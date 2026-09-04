@@ -693,4 +693,72 @@ claude_md:
         chose `analyze` as the verb and directed that coverage remain the output
         noun. Follow-up: none -- the file names are correct as they stand.
       added: "2026-08-17"
+    - id: human_html_gets_two_dedicated_lanes
+      keywords: [human-html, two lanes, dedicated lane records, scalar subject axis, list-valued subject rejected, coverage_human_html_directory, generate_human_html, explicit selector, no artifact audit lane]
+      summary: The human-html artifact got its OWN analyze lane and its OWN generate lane rather than a second subject on the existing ones, because the lane record's subject axis is one scalar value and the registry test enforces that.
+      detail: |
+        The tempting shape was to widen `coverage_code_subtree.subject` to a list
+        and let one analyze lane serve both questions. It was rejected on a
+        mechanical ground and a semantic one, and either alone is sufficient.
+
+        Mechanically, a lane record declares exactly one scalar axis value --
+        `artifact` OR `subject`, never both and never a list -- and
+        `test_domain_members_resolve.py` fails a record that does otherwise. A
+        list-valued subject would have had to weaken the invariant that keeps
+        routing checkable, in order to express a second lane as a field.
+
+        Semantically the two analyses are not variants. `coverage_code_subtree`
+        reads one directory's OWN DIRECT CODE and never descends, because each
+        child is its own CLAUDE.md subject. `coverage_human_html_directory` reads
+        that directory's WHOLE SUBTREE -- code, guidance, docs, data, assets,
+        configuration, and each child's finished decision record -- because "what
+        is this directory for" is a question about everything under it. Same unit
+        (a directory), opposite recursion rule, different criteria document,
+        different verdicts. One lane serving both would have had to pick one
+        recursion rule and be wrong for the other half of its subjects.
+
+        Two consequences follow and are deliberate. The `human-html` token is an
+        EXPLICIT selector on both verbs -- routing never infers the lane from a
+        directory's contents -- so the legacy `analyze <dir>` and
+        `generate claude-md <dir>` calls keep their exact prior meaning. And there
+        is no `audit` or `author` lane for the artifact: the page is
+        machine-emitted, so there is nothing to author, and its check is a script
+        (`scripts/human_html_check.py`) rather than an audit verdict.
+      origin: |
+        The human-html standards doc (references/standards/human-html-standards.md)
+        rule AD-1, ratified 2026-09-04, which records the list-valued-subject
+        rejection and its reason. Implemented with the two lane records and the
+        AD-3 registry-test generalization in the same change.
+      added: "2026-09-04"
+    - id: the_human_page_never_fetches
+      keywords: [human.html, no fetch, NF-1, PC-6, browser-resolved, relative url, portability, file url, static host, host viewer frame, inline style, no CDN]
+      summary: A generated human page reads every other file through a relative URL the BROWSER resolves, and contains no fetch, no XMLHttpRequest, no absolute URL or path, and no external-origin asset -- because the same file must work from a file manager, a static host, and inside the host viewer's frame.
+      detail: |
+        The three target environments do not share a network story. Opened as a
+        `file://` URL, a page's scripted reads are blocked outright by the
+        browser's origin rules, so a fetch-based page renders blank exactly where
+        it is most likely to be opened -- by someone who found the file next to
+        the code. Served from a static host or framed by the host viewer, a fetch
+        might work, which is worse: the page then passes review in the
+        environment it was tested in and fails silently in the one it was written
+        for.
+
+        The rule that survives all three is the browser's own resolution:
+        `a[href]`, `iframe[src]`, `script[src]` and `img[src]` carrying RELATIVE
+        URLs, plus same-document fragments (NF-1). The same reasoning drives the
+        neighbouring prohibitions -- an absolute path, a drive or UNC path, a
+        hostname, or an external-origin asset each pins the page to one machine
+        or one network, and PC-4 inlines the SA-1 style asset for the same reason
+        rather than linking it.
+
+        This is why the size and staleness signals are INFO while every
+        portability breach is FAIL in `scripts/human_html_check.py`. A long or
+        stale page is still a working page; a page that reaches for the network
+        is a blank one somewhere, and the failure leaves no trace in the file.
+      origin: |
+        The human-html standards doc rules NF-1 and PC-6, ratified 2026-09-04,
+        which record the rejection of fetch-based loading and of viewer-specific
+        APIs. Encoded here because the pull toward a richer page (a CDN font, a
+        data fetch, an absolute link) recurs every time the page is edited.
+      added: "2026-09-04"
 ```

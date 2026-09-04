@@ -12,9 +12,10 @@ violation).
   re-checked against anything, because there is no source to re-read. It crosses
   `skill`, `claude-md` and `project-doc`.
 - **GENERATE** takes COVERAGE produced by an `analyze` run and writes it up, so
-  each claim carries the `file:line` evidence it came from and a later run can
-  re-derive it. It crosses `claude-md` ALONE: nothing analyzes a codebase and
-  emits skill or project-doc candidates, so there is no coverage to generate from.
+  each claim carries the evidence it came from and a later run can re-derive it.
+  It crosses `claude-md` and `human-html` -- exactly the two artifacts an analyze
+  lane feeds. Nothing analyzes a codebase and emits skill or project-doc
+  candidates, so there is no coverage to generate those from.
 
 Both then run the same five steps below, against the same standards doc for the
 artifact. Provenance is not a stylistic label -- it is what decides how much
@@ -78,7 +79,13 @@ table:
 | `author_claude_md` | `../standards/claude-md-standards.md` | `python -m skills_kit_lib.audit <path>` |
 | `author_project_doc` | `../standards/project-doc-standards.md` | no mechanical validator -- self-check against the standards doc |
 | `generate_claude_md` | `../standards/claude-md-standards.md` | `python -m skills_kit_lib.audit <path>` |
+| `generate_human_html` | `../standards/human-html-standards.md` | `python scripts/human_html_check.py <repo-root> <directory>` |
 | `author_references` | -- | no lane; see below |
+
+**`generate_human_html` runs the branch at the END of this file, not the five
+steps below.** It shares the verb and the provenance rule; it does not share the
+procedure, because its output is a machine-emitted HTML page rather than an
+authored markdown document. Skip to "The `human-html` branch".
 
 **There is no `author_references` lane.** Cross-references are an emergent
 property of the other three artifacts, not an authored one. A request to
@@ -531,10 +538,198 @@ Expected: 0 FAILs on the target, or a stated reason a JUDGMENT row is accepted.
   it is one read away. Writing from memory reintroduces the hand-maintained
   second copy the fold removed.
 
+## The `human-html` branch
+
+The `generate_human_html` lane. Its output is a generated HTML page a person
+browses beside the files it explains, so it replaces the five steps above with
+the sequence below. Load it with `../standards/human-html-standards.md`.
+
+**Everything mechanical is already implemented in
+`skills_kit_lib.human_html`.** Import it and call it. Do not hand-write a marker,
+re-derive a record path, recompute a source stamp, restate the CSS, or reimplement
+the navigation walk: the package is the single owner of all of it (DR-3), the
+host viewer reads the same interface, and a second implementation is exactly the
+drift the ownership rule exists to prevent.
+
+| Rule | What the package gives you |
+|---|---|
+| DR-1, DR-3 | `record_path`, `validate_record`, `load_record`, `dumps_record`, `write_record`, `normalize_directory`, `reference_filename` |
+| DR-2 | `source_stamp(repo_root, directory) -> (source_sha, dirty)` |
+| DR-4 | `read_instructions`, and `write_record`'s default `preserve_instructions=True` |
+| PC-1, RD-2 | `marker(record, kind, reference=None)`, `parse_marker` |
+| PC-2 | `navigation_targets(records, directory) -> (up, down)` |
+| PC-3 | `announce_script(record, file, kind, reference=None)` |
+| SA-1, PC-4 | `asset_css()` |
+
+### Step 1 -- Intake: the human analysis report is the only input
+
+The lane's coverage input is the `coverage_human_html_directory` report for THIS
+directory: its warrant-exercise outcomes, its admitted units, its identity line,
+and its `PAGE-WARRANTED` / `NO-PAGE` decision. Use this session's report, or read
+the one named by `--coverage <path>`.
+
+A code-coverage report is NOT a substitute and neither is your own reading of the
+directory. If no human analysis exists, run `analyze human-html <directory>`
+first and say that you did -- the two-dispatch chain is what keeps the decision a
+decision.
+
+Re-check the stale-child gate before writing anything: `stale_child` true in
+`scripts/discover_human_html.py` means a descendant record is stale or missing,
+and TS-2 blocks this directory until those are refreshed bottom-up.
+
+### Step 2 -- Persist the record, for `none` exactly as for `page` (DR-1, DR-2, DR-4)
+
+Write one record per directory at the DR-1 path, in JSON syntax so a stdlib JSON
+parser reads it:
+
+```python
+from skills_kit_lib import human_html as hh
+
+path = hh.record_path(repo_root, directory)          # DR-1 path mapping
+sha, dirty = hh.source_stamp(repo_root, directory)   # DR-2 subtree stamp
+record = hh.write_record(path, {                     # DR-4 preserves instructions
+    "schema_version": 1,
+    "directory": hh.normalize_directory(directory),
+    "decision": "page",                              # or "none"
+    "source_sha": sha,
+    "dirty": dirty,
+    "identity": "<the analysis report's identity line>",   # "" for none
+    "instructions": "",                              # rewritten from disk, see below
+    "references": [],
+})
+```
+
+**A `none` decision gets a record too (AD-1).** The absence of a page is a
+recorded finding, not a gap: it is what tells a later run that this directory was
+judged rather than skipped, it is what lets PC-2 traverse THROUGH the directory
+to the pages below it, and it is what stops the next parent generation from
+treating an unanalyzed child as an unfinished one.
+
+**`instructions` is the one field you never write (DR-4).** It is the only
+human-managed field in the record and the only steering channel for a page nobody
+hand-edits. `write_record` reads the existing value off disk and writes it back
+byte-identical by default; do not pass `preserve_instructions=False` in this
+lane. Do READ it -- instructions steer the page's emphasis, and SZ-1 lets them
+override the word budget.
+
+**`dirty: true` is persisted, not blocked on (DR-2).** It means no commit
+identifies the content that was judged. Report it as `INFO DIRTY` and carry on.
+
+### Step 3 -- Emit the page, or remove one (PC-1 to PC-6, NF-1, SA-1)
+
+For `decision: none`, the directory must end with NO `human.html` and NO
+`human.<slug>.html`. If the previous decision was `page`, DELETE those files now.
+A retired page left on disk is worse than never having written one: it still
+looks authoritative, it still answers the four questions with whatever was true
+before, and CK-1 fails the directory for it.
+
+For `decision: page`, write `human.html` in the directory itself. Required chrome,
+all of it from the package:
+
+```
+<!doctype html>
+<html lang="en">
+<head>
+<!-- human-html: {...} -->                    PC-1, within the first 20 lines: hh.marker(record, "page")
+<meta charset="utf-8">                        PC-1
+<meta name="viewport" ...>                    PC-1, responsive
+<meta name="color-scheme" content="dark">     PC-1
+<style data-human-html-style>                 PC-4: the exact hh.asset_css() bytes, inline, never linked
+...
+<nav data-human-html-chrome="nav">            PC-2: exactly one region, up plus nearest descendants
+<script>                                      PC-3: the exact hh.announce_script(...) text
+```
+
+**Navigation is COMPUTED, never composed by hand (PC-2).** Call
+`hh.navigation_targets(records, directory)`: `up` is the nearest ANCESTOR whose
+fresh record says `page`, `down` is every nearest DESCENDANT whose fresh record
+says `page`. Traversal passes through `none` directories and stops each branch at
+its first page, so a `none` directory is never a link target and a page below
+another page is not a root's target. The repository root has no up link; omit the
+descendant section entirely when `down` is empty. Describe each link with the
+TARGET RECORD'S identity line, which is why TS-1 requires the child to be
+finished first.
+
+**Outside that chrome the body is yours (PC-5).** There is no template and there
+will not be one: repository directories do not share an information shape, so a
+page built from scratch for the units the analysis admitted is the correct
+output. Validation checks the contract, not a layout.
+
+**Nothing in the page reaches the network, and nothing names a location
+(PC-6, NF-1).** Every cross-file read is a relative URL the BROWSER resolves,
+carried by `a[href]`, `iframe[src]`, `script[src]` or `img[src]`; same-document
+fragments are fine. Prohibited outright: `fetch`, `XMLHttpRequest`, a URL scheme,
+a protocol-relative URL, a leading slash, a drive or UNC path, a hostname, an
+external-origin asset, and any non-ASCII byte. This is what makes one file work
+from a file manager, a static host, and the host viewer frame alike -- a page
+that fetches is not a slightly less portable page, it is a blank one wherever the
+fetch is blocked.
+
+**Report the visible-word count (SZ-1).** 1,200 words at the repository root, 600
+elsewhere and for each reference, unless the record's `instructions` override it.
+Over budget is `INFO`, never a failure -- it is a signal that the page has drifted
+from orientation toward exposition.
+
+### Step 4 -- References, only when the page needs one (RD-1, RD-2)
+
+A reference is CONDITIONAL. Add one only when a page genuinely needs separate
+material; a directory whose orientation fits on one page needs none.
+
+Each reference is `human.<slug>.html` beside `human.html`, with the slug matching
+`[a-z0-9]+(-[a-z0-9]+)*` and unique in that directory. Use
+`hh.reference_filename(slug)` rather than formatting the name. Three things must
+agree, and CK-1 checks all three: the record's `references` entry, the link from
+`human.html`, and the file on disk.
+
+A reference carries the same chrome as a page (PC-1, PC-3, PC-4, PC-5, PC-6,
+NF-1) with two changes: `kind` is `reference` in both the marker and the announce
+message, plus the slug; and the page tree spine is replaced by ONE relative
+backlink to the sibling `human.html` in the same navigation region. A reference
+with no return path is a dead end, which is why the backlink is required rather
+than conventional.
+
+Data-backed references (RD-3) are DEFERRED. Do not invent the data schema,
+filenames, or template protocol ahead of that phase.
+
+### Step 5 -- Validate
+
+```
+python scripts/human_html_check.py <repo-root> <directory>
+```
+
+`FAIL` is a broken contract and exits nonzero: fix it and rerun. `STALE`, `DIRTY`
+and the size signal are `INFO` and do not: they are resolved by rerunning the
+lane or editing prose, not by patching the output.
+
+### Regeneration: `replace-generated`
+
+Regeneration here is NOT `sort-never-delete`. That contract exists because a
+CLAUDE.md may carry hand-written prose no rerun can re-derive, so unverifiable
+units are relocated rather than dropped. A human page carries no such prose by
+construction: PC-6 prohibits hand-written HTML content, and every page is emitted
+whole from a record plus an analysis report.
+
+So a regeneration REPLACES the generated output outright -- rewrite `human.html`,
+rewrite or delete each reference to match the record, and delete a page whose
+decision became `none`. Two things survive it, and only two:
+
+- `instructions` in the record (DR-4), read first and written back unchanged.
+- Nothing else. A hand edit to a generated page is not retained; it is
+  overwritten. Steering a page is what `instructions` is FOR, and it is the only
+  channel that survives.
+
+Do not import the `## Unverified` section, the retention markings, or the sort
+into this branch. They protect a hazard that does not exist here, and carrying
+them over would make a machine-emitted page accumulate stale content nobody can
+remove.
+
 ## Cross-references
 
 - Where a fact lives (the placement spine, incl. the packaging razor) --
   `../cohesion-principles.md`.
+- The human-html contract in full -- `../standards/human-html-standards.md`.
+- Deciding whether a directory warrants a page at all -- `coverage-lane.md`, the
+  `human_html_directory` branch.
 - How a fact is shaped -- `../authoring-patterns/content-authoring.md`.
 - Skill-artifact deep references (vocabulary, worked examples, domain layering,
   sub-domain schema, script reference) -- `../skill-domain/`.

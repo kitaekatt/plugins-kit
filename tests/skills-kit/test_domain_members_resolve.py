@@ -67,6 +67,7 @@ EXPECTED_LANES = {
     "author_claude_md": {"verb": "author", "artifact": "claude-md"},
     "author_project_doc": {"verb": "author", "artifact": "project-doc"},
     "generate_claude_md": {"verb": "generate", "artifact": "claude-md"},
+    "generate_human_html": {"verb": "generate", "artifact": "human-html"},
     "coverage_code_subtree": {
         # The verb is `analyze`; the lane id, its procedure, its standards doc
         # and its scripts are all named for the OUTPUT (coverage) instead.
@@ -77,6 +78,29 @@ EXPECTED_LANES = {
         # own direct code files, never a subtree.
         "table_key": "analyze (one directory)",
     },
+    "coverage_human_html_directory": {
+        # The second analyze subject. Its unit is also one directory, but the
+        # material it reads is that directory's whole SUBTREE, and its question
+        # is page warrant rather than ambient-guidance coverage. The selector is
+        # explicit in the table key because the two analyze lanes are told apart
+        # by the `human-html` token, never by inspecting the directory.
+        "verb": "analyze",
+        "subject": "human_html_directory",
+        "table_key": "analyze human-html (one directory)",
+    },
+}
+
+# The producing lane per artifact axis value, for the assertions that used to
+# name `generate_claude_md` directly. Selecting by id keeps each lane's own
+# contract checkable once more than one lane shares a verb.
+GENERATE_LANES = {
+    "generate_claude_md": {"artifact": "claude-md", "regeneration": "sort-never-delete"},
+    "generate_human_html": {"artifact": "human-html", "regeneration": "replace-generated"},
+}
+
+ANALYZE_LANES = {
+    "coverage_code_subtree": ["GAPS-FOUND", "COVERAGE-ASSESSED"],
+    "coverage_human_html_directory": ["PAGE-WARRANTED", "NO-PAGE"],
 }
 
 # Lane-record keys whose value is a path relative to the md-domain skill dir.
@@ -176,13 +200,41 @@ class TestDispatchTable:
             for r in LANE_RECORDS
         ), "author x references must have no lane -- cross-references are emergent"
 
-    def test_generate_is_claude_md_only(self):
-        """`generate` consumes coverage, and only `analyze` produces any."""
+    def test_generate_takes_exactly_the_artifacts_an_analysis_feeds(self):
+        """`generate` consumes coverage, and only `analyze` produces any.
+
+        The roster is the invariant, not the count: an artifact earns a generate
+        lane when some analyze lane emits its input, and gains one no other way.
+        `claude-md` is fed by `coverage_code_subtree`, `human-html` by
+        `coverage_human_html_directory`; skill and project-doc have no analysis,
+        so they stay authored.
+        """
         arts = {r.get("artifact") for r in LANE_RECORDS if r.get("verb") == "generate"}
-        assert arts == {"claude-md"}, (
-            "generate must take claude-md alone -- nothing analyzes a codebase and "
-            f"emits skill or project-doc coverage; got {sorted(arts)}"
+        expected = {spec["artifact"] for spec in GENERATE_LANES.values()}
+        assert arts == expected, (
+            "generate must take exactly the artifacts an analyze lane feeds -- nothing "
+            f"analyzes a codebase and emits skill or project-doc coverage; got {sorted(arts)}"
         )
+
+    def test_every_lane_declares_exactly_one_subject_axis(self):
+        """A lane is keyed by `artifact` OR `subject`, never both and never neither.
+
+        This is the invariant that made a list-valued second subject invalid on
+        `coverage_code_subtree`: the axis is one scalar per lane, so a second
+        subject means a second lane record.
+        """
+        for record in LANE_RECORDS:
+            has_artifact = "artifact" in record
+            has_subject = "subject" in record
+            assert has_artifact != has_subject, (
+                f"{record['id']}: declares "
+                f"{'both artifact and subject' if has_artifact else 'neither artifact nor subject'}"
+                " -- exactly one scalar axis per lane"
+            )
+            value = record.get("artifact") if has_artifact else record.get("subject")
+            assert isinstance(value, str) and value.strip(), (
+                f"{record['id']}: the subject axis must be a scalar string, got {value!r}"
+            )
 
     def test_producing_verbs_declare_their_input_provenance(self):
         """author vs generate is decided by provenance, so each must state it."""
@@ -287,10 +339,21 @@ class TestBoundPathsResolve:
                 f"{record['id']}: no detect/classify lane"
             )
 
-    def test_analyze_lane_is_report_only(self):
-        record = next(r for r in LANE_RECORDS if r["verb"] == "analyze")
+    @pytest.mark.parametrize("lane_id", sorted(ANALYZE_LANES))
+    def test_analyze_lane_is_report_only(self, lane_id):
+        """Report-only is a property of the ENTRY POINT, so every analyze lane holds it."""
+        record = next(r for r in LANE_RECORDS if r["id"] == lane_id)
+        assert record["verb"] == "analyze"
         assert "workflow_remediate" not in record
-        assert record["verdicts"] == ["GAPS-FOUND", "COVERAGE-ASSESSED"]
+        assert record.get("report_only") is True, (
+            f"{lane_id}: an analyze lane must declare report_only -- the verb reads "
+            "and reports, and never remediates"
+        )
+        assert record["verdicts"] == ANALYZE_LANES[lane_id]
+
+    def test_analyze_lanes_are_exactly_the_registered_ones(self):
+        found = {r["id"] for r in LANE_RECORDS if r["verb"] == "analyze"}
+        assert found == set(ANALYZE_LANES), f"analyze lane roster drifted: {sorted(found)}"
 
     def test_producing_lanes_bind_standards_and_procedure(self):
         """author and generate SHARE one producing procedure."""
@@ -299,6 +362,23 @@ class TestBoundPathsResolve:
         for record in producing:
             assert record["procedure"] == "references/lanes/generation-lane.md"
             assert record["standards"].startswith("references/standards/")
+
+    @pytest.mark.parametrize("lane_id", sorted(GENERATE_LANES))
+    def test_every_generate_lane_declares_a_regeneration_contract(self, lane_id):
+        """Regeneration semantics are per artifact, and each lane must name its own.
+
+        A document a human may have written by hand and a page only a machine
+        ever writes cannot share one rule: `sort-never-delete` protects prose
+        nobody can re-derive, and `replace-generated` is honest about output that
+        is rewritten wholesale every run. What both refuse is an UNDECLARED
+        contract, which is how a regeneration quietly picks whichever behaviour
+        the implementer assumed.
+        """
+        record = next(r for r in LANE_RECORDS if r["id"] == lane_id)
+        assert record.get("regeneration") == GENERATE_LANES[lane_id]["regeneration"], (
+            f"{lane_id}: must declare regeneration: "
+            f"{GENERATE_LANES[lane_id]['regeneration']!r}"
+        )
 
     def test_regeneration_declares_the_never_delete_contract(self):
         """Regeneration must never silently drop content from an unmarked document.
@@ -313,7 +393,7 @@ class TestBoundPathsResolve:
         `## Unverified` section verbatim instead of deleting them, which removes
         the hazard the gate existed to guard against.
         """
-        record = next(r for r in LANE_RECORDS if r["verb"] == "generate")
+        record = next(r for r in LANE_RECORDS if r["id"] == "generate_claude_md")
         assert record.get("regeneration") == "sort-never-delete", (
             "generate_claude_md must declare the sort-never-delete contract -- "
             "without it a regeneration may drop content it cannot verify"
@@ -326,7 +406,7 @@ class TestBoundPathsResolve:
         specific failure this contract replaced; it is cheap to reintroduce by
         accident when someone re-reads section 6.4 out of context.
         """
-        record = next(r for r in LANE_RECORDS if r["verb"] == "generate")
+        record = next(r for r in LANE_RECORDS if r["id"] == "generate_claude_md")
         assert record.get("regeneration") != "propose-markings-first", (
             "the propose-markings-first gate is retired -- see "
             "claude-md-standards.md section 6.4, 'Do not reintroduce a pre-write gate'"
