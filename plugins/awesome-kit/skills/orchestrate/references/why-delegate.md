@@ -7,11 +7,30 @@ for backend mechanics and the config schema respectively.
 
 ## The economics
 
-An agent's *results* hold most of the value while *generating* them consumes most of the
-context and tool calls -- so generation belongs in a background unit and only the compressed
-conclusions come home. Agent-tool mechanics are already in the harness prompt every session;
-what this skill adds is the economics, the procedure, and -- through the rendered policy --
-the machine's own dispatch options and their mechanics.
+Delegation is a parallelism and main-context headroom lever. It usually increases total
+spend: a background unit pays for its own prompt, orientation, and tool loop, then returns a
+summary to the lead.
+
+Under prompt caching, a token kept in the lead is cache-written once and then re-read on
+every later turn until the cached prefix is invalidated (a compaction, a TTL expiry). For
+`T` tokens, estimate its lifetime main-context cost as:
+
+`T x (write_rate + read_rate x turns_remaining)`
+
+Compare the lifetime cost of keeping the whole line of investigation inline with the
+background run, dispatch brief, and returned summary. The relevant footprint is the cluster
+-- every read and result the investigation is expected to need -- not the size of one tool
+response. Backend price, brief size, return size, and turns remaining move the crossover, so
+estimate rather than assume a fixed token threshold. Delegation may still be right for
+headroom or parallelism even when it costs more overall.
+
+A cluster expected to run tens of tool calls and consume tens of thousands of tokens can
+qualify on footprint. One `git status` or one targeted read does not: footprint is judged over
+the whole line of investigation, not over a single response.
+
+Agent-tool mechanics are already in the harness prompt every session; what this skill adds is
+the economics, the procedure, and -- through the rendered policy -- the machine's own dispatch
+options and their mechanics.
 
 ## Anti-patterns
 
@@ -74,11 +93,20 @@ anti_patterns:
       reason=<one clause>`, and keep going. Only a decision the user has
       CLAIMED, or product direction, waits for the user.
   - id: inline_footprint_work
-    name: Doing reads-a-lot / emits-a-lot work inline in the orchestrating context
-    keywords: [inline work, context footprint, quick edit, difficulty axis]
+    name: Running a high-footprint line of investigation inline in the orchestrating context
+    keywords: [inline work, context footprint, quick edit, difficulty axis, tool-call cluster, line of investigation]
     why_it_seems_right: "It's quick, I'm already here, and dispatching an agent costs a prompt and a relay."
-    why_it_is_wrong: Sessions run hundreds of messages; every file read and diff emitted inline stays in the orchestrating context for all of them. Difficulty and duration are the wrong axis -- persistent context footprint is.
-    alternative: Classify by shape in one glance (step 1); reads-a-lot or emits-a-lot goes to a background agent even when it is easy.
+    why_it_is_wrong: >-
+      Footprint accumulates across a line of investigation, not within one tool result. A
+      cluster expected to need tens of calls and tens of thousands of tokens can crowd out
+      later coordination; one targeted read or command does not, whatever its single result
+      weighs. Difficulty and duration are the wrong axis.
+    alternative: >-
+      Estimate the whole cluster's lifetime main-context cost against a background run, its
+      dispatch brief, and its returned summary. Delegate a multi-call, high-footprint line of
+      investigation when it materially protects headroom, or when the rendered
+      parallel-development razor independently admits it; keep targeted reads and commands
+      inline.
   - id: parallelism_by_unit_count
     name: Splitting because several edits exist
     keywords: [parallelism, implementation shards, unit count, merge overhead]
