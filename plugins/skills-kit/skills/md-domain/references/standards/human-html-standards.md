@@ -247,11 +247,15 @@ directory.
 - **Rule:** Add one navigation region marked `data-human-html-chrome="nav"`.
 Link up to the nearest ancestor whose fresh record says `page`. Link down once to every nearest descendant whose fresh
 record says `page`. Traverse through `none` directories and stop a branch at its first page. Repository root has no
-up link. Use each target record's identity as its link description. Omit the
+up link. Put all links in one `ul`, with one link in each `li`. Each link has a
+`span.hh-nav-label` followed by a `span.hh-nav-identity`. Use `Repository root`
+as the root label. Otherwise use the target directory's final path segment.
+Use the target record's complete identity as the identity text. Omit the
 descendant section when no down link exists.
 - **Rationale:** Nearest-page links keep the tree navigable without exposing no-page gaps. Direct-child links were rejected because they strand skipped directories.
 - **Test:** Discovery computes the expected up and down targets. The check script
-compares that set with the navigation links.
+compares that set with the navigation links, then checks the list, label, and
+identity structure.
 
 ### PC-3. Announce message
 
@@ -288,9 +292,12 @@ parent, and matches the page marker.
 ### PC-5. Free generated body
 
 - **Level:** REQUIRED
-- **Rule:** Outside required chrome, the generator controls structure and
-layout. A page built from scratch is valid. Template support is deferred and
-never required.
+- **Rule:** Read `../human-html-presentation.md` before writing the page.
+Outside required chrome, the generator controls the evidence-shaped hierarchy,
+section order, and semantic body structure within that reference. The generator
+does not control the palette, fonts, theme, width, scripts, or external assets.
+A page built from scratch is valid. Template support is deferred and never
+required.
 - **Rationale:** Evidence shapes the page. A mandatory template was rejected because repository directories do not share one information shape.
 - **Test:** Validation checks the contract, not a body template.
 
@@ -359,9 +366,14 @@ it accepts data-backed references.
 - **Rule:** Ship `skills_kit_lib/assets/human-html.css` as package data. The
 asset defines dark-only values for background, text, headings, muted text,
 surface, border, link, link hover, and accent. It also defines the body
-font stack and the monospace font stack; it sets no page width, so a page
-fills its viewport. Seed it from the host viewer's established dark theme.
-Keep every concrete value in the asset. The asset is ASCII. Expose the asset through
+font stack and the monospace font stack. It sets no maximum width on `main` or
+prose, so a page always fills its viewport. It owns a small spacing scale and
+gap-based section rhythm; the PC-2 navigation list with its label and identity
+levels; `dl` evidence; underlined links at rest and the visible focus outline;
+the one-`h1`, `h2`-section hierarchy; bounded scrolling for code blocks and
+tables; and table styling for multi-attribute comparison. Seed it from the host
+viewer's established dark theme. Keep every concrete value in the asset. The
+asset is ASCII. Expose the asset through
 `skills_kit_lib.human_html` for the generator and the host viewer.
 - **Rationale:** One packaged asset prevents visual drift. Values copied into this document or the host viewer were rejected as duplicate sources of truth.
 - **Test:** A built wheel contains the asset. Both consumers read the same
@@ -403,6 +415,8 @@ The script reports `FAIL` for:
 - a missing, malformed, duplicate, or record-inconsistent generated marker.
 - missing or invalid required metadata, navigation, announce code, or inline
   style.
+- navigation that is not one list, lacks one link per item, or lacks the exact
+  short label and target identity required by PC-2.
 - a missing or invalid decision record.
 - `human.html` or a reference file when `decision` is `none`.
 - no `human.html` when `decision` is `page`.

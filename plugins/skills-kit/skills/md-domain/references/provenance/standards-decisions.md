@@ -267,4 +267,37 @@ claude_md:
         Follow-up: SR-1's aptness blindness and the unmeasured consequence bar are
         limitations (a) and above, not action items.
       added: "2026-08-09"
+    - id: human_html_presentation_contract
+      keywords: [human-html, presentation reference, PC-2, PC-5, SA-1, navigation list, evidence dl, full width, generator freedom]
+      summary: "PC-2, PC-5, and SA-1 amended 2026-09-04: generators read one presentation reference, emit semantic navigation and evidence structures, and leave the fixed visual system unchanged."
+      detail: |
+        Surface: the first generated human.html pages in three independent
+        corpora were structurally valid but read as uncomposed records. Their
+        navigation was a row of bare identity sentences, sections repeated h1,
+        links relied on hover for their cue, evidence used bold labels inside
+        paragraphs, and spacing supplied no section rhythm.
+
+        Finding: the standards fixed the asset bytes and portability envelope
+        but gave both generation backends no shared presentation judgment. A
+        page could satisfy every existing check while reproducing all five
+        defects. The checker also verified the navigation region and link set,
+        but not the structure or visible label and identity text required by
+        PC-2.
+
+        Follow-up: PC-5 makes human-html-presentation.md required reading for
+        both backends. PC-2 defines one list item per destination, with a short
+        label and the target identity in separate spans. SA-1 owns the shared
+        structural CSS for navigation, dl evidence, visible link cues, heading
+        hierarchy, spacing rhythm, and horizontal overflow. The checker
+        verifies PC-2. The generator remains free to choose hierarchy, section
+        order, semantic content structures, and prose; it cannot change the
+        palette, fonts, dark theme, full-width layout, scripts, or external-
+        asset policy.
+      origin: |
+        Owner review of the first generated corpus pages, 2026-09-04. Surface:
+        the rendered wide standalone and narrow framed views. Finding: the five
+        repeated presentation defects above. Follow-up: a vendored presentation
+        reference, CSS-owned structure, PC-2 checker coverage, and three
+        regenerated comparison pages.
+      added: "2026-09-04"
 ```

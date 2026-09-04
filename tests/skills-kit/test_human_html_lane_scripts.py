@@ -122,13 +122,14 @@ def page_html(
     filename=hh.PAGE_FILENAME,
     kind=hh.KIND_PAGE,
     slug=None,
-    nav_links=(),
+    nav_items=(),
     body="<p>Orientation prose for the returning owner.</p>",
     marker_text=None,
     announce_text=None,
     style_text=None,
     metadata=True,
     nav=True,
+    nav_markup=None,
 ):
     """Build a page that satisfies PC-1 to PC-4, NF-1 and RD-2.
 
@@ -147,11 +148,27 @@ def page_html(
         '<meta name="viewport" content="width=device-width, initial-scale=1">',
         '<meta name="color-scheme" content="dark">',
     ] if metadata else []
-    nav_block = (
-        ['<nav data-human-html-chrome="nav">']
-        + ['<a href="%s">page</a>' % href for href in nav_links]
-        + ["</nav>"]
-    ) if nav else []
+    if not nav:
+        nav_block = []
+    elif nav_markup is not None:
+        nav_block = [nav_markup]
+    else:
+        nav_block = [
+            '<nav data-human-html-chrome="nav" aria-label="Orientation pages">',
+            "  <ul>",
+        ]
+        for href, label, identity in nav_items:
+            nav_block.extend(
+                [
+                    "    <li>",
+                    '      <a href="%s">' % href,
+                    '        <span class="hh-nav-label">%s</span>' % label,
+                    '        <span class="hh-nav-identity">%s</span>' % identity,
+                    "      </a>",
+                    "    </li>",
+                ]
+            )
+        nav_block.extend(["  </ul>", "</nav>"])
     return "\n".join(
         [
             "<!doctype html>",
@@ -187,6 +204,19 @@ def write_page(repo, directory, record, **kwargs):
     filename = kwargs.get("filename", hh.PAGE_FILENAME)
     base = repo if hh.normalize_directory(directory) == "." else repo / directory
     path = base / filename
+    nav_links = kwargs.pop("nav_links", ())
+    if "nav_items" not in kwargs:
+        items = []
+        for href in nav_links:
+            target_page = (base / href).resolve()
+            target_directory = hh.normalize_directory(
+                target_page.parent.relative_to(repo.resolve()).as_posix()
+            )
+            target_record = hh.load_record(hh.record_path(repo, target_directory))
+            items.append(
+                (href, hh.navigation_label(target_directory), target_record.identity)
+            )
+        kwargs["nav_items"] = items
     path.write_text(page_html(record, **kwargs), encoding="ascii")
     return path
 
@@ -590,6 +620,57 @@ class TestPageFailures:
                    nav_links=["src/human.html"])
         write_page(repo, "src", record, nav_links=[])
         assert "navigation-mismatch" in codes(run_check(repo, "src"), "FAIL")
+
+    def test_navigation_links_must_be_list_items(self, repo):
+        record = make_record(repo, "src", decision="page")
+        root = make_record(repo, ".", decision="page")
+        write_page(
+            repo,
+            ".",
+            root,
+            nav_markup=(
+                '<nav data-human-html-chrome="nav">'
+                '<a href="src/human.html">The src subsystem.</a>'
+                "</nav>"
+            ),
+        )
+        write_page(repo, "src", record, nav_links=["../human.html"])
+        assert "navigation-structure" in codes(run_check(repo, "."), "FAIL")
+
+    def test_navigation_text_must_match_the_label_and_identity(self, repo):
+        record = make_record(repo, "src", decision="page")
+        root = make_record(repo, ".", decision="page")
+        write_page(
+            repo,
+            ".",
+            root,
+            nav_items=[("src/human.html", "source", "A different identity.")],
+        )
+        write_page(repo, "src", record, nav_links=["../human.html"])
+        assert "navigation-structure" in codes(run_check(repo, "."), "FAIL")
+
+    def test_each_navigation_list_item_has_exactly_one_link(self, repo):
+        src = make_record(repo, "src", decision="page")
+        lib = make_record(repo, "lib", decision="page")
+        root = make_record(repo, ".", decision="page")
+        write_page(
+            repo,
+            ".",
+            root,
+            nav_markup=(
+                '<nav data-human-html-chrome="nav"><ul><li>'
+                '<a href="src/human.html">'
+                '<span class="hh-nav-label">src</span>'
+                f'<span class="hh-nav-identity">{src.identity}</span></a>'
+                '<a href="lib/human.html">'
+                '<span class="hh-nav-label">lib</span>'
+                f'<span class="hh-nav-identity">{lib.identity}</span></a>'
+                "</li><li></li></ul></nav>"
+            ),
+        )
+        write_page(repo, "src", src, nav_links=["../human.html"])
+        write_page(repo, "lib", lib, nav_links=["../human.html"])
+        assert "navigation-structure" in codes(run_check(repo, "."), "FAIL")
 
     def test_a_missing_announce_fails(self, repo):
         record = make_record(repo, "src")

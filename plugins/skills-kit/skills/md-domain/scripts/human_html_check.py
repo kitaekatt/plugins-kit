@@ -127,6 +127,26 @@ class Finding:
 
 
 @dataclass
+class ParsedNavLink:
+    """One PC-2 navigation link and its two required text levels."""
+
+    href: str
+    in_list_item: bool
+    label_parts: list[str] = field(default_factory=list)
+    identity_parts: list[str] = field(default_factory=list)
+    label_nodes: int = 0
+    identity_nodes: int = 0
+
+    @property
+    def label(self) -> str:
+        return " ".join("".join(self.label_parts).split())
+
+    @property
+    def identity(self) -> str:
+        return " ".join("".join(self.identity_parts).split())
+
+
+@dataclass
 class ParsedPage:
     """The subset of one HTML file's structure the contract is judged against."""
 
@@ -139,6 +159,10 @@ class ParsedPage:
     styles: list = field(default_factory=list)    # (attrs, text)
     nav_regions: int = 0
     nav_links: list = field(default_factory=list)
+    nav_lists: int = 0
+    nav_list_items: int = 0
+    nav_item_link_counts: list[int] = field(default_factory=list)
+    nav_items: list[ParsedNavLink] = field(default_factory=list)
     visible_words: int = 0
 
 
@@ -158,6 +182,10 @@ class _PageParser(HTMLParser):
         self._open: list[str] = []
         self._chrome_depth = 0
         self._nav_depth = 0
+        self._nav_list_depth = 0
+        self._nav_item_stack: list[int] = []
+        self._nav_anchor: ParsedNavLink | None = None
+        self._nav_text_role: str | None = None
         self._skip_depth = 0
         self._capture: str | None = None
         self._buffer: list[str] = []
@@ -182,6 +210,32 @@ class _PageParser(HTMLParser):
                 self.page.urls.append((tag, attr, mapping[attr]))
                 if self._nav_depth and tag == "a" and carrier == attr:
                     self.page.nav_links.append(mapping[attr])
+
+        if self._nav_depth and tag == "ul":
+            self.page.nav_lists += 1
+            self._nav_list_depth += 1
+        if self._nav_depth and tag == "li":
+            self.page.nav_list_items += 1
+            self.page.nav_item_link_counts.append(0)
+            self._nav_item_stack.append(len(self.page.nav_item_link_counts) - 1)
+        if self._nav_depth and tag == "a":
+            in_list_item = bool(self._nav_list_depth and self._nav_item_stack)
+            if in_list_item:
+                item_index = self._nav_item_stack[-1]
+                self.page.nav_item_link_counts[item_index] += 1
+            self._nav_anchor = ParsedNavLink(
+                href=mapping.get("href", ""),
+                in_list_item=in_list_item,
+            )
+            self.page.nav_items.append(self._nav_anchor)
+        if self._nav_anchor is not None and tag == "span":
+            classes = set(mapping.get("class", "").split())
+            if "hh-nav-label" in classes:
+                self._nav_anchor.label_nodes += 1
+                self._nav_text_role = "label"
+            elif "hh-nav-identity" in classes:
+                self._nav_anchor.identity_nodes += 1
+                self._nav_text_role = "identity"
 
         is_chrome = CHROME_ATTR in mapping
         is_nav = is_chrome and mapping[CHROME_ATTR] == CHROME_NAV
@@ -218,6 +272,15 @@ class _PageParser(HTMLParser):
     def handle_endtag(self, tag: str) -> None:
         if tag in _VOID_TAGS or tag not in self._open:
             return
+        if self._nav_anchor is not None and tag == "span":
+            self._nav_text_role = None
+        if self._nav_anchor is not None and tag == "a":
+            self._nav_anchor = None
+            self._nav_text_role = None
+        if self._nav_depth and tag == "li" and self._nav_item_stack:
+            self._nav_item_stack.pop()
+        if self._nav_depth and tag == "ul" and self._nav_list_depth:
+            self._nav_list_depth -= 1
         while self._open:
             open_tag = self._open.pop()
             if self._chrome_depth:
@@ -243,6 +306,10 @@ class _PageParser(HTMLParser):
         if self._capture is not None:
             self._buffer.append(data)
             return
+        if self._nav_anchor is not None and self._nav_text_role == "label":
+            self._nav_anchor.label_parts.append(data)
+        elif self._nav_anchor is not None and self._nav_text_role == "identity":
+            self._nav_anchor.identity_parts.append(data)
         if self._skip_depth or self._chrome_depth:
             return
         self.page.visible_words += len(_WORD_RE.findall(data))
@@ -380,7 +447,7 @@ def check_html_file(
     file_path: Path,
     kind: str,
     slug: str | None,
-    expected_nav: list,
+    expected_nav: list[tuple[str, str, str]],
     add,
 ) -> None:
     """Check one generated file against PC-1 to PC-4, PC-6, NF-1, RD-2 and SZ-1."""
@@ -466,12 +533,37 @@ def check_html_file(
             '%d regions marked `%s="%s"` found, exactly one is required'
             % (page.nav_regions, CHROME_ATTR, CHROME_NAV), rel)
     else:
-        found = {link.strip() for link in page.nav_links if link.strip().endswith(hh.PAGE_FILENAME)}
-        wanted = set(expected_nav)
-        if found != wanted:
+        found = [link.strip() for link in page.nav_links]
+        wanted = [href for href, _label, _identity in expected_nav]
+        if sorted(found) != sorted(wanted):
             add(FAIL, "navigation-mismatch", directory,
                 "navigation links %s do not match the computed spine %s"
                 % (sorted(found), sorted(wanted)), rel)
+        if (
+            page.nav_lists != 1
+            or page.nav_list_items != len(page.nav_items)
+            or any(count != 1 for count in page.nav_item_link_counts)
+            or any(not item.in_list_item for item in page.nav_items)
+        ):
+            add(FAIL, "navigation-structure", directory,
+                "PC-2 requires one list with one navigation link per list item", rel)
+        expected_by_href = {
+            href: (label, identity) for href, label, identity in expected_nav
+        }
+        for item in page.nav_items:
+            expected = expected_by_href.get(item.href.strip())
+            if expected is None:
+                continue
+            label, identity = expected
+            if (
+                item.label_nodes != 1
+                or item.identity_nodes != 1
+                or item.label != label
+                or item.identity != identity
+            ):
+                add(FAIL, "navigation-structure", directory,
+                    "navigation link %r must contain label %r and the target identity %r"
+                    % (item.href, label, identity), rel)
 
     check_urls(repo_root, file_path, page, directory, add)
     check_scripts(page, directory, rel, add)
@@ -544,7 +636,15 @@ def check_directory(repo_root: Path, entry: dict, add) -> None:
 
     up = entry["nearest_page_ancestor"]
     down = entry["nearest_page_descendants"]
-    expected_nav = [_relative_link(directory, target) for target in ([up] if up else []) + down]
+    targets = ([up] if up else []) + down
+    expected_nav = [
+        (
+            _relative_link(directory, target),
+            hh.navigation_label(target),
+            hh.load_record(hh.record_path(repo_root, target)).identity,
+        )
+        for target in targets
+    ]
 
     page_path = repo_root / _rel(directory, page_file)
     check_html_file(
@@ -561,7 +661,10 @@ def check_directory(repo_root: Path, entry: dict, add) -> None:
                 _rel(directory, hh.PAGE_FILENAME))
         check_html_file(
             repo_root, directory, record, repo_root / _rel(directory, name),
-            hh.KIND_REFERENCE, reference.slug, [hh.PAGE_FILENAME], add,
+            hh.KIND_REFERENCE,
+            reference.slug,
+            [(hh.PAGE_FILENAME, hh.navigation_label(directory), record.identity)],
+            add,
         )
 
 

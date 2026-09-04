@@ -724,6 +724,10 @@ domain_skill:
         path: references/standards/human-html-standards.md
         keywords: [human html standards, human.html, orientation page, page warrant, HC-1 HC-2 HC-3 HC-4, decision record, DR-1 DR-2, .databench/human, source stamp, dirty, PC-1 page contract, navigation spine, announce message, inline style, NF-1 no fetch, RD-1 reference documents, SA-1 style asset, SZ-1 word budget, CK-1 CK-2 script contracts, TS-1 bottom-up, TS-2 stale child, host viewer contract]
         summary: The whole human-html contract in one document -- the AD lane declarations, the HC page-warrant criteria, the DR decision record, the PC page contract, NF-1 browser-resolved access, the RD reference documents, the SA-1 style asset, the SZ-1 size signal, the CK script contracts, the TS tree-scale order, and the HV host viewer surfaces. Read by both coverage_human_html_directory and generate_human_html.
+      - id: human_html_presentation
+        path: references/human-html-presentation.md
+        keywords: [human html presentation, generated page hierarchy, navigation list, nav label identity, evidence definition list, one h1, h2 sections, section rhythm, table versus list, code overflow, wide standalone view, narrow framed view]
+        summary: The required presentation reference for generate_human_html -- the generator-owned hierarchy and semantic structure, the SA-1-owned axes it cannot change, the navigation and evidence markup, and the wide and narrow review checklist.
       - id: project_doc_standards
         path: references/standards/project-doc-standards.md
         keywords: [project document standards, PD-1, maturation, graduate to skill, orphan, discoverability, one hop, readme role, generated artifact, ancestor convention]
@@ -844,6 +848,7 @@ domain_skill:
 - **How to run an analysis** -- `references/lanes/coverage-lane.md`.
 - **What earns a coverage candidate** -- `references/standards/coverage-standards.md`.
 - **Whether a directory warrants a human page, and what a page must contain** -- `references/standards/human-html-standards.md`.
+- **How a generated human page presents its admitted content** -- `references/human-html-presentation.md`.
 - **How to decide a directory's page warrant** -- `references/lanes/coverage-lane.md`, the `human_html_directory` branch.
 - **How to write or remove a human page** -- `references/lanes/generation-lane.md`, the `human-html` branch.
 - **Checking generated human HTML** -- `scripts/human_html_check.py` (CK-1); the shared scan behind it is `scripts/discover_human_html.py` (CK-2).
