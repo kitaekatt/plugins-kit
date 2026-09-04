@@ -44,8 +44,13 @@ off their tracked paths with no commit.
 ## Invoking the CLI
 
 Run from the project root (refs are project-relative; `--root` defaults to
-cwd). Use the plugin venv's Python explicitly -- not `uv run python`, which
-resolves the wrong environment from a foreign cwd:
+cwd). When `dev/tasks` is a link into another repository, the project root is
+still the PROJECT, never the link target: a `cd` into the task folder or the
+repo behind the link makes every verb fail with "matches no task folder under
+tmp/ or dev/tasks/" -- the refs no longer resolve from there. Pass `--root
+<project>` if the shell must sit elsewhere. Use the plugin venv's Python
+explicitly -- not `uv run python`, which resolves the wrong environment from a
+foreign cwd:
 
 ```bash
 # macOS/Linux (Windows: .venv/Scripts/python.exe instead of .venv/bin/python)
