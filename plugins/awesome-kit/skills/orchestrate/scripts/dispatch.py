@@ -7,6 +7,7 @@ import argparse
 from datetime import datetime, timezone
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
 import shlex
@@ -24,6 +25,7 @@ DEFAULT_GLOBAL_CACHE = (
     Path.home() / ".claude" / "plugins" / "data" / "plugins-kit" / "awesome-kit" / "agent-cache"
 )
 LABEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+ENTRY_RE = re.compile(r"^\d{8}-\d{6}-[A-Za-z0-9][A-Za-z0-9._-]*$")
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -60,11 +62,20 @@ def _ensure_cache(cache_dir: Path) -> None:
     cache_dir.mkdir(parents=True, exist_ok=True)
 
 
-def _sweep(cache_dir: Path, ttl_days: float, excluded: Path | None = None) -> int:
+def _sweep(cache_dir: Path, ttl_days: float, excluded: Path | None = None) -> tuple[int, int]:
     cutoff = time.time() - (ttl_days * 86400)
     swept = 0
+    skipped = 0
     for entry in cache_dir.iterdir():
-        if not entry.is_dir() or entry.is_symlink() or entry == excluded:
+        if entry == excluded:
+            continue
+        if (
+            not entry.is_dir()
+            or entry.is_symlink()
+            or not ENTRY_RE.fullmatch(entry.name)
+            or not (entry / "meta.json").is_file()
+        ):
+            skipped += 1
             continue
         try:
             is_old = entry.stat().st_mtime < cutoff
@@ -77,7 +88,7 @@ def _sweep(cache_dir: Path, ttl_days: float, excluded: Path | None = None) -> in
                 print(f"dispatch cache: could not sweep {entry}: {exc}", file=sys.stderr)
             else:
                 swept += 1
-    return swept
+    return swept, skipped
 
 
 def _entry_path(cache_dir: Path, label: str) -> Path:
@@ -90,21 +101,49 @@ def _entry_path(cache_dir: Path, label: str) -> Path:
     return candidate
 
 
-def _cache_key(model: str, effort: str, sandbox: str, brief: bytes) -> str:
-    material = model.encode("utf-8") + effort.encode("utf-8") + sandbox.encode("utf-8") + brief
+def _cache_key(
+    model: str,
+    effort: str,
+    sandbox: str,
+    cwd: Path,
+    add_dirs: Sequence[Path],
+    brief: bytes,
+) -> str:
+    components = [
+        model.encode("utf-8"),
+        effort.encode("utf-8"),
+        sandbox.encode("utf-8"),
+        str(cwd).encode("utf-8"),
+        *[str(path).encode("utf-8") for path in sorted(add_dirs)],
+        brief,
+    ]
+    material = b"\0".join(components)
     return hashlib.sha256(material).hexdigest()
 
 
-def _cache_hit(cache_dir: Path, key: str) -> tuple[Path, Path] | None:
+def _cache_hit(
+    cache_dir: Path, key: str, cwd: Path, add_dirs: Sequence[Path]
+) -> tuple[Path, Path] | None:
     for entry in sorted(cache_dir.iterdir(), reverse=True):
         if not entry.is_dir() or entry.is_symlink():
             continue
         try:
             meta = json.loads((entry / "meta.json").read_text(encoding="utf-8"))
+            if not isinstance(meta, dict):
+                continue
             result = entry / "result.md"
-            if meta.get("key") == key and meta.get("exit_code") == 0 and result.stat().st_size > 0:
+            # A codex dispatch can fail silently at exit 0, so the exit code is
+            # recorded for --list but never consulted here: a hit is judged by the
+            # -o file alone, and the caller reads result.md exactly as it would a
+            # fresh dispatch (--no-cache forces a re-run).
+            if (
+                meta.get("key") == key
+                and meta.get("cwd") == str(cwd)
+                and meta.get("add_dirs") == [str(path) for path in sorted(add_dirs)]
+                and result.stat().st_size > 0
+            ):
                 return entry, result
-        except (OSError, TypeError, ValueError):
+        except (AttributeError, OSError, TypeError, ValueError):
             continue
     return None
 
@@ -140,6 +179,8 @@ def _argv(
         "-C",
         str(cwd),
     ]
+    if os.name == "nt":
+        argv[4:4] = ["-c", 'windows.sandbox="unelevated"']
     for add_dir in add_dirs:
         argv.extend(("--add-dir", str(add_dir)))
     argv.extend(("-o", str(result), "--skip-git-repo-check", "--color", "never", "-"))
@@ -161,7 +202,9 @@ def _list_entries(cache_dir: Path) -> None:
             continue
         try:
             meta = json.loads((entry / "meta.json").read_text(encoding="utf-8"))
-        except (OSError, TypeError, ValueError):
+            if not isinstance(meta, dict):
+                continue
+        except (AttributeError, OSError, TypeError, ValueError):
             continue
         result = entry / "result.md"
         try:
@@ -171,7 +214,7 @@ def _list_entries(cache_dir: Path) -> None:
         timestamp = entry.name[:15]
         print(
             f"{timestamp} {meta.get('label', '-')} {meta.get('model', '-')} "
-            f"{meta.get('exit_code', '-')} {result_size}"
+            f"{meta.get('exit_code', '-')} {result_size} {entry} {result}"
         )
 
 
@@ -185,8 +228,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         cwd = Path.cwd().resolve()
         cache_dir, _ = _cache_location(cwd, args.cache_dir)
         _ensure_cache(cache_dir)
-        swept = _sweep(cache_dir, args.ttl_days)
-        print(f"SWEPT {swept} entries", file=sys.stderr)
+        swept, skipped = _sweep(cache_dir, args.ttl_days)
+        print(f"SWEPT {swept} entries; skipped {skipped} (not an entry)", file=sys.stderr)
         _list_entries(cache_dir)
         return 0
 
@@ -203,14 +246,14 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     cache_dir, cache_source = _cache_location(cwd, args.cache_dir)
     _ensure_cache(cache_dir)
-    key = _cache_key(args.model, args.effort, args.sandbox, brief)
-    swept = _sweep(cache_dir, args.ttl_days)
+    key = _cache_key(args.model, args.effort, args.sandbox, cwd, add_dirs, brief)
+    swept, skipped = _sweep(cache_dir, args.ttl_days)
     if not args.no_cache:
-        hit = _cache_hit(cache_dir, key)
+        hit = _cache_hit(cache_dir, key, cwd, add_dirs)
         if hit is not None:
             entry, result = hit
             print(f"CACHE HIT {entry}")
-            print(f"SWEPT {swept} entries", file=sys.stderr)
+            print(f"SWEPT {swept} entries; skipped {skipped} (not an entry)", file=sys.stderr)
             print(result)
             return 0
 
@@ -227,7 +270,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.print_only:
         print(entry)
         print(f"ARGV {shlex.join(run_argv)}")
-        print(f"SWEPT {swept} entries", file=sys.stderr)
+        print(f"SWEPT {swept} entries; skipped {skipped} (not an entry)", file=sys.stderr)
         return 0
 
     entry.mkdir()
