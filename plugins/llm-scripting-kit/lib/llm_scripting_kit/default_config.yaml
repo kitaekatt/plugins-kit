@@ -74,10 +74,14 @@ endpoints:
     harness: codex
     model: gpt-5.6-sol
     effort: high
+    tier: 3
+    family: openai
   luna:
     harness: codex
     model: gpt-5.6-luna
     effort: high
+    tier: 2
+    family: openai
 
   # Claude subscription models, shipped for the same reason as the codex pair
   # above: nothing about them is machine-specific, so a fresh machine with the
@@ -88,12 +92,18 @@ endpoints:
   sonnet:
     harness: claude
     model: claude-sonnet-5
+    tier: 2
+    family: anthropic
   opus:
     harness: claude
     model: claude-opus-5
+    tier: 3
+    family: anthropic
   fable:
     harness: claude
     model: claude-fable-5
+    tier: 4
+    family: anthropic
 
 # Top-level model registry (the openrouter endpoint's registry). Named
 # selection: `default` for general use, `defaultCheap` for cheap/smoke work.

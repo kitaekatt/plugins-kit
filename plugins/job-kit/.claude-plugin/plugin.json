@@ -1,6 +1,6 @@
 {
   "name": "job-kit",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Durable execution for heterogeneous agent jobs through a bounded worker pool, with advertisement-based endpoint selection and command-shaped acceptance.",
   "author": {
     "name": "Christina"

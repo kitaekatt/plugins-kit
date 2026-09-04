@@ -54,16 +54,19 @@ technique_skill:
       - reviewer fan-out internal to an invoked review skill (N reviewers over one artifact) -- that skill's `SKILL.md` owns its reviewer roster and lane arithmetic; orchestrate still owns and routes the plan-checkpoint cross-check as a separate unit
 
   policy:
-    keywords: [model choice, model routing, backend, codex, custom orchestrator, usage limit, capacity, rate limit, configurable, override, pool]
+    keywords: [model choice, model routing, backend, codex, custom orchestrator, usage limit, capacity, rate limit, configurable, override, pool, consult seat, independent seat, who to ask, --self, UP, BESIDE]
     render: |
       Use the plugin venv's Python explicitly -- not `uv run python`, which resolves the
       venv from the cwd and misses this plugin's dependencies when run from another project
       (macOS/Linux path shown; Windows uses .venv/Scripts/python.exe):
 
         ~/.claude/plugins/data/plugins-kit/awesome-kit/.venv/bin/python \
-          ${CLAUDE_PLUGIN_ROOT}/skills/orchestrate/scripts/orchestration_guidance.py
+          ${CLAUDE_PLUGIN_ROOT}/skills/orchestrate/scripts/orchestration_guidance.py \
+          --self <your endpoint alias>
 
       Add `--project-root <path>` when the project whose policy applies is not the cwd.
+      Pass the registry alias for your own model (`fable`, `opus`, `sonnet`) -- the agent
+      knows its model from the system prompt; exact model ids also resolve.
     emits: |
       A markdown block covering (a) a DECISION TREE -- shape, routing, agent type, effort,
       announcement -- resolved by ordered elimination, first match wins, (b) every
@@ -84,6 +87,8 @@ technique_skill:
       not reach for a backend or model you remember but cannot see, and do not tell the user
       something is "unavailable" on the strength of its absence. (`--explain` reports what
       was skipped and why, if you need to answer that question.)
+
+      The Consult seats section is who to ask; take the first UP seat, else the first BESIDE.
 
       Being LISTED is not the same as being ELIGIBLE. A backend whose block opens with a
       `**Selection.**` line is not a routing target: it is documented so you can drive it

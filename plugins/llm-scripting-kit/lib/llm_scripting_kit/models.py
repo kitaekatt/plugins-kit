@@ -53,8 +53,10 @@ from .model_endpoints import (
     HARNESS_KIND,
     TRANSPORT_KIND,
     EndpointEntry,
+    EndpointMetadataError,
     EndpointRegistry,
     harness_entry_message,
+    parse_classification_fields,
 )
 
 # The name of the endpoint used when a caller does not name one.
@@ -81,14 +83,29 @@ DEFAULT_MODEL_CONFIG = {
         # models are deliberately NOT shipped: they name providers from the
         # user's own opencode config, which this repo neither ships nor reads,
         # so there is no default that would resolve anywhere but here.
-        "sol": {"harness": "codex", "model": "gpt-5.6-sol", "effort": "high"},
-        "luna": {"harness": "codex", "model": "gpt-5.6-luna", "effort": "high"},
+        "sol": {
+            "harness": "codex", "model": "gpt-5.6-sol", "effort": "high",
+            "tier": 3, "family": "openai",
+        },
+        "luna": {
+            "harness": "codex", "model": "gpt-5.6-luna", "effort": "high",
+            "tier": 2, "family": "openai",
+        },
         # Claude subscription models, shipped for the same reason: the
         # claude-cli adapter had no endpoint pointing at it. Effort is a
         # per-call mapped param on this adapter, so none is set here.
-        "sonnet": {"harness": "claude", "model": "claude-sonnet-5"},
-        "opus": {"harness": "claude", "model": "claude-opus-5"},
-        "fable": {"harness": "claude", "model": "claude-fable-5"},
+        "sonnet": {
+            "harness": "claude", "model": "claude-sonnet-5",
+            "tier": 2, "family": "anthropic",
+        },
+        "opus": {
+            "harness": "claude", "model": "claude-opus-5",
+            "tier": 3, "family": "anthropic",
+        },
+        "fable": {
+            "harness": "claude", "model": "claude-fable-5",
+            "tier": 4, "family": "anthropic",
+        },
     },
     "models": {
         "qwen": {"slug": "qwen/qwen3-32b"},
@@ -260,6 +277,15 @@ def _config_optional_str(
     return value.strip()
 
 
+def _config_classification(
+    ep_name: str, ep: Mapping[str, object]
+) -> "tuple[Optional[int], Optional[str]]":
+    """Validate the optional frontier classification on a config endpoint."""
+    return parse_classification_fields(
+        ep, source="layered model config", entry_id=ep_name
+    )
+
+
 def _config_model_entry(
     ep_name: str,
     ep: Mapping[str, object],
@@ -276,6 +302,7 @@ def _config_model_entry(
         return None
 
     if kind == HARNESS_KIND:
+        tier, family = _config_classification(ep_name, ep)
         return EndpointEntry(
             id=ep_name,
             base_url=None,
@@ -284,6 +311,8 @@ def _config_model_entry(
             kind=kind,
             harness=_config_required_str(ep_name, ep, kind=kind, key="harness"),
             effort=_config_optional_str(ep_name, ep, kind=kind, key="effort"),
+            tier=tier,
+            family=family,
         )
 
     if "model" not in ep:
@@ -291,6 +320,7 @@ def _config_model_entry(
     # Note: key_file (see resolve_endpoint) is not plumbed into EndpointEntry
     # here -- this helper feeds merged model DISCOVERY, which has no api_key
     # consumer; key_file only matters where a key is actually resolved.
+    tier, family = _config_classification(ep_name, ep)
     return EndpointEntry(
         id=ep_name,
         base_url=_config_required_str(ep_name, ep, kind=kind, key="base_url"),
@@ -301,6 +331,8 @@ def _config_model_entry(
         ),
         key_env=_config_optional_str(ep_name, ep, kind=kind, key="key_env"),
         kind=kind,
+        tier=tier,
+        family=family,
     )
 
 
@@ -543,6 +575,8 @@ def discover_model_entries(
                 continue
             config_ids.add(key)
             entry = _config_model_entry(key, raw)
+        except EndpointMetadataError:
+            raise
         except EndpointResolveError as exc:
             notes.append(f"layered config endpoint '{key}' skipped: {exc}")
             continue

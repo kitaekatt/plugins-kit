@@ -20,7 +20,7 @@ RECORD_LISTS merge by record `id` (patch a known id, append a new one, drop one
 with `disabled: true`); scalars and plain lists replace.
 
 Usage:
-    orchestration_guidance.py [--project-root PATH]
+    orchestration_guidance.py [--project-root PATH] [--self ENDPOINT_OR_MODEL]
     orchestration_guidance.py --explain      # layer provenance + resolved config
     orchestration_guidance.py --paths        # where the layers are read from
 """
@@ -1452,7 +1452,6 @@ def render_capacity(config: Dict[str, Any], out: List[str]) -> None:
     capacity = config.get("capacity") or {}
     out.append("## Capacity")
     out.append("")
-
     snapshot, note = load_snapshot(capacity)
     if snapshot is None:
         out.append(f"Usage capacity unknown -- {note}. Assume nothing about remaining headroom.")
@@ -1480,6 +1479,104 @@ def render_capacity(config: Dict[str, Any], out: List[str]) -> None:
             "per-model breakdown, so they cannot tell you a specific model is spent."
         )
     out.append("")
+
+
+def discover_consult_seats(
+    self_ref: Optional[str], project_root: Path
+) -> Tuple[Optional[Any], str, Optional[str]]:
+    """Discover seats when the optional library exposes the seats frontier.
+
+    The seats section is enabling: an absent or stale optional library makes no
+    claim, so those cases return without a renderable result. A failure after
+    the frontier is available is different because the requested discovery did
+    run and must be disclosed in the policy.
+    """
+    if not self_ref:
+        return None, "self_not_provided", None
+
+    try:
+        import llm_scripting_kit as model_kit  # noqa: PLC0415
+    except ImportError as exc:
+        return None, "library_absent", str(exc)
+
+    discover = getattr(model_kit, "discover_seats", None)
+    if not callable(discover):
+        return None, "library_too_old", None
+
+    try:
+        return discover(self_ref, project_root=str(project_root)), "available", None
+    except Exception as exc:  # noqa: BLE001 -- discovery errors are rendered
+        return None, "discovery_failed", f"{type(exc).__name__}: {exc}"
+
+
+def render_consult_seats(
+    result: Optional[Any], status: str, detail: Optional[str], out: List[str]
+) -> None:
+    """Render the requested consult seats result, including explicit failures."""
+    if status in {"self_not_provided", "library_absent", "library_too_old"}:
+        return
+
+    out.append("## Consult seats")
+    out.append("")
+    if status == "discovery_failed":
+        error_class = detail.split(":", 1)[0] if detail else "Exception"
+        out.append(f"seats unavailable: {error_class}")
+        out.append("")
+        return
+    if result is None:
+        out.append("seats unavailable: Exception")
+        out.append("")
+        return
+
+    seats = list(getattr(result, "seats", ()) or ())
+    if seats:
+        for seat in seats:
+            harness = getattr(seat, "harness", None) or "?"
+            out.append(
+                f"{seat.relation} {seat.endpoint} ({seat.band}, {harness})"
+            )
+    else:
+        out.append("none reachable -- decide and say so")
+    self_seat = result.self
+    out.append(f"self: {self_seat.endpoint} ({self_seat.band})")
+
+    unclassified = [
+        str(getattr(entry, "endpoint", entry))
+        for entry in (getattr(result, "unclassified", ()) or ())
+    ]
+    if unclassified:
+        out.append("unclassified: " + ", ".join(unclassified))
+    out.append("")
+
+
+def explain_consult_seats(
+    result: Optional[Any], status: str, detail: Optional[str]
+) -> None:
+    """Print the seats diagnostic that is intentionally absent from guidance."""
+    if status == "self_not_provided":
+        print("seats  skipped   --self was not provided")
+    elif status == "library_absent":
+        print(
+            "seats  skipped   llm_scripting_kit is absent; install with "
+            "`claude plugin install llm-scripting-kit@plugins-kit`"
+        )
+    elif status == "library_too_old":
+        print(
+            "seats  skipped   llm_scripting_kit lacks discover_seats; owner "
+            "version is 0.28.0; update with `claude plugin update "
+            "llm-scripting-kit@plugins-kit`"
+        )
+    elif status == "discovery_failed":
+        error_class = detail.split(":", 1)[0] if detail else "Exception"
+        print(f"seats  error     {error_class}: {detail or 'no detail'}")
+    elif status == "available" and result is not None:
+        print(f"seats  available self={result.self.endpoint}")
+        unknown = [
+            str(getattr(seat, "endpoint", seat))
+            for seat in (getattr(result, "probe_unknown", ()) or ())
+        ]
+        if unknown:
+            print("seats  probe-unknown " + ", ".join(unknown))
 
 # Schema-1 and retired decision keys. The decision half was reshaped in schema 3 and none of
 # these is read any more, so an override written against schema 1 deep-merges
@@ -1511,7 +1608,11 @@ def legacy_schema_keys(config: Dict[str, Any]) -> List[str]:
     return [k for k in LEGACY_SCHEMA_1_KEYS if k in config]
 
 
-def render(config: Dict[str, Any], provenance: List[Tuple[str, Path, str]]) -> str:
+def render(
+    config: Dict[str, Any],
+    provenance: List[Tuple[str, Path, str]],
+    self_ref: Optional[str] = None,
+) -> str:
     out: List[str] = ["# Orchestration policy", ""]
     detected = detect_all(config)
     backend_names = {
@@ -1540,6 +1641,10 @@ def render(config: Dict[str, Any], provenance: List[Tuple[str, Path, str]]) -> s
         routable_backend_ids,
     )
     render_decision_tree(config, routable_backend_ids, backend_names, out, routes)
+    seat_result, seat_status, seat_detail = discover_consult_seats(
+        self_ref, project_root
+    )
+    render_consult_seats(seat_result, seat_status, seat_detail, out)
     render_backends(
         config,
         detected,
@@ -1618,6 +1723,11 @@ def main(argv: Optional[List[str]] = None) -> int:
         action="store_true",
         help="Print the four layer paths and exit",
     )
+    parser.add_argument(
+        "--self",
+        dest="self_ref",
+        help="Registry endpoint alias or model id for this agent",
+    )
     args = parser.parse_args(argv)
     project_root = Path(args.project_root).resolve()
 
@@ -1666,6 +1776,10 @@ def main(argv: Optional[List[str]] = None) -> int:
             print(f"command  note      {note}")
         for note in routing_notes:
             print(f"routing  note      {note}")
+        seat_result, seat_status, seat_detail = discover_consult_seats(
+            args.self_ref, project_root
+        )
+        explain_consult_seats(seat_result, seat_status, seat_detail)
         for route in routes:
             targets = ", ".join(model["target"] for model in route["models"])
             shape = "+".join(route["shape"]) or "default"
@@ -1674,7 +1788,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(yaml.safe_dump(config, sort_keys=False, allow_unicode=False, width=100))
         return 0
 
-    text = render(config, provenance)
+    text = render(config, provenance, self_ref=args.self_ref)
     print(text)
     return 0
 

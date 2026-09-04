@@ -14,6 +14,7 @@ import json
 import re
 import sys
 import time
+from types import ModuleType, SimpleNamespace
 from pathlib import Path
 
 import pytest
@@ -601,6 +602,131 @@ class TestRender:
         text = og.render(config, provenance)
         assert "To change this policy, create:" in text
         assert og.CONFIG_NAME in text
+
+
+def _fake_seats_module(discover_seats):
+    module = ModuleType("llm_scripting_kit")
+    module.discover_seats = discover_seats
+    return module
+
+
+def _seat_result(seats=(), unclassified=(), probe_unknown=()):
+    return SimpleNamespace(
+        self=SimpleNamespace(endpoint="opus", band="strong"),
+        seats=seats,
+        unclassified=unclassified,
+        probe_unknown=probe_unknown,
+    )
+
+
+class TestConsultSeats:
+    def _config(self, layered):
+        layered("shipped", cfg())
+        return og.resolve_config(layered.project_root)
+
+    def test_self_with_seats_renders_in_cli_order(self, layered, monkeypatch):
+        result = _seat_result(
+            seats=(
+                SimpleNamespace(relation="UP", endpoint="fable", band="frontier", harness="claude"),
+                SimpleNamespace(relation="BESIDE", endpoint="sol", band="strong", harness="codex"),
+            ),
+            unclassified=(SimpleNamespace(endpoint="untyped"),),
+        )
+
+        def discover(self_ref, *, project_root):
+            assert self_ref == "opus"
+            assert project_root == str(layered.project_root)
+            return result
+
+        monkeypatch.setitem(sys.modules, "llm_scripting_kit", _fake_seats_module(discover))
+        monkeypatch.setattr(og, "discover_model_definitions", lambda _root: ({}, []))
+        config, provenance = self._config(layered)
+        text = og.render(config, provenance, self_ref="opus")
+        section = text.split("## Consult seats\n", 1)[1].split(
+            "## Dispatch backends\n", 1
+        )[0]
+        assert section == (
+            "\nUP fable (frontier, claude)\n"
+            "BESIDE sol (strong, codex)\n"
+            "self: opus (strong)\n"
+            "unclassified: untyped\n\n"
+        )
+
+    def test_self_with_library_absent_is_silent_but_explain_discloses_it(
+        self, layered, monkeypatch, capsys
+    ):
+        monkeypatch.setitem(sys.modules, "llm_scripting_kit", None)
+        monkeypatch.setattr(og, "discover_model_definitions", lambda _root: ({}, []))
+        config, provenance = self._config(layered)
+        assert "## Consult seats" not in og.render(config, provenance, self_ref="opus")
+        assert og.main(["--self", "opus", "--explain", "--project-root", str(layered.project_root)]) == 0
+        explained = capsys.readouterr().out
+        assert "seats  skipped" in explained
+        assert "llm_scripting_kit is absent" in explained
+        assert "claude plugin install llm-scripting-kit@plugins-kit" in explained
+
+    def test_self_with_old_library_is_silent_but_explain_discloses_the_frontier(
+        self, layered, monkeypatch, capsys
+    ):
+        monkeypatch.setitem(sys.modules, "llm_scripting_kit", ModuleType("llm_scripting_kit"))
+        monkeypatch.setattr(og, "discover_model_definitions", lambda _root: ({}, []))
+        config, provenance = self._config(layered)
+        assert "## Consult seats" not in og.render(config, provenance, self_ref="opus")
+        assert og.main(["--self", "opus", "--explain", "--project-root", str(layered.project_root)]) == 0
+        explained = capsys.readouterr().out
+        assert "seats  skipped" in explained
+        assert "lacks discover_seats" in explained
+        assert "0.28.0" in explained
+        assert "claude plugin update llm-scripting-kit@plugins-kit" in explained
+
+    def test_without_self_is_silent_even_when_seats_are_available(self, layered, monkeypatch):
+        calls = []
+
+        def discover(*args, **kwargs):
+            calls.append((args, kwargs))
+            return _seat_result()
+
+        monkeypatch.setitem(sys.modules, "llm_scripting_kit", _fake_seats_module(discover))
+        monkeypatch.setattr(og, "discover_model_definitions", lambda _root: ({}, []))
+        config, provenance = self._config(layered)
+        assert "## Consult seats" not in og.render(config, provenance)
+        assert calls == []
+
+    def test_empty_seats_render_the_explicit_decision_line(self, layered, monkeypatch):
+        monkeypatch.setitem(
+            sys.modules,
+            "llm_scripting_kit",
+            _fake_seats_module(lambda _self_ref, *, project_root: _seat_result()),
+        )
+        monkeypatch.setattr(og, "discover_model_definitions", lambda _root: ({}, []))
+        config, provenance = self._config(layered)
+        text = og.render(config, provenance, self_ref="opus")
+        assert "none reachable -- decide and say so" in text
+
+    def test_probe_unknown_is_explain_only(self, layered, monkeypatch, capsys):
+        unknown = SimpleNamespace(endpoint="mystery")
+        result = _seat_result(probe_unknown=(unknown,))
+        monkeypatch.setitem(
+            sys.modules,
+            "llm_scripting_kit",
+            _fake_seats_module(lambda _self_ref, *, project_root: result),
+        )
+        monkeypatch.setattr(og, "discover_model_definitions", lambda _root: ({}, []))
+        config, provenance = self._config(layered)
+        rendered = og.render(config, provenance, self_ref="opus")
+        assert "mystery" not in rendered
+        assert og.main(["--self", "opus", "--explain", "--project-root", str(layered.project_root)]) == 0
+        assert "seats  probe-unknown mystery" in capsys.readouterr().out
+
+    def test_discovery_failure_renders_the_exception_class(self, layered, monkeypatch):
+        def fail(_self_ref, *, project_root):
+            raise RuntimeError("registry config is broken")
+
+        monkeypatch.setitem(sys.modules, "llm_scripting_kit", _fake_seats_module(fail))
+        monkeypatch.setattr(og, "discover_model_definitions", lambda _root: ({}, []))
+        config, provenance = self._config(layered)
+        text = og.render(config, provenance, self_ref="opus")
+        assert "seats unavailable: RuntimeError" in text
 
 
 class TestReviewOverlap:

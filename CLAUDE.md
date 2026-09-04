@@ -258,8 +258,8 @@ switch in this one.
 
 **Publishing does not need a branch either.** `publish.py` owns the `dev` -> `master`
 flow. The one case that historically wanted a feature branch -- gotcha 1, cherry-picking
-past unrelated `dev` commits -- is a decision to ship alone with `--only` or to escalate
-to the user, not to solve by creating a branch yourself.
+past unrelated `dev` commits -- is a decision to ship alone with `--only`, not to solve by
+creating a branch yourself.
 
 ### Committing and pushing to `dev` is unrestricted -- only PUBLISHES are gated
 
@@ -795,7 +795,7 @@ claude_md:
         (1) the members are in separate plugins (git-kit, p4-kit) and a domain router cannot
         span plugins without relocating a member or spawning a new home plugin -- both barred by
         "Plugin boundaries are hard boundaries for cohesion work" in `plugins/CLAUDE.md`; (2) routing value is low
-       -- git-vs-p4 is unambiguous from the workspace, so a natural-language front door adds
+        -- git-vs-p4 is unambiguous from the workspace, so a natural-language front door adds
         little over the two already-auto-triggering skills. Correct cross-plugin sharing is the
         library both depend on (bootstrap_lib.code_review), which already exists. Do not
         re-investigate a code-review domain; the answer is "surface, don't merge."
@@ -992,8 +992,8 @@ claude_md:
         the tree. Non-contiguous commits: review each individually rather than assembling a
         branch. If a separate checkout is genuinely required, `git worktree add` gives one
         without moving this tree. Publishing needs no branch -- publish.py owns dev -> master,
-        and gotcha 1 (unrelated dev commits) is a decision to escalate to the user, not to
-        solve by creating a branch.
+        and unrelated dev commits in the range are shipped rather than escalated (gotcha 1);
+        a self-contained change that must ship alone uses `publish.py --only <plugin>`.
         The rule and range-scoping alternative remain in "Anti-pattern: creating a branch, or
         switching the one that is checked out" in Development Workflow; the worked example is
         in `docs/reference/shared-tree-git-discipline.md`.
@@ -1080,7 +1080,14 @@ claude_md:
   conventions:
     - rule: Commit and push to dev freely without asking; only a PUBLISH (dev -> master) needs the user. Do not coordinate around other agent sessions' concurrent work.
       keywords: [commit freely, push freely, no permission, dev branch, only publishes gated, other agents, concurrent sessions, shared tree, git commit -- paths]
-      why: A commit or push is reversible working-branch state and a publish broadcasts to every machine, so only the publish is gated. Note the implied contract, stated in that section: pushing to dev consents to ANOTHER session's next publish carrying your work, since a publish ships the whole range. Scope commits by path for readability, and use `git commit -F <msg> -- <paths>` when the index holds another session's staged work. See "Committing and pushing to dev is unrestricted" in Development Workflow.
+      why: >-
+        A commit or push is reversible working-branch state and a publish broadcasts to
+        every machine, so only the publish is gated. Note the implied contract, stated in
+        that section -- pushing to dev consents to ANOTHER session's next publish carrying
+        your work, since a publish ships the whole range. Scope commits by path for
+        readability, and use `git commit -F <msg> -- <paths>` when the index holds another
+        session's staged work. See "Committing and pushing to dev is unrestricted" in
+        Development Workflow.
     - rule: Stay on dev -- never create a branch or run git checkout/switch in this working tree; scope reviews with a commit range, and use git worktree if a separate checkout is truly needed.
       keywords: [branch, git checkout, git switch, shared working tree, concurrent session, scope a review, range, worktree]
       why: The tree is shared with other agent sessions and the checked-out branch is global to it, so a switch silently redirects their commits onto your branch. See the never_create_or_switch_branches insight and the anti-pattern section in Development Workflow.
