@@ -68,13 +68,17 @@ Location-op conventions (Step 5):
   before its final state is committed); outside a git repo NO git command
   runs -- the final state is recorded, the folder kept, and submission via
   the workspace's VCS (e.g. p4) plus the finishing delete are left to the
-  agent/user. Non-zero with the refusal reason on stderr when the task is
-  not active (closed -> reopen first), the folder is missing, the tmp
-  parking spot is occupied, or a git command fails.
+  agent/user; where git ignores EVERY file in the folder no commit is
+  possible, so the final state is recorded and the folder moved to
+  dev/tasks/archived-tasks/<stub>, while a folder git holds only PARTLY is
+  kept in place. Non-zero with the refusal reason on
+  stderr when the task is not active (closed -> reopen first), the folder is
+  missing, the parking spot is occupied, or a git command fails.
 - ``delete <ref>`` prints ``deleted: <id>``; accepts an active OR archived
-  task, refuses a dev/tasks folder git can see is dirty (delete never
-  auto-commits; outside a git repo the agent owns VCS state), then the
-  folder is removed even when tmp.
+  task -- including one parked at ``<location>/archived-tasks/<stub>`` --
+  refuses a dev/tasks folder git can see is dirty (delete never
+  auto-commits; outside a git repo, and for a parked folder, the agent owns
+  VCS state), then the folder is removed even when tmp.
 - ``move <ref> <dest>`` (dest: ``tmp`` or ``dev/tasks``; the stub is
   preserved) prints ``moved: <old> -> <new>`` and the rewritten-document
   count. Non-zero when the source folder is absent or the destination
@@ -427,11 +431,21 @@ def _cmd_archive(args: argparse.Namespace) -> int:
             "submit it with your version control (e.g. p4 submit), then run "
             "delete"
         )
+    elif result.vcs_ignored and result.archived_to is not None:
+        disposition = (
+            f"moved to {result.archived_to}, status: archived -- it is "
+            "git-ignored, so version control holds no copy of it and never "
+            "will; the parking directory is yours to purge, and delete "
+            "removes it PERMANENTLY"
+        )
     elif result.vcs_ignored:
         disposition = (
-            "final state recorded; folder kept -- it is git-ignored, so "
-            "version control holds no copy of it and never will; run delete "
-            "to remove it PERMANENTLY, or keep it as local scratch"
+            "final state recorded; folder kept -- git ignores "
+            f"{result.vcs_unheld_count} file(s) here, so version control "
+            f"holds no copy of THOSE, and holds {result.vcs_held_count} "
+            "tracked file(s) here, which is why the folder is neither moved "
+            "nor parked (the log entry names both sets); run delete to "
+            "remove it PERMANENTLY, or keep it as local scratch"
         )
     else:
         disposition = f"moved to {result.archived_to}, status: archived"
@@ -734,13 +748,17 @@ def main(argv: list[str] | None = None) -> int:
         "archived, folder moved to tmp/archived-tasks/<stub>; non-tmp -> "
         "version control is the record (git repo: commit final state, "
         "delete folder, commit removal; other/no VCS: record final state, "
-        "keep folder for the agent to submit + delete).",
+        "keep folder for the agent to submit + delete; git ignores EVERY "
+        "file: record final state, move folder to "
+        "dev/tasks/archived-tasks/<stub>; git holds some of it: record final "
+        "state, keep folder in place).",
     )
     add_state_op_parser(
         "delete",
         "Remove the folder even when tmp (unconditional removal). Accepts "
-        "an active or archived task; refuses a dev/tasks folder git can "
-        "see is dirty (never auto-commits).",
+        "an active or archived task, including one parked at "
+        "<location>/archived-tasks/<stub>; refuses a dev/tasks folder git "
+        "can see is dirty (never auto-commits).",
     )
     p_move = add_state_op_parser(
         "move",

@@ -153,6 +153,34 @@ class TestTriState:
         assert result.classification == "archived"
         assert result.clean
 
+    @pytest.mark.parametrize("location", ["tmp", "dev/tasks"])
+    def test_parked_folder_reads_as_archived(self, tmp_path, location):
+        # A ref whose live folder is gone but whose copy sits in the parking
+        # directory is a PROPER archive under either root -- never dangling,
+        # and for tmp never "orphaned".
+        make_task(
+            tmp_path, f"{location}/archived-tasks/done", status="archived"
+        )
+        result = v(f"{location}/done", tmp_path)
+        assert result.classification == "archived"
+        assert result.clean
+
+    @pytest.mark.parametrize(
+        "ref", ["tmp/archived-tasks", "dev/tasks/archived-tasks"]
+    )
+    def test_parking_directory_itself_is_not_a_task(self, tmp_path, ref):
+        result = v(ref, tmp_path)
+        assert result.classification == "invalid"
+        assert any("reserved parking directory" in e for e in result.errors)
+
+    @pytest.mark.parametrize(
+        "ref", ["tmp/archived-tasks/a", "dev/tasks/archived-tasks/a"]
+    )
+    def test_ref_into_the_parking_directory_is_invalid(self, tmp_path, ref):
+        result = v(ref, tmp_path)
+        assert result.classification == "invalid"
+        assert any("not a known task location" in e for e in result.errors)
+
     def test_tmp_absent_no_host_is_orphaned_with_warning(self, tmp_path):
         result = v("tmp/vanished", tmp_path)
         assert result.classification == "orphaned"

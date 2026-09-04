@@ -1009,6 +1009,18 @@ claude_md:
       origin: "2026-08-08 -- disclosure gap identified after the unshipping move removed the in-plugin links that used to name this chain. RETRACTED 2026-08-26 when config-driven routing replaced the generated decision half."
       added: "2026-08-08"
       updated: "2026-08-26"
+    - id: orchestrate_routing_deferred_evidence
+      keywords: [routing, unmeasured assumption, deferred evidence, evidence gaps, orchestration.yaml, tier-principles, orchestrate-2.0, benchmark, pool consumption, fan-out]
+      summary: The routing policy in orchestration.yaml rests on seven UNMEASURED assumptions, recorded as a dated ledger in docs/planning/orchestrate/deferred-evidence-experiments.md -- read it before changing a routing row on the strength of an assumption it lists.
+      detail: |
+        The ledger names each gap (codex capability benchmarks, fable pool
+        consumption, multi_agent_v2 scope, usage telemetry, agent-type
+        effectiveness, the P0.3 volume threshold, Claude-side fan-out) and the
+        experiment that would close it. It replaced section 7 of the deleted
+        tier-principles.md (commit 4cb4d96c) and is maintainer material, which
+        is why it lives under docs/planning/ rather than in the shipped skill.
+      origin: "2026-09-04 -- task orchestrate-2.0 could not be retired because its declared durable output had been deleted with the generated policy; the ledger was reconstructed into docs/planning/."
+      added: "2026-09-04"
     - id: codex_dispatch_is_silent_on_failure
       keywords: [codex, codex exec, sandbox, workspace-write, windows.sandbox, absolute -C, add-dir, exit 0, no approval channel, permission spam, danger-full-access, reads unrestricted, bootstrap_lib.codex, CodexCliBackend, run_cli_streaming, discovery vs execution, does orchestrate use llm-scripting-kit, who invokes codex, two paths to codex]
       summary: Every way a codex dispatch can be misconfigured fails SILENTLY at exit 0, so codex machinery is built to refuse bad input rather than trust it. There are TWO paths to codex -- the completion seam (CodexCliBackend) and orchestrate rendering a `codex exec` argv for the agent to run -- and orchestrate does not call the seam, but it DOES reach bootstrap_lib.codex through llm-scripting-kit's CodexAdapter.

@@ -12,8 +12,10 @@ Classification outcomes:
                   the folder/task.yaml is never read or validated locally.
 - ``invalid``  -- any error.
 - ``archived`` / ``orphaned`` -- the absent-folder tri-state (spec section 4):
-  non-tmp path + no folder reads as ``archived`` (expected end state, git is
-  the record, no findings); a tmp path whose folder is parked at
+  non-tmp path + no folder reads as ``archived`` (expected end state -- git
+  is the record when the folder was committed and removed, and the parking
+  directory holds it when git was configured to ignore it, so both dev/tasks
+  archive dispositions land here); a tmp path whose folder is parked at
   ``tmp/archived-tasks/<stub>`` (archive's tmp closure policy) also reads as
   ``archived``; tmp path (local host or no host) + no folder otherwise is
   ``orphaned`` with the "orphaned tmp reference" warning.
@@ -329,10 +331,15 @@ def _dangling_reason(entry: object, project_root: Path) -> str | None:
     if resolved.folder(project_root).is_dir():
         return None
     if resolved.location == resolve.LOCATION_TMP:
-        if resolve.archived_tmp_folder(project_root, resolved.stub).is_dir():
+        if resolve.archived_folder(
+            project_root, resolved.location, resolved.stub
+        ).is_dir():
             return None  # parked archive: reads as archived, not dangling
         return "orphaned tmp reference (no folder on this host)"
-    return None  # non-tmp absent reads as archived per the tri-state
+    # Non-tmp absent reads as archived per the tri-state -- whether the
+    # folder was committed and removed or parked under dev/tasks/
+    # archived-tasks/ because git ignores it.
+    return None
 
 
 def validate_ref(
@@ -370,12 +377,16 @@ def validate_ref(
         result.classification = "remote"
         return result
 
-    # Absent-folder tri-state (spec section 4). A tmp folder parked at
-    # tmp/archived-tasks/<stub> is a PROPER archive, not an orphan.
+    # Absent-folder tri-state (spec section 4). A folder parked at
+    # <location>/archived-tasks/<stub> is a PROPER archive, not an orphan --
+    # which is already the reading a non-tmp absent folder gets, so a parked
+    # dev/tasks folder needs no separate branch here.
     if not folder.is_dir():
         if resolved.location == resolve.LOCATION_DEV_TASKS:
             result.classification = "archived"
-        elif resolve.archived_tmp_folder(project_root, resolved.stub).is_dir():
+        elif resolve.archived_folder(
+            project_root, resolved.location, resolved.stub
+        ).is_dir():
             result.classification = "archived"
         else:
             result.classification = "orphaned"

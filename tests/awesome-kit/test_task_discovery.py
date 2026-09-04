@@ -144,13 +144,26 @@ class TestProjectScope:
         )
         assert d("project", tmp_path) == []
 
-    def test_parked_archived_tmp_docs_do_not_contribute_refs(self, tmp_path):
-        # Parity with the folder crawl, which skips tmp/archived-tasks/.
+    @pytest.mark.parametrize("location", ["tmp", "dev/tasks"])
+    def test_parked_archived_docs_do_not_contribute_refs(
+        self, tmp_path, location
+    ):
+        # Parity with the folder crawl, which skips <root>/archived-tasks/
+        # under EITHER root (dev/tasks parks when git ignores the folder).
         write_doc(
-            tmp_path / "tmp" / "archived-tasks" / "old" / "CLAUDE.md",
+            tmp_path / Path(location) / "archived-tasks" / "old" / "CLAUDE.md",
             fenced_task_list([{"path": "dev/tasks/from-parked"}]),
         )
         assert "dev/tasks/from-parked" not in ids(d("project", tmp_path))
+
+    @pytest.mark.parametrize("location", ["tmp", "dev/tasks"])
+    def test_parked_archived_folders_are_not_crawled(self, tmp_path, location):
+        make_task(tmp_path, f"{location}/live")
+        make_task(tmp_path, f"{location}/archived-tasks/done")
+        notes: list[str] = []
+        records = d("project", tmp_path, notes=notes)
+        assert ids(records) == {f"{location}/live"}
+        assert notes == []  # skipped silently, never a note
 
     def test_record_projection_fields(self, tmp_path):
         make_task(tmp_path, "tmp/full", title="Full task", priority="P1")

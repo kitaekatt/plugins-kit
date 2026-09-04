@@ -244,6 +244,15 @@ class TestBadArguments:
         with pytest.raises(InitError, match="unknown dest"):
             init_task("foo", tmp_path, dest="docs")
 
+    @pytest.mark.parametrize("dest", ["tmp", "dev/tasks"])
+    def test_parking_stub_is_reserved_under_either_root(self, tmp_path, dest):
+        # archive parks under BOTH roots (tmp always; dev/tasks when git
+        # ignores the folder), so the name is reserved in both -- a task
+        # folder there would be shadowed by the parking directory.
+        with pytest.raises(InitError, match="reserved"):
+            init_task("archived-tasks", tmp_path, dest=dest)
+        assert not (tmp_path / dest / "archived-tasks").exists()
+
 
 class TestCLI:
     def test_init_into_tmp_exits_zero_prints_path(self, tmp_path):
