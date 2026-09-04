@@ -34,7 +34,12 @@ deletes it, because version control is the record. Git is the VCS the scripts
 detect and automate; in a workspace under another VCS (e.g. Perforce) the
 scripts run no git commands and leave submission to you/the agent. Archiving
 a tmp folder parks it at `tmp/archived-tasks/<stub>` (purge that directory
-whenever you like).
+whenever you like); so does a dev/tasks folder when git ignores EVERY file
+in it, at `dev/tasks/archived-tasks/<stub>` -- such a folder is local scratch
+in fact, and version control holds no copy of a parked folder under either
+root. A dev/tasks folder git holds only PARTLY (some files force-added, the
+rest ignored) is kept in place instead: moving it would take tracked files
+off their tracked paths with no commit.
 
 ## Invoking the CLI
 
@@ -148,21 +153,21 @@ capability_skill:
       user_objective: "Reverse a terminal state back to active."
       operation: task.py reopen <ref> [--root PATH]
       gotchas:
-        - "Contract: allowed only while the folder still exists -- including a tmp archived folder parked at tmp/archived-tasks/<stub>, which reopen RESTORES to tmp/<stub> first. A task with no folder (and nothing parked) is gone -- it cannot be reopened. Sets status: active and re-validates (prints classification; exit reflects findings)."
+        - "Contract: allowed only while the folder still exists -- including an archived folder parked at <location>/archived-tasks/<stub>, which reopen RESTORES to <location>/<stub> first. Both roots park: tmp always, dev/tasks when git ignores EVERY file in the folder. A task with no folder (and nothing parked) is gone -- it cannot be reopened. Sets status: active and re-validates (prints classification; exit reflects findings)."
     - id: archive
       keywords: [archive task, finish for good, git is the record, closure policy, durable outputs, durable outputs check, document outlives the task, deleted spec]
       user_objective: "Retire an active task per its closure policy."
       operation: task.py archive <ref> [--root PATH]
       gotchas:
         - "Contract: acts on an ACTIVE task (a closed task errors with a reopen-first hint). tmp -> status: archived, folder MOVED to tmp/archived-tasks/<stub> (the user-purgeable parking directory; an occupied spot refuses -- remove the old copy first). dev/tasks -> version control is the record: in a GIT repo the final state (status + dated log entry) is COMMITTED, the folder deleted, and the removal committed -- two commits scoped to the task folder, never removing the folder before its final state is committed; OUTSIDE a git repo no git command runs -- the final state is recorded and the folder KEPT ('vcs_pending'), and the AGENT submits it with the workspace's VCS (e.g. p4 submit), then runs delete."
-        - "GIT-IGNORED task root (a project that deliberately keeps task folders as local scratch): git is present but will never carry the folder, so no commit is attempted and none is possible. The final state is recorded, the folder is KEPT ('vcs_ignored'), and the disposition says delete removes it PERMANENTLY -- version control holds no copy to recover from. This is a supported configuration, not an error; it is the one archive disposition where the folder's contents are unrecoverable, so relocate anything that must survive (update --durable-output) BEFORE running delete."
+        - "GIT-IGNORED task root (a project that deliberately keeps task folders as local scratch): git is present but will never carry the ignored files, so no commit is attempted and none is possible ('vcs_ignored'). Where git ignores EVERY file in the folder it IS local scratch, so it gets the tmp disposition -- the final state is recorded and the folder MOVED to dev/tasks/archived-tasks/<stub> (an occupied spot refuses, and the refusal lands before any write); the disposition says version control holds no copy to recover from, the parking directory is yours to purge, and delete removes the parked folder PERMANENTLY. Where git holds SOME of the folder and ignores the rest (files force-added into an ignored tree), the folder is KEPT IN PLACE and never parked -- moving it would take those tracked files off their tracked paths with no commit -- and the disposition names both sets, what git ignores and what git holds. This is a supported configuration, not an error; it is the one archive disposition where folder contents are unrecoverable, so relocate anything that must survive (update --durable-output) BEFORE running delete."
         - "DURABLE-OUTPUTS CHECK (runs BEFORE anything is parked, committed, or removed): each path in task.yaml's durable_outputs must exist AND live OUTSIDE the task folder. Either failure REFUSES the archive, naming every offender, while the documents can still be moved -- a path inside the folder is the load-bearing case, since archive is about to park or delete it. The check is purely mechanical and asks the user NOTHING; the judgment lives at authoring time (the update rotation's durable-outputs pass). No durable_outputs field at all -> a reminder note on stderr and the archive PROCEEDS: every folder predating the rule reads that way, and manifests here stay backwards-readable. On refusal: relocate each document to the repo it describes, re-declare with update --durable-output, then archive."
     - id: delete
       keywords: [delete task, remove folder, unconditional removal, discard]
       user_objective: "Archive semantics plus unconditional folder removal (even tmp)."
       operation: task.py delete <ref> [--root PATH]
       gotchas:
-        - "Contract: acts on an ACTIVE or ARCHIVED task (a still-present archived folder -- e.g. archive's vcs_pending output after you submitted it -- is exactly what delete finishes off; closed errors with a reopen-first hint). Refuses a dev/tasks folder git can see is DIRTY (delete never auto-commits; use archive); outside a git repo, or where the folder is git-IGNORED, no git check applies -- there is no VCS state the script can verify or preserve, so the removal is unrecoverable. Then the folder is removed even when tmp. Prints deleted: <id>."
+        - "Contract: acts on an ACTIVE or ARCHIVED task (a still-present archived folder -- archive's vcs_pending output after you submitted it, or a folder PARKED at <location>/archived-tasks/<stub> -- is exactly what delete finishes off; closed errors with a reopen-first hint). Name the task by its LIVE ref either way; delete finds the parked copy. Refuses a dev/tasks folder git can see is DIRTY (delete never auto-commits; use archive); outside a git repo, and for a parked folder, no git check applies -- there is no VCS state the script can verify or preserve, so the removal is unrecoverable. Then the folder is removed even when tmp. Prints deleted: <id>."
     - id: move
       keywords: [move task, promote, demote, relocate folder, rewrite references]
       user_objective: "Relocate a task between tmp and dev/tasks, keeping every reference valid."
@@ -176,7 +181,7 @@ capability_skill:
       gotchas:
         - "Contract: one parseable line per task -- 'id  status  priority  title' (absent fields '-'); dedupes by canonical path; classifies each via validate. Remote tasks list as '<path> @<host>  remote  -  -' (not locally resolvable). Folderless non-tmp refs read as archived; folderless local tmp refs as orphaned. Exit 0 even when empty; notes go to stderr."
         - "The project list is always computed (documents ARE the registry) -- there is no stored master list to consult or maintain."
-        - "project/user scope enumerate the TASK ROOTS: folder crawl over tmp/ + dev/tasks/, plus a task_list reference scan of the *.md under those roots (the parked tmp/archived-tasks/ subtree excluded). They do NOT crawl the whole tree -- an embedded task_list block is indistinguishable from an EXAMPLE of one, so a whole-tree scan reports the format's own documentation as live tasks. A task_list embedded elsewhere (a SKILL.md, a domain issues.md) is reached by NAMING its document: --scope skill <name> or --scope file <path>."
+        - "project/user scope enumerate the TASK ROOTS: folder crawl over tmp/ + dev/tasks/, plus a task_list reference scan of the *.md under those roots (the parked <root>/archived-tasks/ subtree excluded under either root). They do NOT crawl the whole tree -- an embedded task_list block is indistinguishable from an EXAMPLE of one, so a whole-tree scan reports the format's own documentation as live tasks. A task_list embedded elsewhere (a SKILL.md, a domain issues.md) is reached by NAMING its document: --scope skill <name> or --scope file <path>."
     - id: show
       keywords: [show task, task details, read fields, inspect]
       user_objective: "Render one task's selected task.yaml fields, cheaply."

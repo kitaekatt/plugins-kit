@@ -30,16 +30,44 @@ LOCATION_TMP = "tmp"
 LOCATION_DEV_TASKS = "dev/tasks"
 KNOWN_ROOTS = (LOCATION_TMP, LOCATION_DEV_TASKS)
 
-# Where a tmp task's folder is parked by ``archive`` (spec 2.5): the folder
-# moves out of the live root so tmp/ stays a working set, and the user can
-# purge tmp/archived-tasks/ wholesale. The name is reserved -- it can never
-# itself be a task stub under tmp/.
-ARCHIVED_TMP_DIRNAME = "archived-tasks"
+# Where ``archive`` parks a folder version control will not carry (spec 2.5):
+# the folder moves out of the live root so the root stays a working set, and
+# the user can purge ``<location>/archived-tasks/`` wholesale. The name is
+# reserved under BOTH roots -- it can never itself be a task stub.
+#
+# Two locations park, for the same reason expressed differently: a tmp task
+# is local scratch by construction, and a dev/tasks task whose folder git is
+# configured to IGNORE is local scratch in fact -- no commit can carry it, so
+# there is no version-control record to archive into.
+ARCHIVED_DIRNAME = "archived-tasks"
 
 
-def archived_tmp_folder(project_root: Path, stub: str) -> Path:
-    """The parking spot for an archived tmp task's folder."""
-    return project_root / LOCATION_TMP / ARCHIVED_TMP_DIRNAME / stub
+def archived_folder(project_root: Path, location: str, stub: str) -> Path:
+    """The parking spot for an archived task's folder in ``location``."""
+    return project_root / location / ARCHIVED_DIRNAME / stub
+
+
+def archived_canonical(location: str, stub: str) -> str:
+    """The project-relative parking path, in canonical (posix) form."""
+    return f"{location}/{ARCHIVED_DIRNAME}/{stub}"
+
+
+def is_parked_parts(parts: tuple[str, ...]) -> bool:
+    """True when project-relative ``parts`` lie inside a parking directory.
+
+    Used by discovery to skip the parked subtree under either root. It takes
+    PARTS rather than a path so it works for a folder and for a document
+    inside one, and so ``dev/tasks`` (two segments) is matched as a unit."""
+    for root in KNOWN_ROOTS:
+        root_parts = tuple(root.split("/"))
+        depth = len(root_parts)
+        if (
+            parts[:depth] == root_parts
+            and len(parts) > depth
+            and parts[depth] == ARCHIVED_DIRNAME
+        ):
+            return True
+    return False
 
 
 class RefResolutionError(ValueError):
@@ -87,16 +115,24 @@ def _normalize_parts(path_str: str, project_root: Path) -> tuple[str, ...]:
     return tuple(parts)
 
 
+def _reserved_message(location: str, original: str) -> str:
+    return (
+        f"{location}/{ARCHIVED_DIRNAME} is the reserved parking directory "
+        f"for archived tasks, not a task: {original!r}"
+    )
+
+
 def _classify_parts(parts: tuple[str, ...], original: str) -> ResolvedRef:
     """Classify normalized parts as a tmp or dev/tasks task path."""
     if len(parts) == 2 and parts[0] == "tmp":
-        if parts[1] == ARCHIVED_TMP_DIRNAME:
-            raise RefResolutionError(
-                f"tmp/{ARCHIVED_TMP_DIRNAME} is the reserved parking "
-                f"directory for archived tmp tasks, not a task: {original!r}"
-            )
+        if parts[1] == ARCHIVED_DIRNAME:
+            raise RefResolutionError(_reserved_message(LOCATION_TMP, original))
         return ResolvedRef("/".join(parts), LOCATION_TMP, parts[1])
     if len(parts) == 3 and parts[0] == "dev" and parts[1] == "tasks":
+        if parts[2] == ARCHIVED_DIRNAME:
+            raise RefResolutionError(
+                _reserved_message(LOCATION_DEV_TASKS, original)
+            )
         return ResolvedRef("/".join(parts), LOCATION_DEV_TASKS, parts[2])
     raise RefResolutionError(
         "not a known task location (expected tmp/<stub> or dev/tasks/<stub>): "

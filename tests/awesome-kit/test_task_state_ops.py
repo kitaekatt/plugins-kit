@@ -353,6 +353,24 @@ class TestReopenLib:
         with pytest.raises(StateOpError, match="cannot be reopened"):
             state_ops.reopen("tmp/ghost", tmp_path)
 
+    @pytest.mark.parametrize("location", ["tmp", "dev/tasks"])
+    def test_parked_folder_is_restored_to_the_live_root(
+        self, tmp_path, location
+    ):
+        # Both roots park: tmp always, dev/tasks when git ignores the folder.
+        # reopen restores from either parking directory before writing.
+        parked = tmp_path / location / "archived-tasks" / "a"
+        make_task(tmp_path, f"{location}/archived-tasks/a", status="archived")
+        assert parked.is_dir()
+
+        result = state_ops.reopen(f"{location}/a", tmp_path)
+
+        folder = tmp_path / location / "a"
+        assert folder.is_dir()
+        assert not parked.exists()
+        assert read_block(folder)["status"] == "active"
+        assert result.canonical == f"{location}/a"
+
 
 class TestWorkCLI:
     def test_pass_emits_skill_lines_and_agent_hint(self, tmp_path):

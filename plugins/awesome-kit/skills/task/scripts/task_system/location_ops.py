@@ -30,12 +30,30 @@ Readings chosen in Step 5 (flagged in the implementation report):
   is present and can see the folder, but is configured never to carry it, so
   the commits cannot succeed -- ``git add`` refuses an ignored path -- and no
   later commit can either. "Version control is the record, therefore the
-  folder may go" simply does not hold, so archive records the final state and
-  KEEPS the folder (``vcs_ignored``), reporting that ``delete`` is
-  unrecoverable there. This is a supported configuration, not a
+  folder may go" simply does not hold, so archive records the final state
+  and never removes the folder (``vcs_ignored``), reporting that version
+  control holds no copy of the ignored files and that ``delete`` is
+  therefore unrecoverable. This is a supported configuration, not a
   misconfiguration: a project may deliberately gitignore its task root to
   keep task folders local scratch. Previously this crashed mid-write, after
   the final-state writes and before the commit that justified them.
+- **``vcs_ignored`` splits by whether git holds ANY of the folder**, because
+  that decides whether the folder may MOVE:
+  - **Fully unheld** (``git ls-files -- <folder>`` empty): local scratch in
+    fact, which is exactly the tmp case, so it takes the tmp disposition and
+    PARKS at ``dev/tasks/archived-tasks/<stub>``. ``dev/tasks/`` stays a
+    working set of live tasks, and the parking directory is the user's to
+    purge. Leaving it in the live root made an archived task
+    indistinguishable from an active one on disk, with nothing but the
+    stored status to tell them apart.
+  - **Partially held** (some files force-added, the rest ignored): the
+    folder is KEPT IN PLACE. ``shutil.move`` relocates a tracked file off
+    its tracked path with no commit, so parking here would leave pending
+    deletions the archive never recorded and never intended, and would make
+    "version control holds no copy" false about exactly those files. The log
+    entry and the CLI disposition therefore name BOTH sets -- what git
+    ignores and what git holds -- rather than claiming the folder is
+    unrecorded.
 - **archive's pre-commit writes are rolled back when the commit fails.** The
   final state has to exist ON DISK to be committed, so the writes precede the
   git phase; a failure there would otherwise leave a log line asserting the
@@ -53,14 +71,23 @@ Readings chosen in Step 5 (flagged in the implementation report):
   still-present archived folder (a ``vcs_pending`` archive output, or the
   validate warning's "should have been deleted" case) is exactly what
   delete finishes off; a ``closed`` task still errors with the
-  reopen-first hint.
-- **tmp archive PARKS the folder** (spec 2.5, revised 2026-07-22): sets
-  ``status: archived`` and moves the folder to
-  ``tmp/archived-tasks/<stub>`` (resolve.archived_tmp_folder) so tmp/ stays
-  a working set; the user purges the parking directory at will. An occupied
-  parking spot (a previously-archived same-stub task) refuses -- remove the
-  old copy first. validate reads a parked folder as ``archived`` (not
-  orphaned) and reopen restores it to ``tmp/<stub>``.
+  reopen-first hint. delete also reaches a PARKED folder under either root
+  (``<location>/archived-tasks/<stub>``): it is the archived copy of the
+  named task, so ``delete <ref>`` is how the user removes it. The
+  commit-first guard does not apply to a parked folder -- it sits outside
+  the live root precisely because no commit will carry it.
+- **archive PARKS the folder wherever version control will not carry it**
+  (spec 2.5, revised 2026-07-22 for tmp): sets ``status: archived`` and
+  moves the folder to ``<location>/archived-tasks/<stub>``
+  (resolve.archived_folder) so the live root stays a working set; the user
+  purges the parking directory at will. That is ALWAYS the tmp disposition,
+  and it is the dev/tasks disposition when git ignores EVERY file in the
+  folder (a folder git partly holds stays where it is -- see above). An
+  occupied parking spot (a previously-archived same-stub task) refuses --
+  remove the old copy first, and the refusal happens BEFORE any final-state
+  write, so a refused archive is a no-op. validate reads a parked folder as
+  ``archived`` (not orphaned) and reopen restores it to
+  ``<location>/<stub>``.
  - **delete skips the intermediate tmp status write.** For a tmp folder,
   archive-then-remove would write ``status: archived`` into a folder removed
   moments later -- an unobservable intermediate state. delete goes straight
@@ -125,16 +152,28 @@ from .validate import git_ignores_path, git_vcs_state
 class ArchiveResult:
     canonical: str
     folder_removed: bool  # non-tmp in git: True (VC is the record); else False
-    archived_to: str | None = None  # tmp: parking path (project-relative)
+    # The parking path (project-relative) when the folder was PARKED: always
+    # for tmp, and for a git-ignored non-tmp folder (see vcs_ignored).
+    archived_to: str | None = None
     # Non-tmp, outside any git repo: final state recorded, folder KEPT --
     # submission to the workspace's VCS (and the finishing delete) is the
     # agent/user's to do.
     vcs_pending: bool = False
-    # Non-tmp, inside a git repo that IGNORES the folder: no commit is
-    # possible and none ever will be, so the final state is recorded and the
-    # folder KEPT. Distinct from vcs_pending -- there is nothing to submit,
-    # and `delete` destroys the folder with no version-control copy.
+    # Non-tmp, inside a git repo whose ignore rules exclude some or all of
+    # the folder: no commit can carry those files and none ever will, so the
+    # final state is recorded and the folder is never removed. Distinct from
+    # vcs_pending -- there is nothing to submit, and `delete` destroys the
+    # ignored files with no version-control copy behind them.
+    #
+    # Two shapes, told apart by `archived_to`: FULLY unheld parks like tmp
+    # (archived_to set); PARTIALLY held -- some files force-added -- stays in
+    # place (archived_to None), because moving it would relocate tracked
+    # files off their tracked paths with no commit.
     vcs_ignored: bool = False
+    # The counts behind that disposition: files git's ignore rules exclude,
+    # and files git's index holds. Both zero unless vcs_ignored.
+    vcs_unheld_count: int = 0
+    vcs_held_count: int = 0
     # Absent `durable_outputs` (every task predating the field): the rule
     # degrades to this note rather than refusing -- manifests here stay
     # backwards-READABLE.
@@ -232,15 +271,29 @@ def _archive_preflight(
     *,
     allowed_statuses: tuple[str, ...],
     require_committed: bool,
+    accept_parked: bool = False,
 ) -> tuple[resolve.ResolvedRef, Path, dict]:
     """The shared archive/delete preconditions (module docstring): folder
     exists, stored status in ``allowed_statuses`` (closed -> reopen-first
     hint). With ``require_committed`` (delete), a non-tmp folder that git
     can see is dirty refuses -- archive instead commits the final state
     itself, and outside a git repo the script cannot verify VCS state, so
-    no guard applies (the agent owns version control there)."""
+    no guard applies (the agent owns version control there).
+
+    ``accept_parked`` (delete) also accepts the folder at
+    ``<location>/archived-tasks/<stub>``: the archived copy of the named
+    task is what delete finishes off, under either root. A parked folder is
+    exempt from the commit-first guard -- it was parked precisely because no
+    commit will ever carry it, so there is no VCS state to preserve."""
     resolved = _resolve(ref, project_root)
     folder = resolved.folder(project_root)
+    parked = False
+    if not folder.is_dir() and accept_parked:
+        candidate = resolve.archived_folder(
+            project_root, resolved.location, resolved.stub
+        )
+        if candidate.is_dir():
+            folder, parked = candidate, True
     if not folder.is_dir():
         raise StateOpError(
             f"{resolved.canonical}: no task folder -- {verb} requires an "
@@ -259,6 +312,7 @@ def _archive_preflight(
         )
     if (
         require_committed
+        and not parked
         and resolved.location == resolve.LOCATION_DEV_TASKS
         and git_vcs_state(folder) == "dirty"
     ):
@@ -417,6 +471,50 @@ def _unheld_files_in(repo_root: Path, folder: Path) -> list[str]:
     return [line for line in proc.stdout.splitlines() if line.strip()]
 
 
+def _tracked_files_in(repo_root: Path, folder: Path) -> list[str]:
+    """Files inside the folder that git's INDEX holds -- the ones a commit
+    already carries, or would.
+
+    This is the predicate for whether the folder may be MOVED. ``shutil.move``
+    relocates a tracked file off its tracked path without any commit, so git
+    reports a pending deletion the archive never recorded and never intended:
+    parking a folder git partly holds leaves the repo dirty and makes "version
+    control holds no copy" false for exactly those files.
+
+    Together with ``_unheld_files_in`` it separates the two ignored shapes.
+    FULLY unheld (this returns empty) is local scratch and parks like tmp.
+    PARTIALLY held -- some files force-added, the rest ignored -- must stay
+    where it is: git is the record for what it holds, so the folder cannot
+    move and cannot be removed either.
+
+    Both ``repo_root`` and ``folder`` are resolved first -- see
+    ``_git_toplevel``."""
+    repo_root = repo_root.resolve()
+    folder = folder.resolve()
+    try:
+        proc = subprocess.run(
+            [
+                "git",
+                "-C",
+                str(repo_root),
+                "ls-files",
+                "--",
+                str(folder),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        # Cannot prove the folder is fully UNheld -> assume git holds
+        # something. Failing closed keeps the folder in place; failing open
+        # moves tracked files out from under git.
+        return ["<git could not enumerate tracked files>"]
+    if proc.returncode != 0:
+        return ["<git could not enumerate tracked files>"]
+    return [line for line in proc.stdout.splitlines() if line.strip()]
+
+
 def _snapshot_index(repo_root: Path, folder: Path) -> str | None:
     """The folder's staged index entries (``git ls-files --stage`` format),
     or None when git cannot report them.
@@ -488,6 +586,31 @@ def _restore_docs(folder: Path, snap: dict[str, bytes | None]) -> None:
             continue
 
 
+def _parking_target(
+    project_root: Path, resolved: resolve.ResolvedRef
+) -> tuple[Path, str]:
+    """The parking spot for ``resolved``, refusing an occupied one.
+
+    Called BEFORE archive writes anything, so a refusal leaves the task
+    exactly as it was rather than half-archived."""
+    parking = resolve.archived_folder(
+        project_root, resolved.location, resolved.stub
+    )
+    canonical = resolve.archived_canonical(resolved.location, resolved.stub)
+    if parking.exists():
+        raise StateOpError(
+            f"archive parking spot already occupied: {canonical} exists -- "
+            "remove (purge) the old archived copy first"
+        )
+    return parking, canonical
+
+
+def _park(folder: Path, parking: Path) -> None:
+    """Move the folder into its (verified-free) parking spot."""
+    parking.parent.mkdir(parents=True, exist_ok=True)
+    shutil.move(str(folder), str(parking))
+
+
 def archive_task(ref: str, project_root: Path) -> ArchiveResult:
     """``archive <ref>`` (spec 7.1): pre folder exists + stored status
     active. Then per closure policy (spec 2.5, revised): tmp ->
@@ -497,9 +620,14 @@ def archive_task(ref: str, project_root: Path) -> ArchiveResult:
     record; two pathspec-limited commits); non-tmp outside any git repo ->
     record the final state and KEEP the folder (``vcs_pending``: the agent
     submits it with the workspace's VCS, then runs delete); non-tmp inside a
-    git repo that IGNORES the folder -> record the final state and KEEP the
-    folder (``vcs_ignored``: no commit is possible, so removal would be
-    unrecoverable -- ``delete`` is the user's explicit call)."""
+    git repo whose ignore rules exclude EVERY file in the folder -> record
+    the final state and PARK the folder at
+    ``dev/tasks/archived-tasks/<stub>`` (``vcs_ignored``: no commit is
+    possible, so version control holds no copy and ``delete`` on the parked
+    folder is the user's explicit, unrecoverable call); non-tmp where git
+    holds SOME of the folder and ignores the rest -> record the final state
+    and KEEP the folder in place (``vcs_ignored`` with no ``archived_to``:
+    moving it would take tracked files off their tracked paths)."""
     resolved, folder, data = _archive_preflight(
         ref,
         project_root,
@@ -517,34 +645,26 @@ def archive_task(ref: str, project_root: Path) -> ArchiveResult:
     archived_to: str | None = None
     vcs_pending = False
     vcs_ignored = False
+    unheld: list[str] = []
+    tracked: list[str] = []
     if resolved.location == resolve.LOCATION_TMP:
-        parking = resolve.archived_tmp_folder(project_root, resolved.stub)
-        if parking.exists():
-            raise StateOpError(
-                f"archive parking spot already occupied: "
-                f"{resolve.LOCATION_TMP}/{resolve.ARCHIVED_TMP_DIRNAME}/"
-                f"{resolved.stub} exists -- remove (purge) the old archived "
-                "copy first"
-            )
+        parking, parking_canonical = _parking_target(project_root, resolved)
         data["task"]["status"] = "archived"
         _write_task_yaml(folder, data)
-        parking.parent.mkdir(parents=True, exist_ok=True)
-        shutil.move(str(folder), str(parking))
+        _park(folder, parking)
         removed = False
-        archived_to = (
-            f"{resolve.LOCATION_TMP}/{resolve.ARCHIVED_TMP_DIRNAME}/"
-            f"{resolved.stub}"
-        )
+        archived_to = parking_canonical
     else:
         repo_root = _git_toplevel(folder)
         unheld = _unheld_files_in(repo_root, folder) if repo_root else []
+        parking = parking_canonical = None
         if repo_root is not None and unheld:
             # Inside a repo, but git's ignore rules exclude some or all of
             # this folder, so no commit will ever carry those files. "Version
             # control is the record, therefore the folder may go" does not
             # hold: removing it would destroy content that exists nowhere
-            # else. Record the final state, keep the folder, and say plainly
-            # that `delete` is unrecoverable here.
+            # else. Record the final state, do not remove anything, and say
+            # plainly that `delete` is unrecoverable here.
             # This covers BOTH shapes, and the partial one is the dangerous
             # one: when only SOME files were force-added, git_vcs_state reads
             # `clean` (the porcelain is quiet and something IS tracked) and
@@ -556,6 +676,20 @@ def archive_task(ref: str, project_root: Path) -> ArchiveResult:
             # your VCS" -- which is precisely the wrong advice for a folder
             # no VCS will ever accept.
             vcs_ignored = True
+            # WHICH ignored shape decides whether the folder may MOVE.
+            # Fully unheld -> local scratch in fact, so it takes the tmp
+            # disposition and parks. Partially held (some files force-added)
+            # -> it must stay: `shutil.move` would relocate those tracked
+            # files off their tracked paths with no commit, leaving pending
+            # deletions the archive never recorded, and would make "version
+            # control holds no copy" a false claim about them.
+            tracked = _tracked_files_in(repo_root, folder_resolved)
+            if not tracked:
+                # Resolved BEFORE the final-state writes: an occupied parking
+                # spot must refuse while the task is still untouched.
+                parking, parking_canonical = _parking_target(
+                    project_root, resolved
+                )
         data["task"]["status"] = "archived"
         pre_write = _snapshot_docs(folder)
         _write_task_yaml(folder, data)
@@ -563,13 +697,32 @@ def archive_task(ref: str, project_root: Path) -> ArchiveResult:
             shown = ", ".join(unheld[:3]) + (
                 f" (+{len(unheld) - 3} more)" if len(unheld) > 3 else ""
             )
-            _append_archive_log_entry(
-                folder,
-                "final state recorded; folder KEPT -- git is configured to "
-                f"ignore {len(unheld)} file(s) here ({shown}), so version "
-                "control holds no copy of them (delete removes them "
-                "permanently)",
-            )
+            if parking is not None:
+                _append_archive_log_entry(
+                    folder,
+                    "final state recorded; folder PARKED at "
+                    f"{parking_canonical} -- git is configured to ignore "
+                    f"{len(unheld)} file(s) here ({shown}), so version "
+                    "control holds no copy of them (the parking directory "
+                    "is yours to purge; delete removes them permanently)",
+                )
+                # The log entry is written first so it travels with the
+                # folder.
+                _park(folder, parking)
+                archived_to = parking_canonical
+            else:
+                held = ", ".join(tracked[:3]) + (
+                    f" (+{len(tracked) - 3} more)" if len(tracked) > 3 else ""
+                )
+                _append_archive_log_entry(
+                    folder,
+                    "final state recorded; folder KEPT -- git is configured "
+                    f"to ignore {len(unheld)} file(s) here ({shown}), so "
+                    "version control holds no copy of THOSE (delete removes "
+                    f"them permanently); it DOES hold {len(tracked)} tracked "
+                    f"file(s) here ({held}), which is why the folder is not "
+                    "moved or removed",
+                )
             removed = False
         elif repo_root is None:
             # Not a git workspace: no git command runs. The final state is
@@ -634,22 +787,27 @@ def archive_task(ref: str, project_root: Path) -> ArchiveResult:
         archived_to=archived_to,
         vcs_pending=vcs_pending,
         vcs_ignored=vcs_ignored,
+        vcs_unheld_count=len(unheld) if vcs_ignored else 0,
+        vcs_held_count=len(tracked) if vcs_ignored else 0,
         durable_note=durable_note,
     )
 
 
 def delete_task(ref: str, project_root: Path) -> str:
     """``delete <ref>`` (spec 7.1): accepts stored status active OR archived
-    (a still-present archived folder is what delete finishes off), plus the
-    commit-first guard where git can verify it (module docstring -- delete
-    never auto-commits; outside a git repo the agent owns VCS state), then
-    remove the folder even when tmp (unconditional). Returns the canonical id."""
+    (a still-present archived folder is what delete finishes off -- including
+    one PARKED at ``<location>/archived-tasks/<stub>``), plus the commit-first
+    guard where git can verify it (module docstring -- delete never
+    auto-commits; outside a git repo, and for a parked folder, the guard does
+    not apply), then remove the folder even when tmp (unconditional). Returns
+    the canonical id."""
     resolved, folder, _ = _archive_preflight(
         ref,
         project_root,
         "delete",
         allowed_statuses=("active", "archived"),
         require_committed=True,
+        accept_parked=True,
     )
     shutil.rmtree(folder)
     return resolved.canonical

@@ -294,10 +294,10 @@ def init_task(
         raise InitError(f"unknown type: {task_type!r} names no registered task type")
 
     stub, title = derive_stub_and_title(stub_or_desc)
-    if dest == resolve.LOCATION_TMP and stub == resolve.ARCHIVED_TMP_DIRNAME:
+    if stub == resolve.ARCHIVED_DIRNAME:
         raise InitError(
-            f"stub {stub!r} is reserved under tmp/ (the parking directory "
-            "for archived tmp tasks)"
+            f"stub {stub!r} is reserved under {dest}/ (the parking directory "
+            "for archived tasks)"
         )
     canonical = f"{dest}/{stub}"
     folder = (project_root / canonical).absolute()

@@ -37,9 +37,10 @@ Readings chosen in Step 4 (flagged in the implementation report):
 - **close checks the STORED status** (``status: active`` in task.yaml), not
   the computed classification.
 - **reopen sets ``status: active`` unconditionally** (its precondition is
-  only that the folder exists -- a tmp folder parked at
-  ``tmp/archived-tasks/<stub>`` counts and is restored to ``tmp/<stub>``
-  first); it re-validates and reports findings.
+  only that the folder exists -- a folder parked at
+  ``<location>/archived-tasks/<stub>`` counts and is restored to
+  ``<location>/<stub>`` first, under either root); it re-validates and
+  reports findings.
 - **task.yaml read-modify-write** uses yaml.safe_load + safe_dump
   (sort_keys=False): unknown extra fields and the mapping's insertion order
   round-trip; YAML comments do not survive an edit (content, not bytes, is
@@ -361,20 +362,22 @@ def reopen(
     *,
     local_host: str | None = None,
 ) -> UpdateResult:
-    """``reopen <ref>`` (spec 7.1): pre folder exists -- including a tmp
-    archived folder parked at ``tmp/archived-tasks/<stub>``, which is first
-    RESTORED to ``tmp/<stub>``; a missing folder cannot be reopened -- it is
-    gone. Set ``status: active``; re-validate; the result carries the
-    findings."""
+    """``reopen <ref>`` (spec 7.1): pre folder exists -- including an
+    archived folder parked at ``<location>/archived-tasks/<stub>``, which is
+    first RESTORED to ``<location>/<stub>``; a missing folder cannot be
+    reopened -- it is gone. Set ``status: active``; re-validate; the result
+    carries the findings.
+
+    Both roots park: tmp always, and dev/tasks when git is configured to
+    IGNORE the folder (archive's ``vcs_ignored`` disposition), so reopen
+    looks in the parking directory for either."""
     resolved = _resolve(ref, project_root)
     folder = resolved.folder(project_root)
     if not folder.is_dir():
-        parked = (
-            resolve.archived_tmp_folder(project_root, resolved.stub)
-            if resolved.location == resolve.LOCATION_TMP
-            else None
+        parked = resolve.archived_folder(
+            project_root, resolved.location, resolved.stub
         )
-        if parked is not None and parked.is_dir():
+        if parked.is_dir():
             folder.parent.mkdir(parents=True, exist_ok=True)
             shutil.move(str(parked), str(folder))
         else:

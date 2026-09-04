@@ -5,10 +5,13 @@ Covers the spec section 7.1/7.2/7.4 verbs ``archive`` / ``delete`` /
 at tmp/archived-tasks/<stub>; non-tmp in git -> final state committed,
 folder deleted, removal committed; non-tmp outside git -> final state
 recorded, folder kept, VCS submission left to the agent -- version control
-is the record, git is just the automated case), the status preconditions
+is the record, git is just the automated case; non-tmp that git IGNORES ->
+final state recorded + folder parked at dev/tasks/archived-tasks/<stub>,
+since no commit can ever carry it), the status preconditions
 (closed -> reopen-first error), delete's git-dirty guard (delete never
-auto-commits; accepts active or archived) plus unconditional folder
-removal, reopen's restore of a parked tmp folder,
+auto-commits; accepts active or archived, including a parked folder) plus
+unconditional folder removal, reopen's restore of a parked folder under
+either root,
 move's relocation + span-precise reference rewrite across the project
 document set (byte-level preservation outside the rewritten path values,
 prose mentions and other-task refs untouched).
@@ -306,13 +309,14 @@ class TestArchiveLib:
             location_ops.archive_task("tmp/a", tmp_path)
         assert read_block(folder)["status"] == "closed"
 
-    def test_git_ignored_folder_records_and_keeps_folder(self, git_root):
+    def test_git_ignored_folder_records_and_parks_folder(self, git_root):
         # A project may deliberately gitignore its task root, keeping task
         # folders as local scratch. Git is present and CAN see the folder,
         # but will never carry it -- so the commits cannot succeed and the
         # "version control is the record, therefore the folder may go"
-        # justification does not hold. Before the fix this crashed at
-        # `git add -A` AFTER the final-state writes had landed.
+        # justification does not hold. Such a folder IS local scratch, which
+        # is exactly the tmp case, so it gets the tmp disposition: parked at
+        # dev/tasks/archived-tasks/<stub>, leaving dev/tasks/ a working set.
         (git_root / ".gitignore").write_text("dev/\n", encoding="utf-8")
         _commit_all(git_root)
         folder = make_task(git_root, "dev/tasks/scratch")
@@ -320,27 +324,87 @@ class TestArchiveLib:
         assert result.vcs_ignored is True
         assert result.vcs_pending is False
         assert result.folder_removed is False
-        assert folder.is_dir()
-        assert read_block(folder)["status"] == "archived"
-        log = (folder / "log.md").read_text(encoding="utf-8")
-        assert "folder KEPT" in log
+        assert result.archived_to == "dev/tasks/archived-tasks/scratch"
+        assert not folder.exists()
+        parked = git_root / "dev" / "tasks" / "archived-tasks" / "scratch"
+        assert parked.is_dir()
+        assert read_block(parked)["status"] == "archived"
+        log = (parked / "log.md").read_text(encoding="utf-8")
+        assert "folder PARKED at dev/tasks/archived-tasks/scratch" in log
         assert "configured to ignore" in log
         # The log must NOT claim a commit or a removal that did not happen.
         assert "final state committed" not in log
         # No archive commit was invented for an unreachable folder.
         assert not any("task archive" in s for s in _log_subjects(git_root))
 
+    def test_git_ignored_occupied_parking_spot_refuses_before_writing(
+        self, git_root
+    ):
+        # Same refusal shape as tmp, and it must land BEFORE the final-state
+        # writes so a refused archive is a no-op rather than a half-archived
+        # folder whose log claims a parking that never happened.
+        (git_root / ".gitignore").write_text("dev/\n", encoding="utf-8")
+        _commit_all(git_root)
+        folder = make_task(git_root, "dev/tasks/scratch")
+        occupied = git_root / "dev" / "tasks" / "archived-tasks" / "scratch"
+        occupied.mkdir(parents=True)
+        with pytest.raises(StateOpError, match="parking spot already occupied"):
+            location_ops.archive_task("dev/tasks/scratch", git_root)
+        assert folder.is_dir()
+        assert read_block(folder)["status"] == "active"
+        assert "archive:" not in (folder / "log.md").read_text(
+            encoding="utf-8"
+        )
+
     def test_git_ignored_delete_finishes(self, git_root):
-        # The second half: delete removes an ignored archived folder. Its
-        # commit-first guard cannot apply (git will never hold this content),
-        # so it must not block -- the CLI disposition is what warns that the
-        # removal is permanent.
+        # The second half: delete removes the PARKED archived folder, named
+        # by its live ref. Its commit-first guard cannot apply (git will
+        # never hold this content), so it must not block -- the CLI
+        # disposition is what warns that the removal is permanent.
         (git_root / ".gitignore").write_text("dev/\n", encoding="utf-8")
         _commit_all(git_root)
         folder = make_task(git_root, "dev/tasks/scratch")
         location_ops.archive_task("dev/tasks/scratch", git_root)
+        parked = git_root / "dev" / "tasks" / "archived-tasks" / "scratch"
+        assert parked.is_dir()
         location_ops.delete_task("dev/tasks/scratch", git_root)
         assert not folder.exists()
+        assert not parked.exists()
+
+    def test_git_ignored_reopen_restores_parked_folder(self, git_root):
+        # reopen mirrors tmp: the parked folder comes back to the live root.
+        from task_system import state_ops
+
+        (git_root / ".gitignore").write_text("dev/\n", encoding="utf-8")
+        _commit_all(git_root)
+        folder = make_task(git_root, "dev/tasks/scratch")
+        location_ops.archive_task("dev/tasks/scratch", git_root)
+        result = state_ops.reopen("dev/tasks/scratch", git_root)
+        assert folder.is_dir()
+        assert not (
+            git_root / "dev" / "tasks" / "archived-tasks" / "scratch"
+        ).exists()
+        assert read_block(folder)["status"] == "active"
+        assert result.validation.classification == "active"
+
+    def test_git_ignored_parked_folder_is_not_listed(self, git_root):
+        from task_system.discovery import discover
+
+        (git_root / ".gitignore").write_text("dev/\n", encoding="utf-8")
+        _commit_all(git_root)
+        make_task(git_root, "dev/tasks/live")
+        make_task(git_root, "dev/tasks/done")
+        location_ops.archive_task("dev/tasks/done", git_root)
+        notes: list[str] = []
+        records = discover("project", git_root, notes=notes)
+        by_id = {r.id: r for r in records}
+        assert "dev/tasks/live" in by_id
+        # The parked subtree contributes no folder-crawl candidate; the ref
+        # is only reachable by naming the task, and reads as archived.
+        assert notes == []
+        assert validate_ref("dev/tasks/done", git_root).classification == (
+            "archived"
+        )
 
     def test_force_added_file_is_tracked_not_ignored(self, git_root):
         # `check-ignore` alone would call this ignored, but a force-added
@@ -383,12 +447,55 @@ class TestArchiveLib:
 
         assert result.vcs_ignored is True
         assert result.folder_removed is False
-        # The files git never held must still be on disk.
+        # It must NOT park either. `shutil.move` would take task.yaml and
+        # log.md off their TRACKED paths with no commit, so git would report
+        # deletions the archive never recorded -- and "version control holds
+        # no copy" would be false about exactly those two files.
+        assert result.archived_to is None
+        assert not (
+            git_root / "dev" / "tasks" / "archived-tasks" / "partial"
+        ).exists()
+        # Everything stays exactly where it was.
+        assert folder.is_dir()
         assert (folder / "plan.md").is_file()
         assert (folder / "CLAUDE.md").is_file()
         log = (folder / "log.md").read_text(encoding="utf-8")
         assert "folder KEPT" in log
         assert "final state committed" not in log
+        # The message must be TRUE: it names what git ignores AND what git
+        # holds, rather than claiming the whole folder is unrecorded.
+        assert "task.yaml" in log or "log.md" in log
+        assert result.vcs_held_count == 2
+        assert result.vcs_unheld_count >= 1
+
+    def test_partially_force_added_archive_leaves_no_pending_deletions(
+        self, git_root
+    ):
+        # The concrete harm parking would cause in this shape: tracked files
+        # relocated with no commit show up as ' D' entries, dirtying a repo
+        # the archive was supposed to leave alone.
+        (git_root / ".gitignore").write_text("dev/\n", encoding="utf-8")
+        folder = make_task(git_root, "dev/tasks/partial")
+        subprocess.run(
+            ["git", "-C", str(git_root), "add", "-f", "--",
+             str(folder / "task.yaml"), str(folder / "log.md")],
+            check=True,
+            capture_output=True,
+        )
+        _commit_all(git_root)
+
+        location_ops.archive_task("dev/tasks/partial", git_root)
+
+        porcelain = subprocess.run(
+            ["git", "-C", str(git_root), "status", "--porcelain"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
+        deletions = [
+            line for line in porcelain.splitlines() if line[:2] in (" D", "D ")
+        ]
+        assert deletions == [], porcelain
 
     def test_failed_commit_restores_the_index_not_just_the_tree(
         self, git_root
@@ -539,15 +646,30 @@ class TestParkedTmpArchive:
         by_id = {r.id: r for r in records}
         assert by_id["tmp/done"].classification == "archived"
 
-    def test_reserved_ref_errors(self, tmp_path):
+    @pytest.mark.parametrize(
+        "ref", ["tmp/archived-tasks", "dev/tasks/archived-tasks"]
+    )
+    def test_reserved_ref_errors(self, tmp_path, ref):
         with pytest.raises(StateOpError, match="reserved"):
-            location_ops.archive_task("tmp/archived-tasks", tmp_path)
+            location_ops.archive_task(ref, tmp_path)
 
-    def test_init_reserved_stub_errors(self, tmp_path):
+    @pytest.mark.parametrize(
+        "ref",
+        ["tmp/archived-tasks/a", "dev/tasks/archived-tasks/a"],
+    )
+    def test_ref_into_the_parking_dir_errors(self, tmp_path, ref):
+        # A ref pointing INTO the parking directory is not a task location:
+        # the task is named by its LIVE ref, and reopen/delete reach the
+        # parked copy from there.
+        with pytest.raises(StateOpError, match="not a known task location"):
+            location_ops.archive_task(ref, tmp_path)
+
+    @pytest.mark.parametrize("dest", ["tmp", "dev/tasks"])
+    def test_init_reserved_stub_errors(self, tmp_path, dest):
         from task_system.init import InitError, init_task
 
         with pytest.raises(InitError, match="reserved"):
-            init_task("archived-tasks", tmp_path, dest="tmp")
+            init_task("archived-tasks", tmp_path, dest=dest)
 
 
 def fenced_task_list(refs: list[dict]) -> str:
@@ -768,6 +890,38 @@ class TestArchiveCLI:
         # old behavior was a bare git error naming no next step at all.
         assert "delete" in out
         assert "PERMANENTLY" in out
+        # The parking is stated too, along with the fact that the parking
+        # directory is the user's to purge.
+        assert "moved to dev/tasks/archived-tasks/scratch" in out
+        assert "purge" in out
+        assert not folder.exists()
+        parked = git_root / "dev" / "tasks" / "archived-tasks" / "scratch"
+        assert read_block(parked)["status"] == "archived"
+
+    def test_partially_held_prints_kept_in_place_disposition(self, git_root):
+        # The disposition must be TRUE for this shape: the folder is kept,
+        # and git DOES hold some of it -- so it may not say version control
+        # holds no copy of the folder.
+        (git_root / ".gitignore").write_text("dev/\n", encoding="utf-8")
+        folder = make_task(git_root, "dev/tasks/partial")
+        subprocess.run(
+            ["git", "-C", str(git_root), "add", "-f", "--",
+             str(folder / "task.yaml")],
+            check=True,
+            capture_output=True,
+        )
+        _commit_all(git_root)
+        proc = run_cli(
+            ["archive", "dev/tasks/partial", "--root", str(git_root)],
+            git_root,
+        )
+        assert proc.returncode == 0, proc.stderr
+        out = proc.stdout.strip()
+        assert "folder kept" in out
+        assert "1 tracked file(s)" in out
+        assert "PERMANENTLY" in out
+        assert "local scratch" in out
+        assert "moved to" not in out
         assert folder.is_dir()
 
     def test_closed_task_exits_nonzero_with_reopen_hint(self, tmp_path):

@@ -19,8 +19,10 @@ Readings chosen in Step 3 (flagged in the implementation report):
 
 - **Scope -> documents (``project``/``user``).** The document set is the
   ``*.md`` under the scope's task roots (``tmp/`` + ``dev/tasks/``), NOT the
-  whole tree, and the parked ``tmp/archived-tasks/`` subtree is excluded for
-  parity with the folder crawl. Rationale: an embedded ``task_list`` block is
+  whole tree, and the parked ``<root>/archived-tasks/`` subtree is excluded
+  under EITHER root for parity with the folder crawl (both roots park: tmp
+  always, dev/tasks when git is configured to ignore the folder). Rationale:
+  an embedded ``task_list`` block is
   indistinguishable from an example of one, so a whole-tree crawl reports the
   format's own documentation as live tasks (this is what it did -- the spec's
   2.4 sample block resolved as three phantom tasks in plugins-kit, the one
@@ -167,8 +169,8 @@ def _scope_docs(
                 continue
             for doc in base.rglob("*.md"):
                 rel = doc.relative_to(effective_root).parts
-                if rel[:2] == (resolve.LOCATION_TMP, resolve.ARCHIVED_TMP_DIRNAME):
-                    continue  # parked archived tmp tasks: not listed (2a parity)
+                if resolve.is_parked_parts(rel):
+                    continue  # parked archived tasks: not listed (2a parity)
                 docs.append(doc)
         return sorted(docs)
     assert target is not None  # guarded in discover()
@@ -206,8 +208,8 @@ def _crawl_folders(
             continue
         for task_yaml in sorted(base.rglob("task.yaml")):
             rel_parts = task_yaml.parent.relative_to(effective_root).parts
-            if rel_parts[:2] == ("tmp", resolve.ARCHIVED_TMP_DIRNAME):
-                continue  # parked archived tmp tasks: deliberate, not listed
+            if resolve.is_parked_parts(rel_parts):
+                continue  # parked archived tasks: deliberate, not listed
             rel = task_yaml.parent.relative_to(effective_root).as_posix()
             try:
                 resolved = resolve.resolve_path(rel, effective_root)
