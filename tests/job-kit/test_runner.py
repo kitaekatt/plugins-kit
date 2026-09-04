@@ -349,6 +349,37 @@ def test_runner_sets_timeout_and_records_truthful_response(tmp_path: Path) -> No
     assert backend.calls[0][3].timeout_s == 17.0
 
 
+def test_runner_omits_temperature_when_job_does_not_set_one(tmp_path: Path) -> None:
+    """An unset job temperature reaches the transport as an omitted value."""
+    backend = FakeBackend()
+
+    run_jobs(
+        [_job(tmp_path)],
+        tmp_path / "temperature-default.sqlite3",
+        capabilities_provider=_advertisement,
+        backend_factory=_factory_for(backend),
+    )
+
+    options = backend.calls[0][3]
+    assert options.temperature is None
+    assert options.max_tokens == 4096
+
+
+def test_runner_sends_job_temperature_override(tmp_path: Path) -> None:
+    """An explicit job temperature reaches the transport unchanged."""
+    backend = FakeBackend()
+    job = replace(_job(tmp_path), options={"temperature": 0.2})
+
+    run_jobs(
+        [job],
+        tmp_path / "temperature-override.sqlite3",
+        capabilities_provider=_advertisement,
+        backend_factory=_factory_for(backend),
+    )
+
+    assert backend.calls[0][3].temperature == 0.2
+
+
 def test_runner_carries_forwarded_params_through_acceptance(
     tmp_path: Path,
 ) -> None:
