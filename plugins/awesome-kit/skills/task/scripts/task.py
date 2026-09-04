@@ -18,7 +18,8 @@ Read-op conventions (Step 3):
 - ``list`` prints one stable, parseable line per task --
   ``id  status  priority  title`` (two-space separated; absent fields ``-``;
   remote tasks as ``<path> @<host>  remote  -  -``, status not locally
-  resolvable). Discovery notes go to stderr. Exit 0 even when empty.
+  resolvable). Archived tasks are omitted unless ``--status archived`` is
+  given. Discovery notes go to stderr. Exit 0 even when empty.
 - ``show <ref>`` prints the selected task.yaml fields; non-zero with a
   reason on stderr when the ref is unresolvable or the folder is not
   readable locally (archived / orphaned / remote).
@@ -594,7 +595,10 @@ def main(argv: list[str] | None = None) -> int:
         "path (scope file).",
     )
     p_list.add_argument(
-        "--status", default=None, help="Only tasks with this status/classification."
+        "--status",
+        default=None,
+        help="Only tasks with this status/classification. Default: every "
+        "classification except archived (pass --status archived for those).",
     )
     p_list.add_argument(
         "--priority", default=None, help="Only tasks with this priority."

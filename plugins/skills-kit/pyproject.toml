@@ -1,6 +1,6 @@
 [project]
 name = "skills-kit"
-version = "0.69.0"
+version = "0.70.0"
 requires-python = ">=3.10"
 dependencies = ["pyyaml"]
 
@@ -10,3 +10,10 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 include = ["skills_kit_lib*"]
+
+# SA-1 requires the human-html style asset to ship in a built wheel; consumers
+# read it through importlib.resources, so it must be package data rather than a
+# source-tree file. skills_kit_lib/assets is a real package (it carries an
+# __init__.py) so packages.find above discovers it.
+[tool.setuptools.package-data]
+"skills_kit_lib.assets" = ["*.css"]

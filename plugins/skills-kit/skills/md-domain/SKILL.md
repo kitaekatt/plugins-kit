@@ -6,7 +6,7 @@ skill-type: domain-skill
 description: Use when auditing, authoring, generating, or analyzing markdown -- SKILL.md, CLAUDE.md, docs. Do NOT use for knowledge-encoding or update-documentation.
 disable-model-invocation: false
 user-invocable: true
-argument-hint: "[audit|author|generate|analyze] [skill|claude-md|project-doc|references|<directory>] [<path>|--diff|jobs <dir>] [--coverage <dir>] [--review] [--density] [--json] [--advanced] [fast]"
+argument-hint: "[audit|author|generate|analyze] [skill|claude-md|project-doc|references|human-html|<directory>] [<path>|--diff|jobs <dir>] [--coverage <dir>] [--review] [--density] [--json] [--advanced] [fast]"
 ---
 
 # md-domain
@@ -23,8 +23,17 @@ The single front door for four dispatch verbs over project markdown:
 
 `audit` crosses four artifacts (`skill`, `claude-md`, `project-doc`,
 `references`) and `author` crosses three (cross-references are not authored).
-`analyze` and `generate` are not artifact-parameterized. This replaces the former
-`md-audit` / `md-authoring` routers and the member skills they dispatched into.
+`generate` crosses two (`claude-md` and `human-html`), and `analyze` has two
+non-artifact subjects (`code_subtree` and `human_html_directory`), each selected
+explicitly. This replaces the former `md-audit` / `md-authoring` routers and the
+member skills they dispatched into.
+
+**`human-html` is the one artifact md-domain writes that is not markdown.** It
+is a generated orientation page a person browses beside the files it explains --
+one `human.html` per warranted directory, plus optional `human.<slug>.html`
+references. It has its own analysis (does this directory warrant a page at all?)
+and its own generation (write the page, or remove one the decision retired), and
+both defer to `references/standards/human-html-standards.md`.
 
 **Coverage's subject is ONE DIRECTORY'S OWN DIRECT code files -- never a
 subtree.** Assessing a directory never descends into its subdirectories: each of
@@ -41,11 +50,13 @@ later run can re-check. Both produce a document held to the same per-artifact
 standards. Only a generated document can ALSO be checked back against its source,
 and that is the whole of the difference.
 
-**That is why `generate` exists for `claude-md` alone.** `analyze` reads code,
-and code is what a CLAUDE.md is about. Nothing analyzes a codebase and emits
-skill or project-doc candidates, so those two artifacts are authored. If an
-analysis is ever built for them, they gain a generate lane; until then, do not
-improvise one.
+**That is why `generate` exists for `claude-md` and `human-html` alone.** Each
+has an analysis that produces its input: `analyze <directory>` reads code and
+emits coverage, and `analyze human-html <directory>` reads a subtree and emits a
+page-warrant decision. Nothing analyzes a codebase and emits skill or
+project-doc candidates, so those two artifacts are authored. If an analysis is
+ever built for them, they gain a generate lane; until then, do not improvise
+one.
 
 **REGENERATION is `generate` over a document that already exists.** Existence
 decides, not a flag. It NEVER deletes and never blocks: every unit is SORTED --
@@ -68,8 +79,11 @@ live in `references/lanes/`, and the placement spine they all defer to lives in
 - **Bare** -- `/md-domain` greets with the menu below; pick a verb + artifact.
 - **Argument-dispatched** -- `/md-domain audit skill <path>`,
   `/md-domain author claude-md`, `/md-domain generate claude-md <directory>`,
-  `/md-domain audit references [flags]`, and
-  `/md-domain analyze <directory> [--advanced]` jump straight into that lane.
+  `/md-domain audit references [flags]`,
+  `/md-domain analyze <directory> [--advanced]`,
+  `/md-domain analyze human-html <directory> [--json]` and
+  `/md-domain generate human-html <directory> [--coverage <path>]` jump
+  straight into that lane.
 - **Natural language** -- routed by the verb and subject named. Each lane
   record below declares the `invocation_phrasings` that should reach it.
 - **Review mode** -- append `--review` to an `audit` dispatch on `skill`,
@@ -82,6 +96,11 @@ live in `references/lanes/`, and the placement spine they all defer to lives in
   session's, or reads persisted reports named by `--coverage <dir>`, or runs
   `analyze` first and says so. Over a document that already exists it is
   REGENERATION and the retention rules apply.
+- **Human-html mode** -- say `human-html` after the verb, then name a directory.
+  `analyze human-html <dir>` decides whether that directory warrants an
+  orientation page and stops; `generate human-html <dir>` persists the decision
+  and writes or removes the page to match it. Neither has a whole-repo default,
+  and both run deepest-first over a tree (TS-1).
 
 ### Bare-invocation greeting
 
@@ -90,16 +109,19 @@ Tell me in your own words what you want to do with your project markdown.
 
 WHAT I CAN DO
   audit      check an existing document against its standards, and give a verdict
-  analyze    read one directory's own code and report what its CLAUDE.md should
-             carry -- not its subdirectories, each of which is its own run; never edits
+  analyze    read one directory and report what a document there should carry --
+             its own code for a CLAUDE.md, or its whole subtree for a human page;
+             not its subdirectories' code, each of which is its own run; never edits
   author     produce a document from content you supply, held to the standards
-  generate   produce a CLAUDE.md out of analysis, so every claim traces back to code
+  generate   produce a CLAUDE.md or a human page out of analysis, so every claim
+             traces back to what was read
 
 WHAT I CAN DO IT TO
   skills             a SKILL.md and its reference documents      audit, author
   CLAUDE.md          one directory's ambient guidance            audit, author, generate
   project docs       READMEs, design records, docs/              audit, author
   cross-references   the links between all of the above          audit only
+  human pages        an orientation page a person browses        analyze, generate
 
 FOR EXAMPLE
   "audit this skill"                     one SKILL.md against its type contract
@@ -112,6 +134,8 @@ FOR EXAMPLE
   "generate src/cache's CLAUDE.md"       out of the analysis; I analyze first if needed
   "give src/ and everything under it CLAUDE.md files"
                                          the whole-tree form, deepest first
+  "analyze src/cache for human html"     whether a person browsing it needs a page
+  "generate human html for src/cache"    write the page the analysis warranted
 
 Generating over a document that already exists never deletes anything. What I can
 confirm against the code stays put, what you marked to retain stays verbatim, and
@@ -155,8 +179,10 @@ The canonical analysis name that "Naming and scope announcement" below requires
 you to echo is COMPOSED from the greeting's two lists -- the verb plus the
 artifact it is applied to: "Skill audit", "CLAUDE.md audit", "Project-doc audit",
 "Cross-reference audit", "Skill authoring", "CLAUDE.md authoring", "Project-doc
-authoring", "CLAUDE.md generation", and "Code analysis" for `analyze`. The
-example phrasings are entry points only, and are deliberately not exhaustive.
+authoring", "CLAUDE.md generation", "Human-html generation", "Code analysis" for
+`analyze <directory>`, and "Human-html analysis" for
+`analyze human-html <directory>`. The example phrasings are entry points only,
+and are deliberately not exhaustive.
 
 ### Naming and scope announcement (applies to every run)
 
@@ -228,10 +254,11 @@ silently returns a SMALLER corpus, which then reads as the whole corpus.
 
 ## Dispatch table
 
-For audit and author, route by verb AND artifact. `generate` takes only
-`claude-md`; `analyze` has one non-artifact subject, `code_subtree`. In every
-case load the selected procedure plus its standards doc -- exactly those two,
-never the whole tree.
+For audit and author, route by verb AND artifact. `generate` takes `claude-md`
+or `human-html`; `analyze` has two non-artifact subjects, `code_subtree` (the
+default) and `human_html_directory` (selected by the explicit `human-html`
+token). In every case load the selected procedure plus its standards doc --
+exactly those two, never the whole tree.
 
 | Verb x artifact or subject | Lane id | Procedure | Standards doc |
 |---|---|---|---|
@@ -244,7 +271,9 @@ never the whole tree.
 | author x project-doc | `author_project_doc` | `references/lanes/generation-lane.md` | `references/standards/project-doc-standards.md` |
 | author x references | -- (no lane) | -- | -- |
 | generate x claude-md | `generate_claude_md` | `references/lanes/generation-lane.md` | `references/standards/claude-md-standards.md` |
+| generate x human-html | `generate_human_html` | `references/lanes/generation-lane.md` | `references/standards/human-html-standards.md` |
 | analyze (one directory) | `coverage_code_subtree` | `references/lanes/coverage-lane.md` | `references/standards/coverage-standards.md` |
+| analyze human-html (one directory) | `coverage_human_html_directory` | `references/lanes/coverage-lane.md` | `references/standards/human-html-standards.md` |
 
 **The analyze lane's files are named for its OUTPUT, not its verb.** The lane id
 `coverage_code_subtree`, `coverage-lane.md`, `coverage-standards.md`,
@@ -264,6 +293,17 @@ whichever artifact carries it (`author_skill` / `author_claude_md` /
 analyzes a codebase and emits skill or project-doc candidates, so there is no
 coverage to generate from. Those artifacts are AUTHORED. A request to "generate a
 skill" is `author_skill`; say so rather than improvising a coverage input.
+
+**The two analyze lanes have different subjects, and the selector is not
+optional.** `coverage_code_subtree` reads one directory's OWN DIRECT code files
+and asks what its CLAUDE.md is missing. `coverage_human_html_directory` reads
+that directory's whole SUBTREE -- code, docs, data, assets, configuration, and
+its children's finished decision records -- and asks whether a person browsing
+it needs an orientation page. Neither answer substitutes for the other, so an
+`analyze` dispatch without the `human-html` token takes the code lane and never
+guesses at the other. There is no `audit` or `author` lane for `human-html`: the
+page is machine-emitted (CK-1 checks it, no human writes it), so there is
+nothing to author, and its check is a script rather than an audit verdict.
 
 **Analysis then generation is a CHAIN, not a composite verb.** "Find what's
 missing and write it up" is the natural end-to-end request, and it is served by
@@ -480,13 +520,48 @@ lanes:
       - "find what this directory's CLAUDE.md is missing"
       - "find code-derived facts that should be ambient"
     change_driver: Changes when coverage criteria, depth semantics, or the report-only procedure change.
+  - id: coverage_human_html_directory
+    verb: analyze
+    subject: human_html_directory
+    standards: references/standards/human-html-standards.md
+    procedure: references/lanes/coverage-lane.md
+    discover_script: scripts/discover_human_html.py
+    verdicts: [PAGE-WARRANTED, NO-PAGE]
+    report_only: true
+    invocation_phrasings:
+      - "analyze this directory for human html"
+      - "decide whether this directory needs a human page"
+      - "assess the human browsing experience here"
+      - "find what an orientation page needs to explain"
+    change_driver: >-
+      Changes when the human coverage criteria, decision-record contract, or
+      bottom-up analysis procedure changes.
+  - id: generate_human_html
+    verb: generate
+    artifact: human-html
+    standards: references/standards/human-html-standards.md
+    procedure: references/lanes/generation-lane.md
+    contract_script: scripts/human_html_check.py
+    verdicts: [COMPLIANT, NON-COMPLIANT]
+    input_provenance: coverage
+    regeneration: replace-generated
+    invocation_phrasings:
+      - "generate human html from this analysis"
+      - "regenerate this directory's human page"
+      - "write the warranted human pages"
+      - "refresh the human html tree"
+    change_driver: >-
+      Changes when the page, record, style, navigation, or regeneration
+      contract changes.
 ```
 
 ## Argument grammar
 
 Audit/author positional form: `<verb> <artifact> [selector] [flags]`.
 Analyze form: `analyze (<directory> | --diff) [--json] [--advanced]`.
+Human-html analyze form: `analyze human-html <directory> [--json]`.
 Generate form: `generate claude-md <directory> [--coverage <dir>]`.
+Human-html generate form: `generate human-html <directory> [--coverage <path>]`.
 Verb and subject may be inferred from natural language; when a required part is
 ambiguous, ask rather than guessing.
 
@@ -495,11 +570,21 @@ ambiguous, ask rather than guessing.
   "generate a README" route to `author`**, because no analysis produces coverage
   for those artifacts; take the intent, not the token.
 - **Artifact** (audit / author only) -- `skill` | `claude-md` | `project-doc`
-  | `references` (`references` is audit-only). `generate` takes `claude-md` and
-  nothing else.
+  | `references` (`references` is audit-only). `generate` takes `claude-md` or
+  `human-html` and nothing else.
+- **`human-html`** -- the explicit selector that routes an `analyze` or
+  `generate` dispatch to the human-html lanes. On `analyze` it selects the
+  `human_html_directory` subject over the default `code_subtree`; on `generate`
+  it selects the `human-html` artifact over `claude-md`. Without the token an
+  `analyze <directory>` is a code analysis and a `generate <directory>` is a
+  CLAUDE.md generation, always -- there is no inference from the directory's
+  contents.
 - **`--coverage <dir>`** -- generate-only. A directory of persisted coverage
   reports (JSON) to write up, as emitted by `analyze --json`. Absent, generate
   uses the coverage from this session, and runs `analyze` first if there is none.
+  On `generate human-html` the value is `--coverage <path>`: the persisted human
+  analysis report for that directory, which is the ONLY accepted coverage input
+  for the lane (AD-2). A code-coverage report is not an accepted substitute.
 - **Selector** (audit lanes) -- `(none)` audits the cwd artifact if present;
   `list` emits a numbered list from the lane's discover script and stops;
   `<path>` targets a file or directory; `<numbers>` selects by index from the
@@ -512,9 +597,11 @@ ambiguous, ask rather than guessing.
   renders a verdict, so none is an audit -- announce it as its own operation.
 - **Analyze subject** -- a named directory or `--diff`. There is NO whole-repo
   default: if neither is present, say so and stop rather than choosing the cwd.
+  `analyze human-html` takes a directory only; `--diff` does not apply to it,
+  because a page's warrant is a property of a subtree rather than of a change.
 - **`--diff` / `--json`** -- both analyze-only. `--diff` resolves changed code
-  into per-directory subjects; `--json` emits the coverage report as structured
-  JSON.
+  into per-directory subjects; `--json` emits the report as structured JSON on
+  either analyze lane.
 - **`--advanced`** -- analyze-only exhaustive reads, invariant discovery, and
   the refutation stage that tries to falsify every surviving candidate in fresh
   context. Only this depth earns "verified absent". Without an explicit depth,
@@ -564,7 +651,7 @@ filter, pre-image materialization, the two documented limits) live in
 ```yaml
 domain_skill:
   _schema_version: "1"
-  identity: The single front door for four dispatch verbs over project markdown -- auditing SKILL.md (and its reference documents), CLAUDE.md, project documents and skill cross-references; authoring any of those from content the user supplies; generating a CLAUDE.md from analysis-produced coverage so its claims stay re-checkable; and report-only analysis of one directory's direct code.
+  identity: The single front door for four dispatch verbs over project markdown -- auditing SKILL.md (and its reference documents), CLAUDE.md, project documents and skill cross-references; authoring any of those from content the user supplies; generating a CLAUDE.md from analysis-produced coverage so its claims stay re-checkable; report-only analysis of one directory's direct code; and the one non-markdown artifact it owns, the generated human-html orientation page, with its own directory analysis and its own generation.
   companions:
     siblings: []
     note: |
@@ -580,6 +667,7 @@ domain_skill:
       - dispatching audit, author, generate, or analyze intent to exactly one lane
       - owning the four per-artifact standards docs (what good looks like for skill / claude-md / project-doc / references)
       - owning coverage-standards.md for the code_subtree composition (one directory's direct code, not a subtree)
+      - owning human-html-standards.md and the human-html artifact (page warrant, decision records, generated pages and their references, and the two lane scripts that discover and check them)
       - owning three procedures (shared audit; ONE producing procedure serving both author and generate, including regeneration and its retention rules; and report-only analysis)
       - owning the placement spine (cohesion-principles) and the shared audit framework, configuration, and content-shape references
     excludes:
@@ -605,7 +693,9 @@ domain_skill:
       - Scope is the user's decision, and it is announced in BOTH directions. Mechanical exclusions (VCS-ignored, vendored, generated) are yours to take and to report as a count. A JUDGMENT exclusion -- "this directory probably holds nothing worth carrying" -- is a prediction of the analysis result, so the way to settle it is to RUN the analysis, not to drop the subject. Never let cost silently shrink scope: report the honest subject count with its cost and let the user choose what to drop. A banding or ranking pre-filter is a substitute for the analysis, not a preparation for it -- if it means "skip" rather than "order", it has moved the admission decision outside coverage-standards.md where nothing enforces it. See "Narrowing scope".
       - Enumerate subjects with the discovery scripts, never a hand-rolled walk or extension filter. `scripts/discover_coverage.py <dir>` for one subject; `scripts/discover_composition.py <root> --json` -> `coverageSubjects` for every subject under a root, which is the cheap model-free enumeration to plan and cost from. A hand-written filter fails SILENTLY toward a smaller corpus, and that smaller corpus then reads as the whole one.
       - When this work is handed to another agent -- a subagent, a background CLI, a workflow -- pass the artifact's standards document VERBATIM by absolute path. Do not summarize it into a brief. A paraphrase is not the criteria: the agent will satisfy the paraphrase. Worse, a brief that lists worked EXAMPLES of qualifying facts will have those examples beat its own abstract rules, so a brief that correctly forbids repo-wide facts while illustrating "good" facts with repo-wide project rules produces exactly the bloat it forbade. If a brief must exist, let it carry the task and the return shape, and let the standards document carry every criterion.
-      - Route by verb AND subject. Audit and author require an artifact; generate takes claude-md only; analyze accepts only code_subtree and is not artifact-parameterized. Do not run a SKILL.md audit on a CLAUDE.md, and do not apply the producing direction when the user asked for a verdict.
+      - Route by verb AND subject. Audit and author require an artifact; generate takes claude-md or human-html; analyze takes code_subtree by default and human_html_directory only when the explicit `human-html` token is present. Do not run a SKILL.md audit on a CLAUDE.md, and do not apply the producing direction when the user asked for a verdict.
+      - The human-html lanes run BOTTOM-UP and one directory at a time (TS-1), and the unit of execution is analyze-then-generate for that directory. A parent reads each finished child decision and each page child's identity line, so a stale or missing child record blocks the parent (TS-2) rather than being guessed around. Generation persists a record for a `none` decision exactly as it does for a `page` one: the absence of a page is a recorded finding, not a gap.
+      - A generated human page NEVER fetches. Every cross-file read is a relative URL the browser resolves (NF-1), so the page works from a file manager, a static host and the host viewer frame alike. Do not add fetch, XMLHttpRequest, an absolute URL or path, or an external-origin asset to make a page richer -- CK-1 fails all of them, and the page's whole value is that one file survives every environment.
       - Author and generate are chosen by INPUT PROVENANCE, never by the word the user typed. Content the user supplies is authored; coverage from an analyze run is generated. "Generate a skill" and "generate a README" are author dispatches, because no analysis produces coverage for those artifacts -- say which lane you are taking and why, rather than silently honouring or silently overriding the token.
       - Regeneration never deletes and never blocks. Generating over a document that already exists SORTS every unit: content a DIRECTED check confirms against the code it describes is kept in place, marked content is kept verbatim, and everything else moves verbatim into the document's `## Unverified` section with the reason its check failed (NOT LOCATED, or CONTRADICTED at a named file:line). Verify by reading the code the claim describes -- never by whether this run's coverage happened to re-derive it, because coverage is a non-idempotent sample and sorting on coincidence churns the document. There is no proposal round and no pre-write marking chore; `retain` is how a user resolves a unit OUT of the Unverified section, never a precondition to running. Report the section with a count every run.
       - One lane at a time. On a bare invocation show the menu and wait; do not co-load standards docs or verb procedures. A typical invocation loads this SKILL.md plus one lane plus one standards doc.
@@ -630,6 +720,10 @@ domain_skill:
         path: references/standards/coverage-standards.md
         keywords: [coverage standards, one directory not a subtree, direct code files, non-recursive subject, ambient claude.md, absent facts, CV criteria, basic advanced, analysis depth, candidate admission, hoisting, vcs ignore exclusion]
         summary: What makes a code-derived fact earn ambient CLAUDE.md cost -- CV admission criteria, the basic/advanced depth contract, evidence floor, suppression rules, and report-only boundary. Read by coverage_code_subtree.
+      - id: human_html_standards
+        path: references/standards/human-html-standards.md
+        keywords: [human html standards, human.html, orientation page, page warrant, HC-1 HC-2 HC-3 HC-4, decision record, DR-1 DR-2, .databench/human, source stamp, dirty, PC-1 page contract, navigation spine, announce message, inline style, NF-1 no fetch, RD-1 reference documents, SA-1 style asset, SZ-1 word budget, CK-1 CK-2 script contracts, TS-1 bottom-up, TS-2 stale child, host viewer contract]
+        summary: The whole human-html contract in one document -- the AD lane declarations, the HC page-warrant criteria, the DR decision record, the PC page contract, NF-1 browser-resolved access, the RD reference documents, the SA-1 style asset, the SZ-1 size signal, the CK script contracts, the TS tree-scale order, and the HV host viewer surfaces. Read by both coverage_human_html_directory and generate_human_html.
       - id: project_doc_standards
         path: references/standards/project-doc-standards.md
         keywords: [project document standards, PD-1, maturation, graduate to skill, orphan, discoverability, one hop, readme role, generated artifact, ancestor convention]
@@ -709,6 +803,20 @@ domain_skill:
       tool: skills_kit_lib/classify.py
       scope_axes: [single-skill]
       reference_section: skill-domain/scripts.md (classify)
+    - id: human_html_check
+      keywords: [human html check, check generated page, CK-1, portability check, fetch prohibited, marker mismatch, stale page, dirty record, word budget, page missing, none has a page]
+      description: Check generated human HTML against its contract -- record, marker, metadata, navigation, announce, inline style, portability, references, and the SZ-1 size signal. FAIL is a broken contract and exits nonzero; STALE, DIRTY and size are INFO and do not.
+      operation: python scripts/human_html_check.py <repository-root> [<directory>] [--json]
+      tool: scripts/human_html_check.py
+      scope_axes: [single-directory, whole-repository]
+      reference_section: standards/human-html-standards.md (CK-1)
+    - id: discover_human_html
+      keywords: [discover human html, CK-2, human html scan, decision records, source stamp, navigation targets, deepest first, stale child, page ancestor, page descendants]
+      description: Scan a repository for its human-html state -- subjects deepest-first, DR-2 source stamps, decision-record status, generated files, navigation targets, and TS-2 stale-child propagation. Read-only.
+      operation: python scripts/discover_human_html.py <repository-root> [<directory>]
+      tool: scripts/discover_human_html.py
+      scope_axes: [single-directory, whole-repository]
+      reference_section: standards/human-html-standards.md (CK-2)
     - id: tag
       keywords: [tag, write skill-type, frontmatter tagging, idempotent skill-type write]
       description: Write a skill-type value into a SKILL.md's frontmatter idempotently.
@@ -735,6 +843,10 @@ domain_skill:
 - **How to author or generate a document** -- `references/lanes/generation-lane.md`.
 - **How to run an analysis** -- `references/lanes/coverage-lane.md`.
 - **What earns a coverage candidate** -- `references/standards/coverage-standards.md`.
+- **Whether a directory warrants a human page, and what a page must contain** -- `references/standards/human-html-standards.md`.
+- **How to decide a directory's page warrant** -- `references/lanes/coverage-lane.md`, the `human_html_directory` branch.
+- **How to write or remove a human page** -- `references/lanes/generation-lane.md`, the `human-html` branch.
+- **Checking generated human HTML** -- `scripts/human_html_check.py` (CK-1); the shared scan behind it is `scripts/discover_human_html.py` (CK-2).
 - **Retention marking for regeneration** -- `references/standards/claude-md-standards.md`, section 6.4.
 - **What this domain does NOT do, and who owns it instead** -- `references/capability-boundaries.md`.
 - **Encoding a newly discovered insight into a persistent home** -- `knowledge-encoding` (in skills-kit).
