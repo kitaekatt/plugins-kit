@@ -279,4 +279,8 @@ technique_skill:
           by it. Waiting for it is passive (step 6).
         - Parallel units editing the same files clobber each other -- but a shared-file conflict is a PARTITIONING problem before it is a scheduling one. Re-split the work by file ownership first (one owner per file, stated in each brief), then use isolation appropriate to the backend, and sequence only what genuinely remains. Reaching for sequencing first serialises work that had no real dependency.
         - A unit that correctly removes or relocates something can silently destroy the only signpost pointing at it -- a green result and a clean diff will not surface that; only the unit's own disclosure does.
+        - >-
+          Codex dispatch results have durable handles and can be recovered after a restart; see
+          [references/codex-dispatch.md](references/codex-dispatch.md) "Dispatch cache". Pass
+          the dispatch script's `--no-cache` option when a fresh run is required.
 ```
