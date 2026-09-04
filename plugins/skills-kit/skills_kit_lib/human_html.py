@@ -10,6 +10,7 @@ contract defines around it:
 - `marker` / `parse_marker` -- the PC-1 and RD-2 generated-page marker.
 - `announce_script` -- the PC-3 viewer-agnostic announce snippet.
 - `navigation_targets` -- the PC-2 nearest-page ancestor and descendants.
+- `navigation_label` -- the PC-2 short label for a target directory.
 
 Standard library only. CK-1 and CK-2 require their scripts to run on a plain
 interpreter with `skills_kit_lib` importable and nothing else installed, so
@@ -91,6 +92,7 @@ __all__ = [
     "dumps_record",
     "load_record",
     "marker",
+    "navigation_label",
     "navigation_targets",
     "normalize_directory",
     "parse_marker",
@@ -414,6 +416,12 @@ def _is_descendant(candidate: str, ancestor: str) -> bool:
     if ancestor == ROOT_DIRECTORY:
         return True
     return candidate.startswith(ancestor + "/")
+
+
+def navigation_label(directory: str | Path) -> str:
+    """Return the PC-2 short label for a navigation target directory."""
+    normalized = normalize_directory(directory)
+    return "Repository root" if normalized == ROOT_DIRECTORY else normalized.rsplit("/", 1)[-1]
 
 
 def navigation_targets(

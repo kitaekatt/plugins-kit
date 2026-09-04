@@ -146,8 +146,8 @@ unconfigurable opinion whose test passes is a finding.
 
 - **A `conserve_usage` verdict is pinned for the session and never re-evaluated
   downward.** llm-scripting-kit computes a paced endpoint's availability once per session
-  key and reuses it; a CONSERVED verdict is recomputed only once its window resets, and an
-  AVAILABLE one is never recomputed at all. A team could reasonably want live
+  key and reuses it; an UNDER-QUOTA or OUT-OF-QUOTA verdict is recomputed only once its
+  window resets, and an AVAILABLE one is never recomputed at all. A team could reasonably want live
   re-evaluation -- a session running for days holds an `available` verdict computed against
   numbers that have since moved -- and the only remedy we leave them is to start a new
   session (or `llm-scripting-kit usage --no-pin`, which inspects without changing what

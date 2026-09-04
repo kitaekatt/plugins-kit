@@ -381,6 +381,13 @@ SEED_VALUES = [
     "1.72",
     "Inter, ui-sans-serif, system-ui, sans-serif",
     "JetBrains Mono, ui-monospace, monospace",
+    "--hh-space-1: .35rem",
+    "--hh-space-5: 2rem",
+    '.hh-nav-label',
+    '.hh-nav-identity',
+    "text-decoration-line: underline",
+    "grid-template-columns: minmax(7rem, .22fr) minmax(0, 1fr)",
+    "overflow: auto",
 ]
 
 
@@ -397,6 +404,11 @@ class TestAsset:
 
     def test_asset_defines_no_light_theme_override(self):
         assert "prefers-color-scheme: light" not in hh.asset_css()
+
+    def test_asset_keeps_main_full_width(self):
+        main_rule = hh.asset_css().split("main {", 1)[1].split("}", 1)[0]
+        assert "width: 100%" in main_rule
+        assert "max-width" not in main_rule
 
 
 # ---------------------------------------------------------------------------
@@ -578,3 +590,14 @@ class TestNavigationTargets:
     def test_plain_mappings_are_accepted(self):
         records = {".": {"decision": "page"}, "x": {"decision": "page"}}
         assert hh.navigation_targets(records, ".") == (None, ["x"])
+
+
+class TestNavigationLabel:
+    def test_root_uses_the_root_label(self):
+        assert hh.navigation_label(".") == "Repository root"
+
+    def test_nested_directory_uses_its_final_segment(self):
+        assert hh.navigation_label("engine/src/rest") == "rest"
+
+    def test_path_input_is_normalized(self):
+        assert hh.navigation_label("engine\\src") == "src"

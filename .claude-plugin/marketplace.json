@@ -71,7 +71,7 @@
     {
       "name": "skills-kit",
       "description": "Author and audit every md file a project loads or ships -- CLAUDE.md, SKILL.md, project docs, and their cross-references -- for placement, cohesion, and drift.",
-      "version": "0.70.1",
+      "version": "0.71.0",
       "author": {
         "name": "Christina"
       },
@@ -97,7 +97,7 @@
     {
       "name": "awesome-kit",
       "description": "Provides plugin-ecosystem, task, orchestrate, recap, debug-context, and verbose-updates skills for plugin browsing, task tracking, delegated work, response distillation, answering why-did-you questions from context, and progress communication.",
-      "version": "0.55.0",
+      "version": "0.56.0",
       "author": {
         "name": "Christina"
       },
@@ -124,7 +124,7 @@
     {
       "name": "llm-scripting-kit",
       "description": "LLM access for scripts and pipelines: credentials, endpoint/model resolution, local Qwen server profiles, and one completion seam over HTTP, Claude, Codex, and OpenCode.",
-      "version": "0.32.0",
+      "version": "0.33.0",
       "author": {
         "name": "Christina"
       },

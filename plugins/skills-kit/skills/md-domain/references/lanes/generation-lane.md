@@ -543,6 +543,8 @@ Expected: 0 FAILs on the target, or a stated reason a JUDGMENT row is accepted.
 The `generate_human_html` lane. Its output is a generated HTML page a person
 browses beside the files it explains, so it replaces the five steps above with
 the sequence below. Load it with `../standards/human-html-standards.md`.
+Before writing a page, also load `../human-html-presentation.md`. PC-5 makes
+that presentation reference required input for this branch.
 
 **Everything mechanical is already implemented in
 `skills_kit_lib.human_html`.** Import it and call it. Do not hand-write a marker,
@@ -557,7 +559,7 @@ drift the ownership rule exists to prevent.
 | DR-2 | `source_stamp(repo_root, directory) -> (source_sha, dirty)` |
 | DR-4 | `read_instructions`, and `write_record`'s default `preserve_instructions=True` |
 | PC-1, RD-2 | `marker(record, kind, reference=None)`, `parse_marker` |
-| PC-2 | `navigation_targets(records, directory) -> (up, down)` |
+| PC-2 | `navigation_targets(records, directory) -> (up, down)`, `navigation_label(directory)` |
 | PC-3 | `announce_script(record, file, kind, reference=None)` |
 | SA-1, PC-4 | `asset_css()` |
 
@@ -636,7 +638,7 @@ all of it from the package:
 <meta name="color-scheme" content="dark">     PC-1
 <style data-human-html-style>                 PC-4: the exact hh.asset_css() bytes, inline, never linked
 ...
-<nav data-human-html-chrome="nav">            PC-2: exactly one region, up plus nearest descendants
+<nav data-human-html-chrome="nav">            PC-2: exactly one list, up plus nearest descendants
 <script>                                      PC-3: the exact hh.announce_script(...) text
 ```
 
@@ -648,12 +650,18 @@ its first page, so a `none` directory is never a link target and a page below
 another page is not a root's target. The repository root has no up link; omit the
 descendant section entirely when `down` is empty. Describe each link with the
 TARGET RECORD'S identity line, which is why TS-1 requires the child to be
-finished first.
+finished first. Put the links in one `ul`, with one `a` in each `li`. Each link
+contains a `span.hh-nav-label` and a `span.hh-nav-identity`. Get the short label
+from `hh.navigation_label(target)`. Use the target record's complete identity
+for the second span. Do not reduce the navigation to adjacent identity links.
 
-**Outside that chrome the body is yours (PC-5).** There is no template and there
-will not be one: repository directories do not share an information shape, so a
-page built from scratch for the units the analysis admitted is the correct
-output. Validation checks the contract, not a layout.
+**Outside that chrome the body is evidence-shaped (PC-5).** Apply
+`../human-html-presentation.md`: use one `h1`, `h2` sections, `dl` evidence,
+resting link cues, and tables only for repeated multi-attribute comparisons.
+There is no template and there will not be one. Repository directories do not
+share one information shape, so build the page from scratch for the units the
+analysis admitted. The presentation reference governs judgment without taking
+ownership of SA-1's palette, fonts, theme, width, scripts, or external assets.
 
 **Nothing in the page reaches the network, and nothing names a location
 (PC-6, NF-1).** Every cross-file read is a relative URL the BROWSER resolves,
@@ -728,6 +736,8 @@ remove.
 - Where a fact lives (the placement spine, incl. the packaging razor) --
   `../cohesion-principles.md`.
 - The human-html contract in full -- `../standards/human-html-standards.md`.
+- The required hierarchy, navigation, evidence, and review guidance for a human
+  page -- `../human-html-presentation.md`.
 - Deciding whether a directory warrants a page at all -- `coverage-lane.md`, the
   `human_html_directory` branch.
 - How a fact is shaped -- `../authoring-patterns/content-authoring.md`.
