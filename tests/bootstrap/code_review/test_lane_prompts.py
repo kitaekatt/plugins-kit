@@ -40,14 +40,30 @@ class TestShippedDefaultsPreserveAgentDispatch:
         This is the compatibility guarantee the whole feature rests on: if a
         shipped default ever became an endpoint id, every user would silently
         start routing reviews off the Agent tool.
+
+        The shipped `code` profile states reviewer_c as a priority list, so the
+        table is resolved first -- with a stub owner that reports no seat, which
+        is the no-peer path. Each resolved value is asserted to be a STRING
+        before it reaches is_agent_alias: a list must never get this far, since
+        every downstream consumer (is_agent_alias, the lane runner) reads one
+        model per lane.
         """
         config, _provenance = rp.resolve_config(tmp_path / "project", home=tmp_path / "home")
+        config, _disclosures, _diagnostics = rp.apply_model_priority(
+            config, discover=lambda self_ref, **kwargs: None
+        )
         for profile in config["profiles"]:
             for reviewer in profile["reviewers"]:
+                assert isinstance(reviewer["model"], str), (
+                    f"resolved {profile['id']}.{reviewer['name']} is not a string"
+                )
                 assert lp.is_agent_alias(reviewer["model"]), (
                     f"shipped {profile['id']}.{reviewer['name']} is not an Agent alias"
                 )
             for reason, model in profile["validator_models"].items():
+                assert isinstance(model, str), (
+                    f"shipped {profile['id']}.validator_models.{reason} is not a string"
+                )
                 assert lp.is_agent_alias(model), (
                     f"shipped {profile['id']}.validator_models.{reason} is not an Agent alias"
                 )

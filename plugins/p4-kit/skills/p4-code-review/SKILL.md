@@ -94,13 +94,18 @@ technique_skill:
             `---` separator and layer provenance; parse only the YAML above the separator. Keep
             the resolved `profiles` list for steps 6 and 7. See references/configuration.md for
             the full layer/merge/override contract.
-            The renderer may also print `peer_when_available:` lines on STDERR. Each one names a
-            lane whose resolved `model` was replaced by a peer endpoint, and it is the only
-            record that the lane did not run on the model the shipped table states. Keep every
-            such line and repeat it verbatim in the step-9 review header, under
-            `## Peer-seat substitutions`. Never drop it, and never edit the resolved table to
-            undo it. Silence on stderr means no substitution happened; there is nothing to
-            report and nothing to install.
+            The renderer may also print `model-priority:` lines on STDERR. Each one names a
+            lane whose `model` was configured as a priority list, saying which entry the
+            renderer resolved -- a `peer:` entry that resolved to an endpoint, or a `peer:`
+            entry it skipped and the entry it ran instead. It is the only record of a `peer:`
+            entry that was probed and resolved, or probed and skipped. Keep every such line
+            and repeat it verbatim in the step-9 review header, under
+            `## Model-priority substitutions`. Never drop it, and never edit the resolved table
+            to undo it. Silence on stderr means either every lane took the first entry of its
+            list, or llm-scripting-kit was not available to probe a `peer:` entry at all --
+            that second case runs the next entry silently and is reported only by
+            `--explain-peer-seats`. Either way the resolved table states the model each lane
+            actually runs.
           tool: Read + python3 ${CLAUDE_PLUGIN_ROOT}/scripts/render_review_profiles.py
         - n: 5
           action: |
@@ -245,12 +250,12 @@ technique_skill:
               partial review is indistinguishable from a complete one. Never describe a
               failed lane's files as clean, and never re-run the lane on a different model to
               paper over the gap -- report it and let the user decide.
-            - When the step-4 renderer printed any `peer_when_available:` line on stderr,
-              prepend a `## Peer-seat substitutions` section carrying each line verbatim. A
-              substituted lane ran on a DIFFERENT model from the one the review-profile table
-              ships, and the rendered review looks identical either way, so omitting this
-              would let the reader believe a model reviewed their change that never saw it.
-              This is a disclosure, not a warning: the substitution is the configured
+            - When the step-4 renderer printed any `model-priority:` line on stderr,
+              prepend a `## Model-priority substitutions` section carrying each line verbatim.
+              Such a lane ran on a model chosen from a priority list rather than on a single
+              configured name, and the rendered review looks identical either way, so omitting
+              this would let the reader believe a model reviewed their change that never saw
+              it. This is a disclosure, not a warning: resolving the list is the configured
               behaviour and nothing needs fixing.
             - When `bundle.submit_gates` is non-empty, prepend a `## Submit checklist`
               section, each gate carrying its step-5 verdict and the evidence for it.
@@ -403,9 +408,9 @@ technique_skill:
         - Record declined findings ONLY through `prepare_review.py --ledger-record <json>`. Never hand-edit ledger.json -- the key normalization (criterion/reason + taxonomy + normalized anchor) must be computed deterministically, not typed.
         - The `review_profiles` block above is SELECTION GUIDANCE AND RATIONALE ONLY. It carries no reviewer roster, model, or validator_models -- that executable table is resolved per review by python3 ${CLAUDE_PLUGIN_ROOT}/scripts/render_review_profiles.py (step 4), which merges the shipped bootstrap_lib defaults with any `~/.claude/config/review_profiles.yaml` (user) or `<project_root>/.claude/review_profiles.yaml` (project) override. Never merge those layers yourself and never hand-edit the resolved output.
         - The `profile` in steps 6-7 is always an entry from that RESOLVED table, never the guidance block. Match the guidance prose to decide which profile id fits the change, then read `reviewers` and `validator_models` off the resolved entry with that id.
-        - See references/configuration.md for the layer precedence, merge rules (profiles/reviewers merge by id/name; validator_models and other mappings deep-merge; `disabled: true` removes a record; plain lists like `data_only_extensions` replace), the shipped default table, what a `model` value may name, which lanes may take an endpoint id, what happens when an endpoint lane fails, and how a reviewer record's `peer_when_available` resolves a peer seat (plus the `--explain-peer-seats` diagnostic).
-        - A `model` value is NOT always an Agent-tool model. The four aliases `sonnet`, `opus`, `haiku` and `fable` name the Agent tool; every other value is an llm-scripting-kit endpoint id and that lane runs through python3 ${CLAUDE_PLUGIN_ROOT}/scripts/run_review_lane.py instead (step 6's model-kind rule). The shipped table is all aliases, so a review with no user or project override dispatches every lane as an Agent subagent.
-        - A reviewer record may set `peer_when_available` true, asking the renderer to run that lane on a reachable PEER endpoint -- same tier as the stated model, different model family -- when llm-scripting-kit is installed and current. The renderer resolves it, so the table you read already carries the substituted endpoint id as that lane's `model`, and the lane dispatches through python3 ${CLAUDE_PLUGIN_ROOT}/scripts/run_review_lane.py under the ordinary step-6 model-kind rule. Do not probe for a peer yourself, and do not treat a substituted value as an override the user forgot to make.
+        - See references/configuration.md for the layer precedence, merge rules (profiles/reviewers merge by id/name; validator_models and other mappings deep-merge; `disabled: true` removes a record; plain lists like `data_only_extensions` replace), the shipped default table, what a `model` value may name, which lanes may take an endpoint id, what happens when an endpoint lane fails, and how a reviewer's ordered `model` priority list resolves a `peer:` entry (plus the `--explain-peer-seats` diagnostic).
+        - A `model` value is NOT always an Agent-tool model. The four aliases `sonnet`, `opus`, `haiku` and `fable` name the Agent tool; every other value is an llm-scripting-kit endpoint id and that lane runs through python3 ${CLAUDE_PLUGIN_ROOT}/scripts/run_review_lane.py instead (step 6's model-kind rule). Every `model` in the RESOLVED table is a single string -- the renderer has already picked one entry out of any priority list the configuration stated -- so this rule needs no extra case.
+        - A reviewer's configured `model` may be an ORDERED PRIORITY LIST rather than a single name, and an entry spelled `peer:<name>` asks the renderer to run that lane on a reachable PEER endpoint -- same tier as `<name>`, different model family -- when llm-scripting-kit is installed and current. The renderer evaluates the list and prints one resolved model, so the table you read already carries the chosen value, and the lane dispatches through python3 ${CLAUDE_PLUGIN_ROOT}/scripts/run_review_lane.py under the ordinary step-6 model-kind rule. Do not probe for a peer yourself, and do not treat a resolved peer endpoint as an override the user forgot to make.
         - An endpoint lane that fails is a FAILED lane. There is no fallback to an Agent, by design: silently substituting one produces a review the user reads as having run on the model they configured, which is a false claim about the change's coverage. Report it and mark the coverage missing.
   narration:
     note: Reviews involve long silent stretches (batched file reads, parallel subagents that take 30s+). Post one short status line per step using these templates verbatim, filling in the bracketed counts. Do not paraphrase, omit, or add extras.

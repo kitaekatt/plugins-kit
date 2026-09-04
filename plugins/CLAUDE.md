@@ -273,7 +273,7 @@ optional-dependency section above defers to it.
 | job-kit | `llm_scripting_kit.completion` (`BackendSelection`, `Capabilities`, `adapter_capabilities`, `create_backend`, `match_capabilities`) | Deterministic endpoint selection from a job's preference order and requirements | Yes |
 | workflow-kit | `llm_scripting_kit.completion.OpenRouterBackend` (via `scripts/openrouter_run.py`) | The `openrouter` node strategy: one non-Claude model call per workflow node | Yes |
 | awesome-kit (orchestrate) | `llm_scripting_kit` (harness-model discovery, lazy/optional, via `orchestration_guidance.py`) | Backend/model advisory text for the orchestrate skill's routing decisions | Yes |
-| bootstrap | `llm_scripting_kit.seats.discover_seats` (lazy/optional, via `bootstrap_lib.code_review.review_profiles`) | Peer-seat discovery for review profiles (`peer_when_available`); it never talks to an LLM | Yes |
+| bootstrap | `llm_scripting_kit.seats.discover_seats` (lazy/optional, via `bootstrap_lib.code_review.review_profiles`) | Peer-seat discovery for review profiles (a `peer:<name>` entry in a reviewer's ordered `model` priority list); it never talks to an LLM | Yes |
 | git-kit, p4-kit | `llm_scripting_kit.review_lane.main` via each kit's thin `scripts/run_review_lane.py` wrapper | Bootstrap setup and the REFUSE probe for the shared library; the lane's prompt lives in `bootstrap_lib.code_review.lane_prompts` and its guards in `llm_scripting_kit.review_lane` | Yes |
 | yaml-data-editor-kit | none directly -- reaches it via content-pipeline-kit's `content_pipeline` (the dispatch binding in `dispatch/`) | The editor's dispatch planner, not the completion transport | No (`published: false`) |
 
