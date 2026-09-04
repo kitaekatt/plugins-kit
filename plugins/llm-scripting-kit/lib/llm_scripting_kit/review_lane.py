@@ -16,6 +16,7 @@ import argparse
 import json
 import sys
 import time
+from dataclasses import replace as _replace_dataclass
 from pathlib import Path
 from typing import Any, Optional, Sequence
 
@@ -214,11 +215,30 @@ def _allowed_tools_for(lane: str) -> Optional[str]:
     hallucination LANES_REQUIRING_AGENT_LOOP exists to prevent, so the guard has
     to grant the capability it just finished checking for.
 
-    `Read` and nothing else: these lanes inspect the changed files' surrounding
-    context, which is the read-only use the seam sanctions. A reviewer has no
+    `Read` and nothing else: these lanes inspect the repository around the chunk
+    -- the changed files' surrounding context, or the CLAUDE.md files that govern
+    them -- which is the read-only use the seam sanctions. A reviewer has no
     business writing or running anything.
     """
     return "Read" if lane in LANES_REQUIRING_AGENT_LOOP else None
+
+
+def _cwd_for(lane: str, project_root: Optional[str]) -> Optional[Path]:
+    """The working directory a lane needs, or None to inherit the process cwd.
+
+    An agent-loop lane is handed repo-RELATIVE file paths and is told to walk up
+    from them, so where it is rooted decides whether those paths resolve at all.
+    The CLI adapters default an absent `cwd` to the process cwd, which is right
+    when the runner was launched from the project root and wrong the moment it
+    was not -- and the failure is a reviewer that reports nothing rather than an
+    error, so the caller's own `--project-root` is passed down when it has one.
+
+    A pure-completion lane gets None: it reads nothing, and OpenRouter drops the
+    parameter anyway.
+    """
+    if project_root is None or lane not in LANES_REQUIRING_AGENT_LOOP:
+        return None
+    return Path(project_root)
 
 
 def run_lane(
@@ -271,6 +291,7 @@ def run_lane(
         timeout_s=timeout_s,
         effort=selection.effort,
         allowed_tools=_allowed_tools_for(lane),
+        cwd=_cwd_for(lane, project_root),
         log_prefix=f"[review:{lane}]",
     )
 
@@ -319,15 +340,12 @@ def run_lane(
             break
         except LaneOutputError as exc:
             last_error = str(exc)
-            options = BackendOptions(
-                max_tokens=options.max_tokens,
-                temperature=options.temperature,
-                timeout_s=options.timeout_s,
-                effort=options.effort,
-                allowed_tools=options.allowed_tools,
-                log_prefix=options.log_prefix,
-                cache_salt=attempt + 1,
-            )
+            # `replace` rather than a field-by-field rebuild: the repair attempt
+            # must differ from the first ONLY in the cache salt, and a rebuild
+            # that lists the fields silently drops any field added later -- the
+            # tool grant and the working directory both matter to an agent-loop
+            # lane, and losing either turns a repair into a different call.
+            options = _replace_dataclass(options, cache_salt=attempt + 1)
     if last_error is not None:
         finish = getattr(response, "finish_reason", None)
         hint = (

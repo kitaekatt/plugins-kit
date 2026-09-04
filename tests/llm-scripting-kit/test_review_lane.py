@@ -7,6 +7,7 @@ and JSON envelope without making a network request.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import sys
 import types
@@ -143,8 +144,25 @@ class TestDispatchRefusals:
         with pytest.raises(lr.LaneConfigError, match="not eligible"):
             lr.check_lane_dispatchable("validator", "my-endpoint")
 
-    def test_the_eligible_lane_passes(self) -> None:
-        lr.check_lane_dispatchable(LANE, "my-endpoint")
+    @pytest.mark.parametrize(
+        "lane",
+        [
+            "reviewer_a_claude_md_compliance",
+            "reviewer_b_diff_only_bugs",
+            "reviewer_c_introduced_code",
+        ],
+    )
+    def test_every_reviewer_lane_passes(self, lane: str) -> None:
+        lr.check_lane_dispatchable(lane, "my-endpoint")
+
+    @pytest.mark.parametrize("lane", sorted(lr.ENDPOINT_ELIGIBLE_LANES))
+    def test_an_eligible_lane_names_itself_in_the_refusal_text(self, lane: str) -> None:
+        """The refusal lists the eligible set; a widened set must widen the text."""
+        with pytest.raises(lr.LaneConfigError) as excinfo:
+            lr.check_lane_dispatchable("validator", "my-endpoint")
+        message = str(excinfo.value)
+        assert lane in message
+        assert "Agent-tool model (sonnet, opus, haiku, fable)" in message
 
 
 class TestRunLane:
@@ -194,24 +212,30 @@ class TestRunLane:
 
 
 class TestAgentLoopRefusal:
-    def test_a_repo_reading_lane_is_refused_on_a_transport(self, monkeypatch) -> None:
+    @pytest.mark.parametrize("lane", sorted(lr.LANES_REQUIRING_AGENT_LOOP))
+    def test_a_repo_reading_lane_is_refused_on_a_transport(self, lane: str) -> None:
         """Refused rather than degraded: a completion cannot fetch the files."""
-        monkeypatch.setattr(
-            lr, "ENDPOINT_ELIGIBLE_LANES", frozenset({"reviewer_c_introduced_code"})
-        )
         selection = FakeSelection(
             endpoint="e", kind="transport", backend=FakeBackend([]), model="m"
         )
         with pytest.raises(lr.LaneConfigError, match="needs an agent loop"):
-            lr._check_selection("reviewer_c_introduced_code", selection)
+            lr._check_selection(lane, selection)
 
-    def test_a_harness_selection_is_accepted(self) -> None:
+    @pytest.mark.parametrize("lane", sorted(lr.LANES_REQUIRING_AGENT_LOOP))
+    def test_a_harness_selection_is_accepted(self, lane: str) -> None:
         selection = FakeSelection(
             endpoint="e", kind="harness", backend=FakeBackend([]), model="m"
         )
-        lr._check_selection("reviewer_c_introduced_code", selection)
+        lr._check_selection(lane, selection)
 
-    def test_an_agent_loop_lane_is_actually_granted_read(self) -> None:
+    def test_the_diff_only_lane_accepts_a_transport(self) -> None:
+        selection = FakeSelection(
+            endpoint="e", kind="transport", backend=FakeBackend([]), model="m"
+        )
+        lr._check_selection(LANE, selection)
+
+    @pytest.mark.parametrize("lane", sorted(lr.LANES_REQUIRING_AGENT_LOOP))
+    def test_an_agent_loop_lane_is_actually_granted_read(self, lane: str) -> None:
         """Passing the harness check must GRANT the capability it checked for.
 
         claude-cli renders allowed_tools=None as `--allowedTools ""` -- an
@@ -219,7 +243,22 @@ class TestAgentLoopRefusal:
         be admitted as needing an agent loop and then handed a tool-less
         completion holding a prompt that tells it to read files.
         """
-        assert lr._allowed_tools_for("reviewer_c_introduced_code") == "Read"
+        assert lr._allowed_tools_for(lane) == "Read"
+
+    @pytest.mark.parametrize("lane", sorted(lr.LANES_REQUIRING_AGENT_LOOP))
+    def test_an_agent_loop_lane_is_rooted_in_the_project(self, seam, lane: str) -> None:
+        """Repo-relative paths only resolve if the lane is rooted where they are."""
+        seam.selection = FakeSelection(
+            endpoint="e", kind="harness", backend=FakeBackend([FakeResponse("[]")]), model="m"
+        )
+        lr.run_lane(lane=lane, model="e", diff_text="d", project_root="/proj")
+        assert seam.selection.backend.calls[0]["options"].cwd == Path("/proj")
+
+    def test_a_diff_only_lane_inherits_the_process_cwd(self, seam) -> None:
+        """It reads nothing, so naming a directory would claim a need it lacks."""
+        seam.selection = _transport([FakeResponse("[]")])
+        lr.run_lane(lane=LANE, model="my-endpoint", diff_text="d", project_root="/proj")
+        assert seam.selection.backend.calls[0]["options"].cwd is None
 
     def test_a_diff_only_lane_stays_a_pure_completion(self) -> None:
         assert lr._allowed_tools_for(LANE) is None
@@ -231,6 +270,12 @@ class TestAgentLoopRefusal:
         first, second = seam.selection.backend.calls
         assert second["options"].allowed_tools == first["options"].allowed_tools
         assert second["options"].effort == first["options"].effort
+        assert second["options"].cwd == first["options"].cwd
+        # Everything except the salt: a rebuild that lists fields drops the one
+        # added next, and this is the assertion that notices.
+        assert dataclasses.replace(second["options"], cache_salt=0) == dataclasses.replace(
+            first["options"], cache_salt=0
+        )
 
 
 class TestContextBudget:

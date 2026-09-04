@@ -25,6 +25,7 @@ profiles:
     model: opus
   - name: reviewer_c_introduced_code
     model: opus
+    peer_when_available: true
   validator_models:
     bug: opus
     claude_md: sonnet

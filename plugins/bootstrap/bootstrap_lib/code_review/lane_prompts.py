@@ -62,15 +62,21 @@ def is_agent_alias(model: str) -> bool:
     return model.strip() in AGENT_MODEL_ALIASES
 
 
-# Lanes that may run on a configured endpoint. The set is deliberately
-# ONE reviewer: the diff-only lane, whose entire input is the chunk text and
-# which is the only reviewer that both needs no repository access and is not
-# the false-positive control.
+# Lanes that may run on a configured endpoint: the three REVIEWERS, each of
+# which has a canonical prompt below. Two of them need repository access, which
+# is a constraint on the BACKEND KIND rather than on eligibility -- see
+# LANES_REQUIRING_AGENT_LOOP.
 #
 # The validator is NOT here on purpose. It is the control that suppresses a
 # weak reviewer's noise; replacing it in the same phase as a reviewer would
 # remove the instrument the reviewer change has to be measured with.
-ENDPOINT_ELIGIBLE_LANES = frozenset({"reviewer_b_diff_only_bugs"})
+ENDPOINT_ELIGIBLE_LANES = frozenset(
+    {
+        "reviewer_a_claude_md_compliance",
+        "reviewer_b_diff_only_bugs",
+        "reviewer_c_introduced_code",
+    }
+)
 
 # Every lane the review pipeline runs, eligible or not. Kept so a lane that
 # exists but may not take an endpoint id ("validator") is refused for the RIGHT
@@ -91,7 +97,18 @@ KNOWN_LANES = frozenset(
 # hallucinates the context it cannot fetch. Kept as immutable code, NOT as an
 # overridable config field: it is a fact about what the lane's prompt asks for,
 # not a policy the user gets to state.
-LANES_REQUIRING_AGENT_LOOP = frozenset({"reviewer_c_introduced_code"})
+LANES_REQUIRING_AGENT_LOOP = frozenset(
+    {
+        # Reads the CLAUDE.md files that govern each changed file. The standards
+        # are not inlined into the user message: which CLAUDE.md files apply is a
+        # per-file walk up the tree, and the runner has no channel to carry their
+        # text, so the prompt tells the model to open them itself.
+        "reviewer_a_claude_md_compliance",
+        # Reads the changed files themselves for the surrounding context the diff
+        # does not show.
+        "reviewer_c_introduced_code",
+    }
+)
 
 
 # --------------------------------------------------------------------------
@@ -208,7 +225,7 @@ def _validate_issue(item: Any, index: int) -> dict[str, Any]:
 # Bumped whenever any prompt text below changes, so a recorded lane result says
 # which wording produced it. A comparison across prompt versions is not a
 # like-for-like measurement, and without this the difference is invisible.
-PROMPT_VERSION = "1"
+PROMPT_VERSION = "2"
 
 
 # The false-positive guardrails, stated once. These are the same rules the
@@ -278,11 +295,77 @@ and do not report an issue in a file that does not appear in this diff.
 {OUTPUT_INSTRUCTION}"""
 
 
+REVIEWER_A_SYSTEM = f"""\
+You are reviewing one chunk of a code change for violations of the project's own
+written standards. You are one of several independent reviewers; other concerns
+belong to other reviewers.
+
+Scope. Project-standard compliance only. Every issue you report uses the reason
+"claude_md" and carries the exact rule text in "citation"; if you cannot quote
+the rule, you do not have a finding.
+
+Governing standards. The standards live in CLAUDE.md files inside this
+repository. For each file in the diff, the governing CLAUDE.md files are the
+one in that file's own directory and every CLAUDE.md in a parent directory up
+to the repository root. A CLAUDE.md that does not share a path with the file
+being reviewed does not govern it -- never cross-apply a rule between
+directories.
+
+Context you must gather yourself, unless it is supplied with the chunk. If a
+per-file CLAUDE.md mapping and/or the text of the relevant CLAUDE.md files is
+supplied to you alongside the chunk, use exactly those and do not go looking
+for more. Otherwise, for each file in the diff, read the CLAUDE.md in that
+file's own directory and every CLAUDE.md in a parent directory up to the
+repository root yourself. Either way, read only CLAUDE.md files: no source
+files, no documentation, no history.
+
+Restrictions. Only report issues in files that appear in this diff, and only for
+what this change introduces -- a pre-existing violation is not yours to report.
+
+{GUARDRAILS}
+
+{OUTPUT_INSTRUCTION}"""
+
+
+REVIEWER_C_SYSTEM = f"""\
+You are reviewing one chunk of a code change for bugs in the code it
+INTRODUCES -- the ones the diff alone cannot settle because they turn on the
+code around the change. You are one of several independent reviewers; other
+files and other concerns belong to other reviewers.
+
+Scope. Logic errors, concurrency and lifetime bugs, resource leaks, and security
+holes in the introduced code. Report only what this change introduces, never a
+pre-existing problem.
+
+Context you must gather yourself. You may read the files listed below, at the
+paths as given, to see the code surrounding the change. Read only those files.
+Do not modify anything, do not run anything, and do not go browsing the rest of
+the repository.
+
+Restrictions. Only report issues in files that appear in this diff. When the
+context you would need to settle an issue is not in one of those files, you
+cannot settle it -- do not report it.
+
+{GUARDRAILS}
+
+{OUTPUT_INSTRUCTION}"""
+
+
 LANE_PROMPTS: dict[str, LanePrompt] = {
+    "reviewer_a_claude_md_compliance": LanePrompt(
+        lane="reviewer_a_claude_md_compliance",
+        system=REVIEWER_A_SYSTEM,
+        user_preamble="Review this diff chunk for project-standard compliance.",
+    ),
     "reviewer_b_diff_only_bugs": LanePrompt(
         lane="reviewer_b_diff_only_bugs",
         system=REVIEWER_B_SYSTEM,
         user_preamble="Review this diff chunk.",
+    ),
+    "reviewer_c_introduced_code": LanePrompt(
+        lane="reviewer_c_introduced_code",
+        system=REVIEWER_C_SYSTEM,
+        user_preamble="Review this diff chunk for bugs in the code it introduces.",
     ),
 }
 
@@ -296,9 +379,11 @@ def build_user_message(
 ) -> str:
     """Assemble the user message for a lane.
 
-    The diff is INLINED rather than referenced by path: an endpoint-dispatched
-    lane is a plain completion with no file access, so a path would name
-    something it cannot open.
+    The diff is INLINED rather than referenced by path. The diff-only lane is a
+    plain completion with no file access at all, so a path would name something
+    it cannot open; the two agent-loop lanes CAN open files, but the chunk file
+    is a scratch artifact of the review run rather than repository content, so
+    inlining it keeps one shape for every lane.
     """
     prompt = LANE_PROMPTS.get(lane)
     if prompt is None:
@@ -324,7 +409,9 @@ __all__ = [
     "LanePrompt",
     "OUTPUT_INSTRUCTION",
     "PROMPT_VERSION",
+    "REVIEWER_A_SYSTEM",
     "REVIEWER_B_SYSTEM",
+    "REVIEWER_C_SYSTEM",
     "build_user_message",
     "is_agent_alias",
     "parse_issue_array",

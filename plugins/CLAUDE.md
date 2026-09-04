@@ -123,16 +123,19 @@ unconfigurable opinion whose test passes is a finding.
   answer is a lease plus an expiry plus a fencing token, which is a distributed runner --
   a different plugin, not a column.
 
-- **Only a qualified reviewer lane may run on a configured endpoint.** A review profile's
+- **Only a reviewer lane may run on a configured endpoint.** A review profile's
   `model` may name an llm-scripting-kit endpoint instead of an Agent alias, but the runner
-  accepts that for `reviewer_b_diff_only_bugs` only; every other lane is refused by name.
+  accepts that for the three REVIEWER lanes only; `validator` is refused by name. (Until
+  2026-09-04 the set was `reviewer_b_diff_only_bugs` alone; it was widened to all three
+  reviewers by owner decision, with the two context-reading lanes further restricted to
+  harness endpoints -- `LANES_REQUIRING_AGENT_LOOP` in `bootstrap_lib.code_review.lane_prompts`.)
   A team could reasonably want its validators on a cheap local model, and the only remedy we
-  leave them is to wait for a lane to be qualified -- so this is a stance, not a good default.
+  leave them is to wait for the set to be widened -- so this is a stance, not a good default.
   We refuse to make it a setting because the validator is the CONTROL that suppresses a weak
   reviewer's false positives: a run with both a weakened reviewer and a weakened validator
   cannot tell you which one caused a regression, and the config key would make that the
-  cheapest thing to reach for. Widening the set is a plugin change, gated on a measurement
-  against a labeled candidate set, not on a user's willingness to type a line of YAML.
+  cheapest thing to reach for. Widening the set further is a plugin change, not a line of
+  YAML.
 - **A failed endpoint lane fails the review's coverage; it never falls back to an Agent.**
   A team could reasonably prefer "finish the review anyway on the default model", and the
   remedy we leave them is to drop the endpoint override. We refuse the fallback because the
@@ -270,6 +273,7 @@ optional-dependency section above defers to it.
 | job-kit | `llm_scripting_kit.completion` (`BackendSelection`, `Capabilities`, `adapter_capabilities`, `create_backend`, `match_capabilities`) | Deterministic endpoint selection from a job's preference order and requirements | Yes |
 | workflow-kit | `llm_scripting_kit.completion.OpenRouterBackend` (via `scripts/openrouter_run.py`) | The `openrouter` node strategy: one non-Claude model call per workflow node | Yes |
 | awesome-kit (orchestrate) | `llm_scripting_kit` (harness-model discovery, lazy/optional, via `orchestration_guidance.py`) | Backend/model advisory text for the orchestrate skill's routing decisions | Yes |
+| bootstrap | `llm_scripting_kit.seats.discover_seats` (lazy/optional, via `bootstrap_lib.code_review.review_profiles`) | Peer-seat discovery for review profiles (`peer_when_available`); it never talks to an LLM | Yes |
 | git-kit, p4-kit | `llm_scripting_kit.review_lane.main` via each kit's thin `scripts/run_review_lane.py` wrapper | Bootstrap setup and the REFUSE probe for the shared library; the lane's prompt lives in `bootstrap_lib.code_review.lane_prompts` and its guards in `llm_scripting_kit.review_lane` | Yes |
 | yaml-data-editor-kit | none directly -- reaches it via content-pipeline-kit's `content_pipeline` (the dispatch binding in `dispatch/`) | The editor's dispatch planner, not the completion transport | No (`published: false`) |
 
