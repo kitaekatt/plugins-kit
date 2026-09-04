@@ -55,9 +55,15 @@ def _profile(config: dict[str, Any], profile_id: str) -> dict[str, Any]:
 
 
 def test_shipped_only_render_matches_pre_seam_bytes(tmp_path: Path) -> None:
-    """The shipped executable projection is pinned byte-for-byte."""
+    """The shipped executable projection is pinned byte-for-byte.
+
+    The autouse fixture below makes the owner absent, so the shipped
+    `[peer:opus, opus]` priority list resolves to `opus` -- the projection the
+    fixture has always pinned.
+    """
     home, project_root, _project_path = _layers(tmp_path)
     config, provenance = rp.resolve_config(project_root, home=home)
+    config, _disclosures, _diagnostics = rp.apply_model_priority(config)
 
     assert provenance[0][0:3:2] == ("shipped", "applied")
     assert all(layer != "user" or status == "absent" for layer, _path, status in provenance)
@@ -290,7 +296,7 @@ def test_cli_prints_yaml_once_and_provenance_for_shipped_only(tmp_path: Path, ca
 
 
 # --------------------------------------------------------------------------
-# peer_when_available: the optional llm-scripting-kit seats edge
+# model priority lists: the optional llm-scripting-kit seats edge
 # --------------------------------------------------------------------------
 
 
@@ -341,39 +347,69 @@ def _no_real_owner(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def _shipped(tmp_path: Path) -> dict[str, Any]:
-    """Resolve the shipped-only table, which opts reviewer_c in."""
+    """Resolve the shipped-only table, whose code profile carries a peer entry."""
     return _resolved(tmp_path)
 
 
-def test_shipped_default_opts_reviewer_c_in_for_the_code_profile(tmp_path: Path) -> None:
-    """The shipped opt-in is exactly one reviewer in exactly one profile."""
-    config = _shipped(tmp_path)
-
-    code = _profile(config, "code")
-    opted = {
-        reviewer["name"]
-        for reviewer in code["reviewers"]
-        if reviewer.get("peer_when_available") is True
-    }
-    assert opted == {"reviewer_c_introduced_code"}
-    data_only = _profile(config, "data_only")
-    assert all(
-        "peer_when_available" not in reviewer for reviewer in data_only["reviewers"]
+def _reviewer(config: dict[str, Any], profile_id: str, name: str) -> dict[str, Any]:
+    return next(
+        reviewer
+        for reviewer in _profile(config, profile_id)["reviewers"]
+        if reviewer["name"] == name
     )
 
 
-def test_projection_never_carries_the_flag_onto_stdout(tmp_path: Path) -> None:
-    """The stdout contract is unchanged: reviewers are still {name, model}."""
-    projection = rp.canonical_projection(_shipped(tmp_path))
+def test_shipped_default_gives_reviewer_c_one_peer_priority_list(tmp_path: Path) -> None:
+    """The shipped priority list is exactly one lane in exactly one profile."""
+    config = _shipped(tmp_path)
 
-    for profile in projection["profiles"]:
-        for reviewer in profile["reviewers"]:
-            assert set(reviewer) == {"name", "model"}
+    assert _reviewer(config, "code", "reviewer_c_introduced_code")["model"] == [
+        "peer:opus",
+        "opus",
+    ]
+    listed = [
+        (profile["id"], reviewer["name"])
+        for profile in config["profiles"]
+        for reviewer in profile["reviewers"]
+        if not isinstance(reviewer["model"], str)
+    ]
+    assert listed == [("code", "reviewer_c_introduced_code")]
 
 
-def test_present_owner_with_a_beside_seat_substitutes_and_discloses(tmp_path: Path) -> None:
+def test_a_string_model_is_unchanged_and_probes_nothing(tmp_path: Path) -> None:
+    """A plain string keeps its old meaning: a one-entry list that resolves."""
     calls: list[Any] = []
-    config, disclosures, diagnostics = rp.apply_peer_seats(
+    config, disclosures, diagnostics = rp.apply_model_priority(
+        _resolved(
+            tmp_path,
+            user={
+                "profiles": [
+                    {
+                        "id": "code",
+                        "reviewers": [
+                            {"name": "reviewer_c_introduced_code", "model": "sonnet"}
+                        ],
+                    }
+                ]
+            },
+        ),
+        discover=_discover(_FakeSeat("BESIDE", "beside-seat"), record=calls),
+    )
+
+    code = _profile(config, "code")
+    assert [reviewer["model"] for reviewer in code["reviewers"]] == [
+        "sonnet",
+        "opus",
+        "sonnet",
+    ]
+    assert calls == []
+    assert disclosures == []
+    assert diagnostics == []
+
+
+def test_a_peer_entry_that_resolves_substitutes_and_discloses(tmp_path: Path) -> None:
+    calls: list[Any] = []
+    config, disclosures, diagnostics = rp.apply_model_priority(
         _shipped(tmp_path),
         project_root=tmp_path,
         discover=_discover(
@@ -384,39 +420,41 @@ def test_present_owner_with_a_beside_seat_substitutes_and_discloses(tmp_path: Pa
     )
 
     code = _profile(config, "code")
-    substituted = next(
-        reviewer
-        for reviewer in code["reviewers"]
-        if reviewer["name"] == "reviewer_c_introduced_code"
+    assert _reviewer(config, "code", "reviewer_c_introduced_code")["model"] == (
+        "beside-seat"
     )
-    assert substituted["model"] == "beside-seat"
-    # Only the opted-in lane moves.
+    # Only the lane whose list carries a peer entry moves.
     assert code["reviewers"][1]["model"] == "opus"
     assert diagnostics == []
     assert len(disclosures) == 1
     line = disclosures[0]
+    assert line.startswith("model-priority: profile 'code' lane ")
     assert "reviewer_c_introduced_code" in line
-    assert "'opus'" in line
+    assert "'peer:opus'" in line
     assert "'beside-seat'" in line
     assert "BESIDE" in line
     assert rp.PEER_SEATS_FRONTIER in line
-    # The stated model is the self reference, and the probe is bounded.
+    # The peer target is the self reference, and the probe is bounded.
     assert calls[0][0] == "opus"
     assert calls[0][1]["timeout"] == rp.PEER_SEATS_TIMEOUT_S
     assert calls[0][1]["project_root"] == str(tmp_path)
 
 
-def test_present_owner_without_a_beside_seat_leaves_the_model_alone(tmp_path: Path) -> None:
-    config, disclosures, diagnostics = rp.apply_peer_seats(
-        _shipped(tmp_path),
-        discover=_discover(_FakeSeat("UP", "up-seat")),
+def test_a_present_owner_without_a_seat_falls_through_and_notes_the_skip(
+    tmp_path: Path,
+) -> None:
+    config, disclosures, diagnostics = rp.apply_model_priority(
+        _shipped(tmp_path), discover=_discover(_FakeSeat("UP", "up-seat"))
     )
 
-    code = _profile(config, "code")
-    assert code["reviewers"][2]["model"] == "opus"
+    assert _reviewer(config, "code", "reviewer_c_introduced_code")["model"] == "opus"
     assert diagnostics == []
     assert len(disclosures) == 1
-    assert "no reachable BESIDE seat" in disclosures[0]
+    line = disclosures[0]
+    assert line.startswith("model-priority: profile 'code' lane ")
+    assert "skipped priority entry 'peer:opus'" in line
+    assert "no reachable BESIDE seat" in line
+    assert "runs on 'opus'" in line
 
 
 def test_absent_owner_is_silent_and_diagnosed_as_absent(
@@ -426,9 +464,9 @@ def test_absent_owner_is_silent_and_diagnosed_as_absent(
     monkeypatch.setattr(rp, "_probe_discover_seats", _REAL_PROBE)
     monkeypatch.setitem(sys.modules, "llm_scripting_kit", None)
 
-    config, disclosures, diagnostics = rp.apply_peer_seats(_shipped(tmp_path))
+    config, disclosures, diagnostics = rp.apply_model_priority(_shipped(tmp_path))
 
-    assert _profile(config, "code")["reviewers"][2]["model"] == "opus"
+    assert _reviewer(config, "code", "reviewer_c_introduced_code")["model"] == "opus"
     assert disclosures == []
     assert len(diagnostics) == 1
     assert diagnostics[0].startswith("absent:")
@@ -446,9 +484,9 @@ def test_too_old_owner_is_silent_and_diagnosed_apart_from_absent(
     )
     monkeypatch.delitem(sys.modules, "llm_scripting_kit.seats", raising=False)
 
-    config, disclosures, diagnostics = rp.apply_peer_seats(_shipped(tmp_path))
+    config, disclosures, diagnostics = rp.apply_model_priority(_shipped(tmp_path))
 
-    assert _profile(config, "code")["reviewers"][2]["model"] == "opus"
+    assert _reviewer(config, "code", "reviewer_c_introduced_code")["model"] == "opus"
     assert disclosures == []
     assert len(diagnostics) == 1
     assert diagnostics[0].startswith("too old or stale:")
@@ -468,68 +506,44 @@ def test_stale_after_uninstall_still_imports_but_stays_silent(
     monkeypatch.setitem(sys.modules, "llm_scripting_kit", owner)
     monkeypatch.setitem(sys.modules, "llm_scripting_kit.seats", stale_seats)
 
-    config, disclosures, diagnostics = rp.apply_peer_seats(_shipped(tmp_path))
+    config, disclosures, diagnostics = rp.apply_model_priority(_shipped(tmp_path))
 
-    assert _profile(config, "code")["reviewers"][2]["model"] == "opus"
+    assert _reviewer(config, "code", "reviewer_c_introduced_code")["model"] == "opus"
     assert disclosures == []
     assert len(diagnostics) == 1
     assert diagnostics[0].startswith("too old or stale:")
     assert "discover_seats is missing" in diagnostics[0]
 
 
-def test_a_raising_probe_degrades_to_the_stated_model(tmp_path: Path) -> None:
+def test_a_raising_probe_degrades_to_the_next_entry(tmp_path: Path) -> None:
     def explode(self_ref: str, **kwargs: Any) -> Any:
         raise RuntimeError("registry unreadable")
 
-    config, disclosures, diagnostics = rp.apply_peer_seats(
+    config, disclosures, diagnostics = rp.apply_model_priority(
         _shipped(tmp_path), discover=explode
     )
 
-    assert _profile(config, "code")["reviewers"][2]["model"] == "opus"
-    assert disclosures == ["peer_when_available: no reachable BESIDE seat was found, "
-                           "so every opted-in lane runs on its stated model."]
+    assert _reviewer(config, "code", "reviewer_c_introduced_code")["model"] == "opus"
+    assert len(disclosures) == 1
+    assert "skipped priority entry 'peer:opus' (seat discovery failed)" in (
+        disclosures[0]
+    )
     assert len(diagnostics) == 1
     assert "RuntimeError: registry unreadable" in diagnostics[0]
 
 
 def test_a_malformed_seats_result_degrades_rather_than_raising(tmp_path: Path) -> None:
-    """An unexpected owner shape leaves the stated model in place."""
-    config, disclosures, _diagnostics = rp.apply_peer_seats(
+    """An unexpected owner shape falls through to the next entry."""
+    config, disclosures, _diagnostics = rp.apply_model_priority(
         _shipped(tmp_path), discover=lambda self_ref, **kwargs: object()
     )
 
-    assert _profile(config, "code")["reviewers"][2]["model"] == "opus"
+    assert _reviewer(config, "code", "reviewer_c_introduced_code")["model"] == "opus"
     assert "no reachable BESIDE seat" in disclosures[0]
 
 
-def test_no_owner_artifact_states_the_model_that_will_run(tmp_path: Path) -> None:
-    """EN-5: without the owner the rendered table is true as read."""
-    config, disclosures, _diagnostics = rp.apply_peer_seats(_shipped(tmp_path))
-    rendered = rp.render_projection(config)
-
-    assert disclosures == []
-    assert "peer_when_available" not in rendered
-    table = yaml.safe_load(rendered)
-    code = next(p for p in table["profiles"] if p["id"] == "code")
-    assert code["reviewers"][2] == {
-        "name": "reviewer_c_introduced_code",
-        "model": "opus",
-    }
-
-
-def test_the_probe_runs_again_on_every_call(tmp_path: Path) -> None:
-    """EN-6: nothing is cached across invocations."""
-    calls: list[Any] = []
-    discover = _discover(_FakeSeat("BESIDE", "beside-seat"), record=calls)
-
-    rp.apply_peer_seats(_shipped(tmp_path), discover=discover)
-    rp.apply_peer_seats(_shipped(tmp_path), discover=discover)
-
-    assert len(calls) == 2
-
-
-def test_one_probe_per_distinct_model_within_a_single_call(tmp_path: Path) -> None:
-    calls: list[Any] = []
+def test_a_list_whose_entries_all_fail_is_a_configuration_error(tmp_path: Path) -> None:
+    """Every entry is a peer entry and none resolves: name the lane and list."""
     config = _resolved(
         tmp_path,
         user={
@@ -538,54 +552,59 @@ def test_one_probe_per_distinct_model_within_a_single_call(tmp_path: Path) -> No
                     "id": "code",
                     "reviewers": [
                         {
-                            "name": "reviewer_a_claude_md_compliance",
-                            "model": "opus",
-                            "peer_when_available": True,
+                            "name": "reviewer_c_introduced_code",
+                            "model": ["peer:opus", "peer:sonnet"],
                         }
                     ],
                 }
             ]
         },
     )
-    resolved, disclosures, _diag = rp.apply_peer_seats(
-        config, discover=_discover(_FakeSeat("BESIDE", "beside-seat"), record=calls)
+
+    with pytest.raises(rp.ConfigError) as excinfo:
+        rp.apply_model_priority(config, discover=_discover(_FakeSeat("UP", "up-seat")))
+
+    message = str(excinfo.value)
+    assert "reviewer_c_introduced_code" in message
+    assert "'code'" in message
+    assert "['peer:opus', 'peer:sonnet']" in message
+    assert "no entry resolved" in message
+
+
+def test_a_bare_peer_string_is_a_one_entry_list_and_errors_when_unresolved(
+    tmp_path: Path,
+) -> None:
+    """`model: peer:opus` is legal; it just has nothing to fall back to."""
+    config = _resolved(
+        tmp_path,
+        user={
+            "profiles": [
+                {
+                    "id": "code",
+                    "reviewers": [
+                        {"name": "reviewer_c_introduced_code", "model": "peer:opus"}
+                    ],
+                }
+            ]
+        },
     )
 
-    assert len(calls) == 1
-    code = _profile(resolved, "code")
-    assert [reviewer["model"] for reviewer in code["reviewers"]] == [
-        "beside-seat",
-        "opus",
-        "beside-seat",
-    ]
-    assert len(disclosures) == 2
+    resolved, disclosures, _diag = rp.apply_model_priority(
+        config, discover=_discover(_FakeSeat("BESIDE", "beside-seat"))
+    )
+    assert _reviewer(resolved, "code", "reviewer_c_introduced_code")["model"] == (
+        "beside-seat"
+    )
+    assert len(disclosures) == 1
 
-
-def test_a_non_bool_peer_when_available_is_rejected(tmp_path: Path) -> None:
     with pytest.raises(rp.ConfigError) as excinfo:
-        _resolved(
-            tmp_path,
-            user={
-                "profiles": [
-                    {
-                        "id": "code",
-                        "reviewers": [
-                            {
-                                "name": "reviewer_c_introduced_code",
-                                "peer_when_available": "yes",
-                            }
-                        ],
-                    }
-                ]
-            },
-        )
-
-    assert "peer_when_available" in str(excinfo.value)
-    assert "must be a boolean" in str(excinfo.value)
+        rp.apply_model_priority(config, discover=_discover(_FakeSeat("UP", "up")))
+    assert "['peer:opus']" in str(excinfo.value)
 
 
-def test_a_sparse_override_preserves_the_shipped_flag(tmp_path: Path) -> None:
-    """Patching only `model` leaves the shipped opt-in in place."""
+def test_a_user_model_replaces_the_shipped_list_wholesale(tmp_path: Path) -> None:
+    """The defect this field shape fixes: `model: fable` means fable."""
+    calls: list[Any] = []
     config = _resolved(
         tmp_path,
         user={
@@ -599,13 +618,21 @@ def test_a_sparse_override_preserves_the_shipped_flag(tmp_path: Path) -> None:
             ]
         },
     )
+    assert _reviewer(config, "code", "reviewer_c_introduced_code")["model"] == "fable"
 
-    reviewer = _profile(config, "code")["reviewers"][2]
-    assert reviewer["model"] == "fable"
-    assert reviewer["peer_when_available"] is True
+    resolved, disclosures, diagnostics = rp.apply_model_priority(
+        config, discover=_discover(_FakeSeat("BESIDE", "beside-seat"), record=calls)
+    )
+
+    assert _reviewer(resolved, "code", "reviewer_c_introduced_code")["model"] == "fable"
+    assert calls == []
+    assert disclosures == []
+    assert diagnostics == []
 
 
-def test_a_user_layer_can_opt_out_of_the_shipped_flag(tmp_path: Path) -> None:
+def test_a_user_list_replaces_the_shipped_list_element_for_element(
+    tmp_path: Path,
+) -> None:
     config = _resolved(
         tmp_path,
         user={
@@ -615,19 +642,155 @@ def test_a_user_layer_can_opt_out_of_the_shipped_flag(tmp_path: Path) -> None:
                     "reviewers": [
                         {
                             "name": "reviewer_c_introduced_code",
-                            "peer_when_available": False,
+                            "model": ["peer:sonnet", "sonnet"],
                         }
                     ],
                 }
             ]
         },
     )
-    resolved, disclosures, _diag = rp.apply_peer_seats(
-        config, discover=_discover(_FakeSeat("BESIDE", "beside-seat"))
+
+    assert _reviewer(config, "code", "reviewer_c_introduced_code")["model"] == [
+        "peer:sonnet",
+        "sonnet",
+    ]
+
+
+def test_a_leftover_peer_when_available_names_its_replacement(tmp_path: Path) -> None:
+    with pytest.raises(rp.ConfigError) as excinfo:
+        _resolved(
+            tmp_path,
+            user={
+                "profiles": [
+                    {
+                        "id": "code",
+                        "reviewers": [
+                            {
+                                "name": "reviewer_c_introduced_code",
+                                "peer_when_available": True,
+                            }
+                        ],
+                    }
+                ]
+            },
+        )
+
+    message = str(excinfo.value)
+    assert "peer_when_available" in message
+    assert "was removed" in message
+    assert "model: [peer:<name>, <name>]" in message
+
+
+@pytest.mark.parametrize(
+    ("label", "model"),
+    [
+        ("empty list", []),
+        ("non-string entry", ["opus", 7]),
+        ("empty entry", ["opus", "   "]),
+        ("bare peer prefix", ["peer:", "opus"]),
+        ("mapping", {"peer": "opus"}),
+    ],
+)
+def test_an_invalid_model_is_rejected(
+    tmp_path: Path, label: str, model: Any
+) -> None:
+    with pytest.raises(rp.ConfigError) as excinfo:
+        _resolved(
+            tmp_path,
+            user={
+                "profiles": [
+                    {
+                        "id": "code",
+                        "reviewers": [
+                            {"name": "reviewer_c_introduced_code", "model": model}
+                        ],
+                    }
+                ]
+            },
+        )
+
+    assert ".model" in str(excinfo.value), label
+
+
+def test_no_owner_artifact_states_the_model_that_will_run(tmp_path: Path) -> None:
+    """EN-5: without the owner the rendered table is true as read."""
+    config, disclosures, _diagnostics = rp.apply_model_priority(_shipped(tmp_path))
+    rendered = rp.render_projection(config)
+
+    assert disclosures == []
+    assert "peer:" not in rendered
+    table = yaml.safe_load(rendered)
+    code = next(p for p in table["profiles"] if p["id"] == "code")
+    assert code["reviewers"][2] == {
+        "name": "reviewer_c_introduced_code",
+        "model": "opus",
+    }
+
+
+def test_the_projection_only_ever_carries_a_resolved_string(tmp_path: Path) -> None:
+    """The runner reads this table, so a priority list must never reach it."""
+    resolved, _disclosures, _diag = rp.apply_model_priority(_shipped(tmp_path))
+    projection = rp.canonical_projection(resolved)
+
+    for profile in projection["profiles"]:
+        for reviewer in profile["reviewers"]:
+            assert set(reviewer) == {"name", "model"}
+            assert isinstance(reviewer["model"], str)
+
+
+def test_projecting_an_unresolved_list_is_refused(tmp_path: Path) -> None:
+    """A caller that skips resolution gets an error, never a list on stdout."""
+    with pytest.raises(rp.ConfigError) as excinfo:
+        rp.canonical_projection(_shipped(tmp_path))
+
+    message = str(excinfo.value)
+    assert "reviewer_c_introduced_code" in message
+    assert "apply_model_priority" in message
+
+
+def test_the_probe_runs_again_on_every_call(tmp_path: Path) -> None:
+    """EN-6: nothing is cached across invocations."""
+    calls: list[Any] = []
+    discover = _discover(_FakeSeat("BESIDE", "beside-seat"), record=calls)
+
+    rp.apply_model_priority(_shipped(tmp_path), discover=discover)
+    rp.apply_model_priority(_shipped(tmp_path), discover=discover)
+
+    assert len(calls) == 2
+
+
+def test_one_probe_per_distinct_peer_target_within_a_single_call(
+    tmp_path: Path,
+) -> None:
+    calls: list[Any] = []
+    config = _resolved(
+        tmp_path,
+        user={
+            "profiles": [
+                {
+                    "id": "code",
+                    "reviewers": [
+                        {
+                            "name": "reviewer_a_claude_md_compliance",
+                            "model": ["peer:opus", "opus"],
+                        }
+                    ],
+                }
+            ]
+        },
+    )
+    resolved, disclosures, _diag = rp.apply_model_priority(
+        config, discover=_discover(_FakeSeat("BESIDE", "beside-seat"), record=calls)
     )
 
-    assert _profile(resolved, "code")["reviewers"][2]["model"] == "opus"
-    assert disclosures == []
+    assert len(calls) == 1
+    code = _profile(resolved, "code")
+    assert [reviewer["model"] for reviewer in code["reviewers"]] == [
+        "beside-seat",
+        "opus",
+        "beside-seat",
+    ]
+    assert len(disclosures) == 2
 
 
 def test_cli_discloses_a_substitution_on_stderr_and_keeps_stdout_parseable(
@@ -648,9 +811,9 @@ def test_cli_discloses_a_substitution_on_stderr_and_keeps_stdout_parseable(
     table = yaml.safe_load(captured.out.split("\n---\n")[0])
     code = next(p for p in table["profiles"] if p["id"] == "code")
     assert code["reviewers"][2]["model"] == "beside-seat"
-    assert "peer_when_available" not in captured.out
+    assert "peer:" not in captured.out
     assert captured.err.count("\n") == 1
-    assert captured.err.startswith("peer_when_available: profile 'code' lane ")
+    assert captured.err.startswith("model-priority: profile 'code' lane ")
 
 
 def test_cli_is_silent_about_an_absent_owner_until_explain_is_asked_for(
@@ -678,5 +841,33 @@ def test_cli_is_silent_about_an_absent_owner_until_explain_is_asked_for(
         == 0
     )
     err = capsys.readouterr().err
-    assert err.startswith("peer_when_available: absent:")
+    assert err.startswith("model-priority: absent:")
     assert err.count("\n") == 1
+
+
+def test_cli_exits_nonzero_when_no_entry_of_a_list_resolves(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    home, project_root, project_path = _layers(tmp_path)
+    _write_yaml(
+        project_path,
+        {
+            "profiles": [
+                {
+                    "id": "code",
+                    "reviewers": [
+                        {
+                            "name": "reviewer_c_introduced_code",
+                            "model": ["peer:opus"],
+                        }
+                    ],
+                }
+            ]
+        },
+    )
+
+    assert rp.main(["--project-root", str(project_root), "--home", str(home)]) == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "review profiles config error:" in captured.err
+    assert "reviewer_c_introduced_code" in captured.err
