@@ -1998,3 +1998,226 @@ class TestAppliedStatusDecoration:
 
         applied = [layer for layer, _p, status in provenance if og.status_is_applied(status)]
         assert "machine" in applied
+
+
+# --- quota-aware routing --------------------------------------------------
+
+
+@pytest.fixture
+def quota_routing_enabled(monkeypatch):
+    """Re-enable the quota pass that conftest turns off suite-wide.
+
+    conftest pins it off so no other test's assertions vary with the
+    developer's live balance; these tests are ABOUT that pass, so they turn it
+    back on and supply their own verdicts.
+    """
+    monkeypatch.delenv("ORCHESTRATE_QUOTA_ROUTING", raising=False)
+
+
+def _fake_quota_module(verdicts, *, entries=None, omit=()):
+    """A stand-in llm_scripting_kit exposing only the quota-selection surface.
+
+    `verdicts` maps endpoint id -> "available" | "under-quota" | "out-of-quota";
+    an id absent from it has no `conserve_usage` at all, which is the ordinary
+    never-opted-in endpoint.
+    """
+    module = ModuleType("llm_scripting_kit")
+
+    class Budget:
+        def __init__(self, status):
+            self.status = status
+
+        @property
+        def usable(self):
+            return self.status != "out-of-quota"
+
+        @property
+        def deprioritized(self):
+            return self.status == "under-quota"
+
+    class Candidate:
+        def __init__(self, endpoint, preference_index, budget=None):
+            self.endpoint = endpoint
+            self.preference_index = preference_index
+            self.budget = budget
+
+        @property
+        def usable(self):
+            return self.budget is None or self.budget.usable
+
+        @property
+        def deprioritized(self):
+            return self.budget is not None and self.budget.deprioritized
+
+    def rank_candidates(candidates):
+        usable = [c for c in candidates if c.usable]
+        disabled = [c for c in candidates if not c.usable]
+        usable.sort(key=lambda c: (1 if c.deprioritized else 0, c.preference_index))
+        return usable, disabled
+
+    known = entries if entries is not None else {
+        name: SimpleNamespace(conserve_usage=SimpleNamespace(pool="seven_day"), harness="claude")
+        for name in verdicts
+    }
+
+    module.Candidate = Candidate
+    module.rank_candidates = rank_candidates
+    module.pinned_evaluate = lambda entry_id, spec, harness: Budget(verdicts[entry_id])
+    module.discover_model_entries = lambda project_root=None: SimpleNamespace(
+        entries=known, notes=[]
+    )
+    for name in omit:
+        delattr(module, name)
+    return module
+
+
+def _models(*ids):
+    return [{"id": i, "target": i, "kind": "agent"} for i in ids]
+
+
+def test_an_out_of_quota_model_is_dropped_from_a_row(monkeypatch, tmp_path, quota_routing_enabled):
+    monkeypatch.setitem(
+        sys.modules,
+        "llm_scripting_kit",
+        _fake_quota_module({"opus": "out-of-quota", "sol": "available"}),
+    )
+    rank, notes = og.load_quota_ranker(tmp_path)
+    assert notes == []
+    ordered, row_notes = rank(_models("opus", "sol"))
+    assert [m["id"] for m in ordered] == ["sol"]
+    assert any("out of quota" in n for n in row_notes)
+
+
+def test_an_under_quota_model_is_moved_back_not_dropped(monkeypatch, tmp_path, quota_routing_enabled):
+    # The Claude-first row that swaps to codex: the row's stated order stands
+    # unless quota says otherwise, and being behind pace costs position only.
+    monkeypatch.setitem(
+        sys.modules,
+        "llm_scripting_kit",
+        _fake_quota_module({"opus": "under-quota", "sol": "available"}),
+    )
+    rank, _ = og.load_quota_ranker(tmp_path)
+    ordered, row_notes = rank(_models("opus", "sol"))
+    assert [m["id"] for m in ordered] == ["sol", "opus"]
+    assert any("under quota" in n for n in row_notes)
+
+
+def test_the_stated_order_survives_when_quota_says_nothing(monkeypatch, tmp_path, quota_routing_enabled):
+    monkeypatch.setitem(
+        sys.modules,
+        "llm_scripting_kit",
+        _fake_quota_module({"opus": "available", "sol": "available"}),
+    )
+    rank, _ = og.load_quota_ranker(tmp_path)
+    ordered, row_notes = rank(_models("opus", "sol"))
+    assert [m["id"] for m in ordered] == ["opus", "sol"]
+    assert row_notes == []
+
+
+def test_a_model_that_never_opted_in_keeps_its_place(monkeypatch, tmp_path, quota_routing_enabled):
+    # `sol` has no conserve_usage here, so nothing may de-prioritize it -- and
+    # an endpoint absent from the registry entirely must not be dropped either.
+    monkeypatch.setitem(
+        sys.modules,
+        "llm_scripting_kit",
+        _fake_quota_module(
+            {"opus": "available"},
+            entries={"opus": SimpleNamespace(conserve_usage=SimpleNamespace(pool="seven_day"), harness="claude")},
+        ),
+    )
+    rank, _ = og.load_quota_ranker(tmp_path)
+    ordered, _ = rank(_models("opus", "sol", "unregistered"))
+    assert [m["id"] for m in ordered] == ["opus", "sol", "unregistered"]
+
+
+def test_a_row_whose_models_are_all_spent_is_kept_and_reported(monkeypatch, tmp_path, quota_routing_enabled):
+    # Deleting the row would fall the unit through to a row chosen for a
+    # different shape, which is a worse outcome than reporting the exhaustion.
+    monkeypatch.setitem(
+        sys.modules,
+        "llm_scripting_kit",
+        _fake_quota_module({"opus": "out-of-quota", "sol": "out-of-quota"}),
+    )
+    rank, _ = og.load_quota_ranker(tmp_path)
+    config = {
+        "lexicon": [{"id": "blocking", "kind": "skill"}],
+        "routing": [{"shape": ["blocking"], "models": ["agent:opus"]}],
+    }
+    routes, notes = og.resolve_routing_models(config, {}, {}, set(), quota_rank=rank)
+    assert [m["id"] for r in routes for m in r["models"]] == ["opus"]
+    assert any("every model is out of quota" in n for n in notes)
+
+
+def test_a_missing_shared_library_degrades_with_a_disclosed_note(monkeypatch, tmp_path, quota_routing_enabled):
+    monkeypatch.setitem(sys.modules, "llm_scripting_kit", None)
+    rank, notes = og.load_quota_ranker(tmp_path)
+    assert rank is None
+    # The rendered policy is identical with and without the pass, so silence
+    # would let the reader take the printed order for a quota-aware one.
+    assert notes and "quota-aware routing skipped" in notes[0]
+
+
+def test_a_stale_shared_library_is_detected_by_capability(monkeypatch, tmp_path, quota_routing_enabled):
+    # An older linked copy imports cleanly and lacks the symbol; presence of
+    # the module is not the feature test.
+    monkeypatch.setitem(
+        sys.modules,
+        "llm_scripting_kit",
+        _fake_quota_module({"opus": "available"}, omit=("rank_candidates",)),
+    )
+    rank, notes = og.load_quota_ranker(tmp_path)
+    assert rank is None
+    assert notes and "predates quota-aware selection" in notes[0]
+
+
+def test_an_unreadable_verdict_never_drops_a_model(monkeypatch, tmp_path, quota_routing_enabled):
+    module = _fake_quota_module({"opus": "available", "sol": "available"})
+
+    def boom(entry_id, spec, harness):
+        raise RuntimeError("snapshot unreadable")
+
+    module.pinned_evaluate = boom
+    monkeypatch.setitem(sys.modules, "llm_scripting_kit", module)
+    rank, _ = og.load_quota_ranker(tmp_path)
+    ordered, row_notes = rank(_models("opus", "sol"))
+    assert [m["id"] for m in ordered] == ["opus", "sol"]
+    assert row_notes == []
+
+
+def test_a_drop_does_not_fake_a_move_note(monkeypatch, tmp_path, quota_routing_enabled):
+    # Dropping A shifts B to the front. B overtook nobody, so claiming it was
+    # "moved back" would be a false statement about the row.
+    monkeypatch.setitem(
+        sys.modules,
+        "llm_scripting_kit",
+        _fake_quota_module({"a": "out-of-quota", "b": "under-quota"}),
+    )
+    rank, _ = og.load_quota_ranker(tmp_path)
+    ordered, row_notes = rank(_models("a", "b"))
+    assert [m["id"] for m in ordered] == ["b"]
+    assert not any("moved back" in n for n in row_notes)
+
+
+def test_a_move_note_fires_only_when_a_later_peer_overtakes(
+    monkeypatch, tmp_path, quota_routing_enabled
+):
+    monkeypatch.setitem(
+        sys.modules,
+        "llm_scripting_kit",
+        _fake_quota_module({"a": "out-of-quota", "b": "available", "c": "under-quota"}),
+    )
+    rank, _ = og.load_quota_ranker(tmp_path)
+    ordered, row_notes = rank(_models("a", "b", "c"))
+    # c stayed behind b exactly as configured, so no move happened.
+    assert [m["id"] for m in ordered] == ["b", "c"]
+    assert not any("moved back" in n for n in row_notes)
+
+    monkeypatch.setitem(
+        sys.modules,
+        "llm_scripting_kit",
+        _fake_quota_module({"x": "under-quota", "y": "available"}),
+    )
+    rank, _ = og.load_quota_ranker(tmp_path)
+    ordered, row_notes = rank(_models("x", "y"))
+    assert [m["id"] for m in ordered] == ["y", "x"]
+    assert any("`x` moved back" in n for n in row_notes)

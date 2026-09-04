@@ -88,6 +88,33 @@ Rows are evaluated in declaration order. The first matching shape wins. Models w
 are tried in declaration order; a launch or transport error falls through to the next model.
 The empty shape is the default row.
 
+### Subscription quota reorders within a row
+
+A row states a PREFERENCE order; a model's subscription quota reorders inside it. When an
+endpoint opts in through llm-scripting-kit's `conserve_usage`, its verdict has two different
+effects on the row:
+
+- **out of quota** (the pool is spent) -- the model is DROPPED from the row. Dispatching to it
+  would fail.
+- **under quota** (spending faster than the window elapses) -- the model is MOVED BEHIND the
+  peers on its row that are not behind pace. It stays available.
+
+The stated order is the tiebreak within each band, so a row's own reasoning survives unless
+quota actually says otherwise. That is what lets a row whose first model is deliberately a
+Claude lane swap to a Codex one while Claude is over budget, without the row having to say so.
+A model that never opted in is never de-prioritized or dropped by this.
+
+Verdicts are evaluated ONCE per session and pinned, so a row cannot change seats halfway
+through a session. A row whose models are ALL out of quota keeps them rather than being
+deleted: rows are not each other's fallbacks, and removing one would fall the unit through to
+a row chosen for a different shape.
+
+When llm-scripting-kit is absent or predates quota-aware selection, the pass is skipped, every
+row renders in its configured order, and the rendered policy says so under **Degraded render**
+-- a skipped pass is otherwise indistinguishable from one that found nothing to change.
+Setting `ORCHESTRATE_QUOTA_ROUTING=0` turns the pass off deliberately and emits no note; use it
+when a policy render must not vary with the machine's live balance.
+
 There are exactly two model namespaces:
 
 - `agent:<name>` is reserved for the Agent tool's fixed menu: `fable`, `opus`, `sonnet`, and

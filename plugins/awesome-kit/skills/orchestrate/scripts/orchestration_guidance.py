@@ -649,11 +649,111 @@ def detect_harnesses(
     return result
 
 
+def load_quota_ranker(project_root: Path):
+    """Return (rank, notes) -- a callable reordering a row's models by quota.
+
+    Rows state a PREFERENCE order; subscription quota reorders inside it. A
+    model whose pool is spent is DROPPED from the row (dispatching to it would
+    fail), and one merely being spent faster than its window elapses is moved
+    BEHIND its peers rather than removed. The stated order is the tiebreak
+    within each band, so a row's own reasoning -- a Claude lane first because
+    the orchestrator is stalled -- survives unless quota actually says
+    otherwise. That is what lets a Claude-first row swap to codex when Claude
+    is over budget and codex is not, without the row having to say so.
+
+    Evaluated ONCE per session: llm_scripting_kit pins each verdict against
+    the session id, so a row cannot change seats halfway through a session.
+
+    DEGRADES rather than refuses. The shared library is optional here, and its
+    absence must not silently reorder nothing while the rendered policy reads
+    as though quota had been applied -- so the caller receives a note it is
+    required to render. The probe targets `rank_candidates` and `Candidate`,
+    the newest symbols this function uses, because a stale linked copy can
+    import cleanly while predating them.
+    """
+    if os.environ.get("ORCHESTRATE_QUOTA_ROUTING", "").strip() == "0":
+        # A DELIBERATE opt-out, so it emits no note. The degradation notes
+        # disclose absence the reader did not choose; announcing a switch the
+        # reader set themselves would file their own decision under "degraded".
+        # Set by anything needing a policy render that does not vary with the
+        # machine's live subscription balance -- this repo's own tests are the
+        # motivating case, since without it every routing assertion turns on
+        # the developer's current quota.
+        return None, []
+
+    try:
+        import llm_scripting_kit as model_kit  # noqa: PLC0415
+    except ImportError as exc:
+        return None, [
+            "quota-aware routing skipped: llm_scripting_kit unavailable "
+            f"({type(exc).__name__}); rows render in their configured order and "
+            "no model is de-prioritized or dropped for quota. Install the owning "
+            "plugin with `claude plugin install llm-scripting-kit@plugins-kit` "
+            "and start a new session."
+        ]
+
+    rank_candidates = getattr(model_kit, "rank_candidates", None)
+    candidate_type = getattr(model_kit, "Candidate", None)
+    pinned_evaluate = getattr(model_kit, "pinned_evaluate", None)
+    discover = getattr(model_kit, "discover_model_entries", None)
+    if not callable(rank_candidates) or candidate_type is None or not callable(pinned_evaluate):
+        return None, [
+            "quota-aware routing skipped: the linked llm_scripting_kit predates "
+            "quota-aware selection (no `rank_candidates`), so rows render in their "
+            "configured order and no model is de-prioritized or dropped for quota. "
+            "Update it with `claude plugin update llm-scripting-kit@plugins-kit` "
+            "and start a new session."
+        ]
+
+    try:
+        entries = discover(project_root=str(project_root)).entries if callable(discover) else {}
+    except Exception as exc:  # noqa: BLE001 -- a stale shared lib degrades, never crashes
+        return None, [
+            "quota-aware routing skipped: model discovery failed "
+            f"({type(exc).__name__}: {exc}); rows render in their configured order."
+        ]
+
+    def rank(models: List[Dict[str, str]]) -> Tuple[List[Dict[str, str]], List[str]]:
+        candidates = []
+        for index, model in enumerate(models):
+            entry_id = str(model.get("id") or "")
+            entry = entries.get(entry_id)
+            spec = getattr(entry, "conserve_usage", None) if entry is not None else None
+            budget = None
+            if spec is not None:
+                try:
+                    budget = pinned_evaluate(entry_id, spec, getattr(entry, "harness", None))
+                except Exception:  # noqa: BLE001 -- a verdict that cannot be read is no verdict
+                    budget = None
+            candidates.append(candidate_type(endpoint=entry_id, preference_index=index, budget=budget))
+        ranked, disabled = rank_candidates(candidates)
+        by_id = {str(model.get("id")): model for model in models}
+        ordered = [by_id[c.endpoint] for c in ranked if c.endpoint in by_id]
+        row_notes = []
+        for c in disabled:
+            row_notes.append(f"`{c.endpoint}` dropped: out of quota")
+        for position, c in enumerate(ranked):
+            # "Moved back" means a peer the row listed LATER now precedes it --
+            # not merely that its index shifted. A drop earlier in the row
+            # shifts every later position, so comparing `position` against
+            # `preference_index` reports a move for a model that overtook
+            # nobody (row [A out-of-quota, B under-quota] leaves B leading the
+            # row at position 0 with preference_index 1).
+            if c.deprioritized and any(
+                other.preference_index > c.preference_index for other in ranked[:position]
+            ):
+                row_notes.append(f"`{c.endpoint}` moved back: under quota")
+        return ordered, row_notes
+
+    return rank, []
+
+
 def resolve_routing_models(
     config: Dict[str, Any],
     model_entries: Mapping[str, Mapping[str, str]],
     harness_status: Mapping[str, Tuple[bool, str]],
     routable_ids: Optional[set] = None,
+    quota_rank: Optional[Any] = None,
 ) -> Tuple[List[Dict[str, Any]], List[str]]:
     """Resolve routing rows, retaining order and model priority.
 
@@ -782,6 +882,26 @@ def resolve_routing_models(
         if not models:
             notes.append(f"routing row {row_number} skipped: no model resolves")
             continue
+        if quota_rank is not None:
+            ordered, quota_notes = quota_rank(models)
+            for note in quota_notes:
+                notes.append(f"routing row {row_number}: {note}")
+                inline_notes.append(note)
+            # A row whose every model is out of quota keeps them. Emptying it
+            # would delete the row, and rows are not each other's fallbacks --
+            # first-match-wins means the unit would fall through to a LOWER row
+            # and be dispatched on seats chosen for a different shape entirely.
+            # Reporting the exhaustion and leaving the row intact is the honest
+            # outcome; the orchestrator can read it and decide.
+            if ordered:
+                models = ordered
+            else:
+                notes.append(
+                    f"routing row {row_number}: every model is out of quota; row kept as "
+                    "configured rather than deleted, because deleting it would fall the "
+                    "unit through to a row chosen for a different shape"
+                )
+                inline_notes.append("every model on this row is out of quota")
         routes.append(
             {
                 "number": row_number,
@@ -1634,11 +1754,17 @@ def render(
     )
     rendered_commands = _rendered_backend_command_texts(detected, command_text_provider)
     routable_backend_ids = _routable_backend_ids(detected, rendered_commands)
+    quota_rank, quota_notes = load_quota_ranker(project_root)
+    # Same rule as the degradation notes above: a policy rendered WITHOUT the
+    # quota pass looks identical to one rendered with it, so a skipped pass has
+    # to say so or the reader takes the printed order for a quota-aware one.
+    degradation_notes.extend(quota_notes)
     routes, _routing_notes = resolve_routing_models(
         config,
         model_entries,
         harness_status,
         routable_backend_ids,
+        quota_rank=quota_rank,
     )
     render_decision_tree(config, routable_backend_ids, backend_names, out, routes)
     seat_result, seat_status, seat_detail = discover_consult_seats(
@@ -1762,12 +1888,16 @@ def main(argv: Optional[List[str]] = None) -> int:
             notes=command_notes,
         )
         rendered_commands = _rendered_backend_command_texts(detected, command_text_provider)
+        explain_quota_rank, explain_quota_notes = load_quota_ranker(project_root)
         routes, routing_notes = resolve_routing_models(
             config,
             model_entries,
             harness_status,
             _routable_backend_ids(detected, rendered_commands),
+            quota_rank=explain_quota_rank,
         )
+        for note in explain_quota_notes:
+            print(f"quota    note      {note}")
         for harness, (ok, reason) in harness_status.items():
             print(f"harness  {'available' if ok else 'MISSING':9} {harness}: {reason}")
         for note in model_notes:
