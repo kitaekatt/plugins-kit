@@ -36,6 +36,7 @@ from .reachability import (
     check_entry,
     check_many,
 )
+from . import usage_budget
 from .seats import discover_seats
 from .request_protocol import (
     PROTOCOL_VERSION,
@@ -140,6 +141,20 @@ def _parser() -> argparse.ArgumentParser:
         default=DEFAULT_VERIFY_TIMEOUT_S,
         help=f"Reachability check timeout in seconds (default {DEFAULT_VERIFY_TIMEOUT_S:g}).",
     )
+    usage = sub.add_parser(
+        "usage",
+        help="Show the subscription-usage pacing verdict for conserve_usage endpoints.",
+    )
+    _add_project_arg(usage)
+    usage.add_argument("--json", action="store_true", help="Emit the verdicts as JSON.")
+    usage.add_argument(
+        "--no-pin",
+        action="store_true",
+        help=(
+            "Evaluate the pools now instead of reusing this session's pinned "
+            "verdict. Inspection only -- it neither reads nor writes the pin."
+        ),
+    )
     seats = sub.add_parser("seats", help="List reachable UP and BESIDE harness seats.")
     seats.add_argument("--self", dest="self_ref", required=True, help="Self endpoint or exact model id.")
     seats.add_argument("--json", action="store_true", help="Emit the structured result as JSON.")
@@ -202,6 +217,8 @@ def main(argv: Optional[list[str]] = None) -> int:
             return _cmd_endpoints(args.project_root, verify=args.verify, timeout_s=args.timeout)
         if args.cmd == "probe":
             return _cmd_probe(args.endpoint, args.project_root, args.timeout)
+        if args.cmd == "usage":
+            return _cmd_usage(args.json, args.project_root, args.no_pin)
         if args.cmd == "seats":
             return _cmd_seats(args.self_ref, args.json, args.project_root, args.timeout)
         if args.cmd == "models":
@@ -307,6 +324,53 @@ def _cmd_probe(endpoint: Optional[str], project_root: Optional[str], timeout_s: 
     return EXIT_OK
 
 
+def _cmd_usage(as_json: bool, project_root: Optional[str], no_pin: bool) -> int:
+    """Report the pacing verdict for every endpoint that opted in.
+
+    An inspection surface for a check that is otherwise invisible: it runs
+    inside `seats` and silently withholds an endpoint, so without this the
+    only way to see WHY a frontier seat vanished would be to read the
+    snapshot by hand.
+    """
+    discovery = discover_model_entries(project_root=project_root)
+    opted_in = {
+        entry_id: entry
+        for entry_id, entry in sorted(discovery.entries.items())
+        if entry.conserve_usage is not None
+    }
+    verdicts = {}
+    for entry_id, entry in opted_in.items():
+        if no_pin:
+            budget = usage_budget.evaluate(entry.conserve_usage, entry.harness)
+        else:
+            budget = usage_budget.pinned_evaluate(
+                entry_id, entry.conserve_usage, entry.harness
+            )
+        verdicts[entry_id] = budget
+    if as_json:
+        _json(
+            {
+                "pinned": not no_pin,
+                "session_key": usage_budget.session_key(),
+                "verdicts": {
+                    entry_id: {
+                        "harness": opted_in[entry_id].harness,
+                        "conserve_usage": opted_in[entry_id].conserve_usage.to_json(),
+                        "budget": budget.to_json(),
+                    }
+                    for entry_id, budget in verdicts.items()
+                },
+            }
+        )
+        return EXIT_OK
+    if not opted_in:
+        print("no endpoint declares conserve_usage")
+        return EXIT_OK
+    for entry_id, budget in verdicts.items():
+        print(f"{entry_id}: {budget.status} -- {budget.detail}")
+    return EXIT_OK
+
+
 def _cmd_seats(
     self_ref: str,
     as_json: bool,
@@ -353,6 +417,9 @@ def _entry_json(entry: Any) -> dict[str, Any]:
         result.update({"harness": entry.harness, "effort": entry.effort})
     else:
         result.update({"base_url": entry.base_url, "key_env": entry.key_env})
+    conserve = getattr(entry, "conserve_usage", None)
+    if conserve is not None:
+        result["conserve_usage"] = conserve.to_json()
     adapter = _adapter_for(entry)
     if adapter is not None:
         result["adapter"] = adapter

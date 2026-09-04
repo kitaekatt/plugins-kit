@@ -51,6 +51,21 @@ default_endpoint: openrouter
 # names when set) resolve as endpoints by their entry id, without appearing
 # here. An endpoint declared in this file shadows a registry entry of the same
 # name. Schema and default-entry resolution: model_endpoints.py.
+#
+# USAGE PACING. Any harness entry may add `conserve_usage`, which withholds it
+# while its subscription quota is being spent faster than its window elapses
+# (llm_scripting_kit/usage_budget.py). It is OFF for every shipped entry:
+# whether to pace a model is the user's policy, not this plugin's, and a
+# shipped default would impose one fleet's habits on every consumer. Turn it on
+# in a user or project override, which deep-merges over the shipped entry:
+#
+#   endpoints:
+#     fable:
+#       conserve_usage: {pool: model_scoped, display_name: Fable}
+#     opus:
+#       conserve_usage: {pool: seven_day}    # the all-model weekly window
+#     sol:
+#       conserve_usage: true                 # codex's principal window
 endpoints:
   openrouter:
     base_url: https://openrouter.ai/api/v1

@@ -58,6 +58,7 @@ from .model_endpoints import (
     harness_entry_message,
     parse_classification_fields,
 )
+from .usage_budget import ConserveConfigError, ConserveSpec, parse_conserve_usage
 
 # The name of the endpoint used when a caller does not name one.
 DEFAULT_ENDPOINT_NAME = "openrouter"
@@ -293,6 +294,25 @@ def _config_classification(
     )
 
 
+def _config_conserve(
+    ep_name: str, ep: Mapping[str, object]
+) -> Optional["ConserveSpec"]:
+    """Parse a layered-config ``conserve_usage``, loudly on a bad shape.
+
+    Mirrors ``model_endpoints._conserve_spec``: an unreadable declaration
+    leaves the entry opted in and never conserving, which is
+    indistinguishable from a working opt-in, so it is refused rather than
+    noted. Re-raised as ``EndpointMetadataError`` -- already the loud class
+    for invalid entry metadata here -- so callers meet one error family.
+    """
+    try:
+        return parse_conserve_usage(
+            ep.get("conserve_usage"), source="layered model config", entry_id=ep_name
+        )
+    except ConserveConfigError as exc:
+        raise EndpointMetadataError(str(exc)) from exc
+
+
 def _config_model_entry(
     ep_name: str,
     ep: Mapping[str, object],
@@ -320,6 +340,7 @@ def _config_model_entry(
             effort=_config_optional_str(ep_name, ep, kind=kind, key="effort"),
             tier=tier,
             family=family,
+            conserve_usage=_config_conserve(ep_name, ep),
         )
 
     if "model" not in ep:
@@ -340,6 +361,7 @@ def _config_model_entry(
         kind=kind,
         tier=tier,
         family=family,
+        conserve_usage=_config_conserve(ep_name, ep),
     )
 
 
