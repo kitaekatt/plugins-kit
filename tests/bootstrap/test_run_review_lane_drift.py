@@ -1,19 +1,16 @@
-"""Drift guard for the vendored run_review_lane.py copies.
+"""Drift guard for the identical run_review_lane.py wrappers.
 
 git-kit and p4-kit run the same reviewer lanes with the same prompts against the
-same endpoints, so their endpoint-dispatch runner is ONE file copied
-byte-for-byte, the way bootstrap_guard.py is. The shared review pipeline's other
-half already learned this lesson the hard way: a fix landed in one kit's
-SKILL.md and never reached the other, which is why
-scripts/gen_code_review_skills.py exists.
+same endpoints. Their scripts therefore stay byte-identical wrappers, the way
+bootstrap_guard.py is. The seam-calling implementation is shared in
+llm_scripting_kit.review_lane; the wrappers only set up bootstrap and host its
+REFUSE probe.
 
-The runner cannot live in bootstrap_lib with the rest of the shared review core,
-because it calls llm_scripting_kit -- which would make `openai` a transitive
-requirement of the bootstrap plugin itself, the one every other plugin depends
-on. tests/bootstrap/test_dependency_completeness.py enforces that boundary. So
-the VCS-neutral, LLM-neutral half (prompts, issue schema, dispatch
-classification) lives in bootstrap_lib.code_review.lane_prompts and is imported
-by both copies; only the seam-calling half is vendored.
+The seam-calling implementation cannot live in bootstrap_lib with the rest of
+the shared review core, because it would make `openai` a transitive requirement
+of the bootstrap plugin itself. tests/bootstrap/test_dependency_completeness.py
+enforces that boundary. The VCS-neutral, LLM-neutral half (prompts, issue
+schema, dispatch classification) lives in bootstrap_lib.code_review.lane_prompts.
 
 This test lives in tests/bootstrap/ rather than either kit's directory for the
 same reason test_skill_drift.py does: the invariant is the shared review
@@ -32,29 +29,29 @@ COPIES = [
 ]
 
 
-class TestVendoredCopiesMatch:
+class TestWrapperCopiesMatch:
     def test_every_copy_exists(self) -> None:
         for path in COPIES:
-            assert path.is_file(), f"vendored runner missing: {path}"
+            assert path.is_file(), f"runner wrapper missing: {path}"
 
     def test_copies_are_byte_identical(self) -> None:
         first, *rest = [path.read_bytes() for path in COPIES]
         for path, body in zip(COPIES[1:], rest):
             assert body == first, (
-                f"{path} drifted from {COPIES[0]} -- the runner is vendored "
-                f"byte-for-byte; copy it across rather than editing one side"
+                f"{path} drifted from {COPIES[0]} -- the runner wrappers must "
+                f"stay byte-identical; update both sides together"
             )
 
 
-class TestCopiesStayCopyable:
-    """The properties that let two identical files serve two plugins."""
+class TestCopiesStayIdentical:
+    """The properties that let identical wrappers serve two plugins."""
 
     @pytest.mark.parametrize("path", COPIES, ids=lambda p: p.parts[-3])
     def test_no_copy_names_its_own_plugin(self, path: Path) -> None:
-        """A hardcoded plugin id is what would force the copies apart.
+        """A hardcoded plugin id is what would force the wrappers apart.
 
-        The script reads its plugin from its own location instead, so the two
-        files can stay identical while re-execing into different venvs.
+        The script reads its plugin from its own location instead, so the
+        wrappers can stay identical while re-execing into different venvs.
         """
         source = path.read_text(encoding="utf-8")
         for literal in ('"git-kit"', "'git-kit'", '"p4-kit"', "'p4-kit'"):
@@ -72,7 +69,7 @@ class TestCopiesStayCopyable:
 
 class TestNoSeamImportLeakedIntoBootstrapLib:
     def test_bootstrap_lib_does_not_import_the_completion_seam(self) -> None:
-        """The reason this file is vendored at all.
+        """The reason the wrapper is identical in both kits.
 
         Checked as an IMPORT, not a substring: the engine and shared_lib name
         llm_scripting_kit as a shared-library STRING (it is one of the libs
