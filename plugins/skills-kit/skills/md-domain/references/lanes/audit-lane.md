@@ -53,6 +53,17 @@ from the session.
 - **remediate lanes: model `sonnet`, effort `low`.** Remediation applies
   already-decided edits -- the judgment happened at the Q&A gate.
 
+The detect pin also carries the md-audit evidence-pack adapter's enforcement,
+so unpinning it costs more than it looks. The md-audit evidence-pack adapter is enforced in
+`scripts/emit_audit_jobs.py`, which attaches the pack only for the endpoints it
+was measured for. That covers every caller ONLY because these lanes build their
+prompts in process against a pinned frontier model, so no adapter-admitted
+endpoint ever reaches them. Give a detect lane a configurable model and it
+becomes a second path to an audit prompt, outside that enforcement -- an audit
+that silently runs a measured-for-the-adapter model without the adapter, at
+roughly two thirds of its achievable score, with no error to notice. Design
+record: `docs/planning/adapters/adapter-design.md`, "Seam".
+
 ## The pipeline
 
 ```

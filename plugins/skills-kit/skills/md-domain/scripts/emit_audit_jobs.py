@@ -19,6 +19,15 @@ Usage:
         [--endpoint NAME ...] [--report-dir PATH] [--max-parallel N]
         [--limit N] [--out PATH|-]
 
+Each emitted job carries an `evidence_pack` record stating whether the md-audit
+evidence pack was attached to its prompt and, when it was, that pack's sha256 and
+character count. The pack attaches only for the endpoint ids configured under
+`adapters: {md-audit-evidence-pack: {admitted_endpoints: [...]}}` in skills-kit's
+layered config (see md-domain/references/configuring-standards.md). The shipped
+default is EMPTY, so nothing attaches until a user admits an endpoint. A
+preference list mixing admitted and non-admitted endpoints is an error and fails
+the emit (exit 4).
+
 The emitted document is JSON (job-kit loads job files with yaml.safe_load, and
 every JSON document is valid YAML, so no YAML serializer is needed here). The
 runnable job-kit invocation, including the JOB_KIT_REPORT_DIR prefix, is
@@ -29,6 +38,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import hashlib
 import importlib.util
 import io
 import json
@@ -38,12 +48,57 @@ import sys
 from pathlib import Path
 from types import ModuleType
 
+# skills_kit_lib lives at the plugin root; make it importable regardless of
+# which interpreter launched this script. The import is deferred to
+# resolve_admitted_endpoints so the rest of this script stays stdlib-only and
+# keeps working on a bare interpreter.
+_PLUGIN_ROOT = Path(__file__).resolve().parents[3]
+if str(_PLUGIN_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PLUGIN_ROOT))
+
 _SCRIPTS_DIR = Path(__file__).resolve().parent
 _DISCOVER_PATH = _SCRIPTS_DIR / "discover_project_doc.py"
 _CHECKER_PATH = _SCRIPTS_DIR / "check_project_doc_audit.py"
+_EVIDENCE_PACK_PATH = _SCRIPTS_DIR / "evidence_pack.py"
 
 DEFAULT_ENDPOINTS = ["sonnet", "opus", "luna"]
 DEFAULT_MAX_PARALLEL = 4
+
+# The md-audit evidence pack is an ADAPTER: task-specific context admitted for
+# the model-task pairs it was measured on, and for nothing else. It was measured
+# on 2026-09-04 for a locally hosted 27B-class endpoint auditing markdown, where
+# the compact pack at a single call raised F1 from 0.36 to 0.51 for 7 percent
+# more tokens (docs/planning/adapters/adapter-design.md, Outcome).
+#
+# The admitted set names ENDPOINT IDS, which differ per user and per fleet, so it
+# is configuration rather than a shipped list. The shipped default is EMPTY: an
+# unconfigured run attaches no pack, which is exactly the behaviour of not having
+# the adapter at all. Attaching the pack to a model that does not need it is a
+# tax, so an id in the set is a claim that THAT pair was measured -- do not widen
+# the set to make a run attach a pack.
+# Must match skills_kit_lib.standards_resolve.ADAPTER_MD_AUDIT_EVIDENCE_PACK;
+# spelled literally here so this script imports nothing at module scope.
+ADAPTER_ID = "md-audit-evidence-pack"
+
+
+def resolve_admitted_endpoints(project_root: Path | None) -> frozenset[str]:
+    """The adapter-admitted endpoint ids for this run, from layered config.
+
+    Reads skills-kit's own layered configuration (user layer, then its
+    config.local.yaml overlay, then the project layer and its overlay) through
+    skills_kit_lib.standards_resolve -- no second config file and no environment
+    variable. Returns an EMPTY set when nothing is configured, and also when the
+    library or pyyaml is unavailable: an unresolvable config must never widen
+    admission, only narrow it. A malformed config still raises loudly, because a
+    typo'd admitted_endpoints is indistinguishable from the empty default.
+    """
+    try:
+        from skills_kit_lib import standards_resolve
+    except ImportError:
+        return frozenset()
+    resolved = standards_resolve.resolve(project_root)
+    return resolved.adapter_admitted_endpoints(ADAPTER_ID)
+
 
 # Deny floor: no job in this run may write, edit, or otherwise mutate files.
 # The job is an audit -- it reads a subject doc and a standards doc and
@@ -84,6 +139,63 @@ def discover_project_docs(subject_dir: Path) -> list[dict]:
 def load_checker_module() -> ModuleType:
     """Load check_project_doc_audit.py by path (single parser of the standards doc)."""
     return _load_module(_CHECKER_PATH, "_emit_audit_jobs_check_project_doc_audit")
+
+
+def load_evidence_pack_module() -> ModuleType:
+    """Load evidence_pack.py by path (the adapter's one builder)."""
+    return _load_module(_EVIDENCE_PACK_PATH, "_emit_audit_jobs_evidence_pack")
+
+
+class MixedAdapterEndpointsError(ValueError):
+    """Raised when a preference list mixes admitted and non-admitted endpoints.
+
+    job-kit resolves the preference list at RUN time, so a pack chosen at emit
+    time against a mixed list is wrong for whichever endpoint the run does not
+    pick: either an admitted endpoint loses the pack, or a non-admitted one is
+    taxed with it. There is no per-job answer -- the emit itself is the error.
+    """
+
+
+def adapter_applies(endpoints: list[str], admitted_set: frozenset[str]) -> bool:
+    """True when EVERY endpoint in the preference list is adapter-admitted.
+
+    False when none is -- including when admitted_set is empty, which is the
+    shipped default and means "no endpoint is admitted", never a mixed list. A
+    list mixing admitted and non-admitted endpoints raises
+    MixedAdapterEndpointsError rather than guessing.
+    """
+    admitted = [name for name in endpoints if name in admitted_set]
+    if not admitted:
+        return False
+    if len(admitted) != len(endpoints):
+        rejected = [name for name in endpoints if name not in admitted_set]
+        raise MixedAdapterEndpointsError(
+            "endpoint_preference mixes adapter-admitted and non-admitted "
+            f"endpoints: {endpoints} (admitted: {admitted}; not admitted: "
+            f"{rejected}). The md-audit evidence pack is admitted only for "
+            f"{sorted(admitted_set)} (configured under adapters: "
+            f"{{{ADAPTER_ID}: {{admitted_endpoints: [...]}}}}). Emit one job "
+            "file per endpoint class instead of one mixed list."
+        )
+    return True
+
+
+def build_evidence_pack(
+    evidence_module: ModuleType, repo_root: Path, subject_rel: str
+) -> tuple[str | None, str | None]:
+    """Build the compact pack for one document.
+
+    Returns (pack_text, None) on success and (None, reason) on failure. A pack
+    that cannot be built degrades that ONE document to no pack -- an emit over a
+    directory must not abort because a single subject defeated the builder.
+    """
+    try:
+        pack = evidence_module.build_pack(str(repo_root), subject_rel)
+    except Exception as exc:  # noqa: BLE001 -- any builder failure degrades
+        return None, f"{type(exc).__name__}: {exc}"
+    if not isinstance(pack, str) or not pack.strip():
+        return None, "evidence_pack.build_pack returned no text"
+    return pack, None
 
 
 def default_repo_root(subject_dir: Path) -> Path:
@@ -182,8 +294,15 @@ def build_prompt(
     checker_abs: Path,
     subject_lines: int,
     example_report: dict,
+    evidence_pack: str | None = None,
 ) -> dict:
-    """system/user prompt text for one audit job."""
+    """system/user prompt text for one audit job.
+
+    evidence_pack, when present, is inserted after the block that names the
+    audited document and before the response schema (the worked example and the
+    facts the checker enforces), matching the insertion point the adapter was
+    measured at.
+    """
     example_text = json.dumps(example_report, indent=2)
     system = (
         "You are a document auditor. You read one project document against a "
@@ -204,6 +323,20 @@ def build_prompt(
         "criterion id and the taxonomy id from the standards document, and "
         "give the bucket the standards document's Taxonomy ids table assigns "
         "to that taxonomy id -- do not choose the bucket yourself.\n\n"
+    )
+    if evidence_pack is not None:
+        # This wrapper line is part of the measured stimulus, not decoration:
+        # the 2026-09-04 F1 figures were produced with exactly this framing and
+        # no code fence. Rewording it, or fencing the pack, changes the prompt
+        # the measurement was taken against. The pack closes with its own
+        # "rows are facts, not findings" line, so no further framing is needed.
+        # A fence would also be unsafe here: pack rows carry backticked paths.
+        user += (
+            "EVIDENCE (pre-computed facts about FILE and its repository "
+            "context):\n"
+            f"{evidence_pack.rstrip()}\n\n"
+        )
+    user += (
         "Worked example of the exact report shape (built from this run's "
         "standards document, illustrative content only -- do not audit "
         "against this example, audit against the subject document):\n\n"
@@ -242,12 +375,24 @@ def build_job(
     used_ids: set[str],
     criteria: set[str],
     taxonomy: dict[str, str],
+    evidence_module: ModuleType | None = None,
 ) -> dict:
     subject_abs = Path(record["path"]).resolve()
     subject_rel = subject_abs.relative_to(repo_root).as_posix()
     job_id = unique_id(slugify(subject_rel), used_ids)
     subject_lines = subject_line_count(subject_abs)
     example_report = build_example_report(subject_rel, subject_lines, criteria, taxonomy)
+
+    pack: str | None = None
+    pack_error: str | None = None
+    if evidence_module is not None:
+        pack, pack_error = build_evidence_pack(evidence_module, repo_root, subject_rel)
+        if pack_error is not None:
+            print(
+                f"evidence pack unavailable for {subject_rel}: {pack_error}",
+                file=sys.stderr,
+            )
+
     prompt = build_prompt(
         subject_rel=subject_rel,
         subject_abs=subject_abs,
@@ -255,11 +400,21 @@ def build_job(
         checker_abs=checker_abs,
         subject_lines=subject_lines,
         example_report=example_report,
+        evidence_pack=pack,
     )
+
+    evidence_record: dict[str, object] = {"attached": pack is not None}
+    if pack is not None:
+        evidence_record["sha256"] = hashlib.sha256(pack.encode("utf-8")).hexdigest()
+        evidence_record["char_count"] = len(pack)
+    elif pack_error is not None:
+        evidence_record["error"] = pack_error
+
     return {
         "id": job_id,
         "prompt": prompt,
         "endpoint_preference": list(endpoints),
+        "evidence_pack": evidence_record,
         "requirements": {"params": ["cwd"]},
         "directory": str(repo_root),
         "workspace": {"isolate": False},
@@ -310,6 +465,13 @@ def build_job_file(
     checker_module = load_checker_module()
     criteria, taxonomy = checker_module.load_contract(standards)
 
+    # Raises on a mixed preference list -- deliberately before any job is built,
+    # so a mixed list fails the emit rather than producing a half-adapted file.
+    admitted_set = resolve_admitted_endpoints(repo_root)
+    evidence_module = (
+        load_evidence_pack_module() if adapter_applies(endpoints, admitted_set) else None
+    )
+
     python_abs = Path(sys.executable).resolve()
     used_ids: set[str] = set()
     jobs = [
@@ -323,6 +485,7 @@ def build_job_file(
             used_ids=used_ids,
             criteria=criteria,
             taxonomy=taxonomy,
+            evidence_module=evidence_module,
         )
         for record in records
     ]
@@ -393,14 +556,18 @@ def main(argv: list[str] | None = None) -> int:
     endpoints = args.endpoint if args.endpoint else list(DEFAULT_ENDPOINTS)
     report_dir = (args.report_dir.resolve() if args.report_dir else Path.cwd() / "reports")
 
-    document = build_job_file(
-        subject_dir=subject_dir,
-        repo_root=repo_root,
-        standards=standards,
-        endpoints=endpoints,
-        max_parallel=args.max_parallel,
-        limit=args.limit,
-    )
+    try:
+        document = build_job_file(
+            subject_dir=subject_dir,
+            repo_root=repo_root,
+            standards=standards,
+            endpoints=endpoints,
+            max_parallel=args.max_parallel,
+            limit=args.limit,
+        )
+    except MixedAdapterEndpointsError as exc:
+        print(exc, file=sys.stderr)
+        return 4
 
     non_ascii = _non_ascii_strings(document)
     if non_ascii:

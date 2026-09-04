@@ -19,8 +19,8 @@ would take a shared_lib_imports manifest change and break audit.py's graceful
 bare-python degradation). When pyyaml is unavailable resolution degrades to
 empty defaults plus a loud note, exactly like audit.py's contract-staged state
 -- it never crashes. Malformed config, an un-tunable rule id, an unknown
-threshold, or an invalid standards file are LOUD (StandardsConfigError), never a
-silent {}.
+threshold, an unknown adapter or adapter setting, or an invalid standards file
+are LOUD (StandardsConfigError), never a silent {}.
 """
 
 from __future__ import annotations
@@ -52,6 +52,16 @@ class StandardsConfigError(Exception):
     """
 
 
+#: The one adapter id this configuration surface knows, and the keys it takes.
+#: An adapter is task-specific context admitted for the model-task pairs it was
+#: MEASURED on. The shipped default admits nothing, so an unconfigured user gets
+#: the behaviour of not having the adapter at all.
+ADAPTER_MD_AUDIT_EVIDENCE_PACK = "md-audit-evidence-pack"
+ADAPTER_KEYS: dict[str, set[str]] = {
+    ADAPTER_MD_AUDIT_EVIDENCE_PACK: {"admitted_endpoints"},
+}
+
+
 @dataclass
 class StandardsFile:
     """One authored *-standards.md, parsed and schema-validated."""
@@ -70,13 +80,22 @@ class ResolvedStandards:
       absent name keeps audit.py's default.
     - standards_by_primitive: applies_to value -> the StandardsFiles governing
       it, unioned across layers in layer order.
+    - adapters: adapter id -> that adapter's settings, for the ids in
+      ADAPTER_KEYS. An absent adapter, or an absent key inside one, keeps the
+      shipped default -- which for every adapter setting is EMPTY.
     - notes: loud-but-non-fatal diagnostics (e.g. pyyaml unavailable).
     """
 
     disabled_rules: set[str] = field(default_factory=set)
     thresholds: dict[str, int] = field(default_factory=dict)
     standards_by_primitive: dict[str, list[StandardsFile]] = field(default_factory=dict)
+    adapters: dict[str, dict] = field(default_factory=dict)
     notes: list[str] = field(default_factory=list)
+
+    def adapter_admitted_endpoints(self, adapter_id: str) -> frozenset[str]:
+        """The endpoint ids admitted for one adapter; empty when unconfigured."""
+        settings = self.adapters.get(adapter_id) or {}
+        return frozenset(settings.get("admitted_endpoints", ()))
 
 
 def _config_dir() -> Path:
@@ -136,6 +155,55 @@ def _is_off(val) -> bool:
     if isinstance(val, str) and val.strip().lower() in ("off", "false"):
         return True
     return False
+
+
+def _validate_adapters(merged: dict) -> dict[str, dict]:
+    """Validate the merged config's `adapters:` block and return its settings.
+
+    An unknown adapter id, an unknown key inside a known adapter, or a value of
+    the wrong shape raises rather than being ignored: a typo'd endpoint list
+    would otherwise silently admit nothing, which looks exactly like the
+    (correct, empty) default and hides the mistake.
+    """
+    raw = merged.get("adapters", {})
+    if raw and not isinstance(raw, dict):
+        raise StandardsConfigError(
+            f"'adapters:' must be a mapping of adapter-id -> settings, got "
+            f"{type(raw).__name__}"
+        )
+    adapters: dict[str, dict] = {}
+    for adapter_id, settings in (raw or {}).items():
+        if adapter_id not in ADAPTER_KEYS:
+            raise StandardsConfigError(
+                f"adapter '{adapter_id}' is not a known adapter; valid adapter "
+                f"ids: {sorted(ADAPTER_KEYS)}"
+            )
+        if not isinstance(settings, dict):
+            raise StandardsConfigError(
+                f"adapter '{adapter_id}' must be a mapping of setting -> value, "
+                f"got {type(settings).__name__}"
+            )
+        valid = ADAPTER_KEYS[adapter_id]
+        extracted: dict = {}
+        for key, val in settings.items():
+            if key not in valid:
+                raise StandardsConfigError(
+                    f"adapter '{adapter_id}' has no setting '{key}'; valid "
+                    f"settings: {sorted(valid)}"
+                )
+            if key == "admitted_endpoints":
+                if not isinstance(val, list) or not all(
+                    isinstance(name, str) and name.strip() for name in val
+                ):
+                    raise StandardsConfigError(
+                        f"adapter '{adapter_id}': admitted_endpoints must be a "
+                        f"list of non-empty endpoint id strings; got {val!r}"
+                    )
+                extracted[key] = [name.strip() for name in val]
+            else:  # pragma: no cover - unreachable while every key is handled
+                extracted[key] = val
+        adapters[adapter_id] = extracted
+    return adapters
 
 
 def _validate_and_extract(merged: dict) -> tuple[set[str], dict[str, int]]:
@@ -253,6 +321,7 @@ def resolve(project_root: Path | None, *, shipped_dir: Path | None = None) -> Re
         merged = _deep_merge(merged, _load_config_file(cf))
 
     disabled_rules, thresholds = _validate_and_extract(merged)
+    adapters = _validate_adapters(merged)
 
     # -- standards files (dirs only; config.local.yaml carries no md) ---------
     standards_dirs: list[Path] = []
@@ -274,5 +343,6 @@ def resolve(project_root: Path | None, *, shipped_dir: Path | None = None) -> Re
         disabled_rules=disabled_rules,
         thresholds=thresholds,
         standards_by_primitive=standards_by_primitive,
+        adapters=adapters,
         notes=notes,
     )
