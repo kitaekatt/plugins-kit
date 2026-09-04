@@ -37,6 +37,7 @@ from .reachability import (
     check_many,
 )
 from . import usage_budget
+from .quota_selection import choose_endpoint
 from .seats import discover_seats
 from .request_protocol import (
     PROTOCOL_VERSION,
@@ -155,6 +156,22 @@ def _parser() -> argparse.ArgumentParser:
             "verdict. Inspection only -- it neither reads nor writes the pin."
         ),
     )
+    choose = sub.add_parser(
+        "choose",
+        help="Pick one endpoint from a preference order, applying quota state.",
+    )
+    choose.add_argument(
+        "--prefer",
+        required=True,
+        help="Comma-separated endpoint ids, most preferred first (e.g. opus,sol).",
+    )
+    choose.add_argument(
+        "--default",
+        dest="fallback",
+        help="Endpoint to use when every preference is out of quota.",
+    )
+    choose.add_argument("--json", action="store_true", help="Emit the ranking as JSON.")
+    _add_project_arg(choose)
     seats = sub.add_parser("seats", help="List reachable UP and BESIDE harness seats.")
     seats.add_argument("--self", dest="self_ref", required=True, help="Self endpoint or exact model id.")
     seats.add_argument("--json", action="store_true", help="Emit the structured result as JSON.")
@@ -217,6 +234,8 @@ def main(argv: Optional[list[str]] = None) -> int:
             return _cmd_endpoints(args.project_root, verify=args.verify, timeout_s=args.timeout)
         if args.cmd == "probe":
             return _cmd_probe(args.endpoint, args.project_root, args.timeout)
+        if args.cmd == "choose":
+            return _cmd_choose(args.prefer, args.fallback, args.json, args.project_root)
         if args.cmd == "usage":
             return _cmd_usage(args.json, args.project_root, args.no_pin)
         if args.cmd == "seats":
@@ -369,6 +388,30 @@ def _cmd_usage(as_json: bool, project_root: Optional[str], no_pin: bool) -> int:
     for entry_id, budget in verdicts.items():
         print(f"{entry_id}: {budget.status} -- {budget.detail}")
     return EXIT_OK
+
+
+def _cmd_choose(
+    prefer: str,
+    fallback: Optional[str],
+    as_json: bool,
+    project_root: Optional[str],
+) -> int:
+    """Rank a preference order by quota state and name the winner.
+
+    Exits EXIT_FAILURE when nothing is usable and no --default was given: the
+    caller asked which endpoint to run and there is no answer, which a zero
+    exit would misreport as a successful choice.
+    """
+    preferences = [name.strip() for name in prefer.split(",") if name.strip()]
+    selection = choose_endpoint(
+        preferences, default=fallback, project_root=project_root
+    )
+    if as_json:
+        _json(selection.to_json())
+    else:
+        print(selection.chosen or "<none>")
+        print(f"  {selection.reason}", file=sys.stderr)
+    return EXIT_OK if selection.chosen is not None else EXIT_FAILURE
 
 
 def _cmd_seats(

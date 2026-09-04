@@ -109,9 +109,10 @@ genuinely dead target fast.
 
 A third axis over the two above: an endpoint can be configured and reachable
 and still be one you should leave alone this week. An entry opts in with
-`conserve_usage`, and is then withheld while the fraction of its subscription
-quota remaining is below the fraction of its window remaining -- spend no
-faster than time passes, and the model is still there at the end of the week.
+`conserve_usage`, and its quota state then has one of two effects: an endpoint
+whose pool is **spent** is disabled and leaves selection, while one that is
+merely **being spent faster than the clock** is de-prioritized -- still usable,
+but it loses to an equally-suitable endpoint that is not behind pace.
 
 ```yaml
 endpoints:
@@ -132,10 +133,23 @@ llm-scripting-kit usage            # this session's pinned verdicts
 llm-scripting-kit usage --no-pin   # evaluate now, without reading or writing the pin
 ```
 
-Three statuses: `available`, `conserved`, and `no-data`. **`no-data` never
-withholds a model** -- a missing snapshot, an absent pool, or a window that has
-already reset all leave the endpoint usable, the same way `probe` reports
+Four statuses: `available`, `under-quota` (de-prioritized), `out-of-quota`
+(disabled), and `no-data`. **`no-data` never withholds or de-prioritizes a
+model** -- a missing snapshot, an absent pool, or a window that has already
+reset all leave the endpoint fully usable, the same way `probe` reports
 `unknown` rather than claiming an endpoint is down.
+
+`choose` applies that to a preference order you state:
+
+```bash
+llm-scripting-kit choose --prefer opus,sol --default openrouter
+```
+
+Both fine, you get `opus` -- your stated order. `opus` out of quota, you get
+`sol`. Both out of quota, you get the default. `opus` under quota and `sol`
+fine, you get `sol` -- but `opus` stays in the returned chain, because
+de-prioritized is not disabled. Both under quota and your order decides again.
+Add `--json` for the whole ranking, the disabled endpoints, and the reason.
 
 The numbers come only from files the harnesses already write: claude-ui-kit's
 statusline snapshot for claude, the newest `~/.codex/sessions` rollout for
@@ -144,12 +158,13 @@ not expose shows up as `no-data` rather than being fetched with a token.
 
 A verdict is computed once per session and reused, so a model that was
 available when your session started does not become unavailable partway
-through. A `conserved` verdict is recomputed once its window resets, which can
-only give capacity back.
+through. An `under-quota` or `out-of-quota` verdict is recomputed once its
+window resets, which can only give capacity back.
 
-`seats` applies the same check: a conserved seat is reported under `conserved`
-rather than in `seats`, so "no seat above me" stays distinguishable from "the
-seat above me is being paced".
+`seats` applies the same check: an out-of-quota seat is reported under
+`out_of_quota` rather than in `seats`, so "no seat above me" stays
+distinguishable from "the seat above me is spent"; an under-quota seat stays in
+`seats` and sorts after an equally-suitable peer that is not behind pace.
 
 LLM access for scripts and pipelines: key resolution, a shared model registry,
 and named OpenAI-compatible endpoints. **OpenRouter is the default endpoint**,

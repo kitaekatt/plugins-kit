@@ -246,7 +246,7 @@ def test_cli_json_shape_and_indeterminate_exit(monkeypatch, capsys):
         "seats",
         "unclassified",
         "probe_unknown",
-        "conserved",
+        "out_of_quota",
     }
     assert payload["self"]["band"] == "workhorse"
     assert payload["probe_unknown"][0]["reachability"]["status"] == "unknown"
@@ -288,8 +288,8 @@ def _conserving(endpoint: str, tier: int, spec) -> EndpointEntry:
     )
 
 
-def test_a_conserved_seat_is_withheld_but_reported(monkeypatch):
-    from llm_scripting_kit import ConserveSpec, STATUS_CONSERVED
+def test_an_out_of_quota_seat_is_disabled_but_reported(monkeypatch):
+    from llm_scripting_kit import ConserveSpec, STATUS_OUT_OF_QUOTA
     from llm_scripting_kit.usage_budget import Budget
 
     _config(monkeypatch)
@@ -305,19 +305,19 @@ def test_a_conserved_seat_is_withheld_but_reported(monkeypatch):
         seats_module,
         "pinned_evaluate",
         lambda entry_id, s, harness: Budget(
-            status=STATUS_CONSERVED, pool=s.pool, detail="behind pace", resets_at=10
+            status=STATUS_OUT_OF_QUOTA, pool=s.pool, detail="pool spent", resets_at=10
         ),
     )
 
     result = discover_seats("self", registry=registry)
 
-    # Withheld from the usable seats...
+    # A spent pool removes the seat from selection...
     assert [seat.endpoint for seat in result.seats] == []
-    # ...but reported, so a caller can tell "no frontier seat exists" from
-    # "the frontier seat is being paced" -- only the second changes on reset.
-    assert [seat.endpoint for seat in result.conserved] == ["frontier"]
-    assert result.conserved[0].budget.conserved is True
-    assert result.to_json()["conserved"][0]["budget"]["status"] == "conserved"
+    # ...but it is reported, so a caller can tell "no frontier seat exists"
+    # from "the frontier seat is spent" -- only the second changes on reset.
+    assert [seat.endpoint for seat in result.out_of_quota] == ["frontier"]
+    assert result.out_of_quota[0].budget.usable is False
+    assert result.to_json()["out_of_quota"][0]["budget"]["status"] == "out-of-quota"
 
 
 def test_an_available_verdict_leaves_the_seat_usable(monkeypatch):
@@ -342,7 +342,7 @@ def test_an_available_verdict_leaves_the_seat_usable(monkeypatch):
 
     result = discover_seats("self", registry=registry)
     assert [seat.endpoint for seat in result.seats] == ["frontier"]
-    assert result.conserved == ()
+    assert result.out_of_quota == ()
 
 
 def test_an_unreachable_candidate_is_never_budget_checked(monkeypatch):
@@ -372,7 +372,7 @@ def test_an_unreachable_candidate_is_never_budget_checked(monkeypatch):
 
     result = discover_seats("self", registry=registry)
     assert calls == []
-    assert result.seats == () and result.conserved == ()
+    assert result.seats == () and result.out_of_quota == ()
 
 
 def test_an_endpoint_without_conserve_usage_is_never_budget_checked(monkeypatch):
@@ -393,3 +393,69 @@ def test_an_endpoint_without_conserve_usage_is_never_budget_checked(monkeypatch)
     assert [seat.endpoint for seat in result.seats] == ["frontier"]
     assert result.seats[0].budget is None
     assert "budget" not in result.to_json()["seats"][0]
+
+
+def test_an_under_quota_seat_is_kept_but_sorts_after_an_available_peer(monkeypatch):
+    from llm_scripting_kit import ConserveSpec, STATUS_AVAILABLE, STATUS_UNDER_QUOTA
+    from llm_scripting_kit.usage_budget import Budget
+
+    _config(monkeypatch)
+    # Two UP seats at the SAME tier so quota state is the only difference.
+    registry = _registry(
+        _harness("self", "self-model", tier=2, family="beta"),
+        _conserving("aaa-behind", 4, ConserveSpec(pool="seven_day")),
+        _conserving("zzz-ahead", 4, ConserveSpec(pool="seven_day")),
+    )
+    monkeypatch.setattr(
+        seats_module, "check_many", lambda entries, **kw: {n: _reachable() for n in entries}
+    )
+    verdicts = {
+        "aaa-behind": STATUS_UNDER_QUOTA,
+        "zzz-ahead": STATUS_AVAILABLE,
+    }
+    monkeypatch.setattr(
+        seats_module,
+        "pinned_evaluate",
+        lambda entry_id, s, harness: Budget(
+            status=verdicts[entry_id], pool=s.pool, detail=verdicts[entry_id]
+        ),
+    )
+
+    result = discover_seats("self", registry=registry)
+
+    # Both stay selectable -- being behind pace costs priority, not the seat --
+    # and the behind-pace one sorts last despite winning the id tiebreak.
+    assert [seat.endpoint for seat in result.seats] == ["zzz-ahead", "aaa-behind"]
+    assert result.out_of_quota == ()
+
+
+def test_relation_outranks_quota_state(monkeypatch):
+    # An UP seat that is behind pace still beats a BESIDE seat that is not:
+    # relation says whether a seat can do the job, which outranks budget.
+    from llm_scripting_kit import ConserveSpec, STATUS_AVAILABLE, STATUS_UNDER_QUOTA
+    from llm_scripting_kit.usage_budget import Budget
+
+    _config(monkeypatch)
+    registry = _registry(
+        _harness("self", "self-model", tier=2, family="beta"),
+        _conserving("up-behind", 4, ConserveSpec(pool="seven_day")),
+        EndpointEntry(
+            id="beside-ahead", base_url=None, model="beside-model", kind=HARNESS_KIND,
+            harness="claude", tier=2, family="alpha",
+            conserve_usage=ConserveSpec(pool="seven_day"),
+        ),
+    )
+    monkeypatch.setattr(
+        seats_module, "check_many", lambda entries, **kw: {n: _reachable() for n in entries}
+    )
+    verdicts = {"up-behind": STATUS_UNDER_QUOTA, "beside-ahead": STATUS_AVAILABLE}
+    monkeypatch.setattr(
+        seats_module,
+        "pinned_evaluate",
+        lambda entry_id, s, harness: Budget(
+            status=verdicts[entry_id], pool=s.pool, detail=verdicts[entry_id]
+        ),
+    )
+
+    result = discover_seats("self", registry=registry)
+    assert [seat.endpoint for seat in result.seats] == ["up-behind", "beside-ahead"]

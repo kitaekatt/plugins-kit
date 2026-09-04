@@ -111,7 +111,7 @@ class SeatsResult:
     seats: tuple[Seat, ...]
     unclassified: tuple[UnclassifiedEntry, ...]
     probe_unknown: tuple[Seat, ...]
-    conserved: tuple[Seat, ...] = ()
+    out_of_quota: tuple[Seat, ...] = ()
 
     def to_json(self) -> dict[str, Any]:
         return {
@@ -119,7 +119,7 @@ class SeatsResult:
             "seats": [seat.to_json() for seat in self.seats],
             "unclassified": [entry.to_json() for entry in self.unclassified],
             "probe_unknown": [seat.to_json() for seat in self.probe_unknown],
-            "conserved": [seat.to_json() for seat in self.conserved],
+            "out_of_quota": [seat.to_json() for seat in self.out_of_quota],
         }
 
 
@@ -201,6 +201,22 @@ def _candidate_sort_key(entry: EndpointEntry, relation: str) -> tuple[int, int, 
     return (1, 0, entry.id)
 
 
+def _seat_sort_key(seat: Seat) -> tuple[int, int, int, str]:
+    """Order confirmed seats, de-prioritizing the under-quota ones.
+
+    Quota rank sits BELOW relation and ABOVE tier: a seat's relation says
+    whether it can do the job at all, which outranks how much of its budget is
+    left, while two seats that can both do the job are separated by budget
+    before anything else. An under-quota seat therefore stays selectable and
+    simply loses to an equally-suitable peer -- which is the whole difference
+    between de-prioritizing and disabling.
+    """
+    relation_rank = 0 if seat.relation == "UP" else 1
+    quota_rank = 1 if (seat.budget is not None and seat.budget.deprioritized) else 0
+    tier_rank = -seat.tier if seat.relation == "UP" else 0
+    return (relation_rank, quota_rank, tier_rank, seat.endpoint)
+
+
 def discover_seats(
     self_ref: str,
     *,
@@ -219,11 +235,13 @@ def discover_seats(
 
     A reachable candidate that declares ``conserve_usage`` is additionally
     checked against its subscription-usage pool
-    (:mod:`llm_scripting_kit.usage_budget`) and, when it is being spent faster
-    than its window elapses, moved to ``conserved`` instead of ``seats`` --
-    reported rather than dropped, so a caller can tell "no seat above me" from
-    "the seat above me is being paced". That verdict is pinned for the session,
-    so a seat cannot disappear mid-session.
+    (:mod:`llm_scripting_kit.usage_budget`), and its verdict has two different
+    effects. OUT OF QUOTA disables the seat: it is moved to ``out_of_quota``
+    instead of ``seats`` -- reported rather than dropped, so a caller can tell
+    "no seat above me" from "the seat above me is spent". UNDER QUOTA merely
+    de-prioritizes it: the seat stays in ``seats`` and sorts after any peer of
+    the same relation that is not behind pace. Both verdicts are pinned for the
+    session, so a seat cannot disappear mid-session.
 
     ``registry`` is an injectable parsed registry for callers and tests that
     already own a fabricated registry. When omitted, the normal layered
@@ -277,7 +295,7 @@ def discover_seats(
 
     confirmed: list[Seat] = []
     probe_unknown: list[Seat] = []
-    conserved: list[Seat] = []
+    out_of_quota: list[Seat] = []
     for entry, relation in candidates:
         reachability = checks.get(
             entry.id,
@@ -296,23 +314,25 @@ def discover_seats(
             budget = pinned_evaluate(entry.id, entry.conserve_usage, entry.harness)
         candidate = _candidate_record(entry, relation, reachability, budget)
         if reachability.status == STATUS_REACHABLE:
-            # Conserved seats are withheld rather than dropped. A caller
-            # reporting "no seat above me" must be able to tell a fleet with
-            # no frontier model from one whose frontier model is being paced,
-            # because only the second answer changes once the window resets.
-            if budget is not None and budget.conserved:
-                conserved.append(candidate)
+            # A spent pool DISABLES the seat; being merely behind pace does
+            # not. The excluded ones are reported rather than dropped, so a
+            # caller reporting "no seat above me" can tell a fleet with no
+            # frontier model from one whose frontier model is out of quota --
+            # only the second answer changes when the window resets.
+            if budget is not None and not budget.usable:
+                out_of_quota.append(candidate)
             else:
                 confirmed.append(candidate)
         elif reachability.status == STATUS_UNKNOWN:
             probe_unknown.append(candidate)
 
+    confirmed.sort(key=_seat_sort_key)
     return SeatsResult(
         self=self_record,
         seats=tuple(confirmed),
         unclassified=unclassified,
         probe_unknown=tuple(probe_unknown),
-        conserved=tuple(conserved),
+        out_of_quota=tuple(out_of_quota),
     )
 
 

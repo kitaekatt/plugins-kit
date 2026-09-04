@@ -91,9 +91,16 @@ from .models import (
     resolve_endpoint,
     resolve_model,
 )
+from .quota_selection import (
+    Candidate,
+    QuotaSelection,
+    choose_endpoint,
+    rank_candidates,
+)
 from .usage_budget import (
     STATUS_AVAILABLE,
-    STATUS_CONSERVED,
+    STATUS_UNDER_QUOTA,
+    STATUS_OUT_OF_QUOTA,
     STATUS_NO_DATA,
     POOL_MODEL_SCOPED,
     POOL_PRIMARY,
@@ -188,7 +195,8 @@ __all__ = [
     "discover_seats",
     # subscription-usage pacing (conserve_usage)
     "STATUS_AVAILABLE",
-    "STATUS_CONSERVED",
+    "STATUS_UNDER_QUOTA",
+    "STATUS_OUT_OF_QUOTA",
     "STATUS_NO_DATA",
     "POOL_SEVEN_DAY",
     "POOL_MODEL_SCOPED",
@@ -199,6 +207,11 @@ __all__ = [
     "parse_conserve_usage",
     "evaluate_usage_budget",
     "pinned_evaluate",
+    # quota-aware selection over a caller's preference order
+    "Candidate",
+    "QuotaSelection",
+    "choose_endpoint",
+    "rank_candidates",
     # harness adapters
     "CODEX_EFFORT_MENU",
     "HarnessAdapter",

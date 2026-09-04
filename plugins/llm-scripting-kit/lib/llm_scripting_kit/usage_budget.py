@@ -5,16 +5,26 @@ already has. ``endpoints`` says what is CONFIGURED; ``reachability`` says
 whether a configured endpoint ANSWERS. Neither can say that an endpoint which
 is configured and answering should nonetheless be left alone, because the
 subscription quota behind it is being burned faster than the clock -- and
-that is the question a conserved model asks.
+that is the question a quota-paced model asks.
 
-THE RULE, one sentence: a conserved model is available only while the fraction
-of quota remaining is at least the fraction of the window remaining. Spend at a
-pace no faster than time passes and the frontier model is there when the week
-ends; spend faster and it is withheld until the burn-down catches back up.
+THE RULE, two thresholds and two different consequences. Let
 
     r = remaining_percentage / 100
     t = (resets_at - now) / window_seconds
-    conserved  <=>  r < t
+
+    r <= 0   -> OUT OF QUOTA.   The pool is spent. The model is DISABLED: a
+                                call would fail, so it is removed from
+                                selection entirely.
+    r < t    -> UNDER QUOTA.    Spending faster than the clock. The model is
+                                DE-PRIORITIZED: still usable, but it loses to
+                                any equally-suitable model that is not.
+    else     -> AVAILABLE.      At or ahead of pace.
+
+The gap between the two is the point. Withholding a model merely because it is
+being spent quickly costs the caller a capability it still has; a model whose
+pool is empty has no capability left to lose. Those are different facts and
+they earn different treatment -- ordering for the first, exclusion for the
+second.
 
 Each opted-in entry names ITS OWN pool. That is not a detail: fable draws on a
 per-model weekly bucket while opus draws on the all-model weekly window, so a
@@ -61,9 +71,17 @@ PINNED FOR THE SESSION. A verdict is computed once per session key and reused,
 so a model that was available when the session started does not become
 unavailable halfway through -- a mid-session flip would strand work that was
 planned against the earlier answer. The one exception runs in the safe
-direction only: a CONSERVED verdict is recomputed once its window has reset,
-because a reset can only restore capacity. An AVAILABLE verdict is never
-recomputed within the session.
+direction only: an UNDER-QUOTA or OUT-OF-QUOTA verdict is recomputed once its
+window has reset, because a reset can only restore capacity. An AVAILABLE
+verdict is never recomputed within the session.
+
+The pin has a cost worth stating: a model that goes from under-quota to
+genuinely spent DURING a session keeps its under-quota verdict, so a caller may
+still choose it and the call may then fail on the provider's own rate limit.
+That failure is already classified by this package's halt taxonomy
+(``HALT_RATE_LIMIT``), which is the honest place for it -- an exhausted pool is
+the provider's fact to report, and pretending to predict it mid-session would
+reintroduce exactly the flip the pin exists to prevent.
 """
 from __future__ import annotations
 
@@ -78,11 +96,18 @@ from typing import Any, Dict, Mapping, Optional, Tuple
 STATUS_AVAILABLE = "available"
 """The pool was read and the burn-down is at or ahead of the clock."""
 
-STATUS_CONSERVED = "conserved"
-"""The pool was read and quota is being spent faster than time passes."""
+STATUS_UNDER_QUOTA = "under-quota"
+"""The pool was read and quota is being spent faster than time passes. The
+model stays USABLE and is merely de-prioritized -- see the module docstring on
+why this is ordering rather than exclusion."""
+
+STATUS_OUT_OF_QUOTA = "out-of-quota"
+"""The pool was read and nothing is left in it. The model is DISABLED: unlike
+:data:`STATUS_UNDER_QUOTA` this is not a preference, it is the absence of the
+capability, and a call against it would fail."""
 
 STATUS_NO_DATA = "no-data"
-"""No usable pool reading. NEVER a reason to withhold the model -- see the
+"""No usable pool reading. NEVER a reason to disable or de-prioritize the model -- see the
 module docstring on failing open. Distinct from :data:`STATUS_AVAILABLE`
 because "nothing gated this" and "the pacing check passed" are different
 facts, and a caller reporting capacity must not state the second when it
@@ -151,8 +176,8 @@ whole file is never read. Generous enough to span many events."""
 class Budget:
     """One pacing verdict. Constructors never raise.
 
-    ``status`` is one of :data:`STATUS_AVAILABLE`, :data:`STATUS_CONSERVED`,
-    or :data:`STATUS_NO_DATA`. ``remaining`` and ``window_remaining`` are the
+    ``status`` is one of :data:`STATUS_AVAILABLE`, :data:`STATUS_UNDER_QUOTA`,
+    :data:`STATUS_OUT_OF_QUOTA`, or :data:`STATUS_NO_DATA`. ``remaining`` and ``window_remaining`` are the
     two fractions the rule compares, both None when there was no reading.
     ``pool`` names the window consulted and ``detail`` says, in one line, why
     the verdict came out as it did.
@@ -166,9 +191,19 @@ class Budget:
     resets_at: Optional[int] = None
 
     @property
-    def conserved(self) -> bool:
-        """True only for a checked verdict that withholds the model."""
-        return self.status == STATUS_CONSERVED
+    def usable(self) -> bool:
+        """False ONLY when the pool is spent. Fails open on every other state.
+
+        The predicate a caller gates selection on. Deliberately not the
+        negation of :attr:`deprioritized`: an under-quota model is usable and
+        a caller that conflated the two would drop a capability it still has.
+        """
+        return self.status != STATUS_OUT_OF_QUOTA
+
+    @property
+    def deprioritized(self) -> bool:
+        """True when the model is usable but should lose to an equal peer."""
+        return self.status == STATUS_UNDER_QUOTA
 
     def to_json(self) -> Dict[str, Any]:
         return {
@@ -217,8 +252,8 @@ def parse_conserve_usage(
 
     Raises:
         ConserveConfigError: any other shape. A misspelled pool is a silent
-            no-op if tolerated -- the entry would read as conserved-but-never-
-            conserving -- so it is refused at parse time instead.
+            no-op if tolerated -- the entry would read as opted-in-but-never-
+            paced -- so it is refused at parse time instead.
     """
     if value is None or value is False:
         return None
@@ -317,9 +352,17 @@ def _verdict(
             detail=f"window '{pool}' already reset at {int(resets_at)}; reading is from a dead window",
         )
     window_remaining = max(0.0, min(1.0, seconds_left / window_seconds))
-    conserved = remaining + _PACE_EPSILON < window_remaining
+    if remaining <= 0.0:
+        # Checked BEFORE the pacing test: an empty pool is behind pace by
+        # definition, and reporting it as merely under-quota would leave a
+        # model in selection that cannot answer a call.
+        status = STATUS_OUT_OF_QUOTA
+    elif remaining + _PACE_EPSILON < window_remaining:
+        status = STATUS_UNDER_QUOTA
+    else:
+        status = STATUS_AVAILABLE
     return Budget(
-        status=STATUS_CONSERVED if conserved else STATUS_AVAILABLE,
+        status=status,
         pool=pool,
         detail=(
             f"{remaining * 100:.0f}% of '{pool}' remaining with "
@@ -605,8 +648,9 @@ def pinned_evaluate(
 
     Reuses a stored verdict rather than re-reading the pool, so an endpoint
     that was available at the start of a session stays available through it.
-    A stored CONSERVED verdict is recomputed once its window has reset -- the
-    only recomputation admitted, and it can only restore capacity. Without a
+    A stored UNDER-QUOTA or OUT-OF-QUOTA verdict is recomputed once its window
+    has reset -- the only recomputation admitted, and it can only restore
+    capacity. Without a
     session key nothing is pinned and every call evaluates afresh.
     """
     key = session_key(environ)
@@ -621,7 +665,7 @@ def pinned_evaluate(
         if isinstance(budget, Mapping) and budget.get("status") in _STATUSES:
             resets_at = budget.get("resets_at")
             expired = (
-                budget["status"] == STATUS_CONSERVED
+                budget["status"] in (STATUS_UNDER_QUOTA, STATUS_OUT_OF_QUOTA)
                 and isinstance(resets_at, (int, float))
                 and moment >= resets_at
             )
@@ -640,7 +684,7 @@ def pinned_evaluate(
     return fresh
 
 
-_STATUSES = (STATUS_AVAILABLE, STATUS_CONSERVED, STATUS_NO_DATA)
+_STATUSES = (STATUS_AVAILABLE, STATUS_UNDER_QUOTA, STATUS_OUT_OF_QUOTA, STATUS_NO_DATA)
 
 
 #: Package-level alias. ``evaluate`` is the right name inside this module and
@@ -651,7 +695,8 @@ evaluate_usage_budget = evaluate
 
 __all__ = [
     "STATUS_AVAILABLE",
-    "STATUS_CONSERVED",
+    "STATUS_UNDER_QUOTA",
+    "STATUS_OUT_OF_QUOTA",
     "STATUS_NO_DATA",
     "POOL_SEVEN_DAY",
     "POOL_MODEL_SCOPED",

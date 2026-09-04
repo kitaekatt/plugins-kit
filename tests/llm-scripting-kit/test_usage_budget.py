@@ -7,7 +7,8 @@ import pytest
 from llm_scripting_kit import (
     EndpointMetadataError,
     STATUS_AVAILABLE,
-    STATUS_CONSERVED,
+    STATUS_UNDER_QUOTA,
+    STATUS_OUT_OF_QUOTA,
     STATUS_NO_DATA,
     ConserveConfigError,
     ConserveSpec,
@@ -116,8 +117,9 @@ def test_behind_pace_is_conserved(tmp_path):
     budget = usage_budget.read_claude_pool(
         ConserveSpec(pool="seven_day"), now=NOW, snapshot=path
     )
-    assert budget.status == STATUS_CONSERVED
-    assert budget.conserved is True
+    assert budget.status == STATUS_UNDER_QUOTA
+    assert budget.deprioritized is True
+    assert budget.usable is True
     assert budget.remaining == pytest.approx(0.2)
     assert budget.window_remaining == pytest.approx(0.5)
 
@@ -128,7 +130,7 @@ def test_ahead_of_pace_is_available(tmp_path):
         ConserveSpec(pool="seven_day"), now=NOW, snapshot=path
     )
     assert budget.status == STATUS_AVAILABLE
-    assert budget.conserved is False
+    assert budget.deprioritized is False
 
 
 def test_exactly_on_pace_is_available(tmp_path):
@@ -171,7 +173,7 @@ def test_model_scoped_selects_its_bucket_by_display_name(tmp_path):
     )
     # The Fable bucket is behind pace even though the all-model window is not:
     # reading the wrong pool would invert this verdict.
-    assert budget.status == STATUS_CONSERVED
+    assert budget.status == STATUS_UNDER_QUOTA
     assert budget.remaining == pytest.approx(0.1)
 
 
@@ -195,7 +197,7 @@ def test_model_scoped_reads_an_iso_reset_time(tmp_path):
         now=NOW,
         snapshot=path,
     )
-    assert budget.status in (STATUS_AVAILABLE, STATUS_CONSERVED)
+    assert budget.status in (STATUS_AVAILABLE, STATUS_UNDER_QUOTA)
     assert budget.resets_at is not None
 
 
@@ -219,7 +221,7 @@ def test_absent_snapshot_is_no_data_not_conserved(tmp_path):
         ConserveSpec(pool="seven_day"), now=NOW, snapshot=tmp_path / "missing.json"
     )
     assert budget.status == STATUS_NO_DATA
-    assert budget.conserved is False
+    assert budget.deprioritized is False
 
 
 def test_absent_pool_is_no_data(tmp_path):
@@ -229,7 +231,7 @@ def test_absent_pool_is_no_data(tmp_path):
         ConserveSpec(pool="model_scoped", display_name="Fable"), now=NOW, snapshot=path
     )
     assert budget.status == STATUS_NO_DATA
-    assert budget.conserved is False
+    assert budget.deprioritized is False
 
 
 def test_a_window_that_already_reset_is_no_data(tmp_path):
@@ -252,7 +254,7 @@ def test_malformed_snapshot_is_no_data(tmp_path):
 def test_a_harness_with_no_usage_source_is_no_data():
     budget = usage_budget.evaluate(ConserveSpec(pool="seven_day"), "opencode", now=NOW)
     assert budget.status == STATUS_NO_DATA
-    assert budget.conserved is False
+    assert budget.deprioritized is False
 
 
 # --- codex ----------------------------------------------------------------
@@ -277,7 +279,7 @@ def test_codex_uses_the_window_minutes_it_reports(tmp_path):
     budget = usage_budget.read_codex_pool(
         ConserveSpec(pool="primary"), now=NOW, sessions_dir=tmp_path
     )
-    assert budget.status == STATUS_CONSERVED
+    assert budget.status == STATUS_UNDER_QUOTA
     assert budget.window_remaining == pytest.approx(0.5)
 
 
@@ -398,7 +400,7 @@ def test_a_changed_declaration_is_not_served_from_the_pin(tmp_path, monkeypatch)
 
 def test_a_conserved_verdict_is_recomputed_once_its_window_resets(tmp_path, monkeypatch):
     cache = tmp_path / "verdicts.json"
-    statuses = iter([STATUS_CONSERVED, STATUS_AVAILABLE])
+    statuses = iter([STATUS_UNDER_QUOTA, STATUS_AVAILABLE])
 
     def fake_evaluate(spec, harness, *, now=None):
         return usage_budget.Budget(
@@ -420,8 +422,8 @@ def test_a_conserved_verdict_is_recomputed_once_its_window_resets(tmp_path, monk
         "fable", spec, "claude", now=NOW + 200, cache_path=cache, environ=env
     )
     assert (first.status, held.status, after.status) == (
-        STATUS_CONSERVED,
-        STATUS_CONSERVED,
+        STATUS_UNDER_QUOTA,
+        STATUS_UNDER_QUOTA,
         STATUS_AVAILABLE,
     )
 
@@ -487,12 +489,12 @@ def test_usage_verb_reports_each_opted_in_endpoint(monkeypatch, capsys):
         usage_budget,
         "pinned_evaluate",
         lambda entry_id, spec, harness: usage_budget.Budget(
-            status=STATUS_CONSERVED, pool=spec.pool, detail="behind pace"
+            status=STATUS_UNDER_QUOTA, pool=spec.pool, detail="behind pace"
         ),
     )
     assert cli.main(["usage"]) == cli.EXIT_OK
     out = capsys.readouterr().out
-    assert "fable: conserved -- behind pace" in out
+    assert "fable: under-quota -- behind pace" in out
     assert "sonnet" not in out, "an endpoint that did not opt in is not reported"
 
 
@@ -544,3 +546,57 @@ def test_model_scoped_without_a_display_name_is_refused():
         parse_conserve_usage(
             {"pool": "model_scoped"}, source="test", entry_id="fable"
         )
+
+
+# --- the two consequences: de-prioritize vs disable ------------------------
+
+
+def test_a_spent_pool_is_out_of_quota_not_merely_under(tmp_path):
+    # An empty pool is behind pace by definition, so the exhaustion test has to
+    # run FIRST or a model that cannot answer a call stays in selection.
+    path = _snapshot(tmp_path, {"seven_day": {"used_percentage": 100, "resets_at": NOW + WEEK // 2}})
+    budget = usage_budget.read_claude_pool(
+        ConserveSpec(pool="seven_day"), now=NOW, snapshot=path
+    )
+    assert budget.status == STATUS_OUT_OF_QUOTA
+    assert budget.usable is False
+    assert budget.deprioritized is False
+
+
+def test_under_quota_stays_usable(tmp_path):
+    path = _snapshot(tmp_path, {"seven_day": {"used_percentage": 80, "resets_at": NOW + WEEK // 2}})
+    budget = usage_budget.read_claude_pool(
+        ConserveSpec(pool="seven_day"), now=NOW, snapshot=path
+    )
+    # The whole point of the split: behind pace costs it priority, not its seat.
+    assert budget.status == STATUS_UNDER_QUOTA
+    assert budget.usable is True
+    assert budget.deprioritized is True
+
+
+def test_no_data_is_usable_and_not_deprioritized():
+    budget = usage_budget.evaluate(ConserveSpec(pool="seven_day"), "opencode", now=NOW)
+    assert budget.status == STATUS_NO_DATA
+    assert budget.usable is True
+    assert budget.deprioritized is False
+
+
+def test_an_out_of_quota_verdict_is_recomputed_once_its_window_resets(tmp_path, monkeypatch):
+    cache = tmp_path / "verdicts.json"
+    statuses = iter([STATUS_OUT_OF_QUOTA, STATUS_AVAILABLE])
+
+    def fake_evaluate(spec, harness, *, now=None):
+        return usage_budget.Budget(
+            status=next(statuses), pool=spec.pool, detail="x", resets_at=NOW + 100
+        )
+
+    monkeypatch.setattr(usage_budget, "evaluate", fake_evaluate)
+    env = {"CLAUDE_CODE_SESSION_ID": "s1"}
+    spec = ConserveSpec(pool="seven_day")
+    before = usage_budget.pinned_evaluate(
+        "fable", spec, "claude", now=NOW + 50, cache_path=cache, environ=env
+    )
+    after = usage_budget.pinned_evaluate(
+        "fable", spec, "claude", now=NOW + 200, cache_path=cache, environ=env
+    )
+    assert (before.status, after.status) == (STATUS_OUT_OF_QUOTA, STATUS_AVAILABLE)

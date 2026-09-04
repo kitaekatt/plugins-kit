@@ -88,10 +88,16 @@ produce an actual verdict.
 
 `conserve_usage` (`usage_budget.py`) answers a question neither `endpoints` nor
 `reachability` can: an endpoint that is configured AND answering may still be
-one whose subscription quota is being burned faster than the clock. A model
-that opts in is available only while the fraction of quota remaining is at
-least the fraction of the window remaining -- spend no faster than time passes
-and the frontier model is still there at the end of the week.
+one whose subscription quota is being burned faster than the clock.
+
+**Two thresholds, two different consequences, and collapsing them is the
+mistake to avoid.** With `r` the fraction of quota remaining and `t` the
+fraction of the window remaining: `r <= 0` is OUT OF QUOTA and DISABLES the
+model -- the pool is spent, a call would fail, so it leaves selection
+entirely. `r < t` is UNDER QUOTA and only DE-PRIORITIZES it -- it is being
+spent quickly but still has capability, so it stays usable and merely loses to
+an equally-suitable peer that is not behind pace. Withholding a model for the
+second reason costs the caller something it still had.
 
 **A pool is DECLARED or defaulted, never derived FROM THE MODEL.** fable draws
 on a per-model weekly bucket (`model_scoped`, selected by `display_name`); opus
@@ -123,10 +129,21 @@ fable permanently unreachable on every machine whose payload omits it.
 **A verdict is pinned for the session** (`CLAUDE_CODE_SESSION_ID`); the stance
 and its rationale are the register entry in `plugins/CLAUDE.md`.
 
-`discover_seats` withholds a conserved seat into `SeatsResult.conserved` rather
-than dropping it, so a caller can distinguish "no seat above me" from "the seat
-above me is being paced" -- only the second changes when the window rolls. The
-`usage` verb is the inspection surface for a check that is otherwise invisible.
+`discover_seats` applies both consequences: an out-of-quota seat moves to
+`SeatsResult.out_of_quota` (reported, not dropped, so "no seat above me" stays
+distinguishable from "the seat above me is spent"), while an under-quota seat
+stays in `seats` and sorts after any peer of the same relation that is not
+behind pace. Quota rank sits BELOW relation and ABOVE tier -- a seat's relation
+says whether it can do the job at all, which outranks how much budget is left.
+
+`quota_selection.py` is the consumer-facing half: given a caller's own
+preference order it returns the ranked usable chain, the disabled endpoints,
+and a `default` fallback for when every preference is spent. It RANKS and does
+not dispatch, the same altitude split this package holds when it classifies a
+halt without deciding to stop -- which is what lets job-kit apply it as one
+input to a selection it already owns rather than inheriting a policy. The
+`usage` and `choose` verbs are the inspection surfaces for a check that is
+otherwise invisible.
 
 ## Scope: one call, made correctly
 
@@ -282,7 +299,8 @@ claude_md:
       - the single-call altitude and the shared halt taxonomy
       - the runner seam shared by the CLI-backed completion backends, and where
         that seam is NOT uniform across transports
-      - usage pacing (`conserve_usage`), its declared pools, and its fail-open rule
+      - usage pacing (`conserve_usage`), its declared pools, its fail-open rule,
+        and the de-prioritize / disable split its two thresholds produce
       - the per-transport rules the Codex and OpenCode backends carry
     excludes:
       - codex dispatch mechanics (orchestrate's codex-dispatch.md)
