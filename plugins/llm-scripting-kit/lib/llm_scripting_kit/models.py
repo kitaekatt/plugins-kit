@@ -91,6 +91,13 @@ DEFAULT_MODEL_CONFIG = {
             "harness": "codex", "model": "gpt-5.6-luna", "effort": "high",
             "tier": 2, "family": "openai",
         },
+        # Astra is OpenAI's frontier tier, a peer of fable, so tier 4. Its
+        # rollout is staged and it needs codex-cli 0.153.1 or newer; until both
+        # hold on a machine it probes unreachable and routing falls through.
+        "astra": {
+            "harness": "codex", "model": "gpt-6-astra", "effort": "high",
+            "tier": 4, "family": "openai",
+        },
         # Claude subscription models, shipped for the same reason: the
         # claude-cli adapter had no endpoint pointing at it. Effort is a
         # per-call mapped param on this adapter, so none is set here.

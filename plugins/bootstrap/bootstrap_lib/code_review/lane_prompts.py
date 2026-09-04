@@ -12,7 +12,7 @@ apart silently, reviewing the same diff by two different standards.
 
 So the text lives HERE, once, and both paths consume it:
 
-  * the endpoint path imports it (``lane_runner``);
+  * the endpoint path imports it (``llm_scripting_kit.review_lane``);
   * the Agent path gets it rendered into both SKILL.md files by
     ``scripts/gen_code_review_skills.py``, whose output is pinned byte-for-byte
     by ``tests/bootstrap/code_review/test_skill_drift.py``.
@@ -25,8 +25,9 @@ stdlib only, no ``llm_scripting_kit``, no ``openai``. ``bootstrap_lib`` is
 linked into many plugin venvs that will never make an LLM call, and importing a
 completion transport here would make ``openai`` a transitive requirement of the
 BOOTSTRAP plugin itself -- the one every other plugin depends on. The seam call
-therefore lives outside this package entirely, in each kit's vendored
-``scripts/run_review_lane.py``. The boundary is enforced by
+therefore lives in ``llm_scripting_kit.review_lane``. Each code-review kit
+vendors only the ``scripts/run_review_lane.py`` wrapper that sets up bootstrap
+and probes the shared module. The boundary is enforced by
 ``tests/bootstrap/test_dependency_completeness.py`` and asserted directly by
 ``tests/bootstrap/test_run_review_lane_drift.py``.
 """
