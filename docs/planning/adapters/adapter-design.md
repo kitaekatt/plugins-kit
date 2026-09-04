@@ -1,8 +1,9 @@
 # Adapter concept -- design record
 
 Status: DRAFT. The first adapter is under construction for the `md-audit` task.
-This record defines the concept; it does not choose an attachment seam or claim
-that an adapter has improved a result.
+Observation record: this document records the adapter concept and its measured
+`md-audit` state as of 2026-09-04. It does not choose an attachment seam or
+claim that an adapter has been admitted.
 
 ## Definition
 
@@ -25,11 +26,11 @@ general rewrite of the task.
 
 ## Evidence and the empirical bar
 
-The motivating evidence is the user's measurement from 2026-09-03: in a 59-file
-Markdown audit against a standards document of about 100 KB, a local 27B
-reasoning model at its highest reasoning effort returned 59/59 answers but
-reached about 14-23% recall. Cloud models under the same task reached about
-64-70% recall. Delivery is therefore not the target gap; quality is.
+The motivating evidence is a 2026-09-04 measurement: on a markdown audit (one
+artifact plus its md-domain standards document, returning JSON findings with
+rule ids), qwen3.8-27b served locally by NInfer used model-default sampling,
+reasoning_effort xhigh, and max_tokens 60000. It returned one completion per
+request. Delivery is therefore not the target gap; quality is.
 
 Adapters are hypotheses, never assumptions. A candidate is admitted only after
 measurement records its metric, sample size, cost, and two control runs without
@@ -44,7 +45,7 @@ The candidate seams are intentionally unresolved:
    model. This can shape the brief before dispatch, but its ownership and timing
    must be tested with the first adapter.
 2. The `llm-scripting-kit` model-endpoint registry entry, represented by
-   `plugins/llm-scripting-kit/lib/llm_scripting_kit/model_endpoints.py`. A
+   [`plugins/llm-scripting-kit/lib/llm_scripting_kit/model_endpoints.py`](../../../plugins/llm-scripting-kit/lib/llm_scripting_kit/model_endpoints.py). A
    per-endpoint context is task-agnostic, so it cannot select the required task
    axis by itself; endpoint context alone is the wrong axis.
 3. The task skill itself, such as `md-domain`, shipping a per-tier variant.
@@ -62,8 +63,8 @@ adapter:
     model_selector: model id or capability tier measured for this adapter
     task_id: stable identifier for the task
   content:
-    - compact rule-id checklist placed near the relevant file
-    - few-shot examples of correctly cited findings
+    - compact generic or standards-derived rule-id checklist
+    - generic or standards-derived examples of correctly cited findings
     - required scan-plan step
     - pre-computed structural facts supplied as data
     - standards excerpt trimmed to applicable rules
@@ -84,6 +85,16 @@ The content and prompt position are part of the artifact, not an implementation
 detail. Cost includes added tokens and extra calls. The admission record must
 show the result against both control runs and preserve the cost of the
 intervention.
+
+### Adapter ground rule
+
+An adapter is corpus-independent and may not encode information from the corpus.
+Allowed context is computed at request time from the artifact and its repository,
+generic instructions, a sampling strategy, and material from the standards
+document itself. Disallowed context includes ground-truth, reviewer verdicts, or
+per-file results: mined exemplars, frequency-ranked checklists, negative rules
+distilled from dismissals, and calibration fitted on the corpus. A learnings pack
+built from reviewed findings is disqualified, not measured as a loss.
 
 ### First concrete content: the md-audit EVIDENCE PACK
 
@@ -111,10 +122,7 @@ deixis, dead line citations, and the mechanical contract-check verdicts).
 It closes with: "Evidence rows are facts, not findings. A row with no rule
 violation is not a finding."
 
-The pack is roughly 0.8-6k tokens per file. Across the 59-file motivating
-corpus, its minimum, median, and maximum sizes were 3.3k, 11.6k, and 24k
-characters, and it was built in under 5 s. Each audit row records the pack's
-sha256 and size so a result is reproducible.
+Each audit row records the pack's sha256 and size so a result is reproducible.
 
 ## Anti-patterns
 
@@ -124,40 +132,38 @@ sha256 and size so a result is reproducible.
 - Adopt an adapter on n=1 or on a result with no twice-run control.
 - Apply an adapter to a model that was not measured to need it.
 
-## Status and first build
+## Measurement results
 
-The first adapter is the `md-audit` EVIDENCE PACK. It was motivated by the
-diagnosis of a 59-file audit: local-model misses concentrated in facts absent
-from a single-shot prompt. Only 1 of 25 ancestor-duplication cases was found,
-0 of 23 code claims were confirmed, cited paths and line anchors needed
-resolution, and 30 of 38 mechanical-hygiene cases were missed. Cloud auditors
-ran in a read-only filesystem, while their outputs cited repository facts
-absent from their brief. The pack pre-computes, deterministically, the facts a
-filesystem would have yielded and supplies them to the local model only.
+The instrument matches pairs exactly by `(file, canonical rule)` against
+reviewer-confirmed proxy ground truth, and reports recall and precision. Corpus
+A has 53 files and 198 ground-truth pairs. Each condition has two independent
+arms:
 
-The pack is routed by PATH and records the artifact identity, role, direct code
-files, and whether the code-directory dimension applies. Its sections are
-identity, measurements, references, ancestors, claim evidence, and mechanical
-checks, as specified in the contract above. It costs zero extra model calls
-and roughly 0.8-6k tokens per file. In the 59-file corpus it was built in under
-5 s; measured pack sizes ranged from 3.3k to 24k characters, with a median of
-11.6k.
+- Control: recall 0.237 / 0.217, precision 0.839 / 0.843 (means 0.227 / 0.841).
+- Compact evidence pack: recall 0.328 / 0.298, precision 0.844 / 0.881
+  (+8.6 recall points, +2.2 precision points over control means).
+- Compact pack plus cross-file duplication rows (v4c): recall 0.338 / 0.354,
+  precision 0.848 / 0.814 (+11.9 recall points, -1.0 precision point over
+  control means). This is the best single-call adapter. Its cross-file
+  duplication (CCP) family was 8/8, versus 5/5 for the pack and 1 for control.
 
-The measurement instrument canonicalizes rule ids, credits aliases, and
-rejects section-number citations. Ground truth is reviewer-confirmed with
-locations. The frozen paired corpus has 53 files. The control run was repeated
-twice without the adapter: recall was 0.237 and 0.217, a 2-point noise band.
-The adapter run was also repeated twice. The ship rule was recall +15 points
-with confirmed precision no more than 3 points lower. Result: four adapter arms
-(two verbose, two compact) scored recall 0.323, 0.318, 0.328 and 0.298 against
-the controls' 0.237 and 0.217, with precision 0.84-0.88 against 0.84 -- a
-replicated gain of about 9 recall points with precision kept, below the +15
-bar. The compact form costs 36 percent fewer characters for the same gain.
-Two variants lost: a stricter pack whose budgets dropped the size measurements
-that fed the largest family of wins, and a pack carrying "do not report"
-rules, which suppressed reporting across every family on a model that was
-already too conservative. Prohibitions do not belong in an adapter for a
-recall-limited model; positive evidence does.
+Corpus B is held out: 22 files (8 CLAUDE.md, 6 SKILL.md, and 8 project docs)
+with 69 folded ground-truth pairs. Its ground truth used two cloud workers,
+cloud review lanes, and review of the local model's findings, folding in true
+local findings the cloud missed. Cloud workers reached recall 0.68 and 0.76,
+with precision 0.86-0.87. On B, control recall was 0.261 / 0.246 and precision
+0.750 / 0.654; the compact pack reached recall 0.319 / 0.304 and precision
+0.710 / 0.955 (+5.8 recall points, +13.1 precision points over control means).
+The pack gain replicates on an untuned repository. v4c has not run on B.
+
+Closed single-call levers, all corpus-independent unless noted: pack position
+(system tail versus user head) made no difference; v2 (path-semantics fix,
+deterministic claim checks, and per-section budgets) lost because budgets
+dropped rows that fed wins; a bigger 40k pack left recall flat and reduced
+precision by 10 points; the standards' complete rule list as an unranked
+checklist gave no gain; a system demand for every-family coverage scored below
+the pack; medium reasoning effort reduced recall by 7-13 points; negative rules
+collapsed recall and are also disqualified by the ground rule.
 
 Completeness is the adapter's responsibility. A miss caused by a fact the
 pack did not carry is a pack defect, not a model limit: the pack must remove
@@ -165,14 +171,23 @@ the need for tool calls. The check is a harness run with read-only tools over
 the same brief -- anything the tool loop looks up that the pack did not carry
 gets compiled into the next pack version.
 
+The dominant effect is sample variance, not prompt content. Two arms of the
+same condition agree on only about half their true pairs. With the pack, the
+union of two independent samples gives recall 0.404-0.439 on A and 0.406 on B,
+at precision 0.78-0.82; four samples give recall 0.50 on A and 0.58 on B, at
+precision 0.67-0.80. Requiring two votes of four gives recall 0.37 at precision
+0.91. The server produces one completion per request (n=1), so k samples cost
+k requests. This has zero implementation complexity and is an adoption cost
+decision for the owner.
+
 A further seam candidate: a job specification (job-kit) that declares the
 files and generators a unit needs, materialized into the query by the runner
 per endpoint kind -- inlined for a transport endpoint, listed as readable for a
 harness endpoint. The completeness guarantee then lives in the job file.
 
-The seam decision remains deferred. Because the pack is produced by a
-deterministic prepass, the current evidence favours attaching it at the
-task skill (`md-domain`), keyed by model tier. That is not the decision: it
-waits on the measurement. Until then, this record remains DRAFT and the
-adapter is not admitted. The pack's sha256 and size are recorded on every
-audit row to make each result reproducible.
+The next measurements, if the loop continues, are v4c on corpus B; a harness
+check of the pack's no-tool-calls guarantee; and a per-family decomposition
+(multi-call) compared with sampling at equal request count. Then the generation
+lane (analyze plus generate claude-md) may begin, gated on accepted audit
+quality. The seam decision remains deferred. Until audit quality is accepted,
+this record remains DRAFT and the adapter is not admitted.
