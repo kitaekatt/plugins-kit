@@ -91,6 +91,20 @@ from .models import (
     resolve_endpoint,
     resolve_model,
 )
+from .usage_budget import (
+    STATUS_AVAILABLE,
+    STATUS_CONSERVED,
+    STATUS_NO_DATA,
+    POOL_MODEL_SCOPED,
+    POOL_PRIMARY,
+    POOL_SEVEN_DAY,
+    Budget,
+    ConserveConfigError,
+    ConserveSpec,
+    evaluate_usage_budget,
+    parse_conserve_usage,
+    pinned_evaluate,
+)
 from .completion import (
     AgentTimeoutError,
     BackendOptions,
@@ -172,6 +186,19 @@ __all__ = [
     "SeatsResult",
     "UnclassifiedEntry",
     "discover_seats",
+    # subscription-usage pacing (conserve_usage)
+    "STATUS_AVAILABLE",
+    "STATUS_CONSERVED",
+    "STATUS_NO_DATA",
+    "POOL_SEVEN_DAY",
+    "POOL_MODEL_SCOPED",
+    "POOL_PRIMARY",
+    "Budget",
+    "ConserveConfigError",
+    "ConserveSpec",
+    "parse_conserve_usage",
+    "evaluate_usage_budget",
+    "pinned_evaluate",
     # harness adapters
     "CODEX_EFFORT_MENU",
     "HarnessAdapter",
