@@ -58,7 +58,7 @@
     {
       "name": "git-kit",
       "description": "Multi-agent pre-push code review for git (/git-code-review) with per-finding validation and declined-findings memory.",
-      "version": "0.19.1",
+      "version": "0.20.0",
       "author": {
         "name": "Christina"
       },
