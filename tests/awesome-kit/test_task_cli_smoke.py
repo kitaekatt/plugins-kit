@@ -217,8 +217,12 @@ class TestCliLifecycle:
         )
         assert not new_folder.exists()
 
-        # The surviving reference now reads as archived (folderless non-tmp).
+        # The surviving reference now reads as archived (folderless non-tmp)
+        # and is off the default list; --status archived opts in.
         res = run_cli(["list", *rootflag], cwd=root)
+        assert res.returncode == 0, res.stderr
+        assert f"dev/tasks/{STUB}" not in res.stdout
+        res = run_cli(["list", "--status", "archived", *rootflag], cwd=root)
         assert res.returncode == 0, res.stderr
         assert f"dev/tasks/{STUB}  archived  -  -" in res.stdout.splitlines()
 

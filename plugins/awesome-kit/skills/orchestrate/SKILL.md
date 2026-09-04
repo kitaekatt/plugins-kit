@@ -119,8 +119,8 @@ technique_skill:
         - n: 1
           action: Confirm the task warrants orchestration.
           detail: |
-            Delegate for one of two reasons: footprint -- the unit reads or emits far more than
-            its conclusion -- or parallelism -- the rendered razor yields at least two leaves
+            Delegate for one of two reasons: footprint -- the unit, taken as the whole line of
+            investigation it runs, reads or emits far more than its conclusion -- or parallelism -- the rendered razor yields at least two leaves
             runnable now. Neither means do it inline. One small self-contained unit whose result
             feeds the next decision stays inline; an agent round-trip costs as much context as the
             work. Difficulty and indecision are not reasons to delegate. In `user-present` (the user is watching the prompt) footprint bites harder: prefer the background for anything past one cheap foreground call.

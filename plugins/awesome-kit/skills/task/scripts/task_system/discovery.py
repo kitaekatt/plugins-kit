@@ -51,6 +51,12 @@ Readings chosen in Step 3 (flagged in the implementation report):
   folder-crawl candidate carries no host). Remote refs are opaque: tmp +
   non-matching host is never read locally, even when a same-named local
   folder exists (validate's remote short-circuit governs).
+- **Archived omitted by default.** ``list`` is the working set: a task that
+  classifies as ``archived`` -- a folderless non-tmp ref left behind by a
+  committed archive, or a ref resolving through a parking directory -- is
+  dropped from the projection unless the caller asks for it with
+  ``status="archived"``. The classification itself is unchanged (validate
+  still reads it), only the default filter narrows.
 - **Notes, not crashes.** Skipped material (unreadable documents,
   unparseable/malformed ``task_list`` blocks, unresolvable ref paths,
   non-canonical folder hits) is collected into the optional ``notes``
@@ -278,7 +284,9 @@ def discover(
 ) -> list[TaskRecord]:
     """Enumerate the tasks in a scope (spec 8). Returns records sorted by id.
 
-    ``status``/``priority`` filter the projection (spec 8 step 5);
+    ``status``/``priority`` filter the projection (spec 8 step 5); with no
+    ``status`` every classification EXCEPT ``archived`` is emitted, so the
+    default listing is the working set (``status="archived"`` lists those);
     ``local_host`` overrides host detection (injectable for tests);
     ``notes``, when given, accumulates skip-with-note findings.
     """
@@ -329,7 +337,10 @@ def discover(
             priority=prio,
             host=host,
         )
-        if status is not None and record.classification != status:
+        if status is None:
+            if record.classification == "archived":
+                continue  # working set by default; --status archived opts in
+        elif record.classification != status:
             continue
         if priority is not None and record.priority != priority:
             continue

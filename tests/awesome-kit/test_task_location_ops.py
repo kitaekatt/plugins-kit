@@ -642,7 +642,8 @@ class TestParkedTmpArchive:
             tmp_path / "tmp" / "notes.md", fenced_task_list([{"path": "tmp/done"}])
         )
         location_ops.archive_task("tmp/done", tmp_path)
-        records = discover("project", tmp_path)
+        assert discover("project", tmp_path) == []  # off the default list
+        records = discover("project", tmp_path, status="archived")
         by_id = {r.id: r for r in records}
         assert by_id["tmp/done"].classification == "archived"
 

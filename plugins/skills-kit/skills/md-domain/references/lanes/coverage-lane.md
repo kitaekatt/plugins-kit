@@ -1,7 +1,16 @@
 # The analyze lane (produces coverage)
 
 The ANALYZE procedure. Unlike `audit` and `author`, this one is NOT parameterized
-by artifact -- it has exactly one subject shape, and its subject is CODE.
+by artifact -- it is parameterized by SUBJECT, and it has two.
+
+**Two branches, and the dispatch picks one.** Everything from here down to
+"The `human_html_directory` branch" is `coverage_code_subtree`, whose subject is
+CODE: one directory's own direct code files, assessed for what its CLAUDE.md is
+missing. The final section is `coverage_human_html_directory`, whose subject is a
+directory's whole SOURCE SUBTREE, assessed for whether a person browsing it needs
+an orientation page. They share the verb's report-only posture and nothing else
+-- different material, different criteria document, different verdicts. Read the
+branch you were dispatched into and its standards doc, not both.
 
 **The verb is `analyze`; `coverage` is what it PRODUCES.** This file, the lane id
 `coverage_code_subtree`, `coverage-standards.md`, `discover_coverage.py` and
@@ -945,9 +954,170 @@ review; a fossilized one is not.
   parent duplicates every descendant's findings and downstream de-duplication
   compares facts against copies of themselves.
 
+## The `human_html_directory` branch
+
+Everything above this heading is the `coverage_code_subtree` lane. THIS SECTION
+IS THE WHOLE OF THE OTHER ANALYZE LANE, `coverage_human_html_directory`, and it
+shares only the verb's posture with the code lane: read, report, and stop.
+
+Load it with `../standards/human-html-standards.md`, not
+`coverage-standards.md`. The CV criteria do not apply here and the HC criteria
+do not apply there. Nothing in this branch admits a candidate for a CLAUDE.md,
+and nothing above it decides a page.
+
+| Parameter | Value |
+|---|---|
+| lane id | `coverage_human_html_directory` |
+| discovery | `scripts/discover_human_html.py` |
+| detect workflow | NONE |
+| remediate workflow | NONE -- report-only, deliberately |
+| verdicts | `PAGE-WARRANTED` / `NO-PAGE` |
+| standards | `../standards/human-html-standards.md` |
+| supported flags | `--json` |
+| unit | one directory and its whole source subtree |
+
+**The subject is a SUBTREE, and that is the one place this lane inverts the code
+lane's rule.** `coverage_code_subtree` reads a directory's own direct code and
+never descends, because each child is its own CLAUDE.md subject. A human page
+answers "what is this directory for", which is a question about everything under
+it, so the material here is the whole subtree: code, project guidance,
+documentation, data, assets, configuration, and each child's FINISHED decision
+record (HC-4). The two lanes are not variants of one subject; they ask different
+questions of different material and their answers do not substitute.
+
+### Step 1 -- Order the run (TS-1, TS-2)
+
+Run `scripts/discover_human_html.py <repo-root> <directory>` first and take its
+order as given: deepest-first, every descendant before its ancestors. The unit of
+execution is ANALYZE-THEN-GENERATE for one directory, so a directory is analyzed,
+generated, and finished before its parent is analyzed at all.
+
+**A stale or missing child record is a HARD GATE on the parent (TS-2).** The
+discovery output carries `stale`, `stale_child` and `stale_children` per
+directory. When a directory's `stale_child` is true, do not analyze or finalize
+it: go refresh the named descendants bottom-up and come back. The parent's
+navigation spine and half its orientation content are read out of child records,
+so continuing past a stale one does not produce a slightly-wrong page -- it
+produces a page whose links and claims describe a tree that no longer exists.
+
+This gate is an EXECUTION rule and does not change CK-1's severity: staleness
+stays `INFO` in the checker, because a stale record is a rerun, not a defect.
+
+### Step 2 -- Run the warrant exercise (HC-1)
+
+The warrant question is answered by DOING something, not by judging. Put yourself
+at a plain directory listing with default file previews -- any file browser, or
+the host viewer -- and NO human page. From there you may use only the listed
+files, normal links, and default previews. You may not use search, a terminal,
+hidden `.databench/` data, or anything you already know from prior work in this
+session.
+
+For each of the four questions, find one direct and coherent answer in what that
+view displays:
+
+1. What is this directory for?
+2. Why does it have this shape?
+3. What will hurt the reader?
+4. Where does the reader go next?
+
+Record the outcome per question: the answer and where it was displayed, or the
+gap. A question that does not apply to this directory is recorded with the reason
+it does not, never dropped silently.
+
+Then decide:
+
+- Every applicable question answered -> `none`.
+- An answer materially absent or fragmented -> apply HC-2, and choose `page`
+  only if HC-2 admits at least one content unit.
+
+**`none` IS A RESULT.** It is the normal outcome for a directory whose files
+explain themselves, and reporting it is the lane doing its job. A run that
+returns `page` for every directory has not applied HC-1; it has assumed the
+conclusion and gone looking for material.
+
+The exercise is deliberately mechanical because the alternative -- deciding by
+feel whether a page "would be nice" -- cannot tell a useful page from decoration,
+and every directory looks like it would be nice to explain.
+
+### Step 3 -- Admit content units (HC-2, HC-3)
+
+A unit is admitted only when ALL of these hold:
+
+- it answers one of the four HC-1 questions,
+- it reduces reacquisition work,
+- it states why the fact matters, and
+- it cites repository evidence.
+
+Give priority, in this order, to purpose and boundaries, structural reasons,
+non-obvious hazards, and concrete entry points.
+
+Exclude, always: file inventories, source paraphrases, facts already clear in
+plain browsing, unsupported inference, and duplicated project guidance. The host
+viewer already shows the files -- a page that tours them spends the reader's
+attention re-displaying what is on screen.
+
+**Write for the OWNER RETURNING AFTER CONTEXT LOSS (HC-3).** That reader defines
+the durable task. Add only the extra context a newcomer needs to follow the same
+orientation path; do not restructure the page as a tutorial, which buries the
+reacquisition cues the returning owner came for. Every admitted unit either helps
+the returning owner, or is a necessary definition sitting beside one that does.
+
+**Research the subtree, not the guidance file (HC-4).** Project guidance is
+EVIDENCE, never the source model: it can omit or lag structure that is plainly
+present in the tree. Separate what you OBSERVED from what you INFERRED, and never
+derive a unit from filename patterns alone.
+
+### Step 4 -- Report and stop
+
+```
+## Human-html analysis -- <directory>
+
+Subtree inputs inspected: <N>  (<kind>: <count>, ...)
+Child decisions read (<N>): <child> = page | none, ...
+Source stamp: <40-hex> (dirty: yes | no)
+Stale-child gate: CLEAR | BLOCKED (<stale descendants>)
+
+### Warrant exercise (HC-1)
+1. What is this directory for?        ANSWERED (<where>) | GAP (<what is absent>) | N/A (<reason>)
+2. Why does it have this shape?       ...
+3. What will hurt the reader?         ...
+4. Where does the reader go next?     ...
+
+### Admitted units (HC-2)
+- question: <which of the four this answers>
+  claim: <the fact, as it would be stated to the reader>
+  why: <why the fact matters -- what it changes for the reader>
+  evidence: <file:line>[, <path> ...]
+  plain_browsing_gap: <what the listing view does not show, so this unit earns its space>
+
+### Identity line
+<one line naming what this directory IS -- required for a `page` decision, and
+ the line every ancestor's navigation uses to describe this directory>
+
+### Decision
+PAGE-WARRANTED | NO-PAGE
+```
+
+**Every one of the five unit fields is REQUIRED and an omitted field REJECTS the
+unit (HC-2).** They are not report formatting. `plain_browsing_gap` in particular
+is the field that proves the unit is not already visible, which is the whole
+admission test -- a unit that cannot state its gap has not passed HC-2, it has
+skipped it.
+
+`PAGE-WARRANTED` maps to `decision: page` and `NO-PAGE` maps to `decision: none`
+in the record that generation writes. The identity line is required for
+`PAGE-WARRANTED` because DR-1 requires it and because PC-2 uses it as the link
+description in every ancestor's and descendant's navigation.
+
+Then STOP. This lane writes nothing -- not the page, and not the decision record.
+Persisting the decision is `generate_human_html`'s first step, which is what
+keeps the report a decision point rather than a formality.
+
 ## Cross-references
 
 - Why this verb exists, and the four negative controls -- `references/coverage-gap.md`.
+- The human-html contract in full (HC, DR, PC, NF, RD, SA, SZ, CK, TS, HV) -- `../standards/human-html-standards.md`.
+- Writing or removing the page this branch decided -- `generation-lane.md`, the `human-html` branch.
 - What earns ambient cost, including analysis depth -- `references/standards/coverage-standards.md`.
 - Composing a parent from its children's documents, and the bottom-up order that requires -- `generation-lane.md`.
 - Where content sits WITHIN the destination document (the destination itself is the assessed directory) -- `references/cohesion-principles.md`.

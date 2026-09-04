@@ -40,6 +40,9 @@ technique_skill:
           action: |
             Resolve the diff range.
             - If the user passed an explicit argument (`<ref>`, `<a>..<b>`, `<a>...<b>`, `--staged`, `--working`), use it verbatim.
+            - `--working` diffs the worktree against HEAD, so it sees MODIFIED tracked files only: a brand-new
+              (untracked) file is not in the diff and the review of it is silently empty. To review new files,
+              `git add` them and use `--staged`.
             - Otherwise let prepare_review.py auto-detect from workspace state. The detection order is:
               1. mid-merge (MERGE_HEAD present) -> review the in-progress merge
               2. mid-rebase -> review the in-progress rebase
