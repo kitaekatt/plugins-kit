@@ -205,7 +205,7 @@ Applies to:
 
 The decision rule, the mechanics each branch requires, the three runtime states, and the
 reviewer checklist:
-[docs/reference/optional-plugin-dependencies.md](../docs/reference/optional-plugin-dependencies.md).
+[bootstrap/skills/plugin-dev/references/optional-plugin-dependencies.md](bootstrap/skills/plugin-dev/references/optional-plugin-dependencies.md).
 
 ### Published-plugin boundaries
 

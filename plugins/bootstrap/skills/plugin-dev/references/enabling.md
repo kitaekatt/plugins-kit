@@ -158,8 +158,7 @@ does not admit an enabling disclosure into context.
   skill for that invocation.
 - A Claude-invoked skill also qualifies when the current request or a loaded
   instruction file permits that invocation. The invocation does not create or
-  enlarge that permission. This boundary follows AD-2 and AD-3 in
-  [agent-directive-standards](agent-directive-standards.md).
+  enlarge that permission.
 - Consent follows an exact child-skill invocation emitted by a consented skill
   as part of the same operation. Skills emitted by `task work` qualify because
   the user selected the workflow that emits them.
@@ -175,8 +174,9 @@ separate fix-all and notice rules remain out of scope.
 
 ### Permitted disclosure
 
-An enabling script can advertise only after it detects the capability and its
-frontier symbol.
+An enabling script can advertise only after it detects the capability and the
+discovery-shape evidence that it is current enough: a frontier symbol, a capability
+heading or lane entry point, or a CLI subcommand, flag, or entry point.
 
 The complete injected output must contain no more than three non-empty lines.
 
