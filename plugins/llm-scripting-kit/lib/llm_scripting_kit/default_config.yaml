@@ -82,6 +82,16 @@ endpoints:
     effort: high
     tier: 2
     family: openai
+  # Astra is OpenAI's frontier tier -- a peer of fable, so tier 4. Rollout is
+  # staged (API keys and Enterprise first, ChatGPT plans after) and the codex
+  # CLI needs 0.153.1 or newer; until both hold on a machine the entry simply
+  # probes unreachable and routing falls through past it.
+  astra:
+    harness: codex
+    model: gpt-6-astra
+    effort: high
+    tier: 4
+    family: openai
 
   # Claude subscription models, shipped for the same reason as the codex pair
   # above: nothing about them is machine-specific, so a fresh machine with the

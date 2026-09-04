@@ -270,20 +270,21 @@ optional-dependency section above defers to it.
 | job-kit | `llm_scripting_kit.completion` (`BackendSelection`, `Capabilities`, `adapter_capabilities`, `create_backend`, `match_capabilities`) | Deterministic endpoint selection from a job's preference order and requirements | Yes |
 | workflow-kit | `llm_scripting_kit.completion.OpenRouterBackend` (via `scripts/openrouter_run.py`) | The `openrouter` node strategy: one non-Claude model call per workflow node | Yes |
 | awesome-kit (orchestrate) | `llm_scripting_kit` (harness-model discovery, lazy/optional, via `orchestration_guidance.py`) | Backend/model advisory text for the orchestrate skill's routing decisions | Yes |
-| git-kit, p4-kit | `llm_scripting_kit.completion` (`create_backend`, `BackendOptions`, `HaltError`) via each kit's vendored `scripts/run_review_lane.py` | One reviewer lane's prompt, output contract, context-window pre-flight, and failure policy | Yes |
+| git-kit, p4-kit | `llm_scripting_kit.review_lane.main` via each kit's thin `scripts/run_review_lane.py` wrapper | Bootstrap setup and the REFUSE probe for the shared library; the lane's prompt lives in `bootstrap_lib.code_review.lane_prompts` and its guards in `llm_scripting_kit.review_lane` | Yes |
 | yaml-data-editor-kit | none directly -- reaches it via content-pipeline-kit's `content_pipeline` (the dispatch binding in `dispatch/`) | The editor's dispatch planner, not the completion transport | No (`published: false`) |
 
-The code-review kits are the one entry whose consumer is a VENDORED SCRIPT rather
-than a library. `bootstrap_lib.code_review` holds the shared review pipeline, so the
-runner "belongs" there by cohesion -- but it calls the seam, and an import in
-`bootstrap_lib` makes `openai` a transitive requirement of BOOTSTRAP, which every
-other plugin depends on (`tests/bootstrap/test_dependency_completeness.py` walks the
-first-party closure and enforces this). The split is therefore by DEPENDENCY, not by
-subject: the LLM-neutral half (prompts, issue schema, dispatch classification) stays
-in `bootstrap_lib.code_review.lane_prompts`, and the seam-calling half is one file
-vendored byte-for-byte into both kits, per the bootstrap_guard discipline below.
-Reach for the same split whenever shared machinery would otherwise drag a transport
-dependency down into a layer that does not need one.
+The code-review kits are the one entry whose consumer is a thin wrapper around a
+shared library. `bootstrap_lib.code_review.lane_prompts` owns the LLM-neutral half
+(prompts, issue schema, and dispatch classification). The seam-calling half lives
+in `llm_scripting_kit.review_lane`, which owns endpoint resolution, backend calls,
+the context-window and output-contract guards, retries, and the result envelope.
+Each kit vendors only the wrapper that performs bootstrap setup and hosts the REFUSE
+probe for the shared library. This split is by DEPENDENCY, not by subject: importing
+the seam into `bootstrap_lib` would make `openai` transitive through BOOTSTRAP,
+which every other plugin depends on (`tests/bootstrap/test_dependency_completeness.py`
+walks the first-party closure and enforces this). Reach for the same split whenever
+shared machinery would otherwise drag a transport dependency down into a layer that
+does not need one.
 
 `bootstrap_lib/codex.py` is stdlib-only because `bootstrap_lib` is imported from
 contexts where no third-party dependency is guaranteed to exist (SessionStart
