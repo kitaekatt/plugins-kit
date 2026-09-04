@@ -84,6 +84,50 @@ is `unknown`-shaped information about the CHECK, not `unreachable`-shaped
 information about the TARGET, unless (as here) a real fallback check exists to
 produce an actual verdict.
 
+## Usage pacing is a third axis, and it fails open
+
+`conserve_usage` (`usage_budget.py`) answers a question neither `endpoints` nor
+`reachability` can: an endpoint that is configured AND answering may still be
+one whose subscription quota is being burned faster than the clock. A model
+that opts in is available only while the fraction of quota remaining is at
+least the fraction of the window remaining -- spend no faster than time passes
+and the frontier model is still there at the end of the week.
+
+**A pool is DECLARED or defaulted, never derived FROM THE MODEL.** fable draws
+on a per-model weekly bucket (`model_scoped`, selected by `display_name`); opus
+draws on the all-model weekly window (`seven_day`). A bare `conserve_usage:
+true` takes `seven_day`, which `read_codex_pool` resolves to codex's own
+`primary` -- a harness remap, not a per-model one. The derivation that is
+refused is "use the model's own bucket when one exists": it would hand opus
+`seven_day_opus`, the opposite of the all-model pacing an opus entry means.
+
+**It reads files harnesses already wrote, and reads no credential.** claude's
+numbers come from claude-ui-kit's statusline snapshot at
+`~/.claude/plugins/data/plugins-kit/claude-ui-kit/rate-limits.json` -- a FILE
+CONTRACT, optional on both sides, neither plugin depending on the other --
+because the statusline hook payload is the only surface on which Claude Code
+emits `rate_limits` at all. codex's come from the newest session rollout under
+`~/.codex/sessions/`. Anthropic's `/api/oauth/usage` would answer more
+completely, including the per-model bucket, and is deliberately NOT called: it
+needs the user's OAuth access token, and a pacing check is not a good reason to
+put a subscription credential into this code path. Where a CLI does not expose
+usage, the honest outcome is `status: "no-data"`, not a token read.
+
+**No data never withholds a model.** A missing snapshot, an absent pool, or a
+window that has already reset yields `no-data` and the endpoint stays usable --
+the same rule reachability applies one axis over ("I could not check" is never
+"it is down"), with a second concrete reason here: the per-model bucket is
+emitted by the server for some accounts only, so failing closed would make
+fable permanently unreachable on every machine whose payload omits it.
+
+**A verdict is pinned for the session** (`CLAUDE_CODE_SESSION_ID`); the stance
+and its rationale are the register entry in `plugins/CLAUDE.md`.
+
+`discover_seats` withholds a conserved seat into `SeatsResult.conserved` rather
+than dropping it, so a caller can distinguish "no seat above me" from "the seat
+above me is being paced" -- only the second changes when the window rolls. The
+`usage` verb is the inspection surface for a check that is otherwise invisible.
+
 ## Scope: one call, made correctly
 
 This layer owns everything a SINGLE completion needs -- endpoint resolution,
@@ -238,6 +282,7 @@ claude_md:
       - the single-call altitude and the shared halt taxonomy
       - the runner seam shared by the CLI-backed completion backends, and where
         that seam is NOT uniform across transports
+      - usage pacing (`conserve_usage`), its declared pools, and its fail-open rule
       - the per-transport rules the Codex and OpenCode backends carry
     excludes:
       - codex dispatch mechanics (orchestrate's codex-dispatch.md)

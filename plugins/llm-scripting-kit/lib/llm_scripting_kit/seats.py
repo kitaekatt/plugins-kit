@@ -20,6 +20,7 @@ from .reachability import (
     Reachability,
     check_many,
 )
+from .usage_budget import Budget, pinned_evaluate
 
 _BANDS = {1: "small", 2: "workhorse", 3: "strong", 4: "frontier"}
 
@@ -62,9 +63,10 @@ class Seat:
     family: str
     harness: Optional[str]
     reachability: Reachability
+    budget: Optional[Budget] = None
 
     def to_json(self) -> dict[str, Any]:
-        return {
+        result = {
             "relation": self.relation,
             "endpoint": self.endpoint,
             "model": self.model,
@@ -74,6 +76,9 @@ class Seat:
             "harness": self.harness,
             "reachability": self.reachability.to_json(),
         }
+        if self.budget is not None:
+            result["budget"] = self.budget.to_json()
+        return result
 
 
 @dataclass(frozen=True)
@@ -106,6 +111,7 @@ class SeatsResult:
     seats: tuple[Seat, ...]
     unclassified: tuple[UnclassifiedEntry, ...]
     probe_unknown: tuple[Seat, ...]
+    conserved: tuple[Seat, ...] = ()
 
     def to_json(self) -> dict[str, Any]:
         return {
@@ -113,6 +119,7 @@ class SeatsResult:
             "seats": [seat.to_json() for seat in self.seats],
             "unclassified": [entry.to_json() for entry in self.unclassified],
             "probe_unknown": [seat.to_json() for seat in self.probe_unknown],
+            "conserved": [seat.to_json() for seat in self.conserved],
         }
 
 
@@ -167,7 +174,10 @@ def _self_record(entry: EndpointEntry) -> SeatSelf:
 
 
 def _candidate_record(
-    entry: EndpointEntry, relation: str, reachability: Reachability
+    entry: EndpointEntry,
+    relation: str,
+    reachability: Reachability,
+    budget: Optional[Budget] = None,
 ) -> Seat:
     assert entry.tier is not None
     assert entry.family is not None
@@ -180,6 +190,7 @@ def _candidate_record(
         family=entry.family,
         harness=entry.harness,
         reachability=reachability,
+        budget=budget,
     )
 
 
@@ -205,6 +216,14 @@ def discover_seats(
     every call through the concurrent reachability checker. Unreachable
     candidates are omitted; indeterminate probes are retained in
     ``probe_unknown``.
+
+    A reachable candidate that declares ``conserve_usage`` is additionally
+    checked against its subscription-usage pool
+    (:mod:`llm_scripting_kit.usage_budget`) and, when it is being spent faster
+    than its window elapses, moved to ``conserved`` instead of ``seats`` --
+    reported rather than dropped, so a caller can tell "no seat above me" from
+    "the seat above me is being paced". That verdict is pinned for the session,
+    so a seat cannot disappear mid-session.
 
     ``registry`` is an injectable parsed registry for callers and tests that
     already own a fabricated registry. When omitted, the normal layered
@@ -258,6 +277,7 @@ def discover_seats(
 
     confirmed: list[Seat] = []
     probe_unknown: list[Seat] = []
+    conserved: list[Seat] = []
     for entry, relation in candidates:
         reachability = checks.get(
             entry.id,
@@ -267,9 +287,23 @@ def discover_seats(
                 detail="reachability checker returned no result",
             ),
         )
-        candidate = _candidate_record(entry, relation, reachability)
+        # The pacing verdict is computed only for a candidate that is actually
+        # reachable: an endpoint already excluded by its probe gains nothing
+        # from a second reason, and the read would pin a verdict for the
+        # session against a seat this session never had.
+        budget = None
+        if reachability.status == STATUS_REACHABLE and entry.conserve_usage is not None:
+            budget = pinned_evaluate(entry.id, entry.conserve_usage, entry.harness)
+        candidate = _candidate_record(entry, relation, reachability, budget)
         if reachability.status == STATUS_REACHABLE:
-            confirmed.append(candidate)
+            # Conserved seats are withheld rather than dropped. A caller
+            # reporting "no seat above me" must be able to tell a fleet with
+            # no frontier model from one whose frontier model is being paced,
+            # because only the second answer changes once the window resets.
+            if budget is not None and budget.conserved:
+                conserved.append(candidate)
+            else:
+                confirmed.append(candidate)
         elif reachability.status == STATUS_UNKNOWN:
             probe_unknown.append(candidate)
 
@@ -278,10 +312,12 @@ def discover_seats(
         seats=tuple(confirmed),
         unclassified=unclassified,
         probe_unknown=tuple(probe_unknown),
+        conserved=tuple(conserved),
     )
 
 
 __all__ = [
+    "Budget",
     "Seat",
     "SeatResolutionError",
     "SeatSelf",

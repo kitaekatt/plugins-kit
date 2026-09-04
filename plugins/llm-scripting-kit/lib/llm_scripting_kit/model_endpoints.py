@@ -43,6 +43,7 @@ the schema can grow additively)::
         model: <model id>                   # required, what the harness drives
         effort: <effort>                    # optional harness setting
         name: <human label>                 # optional
+        conserve_usage: <bool | mapping>    # optional; see usage_budget.py
 
 Entry ids are the endpoint names: ``llm_scripting_kit.models.resolve_endpoint``
 injects each entry as a named endpoint, so ``resolve_endpoint("<entry id>")``
@@ -56,6 +57,8 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, Mapping, Optional
+
+from .usage_budget import ConserveConfigError, ConserveSpec, parse_conserve_usage
 
 #: Environment variable overriding the registry path.
 REGISTRY_ENV = "MODEL_ENDPOINTS_REGISTRY"
@@ -109,6 +112,7 @@ class EndpointEntry:
     effort: Optional[str] = None
     tier: Optional[int] = None
     family: Optional[str] = None
+    conserve_usage: Optional[ConserveSpec] = None
 
 
 @dataclass(frozen=True)
@@ -176,6 +180,27 @@ def _optional_str(value: object, *, path: Path, entry_id: str, key: str) -> Opti
             f"non-string '{key}' ({value!r})"
         )
     return value.strip()
+
+
+def _conserve_spec(
+    raw: Mapping[str, object], *, path: Path, entry_id: str
+) -> Optional[ConserveSpec]:
+    """Parse ``conserve_usage``, reporting a bad one as invalid metadata.
+
+    Raised loudly rather than noted-and-skipped: a declaration this reader
+    cannot understand would otherwise leave the entry opted in and never
+    conserving, which looks identical to a working opt-in. Re-raised as
+    :class:`EndpointMetadataError` so a caller already handling registry
+    errors does not meet a bare ``ValueError`` from a helper module.
+    """
+    try:
+        return parse_conserve_usage(
+            raw.get("conserve_usage"),
+            source=f"model-endpoints registry '{path}'",
+            entry_id=entry_id,
+        )
+    except ConserveConfigError as exc:
+        raise EndpointMetadataError(str(exc)) from exc
 
 
 def parse_classification_fields(
@@ -307,6 +332,7 @@ def load_endpoint_registry(
                     ),
                     tier=tier,
                     family=family,
+                    conserve_usage=_conserve_spec(raw, path=path, entry_id=key),
                 )
             except EndpointMetadataError:
                 raise
@@ -344,6 +370,7 @@ def load_endpoint_registry(
                 kind=TRANSPORT_KIND,
                 tier=tier,
                 family=family,
+                conserve_usage=_conserve_spec(raw, path=path, entry_id=key),
             )
         except EndpointMetadataError:
             raise
@@ -416,6 +443,8 @@ def resolve_registry_entry(
 
 __all__ = [
     "REGISTRY_ENV",
+    "ConserveConfigError",
+    "ConserveSpec",
     "harness_entry_message",
     "REGISTRY_RELATIVE_PATH",
     "TRANSPORT_KIND",

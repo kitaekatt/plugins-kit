@@ -144,6 +144,19 @@ unconfigurable opinion whose test passes is a finding.
   examined their change rather than a degraded one. The lane is reported failed and its
   files are marked uncovered, so the reader can re-run deliberately.
 
+- **A `conserve_usage` verdict is pinned for the session and never re-evaluated
+  downward.** llm-scripting-kit computes a paced endpoint's availability once per session
+  key and reuses it; a CONSERVED verdict is recomputed only once its window resets, and an
+  AVAILABLE one is never recomputed at all. A team could reasonably want live
+  re-evaluation -- a session running for days holds an `available` verdict computed against
+  numbers that have since moved -- and the only remedy we leave them is to start a new
+  session (or `llm-scripting-kit usage --no-pin`, which inspects without changing what
+  `seats` returns). We refuse the seam because the alternative is the failure the feature
+  exists to prevent: an endpoint that was usable when work was planned against it
+  disappearing mid-run, which strands that work with no signal a caller can act on. A
+  verdict that only ever improves within a session is a guarantee; one that can flip either
+  way is a race.
+
 - **Code review renders to chat and is never persisted.** git-kit and p4-kit scope
   themselves to a conversational review; a team needing PR/Swarm comments or a CI artifact
   wants a different tool, and both SKILL.md scope blocks say so rather than assuming it
@@ -273,7 +286,7 @@ optional-dependency section above defers to it.
 | job-kit | `llm_scripting_kit.completion` (`BackendSelection`, `Capabilities`, `adapter_capabilities`, `create_backend`, `match_capabilities`) | Deterministic endpoint selection from a job's preference order and requirements | Yes |
 | workflow-kit | `llm_scripting_kit.completion.OpenRouterBackend` (via `scripts/openrouter_run.py`) | The `openrouter` node strategy: one non-Claude model call per workflow node | Yes |
 | awesome-kit (orchestrate) | `llm_scripting_kit` (harness-model discovery, lazy/optional, via `orchestration_guidance.py`) | Backend/model advisory text for the orchestrate skill's routing decisions | Yes |
-| bootstrap | `llm_scripting_kit.seats.discover_seats` (lazy/optional, via `bootstrap_lib.code_review.review_profiles`) | Peer-seat discovery for review profiles (`peer_when_available`); it never talks to an LLM | Yes |
+| bootstrap | `llm_scripting_kit.seats.discover_seats` (lazy/optional, via `bootstrap_lib.code_review.review_profiles`) | Peer-seat discovery for review profiles (a `peer:<name>` entry in a reviewer's ordered `model` priority list); it never talks to an LLM | Yes |
 | git-kit, p4-kit | `llm_scripting_kit.review_lane.main` via each kit's thin `scripts/run_review_lane.py` wrapper | Bootstrap setup and the REFUSE probe for the shared library; the lane's prompt lives in `bootstrap_lib.code_review.lane_prompts` and its guards in `llm_scripting_kit.review_lane` | Yes |
 | yaml-data-editor-kit | none directly -- reaches it via content-pipeline-kit's `content_pipeline` (the dispatch binding in `dispatch/`) | The editor's dispatch planner, not the completion transport | No (`published: false`) |
 

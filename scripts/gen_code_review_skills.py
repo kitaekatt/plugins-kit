@@ -383,9 +383,9 @@ LEDGER_GOTCHAS = """
 PROFILE_GOTCHAS = """
         - The `review_profiles` block above is SELECTION GUIDANCE AND RATIONALE ONLY. It carries no reviewer roster, model, or validator_models -- that executable table is resolved per review by @RENDER_TOOL@ (step 4), which merges the shipped bootstrap_lib defaults with any `~/.claude/config/review_profiles.yaml` (user) or `<project_root>/.claude/review_profiles.yaml` (project) override. Never merge those layers yourself and never hand-edit the resolved output.
         - The `profile` in steps 6-7 is always an entry from that RESOLVED table, never the guidance block. Match the guidance prose to decide which profile id fits the change, then read `reviewers` and `validator_models` off the resolved entry with that id.
-        - See references/configuration.md for the layer precedence, merge rules (profiles/reviewers merge by id/name; validator_models and other mappings deep-merge; `disabled: true` removes a record; plain lists like `data_only_extensions` replace), the shipped default table, what a `model` value may name, which lanes may take an endpoint id, what happens when an endpoint lane fails, and how a reviewer record's `peer_when_available` resolves a peer seat (plus the `--explain-peer-seats` diagnostic).
-        - A `model` value is NOT always an Agent-tool model. The four aliases `sonnet`, `opus`, `haiku` and `fable` name the Agent tool; every other value is an llm-scripting-kit endpoint id and that lane runs through @LANE_TOOL@ instead (step 6's model-kind rule). The shipped table is all aliases, so a review with no user or project override dispatches every lane as an Agent subagent.
-        - A reviewer record may set `peer_when_available` true, asking the renderer to run that lane on a reachable PEER endpoint -- same tier as the stated model, different model family -- when llm-scripting-kit is installed and current. The renderer resolves it, so the table you read already carries the substituted endpoint id as that lane's `model`, and the lane dispatches through @LANE_TOOL@ under the ordinary step-6 model-kind rule. Do not probe for a peer yourself, and do not treat a substituted value as an override the user forgot to make.
+        - See references/configuration.md for the layer precedence, merge rules (profiles/reviewers merge by id/name; validator_models and other mappings deep-merge; `disabled: true` removes a record; plain lists like `data_only_extensions` replace), the shipped default table, what a `model` value may name, which lanes may take an endpoint id, what happens when an endpoint lane fails, and how a reviewer's ordered `model` priority list resolves a `peer:` entry (plus the `--explain-peer-seats` diagnostic).
+        - A `model` value is NOT always an Agent-tool model. The four aliases `sonnet`, `opus`, `haiku` and `fable` name the Agent tool; every other value is an llm-scripting-kit endpoint id and that lane runs through @LANE_TOOL@ instead (step 6's model-kind rule). Every `model` in the RESOLVED table is a single string -- the renderer has already picked one entry out of any priority list the configuration stated -- so this rule needs no extra case.
+        - A reviewer's configured `model` may be an ORDERED PRIORITY LIST rather than a single name, and an entry spelled `peer:<name>` asks the renderer to run that lane on a reachable PEER endpoint -- same tier as `<name>`, different model family -- when llm-scripting-kit is installed and current. The renderer evaluates the list and prints one resolved model, so the table you read already carries the chosen value, and the lane dispatches through @LANE_TOOL@ under the ordinary step-6 model-kind rule. Do not probe for a peer yourself, and do not treat a resolved peer endpoint as an override the user forgot to make.
         - An endpoint lane that fails is a FAILED lane. There is no fallback to an Agent, by design: silently substituting one produces a review the user reads as having run on the model they configured, which is a false claim about the change's coverage. Report it and mark the coverage missing."""
 
 
@@ -492,13 +492,18 @@ technique_skill:
             `---` separator and layer provenance; parse only the YAML above the separator. Keep
             the resolved `profiles` list for steps 6 and 7. See references/configuration.md for
             the full layer/merge/override contract.
-            The renderer may also print `peer_when_available:` lines on STDERR. Each one names a
-            lane whose resolved `model` was replaced by a peer endpoint, and it is the only
-            record that the lane did not run on the model the shipped table states. Keep every
-            such line and repeat it verbatim in the step-9 review header, under
-            `## Peer-seat substitutions`. Never drop it, and never edit the resolved table to
-            undo it. Silence on stderr means no substitution happened; there is nothing to
-            report and nothing to install.
+            The renderer may also print `model-priority:` lines on STDERR. Each one names a
+            lane whose `model` was configured as a priority list, saying which entry the
+            renderer resolved -- a `peer:` entry that resolved to an endpoint, or a `peer:`
+            entry it skipped and the entry it ran instead. It is the only record of a `peer:`
+            entry that was probed and resolved, or probed and skipped. Keep every such line
+            and repeat it verbatim in the step-9 review header, under
+            `## Model-priority substitutions`. Never drop it, and never edit the resolved table
+            to undo it. Silence on stderr means either every lane took the first entry of its
+            list, or llm-scripting-kit was not available to probe a `peer:` entry at all --
+            that second case runs the next entry silently and is reported only by
+            `--explain-peer-seats`. Either way the resolved table states the model each lane
+            actually runs.
           tool: Read + @RENDER_TOOL@
         - n: 5
           action: |
@@ -575,12 +580,12 @@ technique_skill:
               partial review is indistinguishable from a complete one. Never describe a
               failed lane's files as clean, and never re-run the lane on a different model to
               paper over the gap -- report it and let the user decide.
-            - When the step-4 renderer printed any `peer_when_available:` line on stderr,
-              prepend a `## Peer-seat substitutions` section carrying each line verbatim. A
-              substituted lane ran on a DIFFERENT model from the one the review-profile table
-              ships, and the rendered review looks identical either way, so omitting this
-              would let the reader believe a model reviewed their change that never saw it.
-              This is a disclosure, not a warning: the substitution is the configured
+            - When the step-4 renderer printed any `model-priority:` line on stderr,
+              prepend a `## Model-priority substitutions` section carrying each line verbatim.
+              Such a lane ran on a model chosen from a priority list rather than on a single
+              configured name, and the rendered review looks identical either way, so omitting
+              this would let the reader believe a model reviewed their change that never saw
+              it. This is a disclosure, not a warning: resolving the list is the configured
               behaviour and nothing needs fixing.
             - When `bundle.submit_gates` is non-empty, prepend a `## Submit checklist`
               section, each gate carrying its step-5 verdict and the evidence for it.
@@ -1776,16 +1781,18 @@ back to the process working directory.
   is deep-merged into it; an unknown `id` is appended as a new profile.
 - Within one profile record, `reviewers` is a list of records identified by `name`, merged the
   same way -- a higher layer only needs to restate the reviewer it is changing. A reviewer
-  record's fields are `name`, `model`, `disabled`, and `peer_when_available`; any other key is
-  a hard error rather than an ignored one.
+  record's fields are `name`, `model`, and `disabled`; any other key is a hard error rather
+  than an ignored one.
 - Every other mapping -- a profile's `selection`, and `validator_models` -- deep-merges key by
   key, so a higher layer states only the keys it changes.
 - `validator_models` reason keys (`bug`, `claude_md`, ...) are extensible: a higher layer can
   add a new reason without restating the shipped ones.
 - `disabled: true` on a profile or a reviewer record removes that record entirely from the
   resolved table, not just its fields.
-- Every other list -- currently only `selection.data_only_extensions` -- is a PLAIN list, and a
-  higher layer replaces it outright rather than merging entries.
+- Every other list -- `selection.data_only_extensions`, and a reviewer's `model` when it is
+  stated as a priority list -- is a PLAIN list, and a higher layer replaces it outright rather
+  than merging entries. So a layer stating `model: fable` means fable, full stop: it replaces
+  whatever list the layer below stated, entries and all.
 
 Malformed or unreadable YAML in any layer is a hard error (`ConfigError`); resolution never
 falls back to a partial or best-effort merge.
@@ -1819,8 +1826,9 @@ profiles:
   - name: reviewer_b_diff_only_bugs
     model: opus
   - name: reviewer_c_introduced_code
-    model: opus
-    peer_when_available: true
+    model:
+    - peer:opus
+    - opus
   validator_models:
     bug: opus
     claude_md: sonnet
@@ -1828,19 +1836,24 @@ profiles:
 
 ## What a `model` value may name
 
-A `model` -- whether a reviewer's or a `validator_models` reason's -- is one of two things,
-and which one it is decides how that lane is dispatched:
+A resolved `model` -- whether a reviewer's or a `validator_models` reason's -- is one of two
+things, and which one it is decides how that lane is dispatched:
 
 | Value | Dispatch |
 |---|---|
 | `sonnet`, `opus`, `haiku`, `fable` | an Agent subagent (the default) |
 | anything else | an llm-scripting-kit endpoint id, run through `@LANE_TOOL@` |
 
-Every `model` in the shipped table is an Agent alias, so a review with no user or project
-override dispatches every lane as an Agent subagent -- unless the renderer substitutes a peer
-seat for a lane that opted in (below). Naming an endpoint id is the whole override
+Every model the shipped table can resolve to is an Agent alias, so a review with no user or
+project override dispatches every lane as an Agent subagent -- unless a `peer:` entry resolves
+for the one lane that states one (below). Naming an endpoint id is the whole override
 mechanism -- there is no separate field to set, because `model` was already a free-form
-string resolved through the three layers above.
+value resolved through the three layers above.
+
+A reviewer's `model` may also be an ORDERED PRIORITY LIST (`validator_models` values may not
+-- a validator is never endpoint-eligible, so it has nothing to fall back to). The list is
+described in its own section below; the renderer always prints ONE resolved string per lane,
+so everything on this page about dispatching a `model` reads the resolved value.
 
 An endpoint id is resolved by llm-scripting-kit (`create_backend`), so it may name an
 OpenAI-compatible transport or a CLI harness -- whatever that plugin's configuration and
@@ -1888,61 +1901,86 @@ profiles:
 `my-local-endpoint` is a placeholder: use an id your llm-scripting-kit configuration or
 `~/.claude/config/model-endpoints.yaml` actually declares. Everything else about the review
 is unchanged -- the other two reviewers and all validators stay on their Agent models
-(except that `reviewer_c_introduced_code` still takes its shipped `peer_when_available`
-substitution when llm-scripting-kit reports a reachable BESIDE seat, below), so the endpoint
-reviewer's findings still pass through the same validation.
+(except that `reviewer_c_introduced_code` still resolves its shipped `peer:opus` entry when
+llm-scripting-kit reports a reachable BESIDE seat, below), so the endpoint reviewer's findings
+still pass through the same validation.
 
-## `peer_when_available`: running a reviewer on a peer seat
+## Model priority lists: running a reviewer on a peer seat
 
-A reviewer record may carry one more field:
+A reviewer's `model` may be an ordered list instead of a single name:
 
 ```yaml
 - name: reviewer_c_introduced_code
-  model: opus
-  peer_when_available: true
+  model:
+  - peer:opus
+  - opus
 ```
 
-It is a boolean, it defaults to false, and it merges by name like every other reviewer field
--- a layer patching only `model` leaves a shipped `peer_when_available` in place, and setting
-it to `false` opts back out.
+The entries are evaluated IN ORDER and the first one that RESOLVES becomes that lane's model.
+There are two kinds of entry:
 
-Set, it asks the renderer to run that lane on a reachable PEER of the stated model: an
-endpoint in the SAME tier but a DIFFERENT model family. The point is independence. A second
-reviewer reading the same change on the same family largely agrees with the first, so the
-lane that looks for problems the author introduced is the one worth moving off-family. The
-shipped table sets it on `reviewer_c_introduced_code` in the `code` profile, and nowhere else.
+| Entry | Resolves to | When |
+|---|---|---|
+| `<name>` | itself -- an Agent alias or an endpoint id | always |
+| `peer:<name>` | a reachable PEER endpoint of `<name>` | only when llm-scripting-kit is installed, current, and reports one |
+
+A PEER is a seat in the SAME tier as `<name>` but a DIFFERENT model family. The point is
+independence. A second reviewer reading the same change on the same family largely agrees with
+the first, so the lane that looks for problems the author introduced is the one worth moving
+off-family. The shipped table states `[peer:opus, opus]` for `reviewer_c_introduced_code` in
+the `code` profile, and a plain string everywhere else.
+
+A single string is exactly a one-entry list, so `model: sonnet` means what it always meant.
+`model: peer:opus` is legal too -- it simply has nothing to fall back to, so it is a
+configuration error whenever no seat is reachable (below).
+
+The list is a PLAIN list under the merge rules above, which is the whole reason it is shaped
+this way: a higher layer's `model` REPLACES it wholesale. `model: fable` in your user layer
+means fable, with no peer probe and no leftover preference inherited from the shipped record.
 
 ### What actually happens
 
-The renderer asks llm-scripting-kit (`llm_scripting_kit.seats.discover_seats`) for the seats
-around the stated model, takes the first reachable `BESIDE` seat, and writes that seat's
-endpoint id into the lane's `model` in the table it prints. Nothing downstream changes: the
-value is an endpoint id, so the lane dispatches through `@LANE_TOOL@` under the ordinary
-model-kind rule, and the agent-loop constraint above still applies -- a `BESIDE` seat is
-always a harness endpoint, which is what this lane needs.
+For a `peer:<name>` entry the renderer asks llm-scripting-kit
+(`llm_scripting_kit.seats.discover_seats`) for the seats around `<name>`, takes the first
+reachable `BESIDE` seat, and writes that seat's endpoint id into the lane's `model` in the
+table it prints. Nothing downstream changes: the value is an endpoint id, so the lane
+dispatches through `@LANE_TOOL@` under the ordinary model-kind rule, and the agent-loop
+constraint above still applies -- a `BESIDE` seat is always a harness endpoint, which is what
+this lane needs.
 
-Every substitution is announced on STDERR, one line per lane, naming the profile, the lane,
-the stated model, the endpoint that replaced it, and the mechanism:
+A resolved `peer:` entry is announced on STDERR, one line per lane, naming the profile, the
+lane, the entry, the endpoint that resolved it, and the mechanism:
 
-    peer_when_available: profile 'code' lane 'reviewer_c_introduced_code' runs on
-    llm-scripting-kit endpoint 'sol' instead of its stated model 'opus' -- a reachable BESIDE
-    seat (same tier, different model family) reported by llm_scripting_kit.seats.discover_seats.
+    model-priority: profile 'code' lane 'reviewer_c_introduced_code' runs on llm-scripting-kit
+    endpoint 'sol' -- priority entry 'peer:opus' resolved to a reachable BESIDE seat (same
+    tier, different model family) reported by llm_scripting_kit.seats.discover_seats.
 
 (Wrapped here for width; it is emitted as a single line.) `@SKILL_NAME@` carries that line
 into the review header, so a review never claims to have run on a model it did not use.
-When llm-scripting-kit is present but no reachable BESIDE seat is found, the renderer emits
-one unconditional stderr line -- `peer_when_available: no reachable BESIDE seat was found,
-so every opted-in lane runs on its stated model.` -- and the review carries it into the same
-header, so a reader is told the opt-in lane ran on its stated model rather than left to
-assume a substitution happened.
+
+When llm-scripting-kit IS present and the probe ran but no reachable `BESIDE` seat exists, the
+skip is announced the same way, naming the entry that was skipped and the entry that ran
+instead:
+
+    model-priority: profile 'code' lane 'reviewer_c_introduced_code' skipped priority entry
+    'peer:opus' (no reachable BESIDE seat) and runs on 'opus'.
+
+so a reader is told the lane took a later entry rather than left to assume the first one ran.
+
+### When no entry resolves
+
+A list of `peer:` entries with no plain name after them is a configuration error when nothing
+is reachable: the renderer exits non-zero naming the profile, the lane, and the list, and
+prints no table. Put a plain name last -- it always resolves -- unless you genuinely want the
+review to stop rather than run off-peer.
 
 ### When llm-scripting-kit is not there
 
-This is an OPTIONAL edge. The lane simply runs on the model the table states, which is what
-the table already said it would do, so the rendered table stays true as read and there is
-NOTHING to disclose. Accordingly the renderer says nothing at all -- absent, too old, and
-left over from an uninstall are all silent, and no review ever tells you to go install a
-plugin you did not ask for.
+This is an OPTIONAL edge. A `peer:` entry does not resolve, the next entry does, and the
+rendered table states the model that will run -- so it stays true as read and there is NOTHING
+to disclose. Accordingly the renderer says nothing at all -- absent, too old, and left over
+from an uninstall are all silent, and no review ever tells you to go install a plugin you did
+not ask for.
 
 Those states are still told apart, in a diagnostic channel rather than in the review:
 
@@ -1953,8 +1991,8 @@ present but predating `llm_scripting_kit.seats.discover_seats`, which first ship
 llm-scripting-kit 0.28.0 (with the `claude plugin update` command). A discovery call that
 raises is reported there too. None of it changes the table.
 
-The renderer never fails a review over this: no probe error, owner exception, or unexpected
-result shape escapes it, and every one of them degrades to the stated model. The probe runs
+The renderer never fails a review over a probe: no probe error, owner exception, or unexpected
+result shape escapes it, and every one of them falls through to the next entry. The probe runs
 fresh on each render and its result is never cached between reviews, so removing the plugin
 takes effect on the very next review.
 
@@ -1973,10 +2011,10 @@ profiles:
 
 Only the changed reviewer needs restating -- `reviewer_a_claude_md_compliance` and
 `reviewer_b_diff_only_bugs` keep their shipped models via the by-name merge, and `selection`
-and `validator_models` are untouched because the patch omits them. `peer_when_available` is
-inherited from the shipped record by the same merge, so this lane still takes a peer
-substitution when one is reachable; add `peer_when_available: false` to the same record to
-pin it to Sonnet.
+and `validator_models` are untouched because the patch omits them. The scalar `model` REPLACES
+the shipped `[peer:opus, opus]` list outright, so this lane is pinned to Sonnet and no peer is
+probed for. To keep the peer preference on a different tier, state the list you want instead:
+`model: [peer:sonnet, sonnet]`.
 
 ## Inspecting the resolved table
 
@@ -1986,8 +2024,8 @@ prints the merged `profiles` table as YAML, then a `---` separator, then which l
 applied and (for any absent override) the path that would create it. This is the same
 resolution step 4 of `@SKILL_NAME@` performs -- never merge the layers by hand.
 
-Add `--explain-peer-seats` to see why a `peer_when_available` lane kept its stated model. That
-output is diagnostics, never part of the table.
+Add `--explain-peer-seats` to see why a `peer:` entry did not resolve. That output is
+diagnostics, never part of the table.
 """
 
 CONFIGURATION_FRAGMENTS = {

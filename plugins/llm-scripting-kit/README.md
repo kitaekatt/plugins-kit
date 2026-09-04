@@ -7,6 +7,7 @@ shared endpoint registry and completion backends:
 llm-scripting-kit endpoints
 llm-scripting-kit endpoints --verify
 llm-scripting-kit probe --endpoint sol
+llm-scripting-kit usage
 llm-scripting-kit models --endpoint openrouter
 llm-scripting-kit resolve --endpoint sol
 printf 'Review this design' | llm-scripting-kit complete --endpoint sol
@@ -103,6 +104,52 @@ precisely because it does not want to block a queued unit of work on a dead
 target. A live `/models` endpoint or a present CLI's `--version` answers in
 well under a second; 5s is headroom for a slow hop while still failing a
 genuinely dead target fast.
+
+### `usage` -- is an opted-in model being spent too fast?
+
+A third axis over the two above: an endpoint can be configured and reachable
+and still be one you should leave alone this week. An entry opts in with
+`conserve_usage`, and is then withheld while the fraction of its subscription
+quota remaining is below the fraction of its window remaining -- spend no
+faster than time passes, and the model is still there at the end of the week.
+
+```yaml
+endpoints:
+  fable:
+    conserve_usage: {pool: model_scoped, display_name: Fable}  # its own weekly bucket
+  opus:
+    conserve_usage: {pool: seven_day}                          # all-model weekly
+  sol:
+    conserve_usage: true                                       # codex's principal window
+```
+
+Each entry names its OWN pool, because they are different quotas: a per-model
+weekly bucket for one model, the all-model weekly window for another. Nothing
+is opted in by default.
+
+```bash
+llm-scripting-kit usage            # this session's pinned verdicts
+llm-scripting-kit usage --no-pin   # evaluate now, without reading or writing the pin
+```
+
+Three statuses: `available`, `conserved`, and `no-data`. **`no-data` never
+withholds a model** -- a missing snapshot, an absent pool, or a window that has
+already reset all leave the endpoint usable, the same way `probe` reports
+`unknown` rather than claiming an endpoint is down.
+
+The numbers come only from files the harnesses already write: claude-ui-kit's
+statusline snapshot for claude, the newest `~/.codex/sessions` rollout for
+codex. Nothing here reads a credential or calls a usage API, so what a CLI does
+not expose shows up as `no-data` rather than being fetched with a token.
+
+A verdict is computed once per session and reused, so a model that was
+available when your session started does not become unavailable partway
+through. A `conserved` verdict is recomputed once its window resets, which can
+only give capacity back.
+
+`seats` applies the same check: a conserved seat is reported under `conserved`
+rather than in `seats`, so "no seat above me" stays distinguishable from "the
+seat above me is being paced".
 
 LLM access for scripts and pipelines: key resolution, a shared model registry,
 and named OpenAI-compatible endpoints. **OpenRouter is the default endpoint**,
