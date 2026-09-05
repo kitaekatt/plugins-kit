@@ -295,6 +295,8 @@ def build_prompt(
     subject_lines: int,
     example_report: dict,
     evidence_pack: str | None = None,
+    standards_text: str = "",
+    subject_text: str = "",
 ) -> dict:
     """system/user prompt text for one audit job.
 
@@ -309,15 +311,38 @@ def build_prompt(
         "written standards document and emit a single JSON audit report. "
         "You do not edit, write, or otherwise change any file."
     )
-    user = (
-        "Audit this document against the md-domain project-doc standards.\n\n"
-        "Read these files by path before you begin:\n"
-        f"  standards document: {standards_abs}\n"
-        f"  subject document:   {subject_abs}\n"
-        f"  acceptance checker: {checker_abs}\n\n"
-        "Your entire output is piped to the acceptance checker on stdin; it "
-        "decides whether your work is accepted. Read it if anything below is "
-        "ambiguous.\n\n"
+    if evidence_pack is not None:
+        # INLINED, deliberately. Telling the model to go read three files is the
+        # very lookup the evidence pack exists to precompute, and it obliges the
+        # endpoint to have a filesystem -- which excludes exactly the toolless
+        # transports the pack is admitted for. The measured instrument
+        # (run_audit_adapter.py) was a SINGLE call with the sources inlined, so
+        # this is the shipped path matching what the F1 figures were taken
+        # against rather than a new shape. The checker is not inlined: the job's
+        # contract command runs it locally, and the facts it enforces are stated
+        # below in full.
+        user = (
+            "Audit this document against the md-domain project-doc standards.\n\n"
+            "Everything you need is below; there are no files to open.\n\n"
+            f"STANDARDS DOCUMENT ({standards_abs.name}):\n"
+            f"{standards_text.rstrip()}\n\n"
+            f"SUBJECT DOCUMENT ({subject_rel}):\n"
+            f"{subject_text.rstrip()}\n\n"
+            "Your entire output is piped to an acceptance checker on stdin; it "
+            "decides whether your work is accepted.\n\n"
+        )
+    else:
+        user = (
+            "Audit this document against the md-domain project-doc standards.\n\n"
+            "Read these files by path before you begin:\n"
+            f"  standards document: {standards_abs}\n"
+            f"  subject document:   {subject_abs}\n"
+            f"  acceptance checker: {checker_abs}\n\n"
+            "Your entire output is piped to the acceptance checker on stdin; it "
+            "decides whether your work is accepted. Read it if anything below is "
+            "ambiguous.\n\n"
+        )
+    user += (
         "Apply every criterion in the standards document's Criteria ids table "
         "to the subject document. For each violation you find, cite the "
         "criterion id and the taxonomy id from the standards document, and "
@@ -393,6 +418,22 @@ def build_job(
                 file=sys.stderr,
             )
 
+    # Read the sources only when they will be inlined -- an unadmitted endpoint
+    # still gets the read-by-path prompt and pays nothing for this.
+    standards_text = ""
+    subject_text = ""
+    if pack is not None:
+        # Escaped with the pack's own helper, because the emitted job document is
+        # ASCII-only and a real subject document is not: this repo's docs carry
+        # em dashes and emoji. The pack already renders its rows this way, so an
+        # inlined document reads in the same encoding as the evidence about it.
+        # Nothing is lost for the audit -- the pack's MECHANICAL section
+        # enumerates every non-ASCII character by line and codepoint, which is
+        # what the hygiene criteria are judged from.
+        to_ascii = evidence_module.ascii_text
+        standards_text = to_ascii(standards_abs.read_text(encoding="utf-8"))
+        subject_text = to_ascii(subject_abs.read_text(encoding="utf-8"))
+
     prompt = build_prompt(
         subject_rel=subject_rel,
         subject_abs=subject_abs,
@@ -401,6 +442,8 @@ def build_job(
         subject_lines=subject_lines,
         example_report=example_report,
         evidence_pack=pack,
+        standards_text=standards_text,
+        subject_text=subject_text,
     )
 
     evidence_record: dict[str, object] = {"attached": pack is not None}
@@ -415,7 +458,24 @@ def build_job(
         "prompt": prompt,
         "endpoint_preference": list(endpoints),
         "evidence_pack": evidence_record,
-        "requirements": {"params": ["cwd"]},
+        # cwd is required only so the model can open the standards and subject
+        # documents. When they are inlined there is nothing to open, and keeping
+        # the requirement would exclude every toolless transport -- which is the
+        # endpoint class the evidence pack is admitted for in the first place.
+        "requirements": {} if pack is not None else {"params": ["cwd"]},
+        # An adapter is admitted for a model-task pair AT A REQUEST
+        # CONFIGURATION, so the shipped path has to reproduce the one the F1
+        # figures were taken at -- max_tokens 60000 and reasoning_effort xhigh
+        # (2026-09-04, NInfer a140e7ae, model-default sampling). job-kit's
+        # default of 4096 is exhausted by this model's reasoning before it emits
+        # any content at all, which fails the job with finish_reason=length and
+        # no report. Sending the pack at an untested configuration would make
+        # the admission claim false, so these travel with it.
+        "options": (
+            {"max_tokens": 60000, "extras": {"reasoning_effort": "xhigh"}}
+            if pack is not None
+            else {}
+        ),
         "directory": str(repo_root),
         "workspace": {"isolate": False},
         "contract": {

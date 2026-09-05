@@ -50,6 +50,58 @@ DISABLE = "disable"
 """The emission asks the target not to load or expose the named subjects."""
 
 BYPASS = "bypass"
+
+# -- canonical guarantee subjects -------------------------------------------
+#
+# A SUBJECT names a capability of the running agent in adapter-neutral terms, so
+# a caller can require an OUTCOME ("this job must not mutate the working tree")
+# without naming the mechanism any one harness happens to use for it. Each
+# adapter says how it delivers the subject: via an ExecutionControl that denies
+# or confines it, or -- when the adapter has no such capability at all -- by
+# listing it in Capabilities.guarantees.
+#
+# Add a subject only when a caller needs it, and only with an empirical check
+# behind it: ExecutionControl.effect records what an emission ASKS for, never
+# that the target complied.
+FILESYSTEM_WRITE = "filesystem-write"
+SHELL_EXEC = "shell-exec"
+SUBAGENT_SPAWN = "subagent-spawn"
+
+# A deny floor is expressed in BackendOptions' only tool-deny vocabulary, which
+# is claude-cli's tool NAMES. Requiring an outcome from it means knowing what
+# those names denote, so the mapping lives here beside the subjects rather than
+# in any one consumer: job-kit reads it to derive what a floor requires, and the
+# opencode adapter reads it to translate the same list into permission scalars.
+# Two consumers deriving it separately is how they drift.
+_TOOL_SUBJECTS = {
+    FILESYSTEM_WRITE: frozenset(
+        {"write", "edit", "multiedit", "notebookedit", "patch", "apply_patch"}
+    ),
+    SHELL_EXEC: frozenset({"bash", "shell", "run", "execute"}),
+    SUBAGENT_SPAWN: frozenset({"task", "agent", "subagent"}),
+}
+
+
+def subjects_for_disallowed_tools(disallowed_tools):
+    """The canonical subjects a claude-shaped deny list is asking to withhold.
+
+    Names match case-insensitively, and a name carrying a claude-style argument
+    filter (``Bash(git *)``) is read by its head. An unrecognized name maps to
+    no subject: it must neither widen the ask nor silently narrow it, so a
+    caller naming only unknown tools gets an empty set and requires nothing.
+    """
+    if not disallowed_tools:
+        return frozenset()
+    names = set()
+    for token in str(disallowed_tools).replace(",", " ").split():
+        token = token.strip().lower()
+        if not token:
+            continue
+        names.add(token.split("(", 1)[0])
+    return frozenset(
+        subject for subject, aliases in _TOOL_SUBJECTS.items() if names & aliases
+    )
+
 """The emission asks the target not to require interactive approval."""
 
 # -- control provenance ----------------------------------------------------
@@ -247,12 +299,20 @@ class Capabilities:
     ``dropped_params`` names every :class:`BackendOptions` field this adapter
     does not read. It is the advertised half of the truthfulness guarantee: a
     param listed here is applied never and reported always.
+
+    ``guarantees`` names the canonical subjects this adapter denies STRUCTURALLY
+    -- because it has no such capability to begin with, so no flag, sandbox or
+    permission entry is involved and there is nothing that could be configured
+    back on. A transport that exposes no tools guarantees ``FILESYSTEM_WRITE``
+    that way. A subject delivered by an emitted flag belongs in
+    ``execution_controls`` instead, where ``emits`` keeps it falsifiable.
     """
 
     adapter: str
     params: Mapping[str, ParamCapability] = field(default_factory=dict)
     dropped_params: Tuple[str, ...] = ()
     execution_controls: Tuple[ExecutionControl, ...] = ()
+    guarantees: Tuple[str, ...] = ()
     structured_output: StructuredOutputCapability = field(
         default_factory=StructuredOutputCapability
     )
@@ -264,12 +324,29 @@ class Capabilities:
         """True when this adapter reads ``param`` at all."""
         return param in self.params
 
+    def denies(self, subject: str) -> bool:
+        """True when this adapter can guarantee ``subject`` is unavailable.
+
+        Satisfied either structurally (``guarantees``) or by an execution
+        control that denies or confines the subject. A control whose ``source``
+        is ``REQUEST`` still counts: the advertisement says the mechanism
+        EXISTS, and the caller requiring the subject is the one that must pass
+        the parameter which arms it.
+        """
+        if subject in self.guarantees:
+            return True
+        return any(
+            subject in control.subjects and control.effect in (DENY, CONFINE)
+            for control in self.execution_controls
+        )
+
     def to_json(self) -> Dict[str, Any]:
         return {
             "adapter": self.adapter,
             "params": {k: v.to_json() for k, v in self.params.items()},
             "dropped_params": list(self.dropped_params),
             "execution_controls": [c.to_json() for c in self.execution_controls],
+            "guarantees": list(self.guarantees),
             "structured_output": self.structured_output.to_json(),
             "system_prompt": self.system_prompt.to_json(),
         }
@@ -288,6 +365,10 @@ __all__ = [
     "CONFINE",
     "DISABLE",
     "BYPASS",
+    "FILESYSTEM_WRITE",
+    "SHELL_EXEC",
+    "SUBAGENT_SPAWN",
+    "subjects_for_disallowed_tools",
     "FIXED",
     "REQUEST",
     "ALWAYS",

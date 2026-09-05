@@ -48,7 +48,11 @@ from .model import (
     load_job_file,
     validate_max_parallel,
 )
+# Imported from the package .select probes, and AFTER it, so a too-old shared
+# lib raises SharedLibTooOldError with its named remediation rather than a bare
+# ImportError naming a symbol the user has never heard of.
 from .select import SelectionError, select_endpoint
+from llm_scripting_kit.completion import subjects_for_disallowed_tools
 from .store import DuplicateJobError, JobStore, StoreError, UnknownRunError
 from .workspace import WorkspaceError, WorkspaceManager, WorkspaceResolution
 
@@ -296,28 +300,41 @@ def _string_option(
     return value
 
 
-def _require_disallowed_control(job: Job) -> Job:
-    """Require the existing selection contract to honor a run deny floor."""
+def _require_floor_subjects(job: Job, run_floor: str) -> Job:
+    """Require the endpoint to guarantee the EFFECTS the deny floor names.
+
+    A deny floor states outcomes -- no filesystem write, no shell, no subagent
+    -- and every adapter family reaches them differently: claude-cli through
+    --disallowedTools, codex-cli through a read-only sandbox, opencode-cli
+    through permission scalars, and a transport by having no tools at all.
+
+    Requiring a control ID here instead ("disallowed-tools") silently restricted
+    every floored run to claude-cli, because that is the one adapter spelling it
+    that way. That is how the md-audit evidence pack shipped into a delivery
+    path no endpoint it was measured for could be routed to: the pack is
+    admitted for a local transport, and the floor admitted only Claude.
+
+    The subjects are derived FROM the floor rather than assumed, so a floor of
+    "Bash" asks for shell denial and nothing else -- and codex, which confines
+    writes but keeps a shell, is still correctly refused.
+    """
+    subjects = subjects_for_disallowed_tools(run_floor)
+    if not subjects:
+        return job
     requirements = dict(job.requirements)
-    if "controls" in requirements:
-        key = "controls"
-    elif "execution_controls" in requirements:
-        key = "execution_controls"
-    else:
-        key = "controls"
-    existing = requirements.get(key)
+    existing = requirements.get("guarantees")
     if isinstance(existing, Mapping):
-        controls = dict(existing)
-        controls["disallowed-tools"] = True
-        requirements[key] = controls
+        merged = dict(existing)
+        merged.update({subject: True for subject in sorted(subjects)})
+        requirements["guarantees"] = merged
     elif isinstance(existing, str):
-        requirements[key] = (existing, "disallowed-tools")
+        requirements["guarantees"] = tuple(sorted({existing, *subjects}))
     elif isinstance(existing, Sequence) and not isinstance(
         existing, (str, bytes, bytearray)
     ):
-        requirements[key] = tuple(existing) + ("disallowed-tools",)
+        requirements["guarantees"] = tuple(sorted({*existing, *subjects}))
     else:
-        requirements[key] = ("disallowed-tools",)
+        requirements["guarantees"] = tuple(sorted(subjects))
     return replace(job, requirements=requirements)
 
 
@@ -346,6 +363,19 @@ def _backend_options(
     effort = _string_option(job.options, "effort", None)
     max_tokens_value = job.options.get("max_tokens", 4096)
     temperature_value = job.options.get("temperature")
+    # codex-cli advertises FILESYSTEM_WRITE via its sandbox control, and that
+    # control only delivers it at read-only -- the adapter default is
+    # workspace-write. Selecting the endpoint on that guarantee and then not
+    # arming it would make the floor a fake gate, so set it here unless the job
+    # asked for a specific mode itself.
+    extras = dict(extras_value)
+    if (
+        run_floor is not None
+        and getattr(selection.backend, "name", None) == "codex-cli"
+        and "sandbox" not in extras
+    ):
+        extras["sandbox"] = "read-only"
+
     return BackendOptions(
         timeout_s=float(timeout_s),
         cwd=working_directory,
@@ -360,7 +390,7 @@ def _backend_options(
             system_prompt_mode if system_prompt_mode is not None else "replace"
         ),
         log_prefix=f"[job:{job.id}]",
-        extras=dict(extras_value),
+        extras=extras,
     )
 
 
@@ -518,7 +548,9 @@ def run_job(
         run_record.disallowed_tools if run_record is not None else None,
         _validate_disallowed_tools(disallowed_tools),
     )
-    selection_job = _require_disallowed_control(job) if run_floor is not None else job
+    selection_job = (
+        _require_floor_subjects(job, run_floor) if run_floor is not None else job
+    )
     selection = select_endpoint(
         selection_job,
         halted_endpoints=halted_endpoints,

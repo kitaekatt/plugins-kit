@@ -51,11 +51,15 @@ from .halt import (
 )
 from .adapter_capabilities import ADAPTER_CAPABILITIES, adapter_capabilities
 from .capabilities import (
+    FILESYSTEM_WRITE,
+    SHELL_EXEC,
+    SUBAGENT_SPAWN,
     Capabilities,
     ExecutionControl,
     ParamCapability,
     StructuredOutputCapability,
     SystemPromptCapability,
+    subjects_for_disallowed_tools,
 )
 from .requirements import match_capabilities
 from .results import (
@@ -103,6 +107,9 @@ __all__ = [
     "fixed_control_ids",
     "check_applied_controls",
     # capability advertisement
+    "FILESYSTEM_WRITE",
+    "SHELL_EXEC",
+    "SUBAGENT_SPAWN",
     "Capabilities",
     "ParamCapability",
     "ExecutionControl",
@@ -111,6 +118,7 @@ __all__ = [
     "ADAPTER_CAPABILITIES",
     "adapter_capabilities",
     "match_capabilities",
+    "subjects_for_disallowed_tools",
     "BackendOptions",
     "LLMBackend",
     "BackendSelection",
