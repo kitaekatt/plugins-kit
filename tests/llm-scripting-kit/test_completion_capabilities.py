@@ -272,8 +272,15 @@ def test_claude_deny_is_advertised_as_a_request_control():
     assert control.effect == DENY
     assert control.source == REQUEST
     assert control.parameter == "disallowed_tools"
-    # no subject list: the names are caller-supplied, not native identifiers
-    assert control.subjects == ()
+    # The subjects are CANONICAL, not native: the tool names in the deny list
+    # are still caller-supplied and still not enumerated here. What the control
+    # advertises is which adapter-neutral outcomes a caller can reach through
+    # it, so a floor can require an effect without naming this adapter's flag.
+    assert control.subjects == (
+        "filesystem-write",
+        "shell-exec",
+        "subagent-spawn",
+    )
 
 
 def test_claude_allow_and_deny_are_separate_channels():

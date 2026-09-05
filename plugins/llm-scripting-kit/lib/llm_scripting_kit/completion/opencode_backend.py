@@ -69,6 +69,13 @@ _FILESYSTEM_NOTICE = (
     "opencode filesystem posture is workspace-guarded: external-directory "
     "access and subagent delegation are explicitly denied; this is not an OS sandbox"
 )
+from .capabilities import (
+    FILESYSTEM_WRITE,
+    SHELL_EXEC,
+    SUBAGENT_SPAWN,
+    subjects_for_disallowed_tools,
+)
+
 _INLINE_CONFIG_ENV = "OPENCODE_CONFIG_CONTENT"
 
 
@@ -155,7 +162,7 @@ class OpencodeCliBackend:
       an execution directory only, never a confinement boundary.
     - ``log_prefix`` -> the runner's stderr tag.
     - ``max_tokens`` / ``temperature`` / ``cache_salt`` /
-      ``user_cache_prefix`` / ``allowed_tools`` / ``disallowed_tools`` /
+      ``user_cache_prefix`` / ``allowed_tools`` /
       ``system_prompt_mode`` / ``extras`` -- OpenCode's
       adapter contract exposes no corresponding completion flag. They are
       accepted for protocol compatibility and dropped, as the other CLI
@@ -213,7 +220,7 @@ class OpencodeCliBackend:
             prompt=prompt,
             effort=opts.effort,
         )
-        env = _confined_opencode_env()
+        env = _confined_opencode_env(disallowed_tools=opts.disallowed_tools)
 
         # This is deliberately a runtime notice, not just a docstring. A caller
         # must see that this is an OpenCode policy boundary, not an OS sandbox.
@@ -306,8 +313,40 @@ class OpencodeCliBackend:
         )
 
 
+_PERMISSION_KEY_FOR_SUBJECT = {
+    FILESYSTEM_WRITE: "edit",
+    SHELL_EXEC: "bash",
+    SUBAGENT_SPAWN: "task",
+}
+
+
+def denied_permissions(disallowed_tools: str | None) -> dict[str, str]:
+    """Map a neutral disallowed-tools list onto opencode permission scalars.
+
+    ``disallowed_tools`` is claude-cli's spelling and the only tool-deny
+    vocabulary BackendOptions carries, so it is what a harness-neutral caller
+    sets. opencode has no deny LIST -- it has permission scalars, and its
+    ``edit`` scalar gates write, edit and patch together -- so the list is
+    TRANSLATED here rather than forwarded. The name-to-subject half of that
+    translation is shared with every other consumer of the deny vocabulary
+    (see ``subjects_for_disallowed_tools``); only the subject-to-scalar half is
+    opencode's own.
+
+    Measured 2026-09-05 on opencode 1.18.25: with edit and bash denied the agent
+    reports its tools as read-only and creates no file, while the same prompt
+    and model without them writes one. So an explicit deny survives ``--auto``,
+    which auto-approves only what is not already denied.
+    """
+    return {
+        _PERMISSION_KEY_FOR_SUBJECT[subject]: "deny"
+        for subject in subjects_for_disallowed_tools(disallowed_tools)
+        if subject in _PERMISSION_KEY_FOR_SUBJECT
+    }
+
+
 def _confined_opencode_env(
     base_env: Mapping[str, str] | None = None,
+    disallowed_tools: str | None = None,
 ) -> dict[str, str]:
     """Return an OpenCode environment with a fail-closed workspace policy.
 
@@ -356,6 +395,10 @@ def _confined_opencode_env(
     agent_permission["external_directory"] = "deny"
     agent_permission["task"] = "deny"
 
+    for key, value in denied_permissions(disallowed_tools).items():
+        permission[key] = value
+        agent_permission[key] = value
+
     env[_INLINE_CONFIG_ENV] = json.dumps(config, separators=(",", ":"))
     return env
 
@@ -367,5 +410,6 @@ __all__ = [
     "OpencodeRunError",
     "PROMPT_SEPARATOR",
     "_confined_opencode_env",
+    "denied_permissions",
     "compose_prompt",
 ]
