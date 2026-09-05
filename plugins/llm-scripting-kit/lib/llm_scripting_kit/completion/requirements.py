@@ -9,8 +9,9 @@ endpoints has no capability vocabulary of its own to maintain.
 
 The named convenience keys describe the public advertisement shape: ``params``
 (also spelled ``required_params`` or ``honors``), ``execution_controls``
-(``controls``), ``dropped_params``, ``structured_output`` (``structured``) and
-``system_prompt`` (``system_prompt_mode``). Any other key is read as a dotted
+(``controls``), ``guarantees`` (``denies``), ``dropped_params``,
+``structured_output`` (``structured``) and ``system_prompt``
+(``system_prompt_mode``). Any other key is read as a dotted
 path over :meth:`~.capabilities.Capabilities.to_json`, so this function carries
 no endpoint or capability table of its own -- it only knows how to walk the
 advertisement's JSON shape.
@@ -117,6 +118,36 @@ def match_capabilities(
                     return False
                 if any(name not in params for name in _required_names(expected)):
                     return False
+            continue
+
+        if key in {"guarantees", "denies"}:
+            # Require an OUTCOME rather than a mechanism: the caller names a
+            # canonical subject (capabilities.FILESYSTEM_WRITE) and any adapter
+            # that can deny it matches, whether structurally or through a
+            # control it emits. This is what keeps a safety requirement
+            # harness-independent -- naming a control id instead would silently
+            # restrict the caller to the one adapter that spells it that way.
+            structural = advertised.get("guarantees", [])
+            if not isinstance(structural, Sequence) or isinstance(
+                structural, (str, bytes, bytearray)
+            ):
+                structural = []
+            controls = advertised.get("execution_controls", [])
+            if not isinstance(controls, Sequence):
+                return False
+            denied = set(structural)
+            for item in controls:
+                if not isinstance(item, Mapping):
+                    continue
+                if item.get("effect") not in {"deny", "confine"}:
+                    continue
+                subjects = item.get("subjects", ())
+                if isinstance(subjects, Sequence) and not isinstance(
+                    subjects, (str, bytes, bytearray)
+                ):
+                    denied.update(str(subject) for subject in subjects)
+            if any(name not in denied for name in _required_names(expected)):
+                return False
             continue
 
         if key in {"execution_controls", "controls"}:
