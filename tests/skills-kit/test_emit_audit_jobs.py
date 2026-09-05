@@ -485,7 +485,12 @@ class TestAdapterAttachment:
         user = job["prompt"]["user"]
         pack_at = user.index("EVIDENCE (pre-computed facts about FILE")
         schema_at = user.index("Worked example of the exact report shape")
-        subject_at = user.index("subject document:")
+        # An admitted endpoint gets the sources INLINED rather than named by
+        # path, so the block that identifies the audited document is the
+        # "SUBJECT DOCUMENT" heading. The invariant under test is unchanged: the
+        # pack sits after the document and before the response schema, which is
+        # the insertion point the adapter was measured at.
+        subject_at = user.index("SUBJECT DOCUMENT (")
         assert subject_at < pack_at < schema_at
 
     def test_recorded_sha256_and_count_match_the_attached_text(

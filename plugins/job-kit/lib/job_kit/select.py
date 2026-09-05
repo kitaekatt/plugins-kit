@@ -13,7 +13,10 @@ class SelectionError(Exception):
     """Base class for endpoint-selection errors."""
 
 
-_MIN_LLM_SCRIPTING_KIT_VERSION = "0.23.0"
+# The version the FRONTIER symbol shipped in, not the oldest symbol's: the
+# message names a version the user can act on, so it has to be one that
+# actually carries everything probed below.
+_MIN_LLM_SCRIPTING_KIT_VERSION = "0.35.0"
 
 
 class SharedLibTooOldError(SelectionError, ImportError):
@@ -44,12 +47,20 @@ import importlib as _importlib
 
 _completion = _importlib.import_module("llm_scripting_kit.completion")
 
+# subjects_for_disallowed_tools is the FRONTIER symbol: it is the newest thing
+# job-kit uses from this library, added with the effect-based deny floor, so it
+# is what decides whether a linked copy is current enough. run.py imports it to
+# turn a deny floor into the guarantee subjects it asks for; without it a floored
+# run cannot state what it requires, so this is REQUIRED rather than optional and
+# the probe below is what makes the too-old state say so by name instead of
+# surfacing a bare ImportError from run.py's own import.
 _REQUIRED_COMPLETION_SYMBOLS = (
     "BackendSelection",
     "Capabilities",
     "adapter_capabilities",
     "create_backend",
     "match_capabilities",
+    "subjects_for_disallowed_tools",
 )
 for _symbol in _REQUIRED_COMPLETION_SYMBOLS:
     if not hasattr(_completion, _symbol):

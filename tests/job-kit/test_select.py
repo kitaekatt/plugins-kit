@@ -185,5 +185,10 @@ def test_import_raises_shared_lib_too_old_when_match_capabilities_missing() -> N
     assert type(excinfo.value).__name__ == "SharedLibTooOldError"
     message = str(excinfo.value)
     assert "llm-scripting-kit" in message
-    assert "0.23.0" in message
+    # Assert the DECLARED minimum rather than a literal: the constant tracks the
+    # frontier symbol, so it moves whenever job-kit starts using a newer one, and
+    # a hardcoded version here would have to be hand-edited on every such move.
+    # What the contract actually requires is that the message name the owning
+    # plugin, a version the user can act on, and the missing symbol.
+    assert job_kit_select._MIN_LLM_SCRIPTING_KIT_VERSION in message
     assert "match_capabilities" in message
