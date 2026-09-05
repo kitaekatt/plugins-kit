@@ -134,16 +134,34 @@ the scheme `helper.py` and is reported `external` instead of being resolved
 against the repository. A citation carrying any directory component
 (`scripts/helper.py:42`) is unaffected, because the slash rules out a scheme.
 
-It is NOT fixed here, deliberately. The shipped pack is byte-identical to the
-one the 2026-09-04 figures were measured against, and correcting this changes
-what the pack says about affected references, which changes the stimulus. Fixing
-it is its own change, and it needs its own measurement to show the correction
-does not cost more than the defect.
+It is NOT fixed, and that is now a MEASURED decision rather than a deferral.
 
-The fix is already known: the deleted `v2` profile stripped the trailing line
-number first and required `://` before treating a token as external. That
-profile lost on its own measurement for unrelated reasons, so its correction
-never shipped.
+The fix is small. Stripping the trailing line number before parsing is
+sufficient on its own: the token then carries no colon, so the existing scheme
+test behaves correctly, and `mailto:` and host-with-port forms keep working. The
+deleted `v2` profile also required `://` for a scheme, which is unnecessary and
+would have broken those forms.
+
+It is also correct. On the 21-file screen, five files carry a misparsed
+citation and four produce a different pack once fixed. The changed rows move
+references such as `shop.gd:47` and `list-plans.js:58` from `external` to
+`exists` against the real file, so the unfixed pack does not merely omit those
+references -- it states something false about them.
+
+It does not pay. Two screen arms with the fix (2026-09-04, same corpus, same
+ground truth of 106 pairs, same engine and request configuration) scored recall
+0.330 and 0.321 at precision 0.921 and 0.944, for F1 0.486 and 0.479. The
+adopted configuration's two arms scored recall 0.377 and 0.311 at precision
+0.976 and 0.971, for F1 0.544 and 0.471. The fixed mean is F1 0.483 against
+0.508, and the difference between the means is smaller than the spread between
+the adopted configuration's own two arms, so the honest reading is no
+detectable effect rather than a regression. ADP, the family those references
+feed, did not move: 2 and 1 exact before, 1 and 2 after.
+
+So the pack keeps a known-false row rather than taking an unmeasurable change
+to the measured stimulus. Revisit only alongside a change that has its own
+reason to re-measure; do not fix it on correctness grounds alone, because that
+argument has now been tested and did not hold.
 
 ## Anti-patterns
 
