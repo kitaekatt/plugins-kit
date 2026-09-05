@@ -202,7 +202,7 @@
     {
       "name": "pdf-kit",
       "description": "Convert HTML files to PDFs with CSS and JavaScript fidelity via headless Chromium.",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "author": {
         "name": "Christina"
       },
