@@ -91,6 +91,16 @@ def _ascii(text: str) -> str:
     return "".join(pieces)
 
 
+def ascii_text(text: str) -> str:
+    """Public alias for the pack's ASCII escaping.
+
+    emit_audit_jobs inlines the standards and subject documents into an
+    ASCII-only job document and must escape them exactly as the pack escapes its
+    own rows, so the document and the evidence about it read alike.
+    """
+    return _ascii(text)
+
+
 def _display(text: str, limit: int = 180) -> str:
     text = re.sub(r"\s+", " ", text).strip()
     if len(text) > limit:
