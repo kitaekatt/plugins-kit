@@ -1,9 +1,11 @@
 # Adapter concept -- design record
 
-Status: DRAFT. The first adapter is under construction for the `md-audit` task.
-Observation record: this document records the adapter concept and its measured
-`md-audit` state as of 2026-09-04. It does not choose an attachment seam or
-claim that an adapter has been admitted.
+Status: ADMITTED and IMPLEMENTED for one model-task pair. The `md-audit`
+EVIDENCE PACK, in its compact form at a single call, is the standard
+configuration for the local qwen3.8-27b endpoint auditing markdown. The owner
+made that call on 2026-09-04 against the measurement in "Outcome" below, and
+the seam is settled in "Seam" below. No adapter is admitted for any other
+model or task.
 
 ## Definition
 
@@ -39,7 +41,7 @@ model-task pair is the only pair to which that adapter may be applied.
 
 ## Candidate attachment seams
 
-The candidate seams are intentionally unresolved:
+The candidates considered were (the choice is recorded under "Seam" below):
 
 1. `awesome-kit` `orchestrate`, at brief-authoring time, keyed by the routed
    model. This can shape the brief before dispatch, but its ownership and timing
@@ -52,8 +54,7 @@ The candidate seams are intentionally unresolved:
    This keeps task knowledge near the task, but may make model-specific shaping
    less reusable.
 
-The first built adapter and its measurement decide among these seams. Until
-then, none is the design's selected owner.
+The seam these were decided in favour of is recorded under "Seam" below.
 
 ## Adapter artifact contract
 
@@ -124,6 +125,26 @@ violation is not a finding."
 
 Each audit row records the pack's sha256 and size so a result is reproducible.
 
+### Known defect carried from the prototype
+
+`_resolve_path` in `evidence_pack.py` parses a reference with `urlsplit` BEFORE
+stripping a trailing `:<line>` citation. A scheme may legally contain dots, so a
+bare filename with a line number -- `helper.py:1`, `notes.txt:9` -- parses as
+the scheme `helper.py` and is reported `external` instead of being resolved
+against the repository. A citation carrying any directory component
+(`scripts/helper.py:42`) is unaffected, because the slash rules out a scheme.
+
+It is NOT fixed here, deliberately. The shipped pack is byte-identical to the
+one the 2026-09-04 figures were measured against, and correcting this changes
+what the pack says about affected references, which changes the stimulus. Fixing
+it is its own change, and it needs its own measurement to show the correction
+does not cost more than the defect.
+
+The fix is already known: the deleted `v2` profile stripped the trailing line
+number first and required `://` before treating a token as external. That
+profile lost on its own measurement for unrelated reasons, so its correction
+never shipped.
+
 ## Anti-patterns
 
 - Leak adapter text into the strong model's prompt. That changes the control and
@@ -189,7 +210,8 @@ precision 0.67-0.80. Requiring two votes of four gives recall 0.37 at precision
 k requests. This has zero implementation complexity and is an adoption cost
 decision for the owner.
 
-A further seam candidate: a job specification (job-kit) that declares the
+A further seam candidate, considered and not chosen: a job specification
+(job-kit) that declares the
 files and generators a unit needs, materialized into the query by the runner
 per endpoint kind -- inlined for a transport endpoint, listed as readable for a
 harness endpoint. The completeness guarantee then lives in the job file.
@@ -198,5 +220,114 @@ The next measurements, if the loop continues, are v4c on corpus B; a harness
 check of the pack's no-tool-calls guarantee; and a per-family decomposition
 (multi-call) compared with sampling at equal request count. Then the generation
 lane (analyze plus generate claude-md) may begin, gated on accepted audit
-quality. The seam decision remains deferred. Until audit quality is accepted,
-this record remains DRAFT and the adapter is not admitted.
+quality. Admission covers only the
+measured qwen3.8-27b / md-audit pair, and the generation lane is not admitted
+by it.
+
+## Outcome
+
+The owner adopted the compact evidence pack at a SINGLE call as the standard
+configuration for this model-task pair. Recorded here so the reasoning survives
+the experiment.
+
+The deciding view was a single-number one. F1 over exact pairs, on a 21-file
+screen with 106 ground-truth pairs, alongside the token cost of producing it.
+Cost is stated in tokens rather than wall clock because two of the arms ran
+concurrently against one server, which makes their elapsed times meaningless.
+
+| Arm | Recall | Precision | F1 | Tokens | vs control |
+|---|---|---|---|---|---|
+| Bare control | 0.227 | 0.841 | 0.36 | 759k | 1.0x |
+| Compact pack, one call | 0.344 | 0.974 | 0.51 | 815k | 1.1x |
+| Compact pack, union of two samples | 0.425 | 0.978 | 0.59 | 1.63M | 2.1x |
+| Tool-using harness, no pack | 0.387 | 0.759 | 0.51 | 1.79M | 2.4x |
+| Tool-using harness plus pack | 0.382 | 0.827 | 0.52 | 1.67M | 2.2x |
+| Tool-using harness plus pack, two samples | 0.491 | 0.825 | 0.62 | 3.34M | 4.4x |
+
+The adopted row is the second. It buys 15 points of F1 over the bare control
+for 7 percent more tokens, and it is the only row whose precision stays near
+0.97. Every higher-scoring row costs at least twice the control and gives up
+15 precision points or more.
+
+Three findings behind the table are worth keeping.
+
+**Sampling beats prompt content, and it is not free.** Two arms of one condition
+agree on roughly half their true pairs, so the union of two samples is the
+largest single gain available. It was NOT built into the driver. Re-auditing is
+already possible whenever a caller wants that recall, so a k-loop would spend
+double on every audit to serve the minority of cases that want it. The default
+is one call; a second audit is the caller's decision, taken per run.
+
+**Tools are where the strong models get their lead, and the pack recovers only
+part of it.** Cloud auditors given a read-only filesystem reach recall 0.68 to
+0.81. The local model given the same tool loop reaches 0.387, and its precision
+falls to 0.759 because a tool loop invents findings the pack does not. Adding
+the pack to the tool loop raises precision to 0.825 and CUTS its tool calls
+from about 300 to 215 over 21 files, because the model stops hunting for context
+it was already given. The pack makes the tool path cheaper; it does not make it
+worth 2.2x.
+
+**One family resists the pack.** Code-directory findings fall from 11 exact in
+the tool loop to 5 with the pack present, the only family where a tool loop
+beats the pack outright. That is the standing candidate for the next pack
+version under the completeness rule above.
+
+A separate hypothesis was closed against this table: mining the strong models'
+actual tool calls and precomputing those lookups into the pack. Two variants
+were built, one carrying path contexts and topic owners and one carrying paths
+alone. The first lost on both screen arms and the second was neutral. The bound
+was visible in the mining itself, which found only 11 of 18 residual misses
+addressable by any additional lookup, and 3 already carried by the pack and unused.
+Precomputing more context does not raise single-call recall.
+
+## Seam
+
+The seam question is settled, and none of the three candidates above won it.
+
+The adapter is owned END TO END by the task skill, `md-domain`, and enforced in
+`plugins/skills-kit/skills/md-domain/scripts/emit_audit_jobs.py` -- the emitter that materialises
+an audit prompt into a job file. That script already receives the endpoint
+names and already writes an `endpoint_preference` list into every job, so the
+model axis was an input it held all along. The record's premise that the task
+skill cannot know the model was false in the shipped code.
+
+The pack builder lives beside it at `plugins/skills-kit/skills/md-domain/scripts/evidence_pack.py`
+with `build_pack(repo_root, rel_path, compact=True, max_chars=24000)`. It is the
+prototype's compact profile, ported byte-for-byte; the eight experiment profiles
+that lost or were disqualified are not shipped.
+
+Enforcement is by construction rather than by convention. `emit_audit_jobs.py`
+attaches the pack when EVERY preferred endpoint is admitted, attaches nothing
+when none is, and FAILS the emit when the list mixes the two -- job-kit resolves
+that list at run time, so a pack chosen at emit time against a mixed list is
+wrong for whichever endpoint it did not choose. Admission is per measured pair,
+which is stricter than a model-tier test: an endpoint id in that set is a claim
+that this adapter was measured for that endpoint on this task.
+
+The admitted set is CONFIGURATION, not a shipped list, and its default is empty.
+Endpoint ids differ per user and per fleet, so a fixed list would make the
+adapter dead for anyone whose endpoints are named differently and would put a
+machine-identifying name in a public repository. The set is read through
+skills-kit's existing layered config as
+`adapters: {md-audit-evidence-pack: {admitted_endpoints: [...]}}`
+(`skills_kit_lib/standards_resolve.py`); an unconfigured run admits nothing and
+therefore behaves exactly as if the adapter did not exist.
+
+The rejected alternative was a split: the task skill DECLARES the condition and
+the caller enforces it. A cross-check rejected it as a two-sided contract with
+no test that sees both sides -- nothing obliges a caller to read the
+declaration, and a caller that forgets produces a plausible report at the lower
+score with no error for anyone to notice.
+
+The wrapper line introducing the pack in the prompt is part of the measured
+stimulus. The 2026-09-04 figures were produced with that exact framing and no
+code fence, so rewording it changes the prompt the measurement was taken
+against.
+
+One dependency, worth naming because it is invisible from the emitter.
+Enforcement holds because the `workflow/*-detect.js` lanes build their
+prompts in process and hard-pin a frontier model, so no admitted endpoint ever
+reaches them. That pinning is documented in `plugins/skills-kit/skills/md-domain/references/lanes/audit-lane.md`
+under "Model pinning". The day a lane gains a configurable model, that lane
+becomes a second path to an audit prompt and this enforcement no longer covers
+every caller.

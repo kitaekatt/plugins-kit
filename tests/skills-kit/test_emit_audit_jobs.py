@@ -42,6 +42,21 @@ emit = _load(EMIT_PATH, "test_emit_audit_jobs_mod")
 checker = _load(CHECKER_PATH, "test_emit_audit_jobs_checker")
 
 
+@pytest.fixture(scope="module", autouse=True)
+def _hermetic_user_config(tmp_path_factory):
+    """Point CLAUDE_CONFIG_DIR at an empty tmp dir for every test in this file.
+
+    The emitter resolves its adapter-admitted endpoint set through skills-kit's
+    layered config, whose lowest layer is <user_dir>/skills-kit. Without this
+    the suite would read the developer's real harness config and its result
+    would depend on the machine it ran on.
+    """
+    mp = pytest.MonkeyPatch()
+    mp.setenv("CLAUDE_CONFIG_DIR", str(tmp_path_factory.mktemp("empty-config")))
+    yield
+    mp.undo()
+
+
 @pytest.fixture(scope="module")
 def document() -> dict:
     return emit.build_job_file(
@@ -304,3 +319,260 @@ class TestEmptySubjectSkipped:
         )
         emitted = {job["id"] for job in document["jobs"]}
         assert not any("empty" in job_id for job_id in emitted), emitted
+
+
+def _tiny_repo(tmp_path: Path) -> Path:
+    """A git repo holding one auditable project doc, for the adapter tests."""
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    (docs / "real.md").write_text(
+        "# Title\n\nBody text with a sentence in it.\n", encoding="utf-8"
+    )
+    return docs
+
+
+def _emit(docs: Path, repo: Path, endpoints: list[str]) -> dict:
+    return emit.build_job_file(
+        subject_dir=docs,
+        repo_root=repo,
+        standards=checker.DEFAULT_STANDARDS,
+        endpoints=endpoints,
+        max_parallel=1,
+        limit=None,
+    )
+
+
+# Placeholder endpoint ids. Nothing here names a real machine or endpoint: the
+# admitted set is configuration, so the test supplies its own ids.
+EP_A = "audit-endpoint-a"
+EP_B = "audit-endpoint-b"
+
+
+def _write_config(layer_dir: Path, filename: str, admitted: list[str]) -> None:
+    """Write one config layer admitting `admitted` for the md-audit adapter."""
+    yaml = pytest.importorskip("yaml")
+    layer_dir.mkdir(parents=True, exist_ok=True)
+    (layer_dir / filename).write_text(
+        yaml.safe_dump(
+            {"adapters": {emit.ADAPTER_ID: {"admitted_endpoints": admitted}}},
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+
+def _admit(repo: Path, admitted: list[str]) -> None:
+    """Admit `admitted` at the project layer of `repo` (the highest-durability
+    layer a test repo has, and the one build_job_file resolves against)."""
+    _write_config(repo / ".claude" / "skills-kit", "config.yaml", admitted)
+
+
+class TestAdapterAdmissionConfig:
+    """The admitted set is CONFIGURATION with an empty default, read through
+    skills-kit's layered config -- no second config file, no env var."""
+
+    def test_default_is_empty(self, tmp_path: Path) -> None:
+        assert emit.resolve_admitted_endpoints(tmp_path) == frozenset()
+
+    def test_project_layer_config_is_read(self, tmp_path: Path) -> None:
+        _admit(tmp_path, [EP_A, EP_B])
+        assert emit.resolve_admitted_endpoints(tmp_path) == frozenset({EP_A, EP_B})
+
+    def test_layers_resolve_in_documented_precedence_order(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """user config.yaml < user config.local.yaml < project config.yaml <
+        project config.local.yaml. A list replaces wholesale (deep-merge only
+        recurses into mappings), so the highest present layer wins outright."""
+        config_dir = tmp_path / "config"
+        monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config_dir))
+        user_layer = config_dir / "skills-kit"
+        project = tmp_path / "project"
+        project_layer = project / ".claude" / "skills-kit"
+
+        _write_config(user_layer, "config.yaml", ["ep-user"])
+        assert emit.resolve_admitted_endpoints(project) == frozenset({"ep-user"})
+
+        _write_config(user_layer, "config.local.yaml", ["ep-user-local"])
+        assert emit.resolve_admitted_endpoints(project) == frozenset({"ep-user-local"})
+
+        _write_config(project_layer, "config.yaml", ["ep-project"])
+        assert emit.resolve_admitted_endpoints(project) == frozenset({"ep-project"})
+
+        _write_config(project_layer, "config.local.yaml", ["ep-project-local"])
+        assert emit.resolve_admitted_endpoints(project) == frozenset(
+            {"ep-project-local"}
+        )
+
+    def test_a_malformed_admitted_list_is_loud(self, tmp_path: Path) -> None:
+        yaml = pytest.importorskip("yaml")
+        from skills_kit_lib.standards_resolve import StandardsConfigError
+
+        layer = tmp_path / ".claude" / "skills-kit"
+        layer.mkdir(parents=True)
+        (layer / "config.yaml").write_text(
+            yaml.safe_dump(
+                {"adapters": {emit.ADAPTER_ID: {"admitted_endpoints": EP_A}}},
+                sort_keys=False,
+            ),
+            encoding="utf-8",
+        )
+        with pytest.raises(StandardsConfigError):
+            emit.resolve_admitted_endpoints(tmp_path)
+
+
+class TestAdapterAdmission:
+    """adapter_applies decides against the CONFIGURED set. The evidence pack is
+    admitted only for the model-task pairs it was measured on (a locally hosted
+    27B-class endpoint auditing markdown, 2026-09-04)."""
+
+    def test_empty_set_admits_nothing_and_raises_nothing(self) -> None:
+        assert emit.adapter_applies([EP_A, "sonnet"], frozenset()) is False
+
+    def test_all_admitted_returns_true(self) -> None:
+        assert emit.adapter_applies([EP_A, EP_B], frozenset({EP_A, EP_B})) is True
+
+    def test_none_admitted_returns_false(self) -> None:
+        assert (
+            emit.adapter_applies(["sonnet", "opus", "luna"], frozenset({EP_A}))
+            is False
+        )
+
+    def test_empty_list_returns_false(self) -> None:
+        assert emit.adapter_applies([], frozenset({EP_A})) is False
+
+    def test_mixed_list_raises_and_names_the_list(self) -> None:
+        with pytest.raises(emit.MixedAdapterEndpointsError) as excinfo:
+            emit.adapter_applies([EP_A, "opus"], frozenset({EP_A}))
+        message = str(excinfo.value)
+        assert EP_A in message
+        assert "opus" in message
+
+
+class TestAdapterAttachment:
+    def test_empty_default_attaches_nothing_and_raises_nothing(
+        self, tmp_path: Path
+    ) -> None:
+        docs = _tiny_repo(tmp_path)
+        document = _emit(docs, tmp_path, [EP_A, "sonnet"])
+        assert document["jobs"]
+        for job in document["jobs"]:
+            assert job["evidence_pack"] == {"attached": False}
+            assert (
+                "EVIDENCE (pre-computed facts about FILE"
+                not in job["prompt"]["user"]
+            )
+
+    def test_all_admitted_attaches_the_pack(self, tmp_path: Path) -> None:
+        docs = _tiny_repo(tmp_path)
+        _admit(tmp_path, [EP_A])
+        document = _emit(docs, tmp_path, [EP_A])
+        assert document["jobs"]
+        for job in document["jobs"]:
+            record = job["evidence_pack"]
+            assert record["attached"] is True
+            assert len(record["sha256"]) == 64
+            assert record["char_count"] > 0
+            assert "error" not in record
+
+    def test_attached_pack_sits_before_the_response_schema(
+        self, tmp_path: Path
+    ) -> None:
+        docs = _tiny_repo(tmp_path)
+        _admit(tmp_path, [EP_A])
+        job = _emit(docs, tmp_path, [EP_A])["jobs"][0]
+        user = job["prompt"]["user"]
+        pack_at = user.index("EVIDENCE (pre-computed facts about FILE")
+        schema_at = user.index("Worked example of the exact report shape")
+        subject_at = user.index("subject document:")
+        assert subject_at < pack_at < schema_at
+
+    def test_recorded_sha256_and_count_match_the_attached_text(
+        self, tmp_path: Path
+    ) -> None:
+        import hashlib
+
+        docs = _tiny_repo(tmp_path)
+        _admit(tmp_path, [EP_A])
+        job = _emit(docs, tmp_path, [EP_A])["jobs"][0]
+        evidence = emit.load_evidence_pack_module()
+        pack, error = emit.build_evidence_pack(evidence, tmp_path, "docs/real.md")
+        assert error is None and pack is not None
+        assert job["evidence_pack"]["sha256"] == hashlib.sha256(
+            pack.encode("utf-8")
+        ).hexdigest()
+        assert job["evidence_pack"]["char_count"] == len(pack)
+
+    def test_none_admitted_does_not_attach(self, tmp_path: Path) -> None:
+        docs = _tiny_repo(tmp_path)
+        _admit(tmp_path, [EP_A])
+        document = _emit(docs, tmp_path, ["sonnet", "opus", "luna"])
+        assert document["jobs"]
+        for job in document["jobs"]:
+            assert job["evidence_pack"] == {"attached": False}
+            assert (
+                "EVIDENCE (pre-computed facts about FILE"
+                not in job["prompt"]["user"]
+            )
+
+    def test_mixed_list_fails_the_whole_emit(self, tmp_path: Path) -> None:
+        docs = _tiny_repo(tmp_path)
+        _admit(tmp_path, [EP_A])
+        with pytest.raises(emit.MixedAdapterEndpointsError):
+            _emit(docs, tmp_path, [EP_A, "sonnet"])
+
+    def test_default_endpoints_do_not_attach(self, tmp_path: Path) -> None:
+        assert (
+            emit.adapter_applies(
+                list(emit.DEFAULT_ENDPOINTS), emit.resolve_admitted_endpoints(tmp_path)
+            )
+            is False
+        )
+
+
+class TestAdapterFailureDegrades:
+    """A pack that cannot be built degrades that one document to no pack; the
+    emit still produces every job."""
+
+    def test_build_failure_degrades_without_aborting(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        docs = _tiny_repo(tmp_path)
+        (docs / "second.md").write_text("# Second\n\nMore body.\n", encoding="utf-8")
+
+        class _Exploding:
+            @staticmethod
+            def build_pack(repo_root, rel_path, **kwargs):
+                raise RuntimeError("pack builder went bang")
+
+        monkeypatch.setattr(emit, "load_evidence_pack_module", lambda: _Exploding)
+
+        _admit(tmp_path, [EP_A])
+        document = _emit(docs, tmp_path, [EP_A])
+        assert len(document["jobs"]) == 2
+        for job in document["jobs"]:
+            record = job["evidence_pack"]
+            assert record["attached"] is False
+            assert "pack builder went bang" in record["error"]
+            assert (
+                "EVIDENCE (pre-computed facts about FILE"
+                not in job["prompt"]["user"]
+            )
+
+    def test_empty_pack_text_counts_as_a_failure(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        docs = _tiny_repo(tmp_path)
+
+        class _Blank:
+            @staticmethod
+            def build_pack(repo_root, rel_path, **kwargs):
+                return "   \n"
+
+        monkeypatch.setattr(emit, "load_evidence_pack_module", lambda: _Blank)
+
+        _admit(tmp_path, [EP_B])
+        job = _emit(docs, tmp_path, [EP_B])["jobs"][0]
+        assert job["evidence_pack"]["attached"] is False
+        assert "no text" in job["evidence_pack"]["error"]

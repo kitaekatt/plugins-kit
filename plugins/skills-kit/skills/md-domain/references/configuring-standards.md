@@ -50,7 +50,7 @@ Durability rationale, one line each:
 
 ## `config.yaml` format
 
-A layer's `config.yaml` (and its `config.local.yaml` overlay) carries two
+A layer's `config.yaml` (and its `config.local.yaml` overlay) carries three
 optional top-level keys:
 
 ```yaml
@@ -58,9 +58,12 @@ rules:
   <rule-id>: off        # disable an optional rule
 thresholds:
   <threshold-name>: <positive int>   # override a threshold default
+adapters:
+  <adapter-id>:
+    <setting>: <value>  # opt an adapter in (see Adapters)
 ```
 
-Both keys are optional. An absent file is skipped silently; a present file with
+All three keys are optional. An absent file is skipped silently; a present file with
 a malformed root, an un-tunable rule id, or an unknown threshold is a loud error
 (see Troubleshooting).
 
@@ -182,6 +185,38 @@ them in `thresholds:`; an override must be a positive integer.
 
 <!-- END GENERATED: rule-catalog -->
 
+## Adapters
+
+An adapter is task-specific prompt context that is admitted only for the
+model-task pairs it was MEASURED on. Adapters are configured under `adapters:`,
+keyed by adapter id.
+
+| Adapter id | Setting | Default | What it does |
+|------------|---------|---------|--------------|
+| `md-audit-evidence-pack` | `admitted_endpoints` | empty list | Endpoint ids whose project-doc audit jobs get the pre-computed md-audit evidence pack attached to their prompt. |
+
+```yaml
+adapters:
+  md-audit-evidence-pack:
+    admitted_endpoints:
+      - local-27b-endpoint      # a placeholder; use your own endpoint ids
+```
+
+Three things to know before you add an id:
+
+- **The default is empty, and empty is safe.** With no ids admitted, no job ever
+  gets the pack -- exactly the behaviour of not having the adapter. Endpoint ids
+  differ per user and per fleet, so skills-kit ships none.
+- **An id here is a CLAIM that the adapter was measured for that endpoint on
+  markdown audit** -- not that the endpoint is small, local, or likely to
+  benefit. Attaching the pack to a model that does not need it costs tokens for
+  no gain, so do not widen the set to make a run attach a pack.
+- **A mixed preference list is an error, not a guess.** An
+  `endpoint_preference` list naming both admitted and non-admitted endpoints
+  fails the emit (`emit_audit_jobs.py`, exit 4), because the endpoint is
+  resolved at run time and either choice would be wrong. Emit one job file per
+  endpoint class instead.
+
 ## Additive standards files
 
 Beyond disabling and tuning skills-kit's own rules, a layer may ADD standards of
@@ -242,6 +277,12 @@ degrading to an empty config, and the message names the problem:
   an error listing the valid threshold names.
 - **A bad value.** A rule value other than `off`/`false`, or a threshold value
   that is not a positive integer, raises an error naming the offending value.
+- **An unknown adapter or adapter setting.** An `adapters:` id that is not in
+  the table above, a setting that adapter does not take, or an
+  `admitted_endpoints` value that is not a list of non-empty strings, raises an
+  error naming the offending id or value. It is loud rather than ignored
+  because a typo'd endpoint list admits nothing, which looks identical to the
+  empty default.
 - **Malformed config.** A `config.yaml` that is not valid YAML, or whose root is
   not a mapping, raises an error naming the path.
 - **An invalid standards file.** A `*-standards.md` whose `standards_set:` block
