@@ -946,7 +946,7 @@ def _main():
     # _run_agent_skills_link_check's docstring for why.
     asl_value = layered_manifest.get("agent_skills_link") if layered_manifest else None
     asl_action, asl_ok, asl_failures = _run_agent_skills_link_check(
-        args.project_dir, asl_value, current_os, data_dir, plugin_root,
+        args.project_dir, asl_value,
     )
     bootstrap_action_entries.extend(asl_action)
     bootstrap_ok_entries.extend(asl_ok)
@@ -2350,20 +2350,21 @@ def _link_tool_dir_to_path(result, prefix, action_entries):
         return
     from .path_check import add_path_to_shell_config, normalize_path_for_compare
     ok, msg = add_path_to_shell_config(tool_dir)
-    if not ok:
-        # Persistence failed; the live process PATH below is independent of
-        # it, so later phases this run still find the tool.
-        action_entries.append(
-            f"{prefix}{result.subject}: FAILED - could not persist PATH "
-            f"for {tool_dir} ({msg})"
-        )
+    # The live process PATH prepend happens on both outcomes, independent of
+    # persistence success, so later phases this run still find the tool.
     current_path = os.environ.get("PATH", "")
     norm = [normalize_path_for_compare(d) for d in current_path.split(os.pathsep)]
     if normalize_path_for_compare(tool_dir) not in norm:
         os.environ["PATH"] = tool_dir + os.pathsep + current_path
-    action_entries.append(
-        f"{prefix}{result.subject}: on disk but not on PATH — added {tool_dir} ({msg})"
-    )
+    if not ok:
+        action_entries.append(
+            f"{prefix}{result.subject}: FAILED - could not persist PATH "
+            f"for {tool_dir} ({msg})"
+        )
+    else:
+        action_entries.append(
+            f"{prefix}{result.subject}: on disk but not on PATH -- added {tool_dir} ({msg})"
+        )
 
 
 class _StrategyOutcome:
@@ -2592,21 +2593,44 @@ def _strategy_requires(ctx):
     return _StrategyOutcome(True, None)
 
 
+def _record_resolved(ctx, recheck, verb):
+    """Common recheck-passed tail, shared by every strategy that ends in a
+    resolved tool: record the path, link its dir onto PATH (idempotent -- a
+    no-op when already on PATH), and append the outcome line.
+
+    Before this helper only 3 of 6 success paths (resolve, apt, install
+    command) called _link_tool_dir_to_path; scoop, brew, and url_download
+    recorded a tool as installed without linking its directory, so a tool
+    that resolved via an installPath candidate stayed unreachable by bare
+    name. Centralizing the tail closes that gap everywhere at once.
+
+    ``verb`` is the detail text for the outcome line:
+      - None -> the resolve-only "ok - <message>" line (ok_entries).
+      - a string -> a tools_installed detail, e.g. "installed `pkg` via scoop".
+
+    Always terminal (_StrategyOutcome(True, None)).
+    """
+    from . import tool_paths
+    if recheck.path:
+        # data_dir=None -> the canonical bootstrap data dir; tool paths are
+        # recorded centrally regardless of which plugin's pass found them.
+        tool_paths.record(None, recheck.subject, recheck.path)
+    _link_tool_dir_to_path(recheck, ctx.prefix, ctx.action_entries)
+    if verb is None:
+        ctx.ok_entries.append(f"{ctx.prefix}{recheck.subject}: ok - {recheck.message}")
+    else:
+        ctx.tools_installed.append((recheck.subject, verb))
+    return _StrategyOutcome(True, None)
+
+
 def _strategy_resolve(ctx):
     """Precedence 1: already resolvable via installPath candidates / `check`
     cmd / which. On success record the path, link its dir onto PATH (owning
     the chain; no user "restart" instruction — philosophy P4), and finish."""
-    from . import tool_paths
     result = _tool_check(ctx)
     ctx.result = result
     if result.passed:
-        if result.path:
-            # data_dir=None -> the canonical bootstrap data dir; tool paths are
-            # recorded centrally regardless of which plugin's pass found them.
-            tool_paths.record(None, result.subject, result.path)
-        _link_tool_dir_to_path(result, ctx.prefix, ctx.action_entries)
-        ctx.ok_entries.append(f"{ctx.prefix}{result.subject}: ok - {result.message}")
-        return _StrategyOutcome(True, None)
+        return _record_resolved(ctx, result, None)
     return _StrategyOutcome(False)
 
 
@@ -2685,10 +2709,7 @@ def _strategy_scoop(ctx):
     repair_path()
     recheck = _tool_check(ctx)
     if recheck.passed:
-        if recheck.path:
-            tool_paths.record(None, recheck.subject, recheck.path)
-        ctx.tools_installed.append((ctx.name, f"installed `{pkg}` via scoop"))
-        return _StrategyOutcome(True, None)
+        return _record_resolved(ctx, recheck, f"installed `{pkg}` via scoop")
     if si.ok and si.path:
         # Resolvable on disk but not yet by bare name; record the shim path.
         tool_paths.record(None, ctx.name, si.path)
@@ -2710,7 +2731,6 @@ def _strategy_brew(ctx):
     unavailable manager. Only applies on macOS, where the canonical brew object
     is present at install.macos (ctx.brew_spec); on other hosts brew_spec is
     None and this falls through. Mirrors _strategy_scoop's shape."""
-    from . import tool_paths
     spec = ctx.brew_spec
     if not spec:
         return _StrategyOutcome(False)
@@ -2761,10 +2781,7 @@ def _strategy_brew(ctx):
     repair_path()
     recheck = _tool_check(ctx)
     if recheck.passed:
-        if recheck.path:
-            tool_paths.record(None, recheck.subject, recheck.path)
-        ctx.tools_installed.append((ctx.name, f"installed `{label}` via brew"))
-        return _StrategyOutcome(True, None)
+        return _record_resolved(ctx, recheck, f"installed `{label}` via brew")
     if bi.ok and cask:
         # CASK ONLY: brew reported success but the tool doesn't resolve by our
         # check -- a GUI cask may have no CLI binary and no `check` command, so
@@ -2820,7 +2837,6 @@ def _strategy_apt(ctx):
     apt: apt packages install real binaries/services, so the post-install
     re-check stays authoritative -- a package apt claims to have installed but
     that still does not resolve is an apt_failed failure."""
-    from . import tool_paths
     pkg = ctx.apt_pkg
     if not pkg:
         return _StrategyOutcome(False)
@@ -2858,11 +2874,7 @@ def _strategy_apt(ctx):
     repair_path()
     recheck = _tool_check(ctx)
     if recheck.passed:
-        if recheck.path:
-            tool_paths.record(None, recheck.subject, recheck.path)
-        _link_tool_dir_to_path(recheck, ctx.prefix, ctx.action_entries)
-        ctx.tools_installed.append((ctx.name, f"installed `{pkg}` via apt"))
-        return _StrategyOutcome(True, None)
+        return _record_resolved(ctx, recheck, f"installed `{pkg}` via apt")
     # Re-check failed: either the install errored, or the backend reported the
     # package present (apt install, or the dpkg already-installed guard) but the
     # tool still does not resolve (wrong check/binary name -- a manifest bug).
@@ -2882,7 +2894,6 @@ def _strategy_url_download(ctx):
     shelling out to a system package manager. See tool-resolution-redesign.md.
     On failure this logs and FALLS THROUGH to the install command (legacy
     fall-through preserved)."""
-    from . import tool_paths
     download_def = ctx.download_def
     if not (download_def and download_def.get("url") and download_def.get("sha256")):
         return _StrategyOutcome(False)
@@ -2900,10 +2911,7 @@ def _strategy_url_download(ctx):
         repair_path()
         recheck = _tool_check(ctx)
         if recheck.passed:
-            if recheck.path:
-                tool_paths.record(None, recheck.subject, recheck.path)
-            ctx.tools_installed.append((ctx.name, f"downloaded to {dl.path}"))
-            return _StrategyOutcome(True, None)
+            return _record_resolved(ctx, recheck, f"downloaded to {dl.path}")
         message = f"download completed, but re-check failed: {recheck.message}"
         ctx.action_entries.append(f"{ctx.prefix}{ctx.name}: download failed - {message}")
         return _StrategyOutcome(True, {
@@ -2928,7 +2936,6 @@ def _strategy_install_command(ctx):
 
     Always terminal: returns None on a successful re-check or the failure dict
     otherwise."""
-    from . import tool_paths
     result = ctx.result
     install_state = "no_install_cmd"
     install_output = ""
@@ -2973,12 +2980,8 @@ def _strategy_install_command(ctx):
         repair_path()
         recheck = _tool_check(ctx)
         if recheck.passed:
-            if recheck.path:
-                tool_paths.record(None, recheck.subject, recheck.path)
-            _link_tool_dir_to_path(recheck, ctx.prefix, ctx.action_entries)
             verb = "via" if ok else "already present after"
-            ctx.tools_installed.append((result.subject, f"{verb} `{result.install_cmd}`"))
-            return _StrategyOutcome(True, None)
+            return _record_resolved(ctx, recheck, f"{verb} `{result.install_cmd}`")
         # Re-check failed: distinguish "installer ran but we still can't find it"
         # from "installer itself errored".
         install_state = "installed_but_path_stale" if ok else "install_failed"
@@ -3014,7 +3017,7 @@ def _strategy_install_command(ctx):
         # difference between a report and a fabrication.
         _append_detail(
             ctx.action_entries,
-            f"{ctx.prefix}{result.subject}: could not be resolved — manual install required "
+            f"{ctx.prefix}{result.subject}: could not be resolved -- manual install required "
             f"(no unattended installer for this OS); install it and ensure it's on PATH",
             display=f"{result.subject}: manual install needed",
         )
@@ -3114,9 +3117,20 @@ def _normalize_tool_entry(tool_def, current_os):
     # 2. legacy download.scoop -> canonical install.<os>.scoop (host-resolved).
     download = tool_def.get("download", {})
     resolved_dl = _resolve_download_def(download, current_os)
-    if isinstance(resolved_dl, dict) and resolved_dl.get("scoop"):
-        # scoop precedence over any command spelled at install.<os>.
-        install[current_os] = {"scoop": resolved_dl["scoop"]}
+    existing_os_install = install.get(current_os)
+    if (isinstance(resolved_dl, dict) and resolved_dl.get("scoop")
+            and not (isinstance(existing_os_install, dict)
+                     and existing_os_install.get("skip"))):
+        # scoop precedence over any command spelled at install.<os> -- but the
+        # skip sentinel (checked above) beats everything, including a same-OS
+        # download (design-os-not-applicable.md). Merge rather than replace
+        # wholesale, so a sibling "elevated" flag on the download side (e.g.
+        # {"scoop": "bucket/pkg", "elevated": true} for an admin-gated Scoop
+        # manifest) survives the promotion.
+        scoop_val = {"scoop": resolved_dl["scoop"]}
+        if resolved_dl.get("elevated"):
+            scoop_val["elevated"] = True
+        install[current_os] = scoop_val
         # Strip scoop out of the download block so canonical form owns it and no
         # downstream code reads scoop from `download` again.
         new_download = {}
@@ -3158,6 +3172,22 @@ def _process_tool_entry(tool_def, current_os, data_dir, prefix, action_entries,
     never see `requires` entries may omit it (the strategy then builds its
     own over the user env.json layers).
     """
+    if not isinstance(tool_def, dict):
+        # A layered manifest's "tools": ["uv"] shape (a bare name, not an
+        # object) must be a per-item failure, never an exception that aborts
+        # the whole pass -- every other list section guards shape first.
+        action_entries.append(
+            f"{prefix}tool entry: FAILED - malformed entry (expected an "
+            f"object with a 'name', got {tool_def!r})"
+        )
+        return {
+            "type": "tool",
+            "name": None,
+            "message": f"malformed tool entry: {tool_def!r}",
+            "install_state": "malformed_entry",
+            "install_cmd": None,
+            "plugin": plugin_name,
+        }
     tool_def = _normalize_tool_entry(tool_def, current_os)
     ctx = _ToolEntryCtx(tool_def, current_os, prefix, action_entries,
                         ok_entries, tools_installed, plugin_name,
@@ -3180,25 +3210,40 @@ def _process_path_entries(path_entries, prefix, action_entries, ok_entries):
     """
     from .path_check import add_path_to_shell_config, check_path_entry, normalize_path_for_compare
 
+    def _prepend_live(expanded):
+        current_path = os.environ.get("PATH", "")
+        norm = [normalize_path_for_compare(d) for d in current_path.split(os.pathsep)]
+        if normalize_path_for_compare(expanded) not in norm:
+            os.environ["PATH"] = expanded + os.pathsep + current_path
+
     paths_added = []
     for path_entry in path_entries:
         expanded = os.path.expanduser(path_entry)
         result = check_path_entry(path_entry)
         if result.passed:
             ok_entries.append(f"{prefix}PATH {result.subject}: ok - {result.message}")
+            _prepend_live(expanded)
+            continue
+        # Attempt persistent remediation: add to shell RC files
+        ok, msg = add_path_to_shell_config(path_entry)
+        # Live-process PATH prepend happens regardless of the writer's
+        # outcome, so subsequent phases this run can still find things there.
+        _prepend_live(expanded)
+        if not ok:
+            action_entries.append(
+                f"{prefix}PATH {result.subject}: FAILED - {msg}"
+            )
+            continue
+        # The writer's say-so is not authoritative -- re-check exactly like
+        # every neighbouring phase (check -> fix -> authoritative re-check).
+        recheck = check_path_entry(path_entry)
+        if recheck.passed:
+            paths_added.append((result.subject, msg))
         else:
-            # Attempt persistent remediation: add to shell RC files
-            ok, msg = add_path_to_shell_config(path_entry)
-            if ok:
-                paths_added.append((result.subject, msg))
-            else:
-                action_entries.append(
-                    f"{prefix}PATH {result.subject}: FAILED - {msg}"
-                )
-        current_path = os.environ.get("PATH", "")
-        norm = [normalize_path_for_compare(d) for d in current_path.split(os.pathsep)]
-        if normalize_path_for_compare(expanded) not in norm:
-            os.environ["PATH"] = expanded + os.pathsep + current_path
+            action_entries.append(
+                f"{prefix}PATH {result.subject}: FAILED - added to shell "
+                f"config but still not resolving ({recheck.message})"
+            )
 
     if paths_added:
         action_entries.append(f"{prefix}PATH added: {_join_items(paths_added)}")
@@ -3326,7 +3371,7 @@ def _process_self_setup(self_setup, current_os, data_dir, plugin_root, action_en
     for tool_def in self_setup.get("tools", []):
         failure = _process_tool_entry(
             tool_def, current_os, data_dir, p,
-            action_entries, ok_entries, tools_installed, plugin_name="bootstrap",
+            action_entries, ok_entries, tools_installed, plugin_name=plugin_name,
         )
         if failure:
             failures.append(failure)
@@ -3437,6 +3482,44 @@ def _process_self_setup(self_setup, current_os, data_dir, plugin_root, action_en
     return failures
 
 
+def _resolve_project_subdir(project_dir, subdir, label):
+    """Resolve an optional project-relative subdir with REALPATH containment.
+
+    Shared by _process_project_venv and _process_project_npm: ``subdir``
+    becomes both the uv-sync/npm working directory and the .venv/node_modules
+    parent. An absolute subdir, or one that resolves outside project_dir, is
+    a descriptive per-item failure (fail fast; no fallback to the root).
+
+    Uses realpath rather than abspath. A lexical (abspath-only) check is
+    fooled by a symlink INSIDE the project that points somewhere else: the
+    subdir is lexically contained, passes an abspath check, and uv/npm then
+    write into the symlink's target -- outside the project entirely.
+
+    Returns (target_dir, None) on success, or (project_dir, failure_dict) on
+    a rejected subdir. ``label`` becomes the failure's "type" (e.g.
+    "project_venv" / "project_npm") so each caller's failure shape is
+    unchanged.
+    """
+    if not subdir:
+        return project_dir, None
+    root = os.path.realpath(project_dir)
+    resolved = os.path.realpath(os.path.join(root, subdir))
+    if os.path.isabs(subdir) or not (
+        resolved == root or resolved.startswith(root + os.sep)
+    ):
+        msg = (
+            f"subdir {subdir!r} must be a relative path inside the project "
+            f"(it resolves to {resolved}, outside {root})"
+        )
+        return project_dir, {
+            "type": label,
+            "message": msg,
+            "remediation_cmd": None,
+            "plugin": "config",
+        }
+    return resolved, None
+
+
 def _process_project_venv(venv_def, project_dir):
     """Process project_venv: ensure the project's own .venv is ready.
 
@@ -3462,27 +3545,21 @@ def _process_project_venv(venv_def, project_dir):
     ok_entries = []
     failures = []
 
-    target_dir = project_dir
-    subdir = venv_def.get("subdir")
-    if subdir:
-        root = os.path.abspath(project_dir)
-        resolved = os.path.abspath(os.path.join(root, subdir))
-        if os.path.isabs(subdir) or not (
-            resolved == root or resolved.startswith(root + os.sep)
-        ):
-            msg = (
-                f"subdir {subdir!r} must be a relative path inside the project "
-                f"(it resolves to {resolved}, outside {root})"
-            )
-            action_entries.append(f"project_venv: FAILED - {msg}")
-            failures.append({
-                "type": "project_venv",
-                "message": msg,
-                "remediation_cmd": None,
-                "plugin": "config",
-            })
-            return action_entries, ok_entries, failures
-        target_dir = resolved
+    target_dir, failure = _resolve_project_subdir(
+        project_dir, venv_def.get("subdir"), "project_venv")
+    if failure:
+        action_entries.append(f"project_venv: FAILED - {failure['message']}")
+        failures.append(failure)
+        return action_entries, ok_entries, failures
+
+    # A project_venv declared in ~/.claude/bootstrap.json (fleet-wide) applies
+    # to every project this runs in, Python or not. Mirror project_npm's
+    # ok-skip when package.json is absent (manifest-reference.md promises the
+    # same layering rules for both): no pyproject.toml means no Python
+    # project here, so `uv sync` never runs and no FAILED item is registered.
+    if not os.path.isfile(os.path.join(target_dir, "pyproject.toml")):
+        ok_entries.append("project_venv: ok - no pyproject.toml (not a Python project)")
+        return action_entries, ok_entries, failures
 
     # target_dir serves as both data_dir (.venv location) and plugin_root
     # (pyproject.toml location). No env-var export: the project venv belongs
@@ -3525,30 +3602,16 @@ def _process_project_npm(npm_def, project_dir):
     ok_entries = []
     failures = []
 
-    target_dir = project_dir
-    subdir = npm_def.get("subdir")
-    if subdir:
-        root = os.path.abspath(project_dir)
-        resolved = os.path.abspath(os.path.join(root, subdir))
-        if os.path.isabs(subdir) or not (
-            resolved == root or resolved.startswith(root + os.sep)
-        ):
-            msg = (
-                f"subdir {subdir!r} must be a relative path inside the project "
-                f"(it resolves to {resolved}, outside {root})"
-            )
-            action_entries.append(f"project_npm: FAILED - {msg}")
-            failures.append({
-                "type": "project_npm",
-                "message": msg,
-                # No remediation_cmd: a malformed manifest is not something a
-                # command can fix, so this routes to ASK rather than AUTO
-                # (see _auto_fixable_now).
-                "remediation_cmd": None,
-                "plugin": "config",
-            })
-            return action_entries, ok_entries, failures
-        target_dir = resolved
+    # No remediation_cmd: a malformed manifest is not something a command can
+    # fix, so this routes to ASK rather than AUTO (see _auto_fixable_now) --
+    # _resolve_project_subdir's failure dict already carries remediation_cmd:
+    # None for exactly that reason.
+    target_dir, failure = _resolve_project_subdir(
+        project_dir, npm_def.get("subdir"), "project_npm")
+    if failure:
+        action_entries.append(f"project_npm: FAILED - {failure['message']}")
+        failures.append(failure)
+        return action_entries, ok_entries, failures
 
     result, npm_entries = ensure_node_modules(
         target_dir, ignore_scripts=bool(npm_def.get("ignore_scripts", False)),
@@ -4335,8 +4398,7 @@ _AGENT_SKILLS_FAILURE_KWARGS = {
 }
 
 
-def _run_agent_skills_link_check(project_dir, agent_skills_link_value,
-                                  current_os, data_dir, plugin_root):
+def _run_agent_skills_link_check(project_dir, agent_skills_link_value):
     """agent_skills_link: link <project>/.agents/skills -> .claude/skills for
     Codex, once per pass. Deliberately NOT dispatched via _MANIFEST_PHASES
     (that table's dispatch is truthy-gated at _process_manifest, so a
@@ -4348,14 +4410,22 @@ def _run_agent_skills_link_check(project_dir, agent_skills_link_value,
     bootstrap_lib.agent_skills_check; this function owns every user-facing
     message and routes outcomes through _ManifestContext.ok/action/fail so
     the "one outcome per check" contract is structural here too.
+
+    Takes only (project_dir, agent_skills_link_value): the check needs no
+    manifest config or variables, so the _ManifestContext below is built with
+    an empty manifest ({}) whose config/variables never load -- current_os,
+    data_dir, and plugin_root were formerly-accepted params that only ever
+    filled that context and were never read back by anything in this
+    function or _resolve_agent_skills_fix.
     """
     from .agent_skills_check import (
         check_project_agent_skills_link, create_agent_skills_link,
     )
 
     ctx = _ManifestContext(
-        {}, current_os, data_dir, plugin_root,
+        {}, None, None, None,
         [], [], "bootstrap", project_dir, True,
+        marketplace="bootstrap",
     )
 
     if not project_dir:

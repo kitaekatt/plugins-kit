@@ -41,10 +41,11 @@ def _make_source(root, name="demo"):
 
 
 def _run(project_dir, value):
-    return engine._run_agent_skills_link_check(
-        project_dir, value, "test-os", "/does/not/matter/data",
-        "/does/not/matter/plugin-root",
-    )
+    # Narrowed signature (I9): current_os/data_dir/plugin_root were dead
+    # params -- they only ever filled a _ManifestContext({}, ...) whose
+    # config/variables never load, so nothing in this function ever read
+    # them back. Dropped entirely rather than passed as placeholders.
+    return engine._run_agent_skills_link_check(project_dir, value)
 
 
 @pytest.fixture(autouse=True)

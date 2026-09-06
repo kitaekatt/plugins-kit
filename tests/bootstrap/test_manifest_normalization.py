@@ -170,6 +170,29 @@ class TestNormalizeScoop:
         # the url/sha half stays in download for the url-download strategy.
         assert out["download"]["windows"] == {"url": "http://x/y", "sha256": "ab"}
 
+    def test_skip_sentinel_beats_a_same_os_legacy_scoop_download(self):
+        # design-os-not-applicable.md: skip beats everything, incl. a same-OS
+        # download. Step 2's promotion must not clobber a skip already parked
+        # at install[current_os] by step 1.
+        out = engine._normalize_tool_entry(
+            {"name": "t", "install": {"windows": "skip"},
+             "download": {"windows": {"scoop": "main/t"}}},
+            "windows",
+        )
+        assert out["install"]["windows"] == {"skip": True}
+
+    def test_elevated_flag_on_the_download_side_survives_scoop_promotion(self):
+        # manifest-reference.md: {"scoop": "bucket/pkg", "elevated": true} is a
+        # legitimate admin-gated scoop download. Promoting it into install[os]
+        # must not drop the elevated flag by extracting only "scoop".
+        out = engine._normalize_tool_entry(
+            {"name": "t", "download": {
+                "windows": {"scoop": "extras/tailscale", "elevated": True}}},
+            "windows",
+        )
+        assert out["install"]["windows"] == {
+            "scoop": "extras/tailscale", "elevated": True}
+
 
 # --------------------------------------------------------------------------- #
 # 2. Behavioral parity: legacy spelling vs canonical spelling
