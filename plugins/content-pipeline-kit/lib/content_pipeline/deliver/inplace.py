@@ -47,9 +47,17 @@ instance, it does not construct one).
 
 from __future__ import annotations
 
+import copy
+import re
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Callable, List, Optional, Sequence, Tuple
+
+# Splits marker text into whitespace RUNS (odd indices) and the tokens
+# between them (even indices), so a tag can be located, matched as a whole
+# token, and removed together with exactly one adjacent separator without
+# disturbing any other whitespace in the string.
+_WHITESPACE_RUN = re.compile(r"(\s+)")
 
 
 class Marker:
@@ -57,8 +65,12 @@ class Marker:
 
     The tag marks a value as machine-produced. Presence of the tag on a
     populated row means "the pipeline owns this row"; absence means a human
-    authored it. ``add`` / ``remove`` are idempotent and whitespace-normalizing,
-    matching the source tag mutation helpers.
+    authored it. The tag is matched as a whole whitespace-delimited token,
+    never a substring -- a tag that happens to be a substring of authored
+    text (e.g. tag ``"gen"`` inside authored text ``"regen pending"``) must
+    not classify that text as machine-owned. ``add`` is idempotent; ``remove``
+    deletes exactly the tag token plus one adjacent separator, leaving every
+    other character of the surrounding text byte-for-byte unchanged.
     """
 
     def __init__(self, tag: str) -> None:
@@ -67,24 +79,40 @@ class Marker:
         self.tag = tag
 
     def is_marked(self, marker_text: Optional[str]) -> bool:
-        """True when ``marker_text`` carries the tag."""
-        return bool(marker_text) and self.tag in marker_text
+        """True when ``marker_text`` carries the tag as a whole token."""
+        if not marker_text:
+            return False
+        return self.tag in re.split(r"\s+", marker_text.strip())
 
     def add(self, marker_text: Optional[str]) -> str:
         """Return ``marker_text`` with the tag appended (idempotent)."""
         text = marker_text or ""
-        if self.tag in text:
+        if self.is_marked(text):
             return text
         if not text or text.isspace():
             return self.tag
         return f"{text} {self.tag}"
 
     def remove(self, marker_text: Optional[str]) -> str:
-        """Return ``marker_text`` with the tag removed and whitespace collapsed."""
+        """Return ``marker_text`` with exactly the tag token removed.
+
+        Removes the tag token and one adjacent whitespace separator
+        (preferring the separator before it, matching how :meth:`add`
+        appends it), leaving the rest of the text byte-for-byte unchanged --
+        including whitespace that has nothing to do with the tag.
+        """
         text = marker_text or ""
-        if self.tag not in text:
+        if not self.is_marked(text):
             return text
-        return " ".join(text.replace(self.tag, "").split())
+        parts = _WHITESPACE_RUN.split(text)
+        idx = next(i for i, p in enumerate(parts) if p == self.tag)
+        if idx > 0 and parts[idx - 1].strip() == "":
+            del parts[idx - 1 : idx + 1]
+        elif idx + 1 < len(parts) and parts[idx + 1].strip() == "":
+            del parts[idx : idx + 2]
+        else:
+            del parts[idx]
+        return "".join(parts)
 
 
 class Ownership(str, Enum):
@@ -149,7 +177,12 @@ class ApplyResult:
 
     - ``rows`` -- the rebuilt row list (a new list; input rows are not mutated
       when the caller's ``set_*`` return new rows).
-    - ``written`` -- ids of rows whose value was (re)written from the store.
+    - ``written`` -- ids whose row actually changed this pass: the value or
+      the marker differed from what was already there. A row already holding
+      the store's current value and marker is left exactly as it was and is
+      NOT written, even though it was eligible to be (the write-only-on-diff
+      rule) -- this is what keeps a re-apply over unchanged content from
+      staging anything.
     - ``skipped_human`` -- ids of populated, unmarked rows left untouched.
     - ``skipped_policy`` -- ``(id, reason)`` for rows an ``eligible`` gate held.
     - ``skipped_no_value`` -- ids the store had no value for.
@@ -183,12 +216,17 @@ def apply_inplace(
        skip it (``skipped_no_value``), leaving it verbatim.
     3. **Human ownership** -- a populated, UNMARKED row is human-authored; skip
        it (``skipped_human``), never overwriting authored work.
-    4. **Write** -- otherwise set the value from the store and add the marker,
-       recording the id on ``written``.
+    4. **Write** -- set the value from the store and add the marker; if the
+       result differs from the row as given, record the id on ``written`` and
+       keep the rebuilt row. If it does NOT differ (the row already carries
+       the store's current value and marker), the row is left exactly as
+       given and is not recorded on ``written`` -- write-only-on-diff, so a
+       re-apply of an unchanged store touches nothing.
 
     Returns an :class:`ApplyResult` carrying the rebuilt row list and the four
     disposition buckets. Pure over the store: the same store yields the same
-    rows every call (idempotent re-apply).
+    rows every call (idempotent re-apply), and a re-apply that changes
+    nothing also WRITES nothing.
     """
     result = ApplyResult()
     for row in rows:
@@ -215,8 +253,19 @@ def apply_inplace(
             result.rows.append(row)
             continue
 
+        # Write-only-on-diff needs the row AS IT WAS before the setters run:
+        # a caller's set_value / set_marker may mutate the row in place and
+        # return the same object, in which case comparing the returned row
+        # against `row` afterwards compares an object with itself.
+        before = copy.deepcopy(row)
         mutated = spec.set_value(row, value)
         mutated = spec.set_marker(mutated)
+        if mutated == before:
+            # The store's value and the marker already match this row
+            # exactly, so writing again would be a no-op that still shows up
+            # as a staged change to a VCS backend.
+            result.rows.append(mutated)
+            continue
         result.written.append(rid)
         result.rows.append(mutated)
     return result
@@ -317,11 +366,14 @@ def deliver_changeset(
     2. **Per-item inline moves** -- for each item: ``open_for_edit(path)``,
        ``apply_item(item)`` (the caller's write), then
        ``move_into(changeset, [path])``. Collect-and-continue isolates every
-       item: an ``apply_item`` exception records the item on ``failed``; an
-       ``open_for_edit`` / ``move_into`` exception records ``(id, path,
-       reason)`` on ``failed_moves`` -- in either case the batch proceeds, so
-       one bad item never aborts the rest. Only items that both applied and
-       moved are collected on ``moved``.
+       item: an ``apply_item`` exception records the item on ``failed`` and
+       calls ``vcs.revert(path)`` best-effort (a revert failure is swallowed
+       so it never masks the apply failure -- otherwise a p4-backed item
+       stays checked out after the failed write); an ``open_for_edit`` /
+       ``move_into`` exception records ``(id, path, reason)`` on
+       ``failed_moves`` -- in either case the batch proceeds, so one bad item
+       never aborts the rest. Only items that both applied and moved are
+       collected on ``moved``.
     3. **Description rebuilt from the moved subset** -- ``describe`` is called
        with ONLY the successfully-moved ``(id, path)`` pairs, and its result is
        finalized via ``finalize_description`` -- so the description never claims
@@ -373,6 +425,10 @@ def deliver_changeset(
             apply_item(item)
         except Exception as exc:  # noqa: BLE001 -- isolate one item's write
             result.failed.append((iid, str(exc)))
+            try:
+                vcs.revert(path)
+            except Exception:  # noqa: BLE001 -- best-effort, never mask the apply failure
+                pass
             continue
         try:
             vcs.move_into(changeset, [path])

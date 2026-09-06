@@ -218,3 +218,41 @@ def test_matched_answer_carried_forward():
     incoming = {"questions": [{"id": "q1"}]}
     merged = merge_preserved_fields(existing, incoming, policy=ANSWER_POLICY)
     assert merged["questions"][0]["answer"] == "prior"
+
+
+# -- merge presence rule: falsy-but-present values must not be dropped -------
+
+def test_merge_carries_human_false_forward():
+    # A human override of False (a locked flag) must survive a regen; the
+    # default presence rule treats None/""/empty-containers as absent and
+    # everything else -- including False and 0 -- as present.
+    policy = MergePolicy(human_fields=["locked_human"])
+    existing = {"locked_human": False}
+    incoming = {"locked_human": True}
+    merged = merge_preserved_fields(existing, incoming, policy=policy)
+    assert merged["locked_human"] is False
+
+
+def test_merge_carries_carry_zero_forward():
+    policy = MergePolicy(carry_fields=["retry_count"])
+    existing = {"retry_count": 0}
+    incoming = {"retry_count": 5}
+    merged = merge_preserved_fields(existing, incoming, policy=policy)
+    assert merged["retry_count"] == 0
+
+
+def test_merge_item_carries_human_false_and_carry_zero_forward():
+    policy = MergePolicy(
+        collections={
+            "lines": CollectionMerge(
+                id_key="id",
+                human_fields=["approved_human"],
+                carry_fields=["hits"],
+            )
+        }
+    )
+    existing = {"lines": [{"id": "L1", "approved_human": False, "hits": 0}]}
+    incoming = {"lines": [{"id": "L1", "approved_human": True, "hits": 9}]}
+    merged = merge_preserved_fields(existing, incoming, policy=policy)
+    assert merged["lines"][0]["approved_human"] is False
+    assert merged["lines"][0]["hits"] == 0

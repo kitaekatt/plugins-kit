@@ -147,12 +147,21 @@ def append_candidate(cell: CandidateCell, candidate: Candidate) -> CandidateCell
     """Append ``candidate`` to ``cell``; return the new cell.
 
     Raises :class:`CandidateError` if a candidate with the same ``id`` is
-    already present -- ids are unique per cell. ``locked`` and ``extras`` are
+    already present -- ids are unique per cell -- or if ``candidate`` is
+    ``active`` and the cell already has an active entry: at-most-one-active
+    is enforced by every mutator (and on load, by :func:`cell_from_dict`), so
+    an append must not be the one path that lets a second active slip
+    through and later fail an unrelated load. ``locked`` and ``extras`` are
     preserved (a post-lock append must not silently unlock the cell).
     """
     if cell.get(candidate.id) is not None:
         raise CandidateError(
             f"cell {cell.key!r}: candidate id {candidate.id!r} already present"
+        )
+    if candidate.status == CandidateStatus.ACTIVE.value and cell.active is not None:
+        raise CandidateError(
+            f"cell {cell.key!r}: candidate id {cell.active.id!r} is already "
+            "active; at most one active entry is allowed"
         )
     return replace(cell, entries=(*cell.entries, candidate))
 
@@ -165,8 +174,10 @@ def promote_candidate(
 ) -> CandidateCell:
     """Make ``candidate_id`` the cell's active entry; return the new cell.
 
-    The previously-active entry is demoted. ``retire_previous`` selects
-    between the two source semantics (a deliberate semantic union):
+    Only the entry that WAS active is demoted; every other non-retired
+    entry (a shadow that was never promoted) stays exactly as it is.
+    ``retire_previous`` selects between the two source semantics (a
+    deliberate semantic union) for what the PRIOR ACTIVE becomes:
 
     - ``False`` (default) -- the prior active flips to ``shadow`` and stays
       eligible. This is the many-candidate loop's behavior: every produced
@@ -175,12 +186,21 @@ def promote_candidate(
       promote-and-supersede shape). Retired entries are kept for audit
       history but excluded from selection and ``produced_count``.
 
-    Entries already ``retired`` are left retired either way. Raises
+    Entries already ``retired`` are left retired either way, and
+    ``candidate_id`` itself must not already be retired -- a retired entry
+    is excluded from selection, so promoting one is refused with
+    :class:`CandidateError` (consistent with the unknown-id case). Raises
     :class:`CandidateError` if ``candidate_id`` is not in the cell.
     """
-    if cell.get(candidate_id) is None:
+    target = cell.get(candidate_id)
+    if target is None:
         raise CandidateError(
             f"cell {cell.key!r}: candidate id {candidate_id!r} not present"
+        )
+    if target.status == CandidateStatus.RETIRED.value:
+        raise CandidateError(
+            f"cell {cell.key!r}: candidate id {candidate_id!r} is retired "
+            "and cannot be promoted"
         )
     demoted = (
         CandidateStatus.RETIRED.value
@@ -189,12 +209,12 @@ def promote_candidate(
     )
     new_entries = []
     for entry in cell.entries:
-        if entry.status == CandidateStatus.RETIRED.value:
-            new_entries.append(entry)
-        elif entry.id == candidate_id:
+        if entry.id == candidate_id:
             new_entries.append(replace(entry, status=CandidateStatus.ACTIVE.value))
-        else:
+        elif entry.status == CandidateStatus.ACTIVE.value:
             new_entries.append(replace(entry, status=demoted))
+        else:
+            new_entries.append(entry)
     return replace(cell, entries=tuple(new_entries))
 
 

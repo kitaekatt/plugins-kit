@@ -50,6 +50,23 @@ def _truthy(value: object) -> bool:
     return bool(value)
 
 
+def _present_or_falsy_scalar(value: object) -> bool:
+    """Default carry-forward presence predicate for :class:`MergePolicy`.
+
+    Treats ``None``, ``""`` and an empty container (list/tuple/dict/set) as
+    absent; everything else -- including ``False`` and ``0`` -- as present.
+    Distinct from :data:`_truthy` (which the 3-way ``effective_value``
+    precedence uses): a carried-forward human override or count is a value
+    that WAS recorded, and a falsy scalar like ``False`` or ``0`` is a real
+    recorded answer, not an absence of one.
+    """
+    if value is None:
+        return False
+    if isinstance(value, (str, bytes, list, tuple, dict, set, frozenset)):
+        return len(value) > 0
+    return True
+
+
 def effective_value(
     sourced: object = None,
     machine: object = None,
@@ -124,6 +141,9 @@ class CollectionMerge:
     - ``keep_orphans_when`` -- retain an existing item that has no match in
       the new collection when any of these fields is present on it (e.g. a
       question that already carries a human answer).
+    - ``present`` -- keyword-only presence predicate gating ``human_fields``
+      / ``carry_fields`` / ``conditional_fields``, same rule and same default
+      as :attr:`MergePolicy.present`.
     """
 
     id_key: str
@@ -132,6 +152,7 @@ class CollectionMerge:
     conditional_fields: Sequence[str] = ()
     unchanged: Optional[Callable[[Mapping, Mapping], bool]] = None
     keep_orphans_when: Sequence[str] = ()
+    present: Present = field(default=_present_or_falsy_scalar, kw_only=True)
 
 
 @dataclass(frozen=True)
@@ -151,6 +172,12 @@ class MergePolicy:
       the driving inputs are unchanged).
     - ``unchanged`` -- record-level predicate gating ``conditional_fields``.
     - ``collections`` -- per keyed sub-collection merge rules.
+    - ``present`` -- keyword-only presence predicate deciding whether a slice
+      counts as "recorded" and should carry forward. Defaults to
+      :func:`_present_or_falsy_scalar`: ``None``, ``""`` and an empty
+      container are absent; everything else -- including ``False`` and ``0``
+      -- is present, so a human override of ``False`` or a carried count of
+      ``0`` is never silently dropped.
 
     ``human_fields`` and ``carry_fields`` behave identically (carry-when-
     present); they are kept distinct so the policy documents intent -- one is
@@ -163,22 +190,56 @@ class MergePolicy:
     conditional_fields: Sequence[str] = ()
     unchanged: Optional[Callable[[Mapping, Mapping], bool]] = None
     collections: Mapping[str, CollectionMerge] = field(default_factory=dict)
+    present: Present = field(default=_present_or_falsy_scalar, kw_only=True)
 
 
-def _carry_present(source: Mapping, target: MutableMapping, keys: Sequence[str]) -> None:
-    """Copy each present ``keys`` value from ``source`` onto ``target``."""
+def _carry_present(
+    source: Mapping,
+    target: MutableMapping,
+    keys: Sequence[str],
+    present: Present = _present_or_falsy_scalar,
+) -> None:
+    """Copy each ``present``-per-``present`` ``keys`` value onto ``target``."""
     for key in keys:
         value = source.get(key)
-        if value:
+        if present(value):
             target[key] = value
+
+
+def _apply_carry_rules(
+    old: Mapping,
+    new: MutableMapping,
+    *,
+    human: Sequence[str],
+    carry: Sequence[str],
+    conditional: Sequence[str],
+    unchanged: Optional[Callable[[Mapping, Mapping], bool]],
+    present: Present,
+) -> None:
+    """Copy human / carry / conditional fields from ``old`` onto ``new``.
+
+    Shared by the record-level merge (:func:`merge_preserved_fields`) and the
+    item-level merge (:func:`_merge_item`) so the same precedence -- human and
+    carry copy unconditionally-when-present, conditional copies only on
+    ``unchanged`` -- is written once.
+    """
+    _carry_present(old, new, human, present)
+    _carry_present(old, new, carry, present)
+    if conditional and (unchanged is None or unchanged(old, new)):
+        _carry_present(old, new, conditional, present)
 
 
 def _merge_item(old: Mapping, new: MutableMapping, spec: CollectionMerge) -> None:
     """Apply one collection's preservation rules to a matched item pair."""
-    _carry_present(old, new, spec.human_fields)
-    _carry_present(old, new, spec.carry_fields)
-    if spec.conditional_fields and (spec.unchanged is None or spec.unchanged(old, new)):
-        _carry_present(old, new, spec.conditional_fields)
+    _apply_carry_rules(
+        old,
+        new,
+        human=spec.human_fields,
+        carry=spec.carry_fields,
+        conditional=spec.conditional_fields,
+        unchanged=spec.unchanged,
+        present=spec.present,
+    )
 
 
 def _merge_collection(
@@ -242,12 +303,15 @@ def merge_preserved_fields(
     """
     if existing is None:
         return incoming
-    _carry_present(existing, incoming, policy.human_fields)
-    _carry_present(existing, incoming, policy.carry_fields)
-    if policy.conditional_fields and (
-        policy.unchanged is None or policy.unchanged(existing, incoming)
-    ):
-        _carry_present(existing, incoming, policy.conditional_fields)
+    _apply_carry_rules(
+        existing,
+        incoming,
+        human=policy.human_fields,
+        carry=policy.carry_fields,
+        conditional=policy.conditional_fields,
+        unchanged=policy.unchanged,
+        present=policy.present,
+    )
     for coll_key, spec in policy.collections.items():
         incoming[coll_key] = _merge_collection(
             existing.get(coll_key) or (), incoming.get(coll_key) or (), spec

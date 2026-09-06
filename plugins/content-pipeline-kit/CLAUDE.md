@@ -86,10 +86,8 @@ backend, so a changed environment variable can move output quality with no
 local signal.
 
 A supplied `mock` wins unconditionally in `route()`, checked before
-`active_backend_name()` is even read -- a test never has to call
-`set_active_backend("mock")` first to keep a routed call off a live transport.
-(This was not always true: `route()` used to consult the active name first and
-only honor a supplied instance for the name already active, so
-`route(mock=FakeBackend())` with `CONTENT_PIPELINE_LLM_BACKEND` unset silently
-reached a live `OpenRouterBackend`. Fixed; see
-`tests/content-pipeline-kit/test_llm_backends.py::test_routing_injected_mock_wins_without_active_backend_set`.)
+`active_backend_name()` is even read: `route(mock=FakeBackend())` always
+returns the supplied instance, regardless of `CONTENT_PIPELINE_LLM_BACKEND`
+or which backend name is active. A test never has to call
+`set_active_backend("mock")` first to keep a routed call off a live
+transport.

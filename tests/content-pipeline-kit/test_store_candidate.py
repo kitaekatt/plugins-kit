@@ -69,6 +69,16 @@ def test_append_preserves_locked():
     assert len(new.entries) == 2
 
 
+def test_append_rejects_second_active():
+    # CandidateCell's at-most-one-active invariant is enforced by the
+    # mutators (and on load, per test_cell_from_dict_rejects_two_active); a
+    # second active must be refused at append time too, not accepted and
+    # later fail an unrelated load.
+    cell = _cell(entries=[Candidate(id="c0", value="a", status="active")])
+    with pytest.raises(CandidateError):
+        append_candidate(cell, Candidate(id="c1", value="b", status="active"))
+
+
 # -- promote ------------------------------------------------------------------
 
 def test_promote_flips_prior_active_to_shadow():
@@ -82,13 +92,27 @@ def test_promote_flips_prior_active_to_shadow():
 
 
 def test_promote_can_retire_prior_active():
+    # Only the entry that WAS active flips to retired; a never-active shadow
+    # stays shadow (a shadow reading must not silently drop out of
+    # produced_count when the active is promoted-with-retire).
     cell = _cell(entries=[
         Candidate(id="c0", value="a", status="active"),
         Candidate(id="c1", value="b", status="shadow"),
+        Candidate(id="c2", value="c", status="shadow"),
     ])
     new = promote_candidate(cell, "c1", retire_previous=True)
     assert new.get("c1").status == "active"
     assert new.get("c0").status == "retired"
+    assert new.get("c2").status == "shadow"
+
+
+def test_promote_retired_id_raises():
+    cell = _cell(entries=[
+        Candidate(id="c0", value="a", status="active"),
+        Candidate(id="c1", value="b", status="retired"),
+    ])
+    with pytest.raises(CandidateError):
+        promote_candidate(cell, "c1")
 
 
 def test_promote_leaves_retired_alone():

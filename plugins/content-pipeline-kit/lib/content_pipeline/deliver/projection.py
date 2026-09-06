@@ -37,6 +37,12 @@ class ProjectionResult:
     - ``written`` -- True when the artifact was (re)written.
     - ``rolled_back`` -- True when reload validation failed and the ``.bak``
       was restored (``written`` is then False).
+
+    On a failed write, :func:`apply_projection` re-raises the underlying
+    exception before returning, so the ``ProjectionResult`` for that failed
+    attempt is not the function's return value -- it is attached to the
+    raised exception as ``exc.result``, which is how a caller observes
+    ``rolled_back`` (or a no-backup removal, see :func:`apply_projection`).
     """
 
     path: Path
@@ -64,8 +70,14 @@ def apply_projection(
     2. **Write** -- ``serialize(path, content)`` produces the new artifact.
     3. **Reload-validate** -- when ``load`` is given, reload the artifact (and,
        when ``validate`` is given, assert ``validate(reloaded)``). On any
-       failure the ``.bak`` is restored over the artifact and the exception is
-       re-raised as-is, so a corrupt write never survives.
+       failure: when a ``.bak`` was made, it is restored over the artifact
+       (``result.rolled_back = True``); when there was no prior artifact (a
+       first write), the corrupt new artifact is removed instead, so a bad
+       write never leaves anything in place either way. The exception is
+       re-raised as-is, with this attempt's :class:`ProjectionResult`
+       attached to it as ``exc.result`` -- the function never returns on this
+       path, so that is the only way a caller observes ``rolled_back`` (or
+       the no-backup removal).
 
     Never overwrites the ``.bak`` content-blind: a first write (no prior
     artifact) creates no backup. Returns a :class:`ProjectionResult`.
@@ -85,11 +97,16 @@ def apply_projection(
                 raise ValueError(
                     f"projection reload validation failed for {path.name}"
                 )
-    except Exception:
-        # Restore the previous artifact from the backup, if we made one.
+    except Exception as exc:
         if backup is not None and backup.exists():
+            # Restore the previous artifact from the backup.
             os.replace(backup, path)
             result.rolled_back = True
+        elif path.exists():
+            # No prior artifact existed (a first write): the corrupt new
+            # artifact must not be left in place either.
+            path.unlink()
+        exc.result = result  # noqa: B010 -- the only way to expose this result
         raise
     result.written = True
     return result
