@@ -15,9 +15,9 @@
     "universal": [],
     "yaml_contract": [
       {
-        "row": "yaml: claude_md contract block",
-        "verdict": "fail",
-        "note": "no fenced yaml block with a claude_md root key found",
+        "row": "yaml: claude_md contract block (n/a -- code-directory)",
+        "verdict": "n/a",
+        "note": "code-directory review-notes file; carries no claude_md: block by design and is not schema-validated (standards 6.2)",
         "rule": "yaml-contract"
       }
     ],
