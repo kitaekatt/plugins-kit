@@ -1,4 +1,4 @@
-// md-domain audit_claude_md lane — DETECT workflow (before-Q&A phase).
+// md-domain audit_claude_md lane -- DETECT workflow (before-Q&A phase).
 //
 // Fan-out detection + classification, one lane per target CLAUDE.md file. Each
 // lane reads the file (and its parent, for child role), loads the SINGLE
@@ -9,7 +9,7 @@
 // Workflow tool re-creates per-lane cache beyond a fixed harness shell), so the
 // lane loads exactly ONE criteria doc -- the upstream content-allocation
 // framework is the derivation, not the operative rules, and is intentionally not
-// read here. Pure detection — NO file is modified here (the skill's
+// read here. Pure detection -- NO file is modified here (the skill's
 // `audit_then_self_remediate` anti-pattern keeps detection and remediation in
 // separate phases). Returns structured per-file findings for the main loop to
 // render and dispatch.
@@ -124,7 +124,13 @@ const FILE_FINDINGS_SCHEMA = {
     },
     verdict: { type: 'string', enum: ['COMPLIANT', 'NON-COMPLIANT', 'NOT-AUDITED'], description: 'NOT-AUDITED = the criteria were never applied because the file is not a CLAUDE.md / CLAUDE.local.md (the artifact-shape decline). It is NOT a passing verdict and must never be reported as one.' },
   },
-  required: ['path', 'role', 'lines', 'approx_tokens', 'has_schema_block', 'parent_available', 'findings', 'verdict'],
+  // has_schema_block and parent_available are declared but intentionally NOT
+  // required: the prompt never instructs the model how to derive either one,
+  // and no consumer reads them (grepped plugins/ and tests/ before dropping --
+  // only golden_corpus fixture JSON carries recorded values, which stay valid
+  // once the field is merely optional). Forcing an unexplained boolean makes
+  // the model fabricate a value with no instruction to ground it.
+  required: ['path', 'role', 'lines', 'approx_tokens', 'findings', 'verdict'],
 }
 
 // args may arrive as an object or as a JSON string depending on how the
@@ -140,6 +146,16 @@ const refs = input.refs || {}
 const density = input.density === true
 const review = input.review === true
 
+// Same check as discover_claude_md.py's HAS_SCHEMA_BLOCK -- a declared
+// claude_md: contract block forces classic regardless of what the caller
+// classified. f.dimension is a CALLER-SUPPLIED HINT, not a fact: three
+// independent implementations of this decision (this lane trusting
+// f.dimension unvalidated, discover_claude_md.classify_dimension, and
+// evidence_pack's own now-retired regex) used to disagree, and a stale or
+// hand-set f.dimension could reach this lane with no local check at all. See
+// md-domain/CLAUDE.md for the observed defect this closes.
+const CLAUDE_MD_CONTRACT_BLOCK_RE = /^\s*claude_md:\s*$/m
+
 function lanePrompt(f) {
   // The decline contract (audit-lane.md step 2a), generalized from PD-1. The
   // decline instruction must be reachable BOTH when the caller classified the
@@ -151,11 +167,11 @@ function lanePrompt(f) {
   const routingClause = f.kind && f.kind !== 'claude-md'
     ? `NOTE: the caller classified this target as \`${f.kind}\`, NOT a CLAUDE.md. ${declineInstruction}`
     : f.kind === 'claude-md'
-      ? `This is a genuine CLAUDE.md — apply all the criteria below.`
+      ? `This is a genuine CLAUDE.md -- apply all the criteria below.`
       : `No \`kind\` signal was provided (typical for a review-mode subject-lens call, where the caller does not classify). Run the artifact-shape test YOURSELF FIRST: this lane audits files whose BASENAME is \`CLAUDE.md\` or \`CLAUDE.local.md\`. A \`SKILL.md\`, a \`references/*.md\` under a skill, or any other standalone document is NOT one -- if the basename is neither: ${declineInstruction} Otherwise treat it as a genuine CLAUDE.md and apply all the criteria below.`
 
   const densityClause = density
-    ? `The OPT-IN density lens is requested. After the checks above, ALSO read the density criteria at ${refs.densityCriteria} and run the DD-1..DD-4 lens. Overriding rule: density != deletion — every finding must route the tokens somewhere (tighten in place / extract to a named reference / merge a duplicate); if you cannot name the destination, do not raise the finding. DD-1 density_in_place (over-worded but correctly-placed section -> taxonomy L_verbose_in_place, tighten IN PLACE, honor carve-outs for teaching examples / load-bearing nuance / labeled safety rails); DD-2 extract_to_reference (self-contained on-demand block taxing every reader -> taxonomy M_extract_to_reference, move to a reference + leave a one-line pointer; distinct from A wrong-scope and finer than C whole-file split); DD-3 intra_file_redundancy (same fact repeated within THIS file -> taxonomy N_intra_file_redundancy; NOT B, which is across the role chain); DD-4 value_earns_tokens (classic-file generalization of the CD-5 value filter -> taxonomy O_low_value_verbose; do NOT run on a code-directory file, where CD-5/J already owns value). Emit ALL density findings under group "Density", severity JUDGMENT, disposition IMPROVE — the density lens is the opt-in improvement lens (trims of true content passing the one-line test / structural moves), it NEVER produces FAIL and never changes the verdict. Each remediation names the destination (tighten | extract->ref | merge) and an approximate token-savings figure.`
+    ? `The OPT-IN density lens is requested. After the checks above, ALSO read the density criteria at ${refs.densityCriteria} and run the DD-1..DD-4 lens. Overriding rule: density != deletion -- every finding must route the tokens somewhere (tighten in place / extract to a named reference / merge a duplicate); if you cannot name the destination, do not raise the finding. DD-1 density_in_place (over-worded but correctly-placed section -> taxonomy L_verbose_in_place, tighten IN PLACE, honor carve-outs for teaching examples / load-bearing nuance / labeled safety rails); DD-2 extract_to_reference (self-contained on-demand block taxing every reader -> taxonomy M_extract_to_reference, move to a reference + leave a one-line pointer; distinct from A wrong-scope and finer than C whole-file split); DD-3 intra_file_redundancy (same fact repeated within THIS file -> taxonomy N_intra_file_redundancy; NOT B, which is across the role chain); DD-4 value_earns_tokens (classic-file generalization of the CD-5 value filter -> taxonomy O_low_value_verbose; do NOT run on a code-directory file, where CD-5/J already owns value). Emit ALL density findings under group "Density", severity JUDGMENT, disposition IMPROVE -- the density lens is the opt-in improvement lens (trims of true content passing the one-line test / structural moves), it NEVER produces FAIL and never changes the verdict. Each remediation names the destination (tighten | extract->ref | merge) and an approximate token-savings figure.`
     : `The density lens was not requested; do NOT load or apply the density criteria, and emit no Density-group findings.`
 
   const reviewClause = !review
@@ -199,9 +215,23 @@ function lanePrompt(f) {
     ? `DISABLED CRITERIA. The run configuration switched these optional criterion/rule ids OFF: ${disabledCriteria.map((d) => `"${d}"`).join(', ')}. SUPPRESS any finding whose criterion id or rule id matches one in that list -- do not emit it and do not count it toward the verdict. That list only ever names OPTIONAL ids; architectural (schema/contract) and integrity (frontmatter, reachability, convention) checks are NEVER in it, so never suppress one of those on account of this list.`
     : `No criteria were disabled for this run; apply every criterion normally.`
 
-  const codeDirClause = f.dimension === 'code-directory'
-    ? `This file is flagged \`code-directory\` (it is per-directory review notes for code/YAML/CSV). After the classic checks, ALSO read the insight-validation criteria at ${refs.codeDirFilter} and run the CD-* dimension on it. The order is fixed: (a) identify the file's shape(s) A/B/C/D; (b) for EVERY concrete anchor a claim makes, classify its modality FIRST (requires-present / requires-absent / external-unverifiable / template-or-env / vendored-don't-read / generated-or-unsynced / non-anchor) — only \`requires-present\` is eligible for FAIL, and \`requires-absent\` is scored INVERTED (presence of the asserted-absent thing is the FAIL); (c) apply CD-2 fidelity_anchor_resolves (FAIL=H stale-anchor / H2 inverted-absence), CD-3 line-drift (I2, silent if the author gave a recovery hint), CD-4 claim_holds (I; counted magnitudes never FAIL), CD-5 value filter honoring every carve-out (J), CD-6 silent_failure_preserved (INFO). Assign each a disposition in step 8, not here (H re-points to a found mechanism -> FIX, or SERIOUS when it guards an invariant with no surviving mechanism; H2 -> SERIOUS, the invariant is violated; I2 -> FIX; I claim-drift verified from the code reading -> FIX; J default/bare-inventory/restatement -> FIX, true content passing the one-line test -> IMPROVE, validator-artifact/historical-record -> SILENT). Resolve symbol anchors repo-wide and leading-slash paths against repo root. Emit these under group "CodeDir". Validate existing claims only — do NOT crawl the directory for new gotchas (non-idempotent). NEVER FAIL an external/template/vendored/generated/non-anchor anchor.`
-    : `This file is flagged \`classic\` — run the classic CCP/CRP/ADP/Hygiene/Schema criteria only; do NOT load or apply the code-directory insight filter.`
+  // f.dimension is a HINT from the caller, never a fact -- see the
+  // CLAUDE_MD_CONTRACT_BLOCK_RE comment above. When the caller already
+  // supplied the file body (f.body), the override is resolved here,
+  // deterministically, with the same regex discover_claude_md.py uses. Most
+  // real dispatches do NOT pre-read the file (the agent reads it in step 1
+  // below), so dimensionCheckClause carries the same check as a runtime
+  // instruction that fires regardless of whether f.body was supplied.
+  const dimensionHint = f.dimension === 'code-directory' ? 'code-directory' : 'classic'
+  const bodyOverridesToClassic =
+    typeof f.body === 'string' && CLAUDE_MD_CONTRACT_BLOCK_RE.test(f.body)
+  const dimension = bodyOverridesToClassic ? 'classic' : dimensionHint
+
+  const dimensionCheckClause = `DIMENSION CHECK -- do this FIRST, using the file body you just read in step 1, before applying either branch below. The \`Dimension:\` line above is the CALLER'S HINT (\`${dimension}\`), not a verified fact. If the file body contains a line matching \`claude_md:\` at the start of a line (a schema contract block), the file's ACTUAL dimension is \`classic\` REGARDLESS of the hint -- even when the hint says \`code-directory\`. When the hint and the actual dimension disagree, emit ONE extra finding: group "Hygiene", severity INFO, taxonomy "none", bucket "NONE", message "dimension override: caller said code-directory, actual dimension is classic (claude_md: contract block present)" -- this is the caller's only signal that the hint was stale. Otherwise the hint stands and no override finding is emitted.`
+
+  const codeDirClause = dimension === 'code-directory'
+    ? `${dimensionCheckClause} Assuming the hint stands: this file is flagged \`code-directory\` (it is per-directory review notes for code/YAML/CSV). After the classic checks, ALSO read the insight-validation criteria at ${refs.codeDirFilter} and run the CD-* dimension on it. The order is fixed: (a) identify the file's shape(s) A/B/C/D; (b) for EVERY concrete anchor a claim makes, classify its modality FIRST (requires-present / requires-absent / external-unverifiable / template-or-env / vendored-don't-read / generated-or-unsynced / non-anchor) -- only \`requires-present\` is eligible for FAIL, and \`requires-absent\` is scored INVERTED (presence of the asserted-absent thing is the FAIL); (c) apply CD-2 fidelity_anchor_resolves (FAIL=H stale-anchor / H2 inverted-absence), CD-3 line-drift (I2, silent if the author gave a recovery hint), CD-4 claim_holds (I; counted magnitudes never FAIL), CD-5 value filter honoring every carve-out (J), CD-6 silent_failure_preserved (INFO). Assign each a disposition in step 8, not here (H re-points to a found mechanism -> FIX, or SERIOUS when it guards an invariant with no surviving mechanism; H2 -> SERIOUS, the invariant is violated; I2 -> FIX; I claim-drift verified from the code reading -> FIX; J default/bare-inventory/restatement -> FIX, true content passing the one-line test -> IMPROVE, validator-artifact/historical-record -> SILENT). Resolve symbol anchors repo-wide and leading-slash paths against repo root. Emit these under group "CodeDir". Validate existing claims only -- do NOT crawl the directory for new gotchas (non-idempotent). NEVER FAIL an external/template/vendored/generated/non-anchor anchor. If the DIMENSION CHECK above overrode this to \`classic\`, skip this whole paragraph and run ONLY the classic checks.`
+    : `${dimensionCheckClause} This file is flagged \`classic\` -- run the classic CCP/CRP/ADP/Hygiene/Schema criteria only; do NOT load or apply the code-directory insight filter.`
 
   // COUNT CLAIMS. P_stale_factual_claim previously appeared only in the taxonomy
   // enum and the step-8 mapping line -- nothing ever TOLD a lane to go looking for
@@ -232,16 +262,16 @@ function lanePrompt(f) {
     ? `If the file body contains a \`claude_md:\` YAML contract block, run the mechanical schema validator via Bash (it is a package module, so cd into the plugin root first):\n    (cd "${refs.pluginRoot}" && "${refs.venvPython}" -m skills_kit_lib.audit "${f.path}" --json --config)\n(--config makes audit.py drop disabled mechanical rows and overlay the resolved thresholds; the disabled ids also arrive as args.disabledCriteria, so honor both.) and merge its results as Schema-group findings (validation failure on a non-optional field = FAIL, taxonomy E). If the validator is unavailable or errors, emit one Schema finding with severity JUDGMENT and message "schema validator unavailable" and continue. If there is no \`claude_md:\` block, skip the Schema group entirely (do NOT fail a file for not declaring a contract).`
     : `Schema validator path was not provided; if the file has a \`claude_md:\` block, emit one Schema finding with severity JUDGMENT noting the validator was unavailable.`
 
-  return `You are ONE lane of a CLAUDE.md audit. Audit exactly one file and return structured findings. This is DETECTION ONLY — do not modify any file.
+  return `You are ONE lane of a CLAUDE.md audit. Audit exactly one file and return structured findings. This is DETECTION ONLY -- do not modify any file.
 
 Target:    ${f.path}
 Role:      ${f.role}
-Dimension: ${f.dimension || 'classic'}
+Dimension: ${dimension}
 
 ${routingClause}
 
 Steps:
-1. Read the target file. Count its lines and estimate tokens (~chars/4).
+1. Read the target file. Count its lines (report as \`lines\`) and estimate tokens, ~chars/4 (report as \`approx_tokens\`).
 2. Read the audit criteria and role-to-criteria map at ${refs.criteria}. This file is self-contained: every testable rule is stated together with the CCP / CRP / ADP principle it derives from. Do NOT load any other framework document -- everything needed to classify is in this one file. (Principle recap so you can apply them without re-derivation: CCP = content that changes for the same reason belongs together; a rule duplicated across scopes is a FAIL. CRP = a fact lives in the smallest scope whose readers all need it. ADP = cross-file references must resolve and run downward in load order; a broken or stale reference is a FAIL.)
 3. ${parentClause}
 3.5. ${ancestorConventionsClause}
@@ -283,7 +313,7 @@ Steps:
    PASS / INFO / JUDGMENT findings that need no remediation get taxonomy "none" and bucket "NONE".
    For each FIX/SERIOUS/IMPROVE/SPECIAL finding write a concrete \`remediation\` (what edit you propose, with line refs); FIX writes the edit it will apply, SERIOUS writes the one-line summary for the top-of-report block, IMPROVE writes the single one-line pitch.
 8.5. ATTRIBUTABILITY. ${reviewClause}
-9. Verdict: NOT-AUDITED if the artifact-shape decline fired (the target is not a CLAUDE.md / CLAUDE.local.md, so the criteria were never applied) — checked FIRST and overriding everything else, in BOTH modes; never COMPLIANT or DIFF-CLEAN, which would assert a clean file nobody read. Otherwise NON-COMPLIANT if ANY finding has severity FAIL; otherwise COMPLIANT. INFO/JUDGMENT never gate. (A CodeDir CD-2 H/H2 FAIL gates exactly like a classic FAIL. Density findings are JUDGMENT only and never affect the verdict.) Disposition is orthogonal to the verdict -- a FIX still lands in the remediation CL, a SERIOUS still gates via its FAIL severity if it carries one.
+9. Verdict: NOT-AUDITED if the artifact-shape decline fired (the target is not a CLAUDE.md / CLAUDE.local.md, so the criteria were never applied) -- checked FIRST and overriding everything else, in BOTH modes; never COMPLIANT or DIFF-CLEAN, which would assert a clean file nobody read. Otherwise NON-COMPLIANT if ANY finding has severity FAIL; otherwise COMPLIANT. INFO/JUDGMENT never gate. (A CodeDir CD-2 H/H2 FAIL gates exactly like a classic FAIL. Density findings are JUDGMENT only and never affect the verdict.) Disposition is orthogonal to the verdict -- a FIX still lands in the remediation CL, a SERIOUS still gates via its FAIL severity if it carries one.
 
 Idempotency matters: apply the fixed criteria and taxonomy deterministically. Do not invent findings; report only what the criteria actually surface. Return the structured object.`
 }
@@ -291,14 +321,26 @@ Idempotency matters: apply the fixed criteria and taxonomy deterministically. Do
 phase('Audit')
 const perFile = await parallel(input.files.map((f) => () =>
   // Default lane tier: opus at high effort. Detection is the audits' judgment
-  // core — criteria application warrants the judge tier, explicitly pinned.
+  // core -- criteria application warrants the judge tier, explicitly pinned.
   agent(lanePrompt(f), {
     label: `audit:${f.path.split(/[\\/]/).pop()}`,
     phase: 'Audit',
     model: 'opus',
     effort: 'high',
     schema: FILE_FINDINGS_SCHEMA,
-  }).then((r) => ({ ...r, path: f.path, role: f.role, dimension: f.dimension || 'classic' }))
+  }).then((r) => ({
+    ...r,
+    path: f.path,
+    role: f.role,
+    // The deterministic override (when f.body was supplied) or the caller's
+    // hint otherwise -- see dimensionCheckClause inside lanePrompt for the
+    // runtime-instructed override the model itself performs when f.body was
+    // NOT supplied (the common case); that outcome surfaces as a Hygiene
+    // "dimension override" finding in r.findings, not here.
+    dimension: typeof f.body === 'string' && CLAUDE_MD_CONTRACT_BLOCK_RE.test(f.body)
+      ? 'classic'
+      : (f.dimension === 'code-directory' ? 'code-directory' : 'classic'),
+  }))
 ))
 
 const raw = perFile.filter(Boolean)
@@ -323,15 +365,22 @@ const results = raw.map((r) => {
   // regardless of attributability, since it is the only record that nothing was
   // read. Relabelling this DIFF-CLEAN is the fake gate: a caller reads "audited,
   // no failure" where the truth is "declined, not my department".
-  if (r.verdict === 'NOT-AUDITED') return { ...r, suppressed: 0 }
+  if (r.verdict === 'NOT-AUDITED') return { ...r, suppressed: 0, suppressedFindings: [] }
   const kept = r.findings.filter(isKept)
-  const suppressed = r.findings.length - kept.length
+  // suppressedFindings carries the actual dropped findings (not just their
+  // count) as the diagnostic surface for an unstable suppression -- review
+  // mode's attributability filter is an LLM re-judgment against the
+  // pre-image, not a mechanical diff, so a different pre-existing finding can
+  // surface on each re-run of an unchanged file. The count stays alongside it
+  // for compatibility with existing readers.
+  const suppressedFindings = r.findings.filter((f) => !isKept(f))
+  const suppressed = suppressedFindings.length
   // The lane's verdict is computed over ALL findings, so it cannot stand once we
   // filter. DIFF-CLEAN says "the change under review introduced no failure" --
   // deliberately NOT the same claim as COMPLIANT, which would assert the whole
   // file is clean. A DIFF-CLEAN file may still carry a surviving SERIOUS.
   const attributableFail = kept.some((f) => f.severity === 'FAIL' && f.attributable !== false)
-  return { ...r, findings: kept, suppressed, verdict: attributableFail ? 'NON-COMPLIANT' : 'DIFF-CLEAN' }
+  return { ...r, findings: kept, suppressed, suppressedFindings, verdict: attributableFail ? 'NON-COMPLIANT' : 'DIFF-CLEAN' }
 })
 
 const totals = results.reduce((acc, r) => {
@@ -359,10 +408,10 @@ const totals = results.reduce((acc, r) => {
 // The declined count is stated OUTSIDE the pass/fail tallies and never omitted
 // when non-zero -- "N NOT-AUDITED" is the line that stops a reader inferring
 // a clean gate from a report that never read the file.
-const declined = totals.notAudited ? `, ${totals.notAudited} NOT-AUDITED (declined as out of scope — re-run under the lane named in each file's routing finding)` : ''
+const declined = totals.notAudited ? `, ${totals.notAudited} NOT-AUDITED (declined as out of scope -- re-run under the lane named in each file's routing finding)` : ''
 
 log(review
-  ? `Reviewed ${results.length}/${input.files.length} files — ${totals.diffClean} DIFF-CLEAN, ${totals.nonCompliant} NON-COMPLIANT${declined}, ${totals.fail} attributable FAIL; dispositions SERIOUS=${totals.serious} FIX=${totals.fix} IMPROVE=${totals.improve} (${totals.suppressed} pre-existing finding(s) suppressed as not caused by this change; SILENT=${totals.silent} omitted)`
-  : `Audited ${results.length}/${input.files.length} files — ${totals.nonCompliant} NON-COMPLIANT${declined}, ${totals.fail} FAIL findings; dispositions SERIOUS=${totals.serious} FIX=${totals.fix} IMPROVE=${totals.improve} (SILENT=${totals.silent} omitted)`)
+  ? `Reviewed ${results.length}/${input.files.length} files -- ${totals.diffClean} DIFF-CLEAN, ${totals.nonCompliant} NON-COMPLIANT${declined}, ${totals.fail} attributable FAIL; dispositions SERIOUS=${totals.serious} FIX=${totals.fix} IMPROVE=${totals.improve} (${totals.suppressed} pre-existing finding(s) suppressed as not caused by this change; SILENT=${totals.silent} omitted)`
+  : `Audited ${results.length}/${input.files.length} files -- ${totals.nonCompliant} NON-COMPLIANT${declined}, ${totals.fail} FAIL findings; dispositions SERIOUS=${totals.serious} FIX=${totals.fix} IMPROVE=${totals.improve} (SILENT=${totals.silent} omitted)`)
 
 return { perFile: results, totals, review }

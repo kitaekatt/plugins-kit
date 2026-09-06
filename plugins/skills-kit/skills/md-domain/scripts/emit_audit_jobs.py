@@ -243,6 +243,36 @@ def subject_line_count(subject_file: Path) -> int:
     return len(text.splitlines())
 
 
+def _require_nonempty_contract(
+    criteria: set[str], taxonomy: dict[str, str], standards: Path | None = None
+) -> None:
+    """Fail loudly, and by name, when a standards doc's id table(s) are empty.
+
+    build_example_report's `pick(seq, i) -> seq[i % len(seq)]` divides by
+    len(seq); a standards doc carrying no criterion id, no taxonomy id, or
+    neither raises ZeroDivisionError deep inside the picker with nothing
+    naming the actual defect (an empty "### Criteria ids" or "### Taxonomy
+    ids" table in the standards doc). Called both at load time in
+    build_job_file (once per file, before any job is built) and at the pick
+    site in build_example_report itself (so a direct caller that bypasses
+    load_contract is guarded too), and names which table is empty.
+    """
+    empty = []
+    if not criteria:
+        empty.append("Criteria ids")
+    if not taxonomy:
+        empty.append("Taxonomy ids")
+    if empty:
+        where = f"{standards} has" if standards is not None else "the standards document has"
+        print(
+            f"REJECT: {where} an empty {' and '.join(empty)} table -- "
+            "cannot build a two-finding example report with fewer than one id "
+            "of each kind",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+
+
 def build_example_report(
     subject_rel: str,
     subject_lines: int,
@@ -251,7 +281,9 @@ def build_example_report(
 ) -> dict:
     """A two-finding example report, built from ids parsed from the standards
     document THIS run -- never a frozen id list. Degrades gracefully when the
-    document carries fewer than two ids of a kind."""
+    document carries fewer than two ids of a kind (raises a named SystemExit,
+    never ZeroDivisionError, when it carries fewer than one)."""
+    _require_nonempty_contract(criteria, taxonomy)
     criteria_sorted = sorted(criteria)
     taxonomy_sorted = sorted(taxonomy)
 
@@ -401,11 +433,16 @@ def build_job(
     criteria: set[str],
     taxonomy: dict[str, str],
     evidence_module: ModuleType | None = None,
+    subject_lines: int | None = None,
 ) -> dict:
     subject_abs = Path(record["path"]).resolve()
     subject_rel = subject_abs.relative_to(repo_root).as_posix()
     job_id = unique_id(slugify(subject_rel), used_ids)
-    subject_lines = subject_line_count(subject_abs)
+    # The caller (build_job_file) already computed this once while filtering
+    # out zero-line subjects; accept it to avoid re-reading the file. Falls
+    # back to computing it for any other caller that does not have it handy.
+    if subject_lines is None:
+        subject_lines = subject_line_count(subject_abs)
     example_report = build_example_report(subject_rel, subject_lines, criteria, taxonomy)
 
     pack: str | None = None
@@ -508,14 +545,20 @@ def build_job_file(
     # emitted for one could only ever be rejected. Drop it here rather than
     # emit a job that cannot pass its own contract.
     kept = []
+    # Computed once here and reused in build_job below -- subject_line_count
+    # used to be called a second time per file inside build_job, re-reading
+    # and re-splitting a file this loop had just read.
+    line_counts: dict[str, int] = {}
     for record in records:
         subject_abs = (repo_root / record["path"]).resolve()
-        if subject_line_count(subject_abs) < 1:
+        lines = subject_line_count(subject_abs)
+        if lines < 1:
             print(
                 f"skipping {record['path']}: empty document admits no finding",
                 file=sys.stderr,
             )
             continue
+        line_counts[record["path"]] = lines
         kept.append(record)
     records = kept
 
@@ -524,6 +567,7 @@ def build_job_file(
 
     checker_module = load_checker_module()
     criteria, taxonomy = checker_module.load_contract(standards)
+    _require_nonempty_contract(criteria, taxonomy, standards)
 
     # Raises on a mixed preference list -- deliberately before any job is built,
     # so a mixed list fails the emit rather than producing a half-adapted file.
@@ -546,6 +590,7 @@ def build_job_file(
             criteria=criteria,
             taxonomy=taxonomy,
             evidence_module=evidence_module,
+            subject_lines=line_counts.get(record["path"]),
         )
         for record in records
     ]

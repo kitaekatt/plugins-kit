@@ -581,3 +581,95 @@ class TestAdapterFailureDegrades:
         job = _emit(docs, tmp_path, [EP_B])["jobs"][0]
         assert job["evidence_pack"]["attached"] is False
         assert "no text" in job["evidence_pack"]["error"]
+
+
+class TestEmptyContractTableFailsLoudly:
+    """A standards doc contributing no criterion id, no taxonomy id, or
+    neither must fail with a named message -- not raise ZeroDivisionError deep
+    inside build_example_report's modulo picker (`pick(seq, i) -> seq[i %
+    len(seq)]`)."""
+
+    def _repo_with_standards(self, tmp_path: Path, standards_body: str) -> tuple[Path, Path]:
+        repo = tmp_path
+        subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+        docs = repo / "docs"
+        docs.mkdir()
+        (docs / "real.md").write_text("# Title\n\nBody text.\n", encoding="utf-8")
+        standards = repo / "standards.md"
+        standards.write_text(standards_body, encoding="utf-8")
+        return docs, standards
+
+    def test_build_job_file_on_a_standards_doc_with_no_id_tables_raises_systemexit(
+        self, tmp_path: Path
+    ) -> None:
+        # check_project_doc_audit.load_contract itself already rejects a
+        # missing/empty table with a SystemExit -- this is the end-to-end
+        # path a real invocation takes, and it must never surface as
+        # ZeroDivisionError regardless of which layer catches it first.
+        docs, standards = self._repo_with_standards(
+            tmp_path,
+            "# Standards\n\nNo id tables here at all.\n",
+        )
+        with pytest.raises(SystemExit) as excinfo:
+            emit.build_job_file(
+                subject_dir=docs,
+                repo_root=tmp_path,
+                standards=standards,
+                endpoints=["sonnet"],
+                max_parallel=1,
+                limit=None,
+            )
+        assert excinfo.value.code == 1
+
+    def test_build_example_report_direct_call_with_empty_tables_raises_systemexit_not_zerodivisionerror(
+        self, capsys: pytest.CaptureFixture
+    ) -> None:
+        # The pick site itself, called directly (bypassing load_contract's own
+        # guard entirely) -- this is where the ZeroDivisionError actually lived.
+        with pytest.raises(SystemExit) as excinfo:
+            emit.build_example_report("docs/real.md", 10, set(), {})
+        assert excinfo.value.code == 1
+        err = capsys.readouterr().err
+        assert "Criteria ids" in err
+        assert "Taxonomy ids" in err
+
+    def test_build_example_report_direct_call_with_only_taxonomy_empty_names_it(
+        self, capsys: pytest.CaptureFixture
+    ) -> None:
+        with pytest.raises(SystemExit):
+            emit.build_example_report("docs/real.md", 10, {"C-1"}, {})
+        err = capsys.readouterr().err
+        assert "Taxonomy ids" in err
+        assert "Criteria ids" not in err
+
+    def test_build_example_report_degrades_gracefully_with_exactly_one_id_of_each_kind(self) -> None:
+        report = emit.build_example_report("docs/real.md", 10, {"C-1"}, {"T-1": "FIX"})
+        assert report["findings"][0]["criterion"] == "C-1"
+        assert report["findings"][1]["criterion"] == "C-1"
+        assert report["findings"][0]["taxonomy"] == "T-1"
+
+
+class TestSubjectLineCountReadOncePerFile:
+    """subject_line_count(subject_abs) used to be called once in
+    build_job_file's zero-line filter and again inside build_job for the same
+    file -- two full file reads per subject instead of one."""
+
+    def test_subject_line_count_function_called_once_per_subject(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        docs = _tiny_repo(tmp_path)
+
+        calls: list[Path] = []
+        real = emit.subject_line_count
+
+        def _counting(subject_file: Path) -> int:
+            calls.append(subject_file)
+            return real(subject_file)
+
+        monkeypatch.setattr(emit, "subject_line_count", _counting)
+
+        _emit(docs, tmp_path, ["sonnet"])
+
+        assert len(calls) == len(set(calls)), (
+            f"subject_line_count called more than once for the same file: {calls}"
+        )

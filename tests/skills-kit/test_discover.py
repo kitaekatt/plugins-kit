@@ -407,3 +407,19 @@ class TestReferencesWalkResolvesRoot:
         os.symlink(real, link, target_is_directory=True)
         kinds = [(p.name, kind) for p, _, _, kind in collect_skill_md(link, include_references=True)]
         assert ("r.md", "skill_reference") in kinds
+
+
+class TestHasSchemaBlockRegexIsExportedPublicly:
+    """evidence_pack.py's own has-contract-block check used to diverge from
+    discover_claude_md's -- two regexes for one fact. The regex is exported
+    under a public name so evidence_pack can import and reuse the SAME
+    compiled pattern rather than maintaining a second one."""
+
+    def test_public_name_exists(self):
+        assert hasattr(discover, "HAS_SCHEMA_BLOCK")
+
+    def test_it_matches_a_claude_md_block(self):
+        assert discover.HAS_SCHEMA_BLOCK.search("claude_md:\n  scope: {}\n")
+
+    def test_it_does_not_match_prose_mentioning_the_words(self):
+        assert not discover.HAS_SCHEMA_BLOCK.search("See the claude_md file for details.\n")

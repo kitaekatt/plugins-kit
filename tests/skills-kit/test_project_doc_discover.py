@@ -13,6 +13,8 @@ the sibling discover_* test files.
 
 import importlib.util
 import json
+import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -559,3 +561,81 @@ class TestMentionPrefixIsSegmented:
         assert m2.group(1) == "docs/" and m2.group(2) == "release-notes.md"
         assert rx.search("see notes.md.bak") is None
         assert rx.search("see docs/notes.md.").group(2) == "notes.md"  # sentence period
+
+
+class TestSkippedDirsReporting:
+    """discover_project_doc.py gets the same --include-dir / MD_DOMAIN_INCLUDE_DIRS
+    / skipped_dirs treatment as discover_claude_md.py and discover_skill.py
+    (slice 2): a doc under a noise-named directory (tmp/, Build/) is silently
+    invisible to the default walk, and nothing said so."""
+
+    def _run(self, cwd: Path, *extra_args, env=None):
+        full_env = dict(os.environ)
+        if env:
+            full_env.update(env)
+        return subprocess.run(
+            [sys.executable, str(DISCOVER_PATH), "--json", "--root", str(cwd), *extra_args],
+            capture_output=True, text=True, timeout=60, env=full_env,
+        )
+
+    def test_doc_under_noise_dir_is_absent_by_default_and_reported_skipped(self, tmp_path):
+        buried = tmp_path / "tmp" / "Build" / "notes.md"
+        _write(buried)
+
+        result = self._run(tmp_path)
+        assert result.returncode == 0, result.stderr
+        payload = json.loads(result.stdout)
+
+        assert not any(rec.get("path") == str(buried) for rec in payload)
+        skip_records = [rec for rec in payload if "skipped_dir" in rec]
+        assert "tmp" in {rec["skipped_dir"] for rec in skip_records}
+        for rec in skip_records:
+            assert rec["reason"] == "noise-name"
+
+    def test_include_dir_flag_makes_it_discoverable(self, tmp_path):
+        buried = tmp_path / "tmp" / "Build" / "notes.md"
+        _write(buried)
+
+        result = self._run(tmp_path, "--include-dir", "tmp", "--include-dir", "Build")
+        assert result.returncode == 0, result.stderr
+        payload = json.loads(result.stdout)
+
+        assert any(rec.get("path") == str(buried) for rec in payload)
+
+    def test_env_var_fallback_makes_it_discoverable(self, tmp_path):
+        buried = tmp_path / "tmp" / "Build" / "notes.md"
+        _write(buried)
+
+        result = self._run(
+            tmp_path, env={"MD_DOMAIN_INCLUDE_DIRS": "tmp" + os.pathsep + "Build"}
+        )
+        assert result.returncode == 0, result.stderr
+        payload = json.loads(result.stdout)
+
+        assert any(rec.get("path") == str(buried) for rec in payload)
+
+    def test_no_skips_produces_no_skip_records(self, tmp_path):
+        _write(tmp_path / "Docs" / "a.md")
+
+        result = self._run(tmp_path)
+        assert result.returncode == 0, result.stderr
+        payload = json.loads(result.stdout)
+
+        assert all("skipped_dir" not in rec for rec in payload)
+
+
+class TestIncludeDirsOverride:
+    """In-process coverage of _resolve_include_dirs -- the CLI flag wins over
+    the environment fallback, matching discover_claude_md.py's contract."""
+
+    def test_cli_values_win_over_env(self, monkeypatch):
+        monkeypatch.setenv(pd.INCLUDE_DIRS_ENV, "fromenv")
+        assert pd._resolve_include_dirs(["fromcli"]) == ["fromcli"]
+
+    def test_env_used_when_cli_absent(self, monkeypatch):
+        monkeypatch.setenv(pd.INCLUDE_DIRS_ENV, "a" + os.pathsep + "b")
+        assert pd._resolve_include_dirs(None) == ["a", "b"]
+
+    def test_neither_present_is_empty(self, monkeypatch):
+        monkeypatch.delenv(pd.INCLUDE_DIRS_ENV, raising=False)
+        assert pd._resolve_include_dirs(None) == []

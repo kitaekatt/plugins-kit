@@ -125,6 +125,46 @@ class TestBudget:
             ep.build_pack(root, "pkg/NOTES.md", max_chars=0)
 
 
+class TestTruncationIsNotLinearInRowCount:
+    """build_pack's truncation loop used to pop one row and re-render the
+    WHOLE pack on every pop -- O(rows x pack). A subject with many rows to
+    drop must still converge in a small, bounded number of _render calls
+    (binary search per section), not one call per dropped row."""
+
+    def test_render_call_count_stays_small_on_a_large_subject(self, tmp_path, monkeypatch):
+        root = _repo(tmp_path)
+        # Enough repeated content to force MANY rows to be dropped across
+        # sections at a tight cap -- large enough that a linear one-row-at-a-
+        # time implementation would need hundreds of renders.
+        (root / "pkg" / "BIG.md").write_text(BODY * 400, encoding="utf-8")
+
+        calls = {"n": 0}
+        real_render = ep._render
+
+        def _counting_render(*args, **kwargs):
+            calls["n"] += 1
+            return real_render(*args, **kwargs)
+
+        monkeypatch.setattr(ep, "_render", _counting_render)
+
+        result = ep.build_pack(root, "pkg/BIG.md", max_chars=1500)
+
+        assert len(result) <= 1500
+        # log2 of a few thousand rows is well under 20; a linear
+        # implementation on this fixture calls _render in the hundreds.
+        assert calls["n"] < 100, calls["n"]
+
+    def test_result_still_fits_and_is_marked_truncated_at_various_caps(self, tmp_path):
+        # Same characterization TestBudget already pins, run again here so a
+        # correctness regression in the binary-search rewrite is caught next
+        # to the perf assertion above rather than only in a separate class.
+        root = _repo(tmp_path)
+        (root / "pkg" / "BIG.md").write_text(BODY * 400, encoding="utf-8")
+        for cap in (4000, 1200, 400, 60):
+            result = ep.build_pack(root, "pkg/BIG.md", max_chars=cap)
+            assert len(result) <= cap
+
+
 class TestAncestors:
     def test_no_ancestor_chain_reports_none(self, tmp_path):
         root = tmp_path.resolve()
@@ -175,6 +215,70 @@ class TestOutsideRepository:
         target.write_text("# Outside\n", encoding="utf-8")
         with pytest.raises(ValueError):
             ep.build_structured(root, target)
+
+
+class TestOutOfRepoReferenceNeverEmitsAnAbsolutePath:
+    """A reference INSIDE a subject that resolves outside the repo (../../..,
+    or an absolute candidate) must never make it into the rendered pack as a
+    literal machine path -- the pack is inlined verbatim into a prompt that
+    can reach a toolless endpoint. _rel's fallback used to be the absolute
+    path itself; it must be a fixed sanitized token instead."""
+
+    def test_relative_reference_resolving_outside_repo_has_no_absolute_path_in_pack(
+        self, tmp_path
+    ):
+        root = _repo(tmp_path)
+        # No file at outside/target.md -- resolves outside the repo AND
+        # missing, so the compact renderer cannot fold the row away into an
+        # "all exist" summary; the raw target= value is what leaks.
+        (root / "pkg" / "LINKER.md").write_text(
+            "# Linker\n\nSee [elsewhere](../../outside/target.md) for detail.\n",
+            encoding="utf-8",
+        )
+        pack = ep.build_pack(root, "pkg/LINKER.md", max_chars=24000, compact=False)
+        assert str(tmp_path) not in pack
+        assert "<outside-repo>/target.md" in pack
+
+    def test_mechanical_machine_path_regex_catches_macos_users_path(self, tmp_path):
+        root = _repo(tmp_path)
+        (root / "pkg" / "LEAK.md").write_text(
+            "# Leak\n\nConfig lives at /Users/someone/Dev/foo/bar.yaml.\n",
+            encoding="utf-8",
+        )
+        pack = ep.build_pack(root, "pkg/LEAK.md", max_chars=24000)
+        assert "machine-path" in pack
+        assert "/Users/someone" in pack  # the finding QUOTES the offending value
+
+
+class TestIdentityDimensionAgreesWithClassifyDimension:
+    """evidence_pack._identity used to derive the code-directory dimension
+    with its own regex and its own rule (gated on role == 'child' alone,
+    missing Signal B and the root case) -- a THIRD implementation alongside
+    discover_claude_md.classify_dimension and claude-md-detect.js's trust of
+    the caller. It must defer to classify_dimension instead."""
+
+    def test_root_file_with_code_siblings_and_signal_b_is_code_directory(self, tmp_path):
+        # The old rule forced role == "child" -- a ROOT CLAUDE.md could never
+        # be code-directory under it, regardless of content. classify_dimension
+        # has no such restriction.
+        root = tmp_path.resolve()
+        (root / "helper.py").write_text("def f(): pass\n", encoding="utf-8")
+        (root / "CLAUDE.md").write_text(
+            "# Root\n\nNever call `frobnicate()` before init.\n", encoding="utf-8"
+        )
+        pack = ep.build_pack(root, "CLAUDE.md", max_chars=24000)
+        assert "dimension=code-directory" in pack
+
+    def test_contract_block_forces_classic_even_with_code_siblings(self, tmp_path):
+        root = tmp_path.resolve()
+        (root / "a").mkdir()
+        (root / "a" / "helper.py").write_text("def f(): pass\n", encoding="utf-8")
+        (root / "a" / "CLAUDE.md").write_text(
+            "# Contract\n\nNever call `frobnicate()`.\n\nclaude_md:\n  scope: {}\n",
+            encoding="utf-8",
+        )
+        pack = ep.build_pack(root, "a/CLAUDE.md", max_chars=24000)
+        assert "dimension=classic" in pack
 
 
 class TestArtifactClassification:

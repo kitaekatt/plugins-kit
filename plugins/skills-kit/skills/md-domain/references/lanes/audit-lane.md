@@ -404,6 +404,10 @@ Three behavioral differences, and nothing else:
    *this change introduced no failure*, not *this file is clean*. A DIFF-CLEAN
    file may still carry a surviving SERIOUS.
 
+Attributability is model-judged, not mechanical; what that means for a re-run
+is stated under "Attributability is judgment, not arithmetic" in the limits
+list below.
+
 Also: the fan-out threshold drops to 1 (always the Workflow path).
 
 Review-reducer invariants (preserved verbatim): `NOT-AUDITED` passes through
@@ -449,6 +453,12 @@ Two limits worth stating rather than hiding:
 - **Attributability is judgment, not arithmetic.** It rests on re-detection, so a
   pre-existing finding the pre-image check happens to miss can resurface as
   attributable. Generous structural matching mitigates this; nothing eliminates it.
+  There is no line-range anchor tying a finding to the edited hunks, so the
+  detected finding set is stable run-to-run but which of those findings are
+  suppressed as pre-existing is not guaranteed to be. `suppressedFindings` (the
+  filtered findings, carried next to the `suppressed` count in each per-file
+  result) is the diagnostic surface for that -- read it before treating a
+  re-run's different finding set as a lane defect.
 
 ## The density lens (`audit_claude_md` only)
 
@@ -591,8 +601,9 @@ single source of truth.
   CRP test before proposing a split, and offer the split only with a NAMED
   extraction candidate.
 - Idempotency: criteria, taxonomy, and bucket assignments are fixed. The same
-  input produces the same verdict; do not re-rank or re-order findings
-  session-to-session.
+  input produces the same detected finding set and, in normal mode, the same
+  verdict; do not re-rank or re-order findings session-to-session. The one
+  model-judged step is review-mode suppression, per "Review mode" above.
 - Detection and remediation are ALWAYS separate passes, even in workflow mode.
   The Q&A gate sits between them and a background workflow cannot ask the user
   anything. This split is what makes a re-run reproduce the same findings.

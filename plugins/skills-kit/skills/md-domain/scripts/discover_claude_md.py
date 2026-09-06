@@ -95,7 +95,11 @@ _SIGNAL_B_GOTCHA = re.compile(
     r".*(?:`[^`]+`|lines?\s*~?\d|\b\w+\.(?:cpp|h|hpp|cs|py|go|rs|ts|js|lua|yaml|yml|fbs)\b)"
 )
 # Negative guard: a declared claude_md: contract block forces classic.
-_HAS_SCHEMA_BLOCK = re.compile(r"(?m)^\s*claude_md:\s*$")
+# Public (no leading underscore) so other scripts -- evidence_pack.py in
+# particular -- import THIS compiled pattern instead of maintaining a second,
+# divergent regex for the same fact. See classify_dimension below, which is
+# the one place this pattern is applied to a decision.
+HAS_SCHEMA_BLOCK = re.compile(r"(?m)^\s*claude_md:\s*$")
 
 
 def classify_dimension(claude_md_path: Path) -> str:
@@ -132,7 +136,7 @@ def classify_dimension(claude_md_path: Path) -> str:
 
         # Read the body once for the schema guard and Signal B.
         body = claude_md_path.read_text(encoding="utf-8", errors="ignore")
-        if _HAS_SCHEMA_BLOCK.search(body):
+        if HAS_SCHEMA_BLOCK.search(body):
             return "classic"
         signal_b = bool(_SIGNAL_B.search(body) or _SIGNAL_B_GOTCHA.search(body))
 

@@ -446,31 +446,15 @@ if (typeof input === 'string') {
 if (!input || !Array.isArray(input.files) || input.files.length === 0) {
 """
 
-DETECT_TOTALS_CHUNK = """\
-const results = perFile.filter(Boolean)
-const totals = results.reduce((acc, r) => {
-  for (const fnd of r.findings) {
-    if (fnd.bucket === 'FIX') acc.fix++
-    else if (fnd.bucket === 'SERIOUS') acc.serious++
-    else if (fnd.bucket === 'IMPROVE') acc.improve++
-    else if (fnd.bucket === 'SILENT') acc.silent++
-    else if (fnd.bucket === 'SPECIAL') acc.special++
-    if (fnd.severity === 'FAIL') acc.fail++
-  }
-  if (r.verdict === 'NON-COMPLIANT') acc.nonCompliant++
-  return acc
-}, { fix: 0, serious: 0, improve: 0, silent: 0, special: 0, fail: 0, nonCompliant: 0 })
-"""
-
-# Review-mode variant of the totals reducer, for the lanes that implement
-# `--review` (audit_claude_md, audit_skill, audit_project_doc). They cannot share
-# DETECT_TOTALS_CHUNK: review mode filters non-attributable findings out of the
-# per-file results and relabels the verdict DIFF-CLEAN before totalling, so the
-# reducer legitimately differs from the non-review members'. Splitting the
-# canonical chunk keeps the drift check meaningful -- these three must still match
-# each other verbatim -- rather than exempting them and losing the protection.
-# audit_references is the sole remaining non-review lane (its classify script
-# carries only ARGS_NORM_CHUNK; it has no detect totals reducer to pin).
+# Only one totals-reducer chunk is shipped: DETECT_REVIEW_TOTALS_CHUNK below,
+# shared verbatim by the three lanes that implement `--review` (audit_claude_md,
+# audit_skill, audit_project_doc). A prior non-review variant, DETECT_TOTALS_CHUNK,
+# was defined here but rendered and pinned nowhere -- every SHARED_CHUNK_TARGETS
+# entry already used the review variant, review mode's reducer subsumes the
+# non-review shape (it degrades to the same tallies when `review` is false), and
+# it was removed as dead code rather than kept "for later use with a non-review
+# lane". audit_references is the sole remaining non-review lane and its classify
+# script carries only ARGS_NORM_CHUNK -- it has no detect totals reducer to pin.
 DETECT_REVIEW_TOTALS_CHUNK = """\
 const raw = perFile.filter(Boolean)
 
@@ -494,15 +478,22 @@ const results = raw.map((r) => {
   // regardless of attributability, since it is the only record that nothing was
   // read. Relabelling this DIFF-CLEAN is the fake gate: a caller reads "audited,
   // no failure" where the truth is "declined, not my department".
-  if (r.verdict === 'NOT-AUDITED') return { ...r, suppressed: 0 }
+  if (r.verdict === 'NOT-AUDITED') return { ...r, suppressed: 0, suppressedFindings: [] }
   const kept = r.findings.filter(isKept)
-  const suppressed = r.findings.length - kept.length
+  // suppressedFindings carries the actual dropped findings (not just their
+  // count) as the diagnostic surface for an unstable suppression -- review
+  // mode's attributability filter is an LLM re-judgment against the
+  // pre-image, not a mechanical diff, so a different pre-existing finding can
+  // surface on each re-run of an unchanged file. The count stays alongside it
+  // for compatibility with existing readers.
+  const suppressedFindings = r.findings.filter((f) => !isKept(f))
+  const suppressed = suppressedFindings.length
   // The lane's verdict is computed over ALL findings, so it cannot stand once we
   // filter. DIFF-CLEAN says "the change under review introduced no failure" --
   // deliberately NOT the same claim as COMPLIANT, which would assert the whole
   // file is clean. A DIFF-CLEAN file may still carry a surviving SERIOUS.
   const attributableFail = kept.some((f) => f.severity === 'FAIL' && f.attributable !== false)
-  return { ...r, findings: kept, suppressed, verdict: attributableFail ? 'NON-COMPLIANT' : 'DIFF-CLEAN' }
+  return { ...r, findings: kept, suppressed, suppressedFindings, verdict: attributableFail ? 'NON-COMPLIANT' : 'DIFF-CLEAN' }
 })
 
 const totals = results.reduce((acc, r) => {

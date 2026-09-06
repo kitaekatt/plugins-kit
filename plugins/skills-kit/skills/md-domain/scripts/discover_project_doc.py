@@ -46,6 +46,7 @@ import os
 import re
 import sys
 from pathlib import Path
+from typing import Iterable
 
 # The shared walk lives in skills_kit_lib; make the plugin root importable
 # regardless of which interpreter/venv launched this script.
@@ -284,15 +285,25 @@ def _has_skipped_segment(path: Path, root: Path) -> bool:
 _WALK_CACHE: dict[str, list[Path]] = {}
 
 
-def _walk_files(root: Path):
+def _walk_files(
+    root: Path,
+    include_dirs: Iterable[str] = (),
+    skipped_out: list[Path] | None = None,
+):
     """Yield every file under root, honoring depth + skip-dir rules.
 
     Uses skills_kit_lib.dirwalk when present (shared excludes); otherwise a
-    bounded stdlib walk with the same skip-dir set. Cached per resolved root
-    (see `_WALK_CACHE`): repeated calls for the same tree replay the cached
-    list instead of re-walking the filesystem.
+    bounded stdlib walk with the same skip-dir set. Cached per (resolved root,
+    include_dirs) pair (see `_WALK_CACHE`): repeated calls for the same tree
+    and the same include_dirs replay the cached list instead of re-walking the
+    filesystem. `include_dirs` and `skipped_out` mirror discover_claude_md.py /
+    discover_skill.py's iter_dirs plumbing -- a directory pruned as noise
+    (tmp/, Build/) can be opted back in, and every directory actually pruned
+    that way (not the doc-specific `_SKIP_DIRS`/`_has_skipped_segment` prune
+    below, which is unaffected) is appended to `skipped_out` when given.
     """
-    key = str(Path(root).resolve())
+    include_key = tuple(sorted(include_dirs))
+    key = (str(Path(root).resolve()), include_key)
     cached = _WALK_CACHE.get(key)
     if cached is not None:
         yield from cached
@@ -300,7 +311,9 @@ def _walk_files(root: Path):
 
     collected: list[Path] = []
     if iter_dirs is not None:
-        for dir_path, files in iter_dirs(root, SCAN_MAX_DEPTH):
+        for dir_path, files in iter_dirs(
+            root, SCAN_MAX_DEPTH, include_dirs=include_dirs, skipped_out=skipped_out
+        ):
             if _has_skipped_segment(dir_path, root):
                 continue
             for fname in files:
@@ -342,9 +355,13 @@ def _measure(path: Path) -> tuple[int, int]:
     return (len(lines), len(text) // 4)
 
 
-def collect_candidates(root: Path) -> list[Path]:
+def collect_candidates(
+    root: Path,
+    include_dirs: Iterable[str] = (),
+    skipped_out: list[Path] | None = None,
+) -> list[Path]:
     out: list[Path] = []
-    for path in _walk_files(root):
+    for path in _walk_files(root, include_dirs=include_dirs, skipped_out=skipped_out):
         if not is_doc_file(path.name):
             continue
         if _has_skipped_segment(path, root):
@@ -455,6 +472,7 @@ def build_inbound_index(
     root: Path,
     candidates: list[Path],
     extra_citer_files=None,
+    include_dirs: Iterable[str] = (),
 ) -> dict[str, list[Path]]:
     """One pass over citer files: map each candidate PATH -> citing files.
 
@@ -474,7 +492,7 @@ def build_inbound_index(
     mention_re = _compile_mention_regex(set(by_basename))
     inbound: dict[str, set[str]] = {str(c): set() for c in candidates}
 
-    for path in _walk_files(root):
+    for path in _walk_files(root, include_dirs=include_dirs):
         if path.suffix.lower() not in _CITER_EXT and not path.name.lower().endswith(
             MARKDEEP_SUFFIX
         ):
@@ -518,6 +536,21 @@ def describe(path: Path, inbound: dict[str, list[Path]], root: Path) -> dict:
     }
 
 
+INCLUDE_DIRS_ENV = "MD_DOMAIN_INCLUDE_DIRS"
+
+
+def _resolve_include_dirs(cli_values: list[str] | None) -> list[str]:
+    """--include-dir values, falling back to the MD_DOMAIN_INCLUDE_DIRS
+    environment variable (os.pathsep-separated) when the flag was not passed.
+    Mirrors discover_claude_md.py / discover_skill.py exactly, including the
+    shared env var name -- one variable opts a directory back in for every
+    md-domain discover script in one setting."""
+    if cli_values:
+        return cli_values
+    env = os.environ.get(INCLUDE_DIRS_ENV)
+    return [name for name in env.split(os.pathsep) if name] if env else []
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--json", action="store_true", help="emit JSON instead of a numbered list")
@@ -537,14 +570,22 @@ def main() -> int:
     parser.add_argument("--config-dir", default=None,
                         help="harness config dir holding plugins/cache (default: $CLAUDE_CONFIG_DIR "
                              "or ~/.claude). Rarely needed; mainly for testing.")
+    parser.add_argument(
+        "--include-dir", action="append", default=None, metavar="NAME",
+        help="directory NAME to walk into even though it would otherwise be pruned "
+             "as noise (repeatable). Falls back to the MD_DOMAIN_INCLUDE_DIRS "
+             "environment variable (os.pathsep-separated) when omitted.",
+    )
     args = parser.parse_args()
 
     root = Path(args.root).resolve() if args.root else Path.cwd().resolve()
+    include_dirs = _resolve_include_dirs(args.include_dir)
+    skipped_dirs: list[Path] = []
 
     if args.path:
         candidates = [Path(p).resolve() for p in args.path]
     else:
-        candidates = collect_candidates(root)
+        candidates = collect_candidates(root, include_dirs=include_dirs, skipped_out=skipped_dirs)
 
     # The citer scan root is decoupled from the candidate root: an orphan check
     # must see the WHOLE project (a .claude/docs doc is cited from CLAUDE.md /
@@ -570,19 +611,26 @@ def main() -> int:
         config_dir = Path(args.config_dir).expanduser() if args.config_dir else _config_dir()
         extra_citers = list(plugin_cache_citer_files(config_dir, project_root=citer_root))
 
-    inbound = build_inbound_index(citer_root, candidates, extra_citer_files=extra_citers)
+    inbound = build_inbound_index(
+        citer_root, candidates, extra_citer_files=extra_citers, include_dirs=include_dirs
+    )
     records = [describe(p, inbound, citer_root) for p in candidates]
 
+    skipped_rel = sorted(str(_relative_or_self(p, root)) for p in skipped_dirs)
+
     if args.json:
-        print(json.dumps(
-            [{"index": i + 1, **rec} for i, rec in enumerate(records)], indent=2))
+        # Same shape as discover_claude_md.py / discover_skill.py: a flat LIST
+        # unchanged for the common case of no skips, plus one "skipped_dir"
+        # record (no "path"/other file keys) appended per pruned directory.
+        payload = [{"index": i + 1, **rec} for i, rec in enumerate(records)]
+        payload.extend({"skipped_dir": rel, "reason": "noise-name"} for rel in skipped_rel)
+        print(json.dumps(payload, indent=2))
         return 0
 
     if not records:
         print(f"No project documents found under {root}.")
-        return 0
-
-    print(f"Project documents under {root}:\n")
+    else:
+        print(f"Project documents under {root}:\n")
     for i, rec in enumerate(records, start=1):
         try:
             display = Path(rec["path"]).relative_to(root)
@@ -598,7 +646,19 @@ def main() -> int:
         if rec.get("role_hint"):
             extras += f" [{rec['role_hint']}]"
         print(f"  {i:>3}. [{tag:<10}] [{rec['lines']:>4}L] [{orphan:<7}] {display}{extras}")
+
+    if skipped_rel:
+        print(f"\nskipped {len(skipped_rel)} noise-named directory/ies (use --include-dir to opt one back in):")
+        for rel in skipped_rel:
+            print(f"  - {rel}")
     return 0
+
+
+def _relative_or_self(path: Path, root: Path) -> Path:
+    try:
+        return path.relative_to(root)
+    except ValueError:
+        return path
 
 
 if __name__ == "__main__":
