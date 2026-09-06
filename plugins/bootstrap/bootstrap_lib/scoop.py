@@ -28,6 +28,8 @@ import subprocess
 import sys
 from typing import NamedTuple, Optional, Tuple
 
+from .subprocess_run import run_captured
+
 
 class ScoopResult(NamedTuple):
     ok: bool
@@ -64,12 +66,13 @@ def _run_powershell(command: str, timeout: int = 300) -> Tuple[bool, str]:
     if not ps:
         return False, "powershell not found"
     try:
-        result = subprocess.run(
+        returncode, stdout, stderr = run_captured(
             [ps, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
              "-Command", command],
-            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout,
+            timeout=timeout,
+            stdin_devnull=True,
         )
-        return result.returncode == 0, (result.stdout + result.stderr).strip()
+        return returncode == 0, (stdout + stderr).strip()
     except subprocess.TimeoutExpired:
         return False, f"timed out after {timeout}s"
     except Exception as e:  # pragma: no cover - defensive

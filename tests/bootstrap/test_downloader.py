@@ -6,15 +6,18 @@ downloader at it via a file:// URI.
 """
 
 import hashlib
+import io
 import os
 import pathlib
 import sys
 import tarfile
 import zipfile
+from unittest.mock import MagicMock
 
 import pytest
 
 from bootstrap_lib import downloader
+from bootstrap_lib import pypi_check
 
 
 def _sha256_of(path):
@@ -225,6 +228,49 @@ class TestDownloadFonts:
         result = downloader.download_fonts(_file_uri(archive), sha, str(dest), suffixes=(".woff2",))
         assert result.ok, result.message
         assert [os.path.basename(p) for p in result.files] == ["Face.woff2"]
+
+
+@pytest.mark.parametrize("installer", ["binary", "font", "pypi"])
+def test_destination_parent_file_returns_failed_result(installer, tmp_path, monkeypatch):
+    """A regular file where the destination directory should be is reported."""
+    blocked_parent = tmp_path / "not-a-directory"
+    blocked_parent.write_bytes(b"blocker")
+
+    if installer == "binary":
+        source = tmp_path / "payload"
+        source.write_bytes(b"payload")
+        result = downloader.download_and_install(
+            "tool", _file_uri(source), _sha256_of(source),
+            target_dir=str(blocked_parent),
+        )
+        assert not result.ok
+    elif installer == "font":
+        archive = tmp_path / "fonts.zip"
+        with zipfile.ZipFile(archive, "w") as zf:
+            zf.writestr("Family-Regular.ttf", b"font")
+        result = downloader.download_fonts(
+            _file_uri(archive), _sha256_of(archive), str(blocked_parent),
+        )
+        assert not result.ok
+    else:
+        wheel = io.BytesIO()
+        with zipfile.ZipFile(wheel, "w") as zf:
+            zf.writestr("pkg/module.py", b"# module")
+        response = MagicMock()
+        response.read.return_value = wheel.getvalue()
+        response.__enter__ = MagicMock(return_value=response)
+        response.__exit__ = MagicMock(return_value=False)
+        monkeypatch.setattr(
+            pypi_check, "_get_wheel_url",
+            lambda package: ("https://example.invalid/pkg.whl", ""),
+        )
+        monkeypatch.setattr(pypi_check, "urlopen", lambda *args, **kwargs: response)
+        result = pypi_check.download_and_extract(
+            "pkg", str(blocked_parent / "module.py"),
+        )
+        assert not result.passed
+
+    assert "failed" in result.message or "cannot" in result.message or "not a directory" in result.message
 
 
 class TestArchiveTypeDetection:

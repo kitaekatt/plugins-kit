@@ -23,6 +23,25 @@ def test_check_git_config_passes_exact_single_value(monkeypatch):
     assert result.passed is True
 
 
+def test_run_git_closes_stdin_and_bounds_timeout(monkeypatch):
+    seen = {}
+
+    def fake_run(argv, **kwargs):
+        seen["argv"] = argv
+        seen.update(kwargs)
+        return 0, ".githooks\n", "warning\n"
+
+    monkeypatch.setattr(git_config_check, "run_captured", fake_run, raising=False)
+
+    result = git_config_check._run_git(Path("C:/project"), "--get-all", "core.hooksPath")
+
+    assert result.returncode == 0
+    assert result.stdout == ".githooks\n"
+    assert result.stderr == "warning\n"
+    assert seen["stdin_devnull"] is True
+    assert seen["timeout"] == 10
+
+
 def test_check_git_config_rejects_missing_or_multiple_values(monkeypatch):
     monkeypatch.setattr(
         git_config_check,

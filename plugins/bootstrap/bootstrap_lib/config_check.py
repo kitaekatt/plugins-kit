@@ -5,6 +5,9 @@ import os
 import shutil
 from typing import Any, Dict, List, Optional, Tuple
 
+from .atomic_write import write_atomic
+from .config_resolve import ConfigError, _require_yaml, load_config_layer
+
 
 def config_init(plugin_data_dir: str, plugin_root: str, defaults_source: str, config_file: str) -> str:
     """Copy default config to data dir if it doesn't exist.
@@ -33,6 +36,9 @@ def config_validate(
 ) -> Tuple[Dict[str, Any], List[Dict[str, str]]]:
     """Validate config fields, applying defaults where declared.
 
+    A field is missing when its key is absent, or its value is ``None`` or an
+    empty string. Explicit ``False`` and ``0`` values are valid configuration.
+
     Args:
         config: Parsed config dict
         required_fields: Field definitions from manifest
@@ -46,7 +52,7 @@ def config_validate(
 
     for field_name, field_def in required_fields.items():
         value = config.get(field_name)
-        if value:
+        if field_name in config and value is not None and value != "":
             continue
 
         default = field_def.get("default")
@@ -55,7 +61,7 @@ def config_validate(
             changed = True
             continue
 
-        # Missing field — collect for fix-all
+        # Missing field -- collect for fix-all
         missing.append({
             "field": field_name,
             "user_msg": field_def.get("user_msg", field_name),
@@ -86,29 +92,32 @@ def run_autodetect(
         Autodetect functions may return bool (backward compat) or a dict with
         keys: changed (bool), actions (list[str]), ok (list[str]).
         If the autodetect script raises, the error is surfaced as an action
-        message (never swallowed — the logging contract, B8).
+        message (never swallowed -- the logging contract, B8).
     """
-    _empty = (False, [], [])
     parts = autodetect_spec.split()
     if len(parts) != 2:
-        return _empty
+        return (False, [f"config autodetect FAILED - invalid spec {autodetect_spec!r}"], [])
 
     script_rel, func_name = parts
     script_path = os.path.join(plugin_root, script_rel)
 
     if not os.path.isfile(script_path):
-        return _empty
+        return (False, [f"config autodetect FAILED - missing script {script_path}"], [])
 
     try:
         spec = importlib.util.spec_from_file_location("_autodetect", script_path)
         if spec is None or spec.loader is None:
-            return _empty
+            return (False, [f"config autodetect FAILED - cannot load script {script_path}"], [])
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
 
         func = getattr(module, func_name, None)
         if func is None:
-            return _empty
+            return (
+                False,
+                [f"config autodetect FAILED - missing function {func_name} in {script_path}"],
+                [],
+            )
 
         result = func(config, config_path)
 
@@ -117,10 +126,17 @@ def run_autodetect(
             changed = bool(result.get("changed", False))
             actions = list(result.get("actions", []))
             ok = list(result.get("ok", []))
+            # Never silent: a script that reports nothing still yields one entry.
+            if changed and not actions:
+                actions = ["config autodetect: changed"]
+            if not changed and not actions and not ok:
+                ok = ["config autodetect: ok - unchanged"]
             return (changed, actions, ok)
 
         # Backward compat: plain bool
-        return (bool(result), [], [])
+        if result:
+            return (True, ["config autodetect: changed"], [])
+        return (False, [], ["config autodetect: ok - unchanged"])
     except Exception as e:
         # Non-fatal but never silent: route the error to the action entries
         # via the actions channel so the user sees the autodetect broke.
@@ -141,7 +157,7 @@ def run_project_autodetect(
         plugin_root: Plugin root directory
         autodetect_spec: "<script_path> <function_name>" from manifest
         errors: Optional list; when the autodetect script raises, an error
-            message is appended here so the caller can log it (B8 — a crashed
+            message is appended here so the caller can log it (B8 -- a crashed
             autodetect must not silently read as "no project detected").
 
     Returns:
@@ -180,57 +196,13 @@ def run_project_autodetect(
 
 
 def load_yaml_config(config_path: str) -> Dict[str, Any]:
-    """Load a YAML config file. Returns empty dict on failure."""
-    try:
-        import yaml
-    except ImportError:
-        return _load_yaml_fallback(config_path)
-
-    try:
-        with open(config_path, "r") as f:
-            data = yaml.safe_load(f)
-        return data if isinstance(data, dict) else {}
-    except (OSError, yaml.YAMLError):
-        return {}
+    """Load a YAML config file, returning an empty dict only when absent/empty."""
+    data = load_config_layer(config_path)
+    return {} if data is None else data
 
 
 def save_yaml_config(config_path: str, config: Dict[str, Any]) -> None:
     """Save config dict as YAML."""
-    try:
-        import yaml
-    except ImportError:
-        _save_yaml_fallback(config_path, config)
-        return
-
-    os.makedirs(os.path.dirname(config_path), exist_ok=True)
-    with open(config_path, "w") as f:
-        yaml.dump(config, f, default_flow_style=False, sort_keys=False)
-
-
-def _load_yaml_fallback(config_path: str) -> Dict[str, Any]:
-    """Simple key: value YAML parser fallback when PyYAML unavailable."""
-    result = {}
-    try:
-        with open(config_path, "r") as f:
-            for line in f:
-                line = line.strip()
-                if not line or line.startswith("#"):
-                    continue
-                if ":" in line:
-                    key, value = line.split(":", 1)
-                    value = value.strip().strip('"').strip("'")
-                    result[key.strip()] = value
-    except OSError:
-        pass
-    return result
-
-
-def _save_yaml_fallback(config_path: str, config: Dict[str, Any]) -> None:
-    """Simple key: value YAML writer fallback when PyYAML unavailable."""
-    os.makedirs(os.path.dirname(config_path), exist_ok=True)
-    with open(config_path, "w") as f:
-        for key, value in config.items():
-            if isinstance(value, str) and (not value or " " in value or ":" in value):
-                f.write(f'{key}: "{value}"\n')
-            else:
-                f.write(f"{key}: {value}\n")
+    yaml = _require_yaml()
+    text = yaml.safe_dump(config, default_flow_style=False, sort_keys=False)
+    write_atomic(config_path, text)

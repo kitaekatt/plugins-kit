@@ -11,12 +11,30 @@ Usage:
     python3 cache-report.py --detailed       # include per-request breakdown
 """
 
+import argparse
 import json
 import os
 import re
 import sys
 from pathlib import Path
-from datetime import datetime
+
+
+def _config_dir() -> Path:
+    configured = os.environ.get("CLAUDE_CONFIG_DIR")
+    return Path(configured) if configured else Path.home() / ".claude"
+
+
+def _encode_cwd(cwd: str) -> str:
+    """Encode a cwd one UTF-16 code unit at a time like Claude Code."""
+    encoded = []
+    for character in cwd:
+        if character.isascii() and character.isalnum():
+            encoded.append(character)
+        elif ord(character) > 0xFFFF:
+            encoded.append("--")
+        else:
+            encoded.append("-")
+    return "".join(encoded)
 
 
 def _cli_hash_suffix(cwd: str) -> str:
@@ -59,10 +77,10 @@ def find_project_dir(cwd: str) -> Path:
     `if(_.length<=DQH)return _;return\\`${_.slice(0,DQH)}-${hI4(H)}\\``
     with DQH=200); `_cli_hash_suffix` mirrors hI4.
     """
-    encoded = re.sub(r"[^A-Za-z0-9]", "-", cwd)
+    encoded = _encode_cwd(cwd)
     if len(encoded) > 200:
         encoded = f"{encoded[:200]}-{_cli_hash_suffix(cwd)}"
-    return Path.home() / ".claude" / "projects" / encoded
+    return _config_dir() / "projects" / encoded
 
 
 def find_transcript(session_id: str | None, project_dir: Path) -> Path | None:
@@ -72,10 +90,12 @@ def find_transcript(session_id: str | None, project_dir: Path) -> Path | None:
         if candidate.exists():
             return candidate
         # Search all project dirs
-        for p in (Path.home() / ".claude" / "projects").iterdir():
-            candidate = p / f"{session_id}.jsonl"
-            if candidate.exists():
-                return candidate
+        projects_dir = _config_dir() / "projects"
+        if projects_dir.exists():
+            for p in projects_dir.iterdir():
+                candidate = p / f"{session_id}.jsonl"
+                if candidate.exists():
+                    return candidate
         return None
 
     if not project_dir.exists():
@@ -89,18 +109,7 @@ def find_transcript(session_id: str | None, project_dir: Path) -> Path | None:
 
 def _has_usage_data(transcript_path: Path) -> bool:
     """Return True if the transcript contains at least one assistant usage entry."""
-    with open(transcript_path, encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                entry = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if entry.get("type") == "assistant" and entry.get("message", {}).get("usage"):
-                return True
-    return False
+    return bool(parse_transcript(transcript_path))
 
 
 def find_all_transcripts(project_dir: Path) -> list[Path]:
@@ -110,7 +119,7 @@ def find_all_transcripts(project_dir: Path) -> list[Path]:
     return sorted(project_dir.glob("*.jsonl"), key=lambda f: f.stat().st_mtime)
 
 
-def parse_transcript(transcript_path: Path) -> list[dict]:
+def _parse_transcript(transcript_path: Path, seen_ids: set[str]) -> list[dict]:
     """Extract usage data from each assistant message in the transcript."""
     entries = []
     with open(transcript_path, encoding="utf-8") as f:
@@ -130,6 +139,11 @@ def parse_transcript(transcript_path: Path) -> list[dict]:
             usage = message.get("usage")
             if not usage:
                 continue
+            message_id = message.get("id")
+            if message_id is not None:
+                if message_id in seen_ids:
+                    continue
+                seen_ids.add(message_id)
 
             cache_creation = usage.get("cache_creation", {})
             entries.append(
@@ -145,6 +159,28 @@ def parse_transcript(transcript_path: Path) -> list[dict]:
                 }
             )
     return entries
+
+
+def parse_transcript(transcript_path: Path) -> list[dict]:
+    """Extract unique usage data from one transcript."""
+    return _parse_transcript(transcript_path, set())
+
+
+def _session_paths(transcript_path: Path) -> list[Path]:
+    subagents = transcript_path.with_suffix("") / "subagents"
+    if not subagents.exists():
+        return [transcript_path]
+    return [transcript_path] + sorted(subagents.glob("*.jsonl"))
+
+
+def parse_session(transcript_path: Path) -> tuple[list[dict], int]:
+    """Extract unique usage data from a main transcript and its subagents."""
+    paths = _session_paths(transcript_path)
+    seen_ids: set[str] = set()
+    entries: list[dict] = []
+    for path in paths:
+        entries.extend(_parse_transcript(path, seen_ids))
+    return entries, len(paths) - 1
 
 
 def totals(entries: list[dict]) -> dict:
@@ -168,7 +204,7 @@ def fmt(n: int) -> str:
     return f"{n:,}"
 
 
-def render_session_report(entries: list[dict], transcript_path: Path) -> str:
+def render_session_report(entries: list[dict], transcript_path: Path, subagent_count: int = 0) -> str:
     if not entries:
         return f"No usage data found in: {transcript_path}"
 
@@ -183,7 +219,8 @@ def render_session_report(entries: list[dict], transcript_path: Path) -> str:
         f"## Cache Usage Report",
         f"",
         f"Session:   {transcript_path.stem}",
-        f"Period:    {first_ts} → {last_ts}",
+        f"Transcripts: 1 main + {subagent_count} subagent",
+        f"Period:    {first_ts} -> {last_ts}",
         f"Requests:  {requests}",
         f"",
         f"### Token Summary",
@@ -210,7 +247,7 @@ def render_session_report(entries: list[dict], transcript_path: Path) -> str:
         f"Tokens bypassed cache: {fmt(t['input_tokens'])} ({t['input_tokens']/t['total_input']*100:.1f}%)" if t["total_input"] else "",
     ]
 
-    return "\n".join(l for l in lines if l is not None)
+    return "\n".join(l for l in lines if l)
 
 
 def render_per_request_breakdown(entries: list[dict]) -> str:
@@ -226,11 +263,7 @@ def render_per_request_breakdown(entries: list[dict]) -> str:
         hit_pct = e["cache_read_tokens"] / row_total * 100 if row_total > 0 else 0.0
         model = e["model"].split("/")[-1]
         # Shorten common model names
-        model = (
-            model.replace("claude-", "")
-            .replace("-20250929", "")
-            .replace("-20251001", "")
-        )
+        model = re.sub(r"-\d{8}$", "", model.replace("claude-", ""))
         lines.append(
             f"{i:<4} {model:<28} {fmt(e['input_tokens']):>8} "
             f"{fmt(e['cache_creation_tokens']):>8} {fmt(e['cache_read_tokens']):>8} "
@@ -245,24 +278,30 @@ def render_all_sessions_report(transcripts: list[Path]) -> str:
         return "No transcripts found."
 
     lines = [
-        f"## Cache Usage Report — All Sessions",
+        f"## Cache Usage Report -- All Sessions",
         f"Project: {transcripts[0].parent.name}",
-        f"Sessions: {len(transcripts)}",
+        f"Sessions: 0",
         f"",
-        f"{'Session ID':<38} {'Reqs':>5} {'TotalIn':>10} {'Write':>10} {'Read':>10} {'Hit%':>6}",
-        f"{'-'*82}",
+        f"{'Session ID':<38} {'Transcripts':<20} {'Reqs':>5} {'TotalIn':>10} {'Write':>10} {'Read':>10} {'Hit%':>6}",
+        f"{'-'*103}",
     ]
 
     grand = {"total_input": 0, "cache_creation_tokens": 0, "cache_read_tokens": 0, "requests": 0}
 
+    session_rows = []
     for t_path in transcripts:
-        entries = parse_transcript(t_path)
+        entries, subagent_count = parse_session(t_path)
         if not entries:
             continue
+        session_rows.append((t_path, entries, subagent_count))
+
+    lines[2] = f"Sessions: {len(session_rows)}"
+    for t_path, entries, subagent_count in session_rows:
         t = totals(entries)
         session_short = t_path.stem[:36]
+        transcript_label = f"1 main + {subagent_count} subagent"
         lines.append(
-            f"{session_short:<38} {len(entries):>5} "
+            f"{session_short:<38} {transcript_label:<20} {len(entries):>5} "
             f"{fmt(t['total_input']):>10} {fmt(t['cache_creation_tokens']):>10} "
             f"{fmt(t['cache_read_tokens']):>10} {t['cache_hit_rate']:>5.1f}%"
         )
@@ -277,8 +316,8 @@ def render_all_sessions_report(transcripts: list[Path]) -> str:
         else 0.0
     )
     lines += [
-        f"{'-'*82}",
-        f"{'TOTAL':<38} {grand['requests']:>5} "
+        f"{'-'*103}",
+        f"{'TOTAL':<38} {'':<20} {grand['requests']:>5} "
         f"{fmt(grand['total_input']):>10} {fmt(grand['cache_creation_tokens']):>10} "
         f"{fmt(grand['cache_read_tokens']):>10} {grand_hit:>5.1f}%",
     ]
@@ -287,19 +326,24 @@ def render_all_sessions_report(transcripts: list[Path]) -> str:
 
 
 def main():
-    args = sys.argv[1:]
+    parser = argparse.ArgumentParser()
+    parser.add_argument("session_id", nargs="?")
+    parser.add_argument("--session", dest="option_session_id")
+    parser.add_argument("--all", action="store_true")
+    parser.add_argument("--detailed", action="store_true")
+    parsed = parser.parse_args()
     cwd = os.getcwd()
     project_dir = find_project_dir(cwd)
 
-    detailed = "--detailed" in args
-    args = [a for a in args if a != "--detailed"]
+    if parsed.all and parsed.detailed:
+        parser.error("--detailed cannot be combined with --all")
 
-    if "--all" in args:
+    if parsed.all:
         transcripts = find_all_transcripts(project_dir)
         print(render_all_sessions_report(transcripts))
         return
 
-    session_id = args[0] if args else None
+    session_id = parsed.session_id or parsed.option_session_id
     transcript = find_transcript(session_id, project_dir)
 
     if transcript is None:
@@ -309,9 +353,12 @@ def main():
             print(f"Error: No transcripts found in {project_dir}", file=sys.stderr)
         sys.exit(1)
 
-    entries = parse_transcript(transcript)
-    report = render_session_report(entries, transcript)
-    if detailed:
+    entries, subagent_count = parse_session(transcript)
+    if session_id and not entries:
+        print(f"no usage recorded yet for session {session_id}")
+        return
+    report = render_session_report(entries, transcript, subagent_count)
+    if parsed.detailed:
         report += "\n" + render_per_request_breakdown(entries)
     print(report)
 

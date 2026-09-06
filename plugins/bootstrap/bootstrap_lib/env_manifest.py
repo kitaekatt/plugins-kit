@@ -97,6 +97,15 @@ def load_layered_env_manifests(project_dir):
         except OSError as e:
             parse_errors.append({"path": path, "error": f"read error: {e}"})
             continue
+        if not isinstance(layer, dict):
+            parse_errors.append({
+                "path": path,
+                "error": (
+                    "env manifest must be a mapping/object at the top level, "
+                    f"got {type(layer).__name__}"
+                ),
+            })
+            continue
         merged = merge_env_manifests(merged, layer)
     return merged, parse_errors
 
@@ -278,7 +287,19 @@ def validate_entry_filters(merged, machines):
             hosts = entry.get("hosts")
             if not hosts:
                 continue
-            unregistered = [str(h) for h in hosts if h not in machines]
+            unregistered = []
+            for host in hosts:
+                try:
+                    registered = host in machines
+                except TypeError:
+                    errors.append(
+                        f"{section} entry '{label}': 'hosts' filter contains "
+                        f"an unhashable value of type {type(host).__name__}: "
+                        f"{host!r}. Use machine-name strings."
+                    )
+                    continue
+                if not registered:
+                    unregistered.append(str(host))
             if unregistered:
                 errors.append(
                     f"{section} entry '{label}': hosts filter names "

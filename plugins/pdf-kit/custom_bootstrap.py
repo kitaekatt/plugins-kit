@@ -1,74 +1,127 @@
-"""Bootstrap script for pdf-kit.
+"""Install and cache the Chromium browser required by the html-pdf skill.
 
-Single entry point ``bootstrap(ctx)`` ensures the html-pdf skill's browser
-engine is present. Playwright (the Python package) is provisioned by the
-declared venv (``uv sync --project``); the Chromium *browser binary* it drives
-is a separate ~180 MB download that `playwright install chromium` fetches into
-the shared Playwright cache (``~/.cache/ms-playwright`` /
-``%LOCALAPPDATA%\\ms-playwright``).
+The Playwright package is provisioned in the plugin venv by the engine's venv
+phase, which runs before this script. The Chromium *browser binary* it drives is
+a separate ~180 MB download that ``playwright install chromium`` fetches into
+Playwright's shared browser cache. This script runs that install with the
+provisioned venv's python and records, in a marker in the plugin data dir, the
+playwright version it installed for and the Chromium executable path it produced.
 
-The install is run via ``uv run --project`` so it executes against the plugin's
-venv (and uv first syncs that venv, so this is correct even if the engine has
-not run the venv check yet). It is idempotent -- Playwright skips browsers that
-are already present -- but it is still a subprocess, so a marker file in the
-plugin data dir short-circuits it on subsequent sessions.
+Steady state costs no subprocess: the venv's playwright version is read from its
+``dist-info`` directory on disk and the recorded executable is checked with
+``exists()``. A playwright version change (a different Chromium build) or a vanished executable
+(cleared browser cache) re-runs the install; a failed install is recorded as a
+deferred requirement so the html-pdf skill can relay the fix at the point of need
+instead of the pass reading as success.
 """
 
+import json
 import subprocess
-import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
-PLUGIN_ROOT = Path(__file__).resolve().parent
 MARKER_NAME = "chromium.installed"
+# Run only after an install: asks Playwright where it put Chromium.
+EXECUTABLE_PROBE = (
+    "import json; from playwright.sync_api import sync_playwright; "
+    "p = sync_playwright().start(); "
+    "print(json.dumps({'executable_path': p.chromium.executable_path})); p.stop()"
+)
+
+
+def _venv_python(data_dir: Path) -> Optional[Path]:
+    """Return the provisioned venv python, using the engine's candidate order."""
+    for candidate in (
+        data_dir / ".venv" / "bin" / "python",
+        data_dir / ".venv" / "Scripts" / "python.exe",
+    ):
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def _playwright_version(python: Path) -> Optional[str]:
+    """Read the installed playwright version from the venv's dist-info, no subprocess."""
+    venv = python.parents[1]
+    for pattern in ("lib/python*/site-packages", "Lib/site-packages"):
+        for site in venv.glob(pattern):
+            for info in site.glob("playwright-*.dist-info"):
+                return info.name[len("playwright-"):-len(".dist-info")]
+    return None
+
+
+def _defer(ctx: Any, command: str, diagnostic: str) -> None:
+    """Log the failure and record a point-of-need Chromium install request."""
+    ctx.log(f"html-pdf: chromium install failed: {diagnostic[-2000:]}")
+    ctx.add_deferred_requirement(
+        "chromium",
+        user_msg="html-pdf needs Chromium before it can render a PDF.",
+        agent_msg=(
+            "Chromium is not available for html-pdf. Run the prepared install "
+            f"command, then retry: {command}"
+        ),
+        satisfied_by=command,
+    )
+
+
+def _marker_is_current(marker: Path, version: str) -> bool:
+    try:
+        recorded = json.loads(marker.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    return (
+        isinstance(recorded, dict)
+        and recorded.get("playwright_version") == version
+        and bool(recorded.get("executable_path"))
+        and Path(recorded["executable_path"]).exists()
+    )
 
 
 def bootstrap(ctx: Any) -> None:
-    """Ensure the Chromium browser html-pdf needs is installed."""
-    marker = Path(ctx.data_dir) / MARKER_NAME
-    if marker.exists():
-        # Steady state: nothing to do. Verbose-only so a healthy bootstrap stays
-        # silent instead of re-displaying this every session (see llm-scripting-kit's
-        # cached-validation branch for the same idiom).
+    """Ensure the Chromium browser html-pdf needs is installed and current."""
+    data_dir = Path(ctx.data_dir)
+    python = _venv_python(data_dir)
+    command = (
+        f"{python or data_dir / '.venv' / 'bin' / 'python'} -m playwright install chromium"
+    )
+    if python is None:
+        _defer(ctx, command, "provisioned venv python is missing")
+        return
+    version = _playwright_version(python)
+    if version is None:
+        _defer(ctx, command, "playwright is not installed in the plugin venv")
+        return
+
+    marker = data_dir / MARKER_NAME
+    if _marker_is_current(marker, version):
+        # Verbose-only so a healthy bootstrap stays silent (see the test module).
         ctx.log_ok("html-pdf: chromium already installed (cached)")
         return
 
-    cmd = [
-        "uv", "run", "--project", str(PLUGIN_ROOT),
-        "python", "-m", "playwright", "install", "chromium",
-    ]
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True)
-    except FileNotFoundError:
-        # uv not on PATH yet -- the tools/venv bootstrap will install it; we
-        # retry next session. Don't block bootstrap on a transient ordering gap.
-        ctx.log("html-pdf: chromium install deferred (uv not found yet)")
-        return
-
-    if result.returncode != 0:
-        ctx.log(
-            "html-pdf: chromium install failed, will retry next session: "
-            + (result.stderr or result.stdout or "").strip()[:300]
+        result = subprocess.run(
+            [str(python), "-m", "playwright", "install", "chromium"],
+            capture_output=True, text=True,
         )
+        if result.returncode != 0:
+            _defer(ctx, command, (result.stderr or result.stdout or "").strip())
+            return
+        probe = subprocess.run(
+            [str(python), "-c", EXECUTABLE_PROBE], capture_output=True, text=True,
+        )
+        if probe.returncode != 0:
+            _defer(ctx, command, (probe.stderr or probe.stdout or "").strip())
+            return
+        executable = json.loads(probe.stdout)["executable_path"]
+    except (OSError, ValueError, TypeError, KeyError) as error:
+        _defer(ctx, command, str(error))
         return
 
+    state = {"playwright_version": version, "executable_path": executable}
     try:
         marker.parent.mkdir(parents=True, exist_ok=True)
-        marker.write_text("ok\n", encoding="utf-8")
-    except OSError:
-        pass
+        marker.write_text(json.dumps(state) + "\n", encoding="utf-8")
+    except OSError as error:
+        _defer(ctx, command, f"could not write marker: {error}")
+        return
     ctx.log("html-pdf: chromium installed")
-
-
-if __name__ == "__main__":
-    # Allow manual invocation for debugging: prints what bootstrap would do.
-    class _Ctx:
-        data_dir = str(PLUGIN_ROOT / ".bootstrap-data")
-
-        def log(self, msg: str) -> None:
-            print(msg, file=sys.stderr)
-
-        def log_ok(self, msg: str) -> None:
-            print(msg, file=sys.stderr)
-
-    bootstrap(_Ctx())

@@ -7,6 +7,8 @@ import subprocess
 from pathlib import Path
 from typing import NamedTuple
 
+from .subprocess_run import run_captured
+
 
 class GitConfigResult(NamedTuple):
     passed: bool
@@ -16,13 +18,14 @@ class GitConfigResult(NamedTuple):
 
 def _run_git(project_dir: Path, *args: str) -> subprocess.CompletedProcess[str]:
     env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
-    return subprocess.run(
-        ["git", "-C", str(project_dir), "config", "--local", *args],
-        capture_output=True,
-        text=True, encoding="utf-8", errors="replace",
+    argv = ["git", "-C", str(project_dir), "config", "--local", *args]
+    returncode, stdout, stderr = run_captured(
+        argv,
         timeout=10,
         env=env,
+        stdin_devnull=True,
     )
+    return subprocess.CompletedProcess(argv, returncode, stdout, stderr)
 
 
 def check_git_config(project_dir: Path, key: str, expected: str) -> GitConfigResult:

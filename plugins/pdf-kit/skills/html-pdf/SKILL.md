@@ -26,7 +26,7 @@ relays the result.
 | `--a4` | Paginates to A4 and honors the page's own `@media print` rules (white background, page breaks). |
 | Default output | `<input>.pdf` next to the input file. Pass an explicit second argument to override. |
 | `--scale` | Fraction (`0.8`) or percent (`80%` / `80`). Range 10%-200%, default 100%. When the user says "scale it to 80%", pass `--scale 80%`. |
-| Invocation | `uv run --project "${CLAUDE_PLUGIN_ROOT}" python "${CLAUDE_PLUGIN_ROOT}/skills/html-pdf/scripts/html_to_pdf.py" <input.html> [output.pdf] [--scale 80%] [--a4]` |
+| Invocation | `~/.claude/plugins/data/plugins-kit/pdf-kit/.venv/bin/python "${CLAUDE_PLUGIN_ROOT}/skills/html-pdf/scripts/html_to_pdf.py" <input.html> [output.pdf] [--scale 80%] [--a4]` (Windows: `.venv/Scripts/python.exe`) |
 
 ## Technique
 
@@ -73,26 +73,28 @@ technique_skill:
           action: Run the converter
           tool: ${CLAUDE_PLUGIN_ROOT}/skills/html-pdf/scripts/html_to_pdf.py
           precondition: >-
-            If ~/.claude/plugins/data/plugins-kit/pdf-kit/bootstrap.log is missing, tell the user
-            "the bootstrap plugin has not provisioned pdf-kit's html-pdf -- install/enable
-            plugins-kit:bootstrap and start a session" and stop. The venv and Chromium are not
-            set up in this case.
-          detail: 'uv run --project "${CLAUDE_PLUGIN_ROOT}" python "${CLAUDE_PLUGIN_ROOT}/skills/html-pdf/scripts/html_to_pdf.py" "<input.html>" ["<output.pdf>"] [--scale 80%] [--a4]'
+            Confirm ~/.claude/plugins/data/plugins-kit/pdf-kit/bootstrap.log exists. If it does
+            not, tell the user "the bootstrap plugin has not provisioned pdf-kit's html-pdf --
+            install/enable plugins-kit:bootstrap and start a session" and stop. Also read
+            ~/.claude/plugins/data/plugins-kit/pdf-kit/deferred_requirements.json. If it lists
+            chromium, relay that entry's user_msg and satisfied_by, then stop.
+          detail: '~/.claude/plugins/data/plugins-kit/pdf-kit/.venv/bin/python "${CLAUDE_PLUGIN_ROOT}/skills/html-pdf/scripts/html_to_pdf.py" "<input.html>" ["<output.pdf>"] [--scale 80%] [--a4]'
         - n: 4
           action: Relay the result
           detail: >-
-            The script prints `PDF <path>` then `OPENED in default browser` (or `OPEN-FAILED ...`).
-            It opens the PDF in the default browser automatically. Pass --no-open to skip that.
-            Give the user the output path and confirm it opened.
+            If the script prints `PDF <path>`, relay the output path. If it then prints
+            `OPENED in default browser`, confirm it opened. If it prints `OPEN-FAILED ...`, say
+            that browser opening failed and relay the path for manual opening. Pass --no-open to
+            skip opening.
       output_template: |
-        Converted -> <output.pdf> (opened in your default browser).
+        Converted -> <output.pdf> (opened in your default browser | browser open failed, open it manually).
       gotchas:
         - id: needs_chromium
           keywords: [playwright, chromium, browser not installed, executable does not exist]
           gotcha: >-
             Requires the Chromium browser binary. Bootstrap installs it (custom_bootstrap.py). If
-            the converter errors that the browser is missing, install it manually:
-            `uv run --project "${CLAUDE_PLUGIN_ROOT}" python -m playwright install chromium`.
+            the deferred requirement preflight reports chromium, relay its prepared user_msg and
+            satisfied_by command; do not invent a separate manual install instruction.
         - id: self_contained_only
           keywords: [broken page, missing css, external assets, fragment, relative paths]
           gotcha: Only self-contained HTML renders correctly. External stylesheets/scripts over the network load, but sibling-file and local-disk asset references render broken in the PDF.

@@ -1169,7 +1169,7 @@ def _main():
     # when CLAUDE_ENV_FILE isn't set (e.g. console mode, tests). See
     # docs/planning/bootstrap/tool-resolution-redesign.md.
     from . import tool_paths as _tool_paths
-    _tool_paths.export_tool_env_vars(data_dir)
+    _tool_paths.export_tool_env_vars(None)
 
     # Step 8: Emit results
     output_file = os.path.join(data_dir, "bootstrap_display.pending") if args.background else None
@@ -1708,7 +1708,7 @@ def _shared_lib_convergence_sweep(plugins, data_dir, link_log=None):
         # marketplace tree, so shared_root is per-plugin, not per-engine.
         plugin_data_dir = _plugin_data_dir(data_dir, plugin_info)
         shared_root = os.path.join(os.path.dirname(plugin_data_dir), "_shared_libs")
-        venv_python = _find_python(os.path.join(plugin_data_dir, ".venv"))
+        plugin_venv_python = _find_python(os.path.join(plugin_data_dir, ".venv"))
         for lib_name in imports:
             # Include marketplace in the dedup key: same-named plugins from two
             # marketplaces link into their own trees and must not skip each other.
@@ -1716,7 +1716,7 @@ def _shared_lib_convergence_sweep(plugins, data_dir, link_log=None):
             if key in seen:
                 continue
             seen.add(key)
-            result = link_shared_lib(lib_name, venv_python, shared_root)
+            result = link_shared_lib(lib_name, plugin_venv_python, shared_root)
             entry = f"{plugin_info.name}: shared-lib {result.name}: {result.message}"
             if result.status == "linked":
                 quiets.append(entry)
@@ -2017,7 +2017,14 @@ def _link_tool_dir_to_path(result, prefix, action_entries):
     if not tool_dir:
         return
     from .path_check import add_path_to_shell_config, normalize_path_for_compare
-    _ok, msg = add_path_to_shell_config(tool_dir)
+    ok, msg = add_path_to_shell_config(tool_dir)
+    if not ok:
+        # Persistence failed; the live process PATH below is independent of
+        # it, so later phases this run still find the tool.
+        action_entries.append(
+            f"{prefix}{result.subject}: FAILED - could not persist PATH "
+            f"for {tool_dir} ({msg})"
+        )
     current_path = os.environ.get("PATH", "")
     norm = [normalize_path_for_compare(d) for d in current_path.split(os.pathsep)]
     if normalize_path_for_compare(tool_dir) not in norm:
@@ -2557,9 +2564,21 @@ def _strategy_url_download(ctx):
         archive_type=download_def.get("archive_type"),
     )
     if dl.ok:
-        tool_paths.record(None, ctx.name, dl.path)
-        ctx.tools_installed.append((ctx.name, f"downloaded to {dl.path}"))
-        return _StrategyOutcome(True, None)
+        from .path_repair import repair_path
+        repair_path()
+        recheck = _tool_check(ctx)
+        if recheck.passed:
+            if recheck.path:
+                tool_paths.record(None, recheck.subject, recheck.path)
+            ctx.tools_installed.append((ctx.name, f"downloaded to {dl.path}"))
+            return _StrategyOutcome(True, None)
+        message = f"download completed, but re-check failed: {recheck.message}"
+        ctx.action_entries.append(f"{ctx.prefix}{ctx.name}: download failed - {message}")
+        return _StrategyOutcome(True, {
+            "type": "tool", "name": ctx.name, "message": message,
+            "install_state": "download_failed", "install_cmd": None,
+            "plugin": ctx.plugin_name,
+        })
     ctx.action_entries.append(f"{ctx.prefix}{ctx.name}: download failed - {dl.message}")
     # Fall through to legacy install fallback.
     return _StrategyOutcome(False)
@@ -2837,8 +2856,13 @@ def _process_path_entries(path_entries, prefix, action_entries, ok_entries):
             ok_entries.append(f"{prefix}PATH {result.subject}: ok - {result.message}")
         else:
             # Attempt persistent remediation: add to shell RC files
-            _ok, msg = add_path_to_shell_config(path_entry)
-            paths_added.append((result.subject, msg))
+            ok, msg = add_path_to_shell_config(path_entry)
+            if ok:
+                paths_added.append((result.subject, msg))
+            else:
+                action_entries.append(
+                    f"{prefix}PATH {result.subject}: FAILED - {msg}"
+                )
         current_path = os.environ.get("PATH", "")
         norm = [normalize_path_for_compare(d) for d in current_path.split(os.pathsep)]
         if normalize_path_for_compare(expanded) not in norm:
@@ -3227,6 +3251,7 @@ def _process_config(config_section, plugin_data_dir, plugin_root, action_entries
     but skips required_fields validation (no project = no config failures).
     """
     from .config_check import config_init, config_validate, run_autodetect, load_yaml_config, save_yaml_config
+    from .config_resolve import ConfigError
 
     config_file = config_section["file"]
     defaults_source = config_section.get("defaults_source")
@@ -3241,7 +3266,11 @@ def _process_config(config_section, plugin_data_dir, plugin_root, action_entries
         return []
 
     # 2. Load config
-    config = load_yaml_config(config_path)
+    try:
+        config = load_yaml_config(config_path)
+    except ConfigError as exc:
+        action_entries.append(f"config: FAILED to load {config_path} - {exc}")
+        return []
 
     required_fields = config_section.get("required_fields", {})
 
@@ -3278,7 +3307,11 @@ def _process_config(config_section, plugin_data_dir, plugin_root, action_entries
     # Write back if defaults were applied
     if any(f.get("default") is not None for f in required_fields.values()):
         # Re-check if any defaults were actually applied (config may have changed)
-        current_on_disk = load_yaml_config(config_path)
+        try:
+            current_on_disk = load_yaml_config(config_path)
+        except ConfigError as exc:
+            action_entries.append(f"config: FAILED to load {config_path} - {exc}")
+            return []
         if config != current_on_disk:
             save_yaml_config(config_path, config)
 
@@ -3380,6 +3413,7 @@ def _process_project_config(project_config_section, plugin_data_dir, plugin_root
     False if no project was found (autodetect returned None / no file / no autodetect).
     """
     from .config_check import load_yaml_config, save_yaml_config, run_project_autodetect
+    from .config_resolve import ConfigError
 
     config_file = project_config_section["file"]
     required_fields_spec = _normalize_project_required_fields(
@@ -3447,7 +3481,13 @@ def _process_project_config(project_config_section, plugin_data_dir, plugin_root
 
     if os.path.isfile(project_config_path):
         # File exists — load it and check required fields
-        project_data = load_yaml_config(project_config_path)
+        try:
+            project_data = load_yaml_config(project_config_path)
+        except ConfigError as exc:
+            action_entries.append(
+                f"project config: FAILED to load {project_config_path} - {exc}"
+            )
+            return False
         missing_fields = [f for f in required_field_names if not project_data.get(f)]
 
         if missing_fields and autodetect_spec:
@@ -3534,7 +3574,13 @@ def _process_project_config(project_config_section, plugin_data_dir, plugin_root
     # Sync discovered values to data-dir config
     data_config_path = os.path.join(plugin_data_dir, "config.yaml")
     if os.path.isfile(data_config_path):
-        data_config = load_yaml_config(data_config_path)
+        try:
+            data_config = load_yaml_config(data_config_path)
+        except ConfigError as exc:
+            action_entries.append(
+                f"project config: FAILED to load {data_config_path} - {exc}"
+            )
+            return True
     else:
         data_config = {}
 
@@ -3722,7 +3768,9 @@ def _phase_env_vars(ctx):
     edits belong exclusively to ``path_entries`` + tool->PATH linkage, and
     an env_vars PATH entry would clobber the composed value they manage.
     """
-    from .env_var_check import check_env_var, export_env_var, set_env_var
+    from .env_var_check import (
+        check_env_var, export_env_var, is_valid_env_var_name, set_env_var,
+    )
 
     vars_set = []
     for var_def in ctx.manifest.get("env_vars", []):
@@ -3739,6 +3787,14 @@ def _phase_env_vars(ctx):
                 type="env_var",
                 name=_entry_label(name),
                 message=f"invalid env_vars entry {sorted(var_def)!r}: needs string 'name' and 'value'",
+            )
+            continue
+        if not is_valid_env_var_name(name):
+            ctx.fail(
+                f"env_var {name}: FAILED - name is not a valid shell identifier",
+                type="env_var",
+                name=name,
+                message=f"{name}: name is not a valid shell identifier",
             )
             continue
         if name.upper() == "PATH":
@@ -3846,10 +3902,19 @@ def _phase_fonts(ctx):
         inst = install_font(dl_def["url"], dl_def["sha256"], archive_type=dl_def.get("archive_type"))
         if inst.ok:
             recheck = check_font(match)
-            detail = f"{len(inst.files)} files" + ("" if recheck.passed else " (not yet detected)")
-            fonts_installed.append((name, detail))
+            if recheck.passed:
+                fonts_installed.append((name, f"{len(inst.files)} files"))
+            else:
+                message = f"installed {len(inst.files)} files, but re-check failed: {recheck.message}"
+                ctx.fail(
+                    f"font {name}: FAILED - {message}",
+                    type="font", name=name, message=message,
+                )
         else:
-            ctx.action(f"font {name}: install failed - {inst.message}")
+            ctx.fail(
+                f"font {name}: install failed - {inst.message}",
+                type="font", name=name, message=inst.message,
+            )
 
     if fonts_installed:
         ctx.action(f"fonts installed: {_join_items(fonts_installed)}")
@@ -3874,75 +3939,23 @@ def _phase_venv(ctx):
 
 
 def _phase_git_deps(ctx):
-    """git_deps: clone-once + pinned-commit re-checkout.
+    """git_deps: delegate convergence and log its authoritative result."""
+    from .git_dep_check import ensure_git_dep
 
-    A clone that exists on the right branch passes and is never pulled in
-    steady state ("clone once"); only pinned commits are re-checked-out.
-    Successes consolidate by verb (cloned/pulled/checked-out); failures stay
-    per-line.
-    """
-    import subprocess as _sp2
-
-    from .git_dep_check import check_git_dep, clone_git_dep, pull_git_dep
-
-    git_cloned = []
-    git_pulled = []
-    git_checked_out = []
     for dep_def in ctx.manifest.get("git_deps", []):
-        result = check_git_dep(
-            ctx.data_dir,
-            dep_def["url"],
-            dep_def["branch"],
-            dep_def.get("sparse_paths"),
-            dep_def.get("commit"),
-        )
+        result, entries = ensure_git_dep(dep_def, ctx.data_dir)
+        for entry in entries:
+            ctx.action(f"git {result.subject}: {entry}")
         if result.passed:
             ctx.ok(f"git {result.subject}: ok - {result.message}")
-            continue
-
-        target_path = result.target_path
-        pinned_commit = dep_def.get("commit")
-        if not os.path.isdir(target_path):
-            ok, msg = clone_git_dep(dep_def["url"], dep_def["branch"], target_path, dep_def.get("sparse_paths"), pinned_commit)
-            verb = "cloned"
-            detail = dep_def["url"]
-        elif pinned_commit:
-            try:
-                _sp2.run(["git", "-C", target_path, "fetch"], capture_output=True, timeout=60)
-                r = _sp2.run(["git", "-C", target_path, "checkout", pinned_commit], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)
-                ok = r.returncode == 0
-                msg = f"checked out {pinned_commit[:7]}" if ok else (r.stderr.strip() or "checkout failed")
-            except (_sp2.SubprocessError, OSError) as e:
-                ok, msg = False, str(e)
-            verb = "checked out"
-            detail = pinned_commit[:7]
-        else:
-            ok, msg = pull_git_dep(target_path)
-            verb = "pulled"
-            detail = ""
-
-        if ok:
-            if verb == "cloned":
-                git_cloned.append((result.subject, detail))
-            elif verb == "pulled":
-                git_pulled.append((result.subject, detail))
-            else:
-                git_checked_out.append((result.subject, detail))
         else:
             ctx.fail(
-                f"git {result.subject}: FAILED - {msg}",
+                f"git {result.subject}: FAILED - {result.message}",
                 type="git_dep",
                 name=result.subject,
-                message=msg,
+                message=result.message,
                 remediation_cmd=result.remediation_cmd,
             )
-
-    if git_cloned:
-        ctx.action(f"git cloned: {_join_items(git_cloned)}")
-    if git_pulled:
-        ctx.action(f"git pulled: {_join_items(git_pulled)}")
-    if git_checked_out:
-        ctx.action(f"git checked out: {_join_items(git_checked_out)}")
 
 
 def _phase_git_config(ctx):
@@ -4762,7 +4775,15 @@ def _phase_ini_settings(ctx):
             else:
                 try:
                     write_ini_setting(ini_file, section_header, key, expected)
-                    ctx.action(f"ini {key}: set to {expected}")
+                    recheck = check_ini_setting(ini_file, section_header, key, expected)
+                    if recheck.passed:
+                        ctx.action(f"ini {key}: set to {expected}")
+                    else:
+                        message = f"write reported success, but re-check failed: {recheck.message}"
+                        ctx.fail(
+                            f"ini {key}: FAILED - {message}",
+                            type="ini", file=ini_file, key=key, message=message,
+                        )
                 except OSError as e:
                     ctx.fail(
                         f"ini {key}: FAILED - {e}",
@@ -4848,7 +4869,7 @@ def _phase_shared_libs(ctx):
     handler so a consumer's own .venv already exists as the .pth target.
     """
     from .shared_lib import sync_shared_lib, link_shared_lib, find_standalone_python
-    from .venv_check import _find_python
+    from .venv_check import venv_python
 
     shared_root = os.path.join(os.path.dirname(ctx.data_dir), "_shared_libs")
 
@@ -4866,12 +4887,23 @@ def _phase_shared_libs(ctx):
             )
 
     # Owner phase: publish source, then broadcast to the standalone Python.
+    owner_venv_python = venv_python(os.path.join(ctx.data_dir, ".venv"))
     for lib_def in ctx.manifest.get("shared_libs", []):
         lib_name = lib_def.get("name", "")
         lib_src = lib_def.get("src", ".")
         if not lib_name:
             continue
-        sync_result = sync_shared_lib(lib_name, lib_src, ctx.plugin_root, shared_root)
+        sync_result = sync_shared_lib(
+            lib_name,
+            lib_src,
+            ctx.plugin_root,
+            shared_root,
+            verify_python=owner_venv_python,
+        )
+        if sync_result.status == "published" and owner_venv_python is None:
+            sync_result = sync_result._replace(
+                message=f"{sync_result.message} (unverified: owner has no venv)"
+            )
         _log_shared(sync_result)
         if sync_result.status != "failed":
             _log_shared(link_shared_lib(lib_name, find_standalone_python(), shared_root))
@@ -4879,9 +4911,9 @@ def _phase_shared_libs(ctx):
     # Consumer phase: link into this plugin's own venv.
     shared_lib_imports = ctx.manifest.get("shared_lib_imports", [])
     if shared_lib_imports:
-        venv_python = _find_python(os.path.join(ctx.data_dir, ".venv"))
+        plugin_venv_python = venv_python(os.path.join(ctx.data_dir, ".venv"))
         for lib_name in shared_lib_imports:
-            _log_shared(link_shared_lib(lib_name, venv_python, shared_root))
+            _log_shared(link_shared_lib(lib_name, plugin_venv_python, shared_root))
 
 
 def _phase_script(ctx):

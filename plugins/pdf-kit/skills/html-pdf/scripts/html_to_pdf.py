@@ -20,6 +20,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import json
 import subprocess
 import sys
 import webbrowser
@@ -129,6 +130,19 @@ def open_in_default_browser(pdf_path) -> bool:
     return webbrowser.open(uri)
 
 
+def _chromium_install_hint() -> str:
+    """Return bootstrap's prepared Chromium command when it is recorded."""
+    path = Path.home() / ".claude" / "plugins" / "data" / "plugins-kit" / "pdf-kit" / "deferred_requirements.json"
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        for requirement in payload.get("requirements", []):
+            if requirement.get("name") == "chromium" and requirement.get("satisfied_by"):
+                return f"; install hint: {requirement['satisfied_by']}"
+    except (OSError, ValueError, TypeError):
+        pass
+    return ""
+
+
 # --------------------------------------------------------------------------
 # Conversion (requires Playwright + a Chromium browser)
 # --------------------------------------------------------------------------
@@ -150,7 +164,7 @@ def convert(input_path, output_path, *, a4: bool = False, width: int = 1280,
                 page.pdf(
                     path=str(out),
                     print_background=True,
-                    prefer_css_page_size=True,
+                    prefer_css_page_size=False,
                     format="A4",
                     scale=scale,
                     margin={"top": "0.4in", "bottom": "0.4in",
@@ -237,8 +251,16 @@ def main() -> None:
     if not src.is_file():
         raise SystemExit(f"ERROR input not found or not a file: {src}")
     out = Path(args.output).expanduser() if args.output else default_output_path(src)
+    if out.resolve() == src.resolve():
+        raise SystemExit(f"ERROR output path must differ from input: {src}")
 
-    out = convert(src, out, a4=args.a4, width=args.width, scale=scale)
+    try:
+        out = convert(src, out, a4=args.a4, width=args.width, scale=scale)
+    except Exception as error:
+        hint = _chromium_install_hint() if any(
+            word in str(error).lower() for word in ("playwright", "chromium", "executable")
+        ) else ""
+        raise SystemExit(f"ERROR {type(error).__name__}: {error}{hint}") from None
     print(f"PDF {out}  (scale {int(scale * 100)}%)")
 
     if not args.no_open:

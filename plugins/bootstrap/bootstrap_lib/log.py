@@ -100,5 +100,9 @@ def _trim_log(log_file: str) -> None:
                 break
         with open(log_file, "w", encoding="utf-8", errors="replace") as f:
             f.writelines(all_lines[cut:])
-    except (FileNotFoundError, PermissionError):
-        pass
+    except OSError as e:
+        print(
+            f"bootstrap: could not trim {log_file} ({e}); "
+            "continuing without trimming the log",
+            file=sys.stderr,
+        )

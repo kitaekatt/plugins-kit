@@ -3,7 +3,9 @@
 import os
 import stat
 import sys
+from unittest.mock import patch
 
+import bootstrap_lib.tool_check as tool_check
 from bootstrap_lib.tool_check import check_tool, run_install
 
 
@@ -184,8 +186,34 @@ class TestOnPath:
         assert result.passed is True
         assert result.on_path is True
 
+    def test_case_differing_path_entry_uses_shared_normalizer(self, monkeypatch):
+        monkeypatch.setattr(
+            tool_check, "normalize_path_for_compare", lambda path: path.casefold(),
+            raising=False,
+        )
+        monkeypatch.setenv("PATH", "/Opt/Tool")
+
+        assert tool_check._dir_on_path("/opt/tool") is True
+
 
 class TestRunInstall:
+    def test_run_install_closes_stdin_and_bounds_timeout(self, monkeypatch):
+        seen = {}
+
+        def fake_run(argv, **kwargs):
+            seen["argv"] = argv
+            seen.update(kwargs)
+            return 0, "stdout", "stderr"
+
+        monkeypatch.setattr(tool_check, "run_captured", fake_run, raising=False)
+
+        ok, output = run_install("echo ok", timeout=47)
+
+        assert ok is True
+        assert output == "stdoutstderr"
+        assert seen["stdin_devnull"] is True
+        assert seen["timeout"] == 47
+
     def test_success(self):
         ok, output = run_install("echo ok")
         assert ok is True

@@ -37,3 +37,14 @@ def test_pdf_kit_manifest_declares_venv_and_script() -> None:
         "path": "custom_bootstrap.py",
         "entry_point": "bootstrap",
     }
+
+
+def test_html_pdf_skill_pins_provisioned_python_and_deferred_browser_contract() -> None:
+    skill = (_PDF_ROOT / "skills" / "html-pdf" / "SKILL.md").read_text(encoding="utf-8")
+
+    assert "uv run" not in skill
+    assert ".venv/bin/python" in skill
+    assert "deferred_requirements.json" in skill
+    assert "satisfied_by" in skill
+    assert "playwright install" not in skill.lower() or "bootstrap-owned" in skill.lower()
+    assert "OPEN-FAILED" in skill

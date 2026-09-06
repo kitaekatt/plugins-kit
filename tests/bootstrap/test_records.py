@@ -122,6 +122,19 @@ class TestRotation:
         recorder.flush()
         assert not (tmp_path / (EVENTS_FILENAME + ".1")).exists()
 
+    def test_concurrent_rotators_keep_both_generations(self, tmp_path):
+        path = tmp_path / EVENTS_FILENAME
+        first = PassRecorder(str(tmp_path), autoflush=False)
+        second = PassRecorder(str(tmp_path), autoflush=False)
+
+        path.write_text("generation-a\n" + "x" * MAX_EVENTS_BYTES, encoding="utf-8")
+        first._rotate_if_needed(str(path))
+        path.write_text("generation-b\n" + "y" * MAX_EVENTS_BYTES, encoding="utf-8")
+        second._rotate_if_needed(str(path))
+
+        assert "generation-a" in (tmp_path / (EVENTS_FILENAME + ".1")).read_text()
+        assert "generation-b" in path.read_text()
+
 
 class TestRedaction:
     def test_secret_named_keys_are_masked(self):
@@ -178,6 +191,18 @@ class TestRecordingList:
         entry_list(recorder, "ok").extend(["a", "b"])
         recorder.flush()
         assert len(read_events(tmp_path)) == 2
+
+    def test_all_list_write_forms_are_recorded(self, tmp_path, recorder):
+        entries = entry_list(recorder, "action")
+        entries += [Entry("iadd")]
+        entries.insert(0, "insert")
+        entries[0] = "setitem"
+        entries[1:] = ["slice-a", "slice-b"]
+        recorder.flush()
+
+        assert [event["text"] for event in read_events(tmp_path)] == [
+            "iadd", "insert", "setitem", "slice-a", "slice-b",
+        ]
 
     def test_append_rich_carries_display_and_detail(self, tmp_path, recorder):
         entries = entry_list(recorder, "action")

@@ -10,7 +10,7 @@ _IDENTITY_KEYS = {
     "tools": "name",
     "env_vars": "name",
     "fonts": "name",
-    "json_entries": "file",
+    "json_entries": None,  # composite key: reference + target
     "ini_settings": None,  # composite key: file + section
     "pypi_packages": "package",
     "shared_libs": "name",
@@ -37,17 +37,29 @@ _ENV_STRING_LIST_KEYS = frozenset()
 
 def _ini_key(entry):
     """Composite identity key for ini_settings entries."""
+    if entry.get("file") is None or entry.get("section") is None:
+        return None
     return (entry.get("file", ""), entry.get("section", ""))
 
 
 def _defaults_key(entry):
     """Composite identity key for macos_defaults entries."""
+    if entry.get("domain") is None or entry.get("key") is None:
+        return None
     return (entry.get("domain", ""), entry.get("key", ""))
+
+
+def _json_entry_key(entry):
+    """Composite identity key for json_entries entries."""
+    if entry.get("reference") is None or entry.get("target") is None:
+        return None
+    return (entry.get("reference", ""), entry.get("target", ""))
 
 
 # Section name → composite key fn, for _IDENTITY_KEYS/_ENV_IDENTITY_KEYS
 # entries whose value is None.
 _COMPOSITE_FNS = {
+    "json_entries": _json_entry_key,
     "ini_settings": _ini_key,
     "macos_defaults": _defaults_key,
 }
@@ -84,6 +96,9 @@ def _merge_arrays(base_list, override_list, identity_key=None, composite_fn=None
 
     def _upsert(entry):
         k = key_fn(entry)
+        if k is None:
+            merged.append((None, dict(entry)))
+            return
         if k in index:
             pos = index[k]
             merged[pos] = (k, _deep_merge_dicts(merged[pos][1], entry))
@@ -103,6 +118,8 @@ def _deep_merge_dicts(base, override):
     """Recursively merge two dicts. Override wins for scalar conflicts."""
     result = dict(base)
     for key, val in override.items():
+        if val is None:
+            continue
         if key in result and isinstance(result[key], dict) and isinstance(val, dict):
             result[key] = _deep_merge_dicts(result[key], val)
         else:
@@ -169,8 +186,19 @@ def _merge_layers(base, override, identity_keys, string_list_keys):
         over_val = override.get(key)
 
         # Only in one side
+        if key not in base:
+            if over_val is not None:
+                result[key] = over_val
+            continue
+        if key not in override:
+            if base_val is not None:
+                result[key] = base_val
+            continue
+
+        # Explicit null is absent, even when both layers contain the key.
         if base_val is None:
-            result[key] = over_val
+            if over_val is not None:
+                result[key] = over_val
             continue
         if over_val is None:
             result[key] = base_val

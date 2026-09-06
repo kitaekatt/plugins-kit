@@ -30,6 +30,8 @@ bootstrap pass.
 import json
 import os
 import re
+import time
+import uuid
 from datetime import datetime, timezone
 
 EVENTS_FILENAME = "bootstrap_events.jsonl"
@@ -132,6 +134,7 @@ class PassRecorder:
 
     def __init__(self, data_dir, start_time=None, mode="hook", autoflush=True):
         self.data_dir = data_dir
+        self._started_at = (start_time or datetime.now(timezone.utc)).timestamp()
         self.pass_id = pass_id(start_time)
         self.mode = mode
         self._buf = []
@@ -228,7 +231,7 @@ class PassRecorder:
         try:
             os.makedirs(self.data_dir, exist_ok=True)
             path = os.path.join(self.data_dir, EVENTS_FILENAME)
-            self._rotate_if_needed(path)
+            self._rotate_if_needed(path, self._started_at)
             blob = "".join(json.dumps(r, default=str) + "\n" for r in self._buf)
             with open(path, "a", encoding="utf-8") as f:
                 f.write(blob)
@@ -237,22 +240,57 @@ class PassRecorder:
         finally:
             self._buf = []
 
-    def _rotate_if_needed(self, path):
-        """Keep one previous generation, by atomic rename.
+    def _rotate_if_needed(self, path, started_at=None):
+        """Keep one previous generation, by an atomic claim and rename.
 
-        Rename rather than truncate so a concurrent writer's open handle stays
-        valid: it continues appending to the rotated file and loses nothing,
-        where a truncate would leave it writing into a hole.
+        First claim the current file with a unique temporary name. A second
+        flusher that observed the same threshold then either sees no current
+        file or cannot replace the already-retained generation: the retained
+        file's mtime records the winner's rotation. This keeps concurrent
+        flushers from deleting the generation the first one retained, without
+        introducing a new locking primitive.
         """
+        if started_at is None:
+            started_at = self._started_at
         try:
             if os.path.getsize(path) < MAX_EVENTS_BYTES:
                 return
         except OSError:
             return
+
+        retained = path + ".1"
+        temporary = f"{path}.{os.getpid()}.{uuid.uuid4().hex}.rotate"
         try:
-            os.replace(path, path + ".1")
+            os.replace(path, temporary)
         except OSError:
-            pass
+            return
+
+        try:
+            retained_mtime = os.path.getmtime(retained)
+        except OSError:
+            retained_mtime = None
+
+        if (retained_mtime is not None
+                and started_at is not None
+                and retained_mtime >= started_at):
+            try:
+                os.replace(temporary, path)
+            except OSError:
+                pass
+            return
+
+        try:
+            # The source file's old mtime would make a concurrent pre-existing
+            # flusher look newer than the retained generation. Mark this
+            # generation before publishing it so the check above is useful.
+            now = time.time()
+            os.utime(temporary, (now, now))
+            os.replace(temporary, retained)
+        except OSError:
+            try:
+                os.replace(temporary, path)
+            except OSError:
+                pass
 
 
 class Entry(str):
@@ -328,6 +366,9 @@ class RecordingList(list):
 
     def append(self, item):
         super().append(item)
+        self._record_item(item)
+
+    def _record_item(self, item):
         if self._recorder is not None:
             # An Entry may already carry a short form and detail from a phase
             # helper that built a plain list; read them off the item so an
@@ -339,6 +380,24 @@ class RecordingList(list):
     def extend(self, items):
         for item in items:
             self.append(item)
+
+    def __iadd__(self, items):
+        self.extend(items)
+        return self
+
+    def insert(self, index, item):
+        super().insert(index, item)
+        self._record_item(item)
+
+    def __setitem__(self, index, value):
+        if isinstance(index, slice):
+            replacement = list(value)
+            super().__setitem__(index, replacement)
+            for item in replacement:
+                self._record_item(item)
+            return
+        super().__setitem__(index, value)
+        self._record_item(value)
 
     def append_rich(self, item, display=None, detail=None):
         """Append with a short display form and/or structured detail.

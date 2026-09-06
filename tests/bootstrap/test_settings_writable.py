@@ -34,6 +34,21 @@ class TestSettingsPathForScope:
             str(tmp_path), ".claude", "settings.json"
         )
 
+    def test_user_scope_uses_native_home_for_msys_home(self, monkeypatch):
+        native_home = r"C:\Users\native"
+        monkeypatch.setattr(settings_writable.os, "name", "nt")
+        monkeypatch.setenv("HOME", "/c/Users/native")
+        monkeypatch.setenv("USERPROFILE", native_home)
+        monkeypatch.setattr(
+            "bootstrap_lib.path_check.os.path.expanduser",
+            lambda path: native_home if path == "~" else path,
+        )
+
+        result = settings_path_for_scope("user", None)
+
+        assert result.startswith(native_home)
+        assert "/c/Users/native" not in result
+
     def test_project_scope_uses_project_dir(self, tmp_path):
         assert settings_path_for_scope("project", str(tmp_path)) == os.path.join(
             str(tmp_path), ".claude", "settings.json"
@@ -129,6 +144,18 @@ class TestEnsureWritable:
         assert result.ok and result.method == "chmod"
         assert not _is_read_only(str(target))
 
+    def test_chmod_preserves_readability(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(settings_writable, "_p4_tracked", lambda path: False)
+        target = tmp_path / "settings.json"
+        target.write_text("{}")
+        os.chmod(target, 0o444)
+
+        result = ensure_writable(str(target))
+
+        assert result.ok
+        assert stat.S_IMODE(os.stat(target).st_mode) & 0o600 == 0o600
+        assert os.access(target, os.R_OK)
+
     def test_p4_edit_is_preferred_over_chmod(self, tmp_path, monkeypatch):
         """A tracked file goes through `p4 edit` so the change stays in a CL.
 
@@ -153,7 +180,7 @@ class TestEnsureWritable:
         assert result.ok and result.method == "p4-edit"
         assert calls == [str(target)]
 
-    def test_failed_p4_edit_falls_back_to_chmod(self, tmp_path, monkeypatch):
+    def test_failed_p4_edit_leaves_file_read_only(self, tmp_path, monkeypatch):
         target = tmp_path / "settings.json"
         target.write_text("{}")
         _make_read_only(str(target))
@@ -162,8 +189,9 @@ class TestEnsureWritable:
 
         result = ensure_writable(str(target))
 
-        assert result.ok and result.method == "chmod"
-        assert not _is_read_only(str(target))
+        assert not result.ok and result.method == "failed"
+        assert _is_read_only(str(target))
+        assert "Perforce" in result.detail
 
     def test_unfixable_read_only_reports_failure(self, tmp_path, monkeypatch):
         target = tmp_path / "settings.json"

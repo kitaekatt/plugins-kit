@@ -11,11 +11,22 @@ class TestCheckJsonEntries:
     def test_matching_fields(self, tmp_path):
         ref = tmp_path / "ref.json"
         target = tmp_path / "target.json"
-        ref.write_text(json.dumps({"source": "local", "path": "/foo"}))
-        target.write_text(json.dumps({"source": "local", "path": "/foo", "extra": True}))
+        ref.write_text(json.dumps({"entry": {"source": "local", "path": "/foo"}}))
+        target.write_text(json.dumps({"entry": {"source": "local", "path": "/foo", "extra": True}}))
 
         result = check_json_entries(str(ref), str(target), ["source", "path"])
         assert result.passed is True
+
+    def test_nested_changed_field_fails(self, tmp_path):
+        ref = tmp_path / "ref.json"
+        target = tmp_path / "target.json"
+        ref.write_text(json.dumps({"entry": {"source": "local", "path": "/foo"}}))
+        target.write_text(json.dumps({"entry": {"source": "local", "path": "/bar"}}))
+
+        result = check_json_entries(str(ref), str(target), ["source", "path"])
+
+        assert result.passed is False
+        assert "path" in result.message
 
     def test_mismatched_field(self, tmp_path):
         ref = tmp_path / "ref.json"
@@ -96,6 +107,29 @@ class TestMergeJsonEntries:
     def test_reference_missing(self, tmp_path):
         target = tmp_path / "target.json"
         result = merge_json_entries(str(tmp_path / "missing.json"), str(target), ["source"])
+        assert result.passed is False
+
+    @pytest.mark.parametrize("content", ["not valid json", "[]", "null", "1"])
+    def test_unreadable_target_is_not_overwritten(self, tmp_path, content):
+        ref = tmp_path / "ref.json"
+        target = tmp_path / "target.json"
+        ref.write_text(json.dumps({"my-market": {"source": "local"}}))
+        target.write_text(content)
+        before = target.read_bytes()
+
+        result = merge_json_entries(str(ref), str(target), ["source"])
+
+        assert result.passed is False
+        assert target.read_bytes() == before
+
+    def test_scalar_target_entry_fails_without_exception(self, tmp_path):
+        ref = tmp_path / "ref.json"
+        target = tmp_path / "target.json"
+        ref.write_text(json.dumps({"my-market": {"source": "local"}}))
+        target.write_text(json.dumps({"my-market": "scalar"}))
+
+        result = merge_json_entries(str(ref), str(target), ["source"])
+
         assert result.passed is False
 
     def test_preserve_fields_seed_defaults_for_new_entry(self, tmp_path):

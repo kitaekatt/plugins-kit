@@ -113,10 +113,11 @@ class TestMtimeContract:
     def test_write_advances_mtime(self, tmp_path):
         s = Stamp(tmp_path / "v")
         s.write("x")
+        old = time.time() - 10
+        os.utime(s.path, (old, old))
         m1 = s.mtime()
-        time.sleep(0.05)
         s.write("y")  # explicit touch
-        assert s.mtime() >= m1
+        assert s.mtime() > m1
 
 
 class TestScopes:

@@ -41,6 +41,8 @@ import subprocess
 from contextlib import contextmanager
 from typing import NamedTuple, Optional
 
+from .path_check import _home
+
 _P4_TIMEOUT = 10
 
 # Files that mark a Perforce workspace. P4CONFIG/P4IGNORE name them, and both
@@ -68,7 +70,7 @@ def settings_path_for_scope(scope: str, project_dir: Optional[str]) -> Optional[
     when the scope has no single well-known target (or project_dir is missing),
     in which case the caller simply skips the writability guard.
     """
-    home = os.environ.get("HOME") or os.path.expanduser("~")
+    home = _home()
     if scope == "user":
         return os.path.join(home, ".claude", "settings.json")
     if scope == "project" and project_dir:
@@ -220,11 +222,16 @@ def ensure_writable(path: Optional[str]) -> WritableResult:
     if not _is_read_only(path):
         return WritableResult(True, "already-writable", "")
 
-    if _p4_tracked(path) and _p4_edit(path):
-        return WritableResult(True, "p4-edit", "opened for edit in Perforce")
+    if _p4_tracked(path):
+        if _p4_edit(path):
+            return WritableResult(True, "p4-edit", "opened for edit in Perforce")
+        return WritableResult(
+            False, "failed", "Perforce edit failed; file remains read-only",
+        )
 
     try:
-        os.chmod(path, stat.S_IWRITE)
+        current_mode = os.stat(path).st_mode
+        os.chmod(path, current_mode | stat.S_IWRITE)
     except OSError as exc:
         return WritableResult(False, "failed", f"could not clear read-only bit: {exc}")
     if _is_read_only(path):

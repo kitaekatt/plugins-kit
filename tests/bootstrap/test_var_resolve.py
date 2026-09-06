@@ -78,6 +78,23 @@ class TestBuildVariables:
         assert "cwd" in variables
         assert variables["cwd"] == os.getcwd()
 
+    def test_reserved_config_variables_cannot_override_static_values(self, tmp_path):
+        variables = build_variables(
+            "/real/plugin",
+            "/real/data",
+            {
+                "cwd": "/spoofed/cwd",
+                "plugin_root": "/spoofed/plugin",
+                "data_dir": "/spoofed/data",
+                "plugin_data_dir": "relative/data",
+            },
+        )
+
+        assert variables["cwd"] == os.getcwd()
+        assert variables["plugin_root"] == "/real/plugin"
+        assert variables["data_dir"] == "/real/data"
+        assert "plugin_data_dir" not in variables
+
     def test_plugin_data_dir_uses_project_and_namespace(self, tmp_path):
         variables = build_variables(
             "/opt/plugin",

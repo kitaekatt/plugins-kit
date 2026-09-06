@@ -45,6 +45,20 @@ def _brew_output(text, ok=True):
 # --------------------------------------------------------------------------- #
 
 class TestCaskRootRequirement:
+    def test_json_stdout_is_not_contaminated_by_stderr_warning(self, monkeypatch):
+        payload = _info_json([{"app": ["Thing.app"]}])
+        monkeypatch.setattr(brew.sys, "platform", "darwin")
+        monkeypatch.setattr(brew, "_brew_bin", lambda: "/opt/homebrew/bin/brew")
+        monkeypatch.setattr(
+            brew, "run_captured", lambda *args, **kwargs: (0, payload, "warning"),
+            raising=False,
+        )
+
+        info = brew.cask_root_requirement("x")
+
+        assert info.known is True
+        assert info.needs_root is False
+
     def _call(self, payload, ok=True, cask="x"):
         p1, p2 = _brew_output(payload, ok=ok)
         with patch.object(brew.sys, "platform", "darwin"), p1, p2:

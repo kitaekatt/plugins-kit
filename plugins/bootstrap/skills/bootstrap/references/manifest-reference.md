@@ -310,7 +310,7 @@ These two keys let one plugin reuse another plugin's first-party Python library 
 - `name` — the importable top-level package name. Identity key for layered merge.
 - `src` — directory (relative to the plugin root) that contains the package; the package itself lives at `<plugin_root>/<src>/<name>/`. Use `"."` when the package sits directly under the plugin root (e.g. `bootstrap_lib`).
 
-For each entry the engine: syncs the package source to a **stable, version-independent** location, `~/.claude/plugins/data/plugins-kit/_shared_libs/<name>/<name>/` (a clean re-sync that prunes deleted/renamed modules, content-hash cached); then writes a `<name>.pth` (pointing at `_shared_libs/<name>/`) into the **standalone Python's** site-packages and verifies `import <name>`.
+For each entry the engine syncs the package source to a **stable, version-independent** location, `~/.claude/plugins/data/plugins-kit/_shared_libs/<name>/<name>/` (a clean re-sync that prunes deleted/renamed modules, content-hash cached); the owner verifies that the published copy imports once per republish in its own venv, and writes a `<name>.pth` (pointing at `_shared_libs/<name>/`) into the **standalone Python's** site-packages. A consumer's cached link is not re-verified each pass; its own `venv.check_imports` guards its environment.
 
 **Consumer side — `shared_lib_imports`** (a plugin that wants the library on its own venv):
 
@@ -320,7 +320,7 @@ For each entry the engine: syncs the package source to a **stable, version-indep
 }
 ```
 
-A plain string list of library names (deduplicated-unioned across config layers). For each name the engine writes a `<name>.pth` into THIS plugin's own venv (`<plugin_data_dir>/.venv`) pointing at the shared location, then verifies the import. The consumer names only the LIBRARY, never the owning plugin — the location is derived from the name, so reuse stays decoupled from the owner.
+A plain string list of library names (deduplicated-unioned across config layers). For each name the engine writes a `<name>.pth` into THIS plugin's own venv (`<plugin_data_dir>/.venv`) pointing at the shared location. The consumer names only the LIBRARY, never the owning plugin -- the location is derived from the name, so reuse stays decoupled from the owner.
 
 **Stable location, not versioned**: the `.pth` points at the version-independent `_shared_libs/<name>/`, so an owner version bump re-syncs one directory and every `.pth` (standalone + all consumer venvs) keeps resolving without a rewrite.
 
@@ -403,7 +403,8 @@ install commands in any later phase (e.g. a tool `install` invoking
    reach as the `<PLUGIN>_VENV` export — subsequent Bash tool invocations
    in the session see it).
 2. **Persistence** (skipped when already in the wanted state, which logs an
-   ok entry): on macOS the `export NAME="value"` line is written/updated
+   ok entry): on macOS the `export NAME='value'` line (the value shell-quoted,
+   so `$`, quotes and spaces round-trip literally) is written/updated
    **in place** in `~/.zshrc` and `~/.bashrc` (Ubuntu: `~/.bashrc`) — a
    value change replaces the existing line rather than appending a stale
    duplicate. On Windows the variable is written to the User-scope registry
@@ -1031,7 +1032,7 @@ This table is the exact set of identity-keyed sections in
 | `marketplaces` | `name` |
 | `plugins` | `ref` |
 | `fonts` | `name` |
-| `json_entries` | `file` |
+| `json_entries` | `reference` + `target` (composite) |
 | `ini_settings` | `file` + `section` (composite) |
 | `pypi_packages` | `package` |
 | `shared_libs` | `name` |

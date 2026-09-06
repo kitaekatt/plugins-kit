@@ -69,7 +69,7 @@ def download_and_extract(
     if url is None:
         return PypiCheckResult(
             passed=False, package=package,
-            message="failed to find wheel on PyPI",
+            message=f"no wheel available for {package}",
         )
 
     # Download the wheel
@@ -121,6 +121,11 @@ def download_and_extract(
                 passed=True, package=package,
                 message=f"extracted {candidate} ({size_kb:.0f} KB)",
             )
+    except OSError as e:
+        return PypiCheckResult(
+            passed=False, package=package,
+            message=f"destination write failed: {e}",
+        )
     except zipfile.BadZipFile:
         return PypiCheckResult(
             passed=False, package=package,
@@ -141,12 +146,10 @@ def _get_wheel_url(package: str) -> tuple:
         with urlopen(req, timeout=30) as resp:
             data = json.loads(resp.read().decode())
 
-        # Prefer wheel over sdist
-        for packagetype in ("bdist_wheel", "sdist"):
-            for entry in data.get("urls", []):
-                if entry.get("packagetype") == packagetype:
-                    digest = (entry.get("digests") or {}).get("sha256", "")
-                    return entry["url"], digest
+        for entry in data.get("urls", []):
+            if entry.get("packagetype") == "bdist_wheel":
+                digest = (entry.get("digests") or {}).get("sha256", "")
+                return entry["url"], digest
     except Exception:
         pass
     return None, ""

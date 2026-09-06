@@ -246,6 +246,53 @@ class TestP4CommandParsing:
         assert "/custom.p4ignore" in content
         assert outside.read_text() == "unrelated\n"
 
+    def test_absolute_missing_p4ignore_is_rejected(self, tmp_path, monkeypatch):
+        root = str(tmp_path / "project")
+        os.makedirs(root)
+        outside = tmp_path / "outside.p4ignore"
+        monkeypatch.setattr(asc.shutil, "which", lambda name: "p4" if name == "p4" else None)
+        monkeypatch.setattr(asc, "_p4_where_mapped", lambda r, t: True)
+        monkeypatch.setattr(asc, "_p4_ignores", lambda r, path: False)
+        monkeypatch.setattr(asc, "_p4_set_p4ignore", lambda r: [str(outside)])
+
+        status, detail = asc._apply_p4_exclusion(root)
+
+        assert status == "error"
+        assert "outside the project" in detail
+        assert not outside.exists()
+
+    def test_p4_ignore_file_is_excluded_from_git(self, tmp_path, monkeypatch):
+        root = _init_repo(str(tmp_path / "project"))
+        monkeypatch.setattr(asc.shutil, "which", lambda name: "p4" if name == "p4" else None)
+        monkeypatch.setattr(asc, "_p4_where_mapped", lambda r, t: True)
+        calls = {"count": 0}
+
+        def _fake_ignores(r, path):
+            calls["count"] += 1
+            return calls["count"] > 1
+
+        monkeypatch.setattr(asc, "_p4_ignores", _fake_ignores)
+        monkeypatch.setattr(asc, "_p4_set_p4ignore", lambda r: None)
+
+        status, _detail = asc._apply_p4_exclusion(root)
+
+        assert status == "added"
+        clean = subprocess.run(
+            ["git", "-C", root, "status", "--porcelain"],
+            capture_output=True, text=True, check=True,
+        )
+        assert clean.stdout == ""
+
+    def test_home_p4ignore_does_not_affect_git_project(self, tmp_path, monkeypatch):
+        root = _init_repo(str(tmp_path / "project"))
+        (tmp_path / ".p4ignore").write_text("outside\n")
+        monkeypatch.setattr(asc.shutil, "which", lambda name: None)
+
+        status, detail = asc._apply_p4_exclusion(root)
+
+        assert status == "none"
+        assert detail == ""
+
     def test_already_ignored_writes_nothing(self, tmp_path, monkeypatch):
         root = str(tmp_path)
         monkeypatch.setattr(asc.shutil, "which", lambda name: "p4" if name == "p4" else None)

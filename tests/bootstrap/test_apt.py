@@ -119,6 +119,23 @@ class TestDpkgInstalled:
 
 
 class TestAptInstall:
+    def test_run_closes_stdin_and_bounds_timeout(self, monkeypatch):
+        seen = {}
+
+        def fake_run(argv, **kwargs):
+            seen["argv"] = argv
+            seen.update(kwargs)
+            return 0, "stdout", "stderr"
+
+        monkeypatch.setattr(apt, "run_captured", fake_run, raising=False)
+
+        ok, output = apt._run(["apt-get", "install"], timeout=41)
+
+        assert ok is True
+        assert output == "stdoutstderr"
+        assert seen["stdin_devnull"] is True
+        assert seen["timeout"] == 41
+
     def test_non_linux_is_noop_failure(self):
         with patch.object(apt.sys, "platform", "darwin"):
             r = apt.apt_install("net-tools")

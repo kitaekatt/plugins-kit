@@ -7,6 +7,7 @@ output-path defaulting and Windows default-browser command parsing.
 """
 
 import importlib.util
+import sys
 from pathlib import Path
 
 import pytest
@@ -82,3 +83,92 @@ class TestExeFromCommand:
     @pytest.mark.parametrize("value", ["", "   ", None])
     def test_empty_returns_none(self, value):
         assert html_to_pdf.exe_from_command(value) is None
+
+
+def test_main_wraps_convert_errors(monkeypatch, tmp_path):
+    source = tmp_path / "page.html"
+    source.write_text("<html />", encoding="utf-8")
+    monkeypatch.setattr(html_to_pdf, "convert", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("boom")))
+    monkeypatch.setattr(sys, "argv", ["html_to_pdf.py", str(source), "--no-open"])
+
+    with pytest.raises(SystemExit, match=r"ERROR RuntimeError: boom"):
+        html_to_pdf.main()
+
+
+def test_equal_input_output_fails_before_convert(monkeypatch, tmp_path):
+    source = tmp_path / "page.html"
+    source.write_text("<html />", encoding="utf-8")
+    called = []
+    monkeypatch.setattr(html_to_pdf, "convert", lambda *args, **kwargs: called.append(True) or tmp_path / "out.pdf")
+    monkeypatch.setattr(sys, "argv", ["html_to_pdf.py", str(source), str(source)])
+
+    with pytest.raises(SystemExit, match="ERROR"):
+        html_to_pdf.main()
+    assert called == []
+
+
+def test_main_wires_no_open_and_scale(monkeypatch, tmp_path, capsys):
+    source = tmp_path / "page.html"
+    source.write_text("<html />", encoding="utf-8")
+    calls = []
+    monkeypatch.setattr(html_to_pdf, "convert", lambda *args, **kwargs: calls.append((args, kwargs)) or tmp_path / "page.pdf")
+    monkeypatch.setattr(sys, "argv", ["html_to_pdf.py", str(source), "--scale", "80%", "--no-open"])
+
+    html_to_pdf.main()
+
+    assert calls[0][1]["scale"] == pytest.approx(0.8)
+    assert "OPENED" not in capsys.readouterr().out
+
+
+def test_a4_pdf_kwargs_do_not_prefer_css(monkeypatch, tmp_path):
+    class Page:
+        def goto(self, *args, **kwargs): pass
+        def pdf(self, **kwargs): self.kwargs = kwargs
+
+    class Browser:
+        def new_page(self): return page
+        def close(self): pass
+
+    class Chromium:
+        def launch(self): return Browser()
+
+    class Playwright:
+        chromium = Chromium()
+
+    page = Page()
+    class Manager:
+        def __enter__(self): return Playwright()
+        def __exit__(self, *args): pass
+
+    monkeypatch.setitem(sys.modules, "playwright", type("M", (), {})())
+    sync = type("M", (), {"sync_playwright": lambda: Manager()})
+    monkeypatch.setitem(sys.modules, "playwright.sync_api", sync)
+    source = tmp_path / "page.html"
+    source.write_text("<html />", encoding="utf-8")
+
+    html_to_pdf.convert(source, tmp_path / "page.pdf", a4=True)
+
+    assert page.kwargs["format"] == "A4"
+    assert not page.kwargs["prefer_css_page_size"]
+
+
+def test_open_browser_falls_back_after_popen_failure(monkeypatch, tmp_path):
+    monkeypatch.setattr(html_to_pdf.sys, "platform", "win32")
+    monkeypatch.setattr(html_to_pdf, "_windows_default_browser", lambda: "browser.exe")
+    monkeypatch.setattr(html_to_pdf.subprocess, "Popen", lambda *args: (_ for _ in ()).throw(OSError("no")))
+    opened = []
+    monkeypatch.setattr(html_to_pdf.webbrowser, "open", lambda uri: opened.append(uri) or True)
+
+    assert html_to_pdf.open_in_default_browser(tmp_path / "x.pdf")
+    assert opened
+
+
+def test_open_browser_returns_after_windows_popen(monkeypatch, tmp_path):
+    monkeypatch.setattr(html_to_pdf.sys, "platform", "win32")
+    monkeypatch.setattr(html_to_pdf, "_windows_default_browser", lambda: "browser.exe")
+    calls = []
+    monkeypatch.setattr(html_to_pdf.subprocess, "Popen", lambda argv: calls.append(argv))
+    monkeypatch.setattr(html_to_pdf.webbrowser, "open", lambda uri: pytest.fail("fallback"))
+
+    assert html_to_pdf.open_in_default_browser(tmp_path / "x.pdf")
+    assert calls

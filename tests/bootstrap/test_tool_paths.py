@@ -2,6 +2,7 @@
 
 import json
 import os
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -44,6 +45,14 @@ class TestRecordAndResolve:
         tool_paths.record(d, "git", "/usr/bin/git")
         tool_paths.record(d, "git", "/opt/git/bin/git")
         assert tool_paths.resolve(d, "git") == "/opt/git/bin/git"
+
+    def test_record_stores_relative_path_as_absolute(self, tmp_path, monkeypatch):
+        d = _bootstrap_dir(tmp_path)
+        monkeypatch.chdir(tmp_path)
+
+        tool_paths.record(d, "git", "bin/git")
+
+        assert tool_paths.resolve(d, "git") == str((tmp_path / "bin/git").absolute())
 
     def test_record_ignores_empty_name_or_path(self, tmp_path):
         d = _bootstrap_dir(tmp_path)
@@ -188,3 +197,9 @@ class TestDataDirContract:
         d.mkdir()
         tool_paths.record(str(d), "git", "/usr/bin/git")
         assert (d / "tool_paths.json").exists()
+
+    def test_engine_exports_from_canonical_data_dir(self):
+        engine_path = Path(__file__).parents[2] / "plugins/bootstrap/bootstrap_lib/engine.py"
+        source = engine_path.read_text()
+
+        assert "_tool_paths.export_tool_env_vars(None)" in source

@@ -69,6 +69,9 @@ Reports on the most recent session for the current project. Add
 `--detailed` for the per-request breakdown, `--all` for every session,
 or a session ID for a specific one.
 
+Use `--detailed` by itself for the per-request table. It cannot be combined
+with `--all`.
+
 ## When not to use it
 
 If you want spend-in-dollars tracking, use ccusage.
