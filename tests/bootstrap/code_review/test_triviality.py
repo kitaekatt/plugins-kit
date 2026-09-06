@@ -31,10 +31,16 @@ class TestTrivialPass:
         prof = triviality.triviality_profile(diff, pre)
         assert prof == {"trivial": True, "reasons": []}
 
-    def test_no_hunks_is_trivial(self):
-        # A section with no @@ hunk has zero changed lines -> trivially trivial.
+    def test_no_hunks_is_not_trivial(self):
+        # A rename-only or mode-only section has no content to inspect.
         prof = triviality.triviality_profile("diff --git a/x.md b/x.md\n", None)
-        assert prof["trivial"] is True
+        assert prof == {"trivial": False, "reasons": ["no_hunks"]}
+
+    def test_empty_diff_fails_closed(self):
+        assert triviality.triviality_profile("", None) == {
+            "trivial": False,
+            "reasons": ["no_diff"],
+        }
 
 
 # ---------------------------------------------------------------------------
@@ -111,6 +117,11 @@ class TestDisqualifiers:
         prof = triviality.triviality_profile(diff, "one\n")
         assert prof["trivial"] is False
         assert "unparseable" in prof["reasons"]
+
+    def test_mismatched_pre_image_fails_closed(self):
+        diff = _hunk("@@ -1,2 +1,2 @@", " context from another file", "-old", "+new")
+        prof = triviality.triviality_profile(diff, "context from this file\nold\n")
+        assert prof == {"trivial": False, "reasons": ["diff_mismatch"]}
 
 
 # ---------------------------------------------------------------------------

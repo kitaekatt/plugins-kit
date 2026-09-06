@@ -41,8 +41,16 @@ from typing import Optional
 _PROBE = "_probe_marketplace_"
 _PROBE_PLUGIN = "_probe_plugin_"
 
-# Manifest keys whose values are paths a bootstrap phase may write to.
-_PATH_KEYS = ("extract_to", "target", "file", "reference")
+# Manifest sections and the keys whose values are destinations written by that
+# phase. Source paths, such as json_entries.reference, are deliberately absent.
+_DESTINATION_KEYS = {
+    "sync_to_data": ("dst",),
+    "json_entries": ("target",),
+    "ini_settings": ("file",),
+    "pypi_packages": ("extract_to",),
+    "project_config": ("file", "legacy_file"),
+    "config": ("file",),
+}
 
 LABEL_DURABLE = "declared plugin-data path (durable)"
 LABEL_RELOCATED = "declared plugin-data path (relocated by project config)"
@@ -176,16 +184,23 @@ def _manifest_targets(workspace_root: Path, durable: Optional[Path]) -> list[Pat
 
 
 def _walk_path_values(data: object) -> list[str]:
+    """Return only destination paths from known manifest operations."""
     found: list[str] = []
-    if isinstance(data, dict):
-        for key, value in data.items():
-            if key in _PATH_KEYS and isinstance(value, str) and value:
-                found.append(value)
-            else:
-                found.extend(_walk_path_values(value))
-    elif isinstance(data, list):
-        for item in data:
-            found.extend(_walk_path_values(item))
+    if not isinstance(data, dict):
+        return found
+    for section, keys in _DESTINATION_KEYS.items():
+        entries = data.get(section)
+        if isinstance(entries, dict):
+            entries = [entries]
+        if not isinstance(entries, list):
+            continue
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            for key in keys:
+                value = entry.get(key)
+                if isinstance(value, str) and value:
+                    found.append(value)
     return found
 
 

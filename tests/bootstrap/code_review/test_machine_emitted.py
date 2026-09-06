@@ -87,7 +87,7 @@ class TestLocalHead:
 
 class TestDetectMachineEmitted:
     def test_banner_in_added_content(self):
-        section = "<<x>>\n+# " + GEN + " by tool\n+def f(): ...\n"
+        section = "@@ -0,0 +1,2 @@\n+# " + GEN + " by tool\n+def f(): ...\n"
         assert detect_machine_emitted(section) == "generated-by banner"
 
     def test_banner_on_disk_when_the_hunk_is_far_below(self, tmp_path):
@@ -99,3 +99,13 @@ class TestDetectMachineEmitted:
         p = tmp_path / "src.py"
         p.write_text("def f():\n    return 1\n", encoding="utf-8")
         assert detect_machine_emitted("<<x>>\n+def f(): ...\n", str(p)) is None
+
+    def test_deep_added_banner_in_handwritten_file_stays_reviewable(self, tmp_path):
+        p = tmp_path / "src.py"
+        p.write_text("def f():\n    return 1\n", encoding="utf-8")
+        section = (
+            "@@ -500,1 +500,1 @@\n"
+            "-old line\n"
+            "+# " + GEN + " by tool\n"
+        )
+        assert detect_machine_emitted(section, str(p)) is None

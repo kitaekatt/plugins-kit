@@ -65,23 +65,7 @@ def partition_sections_into_chunks(
     chunk; callers stitch a chunk-index back onto their per-file records.
     """
     if not sections:
-        if not preamble:
-            return []
-        # Diff text that parsed into zero sections must not be silently
-        # dropped -- a caller's splitter may have failed to recognize the
-        # format (e.g. combined-diff headers). Surface the unattributed
-        # text as one preamble-only chunk so reviewers still see it.
-        print(
-            "warning: diff parsed into 0 sections; emitting preamble-only chunk",
-            file=sys.stderr,
-        )
-        return [
-            {
-                "text": preamble,
-                "files": [],
-                "bytes": len(preamble.encode("utf-8")),
-            }
-        ]
+        return []
     if group_by is None:
         group_by = _section_parent
 
@@ -99,8 +83,19 @@ def partition_sections_into_chunks(
 
     for sec, sb in zip(sections, section_bytes):
         sec_group = group_by(sec["identifier"])
+        would_be = cur_bytes + sb
+        if cur_text and would_be > max_bytes and not cur_files:
+            if cur_bytes > max_bytes:
+                print(
+                    "error: diff preamble exceeds max chunk size; emitting oversized preamble",
+                    file=sys.stderr,
+                )
+            chunks.append(
+                {"text": cur_text, "files": [], "bytes": cur_bytes}
+            )
+            cur_text = ""
+            cur_bytes = 0
         if cur_files:
-            would_be = cur_bytes + sb
             hard_cap = would_be > max_bytes
             balanced = cur_bytes >= target and sec_group != cur_last_group
             if hard_cap or balanced:

@@ -10,6 +10,7 @@ from typing import Any
 import pytest
 import yaml
 
+from bootstrap_lib.code_review import lane_prompts as lp
 from bootstrap_lib.code_review import review_profiles as rp
 
 
@@ -98,20 +99,21 @@ def test_patch_merges_profile_reviewer_and_validator_in_place(tmp_path: Path) ->
     assert code["validator_models"] == {"bug": "sonnet", "claude_md": "sonnet"}
 
 
-def test_unknown_profiles_reviewers_and_validator_reasons_append(tmp_path: Path) -> None:
+def test_unknown_profiles_and_validator_reasons_append(tmp_path: Path) -> None:
     config = _resolved(
         tmp_path,
         user={
             "profiles": [
                 {
                     "id": "data_only",
-                    "reviewers": [{"name": "reviewer_security", "model": "sonnet"}],
                     "validator_models": {"security": "sonnet"},
                 },
                 {
                     "id": "security",
                     "selection": {},
-                    "reviewers": [{"name": "reviewer_security", "model": "opus"}],
+                    "reviewers": [
+                        {"name": "reviewer_b_diff_only_bugs", "model": "opus"}
+                    ],
                     "validator_models": {"bug": "opus", "claude_md": "sonnet"},
                 },
             ]
@@ -124,10 +126,6 @@ def test_unknown_profiles_reviewers_and_validator_reasons_append(tmp_path: Path)
         "security",
     ]
     data_only = _profile(config, "data_only")
-    assert data_only["reviewers"][-1] == {
-        "name": "reviewer_security",
-        "model": "sonnet",
-    }
     assert data_only["validator_models"] == {
         "bug": "sonnet",
         "claude_md": "sonnet",
@@ -136,6 +134,62 @@ def test_unknown_profiles_reviewers_and_validator_reasons_append(tmp_path: Path)
     assert list(data_only["validator_models"]) == ["bug", "claude_md", "security"]
 
 
+def test_unknown_reviewer_name_is_rejected_with_supported_lanes(tmp_path: Path) -> None:
+    with pytest.raises(rp.ConfigError, match="reviewer_security") as excinfo:
+        _resolved(
+            tmp_path,
+            user={
+                "profiles": [
+                    {
+                        "id": "data_only",
+                        "reviewers": [
+                            {"name": "reviewer_security", "model": "sonnet"}
+                        ],
+                    }
+                ]
+            },
+        )
+
+    supported = sorted(lp.KNOWN_LANES - {"validator"})
+    assert str(supported) in str(excinfo.value)
+
+
+def test_all_profiles_disabled_is_rejected(tmp_path: Path) -> None:
+    with pytest.raises(rp.ConfigError, match="at least one active review profile"):
+        _resolved(
+            tmp_path,
+            user={
+                "profiles": [
+                    {"id": "data_only", "disabled": True},
+                    {"id": "code", "disabled": True},
+                ]
+            },
+        )
+
+
+def test_profile_with_no_active_reviewers_is_rejected(tmp_path: Path) -> None:
+    with pytest.raises(rp.ConfigError, match="profile 'code'.*reviewer"):
+        _resolved(
+            tmp_path,
+            user={
+                "profiles": [
+                    {
+                        "id": "code",
+                        "reviewers": [
+                            {
+                                "name": name,
+                                "disabled": True,
+                            }
+                            for name in (
+                                "reviewer_a_claude_md_compliance",
+                                "reviewer_b_diff_only_bugs",
+                                "reviewer_c_introduced_code",
+                            )
+                        ],
+                    }
+                ]
+            },
+        )
 def test_disabled_profile_and_reviewer_are_removed(tmp_path: Path) -> None:
     config = _resolved(
         tmp_path,

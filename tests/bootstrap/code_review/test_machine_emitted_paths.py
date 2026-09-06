@@ -64,6 +64,18 @@ class TestDeclaredGeneratedRules:
         targets = [root for label, root in rules if label == LABEL_MANIFEST]
         assert targets == [tmp_path / "Generated" / "stub.py"]
 
+    def test_json_reference_is_source_and_target_is_the_only_rule(self, tmp_path):
+        claude = tmp_path / ".claude"
+        claude.mkdir()
+        (claude / "bootstrap.json").write_text(
+            '{"json_entries": [{"reference": "bundled.json", '
+            '"target": "${cwd}/Generated/known.json"}]}',
+            encoding="utf-8",
+        )
+        targets = [root for label, root in declared_generated_rules(tmp_path)
+                   if label == LABEL_MANIFEST]
+        assert targets == [tmp_path / "Generated" / "known.json"]
+
     def test_target_outside_the_workspace_is_dropped(self, tmp_path):
         claude = tmp_path / ".claude"
         claude.mkdir()

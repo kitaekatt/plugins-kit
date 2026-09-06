@@ -82,6 +82,10 @@ class _HunkParseError(Exception):
     """Raised when the diff hunks cannot be parsed / applied to the pre-image."""
 
 
+class _DiffMismatchError(Exception):
+    """Raised when a context or deletion line disagrees with the pre-image."""
+
+
 def _parse_hunks(diff_section_text: str) -> list[dict]:
     """Extract unified-diff hunks from one file's diff section.
 
@@ -146,11 +150,15 @@ def _reconstruct(pre_lines: list[str], hunks: list[dict]) -> tuple[list[str], se
             if op == " ":
                 if pre_idx >= len(pre_lines):
                     raise _HunkParseError("context past end of pre-image")
+                if pre_lines[pre_idx] != content:
+                    raise _DiffMismatchError("context does not match pre-image")
                 post.append(pre_lines[pre_idx])
                 pre_idx += 1
             elif op == "-":
                 if pre_idx >= len(pre_lines):
                     raise _HunkParseError("remove past end of pre-image")
+                if pre_lines[pre_idx] != content:
+                    raise _DiffMismatchError("deletion does not match pre-image")
                 removed_pre.add(pre_idx)
                 pre_idx += 1
             else:  # "+"
@@ -275,13 +283,17 @@ def triviality_profile(
     Returns {"trivial": bool, "reasons": [<code>, ...]}. `reasons` is empty when
     trivial; otherwise it lists every disqualifier that fired, drawn from:
     "too_large", "structure_changed", "reference_changed", "keyword_changed",
-    "yaml_touched", "unparseable". Fails CLOSED (not trivial, "unparseable") when
-    the hunks cannot be parsed or applied to the pre-image.
+    "yaml_touched", "unparseable", "no_diff", "no_hunks", "diff_mismatch".
+    Fails CLOSED when the hunks cannot be parsed or applied to the pre-image.
     """
+    if not diff_section_text:
+        return {"trivial": False, "reasons": ["no_diff"]}
     try:
         hunks = _parse_hunks(diff_section_text)
     except _HunkParseError:
         return {"trivial": False, "reasons": ["unparseable"]}
+    if not hunks:
+        return {"trivial": False, "reasons": ["no_hunks"]}
 
     added, removed = _delta_lines(hunks)
     reasons: list[str] = []
@@ -302,6 +314,8 @@ def triviality_profile(
     pre_lines = pre_image_text.splitlines() if pre_image_text else []
     try:
         post_lines, added_post, removed_pre = _reconstruct(pre_lines, hunks)
+    except _DiffMismatchError:
+        return {"trivial": False, "reasons": ["diff_mismatch"]}
     except _HunkParseError:
         return {"trivial": False, "reasons": ["unparseable"]}
 

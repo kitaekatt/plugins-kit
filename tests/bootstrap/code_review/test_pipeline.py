@@ -203,7 +203,7 @@ class TestAssembleBundle:
         assert cf["chunk_index"] == 0
         assert cf["claude_mds"] == []
 
-    def test_file_absent_from_diff_gets_none_chunk_index(self, tmp_path):
+    def test_file_absent_from_diff_gets_none_chunk_index(self, tmp_path, capsys):
         core = assemble_bundle(
             preamble="",
             sections=_sections_for("a"),
@@ -217,6 +217,10 @@ class TestAssembleBundle:
         )
         assert core["changed_files"][0]["chunk_index"] == 0
         assert core["changed_files"][1]["chunk_index"] is None
+        assert core["unchunked_files"] == [
+            {"path": "not-in-diff", "reason": "no_diff_section"}
+        ]
+        assert "not-in-diff" in capsys.readouterr().err
 
     def test_claude_mds_collected_and_deduped_in_order(self, tmp_path):
         ws = tmp_path / "ws"
@@ -292,7 +296,7 @@ class TestAssembleBundle:
         assert gate["summary"] == "Rebuild the config binaries"
         assert gate["matched_files"] == [str(target)]
 
-    def test_preamble_only_diff_yields_unattributed_chunk(self, tmp_path, capsys):
+    def test_preamble_only_diff_yields_no_chunk(self, tmp_path, capsys):
         core = assemble_bundle(
             preamble="unrecognized diff text\n",
             sections=[],
@@ -301,9 +305,8 @@ class TestAssembleBundle:
             max_chunk_bytes=1024,
             workspace_root=None,
         )
-        assert len(core["diff_chunks"]) == 1
-        assert core["diff_chunks"][0]["files"] == []
-        assert "0 sections" in capsys.readouterr().err
+        assert core["diff_chunks"] == []
+        assert capsys.readouterr().err == ""
 
     def test_creates_bundle_dir(self, tmp_path):
         bundle_dir = tmp_path / "deep" / "nested" / "bundle"
@@ -778,6 +781,7 @@ class TestAssembleBundleMachineEmitted:
             "changed_files",
             "unique_claude_mds",
             "submit_gates",
+            "unchunked_files",
         }
 
     def test_review_machine_emitted_override_reviews_them_normally(self, tmp_path):

@@ -299,7 +299,7 @@ def assemble_bundle(
 
     Returns the shared bundle fields:
         {"bundle_dir", "diff_chunks", "changed_files",
-         "unique_claude_mds", "submit_gates"}
+         "unique_claude_mds", "submit_gates", "unchunked_files"}
     plus "claimed_files" when claim_globs is non-empty, plus
     "machine_emitted_files" (and its `generated_files` compat alias) when any
     changed file was detected as machine-emitted. With neither present the dict
@@ -417,6 +417,7 @@ def assemble_bundle(
     changed_files: list[dict] = []
     claimed_files: list[dict] = []
     machine_emitted_files: list[dict] = []
+    unchunked_files: list[dict] = []
     unique: list[str] = []
     seen: set[str] = set()
     all_locals: list[str] = []
@@ -477,7 +478,20 @@ def assemble_bundle(
             out["local"] = canonical_local(local)
         out["chunk_index"] = id_to_chunk.get(f["identifier"])
         out["claude_mds"] = claude_mds
+        if out["chunk_index"] is None:
+            unchunked_files.append(
+                {"path": f["identifier"], "reason": "no_diff_section"}
+            )
         changed_files.append(out)
+
+    if unchunked_files:
+        details = ", ".join(
+            f"{entry['path']} ({entry['reason']})" for entry in unchunked_files
+        )
+        print(
+            f"warning: enumerated files not present in diff sections: {details}",
+            file=sys.stderr,
+        )
 
     submit_gates = collect_submit_gates(unique, all_locals, workspace_root)
 
@@ -487,6 +501,7 @@ def assemble_bundle(
         "changed_files": changed_files,
         "unique_claude_mds": unique,
         "submit_gates": submit_gates,
+        "unchunked_files": unchunked_files,
     }
     if claim_globs:
         result["claimed_files"] = claimed_files

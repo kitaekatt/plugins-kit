@@ -6,6 +6,6 @@ produce a raw diff text + a per-file action map, then hand off to the
 helpers in this package for chunking, CLAUDE.md collection, submit-gate
 matching, and bundle persistence.
 
-The interface those front-halves implement is written down (as documentation,
-not an enforced base class) in ``vcs_adapter.VcsAdapter``.
+The front-halves share a structural contract through the pipeline helpers;
+their VCS-specific implementations remain in their owning plugins.
 """

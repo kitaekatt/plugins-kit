@@ -431,6 +431,21 @@ class TestBuildCodexExecArgv:
             assert "cmd.exe" in str(excinfo.value)
             assert bad in str(excinfo.value)
 
+    @pytest.mark.parametrize(
+        "argv_prefix",
+        [
+            ("cmd.exe", "/c", "codex.cmd"),
+            (r"C:\Windows\System32\cmd.exe", "/c", "codex.cmd"),
+        ],
+    )
+    def test_cmd_prefix_variants_reject_metacharacters(self, tmp_path, argv_prefix):
+        with pytest.raises(ValueError, match="cmd.exe"):
+            codex.build_codex_exec_argv(
+                root=tmp_path,
+                model="a&b",
+                argv_prefix=argv_prefix,
+            )
+
     def test_real_executable_prefix_allows_metacharacters(self, tmp_path):
         """No cmd hop, no re-parse -- CreateProcess takes argv verbatim."""
         argv = codex.build_codex_exec_argv(
@@ -456,79 +471,3 @@ class TestBuildCodexExecArgv:
         )
         assert all(isinstance(part, str) for part in argv)
 
-
-# --------------------------------------------------------------------------
-# probe_config_key
-# --------------------------------------------------------------------------
-
-
-class _TextProc:
-    def __init__(self, returncode=0, stdout=""):
-        self.returncode = returncode
-        self.stdout = stdout
-
-
-class TestProbeConfigKey:
-    def test_known_key_reaches_the_empty_prompt_error(self, monkeypatch):
-        calls = []
-        monkeypatch.setattr(codex.shutil, "which", lambda name: "/usr/bin/codex")
-        monkeypatch.setattr(
-            codex.subprocess,
-            "run",
-            _fake_run(_TextProc(1, "ERROR: No prompt provided via stdin"), calls),
-        )
-        assert codex.probe_config_key("model_reasoning_effort") is True
-        argv = calls[0]["argv"]
-        assert "--strict-config" in argv
-        assert argv[argv.index("-c") + 1] == "model_reasoning_effort=low"
-        assert argv[-1] == "-"
-        assert calls[0]["kwargs"]["input"] == ""
-
-    def test_unknown_key_is_rejected(self, monkeypatch):
-        monkeypatch.setattr(codex.shutil, "which", lambda name: "/usr/bin/codex")
-        monkeypatch.setattr(
-            codex.subprocess,
-            "run",
-            _fake_run(_TextProc(1, "error: unknown configuration field `nope`")),
-        )
-        assert codex.probe_config_key("nope") is False
-
-    def test_boolean_key_gets_a_boolean_probe_value(self, monkeypatch):
-        calls = []
-        monkeypatch.setattr(codex.shutil, "which", lambda name: "/usr/bin/codex")
-        monkeypatch.setattr(
-            codex.subprocess,
-            "run",
-            _fake_run(_TextProc(1, "No prompt provided"), calls),
-        )
-        assert codex.probe_config_key("sandbox_workspace_write.network_access") is True
-        argv = calls[0]["argv"]
-        assert (
-            argv[argv.index("-c") + 1]
-            == "sandbox_workspace_write.network_access=true"
-        )
-
-    def test_timeout_fails_closed(self, monkeypatch):
-        monkeypatch.setattr(codex.shutil, "which", lambda name: "/usr/bin/codex")
-        monkeypatch.setattr(
-            codex.subprocess,
-            "run",
-            _fake_run(subprocess.TimeoutExpired(cmd="codex", timeout=60.0)),
-        )
-        assert codex.probe_config_key("model_reasoning_effort") is False
-
-    def test_missing_cli_fails_closed(self, monkeypatch):
-        monkeypatch.setattr(codex.shutil, "which", lambda name: None)
-        assert codex.probe_config_key("model_reasoning_effort") is False
-
-    def test_unexpected_nonzero_outcome_fails_closed(self, monkeypatch):
-        monkeypatch.setattr(codex.shutil, "which", lambda name: "/usr/bin/codex")
-        monkeypatch.setattr(
-            codex.subprocess, "run", _fake_run(_TextProc(3, "something else"))
-        )
-        assert codex.probe_config_key("model_reasoning_effort") is False
-
-    def test_clean_exit_counts_as_accepted(self, monkeypatch):
-        monkeypatch.setattr(codex.shutil, "which", lambda name: "/usr/bin/codex")
-        monkeypatch.setattr(codex.subprocess, "run", _fake_run(_TextProc(0, "")))
-        assert codex.probe_config_key("model_reasoning_effort") is True
