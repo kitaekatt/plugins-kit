@@ -27,8 +27,9 @@ installed/uninstalled/updated mid-session (`/plugin` + /reload-plugins) loads
 its skills but never gets its venv provisioned -- SessionStart won't re-fire, so
 every command of the new plugin fails until a restart. On each prompt, compare
 the installed/enabled plugin-set hash (bootstrap_lib/plugins_snapshot.py:
-registry "plugins" map + settings.json "enabledPlugins", covering both the
-populated- and empty-registry v2 variants) against the stamp the last COMPLETED
+registry "plugins" map + the user and active-project settings
+"enabledPlugins", covering both the populated- and empty-registry v2 variants)
+against the stamp the last COMPLETED
 pass absorbed; on a change, relaunch session-bootstrap.sh once per change (the
 launch clears the project cooldown, so the pass always runs and provisions the
 new plugin in-session). The engine re-stamps the snapshot at completion, so
@@ -49,15 +50,15 @@ from typing import Optional, Tuple
 # (tests, in-process) or executed as a SCRIPT (the UserPromptSubmit hook runs
 # `python harvest.py`). Under script execution __package__ is None, so RELATIVE
 # imports (`from .stamps import ...`) raise "attempted relative import with no
-# known parent package" — which made run_harvest throw and the hook silently
+# known parent package" -- which made run_harvest throw and the hook silently
 # no-op (the harvest never fired in production). Putting the plugin root on
 # sys.path lets every import below use the absolute `bootstrap_lib.*` form, which
 # resolves in BOTH contexts. engine.py's top-level imports are light (stdlib +
-# atomic_write), so reusing its semver parser stays cheap.
+# atomic_write), so reusing the shared cache version comparator stays cheap.
 _PLUGIN_ROOT = str(Path(__file__).resolve().parent.parent)
 if _PLUGIN_ROOT not in sys.path:
     sys.path.insert(0, _PLUGIN_ROOT)
-from bootstrap_lib.engine import _parse_semver
+from bootstrap_lib.plugin_resolve import version_sort_key
 
 
 def _default_registry() -> str:
@@ -96,7 +97,7 @@ def _cache_installed_bootstrap(registry_path: str, marketplace: str) -> Tuple[st
         except OSError:
             continue
         if versions:
-            version = max(versions, key=_parse_semver)
+            version = max(versions, key=version_sort_key)
             return version, os.path.join(plugin_dir, version)
     return "", ""
 
@@ -109,8 +110,10 @@ def read_installed_bootstrap(registry_path: str, marketplace: str) -> Tuple[str,
     either a dict or a list of per-scope dicts (each with ``version`` /
     ``installPath``). Robust to both shapes; falls back to the first key whose
     name part is ``bootstrap`` when the marketplace-qualified ref isn't present,
-    then to the cache layout (``_cache_installed_bootstrap``) when the registry
-    records nothing at all (Claude Code registry v2).
+    then to the requested marketplace's cache layout
+    (``_cache_installed_bootstrap``) when the registry records nothing at all
+    (Claude Code registry v2). A requested marketplace never falls back to a
+    same-name record from another marketplace.
     """
     version, path = _registry_installed_bootstrap(registry_path, marketplace)
     if version and path:
@@ -129,9 +132,9 @@ def _registry_installed_bootstrap(registry_path: str, marketplace: str) -> Tuple
         return "", ""
 
     entry = plugins.get(f"bootstrap@{marketplace}") if marketplace else None
-    if entry is None:
+    if entry is None and not marketplace:
         entry = plugins.get("bootstrap")
-    if entry is None:
+    if entry is None and not marketplace:
         for key, val in plugins.items():
             if str(key).split("@", 1)[0] == "bootstrap":
                 entry = val
@@ -155,7 +158,7 @@ def _registry_installed_bootstrap(registry_path: str, marketplace: str) -> Tuple
                 candidates,
                 key=lambda e: (
                     0 if e.get("projectPath") else 1,
-                    _parse_semver(str(e.get("version", "") or "0")),
+                    version_sort_key(str(e.get("version", "") or "0")),
                 ),
             )
     if not isinstance(rec, dict):
@@ -169,7 +172,7 @@ def should_harvest(installed_version: str, ran_version: str) -> bool:
     session. A missing ran_version parses as ``(0, 0, 0)``."""
     if not installed_version:
         return False
-    return _parse_semver(installed_version) > _parse_semver(ran_version or "0")
+    return version_sort_key(installed_version) > version_sort_key(ran_version or "0")
 
 
 def read_path_version(install_path: str) -> str:
@@ -190,6 +193,28 @@ def read_path_version(install_path: str) -> str:
         return ""
 
 
+def _write_launch_failure_note(data_dir: str, detail: str) -> None:
+    """Write a one-line failure payload for the next prompt's display relay."""
+    note = f"bootstrap harvest launch failed: {detail}; retrying on the next prompt"
+    payload = {
+        "continue": True,
+        "suppressOutput": False,
+        "systemMessage": note,
+        "hookSpecificOutput": {
+            "hookEventName": "UserPromptSubmit",
+            "additionalContext": note,
+        },
+    }
+    try:
+        from bootstrap_lib.atomic_write import write_atomic
+        write_atomic(
+            str(Path(data_dir) / "bootstrap_display.pending"),
+            json.dumps(payload),
+        )
+    except Exception:
+        pass
+
+
 def launch_new_engine(install_path: str, project_dir: str, data_dir: str) -> bool:
     """Detach a full bootstrap pass via the NEW engine's session-bootstrap.sh.
 
@@ -198,7 +223,8 @@ def launch_new_engine(install_path: str, project_dir: str, data_dir: str) -> boo
     this session. We clear the per-project cooldown first so the new
     session-bootstrap.sh's throttle gate doesn't skip the pass, then launch it
     detached with empty stdin (its session_id guard is inert without stdin) and
-    output suppressed. The engine writes its user-facing output to
+    output suppressed. The child stderr is retained in ``harvest.stderr``.
+    The engine writes its user-facing output to
     bootstrap_display.pending, surfaced by the NEXT UserPromptSubmit -- exactly
     the same background/pending-file mode SessionStart uses.
 
@@ -207,6 +233,7 @@ def launch_new_engine(install_path: str, project_dir: str, data_dir: str) -> boo
     """
     sb = Path(install_path) / "hooks" / "sessionstart" / "session-bootstrap.sh"
     if not sb.is_file():
+        _write_launch_failure_note(data_dir, f"missing {sb}")
         return False
 
     # Force the pass: deleting this project's cooldown stamp makes the new
@@ -223,7 +250,6 @@ def launch_new_engine(install_path: str, project_dir: str, data_dir: str) -> boo
     popen_kwargs: dict = {
         "stdin": subprocess.DEVNULL,
         "stdout": subprocess.DEVNULL,
-        "stderr": subprocess.DEVNULL,
     }
     if project_dir:
         popen_kwargs["cwd"] = project_dir
@@ -256,8 +282,13 @@ def launch_new_engine(install_path: str, project_dir: str, data_dir: str) -> boo
             | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
         )
     try:
-        subprocess.Popen(["bash", str(sb)], **popen_kwargs)
-    except OSError:
+        stderr_path = Path(data_dir) / "harvest.stderr"
+        stderr_path.parent.mkdir(parents=True, exist_ok=True)
+        with stderr_path.open("w", encoding="utf-8") as stderr:
+            popen_kwargs["stderr"] = stderr
+            subprocess.Popen(["bash", str(sb)], **popen_kwargs)
+    except OSError as exc:
+        _write_launch_failure_note(data_dir, str(exc))
         return False
     return True
 
@@ -279,6 +310,10 @@ def run_harvest(
 
     installed_version, install_path = read_installed_bootstrap(registry_path, marketplace)
     if not installed_version or not install_path:
+        requested = f"bootstrap@{marketplace}" if marketplace else "bootstrap"
+        _write_launch_failure_note(
+            data_dir, f"{requested} is missing from the requested registry/cache"
+        )
         return None
 
     # Transient import-crash retry (fires even WITHOUT a version bump). A partial
@@ -294,6 +329,7 @@ def run_harvest(
             return None  # a retry pass is already in flight; no double-spawn
         launched.write("1")
         if not launch_new_engine(install_path, project_dir, data_dir):
+            launched.clear()
             return None
         return (
             f"import-retry: relaunched bootstrap {installed_version} after a "
@@ -315,6 +351,7 @@ def run_harvest(
     launched_stamp.write(installed_version)
 
     if not launch_new_engine(install_path, project_dir, data_dir):
+        launched_stamp.clear()
         return None
     status = (
         f"harvest: launched bootstrap {installed_version} engine "
@@ -356,7 +393,7 @@ def run_registry_relaunch(
         # completion; launching against an unknown baseline would fire a
         # spurious pass on every machine that adopts this version.
         return None
-    current = plugins_state_hash(registry_path, settings_path)
+    current = plugins_state_hash(registry_path, settings_path, project_dir)
     if current == stored:
         return None
 
@@ -377,6 +414,7 @@ def run_registry_relaunch(
     if not install_path:
         install_path = _PLUGIN_ROOT
     if not launch_new_engine(install_path, project_dir, data_dir):
+        launched.clear()
         return None
     return (
         "registry-change: relaunched bootstrap pass "

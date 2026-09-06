@@ -118,6 +118,14 @@ import shutil
 BACKUP_SUFFIX = ".registry-repair.bak"
 
 
+class RepairResult(dict):
+    """Mapping of repaired refs with an optional write failure."""
+
+    def __init__(self, *args, error: str = "", **kwargs):
+        super().__init__(*args, **kwargs)
+        self.error = error
+
+
 def default_registry_path(home=None):
     """Absolute path to Claude Code's plugin registry."""
     home = home or os.path.expanduser("~")
@@ -262,11 +270,11 @@ def apply_repair(path, backup=True):
     """
     data = load_registry(path)
     if data is None:
-        return {}
+        return RepairResult()
 
     plan = plan_repair(data)
     if not plan:
-        return {}
+        return RepairResult()
 
     container = _entries_container(data)
     for ref, (keep, _dropped) in plan.items():
@@ -281,10 +289,10 @@ def apply_repair(path, backup=True):
     from .atomic_write import write_atomic
     try:
         write_atomic(path, json.dumps(data, indent=2) + "\n")
-    except OSError:
-        return {}
+    except OSError as exc:
+        return RepairResult(error=f"could not write registry: {exc}")
 
-    return {ref: dropped for ref, (_keep, dropped) in plan.items()}
+    return RepairResult({ref: dropped for ref, (_keep, dropped) in plan.items()})
 
 
 def describe_repair(dropped_by_ref):

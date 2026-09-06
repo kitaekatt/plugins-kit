@@ -1,4 +1,4 @@
-"""Tests for marketplace_lifecycle.py — CLI-based marketplace and plugin operations."""
+"""Tests for marketplace_lifecycle.py -- CLI-based marketplace and plugin operations."""
 
 import json
 import os
@@ -9,7 +9,6 @@ import pytest
 
 from bootstrap_lib.marketplace_lifecycle import (
     LifecycleResult,
-    ScopeCheckResult,
     VersionCheckResult,
     _find_claude_cli,
     _run_claude,
@@ -19,7 +18,8 @@ from bootstrap_lib.marketplace_lifecycle import (
     check_plugin_enabled_at_scope,
     check_plugin_installed,
     check_plugin_min_version,
-    check_plugin_scope,
+    check_plugin_version,
+    enable_plugin_at_scope,
     ensure_registry_scope,
     update_marketplace,
     update_plugin,
@@ -55,7 +55,7 @@ def isolate_claude_lookup(tmp_path, monkeypatch):
 
 
 class TestFindClaudeCli:
-    """Tests for _find_claude_cli — env, PATH, and well-known location lookup."""
+    """Tests for _find_claude_cli -- env, PATH, and well-known location lookup."""
 
     def test_returns_path_when_env_set_and_file_exists(self, tmp_path, monkeypatch, isolate_claude_lookup):
         fake_bin = tmp_path / "claude"
@@ -114,13 +114,13 @@ class TestFindClaudeCli:
         monkeypatch.setattr(sys, "platform", "win32")
         claude_cmd = tmp_path / "claude.cmd"
         claude_cmd.write_text("@echo off\n")
-        # Env var without the .cmd suffix — the resolver should still find it.
+        # Env var without the .cmd suffix -- the resolver should still find it.
         monkeypatch.setenv("CLAUDE_REAL_BIN", str(tmp_path / "claude"))
         assert _find_claude_cli() == str(claude_cmd)
 
 
 class TestRunClaude:
-    """Tests for _run_claude — CLI invocation via _find_claude_cli."""
+    """Tests for _run_claude -- CLI invocation via _find_claude_cli."""
 
     def test_returns_failure_when_cli_not_found(self, isolate_claude_lookup):
         ok, stdout, stderr = _run_claude(["plugin", "list"])
@@ -145,6 +145,7 @@ class TestCheckMarketplaceExists:
         km.write_text(json.dumps({
             "my-market": {"source": {"source": "git", "url": "https://example.com"}, "autoUpdate": True, "installLocation": str(tmp_path / "marketplaces" / "my-market")}
         }))
+        (tmp_path / "marketplaces" / "my-market").mkdir(parents=True)
         monkeypatch.setenv("HOME", str(tmp_path))
         monkeypatch.setenv("USERPROFILE", str(tmp_path))
 
@@ -167,14 +168,25 @@ class TestCheckMarketplaceExists:
         result = check_marketplace_exists("anything")
         assert result.passed is False
 
+    def test_install_location_must_exist_as_a_directory(self, tmp_path, monkeypatch):
+        km = tmp_path / ".claude" / "plugins" / "known_marketplaces.json"
+        km.parent.mkdir(parents=True)
+        km.write_text(json.dumps({"my-market": {"installLocation": str(tmp_path / "missing")}}))
+        monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.setenv("USERPROFILE", str(tmp_path))
+
+        assert check_marketplace_exists("my-market").passed is False
+
 
 class TestCheckPluginInstalled:
     def test_installed_colon_format(self, tmp_path, monkeypatch):
         ip = tmp_path / ".claude" / "plugins" / "installed_plugins.json"
         ip.parent.mkdir(parents=True)
+        install_path = tmp_path / "cache" / "bootstrap"
+        install_path.mkdir(parents=True)
         ip.write_text(json.dumps({
             "version": 2,
-            "plugins": {"plugins-kit:bootstrap": [{"installPath": "/some/path", "version": "1.0"}]}
+            "plugins": {"plugins-kit:bootstrap": [{"installPath": str(install_path), "version": "1.0"}]}
         }))
         monkeypatch.setenv("HOME", str(tmp_path))
         monkeypatch.setenv("USERPROFILE", str(tmp_path))
@@ -186,9 +198,11 @@ class TestCheckPluginInstalled:
         """Finds plugin even when registry uses plugin@marketplace format."""
         ip = tmp_path / ".claude" / "plugins" / "installed_plugins.json"
         ip.parent.mkdir(parents=True)
+        install_path = tmp_path / "cache" / "bootstrap"
+        install_path.mkdir(parents=True)
         ip.write_text(json.dumps({
             "version": 2,
-            "plugins": {"bootstrap@plugins-kit": [{"installPath": "/some/path", "version": "1.0"}]}
+            "plugins": {"bootstrap@plugins-kit": [{"installPath": str(install_path), "version": "1.0"}]}
         }))
         monkeypatch.setenv("HOME", str(tmp_path))
         monkeypatch.setenv("USERPROFILE", str(tmp_path))
@@ -211,6 +225,34 @@ class TestCheckPluginInstalled:
         monkeypatch.setenv("USERPROFILE", str(tmp_path))
         result = check_plugin_installed("plugins-kit:bootstrap")
         assert result.passed is False
+
+    def test_empty_registry_with_enabled_cache_is_installed(self, tmp_path, monkeypatch):
+        plugins_dir = tmp_path / ".claude" / "plugins"
+        plugins_dir.mkdir(parents=True)
+        (plugins_dir / "installed_plugins.json").write_text(
+            json.dumps({"version": 2, "plugins": {}})
+        )
+        settings = tmp_path / ".claude" / "settings.json"
+        settings.write_text(json.dumps({"enabledPlugins": {"bootstrap@plugins-kit": True}}))
+        cache = plugins_dir / "cache" / "plugins-kit" / "bootstrap" / "1.0.0"
+        cache.mkdir(parents=True)
+        monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.setenv("USERPROFILE", str(tmp_path))
+
+        assert check_plugin_installed("plugins-kit:bootstrap").passed is True
+
+    def test_registry_record_without_usable_install_path_is_not_installed(
+            self, tmp_path, monkeypatch):
+        ip = tmp_path / ".claude" / "plugins" / "installed_plugins.json"
+        ip.parent.mkdir(parents=True)
+        ip.write_text(json.dumps({
+            "version": 2,
+            "plugins": {"bootstrap@plugins-kit": [{"version": "1.0.0"}]},
+        }))
+        monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.setenv("USERPROFILE", str(tmp_path))
+
+        assert check_plugin_installed("plugins-kit:bootstrap").passed is False
 
 
 class TestMarketplaceAlwaysUpdate:
@@ -239,6 +281,7 @@ class TestMarketplaceAlwaysUpdate:
                 "installLocation": str(tmp_path / "marketplaces" / "my-market"),
             }
         }))
+        (tmp_path / "marketplaces" / "my-market").mkdir(parents=True)
         monkeypatch.setenv("HOME", str(tmp_path))
         monkeypatch.setenv("USERPROFILE", str(tmp_path))
 
@@ -278,6 +321,7 @@ class TestMarketplaceAlwaysUpdate:
                 "installLocation": str(tmp_path / "marketplaces" / "my-market"),
             }
         }))
+        (tmp_path / "marketplaces" / "my-market").mkdir(parents=True)
         monkeypatch.setenv("HOME", str(tmp_path))
         monkeypatch.setenv("USERPROFILE", str(tmp_path))
 
@@ -315,6 +359,7 @@ class TestMarketplaceAlwaysUpdate:
                 "installLocation": str(tmp_path / "marketplaces" / "my-market"),
             }
         }))
+        (tmp_path / "marketplaces" / "my-market").mkdir(parents=True)
         monkeypatch.setenv("HOME", str(tmp_path))
         monkeypatch.setenv("USERPROFILE", str(tmp_path))
 
@@ -349,6 +394,7 @@ class TestMarketplaceAlwaysUpdate:
                 "installLocation": str(tmp_path / "marketplaces" / "my-market"),
             }
         }))
+        (tmp_path / "marketplaces" / "my-market").mkdir(parents=True)
         monkeypatch.setenv("HOME", str(tmp_path))
         monkeypatch.setenv("USERPROFILE", str(tmp_path))
 
@@ -396,58 +442,8 @@ class TestVersionGreater:
 
 
 
-class TestCheckPluginScope:
-    """Tests for check_plugin_scope — detecting scope mismatches."""
-
-    def _write_installed(self, tmp_path, monkeypatch, plugins_data):
-        ip = tmp_path / ".claude" / "plugins" / "installed_plugins.json"
-        ip.parent.mkdir(parents=True, exist_ok=True)
-        ip.write_text(json.dumps({"version": 2, "plugins": plugins_data}))
-        monkeypatch.setenv("HOME", str(tmp_path))
-        monkeypatch.setenv("USERPROFILE", str(tmp_path))
-
-    def test_scope_matches(self, tmp_path, monkeypatch):
-        self._write_installed(tmp_path, monkeypatch, {
-            "bootstrap@plugins-kit": [{"scope": "user", "version": "0.5.4"}]
-        })
-        result = check_plugin_scope("plugins-kit:bootstrap", "user")
-        assert result.matches is True
-        assert result.installed_scope == "user"
-
-    def test_scope_mismatch_project_vs_user(self, tmp_path, monkeypatch):
-        self._write_installed(tmp_path, monkeypatch, {
-            "bootstrap@plugins-kit": [{"scope": "project", "version": "0.5.4"}]
-        })
-        result = check_plugin_scope("plugins-kit:bootstrap", "user")
-        assert result.matches is False
-        assert result.installed_scope == "project"
-        assert "want user" in result.message
-
-    def test_scope_mismatch_user_vs_project(self, tmp_path, monkeypatch):
-        self._write_installed(tmp_path, monkeypatch, {
-            "bootstrap@plugins-kit": [{"scope": "user", "version": "0.5.4"}]
-        })
-        result = check_plugin_scope("plugins-kit:bootstrap", "project")
-        assert result.matches is False
-        assert result.installed_scope == "user"
-        assert "want project" in result.message
-
-    def test_not_installed_returns_matches(self, tmp_path, monkeypatch):
-        """Not installed → matches=True (nothing to fix)."""
-        self._write_installed(tmp_path, monkeypatch, {})
-        result = check_plugin_scope("plugins-kit:bootstrap", "user")
-        assert result.matches is True
-        assert result.installed_scope == ""
-
-    def test_no_file(self, tmp_path, monkeypatch):
-        monkeypatch.setenv("HOME", str(tmp_path))
-        monkeypatch.setenv("USERPROFILE", str(tmp_path))
-        result = check_plugin_scope("plugins-kit:bootstrap", "user")
-        assert result.matches is True
-
-
 class TestCheckPluginEnabledAtScope:
-    """Tests for check_plugin_enabled_at_scope — reading settings files directly."""
+    """Tests for check_plugin_enabled_at_scope -- reading settings files directly."""
 
     def test_enabled_at_user_scope(self, tmp_path, monkeypatch):
         settings = tmp_path / ".claude" / "settings.json"
@@ -508,7 +504,8 @@ class TestCheckPluginEnabledAtScope:
 
 
 class TestScopeRemediation:
-    """Tests for scope remediation in the engine — ensure-at-desired-scope pattern."""
+    """Tests for scope remediation in the engine -- ensure-at-desired-scope pattern."""
+
 
     @staticmethod
     def _setup_engine_path():
@@ -520,15 +517,17 @@ class TestScopeRemediation:
             sys.path.insert(0, engine_dir)
 
     def test_enabled_at_desired_scope_no_action(self, tmp_path, monkeypatch):
-        """Plugin already enabled at desired scope → no install action needed."""
+        """Plugin already enabled at desired scope -> no install action needed."""
         self._setup_engine_path()
 
         ip = tmp_path / ".claude" / "plugins" / "installed_plugins.json"
         ip.parent.mkdir(parents=True)
+        install_path = tmp_path / "cache"
+        install_path.mkdir()
         ip.write_text(json.dumps({
             "version": 2,
             "plugins": {
-                "bootstrap@plugins-kit": [{"scope": "user", "version": "0.5.4", "installPath": "/cache"}]
+                "bootstrap@plugins-kit": [{"scope": "user", "version": "0.5.4", "installPath": str(install_path)}]
             }
         }))
         settings = tmp_path / ".claude" / "settings.json"
@@ -570,10 +569,12 @@ class TestScopeRemediation:
         # Plugin is in the registry (installed) but NOT in user settings
         ip = tmp_path / ".claude" / "plugins" / "installed_plugins.json"
         ip.parent.mkdir(parents=True)
+        install_path = tmp_path / "cache"
+        install_path.mkdir()
         ip.write_text(json.dumps({
             "version": 2,
             "plugins": {
-                "bootstrap@plugins-kit": [{"scope": "project", "version": "0.5.4", "installPath": "/cache"}]
+                "bootstrap@plugins-kit": [{"scope": "project", "version": "0.5.4", "installPath": str(install_path)}]
             }
         }))
         # User settings does NOT have the plugin enabled
@@ -613,7 +614,7 @@ class TestScopeRemediation:
         assert any("enabled bootstrap [at user scope]" in e for e in action_entries)
 
     def test_stale_registry_scope_no_uninstall(self, tmp_path, monkeypatch):
-        """Registry says 'project' but plugin is enabled at user scope → no action.
+        """Registry says 'project' but plugin is enabled at user scope -> no action.
 
         This is the exact scenario from the bug report: installed_plugins.json
         has stale scope metadata, but the settings file shows the truth.
@@ -623,10 +624,12 @@ class TestScopeRemediation:
         # Registry claims project scope (stale)
         ip = tmp_path / ".claude" / "plugins" / "installed_plugins.json"
         ip.parent.mkdir(parents=True)
+        install_path = tmp_path / "cache"
+        install_path.mkdir()
         ip.write_text(json.dumps({
             "version": 2,
             "plugins": {
-                "bootstrap@plugins-kit": [{"scope": "project", "version": "0.5.4", "installPath": "/cache"}]
+                "bootstrap@plugins-kit": [{"scope": "project", "version": "0.5.4", "installPath": str(install_path)}]
             }
         }))
         # But user settings HAS it enabled (truth)
@@ -659,6 +662,20 @@ class TestScopeRemediation:
         assert not any("scope mismatch" in e for e in action_entries)
 
 
+class TestEnablePluginAtScopeProjectOptOut:
+    def test_explicit_false_at_project_scope_is_refused_without_writing(self, tmp_path):
+        path = tmp_path / ".claude" / "settings.json"
+        path.parent.mkdir(parents=True)
+        path.write_text(json.dumps({"enabledPlugins": {"b@mkt": False}}))
+        before = path.read_bytes()
+
+        result = enable_plugin_at_scope("mkt:b", "project", str(tmp_path))
+
+        assert result.passed is False
+        assert str(path) in result.message
+        assert path.read_bytes() == before
+
+
 class TestUpdateMarketplaceFallback:
     """Tests for update_marketplace CLI fallback when directory already exists."""
 
@@ -681,7 +698,7 @@ class TestUpdateMarketplaceFallback:
         self._write_known_marketplaces(tmp_path, monkeypatch, install_dir)
 
         already_exists_error = (
-            "✘ Failed to update marketplace(s): Failed to refresh marketplace 'my-market': "
+            "x Failed to update marketplace(s): Failed to refresh marketplace 'my-market': "
             "Failed to clone marketplace repository: fatal: destination path "
             f"'{install_dir}' already exists and is not an empty directory."
         )
@@ -747,7 +764,7 @@ class TestUpdateMarketplaceFallback:
 
 
 class TestEnsureRegistryScope:
-    """Tests for ensure_registry_scope — fixing stale scope in installed_plugins.json."""
+    """Tests for ensure_registry_scope -- fixing stale scope in installed_plugins.json."""
 
     def _write_registry(self, tmp_path, monkeypatch, plugins_data):
         ip = tmp_path / ".claude" / "plugins" / "installed_plugins.json"
@@ -758,7 +775,7 @@ class TestEnsureRegistryScope:
         return ip
 
     def test_fixes_stale_scope(self, tmp_path, monkeypatch):
-        """Registry says 'project', desired is 'user' → updates to 'user'."""
+        """Registry says 'project', desired is 'user' -> updates to 'user'."""
         ip = self._write_registry(tmp_path, monkeypatch, {
             "bootstrap@plugins-kit": [{"scope": "project", "version": "0.8.4"}]
         })
@@ -768,7 +785,7 @@ class TestEnsureRegistryScope:
         assert data["plugins"]["bootstrap@plugins-kit"][0]["scope"] == "user"
 
     def test_already_correct_scope(self, tmp_path, monkeypatch):
-        """Registry already has correct scope → no change needed."""
+        """Registry already has correct scope -> no change needed."""
         ip = self._write_registry(tmp_path, monkeypatch, {
             "bootstrap@plugins-kit": [{"scope": "user", "version": "0.8.4"}]
         })
@@ -778,20 +795,20 @@ class TestEnsureRegistryScope:
         assert data["plugins"]["bootstrap@plugins-kit"][0]["scope"] == "user"
 
     def test_plugin_not_in_registry(self, tmp_path, monkeypatch):
-        """Plugin not in registry → returns True (nothing to fix)."""
+        """Plugin not in registry -> returns True (nothing to fix)."""
         self._write_registry(tmp_path, monkeypatch, {})
         result = ensure_registry_scope("plugins-kit:bootstrap", "user")
         assert result.passed is True
 
     def test_no_registry_file(self, tmp_path, monkeypatch):
-        """No registry file → returns False."""
+        """No registry file -> returns False."""
         monkeypatch.setenv("HOME", str(tmp_path))
         monkeypatch.setenv("USERPROFILE", str(tmp_path))
         result = ensure_registry_scope("plugins-kit:bootstrap", "user")
         assert result.passed is False
 
     def test_no_op_leaves_registry_file_untouched(self, tmp_path, monkeypatch):
-        """Scope already correct → NO write at all (B3).
+        """Scope already correct -> NO write at all (B3).
 
         The registry's mtime arms the SessionStart cooldown's registry-change
         bypass. ensure_registry_scope runs every pass, so an unconditional
@@ -826,8 +843,37 @@ class TestEnsureRegistryScope:
         )
 
 
+class TestCheckPluginVersionRegistryKeys:
+    def test_reads_record_when_registry_uses_marketplace_colon_plugin(self, tmp_path, monkeypatch):
+        plugins_dir = tmp_path / ".claude" / "plugins"
+        plugins_dir.mkdir(parents=True)
+        install_location = tmp_path / "marketplaces" / "mkt"
+        marketplace_file = install_location / ".claude-plugin" / "marketplace.json"
+        marketplace_file.parent.mkdir(parents=True)
+        marketplace_file.write_text(json.dumps({
+            "plugins": [{"name": "tool", "version": "1.2.0"}],
+        }))
+        (plugins_dir / "installed_plugins.json").write_text(json.dumps({
+            "version": 2,
+            "plugins": {
+                "mkt:tool": [{"installPath": str(tmp_path / "cache"), "version": "1.0.0"}],
+            },
+        }))
+        (plugins_dir / "known_marketplaces.json").write_text(json.dumps({
+            "mkt": {"installLocation": str(install_location)},
+        }))
+        monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.setenv("USERPROFILE", str(tmp_path))
+
+        result = check_plugin_version("mkt:tool")
+
+        assert result.up_to_date is False
+        assert result.installed_version == "1.0.0"
+        assert result.latest_version == "1.2.0"
+
+
 class TestCheckPluginMinVersion:
-    """Tests for check_plugin_min_version — constraint satisfaction against installed version."""
+    """Tests for check_plugin_min_version -- constraint satisfaction against installed version."""
 
     def _write_installed(self, tmp_path, monkeypatch, plugins_data):
         ip = tmp_path / ".claude" / "plugins" / "installed_plugins.json"
@@ -877,7 +923,7 @@ class TestCheckPluginMinVersion:
         assert result.up_to_date is True
 
     def test_should_skip_when_plugin_not_installed(self, tmp_path, monkeypatch):
-        """Not installed → up_to_date=True (skip-check semantics; install path handles missing plugin)."""
+        """Not installed -> up_to_date=True (skip-check semantics; install path handles missing plugin)."""
         self._write_installed(tmp_path, monkeypatch, {})
         result = check_plugin_min_version("plugins-kit:bootstrap", "0.9.1")
         assert result.up_to_date is True
@@ -885,7 +931,7 @@ class TestCheckPluginMinVersion:
         assert "skipping" in result.message
 
     def test_should_skip_when_min_version_is_empty(self, tmp_path, monkeypatch):
-        """Empty min_version → up_to_date=True (no constraint to check)."""
+        """Empty min_version -> up_to_date=True (no constraint to check)."""
         self._write_installed(tmp_path, monkeypatch, {
             "bootstrap@plugins-kit": [{"scope": "user", "version": "0.8.3"}]
         })
@@ -903,7 +949,7 @@ class TestCheckPluginMinVersion:
         assert result.installed_version == "0.9.5"
 
     def test_should_skip_when_registry_file_missing(self, tmp_path, monkeypatch):
-        """No registry file → treat as not-installed, skip check."""
+        """No registry file -> treat as not-installed, skip check."""
         monkeypatch.setenv("HOME", str(tmp_path))
         monkeypatch.setenv("USERPROFILE", str(tmp_path))
         result = check_plugin_min_version("plugins-kit:bootstrap", "0.9.1")
@@ -929,10 +975,12 @@ class TestEngineMinVersionFlow:
     def _write_registry_and_settings(self, tmp_path, monkeypatch, installed_version):
         ip = tmp_path / ".claude" / "plugins" / "installed_plugins.json"
         ip.parent.mkdir(parents=True)
+        install_path = tmp_path / "cache"
+        install_path.mkdir()
         ip.write_text(json.dumps({
             "version": 2,
             "plugins": {
-                "bootstrap@plugins-kit": [{"scope": "user", "version": installed_version, "installPath": "/cache"}]
+                "bootstrap@plugins-kit": [{"scope": "user", "version": installed_version, "installPath": str(install_path)}]
             }
         }))
         settings = tmp_path / ".claude" / "settings.json"
@@ -942,7 +990,7 @@ class TestEngineMinVersionFlow:
         return ip
 
     def test_should_not_trigger_update_when_min_version_satisfied(self, tmp_path, monkeypatch):
-        """Installed version >= min_version → no update call, no action entries mentioning min_version."""
+        """Installed version >= min_version -> no update call, no action entries mentioning min_version."""
         self._setup_engine_path()
         self._write_registry_and_settings(tmp_path, monkeypatch, "0.9.5")
 
@@ -969,7 +1017,7 @@ class TestEngineMinVersionFlow:
         assert not any(f["type"] == "plugin" and "min_version" in f.get("message", "") for f in failures)
 
     def test_should_trigger_update_and_record_success_when_update_satisfies_constraint(self, tmp_path, monkeypatch):
-        """Installed < min_version, update bumps it to satisfy → recheck passes, no failure."""
+        """Installed < min_version, update bumps it to satisfy -> recheck passes, no failure."""
         self._setup_engine_path()
         ip = self._write_registry_and_settings(tmp_path, monkeypatch, "0.8.3")
 
@@ -1002,7 +1050,7 @@ class TestEngineMinVersionFlow:
         assert not any(f["type"] == "plugin" and "min_version" in f.get("message", "") for f in failures)
 
     def test_should_record_failure_when_update_fails(self, tmp_path, monkeypatch):
-        """Installed < min_version, update_plugin returns failure → record a plugin failure entry."""
+        """Installed < min_version, update_plugin returns failure -> record a plugin failure entry."""
         self._setup_engine_path()
         self._write_registry_and_settings(tmp_path, monkeypatch, "0.8.3")
 
@@ -1029,7 +1077,7 @@ class TestEngineMinVersionFlow:
         assert any(f["type"] == "plugin" and "min_version 0.9.1 not satisfied" in f.get("message", "") for f in failures)
 
     def test_should_record_failure_when_update_succeeds_but_still_too_old(self, tmp_path, monkeypatch):
-        """Update succeeds but installed version is still < min_version (marketplace stale) → failure."""
+        """Update succeeds but installed version is still < min_version (marketplace stale) -> failure."""
         self._setup_engine_path()
         ip = self._write_registry_and_settings(tmp_path, monkeypatch, "0.8.3")
 
@@ -1061,7 +1109,7 @@ class TestEngineMinVersionFlow:
         assert any(f["type"] == "plugin" and "min_version 0.9.1 not satisfied (installed 0.8.9)" in f.get("message", "") for f in failures)
 
     def test_should_skip_check_when_no_min_version_declared(self, tmp_path, monkeypatch):
-        """No min_version field → no constraint check, no update call triggered by min_version logic."""
+        """No min_version field -> no constraint check, no update call triggered by min_version logic."""
         self._setup_engine_path()
         self._write_registry_and_settings(tmp_path, monkeypatch, "0.8.3")
 
@@ -1119,6 +1167,29 @@ class TestCheckMarketplaceCurrentNoUpstream:
         result = check_marketplace_current("test-mkt")
         assert result.passed is True
         assert "no upstream" in result.message
+
+    def test_failed_fetch_is_not_current(self, tmp_path, monkeypatch):
+        repo = tmp_path / "mkt_clone"
+        repo.mkdir()
+        km = tmp_path / ".claude" / "plugins" / "known_marketplaces.json"
+        km.parent.mkdir(parents=True)
+        km.write_text(json.dumps({"test-mkt": {"installLocation": str(repo)}}))
+        monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.setenv("USERPROFILE", str(tmp_path))
+
+        def fake_git(args, cwd, timeout=30):
+            if args[:2] == ["fetch", "--quiet"]:
+                return type("Result", (), {
+                    "returncode": 1, "stdout": "", "stderr": "git fetch failed",
+                })()
+            raise AssertionError("fetch failure must stop the currentness check")
+
+        monkeypatch.setattr("bootstrap_lib.marketplace_lifecycle._git", fake_git)
+
+        result = check_marketplace_current("test-mkt")
+
+        assert result.passed is False
+        assert "git fetch failed" in result.message
 
 
 class TestEnsureRegistryScopeProjectPathGuard:
@@ -1381,23 +1452,6 @@ class TestEnsureRegistryScopeAddsUserRecord:
         assert result.passed is True
         assert result.added is False
         assert ip.read_text() == before
-
-
-class TestCheckPluginScopeDuplicateRecords:
-    def test_reads_scope_from_healthy_record(self, tmp_path, monkeypatch):
-        ip = tmp_path / ".claude" / "plugins" / "installed_plugins.json"
-        ip.parent.mkdir(parents=True, exist_ok=True)
-        ip.write_text(json.dumps({"version": 2, "plugins": {
-            "bootstrap@plugins-kit": [
-                {"scope": "project", "version": "0.45.0", "projectPath": "D:/dev/x"},
-                {"scope": "user", "version": "0.52.0"},
-            ],
-        }}))
-        monkeypatch.setenv("HOME", str(tmp_path))
-        monkeypatch.setenv("USERPROFILE", str(tmp_path))
-        result = check_plugin_scope("plugins-kit:bootstrap", "user")
-        assert result.matches is True
-        assert result.installed_scope == "user"
 
 
 class TestUpdatePluginRecordedScope:

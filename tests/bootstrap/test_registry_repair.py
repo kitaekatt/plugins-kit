@@ -209,6 +209,20 @@ class TestApplyOrphanProject:
 
 
 class TestApplyRepair:
+    def test_write_failure_is_distinguishable_from_clean_registry(self, tmp_path, monkeypatch):
+        path = _write_registry(tmp_path, {"bootstrap@plugins-kit": [CHIMERA, HEALTHY]})
+
+        def fail_write(path, content):
+            raise OSError("read-only file system")
+
+        monkeypatch.setattr("bootstrap_lib.atomic_write.write_atomic", fail_write)
+
+        result = apply_repair(str(path))
+
+        assert result == {}
+        assert "read-only file system" in result.error
+        assert path.read_text(encoding="utf-8")
+
     def test_repairs_bootstrap_ref(self, tmp_path):
         path = _write_registry(tmp_path, {"bootstrap@plugins-kit": [CHIMERA, HEALTHY]})
         dropped = apply_repair(str(path))

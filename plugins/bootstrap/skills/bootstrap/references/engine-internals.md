@@ -225,7 +225,7 @@ path in `_phase_plugins`.
 The resolved scope drives **both** the `--scope` argument and the
 `_run_claude_scoped(args, scope, project_dir)` call, so the settings file made
 writable ahead of the CLI's rewrite (`settings_path_for_scope`) is the same one
-the CLI actually writes. `install_plugin` / `uninstall_plugin` keep using the
+the CLI actually writes. Plugin installation and removal keep using the
 caller's scope: those genuinely choose where a plugin should live, whereas an
 update only follows where it already lives.
 

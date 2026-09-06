@@ -1,4 +1,4 @@
-"""Tests for bootstrap_lib/harvest.py — the single-session update harvest.
+"""Tests for bootstrap_lib/harvest.py -- the single-session update harvest.
 
 Mocks all external effects (no real engine launch, no real plugin installs).
 Pins the harvest DECISION logic (installed > ran triggers a launch; == / < do
@@ -33,13 +33,13 @@ HARVEST_PY = Path(__file__).resolve().parents[2] / "plugins" / "bootstrap" / "bo
 
 
 class TestScriptInvocation:
-    """harvest.py must work when EXECUTED AS A SCRIPT (`python harvest.py`) — the
-    way the UserPromptSubmit hook invokes it — not only when imported as a module.
+    """harvest.py must work when EXECUTED AS A SCRIPT (`python harvest.py`) -- the
+    way the UserPromptSubmit hook invokes it -- not only when imported as a module.
 
     Regression: in-function relative imports (`from .stamps import ...`) raise
     "attempted relative import with no known parent package" under script
     execution (no package context), which made run_harvest throw and the hook
-    silently no-op — the harvest never fired in production despite the module-
+    silently no-op -- the harvest never fired in production despite the module-
     level unit tests passing. Run it as a real subprocess to catch that.
     """
 
@@ -63,16 +63,18 @@ class TestScriptInvocation:
             capture_output=True, text=True, timeout=60,
         )
         assert result.returncode == 0, result.stderr
-        # run_harvest writes harvest_launched_version BEFORE attempting the launch
-        # (which fails here — the fake installPath has no session-bootstrap.sh).
+        # A failed launch must not consume the retry marker. The pending note
+        # proves the script reached the harvest logic and reported the failure.
         # If a relative-import (or any top-level) error had no-op'd the script,
         # this marker is absent.
         marker = dd / "harvest_launched_version"
-        assert marker.exists(), (
-            "harvest.py run as a script did not reach the harvest logic — a "
+        assert not marker.exists(), (
+            "harvest.py run as a script did not reach the harvest logic -- a "
             f"relative import or other error silently no-op'd it. stderr={result.stderr!r}"
         )
-        assert marker.read_text().strip() == "9.9.9"
+        pending = dd / "bootstrap_display.pending"
+        assert pending.exists()
+        assert "launch failed" in pending.read_text()
 
 
 class TestReadInstalledBootstrap:
@@ -92,8 +94,9 @@ class TestReadInstalledBootstrap:
         reg = _registry(tmp_path, {
             "bootstrap@other-mkt": [{"version": "0.9.0", "installPath": "/x"}],
         })
-        # Asked for plugins-kit (absent) -> fall back to any "bootstrap" key.
-        assert read_installed_bootstrap(reg, "plugins-kit") == ("0.9.0", "/x")
+        # Asked for plugins-kit (absent): another marketplace is not a valid
+        # source for the requested engine.
+        assert read_installed_bootstrap(reg, "plugins-kit") == ("", "")
 
     def test_missing_registry(self, tmp_path):
         assert read_installed_bootstrap(str(tmp_path / "nope.json"), "plugins-kit") == ("", "")
@@ -131,7 +134,7 @@ class TestShouldHarvest:
 
 
 class TestRunHarvestDecision:
-    """run_harvest with launch_new_engine mocked — assert when a launch fires."""
+    """run_harvest with launch_new_engine mocked -- assert when a launch fires."""
 
     def _setup(self, tmp_path, monkeypatch, installed, ran, install_path="/cache/bootstrap/NEW"):
         data_dir = tmp_path / "data"
@@ -189,6 +192,45 @@ class TestRunHarvestDecision:
         data_dir, reg, calls = self._setup(tmp_path, monkeypatch, "0.22.0", None)
         run_harvest(data_dir, "/proj", reg, "plugins-kit")
         assert len(calls) == 1
+
+    def test_failed_launch_is_retryable_on_next_call(self, tmp_path, monkeypatch):
+        data_dir, reg, calls = self._setup(tmp_path, monkeypatch, "0.22.0", "0.21.0")
+        outcomes = iter([False, True])
+        monkeypatch.setattr(
+            harvest,
+            "launch_new_engine",
+            lambda ip, pd, dd: calls.append((ip, pd, dd)) or next(outcomes),
+        )
+
+        assert run_harvest(data_dir, "/proj", reg, "plugins-kit") is None
+        assert not global_stamp(data_dir, "harvest_launched_version").exists()
+
+        status = run_harvest(data_dir, "/proj", reg, "plugins-kit")
+        assert status is not None
+        assert len(calls) == 2
+        assert global_stamp(data_dir, "harvest_launched_version").read() == "0.22.0"
+
+    def test_other_marketplace_does_not_launch(self, tmp_path, monkeypatch):
+        data_dir = tmp_path / "data"
+        data_dir.mkdir()
+        global_stamp(str(data_dir), "engine_ran_version").write("0.21.0")
+        reg = _registry(tmp_path, {
+            "bootstrap@other-mkt": [
+                {"version": "0.22.0", "installPath": "/other/bootstrap"},
+            ],
+        })
+        calls = []
+        monkeypatch.setattr(
+            harvest,
+            "launch_new_engine",
+            lambda *args: calls.append(args) or True,
+        )
+
+        assert run_harvest(str(data_dir), "/proj", reg, "plugins-kit") is None
+        assert calls == []
+        assert "bootstrap@plugins-kit" in (
+            data_dir / "bootstrap_display.pending"
+        ).read_text()
 
 
 class TestLaunchLogsActualPathVersion:
@@ -264,7 +306,7 @@ class TestReadPathVersion:
 
 
 class TestLaunchNewEngine:
-    """launch_new_engine with subprocess.Popen mocked — assert the invocation
+    """launch_new_engine with subprocess.Popen mocked -- assert the invocation
     and the cooldown-clear side effect."""
 
     def _install(self, tmp_path, with_script=True):
@@ -297,6 +339,7 @@ class TestLaunchNewEngine:
         # Detached + silent so it outlives the hook and never lands in the prompt.
         assert kwargs["stdin"] == harvest.subprocess.DEVNULL
         assert kwargs["stdout"] == harvest.subprocess.DEVNULL
+        assert kwargs["stderr"].name == str(data_dir / "harvest.stderr")
 
     def test_clears_cooldown_before_launch(self, tmp_path, monkeypatch):
         install_path = self._install(tmp_path)
@@ -331,11 +374,28 @@ class TestLaunchNewEngine:
 
         monkeypatch.setattr(harvest.subprocess, "Popen", _boom)
         assert harvest.launch_new_engine(install_path, "/proj", str(data_dir)) is False
+        assert (data_dir / "bootstrap_display.pending").exists()
+
+    def test_crashing_child_stderr_is_retained(self, tmp_path):
+        install_path = self._install(tmp_path)
+        script = Path(install_path) / "hooks" / "sessionstart" / "session-bootstrap.sh"
+        script.write_text("echo child-crash-evidence >&2\nexit 1\n")
+        data_dir = tmp_path / "data"
+        data_dir.mkdir()
+
+        assert harvest.launch_new_engine(install_path, str(tmp_path), str(data_dir)) is True
+        stderr = data_dir / "harvest.stderr"
+        for _ in range(100):
+            if stderr.exists() and "child-crash-evidence" in stderr.read_text():
+                break
+            import time
+            time.sleep(0.01)
+        assert "child-crash-evidence" in stderr.read_text()
 
 
 class TestMainNeverRaises:
     def test_main_swallows_errors(self, tmp_path, monkeypatch):
-        # main() must return 0 even if run_harvest blows up — never break a prompt.
+        # main() must return 0 even if run_harvest blows up -- never break a prompt.
         def _boom(*a, **k):
             raise RuntimeError("boom")
 
@@ -349,7 +409,7 @@ class TestMainNeverRaises:
 
 class TestRunRegistryRelaunch:
     """The mid-session install relaunch (third trigger) with launch_new_engine
-    mocked — assert when a launch fires and the once-per-change dedup."""
+    mocked -- assert when a launch fires and the once-per-change dedup."""
 
     def _setup(self, tmp_path, monkeypatch, plugins, enabled, seed_hash="auto"):
         from bootstrap_lib.plugins_snapshot import STATE_STAMP, plugins_state_hash
@@ -440,7 +500,7 @@ class TestRunRegistryRelaunch:
 
     def test_engine_absorb_resets_trigger(self, tmp_path, monkeypatch):
         # After the launched pass completes (stamp_plugins_state), the same
-        # state no longer triggers — and a FURTHER change triggers again.
+        # state no longer triggers -- and a FURTHER change triggers again.
         from bootstrap_lib.plugins_snapshot import stamp_plugins_state
 
         data_dir, reg, _, calls = self._setup(tmp_path, monkeypatch, {}, {})
@@ -503,7 +563,7 @@ class TestMainTriggerSequencing:
 
 class TestRelaunchScriptInvocation:
     """The relaunch trigger must also be reachable under SCRIPT execution
-    (`python harvest.py`) — the regression class TestScriptInvocation exists
+    (`python harvest.py`) -- the regression class TestScriptInvocation exists
     for, extended to the third trigger."""
 
     def test_script_run_reaches_relaunch_logic(self, tmp_path):
@@ -514,7 +574,7 @@ class TestRelaunchScriptInvocation:
         dd = tmp_path / "data"
         dd.mkdir()
         # A bootstrap entry with a FAKE installPath: keeps the version harvest
-        # quiet (installed == engine_ran_version) and — critically — makes the
+        # quiet (installed == engine_ran_version) and -- critically -- makes the
         # relaunch's launch attempt fail fast instead of falling back to the
         # real dev-tree plugin root and spawning a genuine pass.
         reg = _registry(tmp_path, {
@@ -538,15 +598,13 @@ class TestRelaunchScriptInvocation:
             capture_output=True, text=True, timeout=60,
         )
         assert result.returncode == 0, result.stderr
-        # run_registry_relaunch writes the dedup marker BEFORE the launch
-        # attempt (which fails here — no session-bootstrap.sh anywhere useful);
-        # its presence proves the trigger logic ran under script execution.
+        # A failed launch must clear the dedup marker, while the pending note
+        # proves the trigger logic ran under script execution.
         marker = global_stamp(str(dd), LAUNCHED_STAMP)
-        assert marker.exists(), (
+        assert not marker.exists(), (
             "harvest.py run as a script did not reach the relaunch logic. "
             f"stderr={result.stderr!r}"
         )
-        assert marker.read() == plugins_state_hash(reg, str(st))
 
 
 class TestCacheFallbackInstalledBootstrap:
@@ -572,9 +630,14 @@ class TestCacheFallbackInstalledBootstrap:
         assert path.endswith("0.46.0")
 
     def test_highest_version_wins_numerically(self, tmp_path):
-        reg = self._scaffold(tmp_path, ["0.9.0", "0.10.0"])
+        reg = self._scaffold(tmp_path, ["0.9.0", "0.10.0", "deadbeef9"])
         version, _ = read_installed_bootstrap(reg, "plugins-kit")
         assert version == "0.10.0"
+
+    def test_four_component_semver_wins_numerically(self, tmp_path):
+        reg = self._scaffold(tmp_path, ["1.2.3.4", "1.2.3.5"])
+        version, _ = read_installed_bootstrap(reg, "plugins-kit")
+        assert version == "1.2.3.5"
 
     def test_registry_entry_takes_precedence(self, tmp_path):
         reg = self._scaffold(

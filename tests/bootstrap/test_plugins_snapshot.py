@@ -1,4 +1,4 @@
-"""Tests for bootstrap_lib/plugins_snapshot.py — the installed/enabled
+"""Tests for bootstrap_lib/plugins_snapshot.py -- the installed/enabled
 plugin-set hash behind the mid-session install relaunch.
 
 Pins the hash contract (stable across key order / missing inputs; changes on
@@ -80,6 +80,28 @@ class TestPluginsStateHash:
         h3 = plugins_state_hash(_write(tmp_path, "nonobj.json", ["list"]), missing_st)
         assert h1 == h2 == h3  # all degrade to the same empty-state hash
 
+    def test_project_settings_local_change_changes_hash(self, tmp_path):
+        reg = _registry(tmp_path, {})
+        user = _settings(tmp_path, {}, "user.json")
+        project = tmp_path / "project"
+        project_claude = project / ".claude"
+        project_claude.mkdir(parents=True)
+        (project_claude / "settings.json").write_text(
+            json.dumps({"enabledPlugins": {"project@mkt": True}}), encoding="utf-8"
+        )
+        local = project_claude / "settings.local.json"
+        local.write_text(
+            json.dumps({"enabledPlugins": {"local@mkt": True}}), encoding="utf-8"
+        )
+
+        before = plugins_state_hash(reg, user, str(project))
+        local.write_text(
+            json.dumps({"enabledPlugins": {"local@mkt": False}}), encoding="utf-8"
+        )
+        after = plugins_state_hash(reg, user, str(project))
+
+        assert before != after
+
 
 class TestStampPluginsState:
     def test_writes_state_and_clears_launch_marker(self, tmp_path):
@@ -93,3 +115,22 @@ class TestStampPluginsState:
 
         assert global_stamp(str(data_dir), STATE_STAMP).read() == plugins_state_hash(reg, st)
         assert not global_stamp(str(data_dir), LAUNCHED_STAMP).exists()
+
+    def test_completion_snapshot_reads_active_project_settings(self, tmp_path, monkeypatch):
+        data_dir = tmp_path / "data"
+        data_dir.mkdir()
+        reg = _registry(tmp_path, {})
+        st = _settings(tmp_path, {}, "user.json")
+        project = tmp_path / "project"
+        project_claude = project / ".claude"
+        project_claude.mkdir(parents=True)
+        (project_claude / "settings.local.json").write_text(
+            json.dumps({"enabledPlugins": {"local@mkt": True}}), encoding="utf-8"
+        )
+
+        monkeypatch.chdir(project)
+        stamp_plugins_state(str(data_dir), reg, st)
+
+        assert global_stamp(str(data_dir), STATE_STAMP).read() == plugins_state_hash(
+            reg, st, str(project)
+        )

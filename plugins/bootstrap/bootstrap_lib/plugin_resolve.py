@@ -11,7 +11,7 @@ does not record; registry entries, when present, always take precedence.
 import json
 import os
 import re
-from typing import List, NamedTuple, Optional
+from typing import NamedTuple
 
 
 class PluginInfo(NamedTuple):
@@ -25,8 +25,8 @@ def parse_plugin_ref(plugin_ref: str) -> tuple:
     """Parse a plugin ref into (marketplace, plugin_name).
 
     Supports two formats:
-    - 'marketplace:plugin' (e.g. 'plugins-kit:bootstrap') — used in bootstrap.json
-    - 'plugin@marketplace' (e.g. 'bootstrap@plugins-kit') — used in installed_plugins.json
+    - 'marketplace:plugin' (e.g. 'plugins-kit:bootstrap') -- used in bootstrap.json
+    - 'plugin@marketplace' (e.g. 'bootstrap@plugins-kit') -- used in installed_plugins.json
 
     Returns ('', plugin_ref) if no separator found.
     """
@@ -39,52 +39,16 @@ def parse_plugin_ref(plugin_ref: str) -> tuple:
     return "", plugin_ref
 
 
-def resolve_plugin(registry_path: str, plugin_ref: str, base_dir: str) -> Optional[PluginInfo]:
-    """Resolve a plugin reference to its install path.
-
-    Args:
-        registry_path: Path to installed_plugins.json
-        plugin_ref: Plugin key (e.g. "plugins-kit:test-plugin")
-        base_dir: Base directory for resolving relative paths (the plugins/ dir)
-
-    Returns:
-        PluginInfo if found, None otherwise
-    """
-    try:
-        with open(registry_path, "r") as f:
-            registry = json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
-        return None
-
-    plugins = registry.get("plugins", {})
-    entries = plugins.get(plugin_ref)
-    if not entries or not isinstance(entries, list):
-        return None
-
-    entry = pick_registry_record(entries)
-    if entry is None:
-        return None
-    install_path = entry.get("installPath", "")
-    version = entry.get("version", "0.0.0")
-
-    # Resolve relative paths against base_dir
-    if install_path.startswith("./") or install_path.startswith("../"):
-        install_path = os.path.normpath(os.path.join(base_dir, install_path))
-    else:
-        install_path = os.path.normpath(install_path)
-
-    # Extract plugin name and marketplace from ref
-    marketplace, name = parse_plugin_ref(plugin_ref)
-
-    return PluginInfo(name=name, install_path=install_path, version=version, marketplace=marketplace)
-
-
-def _version_sort_key(version: str):
+def version_sort_key(version: str) -> tuple:
     """Tolerant ordering key for cache version-dir names: numeric dot-parts
     compare numerically ("0.10.0" > "0.9.0"); non-numeric names (git-SHA cache
     keys) sort below any numeric version and tie-break lexically."""
-    parts = re.findall(r"\d+", version)
-    return (1 if parts else 0, tuple(int(p) for p in parts), version)
+    if re.fullmatch(r"\d+(?:\.\d+)*", version):
+        return (1, tuple(int(part) for part in version.split(".")), version)
+    return (0, (), version)
+
+
+_version_sort_key = version_sort_key  # alias kept for callers that imported the private name
 
 
 def pick_registry_record(entry):
@@ -229,7 +193,7 @@ def list_enabled_plugins(config: dict, registry_path: str, base_dir: str, enable
         if ref in no_bootstrap:
             continue
 
-        # Apply enabled_refs filter (dev layout only — skips plugins not enabled in Claude Code)
+        # Apply enabled_refs filter (dev layout only -- skips plugins not enabled in Claude Code)
         marketplace, name = parse_plugin_ref(ref)
         if enabled_refs is not None:
             normalized = f"{name}@{marketplace}" if marketplace else name
@@ -271,9 +235,8 @@ def load_enabled_refs(project_dir=None, home=None, include_registry=True):
 
     Reads settings files in precedence order (later overrides earlier):
       1. <home>/.claude/settings.json               (user scope)
-      2. <home>/.claude/settings.local.json         (user local overrides)
-      3. <project_dir>/.claude/settings.json        (project scope)
-      4. <project_dir>/.claude/settings.local.json  (project local overrides)
+      2. <project_dir>/.claude/settings.json        (project scope)
+      3. <project_dir>/.claude/settings.local.json  (project local overrides)
 
     A plugin is enabled if its enabledPlugins entry has a final value of True.
     An uninstall REMOVES the key rather than setting it False, so an absent ref
@@ -311,7 +274,6 @@ def load_enabled_refs(project_dir=None, home=None, include_registry=True):
 
     settings_paths = [
         os.path.join(claude_home, "settings.json"),
-        os.path.join(claude_home, "settings.local.json"),
     ]
     if project_dir:
         project_claude = os.path.join(project_dir, ".claude")

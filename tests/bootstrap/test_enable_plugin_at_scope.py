@@ -147,11 +147,13 @@ class TestUserScopeOptOut:
         data = json.loads(path.read_text(encoding="utf-8"))
         assert data["enabledPlugins"] == {"b@mkt": False, "c@mkt": True}
 
-    def test_project_scope_false_is_unaffected(self, tmp_path):
-        """The guard is user-scope only; project-scope behavior does not change."""
+    def test_project_scope_explicit_false_is_preserved(self, tmp_path):
+        """A project's explicit false is a decision Claude can see; never undo it."""
         path = _settings(tmp_path, {"enabledPlugins": {"b@mkt": False}})
+        before = path.read_bytes()
 
-        assert enable_plugin_at_scope("mkt:b", "project", str(tmp_path)).passed
+        result = enable_plugin_at_scope("mkt:b", "project", str(tmp_path))
 
-        data = json.loads(path.read_text(encoding="utf-8"))
-        assert data["enabledPlugins"] == {"b@mkt": True}
+        assert not result.passed
+        assert str(path) in result.message
+        assert path.read_bytes() == before

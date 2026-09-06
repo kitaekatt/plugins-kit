@@ -14,27 +14,27 @@ This is the primary lens for any bootstrap UX decision: prefer the lowest rung t
 
 ## Two outcomes: auto-fix or ask
 
-Every issue bootstrap surfaces resolves to **exactly one of two outcomes** — there is no third "guide the user through it / work through it with Claude" path.
+Every issue bootstrap surfaces resolves to **exactly one of two outcomes** -- there is no third "guide the user through it / work through it with Claude" path.
 
-- **AUTO — fix it now, no prompt.** This is the **default**: converging a machine's dependencies is the job the user installed bootstrap to do, so a fix that needs nothing from them is carried out rather than queued. Claude fixes it immediately: runs the install/merge command, sets up a venv, edits an in-user-scope manifest, whatever the remediation is. **Installing software is AUTO** — bootstrap installs non-elevated packages unattended. A queued `fix-all` line is not a precondition for these; they are already cleared to run. Say what was done, and stop if the user asks to review first. (Note the two structural exceptions below: network/credential ops and out-of-user-scope file edits are NOT auto — they ASK.)
+- **AUTO -- fix it now, no prompt.** This is the **default**: converging a machine's dependencies is the job the user installed bootstrap to do, so a fix that needs nothing from them is carried out rather than queued. Claude fixes it immediately: runs the install/merge command, sets up a venv, edits an in-user-scope manifest, whatever the remediation is. **Installing software is AUTO** -- bootstrap installs non-elevated packages unattended. A queued `fix-all` line is not a precondition for these; they are already cleared to run. Say what was done, and stop if the user asks to review first. (Note the two structural exceptions below: network/credential ops and out-of-user-scope file edits are NOT auto -- they ASK.)
 
-- **ASK — get the user's go-ahead via the `AskUserQuestion` tool first.** Only when the fix needs one of exactly three things the user alone can provide:
-  - **`elevation`** — admin / root / UAC / `sudo` that a background hook cannot obtain.
-  - **`action`** — a physical or out-of-band act only the user can perform: press a device's button (e.g. a Hue bridge link button), restart the IDE, install a GUI app that has no unattended installer.
-  - **`info`** — a value only the user holds: an API key or secret, which machine in the fleet this is.
+- **ASK -- get the user's go-ahead via the `AskUserQuestion` tool first.** Only when the fix needs one of exactly three things the user alone can provide:
+  - **`elevation`** -- admin / root / UAC / `sudo` that a background hook cannot obtain.
+  - **`action`** -- a physical or out-of-band act only the user can perform: press a device's button (e.g. a Hue bridge link button), restart the IDE, install a GUI app that has no unattended installer.
+  - **`info`** -- a value only the user holds: an API key or secret, which machine in the fleet this is.
 
   The `AskUserQuestion` prompt is always a single question with exactly two options, "Do nothing" leading (an absent-minded Enter changes nothing; bootstrap re-checks next session) and "Fix" second. Claude acts only on "Fix", and never re-prompts.
 
-**How the outcome is decided:** `engine._ask_reason(failure)` returns `elevation` / `action` / `info` (→ ASK) or `None` (→ AUTO). An explicit `ask_reason` on the failure wins — that is how a check or a plugin `custom_bootstrap` (via `ctx.add_failure(..., ask_reason="action")`) declares it needs the user. Otherwise the reason is derived from signals the engine already records (`install_state == "needs_elevation"`, `type in {python_stub, elevation_script}`, `manual_install`, `bootstrap_outdated`, `config`, ...). **Anything not marked is AUTO.**
+**How the outcome is decided:** `engine._ask_reason(failure)` returns `elevation` / `action` / `info` (-> ASK) or `None` (-> AUTO). An explicit `ask_reason` on the failure wins -- that is how a check or a plugin `custom_bootstrap` (via `ctx.add_failure(..., ask_reason="action")`) declares it needs the user. Otherwise the reason is derived from signals the engine already records (`install_state == "needs_elevation"`, `type in {python_stub, elevation_script}`, `manual_install`, `bootstrap_outdated`, `config`, ...). **Anything not marked is AUTO.**
 
-**Two derived ASK cases enforce the "no doomed AUTO, no unattended shared-file edit" rules — they are structural, not per-item annotations:**
+**Two derived ASK cases enforce the "no doomed AUTO, no unattended shared-file edit" rules -- they are structural, not per-item annotations:**
 
-- **Network + credential classes (`marketplace`, `plugin`, `git_dep`) always ASK.** These types only ever surface as a *failure* after the engine already attempted the operation in-line (`add_marketplace` / `install_plugin` / `clone_git_dep`) and it failed. Handing Claude an AUTO "run the command" for one is doomed twice: retrying what just failed changes nothing, and the usual cause is a credential (SSH key, token) a background hook cannot supply. Routing them to ASK is why Leon's SSH-auth marketplace failure must never again arrive as a fix-now directive. The happy path is untouched — a network op that succeeds in-line produces no failure. Set: `engine._CREDENTIAL_NETWORK_TYPES`.
+- **Network + credential classes (`marketplace`, `plugin`, `git_dep`) always ASK.** These types only ever surface as a *failure* after the engine already attempted the operation in-line (`add_marketplace` / `install_plugin` / `clone_git_dep`) and it failed. Handing Claude an AUTO "run the command" for one is doomed twice: retrying what just failed changes nothing, and the usual cause is a credential (SSH key, token) a background hook cannot supply. Routing them to ASK is why Leon's SSH-auth marketplace failure must never again arrive as a fix-now directive. The happy path is untouched -- a network op that succeeds in-line produces no failure. Set: `engine._CREDENTIAL_NETWORK_TYPES`.
 
-  ASK routing alone is not enough for these, because the fault is **durable**: an SSH `publickey` denial does not resolve itself, so the item re-reports every post-cooldown session indefinitely. A failed `marketplace add` therefore also carries an authored `user_msg` and `agent_msg` naming the two exits — fix access to the repository, or set `"enabled": false` on that `marketplaces[]` entry — and the `agent_msg` says explicitly not to retry the add the engine already attempted. `install: "manual"` on a `plugins[]` entry is the equivalent exit for one access-gated plugin (see [manifest-reference.md](./manifest-reference.md)). An ASK item with no way to make it stop is a nag, not a remediation.
-- **Scope guard: a `json`/`ini` fix whose target is outside `~/.claude` ASKs.** These types' write target comes from the manifest and can point anywhere, including a shared or VCS-tracked project file. `engine._path_in_user_scope(_write_target(failure))` gates them: in-user-scope targets stay AUTO, out-of-scope targets ASK. This is the guard against the incident's actual harm — an unattended edit to a Perforce-controlled shared file.
+  ASK routing alone is not enough for these, because the fault is **durable**: an SSH `publickey` denial does not resolve itself, so the item re-reports every post-cooldown session indefinitely. A failed `marketplace add` therefore also carries an authored `user_msg` and `agent_msg` naming the two exits -- fix access to the repository, or set `"enabled": false` on that `marketplaces[]` entry -- and the `agent_msg` says explicitly not to retry the add the engine already attempted. `install: "manual"` on a `plugins[]` entry is the equivalent exit for one access-gated plugin (see [manifest-reference.md](./manifest-reference.md)). An ASK item with no way to make it stop is a nag, not a remediation.
+- **Scope guard: a `json`/`ini` fix whose target is outside `~/.claude` ASKs.** These types' write target comes from the manifest and can point anywhere, including a shared or VCS-tracked project file. `engine._path_in_user_scope(_write_target(failure))` gates them: in-user-scope targets stay AUTO, out-of-scope targets ASK. This is the guard against the incident's actual harm -- an unattended edit to a Perforce-controlled shared file.
 
-  The line the guard enforces is **shared vs. personal**, not literally *inside `~/.claude`*. `path` (shell-rc / PATH) edits write to `~/.bashrc` / `~/.zshrc` — outside `~/.claude`, yet still AUTO — because a personal dotfile is single-user, and bootstrap's PATH edit is idempotent (it checks for the entry first) and reversible (remove the line). Personal-scope, converging, credential-free clears the bar; only *shared / VCS-tracked / system* state must ASK. `pypi` and `sync_to_data` write to the plugin data dir under `~/.claude` by construction, so they never trip the guard. The `json`/`ini` gate exists precisely because those two are the AUTO types whose target the manifest can aim at an arbitrary — possibly shared — path.
+  The line the guard enforces is **shared vs. personal**, not literally *inside `~/.claude`*. `path` (shell-rc / PATH) edits write to `~/.bashrc` / `~/.zshrc` -- outside `~/.claude`, yet still AUTO -- because a personal dotfile is single-user, and bootstrap's PATH edit is idempotent (it checks for the entry first) and reversible (remove the line). Personal-scope, converging, credential-free clears the bar; only *shared / VCS-tracked / system* state must ASK. `pypi` and `sync_to_data` write to the plugin data dir under `~/.claude` by construction, so they never trip the guard. The `json`/`ini` gate exists precisely because those two are the AUTO types whose target the manifest can aim at an arbitrary -- possibly shared -- path.
 
 **Authoring a `custom_bootstrap` failure:** if the fix is runnable without the user, give it a remediation and leave it AUTO. If it needs the user, set `ask_reason` to the matching category and a friendly `user_msg` (the plain-language line the user sees, e.g. "hue-kit wants to pair with your Hue bridge") plus an `agent_msg` describing the post-consent steps.
 
@@ -60,7 +60,7 @@ Every issue bootstrap surfaces resolves to **exactly one of two outcomes** — t
 | Project venv missing or broken | Same checks against `<project_dir>/.venv` | `uv sync --project <project_dir> [--extra ...]` |
 | Project node_modules missing or stale | Compare `node_modules/.package-lock.json` mtime against the visible lockfile (no subprocess) | `npm ci` if a lockfile exists, else `npm install`; `npm ci` out-of-sync refusal reports and asks the user to run `npm install` themselves (no fallback) |
 | PyPI package missing | Check extracted file exists locally | Download from PyPI and extract |
-| Git dependency not cloned / wrong branch / wrong pinned commit | Check dir exists + is a git repo + `rev-parse` matches the declared branch (or pinned `commit`) | Clone once; pinned commits are fetched + re-checked-out. No steady-state pull — an existing clone on the right branch is never updated against its remote |
+| Git dependency not cloned / wrong branch / wrong pinned commit | Check dir exists + is a git repo + `rev-parse` matches the declared branch (or pinned `commit`) | Clone once; pinned commits are fetched + re-checked-out. No steady-state pull -- an existing clone on the right branch is never updated against its remote |
 
 ## Agent Skills Link Conditions (`agent_skills_link`)
 
@@ -69,35 +69,35 @@ CLI can invoke the same skills Claude Code reads. Full mechanics: the
 `agent_skills_link` field in
 [manifest-reference.md](./manifest-reference.md) and the "Step 3d3" section
 of [engine-internals.md](./engine-internals.md). This is always an ASK
-failure (`ask_reason="action"`, `persist_across_sessions=True`) —
+failure (`ask_reason="action"`, `persist_across_sessions=True`) --
 `agent_skills_link` is not in `_AUTO_FIXABLE_TYPES`, because the normal pass
 has already attempted every safe automatic repair before any of these
 reaches the user.
 
 | Condition | Check Method | Remediation |
 |-----------|-------------|-------------|
-| `.agents/skills` already exists (any kind) | `os.lstat` | None — quick-exit `ok`. Delete `.agents/skills` to make bootstrap rebuild it; bootstrap never repairs a dangling or misdirected link in place. The parent `.agents` is NOT the sentinel — it is shared with Codex's own `.agents/plugins/` config and is adopted, not treated as an opt-out |
-| Project root is not the git repository root (v1 scope) | `git rev-parse --show-toplevel` compared to the project dir; no `.git` at all is a separate skip | None — `ok` skip. Codex resolves a project root by walking up to a `.git` marker, so linking anywhere else would never be discovered |
-| `agent_skills_link` present but not a strict JSON boolean | `type(value) is bool` | None auto — fix the manifest value (`null`/strings/numbers including `0`/`1` are invalid) |
-| Codex CLI unavailable | `bootstrap_lib.codex.detect_codex()` | None — `ok` skip; nothing to link against |
-| `.claude/skills` missing, not a directory, or empty | `os.path.isdir` + `os.scandir` | None — `ok` skip; nothing to link |
-| `.agents/skills` (or a Git/P4-tracked ancestor) is tracked by version control | `git ls-files --literal-pathspecs` (Git); Perforce mapping check | Refuses to write an exclusion over a tracked path — untrack the path first |
-| `.agents` exists but is not a directory | `os.lstat` on the child returns ENOTDIR | None auto — `failed; cannot stat .agents/skills` carries the OS message; remove or rename the file at `.agents` |
+| `.agents/skills` already exists (any kind) | `os.lstat` | None -- quick-exit `ok`. Delete `.agents/skills` to make bootstrap rebuild it; bootstrap never repairs a dangling or misdirected link in place. The parent `.agents` is NOT the sentinel -- it is shared with Codex's own `.agents/plugins/` config and is adopted, not treated as an opt-out |
+| Project root is not the git repository root (v1 scope) | `git rev-parse --show-toplevel` compared to the project dir; no `.git` at all is a separate skip | None -- `ok` skip. Codex resolves a project root by walking up to a `.git` marker, so linking anywhere else would never be discovered |
+| `agent_skills_link` present but not a strict JSON boolean | `type(value) is bool` | None auto -- fix the manifest value (`null`/strings/numbers including `0`/`1` are invalid) |
+| Codex CLI unavailable | `bootstrap_lib.codex.detect_codex()` | None -- `ok` skip; nothing to link against |
+| `.claude/skills` missing, not a directory, or empty | `os.path.isdir` + `os.scandir` | None -- `ok` skip; nothing to link |
+| `.agents/skills` (or a Git/P4-tracked ancestor) is tracked by version control | `git ls-files --literal-pathspecs` (Git); Perforce mapping check | Refuses to write an exclusion over a tracked path -- untrack the path first |
+| `.agents` exists but is not a directory | `os.lstat` on the child returns ENOTDIR | None auto -- `failed; cannot stat .agents/skills` carries the OS message; remove or rename the file at `.agents` |
 | Git/P4 exclusion cannot be established | See VCS steps below | Removes `.agents` only if this attempt created it, and fails with the reason; a `cleanup failed` variant additionally tells the user to delete `.agents` before retrying |
 | Symlink creation fails and (Windows only) the junction fallback also fails, or fails outright on POSIX | `os.symlink`, then on Windows only for WinError 1314 `_winapi.CreateJunction` | No copy fallback is ever created. Removes the partial link/junction, and `.agents` only if this attempt created it; VCS exclusions already written are left in place (harmless, makes the retry cheaper) |
-| Another process created `.agents/skills` between the check and the fix | `os.path.lexists` before and after link creation | None — reported as a race and the winner's link is left untouched |
-| `.agents/skills` absent, or unverifiable, on the authoritative post-fix re-check | Re-run of the side-effect-free check | Fails even though the fixer itself reported success — the re-check, not the fixer's return value, decides the outcome |
+| Another process created `.agents/skills` between the check and the fix | `os.path.lexists` before and after link creation | None -- reported as a race and the winner's link is left untouched |
+| `.agents/skills` absent, or unverifiable, on the authoritative post-fix re-check | Re-run of the side-effect-free check | Fails even though the fixer itself reported success -- the re-check, not the fixer's return value, decides the outcome |
 
 **Windows privilege behavior.** A real directory symlink is attempted
 first; the NTFS junction fallback fires *only* for the specific
 privilege/unsupported-filesystem signal (WinError 1314, no
-`SeCreateSymbolicLinkPrivilege` — no Developer Mode, not elevated). Any
+`SeCreateSymbolicLinkPrivilege` -- no Developer Mode, not elevated). Any
 other symlink failure (a destination collision, an unrelated access-denied
 error) is a real failure and is never masked by attempting a junction.
 
 **Git guidance.** Exclusion is written to the repository-local
 `info/exclude` (via `git rev-parse --git-path info/exclude`), never to the
-tracked `.gitignore` — `.agents` is a local bootstrap artifact, and editing
+tracked `.gitignore` -- `.agents` is a local bootstrap artifact, and editing
 `.gitignore` would dirty shared project policy. The generated rule anchors
 the `skills` child specifically (`/.agents/skills/`), not the whole of
 `.agents/`, because Codex also uses `.agents/plugins/marketplace.json` for
@@ -107,7 +107,7 @@ shared across every worktree linked to that repository, not scoped to the
 one bootstrap ran in.
 
 **Perforce guidance.** Perforce support is implemented in full (v1 scope
-excludes it only via the git-root requirement above, not by omission — a
+excludes it only via the git-root requirement above, not by omission -- a
 tree can be both git- and P4-managed). Workspace detection prefers `p4
 where`, falling back to local evidence (an effective `P4CONFIG` file, a
 root/ancestor `.p4ignore` or `p4ignore.txt`) when the server is
@@ -123,11 +123,11 @@ never appends to an existing ignore file.
 
 | Condition | Check Method | Remediation |
 |-----------|-------------|-------------|
-| Marketplace not registered | Check `known_marketplaces.json` for `installLocation` | `claude plugin marketplace add <url>` |
-| Marketplace stale (`alwaysUpdate`) | Always (no check — unconditional on every session) | `claude plugin marketplace update <name>` |
-| Marketplace pinned but clone at wrong commit | Resolve `pin` via `git rev-parse` (with `git fetch` + retry on a miss); compare resolved SHA to clone HEAD | `git checkout --detach <sha>`; force `autoUpdate: false` in `known_marketplaces.json`; record pin + prior `autoUpdate` in `marketplace_pins.json` |
-| Pin removed from manifest but marker recorded | Compare manifest `pin` fields against `marketplace_pins.json` | `git checkout <default branch>` (origin/HEAD, falling back to master/main probing), then the normal marketplace update; restore recorded `autoUpdate`; remove the marker entry |
-| Pin unresolvable (bad SHA/tag, clone missing) | `git rev-parse` still fails after fetch, or `installLocation` dir absent | Fix-all failure with guidance: check the SHA/tag, register the marketplace, or remove the pin |
+| Marketplace not registered | Check `known_marketplaces.json` for a usable `installLocation` directory | Run `claude plugin marketplace add <url>` |
+| Marketplace stale (`alwaysUpdate`) | Check the clone with `git fetch`, then compare local HEAD with its upstream HEAD | Run `claude plugin marketplace update <name>` |
+| Marketplace pinned but clone at wrong commit | Resolve `pin` with `git rev-parse`, fetch once on a miss, and compare the SHA with clone HEAD | Check out the resolved SHA, set `autoUpdate: false`, and record the pin and prior key state |
+| Pin removed from manifest but marker recorded | Run the pin release prechecks before changing the clone | Restore the default branch, restore or delete `autoUpdate`, remove the marker, then update the marketplace |
+| Pin unresolvable (bad SHA/tag, clone missing) | Fail when pin resolution fails after fetch or the clone directory is absent | Report the failure and keep the marker and clone state for a later retry |
 
 While a marketplace is pinned, `alwaysUpdate` is skipped (a one-line "alwaysUpdate ignored while pinned" warning is emitted instead). See the `pin` section in [manifest-reference.md](./manifest-reference.md) for full semantics.
 
@@ -135,26 +135,26 @@ While a marketplace is pinned, `alwaysUpdate` is skipped (a one-line "alwaysUpda
 
 | Condition | Check Method | Remediation |
 |-----------|-------------|-------------|
-| Plugin not installed | Check installed plugins registry | Install plugin at declared scope |
-| Plugin installed but unwanted | Check installed plugins registry | Uninstall plugin |
-| Plugin out of date | `git ls-remote` vs cached commit SHA | Update plugin at declared scope |
-| Plugin at wrong scope | Compare installed scope vs declared `scope` in manifest | Uninstall from current scope, reinstall at declared scope |
+| Plugin not installed | Check for a usable registry path or an enabled cached copy | Install plugin at declared scope |
+| Plugin installed but unwanted | Check the declared enablement state | Disable the plugin at its declared scope |
+| Plugin out of date | Compare the installed version with the plugin version in `marketplace.json` | Update plugin at its recorded scope |
+| Plugin at wrong scope | Check the enabled settings and synchronize the registry scope directly | Rewrite a safe pathless registry record; do not reinstall |
 
 ## Manual Operations (Blocking Conditions)
 
-These are the **ASK** category (see [Two outcomes](#two-outcomes-auto-fix-or-ask)): auto-configuration cannot complete without the user, because the fix needs elevation, a user action, or information only they have. Claude surfaces each via the `AskUserQuestion` tool (elevation items are batched into one aggregate offer). They are *not* a separate "manual, work-through-it" outcome — the only two outcomes are auto-fix and ask.
+These are the **ASK** category (see [Two outcomes](#two-outcomes-auto-fix-or-ask)): auto-configuration cannot complete without the user, because the fix needs elevation, a user action, or information only they have. Claude surfaces each via the `AskUserQuestion` tool (elevation items are batched into one aggregate offer). They are *not* a separate "manual, work-through-it" outcome -- the only two outcomes are auto-fix and ask.
 
 | Condition | Check Method | Remediation |
 |-----------|-------------|-------------|
 | Config information missing and can't be auto-detected | Check config file for required fields | Ask user for information, write to config file |
 | External app requires config change and/or restart | Modification applied that requires restart | User restarts external application, types `fixed` |
 | Claude Code requires config change and/or restart | Modification applied that requires restart | User restarts Claude Code |
-| Operation needs elevation (sudo/UAC) in a non-interactive pass | Privilege probe (`sudo -n` / admin token) failed when the op ran | Deferred into ONE per-OS fix queue — `<data_dir>/elevate/queue.json` plus a `bootstrap-fix.{sh,bat}` launcher shim — surfaced as one aggregate `elevation_script` item. Windows: a `fix-all` re-run launches the fix runner itself (see below). Unix: user runs the shim; the next session's re-check clears it (nothing to confirm) |
+| Operation needs elevation (sudo/UAC) in a non-interactive pass | Privilege probe (`sudo -n` / admin token) failed when the op ran | Deferred into ONE per-OS fix queue -- `<data_dir>/elevate/queue.json` plus a `bootstrap-fix.{sh,bat}` launcher shim -- surfaced as one aggregate `elevation_script` item. Windows: a `fix-all` re-run launches the fix runner itself (see below). Unix: user runs the shim; the next session's re-check clears it (nothing to confirm) |
 
 ### The fix queue and its runner
 
 Deferred operations are serialized as **typed tasks** in
-`<data_dir>/elevate/queue.json` — data, not generated shell text — and executed
+`<data_dir>/elevate/queue.json` -- data, not generated shell text -- and executed
 by `bootstrap_lib/fix_runner.py` (`python fix_runner.py <queue.json>`), the one
 place bootstrap has a TTY. The queue and its `bootstrap-fix.{sh,bat}` launcher
 shim are rewritten every pass and deleted once nothing is deferred, so the offer
@@ -164,15 +164,15 @@ disappears when the operations succeed.
 |-----------|----------------------|
 | `command` | `bash -c <command>`, `sudo`-wrapped on Unix when the task is `elevated` |
 | `apt` | `apt-get update`, then one `apt-get install -y <all queued packages>` |
-| `brew_installer` | Runs the official Homebrew installer. Never elevated — it refuses to run as root and elevates itself where it needs to |
-| `secret` | Prompts with echo off, writes the value 0600 and user-owned. **Available but unwired** — no producer emits one yet |
-| `path_prune` | Removes the task's `entries` from the Windows User PATH, backing the old value up to `entries`' sibling `path_backup.txt` first. **Never elevated** — `HKCU` is the user's own hive; it is queued for *consent*, not privilege, because it deletes things |
+| `brew_installer` | Runs the official Homebrew installer. Never elevated -- it refuses to run as root and elevates itself where it needs to |
+| `secret` | Prompts with echo off, writes the value 0600 and user-owned. **Available but unwired** -- no producer emits one yet |
+| `path_prune` | Removes the task's `entries` from the Windows User PATH, backing the old value up to `entries`' sibling `path_backup.txt` first. **Never elevated** -- `HKCU` is the user's own hive; it is queued for *consent*, not privilege, because it deletes things |
 
-The runner **prints the plan** before executing anything — one numbered line per
+The runner **prints the plan** before executing anything -- one numbered line per
 task, quickest first, marked `admin` where elevated and flagged where it
 downloads. A data file is more opaque than the shell script this replaced, whose
 real virtue was that the user could read it before approving; the plan restores
-that. The UAC (or sudo) prompt is the consent, the plan is the disclosure — and
+that. The UAC (or sudo) prompt is the consent, the plan is the disclosure -- and
 for `path_prune` the queue file itself is part of that disclosure: it lists every
 entry the prune will delete, verbatim, before the user agrees to anything.
 
@@ -220,26 +220,26 @@ to someone by a background hook.
 **Opportunistic tasks: worth fixing, never worth their own nag.** A `command` or
 `path_prune` descriptor may carry `opportunistic: true` (a `FixTask.opportunistic`
 flag, serialized into `queue.json`). Such a task rides the queue and executes
-whenever the runner is launched for *other* work — but a queue containing **only**
+whenever the runner is launched for *other* work -- but a queue containing **only**
 opportunistic tasks surfaces nothing: no `elevation_script` aggregate, no
 AskUserQuestion prompt, no fix-all launch, and the covered per-item failures are
 dropped from the pass (`engine._elevation_step`, gated on
 `fix_queue.has_actionable`). The queue and shim still stay on disk, so the work
 piggybacks on the next real deferral or a by-hand shim run. The dead-PATH prune
-is the built-in opportunistic task (housekeeping — valuable, not urgent); an
+is the built-in opportunistic task (housekeeping -- valuable, not urgent); an
 `env_checks` entry can opt in with `opportunistic: true` alongside `elevated`.
 
 It **continues past a failed task** rather than aborting on the first one (the
-old `.bat` aborted): the tasks are independent, and the engine's next re-check —
-not the runner — is the authority on what actually cleared, so a task that fails
+old `.bat` aborted): the tasks are independent, and the engine's next re-check --
+not the runner -- is the authority on what actually cleared, so a task that fails
 here simply stays failed there. Exit codes: `0` every task completed, `2` at
 least one did not, `3` the queue is unreadable or names an unknown kind (a
-version skew — failing loudly beats skipping an elevated task silently, which
+version skew -- failing loudly beats skipping an elevated task silently, which
 would look like success to the re-check).
 
 **Privilege is per task, not per run.** On Unix the runner runs **as the user**
 and wraps only `elevated` tasks in `sudo`, so anything it creates stays the
-user's and `$HOME` is already correct — the old script ran wholesale under `sudo`
+user's and `$HOME` is already correct -- the old script ran wholesale under `sudo`
 (`HOME=/root`), which is why it had to rewrite `~`. On Windows the engine
 launches the whole runner elevated in one UAC hop; UAC preserves the user
 profile, so `elevated` is effectively advisory there.
@@ -248,13 +248,13 @@ profile, so `elevated` is effectively advisory there.
 the user's *default* environment (`Start-Process -Verb RunAs` does not inherit
 the caller's), whose PATH has no Git `usr/bin`; `bash -c` is non-login, so msys
 never adds `/usr/bin` either. Before this (0.49.0, observed live) every queued
-command died with exit 127 — `ln: command not found`, `bash: command not
-found` — while the runner itself launched fine off the queue's baked absolute
+command died with exit 127 -- `ln: command not found`, `bash: command not
+found` -- while the runner itself launched fine off the queue's baked absolute
 bash path. `fix_runner._child_env` prepends the bash binary's directory to the
 task subprocess PATH, which is msys `usr/bin` itself.
 
 **Everything the runner prints is tee'd to `<data_dir>/elevate/fix-runner.log`**
-(overwritten per run), including child output — the pump in `fix_runner._run`
+(overwritten per run), including child output -- the pump in `fix_runner._run`
 routes task stdout+stderr through the runner's own stdout precisely so the
 transcript captures it. The elevated window closes on a keypress; the transcript
 is the only account of a failure that survives it, and the `elevation_script`
@@ -265,20 +265,20 @@ reach it (`getpass` bypasses stdout).
 
 `bootstrap_lib/path_prune.py` detects Windows User PATH entries whose directory
 no longer exists. Nothing removes a PATH entry once added, and each dead entry is
-textually unique so nothing collapses them either — they accumulate forever. A
+textually unique so nothing collapses them either -- they accumulate forever. A
 bloated PATH is not cosmetic: it is what `path_repair.py` exists to survive
 (cmd.exe silently truncates an oversized PATH during venv activation, leaving the
 Python child unable to find its tools).
 
-Scanning probes the filesystem per entry — potentially slow, potentially an
-offline network share — so it is gated on a hash of the raw registry PATH. **What
+Scanning probes the filesystem per entry -- potentially slow, potentially an
+offline network share -- so it is gated on a hash of the raw registry PATH. **What
 is cached is the RESULT, not "did I already report this".** That distinction is
 the whole design:
 
 | Situation | Rescan? | Surfaces? |
 |---|---|---|
-| User declined; PATH unchanged | No (hash hit) | **Yes — every session** (into the queue; see below) |
-| User pruned | Yes (hash miss) | No — result empty, self-clearing |
+| User declined; PATH unchanged | No (hash hit) | **Yes -- every session** (into the queue; see below) |
+| User pruned | Yes (hash miss) | No -- result empty, self-clearing |
 | Something added a dead entry | Yes (hash miss) | Yes, naming it |
 
 Cache "already reported" instead and a declined prune is detected once and never
@@ -289,21 +289,21 @@ mentioned again. Caching the result means a skip costs the *scan*, never the
 "Surfaces" here means the finding re-enters the fix queue each session. Whether
 the *user* sees a nag is a separate, later gate: the prune descriptor is
 **opportunistic** (see above), so it only appears in the fix-all offer when a
-non-opportunistic task is queued alongside it — a prune-only queue logs one
+non-opportunistic task is queued alongside it -- a prune-only queue logs one
 verbose line and stays silent.
 
 `scan()` returns `None` for **no verdict** (not Windows, or `BOOTSTRAP_SKIP_REGISTRY`
-set) as distinct from `[]` for **ran and clean** — collapsing the two would let a
+set) as distinct from `[]` for **ran and clean** -- collapsing the two would let a
 check that never ran report itself as one that passed.
 
 **`BOOTSTRAP_SKIP_REGISTRY` suppresses the read, not just writes.** The registry
 is global state that ignores the HOME isolation tests rely on, so a scan inside a
-test reads the *developer's* PATH — every engine test then inherits whatever dead
+test reads the *developer's* PATH -- every engine test then inherits whatever dead
 junk that machine has.
 
 **Deciding "dead" is the dangerous part**, and the two obvious ways are both
-wrong. `os.path.isdir` **never raises** — it swallows `OSError` internally and
-returns False — so an offline `\\nas\share` reads as dead. `os.stat` raises, but
+wrong. `os.path.isdir` **never raises** -- it swallows `OSError` internally and
+returns False -- so an offline `\\nas\share` reads as dead. `os.stat` raises, but
 on Windows an offline UNC host, an unmapped `Z:`, and a genuinely missing
 directory all surface as `FileNotFoundError` **winerror 3**; the exception says
 nothing useful. So `fix_runner.is_dead` asks a different question: **is the
@@ -313,22 +313,22 @@ mean the entry is dead. It also strips surrounding quotes first (cmd.exe does, s
 and declines to judge driveless entries (`\foo\bar` resolves against whatever
 drive is current). Everything ambiguous is **alive**: a false "alive" costs one
 stale entry nobody notices; a false "dead" silently deletes a directory the user
-needs. All three of those holes shipped once and were caught in review — each has
+needs. All three of those holes shipped once and were caught in review -- each has
 a regression test that asks the **real filesystem**, because the original mocked
 `isdir` into raising (something it never does) and so passed while the bug was
 live.
 
 The predicate lives in `fix_runner`, not `path_prune`, and `path_prune` imports it
 back: the runner **re-checks deadness at prune time** and must work as a bare
-script with no package context. That re-check is not belt-and-braces — the
+script with no package context. That re-check is not belt-and-braces -- the
 engine's cache keys on PATH *text* while deadness is a property of the
 *filesystem*, so a tool uninstalled (dead), left unpruned, then reinstalled to the
-same location leaves the PATH text — and the hash — untouched, and the stale
+same location leaves the PATH text -- and the hash -- untouched, and the stale
 verdict would delete a live directory. The queue says what to *consider*; the
 filesystem, at prune time, says what to *do*.
 
 **Why a `secret` kind at all.** Elevation is not the only operation that needs a
-console — gathering a secret hits the same wall for a different reason, and the
+console -- gathering a secret hits the same wall for a different reason, and the
 runner is the only place with a TTY to prompt on. Routing a secret through that
 console also keeps it out of the hook output and the Claude transcript. It is
 designed for, not yet wired up.
@@ -336,14 +336,14 @@ designed for, not yet wired up.
 ### fix-all is user consent for elevation (Windows)
 
 A SessionStart pass must never trigger a UAC or sudo prompt. But when the user
-**types `fix-all`**, that is an explicit interactive request for remediation —
+**types `fix-all`**, that is an explicit interactive request for remediation --
 so the fix-all re-run of the engine (invoked with the `--fix-all` flag, e.g.
 `bash <plugin_root>/hooks/sessionstart/session-bootstrap.sh --console
 --fix-all`) handles a non-empty fix queue by **launching the runner itself**:
 `Start-Process -Verb RunAs -Wait -PassThru` on the engine's own interpreter, so
 the wait covers the real elevated process rather than an unelevated shim that
 relaunches itself and exits early. The UAC prompt appears, the engine waits up
-to 10 minutes, and on success runs a re-check pass (without `--fix-all` — it can
+to 10 minutes, and on success runs a re-check pass (without `--fix-all` -- it can
 never loop the prompt) so the elevated items clear in the same cycle. If the
 user declines UAC, a task fails, or the wait times out, the engine reports the
 outcome and falls back to the run-it-yourself shim.
@@ -352,9 +352,9 @@ On Ubuntu/macOS the fix-all run has no TTY for a foreground `sudo` (or a secret
 prompt), so the shim remains the only path there. That asymmetry is **encoded,
 not remembered**: the engine attaches a `fix_all_cmd` to the aggregate item
 exactly when the launch can happen (Windows, and not already inside a fix-all
-run — which doubles as the loop guard). Elevation is always an **ASK** outcome
+run -- which doubles as the loop guard). Elevation is always an **ASK** outcome
 (`_ask_reason` returns `elevation` for the aggregate), so Claude offers it via
-`AskUserQuestion`; the `fix_all_cmd` only decides what "Fix" *does* — on Windows
+`AskUserQuestion`; the `fix_all_cmd` only decides what "Fix" *does* -- on Windows
 it launches the runner in the same pass, on Unix it points at the shim.
 
 ### What the user sees when elevation is the only issue
@@ -368,7 +368,7 @@ Bootstrap found issues that need admin access: <labels>.
 Type 'fix-all' to fix them. You'll be asked to approve an admin prompt.
 ```
 
-`<labels>` are the queued tasks' labels — an entry's `description` when it has
+`<labels>` are the queued tasks' labels -- an entry's `description` when it has
 one, else its `name` (tools read `Install <name>`). On Unix the second line
 instead names the shim to run ("It asks for your password where needed"), and a
 Windows launch that was declined or failed falls back to the same shim, prefixed
@@ -412,8 +412,8 @@ From the user's perspective, there are three possible outcomes on session start:
 
 | What the user sees | What happened |
 |--------------------|---------------|
-| Nothing | All checks passed (or cache hit) — environment is ready |
-| Nothing (first run after install) | Tool was missing, install ran silently, re-check passed — logged internally, no user-visible output |
+| Nothing | All checks passed (or cache hit) -- environment is ready |
+| Nothing (first run after install) | Tool was missing, install ran silently, re-check passed -- logged internally, no user-visible output |
 | Nothing (very first session, fresh machine) | Python was being bootstrapped; the engine runs fully on the next session. No `bootstrap.log` exists yet. |
 | Fix-all message | Something needs user action: install failed, no install command, missing config, or external app needs restart |
 

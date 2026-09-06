@@ -11,7 +11,7 @@ import subprocess
 import sys
 from typing import NamedTuple, Optional
 
-from .plugin_resolve import pick_registry_record
+from .plugin_resolve import discover_cache_plugins, pick_registry_record
 
 
 class LifecycleResult(NamedTuple):
@@ -35,7 +35,7 @@ class VersionCheckResult(NamedTuple):
 def _query_system_shell_for_claude(is_windows: bool) -> Optional[str]:
     """Ask the OS shell directly where the claude binary lives.
 
-    This bypasses the inherited PATH (which can be stale in hook subshells —
+    This bypasses the inherited PATH (which can be stale in hook subshells --
     e.g. git-bash launched from VS Code before `npm install -g` updated the
     User PATH). On Windows we use PowerShell's Get-Command, which queries the
     Machine+User PATH from the registry. On Unix we use a login bash, which
@@ -69,7 +69,7 @@ def _find_claude_cli() -> Optional[str]:
       1. CLAUDE_REAL_BIN env var (set by Claude Code at runtime)
       2. CLAUDE_CODE_EXECPATH env var (alternative set by Claude Code)
       3. shutil.which("claude") on the current PATH
-      4. System shell query (PowerShell on Windows, login bash on Unix) —
+      4. System shell query (PowerShell on Windows, login bash on Unix) --
          sees the real User+Machine PATH even when our process inherited a
          stale one (e.g. git-bash hook launched before `npm install -g`
          updated the Windows User PATH).
@@ -198,7 +198,7 @@ _CLI_ERROR_CAUSES = (
 )
 
 
-def summarize_cli_error(stderr: str) -> str:
+def summarize_cli_error(output: str) -> str:
     """One short, whole-clause cause for a failed CLI call.
 
     Raw CLI/git output is multi-line and long -- embedding it in a failure
@@ -211,7 +211,7 @@ def summarize_cli_error(stderr: str) -> str:
     error falls back to a whole-clause head of its first line, or to a pointer
     at the log when even that does not fit.
     """
-    text = (stderr or "").strip()
+    text = (output or "").strip()
     if not text:
         return "no output from the CLI"
     haystack = text.lower()
@@ -225,13 +225,18 @@ def summarize_cli_error(stderr: str) -> str:
     return derive_short(first, CAUSE_MAX) or "see the bootstrap log"
 
 
-def _cli_failure(verb: str, ref: str, stderr: str) -> LifecycleResult:
+def _cli_failure(verb: str, ref: str, output: str) -> LifecycleResult:
     """A failed CLI operation: short classified message, raw output in detail."""
     return LifecycleResult(
         passed=False, ref=ref,
-        message=f"{verb} failed ({summarize_cli_error(stderr)})",
-        detail=(stderr or "").strip(),
+        message=f"{verb} failed ({summarize_cli_error(output)})",
+        detail=(output or "").strip(),
     )
+
+
+def _combined_output(*outputs: str) -> str:
+    """Combine CLI output streams for classification and diagnostic detail."""
+    return "\n".join(part.strip() for part in outputs if part and part.strip())
 
 
 # --- Marketplace operations ---
@@ -246,7 +251,8 @@ def check_marketplace_exists(name: str) -> LifecycleResult:
     try:
         with open(km_path, "r") as f:
             data = json.load(f)
-        if name in data and data[name].get("installLocation"):
+        install_location = data.get(name, {}).get("installLocation", "")
+        if install_location and os.path.isdir(install_location):
             return LifecycleResult(passed=True, ref=name, message="marketplace exists")
     except (FileNotFoundError, json.JSONDecodeError):
         pass
@@ -259,7 +265,7 @@ def add_marketplace(source_url: str, name: str = "") -> LifecycleResult:
     ref = name or source_url
     if ok:
         return LifecycleResult(passed=True, ref=ref, message="marketplace added")
-    return _cli_failure("add", ref, stderr)
+    return _cli_failure("add", ref, _combined_output(stdout, stderr))
 
 
 def remove_marketplace(name: str) -> LifecycleResult:
@@ -267,7 +273,7 @@ def remove_marketplace(name: str) -> LifecycleResult:
     ok, stdout, stderr = _run_claude(["plugin", "marketplace", "remove", name])
     if ok:
         return LifecycleResult(passed=True, ref=name, message="marketplace removed")
-    return _cli_failure("remove", name, stderr)
+    return _cli_failure("remove", name, _combined_output(stdout, stderr))
 
 
 def check_marketplace_current(name: str) -> LifecycleResult:
@@ -288,23 +294,19 @@ def check_marketplace_current(name: str) -> LifecycleResult:
 
     try:
         # Fetch latest from remote
-        subprocess.run(
-            ["git", "fetch", "--quiet"],
-            cwd=install_loc, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60,
-        )
+        fetch_proc = _git(["fetch", "--quiet"], install_loc, timeout=60)
+        if fetch_proc.returncode != 0:
+            return LifecycleResult(
+                passed=False, ref=name,
+                message=f"git fetch failed: {fetch_proc.stderr.strip()}",
+            )
         # Compare local HEAD to upstream. Check returncodes (B17): a repo
         # without an upstream tracking branch makes `rev-parse @{u}` fail,
         # which used to read as remote="" != local -> "updates available" ->
         # a doomed update attempt every pass. Treat "can't determine" as
         # current rather than stale.
-        local_proc = subprocess.run(
-            ["git", "rev-parse", "HEAD"],
-            cwd=install_loc, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=10,
-        )
-        remote_proc = subprocess.run(
-            ["git", "rev-parse", "@{u}"],
-            cwd=install_loc, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=10,
-        )
+        local_proc = _git(["rev-parse", "HEAD"], install_loc, timeout=10)
+        remote_proc = _git(["rev-parse", "@{u}"], install_loc, timeout=10)
         if local_proc.returncode != 0:
             return LifecycleResult(passed=True, ref=name, message="cannot read local HEAD; skipping update check")
         if remote_proc.returncode != 0:
@@ -319,7 +321,7 @@ def check_marketplace_current(name: str) -> LifecycleResult:
 def update_marketplace(name: str = "") -> LifecycleResult:
     """Update a marketplace via `claude plugin marketplace update`.
 
-    Falls back to `git pull` when the CLI fails with "already exists" — a known
+    Falls back to `git pull` when the CLI fails with "already exists" -- a known
     Claude Code CLI bug where `plugin marketplace update` attempts `git clone`
     into a directory that already contains the marketplace clone.
     """
@@ -332,7 +334,8 @@ def update_marketplace(name: str = "") -> LifecycleResult:
         return LifecycleResult(passed=True, ref=ref, message="marketplace updated")
 
     # Fallback: if the CLI tried to clone into an existing directory, git pull directly.
-    if "already exists" in stderr and name:
+    combined = _combined_output(stdout, stderr)
+    if "already exists" in combined and name:
         km_path = os.path.expanduser("~/.claude/plugins/known_marketplaces.json")
         try:
             with open(km_path, "r") as f:
@@ -349,11 +352,14 @@ def update_marketplace(name: str = "") -> LifecycleResult:
                 )
                 if pull.returncode == 0:
                     return LifecycleResult(passed=True, ref=ref, message="marketplace updated (git pull fallback)")
-                return _cli_failure("git pull fallback", ref, pull.stderr)
+                return _cli_failure(
+                    "git pull fallback", ref,
+                    _combined_output(pull.stdout, pull.stderr),
+                )
             except (subprocess.SubprocessError, OSError) as e:
                 return LifecycleResult(passed=False, ref=ref, message=f"git pull fallback error: {e}")
 
-    return _cli_failure("update", ref, stderr)
+    return _cli_failure("update", ref, combined)
 
 
 # --- Marketplace pin operations ---
@@ -384,6 +390,9 @@ class PinResult(NamedTuple):
     status: str   # "pinned" | "already_pinned" | "pin_mismatch" | "unpinned" | "error"
     sha: str      # resolved commit SHA (empty when resolution failed)
     message: str
+
+
+_AUTO_UPDATE_UNREADABLE = object()
 
 
 def _git(args: list, cwd: str, timeout: int = 30) -> subprocess.CompletedProcess:
@@ -439,7 +448,7 @@ def marketplace_install_location(name: str, km_path: Optional[str] = None) -> st
 def resolve_pin(clone_dir: str, pin: str) -> tuple:
     """Resolve a committish to a full commit SHA in the clone. Returns (sha, error).
 
-    An unknown committish triggers a `git fetch` and one retry — the pin may
+    An unknown committish triggers a `git fetch` and one retry -- the pin may
     name a commit/tag published after the clone's last fetch.
     """
     proc = _git(["rev-parse", "--verify", f"{pin}^{{commit}}"], clone_dir, timeout=10)
@@ -473,11 +482,11 @@ def check_marketplace_pin(clone_dir: str, pin: str) -> PinResult:
                      message=f"HEAD {head_proc.stdout.strip()[:8]} != pin {sha[:8]}")
 
 
-def _force_auto_update_false(km_path: str, name: str):
+def _force_auto_update_false(km_path: str, name: str) -> object:
     """Set autoUpdate=false for `name` in known_marketplaces.json.
 
     Returns the PRIOR autoUpdate value (True/False, or None when the key or
-    entry was absent). Writes only when the value actually changes — the
+    entry was absent). Writes only when the value actually changes -- the
     registry's mtime arms the SessionStart cooldown's registry-change bypass,
     so a no-op rewrite every pinned session would re-arm a full bootstrap pass
     every session (same discipline as ensure_registry_scope). Atomic write.
@@ -486,32 +495,49 @@ def _force_auto_update_false(km_path: str, name: str):
         with open(km_path, "r") as f:
             data = json.load(f)
     except (FileNotFoundError, json.JSONDecodeError, OSError):
-        return None
+        return _AUTO_UPDATE_UNREADABLE
+    if not isinstance(data, dict):
+        return _AUTO_UPDATE_UNREADABLE
     entry = data.get(name)
     if not isinstance(entry, dict):
-        return None
+        return _AUTO_UPDATE_UNREADABLE
     prior = entry.get("autoUpdate") if "autoUpdate" in entry else None
     if entry.get("autoUpdate") is not False:
         entry["autoUpdate"] = False
         from .atomic_write import write_atomic
-        write_atomic(km_path, json.dumps(data, indent=2) + "\n")
+        try:
+            write_atomic(km_path, json.dumps(data, indent=2) + "\n")
+        except OSError:
+            return _AUTO_UPDATE_UNREADABLE
     return prior
 
 
-def _restore_auto_update(km_path: str, name: str, value: bool) -> None:
-    """Restore autoUpdate for `name` to `value`. Change-gated + atomic (see above)."""
+def _restore_auto_update(km_path: str, name: str, value: Optional[bool]) -> bool:
+    """Restore or delete autoUpdate. Return False when metadata cannot be changed."""
     try:
         with open(km_path, "r") as f:
             data = json.load(f)
     except (FileNotFoundError, json.JSONDecodeError, OSError):
-        return
+        return False
+    if not isinstance(data, dict):
+        return False
     entry = data.get(name)
     if not isinstance(entry, dict):
-        return
-    if entry.get("autoUpdate") != value:
+        return False
+    if value is None:
+        if "autoUpdate" not in entry:
+            return True
+        del entry["autoUpdate"]
+    elif entry.get("autoUpdate") != value:
         entry["autoUpdate"] = value
+    else:
+        return True
+    try:
         from .atomic_write import write_atomic
         write_atomic(km_path, json.dumps(data, indent=2) + "\n")
+    except OSError:
+        return False
+    return True
 
 
 def apply_marketplace_pin(name: str, pin: str, clone_dir: Optional[str] = None,
@@ -555,16 +581,37 @@ def apply_marketplace_pin(name: str, pin: str, clone_dir: Optional[str] = None,
     # Keep Claude Code's own marketplace refresh from pulling the clone off
     # the pin. Capture the pre-pin value for restoration on unpin.
     prior = _force_auto_update_false(km_path, name)
+    if prior is _AUTO_UPDATE_UNREADABLE:
+        return PinResult(
+            passed=False, ref=name, status="error", sha=sha,
+            message="cannot read or update known_marketplaces.json; pin not recorded",
+        )
 
     markers = load_pin_markers(pins_path)
     entry = markers.get(name)
     if not isinstance(entry, dict):
-        markers[name] = {"pin": pin, "resolved_sha": sha, "prior_auto_update": prior}
-        save_pin_markers(markers, pins_path)
+        markers[name] = {
+            "pin": pin, "resolved_sha": sha,
+            "prior_auto_update": prior,
+            "prior_auto_update_present": prior is not None,
+        }
+        try:
+            save_pin_markers(markers, pins_path)
+        except OSError as exc:
+            return PinResult(
+                passed=False, ref=name, status="error", sha=sha,
+                message=f"could not record marketplace pin: {exc}",
+            )
     elif entry.get("pin") != pin or entry.get("resolved_sha") != sha:
         entry["pin"] = pin
         entry["resolved_sha"] = sha
-        save_pin_markers(markers, pins_path)
+        try:
+            save_pin_markers(markers, pins_path)
+        except OSError as exc:
+            return PinResult(
+                passed=False, ref=name, status="error", sha=sha,
+                message=f"could not record marketplace pin: {exc}",
+            )
 
     return PinResult(passed=True, ref=name, status=status, sha=sha, message=f"pinned at {sha[:8]}")
 
@@ -626,11 +673,29 @@ def release_marketplace_pin(name: str, clone_dir: Optional[str] = None,
         )
 
     prior = entry.get("prior_auto_update")
+    # Legacy markers with prior_auto_update=None mean "leave it alone".
+    # New markers add an explicit presence bit for an originally absent key.
+    prior_present = entry.get("prior_auto_update_present", True)
     if prior is not None:
-        _restore_auto_update(km_path, name, prior)
+        restored = _restore_auto_update(km_path, name, prior)
+    elif prior_present is False:
+        restored = _restore_auto_update(km_path, name, None)
+    else:
+        restored = True
+    if not restored:
+        return PinResult(
+            passed=False, ref=name, status="error", sha="",
+            message="cannot restore autoUpdate in known_marketplaces.json; pin marker retained",
+        )
 
     del markers[name]
-    save_pin_markers(markers, pins_path)
+    try:
+        save_pin_markers(markers, pins_path)
+    except OSError as exc:
+        return PinResult(
+            passed=False, ref=name, status="error", sha="",
+            message=f"could not remove marketplace pin marker: {exc}",
+        )
     return PinResult(passed=True, ref=name, status="unpinned", sha="", message=f"restored {branch}")
 
 
@@ -642,80 +707,83 @@ def pinned_marketplace_sha(name: str, pins_path: Optional[str] = None) -> str:
     return (entry.get("resolved_sha") or "")[:8]
 
 
+def remove_marketplace_pin_marker(name: str, pins_path: Optional[str] = None) -> PinResult:
+    """Remove a marketplace pin marker after the marketplace is removed."""
+    markers = load_pin_markers(pins_path)
+    if not isinstance(markers.get(name), dict):
+        return PinResult(True, name, "unpinned", "", "no pin marker")
+    del markers[name]
+    try:
+        save_pin_markers(markers, pins_path)
+    except OSError as exc:
+        return PinResult(
+            False, name, "error", "",
+            f"could not remove marketplace pin marker: {exc}",
+        )
+    return PinResult(True, name, "unpinned", "", "pin marker removed")
+
+
 # --- Plugin operations ---
 
-def check_plugin_installed(plugin_ref: str) -> LifecycleResult:
-    """Check if a plugin is installed in the global installed_plugins.json.
 
-    Args:
-        plugin_ref: Plugin reference in marketplace:plugin format
-    """
+class RegistryEntries(NamedTuple):
+    data: Optional[dict]
+    entries: object
+    error: str = ""
+
+
+def _registry_entries(plugin_ref: str) -> RegistryEntries:
+    """Read both registry key forms with one error policy."""
     ip_path = os.path.expanduser("~/.claude/plugins/installed_plugins.json")
     try:
         with open(ip_path, "r") as f:
             data = json.load(f)
-        plugins = data.get("plugins", {})
-        # Check both marketplace:plugin and plugin@marketplace formats
-        # since Claude Code CLI uses plugin@marketplace internally
-        if plugin_ref in plugins:
-            return LifecycleResult(passed=True, ref=plugin_ref, message="installed")
-        # Try the CLI format (plugin@marketplace)
-        if ":" in plugin_ref:
-            marketplace, plugin_name = plugin_ref.split(":", 1)
-            cli_ref = f"{plugin_name}@{marketplace}"
-            if cli_ref in plugins:
-                return LifecycleResult(passed=True, ref=plugin_ref, message="installed")
-    except (FileNotFoundError, json.JSONDecodeError):
-        pass
-    return LifecycleResult(passed=False, ref=plugin_ref, message="not installed")
-
-
-class ScopeCheckResult(NamedTuple):
-    matches: bool
-    ref: str
-    installed_scope: str  # empty if not installed
-    message: str
-
-
-def check_plugin_scope(plugin_ref: str, desired_scope: str) -> ScopeCheckResult:
-    """Check if a plugin is installed at the desired scope.
-
-    Args:
-        plugin_ref: Plugin reference in marketplace:plugin format
-        desired_scope: Desired scope (user, project, local)
-
-    Returns:
-        ScopeCheckResult with matches=True if installed scope equals desired scope.
-    """
+    except (FileNotFoundError, json.JSONDecodeError, OSError) as exc:
+        return RegistryEntries(None, [], f"registry unreadable: {exc}")
+    if not isinstance(data, dict):
+        return RegistryEntries(data, [])
+    plugins = data.get("plugins", {})
+    if not isinstance(plugins, dict):
+        return RegistryEntries(data, [])
     cli_ref = _to_cli_ref(plugin_ref)
-    ip_path = os.path.expanduser("~/.claude/plugins/installed_plugins.json")
+    for key in (cli_ref, plugin_ref):
+        if key in plugins:
+            return RegistryEntries(data, plugins[key])
+    return RegistryEntries(data, [])
+
+
+def _enabled_plugin_refs() -> set:
+    """Return enabled user-scope plugin refs in CLI key form."""
+    settings_path = os.path.expanduser("~/.claude/settings.json")
     try:
-        with open(ip_path, "r") as f:
+        with open(settings_path, "r") as f:
             data = json.load(f)
-        plugins = data.get("plugins", {})
-        # Try both ref formats
-        entries = plugins.get(cli_ref) or plugins.get(plugin_ref) or []
-        rec = pick_registry_record(entries)
-        if rec is not None:
-            installed_scope = rec.get("scope", "")
-            if installed_scope == desired_scope:
-                return ScopeCheckResult(
-                    matches=True, ref=plugin_ref,
-                    installed_scope=installed_scope,
-                    message=f"scope {installed_scope} (correct)",
-                )
-            return ScopeCheckResult(
-                matches=False, ref=plugin_ref,
-                installed_scope=installed_scope,
-                message=f"installed at {installed_scope}, want {desired_scope}",
-            )
     except (FileNotFoundError, json.JSONDecodeError, OSError):
-        pass
-    return ScopeCheckResult(
-        matches=True, ref=plugin_ref,
-        installed_scope="",
-        message="not installed (skipping scope check)",
-    )
+        return set()
+    enabled = data.get("enabledPlugins", {}) if isinstance(data, dict) else {}
+    if not isinstance(enabled, dict):
+        return set()
+    return {_to_cli_ref(ref) for ref, value in enabled.items() if value is True}
+
+
+def check_plugin_installed(plugin_ref: str) -> LifecycleResult:
+    """Check for a usable registry record or an enabled cached plugin.
+
+    Args:
+        plugin_ref: Plugin reference in marketplace:plugin format
+    """
+    lookup = _registry_entries(plugin_ref)
+    record = pick_registry_record(lookup.entries)
+    if isinstance(record, dict) and os.path.isdir(record.get("installPath") or ""):
+        return LifecycleResult(passed=True, ref=plugin_ref, message="installed")
+
+    cli_ref = _to_cli_ref(plugin_ref)
+    plugins_root = os.path.expanduser("~/.claude/plugins")
+    cached = discover_cache_plugins(plugins_root, _enabled_plugin_refs())
+    cached_record = pick_registry_record(cached.get(cli_ref, []))
+    if isinstance(cached_record, dict) and os.path.isdir(cached_record.get("installPath") or ""):
+        return LifecycleResult(passed=True, ref=plugin_ref, message="installed")
+    return LifecycleResult(passed=False, ref=plugin_ref, message="not installed")
 
 
 def _run_claude_scoped(args, scope: str, project_dir: Optional[str]):
@@ -760,35 +828,14 @@ def install_plugin(
     )
     if ok:
         return LifecycleResult(passed=True, ref=plugin_ref, message="installed")
-    return _cli_failure("install", plugin_ref, stderr)
-
-
-def uninstall_plugin(
-    plugin_ref: str, scope: str = "user", project_dir: Optional[str] = None
-) -> LifecycleResult:
-    """Uninstall a plugin via `claude plugin uninstall`."""
-    cli_ref = _to_cli_ref(plugin_ref)
-    ok, stdout, stderr = _run_claude_scoped(
-        ["plugin", "uninstall", cli_ref, "--scope", scope], scope, project_dir
-    )
-    if ok:
-        return LifecycleResult(passed=True, ref=plugin_ref, message="uninstalled")
-    return _cli_failure("uninstall", plugin_ref, stderr)
+    return _cli_failure("install", plugin_ref, _combined_output(stdout, stderr))
 
 
 def _recorded_scope(cli_ref: str, plugin_ref: str) -> str:
     """Scope the registry says a plugin is actually installed at ("" if unknown)."""
-    ip_path = os.path.expanduser("~/.claude/plugins/installed_plugins.json")
-    try:
-        with open(ip_path, "r") as f:
-            data = json.load(f)
-        plugins = data.get("plugins", {})
-        entries = plugins.get(cli_ref) or plugins.get(plugin_ref) or []
-        rec = pick_registry_record(entries)
-        if rec is not None:
-            return rec.get("scope", "") or ""
-    except (FileNotFoundError, json.JSONDecodeError, OSError):
-        pass
+    rec = pick_registry_record(_registry_entries(plugin_ref).entries)
+    if rec is not None:
+        return rec.get("scope", "") or ""
     return ""
 
 
@@ -817,7 +864,7 @@ def update_plugin(
     )
     if ok:
         return LifecycleResult(passed=True, ref=plugin_ref, message="updated")
-    return _cli_failure("update", plugin_ref, stderr)
+    return _cli_failure("update", plugin_ref, _combined_output(stdout, stderr))
 
 
 class ScopeSyncResult(NamedTuple):
@@ -893,15 +940,16 @@ def ensure_registry_scope(plugin_ref: str, desired_scope: str) -> ScopeSyncResul
     plugin depends on.
     """
     cli_ref = _to_cli_ref(plugin_ref)
-    ip_path = os.path.expanduser("~/.claude/plugins/installed_plugins.json")
+    lookup = _registry_entries(plugin_ref)
+    if lookup.error:
+        return ScopeSyncResult(False, plugin_ref, False, False, lookup.error)
+    data = lookup.data
+    entries = lookup.entries
+    if not entries:
+        return ScopeSyncResult(True, plugin_ref, False, False, "not in registry")
+    if not isinstance(data, dict) or not isinstance(entries, list):
+        return ScopeSyncResult(False, plugin_ref, False, False, "registry entry malformed")
     try:
-        with open(ip_path, "r") as f:
-            data = json.load(f)
-        plugins = data.get("plugins", {})
-        entries = plugins.get(cli_ref) or plugins.get(plugin_ref)
-        if not entries:
-            # not in registry, nothing to fix
-            return ScopeSyncResult(True, plugin_ref, False, False, "not in registry")
         changed = False
         for entry in entries:
             if not isinstance(entry, dict) or entry.get("projectPath"):
@@ -968,6 +1016,7 @@ def ensure_registry_scope(plugin_ref: str, desired_scope: str) -> ScopeSyncResul
             # already correct, leave the file (and its mtime) alone
             return ScopeSyncResult(True, plugin_ref, False, refused, message)
         from .atomic_write import write_atomic
+        ip_path = os.path.expanduser("~/.claude/plugins/installed_plugins.json")
         write_atomic(ip_path, json.dumps(data, indent=2) + "\n")
         return ScopeSyncResult(True, plugin_ref, added, refused, message)
     except (FileNotFoundError, json.JSONDecodeError, OSError) as exc:
@@ -1003,22 +1052,14 @@ def check_plugin_version(plugin_ref: str) -> VersionCheckResult:
     Returns up_to_date=True if current or version cannot be determined.
     Returns up_to_date=False only when a definitive newer version is available.
     """
-    cli_ref = _to_cli_ref(plugin_ref)
     marketplace = plugin_ref.split(":", 1)[0] if ":" in plugin_ref else None
     plugin_name = plugin_ref.split(":", 1)[1] if ":" in plugin_ref else plugin_ref
 
     # Get installed version
-    ip_path = os.path.expanduser("~/.claude/plugins/installed_plugins.json")
     installed_version = ""
-    try:
-        with open(ip_path, "r") as f:
-            data = json.load(f)
-        installs = data.get("plugins", {}).get(cli_ref, [])
-        rec = pick_registry_record(installs)
-        if rec is not None:
-            installed_version = rec.get("version", "")
-    except (FileNotFoundError, json.JSONDecodeError, OSError):
-        pass
+    rec = pick_registry_record(_registry_entries(plugin_ref).entries)
+    if rec is not None:
+        installed_version = rec.get("version", "")
 
     if not installed_version:
         return VersionCheckResult(
@@ -1066,7 +1107,7 @@ def check_plugin_version(plugin_ref: str) -> VersionCheckResult:
             message=f"version {installed_version} (current)",
         )
 
-    # Compare versions directionally — only outdated if latest > installed
+    # Compare versions directionally -- only outdated if latest > installed
     if not _version_greater(latest_version, installed_version):
         return VersionCheckResult(
             up_to_date=True, ref=plugin_ref,
@@ -1099,18 +1140,10 @@ def check_plugin_min_version(plugin_ref: str, min_version: str) -> VersionCheckR
             message="no min_version declared",
         )
 
-    cli_ref = _to_cli_ref(plugin_ref)
-    ip_path = os.path.expanduser("~/.claude/plugins/installed_plugins.json")
     installed_version = ""
-    try:
-        with open(ip_path, "r") as f:
-            data = json.load(f)
-        installs = data.get("plugins", {}).get(cli_ref) or data.get("plugins", {}).get(plugin_ref) or []
-        rec = pick_registry_record(installs)
-        if rec is not None:
-            installed_version = rec.get("version", "")
-    except (FileNotFoundError, json.JSONDecodeError, OSError):
-        pass
+    rec = pick_registry_record(_registry_entries(plugin_ref).entries)
+    if rec is not None:
+        installed_version = rec.get("version", "")
 
     if not installed_version:
         return VersionCheckResult(
@@ -1197,16 +1230,13 @@ def enable_plugin_at_scope(
     endings are left alone) because the target is frequently a shared,
     source-controlled settings.json.
 
-    REFUSES to overwrite an explicit `false` at USER scope. A missing entry and
+    REFUSES to overwrite an explicit `false` at USER or PROJECT scope. A missing entry and
     an entry set to `false` are different things: the first is an install that
     never finished writing its enablement, which is exactly what this function
     exists to repair; the second is somebody having turned the plugin off, and
     convergence must not undo a decision. Repairing it silently is worse than
     leaving it broken -- the user disables a plugin, the next prompt in any live
-    session re-enables it, and nothing explains why. Bootstrap already declines
-    to fight a project-scope opt-out (its enable check reads only the non-local
-    settings.json, so a settings.local.json disable is invisible to it); this is
-    the user-scope equivalent. The refusal is reported to the caller so it
+    session re-enables it, and nothing explains why. The refusal is reported to the caller so it
     surfaces as an issue to fix rather than passing as a no-op.
     """
     from .settings_writable import (
@@ -1238,7 +1268,7 @@ def enable_plugin_at_scope(
             raise ValueError("settings root is not an object")
         existing = data.get("enabledPlugins")
         if (
-            scope == "user"
+            scope in ("user", "project")
             and isinstance(existing, dict)
             and existing.get(cli_ref) is False
         ):
@@ -1248,9 +1278,9 @@ def enable_plugin_at_scope(
             return LifecycleResult(
                 passed=False, ref=plugin_ref,
                 message=(
-                    "disabled at user scope by an explicit false entry in "
-                    "{0}; not re-enabling automatically -- remove the entry, or "
-                    "set it to true, to turn it back on".format(settings_path)
+                    "disabled at {0} scope by an explicit false entry in "
+                    "{1}; not re-enabling automatically -- remove the entry, or "
+                    "set it to true, to turn it back on".format(scope, settings_path)
                 ),
             )
         data.setdefault("enabledPlugins", {})[cli_ref] = True
@@ -1278,7 +1308,42 @@ def enable_plugin_in_claude(plugin_ref: str) -> LifecycleResult:
     ok, stdout, stderr = _run_claude(["plugin", "enable", cli_ref])
     if ok:
         return LifecycleResult(passed=True, ref=plugin_ref, message="enabled in Claude Code")
-    return _cli_failure("enable", plugin_ref, stderr)
+    return _cli_failure("enable", plugin_ref, _combined_output(stdout, stderr))
+
+
+def disable_plugin_at_scope(
+    plugin_ref: str, scope: str, project_dir: Optional[str] = None
+) -> LifecycleResult:
+    """Disable a plugin by writing the enabled state at the requested scope."""
+    from .settings_writable import (
+        ensure_writable, preserve_line_endings, settings_path_for_scope,
+    )
+
+    settings_path = settings_path_for_scope(scope, project_dir)
+    if not settings_path:
+        return LifecycleResult(
+            False, plugin_ref, f"cannot resolve settings file for scope '{scope}'"
+        )
+    prep = ensure_writable(settings_path)
+    if not prep.ok:
+        return LifecycleResult(False, plugin_ref, f"settings file not writable: {prep.detail}")
+    try:
+        if os.path.isfile(settings_path):
+            with open(settings_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        else:
+            data = {}
+        if not isinstance(data, dict):
+            raise ValueError("settings root is not an object")
+        data.setdefault("enabledPlugins", {})[_to_cli_ref(plugin_ref)] = False
+        os.makedirs(os.path.dirname(settings_path), exist_ok=True)
+        with preserve_line_endings(settings_path):
+            with open(settings_path, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2, ensure_ascii=False)
+                f.write("\n")
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        return LifecycleResult(False, plugin_ref, f"could not disable at {scope} scope: {exc}")
+    return LifecycleResult(True, plugin_ref, f"disabled at {scope} scope")
 
 
 def disable_plugin_in_claude(plugin_ref: str) -> LifecycleResult:
@@ -1287,4 +1352,4 @@ def disable_plugin_in_claude(plugin_ref: str) -> LifecycleResult:
     ok, stdout, stderr = _run_claude(["plugin", "disable", cli_ref])
     if ok:
         return LifecycleResult(passed=True, ref=plugin_ref, message="disabled in Claude Code")
-    return _cli_failure("disable", plugin_ref, stderr)
+    return _cli_failure("disable", plugin_ref, _combined_output(stdout, stderr))

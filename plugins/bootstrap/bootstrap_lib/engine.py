@@ -737,9 +737,13 @@ def _main():
         load_registry,
     )
     _registry_path = os.path.join(plugins_dir, "installed_plugins.json")
-    _repair_dropped = apply_repair(_registry_path)
-    if _repair_dropped:
-        bootstrap_action_entries.append(describe_repair(_repair_dropped))
+    _repair_result = apply_repair(_registry_path)
+    if getattr(_repair_result, "error", ""):
+        bootstrap_action_entries.append(
+            f"registry: repair failed - {_repair_result.error}"
+        )
+    elif _repair_result:
+        bootstrap_action_entries.append(describe_repair(_repair_result))
     else:
         bootstrap_ok_entries.append("registry: no malformed records")
 
@@ -2814,7 +2818,7 @@ def _process_tool_entry(tool_def, current_os, data_dir, prefix, action_entries,
         if resolved, record the path and link its dir onto PATH (philosophy P4).
       - scoop / brew / url download / install command run in order on a miss. After
         ANY install attempt the tool is re-checked regardless of the
-        installer's exit code — installers exit non-zero for "already installed
+    installer's exit code -- installers exit non-zero for "already installed
         / no upgrade" (winget 43), so the re-check, not the exit code, decides
         presence. A failed url download falls through to the install command.
 
@@ -3558,7 +3562,7 @@ def _process_project_config(project_config_section, plugin_data_dir, plugin_root
             if field_spec.get("default") is not None:
                 continue  # default already applied above
             if not field_spec:
-                # String-list form carries no messages — skip fix-all emission
+        # String-list form carries no messages -- skip fix-all emission
                 continue
             agent_msg = field_spec.get(
                 "agent_msg", f"Set {field_name} in {project_config_path}"
@@ -4289,7 +4293,8 @@ def _phase_marketplaces(ctx):
     from .marketplace_lifecycle import (
         check_marketplace_exists, check_marketplace_current,
         add_marketplace, remove_marketplace, update_marketplace,
-        apply_marketplace_pin, release_marketplace_pin, load_pin_markers,
+        apply_marketplace_pin, release_marketplace_pin, remove_marketplace_pin_marker,
+        load_pin_markers,
         resolve_claude_cli,
     )
 
@@ -4337,11 +4342,29 @@ def _phase_marketplaces(ctx):
         # without erroring once the removal has happened.
         if mkt_def.get("remove") or mkt_def.get("enabled") is False:
             if not check_marketplace_exists(mkt_name).passed:
-                ctx.ok(f"marketplace {mkt_name}: already removed")
+                marker_result = remove_marketplace_pin_marker(mkt_name)
+                if marker_result.passed:
+                    ctx.ok(f"marketplace {mkt_name}: already removed")
+                else:
+                    ctx.fail(
+                        f"marketplace {mkt_name}: {marker_result.message}",
+                        display=f"marketplace {mkt_name}: remove cleanup failed",
+                        type="marketplace", name=mkt_name,
+                        message=marker_result.message,
+                    )
                 continue
             rm_result = remove_marketplace(mkt_name)
             if rm_result.passed:
-                ctx.action(f"marketplace {mkt_name}: removed")
+                marker_result = remove_marketplace_pin_marker(mkt_name)
+                if marker_result.passed:
+                    ctx.action(f"marketplace {mkt_name}: removed")
+                else:
+                    ctx.fail(
+                        f"marketplace {mkt_name}: removed; {marker_result.message}",
+                        display=f"marketplace {mkt_name}: remove cleanup failed",
+                        type="marketplace", name=mkt_name,
+                        message=marker_result.message,
+                    )
             else:
                 ctx.fail(
                     f"marketplace {mkt_name}: {rm_result.message}",
@@ -4467,8 +4490,8 @@ def _phase_plugins(ctx):
     """
     from .marketplace_lifecycle import (
         check_plugin_installed, install_plugin,
-        enable_plugin_in_claude, disable_plugin_in_claude,
-        check_plugin_enabled, check_plugin_enabled_at_scope,
+        enable_plugin_in_claude, disable_plugin_at_scope,
+        check_plugin_enabled_at_scope,
         enable_plugin_at_scope,
         check_plugin_version, check_plugin_min_version,
         update_plugin, ensure_registry_scope,
@@ -4515,7 +4538,6 @@ def _phase_plugins(ctx):
     installs_skipped = {}       # mkt -> [ref]
 
     plugins_installed = {}      # mkt -> [(name, detail)]
-    plugins_re_installed = {}   # mkt -> [(name, detail)]
     plugins_updated = {}        # mkt -> [(name, detail)]
     plugins_enabled = {}        # mkt -> [(name, detail)]
     plugins_disabled = {}       # mkt -> [(name, detail)]
@@ -4707,11 +4729,15 @@ def _phase_plugins(ctx):
                     )
         else:
             # Only disable if currently enabled (check before acting)
-            enabled_result = check_plugin_enabled(plugin_ref)
+            enabled_result = check_plugin_enabled_at_scope(
+                plugin_ref, desired_scope, ctx.project_dir
+            )
             if not enabled_result.passed:
                 ctx.ok(f"plugin {plugin_ref}: already disabled")
             else:
-                dis_result = disable_plugin_in_claude(plugin_ref)
+                dis_result = disable_plugin_at_scope(
+                    plugin_ref, desired_scope, ctx.project_dir
+                )
                 if dis_result.passed:
                     _bucket(plugins_disabled, plugin_ref, "")
                 else:
@@ -4743,7 +4769,6 @@ def _phase_plugins(ctx):
             else:
                 ctx.action(f"{verb}: {_join_items(items)}")
     _emit_plugin_verb("installed", plugins_installed)
-    _emit_plugin_verb("re-installed", plugins_re_installed)
     _emit_plugin_verb("updated", plugins_updated)
     _emit_plugin_verb("enabled", plugins_enabled)
     _emit_plugin_verb("disabled", plugins_disabled)

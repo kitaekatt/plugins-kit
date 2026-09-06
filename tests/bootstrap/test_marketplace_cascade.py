@@ -113,6 +113,11 @@ def _stub_local_settings_calls(monkeypatch):
         lambda ref: LifecycleResult(passed=True, ref=ref, message="stub"),
     )
     monkeypatch.setattr(
+        marketplace_lifecycle, "disable_plugin_at_scope",
+        lambda ref, scope, project_dir: LifecycleResult(
+            passed=True, ref=ref, message="stub"),
+    )
+    monkeypatch.setattr(
         marketplace_lifecycle, "ensure_registry_scope",
         lambda ref, scope: type(
             "S", (), {"added": False, "refused": False, "passed": True,
@@ -168,6 +173,17 @@ class TestErrorSummary:
 
     def test_empty_output_is_reported_rather_than_blank(self):
         assert summarize_cli_error("") == "no output from the CLI"
+
+    def test_stdout_is_classified_and_kept_in_detail(self, monkeypatch):
+        monkeypatch.setattr(
+            marketplace_lifecycle, "_run_claude",
+            lambda args: (False, "fatal: repository not found", ""),
+        )
+
+        result = marketplace_lifecycle.add_marketplace("https://example.com", "gated")
+
+        assert "repository not found" in result.message
+        assert "repository not found" in result.detail
 
     def test_failure_message_is_single_line_and_detail_holds_the_raw_text(self):
         result = marketplace_lifecycle._cli_failure("add", "gated", SSH_STDERR)
@@ -332,8 +348,8 @@ class TestCascadeSuppression:
             lambda ref: LifecycleResult(passed=True, ref=ref, message="stub"),
         )
         monkeypatch.setattr(
-            marketplace_lifecycle, "disable_plugin_in_claude",
-            lambda ref: disabled.append(ref) or LifecycleResult(
+            marketplace_lifecycle, "disable_plugin_at_scope",
+            lambda ref, scope, project_dir: disabled.append(ref) or LifecycleResult(
                 passed=True, ref=ref, message="disabled"),
         )
         monkeypatch.setattr(
