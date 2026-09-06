@@ -21,6 +21,7 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SESSION_BOOTSTRAP = REPO_ROOT / "plugins" / "bootstrap" / "hooks" / "sessionstart" / "session-bootstrap.sh"
 RESET_SCRIPT = REPO_ROOT / "plugins" / "bootstrap" / "scripts" / "bootstrap-reset-cooldown.sh"
+ENV_RESET_SCRIPT = REPO_ROOT / "plugins" / "bootstrap" / "scripts" / "env-reset-cooldown.sh"
 
 
 def _find_bash() -> str | None:
@@ -44,6 +45,57 @@ def _find_bash() -> str | None:
 
 BASH = _find_bash()
 needs_bash = pytest.mark.skipif(BASH is None, reason="bash not available on this platform")
+
+
+def _hash_project_dir(value: str, path_override: str | None = None) -> str:
+    """Hash a project_dir string the way hash_path() in the reset scripts does:
+    sha1sum, falling back to shasum -a 1 when sha1sum is unavailable.
+
+    Used by the seed helpers below so a test seeds a stamp under the exact key
+    the script under test will compute -- including on a host with only
+    shasum on PATH.
+    """
+    env = os.environ.copy()
+    if path_override is not None:
+        env["PATH"] = path_override
+    out = subprocess.run(
+        [BASH, "-c",
+         'if command -v sha1sum >/dev/null 2>&1; then\n'
+         '    printf "%s" "$1" | sha1sum | awk \'{print $1}\'\n'
+         'elif command -v shasum >/dev/null 2>&1; then\n'
+         '    printf "%s" "$1" | shasum -a 1 | awk \'{print $1}\'\n'
+         'fi\n',
+         "_", value],
+        capture_output=True, text=True, env=env,
+    )
+    return out.stdout.strip()
+
+
+class TestHashHelperFallback:
+    """I10: the seed helpers must hash the same way the scripts do -- sha1sum,
+    falling back to shasum -a 1 -- so a host with only shasum on PATH doesn't
+    make every seeded test host-dependently red."""
+
+    def test_hash_helper_falls_back_to_shasum_when_sha1sum_is_absent(self, tmp_path: Path) -> None:
+        real_shasum = shutil.which("shasum")
+        if not real_shasum:
+            pytest.skip("no shasum on this host to build the fallback scenario")
+        # Build a PATH with every directory that resolves sha1sum removed, but
+        # every other dir kept (awk, printf's dependents, shasum itself all
+        # stay reachable) -- isolates the ONE fact under test: sha1sum absent.
+        kept = [
+            d for d in os.environ.get("PATH", "").split(os.pathsep)
+            if d and not os.path.exists(os.path.join(d, "sha1sum"))
+        ]
+        if not any(os.path.exists(os.path.join(d, "shasum")) for d in kept):
+            # On standard Linux and Git-for-Windows layouts sha1sum and shasum
+            # share /usr/bin, so filtering sha1sum's dirs removes shasum too;
+            # the scenario cannot be built there -- skip, do not fail.
+            pytest.skip("shasum shares a PATH dir with sha1sum on this host; "
+                        "cannot isolate the fallback")
+        path_override = os.pathsep.join(kept)
+        key = _hash_project_dir("/some/project", path_override=path_override)
+        assert key, "seed helper must fall back to shasum when sha1sum is unavailable"
 
 
 class TestCooldownContract:
@@ -133,13 +185,10 @@ class TestResetScript:
 
     def _seed_cooldown(self, fake_home: Path, marketplace: str, project_dir: str) -> Path:
         """Create a stand-in cooldown file by replicating the script's hash."""
-        # Match session-bootstrap.sh / reset script hashing: sha1 of the path string.
-        out = subprocess.run(
-            [BASH, "-c", f'printf "%s" "{project_dir}" | sha1sum | awk \'{{print $1}}\''],
-            capture_output=True, text=True,
-        )
-        key = out.stdout.strip()
-        assert key, f"sha1 hashing failed: {out.stderr}"
+        # Match session-bootstrap.sh / reset script hashing: sha1sum, falling
+        # back to shasum -a 1 the same way the scripts do.
+        key = _hash_project_dir(project_dir)
+        assert key, "hashing failed (neither sha1sum nor shasum available)"
         cooldown_dir = fake_home / ".claude" / "plugins" / "data" / marketplace / "bootstrap" / "cooldowns"
         cooldown_dir.mkdir(parents=True, exist_ok=True)
         f = cooldown_dir / f"last_run_epoch.{key}"
@@ -181,6 +230,106 @@ class TestResetScript:
         result = self._run("--project", str(proj), env_overrides={"HOME": str(fake_home)})
         assert result.returncode == 0, result.stderr
         assert not cooldown_file.exists()
+
+    def test_honors_claude_bootstrap_data_root_and_loops_marketplaces(self, tmp_path: Path) -> None:
+        """I1: with BOOTSTRAP_MARKETPLACE unset, the lever must honor
+        CLAUDE_BOOTSTRAP_DATA_ROOT (not just ~/.claude/plugins/data) and act on
+        every <data root>/*/bootstrap/ directory holding a matching stamp,
+        rather than assuming plugins-kit."""
+        fake_home = tmp_path / "home"
+        fake_home.mkdir()
+        data_root = tmp_path / "alt-data-root"
+        proj = tmp_path / "proj"
+        proj.mkdir()
+        resolved = subprocess.run(
+            [BASH, "-c", f'cd "{proj}" && printf %s "$PWD"'],
+            capture_output=True, text=True,
+        )
+        bash_pwd = resolved.stdout
+        assert bash_pwd
+        key = _hash_project_dir(bash_pwd)
+        assert key
+        cooldown_dir = data_root / "mkt-x" / "bootstrap" / "cooldowns"
+        cooldown_dir.mkdir(parents=True)
+        stamp = cooldown_dir / f"last_run_epoch.{key}"
+        stamp.write_text(str(int(time.time())))
+
+        result = subprocess.run(
+            [BASH, "-c",
+             f'cd "{proj}" && HOME="{fake_home}" CLAUDE_BOOTSTRAP_DATA_ROOT="{data_root}" '
+             f'"{BASH}" "{RESET_SCRIPT}"'],
+            capture_output=True, text=True,
+        )
+        assert result.returncode == 0, result.stderr
+        assert not stamp.exists(), "lever must find and remove the stamp under mkt-x"
+        assert "reset cooldown" in result.stdout
+
+    def test_status_lists_across_data_root_marketplaces(self, tmp_path: Path) -> None:
+        """--status must also honor CLAUDE_BOOTSTRAP_DATA_ROOT and list every
+        marketplace's cooldowns, not only plugins-kit."""
+        fake_home = tmp_path / "home"
+        fake_home.mkdir()
+        data_root = tmp_path / "alt-data-root"
+        for mkt, proj_name in (("mkt-a", "a"), ("mkt-b", "b")):
+            cooldown_dir = data_root / mkt / "bootstrap" / "cooldowns"
+            cooldown_dir.mkdir(parents=True)
+            key = _hash_project_dir(str(tmp_path / proj_name))
+            (cooldown_dir / f"last_run_epoch.{key}").write_text(str(int(time.time())))
+
+        result = subprocess.run(
+            [BASH, "-c",
+             f'HOME="{fake_home}" CLAUDE_BOOTSTRAP_DATA_ROOT="{data_root}" '
+             f'"{BASH}" "{RESET_SCRIPT}" --status'],
+            capture_output=True, text=True,
+        )
+        assert result.returncode == 0, result.stderr
+        assert "mkt-a" in result.stdout
+        assert "mkt-b" in result.stdout
+
+    def test_project_arg_with_trailing_slash_matches_hooks_hash(self, tmp_path: Path) -> None:
+        """I2: --project <path>/ must hash the same key session-bootstrap.sh
+        computes for $PWD (absolute, no trailing slash) -- not the literal
+        string with the slash still attached."""
+        fake_home = tmp_path / "home"
+        fake_home.mkdir()
+        proj = tmp_path / "trailing"
+        proj.mkdir()
+        cooldown_file = self._seed_cooldown(fake_home, "plugins-kit", str(proj))
+
+        result = self._run("--project", str(proj) + "/", env_overrides={"HOME": str(fake_home)})
+        assert result.returncode == 0, result.stderr
+        assert not cooldown_file.exists(), "trailing slash must normalize to the same hash"
+
+    def test_project_arg_dot_matches_cwd_hash(self, tmp_path: Path) -> None:
+        """--project . (cwd = the stamped project) must resolve like $PWD does."""
+        fake_home = tmp_path / "home"
+        fake_home.mkdir()
+        proj = tmp_path / "dotcwd"
+        proj.mkdir()
+        resolved = subprocess.run(
+            [BASH, "-c", f'cd "{proj}" && printf %s "$PWD"'],
+            capture_output=True, text=True,
+        )
+        bash_pwd = resolved.stdout
+        assert bash_pwd
+        cooldown_file = self._seed_cooldown(fake_home, "plugins-kit", bash_pwd)
+
+        result = subprocess.run(
+            [BASH, "-c", f'cd "{proj}" && HOME="{fake_home}" "{BASH}" "{RESET_SCRIPT}" --project .'],
+            capture_output=True, text=True,
+        )
+        assert result.returncode == 0, result.stderr
+        assert not cooldown_file.exists()
+
+    def test_project_arg_nonexistent_is_an_error(self, tmp_path: Path) -> None:
+        """A non-existent --project must error, not silently miss."""
+        fake_home = tmp_path / "home"
+        fake_home.mkdir()
+        missing = tmp_path / "does-not-exist"
+
+        result = self._run("--project", str(missing), env_overrides={"HOME": str(fake_home)})
+        assert result.returncode != 0
+        assert "does-not-exist" in result.stderr or "does-not-exist" in result.stdout
 
     def test_all_resets_every_project(self, tmp_path: Path) -> None:
         fake_home = tmp_path / "home"
@@ -269,12 +418,8 @@ class TestCooldownGateBehavior:
     """
 
     def _seed_fresh_cooldown(self, fake_home: Path, bash_pwd: str) -> Path:
-        out = subprocess.run(
-            [BASH, "-c", f'printf "%s" "{bash_pwd}" | sha1sum | awk \'{{print $1}}\''],
-            capture_output=True, text=True,
-        )
-        key = out.stdout.strip()
-        assert key, f"sha1 hashing failed: {out.stderr}"
+        key = _hash_project_dir(bash_pwd)
+        assert key, "hashing failed (neither sha1sum nor shasum available)"
         # The hook derives MARKETPLACE_NAME from the repo dir basename (PLUGIN_ROOT/../..),
         # so seed under REPO_ROOT.name -- not a hardcoded "plugins-kit" -- to stay correct
         # when run from a differently-named checkout (e.g. the publish mirror plugins-master).
@@ -383,6 +528,40 @@ class TestCooldownGateBehavior:
             f"throttled session passed the wrong run kind; argv was:\n{recorded}"
         )
 
+    def test_future_stamp_runs_full_not_throttled(self, tmp_path: Path) -> None:
+        """I3: a stamp with a future epoch (backwards clock jump) must not
+        throttle forever. _AGE = now - last_run goes negative and always
+        satisfies `-lt $_COOLDOWN_SECS`, so a negative age must be treated as
+        expired -- the pass runs full (--run-kind full), not always."""
+        fake_home = tmp_path / "home"
+        fake_home.mkdir()
+        proj = tmp_path / "proj"
+        proj.mkdir()
+        cd = (fake_home / ".claude" / "plugins" / "data" / REPO_ROOT.name
+              / "bootstrap" / "cooldowns")
+        cd.mkdir(parents=True, exist_ok=True)
+        key = _hash_project_dir(self._bash_pwd(proj))
+        assert key
+        future_epoch = int(time.time()) + 100000
+        (cd / f"last_run_epoch.{key}").write_text(str(future_epoch))
+        argv_log = tmp_path / "argv.txt"
+        self._plant_stub_python(fake_home, argv_log)
+        subprocess.run(
+            [BASH, "-c", f'cd "{proj}" && HOME="{fake_home}" "{BASH}" "{SESSION_BOOTSTRAP}"'],
+            input="", capture_output=True, text=True, timeout=60,
+        )
+        deadline = time.time() + 10
+        while time.time() < deadline and not argv_log.exists():
+            time.sleep(0.1)
+        assert argv_log.exists(), "engine was never invoked with a future-dated stamp"
+        recorded = argv_log.read_text()
+        flags = recorded.splitlines()
+        assert "--run-kind" in flags
+        assert flags[flags.index("--run-kind") + 1] == "full", (
+            f"a future-dated stamp (negative age) throttled to the always lane "
+            f"instead of running full; argv was:\n{recorded}"
+        )
+
     def test_session_guard_skips_repeat_same_session(self, tmp_path: Path) -> None:
         """Same session_id + no newer registry file => Layer-1 guard skips
         silently (exits before the run path, so empty stdout == skipped). Pins
@@ -434,6 +613,54 @@ class TestResetLeverInstall:
         assert "command -v bootstrap-reset-cooldown" in text, (
             "must fall back to PATH"
         )
+
+
+@needs_bash
+class TestEnvResetScript:
+    """I1: env-reset-cooldown.sh's env_state.json reset must also honor
+    CLAUDE_BOOTSTRAP_DATA_ROOT and, with BOOTSTRAP_MARKETPLACE unset, act on
+    every marketplace under the data root instead of assuming plugins-kit."""
+
+    def test_honors_data_root_and_loops_marketplaces(self, tmp_path: Path) -> None:
+        fake_home = tmp_path / "home"
+        fake_home.mkdir()
+        data_root = tmp_path / "alt-data-root"
+        stamps = []
+        for mkt in ("mkt-a", "mkt-b"):
+            d = data_root / mkt / "bootstrap"
+            d.mkdir(parents=True)
+            stamp = d / "env_state.json"
+            stamp.write_text("{}")
+            stamps.append(stamp)
+
+        result = subprocess.run(
+            [BASH, "-c",
+             f'HOME="{fake_home}" CLAUDE_BOOTSTRAP_DATA_ROOT="{data_root}" '
+             f'"{BASH}" "{ENV_RESET_SCRIPT}"'],
+            capture_output=True, text=True,
+        )
+        assert result.returncode == 0, result.stderr
+        for stamp in stamps:
+            assert not stamp.exists(), f"{stamp} should have been reset"
+
+    def test_status_lists_across_data_root_marketplaces(self, tmp_path: Path) -> None:
+        fake_home = tmp_path / "home"
+        fake_home.mkdir()
+        data_root = tmp_path / "alt-data-root"
+        for mkt in ("mkt-a", "mkt-b"):
+            d = data_root / mkt / "bootstrap"
+            d.mkdir(parents=True)
+            (d / "env_state.json").write_text("{}")
+
+        result = subprocess.run(
+            [BASH, "-c",
+             f'HOME="{fake_home}" CLAUDE_BOOTSTRAP_DATA_ROOT="{data_root}" '
+             f'"{BASH}" "{ENV_RESET_SCRIPT}" --status'],
+            capture_output=True, text=True,
+        )
+        assert result.returncode == 0, result.stderr
+        assert "mkt-a" in result.stdout
+        assert "mkt-b" in result.stdout
 
 
 class TestLeverExecutableBits:

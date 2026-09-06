@@ -5588,9 +5588,20 @@ def _env_phase_symlinks(ctx):
             # Windows symlink (default MSYS ln copies instead). -sfn replaces
             # a stale/dangling link left by an earlier attempt. A
             # pre-existing regular file at target was moved aside before
-            # os.symlink raised and is already restored by fix_symlink
-            # itself -- nothing here needs to recover it.
-            manual_cmd = f"MSYS=winsymlinks:nativestrict ln -sfn '{src}' '{tgt}'"
+            # os.symlink raised and restored by fix_symlink itself, so it is
+            # back in place when the queued command runs -- and `ln -sfn`
+            # would force-replace it with no backup. The queued command
+            # therefore moves a REAL file (never a link) aside to a
+            # timestamped .backup_<ts> sibling first, whatever `backup` says:
+            # the in-pass path can delete its aside copy after a successful
+            # link, but nothing runs after the elevated command to do so, so
+            # the copy is kept and named in the deferral message.
+            backup_name = f"{tgt}.backup_{datetime.now():%Y%m%d_%H%M%S}"
+            manual_cmd = (
+                f"if [ -f '{tgt}' ] && [ ! -L '{tgt}' ]; then "
+                f"mv -f '{tgt}' '{backup_name}'; fi; "
+                f"MSYS=winsymlinks:nativestrict ln -sfn '{src}' '{tgt}'"
+            )
             ctx.fail(
                 f"symlink {name}: needs elevation - deferred; creating "
                 f"{tgt} -> {src} requires Developer Mode or admin rights "

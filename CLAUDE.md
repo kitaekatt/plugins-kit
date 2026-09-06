@@ -45,7 +45,7 @@ plugins-kit/                          # Marketplace root
 
 | File | Purpose |
 |------|---------|
-| `plugins/bootstrap/engine/bootstrap_engine.py` | Main engine -- processes manifests, runs checks, emits hook JSON |
+| `plugins/bootstrap/engine/bootstrap_engine.py` | Thin CLI wrapper (73 lines) that contains any `ImportError` from `bootstrap_lib.engine` and delegates to it -- the real engine (manifest processing, checks, hook JSON) lives in `plugins/bootstrap/bootstrap_lib/engine.py` |
 | `plugins/bootstrap/bootstrap_lib/tool_check.py` | System tool availability checks |
 | `plugins/bootstrap/bootstrap_lib/platform_detect.py` | OS detection |
 | `plugins/bootstrap/bootstrap_lib/log.py` | File-based bootstrap logging |
@@ -55,7 +55,7 @@ plugins-kit/                          # Marketplace root
 | `plugins/bootstrap/bootstrap_lib/path_check.py` | PATH entry validation |
 | `plugins/bootstrap/bootstrap_lib/manifest_merge.py` | Deep-merge for layered bootstrap.json files |
 | `plugins/bootstrap/bootstrap_lib/agent_skills_check.py` | `agent_skills_link` check/fixer: links `<project>/.agents/skills` to `<project>/.claude/skills` for Codex, incl. Git/P4 exclusion |
-| `plugins/bootstrap/engine/config.py` | Config loading, migration, persistence |
+| `plugins/bootstrap/engine/config.py` | Thin re-export shim (11 lines, `from bootstrap_lib.config import *`) kept for callers importing bare `config` via the `plugins/bootstrap/engine` pythonpath entry (e.g. `tests/bootstrap/test_config.py`) -- the real config loading, migration, and persistence live in `plugins/bootstrap/bootstrap_lib/config.py` |
 | `plugins/bootstrap/hooks/sessionstart/session-bootstrap.sh` | SessionStart hook (bash wrapper for engine) |
 | `plugins/bootstrap/bootstrap.json` | Bootstrap plugin's own manifest |
 | `plugins/bootstrap/skills/bootstrap/references/engine-internals.md` | Bootstrap engine internals |
@@ -108,15 +108,15 @@ A hand-repair fails twice over:
 
 The second cost is the one that gets underestimated, because the machine looks *better* afterwards. It isn't. A healthy machine with an unknown root cause is strictly worse than a wedged machine you can still read.
 
-**Both entry points are the anti-pattern.** This applies equally to the engine (`bootstrap_engine.py`) and to the hook (`plugins/bootstrap/hooks/sessionstart/session-bootstrap.sh`). Hand-invoking either runs a full live pass outside the conditions bootstrap is designed for, so what you observe generalizes to nobody. (An earlier insight in this file, `run_bootstrap_hook_directly`, advised the opposite; it is retracted and replaced by `never_run_bootstrap_hook_directly`.)
+**Both entry points are the anti-pattern when a machine is wedged or being diagnosed.** This applies equally to the engine (`bootstrap_engine.py`) and to the hook (`plugins/bootstrap/hooks/sessionstart/session-bootstrap.sh`). Hand-invoking either on a wedged machine runs a full live pass outside the conditions bootstrap is designed for, so what you observe generalizes to nobody. The one sanctioned manual run is post-update convergence on a HEALTHY machine -- the bootstrap skill's `manual_convergence` fact (reset the cooldown, then run the hook so a published plugin update provisions without a restart); it converges, it does not diagnose, and it is never the answer to a wedge. (An earlier insight in this file, `run_bootstrap_hook_directly`, advised the opposite; it is retracted and replaced by `never_run_bootstrap_hook_directly`.)
 
-**The legitimate way to make bootstrap run again** is to clear the throttle and let a real session start do the work:
+**The legitimate way to make bootstrap run again on a wedged machine** is to clear the throttle and let a real session start do the work:
 
 ```bash
 bash plugins/bootstrap/scripts/bootstrap-reset-cooldown.sh   # then start a session
 ```
 
-That exercises the same code path under the same conditions a user gets, so the result means something. Resetting the cooldown is not the anti-pattern -- forcing the pass yourself is.
+That exercises the same code path under the same conditions a user gets, so the result means something. Resetting the cooldown is not the anti-pattern -- forcing the pass yourself to diagnose a wedge is; the healthy-machine convergence run named above is the one exception.
 
 **The discipline.** When a machine is wedged:
 
@@ -647,15 +647,15 @@ claude_md:
       added: "2026-04-28"
     - id: never_run_bootstrap_hook_directly
       keywords: [bootstrap hook, sessionstart, force update, plugin refresh, install update, session-bootstrap.sh, run hook directly, force a pass, anti-pattern, superseded]
-      summary: "SUPERSEDES the former run_bootstrap_hook_directly guidance (2026-04-28), which was wrong. Do NOT hand-invoke session-bootstrap.sh or bootstrap_engine.py to force a pass. Reset the cooldown and let the next real session run it."
+      summary: "SUPERSEDES the former run_bootstrap_hook_directly guidance (2026-04-28), which was wrong. Do NOT hand-invoke session-bootstrap.sh or bootstrap_engine.py to force a pass on a WEDGED or under-diagnosis machine. Reset the cooldown and let the next real session run it. Post-update convergence on a HEALTHY machine (reset the cooldown, then invoke the hook) is the one sanctioned manual run -- the bootstrap skill's `manual_convergence` fact."
       detail: |
         The former guidance told you to invoke plugins/bootstrap/hooks/sessionstart/session-bootstrap.sh
         directly to force a refresh. Treat that as retracted. Hand-invoking either entry point --
         the hook or the engine -- runs a full live pass outside the conditions bootstrap is
         designed for, and it is how a diagnosable wedge gets converted into an unexplained one
         (see never_hand_repair_a_wedge and the anti-pattern section in the Bootstrap chapter).
-        The legitimate way to make bootstrap run again is to clear the throttle and let a REAL
-        session start do it:
+        The legitimate way to make bootstrap run again ON A WEDGED MACHINE is to clear the
+        throttle and let a REAL session start do it:
           bash plugins/bootstrap/scripts/bootstrap-reset-cooldown.sh   # then start a session
         That path exercises the same code under the same conditions users get, so what you
         observe is what they would observe. A hand-invoked pass does not, and its success or
@@ -663,6 +663,9 @@ claude_md:
         Narrow exception: a hand-invoked pass is a diagnostic of last resort, permitted only
         AFTER the machine's state has been snapshotted, and preferred only when no read-only
         probe would answer the question.
+        Separate and sanctioned: on a HEALTHY machine, resetting the cooldown and invoking the
+        hook to converge provisioning after a plugin update is the documented path (bootstrap
+        skill fact `manual_convergence`); it converges, it does not diagnose.
       origin: "User directive 2026-07-27, superseding the 2026-04-28 directive. The original guidance was followed during a 'not cached' investigation and destroyed the failing state before it could be diagnosed."
       added: "2026-07-27"
     - id: bootstrap_cooldown_reset

@@ -15,26 +15,54 @@
 #   env-reset-cooldown --status    show the current env stamp, no writes
 #   env-reset-cooldown -h | --help show this help
 #
-# Resolves the bootstrap data dir under ~/.claude/plugins/data/<marketplace>/bootstrap.
-# Defaults the marketplace to plugins-kit; override with BOOTSTRAP_MARKETPLACE.
+# Resolves the bootstrap data dir(s) under
+# ${CLAUDE_BOOTSTRAP_DATA_ROOT:-~/.claude/plugins/data}/<marketplace>/bootstrap.
+# With BOOTSTRAP_MARKETPLACE unset, acts on EVERY marketplace directory found
+# under the data root rather than assuming plugins-kit. Set
+# BOOTSTRAP_MARKETPLACE to scope to one marketplace.
 
 set -uo pipefail
 
-MARKETPLACE="${BOOTSTRAP_MARKETPLACE:-plugins-kit}"
-PLUGIN_DATA="${HOME}/.claude/plugins/data/${MARKETPLACE}/bootstrap"
-STATE_FILE="$PLUGIN_DATA/env_state.json"
+BOOTSTRAP_DATA_ROOT="${CLAUDE_BOOTSTRAP_DATA_ROOT:-${HOME}/.claude/plugins/data}"
+MARKETPLACE="${BOOTSTRAP_MARKETPLACE:-}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 usage() {
     sed -n '2,19p' "$0" | sed 's/^# \{0,1\}//'
 }
 
+# One bootstrap data dir per line -- mirrors bootstrap-reset-cooldown.sh's
+# plugin_data_dirs() so both levers agree on which marketplaces exist.
+plugin_data_dirs() {
+    if [ -n "$MARKETPLACE" ]; then
+        printf '%s\n' "$BOOTSTRAP_DATA_ROOT/$MARKETPLACE/bootstrap"
+        return
+    fi
+    local found=0
+    for d in "$BOOTSTRAP_DATA_ROOT"/*/bootstrap; do
+        [ -d "$d" ] || continue
+        found=1
+        printf '%s\n' "$d"
+    done
+    if [ "$found" -eq 0 ]; then
+        printf '%s\n' "$BOOTSTRAP_DATA_ROOT/plugins-kit/bootstrap"
+    fi
+}
+
 reset_stamp() {
-    if [ -f "$STATE_FILE" ]; then
-        rm -f "$STATE_FILE"
-        echo "reset env stamp ($STATE_FILE)"
-    else
-        echo "no env stamp to reset at $STATE_FILE"
+    local pd
+    local any_reset=0
+    while IFS= read -r pd; do
+        [ -n "$pd" ] || continue
+        local state_file="$pd/env_state.json"
+        if [ -f "$state_file" ]; then
+            rm -f "$state_file"
+            echo "reset env stamp ($state_file)"
+            any_reset=1
+        fi
+    done < <(plugin_data_dirs)
+    if [ "$any_reset" -eq 0 ]; then
+        echo "no env stamp to reset under $BOOTSTRAP_DATA_ROOT"
     fi
     # Clear the per-project bootstrap cooldown (and session-id guard) so the
     # next SessionStart actually runs the pass that includes the env phase.
@@ -62,12 +90,24 @@ reset_stamp() {
 }
 
 print_status() {
-    if [ -f "$STATE_FILE" ]; then
-        echo "env stamp at $STATE_FILE:"
-        cat "$STATE_FILE"
-        echo
-    else
-        echo "no env stamp at $STATE_FILE (next session runs the env phase)"
+    local pd
+    local any_dir=0
+    while IFS= read -r pd; do
+        [ -n "$pd" ] || continue
+        any_dir=1
+        local mkt
+        mkt="$(basename "$(dirname "$pd")")"
+        local state_file="$pd/env_state.json"
+        if [ -f "$state_file" ]; then
+            echo "$mkt: env stamp at $state_file:"
+            cat "$state_file"
+            echo
+        else
+            echo "$mkt: no env stamp at $state_file (next session runs the env phase)"
+        fi
+    done < <(plugin_data_dirs)
+    if [ "$any_dir" -eq 0 ]; then
+        echo "no marketplace data dirs found under $BOOTSTRAP_DATA_ROOT"
     fi
 }
 

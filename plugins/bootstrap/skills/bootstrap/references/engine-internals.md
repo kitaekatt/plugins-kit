@@ -687,6 +687,16 @@ Bootstrap keeps several small string-valued **stamp** files — the cooldown epo
 
 **The harvest logs the version actually on disk.** `launch_new_engine` launches an `installPath`, not a version number. `read_path_version` reads that path's own `.claude-plugin/plugin.json`, and when it disagrees with the registry-claimed version the harvest's log line names both -- otherwise a mismatch (a half-written cache dir, a dev-tree repoint) is invisible and the status line reports a version that never ran.
 
+## Diagnosing a Python that uv reports but cannot run
+
+`plugins/bootstrap/scripts/diagnose-python-venv.sh` is a read-only diagnostic
+for the venv-provisioning failures that look like "uv found a Python, then the
+venv failed": it prints the uv install and every Python uv has installed, checks
+the Windows junction / mount-point shape under uv's python directory, and prints
+the bootstrap venv's `pyvenv.cfg`. It writes nothing. Run it with `bash` from the
+plugin cache when a `venv: FAILED` line names an interpreter the shell cannot
+run; its output is the evidence to attach before any repair.
+
 ## Design Principles
 
 **Configuration-driven, not logic-driven.** The hook contains no platform-specific conditional branches for individual tools. It detects the OS once, reads the manifest entries for that OS, and executes what's declared. All platform knowledge lives in the manifests.

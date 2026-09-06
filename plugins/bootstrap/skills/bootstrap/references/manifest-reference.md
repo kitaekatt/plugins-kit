@@ -1366,7 +1366,7 @@ ConfigLinkManager semantics).
 | `name` | Yes | Identity key |
 | `source` | Yes | The tracked file the link points at. Must exist — a link "pointing at" a missing source **fails** (a dangling link means the manifest references a file not on disk, a content error to surface) |
 | `target` | Yes | Where the link is created |
-| `backup` | No (default false) | When a **real file** already sits at `target`, preserve it as a timestamped `.backup_<ts>` sibling before linking; else it is removed |
+| `backup` | No (default false) | A **real file** already sitting at `target` is always moved aside to a timestamped `.backup_<ts>` sibling before linking, and restored if the link attempt fails, whatever `backup` says. Once the link succeeds, `backup` decides only whether that aside copy is kept and reported (true) or removed (false) |
 
 Paths expand `~` and `$VARS` (an unresolved `$VAR` is an error — declare it via
 `bootstrap.json` `env_vars`). A **directory** at `target` is never replaced (a
@@ -1377,10 +1377,14 @@ refused (it would self-reference).
 **Windows elevation (WinError 1314).** Unelevated symlink creation on Windows
 requires Developer Mode (or `SeCreateSymbolicLinkPrivilege`). When creation
 fails with WinError 1314 the entry is **deferred** into the fix queue as a
-`command` task — `MSYS=winsymlinks:nativestrict ln -sfn '<source>' '<target>'`,
+`command` task -- a real (non-link) file at `<target>` is first moved aside to a
+timestamped `<target>.backup_<ts>` sibling (the in-pass attempt restored it before
+deferring, and `ln -sfn` would otherwise replace it with no copy; this aside copy
+is kept, whatever `backup` says, because nothing runs after the elevated command
+to remove it), then `MSYS=winsymlinks:nativestrict ln -sfn '<source>' '<target>'`,
 which the runner executes elevated through Git Bash (where
 `winsymlinks:nativestrict` makes `ln -s` create a real Windows symlink rather
-than copy) — instead of surfacing a raw failure. The task's label is the entry's
+than copy) -- instead of surfacing a raw failure. The task's label is the entry's
 `description`, else `Link <name>`. Alternatively the user can enable Developer Mode
 (Settings > System > For developers) and type `fix-all`; the re-check then
 creates the link unelevated.

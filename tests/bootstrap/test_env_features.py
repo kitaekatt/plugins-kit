@@ -509,14 +509,20 @@ class TestSymlinkNeedsElevation:
         failure = result.failures[0]
         assert failure["type"] == "env_symlink"
         assert failure["persist_across_sessions"] is True
-        expected_cmd = (
+        expected_tail = (
             f"MSYS=winsymlinks:nativestrict ln -sfn '{source}' '{target}'"
         )
         # Subset, not exact equality: the descriptor also carries an id and a
         # human label (the label is what the session message lists), and
         # asserting the whole dict makes every additive field a test break.
         assert failure["elevation"]["method"] == "command"
-        assert failure["elevation"]["command"] == expected_cmd
+        cmd = failure["elevation"]["command"]
+        assert cmd.endswith(expected_tail)
+        # The queued command runs AFTER fix_symlink restored the real file, so
+        # it must move a real (non-link) file aside before `ln -sfn` replaces
+        # it -- the in-pass always-backup guarantee extended to the elevated
+        # path, whatever `backup` says.
+        assert f"if [ -f '{target}' ] && [ ! -L '{target}' ]; then mv -f '{target}' '{target}.backup_" in cmd
         assert failure["elevation"]["os"] == "windows"
         assert failure["elevation"]["id"] == "symlink:starship-config"
         assert failure["elevation"]["label"] == "Link starship-config"
@@ -524,7 +530,7 @@ class TestSymlinkNeedsElevation:
         assert any("needs elevation" in a for a in result.action_entries)
         # The pass-level harvest picks the command up like any deferred op.
         tasks = queue_from_failures(result.failures, "windows")
-        assert [t.command for t in tasks] == [expected_cmd]
+        assert [t.command for t in tasks] == [cmd]
         assert tasks[0].elevated is True
 
     def test_non_1314_failure_stays_a_raw_failure(
