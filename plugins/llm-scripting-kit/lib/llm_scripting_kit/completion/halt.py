@@ -203,14 +203,14 @@ def classify_claude_exception(exc: BaseException) -> Optional[str]:
     return None
 
 
-def classify_codex_text(text: str) -> Optional[str]:
-    """Map a codex CLI text channel (stderr / error body) to a halt kind.
+def _classify_codex_structural(text: str) -> Optional[str]:
+    """Match only the structural codex CLI markers -- no prose fallback.
 
-    Rate-limit markers are checked before auth markers so a message carrying
-    both classifies as :data:`HALT_RATE_LIMIT`, matching
-    :func:`classify_halt_text`. Falls back to the claude/OpenAI marker set,
-    which costs nothing and catches a message that quotes an upstream HTTP
-    error verbatim. Returns ``None`` when nothing matches.
+    Safe against model-authored text: the codex markers are the CLI's own
+    error-path output, never something a model could plausibly type in
+    passing (see the provenance note on :data:`_CODEX_RATE_LIMIT_MARKERS`).
+    Used for channels (stdout) where a healthy run can legitimately contain
+    prose that happens to mention a rate limit or an auth failure.
     """
     if not text:
         return None
@@ -221,7 +221,31 @@ def classify_codex_text(text: str) -> Optional[str]:
     for marker in _CODEX_AUTH_MARKERS:
         if marker in lower:
             return HALT_AUTH
-    return classify_halt_text(lower)
+    return None
+
+
+def classify_codex_text(text: str) -> Optional[str]:
+    """Map a codex CLI text channel (stderr / error body) to a halt kind.
+
+    Rate-limit markers are checked before auth markers so a message carrying
+    both classifies as :data:`HALT_RATE_LIMIT`, matching
+    :func:`classify_halt_text`. Falls back to the claude/OpenAI marker set,
+    which costs nothing and catches a message that quotes an upstream HTTP
+    error verbatim. Returns ``None`` when nothing matches.
+
+    The prose fallback is safe here only because the caller restricts this
+    function to transport-authored text -- codex's own error path (an
+    exception message) or stderr. It must never be applied to codex's
+    stdout, which is model-authored: see
+    :func:`classify_codex_exception`, which applies the structural-only
+    :func:`_classify_codex_structural` to that channel instead.
+    """
+    if not text:
+        return None
+    structural = _classify_codex_structural(text)
+    if structural is not None:
+        return structural
+    return classify_halt_text(text.lower())
 
 
 def classify_codex_exception(exc: BaseException) -> Optional[str]:
@@ -245,6 +269,13 @@ def classify_codex_exception(exc: BaseException) -> Optional[str]:
     That is safe ONLY because the codex markers are structural CLI output
     rather than prose -- see their definition. Keep both halves of that
     bargain: transcripts stay off the message, and markers stay unforgeable.
+
+    The prose fallback inside :func:`classify_codex_text` (the claude/OpenAI
+    marker set, e.g. "hit your limit") is transport-safe on stderr -- codex's
+    own error path -- but NOT on stdout, which is model-authored. So stdout is
+    scanned with the structural-only matcher and stderr with the full one;
+    applying the fallback to stdout would let a healthy run whose answer
+    merely discusses hitting a limit classify as a persistent halt.
     """
     if isinstance(exc, AgentTimeoutError):
         return HALT_RATE_LIMIT  # CLI-layer backoff is functionally a rate limit
@@ -256,7 +287,10 @@ def classify_codex_exception(exc: BaseException) -> Optional[str]:
         channel = getattr(exc, attr, None)
         if not isinstance(channel, str):
             continue
-        reason = classify_codex_text(channel.lower())
+        classifier = (
+            classify_codex_text if attr == "stderr" else _classify_codex_structural
+        )
+        reason = classifier(channel.lower())
         if reason is not None:
             return reason
     if "exceeded" in msg and "timeout" in msg:

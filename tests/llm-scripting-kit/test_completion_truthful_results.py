@@ -212,8 +212,12 @@ def _openrouter() -> OpenRouterBackend:
 
 
 def test_openrouter_reports_dropped_params_and_no_controls():
+    # A slug-shaped id: resolve_model returns any "/"-bearing string as-is
+    # with no registry lookup, so this stays hermetic now that
+    # OpenRouterBackend._resolve_model no longer swallows a genuine
+    # ModelResolveError for a bare, unregistered alias.
     resp = _openrouter().complete(
-        "s", "u", model="m", options=BackendOptions(allowed_tools="Read")
+        "s", "u", model="test/slug", options=BackendOptions(allowed_tools="Read")
     )
     assert "allowed_tools" in resp.dropped_params
     # an HTTP request has no sandbox, tool or permission surface to constrain
@@ -222,14 +226,14 @@ def test_openrouter_reports_dropped_params_and_no_controls():
 
 def test_openrouter_forwards_an_unrecognised_extra_unvalidated():
     resp = _openrouter().complete(
-        "s", "u", model="m", options=BackendOptions(extras={"top_k": 40})
+        "s", "u", model="test/slug", options=BackendOptions(extras={"top_k": 40})
     )
     assert resp.forwarded_params == ("extras.top_k",)
     assert "extras.top_k" not in resp.dropped_params
 
 
 def test_openrouter_brackets_the_call_with_iso_timestamps():
-    resp = _openrouter().complete("s", "u", model="m")
+    resp = _openrouter().complete("s", "u", model="test/slug")
     assert ISO_Z.match(resp.started_at or "")
     assert ISO_Z.match(resp.ended_at or "")
     assert resp.started_at <= resp.ended_at
