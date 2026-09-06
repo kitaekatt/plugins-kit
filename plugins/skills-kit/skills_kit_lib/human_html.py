@@ -100,6 +100,7 @@ __all__ = [
     "record_path",
     "reference_filename",
     "source_stamp",
+    "territory",
     "validate_record",
     "write_record",
 ]
@@ -167,7 +168,7 @@ def _escape_glob(text: str) -> str:
     return _GLOB_META_RE.sub(r"\\\1", text)
 
 
-def _subtree_pathspecs(directory: str) -> list[str]:
+def _subtree_pathspecs(directory: str, excluded: Iterable[str] = ()) -> list[str]:
     """Build the DR-2 pathspec list limiting git to a directory's analysis inputs.
 
     One positive pathspec for the subtree, then one negative `:(exclude,glob)`
@@ -178,6 +179,13 @@ def _subtree_pathspecs(directory: str) -> list[str]:
     The positive spec takes `:(literal)` magic and the negative specs take an
     escaped base, because git treats an unqualified pathspec as a pattern: both
     forms must match a directory whose own name contains a metacharacter.
+
+    `excluded` adds one more negative pathspec per directory, on top of the
+    three DR-2 exclusions above -- for a caller that wants the pathspecs to
+    stop at a page's `territory` ownership boundary rather than its full
+    filesystem subtree, so a territory-scoped stamp does not cover files a
+    nearer descendant page owns. It is additive and optional: passing nothing
+    reproduces the unscoped DR-2 behavior existing callers rely on.
     """
     if directory == ROOT_DIRECTORY:
         base = ""
@@ -188,6 +196,8 @@ def _subtree_pathspecs(directory: str) -> list[str]:
     specs.append(":(exclude,glob)%s**/.databench/**" % base)
     specs.append(":(exclude,glob)%s**/%s" % (base, PAGE_FILENAME))
     specs.append(":(exclude,glob)%s**/human.*.html" % base)
+    for excluded_dir in excluded:
+        specs.append(":(exclude,glob)%s/**" % _escape_glob(excluded_dir))
     return specs
 
 
@@ -418,6 +428,25 @@ def _is_descendant(candidate: str, ancestor: str) -> bool:
     return candidate.startswith(ancestor + "/")
 
 
+def _nearest_pages(pages: Iterable[str], directory: str) -> list[str]:
+    """Return the sorted nearest-descendant pages of `directory` from `pages`.
+
+    Traversal passes through non-page directories and stops each branch at
+    its first page, so a page nested below another page in `pages` is not
+    returned. This is the "stop at the first page down" rule shared by
+    `navigation_targets` (PC-2 `down` targets, applied to links) and
+    `territory` (ownership boundary, applied to file ownership) -- both need
+    the same notion of "first page down" and must not compute it two
+    different ways.
+    """
+    candidates = sorted(page for page in pages if _is_descendant(page, directory))
+    return [
+        candidate
+        for candidate in candidates
+        if not any(_is_descendant(candidate, other) for other in candidates)
+    ]
+
+
 def navigation_label(directory: str | Path) -> str:
     """Return the PC-2 short label for a navigation target directory."""
     normalized = normalize_directory(directory)
@@ -448,14 +477,43 @@ def navigation_targets(
             up = ancestor
             break
 
-    pages = sorted(
-        candidate
-        for candidate, record in known.items()
-        if _is_descendant(candidate, normalized) and _decision_of(record) == DECISION_PAGE
-    )
-    down = [
-        candidate
-        for candidate in pages
-        if not any(_is_descendant(candidate, page) for page in pages)
-    ]
+    all_pages = {
+        candidate for candidate, record in known.items() if _decision_of(record) == DECISION_PAGE
+    }
+    down = _nearest_pages(all_pages, normalized)
     return up, down
+
+
+def territory(directory: str | Path, pages: Iterable[str | Path]) -> tuple[str, list[str]]:
+    """Return the `(owned, excluded)` territory of the page at `directory`.
+
+    A page's territory is its own directory plus every descendant directory,
+    except the subtree of each nearer descendant page -- ownership stops at
+    the next page down, the same "traverse through `none`, stop at the first
+    page down" rule `navigation_targets` applies to links (via the shared
+    `_nearest_pages`), applied here to file ownership instead. `pages` is the
+    set of directories that have a page (for example the keys of a records
+    mapping filtered to `decision == "page"`).
+
+    `owned` is `directory`, normalized: the caller reads it as "this page owns
+    its own directory and everything below it, except what `excluded`
+    removes." `excluded` is the sorted list of nearest descendant pages --
+    each one, and everything below it, belongs to that page instead. Both are
+    returned explicitly because a caller (a generation brief, a territory
+    pathspec) needs both: what is owned and what is carved out of it.
+
+    Worked example -- pages exist at `A`, `A/B/C`, `A/D`:
+
+        territory("A", {"A", "A/B/C", "A/D"}) == ("A", ["A/B/C", "A/D"])
+
+    `A` owns `A` and `A/B` (everything under `A` not carved out) and excludes
+    `A/B/C` and `A/D` (and everything below them, including `A/D`'s own
+    descendants). `territory("A/B/C", {"A", "A/B/C", "A/D"})` returns
+    `("A/B/C", [])`: no page is nested under it, so it owns its whole subtree.
+    A page whose every immediate child directory is itself a page owns only
+    itself: its `excluded` list is exactly those children.
+    """
+    normalized = normalize_directory(directory)
+    known_pages = {normalize_directory(page) for page in pages}
+    excluded = _nearest_pages(known_pages, normalized)
+    return normalized, excluded
