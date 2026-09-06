@@ -61,8 +61,7 @@ prompts in process against a pinned frontier model, so no adapter-admitted
 endpoint ever reaches them. Give a detect lane a configurable model and it
 becomes a second path to an audit prompt, outside that enforcement -- an audit
 that silently runs a measured-for-the-adapter model without the adapter, at
-roughly two thirds of its achievable score, with no error to notice. Design
-record: `docs/planning/adapters/adapter-design.md`, "Seam".
+roughly two thirds of its achievable score, with no error to notice.
 
 ## The pipeline
 
@@ -118,10 +117,19 @@ ONCE per run (not per file), resolve the configurable standards via the plugin v
    --project-root <workspace root> --primitive <artifact primitive>)
 ```
 
-Parse its JSON `{ disabled, thresholds, standards }`. Keep run-level
-`disabledCriteria` = `disabled`, and per target `standardsPaths` =
-`standards.<primitive>`. Both thread into DETECT. An empty or absent config
-yields empty lists, so default behavior is unchanged.
+A non-zero exit means STOP: the script wrote nothing to stdout and a single
+diagnostic line to stderr (a malformed config layer or an un-tunable rule id).
+No audit runs on a partial config -- surface that stderr line and stop rather
+than falling back to defaults.
+
+On a zero exit, parse its JSON `{ disabled, thresholds, standards, notes }`.
+Keep run-level `disabledCriteria` = `disabled`, and per target
+`standardsPaths` = `standards.<primitive>`. Both thread into DETECT. An empty
+or absent config yields empty lists, so default behavior is unchanged. A
+non-empty `notes` array (for example, "pyyaml unavailable; standards
+resolution degraded to defaults") must be surfaced in the report header
+verbatim -- it means the run is NOT the same as "no config", even though the
+disabled/threshold lists read identically to that case.
 
 ### Step 2 -- DETECT (before-Q&A)
 

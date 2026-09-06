@@ -274,6 +274,48 @@ def test_standards_file_without_block_raises(tmp_path, monkeypatch):
         resolve(None)
 
 
+_AUTHORED_CRITERION_STANDARDS_MD = textwrap.dedent(
+    """\
+    # SKILL standards
+
+    Prose for a human reader.
+
+    ```yaml
+    standards_set:
+      identity: A project-authored standard for SKILL.md files.
+      applies_to: skill_md
+      criteria:
+        - id: no-emoji
+          statement: A SKILL.md body carries no emoji.
+          severity: fail
+          keywords: [emoji, glyph, ascii]
+          enforcement: mechanical
+    ```
+    """
+)
+
+
+def test_authored_criterion_id_is_a_valid_rules_off_knob(tmp_path, monkeypatch):
+    layer = _user_layer(tmp_path, monkeypatch)
+    (layer / "SKILL-standards.md").write_text(
+        _AUTHORED_CRITERION_STANDARDS_MD, encoding="utf-8"
+    )
+    _write_yaml(layer / "config.local.yaml", {"rules": {"no-emoji": "off"}})
+    r = resolve(None)
+    assert "no-emoji" in r.disabled_rules
+
+
+def test_unauthored_unknown_id_still_raises(tmp_path, monkeypatch):
+    layer = _user_layer(tmp_path, monkeypatch)
+    (layer / "SKILL-standards.md").write_text(
+        _AUTHORED_CRITERION_STANDARDS_MD, encoding="utf-8"
+    )
+    _write_yaml(layer / "config.local.yaml", {"rules": {"bogus": "off"}})
+    with pytest.raises(StandardsConfigError) as exc:
+        resolve(None)
+    assert "unknown" in str(exc.value)
+
+
 # ---------------------------------------------------------------------------
 # audit.py consumption
 # ---------------------------------------------------------------------------

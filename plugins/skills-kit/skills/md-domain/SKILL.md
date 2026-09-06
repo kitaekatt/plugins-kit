@@ -248,9 +248,13 @@ silently returns a SMALLER corpus, which then reads as the whole corpus.
 
 - One directory: `scripts/discover_coverage.py <directory>` (or `--diff`).
 - Every subject under a root, for planning at tree scale:
-  `scripts/discover_composition.py <root> --json` and read `coverageSubjects`.
-  This is the cheap, model-free enumeration -- use it before estimating cost or
-  proposing any phasing, and quote its count as the scope.
+  `scripts/discover_composition.py <root> --json` and read
+  `compositionSubjects` -- the analyze -> generate chain runs for a code-free
+  intermediate directory too (composed from its children even when never
+  assessed), so `compositionSubjects` is the honest scope count, larger than
+  `coverageSubjects` by exactly those code-free directories. This is the
+  cheap, model-free enumeration -- use it before estimating cost or proposing
+  any phasing, and quote its count as the scope.
 
 ## Dispatch table
 
@@ -691,7 +695,7 @@ domain_skill:
     behavioral_guardrails:
       - Announce every run by its canonical analysis name plus the concrete file scope BEFORE starting (see "Naming and scope announcement"). Echo the menu's name verbatim rather than paraphrasing it, name every analysis a dispatch runs rather than only the headline one, and give scope as a count plus roots -- never as "the corpus". The names are the user's only handle on which analysis they authorized.
       - Scope is the user's decision, and it is announced in BOTH directions. Mechanical exclusions (VCS-ignored, vendored, generated) are yours to take and to report as a count. A JUDGMENT exclusion -- "this directory probably holds nothing worth carrying" -- is a prediction of the analysis result, so the way to settle it is to RUN the analysis, not to drop the subject. Never let cost silently shrink scope: report the honest subject count with its cost and let the user choose what to drop. A banding or ranking pre-filter is a substitute for the analysis, not a preparation for it -- if it means "skip" rather than "order", it has moved the admission decision outside coverage-standards.md where nothing enforces it. See "Narrowing scope".
-      - Enumerate subjects with the discovery scripts, never a hand-rolled walk or extension filter. `scripts/discover_coverage.py <dir>` for one subject; `scripts/discover_composition.py <root> --json` -> `coverageSubjects` for every subject under a root, which is the cheap model-free enumeration to plan and cost from. A hand-written filter fails SILENTLY toward a smaller corpus, and that smaller corpus then reads as the whole one.
+      - Enumerate subjects with the discovery scripts, never a hand-rolled walk or extension filter. `scripts/discover_coverage.py <dir>` for one subject; `scripts/discover_composition.py <root> --json` -> `compositionSubjects` for every subject under a root, which is the cheap model-free enumeration to plan and cost from -- `coverageSubjects` under-counts by the code-free intermediate directories the chain still composes. A hand-written filter fails SILENTLY toward a smaller corpus, and that smaller corpus then reads as the whole one.
       - When this work is handed to another agent -- a subagent, a background CLI, a workflow -- pass the artifact's standards document VERBATIM by absolute path. Do not summarize it into a brief. A paraphrase is not the criteria: the agent will satisfy the paraphrase. Worse, a brief that lists worked EXAMPLES of qualifying facts will have those examples beat its own abstract rules, so a brief that correctly forbids repo-wide facts while illustrating "good" facts with repo-wide project rules produces exactly the bloat it forbade. If a brief must exist, let it carry the task and the return shape, and let the standards document carry every criterion.
       - Route by verb AND subject. Audit and author require an artifact; generate takes claude-md or human-html; analyze takes code_subtree by default and human_html_directory only when the explicit `human-html` token is present. Do not run a SKILL.md audit on a CLAUDE.md, and do not apply the producing direction when the user asked for a verdict.
       - The human-html lanes run BOTTOM-UP and one directory at a time (TS-1), and the unit of execution is analyze-then-generate for that directory. A parent reads each finished child decision and each page child's identity line, so a stale or missing child record blocks the parent (TS-2) rather than being guessed around. Generation persists a record for a `none` decision exactly as it does for a `page` one: the absence of a page is a recorded finding, not a gap.
@@ -711,7 +715,7 @@ domain_skill:
       - id: skill_standards
         path: references/standards/skill-standards.md
         keywords: [skill.md standards, type contract, required conditional prohibited, description requirements, frontmatter, mixed-type, schemas are floors, content allocation, skill reference document, references/*.md prose, SR-1 SR-2 SR-3 SR-4, inbound anchor integrity, internal contradiction, claim calibration, reader fit, maintainer-only material]
-        summary: What a good SKILL.md looks like -- per-type contract tables, description requirements, content-form choice, L1/L2/L3 allocation, hygiene thresholds -- plus section 10, the prose criteria for the artifact's second subject shape, a skill reference document. Read by both the audit_skill and generate_skill lanes. Paired with skills_kit_lib/schema_registry.py, which wins on divergence.
+        summary: What a good SKILL.md looks like -- per-type contract tables, description requirements, content-form choice, L1/L2/L3 allocation, hygiene thresholds -- plus section 10, the prose criteria for the artifact's second subject shape, a skill reference document. Read by both the audit_skill and author_skill lanes. Paired with skills_kit_lib/schema_registry.py, which wins on divergence.
       - id: claude_md_standards
         path: references/standards/claude-md-standards.md
         keywords: [claude.md standards, claude_md block, C-1 R-1 A-1 H-1, ccp crp adp rules, code-directory review notes, CD-1, density DD-1, insight record shape, scope covers excludes]
@@ -731,7 +735,7 @@ domain_skill:
       - id: project_doc_standards
         path: references/standards/project-doc-standards.md
         keywords: [project document standards, PD-1, maturation, graduate to skill, orphan, discoverability, one hop, readme role, generated artifact, ancestor convention]
-        summary: What a good project document looks like -- PD-1..PD-12 (placement, maturation, CRP unitary reading task, ADP discoverability and one-hop, CCP no-skill-duplication, named roles, hygiene). Read by both the audit_project_doc and generate_project_doc lanes.
+        summary: What a good project document looks like -- PD-1..PD-12 (placement, maturation, CRP unitary reading task, ADP discoverability and one-hop, CCP no-skill-duplication, named roles, hygiene). Read by both the audit_project_doc and author_project_doc lanes.
       - id: references_standards
         path: references/standards/references-standards.md
         keywords: [cross-reference standards, hard dep, soft ref, name mismatch, shadowing, documentation convention, example prefix, proposed prefix, allow-stale, code fence masking]

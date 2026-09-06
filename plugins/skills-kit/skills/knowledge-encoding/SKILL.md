@@ -46,7 +46,7 @@ technique_skill:
     excludes:
       - where a fact should live across CLAUDE.md / SKILL.md / references (use md-domain's cohesion-principles.md)
       - what content form a fact should take -- YAML vs prose vs frontmatter (use content-authoring.md)
-      - generating or auditing a skill's type contract (use md-domain's generate skill lane)
+      - authoring or auditing a skill's type contract (use md-domain's author skill lane)
       - end-of-session documentation review / sweep (use update-documentation)
   techniques:
     - id: encode_insight
@@ -131,7 +131,7 @@ does not repeat.
 
 - **Where a fact lives** -- `skills/md-domain/references/cohesion-principles.md` (placement: CCP / CRP / ADP over the load graph).
 - **What shape a fact takes** -- the md-domain content-shape reference (`skills/md-domain/references/authoring-patterns/content-authoring.md`) (the three content-form surfaces).
-- **Generating/auditing a skill's type contract** -- `Skill(skills-kit:md-domain)`, generate skill lane.
+- **Authoring/auditing a skill's type contract** -- `Skill(skills-kit:md-domain)`, author skill lane.
 - **End-of-session documentation sweep** -- `/skills-kit:update-documentation` (feeds individual insights to this skill).
 
 ## CLAUDE.md instance example

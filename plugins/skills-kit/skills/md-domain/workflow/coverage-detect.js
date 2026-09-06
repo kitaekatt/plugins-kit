@@ -115,7 +115,6 @@
 //   depth: 'basic'|'advanced'    // resolved by the lane's intent gate
 //   refs: { criteria: <abs path to the coverage standards doc>,
 //           observationKinds: <abs path to references/standards/claude-md-standards.md>,
-//           placement: <abs path to references/cohesion-principles.md>,
 //           pluginRoot: <abs path to plugins/skills-kit> }
 // }
 //

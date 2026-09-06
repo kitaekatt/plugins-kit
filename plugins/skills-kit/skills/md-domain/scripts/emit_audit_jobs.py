@@ -68,7 +68,8 @@ DEFAULT_MAX_PARALLEL = 4
 # the model-task pairs it was measured on, and for nothing else. It was measured
 # on 2026-09-04 for a locally hosted 27B-class endpoint auditing markdown, where
 # the compact pack at a single call raised F1 from 0.36 to 0.51 for 7 percent
-# more tokens (docs/planning/adapters/adapter-design.md, Outcome).
+# more tokens (the adapter design record's Outcome section, kept in the
+# plugins-kit repo's planning tree, not shipped with this plugin).
 #
 # The admitted set names ENDPOINT IDS, which differ per user and per fleet, so it
 # is configuration rather than a shipped list. The shipped default is EMPTY: an

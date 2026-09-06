@@ -213,13 +213,18 @@ def _validate_adapters(merged: dict) -> dict[str, dict]:
     return adapters
 
 
-def _validate_and_extract(merged: dict) -> tuple[set[str], dict[str, int]]:
+def _validate_and_extract(
+    merged: dict, authored_criteria: set[str] | None = None
+) -> tuple[set[str], dict[str, int]]:
     """Validate the merged config and extract disabled rules + threshold overrides.
 
-    A rules: id that is not an optional rule raises, naming the id and its bucket
-    (architectural/inoffensive/unknown). A thresholds: key not in audit's
-    THRESHOLDS raises, naming the valid keys. Rule values accept only off/false;
-    threshold values must be positive ints.
+    A rules: id that is not an optional rule and not an authored standards
+    criterion raises, naming the id and its bucket (architectural/inoffensive/
+    unknown). `authored_criteria` is the set of criterion ids declared by the
+    standards files resolved for this project (any layer, any primitive); an id
+    in that set is a valid config knob even though it is not in the catalog. A
+    thresholds: key not in audit's THRESHOLDS raises, naming the valid keys.
+    Rule values accept only off/false; threshold values must be positive ints.
     """
     disabled: set[str] = set()
     rules = merged.get("rules", {})
@@ -228,12 +233,14 @@ def _validate_and_extract(merged: dict) -> tuple[set[str], dict[str, int]]:
             f"'rules:' must be a mapping of rule-id -> off, got {type(rules).__name__}"
         )
     optional = set(rule_catalog.optional_rule_ids())
+    authored = authored_criteria or set()
     for rid, val in (rules or {}).items():
-        if rid not in optional:
+        if rid not in optional and rid not in authored:
             bucket = rule_catalog.BUCKETS.get(rid, "unknown")
             raise StandardsConfigError(
                 f"rule '{rid}' is {bucket} and cannot be configured; only optional "
-                f"rules are configurable (see rule_catalog.optional_rule_ids())"
+                f"rules and authored standards criteria are configurable (see "
+                f"rule_catalog.optional_rule_ids())"
             )
         if not _is_off(val):
             raise StandardsConfigError(
@@ -333,10 +340,10 @@ def resolve(project_root: Path | None, *, shipped_dir: Path | None = None) -> Re
     for cf in config_files:
         merged = _deep_merge(merged, _load_config_file(cf))
 
-    disabled_rules, thresholds = _validate_and_extract(merged)
-    adapters = _validate_adapters(merged)
-
     # -- standards files (dirs only; config.local.yaml carries no md) ---------
+    # Collected BEFORE the rules: block is validated -- an authored criterion
+    # id is a valid `rules: {<id>: off}` knob, so the rule-id validation below
+    # needs the full criterion-id set up front.
     standards_dirs: list[Path] = []
     if shipped_dir is not None:
         standards_dirs.append(shipped_dir)
@@ -351,6 +358,16 @@ def resolve(project_root: Path | None, *, shipped_dir: Path | None = None) -> Re
         for md_path in sorted(d.glob("*-standards.md")):
             sf = _parse_standards_file(md_path)
             standards_by_primitive.setdefault(sf.applies_to, []).append(sf)
+
+    authored_criteria: set[str] = {
+        c["id"]
+        for files in standards_by_primitive.values()
+        for sf in files
+        for c in sf.criteria
+    }
+
+    disabled_rules, thresholds = _validate_and_extract(merged, authored_criteria)
+    adapters = _validate_adapters(merged)
 
     return ResolvedStandards(
         disabled_rules=disabled_rules,

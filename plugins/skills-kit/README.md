@@ -11,13 +11,15 @@ one owned surface with a place each fact belongs, rather than a pile of
 files that drift apart independently.
 
 There is one front door, `/md-domain`, and it works on a **verb x artifact**
-grammar: pick a verb (`audit` or `generate`) and an artifact (`skill`,
-`claude-md`, `project-doc`, or `references`).
+grammar: pick a verb (`audit`, `author`, `generate`, or `analyze`) and, for
+`audit`/`author`, an artifact (`skill`, `claude-md`, `project-doc`, or
+`references`; `references` is audit-only).
 
 ```
 /md-domain audit claude-md ./CLAUDE.md
-/md-domain generate skill
-/md-domain audit references
+/md-domain author skill
+/md-domain generate claude-md ./some-directory
+/md-domain analyze ./some-directory
 ```
 
 - **audit** checks what you already have: placement (does this fact belong
@@ -25,8 +27,16 @@ grammar: pick a verb (`audit` or `generate`) and an artifact (`skill`,
   (dangling skill references, broken load-graph edges). It produces a
   reviewable set of findings -- FIX / SERIOUS / IMPROVE -- for you to accept
   or decline. It does not auto-rewrite your files.
-- **generate** guides writing them: the per-type contract for the artifact you
-  are producing, where the content belongs, and what shape it takes.
+- **author** guides writing an artifact from content you supply: the per-type
+  contract for the artifact you are producing, where the content belongs, and
+  what shape it takes. "Generate a skill" routes here -- no analysis produces
+  coverage for a skill.
+- **generate** writes a CLAUDE.md (or the human-html orientation page) from
+  analysis-produced coverage, so its claims stay re-checkable against the code
+  that produced them. It takes only `claude-md` or `human-html`.
+- **analyze** is report-only: it reads one directory's direct code (or, with
+  the `human-html` selector, a whole subtree) and reports what it found. It
+  never remediates.
 
 Both verbs read the same four standards documents -- one per artifact,
 covering SKILL.md, CLAUDE.md, project documents, and cross-references. That

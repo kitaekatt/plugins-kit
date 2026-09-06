@@ -102,14 +102,15 @@ never reaches.
 ## Model pinning (not negotiable)
 
 The detect workflow pins `opus` + `high` effort, per
-`plugins/skills-kit/CLAUDE.md`.
+`${CLAUDE_PLUGIN_ROOT}/CLAUDE.md`.
 
 **The workflow is entered regardless of subject count.** This is the one place
-coverage must NOT copy the audit lane. `audit-lane.md:110-117` runs a
-single-subject job INLINE, inheriting whatever model the session happens to be
-on -- which is fine when the subject is one small markdown file. A coverage run
-normally has exactly ONE directory, so reusing that shortcut would mean the
-common case silently runs off-pin. Always go through the workflow.
+coverage must NOT copy the audit lane. audit-lane.md's "Step 2 -- DETECT"
+section runs a single-file audit INLINE, inheriting whatever model the session
+happens to be on -- which is fine when the subject is one small markdown file.
+A coverage run normally has exactly ONE directory, so reusing that shortcut
+would mean the common case silently runs off-pin. Always go through the
+workflow.
 
 There is no remediate lane, so the `sonnet` + `low` remediation pin and
 `scripts/gen_workflow_js.py` do not apply here at all.
@@ -432,6 +433,13 @@ Apply `references/standards/coverage-standards.md` verbatim. The caller MUST
 resolve that document to an ABSOLUTE path and pass it as `refs.criteria` to
 `workflow/coverage-detect.js`; never embed or paraphrase the criteria in the
 JavaScript workflow.
+
+The caller also resolves `references/standards/claude-md-standards.md` (the
+observation-kind vocabulary the assessment direction reuses -- section 3.2,
+"High-value observation kinds") to an absolute path and passes it as
+`refs.observationKinds`. When omitted, the workflow falls back to a bare
+placeholder string with no path, which is not a usable pointer for an agent
+asked to apply the vocabulary -- always pass it.
 
 **The same rule holds for ANY carrier, not just the workflow.** If the
 assessment is handed to a subagent, a background CLI, or a hand-written brief,

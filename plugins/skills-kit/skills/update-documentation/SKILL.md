@@ -39,7 +39,7 @@ technique_skill:
       - making approved documentation changes
     excludes:
       - creating new skills (hand off to md-domain's author skill lane)
-      - deep placement design across the load graph (hand off to md-domain's plugins/skills-kit/skills/md-domain/references/cohesion-principles.md / knowledge-encoding)
+      - deep placement design across the load graph (hand off to md-domain's ${CLAUDE_PLUGIN_ROOT}/skills/md-domain/references/cohesion-principles.md / knowledge-encoding)
       - memory system updates (separate from documentation)
   techniques:
     - id: session_doc_review
@@ -147,9 +147,9 @@ technique_skill:
 ## Integration Points
 
 - **knowledge-encoding** (in plugins-kit:skills-kit) - For deeper analysis of where insights should live in the project structure
-- **md-domain** (in plugins-kit:skills-kit) - If recommendations include generating a new skill (`/md-domain generate skill`) or a CLAUDE.md (`/md-domain generate claude-md`)
-- **content-authoring** (an md-domain reference, `plugins/skills-kit/skills/md-domain/references/authoring-patterns/content-authoring.md`) - For how a recommended doc update should be shaped
-- **md-domain standards** (`plugins/skills-kit/skills/md-domain/references/standards/`) - SSOT for the per-artifact size and hygiene thresholds referenced by steps 3-4
+- **md-domain** (in plugins-kit:skills-kit) - If recommendations include authoring a new skill (`/md-domain author skill`) or generating a CLAUDE.md (`/md-domain generate claude-md`)
+- **content-authoring** (an md-domain reference, `${CLAUDE_PLUGIN_ROOT}/skills/md-domain/references/authoring-patterns/content-authoring.md`) - For how a recommended doc update should be shaped
+- **md-domain standards** (`${CLAUDE_PLUGIN_ROOT}/skills/md-domain/references/standards/`) - SSOT for the per-artifact size and hygiene thresholds referenced by steps 3-4
 
 ## Scope Boundaries
 

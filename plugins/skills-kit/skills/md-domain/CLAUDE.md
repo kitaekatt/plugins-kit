@@ -147,21 +147,22 @@ claude_md:
             verdict" is an audit INVARIANT. Coverage disclaims idempotency (candidate
             selection is a judgment over ~10^4 constructs), so it cannot be an
             audit lane without breaking a contract the audit family relies on.
-          - tests/skills-kit/test_domain_members_resolve.py:213-217 forces every
+          - test_domain_members_resolve.py::test_verdict_set_declared forces every
             audit_* lane but references to declare NOT-AUDITED + DIFF-CLEAN, and
-            :236 forces every verb == "audit" record to bind a
-            workflow_remediate. A third verb satisfies both by not matching them,
-            rather than by exception.
+            ::test_audit_lanes_bind_their_machinery forces every verb == "audit"
+            record to bind a workflow_remediate. A third verb satisfies both by
+            not matching them, rather than by exception.
 
         REPORT-ONLY is what keeps A cheap. With no remediation phase there is no
         coverage-remediate.js, the sonnet+low pin does not apply, and
         gen_workflow_js.py -- which assumes per-file edits and
         applied/skipped/failed results -- is not involved at all.
 
-        One place coverage must NOT copy the audit lane: audit-lane.md:110-117
-        runs a single-subject job INLINE at the session model. A coverage run
-        normally has exactly ONE subtree, so reusing that shortcut would put the
-        COMMON case off-pin. The detect workflow is entered regardless of count.
+        One place coverage must NOT copy the audit lane: audit-lane.md's "Step 2
+        -- DETECT" section runs a single-file audit INLINE at the session model.
+        A coverage run normally has exactly ONE subtree, so reusing that
+        shortcut would put the COMMON case off-pin. The detect workflow is
+        entered regardless of count.
 
         REGISTRATION WAS THE GO-LIVE SWITCH, and it has been thrown (2026-08-08).
         The verb was deliberately absent from SKILL.md's menu, dispatch table and
@@ -200,12 +201,12 @@ claude_md:
           - audit-lane.md:19-22 -- the pre-references material "applies to the
             three per-file lanes"; audit_references is a carved-out outlier, not
             a general extension point.
-          - audit-lane.md:485-487 -- idempotency is an audit INVARIANT, and
-            coverage disclaims it.
-          - tests/skills-kit/test_domain_members_resolve.py:213-217 and :236 --
-            every audit_* lane but references must declare NOT-AUDITED +
-            DIFF-CLEAN and bind a workflow_remediate; coverage satisfies both by
-            not matching them.
+          - audit-lane.md, Gotchas, the Idempotency bullet -- idempotency is an
+            audit INVARIANT, and coverage disclaims it.
+          - test_domain_members_resolve.py::test_verdict_set_declared and
+            ::test_audit_lanes_bind_their_machinery -- every audit_* lane but
+            references must declare NOT-AUDITED + DIFF-CLEAN and bind a
+            workflow_remediate; coverage satisfies both by not matching them.
 
         What is overturned is only the step FROM those facts TO "therefore a peer
         verb". "Not an audit" does not establish peer status. Under the framework
@@ -216,12 +217,14 @@ claude_md:
         rather than audit. It is that family's DISCOVERY step, not a third peer.
 
         The report-only contract does not move an inch, and must not be read as
-        moving. Coverage writes nothing (coverage-lane.md:70 "Nothing is ever
-        applied", :189 "Then STOP", coverage-standards.md:231-232), which is
-        precisely why it is discovery rather than generation proper. Re-homing it
-        under the generation family is a FRAMING change; the mechanism that pins
-        report-only is unchanged (no bound workflow_remediate, pinned at
-        test_domain_members_resolve.py:253-256).
+        moving. Coverage writes nothing (coverage-lane.md, "The pipeline" section
+        intro, "Nothing is ever applied"; "Step 4 -- Report and stop", "Then
+        STOP"; coverage-standards.md's `present-content-not-re-audited`
+        criterion), which is precisely why it is discovery rather than
+        generation proper. Re-homing it under the generation family is a FRAMING
+        change; the mechanism that pins report-only is unchanged (no bound
+        workflow_remediate, pinned at
+        test_domain_members_resolve.py::test_analyze_lane_is_report_only).
       origin: |
         Surface: the coverage-lane spec argued "separate lane" from subject
         enumeration alone. Finding: an adversarial cross-check (gpt-5.6-sol,
@@ -762,4 +765,32 @@ claude_md:
         APIs. Encoded here because the pull toward a richer page (a CDN font, a
         data fetch, an absolute link) recurs every time the page is edited.
       added: "2026-09-04"
+    - id: new_lane_records_extend_the_registry_test
+      keywords: [new lane, dispatch table row, registry integrity, test_domain_members_resolve, lane roster, scalar axis check, three-phrasing minimum, generalize assertions]
+      summary: Adding a lane record to md-domain's dispatch table requires extending tests/skills-kit/test_domain_members_resolve.py -- add the lane to the EXPECTED_LANES / GENERATE_LANES / ANALYZE_LANES rosters its assertions are driven by, and add the new dispatch-table row to test_markdown_table_matches_the_lane_records.
+      detail: |
+        Preserve every invariant AD-3 enumerates
+        (skills/md-domain/references/standards/human-html-standards.md); this
+        test is where they are enforced. The human-html lane pair (generate_human_html, coverage_human_html_directory)
+        is the worked example -- ratified in human-html-standards.md's AD-3, whose
+        consumer-facing rule states the same obligation without naming this test
+        file, since that file does not ship to a consumer's plugin cache.
+      origin: AD-3 (human-html-standards.md), ratified 2026-09-04; test-file citation moved here 2026-09-06 so the shipped standards doc names no repo-relative test path.
+      added: "2026-09-06"
+    - id: detect_lanes_never_take_a_configurable_model
+      keywords: [detect lane model, adapter seam, md-audit-evidence-pack, configurable model, in-process prompt build, pinned frontier model]
+      summary: The detect/classify lanes' model is pinned, never configurable; the rationale is audit-lane.md's "Model pinning (not negotiable)" section. The design record for the adapter seam is a plugins-kit planning document, not shipped content.
+      detail: |
+        Mechanism and rationale: references/lanes/audit-lane.md, "Model pinning
+        (not negotiable)". Recorded here only for the delta that document cannot
+        carry: the design record for the md-audit-evidence-pack adapter seam
+        lives in the plugins-kit repo's own planning tree
+        (docs/planning/adapters/adapter-design.md), outside this plugin's
+        shipped surface.
+      origin: |
+        Surface: audit-lane.md's "Model pinning" section cited the adapter
+        design record by a repo-root docs/planning path, which does not exist
+        in a consumer's plugin cache (OP-1). Finding: the pointer belongs in
+        this maintainer file, not the shipped reference. Follow-up: none.
+      added: "2026-09-06"
 ```

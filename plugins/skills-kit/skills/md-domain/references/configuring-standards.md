@@ -78,7 +78,10 @@ rules:
 ```
 
 A rule value accepts only `off` (or `false`); the id must be one of the optional
-rules below. Disabling an architectural or inoffensive rule is refused.
+rules below, or the `id` of a criterion declared by a standards file resolved
+for this project (any layer, any primitive) -- see
+[authoring-standards.md](authoring-standards.md). Disabling an architectural or
+inoffensive rule is refused.
 
 ### Worked example: tune a threshold
 
@@ -246,7 +249,8 @@ finding against a skills-kit rule quotes its `rule` id (one of the catalog ids
 above); a finding against an additive criterion quotes that criterion's `id`.
 This lets a reader go straight from a finding to the config line that would
 disable it: read the id, decide the opinion is not for this project, add
-`rules: {<id>: off}` (for a skills-kit rule) or disable the criterion.
+`rules: {<id>: off}` -- the same key takes a skills-kit rule id or an
+additive criterion's `id`.
 
 At the design level, the audit lanes consume the resolved configuration as
 follows:
@@ -270,9 +274,11 @@ degrading to an empty config, and the message names the problem:
 
 - **Disabling an un-tunable rule.** `rules: {yaml-contract: off}` (architectural)
   or `rules: {name-length: off}` (inoffensive) raises an error naming the id and
-  its bucket -- only optional rules are configurable.
-- **An unknown rule id.** A typo'd or removed id in `rules:` raises an error
-  naming the id (bucket `unknown`).
+  its bucket -- only optional rules and authored standards criteria are
+  configurable.
+- **An unknown rule id.** A typo'd or removed id in `rules:` -- one that names
+  neither a catalog rule nor a criterion declared by a standards file resolved
+  for this project -- raises an error naming the id (bucket `unknown`).
 - **An unknown threshold.** A `thresholds:` key not among the five above raises
   an error listing the valid threshold names.
 - **A bad value.** A rule value other than `off`/`false`, or a threshold value
@@ -306,7 +312,7 @@ The rule-id catalog and threshold table above are GENERATED (the marked
 region): rule ids, buckets, and descriptions come from
 `skills_kit_lib/rule_catalog.py` (`RULES`), threshold defaults from
 `skills_kit_lib/audit.py` (`THRESHOLDS`). Edit those sources, then run
-`scripts/gen_standards_doc.py`; never hand-edit the generated region.
-`tests/skills-kit/test_standards_doc_drift.py` fails when the region is
-stale. The resolver's reject-un-tunable-rule check reads the same module
-directly, so the doc and the enforcement cannot disagree.
+`scripts/gen_standards_doc.py`; never hand-edit the generated region -- a
+stale region is caught by a drift check. The resolver's reject-un-tunable-rule
+check reads the same module directly, so the doc and the enforcement cannot
+disagree.

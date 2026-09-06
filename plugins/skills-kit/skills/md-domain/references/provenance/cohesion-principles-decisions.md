@@ -11,7 +11,7 @@ the skill's own shape so they do not bleed into the SKILL.md body.
 claude_md:
   _schema_version: "1"
   scope:
-    directory: plugins/skills-kit/skills/cohesion-principles
+    directory: skills/cohesion-principles
     covers:
       - shape decisions about the cohesion-principles SKILL.md itself
     excludes:

@@ -1,7 +1,7 @@
 # Repo-Independent Standards: separating the toolkit from the standards
 
 Status: concept capture, 2026-07-22. This documents a direction
-the author has been considering for a while; it exists so the idea has a home
+under consideration as of 2026-07-22; it exists so the idea has a home
 and a shape before any implementation decision.
 
 Implementation status (2026-07-23): the first increment is implemented --
@@ -11,7 +11,7 @@ user/project standards resolution, and additive per-file-type standards files
 stay hard-coded; inoffensive integrity checks stay knob-less. For the
 configuration surface (layer model, `config.yaml` format, the rule-id catalog,
 thresholds), see
-[../skills/md-domain/references/configuring-standards.md](../skills/md-domain/references/configuring-standards.md).
+[../../../plugins/skills-kit/skills/md-domain/references/configuring-standards.md](../../../plugins/skills-kit/skills/md-domain/references/configuring-standards.md).
 
 ## The observation
 
@@ -20,7 +20,7 @@ As of 2026-07-22 skills-kit is two things fused together:
 1. **A toolkit** for authorship, auditing, and review of the markdown artifacts
    Claude loads -- the machinery: audit fan-out, findings taxonomy
    (FIX/SERIOUS/IMPROVE), placement algorithm, remediation-as-reviewable-CL.
-2. **A set of opinionated standards** the toolkit currently enforces -- skill
+2. **A set of opinionated standards** the toolkit enforces as of 2026-07-22 -- skill
    type contracts, the structured CLAUDE.md insights schema, cohesion
    principles (CCP/CRP/ADP) applied to docs, total-ownership of md files.
 
@@ -97,8 +97,8 @@ layer, not just a style guide.
    project-level CLAUDE.md direction (project direction wins on conflict,
    or per a declared precedence).
 3. **Authoring standards sets is open** -- the format is documented and
-   validated, so anyone can write a compliant set. skills-kit's current
-   opinions become the first shipped set (the reference implementation),
+   validated, so anyone can write a compliant set. skills-kit's opinions
+   as of 2026-07-22 become the first shipped set (the reference implementation),
    not the hard-coded truth.
 4. **A marketplace of standards** -- the eventual shape. Initially: host a
    small number of good sets in this repo. If it catches on: a real

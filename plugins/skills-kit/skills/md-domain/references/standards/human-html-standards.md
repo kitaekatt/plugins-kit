@@ -81,13 +81,14 @@ only accepted coverage input for human generation.
 ### AD-3. Registry integrity update
 
 - **Level:** CONDITIONALLY REQUIRED -- when the lane records are implemented
-- **Rule:** Extend the exact lane roster and dispatch-table expectations in `tests/skills-kit/test_domain_members_resolve.py`.
-Generalize its single-lane generate, analyze, and regeneration assertions to select the applicable lane by id. Preserve
-the scalar axis check, path resolution, three-phrasing minimum, nonempty change driver, and producing-provenance check.
-Extend `test_markdown_table_matches_the_lane_records` with the dispatch-table
-row `generate x human-html` and an analyze row whose `table_key` names the
-non-artifact lane.
-- **Rationale:** The test must recognize the added lanes without weakening the invariants that made a list-valued subject invalid.
+- **Rule:** The exact lane roster and dispatch-table expectations that the framework's
+registry integrity check enforces must recognize the added lanes: the scalar axis (`artifact`
+OR `subject`, never both), path resolution for every bound reference, the
+three-phrasing minimum, a nonempty change driver, the producing-provenance
+check, and the markdown table row for each new dispatch entry (`generate x
+human-html`, and an `analyze` row whose `table_key` names the non-artifact
+lane).
+- **Rationale:** The registry integrity check must recognize the added lanes without weakening the invariants that made a list-valued subject invalid.
 - **Test:** The registry-integrity test passes with both new records and fails
 for a missing path, missing phrase, empty driver, or mixed axis.
 
