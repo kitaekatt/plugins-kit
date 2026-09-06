@@ -81,7 +81,7 @@ Do NOT use for translating strings, choosing models, debugging chunk failures, o
 
 ## The CLI
 
-The plugin ships a single CLI script at `${CLAUDE_PLUGIN_ROOT}/scripts/llm_scripting_kit_cli.py` with three subcommands.
+The plugin ships one CLI script at `${CLAUDE_PLUGIN_ROOT}/scripts/llm_scripting_kit_cli.py`. This skill covers the three key-management subcommands; see README.md for the CLI's full verb set (endpoints, probe, usage, choose, seats, models, resolve, complete, request-schema).
 
 | Command | What it does |
 |---------|--------------|

@@ -316,6 +316,26 @@ class TestLegacyMigration:
         # No fix-all entries
         assert ctx.failures == []
 
+    def test_migration_preserves_a_preexisting_unrelated_key_in_the_user_env(self, env_setup):
+        # A second, unrelated endpoint's key already lives in the user .env
+        # (documented to coexist -- see README "Keys for multiple endpoints
+        # coexist in the same .env"). write_env_file REPLACES the file, so a
+        # migration that writes only the migrated key would silently delete
+        # this one. Seed it BEFORE the migration runs.
+        write_env_file(env_setup["user_env"], {"SOME_OTHER_KEY": "keep-me-byte-for-byte"})
+
+        legacy = env_setup["project_dir"] / ".local-data" / "loc" / ".env"
+        write_env_file(legacy, {"OPENROUTER_API_KEY": "sk-or-v1-legacy"})
+        ctx = FakeContext(env_setup["data_dir"], env_setup["project_dir"])
+
+        with patch.object(cb, "check_account", return_value=_ok_status()):
+            cb.bootstrap(ctx)
+
+        result = read_env_file(env_setup["user_env"])
+        assert result["OPENROUTER_API_KEY"] == "sk-or-v1-legacy"
+        # Survives byte-for-byte -- not merely present, but unaltered.
+        assert result["SOME_OTHER_KEY"] == "keep-me-byte-for-byte"
+
     def test_legacy_does_not_overwrite_canonical(self, env_setup):
         # Both files exist; canonical should win and migration is a no-op.
         write_env_file(env_setup["user_env"], {"OPENROUTER_API_KEY": "sk-or-v1-canon"})

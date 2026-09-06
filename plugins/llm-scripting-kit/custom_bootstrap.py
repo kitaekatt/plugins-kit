@@ -265,7 +265,12 @@ def _try_legacy_migration(ctx: Any, project_root: Path) -> bool:
     if API_KEY_ENV in existing:
         return False
 
-    write_env_file(USER_ENV_FILE, {API_KEY_ENV: legacy_key})
+    # write_env_file REPLACES the file, so merge the migrated key into the
+    # existing contents rather than writing a fresh dict -- another
+    # endpoint's key documented to coexist here (README: "Keys for multiple
+    # endpoints coexist in the same .env") must survive this migration.
+    existing[API_KEY_ENV] = legacy_key
+    write_env_file(USER_ENV_FILE, existing)
     ctx.log(
         f"openrouter: migrated key from {legacy_path} -> {USER_ENV_FILE}"
     )

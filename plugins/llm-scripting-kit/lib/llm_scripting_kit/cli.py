@@ -223,13 +223,13 @@ def _parser() -> argparse.ArgumentParser:
 
 def main(argv: Optional[list[str]] = None) -> int:
     args = _parser().parse_args(argv)
-    if args.cmd == "status":
-        return _cmd_status(args.endpoint)
-    if args.cmd == "set-key":
-        return _cmd_set_key(args.key, validate=not args.no_validate, endpoint=args.endpoint)
-    if args.cmd == "which":
-        return _cmd_which(args.endpoint)
     try:
+        if args.cmd == "status":
+            return _cmd_status(args.endpoint)
+        if args.cmd == "set-key":
+            return _cmd_set_key(args.key, validate=not args.no_validate, endpoint=args.endpoint)
+        if args.cmd == "which":
+            return _cmd_which(args.endpoint)
         if args.cmd == "endpoints":
             return _cmd_endpoints(args.project_root, verify=args.verify, timeout_s=args.timeout)
         if args.cmd == "probe":

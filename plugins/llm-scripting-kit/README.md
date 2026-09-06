@@ -17,8 +17,11 @@ llm-scripting-kit complete --endpoint openrouter --model qwen \
 
 Discovery and completion commands emit JSON by default. `complete --format
 text` prints only the response text. Exit codes are `0` for success, `1` for a
-runtime failure, `2` for invalid input/configuration, and `3` for a classified
-persistent halt such as authentication, credit, or rate limiting. The existing
+runtime failure, `2` for invalid input/configuration, `3` for a classified
+persistent halt such as authentication, credit, or rate limiting, `4` for a
+protocol error (`complete --request-file` could not understand the request,
+so nothing ran), and `5` for an indeterminate reachability check (`probe`
+attempted a check that could not run to a verdict). The existing
 `status`, `set-key`, and `which` account commands retain their human-readable
 output.
 

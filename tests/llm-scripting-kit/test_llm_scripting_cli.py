@@ -545,3 +545,47 @@ def test_the_flag_surface_leaves_temperature_unset(monkeypatch, capsys):
     assert options.temperature is None
     assert backend.call[0] == ""
     json.loads(capsys.readouterr().out)
+
+
+def test_which_with_a_malformed_registry_gets_the_configuration_envelope_not_a_traceback(
+    monkeypatch, capsys
+):
+    """status/set-key/which used to return BEFORE main()'s try/except that maps
+    (EndpointResolveError, ModelResolveError, EndpointRegistryError, OSError,
+    ValueError) to the configuration envelope + EXIT_USAGE.
+    _resolve_endpoint_or_exit only ever catches EndpointResolveError, so an
+    EndpointRegistryError (a malformed registry file) escaped `which` as a raw
+    traceback instead of the documented exit-2 envelope.
+    """
+
+    def _raise(*_a, **_kw):
+        raise cli.EndpointRegistryError("malformed registry: bad yaml")
+
+    monkeypatch.setattr(cli, "resolve_endpoint", _raise)
+
+    assert cli.main(["which"]) == cli.EXIT_USAGE
+    envelope = json.loads(capsys.readouterr().err)
+    assert envelope["error"]["kind"] == "configuration"
+    assert "malformed registry" in envelope["error"]["message"]
+
+
+def test_set_key_with_an_unwritable_target_gets_the_configuration_envelope_not_a_traceback(
+    monkeypatch, capsys, tmp_path
+):
+    """Same gap as `which`, for `set-key`: an OSError from write_env_file (e.g.
+    an unwritable USER_ENV_FILE) escaped as a raw traceback instead of the
+    documented exit-2 configuration envelope.
+    """
+    # Redirect USER_ENV_FILE to a tmp path so the read_env_file() call that
+    # precedes the write never touches this host's real credential file.
+    monkeypatch.setattr(cli, "USER_ENV_FILE", tmp_path / ".env")
+
+    def _raise(*_a, **_kw):
+        raise OSError("[Errno 13] Permission denied: '.env'")
+
+    monkeypatch.setattr(cli, "write_env_file", _raise)
+
+    assert cli.main(["set-key", "--key", "sk-or-v1-whatever", "--no-validate"]) == cli.EXIT_USAGE
+    envelope = json.loads(capsys.readouterr().err)
+    assert envelope["error"]["kind"] == "configuration"
+    assert "Permission denied" in envelope["error"]["message"]

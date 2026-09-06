@@ -663,10 +663,20 @@ def pinned_evaluate(
     if isinstance(stored, Mapping) and stored.get("spec") == spec.to_json():
         budget = stored.get("budget")
         if isinstance(budget, Mapping) and budget.get("status") in _STATUSES:
-            resets_at = budget.get("resets_at")
+            raw_resets_at = budget.get("resets_at")
+            # Normalize once: a cached resets_at can be a float epoch (a
+            # harness snapshot may report sub-second timestamps), and the
+            # expiry decision below and the rehydrated Budget must agree on
+            # the same value -- keeping it only when isinstance(x, int) here
+            # while accepting int OR float for the expiry test used the float
+            # correctly to decide "not expired" and then reported it back as
+            # resets_at=None ("no reset known").
+            resets_at = (
+                int(raw_resets_at) if isinstance(raw_resets_at, (int, float)) else None
+            )
             expired = (
                 budget["status"] in (STATUS_UNDER_QUOTA, STATUS_OUT_OF_QUOTA)
-                and isinstance(resets_at, (int, float))
+                and resets_at is not None
                 and moment >= resets_at
             )
             if not expired:
@@ -676,7 +686,7 @@ def pinned_evaluate(
                     detail=str(budget.get("detail", "")),
                     remaining=budget.get("remaining"),
                     window_remaining=budget.get("window_remaining"),
-                    resets_at=resets_at if isinstance(resets_at, int) else None,
+                    resets_at=resets_at,
                 )
     fresh = evaluate(spec, harness, now=moment)
     verdicts[entry_id] = {"spec": spec.to_json(), "budget": fresh.to_json()}

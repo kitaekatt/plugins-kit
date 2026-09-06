@@ -26,6 +26,22 @@ find_ninfer_root() {
 }
 
 show_help() {
+    # --serial only acts on the two NInfer profiles (qwen36, qwen38): it sets
+    # QWEN36_MAX_CONCURRENCY / QWEN38_MAX_CONCURRENCY, which the qwen38l
+    # (llama.cpp) command array does not read at all. Advertise it only where
+    # it does something.
+    if [[ "$profile" == "qwen38l" ]]; then
+        printf '%s\n' \
+            "Usage: ${profile}-server [--help|--print-command] [SERVER_ARGS...]" \
+            '' \
+            "Starts the ${profile} OpenAI-compatible local model server." \
+            'Extra arguments are appended after the measured defaults.' \
+            '' \
+            'This profile always serves one request at a time (llama.cpp default);' \
+            'there is no concurrency knob to set, so --serial is refused rather than' \
+            'silently ignored.'
+        return
+    fi
     printf '%s\n' \
         "Usage: ${profile}-server [--serial] [--help|--print-command] [SERVER_ARGS...]" \
         '' \
@@ -43,11 +59,15 @@ show_help() {
 
 # --serial is consumed HERE rather than passed through: it is not a server flag,
 # it selects one of this launcher's two measured configurations. Parsed before
-# the profile blocks so it can set the env default they read.
+# the profile blocks so it can set the env default they read. Recorded in
+# serial_requested so the qwen38l branch below can refuse it -- that profile's
+# command array has no parallel-slots flag to set.
+serial_requested=0
 if [[ "${1:-}" == "--serial" ]]; then
     QWEN36_MAX_CONCURRENCY=1
     QWEN38_MAX_CONCURRENCY=1
     export QWEN36_MAX_CONCURRENCY QWEN38_MAX_CONCURRENCY
+    serial_requested=1
     shift
 fi
 
@@ -135,6 +155,10 @@ case "$profile" in
         )
         ;;
     qwen38l)
+        if [[ "$serial_requested" == "1" ]]; then
+            printf 'qwen38l-server: --serial has no effect on this profile (llama.cpp already serves one request at a time by default; there is no concurrency flag here to set).\n' >&2
+            exit 2
+        fi
         readonly llama_prefix="${LLAMA_CPP_PREFIX:-$HOME/.local/opt/llama.cpp}"
         readonly model="${QWEN38_GGUF:-$HOME/hf/models/Qwen3.8-27B-GGUF/Qwen3.8-27B-UD-Q4_K_XL.gguf}"
         readonly server="${LLAMA_SERVER:-$llama_prefix/bin/llama-server}"
