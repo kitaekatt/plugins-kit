@@ -54,6 +54,25 @@ def test_halt_stops_with_remaining():
     assert [u for u, _r in result.done] == [1]
 
 
+def test_guard_halts_false_propagates_halt():
+    """``run_bulk(guard_halts=False)`` documents that a PipelineHaltError
+    propagates, but the unguarded loop's bare ``except Exception`` catches it
+    too (PipelineHaltError subclasses Exception) -- with isolate_errors=True
+    (the default) that records the halt as one unit's error and keeps
+    sweeping the remaining units against a dead credential instead of
+    stopping. Pin the documented behavior: the halt raises out of run_bulk
+    after the first (failing) unit, and the guarded default path is
+    untouched by this change."""
+
+    def worker(unit):
+        if unit == 2:
+            raise PipelineHaltError(HALT_RATE_LIMIT, "429")
+        return unit
+
+    with pytest.raises(PipelineHaltError):
+        run_bulk([1, 2, 3, 4], worker, guard_halts=False)
+
+
 def test_warm_failure_propagates():
     with pytest.raises(RuntimeError):
         run_bulk(

@@ -926,8 +926,9 @@ def test_a_wave_that_makes_no_progress_at_all_aborts_instead_of_spinning(
     world = World(store, clock)
 
     class BreakingRunner(ScenarioRunner):
-        """`agents --json` works for preflight + launch confirmation, then
-        fails for good."""
+        """`agents --json` works for preflight + dispatch_unit's before-launch
+        snapshot (the banner-regex-miss fallback) + launch confirmation,
+        then fails for good."""
 
         def __init__(self, world):
             super().__init__(world)
@@ -937,7 +938,7 @@ def test_a_wave_that_makes_no_progress_at_all_aborts_instead_of_spinning(
             argv = list(argv)
             if argv[1:3] == ["agents", "--json"]:
                 self.agents_calls += 1
-                if self.agents_calls > 2:
+                if self.agents_calls > 3:
                     self.calls.append((argv, kwargs))
                     return ("", "the daemon is not answering", 1)
             return super().__call__(argv, **kwargs)
@@ -969,6 +970,64 @@ def test_a_wave_that_makes_no_progress_at_all_aborts_instead_of_spinning(
     assert report.settled.get("u0") == "wave_exit"
     short_id = world.launches[0]["short_id"]
     assert ["claude", "stop", short_id] in [argv for argv, _kw in runner.calls]
+
+
+def test_dispatch_wave_settles_a_dropped_dispatch_so_the_wave_completes(
+    tmp_path, monkeypatch
+):
+    """PRE-FIX DEMONSTRATION. A DROPPED dispatch (the drift branch:
+    ``claimed_by`` cleared, fencing token UNCHANGED -- a peer failed the
+    unit non-terminally through the protocol, under this dispatcher's own
+    fence) is popped from ``open_dispatches`` by ``dispatch_wave``'s
+    post-tick loop but its dispatch ROW is never settled: every other exit
+    path calls ``store.settle_dispatch``, this one does not. The unit is
+    PENDING again and is re-selected on the very next iteration of
+    ``dispatch_wave``'s own loop; ``record_dispatch`` then collides with the
+    still-open row from the first dispatch and raises
+    ``sqlite3.IntegrityError``, which is not among the exceptions
+    ``dispatch_unit``'s call site inside ``dispatch_wave`` catches -- a raw
+    traceback ends the wave instead of a :class:`DispatchReport`.
+
+    MUTATION: drop the settle call in the ``tick.dropped`` loop -- the
+    second launch's ``record_dispatch`` raises and this test errors instead
+    of the wave completing."""
+    monkeypatch.setattr(claude_bg, "classify_settled_failure", lambda *a, **k: None)
+    store = _seeded_store(tmp_path, unit_ids=("u0",))
+    clock = Clock(deadline=T_START + 20_000)
+    world = World(store, clock)
+
+    launch_count = {"n": 0}
+
+    def on_launch(rec):
+        launch_count["n"] += 1
+        if launch_count["n"] == 1:
+            # A peer fails the unit non-terminally THROUGH THE PROTOCOL,
+            # under the dispatcher's own fence -- claimed_by cleared, the
+            # fencing token left untouched (fail_unit(terminal=False) never
+            # bumps it). The session itself keeps reporting "working": this
+            # dispatcher observes the drift, not a vanished/failed session.
+            store.fail_unit(RUN_ID, rec["unit_id"], rec["fencing_token"], at=clock.t)
+        else:
+            # The unit's SECOND dispatch (the reclaim this test exists to
+            # prove completes) is accepted normally so the wave can end.
+            store.accept_unit(RUN_ID, rec["unit_id"], rec["fencing_token"], text="ok", at=clock.t)
+            world.set_state(rec["short_id"], "done")
+
+    world.on_launch = on_launch
+    runner = _lifecycle_scripted(ScenarioRunner(world))
+    cli = ClaudeCli(executable="claude", runner=runner)
+
+    report = dispatch_wave(
+        store, RUN_ID, store.list_units(RUN_ID), RunAdapter(), cli=cli,
+        worker_command=_worker_command(tmp_path), max_agents=1,
+        poll_interval_s=POLL_INTERVAL, env={},
+        sleep_fn=clock.advance, clock_fn=clock,
+    )
+
+    assert launch_count["n"] == 2  # the reclaim actually happened
+    assert store.open_dispatches(RUN_ID) == []
+    assert report.settled.get("u0") == "accepted"
+    assert store.get_unit(RUN_ID, "u0").state is UnitState.ACCEPTED
 
 
 # -- refusal direction: what the bounds must NOT cut off ---------------------

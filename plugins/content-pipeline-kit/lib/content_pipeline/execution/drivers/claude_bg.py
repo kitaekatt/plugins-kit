@@ -118,6 +118,7 @@ from content_pipeline.execution.adapter import RunAdapter
 from content_pipeline.execution.controller import record_halt
 from content_pipeline.execution.model import (
     AlreadyClaimedError,
+    AttemptKind,
     ExecutionError,
     NotClaimedError,
     RunHaltedError,
@@ -738,8 +739,9 @@ def build_launch_prompt(
         "rewritten.\n"
         "5. If you cannot complete the unit, author your failure envelope "
         "the same way as step 3 -- write EXACTLY the template below, "
-        "substituting ONLY <FENCING_TOKEN>, to exactly this path (no other "
-        f"path):\n   {write_fail_cmd}\n"
+        "substituting ONLY <FENCING_TOKEN> and <FAILURE_DETAIL_JSON> (the "
+        "latter with one nonempty JSON string literal describing what went "
+        f"wrong), to exactly this path (no other path):\n   {write_fail_cmd}\n"
         f"   Template:\n{fail_template}\n"
         f"   Then report failure:\n   {fail_cmd}\n"
     )
@@ -945,6 +947,27 @@ def _mint_worker_id() -> str:
     return f"claude-bg-{uuid.uuid4().hex[:12]}"
 
 
+def _end_session(cli: "ClaudeCli", short_id: str, *, env: Optional[Mapping[str, str]]) -> None:
+    """Best-effort ``stop`` then ``rm`` of one background session, module-
+    private and shared by every cleanup path in this driver (dispatch
+    launch failure/abort, a settled ``worker_failed``/``session_lingering``/
+    ``blocked`` dispatch, and the wave's own exit cleanup).
+
+    Each call is attempted INDEPENDENTLY: a raising ``stop`` must never skip
+    ``rm``, so this is two separate ``try``/``except`` blocks, not one
+    wrapping both. Neither return code nor exception establishes that the
+    session actually ended -- this is hygiene, not a guarantee (see the
+    callers' own docstrings for what, if anything, closes the gap)."""
+    try:
+        cli.stop(short_id, env=env)
+    except Exception:  # noqa: BLE001 -- best-effort cleanup
+        pass
+    try:
+        cli.rm(short_id, env=env)
+    except Exception:  # noqa: BLE001 -- best-effort cleanup
+        pass
+
+
 @dataclass
 class OpenDispatch:
     """A dispatcher's in-memory bookkeeping for one currently open dispatch
@@ -1077,13 +1100,19 @@ def dispatch_unit(
 
     The launcher's exit code and banner are discarded as evidence of
     success; this function instead polls ``agents --json --all`` (via
-    :func:`parse_agents_json`) until the launched session's short id appears
-    in a state outside the initial (absent) state, or
-    ``launch_confirm_seconds`` elapses. A ``"failed"`` observation, or no
-    observation at all within the window, raises
+    :func:`parse_agents_json`) until the launched session is identified in a
+    state outside the initial (absent) state, or ``launch_confirm_seconds``
+    elapses. The ordinary path identifies it by the short id the banner
+    printed. When the banner's wording drifts and no short id can be parsed
+    (the banner regex has been wrong twice against live CLIs), the poll
+    instead compares each snapshot against one taken before the launch and
+    adopts the single session record absent from that BEFORE snapshot; zero
+    or several new records is ambiguous and adopts neither, so nothing
+    unidentified is ever stopped or ``rm``'d. A ``"failed"`` observation, or
+    no observation at all within the window, raises
     :class:`LaunchMisconfigurationError`: the dispatch is settled as
-    ``launch_failed`` and, when a short id was identified, the corpse is
-    ``rm``'d (best-effort; an ``rm`` failure never masks the
+    ``launch_failed`` and, when a session was identified either way, the
+    corpse is ``rm``'d (best-effort; an ``rm`` failure never masks the
     misconfiguration).
 
     The returned :class:`OpenDispatch` carries the claim's OWN
@@ -1118,6 +1147,24 @@ def dispatch_unit(
     # settles dispatches it is TRACKING, and this one never got that far.
     matched: Optional[SessionRecord] = None
     try:
+        # A before-launch snapshot of the same `agents --json` listing the
+        # confirmation poll below already uses. It exists for the banner-less
+        # fallback further down: when the launch banner's wording drifts (it
+        # has been wrong twice against live CLIs -- see
+        # `_BG_LAUNCH_BANNER_RE`'s docstring) and no short id can be parsed
+        # from it, a launched session must still be identifiable rather than
+        # leaked and the whole dispatch aborted for want of a regex match.
+        # Best-effort: an unreadable or unparsable snapshot degrades to an
+        # empty BEFORE set, which only makes the fallback more conservative
+        # (every record in the confirmation poll then counts as "new").
+        before_ids: Set[str] = set()
+        snap_stdout, _snap_stderr, snap_rc = cli.agents_json(all_sessions=True, env=env)
+        if snap_rc == 0:
+            try:
+                before_ids = {s.id for s in parse_agents_json(snap_stdout).sessions}
+            except AgentsJsonParseError:
+                before_ids = set()
+
         prompt = build_launch_prompt(
             worker_command, run_id, unit.unit_id, worker_id, claim.fencing_token
         )
@@ -1126,22 +1173,32 @@ def dispatch_unit(
         )
         short_id = _parse_launch_session_id(launch_stdout)
 
-        if short_id is not None:
-            deadline = clock_fn() + launch_confirm_seconds
-            while True:
-                poll_stdout, _poll_stderr, poll_rc = cli.agents_json(all_sessions=True, env=env)
-                if poll_rc == 0:
-                    try:
-                        parsed = parse_agents_json(poll_stdout)
-                    except AgentsJsonParseError:
-                        parsed = None
-                    if parsed is not None:
+        deadline = clock_fn() + launch_confirm_seconds
+        while True:
+            poll_stdout, _poll_stderr, poll_rc = cli.agents_json(all_sessions=True, env=env)
+            if poll_rc == 0:
+                try:
+                    parsed = parse_agents_json(poll_stdout)
+                except AgentsJsonParseError:
+                    parsed = None
+                if parsed is not None:
+                    if short_id is not None:
                         matched = next((s for s in parsed.sessions if s.id == short_id), None)
-                if matched is not None:
-                    break
-                if clock_fn() >= deadline:
-                    break
-                sleep_fn(poll_interval_s)
+                    else:
+                        # No short id parsed from the banner. Adopt the
+                        # single record absent from the BEFORE snapshot --
+                        # zero or several new records is ambiguous, so
+                        # nothing is adopted (and therefore nothing
+                        # unidentified is ever stopped or rm'd) and the poll
+                        # keeps trying until the deadline.
+                        new_records = [s for s in parsed.sessions if s.id not in before_ids]
+                        if len(new_records) == 1:
+                            matched = new_records[0]
+            if matched is not None:
+                break
+            if clock_fn() >= deadline:
+                break
+            sleep_fn(poll_interval_s)
 
         if matched is None or matched.state == "failed":
             # Release the claim taken above before settling: no worker ever
@@ -1158,21 +1215,14 @@ def dispatch_unit(
                 at=at,
             )
             if matched is not None:
-                try:
-                    cli.rm(matched.id, env=env)
-                except Exception:  # noqa: BLE001 -- best-effort, never masks the error below
-                    pass
+                _end_session(cli, matched.id, env=env)
             raise LaunchMisconfigurationError(run_id, unit.unit_id, worker_id, short_id)
         store.attach_dispatch_session(run_id, unit.unit_id, matched.session_id)
     except LaunchMisconfigurationError:
         raise  # already released and settled by the branch above
     except BaseException:
-        try:
-            if matched is not None:
-                cli.stop(matched.id, env=env)
-                cli.rm(matched.id, env=env)
-        except Exception:  # noqa: BLE001 -- cleanup must not mask attachment error
-            pass
+        if matched is not None:
+            _end_session(cli, matched.id, env=env)
         _release_claim_and_settle(
             store, run_id, unit.unit_id, claim.fencing_token,
             session_id=matched.session_id if matched is not None else None, at=at
@@ -1405,14 +1455,7 @@ def supervise_tick(
                 None,
             )
             if latest_fail is not None and latest_fail.fencing_token == open_dispatch.fencing_token:
-                try:
-                    cli.stop(open_dispatch.id, env=env)
-                except Exception:  # noqa: BLE001 -- best-effort session cleanup
-                    pass
-                try:
-                    cli.rm(open_dispatch.id, env=env)
-                except Exception:  # noqa: BLE001 -- best-effort session cleanup
-                    pass
+                _end_session(cli, open_dispatch.id, env=env)
                 store.settle_dispatch(run_id, unit_id, outcome="worker_failed", at=now)
                 settled[unit_id] = "worker_failed"
                 continue
@@ -1504,11 +1547,7 @@ def supervise_tick(
                 # leaked. Both calls are best-effort -- an unreachable
                 # daemon must not stop the settle below, which is what frees
                 # the slot and closes the dispatch row.
-                for _verb in (cli.stop, cli.rm):
-                    try:
-                        _verb(open_dispatch.id, env=env)
-                    except Exception:  # noqa: BLE001 -- best-effort cleanup
-                        pass
+                _end_session(cli, open_dispatch.id, env=env)
                 store.settle_dispatch(run_id, unit_id, outcome="session_lingering", at=now)
                 settled[unit_id] = "session_lingering"
                 # No classify_settled_failure: the unit is ACCEPTED. This is
@@ -1529,11 +1568,7 @@ def supervise_tick(
             # to die is still left running. Handling the return codes is a
             # separate piece of work; do not read these two calls as a
             # guarantee that the session is gone.
-            for _verb in (cli.stop, cli.rm):
-                try:
-                    _verb(open_dispatch.id, env=env)
-                except Exception:  # noqa: BLE001 -- best-effort cleanup
-                    pass
+            _end_session(cli, open_dispatch.id, env=env)
             store.settle_dispatch(run_id, unit_id, outcome="blocked", at=now)
             settled[unit_id] = "blocked"
             # No classify_settled_failure here: a stalled worker is not a
@@ -1991,19 +2026,38 @@ def dispatch_wave(
                     accepted.append(unit_id)
             for unit_id in tick.dropped:
                 open_dispatches.pop(unit_id, None)
+                # A DROPPED dispatch's row must be settled here, not just
+                # popped from this loop's own bookkeeping: every OTHER exit
+                # from this loop calls store.settle_dispatch, and an open
+                # dispatch row makes reclaimable_units skip its unit
+                # forever. Without this, the unit goes back to PENDING (the
+                # drift that caused the drop), is re-selected as a
+                # candidate on the very next iteration, and its
+                # record_dispatch collides with this still-open row --
+                # sqlite3.IntegrityError, uncaught at dispatch_unit's call
+                # site, ending the wave. Best-effort: a settle failure here
+                # must not mask the drop itself.
+                try:
+                    store.settle_dispatch(run_id, unit_id, outcome="dropped", at=_now())
+                except Exception:  # noqa: BLE001 -- never mask the drop
+                    pass
+                else:
+                    settled_all[unit_id] = "dropped"
             if tick.halted is not None:
                 halted = tick.halted
 
-            try:
-                fence = store.acquire_dispatcher_lease(
-                    run_id, dispatcher_id, lease_seconds=DEFAULT_DISPATCHER_LEASE_SECONDS, at=_now()
-                ) or fence
-                store.renew_dispatcher_lease(
-                    run_id, dispatcher_id, fence, lease_seconds=DEFAULT_DISPATCHER_LEASE_SECONDS, at=_now()
-                )
-            except StaleDispatcherLeaseError:
+            # acquire_dispatcher_lease alone both extends and bumps the fence
+            # for the SAME holder (its own contract: it fails, returning
+            # None, only when a DIFFERENT dispatcher holds a still-live
+            # lease) -- a separate renew_dispatcher_lease call afterward
+            # re-checks a precondition acquire already re-established.
+            new_fence = store.acquire_dispatcher_lease(
+                run_id, dispatcher_id, lease_seconds=DEFAULT_DISPATCHER_LEASE_SECONDS, at=_now()
+            )
+            if new_fence is None:
                 aborted_reason = "dispatcher_lease_lost"
                 break
+            fence = new_fence
 
             # The wave-level liveness bound (see the docstring's LIVENESS
             # paragraph). Progress is anything that moved: a launch, a
@@ -2027,14 +2081,7 @@ def dispatch_wave(
                 sleep_fn(poll_interval_s)
     finally:
         for unit_id, opened in list(open_dispatches.items()):
-            try:
-                cli.stop(opened.id, env=env)
-            except Exception:  # noqa: BLE001 -- best-effort cleanup on exit
-                pass
-            try:
-                cli.rm(opened.id, env=env)
-            except Exception:  # noqa: BLE001 -- best-effort cleanup on exit
-                pass
+            _end_session(cli, opened.id, env=env)
             # Settle what was just stopped. An open dispatch row makes its
             # unit permanently unreclaimable, so abandoning one here (only
             # reachable on an abort path -- a normal exit leaves nothing

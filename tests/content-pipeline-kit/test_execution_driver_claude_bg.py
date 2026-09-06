@@ -1050,6 +1050,13 @@ def test_build_launch_prompt_names_ids_and_carries_invocations_verbatim(tmp_path
         assert inv in prompt, f"invocation not carried verbatim: {inv!r}"
     assert answer_path_for(wc, "run-1", "u0") in prompt
 
+    # The fail step's template (_envelope_payload_text("fail", ...)) carries
+    # BOTH <FENCING_TOKEN> and <FAILURE_DETAIL_JSON>, so the prose telling
+    # the worker what to substitute must name both, not only the token --
+    # the template's own verbatim <FAILURE_DETAIL_JSON> text is not enough
+    # of a check by itself, since that appears in the prompt either way.
+    assert "substituting ONLY <FENCING_TOKEN> and <FAILURE_DETAIL_JSON>" in prompt
+
 
 def test_launch_prompt_carries_the_real_fencing_token_and_no_claim_step(tmp_path):
     """The token the DISPATCHER's claim returned reaches the worker here, in
@@ -1434,6 +1441,121 @@ def test_dispatch_unit_never_appearing_is_launch_misconfiguration(tmp_path):
             sleep_fn=lambda s: clock.__setitem__("t", clock["t"] + s),
         )
     assert store.open_dispatches("run-1") == []
+
+
+def test_dispatch_unit_banner_regex_miss_falls_back_to_snapshot_diff(tmp_path):
+    """When the launch banner's wording drifts (it has been wrong twice
+    against live CLIs; see ``_BG_LAUNCH_BANNER_RE``'s docstring) and no short
+    id can be parsed from it, ``dispatch_unit`` must not treat the launch as
+    a misconfiguration and abort the whole wave for want of a regex match --
+    it falls back to comparing the confirmation poll's ``agents --json``
+    listing against a snapshot taken BEFORE the launch, and adopts the one
+    session record that was not there before."""
+    store = _seeded_dispatch_store(tmp_path)
+    wc = _worker_command(tmp_path)
+    runner = FakeRunner()
+    # No "backgrounded" token at all -- _parse_launch_session_id returns None.
+    runner.script(("claude", "--bg"), ("session started elsewhere", "", 0))
+    runner.script(
+        ("claude", "agents", "--json"),
+        [
+            ("[]", "", 0),  # BEFORE snapshot: nothing running yet
+            (json.dumps([_bg_record(id="newid01", session_id="sess-new", state="working")]), "", 0),
+        ],
+    )
+    cli = _cli(runner)
+    unit = _pending_unit(store, "run-1", "u0")
+
+    opened = dispatch_unit(
+        store, "run-1", unit, cli, wc, worker_id="worker-a",
+        sleep_fn=lambda s: None, clock_fn=lambda: 1000.0,
+    )
+    assert opened.session_id == "sess-new"
+    assert opened.id == "newid01"
+    assert store.open_dispatches("run-1")[0].session_id == "sess-new"
+
+
+def test_dispatch_unit_banner_regex_miss_still_stops_and_rms_on_abort(tmp_path):
+    """The other half of the same fallback: once a session is identified via
+    the snapshot diff, an abort AFTER that point must still stop/rm it --
+    the whole point of identifying it is that it is never left unstopped on
+    an abort path."""
+    store = _seeded_dispatch_store(tmp_path)
+    wc = _worker_command(tmp_path)
+    runner = FakeRunner()
+    runner.script(("claude", "--bg"), ("session started elsewhere", "", 0))
+    runner.script(
+        ("claude", "agents", "--json"),
+        [
+            ("[]", "", 0),
+            (json.dumps([_bg_record(id="newid02", session_id="sess-new2", state="working")]), "", 0),
+        ],
+    )
+    runner.script(("claude", "stop"), ("stopped", "", 0))
+    runner.script(("claude", "rm"), ("removed", "", 0))
+    cli = _cli(runner)
+    unit = _pending_unit(store, "run-1", "u0")
+
+    def _boom(*_args, **_kwargs):
+        raise RuntimeError("boom after identification")
+
+    store.attach_dispatch_session = _boom  # type: ignore[assignment]
+
+    with pytest.raises(RuntimeError):
+        dispatch_unit(
+            store, "run-1", unit, cli, wc, worker_id="worker-a",
+            sleep_fn=lambda s: None, clock_fn=lambda: 1000.0,
+        )
+
+    stop_calls = [argv for argv, _kwargs in runner.calls if len(argv) >= 2 and argv[1] == "stop"]
+    rm_calls = [argv for argv, _kwargs in runner.calls if len(argv) >= 2 and argv[1] == "rm"]
+    assert stop_calls and stop_calls[0][2] == "newid02"
+    assert rm_calls and rm_calls[0][2] == "newid02"
+
+
+def test_dispatch_unit_attach_failure_still_rms_even_when_stop_raises(tmp_path):
+    """``_end_session`` attempts ``cli.stop`` and ``cli.rm`` independently,
+    each in its own ``try``/``except``, so a raising ``stop`` never skips
+    ``rm`` -- an identified session is always attempted removed."""
+    store = _seeded_dispatch_store(tmp_path)
+    wc = _worker_command(tmp_path)
+    calls: list = []
+
+    def runner(argv, **kwargs):
+        argv = list(argv)
+        calls.append(argv)
+        if argv[1:2] == ["--bg"] and argv[2:3] != ["-p"]:
+            return ("backgrounded * a1b2c3d4", "", 0)
+        if argv[1:3] == ["agents", "--json"]:
+            return (
+                json.dumps([_bg_record(id="a1b2c3d4", session_id="sess-xyz", state="working")]),
+                "",
+                0,
+            )
+        if argv[1:2] == ["stop"]:
+            raise OSError("the daemon is gone")
+        if argv[1:2] == ["rm"]:
+            return ("removed", "", 0)
+        raise AssertionError(f"unexpected argv {argv!r}")
+
+    cli = ClaudeCli(executable="claude", runner=runner)
+    unit = _pending_unit(store, "run-1", "u0")
+
+    def _boom(*_args, **_kwargs):
+        raise RuntimeError("boom after attach")
+
+    store.attach_dispatch_session = _boom  # type: ignore[assignment]
+
+    with pytest.raises(RuntimeError):
+        dispatch_unit(
+            store, "run-1", unit, cli, wc, worker_id="worker-a",
+            sleep_fn=lambda s: None, clock_fn=lambda: 1000.0,
+        )
+
+    stop_calls = [argv for argv in calls if argv[1:2] == ["stop"]]
+    rm_calls = [argv for argv in calls if argv[1:2] == ["rm"]]
+    assert stop_calls and stop_calls[0][2] == "a1b2c3d4"
+    assert rm_calls and rm_calls[0][2] == "a1b2c3d4"
 
 
 # ===========================================================================
@@ -1836,6 +1958,39 @@ def test_supervise_tick_failed_ordinary_does_not_halt(tmp_path, monkeypatch):
     assert run.halted_kind is None
 
 
+def test_supervise_tick_settles_a_worker_that_failed_while_session_live(tmp_path):
+    """Condition, not history: the module never imports ``AttemptKind`` while
+    the worker-failed branch reads ``attempt.kind is AttemptKind.FAIL``, so
+    that branch raises ``NameError`` the moment it is entered. The existing
+    ``test_supervise_tick_failed_*`` tests set the SESSION state (the fake
+    ``agents --json`` record) to ``"failed"``, never the UNIT state, so none
+    of them ever enters this branch -- which is why the suite is green
+    despite the missing import.
+
+    Here the UNIT is failed (via a direct, non-terminal ``store.fail_unit``
+    under the dispatcher's own fence, standing in for a peer failing it
+    through the protocol) while the fake ``agents --json`` listing still
+    reports the session ``working`` -- the exact combination the
+    worker-failed branch exists to settle."""
+    store = _seeded_dispatch_store(tmp_path)
+    od = _claim_and_open(store, "run-1", "u0", "worker-a", "sess-1", "short1", at=1000.0)
+    store.fail_unit(
+        "run-1", "u0", od.fencing_token, error="worker reported failure", terminal=True, at=1005.0
+    )
+    runner = FakeRunner()
+    runner.script(
+        ("claude", "agents", "--json"),
+        (json.dumps([_bg_record(id="short1", session_id="sess-1", state="working")]), "", 0),
+    )
+    cli = _cli(runner)
+    adapter = RunAdapter()
+
+    result = supervise_tick(store, "run-1", cli, adapter, {"u0": od}, at=1010.0)
+
+    assert result.settled == {"u0": "worker_failed"}
+    assert store.open_dispatches("run-1") == []
+
+
 def test_supervise_tick_done_accepted_settles_success_without_classifying(tmp_path, monkeypatch):
     store = _seeded_dispatch_store(tmp_path)
     od = _claim_and_open(store, "run-1", "u0", "worker-a", "sess-1", "short1", at=1000.0)
@@ -2039,6 +2194,58 @@ def test_dispatch_wave_second_dispatcher_exits_without_launching(tmp_path):
     assert launch_calls == []
 
 
+def test_dispatch_wave_aborts_when_the_dispatcher_lease_is_lost(tmp_path, monkeypatch):
+    """No prior test exercised the mid-run lease-loss abort path (only
+    ``dispatcher_lease_held_by_another_dispatcher``, the pre-loop refusal,
+    above). A rival dispatcher genuinely takes over the run-level lease
+    (via the same public ``acquire_dispatcher_lease`` a real second
+    dispatcher would use, at an ``at`` far past this dispatcher's own
+    lease's expiry, so the acquire is a real success, not a monkeypatched
+    stub) between two ticks of the SAME wave; the per-tick lease dance must
+    detect that and set ``aborted_reason="dispatcher_lease_lost"`` rather
+    than raising ``StaleDispatcherLeaseError`` out of ``dispatch_wave``.
+
+    MUTATION: return None from the per-tick lease dance without checking it
+    -- the rival takeover goes unnoticed and this test hangs or errors on a
+    later store call instead of ending with the abort reason."""
+    monkeypatch.setattr(claude_bg, "_mint_worker_id", lambda: "our-dispatcher")
+    store = _seeded_dispatch_store(tmp_path)
+    wc = _worker_command(tmp_path)
+    runner = _healthy_runner()
+    runner.script(("claude", "--bg"), ("backgrounded * abc12345", "", 0))
+    runner.script(
+        ("claude", "agents", "--json"),
+        (json.dumps([_bg_record(id="abc12345", session_id="sess-1", state="working")]), "", 0),
+    )
+    cli = _cli(runner)
+    wave = store.list_units("run-1")
+
+    stolen = {"done": False}
+
+    def _steal_after_first_renew(unit):
+        if not stolen["done"]:
+            stolen["done"] = True
+            # A genuine rival acquire, far past our lease's own expiry
+            # (started at=1000.0, 120s lease -> expires 1120.0): a real
+            # success under acquire_dispatcher_lease's own contract, not a
+            # forced/monkeypatched failure.
+            assert store.acquire_dispatcher_lease(
+                "run-1", "rival-dispatcher", lease_seconds=999.0, at=5000.0
+            ) is not None
+        return 5.0
+
+    adapter = RunAdapter(unit_seconds_for=_steal_after_first_renew)
+
+    report = dispatch_wave(
+        store, "run-1", wave, adapter, cli=cli, worker_command=wc,
+        max_agents=1, at=1000.0, sleep_fn=lambda s: None, clock_fn=lambda: 1000.0,
+    )
+
+    assert report.aborted_reason == "dispatcher_lease_lost"
+    run = store.get_run("run-1")
+    assert run.dispatcher_id == "rival-dispatcher"  # the rival's takeover held
+
+
 def test_dispatch_wave_dispatcher_can_reacquire_its_own_expired_lease(tmp_path, monkeypatch):
     """ACCEPT case: a dispatcher must be able to re-acquire its OWN expired
     lease."""
@@ -2227,7 +2434,8 @@ def test_dispatch_wave_returns_a_report_when_an_accept_lands_inside_the_renew_wi
     runner.script(
         ("claude", "agents", "--json"),
         [
-            ("[]", "", 0),
+            ("[]", "", 0),  # preflight step 4
+            ("[]", "", 0),  # dispatch_unit's before-launch snapshot
             (json.dumps([_bg_record(id="abc12345", session_id="sess-1", state="working")]), "", 0),
             (json.dumps([_bg_record(id="abc12345", session_id="sess-1", state="working")]), "", 0),
             (json.dumps([_bg_record(id="abc12345", session_id="sess-1", state="done")]), "", 0),

@@ -13,9 +13,13 @@ generalized to :func:`run_bulk(units, worker, *, warm=..., ...)`. The bare
 ``stage`` / ``cache_dir`` pair assumed the caller wanted this module to own the
 cache; instead the WARM callable owns whatever priming the consumer needs
 (seeding a ``ResponseCache`` directory, loading a shared glossary), and the
-WORKER owns the per-unit call -- so this module stays free of ``llm`` and of any
-cache substrate. Halt handling is delegated to ``cli.budget.guarded_sweep``
-when the caller opts in, keeping the ``PipelineHaltError`` import in one place.
+WORKER owns the per-unit call -- so this module stays free of any cache
+substrate. Halt handling is delegated to ``cli.budget.guarded_sweep`` when the
+caller opts in (``guard_halts=True``, the default); with ``guard_halts=False``
+this module imports :class:`~content_pipeline.llm.platform.PipelineHaltError`
+only to re-raise it ahead of the unguarded loop's generic per-unit error
+isolation, since the halt taxonomy is otherwise indistinguishable from an
+ordinary unit error to a bare ``except Exception``.
 """
 
 from __future__ import annotations
@@ -24,6 +28,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, List, Optional, Sequence, Tuple
 
 from content_pipeline.cli.budget import BudgetStop, SweepResult, guarded_sweep
+from content_pipeline.llm.platform import PipelineHaltError
 
 
 @dataclass
@@ -95,6 +100,13 @@ def run_bulk(
     for unit in units:
         try:
             outcome = worker(unit)
+        except PipelineHaltError:
+            # A PipelineHaltError subclasses Exception, so the bare handler
+            # below would otherwise catch it, record it as one unit's error,
+            # and keep sweeping the remaining units against a dead
+            # credential -- exactly what guard_halts=False documents this
+            # loop as refusing to do.
+            raise
         except Exception as exc:  # noqa: BLE001 -- isolate one unit's failure
             if not isolate_errors:
                 raise
