@@ -9,12 +9,43 @@ llm_scripting_kit.review_lane.
 from __future__ import annotations
 
 import importlib
+import re
 import sys
 from pathlib import Path
 
 from bootstrap_guard import reexec_under_plugin_venv
 
-_PLUGIN_NAME = Path(__file__).resolve().parents[1].name
+_VERSION_DIR = re.compile(r"^\d+\.\d+\.\d+")
+
+
+def _plugin_name() -> str:
+    """The owning plugin's directory name, in BOTH install layouts.
+
+    A dev checkout is ``plugins/<plugin>/scripts/``, so the plugin is the
+    script's grandparent. An INSTALLED plugin is
+    ``<marketplace>/<plugin>/<version>/scripts/``, so the grandparent is the
+    VERSION -- and a fixed parent index resolved to e.g. "0.35.0". Then
+    ``plugin_venv_python("0.35.0")`` finds no venv, ``reexec_under_plugin_venv``
+    returns quietly by design, the shared-lib ``.pth`` never reaches sys.path,
+    and the run dies on the bootstrap guard with a misleading "has not
+    provisioned ... (missing: bootstrap_lib)" -- while the venv is in fact
+    provisioned and correct.
+
+    That failure is doubly costly because the guard exits 0: the caller reads a
+    broken lane as a review that found nothing. So this only ever reproduced for
+    INSTALLED users, never in a dev checkout, which is why it survived.
+
+    Walking up and skipping the version segment resolves the plugin in either
+    layout; the old expression stays as the fallback.
+    """
+    for part in reversed(Path(__file__).resolve().parts[:-1]):
+        if part == "scripts" or _VERSION_DIR.match(part):
+            continue
+        return part
+    return Path(__file__).resolve().parents[1].name
+
+
+_PLUGIN_NAME = _plugin_name()
 
 reexec_under_plugin_venv(_PLUGIN_NAME)
 
