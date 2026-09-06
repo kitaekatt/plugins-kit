@@ -54,6 +54,7 @@ if str(_SCRIPTS_DIR) not in sys.path:
 from discover_coverage import (  # noqa: E402
     NOISE_DIR_NAMES,
     build_subject,
+    is_nested_repo,
     root_exclusion,
 )
 from vcs_ignore import detect_vcs, ignored_paths  # noqa: E402
@@ -197,7 +198,7 @@ def _is_noise(name: str) -> bool:
 def _enumerate_tree(root: Path) -> list[Path]:
     """Every directory in `root`'s tree that could be a subject, root included.
 
-    Three prunes, and every one of them is the discovery module's own rule rather
+    Four prunes, and every one of them is the discovery module's own rule rather
     than a local restatement:
 
       * NOISE (`_is_noise` over the imported `NOISE_DIR_NAMES`) -- build output
@@ -206,13 +207,18 @@ def _enumerate_tree(root: Path) -> list[Path]:
         dot-directory except `.claude`.
       * STRUCTURAL (`root_exclusion`, which is `_skip_reason`) -- vendored,
         generated, and content-detected vendored bundles.
+      * NESTED REPOSITORY (`is_nested_repo`) -- a directory carrying its own
+        `.git` is a separate repository, whose ambient chain is its own; a
+        vendored clone dropped under the tree must not be walked into and
+        turned into subjects that belong to a different repo entirely.
       * VCS-IGNORED (`vcs_ignore.ignored_paths`) -- see below.
 
-    Getting only two of the three is not a smaller version of the rule, it is a
+    Getting only some of the four is not a smaller version of the rule, it is a
     DIFFERENT rule. An Unreal tree carries `Intermediate/`, `Saved/` and
-    `Binaries/` under most module and plugin directories, so the half that was
-    missing turned hundreds of build-output directories into coverage subjects,
-    each one costing a full agent run over compiler leavings.
+    `Binaries/` under most module and plugin directories, so a missing NOISE
+    prune turns hundreds of build-output directories into coverage subjects,
+    each one costing a full agent run over compiler leavings; a missing NESTED
+    REPOSITORY prune does the analogous thing to a vendored checkout.
 
     VCS-IGNORED DESCENDANTS ARE PRUNED TOO, and this is the half that is easy to
     get wrong. `build_subject` honours an explicitly named ignored root WHOLESALE
@@ -249,7 +255,9 @@ def _enumerate_tree(root: Path) -> list[Path]:
         here = Path(current)
         kept = sorted(
             d for d in dirnames
-            if not _is_noise(d) and root_exclusion(here / d) is None
+            if not _is_noise(d)
+            and root_exclusion(here / d) is None
+            and not is_nested_repo(here / d)
         )
         if kept and vcs:
             ignored = ignored_paths(

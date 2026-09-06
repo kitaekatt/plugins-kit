@@ -1069,8 +1069,8 @@ class TestVcsIgnorePredicate:
         )
 
         assert ignored == {git_repo / "tmpwork"}
-        assert vcs.is_ignored(git_repo / "tmpwork")
-        assert not vcs.is_ignored(git_repo / "engine")
+        assert git_repo / "tmpwork" in vcs.ignored_paths([git_repo / "tmpwork"], root=git_repo)
+        assert git_repo / "engine" not in vcs.ignored_paths([git_repo / "engine"], root=git_repo)
 
     def test_no_index_is_required_for_a_tracked_but_ignored_path(self, git_repo):
         """The question is whether the ignore RULES cover the path. Plain
@@ -1082,8 +1082,10 @@ class TestVcsIgnorePredicate:
         _git(git_repo, "add", "-f", "forced/kept.py")
         _git(git_repo, "commit", "-qm", "force-add an ignored path")
 
-        assert vcs.is_ignored(git_repo / "forced")
-        assert vcs.is_ignored(git_repo / "forced" / "kept.py")
+        assert git_repo / "forced" in vcs.ignored_paths([git_repo / "forced"], root=git_repo)
+        assert git_repo / "forced" / "kept.py" in vcs.ignored_paths(
+            [git_repo / "forced" / "kept.py"], root=git_repo
+        )
 
     def test_one_subprocess_covers_the_whole_batch(self, git_repo, monkeypatch):
         """A tree walk asks about hundreds of paths; one subprocess per path is
@@ -1123,7 +1125,6 @@ class TestVcsIgnorePredicate:
         """
         _write(git_repo / ".gitignore", "a\n\nb\n\n")
 
-        assert not vcs.is_ignored(git_repo)
         assert vcs.ignored_paths([git_repo], root=git_repo) == set()
         assert cov.build_subject(git_repo)["rootExclusion"] is None
 
@@ -1212,3 +1213,73 @@ class TestWalkTreeStillRecurses:
 
         assert len(leaves) == 4
         assert [p.name for p in code_files] == ["top.js"]
+
+
+class TestChildDispositionParity:
+    """walk_directory and walk_tree used to apply the same four child-entry
+    checks (noise/dot-dir, _skip_reason, nested-repo, vcs-ignored) in
+    DIFFERENT orders -- walk_directory pruned dot-directories first,
+    walk_tree ran _skip_reason (which can iterate a directory's contents via
+    _vendored_bundle_dir) before its own dot-dir check. Both are now wired
+    through one shared helper, `_child_disposition`, in walk_directory's
+    cheaper order, so they cannot disagree about what a given entry is.
+    """
+
+    def _fixture(self, tmp_path):
+        # A REAL git repo, not the bare `.git` marker `_mkrepo` makes -- the
+        # vcs-ignored case needs `git check-ignore` to actually run.
+        root = tmp_path / "repo"
+        subprocess.run(["git", "init", "-q", str(root)], check=True,
+                        capture_output=True, text=True)
+        _git(root, "config", "user.email", "t@example.com")
+        _git(root, "config", "user.name", "t")
+        _write(root / "noisy" / "Intermediate" / "artifact.cpp")
+        _write(root / "noisy" / ".github" / "workflows" / "ci.yml")
+        _write(root / "noisy" / "static" / "jquery.min.js")
+        _write(root / "noisy" / "ignored_dir" / "thing.py")
+        _write(root / "noisy" / "ordinary" / "code.py")
+        _write(root / ".gitignore", "noisy/ignored_dir/\n")
+        _git(root, "add", "-A")
+        _git(root, "commit", "-qm", "fixture tree")
+        return root / "noisy"
+
+    def test_child_disposition_matches_each_case(self, tmp_path):
+        directory = self._fixture(tmp_path)
+        entries = {p.name: p for p in directory.iterdir() if p.is_dir()}
+        ignored = vcs.ignored_paths(list(entries.values()), root=directory)
+
+        assert cov._child_disposition(entries["Intermediate"], ignored) == "noise"
+        assert cov._child_disposition(entries[".github"], ignored) == "noise"
+        assert cov._child_disposition(entries["static"], ignored) == cov.SKIP_VENDORED_BUNDLE
+        assert cov._child_disposition(entries["ignored_dir"], ignored) == cov.SKIP_IGNORED
+        assert cov._child_disposition(entries["ordinary"], ignored) is None
+
+    def test_walk_directory_and_walk_tree_report_the_same_disposition(self, tmp_path):
+        directory = self._fixture(tmp_path)
+        entries = sorted(directory.iterdir(), key=lambda p: p.name)
+        ignored = vcs.ignored_paths(entries, root=directory)
+
+        code_files, wd_skipped, wd_noise, _ = cov.walk_directory(directory, ignored=ignored)
+        leaves, _, wt_skipped, wt_noise = cov.walk_tree(directory)
+
+        wd_reasons = {Path(e["path"]).name: e["reason"] for e in wd_skipped}
+        # walk_tree's skipped list also carries deeper entries reached by
+        # recursion; narrow to the direct children of `directory` to compare
+        # like with like.
+        wt_reasons = {
+            Path(e["path"]).name: e["reason"] for e in wt_skipped
+            if Path(e["path"]).parent == directory
+        }
+
+        assert wd_reasons == wt_reasons == {
+            "static": cov.SKIP_VENDORED_BUNDLE,
+            "ignored_dir": cov.SKIP_IGNORED,
+        }
+        # Noise (Intermediate, .github) is counted, not itemized, by both.
+        assert wd_noise == wt_noise == 2
+        # The ordinary directory is walked (walk_tree descends into it and
+        # reports its code as a leaf); walk_directory reports the ordinary
+        # entry as neither noise nor skipped.
+        assert "ordinary" not in wd_reasons
+        assert any(p.name == "ordinary" for p in leaves)
+        assert not code_files

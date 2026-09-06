@@ -826,6 +826,27 @@ class TestBuildTreePrunesNoise:
         assert "intermediate" in names
 
 
+class TestBuildTreePrunesNestedRepos:
+    """A directory carrying its own `.git` is a separate repository, whose
+    ambient chain is its own -- discover_coverage.walk_directory and
+    walk_tree both already prune it (SKIP_NESTED_REPO). `_enumerate_tree`'s
+    own docstring claims this is one of its three inherited prunes, which was
+    false until this rule was applied here too: a vendored clone with its own
+    `.git` was walked and turned into subjects.
+    """
+
+    def test_nested_repo_and_its_contents_are_not_enumerated(self, tmp_path):
+        src = make_tree(tmp_path, {
+            "proj": ["real.py"],
+            "proj/vendor_clone": ["lib.py"],
+            "proj/vendor_clone/.git": [],
+        })
+        out = tmp_path / "s.jsonl"
+        assert run("build", src / "proj", "--out", out, "--tree").returncode == 0
+        roots = [s["root"] for s in read_jsonl(out)]
+        assert not any("vendor_clone" in r for r in roots)
+
+
 class TestTheNoiseListIsSharedNotCopied:
     """The fix is only a fix if a later addition reaches this walk too."""
 

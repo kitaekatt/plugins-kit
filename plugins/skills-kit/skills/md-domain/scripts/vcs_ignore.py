@@ -30,7 +30,10 @@ Two properties are load-bearing:
   * The entry point is BATCHED. A tree walk asks about hundreds of paths, and
     one subprocess per path is the difference between a discovery step and a
     noticeable stall. ``ignored_paths`` takes a list and spends one
-    subprocess; ``is_ignored`` is the one-path convenience built on it.
+    subprocess; call it even for a single path (wrap it in a one-item list
+    and check membership in the returned set) rather than adding a one-path
+    convenience wrapper back -- a second public entry point is a second thing
+    that can drift out of sync with this one.
 
 Stdlib-only, side-effect free, read-only: it runs query commands and writes
 nothing.
@@ -163,15 +166,6 @@ def ignored_paths(
     if vcs == P4:
         return _p4_ignored(items, Path(root))
     return set()
-
-
-def is_ignored(path: Path, root: Path | None = None, vcs: str | None = None) -> bool:
-    """True when the project's ignore rules cover `path`.
-
-    One-path convenience. Prefer `ignored_paths` in a loop -- this spends a
-    subprocess per call.
-    """
-    return Path(path) in ignored_paths([path], root=root, vcs=vcs)
 
 
 def _norm(path: Path) -> str:

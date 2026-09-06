@@ -25,9 +25,11 @@ Stdlib-only.
 
 import argparse
 import json
+import os
 import re
 import sys
 from pathlib import Path
+from typing import Iterable
 
 # The shared walk lives in skills_kit_lib; make the plugin root importable
 # regardless of which interpreter/venv launched this script (stdlib-only:
@@ -197,9 +199,23 @@ def collect_at_cwd(cwd: Path, has_ancestor_root: bool = False) -> list[tuple[Pat
     return out
 
 
-def collect_descendants(cwd: Path) -> list[tuple[Path, str]]:
+def collect_descendants(
+    cwd: Path,
+    include_dirs: Iterable[str] = (),
+    skipped_out: list[Path] | None = None,
+) -> list[tuple[Path, str]]:
+    """`include_dirs` and `skipped_out` pass straight through to
+    `iter_dirs` -- see its docstring. Without them the walk silently prunes
+    every noise-named directory (and every dot-directory but `.claude`), so a
+    CLAUDE.md sitting under a directory that happens to share a noise name
+    (e.g. `tmp/`, `Build/`) is never discovered and nothing says so; the two
+    parameters are how a caller opts a name back in and how it can report what
+    was pruned instead of losing that information.
+    """
     out: list[tuple[Path, str]] = []
-    for current_path, files in iter_dirs(cwd, DESCEND_MAX_DEPTH):
+    for current_path, files in iter_dirs(
+        cwd, DESCEND_MAX_DEPTH, include_dirs=include_dirs, skipped_out=skipped_out
+    ):
         if current_path == cwd:
             continue
         for name, role in (("CLAUDE.md", "child"), ("CLAUDE.local.md", "local")):
@@ -209,7 +225,11 @@ def collect_descendants(cwd: Path) -> list[tuple[Path, str]]:
     return out
 
 
-def discover(cwd: Path) -> list[tuple[Path, str]]:
+def discover(
+    cwd: Path,
+    include_dirs: Iterable[str] = (),
+    skipped_out: list[Path] | None = None,
+) -> list[tuple[Path, str]]:
     ancestors = collect_ancestors(cwd)
     # A CLAUDE.md ancestor (not a personal CLAUDE.local.md) above cwd means cwd
     # is not the project top, so the cwd CLAUDE.md is classified `child`.
@@ -217,18 +237,41 @@ def discover(cwd: Path) -> list[tuple[Path, str]]:
     out: list[tuple[Path, str]] = []
     out.extend(ancestors)
     out.extend(collect_at_cwd(cwd, has_ancestor_root))
-    out.extend(collect_descendants(cwd))
+    out.extend(collect_descendants(cwd, include_dirs=include_dirs, skipped_out=skipped_out))
     return out
+
+
+INCLUDE_DIRS_ENV = "MD_DOMAIN_INCLUDE_DIRS"
+
+
+def _resolve_include_dirs(cli_values: list[str] | None) -> list[str]:
+    """--include-dir values, falling back to the MD_DOMAIN_INCLUDE_DIRS
+    environment variable (os.pathsep-separated) when the flag was not passed."""
+    if cli_values:
+        return cli_values
+    env = os.environ.get(INCLUDE_DIRS_ENV)
+    return [name for name in env.split(os.pathsep) if name] if env else []
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--json", action="store_true", help="emit JSON instead of a numbered list")
     parser.add_argument("--cwd", default=None, help="override cwd (for testing)")
+    parser.add_argument(
+        "--include-dir", action="append", default=None, metavar="NAME",
+        help="directory NAME to walk into even though it would otherwise be pruned "
+             "as noise (repeatable). Falls back to the MD_DOMAIN_INCLUDE_DIRS "
+             "environment variable (os.pathsep-separated) when omitted.",
+    )
     args = parser.parse_args()
 
     cwd = Path(args.cwd).resolve() if args.cwd else Path.cwd().resolve()
-    results = discover(cwd)
+    include_dirs = _resolve_include_dirs(args.include_dir)
+    skipped_dirs: list[Path] = []
+    results = discover(cwd, include_dirs=include_dirs, skipped_out=skipped_dirs)
+    skipped_rel = sorted(
+        str(_relative_or_self(p, cwd)) for p in skipped_dirs
+    )
 
     # role=local files are personal-scoped; they never take the code-directory
     # dimension. Everything else gets the Level-1 trigger classified.
@@ -236,25 +279,45 @@ def main() -> int:
         return "classic" if role == "local" else classify_dimension(path)
 
     if args.json:
-        print(json.dumps([{"index": i + 1, "path": str(p), "role": role,
-                           "dimension": dim_for(p, role)}
-                          for i, (p, role) in enumerate(results)], indent=2))
+        # Kept as a single flat LIST -- unchanged shape for the common case of
+        # no skips -- rather than wrapped in a {"files": ...} envelope, so an
+        # existing consumer that reads this as a bare array of file records
+        # sees no difference when nothing was pruned. A skipped directory is
+        # a distinct record shape (no "path"/"role"/"dimension"; a
+        # "skipped_dir" key instead) appended after the file records.
+        payload = [
+            {"index": i + 1, "path": str(p), "role": role, "dimension": dim_for(p, role)}
+            for i, (p, role) in enumerate(results)
+        ]
+        payload.extend({"skipped_dir": rel, "reason": "noise-name"} for rel in skipped_rel)
+        print(json.dumps(payload, indent=2))
         return 0
 
     if not results:
         print(f"No CLAUDE.md or CLAUDE.local.md files found at or near {cwd}.")
-        return 0
+    else:
+        print(f"CLAUDE.md files visible from {cwd}:\n")
+        for i, (path, role) in enumerate(results, start=1):
+            try:
+                display = path.relative_to(cwd)
+            except ValueError:
+                display = path
+            dim = dim_for(path, role)
+            tag = "code-dir" if dim == "code-directory" else "classic"
+            print(f"  {i:>3}. [{role:<8}] [{tag:<8}] {display}")
 
-    print(f"CLAUDE.md files visible from {cwd}:\n")
-    for i, (path, role) in enumerate(results, start=1):
-        try:
-            display = path.relative_to(cwd)
-        except ValueError:
-            display = path
-        dim = dim_for(path, role)
-        tag = "code-dir" if dim == "code-directory" else "classic"
-        print(f"  {i:>3}. [{role:<8}] [{tag:<8}] {display}")
+    if skipped_rel:
+        print(f"\nskipped {len(skipped_rel)} noise-named directory/ies (use --include-dir to opt one back in):")
+        for rel in skipped_rel:
+            print(f"  - {rel}")
     return 0
+
+
+def _relative_or_self(path: Path, root: Path) -> Path:
+    try:
+        return path.relative_to(root)
+    except ValueError:
+        return path
 
 
 if __name__ == "__main__":

@@ -16,9 +16,14 @@ Each multi-level test plants a .git marker at the intended project root so the
 boundary is deterministic regardless of the real filesystem above tmp_path.
 """
 
+import json
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 import discover_claude_md as discover
+import discover_skill
 
 
 def _write(path: Path, text: str = "# CLAUDE.md\n") -> None:
@@ -150,6 +155,188 @@ class TestCollectAtCwd:
         assert "local" in [role for _, role in out]
 
 
+class TestSkippedDirsReporting:
+    """A CLAUDE.md sitting under a noise-named directory (tmp/, Build/) is
+    silently invisible to the default walk, and nothing said so. --include-dir
+    (or MD_DOMAIN_INCLUDE_DIRS) opts a name back in; skipped_dirs in the JSON
+    output reports every noise-named directory that was pruned instead."""
+
+    SCRIPT = (
+        Path(__file__).resolve().parents[2] / "plugins" / "skills-kit" / "skills"
+        / "md-domain" / "scripts" / "discover_claude_md.py"
+    )
+
+    def _run(self, cwd: Path, *extra_args, env=None):
+        full_env = dict(os.environ)
+        if env:
+            full_env.update(env)
+        return subprocess.run(
+            [sys.executable, str(self.SCRIPT), "--json", "--cwd", str(cwd), *extra_args],
+            capture_output=True, text=True, timeout=60, env=full_env,
+        )
+
+    def test_claude_md_under_noise_dir_is_absent_by_default_and_reported_skipped(
+        self, tmp_path
+    ):
+        """The JSON output stays a flat LIST (unchanged for the common case of
+        no skips); a skipped directory is a distinct record shape within it
+        (a "skipped_dir" key, no "path"/"role") rather than a new envelope."""
+        _mkgit(tmp_path)
+        buried = tmp_path / "tmp" / "Build" / "CLAUDE.md"
+        _write(buried)
+
+        result = self._run(tmp_path)
+        assert result.returncode == 0, result.stderr
+        payload = json.loads(result.stdout)
+
+        assert not any(rec.get("path") == str(buried) for rec in payload)
+        skip_records = [rec for rec in payload if "skipped_dir" in rec]
+        assert "tmp" in {rec["skipped_dir"] for rec in skip_records}
+        for rec in skip_records:
+            assert rec["reason"] == "noise-name"
+
+    def test_include_dir_flag_makes_it_discoverable(self, tmp_path):
+        _mkgit(tmp_path)
+        buried = tmp_path / "tmp" / "Build" / "CLAUDE.md"
+        _write(buried)
+
+        result = self._run(tmp_path, "--include-dir", "tmp", "--include-dir", "Build")
+        assert result.returncode == 0, result.stderr
+        payload = json.loads(result.stdout)
+
+        assert any(rec.get("path") == str(buried) for rec in payload)
+
+    def test_env_var_fallback_makes_it_discoverable(self, tmp_path):
+        _mkgit(tmp_path)
+        buried = tmp_path / "tmp" / "Build" / "CLAUDE.md"
+        _write(buried)
+
+        result = self._run(
+            tmp_path, env={"MD_DOMAIN_INCLUDE_DIRS": "tmp" + os.pathsep + "Build"}
+        )
+        assert result.returncode == 0, result.stderr
+        payload = json.loads(result.stdout)
+
+        assert any(rec.get("path") == str(buried) for rec in payload)
+
+    def test_no_skips_produces_no_skip_records(self, tmp_path):
+        """The compatibility case: nothing pruned, nothing appended -- the
+        output is byte-for-byte what it was before skipped_dirs existed. No
+        .git marker here deliberately: `.git` is itself a pruned noise name,
+        which would give this "nothing pruned" case something pruned."""
+        _write(tmp_path / "CLAUDE.md")
+
+        result = self._run(tmp_path)
+        assert result.returncode == 0, result.stderr
+        payload = json.loads(result.stdout)
+
+        assert all("skipped_dir" not in rec for rec in payload)
+
+
+class TestSkillDiscoverSkippedDirs:
+    """discover_skill.py gets the same treatment as discover_claude_md.py:
+    --include-dir / MD_DOMAIN_INCLUDE_DIRS opt a noise-named directory back
+    in, and every pruned directory is reported rather than dropped."""
+
+    SCRIPT = (
+        Path(__file__).resolve().parents[2] / "plugins" / "skills-kit" / "skills"
+        / "md-domain" / "scripts" / "discover_skill.py"
+    )
+
+    def _run(self, cwd: Path, *extra_args, env=None):
+        full_env = dict(os.environ)
+        if env:
+            full_env.update(env)
+        return subprocess.run(
+            [sys.executable, str(self.SCRIPT), "--json", "--cwd", str(cwd), *extra_args],
+            capture_output=True, text=True, timeout=60, env=full_env,
+        )
+
+    def test_skill_under_noise_dir_is_absent_by_default_and_reported_skipped(self, tmp_path):
+        buried = tmp_path / "tmp" / "Build" / "SKILL.md"
+        buried.parent.mkdir(parents=True)
+        buried.write_text("---\nname: buried\n---\nbody\n", encoding="utf-8")
+
+        result = self._run(tmp_path)
+        assert result.returncode == 0, result.stderr
+        payload = json.loads(result.stdout)
+
+        assert not any(rec.get("path") == str(buried) for rec in payload)
+        skip_records = [rec for rec in payload if "skipped_dir" in rec]
+        assert "tmp" in {rec["skipped_dir"] for rec in skip_records}
+        for rec in skip_records:
+            assert rec["reason"] == "noise-name"
+
+    def test_include_dir_flag_makes_it_discoverable(self, tmp_path):
+        buried = tmp_path / "tmp" / "Build" / "SKILL.md"
+        buried.parent.mkdir(parents=True)
+        buried.write_text("---\nname: buried\n---\nbody\n", encoding="utf-8")
+
+        result = self._run(tmp_path, "--include-dir", "tmp", "--include-dir", "Build")
+        assert result.returncode == 0, result.stderr
+        payload = json.loads(result.stdout)
+
+        assert any(rec.get("path") == str(buried) for rec in payload)
+
+    def test_env_var_fallback_makes_it_discoverable(self, tmp_path):
+        buried = tmp_path / "tmp" / "Build" / "SKILL.md"
+        buried.parent.mkdir(parents=True)
+        buried.write_text("---\nname: buried\n---\nbody\n", encoding="utf-8")
+
+        result = self._run(
+            tmp_path, env={"MD_DOMAIN_INCLUDE_DIRS": "tmp" + os.pathsep + "Build"}
+        )
+        assert result.returncode == 0, result.stderr
+        payload = json.loads(result.stdout)
+
+        assert any(rec.get("path") == str(buried) for rec in payload)
+
+
+class TestCollectSkillMdReferencesSafety:
+    """collect_skill_md(..., include_references=True) used to enumerate a
+    skill's references/*.md via plain rglob -- unbounded depth, no VCS-ignore
+    query, and (pathlib's default) FOLLOWS directory symlinks. It now goes
+    through the same bounded, no-symlink-follow walk plus vcs_ignore
+    filtering the sibling discover scripts use."""
+
+    def test_vcs_ignored_reference_is_excluded(self, tmp_path):
+        subprocess.run(["git", "init", "-q", str(tmp_path)], check=True,
+                        capture_output=True, text=True)
+        skill = tmp_path / "skills" / "demo"
+        (skill / "references").mkdir(parents=True)
+        (skill / "SKILL.md").write_text("---\nname: demo\n---\nbody\n", encoding="utf-8")
+        (skill / "references" / "keep.md").write_text("keep\n", encoding="utf-8")
+        (skill / "references" / "scratch.md").write_text("scratch\n", encoding="utf-8")
+        (tmp_path / ".gitignore").write_text("scratch.md\n", encoding="utf-8")
+
+        results = discover_skill.collect_skill_md(tmp_path, include_references=True)
+        names = {p.name for p, _, _, kind in results if kind == "skill_reference"}
+
+        assert "keep.md" in names
+        assert "scratch.md" not in names
+
+    def test_symlinked_references_dir_pointing_outside_root_is_not_followed(self, tmp_path):
+        outside = tmp_path / "outside"
+        (outside / "leaked").mkdir(parents=True)
+        (outside / "leaked" / "secret.md").write_text("secret\n", encoding="utf-8")
+
+        skill = tmp_path / "project" / "skills" / "demo"
+        skill.mkdir(parents=True)
+        (skill / "SKILL.md").write_text("---\nname: demo\n---\nbody\n", encoding="utf-8")
+        try:
+            (skill / "references").symlink_to(outside / "leaked", target_is_directory=True)
+        except (OSError, NotImplementedError):
+            import pytest
+            pytest.skip("symlinks not supported on this platform/permission set")
+
+        results = discover_skill.collect_skill_md(
+            tmp_path / "project", include_references=True
+        )
+        names = {p.name for p, _, _, kind in results if kind == "skill_reference"}
+
+        assert "secret.md" not in names
+
+
 class TestClassifyDimension:
     """classify_dimension Level-1 trigger: Signal A (code siblings), Signal B
     (review-claim markers), and the narrowed gotcha rule -- bare "do not" /
@@ -201,3 +388,22 @@ class TestClassifyDimension:
         _write(md, "Never call `frobnicate()`.\n")
         _write(tmp_path / "SKILL.md", "---\nname: x\n---\n")
         assert discover.classify_dimension(md) == "classic"
+
+
+class TestReferencesWalkResolvesRoot:
+    """The within-root guard compares resolved against resolved: a cwd with a
+    symlink component (macOS /tmp -> /private/tmp) must not drop every
+    skill's references/ as if they were symlinks out of the root."""
+
+    def test_symlinked_cwd_keeps_references(self, tmp_path):
+        import os
+        from discover_skill import collect_skill_md
+        real = tmp_path / "real"
+        (real / "skills" / "s" / "references").mkdir(parents=True)
+        (real / "skills" / "s" / "SKILL.md").write_text(
+            "---\nname: s\ndescription: d\n---\n", encoding="utf-8")
+        (real / "skills" / "s" / "references" / "r.md").write_text("# r\n", encoding="utf-8")
+        link = tmp_path / "link"
+        os.symlink(real, link, target_is_directory=True)
+        kinds = [(p.name, kind) for p, _, _, kind in collect_skill_md(link, include_references=True)]
+        assert ("r.md", "skill_reference") in kinds
