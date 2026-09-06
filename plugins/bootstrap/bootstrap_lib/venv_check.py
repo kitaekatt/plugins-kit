@@ -1,6 +1,7 @@
 """Python venv validation and remediation."""
 
 import ast
+import hashlib
 import os
 import re
 import shlex
@@ -233,7 +234,7 @@ def scan_editable_installs(
 
 
 def check_venv(plugin_data_dir: str, plugin_root: str, check_imports: List[str],
-               extras: Sequence[str] = ()) -> Result:
+               extras: Sequence[str] = (), venv_path: Optional[str] = None) -> Result:
     """Check if a Python venv exists and required imports are available.
 
     Also fails when an editable install still points outside ``plugin_root``
@@ -248,7 +249,7 @@ def check_venv(plugin_data_dir: str, plugin_root: str, check_imports: List[str],
     Returns:
         Result with pass/fail and optional remediation command
     """
-    venv_path = os.path.join(plugin_data_dir, ".venv")
+    venv_path = venv_path or os.path.join(plugin_data_dir, ".venv")
     _extra_flags = "".join(f" --extra {e}" for e in extras)
     remediation = f"uv sync --project {plugin_root}{_extra_flags}"
 
@@ -335,7 +336,7 @@ def check_venv(plugin_data_dir: str, plugin_root: str, check_imports: List[str],
     )
 
 
-def _find_python(venv_path: str) -> Optional[str]:
+def venv_python(venv_path: str) -> Optional[str]:
     """Find the python binary in a venv."""
     candidates = [
         os.path.join(venv_path, "bin", "python"),
@@ -345,6 +346,43 @@ def _find_python(venv_path: str) -> Optional[str]:
         if os.path.isfile(candidate):
             return candidate
     return None
+
+
+_find_python = venv_python
+
+
+def _venv_sync_stamp_path(venv_path: str) -> Path:
+    """Return the dependency-content stamp path beside the venv."""
+    return Path(venv_path).parent / ".venv.sync.sha256"
+
+
+def _read_stamp(path: Path) -> Optional[str]:
+    """Read a stamp without allowing a filesystem race to escape a check."""
+    try:
+        return path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+
+
+def _project_content_hash(project_dir: str) -> Optional[str]:
+    """Hash the dependency declarations that control ``uv sync``."""
+    digest = hashlib.sha256()
+    found = False
+    for name in ("pyproject.toml", "uv.lock"):
+        path = Path(project_dir) / name
+        digest.update(name.encode("utf-8"))
+        digest.update(b"\0")
+        try:
+            content = path.read_bytes()
+        except FileNotFoundError:
+            digest.update(b"MISSING\0")
+            continue
+        except OSError:
+            return None
+        found = True
+        digest.update(content)
+        digest.update(b"\0")
+    return digest.hexdigest() if found else None
 
 
 def find_uv() -> Optional[str]:
@@ -398,9 +436,13 @@ def ensure_venv(
     data_dir = os.path.dirname(venv_path)
     entries: List[str] = []
     existed = os.path.isdir(venv_path)
-    result = check_venv(data_dir, project_dir, list(check_imports), extras=extras)
+    check_kwargs = {"extras": extras, "venv_path": venv_path}
+    result = check_venv(data_dir, project_dir, list(check_imports), **check_kwargs)
+    content_hash = _project_content_hash(project_dir)
+    stamp_path = _venv_sync_stamp_path(venv_path)
+    content_changed = content_hash is not None and _read_stamp(stamp_path) != content_hash
 
-    if result.passed and not always_sync:
+    if result.passed and not always_sync and not content_changed:
         return result, entries
 
     extra_flags = " ".join(f"--extra {e}" for e in extras)
@@ -409,6 +451,8 @@ def ensure_venv(
         # The reason is part of the action entry: a re-sync triggered by a stale
         # editable install is otherwise indistinguishable from any other repair.
         entries.append(f"not ready, running `{uv_cmd}` - {result.message}")
+    elif content_changed and not always_sync:
+        entries.append(f"dependency declarations changed, running `{uv_cmd}`")
 
     uv_bin = find_uv()
     if not uv_bin:
@@ -430,18 +474,35 @@ def ensure_venv(
         return result, entries
 
     was_passing = result.passed
-    result = check_venv(data_dir, project_dir, list(check_imports), extras=extras)
-    if result.passed:
-        if not was_passing:
-            entries.append("created" if not existed else "re-synced")
-    elif proc.returncode != 0:
-        stderr_text = (proc.stderr or b"").decode("utf-8", errors="replace").strip()
+    result = check_venv(data_dir, project_dir, list(check_imports), **check_kwargs)
+    if proc.returncode != 0:
+        stderr = proc.stderr or b""
+        stderr_text = (
+            stderr.decode("utf-8", errors="replace")
+            if isinstance(stderr, bytes) else str(stderr)
+        ).strip()
         # The FULL stderr, not the first 200 chars. uv reports the resolution
         # conflict that actually explains the failure well past that cut, and
         # the tail was unrecoverable -- the entry was the only copy. Length is
         # now a rendering concern: the record and the log keep everything, and
         # the collated display line shortens it (see messages.py).
         entries.append(f"uv sync failed (exit {proc.returncode}): {stderr_text}")
+        if always_sync:
+            result = _venv_result(
+                passed=False,
+                message=f"uv sync failed (exit {proc.returncode}): {stderr_text}",
+                venv_path=venv_path,
+                remediation_cmd=uv_cmd,
+            )
+    elif result.passed:
+        if not was_passing:
+            entries.append("created" if not existed else "re-synced")
+        if content_hash is not None:
+            try:
+                stamp_path.parent.mkdir(parents=True, exist_ok=True)
+                stamp_path.write_text(content_hash + "\n", encoding="utf-8")
+            except OSError as exc:
+                entries.append(f"could not write venv dependency stamp: {exc}")
     else:
         entries.append(f"uv sync completed but re-check failed: {result.message}")
     return result, entries

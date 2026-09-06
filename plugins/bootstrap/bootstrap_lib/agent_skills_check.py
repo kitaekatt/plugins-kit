@@ -63,6 +63,7 @@ SOURCE_DISPLAY = ".claude/skills"
 _GENERATED_RULE = "/%s/%s/" % (AGENTS_DIRNAME, SKILLS_DIRNAME)
 _GIT_EXCLUDE_HEADER = "# plugins-kit bootstrap: generated agent skills link"
 _P4_IGNORE_DEFAULT_NAME = "p4ignore.txt"
+_P4_GIT_EXCLUDE_HEADER = "# plugins-kit bootstrap: generated Perforce ignore file"
 
 _GIT_ENV = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
 _SUBPROCESS_TIMEOUT = 15.0
@@ -271,7 +272,7 @@ def create_agent_skills_link(project_dir):
         # winner has already done it.
         return SkillsLinkFixResult(False, "race_existing")
 
-    vcs_ok, vcs_result = _apply_vcs_exclusions(project_dir, agents_path)
+    vcs_ok, vcs_result = _apply_vcs_exclusions(project_dir)
     if not vcs_ok:
         cleanup_err = _cleanup_after_failure(link_path, agents_path, created_agents)
         if cleanup_err:
@@ -302,9 +303,11 @@ def create_agent_skills_link(project_dir):
     # re-check is allowed to trust it (design step 11/12).
     verify_err = _verify_link(link_path, source_path)
     if verify_err:
+        cleanup_err = _cleanup_after_failure(link_path, agents_path, created_agents)
         return SkillsLinkFixResult(
             False, "verify_error", mechanism=mechanism,
             vcs_result=vcs_result, detail=verify_err,
+            cleanup_detail=cleanup_err or "",
         )
 
     return SkillsLinkFixResult(True, "created", mechanism=mechanism, vcs_result=vcs_result)
@@ -425,7 +428,7 @@ def _verify_link(link_path, source_path):
 # ---------------------------------------------------------------------------
 
 
-def _apply_vcs_exclusions(root, agents_path):
+def _apply_vcs_exclusions(root):
     """Returns (ok, result_or_reason).
 
     On success, result is a "; "-joined summary of every VCS action taken
@@ -589,14 +592,8 @@ def _p4_local_evidence(root):
         names.append(p4config_name)
     names.extend((".p4ignore", "p4ignore.txt"))
     for name in names:
-        current = root
-        while True:
-            if os.path.isfile(os.path.join(current, name)):
-                return name
-            parent = os.path.dirname(current)
-            if parent == current:
-                break
-            current = parent
+        if not os.path.isabs(name) and os.path.isfile(os.path.join(root, name)):
+            return name
     return None
 
 
@@ -673,7 +670,17 @@ def _apply_p4_exclusion(root):
 
     target_name = None
     for name in candidates:
-        if not os.path.exists(os.path.join(root, name)):
+        candidate_path = os.path.abspath(os.path.join(root, name))
+        try:
+            inside = os.path.commonpath([os.path.abspath(root), candidate_path]) == os.path.abspath(root)
+        except ValueError:
+            inside = False
+        if not inside:
+            return "error", (
+                "Perforce ignore candidate %s is outside the project root; "
+                "no file was created" % name
+            )
+        if not os.path.exists(candidate_path):
             target_name = name
             break
     if target_name is None:
@@ -684,7 +691,7 @@ def _apply_p4_exclusion(root):
             % (", ".join(candidates), _GENERATED_RULE)
         )
 
-    ignore_path = os.path.join(root, target_name)
+    ignore_path = os.path.abspath(os.path.join(root, target_name))
     try:
         with open(ignore_path, "x", encoding="utf-8") as f:
             f.write("%s\n" % _GIT_EXCLUDE_HEADER)
@@ -695,6 +702,10 @@ def _apply_p4_exclusion(root):
     except OSError as exc:
         return "error", "could not create %s: %s" % (ignore_path, exc)
 
+    git_status, git_detail = _apply_git_file_exclusion(root, "/%s" % target_name)
+    if git_status == "error":
+        return "error", git_detail
+
     ok_skills = _p4_ignores(root, agents_skills_path)
     ok_self = _p4_ignores(root, ignore_path)
     if not ok_skills or not ok_self:
@@ -703,3 +714,52 @@ def _apply_p4_exclusion(root):
             "as ignored" % ignore_path
         )
     return "added", "P4 exclusion added to %s" % ignore_path
+
+
+def _apply_git_file_exclusion(root, rule):
+    """Exclude a generated file from Git when ``root`` is a Git repository."""
+    try:
+        proc = _run_git(root, ["rev-parse", "--show-toplevel"])
+    except (OSError, subprocess.SubprocessError):
+        return "error", "git rev-parse failed while excluding %s" % rule
+    if proc.returncode != 0:
+        stderr = (proc.stderr or "").lower()
+        if "not a git repository" in stderr:
+            return "none", ""
+        return "error", "git rev-parse failed while excluding %s" % rule
+
+    rel_path = rule.lstrip("/")
+    already = _git_check_ignore(root, rel_path)
+    if already is None:
+        return "error", "git check-ignore failed for %s" % rel_path
+    if already:
+        return "effective", "Git exclusion already effective for %s" % rule
+
+    try:
+        proc = _run_git(root, ["rev-parse", "--git-path", "info/exclude"])
+    except (OSError, subprocess.SubprocessError) as exc:
+        return "error", "git rev-parse --git-path failed: %s" % exc
+    if proc.returncode != 0:
+        return "error", "could not resolve info/exclude: %s" % (proc.stderr or "").strip()
+    exclude_rel = (proc.stdout or "").strip()
+    if not exclude_rel:
+        return "error", "git rev-parse --git-path info/exclude returned no output"
+    exclude_path = exclude_rel if os.path.isabs(exclude_rel) else os.path.join(root, exclude_rel)
+    try:
+        exclude_dir = os.path.dirname(exclude_path)
+        if exclude_dir:
+            os.makedirs(exclude_dir, exist_ok=True)
+        existing = ""
+        if os.path.isfile(exclude_path):
+            with open(exclude_path, "r", encoding="utf-8") as f:
+                existing = f.read()
+        with open(exclude_path, "a", encoding="utf-8") as f:
+            if existing and not existing.endswith("\n"):
+                f.write("\n")
+            f.write("%s\n%s\n" % (_P4_GIT_EXCLUDE_HEADER, rule))
+    except OSError as exc:
+        return "error", "could not write %s: %s" % (exclude_path, exc)
+
+    if not _git_check_ignore(root, rel_path):
+        return "error", "wrote %s but %s is still not ignored" % (exclude_path, rel_path)
+    return "added", "Git exclusion added to %s" % exclude_path

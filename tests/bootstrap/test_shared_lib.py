@@ -73,6 +73,115 @@ class TestSync:
         r = shared_lib.sync_shared_lib("mylib", "lib", str(plugin_root), shared_root)
         assert r.status == "failed"
 
+    def test_copy_failure_keeps_previous_destination(self, tmp_path, monkeypatch):
+        plugin_root = tmp_path / "plugin"
+        pkg = _make_pkg(str(plugin_root / "lib"), "mylib", value=1)
+        shared_root = str(tmp_path / "_shared_libs")
+        shared_lib.sync_shared_lib("mylib", "lib", str(plugin_root), shared_root)
+        with open(os.path.join(pkg, "__init__.py"), "w", encoding="utf-8") as f:
+            f.write("VALUE = 2\n")
+        monkeypatch.setattr(shared_lib.shutil, "copytree", lambda *a, **k: (_ for _ in ()).throw(PermissionError("denied")))
+
+        result = shared_lib.sync_shared_lib("mylib", "lib", str(plugin_root), shared_root)
+
+        assert result.status == "failed"
+        assert os.path.isfile(os.path.join(shared_root, "mylib", "mylib", "__init__.py"))
+        assert open(os.path.join(shared_root, "mylib", "mylib", "__init__.py")).read() == "VALUE = 1\n"
+
+    def test_source_pycache_does_not_invalidate_cache(self, tmp_path):
+        plugin_root = tmp_path / "plugin"
+        pkg = _make_pkg(str(plugin_root / "lib"), "mylib")
+        shared_root = str(tmp_path / "_shared_libs")
+        shared_lib.sync_shared_lib("mylib", "lib", str(plugin_root), shared_root)
+        pycache = os.path.join(pkg, "__pycache__")
+        os.makedirs(pycache)
+        with open(os.path.join(pycache, "x.pyc"), "wb") as f:
+            f.write(b"cache")
+
+        result = shared_lib.sync_shared_lib("mylib", "lib", str(plugin_root), shared_root)
+
+        assert result.status == "cached"
+        assert not os.path.exists(os.path.join(shared_root, "mylib", "mylib", "__pycache__"))
+
+    def test_verify_failure_keeps_old_publish_and_stamp(self, tmp_path, monkeypatch):
+        plugin_root = tmp_path / "plugin"
+        pkg = _make_pkg(str(plugin_root / "lib"), "mylib", value=1)
+        shared_root = str(tmp_path / "_shared_libs")
+        shared_lib.sync_shared_lib("mylib", "lib", str(plugin_root), shared_root)
+        hash_file = os.path.join(shared_root, "mylib", ".src.sha256")
+        old_stamp = open(hash_file, encoding="utf-8").read()
+
+        with open(os.path.join(pkg, "__init__.py"), "w", encoding="utf-8") as f:
+            f.write("VALUE = 2\n")
+
+        def failed_run(*args, **kwargs):
+            return subprocess.CompletedProcess(args[0], 1, stderr="bad import\ntrace")
+
+        monkeypatch.setattr(shared_lib.subprocess, "run", failed_run)
+        result = shared_lib.sync_shared_lib(
+            "mylib", "lib", str(plugin_root), shared_root, verify_python="python"
+        )
+
+        assert result == shared_lib.SharedLibResult(
+            "mylib", "failed", "mylib failed to import from the published copy: bad import"
+        )
+        assert open(os.path.join(shared_root, "mylib", "mylib", "__init__.py"), encoding="utf-8").read() == "VALUE = 1\n"
+        assert open(hash_file, encoding="utf-8").read() == old_stamp
+
+    def test_verify_success_publishes_with_one_subprocess_call(self, tmp_path, monkeypatch):
+        plugin_root = tmp_path / "plugin"
+        _make_pkg(str(plugin_root / "lib"), "mylib", value=2)
+        shared_root = str(tmp_path / "_shared_libs")
+        calls = []
+
+        def successful_run(*args, **kwargs):
+            calls.append((args, kwargs))
+            return subprocess.CompletedProcess(args[0], 0, stderr="")
+
+        monkeypatch.setattr(shared_lib.subprocess, "run", successful_run)
+        result = shared_lib.sync_shared_lib(
+            "mylib", "lib", str(plugin_root), shared_root, verify_python="python"
+        )
+
+        assert result.status == "published"
+        assert len(calls) == 1
+        command = calls[0][0][0]
+        assert command[:2] == ["python", "-c"]
+        assert "sys.path.insert(0" in command[2]
+        assert "import mylib" in command[2]
+        assert (tmp_path / "_shared_libs" / "mylib" / "mylib" / "__init__.py").read_text(encoding="utf-8") == "VALUE = 2\n"
+
+    @pytest.mark.parametrize("verify_python", [None, "unused"])
+    def test_cached_or_unverified_publish_does_not_launch(self, tmp_path, monkeypatch, verify_python):
+        plugin_root = tmp_path / "plugin"
+        _make_pkg(str(plugin_root / "lib"), "mylib")
+        shared_root = str(tmp_path / "_shared_libs")
+        shared_lib.sync_shared_lib("mylib", "lib", str(plugin_root), shared_root)
+        calls = []
+        monkeypatch.setattr(shared_lib.subprocess, "run", lambda *args, **kwargs: calls.append(args))
+
+        result = shared_lib.sync_shared_lib(
+            "mylib", "lib", str(plugin_root), shared_root, verify_python=verify_python
+        )
+
+        assert result.status == "cached"
+        assert calls == []
+
+    def test_republish_without_verification_does_not_launch(self, tmp_path, monkeypatch):
+        plugin_root = tmp_path / "plugin"
+        pkg = _make_pkg(str(plugin_root / "lib"), "mylib", value=1)
+        shared_root = str(tmp_path / "_shared_libs")
+        shared_lib.sync_shared_lib("mylib", "lib", str(plugin_root), shared_root)
+        with open(os.path.join(pkg, "__init__.py"), "w", encoding="utf-8") as f:
+            f.write("VALUE = 2\n")
+        calls = []
+        monkeypatch.setattr(shared_lib.subprocess, "run", lambda *args, **kwargs: calls.append(args))
+
+        result = shared_lib.sync_shared_lib("mylib", "lib", str(plugin_root), shared_root)
+
+        assert result.status == "published"
+        assert calls == []
+
 
 # --- link_shared_lib (.pth registration) ---------------------------------
 
