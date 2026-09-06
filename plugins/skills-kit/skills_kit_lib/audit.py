@@ -12,7 +12,6 @@ by hand against the contract in md-domain's skill-domain/framework.md.
 from __future__ import annotations
 
 import argparse
-import importlib.util
 import json
 import re
 import sys
@@ -950,36 +949,6 @@ def check_cross_block_drift(body_text: str) -> CheckResult | None:
     return None
 
 
-_DIMENSION_CLASSIFIER = "skills/md-domain/scripts/discover_claude_md.py"
-
-
-def _claude_md_dimension(claude_md_path: Path) -> str | None:
-    """Classify a CLAUDE.md as 'code-directory' or 'classic', or None.
-
-    Defers to the discover script's `classify_dimension`, which is the SSOT for
-    the Level-1 trigger (claude-md-standards.md 1.2) -- loaded by path because
-    the script lives under the md-domain skill rather than in this package, and
-    duplicating the signals here would be a second implementation to drift.
-    None means the classifier could not be loaded, which the caller must treat
-    as "unknown" rather than as either dimension.
-    """
-    script = Path(__file__).resolve().parent.parent / _DIMENSION_CLASSIFIER
-    try:
-        spec = importlib.util.spec_from_file_location(
-            "_skills_kit_discover_claude_md", script)
-        if spec is None or spec.loader is None:
-            return None
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        return module.classify_dimension(claude_md_path)
-    except Exception:  # noqa: BLE001 -- see below
-        # Deliberately broad: exec_module runs the script's module-level code,
-        # which may raise anything (its own path arithmetic, a future import).
-        # This helper exists so the auditor never dies classifying a file, and
-        # None is the degrade signal the caller turns into JUDGMENT.
-        return None
-
-
 def audit_claude_md(
     claude_md_path: Path,
     content: str,
@@ -1021,35 +990,12 @@ def audit_claude_md(
             rule="yaml-contract",
         ))
     else:
-        # A code-directory review-notes file carries no claude_md: block by
-        # design and must not be schema-validated (claude-md-standards.md 6.2);
-        # failing it here is the standards doc's named "recurring error", and
-        # acting on the FAIL means authoring a block the standard forbids.
-        dimension = _claude_md_dimension(claude_md_path)
-        if dimension == "code-directory":
-            yaml_results.append(CheckResult(
-                "yaml: claude_md contract block (n/a -- code-directory)",
-                NA,
-                "code-directory review-notes file; carries no claude_md: block "
-                "by design and is not schema-validated (standards 6.2)",
-                rule="yaml-contract",
-            ))
-        elif dimension is None:
-            yaml_results.append(CheckResult(
-                "yaml: claude_md contract block",
-                JUDGMENT,
-                "no fenced yaml block with a claude_md root key found, and the "
-                f"dimension classifier ({_DIMENSION_CLASSIFIER}) could not be "
-                "loaded -- cannot tell whether the block is required",
-                rule="yaml-contract",
-            ))
-        else:
-            yaml_results.append(CheckResult(
-                "yaml: claude_md contract block",
-                FAIL,
-                "no fenced yaml block with a claude_md root key found",
-                rule="yaml-contract",
-            ))
+        yaml_results.append(CheckResult(
+            "yaml: claude_md contract block",
+            FAIL,
+            "no fenced yaml block with a claude_md root key found",
+            rule="yaml-contract",
+        ))
 
     disabled = resolved.disabled_rules if resolved else set()
     yaml_rows = [asdict(r) for r in yaml_results]
