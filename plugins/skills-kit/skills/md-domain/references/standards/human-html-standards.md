@@ -1,6 +1,6 @@
 # Human HTML standards
 
-This document defines the `human-html` analysis, generation, and validation contract. Load it for one directory when md-domain routes either human HTML lane.
+This document defines the `human-html` analysis, generation, and validation contract. Load it for one territory when md-domain routes either human HTML lane.
 It is the single source of truth for page warrant, records, generated HTML, shared styling, and the host viewer integration.
 
 Normative levels are **REQUIRED**, **CONDITIONALLY REQUIRED**, and **PROHIBITED**. A failed required or prohibited rule is a `FAIL` unless the rule assigns `INFO`.
@@ -9,24 +9,46 @@ Apply `references/standards/project-doc-standards.md` rule PD-10 only for their 
 
 Contents: 1 artifact declaration (AD) -- 2 human coverage criteria (HC) --
 3 decision record (DR) -- 4 page contract (PC) -- 5 browser-resolved access
-(NF) -- 6 reference documents (RD) -- 7 style asset (SA) -- 8 size signal (SZ)
+(NF) -- 6 reference documents (RD) -- 7 style asset (SA) -- 8 size ceiling (SZ)
 -- 9 script contracts (CK) -- 10 tree-scale order (TS) -- 11 host viewer
 contract (HV) -- 12 proving corpora (PV).
 
 ## 1. Artifact declaration
 
-### AD-1. Dedicated scalar lanes
+### AD-1. Dedicated scalar lanes, two passes
 
 - **Level:** REQUIRED
 - **Rule:** Register one `human_html_directory` analysis lane and one
 `human-html` generation lane. Keep `coverage_code_subtree.subject` scalar and
-unchanged. The analysis lane stays report-only. The generation lane runs for every
-analyzed directory, deepest first, persists `page` and `none` records alike,
-and generates or removes HTML to match the decision. The unit of execution is
-analyze-then-generate per directory.
-- **Rationale:** Dedicated records preserve one axis value per lane. A list-valued second subject was rejected because the registry test requires a scalar subject.
+unchanged. The two lanes are two passes over the tree, run in order, with
+separate prompts and no shared criteria:
+
+1. **PLACEMENT.** The analysis lane decides `page` or `none` for every analyzed
+   directory and persists that decision under DR-1, deepest first. The decision
+   record is its report, so the lane stays `report_only`: it writes no HTML,
+   removes no HTML, and applies no page-content criterion. Placement covers the
+   whole tree before generation begins, because no directory's territory is
+   known until every descendant decision exists.
+2. **GENERATION.** The generation lane runs after placement is settled, deepest
+   first, over the persisted decisions. It writes `human.html` for every `page`
+   record and removes generated HTML for every `none` record. It applies no
+   warrant criterion, takes each persisted decision as given, and never flips
+   one.
+
+Neither pass is a mode of the other, and neither carries the other's criteria.
+- **Rationale:** A page's territory is a property of the whole tree, so a
+directory cannot be generated against a scope its descendants have not yet
+decided. The former fused unit -- analyze-then-generate per directory -- was
+rejected on that ordering: it fixed a page's content before the placement below
+it bounded that page's subject. One prompt carrying both sets of criteria was
+rejected separately, because warrant reasoning then leaks into page content.
+Splitting the passes does not split the lanes: the roster, the scalar subject
+axis, `report_only`, and every registry expectation under AD-3 are unchanged, so
+a list-valued second subject stays as invalid as it was.
 - **Test:** The dispatch table, lane records, argument grammar, and registry
-test all name both routes without changing the legacy route meanings.
+test all name both routes without changing the legacy route meanings. Running
+placement alone leaves a decision record for every analyzed directory and no
+HTML change. Running generation alone changes no directory's `decision` value.
 
 The lane records have this target shape:
 
@@ -94,17 +116,45 @@ for a missing path, missing phrase, empty driver, or mixed axis.
 
 ## 2. Human coverage criteria
 
-The analysis subject is one directory and its source subtree. Evidence can come from code, project guidance, documentation, data, assets, configuration, and finished descendant records.
+The analysis subject is one TERRITORY: a directory plus every descendant
+directory, EXCEPT the subtrees owned by a nearer descendant page. Ownership
+stops at the next page down. With pages at `A`, `A/B/C`, and `A/D`, page `A`'s
+territory is `A` and `A/B`; `A/B/C` and `A/D` own their own subtrees. A
+territory is therefore a property of the whole tree, not of one directory, and
+it is computed from the persisted placement decisions rather than inferred by
+the analyzing or generating agent.
+
+Evidence can come from code, project guidance, documentation, data, assets, configuration, and finished descendant records anywhere inside the territory.
 Project guidance is evidence, not the source model. The analysis applies HC criteria, not the CV criteria in `references/standards/coverage-standards.md`.
+
+**Territory overturns an argued decision, not an oversight.** The earlier
+subject was one directory and its whole source subtree, and
+`references/lanes/coverage-lane.md` defended it explicitly as the one place this
+artifact inverts the code lane's directory-only rule: "what is this directory
+for" is a question about everything underneath it, so the material had to be the
+subtree. That reasoning is sound and territory keeps it -- the subject is still a
+subtree, and still not one directory's own files. What the argument missed is
+overlap. With no truncation, a deep directory is analyzed as material by every
+page above it, so the same files are judged two or three times, no page can
+state what it is responsible for, and each ancestor either duplicates its
+descendants or silently drops them. Stopping at the next page down keeps the
+subtree subject and removes the overlap; it also makes the subject computable
+only after placement, which is why AD-1 splits the passes. A future reader who
+wants the unbounded subtree back must answer the overlap, not merely restate the
+subtree argument.
 
 ### HC-1. Checkable page warrant
 
 - **Level:** REQUIRED
-- **Rule:** Start at a plain directory listing with default file previews
+- **Rule:** Judge warrant over the TERRITORY the candidate directory would own:
+itself plus every descendant not already owned by a nearer descendant page.
+Start at a plain directory listing with default file previews
 (any file browser, or the host viewer) and no human page.
 Use only listed files, normal links, and default previews. Do not use search,
-a terminal, hidden `.databench/` data, or prior notes. For each applicable
-question, identify one direct and coherent answer in displayed material:
+a terminal, hidden `.databench/` data, or prior notes. Do not browse into, or
+answer from, a subtree owned by a nearer descendant page. For each applicable
+question, identify one direct and coherent answer in displayed material within
+the territory:
 
 1. What is this directory for?
 2. Why does it have this shape?
@@ -115,9 +165,10 @@ Record a reason for each question that does not apply. If all applicable
 answers exist, choose `none`. If an answer is materially absent or fragmented,
 apply HC-2. Choose `page` only when HC-2 admits at least one unit. A `none`
 decision is a normal result.
-- **Rationale:** A repeatable browsing exercise makes page warrant observable. Intuition alone was rejected because it cannot distinguish a useful page from decoration.
-- **Test:** The analysis report records each answer or gap, each inapplicable
-reason, the HC-2 result, and the final `page` or `none` decision.
+- **Rationale:** A repeatable browsing exercise makes page warrant observable. Intuition alone was rejected because it cannot distinguish a useful page from decoration. The exercise is bounded at the ownership edge so a page and its descendant page never answer the same question over the same files; an unbounded browse was rejected because the deepest material would then re-warrant a page at every level above it. The bound is why placement runs deepest first: the descendant decisions that draw the edge must already exist.
+- **Test:** The analysis report names the territory it judged -- the owned
+directories and the excluded ones -- and records each answer or gap, each
+inapplicable reason, the HC-2 result, and the final `page` or `none` decision.
 
 ### HC-2. Orientation-first admission
 
@@ -144,12 +195,16 @@ definition beside a unit that does.
 ### HC-4. Repository research
 
 - **Level:** REQUIRED
-- **Rule:** Research the actual directory subtree before deciding. Treat every
+- **Rule:** Research the actual TERRITORY before deciding: the candidate
+directory and every descendant directory it would own. Treat every
 repository input type as eligible evidence. Do not derive the page from a
-project-guidance file or from filename patterns alone.
-- **Rationale:** The page explains the repository as it exists. Guidance-only generation was rejected because guidance can omit or lag important structure.
-- **Test:** The report cites inspected evidence from the subtree and separates
-observed facts from inference.
+project-guidance file or from filename patterns alone. Do not research into a
+subtree owned by a nearer descendant page; read that subtree only through the
+descendant's finished decision record and identity line.
+- **Rationale:** The page explains the territory as it exists. Guidance-only generation was rejected because guidance can omit or lag important structure. Researching past the ownership edge was rejected because it reproduces a descendant page's material, and because the words it adds are spent against the same SZ-1 ceiling the descendant already spent them against.
+- **Test:** The report cites inspected evidence from inside the territory, cites
+each excluded subtree only through its record, and separates observed facts from
+inference.
 
 ## 3. Decision record
 
@@ -192,17 +247,21 @@ The fields have these contracts:
 - `references` is an array of unique `slug`, `title`, and `file` mappings. It
   is empty for `none`. It reserves schema growth for reference data.
 
-### DR-2. Subtree source stamp
+### DR-2. Territory source stamp
 
 - **Level:** REQUIRED
 - **Rule:** Set `source_sha` to the newest commit at or before `HEAD`. That
-commit must have changed a tracked analysis input in the directory subtree. Exclude
-`.databench/`, `human.html`, and `human.<slug>.html` from the input set. When an
-analysis input has uncommitted content, persist the record with `dirty: true`
-and report `INFO DIRTY`; do not block.
-- **Rationale:** A subtree source stamp limits staleness to affected branches. `HEAD` was rejected because an unrelated commit stales every record.
-- **Test:** Recompute the last-touch commit over the same excluded path set. A
-different commit yields `STALE`. Dirty tracked or untracked analysis input
+commit must have changed a tracked analysis input inside the directory's
+TERRITORY. Exclude `.databench/`, `human.html`, and `human.<slug>.html` from the
+input set, and exclude in addition every descendant subtree owned by a nearer
+descendant page. When an analysis input inside the territory has uncommitted
+content, persist the record with `dirty: true` and report `INFO DIRTY`; do not
+block.
+- **Rationale:** A territory source stamp limits staleness to the branches the page is responsible for. `HEAD` was rejected because an unrelated commit stales every record. A whole-subtree stamp was rejected for the same reason one level down: it restamps an ancestor whenever a descendant page's own material changes, so a page is marked stale, and regenerated, over files it must not mention. The excluded-subtree edits still invalidate a page -- the descendant page they belong to.
+- **Test:** Recompute the last-touch commit over the same excluded path set,
+including each owned-out subtree. A different commit yields `STALE`. An edit
+confined to a descendant page's territory leaves the ancestor's `source_sha`
+unchanged. Dirty tracked or untracked analysis input inside the territory
 sets `dirty: true` and reports `INFO DIRTY`, because no commit identifies the
 judged content.
 
@@ -311,6 +370,26 @@ absolute path. Do not emit an external-origin asset, non-ASCII content, or hand-
 - **Test:** CK-1 checks generated pages and reference pages for every prohibited
 form.
 
+### PC-7. Flat job-named sections
+
+- **Level:** REQUIRED
+- **Rule:** Every group the page presents in its contents is a top-level
+section: one `h2` under the single `h1`, named for the job that group does for
+the reader rather than for a directory, a file type, or an HC-1 question. Do not
+nest sections, and do not condition nesting on territory size, owned-directory
+count, section count, or any other trigger. This narrows PC-5's generator
+control over section hierarchy; PC-5 continues to govern the rest of the body.
+- **Rationale:** Grouping by job already caps section count, so a nesting rule
+has nothing to fire on. A nesting-by-territory-size trigger was written and then
+tested on territories of 12 and 31 owned directories, and it fired on NEITHER:
+the 31-directory territory produced FEWER sections (5) than the 12-directory one
+(8), because a larger territory groups harder instead of listing longer. The
+trigger's size limb decided nothing either time, and its section-count limb was
+not crisply falsifiable, so both were removed rather than retuned. A flat list
+that is genuinely unscannable earns a rule when one is observed, not before.
+- **Test:** Outside chrome the page has exactly one `h1`, its content groups are
+all `h2`, and no `h3` or deeper heading subdivides a group.
+
 ## 5. Browser-resolved cross-file access
 
 ### NF-1. No-fetch portability rule
@@ -380,21 +459,36 @@ asset is ASCII. Expose the asset through
 - **Test:** A built wheel contains the asset. Both consumers read the same
 package resource, and every page contains those exact bytes.
 
-## 8. Size signal
+## 8. Size ceiling
 
-### SZ-1. Visible-word budgets
+### SZ-1. Hard visible-word ceiling
 
 - **Level:** REQUIRED
-- **Rule:** Report the visible-word count for every page. The default budget
-is 1,200 words for the repository-root page and 600 words for every other
-main page and each reference page; a record's `instructions` may override the
-budget for its page. Parse HTML text and
+- **Rule:** Report the visible-word count for every page. The ceiling is 900
+visible words for every main page and every reference page. It does not vary
+with territory size, with depth, or between the repository root and any other
+page, and a record's `instructions` does not raise it. Parse HTML text and
 exclude `script`, `style`, `template`, and every subtree marked
 `data-human-html-chrome`. Count tokens that match
 `[A-Za-z0-9]+(?:[-'][A-Za-z0-9]+)*`.
-- **Rationale:** The budgets target six minutes at root and three minutes elsewhere at 200 words per minute. Line and byte limits were rejected because HTML formatting distorts them.
-- **Test:** Report observed words and the applicable budget as `INFO` when the
-count exceeds it. Size alone never produces `FAIL`.
+- **Rationale:** This rule REVERSES the position it replaces -- that size is a
+signal and never a failure -- and the reversal is the point, not a side effect,
+so it is recorded here rather than swapped in quietly. Two things forced it.
+First, budgets keyed on root-vs-other gave a page owning forty directories the
+same allowance as a page owning only itself, and the observed result was
+enumeration: the large page reproduced the file tree instead of routing to it.
+A ceiling that does not grow with the territory makes enumeration physically
+impossible, so the large page must group and route, which is the behavior
+wanted. Second, an advisory budget changed no output, because a signal nothing
+enforces is a signal nothing obeys. Per-page overrides were removed with the
+keying, since an override reintroduces exactly the territory-proportional growth
+the ceiling exists to stop. 900 is a TUNED STARTING NUMBER, not a settled
+constant: it is set from trial evidence -- rejected pages ran near 900 words and
+accepted ones ran 1,215 to 1,698 -- and it is expected to move once generated
+corpora give better evidence. Line and byte limits were rejected because HTML
+formatting distorts them.
+- **Test:** Report the observed word count and the ceiling for every page. A
+count above the ceiling is a `FAIL`.
 
 ## 9. Script contracts
 
@@ -423,14 +517,14 @@ The script reports `FAIL` for:
 - no `human.html` when `decision` is `page`.
 - a reference-list, filename, or backlink mismatch; a consumption mismatch
   only once RD-3 is implemented.
+- a visible-word count above the SZ-1 ceiling.
 
 The script reports `INFO` for:
 
 - `STALE` when DR-2 recomputes a different `source_sha`, including stale-child
-  propagation under TS-2.
-- a visible-word count above SZ-1.
+  propagation under TS-2 and placement drift under TS-3.
 - `DIRTY` when the record carries `dirty: true`.
-- **Rationale:** One stdlib checker enforces portable output without provisioning a runtime. Treating staleness or size as failure was rejected because both are manual-action signals.
+- **Rationale:** One stdlib checker enforces portable output without provisioning a runtime. Treating staleness as failure was rejected because it is a manual-action signal: the page is correct for the content it was written against. Size moved the other way when SZ-1 became a ceiling -- an over-long page is wrong now, not merely aging -- so the word count is a `FAIL` and staleness is not.
 - **Test:** Fixtures cover each `FAIL`, each `INFO`, clean `page`, clean `none`,
 root mapping, and reference HTML.
 
@@ -442,17 +536,22 @@ optional directory. Walk non-ignored repository directories. Exclude VCS
 metadata, `.databench/`, and directories that contain only generated output.
 Emit JSON records in deepest-first order. For each directory, report its normalized path, current DR-2 commit, dirty-input state,
 record status, decision, and identity. Also report page and reference files,
-nearest page ancestor, nearest page descendants, and stale-child state.
-- **Rationale:** Shared discovery keeps navigation and ordering deterministic. Separate generator and checker scans were rejected because they can disagree.
+nearest page ancestor, nearest page descendants, and stale-child state. For each
+`page` directory, report its computed TERRITORY: the owned directories and the
+excluded subtrees that a nearer descendant page owns.
+- **Rationale:** Shared discovery keeps navigation and ordering deterministic. Separate generator and checker scans were rejected because they can disagree. Territory is reported here rather than recomputed per consumer for the same reason, and because DR-2's stamp, TS-2's gate, and the generation brief must all bound themselves identically or a page is stamped over one scope and written over another.
 - **Test:** Fixtures cover root, nested pages, skipped `none` directories, stale
-records, dirty input, missing records, and multiple descendant branches.
+records, dirty input, missing records, and multiple descendant branches. A
+fixture with pages at `A`, `A/B/C`, and `A/D` reports `A` owning `A` and `A/B`,
+and excluding `A/B/C` and `A/D`.
 
 ## 10. Tree-scale order
 
 ### TS-1. Bottom-up execution
 
 - **Level:** REQUIRED
-- **Rule:** Analyze and generate deepest directories first. A parent reads each
+- **Rule:** Run each AD-1 pass deepest directories first: placement across the
+whole tree, then generation. A parent reads each
 finished child decision and each page child's identity line. No-page
 directories stay in traversal but do not become navigation targets.
 - **Rationale:** Parent navigation and orientation depend on child decisions. Top-down generation was rejected because it guesses unfinished child state.
@@ -462,12 +561,33 @@ parent uses only finished child records.
 ### TS-2. Stale-child propagation
 
 - **Level:** REQUIRED
-- **Rule:** A stale or missing child record makes every dependent ancestor
-`STALE`. Do not finalize or regenerate the parent until the child is fresh.
-This execution gate does not change CK-1 staleness from `INFO` to `FAIL`.
-- **Rationale:** A parent trusts child identity and decision data. Continuing past stale child data was rejected because it silently corrupts the navigation spine.
-- **Test:** Changing a descendant input marks that descendant and each dependent
-ancestor stale, then blocks parent generation until bottom-up refresh finishes.
+- **Rule:** A page depends on exactly two sets of records: the records of the
+directories inside its TERRITORY, and the record of each nearest descendant page
+it links to under PC-2. A stale or missing record in that set makes the page
+`STALE`, and the page is not finalized or regenerated until those records are
+fresh. A stale record deeper than a nearest descendant page does not gate this
+page; it gates the descendant page that owns it, and reaches further up only
+through TS-3. This execution gate does not change CK-1 staleness from `INFO` to
+`FAIL`.
+- **Rationale:** A page trusts the material it owns and the identity lines it links, so continuing past stale data in that set was rejected: it silently corrupts the navigation spine. Gating on ALL descendants was rejected in this rework, because ownership stops at the next page down while the old gate did not: one broken page deep in a branch froze every ancestor above it, including pages whose own material and links were fresh, and the deeper the tree the more of the spine one failure held hostage.
+- **Test:** Changing an input inside a page's territory marks that page stale and
+blocks its generation until refresh. Changing an input under a nearer descendant
+page marks that descendant stale and leaves its ancestors generable.
+
+### TS-3. Placement-drift invalidation
+
+- **Level:** REQUIRED
+- **Rule:** When a directory's `decision` flips between `page` and `none` while
+its content is otherwise unchanged, mark stale every page whose territory or
+PC-2 navigation the flip alters -- at minimum the nearest ancestor page. A
+`page` that becomes `none` returns its subtree to the nearest ancestor's
+territory; a `none` that becomes `page` removes that subtree from it. Report the
+invalidation through the same `INFO STALE` channel as DR-2 staleness, and gate
+the affected pages under TS-2 until they are regenerated.
+- **Rationale:** Placement drift changes what a page owns without changing any byte its source stamp covers: DR-2 excludes `.databench/`, so rewriting a child's `decision.yaml` moves no ancestor `source_sha`, and TS-2 fires only on a missing, invalid, or stale record. Without this rule the drift surfaced only after the fact, as a `FAIL navigation-mismatch` from `human_html_check.py` against an already-written page. A scheduling signal was chosen over that failure because the correct response to placement drift is to rerun the ancestor in the ordinary bottom-up pass, and a `FAIL` reports a page as broken when nothing about it is wrong except its age. The rule sits beside TS-2 because the two are the same gate over different causes: TS-2 tracks content drift, TS-3 tracks placement drift.
+- **Test:** Flipping a descendant's decision with no content change marks the
+nearest ancestor page stale while its `source_sha` is unchanged. Regenerating
+that ancestor clears the staleness and the navigation mismatch together.
 
 ## 11. The host viewer contract
 
