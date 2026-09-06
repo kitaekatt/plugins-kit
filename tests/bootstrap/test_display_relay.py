@@ -139,11 +139,44 @@ def test_pending_is_consumed_exactly_once(tmp_path, capsys):
     capsys.readouterr()
 
     assert not os.path.exists(pending)
-    assert os.path.exists(os.path.join(tmp_path, display_relay.DISPLAYED_NAME))
+    assert not os.path.exists(os.path.join(tmp_path, display_relay.DISPLAYED_NAME))
     # Second delivery attempt: nothing left to show, and the caller is told to
     # fall back (its own `[ -f "$PENDING" ]` guard has already exited by then).
     assert display_relay.relay(str(tmp_path)) == 1
     assert capsys.readouterr().out == ""
+
+
+def test_two_relays_deliver_one_pending_message(tmp_path, capsys):
+    _write_pending(str(tmp_path), _failure_payload())
+
+    assert display_relay.relay(str(tmp_path)) == 0
+    first = capsys.readouterr().out
+    assert display_relay.relay(str(tmp_path)) == 1
+    second = capsys.readouterr().out
+
+    assert first
+    assert second == ""
+
+
+def test_producer_replacement_after_claim_stays_pending(tmp_path, monkeypatch, capsys):
+    pending = os.path.join(str(tmp_path), display_relay.PENDING_NAME)
+    _write_pending(str(tmp_path), _failure_payload())
+    replacement = _failure_payload()
+    replacement["systemMessage"] = "replacement"
+    original_replace = display_relay.os.replace
+    claimed = []
+
+    def replace_and_produce(source, destination):
+        original_replace(source, destination)
+        if source == pending:
+            claimed.append(destination)
+            _write_pending(str(tmp_path), replacement)
+
+    monkeypatch.setattr(display_relay.os, "replace", replace_and_produce)
+    assert display_relay.relay(str(tmp_path)) == 0
+    assert "Setup issues found" in capsys.readouterr().out
+    assert claimed
+    assert json.loads(open(pending, encoding="utf-8").read())["systemMessage"] == "replacement"
 
 
 # --- fallback contract ------------------------------------------------------
@@ -196,3 +229,17 @@ def test_display_hook_prefers_the_relay_and_keeps_the_plain_fallback():
     assert "bootstrap_lib/display_relay.py" in text
     assert 'cat "$PENDING"' in text
     assert 'mv -f "$PENDING"' in text
+
+
+def test_non_object_json_payload_is_left_for_the_shell_fallback(tmp_path, capsys):
+    """A valid-JSON payload that is not an object takes the exit-1 fallback,
+    which only works if the pending file is still there for the hook to cat."""
+    from bootstrap_lib import display_relay
+
+    pending = tmp_path / display_relay.PENDING_NAME
+    pending.write_text("[1, 2, 3]", encoding="utf-8")
+
+    assert display_relay.relay(str(tmp_path)) == 1
+    assert capsys.readouterr().out == ""
+    assert pending.exists(), "the claim must be handed back for the fallback cat"
+    assert not [p for p in tmp_path.iterdir() if p.name.startswith(".")]

@@ -1293,11 +1293,12 @@ def _elevation_step(all_failures, current_os, data_dir, args, plugin_root,
     """
     from .fix_queue import (
         queue_from_failures, write_or_clear_queue, fix_queue_failure,
-        launch_fix_runner, has_actionable,
+        launch_fix_runner, has_actionable, load_queue_tasks,
     )
-    tasks = queue_from_failures(all_failures, current_os)
+    origin = getattr(args, "project_dir", None) or ""
+    tasks = queue_from_failures(all_failures, current_os, origin=origin)
     try:
-        path = write_or_clear_queue(tasks, data_dir, current_os)
+        path = write_or_clear_queue(tasks, data_dir, current_os, origin=origin)
     except RuntimeError as exc:
         # render_queue raises when bash can't be resolved at write time and the
         # queue holds command/brew tasks (shell strings the runner needs bash
@@ -1331,9 +1332,14 @@ def _elevation_step(all_failures, current_os, data_dir, args, plugin_root,
         all_failures[:] = [f for f in all_failures if not _opportunistic(f)]
         return False
 
+    # The file may carry another project's deferrals too; the runner executes
+    # the whole file, so budget and disclose the merged queue, not this pass's.
+    queued = load_queue_tasks(path) or tasks
+
     launch_detail = None
+    launch_failed = False
     if getattr(args, "fix_all", False):
-        result = launch_fix_runner(path, current_os, tasks=tasks)
+        result = launch_fix_runner(path, current_os, tasks=queued)
         if result is not None:
             if result.succeeded:
                 note = (f"{label} -> fix runner completed successfully "
@@ -1346,9 +1352,11 @@ def _elevation_step(all_failures, current_os, data_dir, args, plugin_root,
                 _spawn_recheck_pass(args, plugin_root)
                 return True
             launch_detail = result.detail
+            launch_failed = not result.launched
 
-    item = fix_queue_failure(tasks, current_os, data_dir,
-                             launch_detail=launch_detail)
+    item = fix_queue_failure(queued, current_os, data_dir,
+                             launch_detail=launch_detail,
+                             launch_failed=launch_failed)
     if current_os == "windows" and not getattr(args, "fix_all", False):
         # Name the consented invocation for Claude: on 'fix-all' it re-runs the
         # engine with --fix-all, and the engine launches the runner itself (so

@@ -31,7 +31,7 @@ This module:
   * :func:`write_or_clear_queue` regenerates ``<data_dir>/elevate/queue.json``
     each pass and DELETES a stale queue when nothing is deferred, so the fix-all
     offer disappears once its operations succeed.
-  * :func:`write_shim` emits a small ``bootstrap-fix.{bat,sh}`` that invokes the
+  * :func:`write_or_clear_queue` emits a small ``bootstrap-fix.{bat,sh}`` that invokes the
     runner, preserving the "run it yourself" affordance (double-click on
     Windows; the only path on Unix -- see below).
   * :func:`launch_fix_runner` is the "fix-all is user consent" half: on an
@@ -48,13 +48,16 @@ import json
 import os
 import subprocess
 import sys
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields, replace
 from typing import List, Optional
 
 from .apt import sudo_noninteractive_available, windows_admin_available
 from .atomic_write import write_atomic
 from .tool_check import resolve_bash
-from .fix_runner import COST_QUICK, COST_SLOW, QUEUE_VERSION
+from .fix_runner import (
+    COST_QUICK, COST_SLOW, EXIT_ABORTED, EXIT_BAD_QUEUE, LOG_BASENAME,
+    QUEUE_VERSION,
+)
 from .messages import item_label, numbered
 
 
@@ -83,6 +86,8 @@ class FixTask:
     id: str
     kind: str
     label: str
+    # The project pass that owns this task. Empty means user scope.
+    origin: str = ""
     elevated: bool = False
     command: Optional[str] = None
     packages: List[str] = field(default_factory=list)
@@ -126,7 +131,8 @@ class FixTask:
         # filter compares with `==`, so an int 0 matches False and a meaningful
         # `timeout: 0` would be silently dropped. Identity (`is not None`) for
         # the Optional scalars keeps a real 0 in the output.
-        out = {"id": self.id, "kind": self.kind, "label": self.label}
+        out = {"id": self.id, "kind": self.kind, "label": self.label,
+               "origin": self.origin}
         if self.elevated:
             out["elevated"] = self.elevated
         if self.packages:
@@ -254,7 +260,8 @@ def _brew_cask_task(desc: dict, token: str) -> FixTask:
     )
 
 
-def queue_from_failures(failures, current_os: str) -> List[FixTask]:
+def queue_from_failures(failures, current_os: str,
+                        origin: str = "") -> List[FixTask]:
     """Harvest ``elevation`` descriptors from the pass's failures into tasks.
 
     Order: quick tasks first (order_tasks), then the slow ones -- and inside the
@@ -288,7 +295,7 @@ def queue_from_failures(failures, current_os: str) -> List[FixTask]:
         method = desc.get("method")
         if method == "apt":
             pkg = desc.get("package")
-            if pkg:
+            if pkg and pkg not in apt_packages:
                 apt_packages.append(pkg)
                 apt_ids.append(pkg)
         elif method == "command":
@@ -367,6 +374,8 @@ def queue_from_failures(failures, current_os: str) -> List[FixTask]:
         # and rewrites only `current minus the named entries`, so an install
         # that adds a PATH entry -- before or after -- is preserved either way.
         tasks.append(prune)
+    for task in tasks:
+        task.origin = origin
     return order_tasks(tasks)
 
 
@@ -413,7 +422,6 @@ def transcript_path(data_dir: str) -> str:
     coupling obvious: the runner derives it from the queue path it is handed,
     so both sides land in elevate_dir by construction.
     """
-    from .fix_runner import LOG_BASENAME
     return os.path.join(elevate_dir(data_dir), LOG_BASENAME)
 
 
@@ -431,6 +439,28 @@ def runner_path() -> str:
 # Serialization
 # --------------------------------------------------------------------------- #
 
+def _render_queue_records(records: List[dict], current_os: str,
+                          bash: Optional[str] = None) -> str:
+    queue = {
+        "version": QUEUE_VERSION,
+        "os": current_os,
+        "tasks": records,
+    }
+    if bash is None:
+        bash = resolve_bash()
+    if bash:
+        queue["bash"] = bash
+    elif any(task.get("kind") in ("command", "brew_installer")
+             for task in records):
+        raise RuntimeError(
+            "cannot write the bootstrap fix queue: bash was not found at write "
+            "time, and the queued command(s) are shell strings that need it. "
+            "Install Git for Windows (or run the session from Git Bash) and "
+            "start a new session."
+        )
+    return json.dumps(queue, indent=2) + "\n"
+
+
 def render_queue(tasks: List[FixTask], current_os: str) -> str:
     """Serialize the queue.
 
@@ -439,22 +469,7 @@ def render_queue(tasks: List[FixTask], current_os: str) -> str:
     here, in the session that still has a working PATH, on the machine that will
     run it.
     """
-    queue = {
-        "version": QUEUE_VERSION,
-        "os": current_os,
-        "tasks": [t.to_json() for t in tasks],
-    }
-    bash = resolve_bash()
-    if bash:
-        queue["bash"] = bash
-    elif any(t.kind in ("command", "brew_installer") for t in tasks):
-        raise RuntimeError(
-            "cannot write the bootstrap fix queue: bash was not found at write "
-            "time, and the queued command(s) are shell strings that need it. "
-            "Install Git for Windows (or run the session from Git Bash) and "
-            "start a new session."
-        )
-    return json.dumps(queue, indent=2) + "\n"
+    return _render_queue_records([t.to_json() for t in tasks], current_os)
 
 
 def _render_shim(current_os: str, python: str, runner: str, queue: str) -> str:
@@ -486,8 +501,43 @@ def _render_shim(current_os: str, python: str, runner: str, queue: str) -> str:
     ]) + "\n"
 
 
+class QueueCleanupError(RuntimeError):
+    """The queue cleanup could not remove all stale runnable artifacts."""
+
+
+def _read_existing_queue(path: str) -> tuple[List[dict], Optional[str]]:
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            payload = json.load(fh)
+    except (FileNotFoundError, OSError, ValueError):
+        return [], None
+    records = payload.get("tasks") if isinstance(payload, dict) else None
+    if not isinstance(records, list):
+        return [], payload.get("bash") if isinstance(payload, dict) else None
+    return ([record for record in records if isinstance(record, dict)],
+            payload.get("bash") if isinstance(payload, dict) else None)
+
+
+_FIX_TASK_FIELDS = {f.name for f in fields(FixTask)}
+
+
+def load_queue_tasks(path: str) -> List[FixTask]:
+    """The tasks the runner will execute: the MERGED queue on disk, every origin.
+
+    A pass launches and discloses this list, not only its own tasks -- the file
+    may carry another project's deferrals, and the runner runs them all.
+    """
+    records, _bash = _read_existing_queue(path)
+    tasks = []
+    for record in records:
+        known = {k: v for k, v in record.items() if k in _FIX_TASK_FIELDS}
+        if {"id", "kind", "label"} <= known.keys():
+            tasks.append(FixTask(**known))
+    return tasks
+
+
 def write_or_clear_queue(tasks: List[FixTask], data_dir: str,
-                         current_os: str) -> Optional[str]:
+                         current_os: str, origin: str = "") -> Optional[str]:
     """Write queue + shim, or remove both when nothing is deferred.
 
     Returns the queue path when written, else None. Clearing is what makes the
@@ -495,14 +545,26 @@ def write_or_clear_queue(tasks: List[FixTask], data_dir: str,
     """
     qpath = queue_path(data_dir)
     spath = shim_path(data_dir, current_os)
-    if not tasks:
+    existing, existing_bash = _read_existing_queue(qpath)
+    kept = [record for record in existing if record.get("origin", "") != origin]
+    current = [replace(task, origin=origin).to_json() for task in tasks]
+    merged = kept + current
+    if not merged:
+        errors = []
         for stale in (qpath, spath):
             try:
                 os.remove(stale)
-            except OSError:
+            except FileNotFoundError:
                 pass
+            except OSError as exc:
+                errors.append(f"{stale}: {exc}")
+        if errors:
+            raise QueueCleanupError(
+                "could not clear bootstrap fix queue artifacts: "
+                + ", ".join(errors))
         return None
-    write_atomic(qpath, render_queue(tasks, current_os))
+    bash = resolve_bash() or existing_bash
+    write_atomic(qpath, _render_queue_records(merged, current_os, bash=bash))
     write_atomic(
         spath,
         _render_shim(current_os, sys.executable, runner_path(), qpath),
@@ -528,13 +590,14 @@ def write_or_clear_queue(tasks: List[FixTask], data_dir: str,
 # hence a bound derived from what the queue actually declares, rather than one
 # big number that is simultaneously too short for a 3GB install and too long for
 # an ignored dialog.
-LAUNCH_TIMEOUT = 600
+LAUNCH_TIMEOUT = 240
 UAC_GRACE = 120
 # The runner holds its window until the user presses a key (fix_runner.main), so
 # the engine's wait must cover reading the output as well as producing it. Not
 # covering it would make a successful fix-all report a spurious "timed out" the
 # moment the user took a minute to read what ran with admin rights on their box.
 ACK_GRACE = 300
+MAX_LAUNCH_WAIT = 590
 # What a task may take when its manifest entry declared nothing, mirroring the
 # engine's own ENV_CHECK_DEFAULT_TIMEOUT by copy (a top-level import of
 # env_features would drag heavy modules into this near-stdlib-only import graph).
@@ -552,8 +615,20 @@ def launch_timeout_for(tasks: List[FixTask]) -> int:
     working. Both graces are added on top: UAC_GRACE for answering the dialog
     before the work starts, ACK_GRACE for the runner's hold after it ends.
     """
-    total = sum(t.timeout or DEFAULT_TASK_TIMEOUT for t in tasks)
-    return max(LAUNCH_TIMEOUT, total + UAC_GRACE) + ACK_GRACE
+    # The engine runs under the Bash tool, whose documented per-call ceiling is
+    # 600 seconds. Leave headroom so the harness does not kill the engine first.
+    return min(_requested_wait(tasks), MAX_LAUNCH_WAIT)
+
+
+def _requested_wait(tasks: List[FixTask]) -> int:
+    """The wait the queue's own budget asks for, before the harness ceiling."""
+    declared = sum(t.timeout for t in tasks
+                   if isinstance(t.timeout, int) and t.timeout > 0)
+    return max(LAUNCH_TIMEOUT, declared + UAC_GRACE) + ACK_GRACE
+
+
+def _launch_budget_exceeds_limit(tasks: List[FixTask]) -> bool:
+    return _requested_wait(tasks) > MAX_LAUNCH_WAIT
 
 
 @dataclass
@@ -573,7 +648,6 @@ def _powershell_exe() -> str:
 
 
 def launch_fix_runner(queue: str, current_os: str,
-                      timeout: int = LAUNCH_TIMEOUT,
                       tasks: Optional[List[FixTask]] = None) -> Optional[LaunchResult]:
     """Launch the runner interactively and wait for it (Windows).
 
@@ -595,8 +669,7 @@ def launch_fix_runner(queue: str, current_os: str,
     """
     if current_os != "windows":
         return None
-    if tasks:
-        timeout = launch_timeout_for(tasks)
+    timeout = launch_timeout_for(tasks or [])
     # Two DIFFERENT quoting layers, both required -- conflating them is a bug:
     #
     #  1. PowerShell parse: single-quoted literals, embedded quotes doubled.
@@ -639,7 +712,7 @@ def launch_fix_runner(queue: str, current_os: str,
                                    f"will pick up whatever completed")
     except OSError as e:
         return LaunchResult(launched=False, succeeded=False,
-                            detail=f"could not launch: {e}")
+                            detail=str(e))
     if proc.returncode == 0:
         return LaunchResult(launched=True, succeeded=True, detail="exit code 0")
     stderr = (proc.stderr or "").strip()
@@ -653,7 +726,14 @@ def launch_fix_runner(queue: str, current_os: str,
     # A failed task, by contrast, surfaces as the runner's exit code with no
     # stderr (2 = at least one task did not complete).
     first = next((ln.strip() for ln in stderr.splitlines() if ln.strip()), "")
-    detail = first or f"exit code {proc.returncode}"
+    if first:
+        return LaunchResult(launched=False, succeeded=False, detail=first)
+    if proc.returncode == EXIT_ABORTED:
+        detail = "you declined at the briefing"
+    elif proc.returncode == EXIT_BAD_QUEUE:
+        detail = "the queue file was invalid"
+    else:
+        detail = f"exit code {proc.returncode}"
     return LaunchResult(launched=True, succeeded=False, detail=detail)
 
 
@@ -669,7 +749,8 @@ def _run_instruction(current_os: str, data_dir: str) -> str:
 
 
 def fix_queue_failure(tasks: List[FixTask], current_os: str, data_dir: str,
-                      launch_detail: Optional[str] = None) -> dict:
+                      launch_detail: Optional[str] = None,
+                      launch_failed: bool = False) -> dict:
     """Build the aggregated item that offers fix-all and names what it covers.
 
     This item SPEAKS FOR the per-task ``needs_elevation`` failures it
@@ -677,10 +758,9 @@ def fix_queue_failure(tasks: List[FixTask], current_os: str, data_dir: str,
     repeating the elevation rationale once per item is what made the old output
     unreadable.
 
-    ``launch_detail`` is set when a fix-all run launched the runner but it did
-    not complete (UAC declined, a task failed, the bounded wait timed out): the
-    messages then lead with that outcome and fall back to the run-it-yourself
-    instruction -- the engine never re-prompts in a loop.
+    ``launch_detail`` is set when a fix-all run did not complete. When
+    ``launch_failed`` is true, the runner never started and no transcript claim
+    is made; otherwise the messages name the transcript from the started run.
     """
     labels = task_labels(tasks)
     listed = numbered(labels)
@@ -688,7 +768,19 @@ def fix_queue_failure(tasks: List[FixTask], current_os: str, data_dir: str,
     # is BOTH what the user reads and (on Windows) the text Claude must put in
     # the AskUserQuestion prompt, and those two drifting apart is how a user
     # ends up answering a question that does not match what they were told.
-    intro = f"Bootstrap found issues that need admin access: {listed}."
+    admin = [task.label for task in tasks if task.elevated]
+    consent = [task.label for task in tasks if not task.elevated]
+    if admin and consent:
+        intro = (f"Bootstrap found issues that need admin access: "
+                 f"{numbered(admin)}. These items only need your go-ahead: "
+                 f"{numbered(consent)}.")
+    elif admin:
+        intro = f"Bootstrap found issues that need admin access: {listed}."
+    else:
+        intro = f"Bootstrap found issues that need your go-ahead: {listed}."
+    if _launch_budget_exceeds_limit(tasks):
+        intro += (" The runner may still be working after this pass returns; "
+                  "re-run the check when it finishes.")
     if current_os == "windows" and launch_detail:
         # The launch already happened and did not complete (declined UAC, a
         # failed task, a timeout). Re-offering fix-all here would either loop
@@ -704,10 +796,11 @@ def fix_queue_failure(tasks: List[FixTask], current_os: str, data_dir: str,
             f"session; there is nothing to confirm."
         )
     elif current_os == "windows":
+        prompt_note = ("You'll be asked to approve an admin prompt."
+                       if admin else "You'll be asked to approve the fix runner.")
         user_msg = (
             f"{intro}\n\n"
-            f"Type 'fix-all' to fix them. You'll be asked to approve an admin "
-            f"prompt."
+            f"Type 'fix-all' to fix them. {prompt_note}"
         )
         # ASK, do not merely mention. A "type fix-all" line buried in session
         # start scrolls past unread, so the offer only ever lands if the user
@@ -734,7 +827,7 @@ def fix_queue_failure(tasks: List[FixTask], current_os: str, data_dir: str,
         # Unix fix-all has no TTY, so the honest offer is the shim, not fix-all.
         run = _run_instruction(current_os, data_dir)
         user_msg = (
-            f"Bootstrap found issues that need admin access: {listed}.\n\n"
+            f"{intro}\n\n"
             f"To fix them, {run}. It asks for your password where needed."
         )
         agent_msg = (
@@ -744,7 +837,11 @@ def fix_queue_failure(tasks: List[FixTask], current_os: str, data_dir: str,
             f"a Bash tool subprocess does not provide. Bootstrap re-checks "
             f"automatically on the next session; there is nothing to confirm."
         )
-    if launch_detail:
+    if launch_detail and launch_failed:
+        prefix = f"could not launch the fix runner: {launch_detail}. "
+        user_msg = prefix + user_msg
+        agent_msg = prefix + agent_msg
+    elif launch_detail:
         prefix = (f"fix-all launched the fix runner but it did not complete "
                   f"({launch_detail}). The runner's transcript -- written when "
                   f"it actually started -- is at "

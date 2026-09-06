@@ -156,9 +156,14 @@ These are the **ASK** category (see [Two outcomes](#two-outcomes-auto-fix-or-ask
 Deferred operations are serialized as **typed tasks** in
 `<data_dir>/elevate/queue.json` -- data, not generated shell text -- and executed
 by `bootstrap_lib/fix_runner.py` (`python fix_runner.py <queue.json>`), the one
-place bootstrap has a TTY. The queue and its `bootstrap-fix.{sh,bat}` launcher
-shim are rewritten every pass and deleted once nothing is deferred, so the offer
-disappears when the operations succeed.
+place bootstrap has a TTY. The queue is shared by every project on the machine:
+each task records the project (`origin`) whose pass deferred it, a pass replaces
+only its own origin's tasks and keeps the others', and the queue and its
+`bootstrap-fix.{sh,bat}` launcher shim are deleted once the merged queue holds
+nothing -- so the offer disappears when the operations succeed, and one
+project's clean pass cannot discard another's deferrals. A pass launches and
+discloses the merged queue, not only its own tasks. A stale queue or shim that
+cannot be removed is reported, never silently kept.
 
 | Task kind | What the runner does |
 |-----------|----------------------|
@@ -342,11 +347,15 @@ so the fix-all re-run of the engine (invoked with the `--fix-all` flag, e.g.
 --fix-all`) handles a non-empty fix queue by **launching the runner itself**:
 `Start-Process -Verb RunAs -Wait -PassThru` on the engine's own interpreter, so
 the wait covers the real elevated process rather than an unelevated shim that
-relaunches itself and exits early. The UAC prompt appears, the engine waits up
-to 10 minutes, and on success runs a re-check pass (without `--fix-all` -- it can
-never loop the prompt) so the elevated items clear in the same cycle. If the
-user declines UAC, a task fails, or the wait times out, the engine reports the
-outcome and falls back to the run-it-yourself shim.
+relaunches itself and exits early. The UAC prompt appears, the engine waits for
+the queue's declared budget clamped just under the Bash tool's 10-minute ceiling
+(`MAX_LAUNCH_WAIT`; a queue that needs longer is told the runner may still be
+working after the pass returns), and on success runs a re-check pass (without
+`--fix-all` -- it can never loop the prompt) so the elevated items clear in the
+same cycle. If the runner could not be launched (UAC declined, PowerShell
+refused), a task fails, or the wait times out, the engine reports that outcome
+-- a launch that never happened claims no transcript -- and falls back to the
+run-it-yourself shim.
 
 On Ubuntu/macOS the fix-all run has no TTY for a foreground `sudo` (or a secret
 prompt), so the shim remains the only path there. That asymmetry is **encoded,

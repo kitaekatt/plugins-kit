@@ -396,18 +396,29 @@ def _read_one_key():
 
 
 class Runner:
-    """Executes one queue. Holds the resolved bash + OS so tasks stay dumb."""
+    """Executes one queue. Resolves bash only for tasks that need it."""
 
     def __init__(self, queue):
         self.os = queue.get("os") or ""
-        self.bash = queue.get("bash") or _bash()
-        self.tasks = queue.get("tasks") or []
+        self._bash = queue.get("bash")
+        self._env = None
         # The runner runs as the invoking user, so this is the user's home --
         # captured before any sudo, which is the whole point (see _shell_argv).
         self.home = os.path.expanduser("~")
-        # Every task subprocess runs with bash's dir on PATH -- see _child_env
-        # for the elevated-fresh-environment failure this repairs.
-        self.env = _child_env(self.bash)
+
+    @property
+    def bash(self):
+        if self._bash is None:
+            self._bash = _bash()
+        return self._bash
+
+    @property
+    def env(self):
+        # Every shell task gets bash's dir on PATH -- see _child_env for the
+        # elevated-fresh-environment failure this repairs.
+        if self._env is None:
+            self._env = _child_env(self.bash)
+        return self._env
 
     @property
     def _is_windows(self):
@@ -804,10 +815,18 @@ def _open_transcript(queue_path):
         return None
 
 
+def _hold_after_outcome(engine_launch):
+    prompt = ("  Press Space or Enter to continue. "
+              if engine_launch else
+              "  Press Space or Enter to close. ")
+    wait_for_key(prompt)
+
+
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     if not argv:
         print("usage: fix_runner.py <queue.json>", file=sys.stderr)
+        _hold_after_outcome(False)
         return EXIT_BAD_QUEUE
     path = argv[0]
     # Tee everything the runner (and, via _run's pump, its children) prints
@@ -840,16 +859,19 @@ def _main_teed(path, argv):
             queue = json.load(fh)
     except (OSError, ValueError) as e:
         print(f"could not read queue {path}: {e}", file=sys.stderr)
+        _hold_after_outcome(engine_launch)
         return EXIT_BAD_QUEUE
     problems = validate(queue)
     if problems:
         print(f"queue {path} is not executable:", file=sys.stderr)
         for p in problems:
             print(f"  - {p}", file=sys.stderr)
+        _hold_after_outcome(engine_launch)
         return EXIT_BAD_QUEUE
 
     print_plan(queue)
     if not print_briefings(queue):
+        _hold_after_outcome(engine_launch)
         return EXIT_ABORTED
     code = run_queue(queue)
 

@@ -317,6 +317,40 @@ class TestFixAllInteractiveLaunch:
         # Manual instruction remains as the fallback.
         assert "bootstrap-fix.bat" in agg[0]["agent_msg"]
 
+    def test_runner_rejection_is_reported_as_unlaunched_without_transcript(
+            self, tmp_path, monkeypatch):
+        self._pin_bash(monkeypatch)
+        monkeypatch.setattr(
+            elev, "launch_fix_runner",
+            lambda *a, **k: elev.LaunchResult(
+                launched=False, succeeded=False, detail="access denied"))
+
+        failures = [_win_failure()]
+        stopped = engine._elevation_step(
+            failures, "windows", str(tmp_path),
+            _args(tmp_path, fix_all=True, console=True), "/plugin/root")
+
+        assert stopped is False
+        agg = [f for f in failures if f["type"] == "elevation_script"][0]
+        assert "could not launch the fix runner: access denied" in agg["user_msg"]
+        assert "fix-runner.log" not in agg["user_msg"]
+
+    def test_runner_oserror_is_reported_as_unlaunched_without_transcript(
+            self, tmp_path, monkeypatch):
+        self._pin_bash(monkeypatch)
+        monkeypatch.setattr(
+            elev.subprocess, "run",
+            lambda *a, **k: (_ for _ in ()).throw(OSError("powershell missing")))
+
+        failures = [_win_failure()]
+        engine._elevation_step(
+            failures, "windows", str(tmp_path),
+            _args(tmp_path, fix_all=True, console=True), "/plugin/root")
+
+        agg = [f for f in failures if f["type"] == "elevation_script"][0]
+        assert "could not launch the fix runner: powershell missing" in agg["user_msg"]
+        assert "fix-runner.log" not in agg["user_msg"]
+
     def test_timeout_falls_back_to_manual_message(self, tmp_path, monkeypatch):
         self._pin_bash(monkeypatch)
         monkeypatch.setattr(
