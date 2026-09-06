@@ -3,8 +3,30 @@
 import json
 import os
 import shutil
+from copy import deepcopy
+from typing import Any
+
+from .atomic_write import write_atomic
 
 CURRENT_SCHEMA_VERSION = 6
+
+
+def _defaults_value(defaults_dir: str, *path: str, fallback: Any) -> Any:
+    """Read one value from defaults/config.json, or return its fallback."""
+    if not defaults_dir:
+        return fallback
+
+    defaults_path = os.path.join(defaults_dir, "config.json")
+    try:
+        with open(defaults_path, "r") as f:
+            value = json.load(f)
+        for key in path:
+            if not isinstance(value, dict):
+                return fallback
+            value = value.get(key)
+        return value
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return fallback
 
 
 def load_config(data_dir: str, defaults_dir: str) -> dict:
@@ -50,7 +72,7 @@ def migrate_config(config: dict, defaults_dir: str = "") -> dict:
         return config
 
     # Copy to avoid mutating the original
-    migrated = dict(config)
+    migrated = deepcopy(config)
 
     # Migration from v0 to v1: add missing fields
     if version < 1:
@@ -78,16 +100,7 @@ def migrate_config(config: dict, defaults_dir: str = "") -> dict:
 
     # Migration from v4 to v5: add self_setup from defaults
     if version < 5:
-        # Read self_setup from defaults/config.json if available
-        self_setup = None
-        if defaults_dir:
-            defaults_path = os.path.join(defaults_dir, "config.json")
-            try:
-                with open(defaults_path, "r") as f:
-                    defaults = json.load(f)
-                self_setup = defaults.get("self_setup")
-            except (FileNotFoundError, json.JSONDecodeError, OSError):
-                pass
+        self_setup = _defaults_value(defaults_dir, "self_setup", fallback=None)
 
         # Hardcoded fallback if defaults not available
         if self_setup is None:
@@ -112,16 +125,9 @@ def migrate_config(config: dict, defaults_dir: str = "") -> dict:
 
     # Migration from v5 to v6: add python_stub_check to self_setup
     if version < 6:
-        # Read python_stub_check from defaults/config.json if available
-        stub_check = None
-        if defaults_dir:
-            defaults_path = os.path.join(defaults_dir, "config.json")
-            try:
-                with open(defaults_path, "r") as f:
-                    defaults = json.load(f)
-                stub_check = defaults.get("self_setup", {}).get("python_stub_check")
-            except (FileNotFoundError, json.JSONDecodeError, OSError):
-                pass
+        stub_check = _defaults_value(
+            defaults_dir, "self_setup", "python_stub_check", fallback=None
+        )
 
         # Hardcoded fallback if defaults not available
         if stub_check is None:
@@ -148,6 +154,4 @@ def save_config(data_dir: str, config: dict) -> None:
     """
     config_path = os.path.join(data_dir, "config.json")
     os.makedirs(data_dir, exist_ok=True)
-    with open(config_path, "w") as f:
-        json.dump(config, f, indent=2)
-        f.write("\n")
+    write_atomic(config_path, json.dumps(config, indent=2) + "\n")

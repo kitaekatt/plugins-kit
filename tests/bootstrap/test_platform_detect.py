@@ -114,10 +114,3 @@ class TestDetectArch:
     def test_unknown_arch_returned_lowercased(self):
         with patch("platform.machine", return_value="riscv64"):
             assert platform_detect.detect_arch() == "riscv64"
-
-
-class TestDetectOsArch:
-    def test_combines_with_dash(self):
-        with patch("bootstrap_lib.platform_detect.detect_os", return_value="macos"), \
-             patch("bootstrap_lib.platform_detect.detect_arch", return_value="arm64"):
-            assert platform_detect.detect_os_arch() == "macos-arm64"

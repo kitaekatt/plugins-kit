@@ -3227,6 +3227,7 @@ def _process_config(config_section, plugin_data_dir, plugin_root, action_entries
     but skips required_fields validation (no project = no config failures).
     """
     from .config_check import config_init, config_validate, run_autodetect, load_yaml_config, save_yaml_config
+    from .config_resolve import ConfigError
 
     config_file = config_section["file"]
     defaults_source = config_section.get("defaults_source")
@@ -3241,7 +3242,11 @@ def _process_config(config_section, plugin_data_dir, plugin_root, action_entries
         return []
 
     # 2. Load config
-    config = load_yaml_config(config_path)
+    try:
+        config = load_yaml_config(config_path)
+    except ConfigError as exc:
+        action_entries.append(f"config: FAILED to load {config_path} - {exc}")
+        return []
 
     required_fields = config_section.get("required_fields", {})
 
@@ -3278,7 +3283,11 @@ def _process_config(config_section, plugin_data_dir, plugin_root, action_entries
     # Write back if defaults were applied
     if any(f.get("default") is not None for f in required_fields.values()):
         # Re-check if any defaults were actually applied (config may have changed)
-        current_on_disk = load_yaml_config(config_path)
+        try:
+            current_on_disk = load_yaml_config(config_path)
+        except ConfigError as exc:
+            action_entries.append(f"config: FAILED to load {config_path} - {exc}")
+            return []
         if config != current_on_disk:
             save_yaml_config(config_path, config)
 
@@ -3380,6 +3389,7 @@ def _process_project_config(project_config_section, plugin_data_dir, plugin_root
     False if no project was found (autodetect returned None / no file / no autodetect).
     """
     from .config_check import load_yaml_config, save_yaml_config, run_project_autodetect
+    from .config_resolve import ConfigError
 
     config_file = project_config_section["file"]
     required_fields_spec = _normalize_project_required_fields(
@@ -3447,7 +3457,13 @@ def _process_project_config(project_config_section, plugin_data_dir, plugin_root
 
     if os.path.isfile(project_config_path):
         # File exists — load it and check required fields
-        project_data = load_yaml_config(project_config_path)
+        try:
+            project_data = load_yaml_config(project_config_path)
+        except ConfigError as exc:
+            action_entries.append(
+                f"project config: FAILED to load {project_config_path} - {exc}"
+            )
+            return False
         missing_fields = [f for f in required_field_names if not project_data.get(f)]
 
         if missing_fields and autodetect_spec:
@@ -3534,7 +3550,13 @@ def _process_project_config(project_config_section, plugin_data_dir, plugin_root
     # Sync discovered values to data-dir config
     data_config_path = os.path.join(plugin_data_dir, "config.yaml")
     if os.path.isfile(data_config_path):
-        data_config = load_yaml_config(data_config_path)
+        try:
+            data_config = load_yaml_config(data_config_path)
+        except ConfigError as exc:
+            action_entries.append(
+                f"project config: FAILED to load {data_config_path} - {exc}"
+            )
+            return True
     else:
         data_config = {}
 

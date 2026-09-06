@@ -1031,7 +1031,7 @@ This table is the exact set of identity-keyed sections in
 | `marketplaces` | `name` |
 | `plugins` | `ref` |
 | `fonts` | `name` |
-| `json_entries` | `file` |
+| `json_entries` | `reference` + `target` (composite) |
 | `ini_settings` | `file` + `section` (composite) |
 | `pypi_packages` | `package` |
 | `shared_libs` | `name` |

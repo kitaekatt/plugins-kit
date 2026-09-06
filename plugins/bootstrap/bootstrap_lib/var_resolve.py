@@ -56,6 +56,7 @@ def build_variables(
         adds <key>_dir with the dirname. E.g. uproject=/foo/bar.uproject
         -> uproject_dir=/foo
     """
+    reserved = {"plugin_root", "data_dir", "cwd", "plugin_data_dir"}
     variables: Dict[str, str] = {
         "plugin_root": plugin_root,
         "data_dir": data_dir,
@@ -64,6 +65,8 @@ def build_variables(
 
     if config:
         for key, val in config.items():
+            if key in reserved:
+                continue
             if not isinstance(val, str) or not val:
                 continue
             variables[key] = val

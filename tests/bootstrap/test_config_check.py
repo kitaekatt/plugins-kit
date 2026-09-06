@@ -1,10 +1,17 @@
-"""Tests for bootstrap lib/config_check.py — config management primitives."""
+"""Tests for bootstrap lib/config_check.py -- config management primitives."""
 
 import os
 
 import pytest
 
-from bootstrap_lib.config_check import config_init, config_validate, load_yaml_config, save_yaml_config
+import bootstrap_lib.config_check as config_check_module
+from bootstrap_lib.config_check import (
+    config_init,
+    config_validate,
+    load_yaml_config,
+    save_yaml_config,
+)
+from bootstrap_lib.config_resolve import ConfigError
 
 
 class TestConfigInit:
@@ -84,6 +91,27 @@ class TestConfigValidate:
         updated, missing = config_validate(config, required, "/path/config.yaml")
         assert updated["AGENT"] == "gpt-4"
 
+    def test_none_is_missing_and_gets_default(self):
+        config = {"VCS_BACKEND": None}
+        required = {"VCS_BACKEND": {"default": "git"}}
+
+        updated, missing = config_validate(config, required, "/path/config.yaml")
+
+        assert missing == []
+        assert updated["VCS_BACKEND"] == "git"
+
+    def test_false_and_zero_are_values_not_missing(self):
+        config = {"flag": False, "count": 0}
+        required = {
+            "flag": {"default": True},
+            "count": {"default": 1},
+        }
+
+        updated, missing = config_validate(config, required, "/path/config.yaml")
+
+        assert missing == []
+        assert updated == {"flag": False, "count": 0}
+
     def test_mixed_fields(self):
         """Some fields set, some defaulted, some missing."""
         config = {"A": "value", "B": "", "C": ""}
@@ -119,3 +147,38 @@ class TestYamlRoundTrip:
         path.write_text("")
         loaded = load_yaml_config(str(path))
         assert loaded == {}
+
+    def test_save_yaml_config_uses_atomic_writer(self, tmp_path, monkeypatch):
+        calls = []
+
+        def fake_write_atomic(path, content):
+            calls.append((path, content))
+
+        monkeypatch.setattr(config_check_module, "write_atomic", fake_write_atomic)
+
+        path = str(tmp_path / "config.yaml")
+        save_yaml_config(path, {"answer": 42})
+
+        assert calls == [(path, "answer: 42\n")]
+
+    def test_atomic_failure_preserves_previous_bytes(self, tmp_path, monkeypatch):
+        path = tmp_path / "config.yaml"
+        original = b"answer: 1\n"
+        path.write_bytes(original)
+
+        def fail_replace(_source, _destination):
+            raise OSError("simulated replace failure")
+
+        monkeypatch.setattr(config_check_module.os, "replace", fail_replace)
+
+        with pytest.raises(OSError, match="simulated replace failure"):
+            save_yaml_config(str(path), {"answer": 2})
+
+        assert path.read_bytes() == original
+
+    def test_load_malformed_file_raises_config_error(self, tmp_path):
+        path = tmp_path / "malformed.yaml"
+        path.write_text("key: [unterminated\n")
+
+        with pytest.raises(ConfigError, match="malformed YAML"):
+            load_yaml_config(str(path))

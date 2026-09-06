@@ -31,6 +31,7 @@ Design rules:
 """
 
 from pathlib import Path
+from pathlib import PureWindowsPath
 from typing import Iterable, List, Mapping, Optional, Union
 
 from .manifest_merge import _deep_merge_dicts
@@ -75,6 +76,8 @@ def load_config_layer(path: PathLike) -> Optional[dict]:
         data = yaml.safe_load(text)
     except OSError as exc:
         raise ConfigError(f"cannot read config layer {p}: {exc}") from exc
+    except UnicodeError as exc:
+        raise ConfigError(f"malformed YAML in config layer {p}: {exc}") from exc
     except yaml.YAMLError as exc:
         raise ConfigError(f"malformed YAML in config layer {p}: {exc}") from exc
 
@@ -165,6 +168,15 @@ def resolve_plugin_data_dir(
         raise ConfigError("plugin_data_dir must be a relative path string")
 
     override_path = Path(override)
-    if override_path.is_absolute():
-        raise ConfigError("plugin_data_dir must be relative to the project root")
-    return (root / override_path).resolve()
+    windows_override = PureWindowsPath(override)
+    if override_path.is_absolute() or windows_override.drive or windows_override.root:
+        raise ConfigError(
+            f"plugin_data_dir override {override!r} must be relative to the project root {root}"
+        )
+
+    resolved = (root / override_path).resolve()
+    if not resolved.is_relative_to(root):
+        raise ConfigError(
+            f"plugin_data_dir override {override!r} resolves outside project root {root}"
+        )
+    return resolved
