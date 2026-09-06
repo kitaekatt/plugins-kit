@@ -5491,6 +5491,46 @@ def _env_section_entries(ctx, section, failure_type):
     return None
 
 
+def _env_report_fix(ctx, phase, failure_type, name, fix_ok, fix_msg,
+                     recheck_ok, recheck_message, *,
+                     message_label=None, action_text=None):
+    """The shared fix -> authoritative re-check reporting tail used by every
+    declarative env phase (symlinks, shell_rc, macos_defaults,
+    macos_hotkeys, login_items): each phase runs its own check -> fix ->
+    re-check, then ends here to turn the outcome into an ok/fail record.
+
+    On success (``fix_ok`` and ``recheck_ok``): ``ctx.action(f"{phase}
+    {name}: {action_text or fix_msg}")``. ``action_text`` overrides the
+    literal fix message when a phase needs a different success line
+    (macos_hotkeys' per-entry "applied - <label>" rather than the batch
+    fix's own message).
+
+    On failure: the shared detail is the fix's own message when the fix
+    itself failed, else "fix reported '<fix_msg>' but re-check failed:
+    <recheck_message>" -- then a persistent failure is recorded with
+    ``message=f"{message_label or name}: {detail}"``. ``message_label``
+    overrides the message's leading label when it must differ from the
+    failure record's ``name`` (macos_hotkeys keys its record by numeric id
+    but writes the human-facing message with the entry's description).
+
+    Returns True when ``ctx.action`` fired (fix succeeded and the
+    re-check passed), else False.
+    """
+    if fix_ok and recheck_ok:
+        ctx.action(f"{phase} {name}: {action_text if action_text is not None else fix_msg}")
+        return True
+    detail = fix_msg if not fix_ok else (
+        f"fix reported '{fix_msg}' but re-check failed: {recheck_message}"
+    )
+    label = name if message_label is None else message_label
+    ctx.fail(
+        f"{phase} {name}: FAILED - {detail}",
+        type=failure_type, name=name, message=f"{label}: {detail}",
+        persist_across_sessions=True,
+    )
+    return False
+
+
 def _env_phase_symlinks(ctx):
     """symlinks: ensure target is a symlink pointing at source (spec 4.3).
 
@@ -5546,9 +5586,10 @@ def _env_phase_symlinks(ctx):
             # the queue through Git Bash elevated, where
             # MSYS=winsymlinks:nativestrict makes `ln -s` create a REAL
             # Windows symlink (default MSYS ln copies instead). -sfn replaces
-            # a stale/dangling link left by an earlier attempt. Any backup of
-            # a pre-existing regular file already happened inside fix_symlink
-            # before os.symlink raised.
+            # a stale/dangling link left by an earlier attempt. A
+            # pre-existing regular file at target was moved aside before
+            # os.symlink raised and is already restored by fix_symlink
+            # itself -- nothing here needs to recover it.
             manual_cmd = f"MSYS=winsymlinks:nativestrict ln -sfn '{src}' '{tgt}'"
             ctx.fail(
                 f"symlink {name}: needs elevation - deferred; creating "
@@ -5583,17 +5624,10 @@ def _env_phase_symlinks(ctx):
             )
             continue
         recheck = check_symlink(src, tgt)
-        if fix.ok and recheck.passed:
-            ctx.action(f"symlink {name}: {fix.message}")
-        else:
-            detail = fix.message if not fix.ok else (
-                f"fix reported '{fix.message}' but re-check failed: {recheck.message}"
-            )
-            ctx.fail(
-                f"symlink {name}: FAILED - {detail}",
-                type="env_symlink", name=name, message=f"{name}: {detail}",
-                persist_across_sessions=True,
-            )
+        _env_report_fix(
+            ctx, "symlink", "env_symlink", name,
+            fix.ok, fix.message, recheck.passed, recheck.message,
+        )
 
 
 def _env_phase_shell_rc(ctx):
@@ -5659,17 +5693,10 @@ def _env_phase_shell_rc(ctx):
             fix_ok, msg = fix_shell_ensure(content, ctx.current_os)
             recheck = check_shell_ensure(name, content)
 
-        if fix_ok and recheck.passed:
-            ctx.action(f"shell_rc {name}: {msg}")
-        else:
-            detail = msg if not fix_ok else (
-                f"fix reported '{msg}' but re-check failed: {recheck.message}"
-            )
-            ctx.fail(
-                f"shell_rc {name}: FAILED - {detail}",
-                type="env_shell_rc", name=name, message=f"{name}: {detail}",
-                persist_across_sessions=True,
-            )
+        _env_report_fix(
+            ctx, "shell_rc", "env_shell_rc", name,
+            fix_ok, msg, recheck.passed, recheck.message,
+        )
 
 
 def _env_phase_macos_defaults(ctx):
@@ -5719,19 +5746,11 @@ def _env_phase_macos_defaults(ctx):
             continue
         fix_ok, msg = fix_macos_default(domain, key, value)
         recheck = check_macos_default(domain, key, value)
-        if fix_ok and recheck.passed:
+        if _env_report_fix(
+            ctx, "macos_default", "env_macos_default", label,
+            fix_ok, msg, recheck.passed, recheck.message,
+        ):
             fixed_any = True
-            ctx.action(f"macos_default {label}: {msg}")
-        else:
-            detail = msg if not fix_ok else (
-                f"fix reported '{msg}' but re-check failed: {recheck.message}"
-            )
-            ctx.fail(
-                f"macos_default {label}: FAILED - {detail}",
-                type="env_macos_default", name=label,
-                message=f"{label}: {detail}",
-                persist_across_sessions=True,
-            )
     if fixed_any:
         flush_macos_defaults_cache()
         ctx.ok("macos_defaults: preference cache flushed")
@@ -5819,18 +5838,12 @@ def _env_phase_macos_hotkeys(ctx):
                 redata, entry["id"], entry["parameters"],
                 entry.get("enabled", True))
             re_ok = status == "ok"
-        if fix_ok and re_ok:
-            ctx.action(f"macos_hotkey {entry['id']}: applied - {_label(entry)}")
-        else:
-            detail2 = msg if not fix_ok else (
-                f"fix reported '{msg}' but re-check failed: {detail}"
-            )
-            ctx.fail(
-                f"macos_hotkey {entry['id']}: FAILED - {detail2}",
-                type="env_macos_hotkey", name=str(entry["id"]),
-                message=f"{_label(entry)}: {detail2}",
-                persist_across_sessions=True,
-            )
+        _env_report_fix(
+            ctx, "macos_hotkey", "env_macos_hotkey", str(entry["id"]),
+            fix_ok, msg, re_ok, detail,
+            message_label=_label(entry),
+            action_text=f"applied - {_label(entry)}",
+        )
 
 
 def _env_phase_login_items(ctx):
@@ -5846,7 +5859,7 @@ def _env_phase_login_items(ctx):
         ctx.ok("login_items: skipped (not macOS)")
         return
     from .env_features import (
-        add_login_item, check_login_item, expand_env_path,
+        add_login_item, check_login_item, expand_env_path, list_login_items,
     )
 
     entries = _env_section_entries(ctx, "login_items", "env_login_item")
@@ -5889,23 +5902,34 @@ def _env_phase_login_items(ctx):
             )
             continue
 
-        result = check_login_item(name)
+        # `path` lets check_login_item accept either the entry's declared
+        # `name` or the app bundle's basename -- macOS names a login item
+        # from the bundle, not the manifest, so a mismatch (entry "Docker
+        # Desktop" for Docker.app, which System Events reports as "Docker")
+        # must already pass here, or the fix below re-adds a duplicate every
+        # session it runs (the check fails by name, the fix succeeds under
+        # the bundle's own name, and a name-only re-check never sees it).
+        result = check_login_item(name, path=app_path)
         if result.passed:
             ctx.ok(f"login_item {name}: ok - {result.message}")
             continue
         fix_ok, msg = add_login_item(app_path, bool(entry.get("hidden", False)))
-        recheck = check_login_item(name)
-        if fix_ok and recheck.passed:
-            ctx.action(f"login_item {name}: {msg}")
-        else:
-            detail = msg if not fix_ok else (
-                f"fix reported '{msg}' but re-check failed: {recheck.message}"
+        recheck = check_login_item(name, path=app_path)
+        recheck_message = recheck.message
+        if fix_ok and not recheck.passed:
+            # The fix ran but neither the declared name nor the bundle
+            # basename matches what macOS now reports -- genuinely unusual,
+            # so name it rather than leaving the reader to guess.
+            items, _err = list_login_items()
+            recheck_message = (
+                f"{recheck.message} (the item may have been registered "
+                f"under a name other than '{name}' or the app bundle's "
+                f"basename; current login items: {', '.join(items) if items else 'none'})"
             )
-            ctx.fail(
-                f"login_item {name}: FAILED - {detail}",
-                type="env_login_item", name=name, message=f"{name}: {detail}",
-                persist_across_sessions=True,
-            )
+        _env_report_fix(
+            ctx, "login_item", "env_login_item", name,
+            fix_ok, msg, recheck.passed, recheck_message,
+        )
 
 
 def _env_check_user_text(name, text):
@@ -5998,6 +6022,22 @@ def _env_phase_env_checks(ctx):
                 f"env_check {name}: INVALID cost {cost!r} - must be 'quick' or 'slow'",
                 type="env_check", name=name,
                 message=f"{name}: invalid cost {cost!r}: must be 'quick' or 'slow'",
+                persist_across_sessions=True,
+            )
+            continue
+        # `cadence` is read by exactly one downstream line (the
+        # cadence_filter match above), so a typo silently removed the entry
+        # from every always lane -- validate it here like cost/timeout.
+        cadence = entry.get("cadence")
+        if cadence is not None and cadence != "always":
+            ctx.fail(
+                f"env_check {name}: INVALID cadence {cadence!r} - the only "
+                f"accepted value is 'always' (or omit the field)",
+                type="env_check", name=name,
+                message=(
+                    f"{name}: invalid cadence {cadence!r}: the only "
+                    f"accepted value is 'always' (or omit the field)"
+                ),
                 persist_across_sessions=True,
             )
             continue
@@ -6326,8 +6366,26 @@ def _process_env_pass(project_dir, current_os, data_dir, plugin_root,
         # the whole guarantee the cadence exists to make, so run them here too --
         # silently, and WITHOUT restamping env_state.json, which still describes
         # the last time the FULL manifest converged.
-        _run_always_entries_only(
-            merged, current_os, data_dir, plugin_root, project_dir, hostname)
+        #
+        # "Silently" means never displayed (this path writes no
+        # bootstrap_display.pending, mirroring the throttled always lane), but
+        # NOT silently in the log: a cadence:always fix that mutates (clone,
+        # pull, commit) or fails must still leave a trace, or the repo's
+        # "Anti-pattern: silent bootstrap operations" rule is violated on this
+        # path alone. Mirror the throttled lane's own choice at the run_kind
+        # == "always" branch (this module, ~L677-700): collect actions +
+        # failures into one log block via write_log_block. No cooldown stamp,
+        # env_state, or display-pending write from here.
+        _closed_gate_failures, _closed_gate_actions, _closed_gate_ok = \
+            _run_always_entries_only(
+                merged, current_os, data_dir, plugin_root, project_dir, hostname)
+        _closed_gate_entries = list(_closed_gate_actions)
+        _closed_gate_entries.extend(
+            f"env_check {f.get('name', '?')}: {f.get('message', 'FAILED')}"
+            for f in _closed_gate_failures)
+        if _closed_gate_entries:
+            from .log import write_log_block
+            write_log_block(data_dir, "bootstrap always", _closed_gate_entries)
         return []
     ok_entries.append(f"running ({reason})")
 

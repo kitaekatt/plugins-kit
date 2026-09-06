@@ -304,8 +304,9 @@ reference_skill:
         about a day.
 
         env.json has NO env_vars section and NO PATH edits (both are bootstrap.json's
-        alone). All env.json failures are manual-attention -- the engine already ran the
-        fix. Full schema: references/manifest-reference.md (the env.json section).
+        alone). Most env.json failures are manual-attention -- the engine already ran the
+        fix; two conditions defer to the fix-all queue instead (an env_checks
+        `elevated: true` fix without privileges, and a symlinks WinError 1314). Full schema: references/manifest-reference.md (the env.json section).
       gotchas:
         - Unknown machine, os mismatch, hosts-filter typo, and a missing `machines`
           registry are all hard errors (one descriptive fix-all item each); bootstrap.json

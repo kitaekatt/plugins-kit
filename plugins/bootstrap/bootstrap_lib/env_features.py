@@ -191,10 +191,14 @@ class SymlinkFixResult(NamedTuple):
 def fix_symlink(source: str, target: str, backup: bool) -> SymlinkFixResult:
     """Make target a symlink to source (env-config ConfigLinkManager semantics).
 
-    A real file at target is preserved as a timestamped ``.backup_<ts>``
-    sibling when ``backup`` is true, else removed. An existing symlink
-    (wrong or dangling) is replaced without backup -- a link carries no
-    content worth keeping. A directory at target is never replaced.
+    A real file at target is always moved aside to a timestamped
+    ``.backup_<ts>`` sibling BEFORE ``os.symlink`` runs -- this protects the
+    file from a failing symlink attempt regardless of ``backup``. Once the
+    link succeeds, the aside copy is kept and reported when ``backup`` is
+    true, else removed; on ANY symlink failure it is restored to target
+    first. An existing symlink (wrong or dangling) is replaced without
+    backup -- a link carries no content worth keeping. A directory at target
+    is never replaced.
 
     Two self-alias guards protect the source: a textual one (source and
     target are the same path) and a resolved one (textually distinct paths
@@ -239,13 +243,23 @@ def fix_symlink(source: str, target: str, backup: bool) -> SymlinkFixResult:
             elif os.path.isdir(target):
                 return SymlinkFixResult(
                     False, f"target is a directory, refusing to replace: {target}")
-            elif backup:
+            else:
+                # A real file: always move it aside FIRST, whatever `backup`
+                # says, so a failing os.symlink (WinError 1314, or any other
+                # OSError) can never leave the target simply gone. `backup`
+                # only decides what happens to this aside copy once the link
+                # SUCCEEDS -- kept and reported when true, removed when
+                # false. On any symlink failure the aside copy is restored
+                # before returning, below.
                 backed_up = f"{target}.backup_{datetime.now():%Y%m%d_%H%M%S}"
                 os.replace(target, backed_up)
-            else:
-                os.unlink(target)
 
-        os.symlink(source, target)
+        try:
+            os.symlink(source, target)
+        except OSError:
+            if backed_up is not None:
+                os.replace(backed_up, target)
+            raise
     except OSError as e:
         return SymlinkFixResult(
             False,
@@ -257,7 +271,13 @@ def fix_symlink(source: str, target: str, backup: bool) -> SymlinkFixResult:
 
     msg = f"linked {target} -> {source}"
     if backed_up:
-        msg += f" (existing file backed up to {backed_up})"
+        if backup:
+            msg += f" (existing file backed up to {backed_up})"
+        else:
+            try:
+                os.remove(backed_up)
+            except OSError:
+                pass
     return SymlinkFixResult(True, msg)
 
 
@@ -367,11 +387,15 @@ def fix_shell_ensure(content: str, current_os: str) -> Tuple[bool, str]:
 
 
 def check_shell_forbid(name: str, pattern: str) -> Result:
-    """The pattern must not match any line of any existing rc file.
+    """The pattern must not match any UNCOMMENTED line of any existing rc file.
 
-    The pattern carries its own comment-exclusion (e.g. the TERM entry's
-    ``^\\s*(export\\s+)?TERM=`` cannot match a ``#``-prefixed line), so a
-    match = an uncommented violation. No rc file = trivially clean.
+    A pattern the author anchored themselves already excludes comments (e.g.
+    the TERM entry's ``^\\s*(export\\s+)?TERM=`` cannot match a
+    ``#``-prefixed line), but not every pattern is anchored that way -- so a
+    line already commented out (``lstrip()`` starts with ``#``) is always
+    skipped here too, matching :func:`fix_shell_forbid`'s own skip: the
+    forbid is already satisfied for a line that is already a comment,
+    whatever the pattern says. No rc file = trivially clean.
     """
     rx = re.compile(pattern)
     offending = []
@@ -384,6 +408,8 @@ def check_shell_forbid(name: str, pattern: str) -> Result:
                 passed=False, subject=name, message=f"cannot read {rc}: {e}",
             )
         for i, line in enumerate(lines, start=1):
+            if line.lstrip().startswith("#"):
+                continue
             if rx.search(line):
                 offending.append(f"{os.path.basename(rc)}:{i}")
     if offending:
@@ -397,11 +423,16 @@ def check_shell_forbid(name: str, pattern: str) -> Result:
 
 
 def fix_shell_forbid(pattern: str) -> Tuple[bool, str]:
-    """Comment out every matching line (``# `` prefix) in every rc file.
+    """Comment out every matching UNCOMMENTED line (``# `` prefix) in every
+    rc file.
 
     env-config comment_term_overrides semantics: matching lines are
     preserved as comments, never deleted. Files are rewritten only when a
-    line actually changed.
+    line actually changed. A line already commented (``lstrip()`` starts
+    with ``#``) is left untouched even when the pattern would still match it
+    -- without this, an unanchored pattern (one that does not exclude
+    comments itself) re-prepends ``# `` every pass and the file grows
+    ``# # # ...`` forever, never converging.
     """
     rx = re.compile(pattern)
     commented = []
@@ -412,7 +443,9 @@ def fix_shell_forbid(pattern: str) -> Tuple[bool, str]:
             changed = 0
             new_lines = []
             for line in lines:
-                if rx.search(line):
+                if line.lstrip().startswith("#"):
+                    new_lines.append(line)
+                elif rx.search(line):
                     new_lines.append(f"# {line}")
                     changed += 1
                 else:
@@ -523,6 +556,14 @@ def read_symbolic_hotkeys() -> Tuple[Optional[Dict], str]:
 
     Returns ``(plist_dict, "")`` or ``(None, error)``. Side-effect free --
     this is the check side (env-config check_macos_keyboard_shortcuts).
+
+    A plist exported with no ``AppleSymbolicHotKeys`` dict at all is treated
+    as an empty one, not an error: macOS records only hotkeys CHANGED from
+    factory, so a freshly installed machine can genuinely export none, and
+    apply_symbolic_hotkeys already creates a fresh slot for any id absent
+    from the dict. Only a genuine export failure (no plist at all -- a
+    nonzero ``defaults export``, or one that could not run or parse) stays a
+    failure.
     """
     try:
         proc = subprocess.run(
@@ -538,8 +579,7 @@ def read_symbolic_hotkeys() -> Tuple[Optional[Dict], str]:
     except (subprocess.SubprocessError, OSError,
             plistlib.InvalidFileException, ValueError) as e:
         return None, f"failed to read symbolic hotkeys: {e}"
-    if "AppleSymbolicHotKeys" not in data:
-        return None, f"no AppleSymbolicHotKeys dict in {HOTKEYS_DOMAIN}"
+    data.setdefault("AppleSymbolicHotKeys", {})
     return data, ""
 
 
@@ -639,15 +679,25 @@ def _flush_hotkey_caches() -> None:
 # login_items (spec 3.1 feature 5)
 # ---------------------------------------------------------------------------
 
+_LOGIN_ITEMS_SCRIPT = (
+    "set AppleScript's text item delimiters to linefeed\n"
+    'tell application "System Events" to set itemNames to name of every login item\n'
+    "return itemNames as text"
+)
+
+
 def list_login_items() -> Tuple[Optional[List[str]], str]:
     """The names of every login item, via System Events.
 
-    Returns ``(names, "")`` or ``(None, error)``.
+    Returns ``(names, "")`` or ``(None, error)``. Joined by a LINEFEED, not
+    a comma -- a comma-joined list mis-parses any login item whose own name
+    contains a comma (splitting it into two items), so the query sets
+    AppleScript's text item delimiters to linefeed before rendering the
+    list as text.
     """
     try:
         proc = subprocess.run(
-            ["osascript", "-e",
-             'tell application "System Events" to get the name of every login item'],
+            ["osascript", "-e", _LOGIN_ITEMS_SCRIPT],
             capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=_OSASCRIPT_TIMEOUT,
         )
     except (subprocess.SubprocessError, OSError) as e:
@@ -657,10 +707,28 @@ def list_login_items() -> Tuple[Optional[List[str]], str]:
     out = proc.stdout.strip()
     if not out:
         return [], ""
-    return [item.strip() for item in out.split(",")], ""
+    return [item.strip() for item in out.split("\n")], ""
 
 
-def check_login_item(name: str) -> Result:
+def _bundle_basename(path: str) -> str:
+    """The login-item name macOS derives from an app bundle path."""
+    name = os.path.basename(path.rstrip("/\\"))
+    if name.endswith(".app"):
+        name = name[:-4]
+    return name
+
+
+def check_login_item(name: str, path: Optional[str] = None) -> Result:
+    """The entry is registered under EITHER its declared `name` OR the app
+    bundle's basename (derived from `path`, when given).
+
+    macOS names a login item from the app bundle, not from the manifest, so
+    a `name` that differs from the bundle's basename (e.g. entry "Docker
+    Desktop" for /Applications/Docker.app, which System Events reports as
+    "Docker") must still be recognized as present -- otherwise the fix adds
+    it, the name-only re-check still fails, and every later pass adds it
+    again (unbounded duplicate login items).
+    """
     items, err = list_login_items()
     if items is None:
         return Result(passed=False, subject=name, message=err)
@@ -668,6 +736,16 @@ def check_login_item(name: str) -> Result:
         return Result(
             passed=True, subject=name, message="registered as a login item",
         )
+    if path:
+        basename = _bundle_basename(path)
+        if basename and basename in items:
+            return Result(
+                passed=True, subject=name,
+                message=(
+                    f"registered as a login item under the app bundle name "
+                    f"'{basename}' (entry name '{name}' differs)"
+                ),
+            )
     return Result(
         passed=False, subject=name,
         message=f"not a login item (current: {', '.join(items) or 'none'})",

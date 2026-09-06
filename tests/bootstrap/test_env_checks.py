@@ -909,3 +909,111 @@ class TestEnvCheckUserText:
         # Stripping must never leave the user an empty line.
         from bootstrap_lib.engine import _env_check_user_text
         assert _env_check_user_text("repo-sync", "repo-sync:") == "repo-sync:"
+
+
+class TestClosedGateAlwaysLogging:
+    """I2: on the CLOSED-gate path, _process_env_pass calls
+    _run_always_entries_only and used to discard its (failures, actions,
+    ok_entries) outright, returning []. A cadence:'always' entry that
+    mutates on this path left no log line, and a failing one vanished. The
+    fix mirrors the throttled always lane's own logging choice
+    (engine.py's run_kind == "always" branch, L677-700): write a
+    "bootstrap always" log block, never touch env_state/cooldown/display.
+    """
+
+    def _pass(self, data_dir, plugin_root, hostname="testhost"):
+        action_entries: list = []
+        ok_entries: list = []
+        failures = _process_env_pass(
+            None, "ubuntu", str(data_dir), str(plugin_root),
+            action_entries, ok_entries,
+            engine_version=ENGINE_VERSION, hostname=hostname,
+        )
+        return failures, action_entries, ok_entries
+
+    def test_closed_gate_always_fix_success_is_logged(
+        self, isolated_home, tmp_path
+    ):
+        data_dir = tmp_path / "data"
+        plugin_root = tmp_path / "plugin"
+        data_dir.mkdir()
+        plugin_root.mkdir()
+        marker = isolated_home / "flag"
+        marker.write_text("")
+        entry = {"name": "always-check", "cadence": "always",
+                 "check": f"test -f {marker.as_posix()}",
+                 "fix": f"touch {marker.as_posix()}"}
+        _write_json(isolated_home / ".claude" / "env.json",
+                    _manifest(env_checks=[entry]))
+
+        first_failures, _, _ = self._pass(data_dir, plugin_root)
+        assert first_failures == []
+        assert read_env_state(str(data_dir))["last_result"] == "clean"
+        marker.unlink()  # the always lane must re-fix it on the closed pass
+
+        second_failures, second_actions, _ = self._pass(data_dir, plugin_root)
+
+        assert second_failures == []
+        # The closed-gate path never displays -- confirmed by the pass's own
+        # (discarded-by-design) action list staying empty.
+        assert second_actions == []
+        assert marker.exists()  # the fix genuinely ran
+        log = (data_dir / "bootstrap.log").read_text()
+        assert "always-check" in log
+        assert "fixed" in log
+
+    def test_closed_gate_always_check_failure_is_logged(
+        self, isolated_home, tmp_path
+    ):
+        data_dir = tmp_path / "data"
+        plugin_root = tmp_path / "plugin"
+        data_dir.mkdir()
+        plugin_root.mkdir()
+        marker = isolated_home / "flag"
+        marker.write_text("")
+        entry = {"name": "always-fail", "cadence": "always",
+                 "check": f"test -f {marker.as_posix()}"}
+        _write_json(isolated_home / ".claude" / "env.json",
+                    _manifest(env_checks=[entry]))
+
+        first_failures, _, _ = self._pass(data_dir, plugin_root)
+        assert first_failures == []
+        marker.unlink()
+
+        second_failures, second_actions, _ = self._pass(data_dir, plugin_root)
+
+        assert second_failures == []
+        assert second_actions == []
+        log = (data_dir / "bootstrap.log").read_text()
+        assert "always-fail" in log
+
+
+class TestCadenceValidation:
+    """I3: `cadence` is read by exactly one line (the cadence_filter match)
+    and was never validated -- a typo silently removed the entry from
+    every always lane forever. Mirror the neighbouring cost/timeout
+    validation: an unrecognized value is a descriptive persistent failure."""
+
+    def test_typo_cadence_is_a_failure(self, isolated_home, run_env_pass):
+        entry = {"name": "probe", "check": "true", "cadence": "alwyas"}
+        _write_json(isolated_home / ".claude" / "env.json",
+                    _manifest(env_checks=[entry]))
+
+        result = run_env_pass()
+
+        assert len(result.failures) == 1
+        assert "cadence" in result.failures[0]["message"]
+        assert "alwyas" in result.failures[0]["message"]
+        assert "always" in result.failures[0]["message"]
+
+    def test_absent_cadence_is_fine(self, isolated_home, run_env_pass):
+        entry = {"name": "probe", "check": "true"}
+        _write_json(isolated_home / ".claude" / "env.json",
+                    _manifest(env_checks=[entry]))
+        assert run_env_pass().failures == []
+
+    def test_valid_cadence_always_is_fine(self, isolated_home, run_env_pass):
+        entry = {"name": "probe", "check": "true", "cadence": "always"}
+        _write_json(isolated_home / ".claude" / "env.json",
+                    _manifest(env_checks=[entry]))
+        assert run_env_pass().failures == []

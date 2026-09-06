@@ -37,6 +37,7 @@ from bootstrap_lib.env_features import (
     check_symlink,
     defaults_expected_string,
     expand_env_path,
+    fix_shell_forbid,
     fix_symlink,
     hotkey_state,
     render_shell_content,
@@ -547,6 +548,69 @@ class TestSymlinkNeedsElevation:
         assert any("FAILED" in a for a in result.action_entries)
 
 
+class TestSymlinkFixPreservesFileOnFailure:
+    """I1: fix_symlink must never lose the user's real file when os.symlink
+    raises, whatever `backup` says -- the target is moved aside BEFORE
+    os.symlink runs and restored on any failure."""
+
+    def test_backup_false_1314_restores_content_no_backup_left(
+        self, tmp_path, monkeypatch
+    ):
+        source = tmp_path / "src.toml"
+        source.write_text("tracked")
+        target = tmp_path / "starship.toml"
+        target.write_text("precious local edits")
+        monkeypatch.setattr(
+            env_features.os, "symlink",
+            lambda s, t: (_ for _ in ()).throw(_WinPrivilegeError()))
+
+        res = fix_symlink(str(source), str(target), backup=False)
+
+        assert not res.ok
+        assert res.needs_elevation is True
+        assert target.is_file() and not target.is_symlink()
+        assert target.read_text() == "precious local edits"
+        assert list(tmp_path.glob("*.backup_*")) == []
+
+    def test_backup_false_plain_oserror_restores_content_no_backup_left(
+        self, tmp_path, monkeypatch
+    ):
+        source = tmp_path / "src.toml"
+        source.write_text("tracked")
+        target = tmp_path / "starship.toml"
+        target.write_text("precious local edits")
+        monkeypatch.setattr(
+            env_features.os, "symlink",
+            lambda s, t: (_ for _ in ()).throw(OSError("disk full")))
+
+        res = fix_symlink(str(source), str(target), backup=False)
+
+        assert not res.ok
+        assert res.needs_elevation is False
+        assert target.is_file() and not target.is_symlink()
+        assert target.read_text() == "precious local edits"
+        assert list(tmp_path.glob("*.backup_*")) == []
+
+    def test_backup_true_failure_restores_content_too(
+        self, tmp_path, monkeypatch
+    ):
+        source = tmp_path / "src.toml"
+        source.write_text("tracked")
+        target = tmp_path / "starship.toml"
+        target.write_text("precious local edits")
+        monkeypatch.setattr(
+            env_features.os, "symlink",
+            lambda s, t: (_ for _ in ()).throw(_WinPrivilegeError()))
+
+        res = fix_symlink(str(source), str(target), backup=True)
+
+        assert not res.ok
+        assert res.needs_elevation is True
+        assert target.is_file() and not target.is_symlink()
+        assert target.read_text() == "precious local edits"
+        assert list(tmp_path.glob("*.backup_*")) == []
+
+
 class TestSymlinkSourceEqualsTarget:
     def test_entry_fails_and_preserves_file(self, isolated_home, run_env_pass):
         path = isolated_home / "starship.toml"
@@ -726,6 +790,31 @@ class TestShellRcForbid:
         assert len(result.failures) == 1
         assert "invalid forbid regex" in result.failures[0]["message"]
 
+    def test_unanchored_pattern_does_not_recomment_on_second_pass(
+        self, isolated_home, run_env_pass
+    ):
+        """I4: fix_shell_forbid used to prepend '# ' to EVERY matching line,
+        including one it commented on an earlier pass. With an UNANCHORED
+        pattern (no comment-exclusion of its own, unlike NO_TERM's ^\\s*
+        anchor) the file grows '# # # ...' forever and the entry never
+        converges."""
+        entry = {"name": "no-term-anywhere", "forbid": "TERM="}
+        bashrc = isolated_home / ".bashrc"
+        bashrc.write_text("export TERM=dumb\n")
+        _write_json(isolated_home / ".claude" / "env.json",
+                    _manifest(shell_rc=[entry]))
+
+        first = run_env_pass()
+        assert first.failures == []
+        once = bashrc.read_text()
+        assert once == "# export TERM=dumb\n"
+
+        second = run_env_pass()
+
+        assert second.failures == []
+        assert second.action_entries == []
+        assert bashrc.read_text() == once  # byte-identical, not "# # ..."
+
 
 class TestShellRcValidation:
     @pytest.mark.parametrize("entry", [
@@ -769,6 +858,26 @@ class TestShellChecksUnit:
             "no-term-override", "^\\s*(export\\s+)?TERM=")
         assert not result.passed
         assert ".bashrc:2" in result.message
+
+    def test_fix_forbid_twice_with_unanchored_pattern_is_byte_identical(
+        self, isolated_home
+    ):
+        """I4 unit-level pin: an unanchored pattern (no comment-exclusion of
+        its own) must not re-comment a line it already commented."""
+        bashrc = isolated_home / ".bashrc"
+        bashrc.write_text("export TERM=dumb\n")
+
+        ok1, _msg1 = fix_shell_forbid("TERM=")
+        assert ok1
+        once = bashrc.read_text()
+        assert once == "# export TERM=dumb\n"
+
+        ok2, msg2 = fix_shell_forbid("TERM=")
+        assert ok2
+        assert bashrc.read_text() == once
+        assert msg2 == "nothing to comment out"
+
+        assert check_shell_forbid("no-term-anywhere", "TERM=").passed
 
 
 # ---------------------------------------------------------------------------
@@ -870,8 +979,8 @@ class FakeMac:
 
     def _osascript(self, cmd):
         script = cmd[2]
-        if "get the name of every login item" in script:
-            return FakeProc(0, stdout=", ".join(self.login_items) + "\n")
+        if "name of every login item" in script:
+            return FakeProc(0, stdout="\n".join(self.login_items) + "\n")
         if "make login item" in script:
             m = re.search(r'path:"([^"]+)"', script)
             name = os.path.basename(m.group(1))
@@ -1164,6 +1273,32 @@ class TestMacosHotkeys:
         assert second.action_entries == []
         assert mac.write_calls() == []
 
+    def test_missing_apple_symbolic_hotkeys_key_creates_slot_not_failure(
+        self, isolated_home, run_env_pass, monkeypatch
+    ):
+        """I7: macOS records only hotkeys CHANGED from factory, so a plist
+        exported with NO 'AppleSymbolicHotKeys' dict at all is the normal
+        state of a freshly installed machine -- it must not hard-fail every
+        session, only the genuine export-failure branch (no plist at all)
+        should."""
+        mac = FakeMac(hotkeys={}).install(monkeypatch)  # no such key
+        entries = [{"id": 99, "parameters": [1, 2, 3], "enabled": True}]
+        self._write_manifest(isolated_home, entries=entries)
+
+        result = run_env_pass(current_os="macos")
+
+        assert result.failures == []
+        assert mac.hotkeys["AppleSymbolicHotKeys"]["99"] == {
+            "enabled": True,
+            "value": {"parameters": [1, 2, 3], "type": "standard"},
+        }
+
+
+class TestMacosHotkeysContinued:
+    def _write_manifest(self, home, entries=SCREENSHOT_HOTKEYS, os_="macos"):
+        _write_json(home / ".claude" / "env.json",
+                    _manifest(os_=os_, macos_hotkeys=entries))
+
     def test_missing_id_is_created_not_failed(
         self, isolated_home, run_env_pass, monkeypatch
     ):
@@ -1208,6 +1343,36 @@ class TestMacosHotkeys:
         result = run_env_pass(current_os="macos")
         assert len(result.failures) == 1
         assert "invalid macos_hotkeys entry" in result.failures[0]["message"]
+
+
+class TestReadSymbolicHotkeysUnit:
+    """I7 unit-level pin: an exported plist lacking the AppleSymbolicHotKeys
+    key must be treated as an empty dict, not a hard failure -- only a
+    genuine export failure (no plist at all) stays a failure."""
+
+    def test_absent_key_is_treated_as_empty_dict(self, monkeypatch):
+        def fake_run(cmd, **kwargs):
+            return FakeProc(0, stdout=plistlib.dumps({}))
+
+        monkeypatch.setattr(
+            env_features, "subprocess", _fake_subprocess(fake_run))
+
+        data, err = env_features.read_symbolic_hotkeys()
+
+        assert err == ""
+        assert data == {"AppleSymbolicHotKeys": {}}
+
+    def test_export_failure_stays_a_failure(self, monkeypatch):
+        def fake_run(cmd, **kwargs):
+            return FakeProc(1, stderr="not authorized")
+
+        monkeypatch.setattr(
+            env_features, "subprocess", _fake_subprocess(fake_run))
+
+        data, err = env_features.read_symbolic_hotkeys()
+
+        assert data is None
+        assert "defaults export" in err
 
 
 class TestHotkeyStateUnit:
@@ -1348,6 +1513,74 @@ class TestLoginItems:
         assert second.action_entries == []
         assert mac.write_calls() == []
 
+    def test_bundle_basename_match_passes_without_adding_again(
+        self, isolated_home, run_env_pass, monkeypatch
+    ):
+        """I6: the check matched the entry `name` against macOS's reported
+        names, but the fix registers by `path` -- and macOS names the item
+        from the app bundle, not the manifest. A mismatch (entry name
+        "Docker Desktop", bundle "Docker.app") used to mean: fix adds,
+        re-check fails by name, next session adds AGAIN. The check must also
+        accept the app bundle's basename."""
+        app_dir = isolated_home / "Applications" / "Docker.app"
+        app_dir.mkdir(parents=True)
+        mac = FakeMac(login_items=["Docker"]).install(monkeypatch)
+        self._write_manifest(isolated_home, app_dir, name="Docker Desktop")
+
+        result = run_env_pass(current_os="macos")
+
+        assert result.failures == []
+        assert result.action_entries == []
+        makes = [c for c in mac.calls
+                 if c[0] == "osascript" and "make login item" in c[2]]
+        assert makes == []  # never re-added
+
+    def test_comma_in_login_item_name_parses_as_one_item(
+        self, isolated_home, run_env_pass, monkeypatch
+    ):
+        """I6: list_login_items used to split osascript's comma-joined output,
+        so a name containing a comma mis-parsed into two items."""
+        app_dir = isolated_home / "Applications" / "Acme, Inc.app"
+        app_dir.mkdir(parents=True)
+        mac = FakeMac(login_items=["Acme, Inc"]).install(monkeypatch)
+        self._write_manifest(isolated_home, app_dir, name="Acme, Inc")
+
+        result = run_env_pass(current_os="macos")
+
+        assert result.failures == []
+        assert result.action_entries == []
+        assert mac.write_calls() == []
+
+
+class TestCheckLoginItemUnit:
+    """I6 unit-level pin for check_login_item's bundle-basename fallback."""
+
+    def test_matches_entry_name_exactly(self, monkeypatch):
+        monkeypatch.setattr(env_features, "list_login_items",
+                             lambda: (["Tailscale"], ""))
+        result = env_features.check_login_item("Tailscale")
+        assert result.passed
+
+    def test_falls_back_to_bundle_basename(self, monkeypatch):
+        monkeypatch.setattr(env_features, "list_login_items",
+                             lambda: (["Docker"], ""))
+        result = env_features.check_login_item(
+            "Docker Desktop", path="/Applications/Docker.app")
+        assert result.passed
+
+    def test_neither_name_nor_basename_matches_fails(self, monkeypatch):
+        monkeypatch.setattr(env_features, "list_login_items",
+                             lambda: (["Other"], ""))
+        result = env_features.check_login_item(
+            "Docker Desktop", path="/Applications/Docker.app")
+        assert not result.passed
+
+    def test_no_path_still_falls_back_to_name_only(self, monkeypatch):
+        monkeypatch.setattr(env_features, "list_login_items",
+                             lambda: (["Other"], ""))
+        result = env_features.check_login_item("Docker Desktop")
+        assert not result.passed
+
 
 # ---------------------------------------------------------------------------
 # Subprocess bounds + best-effort flushes (R1)
@@ -1474,6 +1707,102 @@ class TestSubprocessFailureContainment:
 # ---------------------------------------------------------------------------
 # Section-shape validation + pass stamping
 # ---------------------------------------------------------------------------
+
+class TestFixRecheckFailedMessage:
+    """I9 characterization: pins the "fix reported '<msg>' but re-check
+    failed: <recheck message>" text every declarative env phase's fix/
+    re-check tail produces, so extracting the shared _env_report_fix helper
+    stays behavior-neutral. Each test forces a genuine fix success followed
+    by a forced re-check failure (the branch the helper's "else" arm
+    covers)."""
+
+    def test_symlink(self, isolated_home, run_env_pass, monkeypatch):
+        source = isolated_home / "src.toml"
+        source.write_text("x")
+        target = isolated_home / "link.toml"
+        entry = {"name": "cfg", "source": str(source), "target": str(target)}
+        _write_json(isolated_home / ".claude" / "env.json",
+                    _manifest(symlinks=[entry]))
+        monkeypatch.setattr(
+            env_features, "check_symlink",
+            lambda s, t: env_features.Result(
+                passed=False, subject=t, message="still wrong"))
+
+        result = run_env_pass()
+
+        assert len(result.failures) == 1
+        msg = result.failures[0]["message"]
+        assert msg.startswith("cfg: fix reported '")
+        assert "but re-check failed: still wrong" in msg
+
+    def test_shell_rc_ensure(self, isolated_home, run_env_pass, monkeypatch):
+        entry = {"name": "block", "content": "export FOO=1"}
+        _write_json(isolated_home / ".claude" / "env.json",
+                    _manifest(shell_rc=[entry]))
+        monkeypatch.setattr(
+            env_features, "check_shell_ensure",
+            lambda name, content: env_features.Result(
+                passed=False, subject=name, message="still missing"))
+
+        result = run_env_pass()
+
+        assert len(result.failures) == 1
+        msg = result.failures[0]["message"]
+        assert msg.startswith("block: fix reported '")
+        assert "but re-check failed: still missing" in msg
+
+    def test_macos_default(self, isolated_home, run_env_pass, monkeypatch):
+        FakeMac().install(monkeypatch)
+        entry = {"domain": "NSGlobalDomain", "key": "Foo", "value": True,
+                 "os": ["macos"]}
+        _write_json(isolated_home / ".claude" / "env.json",
+                    _manifest(os_="macos", macos_defaults=[entry]))
+        monkeypatch.setattr(
+            env_features, "check_macos_default",
+            lambda d, k, v: env_features.Result(
+                passed=False, subject=f"{d}.{k}", message="still wrong"))
+
+        result = run_env_pass(current_os="macos")
+
+        assert len(result.failures) == 1
+        msg = result.failures[0]["message"]
+        assert msg.startswith("NSGlobalDomain.Foo: fix reported '")
+        assert "but re-check failed: still wrong" in msg
+
+    def test_macos_hotkey(self, isolated_home, run_env_pass, monkeypatch):
+        FakeMac(hotkeys=FACTORY_HOTKEYS).install(monkeypatch)
+        _write_json(isolated_home / ".claude" / "env.json",
+                    _manifest(os_="macos", macos_hotkeys=SCREENSHOT_HOTKEYS))
+        monkeypatch.setattr(
+            env_features, "hotkey_state",
+            lambda data, hid, params, enabled: ("mismatch", "still off"))
+
+        result = run_env_pass(current_os="macos")
+
+        assert len(result.failures) == len(SCREENSHOT_HOTKEYS)
+        msg = result.failures[0]["message"]
+        assert "fix reported '" in msg
+        assert "but re-check failed: still off" in msg
+
+    def test_login_item(self, isolated_home, run_env_pass, monkeypatch):
+        FakeMac().install(monkeypatch)
+        app_dir = isolated_home / "Applications" / "Tailscale.app"
+        app_dir.mkdir(parents=True)
+        entry = {"name": "Tailscale", "path": str(app_dir), "os": ["macos"]}
+        _write_json(isolated_home / ".claude" / "env.json",
+                    _manifest(os_="macos", login_items=[entry]))
+        monkeypatch.setattr(
+            env_features, "check_login_item",
+            lambda name, path=None: env_features.Result(
+                passed=False, subject=name, message="still absent"))
+
+        result = run_env_pass(current_os="macos")
+
+        assert len(result.failures) == 1
+        msg = result.failures[0]["message"]
+        assert msg.startswith("Tailscale: fix reported '")
+        assert "but re-check failed: still absent" in msg
+
 
 class TestSectionShape:
     def test_non_array_section_is_a_failure(self, isolated_home, run_env_pass):

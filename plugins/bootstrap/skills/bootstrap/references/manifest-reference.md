@@ -828,7 +828,7 @@ Each entry in the `marketplaces` array declares a marketplace the engine should 
 | `name` | Yes | Marketplace name; also the merge identity key |
 | `source` | For registration | Git URL passed to `claude plugin marketplace add` when the marketplace is not yet registered. Optional when it is already registered — the common case for a pin-only override in a user layer |
 | `remove` | No | When truthy (or `enabled: false`), deregister the marketplace via `claude plugin marketplace remove` (which also uninstalls its plugins). **Takes precedence over every other field** — `source`/`pin`/`alwaysUpdate` are meaningless for a marketplace being torn down. Idempotent: an already-absent marketplace is a verbose-only ok, so the directive can live in a checked-in layer forever without erroring once the removal has happened. See below |
-| `alwaysUpdate` | No | Refresh the marketplace **clone/listing** against its remote every session. NOTE: this does **not** bump *installed plugin versions* — for that the marketplace needs Claude Code's `autoUpdate: true` (set via an `extraKnownMarketplaces` block in a settings.json). Declaring a marketplace here with only `alwaysUpdate` keeps the listing fresh while installed plugins stay pinned — see the `plugin_autoupdate_propagation` fact in SKILL.md. **Ignored while `pin` is set** (a one-line warning action is emitted) |
+| `alwaysUpdate` | No | Refresh the marketplace **clone/listing** against its remote every session. NOTE: this does **not** bump *installed plugin versions* -- for that the marketplace needs Claude Code's `autoUpdate: true` (set via an `extraKnownMarketplaces` block in a settings.json). Declaring a marketplace here with only `alwaysUpdate` keeps the listing fresh while installed plugins stay pinned (update mechanics: references/plugin-reload-lifecycle.md) -- **Ignored while `pin` is set** (a one-line warning action is emitted) |
 | `pin` | No | Git committish (SHA or tag) that snapshots the ENTIRE marketplace repo at a moment in time — see below |
 
 ### `remove`
@@ -1120,11 +1120,16 @@ Three traits distinguish it from `bootstrap.json`:
    rewritten on disk, and an engine too old to know `env.json` skips the file
    entirely.
 
-All of `env.json`'s failure types are **manual-attention** items (never
-auto-fixable in the fix-all sense): the engine has *already* run each fix in the
-same pass. What surfaces is the residue that the fix could not resolve — a
-persistent failure that keeps the phase re-running (via the gate) every session
-until it converges. `env.json` failures never block `bootstrap.json` provisioning
+Most of `env.json`'s failure types are **manual-attention** items: the engine has
+*already* run each fix in the same pass, and what surfaces is the residue that the
+fix could not resolve -- a persistent failure that keeps the phase re-running (via
+the gate) every session until it converges. Two conditions are the exception and
+route into the **fix-all queue** instead, exactly like an elevated `bootstrap.json`
+strategy: an `env_checks` entry's `elevated: true` fix when privileges are missing,
+and a `symlinks` entry whose creation fails with Windows' WinError 1314 (no
+Developer Mode). Both are deferred `{method: "command"}` tasks the fix-all runner
+can execute elevated -- see the `env_checks` dispatch table and the `symlinks`
+section below. `env.json` failures never block `bootstrap.json` provisioning
 (tools, fonts, venvs); failure isolation is per-item, as everywhere in the engine.
 
 ## File homes and 4-layer precedence
@@ -1253,7 +1258,9 @@ registry-level machinery as a hosts-filter typo.
   manual-attention item).
 
 **The phase RUNS iff any of** (else it logs one verbose `env: up to date` line and
-is skipped entirely):
+is skipped -- except `env_checks` entries declaring `cadence: "always"`, which
+still run on that closed-gate path, logged to `bootstrap.log` and never displayed,
+without restamping `env_state.json`; see the `cadence` row under `env_checks`):
 
 1. **no stamp** — first run (an explicit reset recreates this state by deleting the
    stamp);
@@ -1496,6 +1503,7 @@ command with an optional `fix` command.
 | `cost` | No (inferred) | `quick` or `slow` — whether the **fix** downloads. Orders the fix queue (quick first) and drives the runner's "this can take several minutes" note. **Usually omit it**: an entry whose `timeout` exceeds the 600s default is inferred `slow`, which already classifies a real install correctly. Declare it only to correct that inference |
 | `description` | No | The user-facing instruction for a check-only entry's manual-attention item. Doubles as the **label** when an `elevated` entry is deferred to the fix queue (else the label is `name`) |
 | `agent_instructions` | No | Agent-facing protocol text (non-empty string) surfaced ONLY to Claude on a runtime-state failure of this check. Rides in the hook's `additionalContext` (the message *to the agent*) as the failure's `agent_msg`, combined with the failure detail — the user-facing log is unchanged. Use it to tell Claude how to handle a specific check's failure (investigate, then offer a fix via `AskUserQuestion` with "do nothing" as the default). Attached on the check-could-not-run, check-only-manual, and fix-failed-recheck paths; NOT on manifest-validation errors (those are authoring bugs). Absent = `agent_msg` stays unset and the numbered item falls back to `message` (unchanged) |
+| `cadence` | No | The only accepted value is `"always"` (an unrecognized value is a persistent manifest-validation failure naming the field and the accepted value). When set, the entry ALSO runs -- beyond the ordinary full-pass dispatch above -- on the throttled always lane (the tiny pass that runs INSTEAD of a full pass in a session the per-project cooldown would otherwise have skipped) and on the closed-gate path of a full pass whose env gate is closed. On both of those paths the entry's outcome is logged to `bootstrap.log` and never displayed to the user; env_state.json, the cooldown stamp, and bootstrap_display.pending are untouched from either path. On a full pass whose gate is OPEN, a `cadence: "always"` entry runs through the ordinary reporting path like any other entry. Use it for a check that must stay current every session (e.g. a repo pulled to head) rather than only once per gate window |
 
 **Dispatch per applicable entry:**
 
