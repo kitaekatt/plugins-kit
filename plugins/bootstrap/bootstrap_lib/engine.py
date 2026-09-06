@@ -6847,7 +6847,17 @@ def _version_satisfies(current, required):
     """True if `current` >= the minimum `required` version (both dotted semver).
 
     `required` may be bare ("0.21.0") or ">=0.21.0" -- both mean "at least".
+    No other form (a caret/tilde range, a bare ">") is documented or
+    supported. `_parse_semver` only strips a leading ">="; handing it
+    anything else scans a non-digit leading character to 0 ("^1.2.0" ->
+    (0, 2, 0)), which would let a much older `current` falsely satisfy the
+    requirement. Guarded here rather than in `_parse_semver` itself, which
+    stays a generic tolerant parser other callers (own-vs-ran version
+    comparisons) rely on for plain version strings.
     """
+    req = str(required).strip()
+    if req and not req.startswith(">=") and not req[0].isdigit():
+        return False
     return _parse_semver(current) >= _parse_semver(required)
 
 
@@ -7032,7 +7042,10 @@ def emit_success_response(log_content, label="bootstrap", output_file=None,
         _write_atomic(output_file, json.dumps(response))
         _record_emit(recorder, "pending", response)
     else:
-        # SessionStart hook: supports hookSpecificOutput with hookEventName
+        # SessionStart hook: supports hookSpecificOutput with hookEventName.
+        # Same body as the background branch above (only hookEventName and
+        # the transport differ) -- see engine-internals.md's "Non-background
+        # output ... is identical except hookEventName".
         user_log = _user_visible_log(log_content)
         response = {
             "continue": True,
@@ -7043,7 +7056,7 @@ def emit_success_response(log_content, label="bootstrap", output_file=None,
             },
         }
         if user_log:
-            response["systemMessage"] = f"{label}:\n{user_log}"
+            response["systemMessage"] = f"{label} -> bootstrap complete:\n{user_log}"
         print(json.dumps(response))
         _record_emit(recorder, "stdout", response)
 
@@ -7116,17 +7129,18 @@ def _collapse_occurred(failures):
 
 
 def _is_elevation_only(failures):
-    """True when every failure is the elevation aggregate or covered by it.
+    """True when the aggregate is present and every remaining failure IS it.
 
-    The predicate for the focused message: an elevation_script item never
-    arrives alone (the per-task failures it summarizes persist alongside it by
-    design), so "all failures are elevation_script" would never fire.
+    The predicate for the focused message. The only call site
+    (emit_failure_response) always passes failures already filtered through
+    `_visible_failures`, which drops every item the aggregate speaks for --
+    so by the time this runs, nothing left is ever `_spoken_for` and the only
+    question is whether every remaining item is the aggregate itself.
     """
     has_aggregate = any(f.get("type") == "elevation_script" for f in failures)
     if not has_aggregate:
         return False
-    return all(f.get("type") == "elevation_script" or _spoken_for(f)
-               for f in failures)
+    return all(f.get("type") == "elevation_script" for f in failures)
 
 
 def _is_auto_fixable(failure):
@@ -7186,10 +7200,25 @@ _ASK_REASONS = ("elevation", "action", "info")
 _CREDENTIAL_NETWORK_TYPES = frozenset({"marketplace", "plugin", "git_dep"})
 
 
+def _normalize_scope_path(p):
+    """Resolve a path the same way on both sides of the scope compare:
+    expanduser, then realpath (follows symlinks -- a symlink planted inside
+    ~/.claude that points outside must not read as in-scope), then normcase
+    (a no-op except on Windows, where it casefolds and normalizes slashes).
+
+    Using expanduser() here -- rather than reading $HOME directly -- is what
+    keeps this in sync with the root: on Windows Git Bash, $HOME is msys-style
+    ("/c/Users/x") while os.path.expanduser() resolves the native profile via
+    USERPROFILE, so building the root from raw $HOME and the target from
+    expanduser compared two differently-shaped strings and never matched (see
+    fix_runner.py's HOME split note for the same underlying mismatch).
+    """
+    return os.path.normcase(os.path.realpath(os.path.expanduser(str(p))))
+
+
 def _user_scope_root():
     """The one tree bootstrap may write to unattended: ~/.claude."""
-    home = os.environ.get("HOME") or os.path.expanduser("~")
-    return os.path.normpath(os.path.join(home, ".claude"))
+    return _normalize_scope_path(os.path.join("~", ".claude"))
 
 
 def _path_in_user_scope(p):
@@ -7198,7 +7227,7 @@ def _path_in_user_scope(p):
     if not p:
         return True
     root = _user_scope_root()
-    ap = os.path.normpath(os.path.expanduser(str(p)))
+    ap = _normalize_scope_path(p)
     return ap == root or ap.startswith(root + os.sep)
 
 
@@ -7235,11 +7264,14 @@ def _ask_reason(failure):
     # user, not a doomed AUTO retry (see _CREDENTIAL_NETWORK_TYPES).
     if t in _CREDENTIAL_NETWORK_TYPES:
         return "info"
-    # Scope guard: an AUTO fix may only write inside ~/.claude. A json/ini
-    # remediation the manifest points at a shared or VCS-tracked file must ask
-    # first -- editing a shared file unattended is the failure we will not
-    # repeat. In-user-scope targets stay AUTO.
-    if t in ("json", "ini") and not _path_in_user_scope(_write_target(failure)):
+    # Scope guard: an AUTO fix may only write inside ~/.claude. A json/ini/
+    # sync_to_data remediation the manifest points at a shared or VCS-tracked
+    # file must ask first -- editing a shared file unattended is the failure
+    # we will not repeat. Every type _write_target knows a target for is
+    # covered here, not just json/ini, else a sync_to_data whose dst falls
+    # outside ~/.claude would slip through as AUTO. In-user-scope targets
+    # stay AUTO.
+    if t in ("json", "ini", "sync_to_data") and not _path_in_user_scope(_write_target(failure)):
         return "info"
     # Safety net: AUTO means "fix it now" and hands Claude a run-this directive,
     # so an item bootstrap CANNOT actually auto-fix (no runnable command/edit and
@@ -7256,9 +7288,27 @@ def _auto_fixable_now(failure):
     """True when Claude can carry the fix out with NO user input: a fix-all-
     eligible type, or an explicit runnable command on the failure. Distinct from
     `_is_auto_fixable` (fix-all-runnable specifically) -- an AUTO item may also be
-    a plain command Claude runs itself or a manifest edit it makes."""
+    a plain command Claude runs itself or a manifest edit it makes.
+
+    The fallback below must agree with `_is_auto_fixable` on the two shapes it
+    already routes ASK: a tool stuck in a blocked install_state (retrying just
+    says "already installed", or only the user can run the manual/elevated
+    step) still carries its old `install_cmd`, and a credential/network type
+    (_CREDENTIAL_NETWORK_TYPES) still carries its `remediation_cmd` -- both
+    would otherwise read as "genuinely runnable" here. In practice `_ask_reason`
+    already routes both to ASK before ever calling this, so the gap was
+    latent; a caller of this function on its own must still get the right
+    answer.
+    """
     if _is_auto_fixable(failure):
         return True
+    t = failure.get("type")
+    if t == "tool" and failure.get("install_state") in (
+        "installed_but_path_stale", "manual_install", "needs_elevation",
+    ):
+        return False
+    if t in _CREDENTIAL_NETWORK_TYPES:
+        return False
     return bool(failure.get("install_cmd") or failure.get("remediation_cmd")
                 or failure.get("remediation"))
 
@@ -7427,7 +7477,7 @@ def _auto_agent_directive(auto_idxs):
     )
 
 
-def _emit_unsupported_platform(message, data_dir, args):
+def _emit_unsupported_platform(message, data_dir, args, recorder=None):
     """Surface an unsupported-platform hard error and stop the pass.
 
     Non-Ubuntu Linux fails fast (detect_os raised UnsupportedPlatformError):
@@ -7440,6 +7490,11 @@ def _emit_unsupported_platform(message, data_dir, args):
     stamped the per-project cooldown BEFORE launching the engine, so leaving it
     in place means this message re-surfaces at most once per cooldown window
     (not on every session).
+
+    The background write uses _write_pending_if_absent, not _write_atomic:
+    an unconsumed bootstrap_display.pending is a verdict the user has not yet
+    seen, and this hard-error path must not clobber it -- the same reasoning
+    behind the crash sink (_emit_engine_crash) using the same guard.
     """
     label = "bootstrap"
     system_message = f"{label} -> {message}"
@@ -7461,7 +7516,8 @@ def _emit_unsupported_platform(message, data_dir, args):
             },
         }
         pending = os.path.join(data_dir, "bootstrap_display.pending")
-        _write_atomic(pending, json.dumps(response))
+        _write_pending_if_absent(pending, json.dumps(response))
+        _record_emit(recorder, "pending", response)
     else:
         response = {
             "continue": True,
@@ -7473,10 +7529,11 @@ def _emit_unsupported_platform(message, data_dir, args):
             },
         }
         print(json.dumps(response))
+        _record_emit(recorder, "stdout", response)
 
 
 def _emit_focused(failure, label, output_file, persistent_output_file,
-                  recorder=None):
+                  recorder=None, log_content=None):
     """Emit ONE failure's own messages as the whole response.
 
     Used when every failure shares a single remediation, so the numbered list
@@ -7488,16 +7545,24 @@ def _emit_focused(failure, label, output_file, persistent_output_file,
     other ASK-type focused failure (e.g. python_stub -- UAC elevation) is wrapped
     so its agent-facing text mandates the AskUserQuestion prompt instead of a
     bare 'walk them through it'.
+
+    ``log_content``'s reload/restart notice blocks (see _user_notice_blocks)
+    are threaded into the systemMessage for the same reason the general path
+    threads them: a pass that both installs a plugin and queues an elevation
+    aggregate must not lose the "restart to load it" notice just because it
+    took the focused path.
     """
     user_msg = failure.get("user_msg", failure.get("message", ""))
     agent_msg = failure.get("agent_msg", failure.get("message", ""))
     if _needs_user(failure) and failure.get("type") != "elevation_script":
         directive = _ask_agent_directive([failure], [1])
         agent_msg = f"{directive}\n\nAfter the user picks \"Fix\", the steps are:\n{agent_msg}"
+    system_message = _join_user_msg(
+        f"{label}: {user_msg}", _user_notice_blocks(log_content))
     response = {
         "continue": True,
         "suppressOutput": False,
-        "systemMessage": f"{label}: {user_msg}",
+        "systemMessage": system_message,
         "hookSpecificOutput": {
             "hookEventName": "UserPromptSubmit" if output_file else "SessionStart",
             "additionalContext": f"{label} -> {agent_msg}",
@@ -7643,10 +7708,14 @@ def emit_failure_response(failures, current_os, log_content, label="bootstrap", 
     # installing non-elevated software) or ASK (get the user's go-ahead via the
     # AskUserQuestion tool first, because the fix needs elevation, a user action,
     # or info only the user has). There is no third "manual attention" outcome.
-    auto = [f for f in failures if not _needs_user(f)]
-    ask = [f for f in failures if _needs_user(f)]
-    auto_idxs = [i for i, f in enumerate(failures, 1) if not _needs_user(f)]
-    ask_idxs = [i for i, f in enumerate(failures, 1) if _needs_user(f)]
+    auto, ask, auto_idxs, ask_idxs = [], [], [], []
+    for i, f in enumerate(failures, 1):
+        if _needs_user(f):
+            ask.append(f)
+            ask_idxs.append(i)
+        else:
+            auto.append(f)
+            auto_idxs.append(i)
 
     trailer_parts = []
     if auto_idxs:
@@ -7681,7 +7750,7 @@ def emit_failure_response(failures, current_os, log_content, label="bootstrap", 
 
     if focus is not None:
         _emit_focused(focus, label, output_file, persistent_output_file,
-                      recorder=recorder)
+                      recorder=recorder, log_content=log_content)
         return
 
     # General path: mixed failures.
@@ -7728,15 +7797,22 @@ def emit_failure_response(failures, current_os, log_content, label="bootstrap", 
         if persistent_output_file:
             _write_atomic(persistent_output_file, json.dumps(response))
     else:
-        # SessionStart hook: supports hookSpecificOutput with hookEventName
+        # SessionStart hook: supports hookSpecificOutput with hookEventName.
+        # Same body as the background branch above (only hookEventName and
+        # the transport differ) -- additionalContext always carries the
+        # complete log alongside the numbered remediation steps (see
+        # remediation-reference.md).
         response = {
             "continue": True,
             "suppressOutput": False,
-            "systemMessage": user_body or
-                f"{label}:\n{_user_visible_log(log_content)}".rstrip(),
+            "systemMessage": user_body or _join_user_msg(
+                f"{label} -> Setup issues found. Fix in order:\n"
+                f"{_user_visible_log(log_content)}".rstrip(),
+                user_msg,
+            ),
             "hookSpecificOutput": {
                 "hookEventName": "SessionStart",
-                "additionalContext": agent_msg,
+                "additionalContext": f"{label} -> bootstrap complete:\n{log_content}\n\n{agent_msg}",
             },
         }
         print(json.dumps(response))

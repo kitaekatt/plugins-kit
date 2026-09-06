@@ -70,6 +70,43 @@ class TestBrewInstallerSignal:
 
 
 # --------------------------------------------------------------------------- #
+# _is_elevation_only: the focused-message predicate, in isolation
+# --------------------------------------------------------------------------- #
+
+class TestIsElevationOnly:
+    def _agg(self, current_os, data_dir, fix_all_cmd=None):
+        tasks = elev.queue_from_failures(
+            [{"elevation": {"method": "apt", "package": "net-tools", "os": current_os}}],
+            current_os)
+        agg = elev.fix_queue_failure(tasks, current_os, data_dir)
+        if fix_all_cmd:
+            agg["fix_all_cmd"] = fix_all_cmd
+        return agg
+
+    def test_aggregate_alone_is_elevation_only(self):
+        agg = self._agg("windows", "C:/data")
+        assert engine._is_elevation_only([agg]) is True
+
+    def test_no_aggregate_is_never_elevation_only(self):
+        assert engine._is_elevation_only(
+            [{"type": "venv", "message": "m"}]) is False
+        assert engine._is_elevation_only([]) is False
+
+    def test_a_non_aggregate_item_present_is_not_elevation_only(self):
+        # The real call site (emit_failure_response) always filters through
+        # _visible_failures first, which drops every _spoken_for item -- so
+        # nothing but the aggregate itself ever survives to reach here. This
+        # unit-level case pins that _is_elevation_only itself no longer
+        # tolerates a lingering spoken-for item (the dead `or _spoken_for(f)`
+        # disjunct used to let it through).
+        agg = self._agg("windows", "C:/data")
+        spoken_for = {"type": "tool", "name": "net-tools",
+                     "elevation": {"method": "apt", "package": "net-tools",
+                                   "os": "windows"}}
+        assert engine._is_elevation_only([spoken_for, agg]) is False
+
+
+# --------------------------------------------------------------------------- #
 # emit_failure_response rendering of the aggregated item
 # --------------------------------------------------------------------------- #
 
@@ -174,6 +211,27 @@ class TestElevationScriptRendering:
         )
         ac = json.loads(capsys.readouterr().out)["hookSpecificOutput"]["additionalContext"]
         assert "Fix in order:" in ac
+
+    def test_focused_message_still_carries_a_notice(self, capsys):
+        """A pass that both installs a plugin (writing a 'notice' log block) and
+        queues an elevation aggregate must not lose the notice: the focused path
+        used to build its systemMessage from the failure's own label + user_msg
+        alone, with no log_content threaded through at all."""
+        notice = ("bootstrap installed new plugin(s): hue-kit. Run "
+                  "/reload-plugins to start using them.")
+        log_with_notice = (
+            "--- bootstrap: 1. net-tools: needs elevation ---\n"
+            "--- bootstrap notice: 1. " + notice + " ---"
+        )
+        agg = self._agg("windows", "C:/data", fix_all_cmd="cmd")
+        engine.emit_failure_response(
+            [agg], current_os="windows", log_content=log_with_notice,
+            label="plugins-kit:bootstrap@test",
+        )
+        sm = json.loads(capsys.readouterr().out)["systemMessage"]
+        assert notice in sm
+        # The focused path still drops the raw noise -- only the notice rides.
+        assert "needs elevation" not in sm
 
 
 # --------------------------------------------------------------------------- #

@@ -118,6 +118,20 @@ Three schema gotchas worth calling out:
 - **`autodetect` is a string**, `"<script_path> <function_name>"` (e.g. `"scripts/autodetect.py detect"`), for both `config` and `project_config`. A dict form is not understood.
 - **`python_stub_check` is not a manifest field** — it lives only under `self_setup` in bootstrap's own `config.json` (see its section below).
 
+## `requires_bootstrap` -- Minimum Engine Version
+
+A top-level manifest key naming the oldest bootstrap engine that can process this
+manifest. Accepted forms are a bare version (`"1.2.0"`) or a `>=` form
+(`">=1.2.0"`); both mean "engine version at least this". Any other spelling
+(`"^1.2.0"`, `">1.2.0"`, `"~1.2"`) is never satisfied, so a manifest carrying one
+is skipped exactly as an outdated engine would skip it.
+
+When the running engine does not satisfy the constraint, the plugin's manifest is
+skipped in its entirety (every phase, and the shared-library convergence sweep
+that would otherwise re-link its `shared_lib_imports`), and one action entry says
+to update bootstrap. The plugin is processed on the first pass after bootstrap
+converges to a satisfying version.
+
 ## `venv` — Per-Plugin Python Environment
 
 A plugin declares a `venv` section to request a bootstrap-managed Python environment. The engine creates and syncs `<plugin_data_dir>/.venv` from the plugin's `pyproject.toml` (via `uv sync --project <plugin_root>`), then verifies each listed import works.

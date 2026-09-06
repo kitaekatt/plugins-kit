@@ -8,6 +8,7 @@ only the user has (see engine._ask_reason).
 """
 
 import json
+import os
 
 import bootstrap_lib.engine as engine
 
@@ -37,6 +38,7 @@ class TestAskReason:
 
     def test_json_ini_in_user_scope_are_auto(self, monkeypatch, tmp_path):
         monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.setenv("USERPROFILE", str(tmp_path))  # ntpath.expanduser reads this, not HOME
         claude = tmp_path / ".claude"
         assert engine._ask_reason(
             {"type": "json", "target": str(claude / "settings.json")}) is None
@@ -47,11 +49,86 @@ class TestAskReason:
 
     def test_json_ini_outside_user_scope_ask(self, monkeypatch, tmp_path):
         monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.setenv("USERPROFILE", str(tmp_path))  # ntpath.expanduser reads this, not HOME
         # A manifest pointing json/ini at a shared/VCS-tracked project file.
         assert engine._ask_reason(
             {"type": "json", "target": str(tmp_path / "proj/.p4config")}) == "info"
         assert engine._ask_reason(
             {"type": "ini", "file": "/etc/someapp.ini"}) == "info"
+
+    def test_sync_to_data_outside_user_scope_asks(self):
+        # sync_to_data is in _AUTO_FIXABLE_TYPES and _write_target reads its
+        # `dst`, so an unattended sync whose destination is outside ~/.claude
+        # must ASK -- the same scope guard json/ini already get.
+        assert engine._ask_reason(
+            {"type": "sync_to_data", "dst": "/tmp/x"}) == "info"
+
+    def test_sync_to_data_in_user_scope_is_auto(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.setenv("USERPROFILE", str(tmp_path))  # ntpath.expanduser reads this, not HOME
+        claude = tmp_path / ".claude"
+        assert engine._ask_reason(
+            {"type": "sync_to_data", "dst": str(claude / "plugins/data/x/y")}
+        ) is None
+
+
+class TestUserScopeResolution:
+    """_user_scope_root / _path_in_user_scope must resolve BOTH sides the
+    same way -- see fix_runner.py's HOME split note for why HOME and
+    expanduser() can disagree on Windows Git Bash."""
+
+    def test_home_env_expanduser_mismatch_still_resolves_in_scope(
+            self, monkeypatch, tmp_path):
+        """Simulates the Windows Git Bash split: $HOME is msys-style
+        ("/c/Users/x") while os.path.expanduser resolves the native profile
+        (ntpath prefers USERPROFILE over HOME). Before the fix, the root was
+        built straight from os.environ["HOME"] while the target went through
+        expanduser, so a genuinely in-scope target routed ASK."""
+        native_home = str(tmp_path / "native")
+        os.makedirs(native_home, exist_ok=True)
+        monkeypatch.setenv("HOME", "/msys/style/home")  # deliberately wrong
+        monkeypatch.setattr(
+            engine.os.path, "expanduser",
+            lambda p: (native_home + p[1:]) if p.startswith("~") else p)
+        target = os.path.join(native_home, ".claude", "settings.json")
+        assert engine._path_in_user_scope(target) is True
+
+    def test_symlink_inside_claude_pointing_outside_is_not_in_scope(
+            self, monkeypatch, tmp_path):
+        monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.setenv("USERPROFILE", str(tmp_path))  # ntpath.expanduser reads this, not HOME
+        claude = tmp_path / ".claude"
+        claude.mkdir()
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        real = outside / "real.json"
+        real.write_text("{}")
+        link = claude / "escape.json"
+        link.symlink_to(real)
+        assert engine._path_in_user_scope(str(link)) is False
+
+    def test_symlink_inside_claude_pointing_inside_stays_in_scope(
+            self, monkeypatch, tmp_path):
+        monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.setenv("USERPROFILE", str(tmp_path))  # ntpath.expanduser reads this, not HOME
+        claude = tmp_path / ".claude"
+        claude.mkdir()
+        real = claude / "real.json"
+        real.write_text("{}")
+        link = claude / "alias.json"
+        link.symlink_to(real)
+        assert engine._path_in_user_scope(str(link)) is True
+
+    def test_case_insensitive_host_normalizes_case(self, monkeypatch, tmp_path):
+        # Guarded by monkeypatching normcase itself (rather than relying on
+        # the real host filesystem's case sensitivity) so the test result
+        # does not depend on which platform it runs on.
+        monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.setenv("USERPROFILE", str(tmp_path))  # ntpath.expanduser reads this, not HOME
+        monkeypatch.setattr(engine.os.path, "normcase", lambda p: p.lower())
+        claude_dir = os.path.join(str(tmp_path), ".claude")
+        target = os.path.join(claude_dir.upper(), "settings.json")
+        assert engine._path_in_user_scope(target) is True
 
     def test_tool_install_is_auto(self):
         # Installing non-elevated software is AUTO on a fleet.
@@ -88,6 +165,32 @@ class TestAskReason:
     def test_unfixable_but_runnable_is_auto(self):
         # A non-fix-all type WITH a runnable command is genuinely AUTO.
         assert engine._ask_reason({"type": "env_check", "remediation_cmd": "systemctl x"}) is None
+
+
+class TestAutoFixableNowAgreesWithIsAutoFixable:
+    """_auto_fixable_now's own fallback used to return True for two shapes
+    _is_auto_fixable (and _ask_reason) already route ASK -- masked in
+    practice only because _ask_reason checks install_state/credential-network
+    BEFORE ever reaching _auto_fixable_now. Called standalone, the two
+    predicates must agree."""
+
+    def test_installed_but_path_stale_is_not_auto_fixable_now(self):
+        f = {"type": "tool", "name": "jq", "install_state": "installed_but_path_stale",
+             "install_cmd": "winget install jq"}
+        assert engine._is_auto_fixable(f) is False
+        assert engine._auto_fixable_now(f) is False
+
+    def test_credential_network_types_are_not_auto_fixable_now(self):
+        for t in ("git_dep", "marketplace", "plugin"):
+            f = {"type": t, "remediation_cmd": "git clone x"}
+            assert engine._is_auto_fixable(f) is False
+            assert engine._auto_fixable_now(f) is False
+
+    def test_ordinary_runnable_type_is_still_auto_fixable_now(self):
+        # Not a regression target -- an unrelated type with a runnable
+        # command must remain AUTO.
+        f = {"type": "env_check", "remediation_cmd": "systemctl x"}
+        assert engine._auto_fixable_now(f) is True
 
 
 # --------------------------------------------------------------------------- #
