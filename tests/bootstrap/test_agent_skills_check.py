@@ -480,8 +480,25 @@ class TestLinkCreation:
     def test_vcs_failure_removes_only_the_empty_agents_dir(self, tmp_path, monkeypatch):
         repo = _init_repo(str(tmp_path / "repo"))
         _make_source(repo)
-        monkeypatch.setattr(asc, "_apply_vcs_exclusions", lambda *a: (False, "boom"))
+        monkeypatch.setattr(asc, "_apply_vcs_exclusions", lambda root: (False, "boom"))
         result = asc.create_agent_skills_link(repo)
         assert not result.ok
         assert result.status == "vcs_failed"
         assert not os.path.lexists(os.path.join(repo, ".agents"))
+
+    @requires_symlinks
+    def test_verification_failure_removes_new_link_and_is_retryable(self, tmp_path, monkeypatch):
+        repo = _init_repo(str(tmp_path / "repo"))
+        _make_source(repo)
+        monkeypatch.setattr(
+            asc, "detect_codex",
+            lambda: CodexDetection(available=True, reason="fake"),
+        )
+        monkeypatch.setattr(asc, "_verify_link", lambda link, source: "forced verification failure")
+
+        result = asc.create_agent_skills_link(repo)
+
+        assert not result.ok
+        assert result.status == "verify_error"
+        assert not os.path.lexists(_skills(repo))
+        assert asc.check_project_agent_skills_link(repo, None).status == "fixable"

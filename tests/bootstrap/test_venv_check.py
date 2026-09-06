@@ -16,6 +16,8 @@ from bootstrap_lib.venv_check import (
     scan_editable_installs,
     site_packages_dirs,
     venv_env_var_name,
+    _project_content_hash,
+    _venv_sync_stamp_path,
 )
 
 
@@ -390,7 +392,7 @@ class TestEnsureVenvEditableRemediation:
             Result(passed=True, subject=venv_path, message="venv ok (0 imports verified)"),
         ]
         monkeypatch.setattr("bootstrap_lib.venv_check.check_venv",
-                            lambda d, r, i, extras=(): states.pop(0))
+                            lambda d, r, i, extras=(), venv_path=None: states.pop(0))
         monkeypatch.setattr("bootstrap_lib.venv_check.find_uv", lambda: "/fake/uv")
 
         class _Proc:
@@ -580,7 +582,7 @@ class TestEnsureVenv:
         """When the check passes and always_sync is off, nothing runs."""
         venv_path = str(tmp_path / ".venv")
         monkeypatch.setattr("bootstrap_lib.venv_check.check_venv",
-                            lambda d, r, i, extras=(): self._passing_result(venv_path))
+                            lambda d, r, i, extras=(), venv_path=None: self._passing_result(venv_path))
         ran = []
         monkeypatch.setattr("bootstrap_lib.venv_check.subprocess.run",
                             lambda *a, **k: ran.append(a))
@@ -594,7 +596,7 @@ class TestEnsureVenv:
         venv_path = str(tmp_path / ".venv")
         states = [self._failing_result(venv_path), self._passing_result(venv_path)]
         monkeypatch.setattr("bootstrap_lib.venv_check.check_venv",
-                            lambda d, r, i, extras=(): states.pop(0))
+                            lambda d, r, i, extras=(), venv_path=None: states.pop(0))
         monkeypatch.setattr("bootstrap_lib.venv_check.find_uv", lambda: "/fake/uv")
 
         class _Proc:
@@ -617,7 +619,7 @@ class TestEnsureVenv:
         """uv sync errors are logged with exit code + stderr (B8: never swallowed)."""
         venv_path = str(tmp_path / ".venv")
         monkeypatch.setattr("bootstrap_lib.venv_check.check_venv",
-                            lambda d, r, i, extras=(): self._failing_result(venv_path))
+                            lambda d, r, i, extras=(), venv_path=None: self._failing_result(venv_path))
         monkeypatch.setattr("bootstrap_lib.venv_check.find_uv", lambda: "/fake/uv")
 
         class _Proc:
@@ -634,7 +636,7 @@ class TestEnsureVenv:
         """A subprocess exception is logged, not swallowed (B8)."""
         venv_path = str(tmp_path / ".venv")
         monkeypatch.setattr("bootstrap_lib.venv_check.check_venv",
-                            lambda d, r, i, extras=(): self._failing_result(venv_path))
+                            lambda d, r, i, extras=(), venv_path=None: self._failing_result(venv_path))
         monkeypatch.setattr("bootstrap_lib.venv_check.find_uv", lambda: "/fake/uv")
 
         def _boom(cmd, **k):
@@ -648,7 +650,7 @@ class TestEnsureVenv:
     def test_uv_missing_logged(self, tmp_path, monkeypatch):
         venv_path = str(tmp_path / ".venv")
         monkeypatch.setattr("bootstrap_lib.venv_check.check_venv",
-                            lambda d, r, i, extras=(): self._failing_result(venv_path))
+                            lambda d, r, i, extras=(), venv_path=None: self._failing_result(venv_path))
         monkeypatch.setattr("bootstrap_lib.venv_check.find_uv", lambda: None)
         result, entries = ensure_venv(str(tmp_path / "proj"), venv_path)
         assert not result.passed
@@ -658,9 +660,53 @@ class TestEnsureVenv:
         """Self-setup mode: sync runs on a passing check, silently when clean."""
         venv_path = str(tmp_path / ".venv")
         monkeypatch.setattr("bootstrap_lib.venv_check.check_venv",
-                            lambda d, r, i, extras=(): self._passing_result(venv_path))
+                            lambda d, r, i, extras=(), venv_path=None: self._passing_result(venv_path))
         monkeypatch.setattr("bootstrap_lib.venv_check.find_uv", lambda: "/fake/uv")
 
+        class _Proc:
+            returncode = 1
+            stderr = b"sync failed"
+        ran = []
+        monkeypatch.setattr("bootstrap_lib.venv_check.subprocess.run",
+                            lambda cmd, **k: ran.append(cmd) or _Proc())
+
+        result, entries = ensure_venv(str(tmp_path / "proj"), venv_path, always_sync=True)
+        assert not result.passed
+        assert any("uv sync failed (exit 1)" in entry for entry in entries)
+        assert ran  # but the sync did run
+
+    def test_matching_dependency_stamp_skips_sync(self, tmp_path, monkeypatch):
+        project = tmp_path / "proj"
+        project.mkdir()
+        (project / "pyproject.toml").write_text("[project]\nname = 'demo'\n")
+        (project / "uv.lock").write_text("version = 1\n")
+        venv_path = str(tmp_path / "data" / ".venv")
+        monkeypatch.setattr("bootstrap_lib.venv_check.check_venv",
+                            lambda d, r, i, extras=(), venv_path=None: self._passing_result(venv_path))
+        monkeypatch.setattr("bootstrap_lib.venv_check.subprocess.run",
+                            lambda *a, **k: pytest.fail("uv sync must not run"))
+        stamp = _venv_sync_stamp_path(venv_path)
+        stamp.parent.mkdir(parents=True)
+        stamp.write_text(_project_content_hash(str(project)))
+
+        result, entries = ensure_venv(str(project), venv_path)
+
+        assert result.passed
+        assert entries == []
+
+    def test_changed_pyproject_runs_sync(self, tmp_path, monkeypatch):
+        project = tmp_path / "proj"
+        project.mkdir()
+        pyproject = project / "pyproject.toml"
+        pyproject.write_text("[project]\nname = 'demo'\n")
+        venv_path = str(tmp_path / "data" / ".venv")
+        stamp = _venv_sync_stamp_path(venv_path)
+        stamp.parent.mkdir(parents=True)
+        stamp.write_text(_project_content_hash(str(project)))
+        pyproject.write_text("[project]\nname = 'changed'\n")
+        monkeypatch.setattr("bootstrap_lib.venv_check.check_venv",
+                            lambda d, r, i, extras=(), venv_path=None: self._passing_result(venv_path))
+        monkeypatch.setattr("bootstrap_lib.venv_check.find_uv", lambda: "/fake/uv")
         class _Proc:
             returncode = 0
             stderr = b""
@@ -668,10 +714,56 @@ class TestEnsureVenv:
         monkeypatch.setattr("bootstrap_lib.venv_check.subprocess.run",
                             lambda cmd, **k: ran.append(cmd) or _Proc())
 
-        result, entries = ensure_venv(str(tmp_path / "proj"), venv_path, always_sync=True)
+        result, _entries = ensure_venv(str(project), venv_path)
+
         assert result.passed
-        assert entries == []  # clean no-op sync stays silent
-        assert ran  # but the sync did run
+        assert ran
+        assert stamp.read_text().strip() == _project_content_hash(str(project))
+
+    def test_failed_dependency_sync_does_not_write_stamp(self, tmp_path, monkeypatch):
+        project = tmp_path / "proj"
+        project.mkdir()
+        (project / "pyproject.toml").write_text("[project]\nname = 'demo'\n")
+        venv_path = str(tmp_path / "data" / ".venv")
+        monkeypatch.setattr("bootstrap_lib.venv_check.check_venv",
+                            lambda d, r, i, extras=(), venv_path=None: self._passing_result(venv_path))
+        monkeypatch.setattr("bootstrap_lib.venv_check.find_uv", lambda: "/fake/uv")
+        class _Proc:
+            returncode = 1
+            stderr = b"resolution failed"
+        monkeypatch.setattr("bootstrap_lib.venv_check.subprocess.run",
+                            lambda *a, **k: _Proc())
+
+        result, entries = ensure_venv(str(project), venv_path)
+
+        assert result.passed
+        assert any("uv sync failed" in entry for entry in entries)
+        assert not _venv_sync_stamp_path(venv_path).exists()
+
+    def test_custom_venv_path_is_checked_and_synced(self, tmp_path, monkeypatch):
+        project = tmp_path / "proj"
+        project.mkdir()
+        venv_path = str(tmp_path / "data" / "env")
+        seen = []
+
+        def _fake_check(data, root, imports, extras=(), venv_path=None):
+            seen.append(data)
+            return self._passing_result(str(tmp_path / "data" / "env"))
+
+        monkeypatch.setattr(
+            "bootstrap_lib.venv_check.check_venv",
+            _fake_check,
+        )
+        monkeypatch.setattr("bootstrap_lib.venv_check.find_uv", lambda: "/fake/uv")
+        class _Proc:
+            returncode = 0
+            stderr = b""
+        monkeypatch.setattr("bootstrap_lib.venv_check.subprocess.run", lambda *a, **k: _Proc())
+
+        result, _entries = ensure_venv(str(project), venv_path, always_sync=True)
+
+        assert result.passed
+        assert seen == [str(tmp_path / "data"), str(tmp_path / "data")]
 
 
 class TestManifestExtrasReachEnsureVenv:

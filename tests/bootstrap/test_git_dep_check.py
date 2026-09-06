@@ -5,7 +5,12 @@ import subprocess
 
 import pytest
 
-from bootstrap_lib.git_dep_check import check_git_dep, _extract_repo_name, _build_clone_cmd
+from bootstrap_lib.git_dep_check import (
+    check_git_dep,
+    ensure_git_dep,
+    _extract_repo_name,
+    _build_clone_cmd,
+)
 
 
 class TestExtractRepoName:
@@ -61,14 +66,58 @@ class TestCheckGitDep:
             env={**os.environ, "GIT_AUTHOR_NAME": "test", "GIT_AUTHOR_EMAIL": "test@test.com",
                  "GIT_COMMITTER_NAME": "test", "GIT_COMMITTER_EMAIL": "test@test.com"},
         )
+        subprocess.run(
+            ["git", "-C", str(target), "remote", "add", "origin",
+             "https://github.com/example/my-repo.git"],
+            capture_output=True, check=True,
+        )
 
         result = check_git_dep(
-            str(tmp_path), "https://github.com/example/my-repo", "main",
+            str(tmp_path), "https://github.com/example/my-repo.git", "main",
         )
 
         assert result.passed
         assert "cloned on main" in result.message
         assert result.remediation_cmd is None
+
+    def test_changed_origin_fails(self, tmp_path):
+        target = tmp_path / "github" / "my-repo"
+        target.mkdir(parents=True)
+        subprocess.run(["git", "init", "-b", "main", str(target)], capture_output=True, check=True)
+        subprocess.run(
+            ["git", "-C", str(target), "commit", "--allow-empty", "-m", "init"],
+            capture_output=True, check=True,
+            env={**os.environ, "GIT_AUTHOR_NAME": "test", "GIT_AUTHOR_EMAIL": "test@test.com",
+                 "GIT_COMMITTER_NAME": "test", "GIT_COMMITTER_EMAIL": "test@test.com"},
+        )
+        subprocess.run(
+            ["git", "-C", str(target), "remote", "add", "origin", "https://example.com/moved.git"],
+            capture_output=True, check=True,
+        )
+
+        result = check_git_dep(
+            str(tmp_path), "https://github.com/example/my-repo", "main",
+        )
+
+        assert not result.passed
+        assert "origin" in result.message
+
+    def test_corrupt_clone_reports_could_not_check(self, tmp_path, monkeypatch):
+        target = tmp_path / "github" / "my-repo"
+        (target / ".git").mkdir(parents=True)
+
+        class _Proc:
+            returncode = 1
+            stdout = ""
+            stderr = "fatal: corrupt repository"
+
+        monkeypatch.setattr("bootstrap_lib.git_dep_check.subprocess.run", lambda *a, **k: _Proc())
+        result = check_git_dep(
+            str(tmp_path), "https://github.com/example/my-repo", "main",
+        )
+
+        assert not result.passed
+        assert "could not check" in result.message
 
     def test_wrong_branch(self, tmp_path):
         """Returns failure when repo is on wrong branch."""
@@ -153,6 +202,11 @@ class TestCommitPinning:
             ["git", "-C", str(target), "commit", "--allow-empty", "-m", "second"],
             capture_output=True, check=True, env=env,
         )
+        subprocess.run(
+            ["git", "-C", str(target), "remote", "add", "origin",
+             "https://github.com/example/my-repo"],
+            capture_output=True, check=True,
+        )
         r2 = subprocess.run(
             ["git", "-C", str(target), "rev-parse", "HEAD"],
             capture_output=True, text=True, check=True,
@@ -197,6 +251,51 @@ class TestCommitPinning:
         assert "fetch" in result.remediation_cmd
         assert "checkout" in result.remediation_cmd
 
+    def test_full_sha_pin_does_not_accept_same_prefix(self, tmp_path, monkeypatch):
+        target = tmp_path / "github" / "my-repo"
+        target.mkdir(parents=True)
+        first_sha, _second_sha = self._init_repo_with_commits(target)
+        fake_head = first_sha[:7] + "1" * 33
+        pin = first_sha[:7] + "2" * 33
+        real_run = subprocess.run
+
+        def _fake_run(cmd, **kwargs):
+            if cmd[-2:] == ["rev-parse", "HEAD"]:
+                return type("_Proc", (), {"returncode": 0, "stdout": fake_head + "\n", "stderr": ""})()
+            return real_run(cmd, **kwargs)
+
+        monkeypatch.setattr("bootstrap_lib.git_dep_check.subprocess.run", _fake_run)
+        result = check_git_dep(
+            str(tmp_path), "https://github.com/example/my-repo", "main", commit=pin,
+        )
+
+        assert not result.passed
+        assert "expected" in result.message
+
+    def test_sparse_checkout_drift_fails(self, tmp_path):
+        target = tmp_path / "github" / "my-repo"
+        target.mkdir(parents=True)
+        env = self._git_env()
+        subprocess.run(["git", "init", "-b", "main", str(target)], capture_output=True, check=True)
+        (target / "README").write_text("readme\n")
+        (target / "docs").mkdir()
+        (target / "docs" / "guide").write_text("guide\n")
+        subprocess.run(["git", "-C", str(target), "add", "-A"], capture_output=True, check=True)
+        subprocess.run(["git", "-C", str(target), "commit", "-m", "init"], capture_output=True, check=True, env=env)
+        subprocess.run(
+            ["git", "-C", str(target), "remote", "add", "origin", "https://github.com/example/my-repo"],
+            capture_output=True, check=True,
+        )
+        subprocess.run(["git", "-C", str(target), "sparse-checkout", "set", "docs"], capture_output=True, check=True)
+
+        result = check_git_dep(
+            str(tmp_path), "https://github.com/example/my-repo", "main",
+            sparse_paths=["README"],
+        )
+
+        assert not result.passed
+        assert "sparse" in result.message
+
     def test_commit_not_cloned(self, tmp_path):
         """Not-cloned failure includes checkout step in remediation."""
         result = check_git_dep(
@@ -218,3 +317,160 @@ class TestCommitPinning:
         )
         assert "git clone --branch main" in cmd
         assert "&& git -C /tmp/test checkout abc123" in cmd
+
+
+class TestEnsureGitDep:
+    @staticmethod
+    def _git_env():
+        return {
+            **os.environ,
+            "GIT_AUTHOR_NAME": "test",
+            "GIT_AUTHOR_EMAIL": "test@test.com",
+            "GIT_COMMITTER_NAME": "test",
+            "GIT_COMMITTER_EMAIL": "test@test.com",
+        }
+
+    def test_wrong_branch_is_fixed_and_authoritatively_rechecked(self, tmp_path):
+        upstream = tmp_path / "upstream"
+        subprocess.run(
+            ["git", "init", "-b", "main", str(upstream)],
+            capture_output=True, check=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(upstream), "commit", "--allow-empty", "-m", "init"],
+            capture_output=True, check=True, env=self._git_env(),
+        )
+        target = tmp_path / "data" / "github" / "upstream"
+        target.parent.mkdir(parents=True)
+        subprocess.run(
+            ["git", "clone", str(upstream), str(target)],
+            capture_output=True, check=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(target), "checkout", "-b", "develop"],
+            capture_output=True, check=True,
+        )
+
+        result, entries = ensure_git_dep(
+            {"url": str(upstream), "branch": "main"}, str(tmp_path / "data")
+        )
+
+        assert result.passed
+        assert subprocess.run(
+            ["git", "-C", str(target), "branch", "--show-current"],
+            capture_output=True, text=True, check=True,
+        ).stdout.strip() == "main"
+        assert any("checked out" in entry for entry in entries)
+        assert not any("pulled" in entry for entry in entries)
+
+    def test_engine_phase_uses_converged_result(self, tmp_path):
+        from bootstrap_lib import engine
+
+        upstream = tmp_path / "upstream"
+        subprocess.run(
+            ["git", "init", "-b", "main", str(upstream)],
+            capture_output=True, check=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(upstream), "commit", "--allow-empty", "-m", "init"],
+            capture_output=True, check=True, env=self._git_env(),
+        )
+        target = tmp_path / "data" / "github" / "upstream"
+        target.parent.mkdir(parents=True)
+        subprocess.run(["git", "clone", str(upstream), str(target)], capture_output=True, check=True)
+        subprocess.run(
+            ["git", "-C", str(target), "checkout", "-b", "develop"],
+            capture_output=True, check=True,
+        )
+
+        class _Ctx:
+            manifest = {"git_deps": [{"url": str(upstream), "branch": "main"}]}
+            data_dir = str(tmp_path / "data")
+            action_entries = []
+            ok_entries = []
+            failures = []
+
+            def action(self, message):
+                self.action_entries.append(message)
+
+            def ok(self, message):
+                self.ok_entries.append(message)
+
+            def fail(self, entry, **failure):
+                self.action_entries.append(entry)
+                self.failures.append(failure)
+
+        ctx = _Ctx()
+        engine._phase_git_deps(ctx)
+
+        assert check_git_dep(str(tmp_path / "data"), str(upstream), "main").passed
+        assert ctx.failures == []
+        assert any("checked out" in entry for entry in ctx.action_entries)
+
+    def test_failed_recheck_does_not_report_clone_success(self, tmp_path, monkeypatch):
+        import bootstrap_lib.git_dep_check as module
+        from bootstrap_lib.result import Result
+
+        target = str(tmp_path / "data" / "github" / "repo")
+        failed = Result(
+            passed=False,
+            subject="repo",
+            message="repo still not ready",
+            remediation_cmd="git clone ...",
+            extras={"target_path": target},
+        )
+        monkeypatch.setattr(module, "check_git_dep", lambda *args, **kwargs: failed)
+        monkeypatch.setattr(module, "clone_git_dep", lambda *args, **kwargs: (True, "cloned"))
+
+        result, entries = ensure_git_dep(
+            {"url": "https://example.invalid/repo", "branch": "main"},
+            str(tmp_path / "data"),
+        )
+
+        assert not result.passed
+        assert entries
+        assert not any(word in entry for entry in entries for word in ("pulled", "cloned"))
+
+
+def test_failed_checks_carry_a_structured_reason(tmp_path, monkeypatch):
+    """ensure_git_dep dispatches on result.reason, never on message text."""
+    from bootstrap_lib.git_dep_check import check_git_dep
+
+    missing = check_git_dep(str(tmp_path), "https://x/y/repo.git", "main")
+    assert missing.reason == "missing"
+    not_git = tmp_path / "github" / "repo"
+    not_git.mkdir(parents=True)
+    assert check_git_dep(str(tmp_path), "https://x/y/repo.git", "main").reason == "not-git"
+
+
+def test_pin_prefixes_of_any_length_and_case_match(tmp_path, monkeypatch):
+    """A pin is a case-insensitive prefix of HEAD: 5, 12 or 40 chars all work."""
+    import subprocess
+    from bootstrap_lib import git_dep_check
+
+    head = "0123456789abcdef0123456789abcdef01234567"
+    repo = tmp_path / "github" / "repo"
+    (repo / ".git").mkdir(parents=True)
+
+    def fake_run(argv, **kwargs):
+        class _P:
+            returncode = 0
+            stderr = ""
+        p = _P()
+        if "rev-parse" in argv and "HEAD" in argv and "--abbrev-ref" not in argv:
+            p.stdout = head + "\n"
+        elif "--abbrev-ref" in argv:
+            p.stdout = "main\n"
+        elif "get-url" in argv:
+            p.stdout = "https://x/y/repo.git\n"
+        else:
+            p.stdout = ""
+        return p
+
+    monkeypatch.setattr(git_dep_check.subprocess, "run", fake_run)
+    for pin in (head[:5], head[:12], head, head.upper()):
+        result = git_dep_check.check_git_dep(str(tmp_path), "https://x/y/repo.git", "main", None, pin)
+        assert result.passed, (pin, result.message)
+    assert not git_dep_check.check_git_dep(
+        str(tmp_path), "https://x/y/repo.git", "main", None, "ffff"
+    ).passed

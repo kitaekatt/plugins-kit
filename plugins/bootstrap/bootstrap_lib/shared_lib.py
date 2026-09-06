@@ -40,6 +40,8 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
+import uuid
 from typing import NamedTuple, Optional
 
 
@@ -89,7 +91,7 @@ def _hash_tree(root: str) -> str:
     """
     h = hashlib.sha256()
     for dirpath, dirnames, filenames in os.walk(root):
-        dirnames.sort()
+        dirnames[:] = sorted(name for name in dirnames if name != "__pycache__")
         for fname in sorted(filenames):
             full = os.path.join(dirpath, fname)
             rel = os.path.relpath(full, root).replace(os.sep, "/")
@@ -125,11 +127,18 @@ def _verify_import(python: str, name: str) -> bool:
     return proc.returncode == 0
 
 
-def sync_shared_lib(name: str, src: str, plugin_root: str, shared_root: str) -> SharedLibResult:
+def sync_shared_lib(
+    name: str,
+    src: str,
+    plugin_root: str,
+    shared_root: str,
+    verify_python: Optional[str] = None,
+) -> SharedLibResult:
     """Publish an owner package's SOURCE to the shared location.
 
     Syncs ``<plugin_root>/<src>/<name>/`` -> ``<shared_root>/<name>/<name>/`` with a
-    clean re-sync (remove-then-copy) so renamed/deleted modules are pruned. Skips
+    clean re-sync so renamed/deleted modules are pruned. Staging happens beside
+    the live package and the completed directory is swapped into place. Skips
     when the source tree hash is unchanged.
 
     Returns "published" (synced), "cached" (unchanged), or "failed" (no source).
@@ -146,12 +155,77 @@ def sync_shared_lib(name: str, src: str, plugin_root: str, shared_root: str) -> 
     if os.path.isdir(dest_pkg) and _read_text(hash_file) == current:
         return SharedLibResult(name, "cached", f"synced (cached, {dest_pkg})")
 
-    os.makedirs(entry_dir, exist_ok=True)
-    shutil.rmtree(dest_pkg, ignore_errors=True)
-    shutil.copytree(src_pkg, dest_pkg)
-    with open(hash_file, "w", encoding="utf-8") as f:
-        f.write(current + "\n")
+    stage_root = None
+    try:
+        os.makedirs(entry_dir, exist_ok=True)
+        stage_root = tempfile.mkdtemp(prefix=".stage-", dir=entry_dir)
+        stage_pkg = os.path.join(stage_root, name)
+        shutil.copytree(
+            src_pkg,
+            stage_pkg,
+            dirs_exist_ok=True,
+            ignore=shutil.ignore_patterns("__pycache__"),
+        )
+
+        if verify_python is not None:
+            try:
+                proc = subprocess.run(
+                    [
+                        verify_python,
+                        "-c",
+                        f"import sys; sys.path.insert(0, {stage_root!r}); import {name}",
+                    ],
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    timeout=20,
+                )
+            except (OSError, subprocess.SubprocessError) as exc:
+                return SharedLibResult(
+                    name, "failed", f"{name} failed to import from the published copy: {exc}"
+                )
+            if proc.returncode != 0:
+                first_stderr_line = (proc.stderr or "").splitlines()[0] if proc.stderr else "import failed"
+                return SharedLibResult(
+                    name,
+                    "failed",
+                    f"{name} failed to import from the published copy: {first_stderr_line}",
+                )
+
+        _swap_directory(stage_pkg, dest_pkg)
+        shutil.rmtree(stage_root, ignore_errors=True)
+        stage_root = None
+        with open(hash_file, "w", encoding="utf-8") as f:
+            f.write(current + "\n")
+    except OSError as exc:
+        return SharedLibResult(name, "failed", f"failed to publish {name}: {exc}")
+    finally:
+        if stage_root is not None:
+            shutil.rmtree(stage_root, ignore_errors=True)
     return SharedLibResult(name, "published", f"synced -> {dest_pkg}")
+
+
+def _swap_directory(staged: str, destination: str) -> None:
+    """Install a staged directory while retaining the old tree on failure."""
+    try:
+        os.replace(staged, destination)
+        return
+    except OSError:
+        if not os.path.isdir(destination):
+            raise
+
+    backup = f"{destination}.old-{uuid.uuid4().hex}"
+    os.replace(destination, backup)
+    try:
+        os.replace(staged, destination)
+    except OSError:
+        try:
+            os.replace(backup, destination)
+        except OSError:
+            pass
+        raise
+    shutil.rmtree(backup, ignore_errors=True)
 
 
 def link_shared_lib(name: str, python: Optional[str], shared_root: str) -> SharedLibResult:

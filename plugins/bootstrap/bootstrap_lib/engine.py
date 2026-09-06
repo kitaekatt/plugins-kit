@@ -1708,7 +1708,7 @@ def _shared_lib_convergence_sweep(plugins, data_dir, link_log=None):
         # marketplace tree, so shared_root is per-plugin, not per-engine.
         plugin_data_dir = _plugin_data_dir(data_dir, plugin_info)
         shared_root = os.path.join(os.path.dirname(plugin_data_dir), "_shared_libs")
-        venv_python = _find_python(os.path.join(plugin_data_dir, ".venv"))
+        plugin_venv_python = _find_python(os.path.join(plugin_data_dir, ".venv"))
         for lib_name in imports:
             # Include marketplace in the dedup key: same-named plugins from two
             # marketplaces link into their own trees and must not skip each other.
@@ -1716,7 +1716,7 @@ def _shared_lib_convergence_sweep(plugins, data_dir, link_log=None):
             if key in seen:
                 continue
             seen.add(key)
-            result = link_shared_lib(lib_name, venv_python, shared_root)
+            result = link_shared_lib(lib_name, plugin_venv_python, shared_root)
             entry = f"{plugin_info.name}: shared-lib {result.name}: {result.message}"
             if result.status == "linked":
                 quiets.append(entry)
@@ -3939,75 +3939,23 @@ def _phase_venv(ctx):
 
 
 def _phase_git_deps(ctx):
-    """git_deps: clone-once + pinned-commit re-checkout.
+    """git_deps: delegate convergence and log its authoritative result."""
+    from .git_dep_check import ensure_git_dep
 
-    A clone that exists on the right branch passes and is never pulled in
-    steady state ("clone once"); only pinned commits are re-checked-out.
-    Successes consolidate by verb (cloned/pulled/checked-out); failures stay
-    per-line.
-    """
-    import subprocess as _sp2
-
-    from .git_dep_check import check_git_dep, clone_git_dep, pull_git_dep
-
-    git_cloned = []
-    git_pulled = []
-    git_checked_out = []
     for dep_def in ctx.manifest.get("git_deps", []):
-        result = check_git_dep(
-            ctx.data_dir,
-            dep_def["url"],
-            dep_def["branch"],
-            dep_def.get("sparse_paths"),
-            dep_def.get("commit"),
-        )
+        result, entries = ensure_git_dep(dep_def, ctx.data_dir)
+        for entry in entries:
+            ctx.action(f"git {result.subject}: {entry}")
         if result.passed:
             ctx.ok(f"git {result.subject}: ok - {result.message}")
-            continue
-
-        target_path = result.target_path
-        pinned_commit = dep_def.get("commit")
-        if not os.path.isdir(target_path):
-            ok, msg = clone_git_dep(dep_def["url"], dep_def["branch"], target_path, dep_def.get("sparse_paths"), pinned_commit)
-            verb = "cloned"
-            detail = dep_def["url"]
-        elif pinned_commit:
-            try:
-                _sp2.run(["git", "-C", target_path, "fetch"], capture_output=True, timeout=60)
-                r = _sp2.run(["git", "-C", target_path, "checkout", pinned_commit], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)
-                ok = r.returncode == 0
-                msg = f"checked out {pinned_commit[:7]}" if ok else (r.stderr.strip() or "checkout failed")
-            except (_sp2.SubprocessError, OSError) as e:
-                ok, msg = False, str(e)
-            verb = "checked out"
-            detail = pinned_commit[:7]
-        else:
-            ok, msg = pull_git_dep(target_path)
-            verb = "pulled"
-            detail = ""
-
-        if ok:
-            if verb == "cloned":
-                git_cloned.append((result.subject, detail))
-            elif verb == "pulled":
-                git_pulled.append((result.subject, detail))
-            else:
-                git_checked_out.append((result.subject, detail))
         else:
             ctx.fail(
-                f"git {result.subject}: FAILED - {msg}",
+                f"git {result.subject}: FAILED - {result.message}",
                 type="git_dep",
                 name=result.subject,
-                message=msg,
+                message=result.message,
                 remediation_cmd=result.remediation_cmd,
             )
-
-    if git_cloned:
-        ctx.action(f"git cloned: {_join_items(git_cloned)}")
-    if git_pulled:
-        ctx.action(f"git pulled: {_join_items(git_pulled)}")
-    if git_checked_out:
-        ctx.action(f"git checked out: {_join_items(git_checked_out)}")
 
 
 def _phase_git_config(ctx):
@@ -4921,7 +4869,7 @@ def _phase_shared_libs(ctx):
     handler so a consumer's own .venv already exists as the .pth target.
     """
     from .shared_lib import sync_shared_lib, link_shared_lib, find_standalone_python
-    from .venv_check import _find_python
+    from .venv_check import venv_python
 
     shared_root = os.path.join(os.path.dirname(ctx.data_dir), "_shared_libs")
 
@@ -4939,12 +4887,23 @@ def _phase_shared_libs(ctx):
             )
 
     # Owner phase: publish source, then broadcast to the standalone Python.
+    owner_venv_python = venv_python(os.path.join(ctx.data_dir, ".venv"))
     for lib_def in ctx.manifest.get("shared_libs", []):
         lib_name = lib_def.get("name", "")
         lib_src = lib_def.get("src", ".")
         if not lib_name:
             continue
-        sync_result = sync_shared_lib(lib_name, lib_src, ctx.plugin_root, shared_root)
+        sync_result = sync_shared_lib(
+            lib_name,
+            lib_src,
+            ctx.plugin_root,
+            shared_root,
+            verify_python=owner_venv_python,
+        )
+        if sync_result.status == "published" and owner_venv_python is None:
+            sync_result = sync_result._replace(
+                message=f"{sync_result.message} (unverified: owner has no venv)"
+            )
         _log_shared(sync_result)
         if sync_result.status != "failed":
             _log_shared(link_shared_lib(lib_name, find_standalone_python(), shared_root))
@@ -4952,9 +4911,9 @@ def _phase_shared_libs(ctx):
     # Consumer phase: link into this plugin's own venv.
     shared_lib_imports = ctx.manifest.get("shared_lib_imports", [])
     if shared_lib_imports:
-        venv_python = _find_python(os.path.join(ctx.data_dir, ".venv"))
+        plugin_venv_python = venv_python(os.path.join(ctx.data_dir, ".venv"))
         for lib_name in shared_lib_imports:
-            _log_shared(link_shared_lib(lib_name, venv_python, shared_root))
+            _log_shared(link_shared_lib(lib_name, plugin_venv_python, shared_root))
 
 
 def _phase_script(ctx):
