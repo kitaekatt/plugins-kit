@@ -271,8 +271,10 @@ class TestFixAllInteractiveLaunch:
             (launches.append((path, current_os)),
              elev.LaunchResult(launched=True, succeeded=True, detail="exit code 0"))[1])
         rechecks = []
-        monkeypatch.setattr(engine, "_spawn_recheck_pass",
-                            lambda args, plugin_root: rechecks.append(plugin_root))
+        monkeypatch.setattr(
+            engine, "_spawn_recheck_pass",
+            lambda args, plugin_root: (rechecks.append(plugin_root), True)[1],
+        )
 
         failures = [_win_failure()]
         stopped = engine._elevation_step(
@@ -506,7 +508,10 @@ class TestSpawnRecheckPass:
         --fix-all -- the loop guard against re-prompting."""
         import subprocess as _sp
         calls = []
-        monkeypatch.setattr(_sp, "run", lambda cmd, **k: calls.append(cmd))
+        monkeypatch.setattr(
+            _sp, "run",
+            lambda cmd, **k: (calls.append(cmd), _sp.CompletedProcess(cmd, 0))[1],
+        )
 
         args = _args(tmp_path, fix_all=True, console=True)
         args.project_dir = "/proj"

@@ -14,6 +14,7 @@ import json
 from bootstrap_lib.engine import (
     _bootstrap_stale_advice,
     _plugin_ships_sessionstart_hook,
+    _read_installed_plugins,
     _reload_advice,
     _resolve_newly_installed,
 )
@@ -226,6 +227,77 @@ class TestBootstrapStaleAdviceConvergence:
             "0.9.0", "bootstrap", "plugins-kit", self._registry(tmp_path, "0.63.0"),
             data_dir=self._data_dir(tmp_path, "0.9.0"),
         ) is not None
+
+
+class TestReadInstalledPluginsCacheFallback:
+    """registry_v2_empty: installed_plugins.json can be permanently
+    {"plugins": {}} for marketplace installs -- enablement lives in settings
+    enabledPlugins and the code in the cache layout. _read_installed_plugins
+    must fall back to the same cache-derived discovery list_enabled_plugins
+    already uses (plugin_resolve.discover_cache_plugins) or the Step 4d
+    before/after diff can never see anything enter or leave."""
+
+    def _empty_registry(self, tmp_path):
+        reg = tmp_path / "installed_plugins.json"
+        reg.write_text(json.dumps({"version": 2, "plugins": {}}), encoding="utf-8")
+        return reg
+
+    def test_no_fallback_without_enabled_refs(self, tmp_path):
+        reg = self._empty_registry(tmp_path)
+        cache_dir = tmp_path / "cache" / "mkt" / "foo" / "1.0.0"
+        cache_dir.mkdir(parents=True)
+        assert _read_installed_plugins(str(reg)) == {}
+
+    def test_empty_registry_plus_new_cache_dir_is_detected_as_newly_installed(self, tmp_path):
+        reg = self._empty_registry(tmp_path)
+        enabled_refs = {"foo@mkt"}
+
+        before = _read_installed_plugins(str(reg), enabled_refs=enabled_refs)
+        assert before == {}
+
+        cache_dir = tmp_path / "cache" / "mkt" / "foo" / "1.0.0"
+        cache_dir.mkdir(parents=True)
+        after = _read_installed_plugins(str(reg), enabled_refs=enabled_refs)
+        assert after.get("foo@mkt") == str(cache_dir)
+
+        newly = _resolve_newly_installed(set(before), after)
+        assert [pi.name for pi in newly] == ["foo"]
+
+    def test_registry_entry_takes_precedence_over_cache(self, tmp_path):
+        reg = tmp_path / "installed_plugins.json"
+        reg.write_text(
+            json.dumps({"plugins": {"foo@mkt": [{"version": "1.0.0", "installPath": "/registry/path"}]}}),
+            encoding="utf-8",
+        )
+        cache_dir = tmp_path / "cache" / "mkt" / "foo" / "2.0.0"
+        cache_dir.mkdir(parents=True)
+        out = _read_installed_plugins(str(reg), enabled_refs={"foo@mkt"})
+        assert out["foo@mkt"] == "/registry/path"
+
+
+class TestBootstrapStaleAdviceCacheFallback:
+    def test_empty_registry_with_newer_cached_bootstrap_returns_advice(self, tmp_path):
+        reg = tmp_path / "installed_plugins.json"
+        reg.write_text(json.dumps({"version": 2, "plugins": {}}), encoding="utf-8")
+        cache_dir = tmp_path / "cache" / "plugins-kit" / "bootstrap" / "0.99.0"
+        cache_dir.mkdir(parents=True)
+
+        msg = _bootstrap_stale_advice(
+            "0.14.0", "bootstrap", "plugins-kit", str(reg),
+            enabled_refs={"bootstrap@plugins-kit"},
+        )
+        assert msg is not None
+        assert "0.99.0" in msg
+
+    def test_empty_registry_without_enabled_refs_stays_silent(self, tmp_path):
+        reg = tmp_path / "installed_plugins.json"
+        reg.write_text(json.dumps({"version": 2, "plugins": {}}), encoding="utf-8")
+        cache_dir = tmp_path / "cache" / "plugins-kit" / "bootstrap" / "0.99.0"
+        cache_dir.mkdir(parents=True)
+
+        assert _bootstrap_stale_advice(
+            "0.14.0", "bootstrap", "plugins-kit", str(reg),
+        ) is None
 
 
 class TestEmitNoRelayDirective:

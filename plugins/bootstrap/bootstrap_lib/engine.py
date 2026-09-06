@@ -18,6 +18,7 @@ import json
 import os
 import stat
 import sys
+import tempfile
 from datetime import datetime, timedelta, timezone
 
 # Single shared atomic-write implementation (mkstemp + os.replace next to the
@@ -74,13 +75,15 @@ def main():
     if not data_dir:
         # --data-dir is a required arg; _main()'s own parser will reject a
         # genuinely missing one with the standard argparse error.
-        _run_with_containment()
+        _run_with_containment((data_dir, project_dir, plugin_root, console,
+                               background, run_kind))
         return
 
     from .proc_lock import engine_lock
     with engine_lock(data_dir) as acquired:
         if acquired:
-            _run_with_containment()
+            _run_with_containment((data_dir, project_dir, plugin_root, console,
+                                   background, run_kind))
             return
 
     if run_kind == "always":
@@ -95,7 +98,8 @@ def main():
     if _carries_update(data_dir, plugin_root):
         with _retry_engine_lock(data_dir) as acquired:
             if acquired:
-                _run_with_containment()
+                _run_with_containment((data_dir, project_dir, plugin_root, console,
+                                       background, run_kind))
                 return
 
     _stand_down_lock_contended(data_dir, project_dir, plugin_root,
@@ -257,12 +261,16 @@ def _stand_down_lock_contended(data_dir, project_dir, plugin_root="",
         if console:
             print(f"--- bootstrap lock: {headline} ---")
         else:
-            emit_success_response(
-                f"--- bootstrap lock: {headline} ---",
-                label="bootstrap",
-                output_file=(os.path.join(data_dir, "bootstrap_display.pending")
-                             if background else None),
-            )
+            if (not background or
+                    not os.path.exists(os.path.join(
+                        data_dir, "bootstrap_display.pending"))):
+                emit_success_response(
+                    f"--- bootstrap lock: {headline} ---",
+                    label="bootstrap",
+                    output_file=(os.path.join(
+                        data_dir, "bootstrap_display.pending")
+                        if background else None),
+                )
     except Exception:
         pass
 
@@ -277,7 +285,7 @@ def _lock_holder_pid(data_dir):
         return None
 
 
-def _run_with_containment():
+def _run_with_containment(lock_args: tuple) -> None:
     try:
         _main()
     except (SystemExit, KeyboardInterrupt):
@@ -286,11 +294,12 @@ def _run_with_containment():
         import traceback
         tb = traceback.format_exc()
         try:
-            if _is_transient_import_crash(exc):
+            if (_is_transient_import_crash(exc) and
+                    _defer_transient_retry(tb, exc, lock_args)):
                 # Partial-download race: stay SILENT and retry, never report.
-                _defer_transient_retry(tb)
+                pass
             else:
-                _emit_engine_crash(tb)
+                _emit_engine_crash(tb, lock_args)
         except Exception:
             pass  # crash reporting must never mask the original traceback
         sys.stderr.write(tb)
@@ -302,6 +311,8 @@ def _run_with_containment():
 # SessionStart hook may import one of these and hit a submodule that has not been
 # written YET -- a ModuleNotFoundError that self-heals once the download finishes.
 _FIRST_PARTY_LIBS = ("bootstrap_lib", "skills_kit_lib", "llm_scripting_kit")
+_MAX_TRANSIENT_IMPORT_RETRIES = 3
+_IMPORT_RETRY_STATE_FILENAME = "import_retry_state.json"
 
 
 def _is_transient_import_crash(exc) -> bool:
@@ -319,7 +330,42 @@ def _is_transient_import_crash(exc) -> bool:
     return any(name == lib or name.startswith(lib + ".") for lib in _FIRST_PARTY_LIBS)
 
 
-def _defer_transient_retry(tb):
+def _import_retry_state_path(data_dir: str) -> str:
+    return os.path.join(data_dir, _IMPORT_RETRY_STATE_FILENAME)
+
+
+def _record_transient_import_crash(data_dir: str, plugin_root: str,
+                                   import_name: str) -> int:
+    version = _plugin_root_version(plugin_root) or "unknown"
+    state_path = _import_retry_state_path(data_dir)
+    state = {}
+    try:
+        with open(state_path, "r", encoding="utf-8") as f:
+            loaded = json.load(f)
+            if isinstance(loaded, dict):
+                state = loaded
+    except (OSError, ValueError, TypeError):
+        pass
+    count = 1
+    if (state.get("version") == version and
+            state.get("import") == import_name):
+        count = int(state.get("count", 0)) + 1
+    _write_atomic(state_path, json.dumps({
+        "version": version,
+        "import": import_name,
+        "count": count,
+    }))
+    return count
+
+
+def _clear_transient_import_state(data_dir: str) -> None:
+    try:
+        os.remove(_import_retry_state_path(data_dir))
+    except (FileNotFoundError, OSError):
+        pass
+
+
+def _defer_transient_retry(tb: str, exc: ImportError, lock_args: tuple) -> bool:
     """Handle a transient first-party import crash (partial-download race).
 
     Stay SILENT -- write NO user-facing message; a ModuleNotFoundError traceback
@@ -330,48 +376,99 @@ def _defer_transient_retry(tb):
     engine_output.log via main()'s stderr write, so the evidence is not lost. A
     completed pass clears the markers (engine._main). No-op in --console mode and
     when --data-dir is unavailable (nowhere to write), matching _emit_engine_crash.
+
+    Returns True when the crash has been HANDLED here -- silently deferred for
+    a retry, or escalated as a loud contained failure once the retry budget is
+    spent -- so the caller must not report it again; False when the caller
+    must report it as an ordinary crash.
     """
-    parser = argparse.ArgumentParser(add_help=False)
-    parser.add_argument("--data-dir", default=None)
-    parser.add_argument("--project-dir", default=None)
-    parser.add_argument("--console", action="store_true")
-    args, _ = parser.parse_known_args()
-    if args.console or not args.data_dir:
-        return
+    data_dir, project_dir, plugin_root, console, _background, run_kind = lock_args
+    if console or not data_dir:
+        return True
+    import_name = getattr(exc, "name", None) or "unknown import"
+    if run_kind == "always":
+        _write_always_crash_log(data_dir, tb)
+        return True
+    count = _record_transient_import_crash(data_dir, plugin_root, import_name)
+    if count > _MAX_TRANSIENT_IMPORT_RETRIES:
+        # No longer a partial-download race -- the same first-party import has
+        # failed identically _MAX_TRANSIENT_IMPORT_RETRIES times in a row with
+        # no cache progress between attempts. Stop hiding it: surface it the
+        # same way an ordinary crash is surfaced, naming the import so the
+        # pending/log evidence says what is actually missing.
+        loud_tb = (
+            f"{import_name} failed to import after "
+            f"{_MAX_TRANSIENT_IMPORT_RETRIES} identical retries; giving up on "
+            f"the silent partial-download retry.\n{tb}"
+        )
+        _emit_engine_crash(loud_tb, lock_args)
+        # Handled: the loud crash above IS the report. Returning True keeps the
+        # caller from emitting a second crash for the same traceback.
+        return True
     # Deliberately silent to the user -- but not to the record. This path
     # swallows a real traceback on purpose (it self-heals), which meant a
     # recurring, non-self-healing failure wearing this signature would look
     # like nothing had happened at all.
     try:
         from .records import PassRecorder
-        r = PassRecorder(args.data_dir, mode="hook", autoflush=False)
+        r = PassRecorder(data_dir, mode="hook", autoflush=False)
         r.record("crash", tb, sev="quiet", transient=True)
         r.flush()
     except Exception:
         pass
     from .stamps import global_stamp
-    global_stamp(args.data_dir, "import_retry_pending").write("1")
+    global_stamp(data_dir, "import_retry_pending").write("1")
     # Void the in-flight guard: THIS attempt crashed, so the harvest may relaunch
     # once more. (Set by harvest on launch, cleared here on crash -> at most one
     # retry pass in flight at a time, retrying until the download completes.)
-    global_stamp(args.data_dir, "import_retry_launched").clear()
-    _clear_project_cooldown(args.data_dir, args.project_dir)
+    global_stamp(data_dir, "import_retry_launched").clear()
+    _clear_project_cooldown(data_dir, project_dir)
+    return True
 
 
-def _emit_engine_crash(tb):
+def _write_always_crash_log(data_dir: str, tb: str) -> None:
+    first_line = tb.strip().splitlines()[-1] if tb.strip() else "unknown error"
+    try:
+        from .log import write_log_block
+        write_log_block(data_dir, "bootstrap always",
+                        [f"always lane crashed: {first_line}"])
+    except Exception:
+        pass
+
+
+def _write_pending_if_absent(path: str, content: str) -> bool:
+    """Write pending evidence without replacing an unconsumed result."""
+    directory = os.path.dirname(os.path.abspath(path))
+    os.makedirs(directory, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(prefix=".pending.", dir=directory)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(content)
+        try:
+            os.link(temporary, path)
+        except FileExistsError:
+            return False
+        return True
+    finally:
+        try:
+            os.remove(temporary)
+        except OSError:
+            pass
+
+
+def _emit_engine_crash(tb: str, lock_args: tuple) -> None:
     """Write a crash .pending + clear the cooldown after an engine crash.
 
-    Re-parses argv leniently (the crash may have happened before/around
-    normal arg parsing). No-op in --console mode (console writes no files
-    and the user sees the traceback directly) and when --data-dir is
-    unavailable (nowhere to write).
+    Receives the lenient argv tuple collected before the engine lock. No-op in
+    --console mode (console writes no files and the user sees the traceback
+    directly) and when --data-dir is unavailable (nowhere to write).
     """
-    parser = argparse.ArgumentParser(add_help=False)
-    parser.add_argument("--data-dir", default=None)
-    parser.add_argument("--project-dir", default=None)
-    parser.add_argument("--console", action="store_true")
-    args, _ = parser.parse_known_args()
-    if not args.data_dir:
+    data_dir, project_dir, _plugin_root, console, _background, run_kind = lock_args
+    if not data_dir:
+        return
+    if run_kind == "always":
+        if not console:
+            _write_always_crash_log(data_dir, tb)
         return
 
     # Record the traceback before the console early-return. A crashed pass is
@@ -381,14 +478,14 @@ def _emit_engine_crash(tb):
     try:
         from .records import PassRecorder
         crash_recorder = PassRecorder(
-            args.data_dir, mode="console" if args.console else "hook",
+            data_dir, mode="console" if console else "hook",
             autoflush=False)
         crash_recorder.record("crash", tb, sev="fail")
         crash_recorder.flush()
     except Exception:
         pass
 
-    if args.console:
+    if console:
         return
 
     first_line = tb.strip().splitlines()[-1] if tb.strip() else "unknown error"
@@ -408,11 +505,11 @@ def _emit_engine_crash(tb):
             ),
         },
     }
-    pending = os.path.join(args.data_dir, "bootstrap_display.pending")
-    _write_atomic(pending, json.dumps(response))
+    pending = os.path.join(data_dir, "bootstrap_display.pending")
+    _write_pending_if_absent(pending, json.dumps(response))
     # Roll back the shell hook's optimistic cooldown stamp so the next
     # SessionStart re-runs instead of silently throttling on a crashed pass.
-    _clear_project_cooldown(args.data_dir, args.project_dir)
+    _clear_project_cooldown(data_dir, project_dir)
 
 
 def _append_detail(entries, text, detail=None, display=None):
@@ -764,7 +861,11 @@ def _main():
     # scan and is absorbed by Step 4 (never appearing in new_plugins) -- the gap
     # the cache-kit end-to-end test surfaced.
     _registry_for_diff = os.path.join(plugins_dir, "installed_plugins.json")
-    installed_refs_before = set(_read_installed_plugins(_registry_for_diff))
+    # Both snapshots take the same registry-v2-empty cache fallback (the
+    # registry can stay {"plugins": {}} forever), or the diff is meaningless.
+    _refs_for_diff = _load_enabled_refs(args.project_dir)
+    installed_refs_before = set(
+        _read_installed_plugins(_registry_for_diff, enabled_refs=_refs_for_diff))
 
     # Step 3c: Process layered bootstrap manifests (user + project level)
     # Deprecation: warn if legacy user-bootstrap.json exists
@@ -911,12 +1012,11 @@ def _main():
 
     enabled_plugins.sort(key=_plugin_sort_key)
     deferred_plugin_logs = []
-    processed_plugin_refs = set()
+    processed_plugin_keys = set()
 
     for plugin_info in enabled_plugins:
-        ref = f"{plugin_info.marketplace}:{plugin_info.name}" if plugin_info.marketplace else plugin_info.name
-        processed_plugin_refs.add(ref)
-        _bootstrap_single_plugin(
+        processed_plugin_keys.add(_plugin_processed_key(plugin_info))
+        _bootstrap_single_plugin_isolated(
             plugin_info, current_os, data_dir, all_failures,
             log_success, display_sections, deferred_plugin_logs, args,
             engine_version=version, shared_lib_links=shared_lib_links,
@@ -933,14 +1033,10 @@ def _main():
         from .config import save_config
         save_config(data_dir, config)
 
-    new_plugins = [
-        pi for pi in phase2_plugins
-        if (f"{pi.marketplace}:{pi.name}" if pi.marketplace else pi.name)
-           not in processed_plugin_refs
-    ]
+    new_plugins = _phase2_new_plugins(phase2_plugins, processed_plugin_keys)
     new_plugins.sort(key=_plugin_sort_key)
     for plugin_info in new_plugins:
-        _bootstrap_single_plugin(
+        _bootstrap_single_plugin_isolated(
             plugin_info, current_os, data_dir, all_failures,
             log_success, display_sections, deferred_plugin_logs, args,
             engine_version=version, shared_lib_links=shared_lib_links,
@@ -1001,7 +1097,7 @@ def _main():
     # (already-linked consumers report "cached" -> verbose-only); only a genuinely
     # converged or failed link surfaces. See _shared_lib_convergence_sweep.
     sweep_actions, sweep_quiets, sweep_oks, sweep_failures = _shared_lib_convergence_sweep(
-        enabled_plugins + new_plugins, data_dir, shared_lib_links,
+        enabled_plugins + new_plugins, data_dir, shared_lib_links, engine_version=version,
     )
     if sweep_failures:
         all_failures.extend(sweep_failures)
@@ -1039,15 +1135,21 @@ def _main():
     # output with no relay directive telling Claude to surface it.
     # Toggle off via config "notify_reload_needed".
     if config.get("notify_reload_needed", True):
+        # Same cache fallback as the "before" snapshot at Step 3b, so a plugin
+        # installed mid-pass on a registry-v2-empty machine still surfaces.
         newly_installed = _resolve_newly_installed(
-            installed_refs_before, _read_installed_plugins(_registry_for_diff),
+            installed_refs_before,
+            _read_installed_plugins(_registry_for_diff, enabled_refs=fallback_refs),
         )
         notices = [a for a in (
             _reload_advice(newly_installed),
             # Bootstrap self-staleness: a newer bootstrap is cached but this session
             # loaded the old one. /reload-plugins won't re-fire its SessionStart pass.
+            # Unlike the reload nag above, this is a single-point registry lookup
+            # (no before/after snapshot), so the registry-v2-empty cache fallback
+            # is safe to wire in directly.
             _bootstrap_stale_advice(version, boot_plugin_name, marketplace_name, prod_registry,
-                                    data_dir=data_dir),
+                                    data_dir=data_dir, enabled_refs=fallback_refs),
         ) if a]
         for advice in notices:
             advice_label = f"{bootstrap_label} notice"
@@ -1249,6 +1351,7 @@ def _main():
     # (set by _defer_transient_retry / harvest.run_harvest on a crash+relaunch).
     global_stamp(data_dir, "import_retry_pending").clear()
     global_stamp(data_dir, "import_retry_launched").clear()
+    _clear_transient_import_state(data_dir)
 
     # Absorb the installed/enabled plugin-set snapshot this pass just provisioned
     # (bootstrap_lib/plugins_snapshot.py). The UserPromptSubmit mid-session
@@ -1349,8 +1452,16 @@ def _elevation_step(all_failures, current_os, data_dir, args, plugin_root,
                 else:
                     from .log import write_log_block
                     write_log_block(data_dir, f"{label} elevation", [note])
-                _spawn_recheck_pass(args, plugin_root)
-                return True
+                if _spawn_recheck_pass(args, plugin_root):
+                    return True
+                all_failures.append({
+                    "type": "recheck",
+                    "name": "elevation re-check",
+                    "message": "bootstrap re-check did not complete",
+                    "agent_msg": "bootstrap re-check did not complete",
+                    "user_msg": "bootstrap re-check did not complete",
+                })
+                return False
             launch_detail = result.detail
             launch_failed = not result.launched
 
@@ -1371,7 +1482,7 @@ def _elevation_step(all_failures, current_os, data_dir, args, plugin_root,
     return False
 
 
-def _spawn_recheck_pass(args, plugin_root):
+def _spawn_recheck_pass(args, plugin_root) -> bool:
     """Re-run the engine (same mode, WITHOUT --fix-all) after a successful
     elevated launch, so the elevated items re-check and clear in the same
     fix-all cycle.
@@ -1410,7 +1521,103 @@ def _spawn_recheck_pass(args, plugin_root):
         cmd += ["--console"]
     if args.background:
         cmd += ["--background"]
-    subprocess.run(cmd)
+    result = subprocess.run(cmd)
+    if result.returncode == 0:
+        return True
+
+    note = (
+        f"bootstrap re-check did not complete (child exit code "
+        f"{result.returncode})"
+    )
+    try:
+        from .log import write_log_block
+        write_log_block(args.data_dir, "bootstrap elevation", [note])
+    except Exception:
+        pass
+    if args.console:
+        print(note)
+    else:
+        emit_success_response(
+            note,
+            label="bootstrap",
+            output_file=(os.path.join(args.data_dir, "bootstrap_display.pending")
+                         if args.background else None),
+        )
+    return False
+
+
+def _plugin_processed_key(plugin_info):
+    """Identity key for the Phase-1/Phase-2 "already processed" set.
+
+    Keyed by (ref, version, install_path) rather than ref alone: a plugin
+    that Phase 1 processed at v1 and that Phase 1 itself (or a layered
+    ``plugins:`` install) then updated to v2 in the registry must be
+    reprocessed in Phase 2's rescan -- otherwise the completion stamps
+    (cooldown, engine_ran_version) acknowledge the NEW registry state while
+    the plugin's own dependencies/shared libs stay stale until the next
+    cooldown expiry notices the drift.
+    """
+    ref = f"{plugin_info.marketplace}:{plugin_info.name}" if plugin_info.marketplace else plugin_info.name
+    return (ref, plugin_info.version, plugin_info.install_path)
+
+
+def _phase2_new_plugins(phase2_plugins, processed_keys):
+    """Phase-2 rescan results not already processed in Phase 1, keyed by
+    ``_plugin_processed_key`` -- see that function's docstring for why version
+    and install_path are part of the identity, not just the ref."""
+    return [pi for pi in phase2_plugins if _plugin_processed_key(pi) not in processed_keys]
+
+
+def _bootstrap_single_plugin_isolated(
+    plugin_info, current_os, data_dir, all_failures,
+    log_success, display_sections, deferred_plugin_logs, args,
+    engine_version="", shared_lib_links=None, recorder=None,
+):
+    """Wrap ``_bootstrap_single_plugin`` so one plugin's crash never loses the
+    pass.
+
+    Before this wrapper, only a JSON parse error inside ``_bootstrap_single_plugin``
+    was caught -- a plain file at ``<data>/<mkt>/<plugin>`` (``NotADirectoryError``
+    from the ``os.makedirs`` call), a ``PermissionError``, or any exception raised
+    by a phase handler propagated out of the Step 4 / Step 4b loop and crashed the
+    whole pass: every already-processed plugin's log block, the display, the
+    elevation queue, and the ``engine_ran_version`` stamp were lost, and the crash
+    handler cleared the cooldown so the same crash repeated every session.
+
+    On an exception, this records a ``<plugin label>: FAILED - <type>: <message>``
+    action entry in the CRASHING plugin's own log block and display section (so
+    it is both logged and shown), appends a failure to the pass record, and lets
+    the caller continue with the next plugin.
+    """
+    try:
+        _bootstrap_single_plugin(
+            plugin_info, current_os, data_dir, all_failures,
+            log_success, display_sections, deferred_plugin_logs, args,
+            engine_version=engine_version, shared_lib_links=shared_lib_links,
+            recorder=recorder,
+        )
+    except Exception as e:
+        detail = f"{type(e).__name__}: {e}"
+        plugin_label = f"{plugin_info.name}@{plugin_info.version}" if plugin_info.version else plugin_info.name
+        entry = f"{plugin_label}: FAILED - {detail}"
+        plugin_data_dir = _plugin_data_dir(data_dir, plugin_info)
+        deferred_plugin_logs.append((plugin_data_dir, plugin_label, [entry]))
+        plugin_display_header = (
+            f"{plugin_info.marketplace}:{plugin_info.name}@{plugin_info.version}"
+            if plugin_info.marketplace else plugin_label
+        )
+        display_sections.append((plugin_display_header, [entry], []))
+        all_failures.append({
+            "type": "plugin_crash",
+            "name": plugin_info.name,
+            "plugin": plugin_info.name,
+            "message": detail,
+            "agent_msg": (
+                f"Bootstrap for plugin {plugin_info.name} crashed with {detail}. "
+                "Its setup was skipped for this pass; other plugins were still "
+                "processed."
+            ),
+        })
 
 
 def _plugin_data_dir(data_dir, plugin_info):
@@ -1454,6 +1661,39 @@ def _plugin_log_label(plugin_info, plugin_data_dir, data_dir, engine_version="")
     if is_self and engine_version and engine_version != plugin_info.version:
         return f"{label} (engine {engine_version})"
     return label
+
+
+def _plugin_headers(plugin_info, plugin_data_dir, data_dir, engine_version=""):
+    """``(log_label, display_header)`` for a plugin's own log block and display
+    section -- the ONE construction shared by every site in
+    ``_bootstrap_single_plugin`` that builds this pair: the manifest-parse
+    failure early return, the manifest-shape failure early return, the
+    requires_bootstrap gate early return, and the normal processing path. Two
+    of those early-return paths used to build the label inline instead of
+    calling ``_plugin_log_label``, so bootstrap's own section on those paths
+    lost the ``(engine <running>)`` disambiguation that path applies.
+    """
+    log_label = _plugin_log_label(plugin_info, plugin_data_dir, data_dir, engine_version)
+    display_header = (
+        f"{plugin_info.marketplace}:{plugin_info.name}@{plugin_info.version}"
+        if plugin_info.marketplace else log_label
+    )
+    return log_label, display_header
+
+
+def _requires_bootstrap_unmet(plugin_manifest, engine_version):
+    """The manifest's ``requires_bootstrap`` constraint when this engine does NOT
+    satisfy it, else ``None``.
+
+    The single gate shared by ``_bootstrap_single_plugin`` (which skips the
+    manifest entirely) and ``_shared_lib_convergence_sweep`` (which used to
+    re-link a gated plugin's ``shared_lib_imports`` with no gate at all --
+    honoring a manifest the per-plugin pass had just refused).
+    """
+    required_bootstrap = plugin_manifest.get("requires_bootstrap")
+    if required_bootstrap and engine_version and not _version_satisfies(engine_version, required_bootstrap):
+        return required_bootstrap
+    return None
 
 
 def _bootstrap_single_plugin(
@@ -1515,9 +1755,36 @@ def _bootstrap_single_plugin(
             "persist_across_sessions": True,
         })
         entry = f"bootstrap.json: PARSE FAILED - {error}"
-        plugin_label = f"{plugin_info.name}@{plugin_info.version}" if plugin_info.version else plugin_info.name
+        plugin_label, plugin_display_header = _plugin_headers(
+            plugin_info, plugin_data_dir, data_dir, engine_version)
         deferred_plugin_logs.append((plugin_data_dir, plugin_label, [entry]))
-        plugin_display_header = f"{plugin_info.marketplace}:{plugin_info.name}@{plugin_info.version}" if plugin_info.marketplace else plugin_label
+        display_sections.append((plugin_display_header, [entry], []))
+        return
+
+    # A syntactically valid bootstrap.json can still decode to a non-mapping
+    # (a bare `[]` or `null` at the top level) -- `.get()` on that raises
+    # AttributeError deep in the manifest phases. Treat it as the same
+    # manifest_parse failure the JSON-syntax path above produces, with a
+    # shape-specific message.
+    if not isinstance(plugin_manifest, dict):
+        error = f"manifest is not a JSON object (top level is {type(plugin_manifest).__name__})"
+        all_failures.append({
+            "type": "manifest_parse",
+            "path": plugin_manifest_path,
+            "message": error,
+            "agent_msg": (
+                f"The bootstrap manifest at {plugin_manifest_path} does not decode "
+                f"to a JSON object ({error}). Open the file, fix its top-level shape "
+                "(it must be a JSON object, not an array or null), and ask the user "
+                "to type 'fix-all' to re-run bootstrap."
+            ),
+            "plugin": plugin_info.name,
+            "persist_across_sessions": True,
+        })
+        entry = f"bootstrap.json: PARSE FAILED - {error}"
+        plugin_label, plugin_display_header = _plugin_headers(
+            plugin_info, plugin_data_dir, data_dir, engine_version)
+        deferred_plugin_logs.append((plugin_data_dir, plugin_label, [entry]))
         display_sections.append((plugin_display_header, [entry], []))
         return
 
@@ -1525,14 +1792,13 @@ def _bootstrap_single_plugin(
     # version it needs (e.g. it uses a `scoop:` fulfillment older engines can't
     # process). If THIS engine is too old, skip the manifest entirely and tell the
     # user to update bootstrap -- rather than misprocessing fields we don't grok.
-    required_bootstrap = plugin_manifest.get("requires_bootstrap")
-    if required_bootstrap and engine_version and not _version_satisfies(engine_version, required_bootstrap):
+    required_bootstrap = _requires_bootstrap_unmet(plugin_manifest, engine_version)
+    if required_bootstrap:
         msg = (f"skipped: requires bootstrap >= {required_bootstrap}, but bootstrap "
                f"{engine_version} is running — update the bootstrap plugin")
-        plugin_label = f"{plugin_info.name}@{plugin_info.version}" if plugin_info.version else plugin_info.name
+        plugin_label, plugin_display_header = _plugin_headers(
+            plugin_info, plugin_data_dir, data_dir, engine_version)
         deferred_plugin_logs.append((plugin_data_dir, plugin_label, [msg]))
-        plugin_display_header = (f"{plugin_info.marketplace}:{plugin_info.name}@{plugin_info.version}"
-                                 if plugin_info.marketplace else plugin_label)
         display_sections.append((plugin_display_header, [msg], []))
         all_failures.append({
             "type": "bootstrap_outdated",
@@ -1620,14 +1886,14 @@ def _bootstrap_single_plugin(
         all_failures.extend(failures)
 
     # Collect plugin log info (deferred — written after reading shell entries)
-    plugin_label = _plugin_log_label(plugin_info, plugin_data_dir, data_dir, engine_version)
+    plugin_label, plugin_display_header = _plugin_headers(
+        plugin_info, plugin_data_dir, data_dir, engine_version)
     # quiet_entries are logged unconditionally (they ARE remediations) but stay
     # out of the display section below -- Step 4c speaks for them in aggregate.
     plugin_log_entries = plugin_action_entries + quiet_entries + (plugin_ok_entries if log_success else [])
     deferred_plugin_logs.append((plugin_data_dir, plugin_label, plugin_log_entries))
 
     # Add plugin section to display
-    plugin_display_header = f"{plugin_info.marketplace}:{plugin_info.name}@{plugin_info.version}" if plugin_info.marketplace else plugin_label
     display_sections.append((plugin_display_header, list(plugin_action_entries), list(plugin_ok_entries)))
 
 
@@ -1676,7 +1942,7 @@ class _SharedLibLinkLog:
         return "; ".join(parts)
 
 
-def _shared_lib_convergence_sweep(plugins, data_dir, link_log=None):
+def _shared_lib_convergence_sweep(plugins, data_dir, link_log=None, engine_version=""):
     """Re-link every consumer's ``shared_lib_imports`` after all owners published.
 
     Consumer links (writing ``<lib>.pth`` into a plugin's own venv) happen inline
@@ -1697,6 +1963,13 @@ def _shared_lib_convergence_sweep(plugins, data_dir, link_log=None):
     sites appears once) and their per-plugin entry goes to ``quiets`` -- logged
     with its .pth path, but displayed only via the aggregated summary line.
 
+    ``engine_version`` applies the SAME ``requires_bootstrap`` gate
+    ``_bootstrap_single_plugin`` applies to the per-plugin pass: a manifest that
+    pass skipped as too-new-for-this-engine is skipped here too, rather than
+    this sweep re-linking its ``shared_lib_imports`` on its behalf. One
+    "skipped" entry per gated plugin lands in ``oks`` (verbose-only, same
+    convention as a cached/skipped per-lib entry) -- no link is attempted.
+
     Returns ``(actions, quiets, oks, failures)`` for the caller to log + display.
     """
     from .shared_lib import link_shared_lib
@@ -1710,9 +1983,19 @@ def _shared_lib_convergence_sweep(plugins, data_dir, link_log=None):
             continue
         try:
             with open(manifest_path, "r") as f:
-                imports = json.load(f).get("shared_lib_imports", [])
+                manifest = json.load(f)
         except (OSError, ValueError):
             continue
+        if not isinstance(manifest, dict):
+            continue
+        required_bootstrap = _requires_bootstrap_unmet(manifest, engine_version)
+        if required_bootstrap:
+            oks.append(
+                f"{plugin_info.name}: shared-lib sweep skipped: requires bootstrap "
+                f">= {required_bootstrap}, but {engine_version} is running"
+            )
+            continue
+        imports = manifest.get("shared_lib_imports", [])
         if not imports:
             continue
         # Key by the plugin's own marketplace (see _plugin_data_dir): the consumer
@@ -1773,7 +2056,7 @@ def _plugin_ships_sessionstart_hook(install_path):
     return False
 
 
-def _read_installed_plugins(registry_path):
+def _read_installed_plugins(registry_path, enabled_refs=None):
     """``{ref: installPath}`` for every installed plugin in the registry file
     (keys like ``cache-kit@plugins-kit``). Empty dict on any read/parse error (a
     missing registry just yields no nag rather than crashing the pass).
@@ -1783,13 +2066,21 @@ def _read_installed_plugins(registry_path):
     ``list_enabled_plugins`` never returns) is still resolvable for the reload nag.
     Registry entries may be a dict or a list of per-scope dicts; take the first
     ``installPath`` found.
+
+    ``enabled_refs``, when given, adds the same cache-derived fallback
+    ``list_enabled_plugins`` uses (``plugin_resolve.discover_cache_plugins``):
+    on a registry-v2-empty machine (``installed_plugins.json`` permanently
+    ``{"plugins": {}}`` for marketplace installs -- see the ``registry_v2_empty``
+    insight) the registry alone can never show a plugin entering or leaving, so
+    the Step 4d before/after diff would never notice anything. Registry entries
+    always take precedence; the fallback only fills refs the registry omits.
     """
     out = {}
     try:
         with open(registry_path) as f:
             plugins = json.load(f).get("plugins", {})
     except (OSError, ValueError):
-        return out
+        plugins = {}
     for ref, entry in plugins.items():
         ip = None
         if isinstance(entry, dict):
@@ -1800,6 +2091,13 @@ def _read_installed_plugins(registry_path):
                     ip = e["installPath"]
                     break
         out[ref] = ip
+    if enabled_refs:
+        from .plugin_resolve import discover_cache_plugins
+        plugins_root = os.path.dirname(os.path.abspath(registry_path))
+        for ref, entries in discover_cache_plugins(plugins_root, enabled_refs).items():
+            if out.get(ref):
+                continue
+            out[ref] = entries[0].get("installPath") if entries else None
     return out
 
 
@@ -1855,7 +2153,7 @@ def _reload_advice(newly_installed):
 
 
 def _bootstrap_stale_advice(running_version, plugin_name, marketplace_name, registry_path,
-                            data_dir=""):
+                            data_dir="", enabled_refs=None):
     """Restart notice (informational, not action-required) when the registry
     records a NEWER bootstrap than the one running this session, else None.
 
@@ -1874,6 +2172,12 @@ def _bootstrap_stale_advice(running_version, plugin_name, marketplace_name, regi
     user the truth. The comparison direction (registry > running) self-guards the
     common dev case (a dev tree running AHEAD of the cache never nags). See
     references/plugin-reload-lifecycle.md.
+
+    ``enabled_refs``, when given, falls back to the cache-derived discovery
+    ``list_enabled_plugins`` already uses when the registry has no record for
+    ``cli_ref`` at all (registry-v2-empty machines never record a version here,
+    so without this the nag can never fire there even when a newer bootstrap
+    is genuinely cached).
     """
     if not running_version or not plugin_name or not marketplace_name:
         return None
@@ -1882,9 +2186,15 @@ def _bootstrap_stale_advice(running_version, plugin_name, marketplace_name, regi
         with open(registry_path) as f:
             installs = json.load(f).get("plugins", {}).get(cli_ref, [])
     except (OSError, ValueError):
-        return None
+        installs = None
     from .plugin_resolve import pick_registry_record
-    rec = pick_registry_record(installs)
+    rec = pick_registry_record(installs) if installs is not None else None
+    if rec is None and enabled_refs:
+        from .plugin_resolve import discover_cache_plugins
+        plugins_root = os.path.dirname(os.path.abspath(registry_path))
+        fallback_entries = discover_cache_plugins(plugins_root, enabled_refs).get(cli_ref)
+        if fallback_entries:
+            rec = pick_registry_record(fallback_entries)
     registry_version = rec.get("version", "") if rec is not None else ""
     if not registry_version:
         return None
@@ -1970,6 +2280,16 @@ def _load_layered_manifests(project_dir, data_dir=None):
             continue
         except OSError as e:
             parse_errors.append({"path": path, "error": f"read error: {e}"})
+            continue
+        if not isinstance(layer, dict):
+            # Syntactically valid JSON that decodes to a non-mapping (a bare
+            # `[]` or `null`) -- same failure family as a parse error, since
+            # merge_manifests(dict, non-dict) would misbehave the same way
+            # `.get()` on a non-mapping manifest does in _bootstrap_single_plugin.
+            parse_errors.append({
+                "path": path,
+                "error": f"manifest is not a JSON object (top level is {type(layer).__name__})",
+            })
             continue
         merged = merge_manifests(merged, layer)
 
