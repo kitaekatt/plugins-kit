@@ -131,7 +131,10 @@ def download_and_install(
     re-raises only for genuine internals (programmer errors).
     """
     bin_dir = target_dir or install_dir()
-    os.makedirs(bin_dir, exist_ok=True)
+    try:
+        os.makedirs(bin_dir, exist_ok=True)
+    except OSError as e:
+        return DownloadResult(False, None, f"create install directory failed: {e}")
 
     final_name = binary_name or tool_name
     if sys.platform == "win32" and not final_name.lower().endswith(".exe"):
@@ -253,7 +256,10 @@ def download_fonts(
     On failure: (ok=False, files=[], message=<reason>). Never raises for
     "expected" failures (network, hash mismatch, no matching members).
     """
-    os.makedirs(dest_dir, exist_ok=True)
+    try:
+        os.makedirs(dest_dir, exist_ok=True)
+    except OSError as e:
+        return FontDownloadResult(False, [], f"create font directory failed: {e}")
     detected_type = _detect_archive_type(url, archive_type)
     if detected_type is None:
         return FontDownloadResult(False, [], f"could not detect archive type from {url!r}")

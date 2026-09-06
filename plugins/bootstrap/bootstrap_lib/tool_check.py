@@ -7,6 +7,8 @@ import sys
 from typing import Optional, Union
 
 from .result import Result
+from .path_check import normalize_path_for_compare
+from .subprocess_run import run_captured
 
 # Extras carried on tool-check Results:
 #   install_cmd -- platform install command when the tool is missing (or None)
@@ -39,9 +41,9 @@ def resolve_bash() -> Optional[str]:
 
 def _dir_on_path(directory: str) -> bool:
     """True if `directory` is present in the current process PATH."""
-    target = os.path.normcase(os.path.normpath(directory))
+    target = normalize_path_for_compare(directory)
     for d in os.environ.get("PATH", "").split(os.pathsep):
-        if d and os.path.normcase(os.path.normpath(d)) == target:
+        if d and normalize_path_for_compare(d) == target:
             return True
     return False
 
@@ -161,30 +163,16 @@ def run_install(install_cmd: str, timeout: int = INSTALL_TIMEOUT_SECONDS) -> tup
         if sys.platform == "win32" or "MSYSTEM" in os.environ:
             bash = resolve_bash()
             if bash:
-                result = subprocess.run(
-                    [bash, "-c", install_cmd],
-                    capture_output=True,
-                    text=True, encoding="utf-8", errors="replace",
-                    timeout=timeout,
-                )
+                command = [bash, "-c", install_cmd]
             else:
-                result = subprocess.run(
-                    install_cmd,
-                    shell=True,
-                    capture_output=True,
-                    text=True, encoding="utf-8", errors="replace",
-                    timeout=timeout,
-                )
+                command = install_cmd
         else:
-            result = subprocess.run(
-                install_cmd,
-                shell=True,
-                capture_output=True,
-                text=True, encoding="utf-8", errors="replace",
-                timeout=timeout,
-            )
-        output = (result.stdout + result.stderr).strip()
-        return result.returncode == 0, output
+            command = install_cmd
+        returncode, stdout, stderr = run_captured(
+            command, timeout=timeout, stdin_devnull=True,
+        )
+        output = (stdout + stderr).strip()
+        return returncode == 0, output
     except subprocess.TimeoutExpired:
         return False, f"install timed out after {timeout}s"
     except Exception as e:

@@ -149,6 +149,16 @@ class TestCheckNodeModules:
         assert result.passed
         assert "no dependencies" in result.message
 
+    def test_malformed_package_json_fails_with_parse_error(self, tmp_path):
+        project = tmp_path / "broken"
+        project.mkdir()
+        _write(str(project / "package.json"), "{not json")
+
+        result = check_node_modules(str(project))
+
+        assert not result.passed
+        assert "package.json parse error" in result.message
+
     def test_shrinkwrap_is_honored_as_lockfile(self, tmp_path):
         project = _make_project(tmp_path, lockfile="npm-shrinkwrap.json")
         _install_node_modules(project, mtime=1000)

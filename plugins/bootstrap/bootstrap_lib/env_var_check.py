@@ -32,7 +32,19 @@ from .result import Result
 
 def export_line(name: str, value: str) -> str:
     """The canonical rc-file export line for a variable."""
-    return f'export {name}="{value}"'
+    return f"export {name}={shlex.quote(value)}"
+
+
+_ENV_VAR_NAME_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+
+
+def is_valid_env_var_name(name: str) -> bool:
+    """Return whether `name` is safe and valid for shell environment use."""
+    return isinstance(name, str) and _ENV_VAR_NAME_RE.fullmatch(name) is not None
+
+
+def _invalid_name_message(name: str) -> str:
+    return f"{name!r} is not a valid shell identifier"
 
 
 def plugin_root_env_var_name(plugin_name: str) -> str:
@@ -83,6 +95,8 @@ def export_env_var(name: str, value: str) -> Optional[str]:
         The exported variable name when the env-file line was written,
         else ``None``.
     """
+    if not is_valid_env_var_name(name):
+        return None
     os.environ[name] = value
 
     env_file = os.environ.get("CLAUDE_ENV_FILE")
@@ -103,6 +117,12 @@ def check_env_var(name: str, value: str, current_os: str) -> Result:
     Unix: every target rc file contains the exact canonical export line.
     Windows: the User-scope registry value equals ``value``.
     """
+    if not is_valid_env_var_name(name):
+        return Result(
+            passed=False,
+            subject=str(name),
+            message=_invalid_name_message(name),
+        )
     if current_os == "windows":
         return _check_windows_env_var(name, value)
 
@@ -137,6 +157,8 @@ def set_env_var(name: str, value: str, current_os: str) -> Tuple[bool, str]:
     Returns:
         (success, message) tuple.
     """
+    if not is_valid_env_var_name(name):
+        return False, _invalid_name_message(name)
     if current_os == "windows":
         return _set_windows_env_var(name, value)
 

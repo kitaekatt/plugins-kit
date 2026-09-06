@@ -21,6 +21,7 @@ import json
 import os
 import re
 from datetime import datetime, timezone
+from pathlib import Path
 
 from .atomic_write import write_atomic
 
@@ -103,6 +104,7 @@ def record(data_dir, name, path):
     """
     if not name or not path:
         return
+    path = str(Path(path).absolute())
     data = _load(data_dir)
     existing = data["tools"].get(name)
     existing_path = existing.get("path") if isinstance(existing, dict) else existing

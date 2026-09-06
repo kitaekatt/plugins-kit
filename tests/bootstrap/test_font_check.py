@@ -124,6 +124,98 @@ class TestInstallFont:
 
 
 class TestEngineFontsLoop:
+    def test_successful_font_install_with_failed_recheck_is_failure(self, tmp_path, monkeypatch):
+        from bootstrap_lib import engine as engine_mod
+        from bootstrap_lib.font_check import FontInstallResult, FontCheckResult
+
+        checks = iter([
+            FontCheckResult(False, None, "missing"),
+            FontCheckResult(False, None, "still missing"),
+        ])
+        monkeypatch.setattr("bootstrap_lib.font_check.check_font", lambda match: next(checks))
+        monkeypatch.setattr(
+            "bootstrap_lib.font_check.install_font",
+            lambda *args, **kwargs: FontInstallResult(True, ["/tmp/Family.ttf"], "installed"),
+        )
+        action, ok = [], []
+        failures = engine_mod._process_manifest(
+            {"fonts": [{
+                "name": "Family", "match": "*Family*",
+                "download": {"url": "https://example.invalid/f.zip", "sha256": "abc"},
+            }]},
+            "linux", str(tmp_path / "data"), str(tmp_path / "root"),
+            action, ok, plugin_name="t",
+        )
+
+        assert failures
+        assert "re-check failed" in failures[0]["message"]
+        assert not any("fonts installed" in item for item in action)
+
+    def test_successful_url_download_with_failed_recheck_is_failure(self, tmp_path, monkeypatch):
+        from bootstrap_lib import downloader, engine as engine_mod
+        from bootstrap_lib.result import Result
+
+        checks = iter([
+            Result(False, "tool", "missing", extras={"install_cmd": None}),
+            Result(False, "tool", "still missing", extras={"install_cmd": None}),
+        ])
+        monkeypatch.setattr(engine_mod, "_tool_check", lambda ctx: next(checks))
+        monkeypatch.setattr(
+            downloader, "download_and_install",
+            lambda *args, **kwargs: downloader.DownloadResult(True, "/tmp/tool", "downloaded"),
+        )
+        action, ok, installed = [], [], []
+        failure = engine_mod._process_tool_entry(
+            {"name": "tool", "download": {
+                "linux": {"url": "https://example.invalid/tool", "sha256": "abc"},
+            }},
+            "linux", str(tmp_path / "data"), "", action, ok, installed, plugin_name="t",
+        )
+
+        assert failure is not None
+        assert "re-check failed" in failure["message"]
+        assert installed == []
+        assert not any("downloaded to" in item for item in action)
+
+    def test_successful_ini_write_with_failed_recheck_is_failure(self, tmp_path, monkeypatch):
+        from bootstrap_lib import engine as engine_mod
+        from bootstrap_lib.ini_check import IniCheckResult
+
+        ini_file = str(tmp_path / "settings.ini")
+        checks = iter([
+            IniCheckResult(False, ini_file, "[Section]", "key", "missing"),
+            IniCheckResult(False, ini_file, "[Section]", "key", "still wrong"),
+        ])
+        monkeypatch.setattr("bootstrap_lib.ini_check.check_ini_setting", lambda *args: next(checks))
+        monkeypatch.setattr("bootstrap_lib.ini_check.write_ini_setting", lambda *args: None)
+
+        class Context:
+            manifest = {"ini_settings": [{
+                "file": ini_file, "section": "Section", "settings": {"key": "value"},
+            }]}
+            project_detected = True
+            variables = {}
+            action_entries = []
+            ok_entries = []
+            failures = []
+
+            def ok(self, message):
+                self.ok_entries.append(message)
+
+            def action(self, message):
+                self.action_entries.append(message)
+
+            def fail(self, entry, **failure):
+                self.action_entries.append(entry)
+                self.failures.append(failure)
+
+        ctx = Context()
+        engine_mod._phase_ini_settings(ctx)
+
+        assert ctx.failures
+        assert "re-check failed" in ctx.failures[0]["message"]
+        assert not any("set to" in item for item in ctx.action_entries)
+
     def test_malformed_entry_missing_name_is_skipped_not_fatal(self, tmp_path):
         # A font entry without "name" (e.g. a typo in a layered bootstrap.json)
         # must not abort the whole bootstrap run with a KeyError.

@@ -68,10 +68,10 @@ def _get_persistent_path_dirs() -> List[str]:
 
 def _find_first_python_in_dirs(dirs: List[str]) -> Optional[str]:
     """Walk dirs in order and return the full path to the first python.exe found."""
-    for d in dirs:
-        if not d:
-            continue
-        for name in ("python.exe", "python3.exe"):
+    for name in ("python.exe", "python3.exe"):
+        for d in dirs:
+            if not d:
+                continue
             candidate = os.path.join(d, name)
             try:
                 if os.path.isfile(candidate):

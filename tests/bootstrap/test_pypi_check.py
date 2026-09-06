@@ -86,7 +86,7 @@ class TestDownloadAndExtract:
         target = tmp_path / "stubs" / "unreal.py"
         result = download_and_extract("nonexistent-pkg", str(target))
         assert result.passed is False
-        assert "failed to find wheel" in result.message
+        assert "no wheel available for nonexistent-pkg" in result.message
 
     @patch("bootstrap_lib.pypi_check.urlopen")
     @patch("bootstrap_lib.pypi_check._get_wheel_url")
@@ -187,7 +187,7 @@ class TestGetWheelUrl:
         assert sha == "abc123"
 
     @patch("bootstrap_lib.pypi_check.urlopen")
-    def test_falls_back_to_sdist(self, mock_urlopen):
+    def test_no_wheel_returns_none_instead_of_sdist(self, mock_urlopen):
         pypi_response = {
             "info": {"version": "1.0"},
             "urls": [
@@ -201,7 +201,7 @@ class TestGetWheelUrl:
         mock_urlopen.return_value = mock_resp
 
         url, sha = _get_wheel_url("some-pkg")
-        assert url == "https://example.com/pkg.tar.gz"
+        assert url is None
         assert sha == ""
 
     @patch("bootstrap_lib.pypi_check.urlopen", side_effect=Exception("network error"))

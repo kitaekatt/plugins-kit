@@ -40,6 +40,17 @@ def _home() -> str:
     return os.path.expanduser("~")
 
 
+def _home_relative_path(path: str, home: str) -> str | None:
+    """Return the portable $HOME spelling when `path` is under `home`."""
+    path_fwd = path.replace("\\", "/")
+    home_fwd = home.replace("\\", "/").rstrip("/")
+    if not home_fwd:
+        return "$HOME" + path_fwd
+    if path_fwd == home_fwd or path_fwd.startswith(home_fwd + "/"):
+        return "$HOME" + path_fwd[len(home_fwd):]
+    return None
+
+
 def check_path_entry(path_entry: str) -> Result:
     """Check if a directory is present in PATH.
 
@@ -82,14 +93,22 @@ def add_path_to_shell_config(path_entry: str) -> Tuple[bool, str]:
     expanded = os.path.expanduser(path_entry)
 
     # On Windows, write to the User PATH registry key (affects all new processes)
+    registry_ok = True
     registry_msg = ""
+    failures = []
+    durable = False
     if sys.platform == "win32" or "MSYSTEM" in os.environ:
-        _reg_ok, registry_msg = _add_path_to_windows_registry(path_entry)
+        registry_ok, registry_msg = _add_path_to_windows_registry(path_entry)
+        # A skipped registry write (BOOTSTRAP_SKIP_REGISTRY) persists nothing.
+        durable = registry_ok and not os.environ.get("BOOTSTRAP_SKIP_REGISTRY")
+        if not registry_ok:
+            failures.append(f"Windows User PATH registry: {registry_msg}")
 
     # Build portable export line using $HOME where possible
     home = _home()
-    if expanded.startswith(home):
-        path_expr = '"$HOME' + expanded[len(home):] + ':$PATH"'
+    home_form = _home_relative_path(expanded, home)
+    if home_form is not None:
+        path_expr = f'"{home_form}:$PATH"'
     else:
         path_expr = f'"{expanded}:$PATH"'
     export_line = f'export PATH={path_expr}'
@@ -106,11 +125,7 @@ def add_path_to_shell_config(path_entry: str) -> Tuple[bool, str]:
     # wrote backslashes (native Windows Python) or forward slashes (MSYS/Cygwin
     # Python). Without this, every run appends a fresh duplicate line.
     expanded_fwd = expanded.replace("\\", "/")
-    home_fwd = home.replace("\\", "/")
-    if expanded_fwd.startswith(home_fwd):
-        home_form = "$HOME" + expanded_fwd[len(home_fwd):]
-    else:
-        home_form = expanded_fwd
+    home_form = _home_relative_path(expanded, home) or expanded_fwd
 
     written = []
     for rc_file in rc_files:
@@ -118,21 +133,30 @@ def add_path_to_shell_config(path_entry: str) -> Tuple[bool, str]:
             if os.path.exists(rc_file):
                 content_fwd = open(rc_file).read().replace("\\", "/")
                 if home_form in content_fwd or expanded_fwd in content_fwd:
+                    durable = True
                     continue
             with open(rc_file, "a") as f:
                 f.write(f'\n# Added by bootstrap\n{export_line}\n')
             written.append(os.path.basename(rc_file))
-        except OSError:
-            pass
+        except OSError as exc:
+            failures.append(f"{os.path.basename(rc_file)}: {exc}")
+    if written:
+        durable = True
 
     parts = []
     if written:
         parts.append(f"added to {', '.join(written)}")
-    if registry_msg:
+    if registry_msg and registry_ok:
         parts.append(registry_msg)
     if parts:
+        if failures:
+            parts.extend(failures)
         return True, "; ".join(parts)
-    return True, "already declared in shell config"
+    if durable:
+        return True, "already declared in shell config"
+    if failures:
+        return False, "; ".join(failures)
+    return False, "could not persist PATH in shell config"
 
 
 def _add_path_to_windows_registry(path_entry: str) -> Tuple[bool, str]:

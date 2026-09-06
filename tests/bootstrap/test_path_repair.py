@@ -7,6 +7,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from bootstrap_lib.path_repair import PathRepairResult, repair_path
+from test_support.fake_winreg import FakeWinreg
 
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -82,6 +83,47 @@ class TestRepairPath:
             mock_sys.platform = "linux"
             result = repair_path()
         assert result.restored == 0
+
+    def test_merges_system_and_user_registry_paths_in_order(self):
+        fake = FakeWinreg()
+        system_key = r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment"
+        fake.set_value(fake.HKEY_LOCAL_MACHINE, system_key, "Path",
+                       "/system;/shared")
+        fake.set_value(fake.HKEY_CURRENT_USER, "Environment", "Path",
+                       "/user;/shared;/system")
+        env = {"PATH": "/inherited"}
+
+        with patch.dict(os.environ, env, clear=True), \
+             patch.dict(sys.modules, {"winreg": fake}), \
+             patch("bootstrap_lib.path_repair.os.pathsep", ";"), \
+            patch("bootstrap_lib.path_repair.sys") as mock_sys:
+            mock_sys.platform = "win32"
+            result = repair_path()
+            actual_path = os.environ["PATH"]
+
+        assert actual_path == ";".join(
+            ["/inherited", "/system", "/shared", "/user"]
+        )
+        assert result.before_entries == 1
+        assert result.after_entries == 4
+        assert result.restored == 3
+        assert result.changed is True
+
+    def test_registry_merge_is_idempotent(self):
+        fake = FakeWinreg()
+        system_key = r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment"
+        fake.set_value(fake.HKEY_LOCAL_MACHINE, system_key, "Path", "/system")
+        fake.set_value(fake.HKEY_CURRENT_USER, "Environment", "Path", "/user")
+
+        with patch.dict(os.environ, {"PATH": "/inherited"}, clear=True), \
+             patch.dict(sys.modules, {"winreg": fake}), \
+             patch("bootstrap_lib.path_repair.sys") as mock_sys:
+            mock_sys.platform = "win32"
+            repair_path()
+            second = repair_path()
+
+        assert second.changed is False
+        assert second.restored == 0
 
 
 class TestVendoredCopiesInSync:

@@ -157,9 +157,17 @@ class TestPrecedence:
         """A successful url download short-circuits the install command."""
         _stub(monkeypatch)
         monkeypatch.setenv("PATH", str(tmp_path))
-        monkeypatch.setattr(downloader, "download_and_install",
-                            lambda *a, **k: downloader.DownloadResult(
-                                True, str(tmp_path / "tool"), "downloaded"))
+
+        def _fake_download(*a, **k):
+            # The download must actually land the tool: the re-check after a
+            # fix is authoritative, so a download that produced nothing is a
+            # failure, not a short-circuit.
+            landed = tmp_path / "tool"
+            landed.write_text("#!/bin/sh\n")
+            landed.chmod(0o755)
+            return downloader.DownloadResult(True, str(landed), "downloaded")
+
+        monkeypatch.setattr(downloader, "download_and_install", _fake_download)
         monkeypatch.setattr(tool_check, "run_install",
                             lambda cmd: (_ for _ in ()).throw(
                                 AssertionError("install command must not run after a good download")))

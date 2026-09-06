@@ -1169,7 +1169,7 @@ def _main():
     # when CLAUDE_ENV_FILE isn't set (e.g. console mode, tests). See
     # docs/planning/bootstrap/tool-resolution-redesign.md.
     from . import tool_paths as _tool_paths
-    _tool_paths.export_tool_env_vars(data_dir)
+    _tool_paths.export_tool_env_vars(None)
 
     # Step 8: Emit results
     output_file = os.path.join(data_dir, "bootstrap_display.pending") if args.background else None
@@ -2017,7 +2017,14 @@ def _link_tool_dir_to_path(result, prefix, action_entries):
     if not tool_dir:
         return
     from .path_check import add_path_to_shell_config, normalize_path_for_compare
-    _ok, msg = add_path_to_shell_config(tool_dir)
+    ok, msg = add_path_to_shell_config(tool_dir)
+    if not ok:
+        # Persistence failed; the live process PATH below is independent of
+        # it, so later phases this run still find the tool.
+        action_entries.append(
+            f"{prefix}{result.subject}: FAILED - could not persist PATH "
+            f"for {tool_dir} ({msg})"
+        )
     current_path = os.environ.get("PATH", "")
     norm = [normalize_path_for_compare(d) for d in current_path.split(os.pathsep)]
     if normalize_path_for_compare(tool_dir) not in norm:
@@ -2557,9 +2564,21 @@ def _strategy_url_download(ctx):
         archive_type=download_def.get("archive_type"),
     )
     if dl.ok:
-        tool_paths.record(None, ctx.name, dl.path)
-        ctx.tools_installed.append((ctx.name, f"downloaded to {dl.path}"))
-        return _StrategyOutcome(True, None)
+        from .path_repair import repair_path
+        repair_path()
+        recheck = _tool_check(ctx)
+        if recheck.passed:
+            if recheck.path:
+                tool_paths.record(None, recheck.subject, recheck.path)
+            ctx.tools_installed.append((ctx.name, f"downloaded to {dl.path}"))
+            return _StrategyOutcome(True, None)
+        message = f"download completed, but re-check failed: {recheck.message}"
+        ctx.action_entries.append(f"{ctx.prefix}{ctx.name}: download failed - {message}")
+        return _StrategyOutcome(True, {
+            "type": "tool", "name": ctx.name, "message": message,
+            "install_state": "download_failed", "install_cmd": None,
+            "plugin": ctx.plugin_name,
+        })
     ctx.action_entries.append(f"{ctx.prefix}{ctx.name}: download failed - {dl.message}")
     # Fall through to legacy install fallback.
     return _StrategyOutcome(False)
@@ -2837,8 +2856,13 @@ def _process_path_entries(path_entries, prefix, action_entries, ok_entries):
             ok_entries.append(f"{prefix}PATH {result.subject}: ok - {result.message}")
         else:
             # Attempt persistent remediation: add to shell RC files
-            _ok, msg = add_path_to_shell_config(path_entry)
-            paths_added.append((result.subject, msg))
+            ok, msg = add_path_to_shell_config(path_entry)
+            if ok:
+                paths_added.append((result.subject, msg))
+            else:
+                action_entries.append(
+                    f"{prefix}PATH {result.subject}: FAILED - {msg}"
+                )
         current_path = os.environ.get("PATH", "")
         norm = [normalize_path_for_compare(d) for d in current_path.split(os.pathsep)]
         if normalize_path_for_compare(expanded) not in norm:
@@ -3744,7 +3768,9 @@ def _phase_env_vars(ctx):
     edits belong exclusively to ``path_entries`` + tool->PATH linkage, and
     an env_vars PATH entry would clobber the composed value they manage.
     """
-    from .env_var_check import check_env_var, export_env_var, set_env_var
+    from .env_var_check import (
+        check_env_var, export_env_var, is_valid_env_var_name, set_env_var,
+    )
 
     vars_set = []
     for var_def in ctx.manifest.get("env_vars", []):
@@ -3761,6 +3787,14 @@ def _phase_env_vars(ctx):
                 type="env_var",
                 name=_entry_label(name),
                 message=f"invalid env_vars entry {sorted(var_def)!r}: needs string 'name' and 'value'",
+            )
+            continue
+        if not is_valid_env_var_name(name):
+            ctx.fail(
+                f"env_var {name}: FAILED - name is not a valid shell identifier",
+                type="env_var",
+                name=name,
+                message=f"{name}: name is not a valid shell identifier",
             )
             continue
         if name.upper() == "PATH":
@@ -3868,10 +3902,19 @@ def _phase_fonts(ctx):
         inst = install_font(dl_def["url"], dl_def["sha256"], archive_type=dl_def.get("archive_type"))
         if inst.ok:
             recheck = check_font(match)
-            detail = f"{len(inst.files)} files" + ("" if recheck.passed else " (not yet detected)")
-            fonts_installed.append((name, detail))
+            if recheck.passed:
+                fonts_installed.append((name, f"{len(inst.files)} files"))
+            else:
+                message = f"installed {len(inst.files)} files, but re-check failed: {recheck.message}"
+                ctx.fail(
+                    f"font {name}: FAILED - {message}",
+                    type="font", name=name, message=message,
+                )
         else:
-            ctx.action(f"font {name}: install failed - {inst.message}")
+            ctx.fail(
+                f"font {name}: install failed - {inst.message}",
+                type="font", name=name, message=inst.message,
+            )
 
     if fonts_installed:
         ctx.action(f"fonts installed: {_join_items(fonts_installed)}")
@@ -4784,7 +4827,15 @@ def _phase_ini_settings(ctx):
             else:
                 try:
                     write_ini_setting(ini_file, section_header, key, expected)
-                    ctx.action(f"ini {key}: set to {expected}")
+                    recheck = check_ini_setting(ini_file, section_header, key, expected)
+                    if recheck.passed:
+                        ctx.action(f"ini {key}: set to {expected}")
+                    else:
+                        message = f"write reported success, but re-check failed: {recheck.message}"
+                        ctx.fail(
+                            f"ini {key}: FAILED - {message}",
+                            type="ini", file=ini_file, key=key, message=message,
+                        )
                 except OSError as e:
                     ctx.fail(
                         f"ini {key}: FAILED - {e}",
