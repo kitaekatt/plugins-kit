@@ -8,6 +8,7 @@ persists append-only through injected I/O callables.
 
 from dataclasses import dataclass, field
 
+import content_pipeline.audit.reasoning_chain as reasoning_chain
 from content_pipeline.audit.reasoning_chain import (
     InMemoryRecorder,
     NullRecorder,
@@ -81,6 +82,26 @@ def test_null_recorder_is_noop():
     rec = NullRecorder()
     rec.record("e1", {"stage": "x"})
     assert rec.chain("e1") == []
+
+
+def test_at_stamp_orders_correctly_across_a_simulated_process_restart(monkeypatch):
+    """`at` must be a wall-clock stamp: SidecarRecorder persists a chain
+    across process restarts, and a per-process clock (time.monotonic, whose
+    epoch resets on each process start) would sort a chain wrong the moment a
+    later event is recorded by a fresh process with a smaller monotonic
+    reading than an earlier one recorded by a longer-lived process."""
+    # Process A: its monotonic clock has been running a while; wall time T0.
+    monkeypatch.setattr(reasoning_chain.time, "monotonic", lambda: 500000.0)
+    monkeypatch.setattr(reasoning_chain.time, "time", lambda: 1_700_000_000.0)
+    first = build_event(stage="a")
+
+    # Simulated restart: a FRESH process's monotonic clock resets near zero
+    # while wall-clock time keeps advancing.
+    monkeypatch.setattr(reasoning_chain.time, "monotonic", lambda: 3.0)
+    monkeypatch.setattr(reasoning_chain.time, "time", lambda: 1_700_000_010.0)
+    second = build_event(stage="b")
+
+    assert first["at"] < second["at"]
 
 
 def test_sidecar_recorder_appends_through_io(tmp_path):

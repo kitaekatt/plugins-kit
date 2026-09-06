@@ -10,10 +10,13 @@ model to call; that is ``backends``'s job.
 
 Key resolution, the model registry, and the ready-made OpenAI-compatible
 client are NOT reimplemented here -- ``backends.OpenRouterBackend`` consumes
-them from ``llm_scripting_kit`` (an ImportError-tolerant optional seam). This
-module is stdlib-only plus the two permitted cross-package imports
-(``freshness.hashing`` for the cache key, ``validate.contract`` for the
-submission loop).
+them from ``llm_scripting_kit`` (an ImportError-tolerant optional seam). At
+module scope this module is stdlib-only plus the two permitted cross-package
+imports (``freshness.hashing`` for the cache key, ``validate.contract`` for
+the submission loop). :func:`classify_openai_exception` additionally reaches
+for ``llm_scripting_kit.completion.halt`` -- lazily, inside the function body,
+and ImportError-tolerant (falling back to this module's own classifier when
+the shared lib is absent), so importing this module never requires it.
 
 Public surface:
 
@@ -403,6 +406,51 @@ def _classify_openai_exception_local(exc: BaseException) -> Optional[str]:
     return None
 
 
+def _is_callers_own_deadline(exc: BaseException) -> bool:
+    """True when ``exc`` reports the CALLER's own ``timeout_s`` expiring.
+
+    See ``plugins/CLAUDE.md``, "A caller that sets the deadline owns the
+    timeout": when a caller supplies its own per-call budget, the exception
+    that budget's expiry raises is evidence about the CALLER, not about the
+    endpoint, so it must never be classified as a provider halt (a
+    connection-error or rate-limit taxonomy entry). Recognizes three shapes:
+
+    - the builtin :class:`TimeoutError` (checked by type, always available);
+    - ``openai.APITimeoutError`` -- checked by CLASS NAME first (so a machine
+      without the ``openai`` SDK still recognizes it), then confirmed by
+      isinstance when the lazy import succeeds. ``APITimeoutError`` subclasses
+      ``APIConnectionError``, which is exactly why this check must run BEFORE
+      any connection-error classification;
+    - ``llm_scripting_kit``'s ``AgentTimeoutError`` -- same class-name-first,
+      then lazy-import-confirmed pattern, so a machine without the shared lib
+      still recognizes an already-raised instance of it by name.
+
+    Both optional imports are ImportError-tolerant, matching every other lazy
+    seam in this module; when the import fails, the class-name match alone is
+    treated as sufficient (the exception could only carry that name by having
+    actually come from the corresponding library).
+    """
+    if isinstance(exc, TimeoutError):
+        return True
+    name = type(exc).__name__
+    if name == "APITimeoutError":
+        try:
+            import openai  # noqa: PLC0415
+        except ImportError:
+            return True
+        api_timeout_error = getattr(openai, "APITimeoutError", None)
+        return api_timeout_error is None or isinstance(exc, api_timeout_error)
+    if name == "AgentTimeoutError":
+        try:
+            from llm_scripting_kit.completion.halt import (  # noqa: PLC0415
+                AgentTimeoutError,
+            )
+        except ImportError:
+            return True
+        return isinstance(exc, AgentTimeoutError)
+    return False
+
+
 def classify_openai_exception(exc: BaseException) -> Optional[str]:
     """Map an OpenAI-SDK exception (or one wrapping it) to a halt kind.
 
@@ -596,12 +644,24 @@ def _charge_exception(
     cost_budget: Optional[CostBudget],
     identifier: str,
 ) -> None:
-    """Charge a transport exception when it reports token usage."""
+    """Charge a transport exception when it reports token usage.
+
+    Runs inside ``call_llm``'s ``except`` handler, ahead of halt
+    classification -- so it must never raise over the transport exception it
+    was called to price. A model absent from ``pricing`` (a legitimate shape:
+    the exception can name whatever model the provider actually tried, which
+    need not be in the caller's own table) skips the charge with no spend
+    recorded, exactly like the no-usage-reported early return above; it does
+    NOT propagate :class:`KeyError`, which would otherwise mask the original
+    exception and skip halt classification entirely.
+    """
     output_tokens = getattr(exc, "output_tokens", None)
     if pricing is None or output_tokens is None:
         return
     input_tokens = int(getattr(exc, "input_tokens", 0) or 0)
     exception_model = str(getattr(exc, "model", None) or model)
+    if exception_model not in pricing:
+        return
     cost = estimate_cost(
         exception_model,
         input_tokens,
@@ -746,7 +806,18 @@ def build_cache_key(
     user: str,
     options: Optional[BackendOptions] = None,
 ) -> str:
-    """Content hash over ``(backend, model, system, user, options)``.
+    """Content hash over every :class:`BackendOptions` field that reaches the
+    backend and can change the served completion.
+
+    Exactly these fields participate: ``backend``, ``model``, ``system``,
+    ``user``, ``temperature``, ``max_tokens``, ``effort``, ``allowed_tools``,
+    ``extras`` (canonicalized -- sorted keys, via
+    ``freshness.hashing.content_hash``), ``cwd``, plus ``cache_salt`` and
+    ``user_cache_prefix`` when set. ``timeout_s`` is the one
+    :class:`BackendOptions` field deliberately EXCLUDED: it caps how long the
+    caller waits, and does not change what the provider is asked or what it
+    answers, so two calls differing only in their deadline must collapse to
+    one cache entry.
 
     Byte-identical requests collapse to one digest regardless of dict
     ordering at the call site (``freshness.hashing.content_hash`` canonicalizes
@@ -756,6 +827,13 @@ def build_cache_key(
     participate only when set, so the no-salt / no-prefix key stays stable.
     Whitespace inside the prompts is significant (a trailing-newline
     difference is a real input difference the provider would see).
+
+    A backend that resolves an EFFECTIVE option value the caller did not
+    explicitly set (e.g. ``ModelEndpointBackend`` defaulting
+    ``extras["reasoning_effort"]`` from its registry entry) must expose that
+    resolution back to the caller -- see ``LLMBackend.effective_options`` --
+    so the value this function hashes is the one that actually reaches the
+    provider, not the caller's pre-resolution options.
     """
     opts = options or BackendOptions()
     payload = {
@@ -765,6 +843,10 @@ def build_cache_key(
         "user": user,
         "temperature": opts.temperature,
         "max_tokens": opts.max_tokens,
+        "effort": opts.effort,
+        "allowed_tools": opts.allowed_tools,
+        "extras": dict(opts.extras or {}),
+        "cwd": opts.cwd,
     }
     if opts.cache_salt:
         payload["cache_salt"] = opts.cache_salt
@@ -958,6 +1040,12 @@ def call_llm(
        :class:`PipelineHaltError` and NOT retried; any other failure is
        retried (sleeping ``retry_sleep`` between attempts) and, once the
        budget is exhausted, propagates as its original type.
+       When ``options.timeout_s`` is set and the failure is the CALLER's own
+       deadline expiring (see :func:`_is_callers_own_deadline`), it is never
+       classified as a halt regardless of what ``backend.classify_halt``
+       would say -- the caller owns that timeout, so its expiry is retried
+       like any other transient failure. Without ``timeout_s`` set,
+       classification is exactly ``backend.classify_halt``'s answer.
     4. **Cost accounting** -- when ``pricing`` is bound each live response,
        including an empty response, is priced and charged to ``cost_budget``
        (which may raise :class:`BudgetExceededError`). Transport exceptions
@@ -989,12 +1077,14 @@ def call_llm(
     cache_key: Optional[str] = None
     if cache_dir is not None:
         cache = ResponseCache(cache_dir)
+        effective_options = getattr(backend, "effective_options", None)
+        key_opts = effective_options(opts) if callable(effective_options) else opts
         cache_key = build_cache_key(
             backend=backend.name,
             model=model,
             system=system,
             user=user,
-            options=opts,
+            options=key_opts,
         )
         hit = cache.lookup(cache_key)
         if hit is not None:
@@ -1015,7 +1105,10 @@ def call_llm(
                 cost_budget=cost_budget,
                 identifier=identifier,
             )
-            halt = backend.classify_halt(exc)
+            if opts.timeout_s is not None and _is_callers_own_deadline(exc):
+                halt = None
+            else:
+                halt = backend.classify_halt(exc)
             if halt is not None:
                 raise PipelineHaltError(halt, str(exc)) from exc
             last_exc = exc

@@ -207,51 +207,52 @@ def _from_completion_response(resp: Any) -> LLMResponse:
     )
 
 
-# ---------------------------------------------------------------------------
-# OpenRouter (OpenAI-compatible HTTP) backend -- delegates to llm_scripting_kit
-# ---------------------------------------------------------------------------
-
-
 @dataclass
-class OpenRouterBackend:
-    """OpenAI-compatible HTTP completion, delegated to ``llm_scripting_kit``.
+class _LazyDelegate:
+    """Shared double-checked-locked lazy delegate build for the thin adapters.
 
-    ``endpoint`` / ``project_root`` / ``client`` are forwarded to
-    ``llm_scripting_kit.completion.OpenRouterBackend`` (a caller may inject a
-    pre-built ``client`` as the test seam). The delegate is built lazily on
-    first use, so constructing this adapter never requires the shared lib.
+    Every live transport (:class:`OpenRouterBackend`, :class:`ClaudeCliBackend`,
+    :class:`CodexCliBackend`, :class:`OpencodeCliBackend`,
+    :class:`ModelEndpointBackend`) wraps exactly one ``llm_scripting_kit.completion``
+    backend, built lazily and cached on ``self._delegate`` (see
+    :func:`_lazy_build_note` for why the build itself must be lock-guarded, and
+    why nothing else in the request path needs to be). This base class owns
+    that mechanism -- :meth:`_build` -- plus the ``complete`` / ``classify_halt``
+    bodies that are byte-identical across the four adapters that need no
+    per-call adjustment of their own (``ModelEndpointBackend`` overrides both,
+    since it also defaults a registry-declared reasoning effort and treats a
+    connection failure as a halt).
 
-    THREAD SAFETY: one instance may be shared across worker threads; the lazy
-    delegate build is guarded by double-checked locking (see
-    :func:`_lazy_build_note`).
+    A subclass declares only its OWN fields plus a ``_backend()`` method that
+    calls :meth:`_build` with the shared-lib symbol name, this adapter's own
+    class name (for the ImportError message), and its constructor kwargs --
+    everything else is inherited.
     """
 
-    endpoint: Optional[str] = None
-    project_root: Optional[Path] = None
-    client: Any = None
-    name: str = field(default="openrouter", init=False)
     _delegate: Any = field(default=None, init=False, repr=False, compare=False)
     _build_lock: "threading.Lock" = field(
         default_factory=threading.Lock, init=False, repr=False, compare=False
     )
 
-    def _backend(self) -> Any:
-        """Return the shared delegate, building it at most once (see notes)."""
+    def _build(self, import_name: str, label: str, **kwargs: Any) -> Any:
+        """Return the cached delegate, building it from ``import_name`` at most once.
+
+        ``import_name`` is the symbol's name inside ``llm_scripting_kit.completion``
+        (e.g. ``"OpenRouterBackend"``); ``label`` names THIS adapter class in the
+        raised ``ImportError`` so a missing shared lib is diagnosed against the
+        adapter actually in use, not the (possibly differently named) delegate
+        symbol. ``kwargs`` become the delegate's constructor arguments.
+        """
         if self._delegate is not None:
             return self._delegate
         with self._build_lock:
             if self._delegate is None:
                 try:
-                    from llm_scripting_kit.completion import (  # noqa: PLC0415
-                        OpenRouterBackend as _CompletionOpenRouter,
-                    )
+                    from llm_scripting_kit import completion as _completion  # noqa: PLC0415
+                    delegate_cls = getattr(_completion, import_name)
                 except ImportError as exc:  # pragma: no cover - env-dependent
-                    raise ImportError(f"OpenRouterBackend {_MISSING_LIB_MSG}") from exc
-                self._delegate = _CompletionOpenRouter(
-                    endpoint=self.endpoint,
-                    project_root=self.project_root,
-                    client=self.client,
-                )
+                    raise ImportError(f"{label} {_MISSING_LIB_MSG}") from exc
+                self._delegate = delegate_cls(**kwargs)
         return self._delegate
 
     def complete(
@@ -273,12 +274,45 @@ class OpenRouterBackend:
 
 
 # ---------------------------------------------------------------------------
+# OpenRouter (OpenAI-compatible HTTP) backend -- delegates to llm_scripting_kit
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class OpenRouterBackend(_LazyDelegate):
+    """OpenAI-compatible HTTP completion, delegated to ``llm_scripting_kit``.
+
+    ``endpoint`` / ``project_root`` / ``client`` are forwarded to
+    ``llm_scripting_kit.completion.OpenRouterBackend`` (a caller may inject a
+    pre-built ``client`` as the test seam). The delegate is built lazily on
+    first use, so constructing this adapter never requires the shared lib.
+
+    THREAD SAFETY: one instance may be shared across worker threads; the lazy
+    delegate build is guarded by double-checked locking (see
+    :func:`_lazy_build_note`, mechanism in :class:`_LazyDelegate`).
+    """
+
+    endpoint: Optional[str] = None
+    project_root: Optional[Path] = None
+    client: Any = None
+    name: str = field(default="openrouter", init=False)
+
+    def _backend(self) -> Any:
+        return self._build(
+            "OpenRouterBackend", "OpenRouterBackend",
+            endpoint=self.endpoint,
+            project_root=self.project_root,
+            client=self.client,
+        )
+
+
+# ---------------------------------------------------------------------------
 # Claude CLI backend -- delegates to llm_scripting_kit
 # ---------------------------------------------------------------------------
 
 
 @dataclass
-class ClaudeCliBackend:
+class ClaudeCliBackend(_LazyDelegate):
     """Local ``claude -p`` completion, delegated to ``llm_scripting_kit``.
 
     Spawns the CLI in pure-completion mode (JSON output, no tools by default),
@@ -297,7 +331,7 @@ class ClaudeCliBackend:
 
     THREAD SAFETY: one instance may be shared across worker threads; the lazy
     delegate build is guarded by double-checked locking (see
-    :func:`_lazy_build_note`).
+    :func:`_lazy_build_note`, mechanism in :class:`_LazyDelegate`).
     """
 
     default_timeout_s: float = 900.0
@@ -307,51 +341,18 @@ class ClaudeCliBackend:
     executable: Optional[str] = None
     runner: Optional[Callable[..., "tuple[str, str, int]"]] = None
     name: str = field(default="claude-cli", init=False)
-    _delegate: Any = field(default=None, init=False, repr=False, compare=False)
-    _build_lock: "threading.Lock" = field(
-        default_factory=threading.Lock, init=False, repr=False, compare=False
-    )
 
     def _backend(self) -> Any:
-        """Return the shared delegate, building it at most once (see notes)."""
-        if self._delegate is not None:
-            return self._delegate
-        with self._build_lock:
-            if self._delegate is None:
-                try:
-                    from llm_scripting_kit.completion import (  # noqa: PLC0415
-                        ClaudeCliBackend as _CompletionClaudeCli,
-                    )
-                except ImportError as exc:  # pragma: no cover - env-dependent
-                    raise ImportError(f"ClaudeCliBackend {_MISSING_LIB_MSG}") from exc
-                kwargs: Dict[str, Any] = {
-                    "default_timeout_s": self.default_timeout_s,
-                    "retry_max_attempts": self.retry_max_attempts,
-                    "retry_cooldown_s": self.retry_cooldown_s,
-                    "diagnostics_dir": self.diagnostics_dir,
-                    "executable": self.executable,
-                }
-                if self.runner is not None:
-                    kwargs["runner"] = self.runner
-                self._delegate = _CompletionClaudeCli(**kwargs)
-        return self._delegate
-
-    def complete(
-        self,
-        system: str,
-        user: str,
-        *,
-        model: str,
-        options: Optional[BackendOptions] = None,
-    ) -> LLMResponse:
-        opts = options or BackendOptions()
-        resp = self._backend().complete(
-            system, user, model=model, options=_to_completion_options(opts)
-        )
-        return _from_completion_response(resp)
-
-    def classify_halt(self, exc: BaseException) -> Optional[str]:
-        return self._backend().classify_halt(exc)
+        kwargs: Dict[str, Any] = {
+            "default_timeout_s": self.default_timeout_s,
+            "retry_max_attempts": self.retry_max_attempts,
+            "retry_cooldown_s": self.retry_cooldown_s,
+            "diagnostics_dir": self.diagnostics_dir,
+            "executable": self.executable,
+        }
+        if self.runner is not None:
+            kwargs["runner"] = self.runner
+        return self._build("ClaudeCliBackend", "ClaudeCliBackend", **kwargs)
 
 
 # ---------------------------------------------------------------------------
@@ -360,7 +361,7 @@ class ClaudeCliBackend:
 
 
 @dataclass
-class CodexCliBackend:
+class CodexCliBackend(_LazyDelegate):
     """Local ``codex exec`` completion, delegated to ``llm_scripting_kit``.
 
     ``default_timeout_s`` / ``argv_prefix`` / ``runner`` are forwarded to
@@ -369,55 +370,22 @@ class CodexCliBackend:
 
     THREAD SAFETY: one instance may be shared across worker threads; the lazy
     delegate build is guarded by double-checked locking (see
-    :func:`_lazy_build_note`).
+    :func:`_lazy_build_note`, mechanism in :class:`_LazyDelegate`).
     """
 
     default_timeout_s: float = 900.0
     argv_prefix: Optional[tuple] = None
     runner: Optional[Callable[..., "tuple[str, str, int]"]] = None
     name: str = field(default="codex-cli", init=False)
-    _delegate: Any = field(default=None, init=False, repr=False, compare=False)
-    _build_lock: "threading.Lock" = field(
-        default_factory=threading.Lock, init=False, repr=False, compare=False
-    )
 
     def _backend(self) -> Any:
-        """Return the shared delegate, building it at most once (see notes)."""
-        if self._delegate is not None:
-            return self._delegate
-        with self._build_lock:
-            if self._delegate is None:
-                try:
-                    from llm_scripting_kit.completion import (  # noqa: PLC0415
-                        CodexCliBackend as _CompletionCodexCli,
-                    )
-                except ImportError as exc:  # pragma: no cover - env-dependent
-                    raise ImportError(f"CodexCliBackend {_MISSING_LIB_MSG}") from exc
-                kwargs: Dict[str, Any] = {
-                    "default_timeout_s": self.default_timeout_s,
-                    "argv_prefix": self.argv_prefix,
-                }
-                if self.runner is not None:
-                    kwargs["runner"] = self.runner
-                self._delegate = _CompletionCodexCli(**kwargs)
-        return self._delegate
-
-    def complete(
-        self,
-        system: str,
-        user: str,
-        *,
-        model: str,
-        options: Optional[BackendOptions] = None,
-    ) -> LLMResponse:
-        opts = options or BackendOptions()
-        resp = self._backend().complete(
-            system, user, model=model, options=_to_completion_options(opts)
-        )
-        return _from_completion_response(resp)
-
-    def classify_halt(self, exc: BaseException) -> Optional[str]:
-        return self._backend().classify_halt(exc)
+        kwargs: Dict[str, Any] = {
+            "default_timeout_s": self.default_timeout_s,
+            "argv_prefix": self.argv_prefix,
+        }
+        if self.runner is not None:
+            kwargs["runner"] = self.runner
+        return self._build("CodexCliBackend", "CodexCliBackend", **kwargs)
 
 
 # ---------------------------------------------------------------------------
@@ -435,7 +403,7 @@ of presenting the working directory as a sandbox.
 
 
 @dataclass
-class OpencodeCliBackend:
+class OpencodeCliBackend(_LazyDelegate):
     """Local ``opencode run`` completion, delegated to llm-scripting-kit.
 
     ``default_timeout_s`` / ``argv_prefix`` / ``runner`` are forwarded to
@@ -457,7 +425,7 @@ class OpencodeCliBackend:
 
     THREAD SAFETY: one instance may be shared across worker threads; the lazy
     delegate build is guarded by double-checked locking (see
-    :func:`_lazy_build_note`).
+    :func:`_lazy_build_note`, mechanism in :class:`_LazyDelegate`).
     """
 
     default_timeout_s: float = 120.0
@@ -467,50 +435,15 @@ class OpencodeCliBackend:
     filesystem_posture: str = field(
         default=OPENCODE_FILESYSTEM_POSTURE, init=False
     )
-    _delegate: Any = field(default=None, init=False, repr=False, compare=False)
-    _build_lock: "threading.Lock" = field(
-        default_factory=threading.Lock, init=False, repr=False, compare=False
-    )
 
     def _backend(self) -> Any:
-        """Return the shared delegate, building it at most once (see notes)."""
-        if self._delegate is not None:
-            return self._delegate
-        with self._build_lock:
-            if self._delegate is None:
-                try:
-                    from llm_scripting_kit.completion import (  # noqa: PLC0415
-                        OpencodeCliBackend as _CompletionOpencodeCli,
-                    )
-                except ImportError as exc:  # pragma: no cover - env-dependent
-                    raise ImportError(
-                        f"OpencodeCliBackend {_MISSING_LIB_MSG}"
-                    ) from exc
-                kwargs: Dict[str, Any] = {
-                    "default_timeout_s": self.default_timeout_s,
-                    "argv_prefix": self.argv_prefix,
-                }
-                if self.runner is not None:
-                    kwargs["runner"] = self.runner
-                self._delegate = _CompletionOpencodeCli(**kwargs)
-        return self._delegate
-
-    def complete(
-        self,
-        system: str,
-        user: str,
-        *,
-        model: str,
-        options: Optional[BackendOptions] = None,
-    ) -> LLMResponse:
-        opts = options or BackendOptions()
-        resp = self._backend().complete(
-            system, user, model=model, options=_to_completion_options(opts)
-        )
-        return _from_completion_response(resp)
-
-    def classify_halt(self, exc: BaseException) -> Optional[str]:
-        return self._backend().classify_halt(exc)
+        kwargs: Dict[str, Any] = {
+            "default_timeout_s": self.default_timeout_s,
+            "argv_prefix": self.argv_prefix,
+        }
+        if self.runner is not None:
+            kwargs["runner"] = self.runner
+        return self._build("OpencodeCliBackend", "OpencodeCliBackend", **kwargs)
 
 
 # ---------------------------------------------------------------------------
@@ -532,7 +465,7 @@ the other names the server.
 
 
 @dataclass
-class ModelEndpointBackend:
+class ModelEndpointBackend(_LazyDelegate):
     """Completion against a registered model endpoint.
 
     The entry comes from llm-scripting-kit's model-endpoints registry -- a
@@ -561,11 +494,7 @@ class ModelEndpointBackend:
     project_root: Optional[Path] = None
     client: Any = None
     name: str = field(default="model-endpoint", init=False)
-    _delegate: Any = field(default=None, init=False, repr=False, compare=False)
     _effort: Any = field(default=_UNSET, init=False, repr=False, compare=False)
-    _build_lock: "threading.Lock" = field(
-        default_factory=threading.Lock, init=False, repr=False, compare=False
-    )
 
     # `name` is CONSTANT across entries, deliberately. The on-disk cache key is
     # (backend name, model id, ...) and two entries serve different model ids,
@@ -609,25 +538,16 @@ class ModelEndpointBackend:
         return self.endpoint
 
     def _backend(self) -> Any:
-        """Return the shared delegate, building it at most once (see notes)."""
-        if self._delegate is not None:
-            return self._delegate
-        with self._build_lock:
-            if self._delegate is None:
-                try:
-                    from llm_scripting_kit.completion import (  # noqa: PLC0415
-                        OpenRouterBackend as _CompletionOpenRouter,
-                    )
-                except ImportError as exc:  # pragma: no cover - env-dependent
-                    raise ImportError(
-                        f"ModelEndpointBackend {_MISSING_LIB_MSG}"
-                    ) from exc
-                self._delegate = _CompletionOpenRouter(
-                    endpoint=self._entry_id(),
-                    project_root=self.project_root,
-                    client=self.client,
-                )
-        return self._delegate
+        # Delegates to the same completion.OpenRouterBackend as
+        # OpenRouterBackend itself -- an OpenAI-compatible client works
+        # against any base URL, and the model-endpoints registry entry
+        # supplies this one's.
+        return self._build(
+            "OpenRouterBackend", "ModelEndpointBackend",
+            endpoint=self._entry_id(),
+            project_root=self.project_root,
+            client=self.client,
+        )
 
     def probe(self, *, timeout: float = 2.0) -> Any:
         """Non-raising reachability ping of the selected entry.
@@ -670,15 +590,21 @@ class ModelEndpointBackend:
         self._effort = effort
         return effort
 
-    def complete(
-        self,
-        system: str,
-        user: str,
-        *,
-        model: str,
-        options: Optional[BackendOptions] = None,
-    ) -> LLMResponse:
-        """Complete, defaulting reasoning effort from the registry entry.
+    def effective_options(self, options: Optional[BackendOptions] = None) -> BackendOptions:
+        """Resolve ``options`` to what actually reaches the provider.
+
+        Defaults ``extras["reasoning_effort"]`` from the selected registry
+        entry when the caller left it unset -- see :meth:`complete`'s
+        precedence rule. This is the seam :func:`platform.build_cache_key`
+        needs: the registry default is resolved HERE, inside the backend,
+        which is downstream of where a caller builds its cache key, so a
+        caller that hashes its own pre-resolution options would key two
+        entries with different registry defaults identically even though
+        they serve different completions. Any caller building a cache key --
+        or otherwise needing the options that will actually be sent -- should
+        call this first when the backend exposes it (duck-typed via
+        ``getattr``; a backend that resolves nothing beyond the caller's own
+        options need not implement it).
 
         Precedence, highest first:
 
@@ -699,7 +625,21 @@ class ModelEndpointBackend:
                 extras["reasoning_effort"] = default
         elif extras["reasoning_effort"] is None:
             extras.pop("reasoning_effort")
-        opts = replace(opts, extras=extras)
+        return replace(opts, extras=extras)
+
+    def complete(
+        self,
+        system: str,
+        user: str,
+        *,
+        model: str,
+        options: Optional[BackendOptions] = None,
+    ) -> LLMResponse:
+        """Complete, defaulting reasoning effort from the registry entry.
+
+        See :meth:`effective_options` for the precedence rule this applies.
+        """
+        opts = self.effective_options(options)
         resp = self._backend().complete(
             system, user, model=model, options=_to_completion_options(opts)
         )
