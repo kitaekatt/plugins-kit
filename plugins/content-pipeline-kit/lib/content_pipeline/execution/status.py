@@ -105,6 +105,11 @@ class RunStatus:
     expired_lease_count: int
     throughput_window_s: float
     accepted_in_window: int
+    # A UNIT count, not an attempt count: a unit retried and failed three
+    # times inside the window, then accepted, contributes 0 here (see
+    # accepted_in_window) -- a unit counts once, regardless of how many FAIL
+    # attempts it produced, as long as it has at least one FAIL attempt
+    # inside the window and its current state is not ACCEPTED.
     failed_in_window: int
     recent_failures: List[FailureGroup]
     truncated_failure_groups: bool
@@ -132,8 +137,15 @@ def compute_status(
     that needs a typed error should call ``store.get_run`` first.
     """
     when = time.time() if now is None else now
+    window_start = when - throughput_window_s
 
-    run, units, attempts = store.snapshot(run_id)
+    # Only FAIL attempts inside the throughput window are ever consulted
+    # below (recent_failures/failed_in_window); every other attempt kind,
+    # and every FAIL outside the window, is read and then discarded. Push
+    # both restrictions into the store's own filtered read instead.
+    run, units, attempts = store.snapshot(
+        run_id, attempt_kinds=(AttemptKind.FAIL,), attempts_since=window_start
+    )
     if run is None:
         raise KeyError(f"no such run: {run_id!r}")
 
@@ -159,7 +171,6 @@ def compute_status(
         and u.lease_expires_at <= when
     )
 
-    window_start = when - throughput_window_s
     accepted_in_window = sum(
         1
         for u in units
@@ -167,28 +178,54 @@ def compute_status(
     )
 
     fail_groups: Dict[str, List[Any]] = defaultdict(list)
-    failed_in_window = 0
+    # `attempts` is already exactly the FAIL rows inside [window_start, when]
+    # -- store.snapshot's attempt_kinds/attempts_since filters above did the
+    # kind/window narrowing in SQL, so no re-check of either is needed here.
+    # `recent_failures`/`fail_groups` stay ATTEMPT-based (one entry per FAIL,
+    # grouped by error code) -- that is what lets the same unit's repeated,
+    # distinct errors surface as distinct groups. `failed_in_window` is a
+    # separate, UNIT-based tally: a unit retried and failed three times then
+    # accepted must report accepted=1, failed=0 for that unit, not failed=3
+    # for a unit that is not outstanding.
+    failed_unit_ids: set = set()
     for a in attempts:
-        if a.kind is not AttemptKind.FAIL:
-            continue
-        if a.at < window_start:
-            continue
         # A terminal skip (execution.controller's "skip:..." error-string
         # convention, A-min.2) is recorded through the same fail_unit(
         # terminal=True, ...) write path as a real failure, but it is not
         # one -- counts_by_state already tells the two apart via
         # UnitState.SKIPPED (a plain Counter over unit state, so it picks up
         # the new member with no code change here). failed_in_window and
-        # recent_failures are ATTEMPT-based, not state-based, so they need
-        # this explicit exclusion or a skip would burn a recent_failures slot
-        # and inflate the failure signal exactly like the defect this guards
-        # against. Checking the error text's prefix, not storing it, keeps
-        # invariant 6 intact: skip: is a library-owned constant, so deriving
-        # a count/exclusion from it is content-free and legal.
+        # recent_failures both exclude a skip, or it would burn a
+        # recent_failures slot and inflate the failure signal exactly like
+        # the defect this guards against. Checking the error text's prefix,
+        # not storing it, keeps invariant 6 intact: skip: is a library-owned
+        # constant, so deriving a count/exclusion from it is content-free
+        # and legal.
         if a.error is not None and a.error.startswith(SKIP_ERROR_PREFIX):
             continue
-        failed_in_window += 1
         fail_groups[_classify(a.error)].append(a)
+        failed_unit_ids.add(a.unit_id)
+
+    # A unit is failed_in_window when it has a FAIL attempt inside the
+    # window and its CURRENT state is not ACCEPTED. `accept_unit` is a
+    # terminal write (model.py: no further claim/renew/accept/fail is legal
+    # against a terminal unit), so a FAIL attempt for a unit that IS
+    # currently ACCEPTED can only have happened before that acceptance --
+    # and acceptance can only follow a retry's FAIL chronologically, so a
+    # FAIL landing inside [window_start, when] with the unit now ACCEPTED
+    # means the acceptance itself is inside the same window too (it cannot
+    # have happened before window_start, which would put it before the FAIL
+    # it follows). The state check alone is therefore equivalent to "this
+    # unit's retry-then-accept, both inside the window, must not surface as
+    # a failure" without needing the non-FAIL attempt rows this function no
+    # longer reads (see the `attempts` filter above).
+    units_by_id = {u.unit_id: u for u in units}
+    failed_in_window = sum(
+        1
+        for unit_id in failed_unit_ids
+        if units_by_id.get(unit_id) is not None
+        and units_by_id[unit_id].state is not UnitState.ACCEPTED
+    )
 
     ordered_codes = sorted(
         fail_groups.items(),

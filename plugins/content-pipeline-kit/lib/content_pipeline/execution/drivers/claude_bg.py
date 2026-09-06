@@ -1451,12 +1451,16 @@ def supervise_tick(
                     store.renew_lease(
                         run_id, unit_id, open_dispatch.fencing_token, lease_seconds=seconds, at=now
                     )
-                except NotClaimedError:
-                    # The race. NARROW on purpose: only NotClaimedError, and
-                    # only around the renew. A StaleFenceError from the same
-                    # call means something re-claimed the unit and is a
-                    # different event with a different correct outcome, so
-                    # it still propagates; so does anything else.
+                except (NotClaimedError, TerminalStateError):
+                    # The race. NARROW on purpose: only the two errors an
+                    # accept-before-renew produces (TerminalStateError once
+                    # the unit is ACCEPTED, per model.py's terminal-state
+                    # promise; NotClaimedError when the accept returned it to
+                    # a non-claimed, non-terminal state), and only around the
+                    # renew. A StaleFenceError from the same call means
+                    # something re-claimed the unit and is a different event
+                    # with a different correct outcome, so it still
+                    # propagates; so does anything else.
                     renew_declined = True
                 else:
                     renewed.append(unit_id)
@@ -1464,8 +1468,9 @@ def supervise_tick(
                 # The worker submitted through the protocol and its session
                 # has NOT exited yet -- the normal submit-then-exit window at
                 # a 15s poll, not a rare race. The unit is no longer CLAIMED,
-                # so store.renew_lease raises NotClaimedError; before that
-                # error was caught above it escaped supervise_tick AND
+                # so store.renew_lease raises TerminalStateError (or
+                # NotClaimedError); before that error was caught above it
+                # escaped supervise_tick AND
                 # dispatch_wave, tearing down the wave and abandoning every
                 # other in-flight dispatch.
                 #

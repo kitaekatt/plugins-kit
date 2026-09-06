@@ -21,7 +21,7 @@ import time
 import pytest
 
 from content_pipeline.execution.adapter import RunAdapter
-from content_pipeline.execution.model import StaleFenceError, UnitState
+from content_pipeline.execution.model import AttemptKind, StaleFenceError, UnitState
 from content_pipeline.execution.protocol import (
     PROTOCOL_VERSION,
     MalformedEnvelopeError,
@@ -455,6 +455,31 @@ def test_prepare_surfaces_unapplied_predecessor_refusal_cleanly(tmp_path):
     assert result["error"]["type"] == "UnappliedPredecessorError"
 
 
+@pytest.mark.parametrize("bad_token", [True, 7.5, "7"])
+def test_submit_rejects_a_non_integer_fencing_token(tmp_path, bad_token):
+    """`fencing_token` parsed with a bare `int()` coerces silently: `int(True) ==
+    1`, `int(7.5) == 7`, `int("7") == 7` -- each silently coerced to a
+    plausible-looking token instead of being refused as malformed, mirroring
+    `_require_bool_flag`'s "refuse loudly rather than silently coerce" for
+    the boolean surface."""
+    store = _seeded_store(tmp_path, unit_ids=("u0",))
+    handlers = build_handlers(store, _adapter(), strategy=FLAT_STRATEGY)
+    claimed = dispatch(
+        _envelope("claim", {"run_id": "run-1", "unit_id": "u0", "worker_id": "w1"}), handlers
+    )
+    assert claimed["ok"] is True
+
+    result = dispatch(
+        _envelope(
+            "submit",
+            {"run_id": "run-1", "unit_id": "u0", "fencing_token": bad_token, "text": "ok"},
+        ),
+        handlers,
+    )
+    assert result["ok"] is False
+    assert result["error"]["type"] == "MalformedEnvelopeError"
+
+
 # -- claim fencing surfaced through submit ------------------------------------
 
 
@@ -483,6 +508,17 @@ def test_submit_with_stale_fencing_token_is_refused(tmp_path):
     )
     assert result["ok"] is False
     assert result["error"]["type"] == "StaleFenceError"
+
+    # store.py invariant 4: a fenced-out submission leaves a durable trace of
+    # the duplicated spend -- exactly one payload-free SUPERSEDED attempt
+    # carrying the presented (stale) token, appended by store.accept_unit.
+    superseded = [
+        a
+        for a in store.list_attempts("run-1", "u0")
+        if a.kind is AttemptKind.SUPERSEDED
+    ]
+    assert len(superseded) == 1
+    assert superseded[0].fencing_token == stale_token
 
 
 def test_submit_with_stale_fencing_token_and_invalid_text_is_still_refused(tmp_path):

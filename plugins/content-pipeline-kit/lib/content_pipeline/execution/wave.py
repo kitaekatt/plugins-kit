@@ -110,7 +110,7 @@ docstring for the mechanics.
 
 from __future__ import annotations
 
-from typing import Dict, List, Optional, Sequence
+from typing import Dict, List, NamedTuple, Optional, Sequence
 
 from content_pipeline.execution.model import (
     AttemptKind,
@@ -191,6 +191,18 @@ def _flat_ready_wave(store, run_id: str, max_wave_size: Optional[int]) -> List[U
     return pending
 
 
+# The only attempt kinds `_last_apply_kind` ever consults -- shared by
+# `_graph_ready_wave` and `graph_block_reason` so each narrows its own
+# `store.snapshot` read to exactly this set (see `_fetch_attempt_rows`'s
+# `attempt_kinds` filter in `execution.store`) instead of materializing
+# every attempt row of the run.
+_APPLY_KINDS = (
+    AttemptKind.APPLY_STARTED,
+    AttemptKind.APPLY_SUCCEEDED,
+    AttemptKind.APPLY_REJECTED,
+)
+
+
 def _last_apply_kind(attempts: Sequence[AttemptRecord]) -> Optional[AttemptKind]:
     """The most recent apply-related attempt kind, or ``None`` if never applied.
 
@@ -216,34 +228,83 @@ def _last_apply_kind(attempts: Sequence[AttemptRecord]) -> Optional[AttemptKind]
     return last
 
 
-def _graph_ready_wave(store, run_id: str) -> List[UnitRecord]:
-    # NOTE (deliberate trade, do not "fix"): `snapshot` materializes EVERY
-    # attempt row for the whole run on every call, even though only one
-    # unit's attempts are ever consulted below -- an N-unit graph run is
-    # O(N^2 * k) row reads over its lifetime. `list_attempts(run_id, unit_id)`
-    # exists and would be O(N * k), but reading units and attempts on two
-    # separate connections reopens the exact torn-read window `snapshot`
-    # exists to close (see the module docstring). Atomicity is the point;
-    # this is the cost of it, not a bug to optimize away.
-    _run, all_units, attempts = store.snapshot(run_id)
-    units = sorted(all_units, key=lambda u: u.ordinal)
-    attempts_by_unit: Dict[str, List[AttemptRecord]] = {}
+def _attempts_by_unit(attempts: Sequence[AttemptRecord]) -> Dict[str, List[AttemptRecord]]:
+    """Group ``attempts`` by ``unit_id``, preserving each unit's own order.
+
+    Underscore-private (not in ``__all__``) but NOT module-local: imported
+    directly by ``execution.controller`` (``_validate_no_unapplied_accepted``),
+    which otherwise repeats this exact grouping loop over its own
+    ``store.snapshot`` read -- same status as :func:`_last_apply_kind` above,
+    which that module also imports rather than reimplementing.
+    """
+    grouped: Dict[str, List[AttemptRecord]] = {}
     for a in attempts:
-        attempts_by_unit.setdefault(a.unit_id, []).append(a)
+        grouped.setdefault(a.unit_id, []).append(a)
+    return grouped
+
+
+class _PendingLookup(NamedTuple):
+    """The lowest-ordinal ``PENDING`` unit for a graph-strategy run (or
+    ``None`` if there is none), plus its immediate predecessor's state and
+    (if that predecessor is ``ACCEPTED``) its last apply-kind attempt.
+    Everything :func:`_graph_ready_wave` and :func:`graph_block_reason` need
+    to compute their own, differently-shaped return value -- see
+    :func:`_next_pending`, the walk shared by both.
+    """
+
+    unit: Optional[UnitRecord]
+    predecessor_state: Optional[UnitState]
+    predecessor_id: Optional[str]
+    predecessor_last_apply_kind: Optional[AttemptKind]
+
+
+def _next_pending(store, run_id: str) -> _PendingLookup:
+    """Walk ``run_id``'s units in ordinal order and locate the lowest-ordinal
+    ``PENDING`` one, alongside its immediate predecessor's context.
+
+    Shared by :func:`_graph_ready_wave` and :func:`graph_block_reason`, which
+    otherwise each run this identical walk and differ only in what they return
+    once it finds (or fails to find) a ``PENDING`` unit -- one maps the
+    result to a ``List[UnitRecord]`` wave, the other to a diagnostic string.
+    ``store.snapshot``'s ``attempt_kinds`` filter (pushed into the SQL read,
+    inside the same read transaction) narrows the attempt rows read to the
+    three apply-kinds :func:`_last_apply_kind` ever consults, instead of
+    materializing and objectifying every attempt row of the run just to
+    discard the rest in Python. Reading units and attempts on two SEPARATE
+    connections would still reopen the torn-read window ``snapshot`` exists
+    to close (see the module docstring) -- this filter avoids that trade
+    rather than taking it: one read transaction, a narrower attempt query.
+    """
+    _run, all_units, attempts = store.snapshot(run_id, attempt_kinds=_APPLY_KINDS)
+    units = sorted(all_units, key=lambda u: u.ordinal)
+    attempts_by_unit = _attempts_by_unit(attempts)
 
     predecessor_state: Optional[UnitState] = None
     predecessor_id: Optional[str] = None
     for unit in units:
         if unit.state is UnitState.PENDING:
-            if predecessor_state is None or predecessor_state is UnitState.SKIPPED:
-                return [unit]
-            if predecessor_state is UnitState.ACCEPTED:
-                predecessor_attempts = attempts_by_unit.get(predecessor_id, [])
-                if _last_apply_kind(predecessor_attempts) is AttemptKind.APPLY_SUCCEEDED:
-                    return [unit]
-            return []
+            last_apply_kind = (
+                _last_apply_kind(attempts_by_unit.get(predecessor_id, []))
+                if predecessor_state is UnitState.ACCEPTED
+                else None
+            )
+            return _PendingLookup(unit, predecessor_state, predecessor_id, last_apply_kind)
         predecessor_state = unit.state
         predecessor_id = unit.unit_id
+    return _PendingLookup(None, predecessor_state, predecessor_id, None)
+
+
+def _graph_ready_wave(store, run_id: str) -> List[UnitRecord]:
+    lookup = _next_pending(store, run_id)
+    if lookup.unit is None:
+        return []
+    if lookup.predecessor_state is None or lookup.predecessor_state is UnitState.SKIPPED:
+        return [lookup.unit]
+    if (
+        lookup.predecessor_state is UnitState.ACCEPTED
+        and lookup.predecessor_last_apply_kind is AttemptKind.APPLY_SUCCEEDED
+    ):
+        return [lookup.unit]
     return []
 
 
@@ -274,58 +335,52 @@ def graph_block_reason(store, run_id: str, strategy: WorkUnitStrategy) -> Option
       the state as still in flight.
 
     Read-only: performs exactly one ``store.snapshot(run_id)`` read, the same
-    call :func:`_graph_ready_wave` makes, and never raises on its own account.
+    call :func:`_graph_ready_wave` makes (via the shared :func:`_next_pending`
+    walk), and never raises on its own account.
     """
     if not is_graph_strategy(strategy):
         return None
-    _run, all_units, attempts = store.snapshot(run_id)
-    units = sorted(all_units, key=lambda u: u.ordinal)
-    attempts_by_unit: Dict[str, List[AttemptRecord]] = {}
-    for a in attempts:
-        attempts_by_unit.setdefault(a.unit_id, []).append(a)
-
-    predecessor_state: Optional[UnitState] = None
-    predecessor_id: Optional[str] = None
-    for unit in units:
-        if unit.state is UnitState.PENDING:
-            if predecessor_state is None or predecessor_state is UnitState.SKIPPED:
-                return None  # actually ready; nothing to diagnose
-            if predecessor_state is UnitState.FAILED:
-                return (
-                    f"unit {unit.unit_id!r} is blocked: predecessor "
-                    f"{predecessor_id!r} is terminally FAILED, which "
-                    "permanently blocks the chain"
-                )
-            if predecessor_state is UnitState.ACCEPTED:
-                last = _last_apply_kind(attempts_by_unit.get(predecessor_id, []))
-                if last is AttemptKind.APPLY_SUCCEEDED:
-                    return None  # actually ready; nothing to diagnose
-                if last is AttemptKind.APPLY_STARTED:
-                    return (
-                        f"unit {unit.unit_id!r} is blocked: predecessor "
-                        f"{predecessor_id!r} is apply_unknown (an "
-                        "APPLY_STARTED attempt with no following "
-                        "APPLY_SUCCEEDED) -- finalize_run with an "
-                        "adapter.reconcile hook can recover it"
-                    )
-                if last is AttemptKind.APPLY_REJECTED:
-                    return (
-                        f"unit {unit.unit_id!r} is blocked: predecessor "
-                        f"{predecessor_id!r} apply was refused; plan another run"
-                    )
-                return (
-                    f"unit {unit.unit_id!r} is blocked: predecessor "
-                    f"{predecessor_id!r} is ACCEPTED but not yet applied -- "
-                    "call finalize_run to apply it"
-                )
+    lookup = _next_pending(store, run_id)
+    unit = lookup.unit
+    if unit is None:
+        return None  # no PENDING unit at all; nothing to diagnose
+    predecessor_state = lookup.predecessor_state
+    predecessor_id = lookup.predecessor_id
+    if predecessor_state is None or predecessor_state is UnitState.SKIPPED:
+        return None  # actually ready; nothing to diagnose
+    if predecessor_state is UnitState.FAILED:
+        return (
+            f"unit {unit.unit_id!r} is blocked: predecessor "
+            f"{predecessor_id!r} is terminally FAILED, which "
+            "permanently blocks the chain"
+        )
+    if predecessor_state is UnitState.ACCEPTED:
+        last = lookup.predecessor_last_apply_kind
+        if last is AttemptKind.APPLY_SUCCEEDED:
+            return None  # actually ready; nothing to diagnose
+        if last is AttemptKind.APPLY_STARTED:
             return (
                 f"unit {unit.unit_id!r} is blocked: predecessor "
-                f"{predecessor_id!r} is {predecessor_state.value} (not yet "
-                "ACCEPTED or SKIPPED)"
+                f"{predecessor_id!r} is apply_unknown (an "
+                "APPLY_STARTED attempt with no following "
+                "APPLY_SUCCEEDED) -- finalize_run with an "
+                "adapter.reconcile hook can recover it"
             )
-        predecessor_state = unit.state
-        predecessor_id = unit.unit_id
-    return None  # no PENDING unit at all; nothing to diagnose
+        if last is AttemptKind.APPLY_REJECTED:
+            return (
+                f"unit {unit.unit_id!r} is blocked: predecessor "
+                f"{predecessor_id!r} apply was refused; plan another run"
+            )
+        return (
+            f"unit {unit.unit_id!r} is blocked: predecessor "
+            f"{predecessor_id!r} is ACCEPTED but not yet applied -- "
+            "call finalize_run to apply it"
+        )
+    return (
+        f"unit {unit.unit_id!r} is blocked: predecessor "
+        f"{predecessor_id!r} is {predecessor_state.value} (not yet "
+        "ACCEPTED or SKIPPED)"
+    )
 
 
 __all__ = [

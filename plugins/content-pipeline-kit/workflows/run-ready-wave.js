@@ -179,7 +179,9 @@ function briefFor(u) {
     "7. If you cannot complete the unit (submit exhaustion, or any failure " +
     "not covered above), author your failure envelope the same way as step " +
     "5 -- write EXACTLY the template below, substituting ONLY " +
-    "<FENCING_TOKEN>, to exactly this path (no other path):\n   " +
+    "<FENCING_TOKEN> and <FAILURE_DETAIL_JSON> (the latter with one " +
+    "nonempty JSON string literal describing what went wrong), to exactly " +
+    "this path (no other path):\n   " +
     u.writeFailPath + "\n" +
     "   Template:\n" + u.failTemplate + "\n" +
     "   Then report failure:\n   " + u.failCmd + "\n" +

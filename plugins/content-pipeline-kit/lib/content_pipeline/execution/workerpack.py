@@ -66,6 +66,8 @@ from content_pipeline.execution.model import (
     UnitState,
 )
 from content_pipeline.execution.store import ExecutionStore
+from content_pipeline.execution.wave import is_graph_strategy, ready_wave
+from content_pipeline.pipeline.workunit import WorkUnitStrategy
 
 # ---------------------------------------------------------------------------
 # Moved verbatim from claude_bg.py -- worker-pack and reap assets (B1)
@@ -586,6 +588,8 @@ def build_wave_args(
     worker_command: WorkerCommand,
     max_agents: int,
     *,
+    strategy: Optional[WorkUnitStrategy] = None,
+    max_wave_size: Optional[int] = None,
     lease_seconds: Optional[float] = None,
     at: Optional[float] = None,
 ) -> Dict[str, Any]:
@@ -601,6 +605,32 @@ def build_wave_args(
     same value here; a caller relying on per-unit derivation leaves it
     ``None``). ``at`` is the same injectable-clock convention every other
     function in this module and ``claude_bg.py`` uses.
+
+    ``strategy``/``max_wave_size`` are this call's own optional mirror of
+    ``execution.controller.prepare_run``'s parameters of the same names --
+    also not part of the five positional parameters design section 5 names,
+    keyword-only with a default (``None``) that preserves every existing
+    caller's behavior (reap-first candidate selection, unrestricted).
+    Without ``strategy``, candidate selection has no way to know the run is
+    a :class:`~content_pipeline.pipeline.workunit.GraphWalkStrategy` mount
+    (:func:`~content_pipeline.execution.wave.is_graph_strategy`), whose wave
+    is at most ONE unit
+    (:func:`~content_pipeline.execution.wave.ready_wave`) -- packing every
+    pending unit for such a mount lets dependent units be generated
+    concurrently, successor before predecessor applied. When ``strategy`` is
+    supplied and is a graph strategy, the post-reap candidate list (step
+    (a)) is narrowed to the single unit
+    :func:`~content_pipeline.execution.wave.ready_wave` admits (against the
+    run's live state, not the reap-processed subset -- a reclaimable unit
+    reported by :func:`reclaimable_units` is not yet actually ``PENDING``
+    until a worker's own ``claim`` reclaims it, so it is not itself
+    "ready" by the graph rule); ``max_wave_size`` greater than 1 against a
+    graph strategy raises the same
+    :class:`~content_pipeline.execution.wave.UnsafeGraphParallelismError`
+    ``ready_wave`` itself raises, eagerly, before any further work. When
+    ``strategy`` is supplied and is a flat strategy, ``max_wave_size`` (when
+    given) simply caps the post-reap candidate list's length, mirroring
+    ``prepare_run``'s own flat cap.
 
     Five things, in order, per design section 5:
 
@@ -643,8 +673,24 @@ def build_wave_args(
     ``workerId`` is ``wf-<batchId>-<unitId>``, sanitized as one unit via
     :func:`_sanitize_path_component` (design section 3) -- this is what
     makes the claim envelope WORKER-scoped (design section 2).
+
+    A halted run (``store.get_run(run_id).halted``) short-circuits ahead of
+    all five steps below, returning an empty ``units`` list. Without this, a
+    halted run's every ``PENDING`` unit would still be packed into a wave;
+    each lane would claim, get :class:`~content_pipeline.execution.model.RunHaltedError`,
+    and report ``halted`` -- one wasted agent per pending unit instead of the
+    empty wave ``skills/workflow-pipeline/SKILL.md`` tells a caller to treat
+    as "go straight to finalize".
     """
     now = time.time() if at is None else at
+    run = store.get_run(run_id)
+    if run is not None and run.halted:
+        return {
+            "runId": run_id,
+            "batchId": uuid.uuid4().hex[:12],
+            "maxAgents": max_agents,
+            "units": [],
+        }
     reaper_id = f"reap-{uuid.uuid4().hex[:12]}"
 
     # (a) reap-first candidate selection.
@@ -698,6 +744,19 @@ def build_wave_args(
                 pass
             continue
         selected.append(u)
+
+    # (a-bis) strategy admission -- narrow the post-reap candidate list to
+    # the wave `strategy` actually admits, mirroring `prepare_run`'s own
+    # policy rather than letting every pending/reclaimable unit through
+    # regardless of the run's strategy. See the docstring above.
+    if strategy is not None:
+        if is_graph_strategy(strategy):
+            # Raises eagerly, same as `ready_wave` itself, before the
+            # (already-committed) reap work above is second-guessed.
+            admitted_ids = {u.unit_id for u in ready_wave(store, run_id, strategy, max_wave_size=max_wave_size)}
+            selected = [u for u in selected if u.unit_id in admitted_ids]
+        elif max_wave_size is not None:
+            selected = selected[:max_wave_size]
 
     # (b) the lease refusal.
     explicit_ok = (

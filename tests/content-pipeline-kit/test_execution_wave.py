@@ -66,9 +66,9 @@ class _ReadSpyStore:
         self.list_units_calls = 0
         self.list_attempts_calls = 0
 
-    def snapshot(self, run_id):
+    def snapshot(self, run_id, **kwargs):
         self.snapshot_calls += 1
-        return self._real.snapshot(run_id)
+        return self._real.snapshot(run_id, **kwargs)
 
     def list_units(self, run_id):
         self.list_units_calls += 1

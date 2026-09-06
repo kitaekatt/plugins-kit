@@ -62,7 +62,7 @@ import time
 import warnings
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Iterator, List, Mapping, Optional, Sequence, Tuple, Union
+from typing import Iterable, Iterator, List, Mapping, Optional, Sequence, Tuple, Union
 
 from content_pipeline.execution.model import (
     AlreadyClaimedError,
@@ -388,16 +388,29 @@ def _fetch_unit_rows(conn: sqlite3.Connection, run_id: str) -> List[sqlite3.Row]
 
 
 def _fetch_attempt_rows(
-    conn: sqlite3.Connection, run_id: str, unit_id: Optional[str] = None
+    conn: sqlite3.Connection,
+    run_id: str,
+    unit_id: Optional[str] = None,
+    *,
+    attempt_kinds: Optional[Iterable[AttemptKind]] = None,
+    attempts_since: Optional[float] = None,
 ) -> List[sqlite3.Row]:
-    if unit_id is None:
-        return conn.execute(
-            "SELECT * FROM attempts WHERE run_id = ? ORDER BY id", (run_id,)
-        ).fetchall()
-    return conn.execute(
-        "SELECT * FROM attempts WHERE run_id = ? AND unit_id = ? ORDER BY id",
-        (run_id, unit_id),
-    ).fetchall()
+    clauses = ["run_id = ?"]
+    params: List[object] = [run_id]
+    if unit_id is not None:
+        clauses.append("unit_id = ?")
+        params.append(unit_id)
+    if attempt_kinds is not None:
+        kinds = [k.value for k in attempt_kinds]
+        if not kinds:
+            return []
+        clauses.append(f"kind IN ({', '.join('?' for _ in kinds)})")
+        params.extend(kinds)
+    if attempts_since is not None:
+        clauses.append("at >= ?")
+        params.append(attempts_since)
+    query = "SELECT * FROM attempts WHERE " + " AND ".join(clauses) + " ORDER BY id"
+    return conn.execute(query, params).fetchall()
 
 
 class ExecutionStore:
@@ -884,6 +897,12 @@ class ExecutionStore:
         module docstring): a presented token that does not match the unit's
         current token always raises :class:`StaleFenceError`, even if the
         unit is now terminal or otherwise not CLAIMED.
+
+        No further claim, renew, accept, or fail is legal against a terminal
+        unit (model.py's promise): a matching (still-current) token against
+        a terminal unit raises :class:`TerminalStateError`, checked before
+        the not-CLAIMED check below, mirroring :meth:`accept_unit` and
+        :meth:`fail_unit`.
         """
         now = time.time() if at is None else at
         with self._writer() as conn:
@@ -894,6 +913,8 @@ class ExecutionStore:
                 raise StaleFenceError(run_id, unit_id, fencing_token, current)
 
             state = UnitState(unit_row["state"])
+            if state in TERMINAL_STATES:
+                raise TerminalStateError(f"{run_id!r}/{unit_id!r} is already {state.value}")
             if state is not UnitState.CLAIMED:
                 raise NotClaimedError(f"{run_id!r}/{unit_id!r} is {state.value}, not claimed")
 
@@ -1082,17 +1103,23 @@ class ExecutionStore:
         if stale is not None:
             raise StaleFenceError(run_id, unit_id, stale[0], stale[1])
 
-    def record_apply_started(
-        self, run_id: str, unit_id: str, *, at: Optional[float] = None
+    def _record_apply_event(
+        self,
+        run_id: str,
+        unit_id: str,
+        kind: AttemptKind,
+        *,
+        error: Optional[str] = None,
+        at: Optional[float] = None,
     ) -> None:
-        """Record that finalize is about to call the adapter's apply (D6).
-
-        Requires the unit to be ACCEPTED; raises :class:`NotAcceptedError`
-        otherwise -- finalize only ever applies accepted units. No fencing
-        check: apply runs after acceptance, under the dispatcher's
-        documented single-writer discipline (see the module docstring), not
-        under worker-claim contention, so there is no competing fence to
-        validate against here the way there is in claim/accept/fail.
+        """Shared body of :meth:`record_apply_started`,
+        :meth:`record_apply_succeeded`, and :meth:`record_apply_rejected`:
+        require the unit ACCEPTED, then append one apply-kind attempt row.
+        No fencing check in any of the three -- apply runs after acceptance,
+        under the dispatcher's documented single-writer discipline (see the
+        module docstring), not under worker-claim contention, so there is no
+        competing fence to validate against here the way there is in
+        claim/accept/fail.
         """
         now = time.time() if at is None else at
         with self._writer() as conn:
@@ -1107,10 +1134,23 @@ class ExecutionStore:
                 conn,
                 run_id,
                 unit_id,
-                AttemptKind.APPLY_STARTED,
+                kind,
                 at=now,
                 fencing_token=unit_row["fencing_token"],
+                error=error,
             )
+
+    def record_apply_started(
+        self, run_id: str, unit_id: str, *, at: Optional[float] = None
+    ) -> None:
+        """Record that finalize is about to call the adapter's apply (D6).
+
+        Requires the unit to be ACCEPTED; raises :class:`NotAcceptedError`
+        otherwise -- finalize only ever applies accepted units. See
+        :meth:`_record_apply_event` for the no-fencing rationale shared with
+        :meth:`record_apply_succeeded` and :meth:`record_apply_rejected`.
+        """
+        self._record_apply_event(run_id, unit_id, AttemptKind.APPLY_STARTED, at=at)
 
     def record_apply_succeeded(
         self, run_id: str, unit_id: str, *, at: Optional[float] = None
@@ -1118,30 +1158,14 @@ class ExecutionStore:
         """Record that the adapter's apply returned without raising (D6).
 
         Same ACCEPTED requirement and no-fencing rationale as
-        :meth:`record_apply_started` -- see that docstring. Recording this
-        twice (e.g. a retried finalize pass) simply appends a second
-        attempt row; it is not itself the idempotence mechanism. Finalize
-        idempotence is derived by scanning the attempt log for an
+        :meth:`record_apply_started` -- see :meth:`_record_apply_event`.
+        Recording this twice (e.g. a retried finalize pass) simply appends a
+        second attempt row; it is not itself the idempotence mechanism.
+        Finalize idempotence is derived by scanning the attempt log for an
         APPLY_STARTED with no following APPLY_SUCCEEDED (``apply_unknown``,
         per the model module docstring), not enforced by this method.
         """
-        now = time.time() if at is None else at
-        with self._writer() as conn:
-            self._require_run(conn, run_id)
-            unit_row = self._require_unit(conn, run_id, unit_id)
-            state = UnitState(unit_row["state"])
-            if state is not UnitState.ACCEPTED:
-                raise NotAcceptedError(
-                    f"{run_id!r}/{unit_id!r} is {state.value}, not accepted"
-                )
-            self._record_attempt(
-                conn,
-                run_id,
-                unit_id,
-                AttemptKind.APPLY_SUCCEEDED,
-                at=now,
-                fencing_token=unit_row["fencing_token"],
-            )
+        self._record_apply_event(run_id, unit_id, AttemptKind.APPLY_SUCCEEDED, at=at)
 
     def record_apply_rejected(
         self,
@@ -1155,26 +1179,12 @@ class ExecutionStore:
 
         The unit must remain ACCEPTED. This is a terminal disposition on the
         apply axis, not a unit-state transition, so a later finalize pass can
-        skip it without risking a duplicate apply.
+        skip it without risking a duplicate apply. See
+        :meth:`_record_apply_event` for the shared no-fencing rationale.
         """
-        now = time.time() if at is None else at
-        with self._writer() as conn:
-            self._require_run(conn, run_id)
-            unit_row = self._require_unit(conn, run_id, unit_id)
-            state = UnitState(unit_row["state"])
-            if state is not UnitState.ACCEPTED:
-                raise NotAcceptedError(
-                    f"{run_id!r}/{unit_id!r} is {state.value}, not accepted"
-                )
-            self._record_attempt(
-                conn,
-                run_id,
-                unit_id,
-                AttemptKind.APPLY_REJECTED,
-                at=now,
-                fencing_token=unit_row["fencing_token"],
-                error=reason,
-            )
+        self._record_apply_event(
+            run_id, unit_id, AttemptKind.APPLY_REJECTED, error=reason, at=at
+        )
 
     # -- attempts ----------------------------------------------------------------
 
@@ -1186,7 +1196,11 @@ class ExecutionStore:
     # -- consistent multi-query snapshot ------------------------------------------
 
     def snapshot(
-        self, run_id: str
+        self,
+        run_id: str,
+        *,
+        attempt_kinds: Optional[Iterable[AttemptKind]] = None,
+        attempts_since: Optional[float] = None,
     ) -> Tuple[Optional[RunRecord], List[UnitRecord], List[AttemptRecord]]:
         """One consistent read-transaction view of a run, its units, and its attempts.
 
@@ -1196,12 +1210,35 @@ class ExecutionStore:
         state but a failure-group tally computed from the attempt that caused
         it, or vice versa). All three queries run inside one
         :meth:`read_transaction`.
+
+        ``attempt_kinds``/``attempts_since`` (both keyword-only, both
+        default ``None``) narrow the ATTEMPT rows read, pushed into the SQL
+        inside the same single read transaction -- units and the run row are
+        always read in full; only the attempt query is filtered. A caller
+        that needs only a subset of attempt kinds within a recent window
+        (``status.compute_status``'s ``FAIL``-only, within-window read;
+        ``execution.wave``'s apply-kind readers) would otherwise pay for
+        materializing and objectifying every attempt row of the run just to
+        discard most of them in Python -- the same O(N) (or, looped over a
+        graph run's lifetime, O(N^2)) cost either way, but now paid once, in
+        SQL, instead of twice (once in SQLite's row fetch, once in
+        :func:`_row_to_attempt`). Neither filter changes what ``units`` or
+        ``run`` return, and omitting both is byte-for-byte the prior
+        behavior (every attempt row, unfiltered).
         """
         with self.read_transaction() as conn:
             run_row = _fetch_run_row(conn, run_id)
             run = _row_to_run(run_row) if run_row is not None else None
             units = [_row_to_unit(r) for r in _fetch_unit_rows(conn, run_id)]
-            attempts = [_row_to_attempt(r) for r in _fetch_attempt_rows(conn, run_id)]
+            attempts = [
+                _row_to_attempt(r)
+                for r in _fetch_attempt_rows(
+                    conn,
+                    run_id,
+                    attempt_kinds=attempt_kinds,
+                    attempts_since=attempts_since,
+                )
+            ]
         return run, units, attempts
 
     # -- dispatcher (launcher-election) lease, B1 ---------------------------------
@@ -1265,6 +1302,25 @@ class ExecutionStore:
             )
         return new_fence
 
+    def _require_dispatcher_lease(
+        self, conn: sqlite3.Connection, run_id: str, dispatcher_id: str, fence: int
+    ) -> sqlite3.Row:
+        """Require ``run_id``'s run row to exist AND its current dispatcher
+        lease to be held by exactly ``(dispatcher_id, fence)``, raising
+        :class:`StaleDispatcherLeaseError` on any mismatch -- checked first,
+        before anything else, same convention as :meth:`renew_lease`. Shared
+        by :meth:`renew_dispatcher_lease` and :meth:`release_dispatcher_lease`,
+        which differ only in what they do once the lease checks out.
+        """
+        run_row = self._require_run(conn, run_id)
+        current_id = run_row["dispatcher_id"]
+        current_fence = run_row["dispatcher_fence"] or 0
+        if current_id != dispatcher_id or fence != current_fence:
+            raise StaleDispatcherLeaseError(
+                run_id, dispatcher_id, fence, current_id, current_fence
+            )
+        return run_row
+
     def renew_dispatcher_lease(
         self,
         run_id: str,
@@ -1277,18 +1333,12 @@ class ExecutionStore:
         """Extend the live dispatcher lease. Returns the new expiry.
 
         Raises :class:`StaleDispatcherLeaseError` when ``(dispatcher_id,
-        fence)`` does not match the run's current holder -- checked first,
-        before anything else, same convention as :meth:`renew_lease`.
+        fence)`` does not match the run's current holder -- see
+        :meth:`_require_dispatcher_lease`.
         """
         now = time.time() if at is None else at
         with self._writer() as conn:
-            run_row = self._require_run(conn, run_id)
-            current_id = run_row["dispatcher_id"]
-            current_fence = run_row["dispatcher_fence"] or 0
-            if current_id != dispatcher_id or fence != current_fence:
-                raise StaleDispatcherLeaseError(
-                    run_id, dispatcher_id, fence, current_id, current_fence
-                )
+            self._require_dispatcher_lease(conn, run_id, dispatcher_id, fence)
             new_expires = now + lease_seconds
             conn.execute(
                 "UPDATE runs SET dispatcher_lease_expires_at = ? WHERE id = ?",
@@ -1302,20 +1352,14 @@ class ExecutionStore:
         """Voluntarily give up the dispatcher lease (a clean dispatcher exit).
 
         Raises :class:`StaleDispatcherLeaseError` on a ``(dispatcher_id,
-        fence)`` mismatch, same as :meth:`renew_dispatcher_lease`.
+        fence)`` mismatch -- see :meth:`_require_dispatcher_lease`.
         ``dispatcher_fence`` itself is left unchanged (it is a monotonic
         counter, never reset) -- only ``dispatcher_id`` and
         ``dispatcher_lease_expires_at`` are cleared, so a later acquire by
         anyone still gets a strictly higher fence than this one.
         """
         with self._writer() as conn:
-            run_row = self._require_run(conn, run_id)
-            current_id = run_row["dispatcher_id"]
-            current_fence = run_row["dispatcher_fence"] or 0
-            if current_id != dispatcher_id or fence != current_fence:
-                raise StaleDispatcherLeaseError(
-                    run_id, dispatcher_id, fence, current_id, current_fence
-                )
+            self._require_dispatcher_lease(conn, run_id, dispatcher_id, fence)
             conn.execute(
                 "UPDATE runs SET dispatcher_id = NULL, dispatcher_lease_expires_at = NULL "
                 "WHERE id = ?",
@@ -1357,6 +1401,28 @@ class ExecutionStore:
             dispatch_id = cursor.lastrowid
         return dispatch_id
 
+    def _open_dispatch_row(
+        self, conn: sqlite3.Connection, run_id: str, unit_id: str
+    ) -> sqlite3.Row:
+        """Require ``run_id``/``unit_id`` to exist AND have a currently OPEN
+        (``settled_at IS NULL``) dispatch, returning its ``id``/``session_id``
+        row (most recent by id, though the guarded uniqueness index means
+        there is ever only one). Raises :class:`NoOpenDispatchError`
+        otherwise. Shared by :meth:`settle_dispatch` and
+        :meth:`attach_dispatch_session`, which differ only in what they do
+        with the row once found.
+        """
+        self._require_run(conn, run_id)
+        self._require_unit(conn, run_id, unit_id)
+        row = conn.execute(
+            "SELECT id, session_id FROM dispatches WHERE run_id = ? AND unit_id = ? "
+            "AND settled_at IS NULL ORDER BY id DESC LIMIT 1",
+            (run_id, unit_id),
+        ).fetchone()
+        if row is None:
+            raise NoOpenDispatchError(run_id, unit_id)
+        return row
+
     def settle_dispatch(
         self,
         run_id: str,
@@ -1376,15 +1442,7 @@ class ExecutionStore:
         """
         now = time.time() if at is None else at
         with self._writer() as conn:
-            self._require_run(conn, run_id)
-            self._require_unit(conn, run_id, unit_id)
-            row = conn.execute(
-                "SELECT id, session_id FROM dispatches WHERE run_id = ? AND unit_id = ? "
-                "AND settled_at IS NULL ORDER BY id DESC LIMIT 1",
-                (run_id, unit_id),
-            ).fetchone()
-            if row is None:
-                raise NoOpenDispatchError(run_id, unit_id)
+            row = self._open_dispatch_row(conn, run_id, unit_id)
             new_session_id = session_id if session_id is not None else row["session_id"]
             conn.execute(
                 "UPDATE dispatches SET settled_at = ?, outcome = ?, session_id = ? WHERE id = ?",
@@ -1400,15 +1458,7 @@ class ExecutionStore:
         if not session_id:
             raise ValueError("session_id must be non-empty")
         with self._writer() as conn:
-            self._require_run(conn, run_id)
-            self._require_unit(conn, run_id, unit_id)
-            row = conn.execute(
-                "SELECT id, session_id FROM dispatches WHERE run_id = ? AND unit_id = ? "
-                "AND settled_at IS NULL ORDER BY id DESC LIMIT 1",
-                (run_id, unit_id),
-            ).fetchone()
-            if row is None:
-                raise NoOpenDispatchError(run_id, unit_id)
+            row = self._open_dispatch_row(conn, run_id, unit_id)
             if row["session_id"] not in (None, session_id):
                 raise ValueError(
                     f"dispatch {run_id!r}/{unit_id!r} already has session "

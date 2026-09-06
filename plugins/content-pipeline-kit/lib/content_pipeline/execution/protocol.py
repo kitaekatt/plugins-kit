@@ -91,7 +91,6 @@ from content_pipeline.execution.controller import (
 )
 from content_pipeline.execution.model import (
     ExecutionError,
-    StaleFenceError,
     UnitRecord,
     UnknownRunError,
     UsageRecord,
@@ -210,6 +209,29 @@ def _require_bool_flag(payload: Mapping[str, Any], key: str, *, default: bool) -
     if not isinstance(value, bool):
         raise MalformedEnvelopeError(
             f"payload {key!r} must be a JSON boolean, got {type(value).__name__}"
+        )
+    return value
+
+
+def _require_fencing_token(payload: Mapping[str, Any]) -> int:
+    """Require ``payload["fencing_token"]`` to be a JSON integer.
+
+    Mirrors :func:`_require_bool_flag`'s "refuse loudly rather than silently
+    coerce" for the fencing-token surface. A bare ``int(...)`` silently
+    coerces this value: ``int(True) == 1``, ``int(7.5) == 7``, ``int("7") == 7`` --
+    each silently coerces to a plausible-looking token instead of being
+    refused as malformed, and a coerced token that happens not to match the
+    unit's current one is merely misdiagnosed as a stale fence rather than
+    the malformed envelope it actually is. ``bool`` is explicitly excluded
+    even though it is a ``int`` subclass in Python (same reasoning as
+    ``_require_bool_flag``'s own boolean check, the other direction): a JSON
+    boolean is not a JSON integer, so ``isinstance(value, bool)`` is checked
+    FIRST.
+    """
+    value = _require(payload, "fencing_token")
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise MalformedEnvelopeError(
+            f"payload 'fencing_token' must be a JSON integer, got {value!r}"
         )
     return value
 
@@ -434,7 +456,7 @@ def build_handlers(
         run_id = _require(payload, "run_id")
         unit_id = _require(payload, "unit_id")
         _require_compatible_run(run_id)
-        fencing_token = int(_require(payload, "fencing_token"))
+        fencing_token = _require_fencing_token(payload)
         text = _require_text(payload)
         # Defect 1 (grok-4.6 review of 46d4a2b): the fencing check used to
         # happen only on the ACCEPT path, inside `store.accept_unit` -- the
@@ -445,9 +467,19 @@ def build_handlers(
         # `store.renew_lease`/`fail_unit` check the fence FIRST, before any
         # other work; do the same here, before spending an evaluation on
         # text a stale claimant no longer has standing to submit.
+        #
+        # The check itself must not raise directly: `store.accept_unit` is
+        # the only code that appends the payload-free
+        # `AttemptKind.SUPERSEDED` attempt row on a stale fence (store.py
+        # invariant 4 -- a fenced-out submission leaves a durable trace of
+        # the duplicated spend), so a stale token found here is delegated to
+        # `accept_unit` (with no text) to record that row and raise
+        # `StaleFenceError` itself, rather than short-circuiting past it.
+        # Fencing tokens only ever increase, so a token observed stale here
+        # is still stale when `accept_unit` re-checks it a moment later.
         current_unit = store.get_unit(run_id, unit_id)
         if current_unit is not None and fencing_token != current_unit.fencing_token:
-            raise StaleFenceError(run_id, unit_id, fencing_token, current_unit.fencing_token)
+            store.accept_unit(run_id, unit_id, fencing_token)
         unit = adapter.unit_for(unit_id)
         spec = adapter.resolve_validation_spec(unit)
         evaluation = evaluate_submission(text, spec)
@@ -470,7 +502,7 @@ def build_handlers(
         run_id = _require(payload, "run_id")
         unit_id = _require(payload, "unit_id")
         _require_compatible_run(run_id)
-        fencing_token = int(_require(payload, "fencing_token"))
+        fencing_token = _require_fencing_token(payload)
         terminal = _require_bool_flag(payload, "terminal", default=False)
         store.fail_unit(
             run_id,
@@ -486,7 +518,7 @@ def build_handlers(
         run_id = _require(payload, "run_id")
         unit_id = _require(payload, "unit_id")
         _require_compatible_run(run_id)
-        fencing_token = int(_require(payload, "fencing_token"))
+        fencing_token = _require_fencing_token(payload)
         seconds = _resolve_lease_seconds(payload, _lease_ceiling(unit_id))
         lease_expires_at = store.renew_lease(run_id, unit_id, fencing_token, lease_seconds=seconds)
         return {"run_id": run_id, "unit_id": unit_id, "lease_expires_at": lease_expires_at}

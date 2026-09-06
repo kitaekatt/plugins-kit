@@ -144,7 +144,12 @@ from content_pipeline.execution.model import (
     UnitState,
 )
 from content_pipeline.execution.store import ExecutionStore
-from content_pipeline.execution.wave import _last_apply_kind, is_graph_strategy, ready_wave
+from content_pipeline.execution.wave import (
+    _attempts_by_unit,
+    _last_apply_kind,
+    is_graph_strategy,
+    ready_wave,
+)
 from content_pipeline.freshness.classify import FreshnessState, needs_generation
 from content_pipeline.llm.platform import PipelineHaltError
 from content_pipeline.pipeline.single_pass import Gate, run_gates
@@ -376,9 +381,7 @@ def _validate_no_unapplied_accepted(
     refusal succeeds once the peer's write is visible.
     """
     _run, units, attempts = store.snapshot(run_id)
-    attempts_by_unit: dict = {}
-    for a in attempts:
-        attempts_by_unit.setdefault(a.unit_id, []).append(a)
+    attempts_by_unit = _attempts_by_unit(attempts)
     for unit in units:
         if unit.state is not UnitState.ACCEPTED:
             continue

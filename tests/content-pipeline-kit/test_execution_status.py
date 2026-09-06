@@ -96,6 +96,62 @@ def test_fixed_window_throughput_counts_only_within_window(tmp_path):
     assert digest.accepted_in_window == 1
 
 
+def test_failed_in_window_counts_units_not_fail_attempts(tmp_path):
+    """failed_in_window counts units, not FAIL ATTEMPT rows: counting rows, one
+    unit failed three times then accepted reports accepted=1, failed=3 for
+    total_units=1. A unit retried and then accepted, all inside the window,
+    must report accepted_in_window=1 and failed_in_window=0; a unit whose
+    last attempt is FAIL (never accepted) counts once, however many times it
+    failed."""
+    store = _store(tmp_path, unit_ids=("u0", "u1"))
+
+    # u0: fails three times, then is accepted -- all inside the window.
+    for i in range(3):
+        claim = store.claim_unit("r1", "u0", f"w{i}", at=float(i))
+        store.fail_unit("r1", "u0", claim.fencing_token, error="boom", terminal=False, at=float(i) + 0.5)
+    final_claim = store.claim_unit("r1", "u0", "w-final", at=3.0)
+    store.accept_unit("r1", "u0", final_claim.fencing_token, at=4.0)
+
+    # u1: fails twice, never accepted -- still inside the window.
+    for i in range(2):
+        claim = store.claim_unit("r1", "u1", f"x{i}", at=float(i))
+        store.fail_unit("r1", "u1", claim.fencing_token, error="also boom", terminal=False, at=float(i) + 0.5)
+
+    digest = compute_status(store, "r1", now=10.0, throughput_window_s=60.0)
+    assert digest.accepted_in_window == 1
+    assert digest.failed_in_window == 1
+
+
+def test_snapshot_attempt_kinds_and_since_filters(tmp_path):
+    """``ExecutionStore.snapshot`` accepts keyword-only ``attempt_kinds`` and
+    ``attempts_since`` filters, applied inside the same single read
+    transaction (status.compute_status needs only FAIL attempts inside its
+    window; an unfiltered store.snapshot reads every attempt row of the
+    run). After claim/renew/accept/fail traffic, filtering to
+    ``(AttemptKind.FAIL,)`` returns only the FAIL row, and a since-filter
+    excludes an older FAIL."""
+    store = _store(tmp_path, unit_ids=("u0", "u1"))
+    claim0 = store.claim_unit("r1", "u0", "w1", at=0.0)
+    store.renew_lease("r1", "u0", claim0.fencing_token, at=1.0)
+    store.accept_unit("r1", "u0", claim0.fencing_token, at=2.0)
+    claim1 = store.claim_unit("r1", "u1", "w2", at=0.0)
+    store.fail_unit("r1", "u1", claim1.fencing_token, error="boom", at=3.0)
+
+    _run, _units, attempts = store.snapshot("r1", attempt_kinds=(AttemptKind.FAIL,))
+    assert len(attempts) == 1
+    assert attempts[0].kind is AttemptKind.FAIL
+    assert attempts[0].unit_id == "u1"
+
+    _run2, _units2, since_attempts = store.snapshot(
+        "r1", attempt_kinds=(AttemptKind.FAIL,), attempts_since=10.0
+    )
+    assert since_attempts == []
+
+    # Default behaviour (no filters) is unchanged: every attempt row.
+    _run3, _units3, all_attempts = store.snapshot("r1")
+    assert len(all_attempts) == 5
+
+
 def test_recent_failures_are_grouped_and_capped(tmp_path):
     unit_ids = [f"u{i}" for i in range(DEFAULT_MAX_FAILURE_GROUPS + 3)]
     store = _store(tmp_path, unit_ids=unit_ids)
@@ -240,7 +296,7 @@ def test_compute_status_reads_one_consistent_snapshot_despite_a_concurrent_write
 
     original_fetch_attempts = store_mod._fetch_attempt_rows
 
-    def patched_fetch_attempts(conn, run_id, unit_id=None):
+    def patched_fetch_attempts(conn, run_id, unit_id=None, **kwargs):
         # A write on an INDEPENDENT connection, landing between the units
         # read and the attempts read of the SAME snapshot transaction. It
         # inserts a new attempts ROW -- the exact table the very next query
@@ -257,7 +313,7 @@ def test_compute_status_reads_one_consistent_snapshot_despite_a_concurrent_write
             writer.commit()
         finally:
             writer.close()
-        return original_fetch_attempts(conn, run_id, unit_id)
+        return original_fetch_attempts(conn, run_id, unit_id, **kwargs)
 
     monkeypatch.setattr(store_mod, "_fetch_attempt_rows", patched_fetch_attempts)
 
