@@ -20,6 +20,59 @@ def _write(path, text):
     return path
 
 
+class TestConfigValidatorErrorTextIsPinned:
+    """I10: models._config_required_str / _config_optional_str duplicate
+    model_endpoints._require_str / _optional_str with a different error class
+    and message prefix. Pin the exact text BEFORE moving the implementation
+    so the refactor stays behavior-neutral."""
+
+    def test_config_required_str_missing_message(self):
+        from llm_scripting_kit.models import EndpointResolveError, _config_required_str
+
+        with pytest.raises(EndpointResolveError) as excinfo:
+            _config_required_str("myep", {}, kind="transport", key="base_url")
+        assert str(excinfo.value) == (
+            "endpoint 'myep' is a transport entry and has no 'base_url' "
+            "(a non-empty string is required)"
+        )
+
+    def test_config_required_str_blank_message(self):
+        from llm_scripting_kit.models import EndpointResolveError, _config_required_str
+
+        with pytest.raises(EndpointResolveError) as excinfo:
+            _config_required_str("myep", {"model": "   "}, kind="harness", key="model")
+        assert str(excinfo.value) == (
+            "endpoint 'myep' is a harness entry and has no 'model' "
+            "(a non-empty string is required)"
+        )
+
+    def test_config_optional_str_none_is_allowed(self):
+        from llm_scripting_kit.models import _config_optional_str
+
+        assert _config_optional_str("myep", {}, kind="transport", key="name") is None
+
+    def test_config_optional_str_non_string_message(self):
+        from llm_scripting_kit.models import EndpointResolveError, _config_optional_str
+
+        with pytest.raises(EndpointResolveError) as excinfo:
+            _config_optional_str("myep", {"name": 5}, kind="transport", key="name")
+        assert str(excinfo.value) == (
+            "endpoint 'myep' is a transport entry and has a non-string 'name' (5)"
+        )
+
+
+class TestModuleDocstringPrecedenceChain:
+    """I6: the module docstring's precedence chain omitted the fleet layer
+    (~/.claude/config/llm-scripting-kit.yaml) that load_model_config actually
+    inserts below the user layer."""
+
+    def test_docstring_names_the_fleet_layer(self):
+        import llm_scripting_kit.models as models_module
+
+        assert "fleet" in models_module.__doc__
+        assert "llm-scripting-kit.yaml" in models_module.__doc__
+
+
 class TestBaselineSync:
     def test_default_yaml_matches_constant(self):
         """default_config.yaml (bootstrap seed source) must mirror DEFAULT_MODEL_CONFIG."""
@@ -241,3 +294,22 @@ class TestShippedHarnessEntries:
         # config, which resolves on no other machine.
         for endpoint in (DEFAULT_MODEL_CONFIG["endpoints"] or {}).values():
             assert endpoint.get("harness") != "opencode"
+
+
+class TestConfigSkipsFileIONotRegistryLookup:
+    """I5: ``config=`` skips the layered config.yaml read, but an unknown
+    name still falls through to the model-endpoints registry -- which is
+    consulted from the real environment (MODEL_ENDPOINTS_REGISTRY / HOME)
+    regardless of whether ``config`` was supplied. This test also proves the
+    conftest autouse isolation fixture works: it never touches this host's
+    real registry or HOME, only the per-test sandbox."""
+
+    def test_unknown_name_with_no_registry_entries_raises_unknown_endpoint(self):
+        from llm_scripting_kit import EndpointResolveError, resolve_endpoint
+
+        # The autouse conftest fixture already isolates HOME and points
+        # MODEL_ENDPOINTS_REGISTRY at an empty per-test registry -- this is
+        # the "absent registry" case the docstring describes, reached without
+        # this test doing anything host-dependent itself.
+        with pytest.raises(EndpointResolveError, match="unknown endpoint 'nope'"):
+            resolve_endpoint("nope", config=DEFAULT_MODEL_CONFIG)

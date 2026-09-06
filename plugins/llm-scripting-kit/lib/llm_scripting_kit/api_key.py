@@ -233,20 +233,30 @@ def get_api_key(
         KeyLookupResult with the key, source label, and source path.
         ``key`` is ``None`` if no source has the key.
     """
-    if endpoint is None:
-        key_env = API_KEY_ENV
-        # Lazy: only loads config if layers 1-4 miss (see
-        # _default_endpoint_key_file), so the fast path stays config-free.
-        key_file_provider = lambda: _default_endpoint_key_file(project_root)  # noqa: E731
-    else:
-        # Named endpoint: consult the config for its key_env. Imported lazily so
-        # the default path stays config-free (and to avoid an import cycle).
-        from .models import resolve_endpoint  # noqa: PLC0415
+    # endpoint=None follows the config's default_endpoint exactly like
+    # resolve_endpoint(None) / resolve_model() do -- it is not a separate
+    # hardcoded OpenRouter path. Resolving that requires a config load (there
+    # is no way to know which key_env to check without knowing which endpoint
+    # is the default), which trades away the old config-free fast path; the
+    # correctness this buys is the point, not a regression -- see this
+    # plugin's CLAUDE.md and the model docstring's "None means the default
+    # endpoint" contract. Resolve failure (an optional dependency such as
+    # PyYAML unavailable, or any other resolve defect) degrades to the
+    # hardcoded OPENROUTER_API_KEY rather than raising, the same
+    # degrade-to-missing-layer contract _default_endpoint_key_file already
+    # applies one layer down.
+    from .models import resolve_endpoint  # noqa: PLC0415
 
+    ep_name = endpoint if endpoint is not None else None
+    try:
         resolved = resolve_endpoint(
-            endpoint, project_root=str(project_root) if project_root is not None else None
+            ep_name, project_root=str(project_root) if project_root is not None else None
         )
-        key_env = resolved["key_env"]
-        resolved_key_file = resolved.get("key_file")
-        key_file_provider = lambda: resolved_key_file  # noqa: E731
+    except Exception:  # noqa: BLE001 -- see docstring: degrade, never raise
+        if endpoint is not None:
+            raise
+        resolved = {"key_env": API_KEY_ENV, "key_file": None}
+    key_env = resolved["key_env"]
+    resolved_key_file = resolved.get("key_file")
+    key_file_provider = lambda: resolved_key_file  # noqa: E731
     return _resolve_key(key_env, project_root, key_file_provider)

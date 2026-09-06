@@ -38,6 +38,43 @@ class TestReadEnvFile:
         with pytest.raises(ValueError, match="missing '='"):
             read_env_file(env)
 
+    def test_strips_leading_export_shell_idiom(self, tmp_path):
+        """I3: `export KEY=value` used to yield the key "export KEY" silently
+        -- a malformed line that should be surfaced loudly, per the module
+        docstring, instead reads a garbage key with no error at all."""
+        env = tmp_path / ".env"
+        env.write_text("export FOO=bar\n")
+        assert read_env_file(env) == {"FOO": "bar"}
+
+    def test_export_idiom_with_quoted_value(self, tmp_path):
+        env = tmp_path / ".env"
+        env.write_text('export FOO="bar baz"\n')
+        assert read_env_file(env) == {"FOO": "bar baz"}
+
+
+class TestQuotingRoundTrip:
+    def test_padded_value_round_trips_byte_identically(self, tmp_path):
+        env = tmp_path / ".env"
+        write_env_file(env, {"KEY": "  padded value  "})
+        assert read_env_file(env) == {"KEY": "  padded value  "}
+
+    def test_embedded_quote_value_round_trips_byte_identically(self, tmp_path):
+        env = tmp_path / ".env"
+        write_env_file(env, {"KEY": 'has "a quote" inside'})
+        assert read_env_file(env) == {"KEY": 'has "a quote" inside'}
+
+    def test_embedded_backslash_round_trips_byte_identically(self, tmp_path):
+        env = tmp_path / ".env"
+        write_env_file(env, {"KEY": "back\\slash"})
+        assert read_env_file(env) == {"KEY": "back\\slash"}
+
+    def test_plain_value_is_not_quoted(self, tmp_path):
+        """No unnecessary quoting -- a value needing no protection round-trips
+        exactly as before, so an existing hand-edited .env stays diffable."""
+        env = tmp_path / ".env"
+        write_env_file(env, {"KEY": "plain-value"})
+        assert env.read_text(encoding="utf-8") == "KEY=plain-value\n"
+
 
 class TestWriteEnvFile:
     def test_round_trip(self, tmp_path):

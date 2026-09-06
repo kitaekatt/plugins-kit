@@ -145,12 +145,25 @@ def harness_entry_message(entry_id: str, harness: Optional[str]) -> str:
     )
 
 
-def _require_str(value: object, *, path: Path, entry_id: str, key: str) -> str:
+def _require_str(
+    value: object,
+    *,
+    source: str,
+    entry_id: str,
+    key: str,
+    error: type = EndpointRegistryError,
+) -> str:
+    """Require ``value`` to be a non-empty string, or raise ``error``.
+
+    ``source`` is the caller-specific prefix naming what's being validated
+    (e.g. ``f"model-endpoints registry '{path}'"`` or
+    ``f"endpoint '{ep_name}' is a {kind} entry"``) -- shared here so the
+    string-validation LOGIC has one home while each caller keeps its own
+    wording and exception class. Used by both the model-endpoints registry
+    loader and ``models._config_required_str``.
+    """
     if not isinstance(value, str) or not value.strip():
-        raise EndpointRegistryError(
-            f"model-endpoints registry '{path}': entry '{entry_id}' has no "
-            f"'{key}' (a non-empty string is required)"
-        )
+        raise error(f"{source} has no '{key}' (a non-empty string is required)")
     return value.strip()
 
 
@@ -171,19 +184,27 @@ def _optional_int(value: object, *, path: Path, entry_id: str, key: str) -> Opti
         ) from exc
 
 
-def _optional_str(value: object, *, path: Path, entry_id: str, key: str) -> Optional[str]:
+def _optional_str(
+    value: object,
+    *,
+    source: str,
+    entry_id: str,
+    key: str,
+    error: type = EndpointRegistryError,
+) -> Optional[str]:
+    """Allow ``None``, else require a non-empty string, or raise ``error``.
+
+    See :func:`_require_str` for the ``source`` / ``error`` sharing rationale.
+    """
     if value is None:
         return None
     if not isinstance(value, str) or not value.strip():
-        raise EndpointRegistryError(
-            f"model-endpoints registry '{path}': entry '{entry_id}' has a "
-            f"non-string '{key}' ({value!r})"
-        )
+        raise error(f"{source} has a non-string '{key}' ({value!r})")
     return value.strip()
 
 
 def _conserve_spec(
-    raw: Mapping[str, object], *, path: Path, entry_id: str
+    raw: Mapping[str, object], *, source: str, entry_id: str
 ) -> Optional[ConserveSpec]:
     """Parse ``conserve_usage``, reporting a bad one as invalid metadata.
 
@@ -191,13 +212,12 @@ def _conserve_spec(
     cannot understand would otherwise leave the entry opted in and never
     conserving, which looks identical to a working opt-in. Re-raised as
     :class:`EndpointMetadataError` so a caller already handling registry
-    errors does not meet a bare ``ValueError`` from a helper module.
+    errors does not meet a bare ``ValueError`` from a helper module. Shared by
+    the model-endpoints registry loader and ``models._config_conserve``.
     """
     try:
         return parse_conserve_usage(
-            raw.get("conserve_usage"),
-            source=f"model-endpoints registry '{path}'",
-            entry_id=entry_id,
+            raw.get("conserve_usage"), source=source, entry_id=entry_id
         )
     except ConserveConfigError as exc:
         raise EndpointMetadataError(str(exc)) from exc
@@ -309,6 +329,8 @@ def load_endpoint_registry(
             )
             continue
 
+        entry_source = f"model-endpoints registry '{path}': entry '{key}'"
+
         if has_harness:
             try:
                 tier, family = parse_classification_fields(
@@ -318,21 +340,23 @@ def load_endpoint_registry(
                     id=key,
                     base_url=None,
                     model=_require_str(
-                        raw.get("model"), path=path, entry_id=key, key="model"
+                        raw.get("model"), source=entry_source, entry_id=key, key="model"
                     ),
                     name=_optional_str(
-                        raw.get("name"), path=path, entry_id=key, key="name"
+                        raw.get("name"), source=entry_source, entry_id=key, key="name"
                     ),
                     kind=HARNESS_KIND,
                     harness=_require_str(
-                        raw.get("harness"), path=path, entry_id=key, key="harness"
+                        raw.get("harness"), source=entry_source, entry_id=key, key="harness"
                     ),
                     effort=_optional_str(
-                        raw.get("effort"), path=path, entry_id=key, key="effort"
+                        raw.get("effort"), source=entry_source, entry_id=key, key="effort"
                     ),
                     tier=tier,
                     family=family,
-                    conserve_usage=_conserve_spec(raw, path=path, entry_id=key),
+                    conserve_usage=_conserve_spec(
+                        raw, source=f"model-endpoints registry '{path}'", entry_id=key
+                    ),
                 )
             except EndpointMetadataError:
                 raise
@@ -347,30 +371,32 @@ def load_endpoint_registry(
             entries[key] = EndpointEntry(
                 id=key,
                 base_url=_require_str(
-                    raw.get("base_url"), path=path, entry_id=key, key="base_url"
+                    raw.get("base_url"), source=entry_source, entry_id=key, key="base_url"
                 ),
                 model=_require_str(
-                    raw.get("model"), path=path, entry_id=key, key="model"
+                    raw.get("model"), source=entry_source, entry_id=key, key="model"
                 ),
                 name=_optional_str(
-                    raw.get("name"), path=path, entry_id=key, key="name"
+                    raw.get("name"), source=entry_source, entry_id=key, key="name"
                 ),
                 context_window=_optional_int(
                     raw.get("context_window"), path=path, entry_id=key, key="context_window"
                 ),
                 reasoning_effort=_optional_str(
                     raw.get("reasoning_effort"),
-                    path=path,
+                    source=entry_source,
                     entry_id=key,
                     key="reasoning_effort",
                 ),
                 key_env=_optional_str(
-                    raw.get("key_env"), path=path, entry_id=key, key="key_env"
+                    raw.get("key_env"), source=entry_source, entry_id=key, key="key_env"
                 ),
                 kind=TRANSPORT_KIND,
                 tier=tier,
                 family=family,
-                conserve_usage=_conserve_spec(raw, path=path, entry_id=key),
+                conserve_usage=_conserve_spec(
+                    raw, source=f"model-endpoints registry '{path}'", entry_id=key
+                ),
             )
         except EndpointMetadataError:
             raise

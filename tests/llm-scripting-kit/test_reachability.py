@@ -18,6 +18,12 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from llm_scripting_kit import reachability as reach_mod
+
+
+def test_module_declares_no_dead_statuses_tuple():
+    """I12: reachability._STATUSES was defined and never referenced anywhere
+    in plugins/ or tests/. Once removed, it must stay gone."""
+    assert not hasattr(reach_mod, "_STATUSES")
 from llm_scripting_kit.account import EndpointProbe
 from llm_scripting_kit.reachability import (
     STATUS_REACHABLE,
@@ -59,6 +65,41 @@ class TestCheckTransport:
         ok = EndpointProbe(ok=True, endpoint="x", base_url="http://h/v1", detail="ok")
         with patch.object(reach_mod, "probe_endpoint", return_value=ok):
             check_transport("x")  # must not raise
+
+    def test_a_resolve_failure_is_unknown_not_unreachable(self):
+        """I7: an unknown endpoint or a broken registry means no request was
+        ever attempted -- the three-way contract says that is STATUS_UNKNOWN
+        ("I could not check"), not STATUS_UNREACHABLE ("I checked and it is
+        down")."""
+        unresolved = EndpointProbe(
+            ok=False, endpoint="nope", base_url=None,
+            detail="unknown endpoint 'nope' (known: openrouter)", resolved=False,
+        )
+        with patch.object(reach_mod, "probe_endpoint", return_value=unresolved):
+            result = check_transport("nope")
+        assert result.status == STATUS_UNKNOWN
+        assert "unknown endpoint" in result.detail
+
+    def test_reachability_docstring_does_not_overclaim_no_credential_is_read(self):
+        """I9: the class docstring used to claim "nothing here ever reads
+        [a key]", which is false -- check_transport delegates to
+        account.probe_endpoint, which resolves a key via get_api_key for a
+        keyed endpoint and sends it as a Bearer token. Only the RESULT
+        (``detail``) is guaranteed key-free."""
+        doc = Reachability.__doc__
+        assert "detail" in doc
+        assert "never carries" in doc
+        assert "never reads one to begin with" not in doc
+
+    def test_a_network_failure_after_a_successful_resolve_is_still_unreachable(self):
+        """The existing behavior for a real, attempted request that failed."""
+        bad = EndpointProbe(
+            ok=False, endpoint="local", base_url="http://h/v1",
+            detail="unreachable: refused", resolved=True,
+        )
+        with patch.object(reach_mod, "probe_endpoint", return_value=bad):
+            result = check_transport("local")
+        assert result.status == STATUS_UNREACHABLE
 
 
 # ---------------------------------------------------------------------------

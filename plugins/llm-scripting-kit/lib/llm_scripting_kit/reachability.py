@@ -72,8 +72,6 @@ unexpectedly. This is NEVER reported as :data:`STATUS_UNREACHABLE`: "I could
 not check" and "I checked and it is down" are different facts, and a caller
 gating on a boolean-shaped reading must not be able to conflate them."""
 
-_STATUSES = (STATUS_REACHABLE, STATUS_UNREACHABLE, STATUS_UNKNOWN)
-
 _KNOWN_HARNESSES = ("claude", "codex", "opencode")
 
 
@@ -90,8 +88,12 @@ class Reachability:
     ``"cli-version"`` check that could not even resolve ``bootstrap_lib``
     still names ``"cli-version"`` as the method it was TRYING to use).
     ``detail`` is a short human-readable reason: the version banner or ``ok``
-    on success, a specific failure otherwise. Never a key, a token, or an
-    Authorization header -- nothing here ever reads one to begin with.
+    on success, a specific failure otherwise. ``detail`` itself never carries
+    a key, a token, or an Authorization header. This is narrower than "this
+    module never reads a credential": a transport check on a keyed endpoint
+    delegates to :func:`llm_scripting_kit.account.probe_endpoint`, which does
+    resolve a key via ``get_api_key`` and sends it as a Bearer token to
+    perform the check -- it is simply never echoed back into this result.
     """
 
     status: str
@@ -125,11 +127,17 @@ def check_transport(
     """Metadata-only liveness check for a transport (openrouter-adapter) endpoint.
 
     Delegates to :func:`llm_scripting_kit.account.probe_endpoint`, which never
-    raises and never sends more than a ``GET {base_url}/models`` request. It
-    always reaches a real verdict (it attempts the request and reports what
-    happened), so this never returns :data:`STATUS_UNKNOWN`.
+    raises and never sends more than a ``GET {base_url}/models`` request. When
+    the endpoint NAME itself resolves (``EndpointProbe.resolved``), a real
+    request was attempted and the verdict is :data:`STATUS_REACHABLE` or
+    :data:`STATUS_UNREACHABLE`. A RESOLVE failure -- an unknown endpoint or an
+    unreadable/dangling model-endpoints registry -- means no request was ever
+    attempted, so it is :data:`STATUS_UNKNOWN` ("I could not check"), never
+    :data:`STATUS_UNREACHABLE` ("I checked and it is down").
     """
     result = probe_endpoint(name, timeout=timeout, project_root=project_root)
+    if not result.resolved:
+        return Reachability(status=STATUS_UNKNOWN, checked="models-endpoint", detail=result.detail)
     status = STATUS_REACHABLE if result.ok else STATUS_UNREACHABLE
     return Reachability(status=status, checked="models-endpoint", detail=result.detail)
 

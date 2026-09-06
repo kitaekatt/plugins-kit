@@ -1,6 +1,6 @@
 [project]
 name = "llm-scripting-kit"
-version = "0.35.0"
+version = "0.35.1"
 description = "LLM access, local model launch profiles, and completion backends for Claude Code plugins"
 requires-python = ">=3.10"
 

@@ -30,6 +30,36 @@ from typing import Any, Dict, Optional
 from .constants import BASE_URL
 
 
+def _get(
+    url: str, headers: Dict[str, str], timeout: float
+) -> "tuple[bytes, Optional[BaseException]]":
+    """Shared ``GET`` seam for ``check_account``, ``check_models_probe`` and
+    ``probe_endpoint``: one urllib Request/urlopen/HTTPError/URLError/OSError
+    ladder instead of three copies.
+
+    Returns ``(body_bytes, None)`` on success. On failure returns
+    ``(b"", exc)`` -- the CAUGHT exception itself
+    (``urllib.error.HTTPError``, ``urllib.error.URLError``, or another
+    ``OSError``/``TimeoutError``), never translated here. Translation stays
+    with each caller deliberately: a 401/402 means something different to
+    ``check_account``/``check_models_probe`` (a credential-specific
+    ``AccountStatus`` value, never an exception) than to ``probe_endpoint``
+    (an ``EndpointProbe`` with no special-cased status codes at all), and the
+    message wording each already produces must not change underneath a
+    caller that parses it.
+    """
+    req = urllib.request.Request(url, headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return resp.read(), None
+    except urllib.error.HTTPError as e:
+        return b"", e
+    except urllib.error.URLError as e:
+        return b"", e
+    except (TimeoutError, OSError) as e:
+        return b"", e
+
+
 class AccountCheckError(Exception):
     """Raised when the account check fails for a non-credential reason.
 
@@ -87,40 +117,41 @@ def check_account(
     if not api_key:
         raise AccountCheckError("api_key is empty -- nothing to check")
 
-    req = urllib.request.Request(
-        f"{base_url}/auth/key",
-        headers={"Authorization": f"Bearer {api_key}"},
-    )
+    url = f"{base_url}/auth/key"
+    raw, exc = _get(url, {"Authorization": f"Bearer {api_key}"}, timeout)
+    if exc is not None:
+        if isinstance(exc, urllib.error.HTTPError):
+            if exc.code == 401:
+                return _failure("auth")
+            if exc.code == 402:
+                return _failure("no_credit")
+            raise AccountCheckError(f"{url} returned HTTP {exc.code}: {exc.reason}") from exc
+        if isinstance(exc, urllib.error.URLError):
+            raise AccountCheckError(f"Network error contacting {base_url}: {exc.reason}") from exc
+        raise AccountCheckError(f"Transport error contacting {base_url}: {exc}") from exc
 
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            body = resp.read().decode("utf-8")
-            payload = json.loads(body)
-            data = payload.get("data", {}) if isinstance(payload, dict) else {}
-            return AccountStatus(
-                ok=True,
-                label=data.get("label"),
-                usage=data.get("usage"),
-                limit=data.get("limit"),
-                is_free_tier=data.get("is_free_tier"),
-                rate_limit=data.get("rate_limit"),
-                failure_reason=None,
-                raw=payload if isinstance(payload, dict) else None,
-            )
-    except urllib.error.HTTPError as e:
-        if e.code == 401:
-            return _failure("auth")
-        if e.code == 402:
-            return _failure("no_credit")
-        raise AccountCheckError(
-            f"{base_url}/auth/key returned HTTP {e.code}: {e.reason}"
-        ) from e
-    except urllib.error.URLError as e:
-        raise AccountCheckError(f"Network error contacting {base_url}: {e.reason}") from e
-    except (TimeoutError, OSError) as e:
-        raise AccountCheckError(f"Transport error contacting {base_url}: {e}") from e
+        body = raw.decode("utf-8")
+    except UnicodeDecodeError as e:
+        # A UnicodeDecodeError is a ValueError subclass, so left unhandled it
+        # would escape as a bare ValueError instead of the AccountCheckError
+        # every other decode/transport failure in this module raises.
+        raise AccountCheckError(f"{url} returned a non-UTF-8 body: {e}") from e
+    try:
+        payload = json.loads(body)
     except json.JSONDecodeError as e:
-        raise AccountCheckError(f"{base_url}/auth/key returned non-JSON body: {e}") from e
+        raise AccountCheckError(f"{url} returned non-JSON body: {e}") from e
+    data = payload.get("data", {}) if isinstance(payload, dict) else {}
+    return AccountStatus(
+        ok=True,
+        label=data.get("label"),
+        usage=data.get("usage"),
+        limit=data.get("limit"),
+        is_free_tier=data.get("is_free_tier"),
+        rate_limit=data.get("rate_limit"),
+        failure_reason=None,
+        raw=payload if isinstance(payload, dict) else None,
+    )
 
 
 def check_models_probe(
@@ -140,26 +171,22 @@ def check_models_probe(
         raise AccountCheckError("api_key is empty -- nothing to check")
 
     headers = {} if keyless else {"Authorization": f"Bearer {api_key}"}
-    req = urllib.request.Request(f"{base_url}/models", headers=headers)
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            resp.read()  # drain; we only care that it authenticated
-            return AccountStatus(
-                ok=True, label=None, usage=None, limit=None, is_free_tier=None,
-                rate_limit=None, failure_reason=None, raw=None,
-            )
-    except urllib.error.HTTPError as e:
-        if e.code == 401:
-            return _failure("auth")
-        if e.code == 402:
-            return _failure("no_credit")
-        raise AccountCheckError(
-            f"{base_url}/models returned HTTP {e.code}: {e.reason}"
-        ) from e
-    except urllib.error.URLError as e:
-        raise AccountCheckError(f"Network error contacting {base_url}: {e.reason}") from e
-    except (TimeoutError, OSError) as e:
-        raise AccountCheckError(f"Transport error contacting {base_url}: {e}") from e
+    url = f"{base_url}/models"
+    raw, exc = _get(url, headers, timeout)
+    if exc is not None:
+        if isinstance(exc, urllib.error.HTTPError):
+            if exc.code == 401:
+                return _failure("auth")
+            if exc.code == 402:
+                return _failure("no_credit")
+            raise AccountCheckError(f"{url} returned HTTP {exc.code}: {exc.reason}") from exc
+        if isinstance(exc, urllib.error.URLError):
+            raise AccountCheckError(f"Network error contacting {base_url}: {exc.reason}") from exc
+        raise AccountCheckError(f"Transport error contacting {base_url}: {exc}") from exc
+    return AccountStatus(
+        ok=True, label=None, usage=None, limit=None, is_free_tier=None,
+        rate_limit=None, failure_reason=None, raw=None,
+    )
 
 
 def validate_endpoint(
@@ -198,12 +225,23 @@ class EndpointProbe:
     """Result of a non-raising reachability ping.
 
     ``detail`` is ``"ok"`` on success, else the resolve or network failure text.
+
+    ``resolved`` is False only when the endpoint NAME itself could not be
+    resolved (unknown endpoint, unreadable/dangling model-endpoints registry)
+    -- no request was ever attempted. True for every other case, including a
+    resolved endpoint whose key could not be found and a resolved endpoint
+    that answered with a network/HTTP failure: a request target existed, even
+    though sending or completing the request did not succeed.
+    ``reachability.check_transport`` reads this to report STATUS_UNKNOWN
+    ("I could not check") rather than STATUS_UNREACHABLE ("I checked and it
+    is down") for the ``resolved=False`` case.
     """
 
     ok: bool
     endpoint: str
     base_url: Optional[str]
     detail: str
+    resolved: bool = True
 
 
 def probe_endpoint(
@@ -231,7 +269,9 @@ def probe_endpoint(
     try:
         ep = resolve_endpoint(name, project_root=project_root)
     except Exception as e:  # noqa: BLE001 -- any resolve defect is "not usable"
-        return EndpointProbe(ok=False, endpoint=label, base_url=None, detail=str(e))
+        return EndpointProbe(
+            ok=False, endpoint=label, base_url=None, detail=str(e), resolved=False
+        )
 
     label = ep.get("name") or label
     base_url = ep.get("base_url")
@@ -266,23 +306,29 @@ def probe_endpoint(
             )
         headers["Authorization"] = f"Bearer {result.key}"
 
-    req = urllib.request.Request(f"{base_url}/models", headers=headers)
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            resp.read()
-        return EndpointProbe(ok=True, endpoint=label, base_url=base_url, detail="ok")
-    except urllib.error.HTTPError as e:
-        return EndpointProbe(
-            ok=False, endpoint=label, base_url=base_url, detail=f"HTTP {e.code}: {e.reason}"
-        )
-    except urllib.error.URLError as e:
-        return EndpointProbe(
-            ok=False, endpoint=label, base_url=base_url, detail=f"unreachable: {e.reason}"
-        )
-    except Exception as e:  # noqa: BLE001 -- timeouts, OSError, malformed URLs
+        _raw, exc = _get(f"{base_url}/models", headers, timeout)
+    except Exception as e:  # noqa: BLE001 -- a malformed URL etc.; _get itself
+        # only catches HTTPError/URLError/OSError/TimeoutError, so anything
+        # else (e.g. ValueError from a malformed base_url) still lands here.
         return EndpointProbe(
             ok=False, endpoint=label, base_url=base_url, detail=f"unreachable: {e}"
         )
+    if exc is None:
+        return EndpointProbe(ok=True, endpoint=label, base_url=base_url, detail="ok")
+    if isinstance(exc, urllib.error.HTTPError):
+        return EndpointProbe(
+            ok=False, endpoint=label, base_url=base_url,
+            detail=f"HTTP {exc.code}: {exc.reason}",
+        )
+    if isinstance(exc, urllib.error.URLError):
+        return EndpointProbe(
+            ok=False, endpoint=label, base_url=base_url,
+            detail=f"unreachable: {exc.reason}",
+        )
+    return EndpointProbe(
+        ok=False, endpoint=label, base_url=base_url, detail=f"unreachable: {exc}"
+    )
 
 
 def _failure(reason: str) -> AccountStatus:

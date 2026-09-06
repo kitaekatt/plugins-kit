@@ -113,6 +113,19 @@ class TestCheckAccount:
         assert status.label is None
         assert status.usage is None
 
+    def test_non_utf8_body_raises_account_check_error_not_a_bare_value_error(self):
+        """I8: a UnicodeDecodeError from resp.read().decode() used to escape
+        as a raw ValueError (UnicodeDecodeError is a ValueError subclass)
+        instead of the AccountCheckError every other decode/transport failure
+        in this module raises."""
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = b"\xff\xfe\x00\x80not-utf8\xff"
+        mock_resp.__enter__.return_value = mock_resp
+        mock_resp.__exit__.return_value = None
+        with patch("urllib.request.urlopen", return_value=mock_resp):
+            with pytest.raises(AccountCheckError):
+                check_account("sk-or-v1-key")
+
 
 # ---------------------------------------------------------------------------
 # Keyless models-probe + the non-raising probe_endpoint
@@ -227,6 +240,10 @@ class TestProbeEndpoint:
         assert probe.ok is False
         assert "no-such-endpoint" in probe.detail
         assert probe.base_url is None
+        # I7: a resolve failure means no request was ever attempted --
+        # reachability.check_transport reads this to report STATUS_UNKNOWN
+        # rather than STATUS_UNREACHABLE.
+        assert probe.resolved is False
 
     def test_unreadable_registry_reports_down_without_raising(
         self, keyless_config, tmp_path, monkeypatch
@@ -241,6 +258,23 @@ class TestProbeEndpoint:
         probe = probe_endpoint("whatever")
         assert probe.ok is False
         assert "broken.yaml" in probe.detail
+        assert probe.resolved is False
+
+    def test_network_failure_after_a_successful_resolve_is_resolved_true(
+        self, keyless_config
+    ):
+        err = urllib.error.URLError("connection refused")
+        with patch("urllib.request.urlopen", side_effect=err):
+            probe = probe_endpoint("keyless-local")
+        assert probe.ok is False
+        assert probe.resolved is True
+
+    def test_successful_probe_is_resolved_true(self, keyless_config):
+        with patch("urllib.request.urlopen") as mock_open:
+            mock_open.return_value = _ok_response({})
+            probe = probe_endpoint("keyless-local")
+        assert probe.ok is True
+        assert probe.resolved is True
 
     def test_keyed_endpoint_sends_a_bearer(self, keyless_config, monkeypatch):
         monkeypatch.setenv("SOME_LOCAL_KEY", "abc123")
