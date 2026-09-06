@@ -110,7 +110,16 @@ def merge_json_entries(
             message=f"reference file not found: {reference_path}",
         )
 
-    target_data = _load_json(target_path) or {}
+    target_file = Path(target_path)
+    if target_file.exists():
+        target_data = _load_json(target_path)
+        if target_data is None:
+            return JsonCheckResult(
+                passed=False, target=target_path,
+                message="target file is unreadable or is not a JSON object",
+            )
+    else:
+        target_data = {}
     preserve_fields = preserve_fields or []
 
     # Merge per entry (top-level keys are entry names,
@@ -118,6 +127,11 @@ def merge_json_entries(
     for key, ref_entry in ref_data.items():
         if not isinstance(ref_entry, dict):
             continue
+        if key in target_data and not isinstance(target_data[key], dict):
+            return JsonCheckResult(
+                passed=False, target=target_path,
+                message=f"entry '{key}' in target is not a JSON object",
+            )
         target_entry = target_data.setdefault(key, {})
 
         # Copy merge_fields from reference entry

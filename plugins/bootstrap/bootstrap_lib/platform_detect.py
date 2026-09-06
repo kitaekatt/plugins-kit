@@ -1,7 +1,6 @@
 """OS and architecture detection for bootstrap operations."""
 
 import platform
-import sys
 from typing import Optional, Tuple
 
 
@@ -90,8 +89,3 @@ def detect_arch() -> str:
     if m in ("arm64", "aarch64"):
         return "arm64"
     return m
-
-
-def detect_os_arch() -> str:
-    """Convenience: 'macos-arm64', 'windows-amd64', etc."""
-    return f"{detect_os()}-{detect_arch()}"

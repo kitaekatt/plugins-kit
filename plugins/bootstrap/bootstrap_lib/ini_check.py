@@ -39,24 +39,30 @@ def check_ini_setting(
         )
 
     in_section = False
-    with open(ini_path, "r") as f:
-        for line in f:
-            stripped = line.strip()
-            if stripped.startswith("["):
-                in_section = stripped == section
-                continue
-            if in_section and "=" in stripped:
-                k, _, v = stripped.partition("=")
-                if k.strip() == key:
-                    if v.strip() == expected_value:
+    try:
+        with open(ini_path, "r", encoding="utf-8", errors="replace") as f:
+            for line in f:
+                stripped = line.strip()
+                if stripped.startswith("["):
+                    in_section = stripped == section
+                    continue
+                if in_section and "=" in stripped:
+                    k, _, v = stripped.partition("=")
+                    if k.strip() == key:
+                        if v.strip() == expected_value:
+                            return IniCheckResult(
+                                passed=True, file=file, section=section, key=key,
+                                message=f"{key}={expected_value}",
+                            )
                         return IniCheckResult(
-                            passed=True, file=file, section=section, key=key,
-                            message=f"{key}={expected_value}",
+                            passed=False, file=file, section=section, key=key,
+                            message=f"expected {expected_value}, got {v.strip()}",
                         )
-                    return IniCheckResult(
-                        passed=False, file=file, section=section, key=key,
-                        message=f"expected {expected_value}, got {v.strip()}",
-                    )
+    except OSError as exc:
+        return IniCheckResult(
+            passed=False, file=file, section=section, key=key,
+            message=f"failed to read file: {exc}",
+        )
 
     return IniCheckResult(
         passed=False, file=file, section=section, key=key,
@@ -77,7 +83,7 @@ def write_ini_setting(file: str, section: str, key: str, value: str) -> None:
     lines: list[str] = []
 
     if ini_path.is_file():
-        with open(ini_path, "r") as f:
+        with open(ini_path, "r", encoding="utf-8", errors="replace") as f:
             lines = f.readlines()
 
     # Try to find and update existing key in the target section
@@ -95,7 +101,7 @@ def write_ini_setting(file: str, section: str, key: str, value: str) -> None:
             if k.strip() == key:
                 lines[i] = f"{key}={value}\n"
                 ini_path.parent.mkdir(parents=True, exist_ok=True)
-                with open(ini_path, "w") as f:
+                with open(ini_path, "w", encoding="utf-8", errors="replace") as f:
                     f.writelines(lines)
                 return
 
@@ -109,5 +115,5 @@ def write_ini_setting(file: str, section: str, key: str, value: str) -> None:
         lines.append(f"{key}={value}\n")
 
     ini_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(ini_path, "w") as f:
+    with open(ini_path, "w", encoding="utf-8", errors="replace") as f:
         f.writelines(lines)

@@ -2,7 +2,7 @@
 
 import os
 import sys
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -12,6 +12,7 @@ from bootstrap_lib.path_check import (
     _path_diagnostic,
     check_path_entry,
 )
+from test_support.fake_winreg import FakeWinreg
 
 
 class TestHomeResolution:
@@ -128,33 +129,19 @@ class TestPathDiagnostic:
         assert "PowerShell=False" in diag
 
 
-@pytest.mark.skipif(
-    sys.platform != "win32" and "MSYSTEM" not in os.environ,
-    reason="winreg only available on Windows",
-)
 class TestAddPathToWindowsRegistry:
     """Tests for _add_path_to_windows_registry (mocked winreg)."""
 
     def _winreg_mocks(self, current_value="C:\\\\existing", value_type=None):
-        """Build a mocked winreg module with QueryValueEx returning current_value."""
-        import winreg as real_winreg
-
+        """Build a fake winreg module with QueryValueEx returning current_value."""
+        mock_winreg = FakeWinreg()
         if value_type is None:
-            value_type = real_winreg.REG_EXPAND_SZ
-
-        mock_winreg = MagicMock()
-        mock_winreg.HKEY_CURRENT_USER = real_winreg.HKEY_CURRENT_USER
-        mock_winreg.KEY_READ = real_winreg.KEY_READ
-        mock_winreg.KEY_WRITE = real_winreg.KEY_WRITE
-        mock_winreg.REG_EXPAND_SZ = real_winreg.REG_EXPAND_SZ
-        mock_winreg.REG_SZ = real_winreg.REG_SZ
-
-        mock_key = MagicMock()
-        mock_key.__enter__ = MagicMock(return_value=mock_key)
-        mock_key.__exit__ = MagicMock(return_value=False)
-        mock_winreg.OpenKey.return_value = mock_key
-        mock_winreg.QueryValueEx.return_value = (current_value, value_type)
-        return mock_winreg, mock_key
+            value_type = mock_winreg.REG_EXPAND_SZ
+        mock_winreg.set_value(
+            mock_winreg.HKEY_CURRENT_USER, "Environment", "Path",
+            current_value, value_type,
+        )
+        return mock_winreg, None
 
     def test_the_suite_defaults_to_skipping_registry_writes(self):
         """REGRESSION GUARD for the conftest fixture, not for path_check.
@@ -189,8 +176,7 @@ class TestAddPathToWindowsRegistry:
         assert "added" in msg
         assert "registry" in msg
         # SetValueEx should have been called with the new path prepended.
-        args, _ = mock_winreg.SetValueEx.call_args
-        new_value = args[4]
+        new_value = mock_winreg.store["Path"]
         assert new_value.startswith(os.path.expanduser("~/.local/bin").replace("/", "\\"))
         assert "C:\\Other\\dir" in new_value
 
@@ -202,7 +188,7 @@ class TestAddPathToWindowsRegistry:
             ok, msg = _add_path_to_windows_registry("~/.local/bin")
         assert ok is True
         assert "already" in msg
-        mock_winreg.SetValueEx.assert_not_called()
+        assert mock_winreg.writes == []
 
     def test_already_present_trailing_slash(self, monkeypatch):
         monkeypatch.delenv("BOOTSTRAP_SKIP_REGISTRY", raising=False)
@@ -212,28 +198,25 @@ class TestAddPathToWindowsRegistry:
             ok, msg = _add_path_to_windows_registry("~/.local/bin")
         assert ok is True
         assert "already" in msg
-        mock_winreg.SetValueEx.assert_not_called()
+        assert mock_winreg.writes == []
 
     def test_missing_path_value_creates_it(self, monkeypatch):
         monkeypatch.delenv("BOOTSTRAP_SKIP_REGISTRY", raising=False)
         mock_winreg, mock_key = self._winreg_mocks()
-        mock_winreg.QueryValueEx.side_effect = FileNotFoundError()
+        mock_winreg.store.pop("Path")
+        mock_winreg._values[mock_winreg.HKEY_CURRENT_USER]["Environment"].pop("Path")
         with patch.dict("sys.modules", {"winreg": mock_winreg}), \
              patch("bootstrap_lib.path_check._broadcast_environment_change"):
             ok, msg = _add_path_to_windows_registry("~/.local/bin")
         assert ok is True
         # Should have written exactly the new path with no semicolon
-        args, _ = mock_winreg.SetValueEx.call_args
-        new_value = args[4]
+        new_value = mock_winreg.store["Path"]
         assert new_value == os.path.expanduser("~/.local/bin").replace("/", "\\")
 
     def test_open_key_failure_includes_diagnostic(self, monkeypatch):
         monkeypatch.delenv("BOOTSTRAP_SKIP_REGISTRY", raising=False)
-        mock_winreg = MagicMock()
-        mock_winreg.HKEY_CURRENT_USER = 0
-        mock_winreg.KEY_READ = 0
-        mock_winreg.KEY_WRITE = 0
-        mock_winreg.OpenKey.side_effect = PermissionError("access denied")
+        mock_winreg = FakeWinreg()
+        mock_winreg.open_error = PermissionError("access denied")
         with patch.dict("sys.modules", {"winreg": mock_winreg}):
             ok, msg = _add_path_to_windows_registry("~/.local/bin")
         assert ok is False
@@ -295,6 +278,42 @@ class TestAddPathToShellConfigIdempotency:
         assert content.count("export PATH=") == 1, (
             f"Expected exactly one export line, got:\n{content}"
         )
+
+    def test_unwritable_rc_file_returns_failure(self, tmp_path, monkeypatch):
+        from bootstrap_lib.path_check import add_path_to_shell_config
+
+        monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.setenv("BOOTSTRAP_SKIP_REGISTRY", "1")
+        rc_files = {str(tmp_path / ".bashrc"), str(tmp_path / ".zshrc")}
+        real_open = open
+
+        def fail_rc_open(path, *args, **kwargs):
+            if os.fspath(path) in rc_files:
+                raise OSError("read-only")
+            return real_open(path, *args, **kwargs)
+
+        monkeypatch.setattr("builtins.open", fail_rc_open)
+
+        ok, message = add_path_to_shell_config("/durable/path")
+
+        assert ok is False
+        assert ".bashrc" in message or ".zshrc" in message
+
+    def test_home_prefix_requires_path_boundary(self, tmp_path, monkeypatch):
+        from bootstrap_lib.path_check import add_path_to_shell_config
+
+        home = tmp_path / "bob"
+        home.mkdir()
+        sibling = tmp_path / "bobby" / "bin"
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.setenv("BOOTSTRAP_SKIP_REGISTRY", "1")
+
+        ok, _message = add_path_to_shell_config(str(sibling))
+
+        assert ok is True
+        content = (home / ".bashrc").read_text()
+        assert f'export PATH="{sibling}:$PATH"' in content
+        assert "$HOMEby" not in content
 
     def test_idempotent_with_forward_slash_form_already_present(self, tmp_path, monkeypatch):
         """Existing $HOME/forward/slash line should suppress further writes

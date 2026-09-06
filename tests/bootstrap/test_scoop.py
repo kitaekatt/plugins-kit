@@ -68,6 +68,24 @@ class TestInstallFailureDetail:
 
 
 class TestScoopInstall:
+    def test_powershell_closes_stdin_and_bounds_timeout(self, monkeypatch):
+        seen = {}
+
+        def fake_run(argv, **kwargs):
+            seen["argv"] = argv
+            seen.update(kwargs)
+            return 0, "stdout", "stderr"
+
+        monkeypatch.setattr(scoop.shutil, "which", lambda name: "/x/pwsh")
+        monkeypatch.setattr(scoop, "run_captured", fake_run, raising=False)
+
+        ok, output = scoop._run_powershell("Write-Output ok", timeout=43)
+
+        assert ok is True
+        assert output == "stdoutstderr"
+        assert seen["stdin_devnull"] is True
+        assert seen["timeout"] == 43
+
     def _wire(self, monkeypatch, ok, out, shim=None):
         calls = []
 

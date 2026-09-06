@@ -2,7 +2,9 @@
 
 import json
 import os
+from copy import deepcopy
 
+import bootstrap_lib.config as config_module
 from config import CURRENT_SCHEMA_VERSION, load_config, migrate_config, save_config
 
 
@@ -106,6 +108,19 @@ class TestMigrateConfig:
         assert "self_setup" in migrated
         assert migrated["self_setup"]["tools"][0]["name"] == "uv"
 
+    def test_v5_to_v6_uses_fallback_when_defaults_omit_self_setup(self, tmp_path):
+        defaults_dir = tmp_path / "defaults"
+        defaults_dir.mkdir()
+        (defaults_dir / "config.json").write_text(json.dumps({"schema_version": 6}))
+
+        v5 = {"schema_version": 5, "self_setup": {}}
+
+        migrated = migrate_config(v5, defaults_dir=str(defaults_dir))
+
+        assert migrated["self_setup"]["python_stub_check"]["stub_markers"] == [
+            "WindowsApps"
+        ]
+
     def test_no_migration_on_current_version(self):
         current = {
             "schema_version": CURRENT_SCHEMA_VERSION,
@@ -114,7 +129,21 @@ class TestMigrateConfig:
             "self_setup": {"tools": [], "path_entries": [], "venv": {"check_imports": ["yaml"]}},
         }
         result = migrate_config(current)
-        assert result is current  # Same object — no copy needed
+        assert result is current  # Same object -- no copy needed
+
+    def test_migration_does_not_mutate_nested_input(self):
+        original = {
+            "schema_version": 4,
+            "no_bootstrap": ["bootstrap@plugins-kit", "other@plugin"],
+            "bootstrap_cache": [],
+            "log_success_shell": False,
+            "log_success_checks": False,
+        }
+        before = deepcopy(original)
+
+        migrate_config(original)
+
+        assert original == before
 
 
 class TestSaveConfig:
@@ -126,3 +155,41 @@ class TestSaveConfig:
         with open(config_path) as f:
             loaded = json.load(f)
         assert loaded == original
+
+    def test_save_config_uses_atomic_writer(self, data_dir, monkeypatch):
+        calls = []
+
+        def fake_write_atomic(path, content):
+            calls.append((path, content))
+
+        monkeypatch.setattr(config_module, "write_atomic", fake_write_atomic)
+
+        save_config(data_dir, {"answer": 42})
+
+        assert calls == [
+            (
+                os.path.join(data_dir, "config.json"),
+                '{\n  "answer": 42\n}\n',
+            )
+        ]
+
+    def test_atomic_failure_preserves_previous_bytes(self, data_dir, monkeypatch):
+        config_path = os.path.join(data_dir, "config.json")
+        original = b'{"answer": 1}\n'
+        with open(config_path, "wb") as f:
+            f.write(original)
+
+        def fail_replace(_source, _destination):
+            raise OSError("simulated replace failure")
+
+        monkeypatch.setattr(config_module.os, "replace", fail_replace)
+
+        try:
+            save_config(data_dir, {"answer": 2})
+        except OSError as exc:
+            assert "simulated replace failure" in str(exc)
+        else:
+            raise AssertionError("save_config should propagate atomic write failure")
+
+        with open(config_path, "rb") as f:
+            assert f.read() == original

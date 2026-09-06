@@ -38,6 +38,8 @@ import subprocess
 import sys
 from typing import NamedTuple
 
+from .subprocess_run import run_captured
+
 
 class AptResult(NamedTuple):
     ok: bool               # True when the package is installed / already present
@@ -76,6 +78,7 @@ def sudo_noninteractive_available() -> bool:
         result = subprocess.run(
             [sudo, "-n", "true"],
             capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=10,
+            stdin=subprocess.DEVNULL,
         )
         return result.returncode == 0
     except subprocess.TimeoutExpired:
@@ -119,6 +122,7 @@ def dpkg_installed(pkg: str) -> bool:
         result = subprocess.run(
             [dpkg_query, "-W", "-f", "${db:Status-Status}", pkg],
             capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30,
+            stdin=subprocess.DEVNULL,
         )
     except subprocess.TimeoutExpired:
         return False
@@ -174,13 +178,13 @@ def _run(argv, timeout: int = 600):
     noninteractive tells debconf to take defaults instead of asking.
     """
     try:
-        result = subprocess.run(
+        returncode, stdout, stderr = run_captured(
             list(argv),
-            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout,
-            stdin=subprocess.DEVNULL,
+            timeout=timeout,
             env={**os.environ, "DEBIAN_FRONTEND": "noninteractive"},
+            stdin_devnull=True,
         )
-        return result.returncode == 0, (result.stdout + result.stderr).strip()
+        return returncode == 0, (stdout + stderr).strip()
     except subprocess.TimeoutExpired:
         return False, f"timed out after {timeout}s"
     except Exception as e:  # pragma: no cover - defensive

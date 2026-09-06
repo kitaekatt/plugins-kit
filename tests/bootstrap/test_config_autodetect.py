@@ -5,6 +5,7 @@ import os
 import pytest
 
 from bootstrap_lib.config_check import run_autodetect, run_project_autodetect, save_yaml_config, load_yaml_config
+from bootstrap_lib.engine import _process_config, _process_project_config
 
 
 def _write_autodetect_script(plugin_root, script_name="custom_bootstrap.py", body=""):
@@ -38,6 +39,9 @@ def autodetect(config, config_path):
         config = {"P4PORT": ""}
         changed, actions, ok = run_autodetect(plugin_root, "just-a-script.py", config, "/path/c.yaml")
         assert changed is False
+        assert len(actions) == 1
+        assert "invalid" in actions[0]
+        assert ok == []
 
     def test_not_called_when_script_missing(self, tmp_path):
         """Missing script file returns False."""
@@ -46,6 +50,23 @@ def autodetect(config, config_path):
         config = {"P4PORT": ""}
         changed, actions, ok = run_autodetect(plugin_root, "nonexistent.py autodetect", config, "/path/c.yaml")
         assert changed is False
+        assert len(actions) == 1
+        assert "nonexistent.py" in actions[0]
+        assert ok == []
+
+    def test_missing_function_is_logged_as_action(self, tmp_path):
+        plugin_root = str(tmp_path / "plugin")
+        os.makedirs(plugin_root)
+        _write_autodetect_script(plugin_root, body="def other(config, config_path):\n    return False\n")
+
+        changed, actions, ok = run_autodetect(
+            plugin_root, "custom_bootstrap.py autodetect", {}, "/path/c.yaml"
+        )
+
+        assert changed is False
+        assert len(actions) == 1
+        assert "autodetect" in actions[0]
+        assert ok == []
 
     def test_errors_caught_gracefully(self, tmp_path):
         """Script that raises exception returns False."""
@@ -74,6 +95,9 @@ def autodetect(config, config_path):
         config = {"P4PORT": ""}
         changed, actions, ok = run_autodetect(plugin_root, "custom_bootstrap.py autodetect", config, "/path/c.yaml")
         assert changed is False
+        assert actions == []
+        assert len(ok) == 1
+        assert "unchanged" in ok[0]
 
     def test_config_written_back_after_changes(self, tmp_path):
         """When autodetect changes config, caller should save it (tested via save_yaml_config)."""
@@ -127,69 +151,115 @@ def autodetect(config, config_path):
         assert actions == []
         assert ok == ["config: ok - /existing.yaml"]
 
-
-class TestRunProjectAutodetect:
-    def test_returns_dict(self, tmp_path):
-        """Project autodetect returns a dict of discovered values."""
+    def test_dict_return_passes_messages_through_unchanged(self, tmp_path):
+        """The script's own action/ok messages are the outcome; nothing is joined or rewritten."""
         plugin_root = str(tmp_path / "plugin")
         os.makedirs(plugin_root)
 
         _write_autodetect_script(plugin_root, body="""\
-def discover():
-    return {"uproject": "/path/to/Game.uproject", "engine_dir": "/path/to/engine"}
+def autodetect(config, config_path):
+    return {"changed": True, "actions": ["first", "second"], "ok": ["steady"]}
 """)
-        result = run_project_autodetect(plugin_root, "custom_bootstrap.py discover")
-        assert result == {"uproject": "/path/to/Game.uproject", "engine_dir": "/path/to/engine"}
 
-    def test_returns_none(self, tmp_path):
-        """Project autodetect returns None when nothing found."""
+        changed, actions, ok = run_autodetect(
+            plugin_root, "custom_bootstrap.py autodetect", {}, "/path/c.yaml"
+        )
+
+        assert changed is True
+        assert actions == ["first", "second"]
+        assert ok == ["steady"]
+
+    def test_silent_dict_return_still_logs_one_outcome(self, tmp_path):
+        """A script that reports nothing still produces exactly one entry (never silent)."""
         plugin_root = str(tmp_path / "plugin")
         os.makedirs(plugin_root)
 
         _write_autodetect_script(plugin_root, body="""\
-def discover():
-    return None
+def autodetect(config, config_path):
+    return {"changed": True}
 """)
-        result = run_project_autodetect(plugin_root, "custom_bootstrap.py discover")
-        assert result is None
-
-    def test_error_returns_none(self, tmp_path):
-        """Project autodetect that raises returns None."""
-        plugin_root = str(tmp_path / "plugin")
-        os.makedirs(plugin_root)
+        changed, actions, ok = run_autodetect(
+            plugin_root, "custom_bootstrap.py autodetect", {}, "/path/c.yaml"
+        )
+        assert changed is True
+        assert len(actions) == 1 and "changed" in actions[0]
+        assert ok == []
 
         _write_autodetect_script(plugin_root, body="""\
-def discover():
-    raise RuntimeError("boom")
+def autodetect(config, config_path):
+    return {"changed": False}
 """)
-        result = run_project_autodetect(plugin_root, "custom_bootstrap.py discover")
-        assert result is None
+        changed, actions, ok = run_autodetect(
+            plugin_root, "custom_bootstrap.py autodetect", {}, "/path/c.yaml"
+        )
+        assert changed is False
+        assert actions == []
+        assert len(ok) == 1 and "unchanged" in ok[0]
 
-    def test_invalid_spec_returns_none(self, tmp_path):
-        """Invalid spec (no function name) returns None."""
-        plugin_root = str(tmp_path / "plugin")
-        os.makedirs(plugin_root)
-        result = run_project_autodetect(plugin_root, "just-a-script.py")
-        assert result is None
 
-    def test_missing_script_returns_none(self, tmp_path):
-        """Missing script returns None."""
-        plugin_root = str(tmp_path / "plugin")
-        os.makedirs(plugin_root)
-        result = run_project_autodetect(plugin_root, "nonexistent.py discover")
-        assert result is None
+class TestMalformedConfigEngineHandling:
+    def test_process_config_preserves_malformed_file_and_logs_error(self, tmp_path):
+        plugin_root = tmp_path / "plugin"
+        plugin_root.mkdir()
+        data_dir = tmp_path / "data"
+        data_dir.mkdir()
+        config_path = data_dir / "config.yaml"
+        original = b"key: [unterminated\n"
+        config_path.write_bytes(original)
 
-    def test_non_dict_return_is_none(self, tmp_path):
-        """Non-dict return (e.g. bool) is treated as None."""
-        plugin_root = str(tmp_path / "plugin")
-        os.makedirs(plugin_root)
+        action_entries = []
+        ok_entries = []
+        failures = _process_config(
+            {
+                "file": "config.yaml",
+                "required_fields": {"key": {"default": "replacement"}},
+            },
+            str(data_dir),
+            str(plugin_root),
+            action_entries,
+            ok_entries=ok_entries,
+            plugin_name="test",
+        )
 
-        _write_autodetect_script(plugin_root, body="""\
-def discover():
-    return True
-""")
-        result = run_project_autodetect(plugin_root, "custom_bootstrap.py discover")
-        assert result is None
+        assert failures == []
+        assert config_path.read_bytes() == original
+        assert len(action_entries) == 1
+        assert str(config_path) in action_entries[0]
+        assert "malformed YAML" in action_entries[0]
+        assert ok_entries == []
+
+    def test_process_project_config_preserves_malformed_file_and_logs_error(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.chdir(tmp_path)
+        plugin_root = tmp_path / "plugin"
+        plugin_root.mkdir()
+        data_dir = tmp_path / "data"
+        data_dir.mkdir()
+        config_path = tmp_path / "config.yaml"
+        original = b"key: [unterminated\n"
+        config_path.write_bytes(original)
+
+        action_entries = []
+        ok_entries = []
+        result = _process_project_config(
+            {
+                "file": "config.yaml",
+                "required_fields": {"key": {"default": "replacement"}},
+            },
+            str(data_dir),
+            str(plugin_root),
+            action_entries,
+            ok_entries=ok_entries,
+            plugin_name="test",
+        )
+
+        assert result is False
+        assert config_path.read_bytes() == original
+        assert len(action_entries) == 1
+        assert str(config_path) in action_entries[0]
+        assert "malformed YAML" in action_entries[0]
+        assert ok_entries == []
 
 
 class TestAutodetectErrorSurfacing:

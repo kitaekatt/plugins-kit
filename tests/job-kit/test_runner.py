@@ -161,7 +161,12 @@ def _advertisement() -> dict[str, Capabilities]:
 
 
 def _deny_advertisement() -> dict[str, Capabilities]:
-    """Return fake capabilities that can emit the deny-floor control."""
+    """Return fake capabilities that can honour a deny floor.
+
+    A floor is selected on the SUBJECTS it names, not on a control id, so a
+    fake adapter claiming to honour one has to enumerate them -- the same way
+    every real adapter does.
+    """
     return {
         "fake": Capabilities(
             adapter="fake",
@@ -170,6 +175,7 @@ def _deny_advertisement() -> dict[str, Capabilities]:
                     id="disallowed-tools",
                     emits="fake deny control",
                     effect="deny",
+                    subjects=("filesystem-write", "shell-exec", "subagent-spawn"),
                     source="request",
                     parameter="disallowed_tools",
                 ),

@@ -43,6 +43,15 @@ class TestCheckIniSetting:
         result = check_ini_setting(str(ini), "[Second]", "key", "right")
         assert result.passed is True
 
+    def test_utf16_file_returns_failed_result(self, tmp_path):
+        ini = tmp_path / "test.ini"
+        ini.write_bytes("[Section]\nkey=value\n".encode("utf-16"))
+
+        result = check_ini_setting(str(ini), "[Section]", "key", "value")
+
+        assert result.passed is False
+        assert result.file == str(ini)
+
 
 class TestWriteIniSetting:
     def test_create_file_and_section(self, tmp_path):

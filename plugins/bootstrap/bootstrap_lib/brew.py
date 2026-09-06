@@ -29,6 +29,8 @@ import subprocess
 import sys
 from typing import NamedTuple, Optional, Tuple
 
+from .subprocess_run import run_captured
+
 
 class BrewResult(NamedTuple):
     ok: bool
@@ -49,11 +51,6 @@ def _brew_bin() -> Optional[str]:
         if os.path.isfile(candidate):
             return candidate
     return None
-
-
-def brew_available() -> bool:
-    """True if Homebrew is already installed and runnable."""
-    return _brew_bin() is not None
 
 
 def ensure_brew() -> BrewResult:
@@ -79,11 +76,11 @@ def ensure_brew() -> BrewResult:
 def _run_brew(brew_bin: str, args, timeout: int = 600) -> Tuple[bool, str]:
     """Invoke ``brew <args>`` non-interactively. Returns (ok, combined_output)."""
     try:
-        result = subprocess.run(
-            [brew_bin] + list(args),
-            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout,
+        returncode, stdout, stderr = run_captured(
+            [brew_bin] + list(args), timeout=timeout, stdin_devnull=True,
         )
-        return result.returncode == 0, (result.stdout + result.stderr).strip()
+        output = stdout if returncode == 0 else stdout + stderr
+        return returncode == 0, output.strip()
     except subprocess.TimeoutExpired:
         return False, f"timed out after {timeout}s"
     except Exception as e:  # pragma: no cover - defensive

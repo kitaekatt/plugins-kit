@@ -2,8 +2,10 @@
 
 import os
 import re
+import builtins
 from datetime import datetime, timedelta, timezone
 
+from bootstrap_lib import log as log_module
 from bootstrap_lib.log import LOG_FILENAME, MAX_LOG_LINES, write_log_block
 
 
@@ -104,6 +106,25 @@ class TestWriteLogBlock:
         write_log_block(data_dir, "Engine", ["entry"])
 
         assert "could not write" in capsys.readouterr().err
+
+    def test_trim_oserror_degrades_to_stderr(self, data_dir, monkeypatch, capsys):
+        log_path = os.path.join(data_dir, LOG_FILENAME)
+        with builtins.open(log_path, "w", encoding="utf-8") as f:
+            f.writelines(["--- Engine 2025-01-01T00:00:00Z ---\n"]
+                         + ["old\n"] * MAX_LOG_LINES)
+
+        real_open = builtins.open
+
+        def _open(path, mode="r", *args, **kwargs):
+            if mode == "w":
+                raise OSError("disk full")
+            return real_open(path, mode, *args, **kwargs)
+
+        monkeypatch.setattr(log_module, "open", _open, raising=False)
+
+        write_log_block(data_dir, "Engine", ["entry"])
+
+        assert "could not trim" in capsys.readouterr().err
 
 
 class TestTrimBlockBoundary:

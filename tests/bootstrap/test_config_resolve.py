@@ -1,9 +1,12 @@
 """Unit tests for bootstrap_lib.config_resolve (runtime layered config)."""
 
+import copy
 import sys
+from pathlib import PureWindowsPath
 
 import pytest
 
+from bootstrap_lib import config_resolve
 from bootstrap_lib.config_resolve import (
     ConfigError,
     default_data_root,
@@ -48,6 +51,13 @@ class TestLoadConfigLayer:
             load_config_layer(p)
         assert "malformed YAML" in str(exc.value)
         assert str(p) in str(exc.value)
+
+    def test_invalid_utf8_raises_config_error(self, tmp_path):
+        p = tmp_path / "c.yaml"
+        p.write_bytes(b"key: \xff\n")
+
+        with pytest.raises(ConfigError, match="malformed YAML"):
+            load_config_layer(p)
 
     def test_top_level_list_raises(self, tmp_path):
         p = _write(tmp_path / "c.yaml", "- a\n- b\n")
@@ -128,13 +138,24 @@ class TestResolveConfig:
         merged = resolve_config([shipped, tmp_path / "missing.yaml", project])
         assert merged["default"] == "c"
 
-    def test_inputs_not_mutated(self, tmp_path):
-        low = _write(tmp_path / "low.yaml", "models: {a: {slug: x}}\n")
-        high = _write(tmp_path / "high.yaml", "models: {b: {slug: y}}\n")
-        first = resolve_config([low, high])
-        second = resolve_config([low, high])
-        assert first == second
-        assert set(first["models"]) == {"a", "b"}
+    def test_inputs_not_mutated(self, tmp_path, monkeypatch):
+        low = tmp_path / "low.yaml"
+        high = tmp_path / "high.yaml"
+        retained = {
+            low: {"models": {"a": {"slug": "x"}}},
+            high: {"models": {"b": {"slug": "y"}}},
+        }
+
+        def _retained_layer(path):
+            return retained[path]
+
+        monkeypatch.setattr(config_resolve, "load_config_layer", _retained_layer)
+        before = copy.deepcopy(retained)
+
+        merged = resolve_config([low, high])
+
+        assert retained == before
+        assert set(merged["models"]) == {"a", "b"}
 
     def test_malformed_layer_propagates(self, tmp_path):
         good = _write(tmp_path / "good.yaml", "default: a\n")
@@ -224,6 +245,29 @@ class TestResolvePluginDataDir:
                 marketplace="plugins-kit",
                 plugin="demo-kit",
                 config={"plugin_data_dir": str((tmp_path / "absolute").resolve())},
+            )
+
+    def test_parent_escape_is_rejected(self, tmp_path):
+        with pytest.raises(ConfigError, match="outside project root"):
+            resolve_plugin_data_dir(
+                tmp_path,
+                marketplace="plugins-kit",
+                plugin="demo-kit",
+                config={"plugin_data_dir": "../shared"},
+            )
+
+    @pytest.mark.parametrize("override", ["C:tmp", r"\tmp", r"C:\tmp"])
+    def test_windows_rooted_and_drive_relative_shapes_are_rejected(
+        self, tmp_path, override
+    ):
+        assert PureWindowsPath(override).drive or PureWindowsPath(override).root
+
+        with pytest.raises(ConfigError):
+            resolve_plugin_data_dir(
+                tmp_path,
+                marketplace="plugins-kit",
+                plugin="demo-kit",
+                config={"plugin_data_dir": override},
             )
 
     def test_non_string_override_is_rejected(self, tmp_path):

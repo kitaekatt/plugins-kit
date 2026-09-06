@@ -1,4 +1,4 @@
-"""Tests for find_transcript — specifically the resume session bug.
+"""Tests for find_transcript - specifically the resume session bug.
 
 When Claude Code resumes a session, it creates a new transcript containing
 only `file-history-snapshot` entries (no assistant usage data). The script

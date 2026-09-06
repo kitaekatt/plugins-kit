@@ -42,6 +42,23 @@ class TestEnsureBrew:
 
 
 class TestBrewInstall:
+    def test_run_brew_closes_stdin_and_bounds_timeout(self, monkeypatch):
+        seen = {}
+
+        def fake_run(argv, **kwargs):
+            seen["argv"] = argv
+            seen.update(kwargs)
+            return 0, "stdout", "stderr"
+
+        monkeypatch.setattr(brew, "run_captured", fake_run, raising=False)
+
+        ok, output = brew._run_brew("/x/brew", ["info"], timeout=37)
+
+        assert ok is True
+        assert output == "stdout"
+        assert seen["stdin_devnull"] is True
+        assert seen["timeout"] == 37
+
     def test_non_macos_is_noop_failure(self):
         with patch.object(brew.sys, "platform", "linux"):
             r = brew.brew_install(formula="direnv")

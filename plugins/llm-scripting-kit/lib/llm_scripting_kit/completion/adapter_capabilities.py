@@ -15,6 +15,9 @@ from __future__ import annotations
 from dataclasses import fields
 
 from .capabilities import (
+    FILESYSTEM_WRITE,
+    SHELL_EXEC,
+    SUBAGENT_SPAWN,
     ALLOW,
     APPEND,
     BYPASS,
@@ -103,6 +106,10 @@ OPENROUTER_CAPABILITIES = Capabilities(
     params=_OPENROUTER_PARAMS,
     dropped_params=_dropped(_OPENROUTER_PARAMS),
     execution_controls=(),
+    # A transport adapter exposes no tools, so there is no filesystem write to
+    # deny and nothing that could turn one back on. The strongest form of the
+    # guarantee and the cheapest: no flag, no sandbox, no checkout.
+    guarantees=(FILESYSTEM_WRITE, SHELL_EXEC, SUBAGENT_SPAWN),
     structured_output=StructuredOutputCapability(
         mode=PASSTHROUGH,
         request_param="extras.response_format",
@@ -209,6 +216,7 @@ CLAUDE_CAPABILITIES = Capabilities(
             id="disallowed-tools",
             emits="--disallowedTools",
             effect=DENY,
+            subjects=(FILESYSTEM_WRITE, SHELL_EXEC, SUBAGENT_SPAWN),
             source=REQUEST,
             parameter="disallowed_tools",
             note=(
@@ -218,7 +226,10 @@ CLAUDE_CAPABILITIES = Capabilities(
                 "control. The record claims the EMISSION only: nothing here "
                 "establishes that the CLI honors the deny, and the subjects are "
                 "caller-supplied rather than a native identifier list, so none "
-                "are enumerated"
+                "are enumerated. FILESYSTEM_WRITE is carried as a CANONICAL "
+                "subject rather than a native one: it names the outcome a "
+                "caller can require, and the caller arms it by passing the "
+                "deny list"
             ),
         ),
         ExecutionControl(
@@ -324,12 +335,16 @@ CODEX_CAPABILITIES = Capabilities(
             id="sandbox-mode",
             emits="-s <value>",
             effect=CONFINE,
+            subjects=(FILESYSTEM_WRITE,),
             source=REQUEST,
             parameter="extras.sandbox",
             note=(
                 "always emitted, defaulting to workspace-write. The value is "
                 "forwarded as given -- the adapter validates no mode menu, so "
-                "modes beyond workspace-write and read-only reach the CLI"
+                "modes beyond workspace-write and read-only reach the CLI. "
+                "It carries FILESYSTEM_WRITE because read-only confines it -- "
+                "but the DEFAULT does not, so a caller requiring that subject "
+                "must pass extras.sandbox=read-only to arm it"
             ),
         ),
         ExecutionControl(
@@ -388,7 +403,10 @@ CODEX_CAPABILITIES = Capabilities(
 #
 # OpencodeCliBackend injects policy as SCALAR settings under opencode's
 # permission namespace via OPENCODE_CONFIG_CONTENT -- not deny lists. The
-# subjects below are the exact native key paths written.
+# subjects below are the exact native key paths written, except the canonical
+# FILESYSTEM_WRITE carried by the caller-armed deny control: opencode has no
+# deny list, so a neutral disallowed_tools value is TRANSLATED into the
+# permission scalars that express it.
 
 _OPENCODE_PARAMS = {
     "timeout_s": ParamCapability(
@@ -398,6 +416,16 @@ _OPENCODE_PARAMS = {
         type="absolute-path",
         emits="--dir",
         note="also the process cwd; --dir is NOT a filesystem-confinement boundary",
+    ),
+    "disallowed_tools": ParamCapability(
+        type="string",
+        emits="OPENCODE_CONFIG_CONTENT permission.{edit,bash,task}=deny",
+        note=(
+            "read as a NEUTRAL tool-deny vocabulary and translated into "
+            "opencode's permission scalars, which have no deny-list form. The "
+            "edit scalar gates write, edit and patch together; unrecognized "
+            "names are ignored rather than guessed at"
+        ),
     ),
     "effort": ParamCapability(
         type="string",
@@ -414,6 +442,44 @@ OPENCODE_CAPABILITIES = Capabilities(
     params=_OPENCODE_PARAMS,
     dropped_params=_dropped(_OPENCODE_PARAMS),
     execution_controls=(
+        ExecutionControl(
+            id="permission-bash-deny",
+            emits="OPENCODE_CONFIG_CONTENT permission.bash=deny",
+            effect=DENY,
+            subjects=(SHELL_EXEC,),
+            source=REQUEST,
+            parameter="disallowed_tools",
+            note="armed by a deny list naming a shell tool",
+        ),
+        ExecutionControl(
+            id="permission-task-request-deny",
+            emits="OPENCODE_CONFIG_CONTENT permission.task=deny",
+            effect=DENY,
+            subjects=(SUBAGENT_SPAWN,),
+            source=REQUEST,
+            parameter="disallowed_tools",
+            note=(
+                "the fixed permission-task-deny below already denies task on "
+                "every call; this records the same scalar as ALSO reachable "
+                "through a caller's deny list"
+            ),
+        ),
+        ExecutionControl(
+            id="permission-edit-deny",
+            emits="OPENCODE_CONFIG_CONTENT permission.edit=deny",
+            effect=DENY,
+            subjects=(FILESYSTEM_WRITE,),
+            source=REQUEST,
+            parameter="disallowed_tools",
+            note=(
+                "armed by a caller-supplied deny list naming any write tool. "
+                "Verified 2026-09-05 on opencode 1.18.25 with a two-arm check: "
+                "denied, the agent reports read-only tools and writes nothing; "
+                "undenied, the same prompt and model create the file. So the "
+                "deny survives --auto, which approves only what is not already "
+                "denied"
+            ),
+        ),
         ExecutionControl(
             id="permission-external-directory-deny",
             emits="OPENCODE_CONFIG_CONTENT permission.external_directory=deny",

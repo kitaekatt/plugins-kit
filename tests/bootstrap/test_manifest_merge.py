@@ -84,6 +84,16 @@ class TestToolsUnion:
         # install is a dict replaced by override (not deep-merged at array-entry level)
         assert result["tools"][0]["install"] == {"linux": "new", "darwin": "brew"}
 
+    def test_identityless_entries_remain_distinct(self):
+        base = {"tools": [{"install": "a"}, {"install": "b"}]}
+        override = {"tools": [{"name": "jq"}]}
+
+        result = merge_manifests(base, override)
+
+        assert result["tools"] == [
+            {"install": "a"}, {"install": "b"}, {"name": "jq"},
+        ]
+
 
 class TestPathEntriesUnion:
     def test_disjoint_paths(self):
@@ -120,6 +130,26 @@ class TestDeepMergeObjects:
         assert result["config"]["defaults_source"] == "defaults/config.yaml"
         assert "key" in result["config"]["required_fields"]
 
+    def test_nested_null_does_not_remove_lower_layer_value(self):
+        base = {
+            "tools": [{
+                "name": "jq",
+                "install": {"windows": "winget install jq"},
+            }],
+        }
+        override = {
+            "tools": [{
+                "name": "jq",
+                "install": {"windows": None},
+            }],
+        }
+
+        result = merge_manifests(base, override)
+
+        assert result["tools"][0]["install"] == {
+            "windows": "winget install jq",
+        }
+
 
 class TestIniSettingsUnion:
     def test_disjoint_ini(self):
@@ -143,6 +173,29 @@ class TestIniSettingsUnion:
         override = {"ini_settings": [{"file": "a.ini", "section": "S", "settings": {"k1": "new"}}]}
         result = merge_manifests(base, override)
         assert result["ini_settings"][0]["settings"] == {"k1": "new"}
+
+
+class TestJsonEntriesUnion:
+    def test_merge_by_reference_and_target_pair(self):
+        base = {
+            "json_entries": [
+                {"reference": "a.json", "target": "x.json", "merge_fields": ["a"]},
+            ],
+        }
+        override = {
+            "json_entries": [
+                {"reference": "b.json", "target": "y.json", "merge_fields": ["b"]},
+                {"reference": "a.json", "target": "x.json", "preserve_fields": ["keep"]},
+            ],
+        }
+
+        result = merge_manifests(base, override)
+
+        assert result["json_entries"] == [
+            {"reference": "a.json", "target": "x.json", "merge_fields": ["a"],
+             "preserve_fields": ["keep"]},
+            {"reference": "b.json", "target": "y.json", "merge_fields": ["b"]},
+        ]
 
 
 class TestPypiPackagesUnion:

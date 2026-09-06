@@ -187,6 +187,19 @@ class TestLayeredLoading:
         assert errors[0]["path"] == str(bad)
         assert "JSON parse error" in errors[0]["error"]
 
+    def test_non_mapping_layer_is_a_persistent_failure(
+        self, isolated_home, run_env_pass
+    ):
+        _write_json(isolated_home / ".claude" / "env.json", 42)
+
+        result = run_env_pass()
+
+        assert len(result.failures) == 1
+        failure = result.failures[0]
+        assert failure["type"] == "manifest_parse"
+        assert failure["persist_across_sessions"] is True
+        assert "mapping" in failure["message"] or "object" in failure["message"]
+
 
 class TestEnvMerge:
     """merge_env_manifests: env.json's identity keys."""
@@ -228,6 +241,14 @@ class TestEnvMerge:
         assert merged["machines"]["h"] == {
             "os": "ubuntu", "skip_repos": ["a"], "kitty_shortcuts": "cmd+2",
         }
+
+    def test_nested_null_does_not_remove_machine_value(self):
+        base = {"machines": {"h": {"os": "ubuntu"}}}
+        override = {"machines": {"h": {"os": None}}}
+
+        merged = merge_env_manifests(base, override)
+
+        assert merged["machines"]["h"]["os"] == "ubuntu"
 
 
 class TestMachineResolution:
@@ -415,6 +436,26 @@ class TestMachinesValidation:
         assert len(errors) == 1
         assert f"'{filt}' filter must be a list" in errors[0]
         assert "symlinks entry 's'" in errors[0]
+
+    def test_unhashable_host_filter_value_is_a_persistent_failure(
+        self, isolated_home, run_env_pass
+    ):
+        _write_json(isolated_home / ".claude" / "env.json", {
+            "machines": {"testhost": {"os": "ubuntu"}},
+            "env_checks": [
+                {"name": "bad-filter", "check": "true", "hosts": [{}]},
+            ],
+        })
+
+        result = run_env_pass()
+
+        assert len(result.failures) == 1
+        failure = result.failures[0]
+        assert failure["type"] == "env_manifest"
+        assert failure["name"] == "entry_filter"
+        assert failure["persist_across_sessions"] is True
+        assert "hosts" in failure["message"]
+        assert "dict" in failure["message"]
 
     def test_scalar_filter_fails_the_env_pass(
         self, isolated_home, run_env_pass

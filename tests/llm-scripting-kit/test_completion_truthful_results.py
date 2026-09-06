@@ -301,11 +301,14 @@ def test_claude_reports_the_system_prompt_mode_it_actually_emitted():
 @pytest.mark.parametrize("param", ["disallowed_tools", "system_prompt_mode"])
 def test_the_other_adapters_report_the_claude_only_params_as_dropped(param):
     """A field added to BackendOptions is dropped-by-default everywhere else."""
-    for caps in (
-        OPENROUTER_CAPABILITIES,
-        CODEX_CAPABILITIES,
-        OPENCODE_CAPABILITIES,
-    ):
+    # opencode-cli deliberately READS disallowed_tools: it is the neutral
+    # tool-deny vocabulary, and opencode translates it into its permission
+    # scalars so a deny floor can be honoured there too. Every other adapter
+    # still drops it, which is what this test protects.
+    others = [OPENROUTER_CAPABILITIES, CODEX_CAPABILITIES]
+    if param != "disallowed_tools":
+        others.append(OPENCODE_CAPABILITIES)
+    for caps in others:
         assert param in caps.dropped_params, caps.adapter
     assert param not in CLAUDE_CAPABILITIES.dropped_params
 

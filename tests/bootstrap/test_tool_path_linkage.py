@@ -55,6 +55,33 @@ class TestLinkToolDirToPath:
         assert calls == []
         assert actions == []
 
+    def test_persistence_failure_is_a_failed_action(self, monkeypatch):
+        monkeypatch.setattr(path_check, "add_path_to_shell_config",
+                            lambda d: (False, "failed to write .bashrc"))
+        actions = []
+        result = _tool_result("draw.io", True, "found",
+                              path="/opt/draw.io/draw.io", on_path=False)
+
+        monkeypatch.setenv("PATH", "/usr/bin")
+        engine._link_tool_dir_to_path(result, "", actions)
+
+        assert any("FAILED" in action for action in actions)
+        assert not any(" on PATH - added" in action for action in actions)
+        # Persistence failed, but the live process PATH is independent of it:
+        # later phases this run must still find the tool.
+        assert "/opt/draw.io" in os.environ["PATH"].split(os.pathsep)
+
+    def test_path_entry_persistence_failure_is_a_failed_action(self, monkeypatch):
+        monkeypatch.setattr(path_check, "add_path_to_shell_config",
+                            lambda d: (False, "failed to write .bashrc"))
+        monkeypatch.setenv("PATH", "/usr/bin")
+        actions, ok_entries = [], []
+
+        engine._process_path_entries(["/opt/missing"], "", actions, ok_entries)
+
+        assert any("FAILED" in action for action in actions)
+        assert not any("PATH added" in action for action in actions)
+
 
 class TestProcessToolEntry:
     @staticmethod

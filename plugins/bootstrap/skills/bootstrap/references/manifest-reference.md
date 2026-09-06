@@ -403,7 +403,8 @@ install commands in any later phase (e.g. a tool `install` invoking
    reach as the `<PLUGIN>_VENV` export — subsequent Bash tool invocations
    in the session see it).
 2. **Persistence** (skipped when already in the wanted state, which logs an
-   ok entry): on macOS the `export NAME="value"` line is written/updated
+   ok entry): on macOS the `export NAME='value'` line (the value shell-quoted,
+   so `$`, quotes and spaces round-trip literally) is written/updated
    **in place** in `~/.zshrc` and `~/.bashrc` (Ubuntu: `~/.bashrc`) — a
    value change replaces the existing line rather than appending a stale
    duplicate. On Windows the variable is written to the User-scope registry
@@ -1031,7 +1032,7 @@ This table is the exact set of identity-keyed sections in
 | `marketplaces` | `name` |
 | `plugins` | `ref` |
 | `fonts` | `name` |
-| `json_entries` | `file` |
+| `json_entries` | `reference` + `target` (composite) |
 | `ini_settings` | `file` + `section` (composite) |
 | `pypi_packages` | `package` |
 | `shared_libs` | `name` |

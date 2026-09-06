@@ -157,12 +157,22 @@ def _read_package_json(project_dir: str) -> dict:
     used for advisory guards, and a malformed package.json is npm's error to
     report, with npm's wording, not a place for this module to invent one.
     """
+    data, _error = _read_package_json_with_error(project_dir)
+    return data
+
+
+def _read_package_json_with_error(project_dir: str) -> tuple[dict, Optional[str]]:
+    """Return package metadata and a parse error, if the file is malformed."""
     try:
         with open(os.path.join(project_dir, "package.json"), encoding="utf-8") as f:
             data = json.load(f)
-    except (OSError, ValueError):
-        return {}
-    return data if isinstance(data, dict) else {}
+    except FileNotFoundError:
+        return {}, None
+    except (OSError, ValueError) as exc:
+        return {}, str(exc)
+    if not isinstance(data, dict):
+        return {}, "top-level value must be an object"
+    return data, None
 
 
 def _declares_dependencies(project_dir: str) -> bool:
@@ -194,7 +204,15 @@ def check_node_modules(project_dir: str) -> Result:
     lockfile = find_npm_lockfile(project_dir)
 
     if not os.path.isfile(hidden):
-        if not _declares_dependencies(project_dir):
+        package_json, parse_error = _read_package_json_with_error(project_dir)
+        if parse_error:
+            return _npm_result(
+                passed=False,
+                message=f"package.json parse error: {parse_error}",
+                node_modules=node_modules,
+                remediation_cmd="npm ci" if lockfile else "npm install",
+            )
+        if not any(package_json.get(field) for field in _DEP_FIELDS):
             return _npm_result(
                 passed=True,
                 message="no dependencies declared, nothing to install",

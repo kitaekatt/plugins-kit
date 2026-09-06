@@ -1,10 +1,7 @@
 [project]
 name = "cache-kit"
-version = "0.5.8"
+version = "0.5.9"
 requires-python = ">=3.11"
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0"]
-
-[tool.pytest.ini_options]
-testpaths = ["tests"]

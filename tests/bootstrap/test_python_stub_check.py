@@ -150,6 +150,19 @@ class TestFindFirstPythonInDirs:
         result = _find_first_python_in_dirs([str(d)])
         assert result == str(d / "python.exe")
 
+    def test_searches_for_python_exe_across_all_dirs_before_python3(self, tmp_path):
+        """python3.exe in an earlier dir must not hide python.exe later."""
+        first = tmp_path / "first"
+        second = tmp_path / "second"
+        first.mkdir()
+        second.mkdir()
+        (first / "python3.exe").write_text("")
+        (second / "python.exe").write_text("")
+
+        result = _find_first_python_in_dirs([str(first), str(second)])
+
+        assert result == str(second / "python.exe")
+
 
 class TestWriteFixScript:
     def test_writes_bat_file(self, tmp_path):

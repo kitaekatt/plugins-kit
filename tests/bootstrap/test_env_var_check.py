@@ -3,8 +3,8 @@
 import json
 import os
 import shlex
+import subprocess
 import sys
-import types
 from pathlib import Path
 from unittest.mock import patch
 
@@ -18,6 +18,7 @@ from bootstrap_lib.env_var_check import (
     plugin_root_env_var_name,
     set_env_var,
 )
+from test_support.fake_winreg import FakeWinreg
 
 
 @pytest.fixture
@@ -34,7 +35,7 @@ class TestUnixRcUpdate:
         assert ok is True
         assert "created .bashrc" in msg
         content = (isolated_home / ".bashrc").read_text()
-        assert 'export DEVROOT="/home/u/Dev"' in content
+        assert export_line("DEVROOT", "/home/u/Dev") in content
         assert "# Added by bootstrap" in content
 
     def test_appends_when_line_missing(self, isolated_home):
@@ -48,13 +49,13 @@ class TestUnixRcUpdate:
         content = rc.read_text()
         # Pre-existing content intact, export appended
         assert content.startswith("# my shell config\nalias ll='ls -l'\n")
-        assert 'export DEVROOT="/home/u/Dev"' in content
+        assert export_line("DEVROOT", "/home/u/Dev") in content
 
     def test_updates_stale_line_in_place(self, isolated_home):
         rc = isolated_home / ".bashrc"
         rc.write_text(
             "# my shell config\n"
-            'export DEVROOT="/old/path"\n'
+            "export DEVROOT=/old/path\n"
             "alias ll='ls -l'\n"
         )
 
@@ -66,7 +67,7 @@ class TestUnixRcUpdate:
         # Replaced at the same position -- no stale second line appended
         assert lines == [
             "# my shell config",
-            'export DEVROOT="/home/u/Dev"',
+            export_line("DEVROOT", "/home/u/Dev"),
             "alias ll='ls -l'",
         ]
 
@@ -87,7 +88,7 @@ class TestUnixRcUpdate:
         assert ok is True
         for rc_name in (".zshrc", ".bashrc"):
             content = (isolated_home / rc_name).read_text()
-            assert 'export DEVROOT="/Users/u/Dev"' in content
+            assert export_line("DEVROOT", "/Users/u/Dev") in content
 
     def test_check_fails_before_set_passes_after(self, isolated_home):
         assert check_env_var("DEVROOT", "/home/u/Dev", "ubuntu").passed is False
@@ -109,44 +110,9 @@ class TestUnixRcUpdate:
         assert ".bashrc" in result.message
 
 
-class _FakeWinreg(types.ModuleType):
-    """Minimal in-memory HKCU\\Environment stand-in (name -> value)."""
-
-    HKEY_CURRENT_USER = object()
-    KEY_READ = 1
-    KEY_WRITE = 2
-    REG_SZ = 1
-
-    def __init__(self):
-        super().__init__("winreg")
-        self.store = {}
-        self.writes = []
-
-    class _Key:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *exc):
-            return False
-
-    def OpenKey(self, root, subkey, reserved, access):
-        assert subkey == "Environment"
-        return self._Key()
-
-    def QueryValueEx(self, key, name):
-        if name not in self.store:
-            raise FileNotFoundError(name)
-        return self.store[name], self.REG_SZ
-
-    def SetValueEx(self, key, name, reserved, value_type, value):
-        assert value_type == self.REG_SZ
-        self.store[name] = value
-        self.writes.append((name, value))
-
-
 @pytest.fixture
 def fake_winreg(monkeypatch):
-    fake = _FakeWinreg()
+    fake = FakeWinreg()
     monkeypatch.setitem(sys.modules, "winreg", fake)
     monkeypatch.delenv("BOOTSTRAP_SKIP_REGISTRY", raising=False)
     return fake
@@ -213,6 +179,20 @@ class TestExportEnvVar:
         with patch.dict(os.environ):
             export_env_var("BOOTSTRAP_TEST_EV", "/some dir/x")
         assert "export BOOTSTRAP_TEST_EV='/some dir/x'\n" in env_file.read_text()
+
+    def test_shell_quoted_rc_value_round_trips(self, isolated_home):
+        value = 'a$b"c'
+
+        ok, _message = set_env_var("BOOTSTRAP_TEST_EV", value, "ubuntu")
+        assert ok is True
+        result = subprocess.run(
+            ["bash", "-c", 'source "$1"; printf %s "$BOOTSTRAP_TEST_EV"',
+             "bash", str(isolated_home / ".bashrc")],
+            capture_output=True, text=True, check=False,
+        )
+
+        assert result.returncode == 0
+        assert result.stdout == value
 
 
 class TestPluginRootEnvVarName:
@@ -362,6 +342,18 @@ class TestEnvVarsPhase:
         assert "needs string 'name' and 'value'" in failures[0]["message"]
         assert any("INVALID" in e for e in action_entries)
 
+    def test_invalid_name_records_failure(self, isolated_home, tmp_path, monkeypatch):
+        monkeypatch.delenv("CLAUDE_ENV_FILE", raising=False)
+        manifest = {"env_vars": [{"name": "BAD=NAME", "value": "value"}]}
+
+        with patch.dict(os.environ):
+            failures, action_entries, _ok = self._run(manifest, tmp_path)
+
+        assert len(failures) == 1
+        assert failures[0]["type"] == "env_var"
+        assert "shell identifier" in failures[0]["message"]
+        assert any("FAILED" in e for e in action_entries)
+
     def test_unnamed_invalid_entry_uses_placeholder(
         self, isolated_home, tmp_path, monkeypatch
     ):
@@ -419,3 +411,20 @@ class TestEnvVarsLayerMerge:
         merged = merge_manifests(base, override)
 
         assert [e["name"] for e in merged["env_vars"]] == ["DEVROOT", "OTHER"]
+
+
+def test_fake_winreg_delete_value_is_observable_through_query():
+    """The fake's two state containers must agree, or a delete-then-query test
+    could pass against a value that was supposedly removed."""
+    from test_support.fake_winreg import FakeWinreg
+
+    reg = FakeWinreg()
+    key = reg.OpenKey(reg.HKEY_CURRENT_USER, "Environment")
+    reg.SetValueEx(key, "X", 0, reg.REG_SZ, "1")
+    reg.DeleteValue(key, "X")
+    try:
+        reg.QueryValueEx(key, "X")
+    except FileNotFoundError:
+        pass
+    else:
+        raise AssertionError("deleted value still readable")
