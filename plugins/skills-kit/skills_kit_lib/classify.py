@@ -22,12 +22,11 @@ import re
 import sys
 from pathlib import Path
 
+from .audit import THRESHOLDS
 from .document_walker import HAVE_YAML, iter_yaml_blocks, safe_load_block
-from .markdown_heuristics import parse_body, parse_frontmatter, type_signals
+from .markdown_heuristics import high_scoring_types, parse_body, parse_frontmatter, type_signals
 from .schema_registry import SKILL_TYPE_ROOTS
 
-
-MIXED_THRESHOLD = 2
 
 # Contract-root -> dashed type name, derived from the registry's skill-type
 # roots (single source of truth; do not restate the type list here).
@@ -54,11 +53,18 @@ def extract_yaml_roots(body_text: str) -> list[str]:
     return roots
 
 
-def classify(skill_md_path: Path) -> dict:
+def classify(skill_md_path: Path, mixed_threshold: int | None = None) -> dict:
+    """Classify a SKILL.md. `mixed_threshold` is the per-type high-score gate
+    for the heuristic-fallback path (defaults to
+    audit.THRESHOLDS["mixed_min_score"]) -- the SAME resolved threshold
+    audit.py's legacy mixed-type signal consumes (I5), so tuning
+    mixed_min_score reaches both consumers identically."""
     if not skill_md_path.exists():
         return {"error": f"file not found: {skill_md_path}"}
     content = skill_md_path.read_text(encoding="utf-8")
-    fm = parse_frontmatter(content)
+    # mode="full" resolves folded/multi-line description blocks and quoted
+    # values correctly (I1); fall back to light (regex) mode without pyyaml.
+    fm = parse_frontmatter(content, mode="full" if HAVE_YAML else "light")
     body = parse_body(content)
 
     declared = fm.fields.get("skill-type") if fm else None
@@ -113,18 +119,19 @@ def classify(skill_md_path: Path) -> dict:
 
     # No YAML contract block; fall back to heuristic scoring.
     scores = type_signals(body.text, fm)
+    th = mixed_threshold if mixed_threshold is not None else THRESHOLDS["mixed_min_score"]
 
     sorted_types = sorted(scores.items(), key=lambda kv: kv[1], reverse=True)
     top_type, top_score = sorted_types[0]
     runner_up_score = sorted_types[1][1] if len(sorted_types) > 1 else 0
 
-    high_scoring = [t for t, s in sorted_types if s >= MIXED_THRESHOLD]
+    high_scoring = high_scoring_types(scores, th)
     suggestion = top_type if top_score > 0 else None
 
     if len(high_scoring) >= 2:
         verdict = "mixed-type"
         reason = (
-            f"multiple types score >= {MIXED_THRESHOLD}: "
+            f"multiple types score >= {th}: "
             + ", ".join(f"{t}={scores[t]}" for t in high_scoring)
         )
     elif top_score == 0:

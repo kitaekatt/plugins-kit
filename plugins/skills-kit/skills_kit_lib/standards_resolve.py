@@ -43,6 +43,13 @@ except ImportError:  # pragma: no cover - exercised only on a bare interpreter
     HAVE_YAML = False
 
 
+#: The four file-type primitives a standards_set's `applies_to:` may name
+#: (schemas/standards.py's owner-doc note; configuring-standards.md's
+#: "Additive standards files" table). Defined once here, next to the
+#: schema's note, so both stay in sync.
+APPLIES_TO_PRIMITIVES = ("skill_md", "claude_md", "reference_doc", "plain_md")
+
+
 class StandardsConfigError(Exception):
     """A resolved standards layer is malformed or names something un-tunable.
 
@@ -279,9 +286,15 @@ def _parse_standards_file(path: Path) -> StandardsFile:
             f"{path}: standards_set block failed schema validation -- {detail}"
         )
     inner = block["standards_set"]
+    applies_to = inner["applies_to"]
+    if applies_to not in APPLIES_TO_PRIMITIVES:
+        raise StandardsConfigError(
+            f"{path}: applies_to '{applies_to}' is not one of the four "
+            f"file-type primitives; valid values: {list(APPLIES_TO_PRIMITIVES)}"
+        )
     return StandardsFile(
         path=path,
-        applies_to=inner["applies_to"],
+        applies_to=applies_to,
         criteria=inner.get("criteria", []),
     )
 

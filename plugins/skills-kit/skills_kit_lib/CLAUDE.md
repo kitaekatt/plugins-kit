@@ -2,7 +2,7 @@
 
 Per-directory insight repository for the plugin-level Python library that powers audit / classify / tag / schema-validation across the skills-kit ecosystem. Insights accumulate from the work that touches this library -- the YAML contract refactor (Phase Y1-Y4), the library extraction (2026-05-19), the verb x artifact reorg, and subsequent audit stress tests; each record carries its own origin.
 
-**Phase / finding identifiers.** `Phase Y1`-`Y7`, `Phase 4.x` / `P5` / `P7`, and `F-4-2-N` are defined in ../skills/md-domain/references/provenance/skill-authoring-decisions.md.
+**Phase / finding identifiers.** `Phase Y1`-`Y7`, `Phase 4.x` / `P5` / `P7`, `F-4-2-N`, and `Dec-N` are defined in ../skills/md-domain/references/provenance/skill-authoring-decisions.md.
 
 ```yaml
 claude_md:
@@ -38,18 +38,41 @@ claude_md:
       origin: Phase 4.2 audit lessons-learned (F-4-2 series); Audience-Claude principle.
       added: "2026-04-28"
     - id: user_only_via_disable_model_invocation
-      keywords: [user-only, disable-model-invocation, slash-command, technique-skill carve-out, ordered-step exemption]
-      summary: User-only technique-skills (disable-model-invocation true in frontmatter) skip the ordered-step body requirement; the technique IS the slash-command.
+      keywords: [user-only, disable-model-invocation, slash-command, technique-skill carve-out, ordered-step exemption, no exemption, Dec-2, dead param]
+      summary: "CORRECTED 2026-09-06: user-only technique-skills (disable-model-invocation true) do NOT skip the ordered-step body requirement at either layer. The prior version of this entry was false."
       detail: |
-        markdown_heuristics.is_user_only(fm) returns true when frontmatter sets disable-model-invocation: true.
-        type_signals(body, fm) adds +3 to technique-skill score for user-only skills so classify
-        recognizes them as technique-skill even when the body has zero ordered-step entries.
-        audit.check_technique_skill threads frontmatter so the ordered-step row reports n/a for
-        user-only skills with note "user-only ... the technique IS the slash-command". The unified
-        TECHNIQUE_SKILL_SCHEMA in schemas/skill_types.py enforces "techniques must have steps OR output_template"
-        instead of the previous variant-separated schemas.
-      origin: Phase 4.2 audit lessons-learned F-4-2-2 / F-4-2-3.
+        markdown_heuristics.is_user_only(fm) returns true when frontmatter sets
+        disable-model-invocation: true, and type_signals(body, fm) still adds +3 to
+        technique-skill score for user-only skills so classify recognizes the type
+        even with zero ordered-step entries -- that half stands.
+
+        The retracted claim: "audit.check_technique_skill threads frontmatter so the
+        ordered-step row reports n/a for user-only skills". False as shipped --
+        check_technique_skill accepted an `fm` parameter but never read it; the
+        ordered-step row is FAIL, not n/a, for a user-only technique with no steps.
+        tests/skills-kit/test_schemas.py (Dec-2, TestTechniqueSkill::
+        test_user_only_still_requires_steps) already pinned the opposite at the
+        schema layer: user-only does NOT exempt from steps ("trigger_model is
+        metadata"). tests/skills-kit/test_technique_user_only_no_exemption.py pins
+        the same fact at this legacy-fallback audit layer.
+
+        The unified TECHNIQUE_SKILL_SCHEMA in schemas/skill_types.py replaced the
+        previous variant-separated schemas, but it does NOT accept output_template
+        in place of steps: steps is required with min_len 1 for every technique
+        "regardless of trigger_model", and output_template is an optional companion,
+        explicitly "not an alternative to steps" (skill_types.py, the technique item
+        rule and its header comment). The original entry's "steps OR output_template"
+        wording was wrong too and is retracted here.
+
+        `fm` stays in check_technique_skill's signature (now `fm=None`, documented
+        unused) only because it is a public positional parameter external callers
+        pass; the dead `is_user_only` import into audit.py and the dead
+        TYPE_RUNNERS["technique-skill"] dict entry (unreachable -- technique-skill
+        is special-cased before TYPE_RUNNERS is ever indexed for that key) were
+        removed.
+      origin: Phase 4.2 audit lessons-learned F-4-2-2 / F-4-2-3; corrected 2026-09-06 by the plugin architecture audit after the claim was found false against shipped behavior and Dec-2.
       added: "2026-04-28"
+      updated: "2026-09-06"
     - id: schema_walker_rule_vocabulary
       keywords: [schema, walker, validator, rule grammar, required, type, min_len, forbid_regex, items, keys, value_schema]
       summary: schema_engine.py uses a small Python-dict rule vocabulary (enumerated in its module docstring); no external schema language.

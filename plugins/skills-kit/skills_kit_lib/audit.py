@@ -34,17 +34,16 @@ from .markdown_heuristics import (
     has_counter_example,
     has_excuse_reality_table,
     has_heading,
-    has_lookup_table,
+    high_scoring_types,
     has_recognition_marker,
     has_red_flags_list,
     has_red_green_refactor,
     has_step_tracker_invocation,
     has_tickbox_list,
-    has_yaml_block,
-    is_user_only,
     parse_body,
     parse_frontmatter,
     strip_code_fences,
+    type_signals,
 )
 from .schema_engine import validate
 from .schema_registry import (
@@ -111,7 +110,7 @@ def check_universal(
         name = fm.fields["name"]
         out.append(CheckResult("frontmatter.name present", PASS, rule="name-present"))
         out.append(CheckResult(
-            "name <= 64 chars",
+            f"name <= {th['name_max_chars']} chars",
             PASS if len(name) <= th["name_max_chars"] else FAIL,
             f"len={len(name)}",
             rule="name-length",
@@ -130,7 +129,7 @@ def check_universal(
         desc = fm.fields["description"]
         out.append(CheckResult("frontmatter.description present", PASS, rule="desc-present"))
         out.append(CheckResult(
-            "description <= 160 chars",
+            f"description <= {th['desc_max_chars']} chars",
             PASS if len(desc) <= th["desc_max_chars"] else FAIL,
             f"len={len(desc)}",
             rule="desc-160-char",
@@ -298,7 +297,15 @@ def check_pattern_skill(body: Body, skill_dir: Path) -> list[CheckResult]:
     return out
 
 
-def check_technique_skill(body: Body, skill_dir: Path, fm: Frontmatter | None) -> list[CheckResult]:
+def check_technique_skill(body: Body, skill_dir: Path, fm: Frontmatter | None = None) -> list[CheckResult]:
+    """`fm` is accepted for positional-call compatibility (public signature;
+    external callers pass it, e.g. tests/skills-kit/test_step_tracker_or_
+    checklist.py) but is never read: user-only technique-skills
+    (disable-model-invocation: true) do NOT exempt the ordered-step row --
+    the technique-skill schema requires steps regardless of trigger_model
+    (Dec-2), and this legacy-fallback path mirrors that. See I7 / the
+    corrected `user_only_via_disable_model_invocation` insight in
+    skills_kit_lib/CLAUDE.md."""
     out: list[CheckResult] = []
     step_count = count_ordered_steps(body.text)
     out.append(CheckResult(
@@ -412,27 +419,33 @@ def check_domain_skill(body: Body, skill_dir: Path) -> list[CheckResult]:
     return out
 
 
-def mixed_type_signal(body_text: str) -> tuple[int, list[str]]:
-    """Detect cross-type signals on the narrative body (code fences stripped)."""
-    narrative = strip_code_fences(body_text)
-    signals: list[str] = []
-    if has_excuse_reality_table(narrative) or has_red_green_refactor(narrative):
-        signals.append("discipline-content (rule+counter or RED/GREEN/REFACTOR)")
-    if has_recognition_marker(narrative) or has_counter_example(narrative):
-        signals.append("pattern-content (recognition / counter-example)")
-    if count_ordered_steps(narrative) >= 1:
-        signals.append("technique-content (ordered steps)")
-    if has_lookup_table(narrative) or has_yaml_block(body_text):
-        signals.append("reference-content (lookup tables / YAML blocks)")
-    if has_conditional_loading(narrative):
-        signals.append("domain-content (Conditional Loading index)")
-    return len(signals), signals
+def mixed_type_signal(body_text: str, threshold: int | None = None) -> tuple[int, list[str]]:
+    """Detect cross-type signals via the ONE shared scorer,
+    markdown_heuristics.type_signals (I5) -- do not re-implement per-type
+    detection here; extend type_signals instead (SSOT convention in
+    skills_kit_lib/CLAUDE.md).
+
+    `threshold` is the per-type high-score gate (defaults to
+    THRESHOLDS["mixed_min_score"]); this is the SAME rule classify.py's
+    heuristic-fallback path applies via markdown_heuristics.high_scoring_types,
+    so tuning mixed_min_score reaches both consumers identically. Returns the
+    count of canonical types scoring at or above the gate, and
+    "type=score" labels for each.
+    """
+    th = threshold if threshold is not None else THRESHOLDS["mixed_min_score"]
+    scores = type_signals(body_text)
+    active = high_scoring_types(scores, th)
+    return len(active), [f"{t}={scores[t]}" for t in active]
 
 
+# "technique-skill" is deliberately absent: check_technique_skill takes a
+# third `fm` argument the others don't, so it is special-cased at the call
+# site below rather than stored here (I7 -- storing it made the entry dead,
+# since the special case always intercepted it before this dict was ever
+# indexed for that key).
 TYPE_RUNNERS = {
     "reference-skill": check_reference_skill,
     "pattern-skill": check_pattern_skill,
-    "technique-skill": check_technique_skill,
     "discipline-skill": check_discipline_skill,
     "domain-skill": check_domain_skill,
 }
@@ -494,15 +507,31 @@ def check_portable_units(body_text: str) -> list[CheckResult]:
     return results
 
 
-def check_facts_cross_rules(body_text: str, declared_type: str | None) -> list[CheckResult]:
+def check_facts_cross_rules(
+    body_text: str,
+    declared_type: str | None,
+    yaml_root: str | None = None,
+) -> list[CheckResult]:
     """Enforce document-level facts cross-rules across the union of all sources.
 
     Facts can live nested in `reference_skill.facts` OR as a top-level `facts:`
     portable unit, OR both. The cross-rules ("at least one fact carries gotchas",
     "at least one fact carries example", "at least one fact exists") apply over
     the union, not per-source. Only applies to reference-skill documents.
+
+    Gated on the YAML ROOT (like check_technique_caution_cross_rule) when a
+    contract block is present, NOT on the frontmatter skill-type -- the
+    frontmatter tag is advisory/judgment-only, so a `reference_skill:`
+    document with no (or a disagreeing) frontmatter skill-type must not
+    silently skip the facts floor (I8). Frontmatter is the fallback gate only
+    for a legacy document that carries no YAML root at all.
     """
-    if declared_type != "reference-skill":
+    is_reference = (
+        yaml_root == "reference_skill"
+        if yaml_root is not None
+        else declared_type == "reference-skill"
+    )
+    if not is_reference:
         return []
     if not HAVE_YAML:
         return []
@@ -1028,7 +1057,11 @@ def audit(skill_md_path: Path, resolved: "ResolvedStandards | None" = None) -> d
     # The module-level THRESHOLDS dict is never mutated (this run only).
     th = {**THRESHOLDS, **(resolved.thresholds if resolved else {})}
 
-    fm = parse_frontmatter(content)
+    # mode="full" (real YAML parse) resolves folded/multi-line description
+    # blocks and quoted values correctly; mode="light" (same-line regex) is
+    # kept as the fallback for a bare interpreter without pyyaml, preserving
+    # the documented contract-staged/legacy-fallback degradation (I1).
+    fm = parse_frontmatter(content, mode="full" if HAVE_YAML else "light")
     body = parse_body(content)
 
     universal = check_universal(fm, body, skill_dir, th)
@@ -1075,7 +1108,7 @@ def audit(skill_md_path: Path, resolved: "ResolvedStandards | None" = None) -> d
         ))
 
     yaml_results.extend(check_portable_units(body.text))
-    yaml_results.extend(check_facts_cross_rules(body.text, declared_type))
+    yaml_results.extend(check_facts_cross_rules(body.text, declared_type, yaml_root))
     yaml_results.extend(check_technique_caution_cross_rule(body.text))
     yaml_results.extend(check_asset_dependencies_resolve(body.text, skill_dir))
 
@@ -1084,7 +1117,9 @@ def audit(skill_md_path: Path, resolved: "ResolvedStandards | None" = None) -> d
         yaml_results.append(cross_block_drift)
 
     type_specific: list[CheckResult] = []
-    if not contract_staged and declared_type in TYPE_RUNNERS:
+    if not contract_staged and (
+        declared_type in TYPE_RUNNERS or declared_type == "technique-skill"
+    ):
         # Legacy heuristics run on the NARRATIVE body -- code fences stripped,
         # like mixed_type_signal (strip_code_fences_before_heuristics insight):
         # numbered lists / markers inside fenced examples must not count.
@@ -1099,8 +1134,12 @@ def audit(skill_md_path: Path, resolved: "ResolvedStandards | None" = None) -> d
             type_specific = TYPE_RUNNERS[declared_type](narrative_body, skill_dir)
 
     if not contract_staged:
-        score, signals = mixed_type_signal(body.text)
-        if score >= th["mixed_min_score"]:
+        # threshold=th["mixed_min_score"] gates each TYPE's score (I5, the
+        # same per-type gate classify.py applies via high_scoring_types);
+        # "mixed" itself means 2+ such types contend, same as classify's
+        # heuristic-fallback verdict.
+        score, signals = mixed_type_signal(body.text, th["mixed_min_score"])
+        if score >= 2:
             mixed = CheckResult(
                 "mixed-type signal (legacy heuristic)",
                 JUDGMENT,

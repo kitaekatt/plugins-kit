@@ -50,7 +50,12 @@ class TestExcuseRealityShape:
 
 class TestCanonicalTypesDerived:
     def test_derived_from_skill_type_roots(self):
-        assert CANONICAL_TYPES == {r.replace("_", "-") for r in SKILL_TYPE_ROOTS}
+        # An ordered tuple (I2), not a set -- so this also pins the exact
+        # iteration order, which must match SKILL_TYPE_ROOTS' registration order.
+        assert CANONICAL_TYPES == tuple(r.replace("_", "-") for r in SKILL_TYPE_ROOTS)
+
+    def test_iteration_order_is_a_tuple_not_a_set(self):
+        assert isinstance(CANONICAL_TYPES, tuple)
 
     def test_known_members(self):
         # Sanity: the registry currently ships these seven.

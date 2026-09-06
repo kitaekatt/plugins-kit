@@ -15,6 +15,7 @@ import re
 import sys
 from pathlib import Path
 
+from .document_walker import HAVE_YAML
 from .markdown_heuristics import (
     CANONICAL_TYPES,
     FRONTMATTER_RE,
@@ -35,7 +36,9 @@ def tag(skill_md_path: Path, new_type: str, force: bool, check_only: bool) -> di
         }
 
     content = skill_md_path.read_text(encoding="utf-8")
-    fm = parse_frontmatter(content)
+    # mode="full" resolves a quoted/multi-line skill-type value correctly
+    # (I1); fall back to light (regex) mode without pyyaml.
+    fm = parse_frontmatter(content, mode="full" if HAVE_YAML else "light")
     if fm is None:
         return {
             "ok": False,
@@ -71,7 +74,10 @@ def tag(skill_md_path: Path, new_type: str, force: bool, check_only: bool) -> di
         new_fm_block = SKILL_TYPE_LINE_RE.sub(f"skill-type: {new_type}", fm_block, count=1)
 
     new_content = content[: m.start(1)] + new_fm_block + content[m.end(1):]
-    skill_md_path.write_text(new_content, encoding="utf-8")
+    # Explicit newline="\n": open(mode="w") without it translates "\n" to
+    # os.linesep, which rewrites the whole file to CRLF on Windows even when
+    # the source was LF (I3; same rationale as gen_standards_doc.py).
+    skill_md_path.write_text(new_content, encoding="utf-8", newline="\n")
     return {
         "ok": True,
         "action": "added" if current is None else "replaced",
