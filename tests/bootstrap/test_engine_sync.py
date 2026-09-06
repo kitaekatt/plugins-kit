@@ -139,3 +139,56 @@ class TestSyncToData:
         assert (data_dir / "vendor" / "modules" / "mod.py").exists()
         assert (data_dir / "vendor" / "modules" / "mod.py").read_text() == "# module"
         assert failures == []
+
+
+class TestSyncToDataSurvivesAnOSErrorFromCopytree:
+    """shutil.copytree / _ensure_shell_scripts_executable can raise OSError
+    (read-only dst file, broken symlink) -- that must not propagate out of
+    _process_manifest and abort every later phase in the same manifest.
+    """
+
+    def test_permission_error_is_a_failure_and_later_phases_still_run(
+            self, tmp_path, monkeypatch):
+        import shutil
+        from bootstrap_lib import engine
+
+        plugin_root = tmp_path / "plugin"
+        data_dir = tmp_path / "data"
+        plugin_root.mkdir()
+        data_dir.mkdir()
+        (plugin_root / "lib").mkdir()
+        (plugin_root / "lib" / "mod.py").write_text("# module")
+
+        ini_path = tmp_path / "DefaultEngine.ini"
+        ini_path.write_text("[Section]\nKey=Value\n")
+
+        monkeypatch.setattr(
+            shutil, "copytree",
+            lambda *a, **k: (_ for _ in ()).throw(PermissionError("read-only dst")),
+        )
+
+        manifest = {
+            "sync_to_data": [{"src": "lib", "dst": "lib"}],
+            "ini_settings": [
+                {
+                    "file": str(ini_path),
+                    "section": "[Section]",
+                    "settings": {"Key": "Value"},
+                }
+            ],
+        }
+        action_entries = []
+        ok_entries = []
+
+        failures = _process_manifest(
+            manifest, "darwin", str(data_dir), str(plugin_root),
+            action_entries, ok_entries, plugin_name="test",
+            project_detected=True,
+        )
+
+        assert len(failures) == 1
+        assert any("sync" in e.lower() and "FAILED" in e for e in action_entries)
+        # The later ini_settings phase still ran (its setting already matched,
+        # so it reports ok rather than an action -- proof the pass continued
+        # instead of aborting on the sync_to_data OSError).
+        assert any("ini Key: ok" in e for e in ok_entries)

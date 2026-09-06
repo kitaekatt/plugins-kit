@@ -136,6 +136,44 @@ def autodetect():
         project_config_path = os.path.join(str(project_dir), ".claude", "unreal-kit.yaml")
         assert not os.path.exists(project_config_path)
 
+    def test_autodetect_returns_empty_dict_still_counts_as_detected(
+        self, tmp_path, monkeypatch
+    ):
+        """`{}` is a real (if empty) autodetect result, not "nothing detected" --
+        only `None` means that (per the reference doc). `if detected:` conflates
+        the two because an empty dict is falsy; this must return True, same as
+        a non-empty dict would."""
+        project_dir = tmp_path / "project"
+        project_dir.mkdir()
+        monkeypatch.chdir(project_dir)
+
+        plugin_root = str(tmp_path / "plugin")
+        os.makedirs(plugin_root)
+        _write_autodetect_script(plugin_root, body="""\
+def autodetect():
+    return {}
+""")
+
+        plugin_data_dir = str(tmp_path / "data")
+        os.makedirs(plugin_data_dir)
+
+        section = {
+            "file": ".claude/unreal-kit.yaml",
+            "required_fields": [],
+            "autodetect": "custom_bootstrap.py autodetect",
+        }
+
+        action_entries = []
+        ok_entries = []
+        result = _process_project_config(
+            section, plugin_data_dir, plugin_root,
+            action_entries, ok_entries=ok_entries, plugin_name="test",
+        )
+
+        assert result is True
+        project_config_path = os.path.join(str(project_dir), ".claude", "unreal-kit.yaml")
+        assert os.path.exists(project_config_path)
+
     def test_runs_every_session(self, tmp_path, monkeypatch):
         """Existing file -> values re-merged to data-dir (no stale data)."""
         project_dir = tmp_path / "project"

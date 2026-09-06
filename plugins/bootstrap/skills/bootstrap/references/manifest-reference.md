@@ -771,7 +771,13 @@ A per-project config file (under `<cwd>/.local-data/<plugin>/config.yaml`) disco
 
 ### `legacy_file` — one-shot path migration
 
-If the manifest declares `legacy_file`, the engine checks whether `<cwd>/<legacy_file>` exists at session start. If it does and `<cwd>/<file>` does not, the engine moves the file to the new path (creating parent dirs as needed) and emits a `project config: migrated <old> -> <new>` action entry. The downstream load/autodetect/required-fields flow then runs against the new path. The migration is idempotent — once the file lives at the new path, subsequent sessions see the legacy file as absent and skip the move.
+If the manifest declares `legacy_file`, the engine checks whether `<cwd>/<legacy_file>` exists at session start, and reconciles it against `<cwd>/<file>` before the downstream load/autodetect/required-fields flow runs against the new path:
+
+- **Only the legacy path exists** -- the engine moves the file to the new path (creating parent dirs as needed) and emits a `project config: migrated <old> -> <new>` action entry.
+- **Both paths exist** -- mtime decides which copy wins, since this is the shape left behind by a session that ran before `legacy_file` was honored: the engine had already created a new file from defaults/autodetect, leaving the legacy file orphaned alongside it. If the legacy file is no newer than the new path, the legacy file is deleted and a `project config: removed stale legacy <old> (new path <new> is fresher)` action entry is emitted. If the legacy file is newer, it overwrites the new path (same move as the only-legacy case) and the action entry notes `(overwrote stale new path)`.
+- **Only the new path exists, or neither exists** -- no-op; downstream logic handles creation.
+
+Whenever a move or deletion actually reconciles the two paths, the engine also removes the legacy file's directory if that removal leaves it empty. The migration is idempotent -- once the file lives at the new path (and the legacy path is gone or is not newer), subsequent sessions see nothing left to reconcile and skip the move.
 
 Use `legacy_file` only when an existing path is being relocated (e.g. moving project config out of `.claude/` and into `.local-data/`); it is not a general-purpose alias.
 

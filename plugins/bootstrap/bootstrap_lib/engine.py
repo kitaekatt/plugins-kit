@@ -3648,6 +3648,8 @@ def _process_config(config_section, plugin_data_dir, plugin_root, action_entries
     from .config_check import config_init, config_validate, run_autodetect, load_yaml_config, save_yaml_config
     from .config_resolve import ConfigError
 
+    ok = ok_entries if ok_entries is not None else action_entries
+
     config_file = config_section["file"]
     defaults_source = config_section.get("defaults_source")
 
@@ -3667,7 +3669,7 @@ def _process_config(config_section, plugin_data_dir, plugin_root, action_entries
         action_entries.append(f"config: FAILED to load {config_path} - {exc}")
         return []
 
-    required_fields = config_section.get("required_fields", {})
+    required_fields = _normalize_required_fields(config_section.get("required_fields", {}))
 
     # 3. Autodetect (optional): always run when declared
     autodetect_spec = config_section.get("autodetect")
@@ -3675,10 +3677,7 @@ def _process_config(config_section, plugin_data_dir, plugin_root, action_entries
         try:
             changed, ad_actions, ad_ok = run_autodetect(plugin_root, autodetect_spec, config, config_path)
             action_entries.extend(ad_actions)
-            if ok_entries is not None:
-                ok_entries.extend(ad_ok)
-            else:
-                action_entries.extend(ad_ok)
+            ok.extend(ad_ok)
             if changed:
                 save_yaml_config(config_path, config)
                 if not ad_actions:
@@ -3691,10 +3690,7 @@ def _process_config(config_section, plugin_data_dir, plugin_root, action_entries
     # 4. Validate required fields (apply defaults, collect missing)
     # Skip validation when no project detected — required fields are project-scoped
     if not project_detected:
-        if ok_entries is not None:
-            ok_entries.append("config: skipped required_fields (no project detected)")
-        else:
-            action_entries.append("config: skipped required_fields (no project detected)")
+        ok.append("config: skipped required_fields (no project detected)")
         return []
 
     config, missing = config_validate(config, required_fields, config_path)
@@ -3711,10 +3707,7 @@ def _process_config(config_section, plugin_data_dir, plugin_root, action_entries
             save_yaml_config(config_path, config)
 
     if not missing:
-        if ok_entries is not None:
-            ok_entries.append("config ok")
-        else:
-            action_entries.append("config ok")
+        ok.append("config ok")
         return []
 
     # 5. Fix-all: aggregate missing fields into failure directives
@@ -3731,7 +3724,7 @@ def _process_config(config_section, plugin_data_dir, plugin_root, action_entries
     return failures
 
 
-def _normalize_project_required_fields(required_fields):
+def _normalize_required_fields(required_fields):
     """Normalize required_fields to dict form.
 
     Accepts either:
@@ -3811,7 +3804,7 @@ def _process_project_config(project_config_section, plugin_data_dir, plugin_root
     from .config_resolve import ConfigError
 
     config_file = project_config_section["file"]
-    required_fields_spec = _normalize_project_required_fields(
+    required_fields_spec = _normalize_required_fields(
         project_config_section.get("required_fields", [])
     )
     required_field_names = list(required_fields_spec.keys())
@@ -3888,7 +3881,7 @@ def _process_project_config(project_config_section, plugin_data_dir, plugin_root
         if missing_fields and autodetect_spec:
             # Some fields missing — try autodetect to fill gaps
             detected = run_project_autodetect(plugin_root, autodetect_spec, errors=action_entries)
-            if detected:
+            if detected is not None:
                 for field in missing_fields:
                     if detected.get(field):
                         project_data[field] = detected[field]
@@ -3912,7 +3905,7 @@ def _process_project_config(project_config_section, plugin_data_dir, plugin_root
         # File doesn't exist — try autodetect
         if autodetect_spec:
             detected = run_project_autodetect(plugin_root, autodetect_spec, errors=action_entries)
-            if detected:
+            if detected is not None:
                 os.makedirs(os.path.dirname(project_config_path), exist_ok=True)
                 project_data = dict(detected)
                 # Apply defaults for any declared field still missing from detected
@@ -4055,7 +4048,6 @@ class _ManifestContext:
         # one, so a single unreachable marketplace produces one actionable
         # failure instead of one per plugin it owns.
         self.unusable_marketplaces = set()
-        self.prefix = ""
         self._config = self._UNSET
         self._variables = None
 
@@ -4103,7 +4095,7 @@ class _ManifestContext:
         return self._variables
 
     def ok(self, message):
-        self.ok_entries.append(f"{self.prefix}{message}")
+        self.ok_entries.append(message)
 
     def action(self, message, display=None, detail=None):
         """Append an action entry.
@@ -4115,13 +4107,13 @@ class _ManifestContext:
         carries structured context that belongs in the record but on no message
         surface. See messages.py and records.py.
         """
-        _append_detail(self.action_entries, f"{self.prefix}{message}",
+        _append_detail(self.action_entries, message,
                        display=display, detail=detail)
 
     def quiet(self, message):
         """Log-only remediation entry: written to the log unconditionally, never
         displayed. Use ONLY when the pass surfaces the same event in aggregate."""
-        self.quiet_entries.append(f"{self.prefix}{message}")
+        self.quiet_entries.append(message)
 
     def fail(self, entry, display=None, detail=None, **failure):
         """Append `entry` as an action line AND register `failure` for fix-all.
@@ -4246,7 +4238,7 @@ def _phase_tools(ctx):
     tools_installed = []
     for tool_def in ctx.manifest.get("tools", []):
         failure = _process_tool_entry(
-            tool_def, ctx.current_os, ctx.data_dir, ctx.prefix,
+            tool_def, ctx.current_os, ctx.data_dir, "",
             ctx.action_entries, ctx.ok_entries, tools_installed,
             plugin_name=ctx.plugin_name, machine_resolver=machine_resolver,
         )
@@ -4318,7 +4310,7 @@ def _phase_fonts(ctx):
 def _phase_path_entries(ctx):
     """path_entries: persistent PATH remediation (shared with self-setup)."""
     _process_path_entries(
-        ctx.manifest.get("path_entries", []), ctx.prefix,
+        ctx.manifest.get("path_entries", []), "",
         ctx.action_entries, ctx.ok_entries,
     )
 
@@ -4326,7 +4318,7 @@ def _phase_path_entries(ctx):
 def _phase_venv(ctx):
     """venv: the shared check -> uv sync -> re-check flow (ensure_venv)."""
     _process_venv_def(
-        ctx.manifest["venv"], ctx.data_dir, ctx.plugin_root, ctx.prefix, "venv",
+        ctx.manifest["venv"], ctx.data_dir, ctx.plugin_root, "", "venv",
         ctx.action_entries, ctx.ok_entries, ctx.failures,
         plugin_name=ctx.plugin_name,
         extras=ctx.manifest["venv"].get("extras", []),
@@ -4573,6 +4565,12 @@ def _phase_sync_to_data(ctx):
     import shutil
 
     for sync_def in ctx.manifest.get("sync_to_data", []):
+        if not isinstance(sync_def, dict) or "src" not in sync_def or "dst" not in sync_def:
+            ctx.fail(
+                f"sync_to_data: FAILED - malformed entry (requires 'src' and 'dst'): {sync_def!r}",
+                type="sync_to_data", message="malformed sync_to_data entry (requires 'src' and 'dst')",
+            )
+            continue
         src_rel = sync_def["src"]
         dst_rel = sync_def["dst"]
         src = os.path.join(ctx.plugin_root, src_rel)
@@ -4586,9 +4584,16 @@ def _phase_sync_to_data(ctx):
                 message=f"source directory not found: {src}",
             )
             continue
-        os.makedirs(dst, exist_ok=True)
-        shutil.copytree(src, dst, dirs_exist_ok=True)
-        _ensure_shell_scripts_executable(dst)
+        try:
+            os.makedirs(dst, exist_ok=True)
+            shutil.copytree(src, dst, dirs_exist_ok=True)
+            _ensure_shell_scripts_executable(dst)
+        except OSError as e:
+            ctx.fail(
+                f"sync {src_rel} -> {dst_rel}: FAILED - {e}",
+                type="sync_to_data", src=src_rel, dst=dst_rel, message=str(e),
+            )
+            continue
         ctx.ok(f"sync {src_rel} -> {dst_rel}: ok")
 
 
@@ -4719,7 +4724,7 @@ def _phase_marketplaces(ctx):
                 _pinned_marketplaces_this_run.add(mkt_def["name"])
         skipped = len(entries)
         ctx.action(
-            f"{ctx.prefix}marketplaces: skipped {skipped} "
+            f"marketplaces: skipped {skipped} "
             f"{'entry' if skipped == 1 else 'entries'} - claude CLI unavailable "
             f"(see the `claude` tool entry)"
         )
@@ -4903,7 +4908,7 @@ def _phase_plugins(ctx):
     if not resolve_claude_cli():
         skipped = len(ctx.manifest.get("plugins", []))
         ctx.action(
-            f"{ctx.prefix}plugins: skipped {skipped} "
+            f"plugins: skipped {skipped} "
             f"{'entry' if skipped == 1 else 'entries'} - claude CLI unavailable "
             f"(see the `claude` tool entry)"
         )
@@ -4997,7 +5002,7 @@ def _phase_plugins(ctx):
         # not installed_plugins.json which can have stale scope metadata). Skip
         # for install: manual -- the user owns scope and enable state; we just
         # manage version updates.
-        if install_result.passed and install_mode != "manual":
+        if install_result.passed and install_mode != "manual" and enabled:
             scope_check = check_plugin_enabled_at_scope(plugin_ref, desired_scope, ctx.project_dir)
             if not scope_check.passed:
                 # Keep the scope-mismatch note as its own line so the user sees
@@ -5011,15 +5016,15 @@ def _phase_plugins(ctx):
                 # session, forever, while reporting success), and when it does
                 # write it reserialises the whole settings file, reordering
                 # keys in what is frequently a shared, source-controlled file.
-                enabled = enable_plugin_at_scope(plugin_ref, desired_scope, ctx.project_dir)
-                if enabled.passed:
+                enable_result = enable_plugin_at_scope(plugin_ref, desired_scope, ctx.project_dir)
+                if enable_result.passed:
                     _bucket(plugins_enabled, plugin_ref, f"at {desired_scope} scope")
                 else:
                     ctx.fail(
-                        f"plugin {plugin_ref}: could not enable at {desired_scope} scope - {enabled.message}",
+                        f"plugin {plugin_ref}: could not enable at {desired_scope} scope - {enable_result.message}",
                         display=f"plugin {plugin_ref}: enable failed",
                         type="plugin", ref=plugin_ref,
-                        message=f"enable at {desired_scope} scope failed: {enabled.message}",
+                        message=f"enable at {desired_scope} scope failed: {enable_result.message}",
                     )
                     continue
 
@@ -5182,10 +5187,17 @@ def _phase_ini_settings(ctx):
         return
 
     for ini_def in ctx.manifest.get("ini_settings", []):
+        if not isinstance(ini_def, dict) or "file" not in ini_def or "section" not in ini_def:
+            ctx.fail(
+                f"ini_settings: FAILED - malformed entry (requires 'file' and 'section'): {ini_def!r}",
+                type="ini_settings", message="malformed ini_settings entry (requires 'file' and 'section')",
+            )
+            continue
         ini_file = resolve_vars(ini_def["file"], ctx.variables)
         if ini_file is None:
             ctx.ok(f"ini {ini_def['file']}: skipped (unresolved vars)")
             continue
+        ini_file = os.path.expanduser(ini_file)
 
         section = ini_def["section"]
         # Ensure section has brackets for check/write
@@ -5242,13 +5254,21 @@ def _phase_json_entries(ctx):
         if result.passed:
             ctx.ok(f"json {os.path.basename(target_path)}: ok")
         else:
-            result = merge_json_entries(ref_path, target_path, merge_fields, preserve_fields)
-            if result.passed:
+            merge_result = merge_json_entries(ref_path, target_path, merge_fields, preserve_fields)
+            if not merge_result.passed:
+                ctx.fail(
+                    f"json {os.path.basename(target_path)}: FAILED - {merge_result.message}",
+                    type="json", target=target_path, message=merge_result.message,
+                )
+                continue
+            recheck = check_json_entries(ref_path, target_path, merge_fields, preserve_fields)
+            if recheck.passed:
                 ctx.action(f"json {os.path.basename(target_path)}: merged")
             else:
+                message = f"write reported success, but re-check failed: {recheck.message}"
                 ctx.fail(
-                    f"json {os.path.basename(target_path)}: FAILED - {result.message}",
-                    type="json", target=target_path, message=result.message,
+                    f"json {os.path.basename(target_path)}: FAILED - {message}",
+                    type="json", target=target_path, message=message,
                 )
 
 
@@ -5259,6 +5279,12 @@ def _phase_pypi_packages(ctx):
 
     pypi_installed = []
     for pypi_def in ctx.manifest.get("pypi_packages", []):
+        if not isinstance(pypi_def, dict) or "extract_to" not in pypi_def or "package" not in pypi_def:
+            ctx.fail(
+                f"pypi_packages: FAILED - malformed entry (requires 'package' and 'extract_to'): {pypi_def!r}",
+                type="pypi_packages", message="malformed pypi_packages entry (requires 'package' and 'extract_to')",
+            )
+            continue
         extract_to = resolve_vars(pypi_def["extract_to"], ctx.variables)
         if extract_to is None:
             ctx.ok(f"pypi {pypi_def['package']}: skipped (unresolved vars)")
@@ -5344,7 +5370,7 @@ def _phase_script(ctx):
     script_failures = _run_script_phase(
         ctx.manifest["script"], ctx.plugin_root, ctx.data_dir, ctx.config,
         ctx.action_entries, ctx.ok_entries,
-        prefix=ctx.prefix, plugin_name=ctx.plugin_name, project_dir=ctx.project_dir,
+        prefix="", plugin_name=ctx.plugin_name, project_dir=ctx.project_dir,
     )
     ctx.failures.extend(script_failures)
 

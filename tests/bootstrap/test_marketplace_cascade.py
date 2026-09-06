@@ -367,6 +367,92 @@ class TestCascadeSuppression:
         assert ctx.failures == []
 
 
+class TestEnabledFlagIsNotClobbered:
+    """The scope-enable block must not run for `enabled: false` entries, and
+    its LifecycleResult must never be assigned back into the manifest-derived
+    `enabled` local -- doing so makes it permanently truthy, so the disable
+    branch never runs again for that entry.
+
+    Both stubs here are host-independent: the real
+    `check_plugin_enabled_at_scope` reads this machine's settings.json, which
+    the existing cascade tests only get away with because their scenarios
+    never reach the scope-enable block for a disabled entry.
+    """
+
+    def test_disabled_entry_never_calls_scope_enable(self, cli_present, monkeypatch):
+        monkeypatch.setattr(
+            marketplace_lifecycle, "check_plugin_installed",
+            lambda ref: LifecycleResult(passed=True, ref=ref, message="stub"),
+        )
+        monkeypatch.setattr(
+            marketplace_lifecycle, "check_plugin_enabled_at_scope",
+            lambda ref, scope, project_dir: LifecycleResult(
+                passed=False, ref=ref, message="stub"),
+        )
+        enable_calls = []
+        monkeypatch.setattr(
+            marketplace_lifecycle, "enable_plugin_at_scope",
+            lambda ref, scope, project_dir: enable_calls.append(ref) or
+            LifecycleResult(passed=True, ref=ref, message="stub"),
+        )
+        monkeypatch.setattr(
+            marketplace_lifecycle, "ensure_registry_scope",
+            lambda ref, scope: type(
+                "S", (), {"added": False, "refused": False, "passed": True,
+                          "message": "ok"})(),
+        )
+
+        ctx = _RecordingContext({
+            "plugins": [{"ref": "gated:core", "enabled": False}],
+        })
+        engine._phase_plugins(ctx)
+
+        assert enable_calls == []
+        assert not any("enabled" in a for a in ctx.actions if "gated:core" not in a)
+        assert ctx.failures == []
+
+    def test_enabled_entry_calls_scope_enable_once(self, cli_present, monkeypatch):
+        monkeypatch.setattr(
+            marketplace_lifecycle, "check_plugin_installed",
+            lambda ref: LifecycleResult(passed=True, ref=ref, message="stub"),
+        )
+        monkeypatch.setattr(
+            marketplace_lifecycle, "check_plugin_enabled_at_scope",
+            lambda ref, scope, project_dir: LifecycleResult(
+                passed=False, ref=ref, message="stub"),
+        )
+        enable_calls = []
+        monkeypatch.setattr(
+            marketplace_lifecycle, "enable_plugin_at_scope",
+            lambda ref, scope, project_dir: enable_calls.append(ref) or
+            LifecycleResult(passed=True, ref=ref, message="stub"),
+        )
+        monkeypatch.setattr(
+            marketplace_lifecycle, "ensure_registry_scope",
+            lambda ref, scope: type(
+                "S", (), {"added": False, "refused": False, "passed": True,
+                          "message": "ok"})(),
+        )
+        monkeypatch.setattr(
+            marketplace_lifecycle, "check_plugin_version",
+            lambda ref: type("V", (), {"up_to_date": True,
+                                        "installed_version": "1", "latest_version": "1"})(),
+        )
+        monkeypatch.setattr(
+            marketplace_lifecycle, "enable_plugin_in_claude",
+            lambda ref: LifecycleResult(passed=True, ref=ref, message="stub"),
+        )
+
+        ctx = _RecordingContext({
+            "plugins": [{"ref": "gated:core", "enabled": True}],
+        })
+        engine._phase_plugins(ctx)
+
+        assert enable_calls == ["gated:core"]
+        assert any("enabled" in a for a in ctx.actions)
+        assert ctx.failures == []
+
+
 class TestTheSurvivingIssueIsReadableAndActionable:
     def test_no_message_surface_carries_the_raw_cli_output(
             self, cli_present, monkeypatch):
