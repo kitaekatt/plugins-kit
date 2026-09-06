@@ -483,9 +483,12 @@ wanted. Second, an advisory budget changed no output, because a signal nothing
 enforces is a signal nothing obeys. Per-page overrides were removed with the
 keying, since an override reintroduces exactly the territory-proportional growth
 the ceiling exists to stop. 900 is a TUNED STARTING NUMBER, not a settled
-constant: it is set from trial evidence -- rejected pages ran near 900 words and
-accepted ones ran 1,215 to 1,698 -- and it is expected to move once generated
-corpora give better evidence. Line and byte limits were rejected because HTML
+constant, and it sits DELIBERATELY BELOW the range the trials produced. Pages
+rejected as trivia ran near 900 words; pages whose shape was accepted ran 1,215
+to 1,698, and those enumerated -- the length was the enumeration, which is what
+this ceiling exists to stop. Pages written to the ceiling afterwards ran 866 and
+898 words over territories of 31 and 12 owned directories. The number is
+expected to move once generated corpora give better evidence. Line and byte limits were rejected because HTML
 formatting distorts them.
 - **Test:** Report the observed word count and the ceiling for every page. A
 count above the ceiling is a `FAIL`.
@@ -569,7 +572,7 @@ fresh. A stale record deeper than a nearest descendant page does not gate this
 page; it gates the descendant page that owns it, and reaches further up only
 through TS-3. This execution gate does not change CK-1 staleness from `INFO` to
 `FAIL`.
-- **Rationale:** A page trusts the material it owns and the identity lines it links, so continuing past stale data in that set was rejected: it silently corrupts the navigation spine. Gating on ALL descendants was rejected in this rework, because ownership stops at the next page down while the old gate did not: one broken page deep in a branch froze every ancestor above it, including pages whose own material and links were fresh, and the deeper the tree the more of the spine one failure held hostage.
+- **Rationale:** A page trusts the material it owns and the identity lines it links, so continuing past stale data in that set was rejected: it silently corrupts the navigation spine. Gating on ALL descendants was rejected, because ownership stops at the next page down while the old gate did not: one broken page deep in a branch froze every ancestor above it, including pages whose own material and links were fresh, and the deeper the tree the more of the spine one failure held hostage.
 - **Test:** Changing an input inside a page's territory marks that page stale and
 blocks its generation until refresh. Changing an input under a nearer descendant
 page marks that descendant stale and leaves its ancestors generable.
