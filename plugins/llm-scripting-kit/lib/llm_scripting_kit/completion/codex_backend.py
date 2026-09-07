@@ -44,6 +44,7 @@ from . import halt
 from .claude_runner import run_cli_streaming
 from .adapter_capabilities import CODEX_CAPABILITIES
 from .capabilities import Capabilities
+from .prompt_fold import fold_prompt
 from .results import (
     check_applied_controls,
     derive_dropped_params,
@@ -167,13 +168,10 @@ def compose_prompt(system: str, user: str) -> str:
     two halves are concatenated system-first, separated by
     :data:`PROMPT_SEPARATOR` (a blank line, a ``---`` rule, a blank line). An
     empty ``system`` yields the user prompt verbatim, so a caller that already
-    folded its own instructions gets no stray leading separator.
+    folded its own instructions gets no stray leading separator. The folding
+    itself is shared with the opencode sibling -- see :mod:`.prompt_fold`.
     """
-    if not system:
-        return user
-    if not user:
-        return system
-    return f"{system}{PROMPT_SEPARATOR}{user}"
+    return fold_prompt(system, user, PROMPT_SEPARATOR)
 
 
 @dataclass

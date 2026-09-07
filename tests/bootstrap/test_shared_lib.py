@@ -488,6 +488,32 @@ class TestConvergenceSweep:
         actions, quiets, oks, failures = _shared_lib_convergence_sweep(plugins, str(data_root / "bootstrap"))
         assert (actions, quiets, oks, failures) == ([], [], [], [])
 
+    def test_requires_bootstrap_gate_skips_the_sweep(self, tmp_path):
+        """A manifest _bootstrap_single_plugin refused as too-new-for-this-engine
+        must not be honored by the sweep instead -- same gate, one helper."""
+        from bootstrap_lib.engine import _shared_lib_convergence_sweep
+        from bootstrap_lib.plugin_resolve import PluginInfo
+
+        data_root = tmp_path / "data"
+        (data_root / "bootstrap").mkdir(parents=True)
+        install = tmp_path / "plugins" / "gated"
+        install.mkdir(parents=True)
+        (install / "bootstrap.json").write_text(
+            json.dumps({"requires_bootstrap": ">=99.0", "shared_lib_imports": ["mylib"]}),
+            encoding="utf-8",
+        )
+
+        plugins = [PluginInfo(name="gated", install_path=str(install), version="1.0", marketplace="mkt")]
+        actions, quiets, oks, failures = _shared_lib_convergence_sweep(
+            plugins, str(data_root / "bootstrap"), engine_version="0.5.0",
+        )
+        assert actions == []
+        assert quiets == []
+        assert failures == []
+        assert any("skipped" in o and "requires bootstrap" in o for o in oks)
+        # No .pth link was even attempted -- no venv or shared_root was created.
+        assert not (data_root / "gated").exists()
+
 
 # --- aggregated display line ---------------------------------------------
 

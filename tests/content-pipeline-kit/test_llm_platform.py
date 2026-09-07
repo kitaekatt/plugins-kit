@@ -9,6 +9,7 @@ import json
 import os
 import threading
 from pathlib import Path
+from typing import Optional
 
 import pytest
 
@@ -109,6 +110,54 @@ def test_cache_key_salt_only_participates_when_set():
         backend="mock", model="m", system="s", user="u",
         options=BackendOptions(cache_salt=1),
     )
+
+
+def test_cache_key_differs_by_effort():
+    low = build_cache_key(
+        backend="mock", model="m", system="s", user="u",
+        options=BackendOptions(effort="low"),
+    )
+    high = build_cache_key(
+        backend="mock", model="m", system="s", user="u",
+        options=BackendOptions(effort="high"),
+    )
+    assert low != high
+
+
+def test_cache_key_differs_by_allowed_tools():
+    none_tools = build_cache_key(
+        backend="mock", model="m", system="s", user="u",
+        options=BackendOptions(allowed_tools=None),
+    )
+    read_tools = build_cache_key(
+        backend="mock", model="m", system="s", user="u",
+        options=BackendOptions(allowed_tools="Read"),
+    )
+    assert none_tools != read_tools
+
+
+def test_cache_key_differs_by_extras_value():
+    low = build_cache_key(
+        backend="mock", model="m", system="s", user="u",
+        options=BackendOptions(extras={"reasoning_effort": "low"}),
+    )
+    high = build_cache_key(
+        backend="mock", model="m", system="s", user="u",
+        options=BackendOptions(extras={"reasoning_effort": "high"}),
+    )
+    assert low != high
+
+
+def test_cache_key_ignores_timeout_s():
+    short = build_cache_key(
+        backend="mock", model="m", system="s", user="u",
+        options=BackendOptions(timeout_s=5),
+    )
+    long = build_cache_key(
+        backend="mock", model="m", system="s", user="u",
+        options=BackendOptions(timeout_s=50),
+    )
+    assert short == long
 
 
 # --- ResponseCache -----------------------------------------------------------
@@ -463,6 +512,22 @@ def test_call_llm_prices_tokenized_transport_exception_before_retry():
     assert budget.spent == pytest.approx(7 * 1.20 / 1_000_000)
 
 
+def test_call_llm_unknown_model_in_charge_exception_never_masks_the_original_error():
+    """An exception carrying output_tokens for a model absent from the
+    pricing table must not have its charge attempt raise KeyError over the
+    original transport failure -- the caller needs to see (and classify)
+    what actually went wrong, not a pricing-table lookup miss."""
+
+    class TokenizedError(RuntimeError):
+        output_tokens = 5
+
+    backend = MockBackend(
+        responses=[TokenizedError("boom1"), TokenizedError("boom2")]
+    )
+    with pytest.raises(TokenizedError):
+        call_llm(backend, "s", "u", model="unpriced/model", pricing={}, retries=1)
+
+
 def test_call_llm_gives_up_after_retries(monkeypatch):
     monkeypatch.setattr(platform.time, "sleep", lambda *_: None)
     backend = MockBackend(responses=[ValueError("a"), ValueError("b")])
@@ -480,6 +545,45 @@ def test_call_llm_halt_is_not_retried_and_maps_to_halt_error(monkeypatch):
         call_llm(backend, "s", "u", model="test/model", retries=3)
     assert ei.value.kind == platform.HALT_RATE_LIMIT
     assert len(backend.calls) == 1  # halted immediately, no retry
+
+
+class _TimeoutHaltingBackend(MockBackend):
+    """A backend that classifies a raw ``TimeoutError`` as a halt -- the
+    documented shape of ModelEndpointBackend (connection-error halt) and
+    ClaudeCliBackend (delegates to llm_scripting_kit's AgentTimeoutError ->
+    HALT_RATE_LIMIT mapping). MockBackend's own ``classify_halt`` does not
+    halt on a bare TimeoutError (no text marker), so this stand-in is needed
+    to exercise the caller-owns-the-timeout rule end-to-end."""
+
+    def classify_halt(self, exc: BaseException) -> Optional[str]:
+        if isinstance(exc, TimeoutError):
+            return platform.HALT_UNREACHABLE
+        return super().classify_halt(exc)
+
+
+def test_call_llm_with_timeout_s_set_retries_the_callers_own_deadline(monkeypatch):
+    """A caller that OWNS the timeout (set timeout_s) gets a retry, not a
+    halt, when the transport reports that exact deadline expiring."""
+    monkeypatch.setattr(platform.time, "sleep", lambda *_: None)
+    backend = _TimeoutHaltingBackend(responses=[TimeoutError("deadline"), "ok"])
+    resp = call_llm(
+        backend, "s", "u", model="test/model",
+        options=BackendOptions(timeout_s=5),
+        retries=1, retry_sleep=0.01,
+    )
+    assert resp.text == "ok"
+    assert len(backend.calls) == 2
+
+
+def test_call_llm_without_timeout_s_keeps_the_existing_halt_classification(monkeypatch):
+    """Without a caller-owned deadline, classification is unchanged: the
+    backend's own halt verdict for TimeoutError stands and is NOT retried."""
+    monkeypatch.setattr(platform.time, "sleep", lambda *_: None)
+    backend = _TimeoutHaltingBackend(responses=[TimeoutError("deadline"), "unreached"])
+    with pytest.raises(PipelineHaltError) as ei:
+        call_llm(backend, "s", "u", model="test/model", retries=3)
+    assert ei.value.kind == platform.HALT_UNREACHABLE
+    assert len(backend.calls) == 1
 
 
 def test_classify_halt_text_precedence():

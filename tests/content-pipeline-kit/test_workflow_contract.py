@@ -82,6 +82,7 @@ from content_pipeline.execution.workerpack import (
     enumerate_workflow_invocations,
     format_fenced_answer,
 )
+from content_pipeline.pipeline.workunit import FlatChunkStrategy, GraphWalkStrategy
 
 PLUGIN_ROOT = Path(__file__).resolve().parents[2] / "plugins" / "content-pipeline-kit"
 SCRIPT_PATH = PLUGIN_ROOT / "workflows" / "run-ready-wave.js"
@@ -661,6 +662,23 @@ def test_the_brief_carries_every_invocation_string_the_agent_needs(tmp_path):
     assert "fencing_token" not in prompt.lower().replace("<fencing_token>", "")
 
 
+@requires_node
+def test_the_brief_instructs_both_fail_template_substitutions(tmp_path):
+    """The fail-envelope template carries two placeholders, `<FENCING_TOKEN>`
+    and `<FAILURE_DETAIL_JSON>` (workerpack.py's `_envelope_payload_text`),
+    and the agent-facing docs (agents/pipeline-worker.md,
+    skills/execute-work-unit/SKILL.md) tell the worker to substitute both.
+    The brief's own fail step must give the same instruction, not name only
+    the fencing token and leave the failure-detail placeholder unmentioned."""
+    units = [_pack("solo", 0)]
+    report = _run_stub(
+        tmp_path, _scenario(_wave_args(units, max_agents=1), capture_prompts=True)
+    )
+    assert report["ok"] is True, report.get("error")
+    prompt = report["calls"][0]["prompt"]
+    assert "<FAILURE_DETAIL_JSON>" in prompt
+
+
 # ===========================================================================
 # 3. Arg-validation matrix
 # ===========================================================================
@@ -869,6 +887,54 @@ def test_build_wave_args_packs_match_the_library_strings_byte_for_byte(tmp_path)
         # The ones it DOES author must not be pre-written.
         assert not Path(pack["writeSubmitPath"]).exists()
         assert not Path(pack["writeFailPath"]).exists()
+
+
+def test_build_wave_args_honours_a_graph_strategys_one_unit_wave(tmp_path):
+    """KILLS a builder that selects its own candidates (every PENDING unit
+    plus reclaimable units) without consulting the run's strategy. Against a
+    graph strategy (workunit.py, wave.py: at most one unit may ever be in
+    flight), packing every pending unit lets dependent units be generated
+    concurrently, successor before predecessor applied. With three PENDING
+    units under a graph strategy, the wave must contain exactly one."""
+    store, adapter, _commands = _make_run(tmp_path, ["unit-a", "unit-b", "unit-c"])
+    wc = _worker_command(tmp_path)
+    graph_strategy = GraphWalkStrategy(order=lambda store: [])
+
+    wave = build_wave_args(store, RUN_ID, adapter, wc, 3, strategy=graph_strategy)
+
+    assert len(wave["units"]) == 1
+    assert wave["units"][0]["unitId"] == "unit-a"
+
+
+def test_build_wave_args_honours_a_flat_strategys_max_wave_size(tmp_path):
+    """KILLS a builder that ignores a flat mount's configured max_wave_size
+    (bypassed the same way as the graph one-unit rule above). Five PENDING
+    units, max_wave_size=2 -> the wave contains exactly two."""
+    store, adapter, _commands = _make_run(
+        tmp_path, ["unit-a", "unit-b", "unit-c", "unit-d", "unit-e"]
+    )
+    wc = _worker_command(tmp_path)
+    flat_strategy = FlatChunkStrategy(select=lambda store: [])
+
+    wave = build_wave_args(
+        store, RUN_ID, adapter, wc, 5, strategy=flat_strategy, max_wave_size=2
+    )
+
+    assert len(wave["units"]) == 2
+
+
+def test_build_wave_args_returns_no_units_for_a_halted_run(tmp_path):
+    """KILLS a builder that emits a pack for every pending unit against a
+    halted run. Each lane would then claim, get RunHaltedError, and report
+    halted -- a wasted agent per pending unit instead of an empty wave (and
+    straight to finalize, per skills/workflow-pipeline/SKILL.md)."""
+    store, adapter, _commands = _make_run(tmp_path, ["unit-a", "unit-b"])
+    wc = _worker_command(tmp_path)
+    store.set_halt(RUN_ID, "pause", "operator requested")
+
+    wave = build_wave_args(store, RUN_ID, adapter, wc, 2)
+
+    assert wave["units"] == []
 
 
 # ===========================================================================

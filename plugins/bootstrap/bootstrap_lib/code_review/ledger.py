@@ -181,6 +181,16 @@ def default_ledger() -> dict:
     return {"version": LEDGER_VERSION, "changes": {}}
 
 
+def _valid_entries(bucket: object) -> list[dict]:
+    """Return well-formed entry mappings from a change bucket."""
+    if not isinstance(bucket, dict):
+        return []
+    entries = bucket.get("entries")
+    if not isinstance(entries, list):
+        return []
+    return [entry for entry in entries if isinstance(entry, dict)]
+
+
 def load_ledger(ledger_file: Path) -> dict:
     """Read the ledger JSON, tolerating absence / corruption with a fresh doc."""
     try:
@@ -219,7 +229,7 @@ def ledger_hits(ledger_file: Path, change_id: str, current_baseline: str) -> lis
     if not change:
         return []
     return [
-        e for e in change.get("entries", [])
+        e for e in _valid_entries(change)
         if e.get("baseline") == current_baseline
     ]
 
@@ -239,9 +249,12 @@ def record_declined(
     """
     ledger = load_ledger(ledger_file)
     changes = ledger.setdefault("changes", {})
-    bucket = changes.setdefault(str(change_id), {})
+    bucket = changes.get(str(change_id))
+    if not isinstance(bucket, dict):
+        bucket = {}
+        changes[str(change_id)] = bucket
     existing = [
-        e for e in bucket.get("entries", [])
+        e for e in _valid_entries(bucket)
         if e.get("baseline") == current_baseline
     ]
     by_key = {e["key"]: e for e in existing if e.get("key")}

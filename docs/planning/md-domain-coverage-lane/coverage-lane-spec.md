@@ -62,7 +62,8 @@ one. Three findings settle it, each verified against source:
 - `audit-lane.md:19-22` -- everything before the references section "applies to
   the three per-file lanes". `audit_references` is a carved-out outlier, not a
   general extension point.
-- `audit-lane.md:485-487` -- "The same input produces the same verdict" is an
+- `audit-lane.md` (Gotchas, the Idempotency bullet) -- "The same input produces
+  the same detected finding set and, in normal mode, the same verdict" is an
   audit INVARIANT. This verb disclaims idempotency (see below), so it cannot be
   an audit lane without breaking a contract the audit family relies on.
 - `tests/skills-kit/test_domain_members_resolve.py:213-217` requires every

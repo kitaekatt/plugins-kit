@@ -121,6 +121,20 @@ class TestPerTaskPrivilege:
         r.run_brew_installer({"label": "Install Homebrew"})
         assert seen["argv"][0] != "sudo"
 
+    def test_path_prune_queue_does_not_resolve_bash(self, monkeypatch):
+        monkeypatch.setattr(fr.shutil, "which", lambda name: None)
+        calls = []
+        task = {"kind": "path_prune", "label": "Prune",
+                "entries": ["C:\\dead"]}
+        runner = fr.Runner({
+            "os": "windows",
+            "tasks": [task],
+        })
+        monkeypatch.setattr(runner, "run_path_prune",
+                            lambda task: calls.append(task) or True)
+        assert runner.dispatch(task) is True
+        assert calls
+
 
 # --------------------------------------------------------------------------- #
 # Child environment
@@ -693,6 +707,26 @@ class TestHold:
         assert fr._accepted("\r")
         assert fr._accepted("\n")
         assert not fr._accepted("q")
+
+    def test_briefing_abort_still_holds_the_window(self, monkeypatch, tmp_path):
+        held = []
+        monkeypatch.setattr(fr, "print_briefings", lambda queue: False)
+        monkeypatch.setattr(fr, "wait_for_key", lambda prompt: held.append(prompt))
+        path = tmp_path / "queue.json"
+        path.write_text(json.dumps({
+            "version": 1, "os": "ubuntu",
+            "tasks": [{"kind": "command", "label": "x", "command": "x"}],
+        }))
+        assert fr.main([str(path), "--engine"]) == fr.EXIT_ABORTED
+        assert held
+
+    def test_bad_queue_still_holds_the_window(self, monkeypatch, tmp_path):
+        held = []
+        monkeypatch.setattr(fr, "wait_for_key", lambda prompt: held.append(prompt))
+        path = tmp_path / "queue.json"
+        path.write_text("not json")
+        assert fr.main([str(path), "--engine"]) == fr.EXIT_BAD_QUEUE
+        assert held
 
 
 class TestTranscript:

@@ -146,10 +146,12 @@ bug lanes, opus validators. (1) A power user near their weekly usage limit wants
 everywhere to protect the opus pool -- an acutely realistic preference, since the
 orchestrate policy this marketplace ships renders a live capacity readout precisely because
 users run close to those limits. Absent the seam their only remedies are forking the plugin or not
-running review. (2) A different user wants to ADD a lane -- a security reviewer, or one
-routed to a non-Claude backend for independence. Two distinct users, two distinct wants,
-neither addressable. PASSES; the seam is a layered `review_profiles.yaml` defaulting to
-the pre-seam profiles. Built -- see the SEAMS BUILT table below.
+running review. (2) A different user wants to REROUTE one of the shipped lanes to a
+non-Claude backend for independence, or DISABLE a shipped lane whose coverage does not fit
+their workflow. Two distinct users, two distinct wants, both addressable. Adding a new lane
+is not supported by this seam; its lane set remains the shipped set. PASSES; the seam is a
+layered `review_profiles.yaml` defaulting to the pre-seam profiles. Built -- see the SEAMS
+BUILT table below.
 
 *Evidence from practice:* this exact gap was hit while authoring this document. A review
 needed its opus lanes routed to a different backend, and with no seam the only way through

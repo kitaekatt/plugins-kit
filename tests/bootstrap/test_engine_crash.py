@@ -33,6 +33,36 @@ def _seed_cooldown(data_dir, project_dir):
 
 
 class TestEngineCrashContainment:
+    def test_always_prologue_import_crash_logs_only(self, tmp_path, monkeypatch):
+        data_dir = tmp_path / "data"
+        data_dir.mkdir()
+        project_dir = tmp_path / "proj"
+        project_dir.mkdir()
+        stamp = _seed_cooldown(data_dir, project_dir)
+
+        def _import_boom():
+            raise ModuleNotFoundError(
+                "No module named 'bootstrap_lib.records'",
+                name="bootstrap_lib.records",
+            )
+
+        monkeypatch.setattr(engine, "_main", _import_boom)
+        monkeypatch.setattr(sys, "argv", [
+            "bootstrap_engine.py",
+            "--plugin-root", str(tmp_path / "unused-root"),
+            "--data-dir", str(data_dir),
+            "--project-dir", str(project_dir),
+            "--background",
+            "--run-kind", "always",
+        ])
+
+        with pytest.raises(SystemExit) as exc:
+            engine.main()
+        assert exc.value.code == 1
+        assert stamp.exists()
+        assert not (data_dir / "bootstrap_display.pending").exists()
+        assert "always" in (data_dir / "bootstrap.log").read_text()
+
     def test_crash_writes_pending_and_clears_cooldown(self, tmp_path, monkeypatch, capsys):
         data_dir = tmp_path / "data"
         data_dir.mkdir()

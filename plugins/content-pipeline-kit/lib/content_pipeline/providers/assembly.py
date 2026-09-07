@@ -113,10 +113,6 @@ class SlotSyntax:
         """
         return tuple(m.group(1) for m in self._pattern.finditer(text))
 
-    def iter_matches(self, text: str):
-        """Yield ``re.Match`` objects for each slot (for callers needing spans)."""
-        return self._pattern.finditer(text)
-
     def has_any_slot(self, text: str) -> bool:
         """Return True iff ``text`` contains at least one slot."""
         return self._pattern.search(text) is not None

@@ -27,6 +27,18 @@ class TestVersionSatisfies:
         assert engine._version_satisfies("0.21.5", ">=0.21")
         assert not engine._version_satisfies("0.20", ">=0.21.0")
 
+    def test_unsupported_prefix_is_never_silently_satisfied(self):
+        # _parse_semver only strips ">="; a caret/tilde/bare-">" range's
+        # leading non-digit used to scan to 0 ("^1.2.0" -> (0, 2, 0)), so a
+        # much older engine version falsely satisfied it. Not documented
+        # anywhere as a supported requires_bootstrap form -- only bare and
+        # ">=" are (see this class's other two tests) -- so it must never
+        # read as satisfied, regardless of how low `current` is.
+        assert not engine._version_satisfies("0.3.0", "^1.2.0")
+        assert not engine._version_satisfies("99.0.0", "^1.2.0")
+        assert not engine._version_satisfies("99.0.0", "~1.2")
+        assert not engine._version_satisfies("99.0.0", ">1.2.0")
+
 
 def _plugin(tmp_path, manifest, *, name="p4-kit", version="0.14.0"):
     (tmp_path / "bootstrap.json").write_text(json.dumps(manifest))

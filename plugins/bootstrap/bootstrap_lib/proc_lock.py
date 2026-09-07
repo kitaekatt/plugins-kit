@@ -24,6 +24,7 @@ from __future__ import annotations
 import os
 import random
 import time
+import uuid
 from contextlib import contextmanager
 from typing import Optional
 
@@ -185,15 +186,30 @@ def _try_acquire(lock_path: str) -> bool:
 
 
 def _remove_if_owned(lock_path: str, pid: Optional[int]) -> None:
-    """Remove the lock file only if it still records ``pid`` (or both the
-    file's current content and ``pid`` are unreadable/None) -- never removes
-    a lock some OTHER process has since created or claimed. Best-effort;
-    never raises."""
+    """Remove the lock file only if it still records ``pid``.
+
+    First rename it to a unique path. This makes the stale-file claim atomic:
+    a loser whose contender has already claimed the lock cannot remove that
+    contender's file. Inspect the claimed path before deleting it so a lock
+    whose content changed after the initial read is preserved.
+    Best-effort; never raises.
+    """
     owner = _read_lock_pid(lock_path)
     if owner != pid:
         return
+    stale_path = f"{lock_path}.stale-{uuid.uuid4()}"
     try:
-        os.remove(lock_path)
+        os.replace(lock_path, stale_path)
+    except OSError:
+        return
+    if _read_lock_pid(stale_path) != pid:
+        try:
+            os.replace(stale_path, lock_path)
+        except OSError:
+            pass
+        return
+    try:
+        os.remove(stale_path)
     except OSError:
         pass
 

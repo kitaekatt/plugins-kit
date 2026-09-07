@@ -200,6 +200,20 @@ def test_renew_without_a_claim_raises_not_claimed(tmp_path):
         store.renew_lease("run-1", "u0", 0)
 
 
+def test_renew_against_an_accepted_unit_raises_terminal_state(tmp_path):
+    """model.py promises no further claim, renew, accept, or fail is legal
+    against a terminal unit (execution.store raises TerminalStateError).
+    accept_unit and fail_unit both check TERMINAL_STATES before the
+    not-CLAIMED check; a renew_lease that skips straight to the not-CLAIMED
+    check makes an accepted unit's own (still-current) fencing token raise
+    NotClaimedError instead of TerminalStateError."""
+    store = _seeded_store(tmp_path)
+    claim = store.claim_unit("run-1", "u0", "worker-a")
+    store.accept_unit("run-1", "u0", claim.fencing_token)
+    with pytest.raises(TerminalStateError):
+        store.renew_lease("run-1", "u0", claim.fencing_token)
+
+
 def test_accept_with_a_nonmatching_token_on_an_unclaimed_unit_is_stale_fence(tmp_path):
     """Fence is checked BEFORE the state check (defect 7's fix): a presented
     token that does not match the unit's current token is always

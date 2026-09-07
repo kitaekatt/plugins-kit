@@ -62,6 +62,19 @@ the cooldown and start a new session:
 bash plugins/bootstrap/scripts/bootstrap-reset-cooldown.sh
 ```
 
+If a Python venv itself looks wrong -- uv reports a Python it cannot run, or
+a Windows junction under uv's python directory does not resolve -- diagnose
+it directly:
+
+```bash
+bash plugins/bootstrap/scripts/diagnose-python-venv.sh
+```
+
+It reports uv's installation and installed Python versions, checks uv's
+python directory for the Windows junction/mount-point problem, and inspects
+the bootstrap plugin's own venv (`pyvenv.cfg` and whether its Python runs).
+Read-only -- it makes no changes to the system.
+
 ## What it writes outside its own directory
 
 Bootstrap provisions the machine, so it deliberately writes beyond the plugin

@@ -225,7 +225,7 @@ path in `_phase_plugins`.
 The resolved scope drives **both** the `--scope` argument and the
 `_run_claude_scoped(args, scope, project_dir)` call, so the settings file made
 writable ahead of the CLI's rewrite (`settings_path_for_scope`) is the same one
-the CLI actually writes. `install_plugin` / `uninstall_plugin` keep using the
+the CLI actually writes. Plugin installation and removal keep using the
 caller's scope: those genuinely choose where a plugin should live, whereas an
 update only follows where it already lives.
 
@@ -686,6 +686,16 @@ Bootstrap keeps several small string-valued **stamp** files — the cooldown epo
 **The stale-restart notice stops once provisioning converges.** `_bootstrap_stale_advice` suppresses the "bootstrap was updated to X; restart to load it" notice when `engine_ran_version` is already `>=` the registry version: the new engine has completed a pass (via the harvest or an earlier restart), so a restart would only reload plugin *code*. The notice is kept while `engine_ran_version` is still behind.
 
 **The harvest logs the version actually on disk.** `launch_new_engine` launches an `installPath`, not a version number. `read_path_version` reads that path's own `.claude-plugin/plugin.json`, and when it disagrees with the registry-claimed version the harvest's log line names both -- otherwise a mismatch (a half-written cache dir, a dev-tree repoint) is invisible and the status line reports a version that never ran.
+
+## Diagnosing a Python that uv reports but cannot run
+
+`plugins/bootstrap/scripts/diagnose-python-venv.sh` is a read-only diagnostic
+for the venv-provisioning failures that look like "uv found a Python, then the
+venv failed": it prints the uv install and every Python uv has installed, checks
+the Windows junction / mount-point shape under uv's python directory, and prints
+the bootstrap venv's `pyvenv.cfg`. It writes nothing. Run it with `bash` from the
+plugin cache when a `venv: FAILED` line names an interpreter the shell cannot
+run; its output is the evidence to attach before any repair.
 
 ## Design Principles
 

@@ -398,6 +398,34 @@ def test_a_changed_declaration_is_not_served_from_the_pin(tmp_path, monkeypatch)
     assert calls == ["seven_day", "model_scoped"]
 
 
+def test_a_float_resets_at_survives_the_pinned_round_trip(tmp_path, monkeypatch):
+    """The rehydration in pinned_evaluate used isinstance(x, int) to decide
+    whether to keep a cached resets_at, while the EXPIRY check just above it
+    accepts isinstance(x, (int, float)) -- so a float epoch (e.g. from a
+    harness snapshot that reports sub-second timestamps) was used correctly
+    to decide the verdict was not yet expired, and then reported back with
+    resets_at=None, i.e. "no reset known", instead of the value that was just
+    used to make that very decision.
+    """
+    cache = tmp_path / "verdicts.json"
+
+    def fake_evaluate(spec, harness, *, now=None):
+        return usage_budget.Budget(
+            status=STATUS_UNDER_QUOTA, pool=spec.pool, detail="x", resets_at=NOW + 100.0
+        )
+
+    monkeypatch.setattr(usage_budget, "evaluate", fake_evaluate)
+    env = {"CLAUDE_CODE_SESSION_ID": "s1"}
+    spec = ConserveSpec(pool="seven_day")
+    usage_budget.pinned_evaluate("fable", spec, "claude", now=NOW, cache_path=cache, environ=env)
+    # Read back within the window (not yet expired) -- served from the pin.
+    held = usage_budget.pinned_evaluate(
+        "fable", spec, "claude", now=NOW + 50, cache_path=cache, environ=env
+    )
+    assert held.status == STATUS_UNDER_QUOTA
+    assert held.resets_at is not None
+
+
 def test_a_conserved_verdict_is_recomputed_once_its_window_resets(tmp_path, monkeypatch):
     cache = tmp_path / "verdicts.json"
     statuses = iter([STATUS_UNDER_QUOTA, STATUS_AVAILABLE])

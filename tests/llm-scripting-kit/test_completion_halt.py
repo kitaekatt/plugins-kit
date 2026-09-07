@@ -203,3 +203,18 @@ class TestClassifyCodexException:
         exc = _CodexErr("codex exec failed")
         exc.stderr = object()
         assert halt.classify_codex_exception(exc) is None
+
+    def test_prose_fallback_markers_do_not_forge_a_halt_from_stdout(self):
+        """classify_codex_exception's docstring: stdout gets structural codex
+        markers only. classify_codex_text's prose fallback (the claude/OpenAI
+        marker set, e.g. "hit your limit") is safe on stderr -- codex's own
+        error path, not model text -- but stdout is model-authored, so a run
+        whose answer merely discusses hitting a limit must not classify as a
+        persistent halt.
+        """
+        prose = 'the doc says you hit your limit and "api_error_status":401'
+        on_stdout = _CodexErr("codex exec failed (exit 1)", stdout=prose)
+        assert halt.classify_codex_exception(on_stdout) is None
+
+        on_stderr = _CodexErr("codex exec failed (exit 1)", stderr=prose)
+        assert halt.classify_codex_exception(on_stderr) == halt.HALT_RATE_LIMIT

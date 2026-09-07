@@ -65,6 +65,7 @@ _COMPILED: tuple[tuple[str, re.Pattern[str]], ...] = tuple(
 _COMPILED_BYTES: tuple[tuple[str, re.Pattern[bytes]], ...] = tuple(
     (label, re.compile(pattern.encode("utf-8"))) for label, pattern in SIGNATURES
 )
+_HUNK_HEADER_RE = re.compile(r"^@@+ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@")
 
 
 def detect_signature(text: str) -> Optional[str]:
@@ -135,6 +136,35 @@ def local_size(local: Optional[str]) -> Optional[int]:
         return None
 
 
+def _added_head_by_new_line(section_text: str, max_lines: int) -> str:
+    """Return added post-image lines whose new-file positions are in the head."""
+    out: list[str] = []
+    new_line: Optional[int] = None
+    saw_hunk = False
+    for line in section_text.splitlines():
+        match = _HUNK_HEADER_RE.match(line)
+        if match:
+            saw_hunk = True
+            new_line = int(match.group(1))
+            continue
+        if new_line is None or line.startswith("\\"):
+            continue
+        if line.startswith("+") and not line.startswith("+++"):
+            if new_line <= max_lines:
+                out.append(line[1:])
+            new_line += 1
+        elif line.startswith("-"):
+            continue
+        else:
+            new_line += 1
+    if not saw_hunk:
+        # Keep the VCS-neutral helper tolerant of synthetic/legacy sections that
+        # do not carry a unified hunk header. Real diff sections take the
+        # position-aware path above.
+        return added_head(section_text, max_lines)
+    return "\n".join(out)
+
+
 def detect_machine_emitted(
     section_text: str,
     local: Optional[str] = None,
@@ -142,11 +172,9 @@ def detect_machine_emitted(
 ) -> Optional[str]:
     """Signature label if this changed file is machine-emitted, else None.
 
-    Scans the leading ADDED lines of the diff section first (which covers an
-    added file, and a deleted or workspace-less one where nothing is on disk),
-    then the leading lines of the file on disk (which covers a modified one).
+    Scans the post-image head on disk when available. Without a local file, it
+    scans only added lines whose new-file positions are in the head window.
     """
-    label = detect_signature(added_head(section_text, max_lines))
-    if label:
-        return label
-    return detect_signature(local_head(local, max_lines))
+    if local and Path(local).is_file():
+        return detect_signature(local_head(local, max_lines))
+    return detect_signature(_added_head_by_new_line(section_text, max_lines))

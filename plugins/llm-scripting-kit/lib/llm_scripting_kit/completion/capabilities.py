@@ -50,6 +50,7 @@ DISABLE = "disable"
 """The emission asks the target not to load or expose the named subjects."""
 
 BYPASS = "bypass"
+"""The emission asks the target not to require interactive approval."""
 
 # -- canonical guarantee subjects -------------------------------------------
 #
@@ -102,7 +103,6 @@ def subjects_for_disallowed_tools(disallowed_tools):
         subject for subject, aliases in _TOOL_SUBJECTS.items() if names & aliases
     )
 
-"""The emission asks the target not to require interactive approval."""
 
 # -- control provenance ----------------------------------------------------
 

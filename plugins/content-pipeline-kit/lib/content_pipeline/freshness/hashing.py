@@ -30,6 +30,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Mapping as MappingABC
+from datetime import date, datetime
+from decimal import Decimal
+from enum import Enum
+from pathlib import Path
 from typing import Iterable, Tuple
 
 # The per-item digest convention shared by both source systems: 16 hex
@@ -40,17 +45,64 @@ DEFAULT_DIGEST_LENGTH = 16
 FULL_DIGEST_LENGTH = 64
 
 
+def _canonicalize(obj, path: str = "$"):
+    """Recursively convert ``obj`` into a JSON-native, order-independent shape.
+
+    Handles the value families that appear in prepared pipeline payloads:
+    ``set``/``frozenset`` become a list of canonicalized members sorted by
+    their own canonical JSON text (so a set's iteration order, which is
+    ``PYTHONHASHSEED``-dependent, never reaches the digest); ``tuple``
+    becomes a list; ``pathlib.Path`` becomes its string form;
+    ``datetime``/``date`` become an ISO-8601 string; ``Decimal`` becomes its
+    string form (exact, unlike a float round-trip); ``Enum`` becomes its
+    (canonicalized) value. A ``Mapping`` recurses per key; every other
+    mapping/sequence/scalar type recurses structurally. Any value this
+    function cannot place is a caller error: raise :class:`TypeError` naming
+    the key path so the offending field is obvious without a debugger.
+    """
+    if obj is None or isinstance(obj, (str, int, float, bool)):
+        return obj
+    if isinstance(obj, MappingABC):
+        return {str(k): _canonicalize(v, f"{path}.{k}") for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_canonicalize(v, f"{path}[{i}]") for i, v in enumerate(obj)]
+    if isinstance(obj, (set, frozenset)):
+        members = [_canonicalize(v, f"{path}{{*}}") for v in obj]
+        members.sort(key=lambda v: json.dumps(v, sort_keys=True, ensure_ascii=True, separators=(",", ":")))
+        return members
+    if isinstance(obj, Path):
+        return str(obj)
+    if isinstance(obj, (datetime, date)):
+        return obj.isoformat()
+    if isinstance(obj, Decimal):
+        return str(obj)
+    if isinstance(obj, Enum):
+        return _canonicalize(obj.value, path)
+    raise TypeError(
+        f"stable_json: cannot canonicalize {type(obj).__name__!r} at {path}"
+    )
+
+
 def stable_json(obj) -> bytes:
     """Serialize ``obj`` to a stable, deterministic ASCII byte string.
 
-    ``sort_keys`` keeps dict ordering out of the digest; ``ensure_ascii``
-    escapes any non-ASCII to ``\\uXXXX`` so the output is pure ASCII;
-    ``default=str`` tolerates values JSON cannot encode natively;
-    ``separators`` drops insignificant whitespace so the encoding is
-    byte-stable across Python versions.
+    Every value is canonicalized explicitly first (see :func:`_canonicalize`)
+    -- a set/frozenset sorts to a list by its own canonical text, a tuple
+    becomes a list, and ``Path``/``datetime``/``date``/``Decimal``/``Enum``
+    each get a deterministic scalar form -- so the result never depends on
+    ``PYTHONHASHSEED`` or on an object's ``id()``. ``sort_keys`` keeps dict
+    ordering out of the digest; ``ensure_ascii`` escapes any non-ASCII to
+    ``\\uXXXX`` so the output is pure ASCII; ``separators`` drops
+    insignificant whitespace so the encoding is byte-stable across Python
+    versions. A value :func:`_canonicalize` cannot place raises
+    :class:`TypeError` naming the key path -- there is no ``default=str``
+    fallback, because silently stringifying an arbitrary object (which may
+    embed its ``id()``, e.g. ``<Foo object at 0x...>``) is exactly the
+    non-determinism this function exists to prevent.
     """
+    canonical = _canonicalize(obj)
     return json.dumps(
-        obj, sort_keys=True, ensure_ascii=True, default=str,
+        canonical, sort_keys=True, ensure_ascii=True,
         separators=(",", ":"),
     ).encode("ascii")
 

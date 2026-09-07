@@ -66,14 +66,48 @@ class TestLinkToolDirToPath:
         engine._link_tool_dir_to_path(result, "", actions)
 
         assert any("FAILED" in action for action in actions)
-        assert not any(" on PATH - added" in action for action in actions)
+        assert not any(" on PATH -- added" in action for action in actions)
         # Persistence failed, but the live process PATH is independent of it:
         # later phases this run must still find the tool.
+        assert "/opt/draw.io" in os.environ["PATH"].split(os.pathsep)
+
+    def test_persistence_failure_emits_exactly_one_action_entry(self, monkeypatch):
+        """A persistence failure must not also emit the success "added" line --
+        one outcome, one action entry, never both."""
+        monkeypatch.setattr(path_check, "add_path_to_shell_config",
+                            lambda d: (False, "failed to write .bashrc"))
+        actions = []
+        result = _tool_result("draw.io", True, "found",
+                              path="/opt/draw.io/draw.io", on_path=False)
+
+        monkeypatch.setenv("PATH", "/usr/bin")
+        engine._link_tool_dir_to_path(result, "", actions)
+
+        assert len(actions) == 1
+        assert "FAILED" in actions[0]
         assert "/opt/draw.io" in os.environ["PATH"].split(os.pathsep)
 
     def test_path_entry_persistence_failure_is_a_failed_action(self, monkeypatch):
         monkeypatch.setattr(path_check, "add_path_to_shell_config",
                             lambda d: (False, "failed to write .bashrc"))
+        monkeypatch.setenv("PATH", "/usr/bin")
+        actions, ok_entries = [], []
+
+        engine._process_path_entries(["/opt/missing"], "", actions, ok_entries)
+
+        assert any("FAILED" in action for action in actions)
+        assert not any("PATH added" in action for action in actions)
+
+    def test_path_entry_writer_ok_but_recheck_still_failing_is_failed(self, monkeypatch):
+        """The writer's say-so is not authoritative -- a re-check exactly like
+        every neighbouring phase. writer True + re-check still failing ->
+        FAILED, never "PATH added"."""
+        monkeypatch.setattr(path_check, "add_path_to_shell_config",
+                            lambda d: (True, "added to .bashrc"))
+        monkeypatch.setattr(path_check, "check_path_entry",
+                            lambda d: path_check.Result(
+                                passed=False, subject=d,
+                                message=f"{d} is not in PATH"))
         monkeypatch.setenv("PATH", "/usr/bin")
         actions, ok_entries = [], []
 
@@ -240,6 +274,18 @@ class TestProcessToolEntry:
         assert failure is None
         assert calls == {"pkg": "main/p4", "tool": "p4"}
         assert tools_installed and "via scoop" in tools_installed[0][1]
+
+    def test_non_mapping_entry_is_a_per_item_failure_not_an_exception(self, tmp_path):
+        """A layered manifest's "tools": ["uv"] shape (a bare name, not an
+        object) must not blow up the whole pass -- every other list section
+        guards shape first."""
+        action_entries, ok_entries, tools_installed = [], [], []
+        failure = engine._process_tool_entry(
+            "uv", "linux", str(tmp_path), "", action_entries, ok_entries,
+            tools_installed, plugin_name="bootstrap",
+        )
+        assert failure is not None
+        assert failure["type"] == "tool"
 
     def test_scoop_unavailable_is_failure_no_pkg_install(self, tmp_path, monkeypatch):
         """If Scoop can't be provisioned, don't try to install the package; emit a

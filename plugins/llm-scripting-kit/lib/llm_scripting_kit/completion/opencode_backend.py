@@ -43,7 +43,9 @@ from . import halt
 from .claude_runner import AgentTimeoutError, run_cli_streaming
 from .adapter_capabilities import OPENCODE_CAPABILITIES
 from .capabilities import Capabilities
+from .prompt_fold import fold_prompt
 from .results import (
+    check_applied_controls,
     derive_dropped_params,
     derive_forwarded_params,
     fixed_control_ids,
@@ -59,8 +61,8 @@ DEFAULT_OPENCODE_TIMEOUT_S = 120.0
 
 # OpenCode exposes one stdin prompt rather than a separate system channel.
 OPENCODE_PROMPT_SEPARATOR = "\n\n---\n\n"
-# Kept as a local spelling for callers/tests that use the sibling's helper
-# name; it is not exported as the Codex module's package-level name.
+# Public alias kept for callers that import the sibling helper name from this
+# module (a shared-library name in __all__ stays resolvable).
 PROMPT_SEPARATOR = OPENCODE_PROMPT_SEPARATOR
 
 # This is an OpenCode permission boundary, not an OS-level filesystem sandbox.
@@ -111,12 +113,9 @@ def compose_prompt(system: str, user: str) -> str:
     OpenCode's non-interactive ``run`` command has one prompt channel. Keep
     the system half first, with the same explicit separator used by the Codex
     sibling, and avoid a leading/trailing separator when one half is empty.
+    The folding itself is shared with that sibling -- see :mod:`.prompt_fold`.
     """
-    if not system:
-        return user
-    if not user:
-        return system
-    return f"{system}{OPENCODE_PROMPT_SEPARATOR}{user}"
+    return fold_prompt(system, user, OPENCODE_PROMPT_SEPARATOR)
 
 
 def _entry_for_model(model: str) -> EndpointEntry:
@@ -278,16 +277,62 @@ class OpencodeCliBackend:
             wall_ms=wall_ms,
             attempts=1,
             from_cache=False,
-            dropped_params=derive_dropped_params(self.capabilities, opts),
+            dropped_params=self._dropped_params(opts),
             forwarded_params=derive_forwarded_params(self.capabilities, opts),
-            # Every control this adapter advertises is source=FIXED -- the
-            # injected permission scalars and the four fixed flags go out on
-            # every invocation -- so the applied set is the advertised set and
-            # is read from it rather than restated here.
-            execution_controls_applied=fixed_control_ids(self.capabilities),
+            # Most controls this adapter advertises are source=FIXED -- the
+            # four fixed flags plus the unconditional permission scalars go
+            # out on every invocation, so the fixed set is read straight from
+            # the advertisement. Three are source=REQUEST, though
+            # (permission-bash-deny, permission-edit-deny,
+            # permission-task-request-deny): they are armed only when a
+            # caller's disallowed_tools names a matching subject, via the same
+            # translation _confined_opencode_env uses to build the env, so
+            # they are reported only when actually emitted.
+            execution_controls_applied=self._applied_controls(opts),
             started_at=started_at,
             ended_at=utc_now_iso(),
         )
+
+    def _dropped_params(self, opts: BackendOptions) -> "tuple[str, ...]":
+        """The generic derivation, plus disallowed_tools when it went nowhere.
+
+        disallowed_tools is not in OPENCODE_CAPABILITIES.dropped_params -- the
+        adapter DOES honour it, when the value names a subject it has a
+        permission scalar for. But a value naming no recognised subject at all
+        (e.g. "Read WebFetch": no edit/bash/task token in it) emits nothing,
+        so the caller's deny request went nowhere -- a partially-honoured-param
+        case the generic field-vs-advertisement intersection in
+        derive_dropped_params cannot see, because it is per-VALUE rather than
+        per-field. Report it as dropped for this call only, exactly when
+        subjects_for_disallowed_tools finds nothing to translate; a value that
+        maps at least one subject (even alongside unrecognised names) is
+        honoured in part and stays unreported, matching the outcome
+        _applied_controls reports for it.
+        """
+        dropped = list(derive_dropped_params(self.capabilities, opts))
+        if opts.disallowed_tools is not None and not subjects_for_disallowed_tools(
+            opts.disallowed_tools
+        ):
+            dropped.append("disallowed_tools")
+        return tuple(dropped)
+
+    def _applied_controls(self, opts: BackendOptions) -> "tuple[str, ...]":
+        """The advertised controls this call's env actually carries.
+
+        The fixed set is unconditional -- every source=FIXED control in the
+        advertisement goes out on every invocation. The three source=REQUEST
+        deny controls are conditional: they are armed only when
+        ``disallowed_tools`` names a subject :func:`denied_permissions`
+        translates into a permission scalar, via the same
+        ``subjects_for_disallowed_tools`` mapping ``_confined_opencode_env``
+        uses to build the env this call sends.
+        """
+        applied = list(fixed_control_ids(self.capabilities))
+        for subject in subjects_for_disallowed_tools(opts.disallowed_tools):
+            control_id = _CONTROL_ID_FOR_SUBJECT.get(subject)
+            if control_id is not None:
+                applied.append(control_id)
+        return check_applied_controls(self.capabilities, applied)
 
     def classify_halt(self, exc: BaseException) -> Optional[str]:
         """Classify a halt without raising :class:`halt.HaltError` itself."""
@@ -317,6 +362,16 @@ _PERMISSION_KEY_FOR_SUBJECT = {
     FILESYSTEM_WRITE: "edit",
     SHELL_EXEC: "bash",
     SUBAGENT_SPAWN: "task",
+}
+
+# The execution-control id each subject arms, matching the three
+# source=REQUEST entries in OPENCODE_CAPABILITIES.execution_controls. Kept as
+# its own map (rather than derived from _PERMISSION_KEY_FOR_SUBJECT) because
+# it names ids the advertisement owns, not permission scalars.
+_CONTROL_ID_FOR_SUBJECT = {
+    FILESYSTEM_WRITE: "permission-edit-deny",
+    SHELL_EXEC: "permission-bash-deny",
+    SUBAGENT_SPAWN: "permission-task-request-deny",
 }
 
 
@@ -406,10 +461,9 @@ __all__ = [
     "DEFAULT_OPENCODE_TIMEOUT_S",
     "OPENCODE_FILESYSTEM_POSTURE",
     "OPENCODE_PROMPT_SEPARATOR",
+    "PROMPT_SEPARATOR",
     "OpencodeCliBackend",
     "OpencodeRunError",
-    "PROMPT_SEPARATOR",
-    "_confined_opencode_env",
     "denied_permissions",
     "compose_prompt",
 ]

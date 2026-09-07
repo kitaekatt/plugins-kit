@@ -71,6 +71,39 @@ def test_reload_validation_failure_restores_bak(tmp_path):
     assert _json_load(art) == {"v": 1}  # restored from .bak
 
 
+def test_first_write_failure_leaves_no_artifact(tmp_path):
+    # No prior artifact exists, so there is no .bak to restore -- a failed
+    # serialize/reload on a FIRST write must not leave the corrupt new
+    # artifact in place.
+    art = tmp_path / "proj.json"
+
+    def bad_serialize(path, content):
+        path.write_text("{not json", encoding="utf-8")
+
+    with pytest.raises(json.JSONDecodeError):
+        apply_projection(art, {"v": 1}, serialize=bad_serialize, load=_json_load)
+    assert not art.exists()
+
+
+def test_reload_validation_failure_exposes_result_on_the_exception(tmp_path):
+    # rolled_back is set on a local ProjectionResult that is never returned
+    # (the exception propagates before the function returns), so a caller
+    # otherwise has no way to observe it. The failed-write result is
+    # attached to the raised exception instead.
+    art = tmp_path / "proj.json"
+    apply_projection(art, {"v": 1}, serialize=_json_serialize)
+
+    def bad_serialize(path, content):
+        path.write_text("{not json", encoding="utf-8")
+
+    try:
+        apply_projection(art, {"v": 2}, serialize=bad_serialize, load=_json_load)
+    except json.JSONDecodeError as exc:
+        assert exc.result.rolled_back is True
+    else:
+        raise AssertionError("expected JSONDecodeError")
+
+
 def test_validate_predicate_failure_restores_bak(tmp_path):
     art = tmp_path / "proj.json"
     apply_projection(art, {"ok": True}, serialize=_json_serialize)

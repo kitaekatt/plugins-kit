@@ -28,6 +28,8 @@ import sys
 from pathlib import Path
 from typing import Any, Mapping, NoReturn, Sequence
 
+from bootstrap_lib.code_review import lane_prompts
+
 
 CONFIG_NAME = "review_profiles.yaml"
 _SCRIPT_DIR = Path(__file__).resolve().parent
@@ -440,7 +442,12 @@ def _validate_layer(
         )
 
 
-def _validate_resolved(value: Mapping[str, Any], source: Path | str) -> None:
+def _validate_resolved(
+    value: Mapping[str, Any],
+    source: Path | str,
+    *,
+    require_runtime_coverage: bool = False,
+) -> None:
     """Validate the merged table, including required fields of active records."""
     _validate_known_fields(value, TOP_LEVEL_FIELDS, source, "top level")
     if "profiles" not in value:
@@ -448,6 +455,8 @@ def _validate_resolved(value: Mapping[str, Any], source: Path | str) -> None:
     profiles = value["profiles"]
     if not isinstance(profiles, list):
         _fail(source, "profiles", f"must be a list, got {type(profiles).__name__}")
+    if require_runtime_coverage and not profiles:
+        _fail(source, "profiles", "must contain at least one active review profile")
 
     seen: set[str] = set()
     for index, profile in enumerate(profiles):
@@ -466,6 +475,24 @@ def _validate_resolved(value: Mapping[str, Any], source: Path | str) -> None:
             existing=None,
             complete=True,
         )
+        if not require_runtime_coverage:
+            continue
+        reviewers = profile["reviewers"]
+        if not reviewers:
+            _fail(
+                source,
+                f"{location}.reviewers",
+                f"profile {profile['id']!r} must contain at least one active reviewer",
+            )
+        supported = sorted(lane_prompts.KNOWN_LANES - {"validator"})
+        for reviewer_index, reviewer in enumerate(reviewers):
+            name = reviewer["name"]
+            if name not in lane_prompts.KNOWN_LANES - {"validator"}:
+                _fail(
+                    source,
+                    f"{location}.reviewers[{reviewer_index}].name",
+                    f"unknown reviewer lane {name!r}; supported reviewer lanes: {supported}",
+                )
 
 
 def validate_config(value: Mapping[str, Any], source: PathLike = "<resolved>") -> None:
@@ -477,7 +504,7 @@ def validate_config(value: Mapping[str, Any], source: PathLike = "<resolved>") -
     """
     if not isinstance(value, dict):
         _fail(source, "top level", f"must be a mapping, got {type(value).__name__}")
-    _validate_resolved(value, source)
+    _validate_resolved(value, source, require_runtime_coverage=True)
 
 
 def merge_records(
@@ -577,7 +604,11 @@ def resolve_config(
 
     _validate_resolved(config, "resolved review profiles")
     config = _without_disabled(config)
-    _validate_resolved(config, "resolved review profiles after disabled records")
+    _validate_resolved(
+        config,
+        "resolved review profiles after disabled records",
+        require_runtime_coverage=True,
+    )
     return config, provenance
 
 

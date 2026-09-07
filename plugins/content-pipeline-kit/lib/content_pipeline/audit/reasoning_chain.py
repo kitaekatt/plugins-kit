@@ -50,11 +50,18 @@ def build_event(
     """Assemble one reasoning-chain event dict, dropping absent fields.
 
     Every field is optional so one call can record a generation input, a
-    rejected attempt, or a final pick without carrying empty keys. A monotonic
-    ``at`` timestamp orders events within a chain even when the wall clock is
-    coarse.
+    rejected attempt, or a final pick without carrying empty keys. ``at`` is a
+    wall-clock stamp (``time.time()``), not a monotonic one -- a
+    :class:`SidecarRecorder` persists a chain ACROSS process restarts, and
+    ``time.monotonic()``'s epoch is per-process (arbitrary, reset on each
+    process start), so a later event recorded by a freshly started process could
+    carry a SMALLER monotonic reading than an earlier event from a
+    longer-lived one. The ordering GUARANTEE a reader relies on is the list
+    order within a chain (each recorder appends), not this field; ``at`` is a
+    timestamp for display/diagnostics, not a sort key to trust across a
+    restart.
     """
-    event: dict = {"at": time.monotonic()}
+    event: dict = {"at": time.time()}
     if stage:
         event["stage"] = stage
     if inputs is not None:

@@ -53,6 +53,16 @@ def _head_subject(repo):
     return proc.stdout.strip()
 
 
+def _head_sha(repo):
+    proc = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=str(repo),
+        capture_output=True,
+        text=True,
+    )
+    return proc.stdout.strip()
+
+
 def _committed_files(repo, sha="HEAD"):
     proc = subprocess.run(
         ["git", "show", "--name-only", "--pretty=format:", sha],
@@ -181,5 +191,87 @@ def test_git_runner_is_injectable_without_subprocess():
     vcs.move_into(cs, ["a.txt"])
     sha = vcs.finalize_description(cs, "msg")
     assert sha == "deadbeef"
-    assert ["add", "--", "a.txt"] in calls
-    assert ["commit", "-m", "msg", "--", "a.txt"] in calls
+    assert ["add", "--", ":(literal)a.txt"] in calls
+    assert ["commit", "-m", "msg", "--", ":(literal)a.txt"] in calls
+
+
+def test_deliver_over_git_backend_second_unchanged_run_does_not_raise(repo):
+    # apply_inplace is idempotent, so a second deliver over unchanged content
+    # produces no diff to stage; the git backend must swallow git's
+    # "nothing to commit" exit and return None rather than raising.
+    vcs = GitVcs(repo_root=repo)
+    (repo / "one.txt").write_text("", encoding="utf-8")
+
+    items = [{"id": "one", "path": str(repo / "one.txt")}]
+
+    def apply_item(it):
+        with open(it["path"], "w", encoding="utf-8") as fh:
+            fh.write("content for one\n")
+
+    result1 = deliver_changeset(
+        items,
+        vcs=vcs,
+        item_id=lambda it: it["id"],
+        path_of=lambda it: it["path"],
+        apply_item=apply_item,
+        describe=lambda moved: "deliver: " + ", ".join(i for i, _p in moved),
+    )
+    assert [i for i, _p in result1.moved] == ["one"]
+    first_head = _head_sha(repo)
+
+    # Second pass writes the exact same content -- no diff to stage.
+    result2 = deliver_changeset(
+        items,
+        vcs=vcs,
+        item_id=lambda it: it["id"],
+        path_of=lambda it: it["path"],
+        apply_item=apply_item,
+        describe=lambda moved: "deliver: " + ", ".join(i for i, _p in moved),
+    )
+    assert [i for i, _p in result2.moved] == ["one"]
+    # No second commit was created (compare the SHA: a second commit would
+    # carry the same subject, so the subject alone cannot tell).
+    assert _head_sha(repo) == first_head
+
+
+def test_move_into_stages_literal_wildcard_named_file_only(repo):
+    # A filename containing glob metacharacters must be staged literally --
+    # never expanded against sibling files.
+    (repo / "a[1].txt").write_text("bracket\n", encoding="utf-8")
+    (repo / "a1.txt").write_text("sibling\n", encoding="utf-8")
+
+    vcs = GitVcs(repo_root=repo)
+    cs = vcs.make_changeset("p")
+    vcs.move_into(cs, [repo / "a[1].txt"])
+    sha = vcs.finalize_description(cs, "stage bracket file only")
+
+    assert sha is not None
+    assert _committed_files(repo, sha) == ["a[1].txt"]
+
+
+def test_revert_of_new_indexed_file_unstages_and_removes(repo):
+    # A delivery that `add`-ed a brand-new file (present only in the index,
+    # not in HEAD) must have revert remove it and unstage it -- the p4
+    # semantics -- rather than fail with "pathspec did not match".
+    vcs = GitVcs(repo_root=repo)
+    new_file = repo / "brand_new.txt"
+    new_file.write_text("new\n", encoding="utf-8")
+    vcs.add(new_file)
+
+    vcs.revert(new_file)
+
+    assert not new_file.exists()
+    status = subprocess.run(
+        ["git", "status", "--porcelain", "--", "brand_new.txt"],
+        cwd=str(repo),
+        capture_output=True,
+        text=True,
+    )
+    assert status.stdout.strip() == ""  # unstaged, gone
+
+
+def test_revert_of_modified_tracked_file_still_restores_head(repo):
+    vcs = GitVcs(repo_root=repo)
+    (repo / "seed.txt").write_text("MODIFIED AGAIN\n", encoding="utf-8")
+    vcs.revert(repo / "seed.txt")
+    assert (repo / "seed.txt").read_text(encoding="utf-8") == "seed\n"

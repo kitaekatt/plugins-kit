@@ -11,9 +11,11 @@ the lock permanently when a prior holder crashed or was killed.
 import hashlib
 import json
 import os
+import subprocess
 import sys
 import threading
 import time
+from types import SimpleNamespace
 
 import pytest
 
@@ -267,6 +269,22 @@ class TestEngineMainLock:
         assert log_file.is_file(), "a stand-down must be visible in bootstrap.log"
         assert "stand-down" in log_file.read_text()
 
+    def test_stand_down_preserves_existing_pending_output(self, tmp_path, monkeypatch):
+        data_dir = tmp_path / "data"
+        data_dir.mkdir()
+        (data_dir / proc_lock.LOCK_FILENAME).write_text(f"{os.getpid()}\n123.0\n")
+        pending = data_dir / "bootstrap_display.pending"
+        original = b'{"systemMessage":"holder output"}\n'
+        pending.write_bytes(original)
+
+        monkeypatch.setattr(engine, "_main", lambda: None)
+        monkeypatch.setattr(sys, "argv", _argv(data_dir, background=True))
+
+        engine.main()
+
+        assert pending.read_bytes() == original
+        assert "stand-down" in (data_dir / "bootstrap.log").read_text()
+
     def test_stand_down_reports_to_console_caller(self, tmp_path, monkeypatch, capsys):
         """A --console stand-down must report on stdout. Exiting 0 with empty
         stdout is indistinguishable from a clean pass, which is how three
@@ -324,6 +342,29 @@ class TestEngineMainLock:
 
         assert called == [True]
         assert not (data_dir / proc_lock.LOCK_FILENAME).exists()
+
+    def test_always_run_stands_down_silently_when_lock_is_held(
+        self, tmp_path, monkeypatch
+    ):
+        data_dir = tmp_path / "data"
+        data_dir.mkdir()
+        (data_dir / proc_lock.LOCK_FILENAME).write_text(f"{os.getpid()}\n123.0\n")
+        stamp = data_dir / "cooldowns" / "last_run_epoch._global_"
+        stamp.parent.mkdir()
+        stamp.write_text("123")
+
+        monkeypatch.setattr(engine, "_main", lambda: (_ for _ in ()).throw(
+            AssertionError("always contender must not run _main")
+        ))
+        monkeypatch.setattr(sys, "argv", _argv(
+            data_dir, background=True, run_kind="always",
+        ))
+
+        engine.main()
+
+        assert stamp.read_text() == "123"
+        assert not (data_dir / "bootstrap.log").exists()
+        assert not (data_dir / "bootstrap_display.pending").exists()
 
     def test_main_releases_lock_after_crash(self, tmp_path, monkeypatch):
         data_dir = tmp_path / "data"
@@ -531,6 +572,7 @@ class TestSpawnRecheckPassReleasesLock:
                     "lock must be released before the child engine spawns"
                 )
                 captured_cmd.append(cmd)
+                return subprocess.CompletedProcess(cmd, 0)
 
             import subprocess as _subprocess
             monkeypatch.setattr(_subprocess, "run", _fake_run)
@@ -538,3 +580,28 @@ class TestSpawnRecheckPassReleasesLock:
             engine._spawn_recheck_pass(_FakeArgs(), "unused-plugin-root")
 
             assert captured_cmd, "expected subprocess.run to be invoked"
+
+    def test_nonzero_child_emits_recheck_failure(self, tmp_path, monkeypatch):
+        data_dir = tmp_path / "data"
+        data_dir.mkdir()
+
+        args = SimpleNamespace(
+            data_dir=str(data_dir),
+            project_dir=None,
+            verbose=False,
+            console=False,
+            background=True,
+        )
+
+        monkeypatch.setattr(
+            subprocess,
+            "run",
+            lambda cmd: subprocess.CompletedProcess(cmd, 1),
+        )
+
+        assert not engine._spawn_recheck_pass(args, "unused-plugin-root")
+        pending = data_dir / "bootstrap_display.pending"
+        assert pending.is_file()
+        response = json.loads(pending.read_text())
+        assert "re-check did not complete" in response["systemMessage"]
+        assert "re-check did not complete" in (data_dir / "bootstrap.log").read_text()

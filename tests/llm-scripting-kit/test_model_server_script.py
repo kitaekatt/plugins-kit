@@ -146,6 +146,51 @@ def test_qwen38_context_override_carries_kv_capacity(tmp_path: Path) -> None:
     assert "--kv-capacity 131072" in result.stdout
 
 
+def test_qwen38l_serial_is_refused_because_the_profile_ignores_it(tmp_path: Path) -> None:
+    """--serial only ever sets QWEN36_MAX_CONCURRENCY / QWEN38_MAX_CONCURRENCY,
+    which the qwen38l (llama.cpp) command array does not read at all -- it has
+    no --parallel/-np flag. The old help text advertised --serial identically
+    for every profile ("${profile}-server [--serial] ...") even though it did
+    nothing for qwen38l. Refuse rather than silently no-op.
+    """
+    prefix = tmp_path / "llama.cpp"
+    server = prefix / "bin" / "llama-server"
+    model = tmp_path / "model.gguf"
+    server.parent.mkdir(parents=True)
+    server.write_text("#!/bin/sh\n", encoding="utf-8")
+    server.chmod(0o755)
+    model.touch()
+    result = _run(
+        "qwen38l-server",
+        "--serial",
+        "--print-command",
+        env={"LLAMA_CPP_PREFIX": str(prefix), "QWEN38_GGUF": str(model)},
+    )
+    assert result.returncode == 2
+    assert "--serial" in result.stderr
+
+
+def test_qwen38l_help_does_not_advertise_serial() -> None:
+    """--serial is documented in the shared show_help(), but it has no effect
+    on qwen38l -- the usage line must not list it as an accepted flag for a
+    profile that ignores it."""
+    result = _run("qwen38l-server", "--help")
+    assert result.returncode == 0
+    assert "[--serial]" not in result.stdout
+
+
+def test_qwen36_help_still_advertises_serial() -> None:
+    result = _run("qwen36-server", "--help")
+    assert result.returncode == 0
+    assert "--serial" in result.stdout
+
+
+def test_qwen38_help_still_advertises_serial() -> None:
+    result = _run("qwen38-server", "--help")
+    assert result.returncode == 0
+    assert "--serial" in result.stdout
+
+
 def test_qwen38l_context_is_not_driven_by_the_ninfer_override(tmp_path: Path) -> None:
     """The two Qwen3.8 backends have different context ceilings, so QWEN38_CTX
     (NInfer's, capped near 240k on a 5090) must not reconfigure llama.cpp, which

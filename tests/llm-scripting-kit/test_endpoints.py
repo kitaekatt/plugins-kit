@@ -296,6 +296,22 @@ class TestRegistryEndpoints:
         assert ep["request_defaults"] == {}
         assert ep["context_window"] is None
 
+    def test_registry_endpoint_carries_every_key_resolve_endpoint_documents(
+        self, registry_file
+    ):
+        """I4: resolve_endpoint's docstring promises name/base_url/key_env/
+        key_file/models/default/defaultCheap/account_check on every returned
+        dict, but a registry-sourced endpoint (models._registry_endpoint) is
+        missing key_file entirely -- a caller reading ep["key_file"] on one
+        raises KeyError instead of finding None."""
+        ep = resolve_endpoint("alpha", config=CUSTOM_CFG)
+        documented = {
+            "name", "base_url", "key_env", "key_file",
+            "models", "default", "defaultCheap", "account_check",
+        }
+        assert documented <= set(ep)
+        assert ep["key_file"] is None
+
     def test_resolve_model_yields_the_entry_model(self, registry_file):
         assert resolve_model(None, config=CUSTOM_CFG, endpoint="alpha") == "alpha-27b"
 

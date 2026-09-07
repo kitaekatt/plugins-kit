@@ -33,6 +33,8 @@ fail again, or to fix a request that was fine.
 """
 from __future__ import annotations
 
+import collections.abc
+import typing
 from dataclasses import fields
 from pathlib import Path
 from typing import Any, Dict, Mapping, Optional, Tuple
@@ -88,10 +90,67 @@ def _option_fields() -> Dict[str, Any]:
     }
 
 
+def _option_type_hints() -> Dict[str, Any]:
+    """Settable BackendOptions fields' RESOLVED types (not the raw annotation
+    string ``from __future__ import annotations`` leaves on ``Field.type``).
+
+    ``_coerce`` / ``_classify`` dispatch on actual type objects
+    (``typing.get_origin`` / ``get_args`` / ``isinstance``), which requires
+    real types, not ``"Optional[float]"`` strings.
+    """
+    hints = typing.get_type_hints(BackendOptions)
+    return {name: hints[name] for name in _option_fields()}
+
+
 def _require_mapping(value: Any, what: str) -> Mapping[str, Any]:
     if not isinstance(value, Mapping):
         raise ProtocolError(f"{what} must be a JSON object, got {type(value).__name__}")
     return value
+
+
+def _unwrap_optional(annotation: Any) -> "Tuple[Any, bool]":
+    """Split ``Optional[X]`` (i.e. ``Union[X, None]``) into ``(X, True)``.
+
+    Any other annotation, including a bare ``Union`` of two non-None types
+    (unused by BackendOptions today), is returned unchanged with ``False`` --
+    :func:`_classify` then raises on it rather than guessing.
+    """
+    if typing.get_origin(annotation) is typing.Union:
+        args = typing.get_args(annotation)
+        non_none = [a for a in args if a is not type(None)]  # noqa: E721
+        if len(non_none) == 1 and type(None) in args:
+            return non_none[0], True
+    return annotation, False
+
+
+def _classify(annotation: Any) -> str:
+    """Return the coercion branch for ``annotation``, or raise ProtocolError.
+
+    Dispatches on ``typing.get_origin`` / ``typing.get_args`` plus
+    ``isinstance``-style type identity -- never on ``str(annotation)``
+    substring matching, which silently accepted (returned unvalidated) any
+    type it did not recognize. An annotation this function does not
+    recognize is a coercer gap, not a caller mistake, so it raises
+    unconditionally rather than falling through to "accept it".
+    """
+    base, _optional = _unwrap_optional(annotation)
+    if base is Path:
+        return "path"
+    origin = typing.get_origin(base)
+    if base in (dict, Mapping) or origin in (dict, Mapping, collections.abc.Mapping):
+        return "mapping"
+    if base is bool:
+        return "bool"
+    if base is int:
+        return "int"
+    if base is float:
+        return "float"
+    if base is str:
+        return "str"
+    raise ProtocolError(
+        f"unsupported BackendOptions type ({annotation!r}); the request-protocol "
+        "coercer has no branch for it -- this is a coercer gap, not a caller mistake"
+    )
 
 
 def _coerce(name: str, value: Any, annotation: Any) -> Any:
@@ -103,38 +162,52 @@ def _coerce(name: str, value: Any, annotation: Any) -> Any:
     accepting ``"0.3"`` for a temperature would push the caller's mistake into
     the transport, where it surfaces as the provider's error rather than theirs.
     """
-    text = str(annotation)
-    optional = "Optional" in text or "None" in text
+    base, optional = _unwrap_optional(annotation)
     if value is None:
         if optional:
             return None
         raise ProtocolError(f"options.{name} may not be null")
 
-    if "Path" in text:
+    kind = _classify(annotation)
+    if kind == "path":
         if not isinstance(value, str):
             raise ProtocolError(f"options.{name} must be a string path")
         return Path(value)
-    if "Mapping" in text or "Dict" in text:
+    if kind == "mapping":
         return dict(_require_mapping(value, f"options.{name}"))
-    if "bool" in text:
+    if kind == "bool":
         if not isinstance(value, bool):
             raise ProtocolError(f"options.{name} must be a boolean")
         return value
-    if "int" in text and "float" not in text:
-        # bool is an int subclass in Python; accepting True for max_tokens would
-        # be a silent nonsense the caller never sees again
+    if kind == "int":
+        # bool is an int subclass in Python; accepting True for max_tokens
+        # would be a silent nonsense the caller never sees again.
         if isinstance(value, bool) or not isinstance(value, int):
             raise ProtocolError(f"options.{name} must be an integer")
         return value
-    if "float" in text:
+    if kind == "float":
         if isinstance(value, bool) or not isinstance(value, (int, float)):
             raise ProtocolError(f"options.{name} must be a number")
         return float(value)
-    if "str" in text:
-        if not isinstance(value, str):
-            raise ProtocolError(f"options.{name} must be a string")
-        return value
+    # kind == "str"
+    if not isinstance(value, str):
+        raise ProtocolError(f"options.{name} must be a string")
     return value
+
+
+def _ensure_coercible(cls: Any = None) -> None:
+    """Assert every field of ``cls`` (default: BackendOptions) resolves to a
+    known coercion branch, raising ProtocolError at the first unhandled one.
+
+    Run at import time against the real BackendOptions (see the bottom of
+    this module) so a future field of an unhandled type (a bare List/Tuple, a
+    non-Optional Union, ...) fails loudly at import/first use instead of
+    silently accepting unvalidated request values for it.
+    """
+    target = cls if cls is not None else BackendOptions
+    hints = typing.get_type_hints(target)
+    for f in fields(target):
+        _classify(hints[f.name])
 
 
 def parse_options(raw: Any) -> Dict[str, Any]:
@@ -155,8 +228,9 @@ def parse_options(raw: Any) -> Dict[str, Any]:
             + "; known options are "
             + ", ".join(sorted(settable))
         )
+    type_hints = _option_type_hints()
     return {
-        name: _coerce(name, value, settable[name].type)
+        name: _coerce(name, value, type_hints[name])
         for name, value in mapping.items()
     }
 
@@ -274,6 +348,12 @@ def describe_request_schema() -> Dict[str, Any]:
         },
         "rejected_options": dict(_UNSETTABLE_OPTIONS),
     }
+
+
+# Fail loudly at import time if a BackendOptions field ever gains a type this
+# coercer has no branch for, rather than letting it reach a caller unvalidated
+# the first time someone sets it in a request (see _ensure_coercible).
+_ensure_coercible()
 
 
 __all__ = [

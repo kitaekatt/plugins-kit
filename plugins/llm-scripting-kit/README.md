@@ -17,8 +17,11 @@ llm-scripting-kit complete --endpoint openrouter --model qwen \
 
 Discovery and completion commands emit JSON by default. `complete --format
 text` prints only the response text. Exit codes are `0` for success, `1` for a
-runtime failure, `2` for invalid input/configuration, and `3` for a classified
-persistent halt such as authentication, credit, or rate limiting. The existing
+runtime failure, `2` for invalid input/configuration, `3` for a classified
+persistent halt such as authentication, credit, or rate limiting, `4` for a
+protocol error (`complete --request-file` could not understand the request,
+so nothing ran), and `5` for an indeterminate reachability check (`probe`
+attempted a check that could not run to a verdict). The existing
 `status`, `set-key`, and `which` account commands retain their human-readable
 output.
 
@@ -198,12 +201,15 @@ registry from this plugin, so keys are set up once and consumed everywhere.
 - **Resolution with source attribution.** A key resolves in order:
   `<endpoint key_env>` env var > project `.env`
   (`<project>/.local-data/plugins-kit/llm-scripting-kit/.env`) > user `.env`
-  (`~/.claude/plugins/data/plugins-kit/llm-scripting-kit/.env`). Keys for multiple
+  (`~/.claude/plugins/data/plugins-kit/llm-scripting-kit/.env`) > the endpoint's
+  configured `key_file` (a bare-value credential file whose whole, stripped
+  content is the key; source `key_file`). Keys for multiple
   endpoints coexist in the same `.env`. `llm-scripting-kit which` tells you which
   source won. The marketplace-less project path
   (`<project>/.local-data/llm-scripting-kit/.env`) predates the alignment with
   the project `config.yaml` layer, which has always been namespaced
-  `<marketplace>/<plugin>`. It is still read, at lower precedence, and a key
+  `<marketplace>/<plugin>`. It is still read, at lower precedence (but above
+  `key_file`), and a key
   resolved from it is flagged (`KeyLookupResult.legacy_location`, plus a
   one-time stderr notice) rather than silently accepted.
 - **Shared model registry.** A layered `config.yaml` maps aliases (plus

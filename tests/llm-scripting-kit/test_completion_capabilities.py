@@ -47,6 +47,38 @@ from llm_scripting_kit.completion.types import BackendOptions
 ALL_OPTION_FIELDS = {f.name for f in fields(BackendOptions)}
 
 
+# -- module-source invariants -----------------------------------------------
+#
+# Module-level attribute docstrings (the ``NAME = "value"`` / ``"""doc"""``
+# idiom) are not introspectable at runtime -- there is no ``NAME.__doc__`` to
+# read -- so the only way to pin that one is attached to the right constant is
+# to read the source text itself.
+
+
+def test_every_control_effect_constant_is_documented():
+    """Each control-effect constant must carry the docstring line that follows
+    its own assignment in source, not an orphaned string expression sitting
+    elsewhere in the module (which documents nothing, since a bare string
+    expression is not attached to any name).
+    """
+    import inspect
+
+    from llm_scripting_kit.completion import capabilities as caps_mod
+
+    lines = inspect.getsource(caps_mod).splitlines()
+    for name in ("ALLOW", "DENY", "CONFINE", "DISABLE", "BYPASS"):
+        for i, line in enumerate(lines):
+            if line.startswith(f'{name} = "'):
+                following = lines[i + 1].strip()
+                assert following.startswith('"""'), (
+                    f"{name} has no docstring line immediately after its "
+                    f"assignment (found: {following!r})"
+                )
+                break
+        else:
+            pytest.fail(f"could not find an assignment for {name}")
+
+
 # -- record invariants -----------------------------------------------------
 
 
@@ -142,7 +174,11 @@ class _RecordingClient:
 def _openrouter_call(**opts):
     client = _RecordingClient()
     backend = OpenRouterBackend(client=client)
-    backend.complete("sys", "usr", model="m", options=BackendOptions(**opts))
+    # A slug-shaped id ("provider/model"): resolve_model returns any string
+    # containing "/" as-is with no registry lookup, so this stays hermetic
+    # now that OpenRouterBackend._resolve_model no longer swallows a genuine
+    # ModelResolveError for a bare, unregistered alias.
+    backend.complete("sys", "usr", model="test/slug", options=BackendOptions(**opts))
     return client.kwargs
 
 

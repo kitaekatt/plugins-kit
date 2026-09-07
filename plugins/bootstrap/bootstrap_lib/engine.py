@@ -18,6 +18,7 @@ import json
 import os
 import stat
 import sys
+import tempfile
 from datetime import datetime, timedelta, timezone
 
 # Single shared atomic-write implementation (mkstemp + os.replace next to the
@@ -74,13 +75,15 @@ def main():
     if not data_dir:
         # --data-dir is a required arg; _main()'s own parser will reject a
         # genuinely missing one with the standard argparse error.
-        _run_with_containment()
+        _run_with_containment((data_dir, project_dir, plugin_root, console,
+                               background, run_kind))
         return
 
     from .proc_lock import engine_lock
     with engine_lock(data_dir) as acquired:
         if acquired:
-            _run_with_containment()
+            _run_with_containment((data_dir, project_dir, plugin_root, console,
+                                   background, run_kind))
             return
 
     if run_kind == "always":
@@ -95,7 +98,8 @@ def main():
     if _carries_update(data_dir, plugin_root):
         with _retry_engine_lock(data_dir) as acquired:
             if acquired:
-                _run_with_containment()
+                _run_with_containment((data_dir, project_dir, plugin_root, console,
+                                       background, run_kind))
                 return
 
     _stand_down_lock_contended(data_dir, project_dir, plugin_root,
@@ -257,12 +261,16 @@ def _stand_down_lock_contended(data_dir, project_dir, plugin_root="",
         if console:
             print(f"--- bootstrap lock: {headline} ---")
         else:
-            emit_success_response(
-                f"--- bootstrap lock: {headline} ---",
-                label="bootstrap",
-                output_file=(os.path.join(data_dir, "bootstrap_display.pending")
-                             if background else None),
-            )
+            if (not background or
+                    not os.path.exists(os.path.join(
+                        data_dir, "bootstrap_display.pending"))):
+                emit_success_response(
+                    f"--- bootstrap lock: {headline} ---",
+                    label="bootstrap",
+                    output_file=(os.path.join(
+                        data_dir, "bootstrap_display.pending")
+                        if background else None),
+                )
     except Exception:
         pass
 
@@ -277,7 +285,7 @@ def _lock_holder_pid(data_dir):
         return None
 
 
-def _run_with_containment():
+def _run_with_containment(lock_args: tuple) -> None:
     try:
         _main()
     except (SystemExit, KeyboardInterrupt):
@@ -286,11 +294,12 @@ def _run_with_containment():
         import traceback
         tb = traceback.format_exc()
         try:
-            if _is_transient_import_crash(exc):
+            if (_is_transient_import_crash(exc) and
+                    _defer_transient_retry(tb, exc, lock_args)):
                 # Partial-download race: stay SILENT and retry, never report.
-                _defer_transient_retry(tb)
+                pass
             else:
-                _emit_engine_crash(tb)
+                _emit_engine_crash(tb, lock_args)
         except Exception:
             pass  # crash reporting must never mask the original traceback
         sys.stderr.write(tb)
@@ -302,6 +311,8 @@ def _run_with_containment():
 # SessionStart hook may import one of these and hit a submodule that has not been
 # written YET -- a ModuleNotFoundError that self-heals once the download finishes.
 _FIRST_PARTY_LIBS = ("bootstrap_lib", "skills_kit_lib", "llm_scripting_kit")
+_MAX_TRANSIENT_IMPORT_RETRIES = 3
+_IMPORT_RETRY_STATE_FILENAME = "import_retry_state.json"
 
 
 def _is_transient_import_crash(exc) -> bool:
@@ -319,7 +330,42 @@ def _is_transient_import_crash(exc) -> bool:
     return any(name == lib or name.startswith(lib + ".") for lib in _FIRST_PARTY_LIBS)
 
 
-def _defer_transient_retry(tb):
+def _import_retry_state_path(data_dir: str) -> str:
+    return os.path.join(data_dir, _IMPORT_RETRY_STATE_FILENAME)
+
+
+def _record_transient_import_crash(data_dir: str, plugin_root: str,
+                                   import_name: str) -> int:
+    version = _plugin_root_version(plugin_root) or "unknown"
+    state_path = _import_retry_state_path(data_dir)
+    state = {}
+    try:
+        with open(state_path, "r", encoding="utf-8") as f:
+            loaded = json.load(f)
+            if isinstance(loaded, dict):
+                state = loaded
+    except (OSError, ValueError, TypeError):
+        pass
+    count = 1
+    if (state.get("version") == version and
+            state.get("import") == import_name):
+        count = int(state.get("count", 0)) + 1
+    _write_atomic(state_path, json.dumps({
+        "version": version,
+        "import": import_name,
+        "count": count,
+    }))
+    return count
+
+
+def _clear_transient_import_state(data_dir: str) -> None:
+    try:
+        os.remove(_import_retry_state_path(data_dir))
+    except (FileNotFoundError, OSError):
+        pass
+
+
+def _defer_transient_retry(tb: str, exc: ImportError, lock_args: tuple) -> bool:
     """Handle a transient first-party import crash (partial-download race).
 
     Stay SILENT -- write NO user-facing message; a ModuleNotFoundError traceback
@@ -330,48 +376,99 @@ def _defer_transient_retry(tb):
     engine_output.log via main()'s stderr write, so the evidence is not lost. A
     completed pass clears the markers (engine._main). No-op in --console mode and
     when --data-dir is unavailable (nowhere to write), matching _emit_engine_crash.
+
+    Returns True when the crash has been HANDLED here -- silently deferred for
+    a retry, or escalated as a loud contained failure once the retry budget is
+    spent -- so the caller must not report it again; False when the caller
+    must report it as an ordinary crash.
     """
-    parser = argparse.ArgumentParser(add_help=False)
-    parser.add_argument("--data-dir", default=None)
-    parser.add_argument("--project-dir", default=None)
-    parser.add_argument("--console", action="store_true")
-    args, _ = parser.parse_known_args()
-    if args.console or not args.data_dir:
-        return
+    data_dir, project_dir, plugin_root, console, _background, run_kind = lock_args
+    if console or not data_dir:
+        return True
+    import_name = getattr(exc, "name", None) or "unknown import"
+    if run_kind == "always":
+        _write_always_crash_log(data_dir, tb)
+        return True
+    count = _record_transient_import_crash(data_dir, plugin_root, import_name)
+    if count > _MAX_TRANSIENT_IMPORT_RETRIES:
+        # No longer a partial-download race -- the same first-party import has
+        # failed identically _MAX_TRANSIENT_IMPORT_RETRIES times in a row with
+        # no cache progress between attempts. Stop hiding it: surface it the
+        # same way an ordinary crash is surfaced, naming the import so the
+        # pending/log evidence says what is actually missing.
+        loud_tb = (
+            f"{import_name} failed to import after "
+            f"{_MAX_TRANSIENT_IMPORT_RETRIES} identical retries; giving up on "
+            f"the silent partial-download retry.\n{tb}"
+        )
+        _emit_engine_crash(loud_tb, lock_args)
+        # Handled: the loud crash above IS the report. Returning True keeps the
+        # caller from emitting a second crash for the same traceback.
+        return True
     # Deliberately silent to the user -- but not to the record. This path
     # swallows a real traceback on purpose (it self-heals), which meant a
     # recurring, non-self-healing failure wearing this signature would look
     # like nothing had happened at all.
     try:
         from .records import PassRecorder
-        r = PassRecorder(args.data_dir, mode="hook", autoflush=False)
+        r = PassRecorder(data_dir, mode="hook", autoflush=False)
         r.record("crash", tb, sev="quiet", transient=True)
         r.flush()
     except Exception:
         pass
     from .stamps import global_stamp
-    global_stamp(args.data_dir, "import_retry_pending").write("1")
+    global_stamp(data_dir, "import_retry_pending").write("1")
     # Void the in-flight guard: THIS attempt crashed, so the harvest may relaunch
     # once more. (Set by harvest on launch, cleared here on crash -> at most one
     # retry pass in flight at a time, retrying until the download completes.)
-    global_stamp(args.data_dir, "import_retry_launched").clear()
-    _clear_project_cooldown(args.data_dir, args.project_dir)
+    global_stamp(data_dir, "import_retry_launched").clear()
+    _clear_project_cooldown(data_dir, project_dir)
+    return True
 
 
-def _emit_engine_crash(tb):
+def _write_always_crash_log(data_dir: str, tb: str) -> None:
+    first_line = tb.strip().splitlines()[-1] if tb.strip() else "unknown error"
+    try:
+        from .log import write_log_block
+        write_log_block(data_dir, "bootstrap always",
+                        [f"always lane crashed: {first_line}"])
+    except Exception:
+        pass
+
+
+def _write_pending_if_absent(path: str, content: str) -> bool:
+    """Write pending evidence without replacing an unconsumed result."""
+    directory = os.path.dirname(os.path.abspath(path))
+    os.makedirs(directory, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(prefix=".pending.", dir=directory)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(content)
+        try:
+            os.link(temporary, path)
+        except FileExistsError:
+            return False
+        return True
+    finally:
+        try:
+            os.remove(temporary)
+        except OSError:
+            pass
+
+
+def _emit_engine_crash(tb: str, lock_args: tuple) -> None:
     """Write a crash .pending + clear the cooldown after an engine crash.
 
-    Re-parses argv leniently (the crash may have happened before/around
-    normal arg parsing). No-op in --console mode (console writes no files
-    and the user sees the traceback directly) and when --data-dir is
-    unavailable (nowhere to write).
+    Receives the lenient argv tuple collected before the engine lock. No-op in
+    --console mode (console writes no files and the user sees the traceback
+    directly) and when --data-dir is unavailable (nowhere to write).
     """
-    parser = argparse.ArgumentParser(add_help=False)
-    parser.add_argument("--data-dir", default=None)
-    parser.add_argument("--project-dir", default=None)
-    parser.add_argument("--console", action="store_true")
-    args, _ = parser.parse_known_args()
-    if not args.data_dir:
+    data_dir, project_dir, _plugin_root, console, _background, run_kind = lock_args
+    if not data_dir:
+        return
+    if run_kind == "always":
+        if not console:
+            _write_always_crash_log(data_dir, tb)
         return
 
     # Record the traceback before the console early-return. A crashed pass is
@@ -381,14 +478,14 @@ def _emit_engine_crash(tb):
     try:
         from .records import PassRecorder
         crash_recorder = PassRecorder(
-            args.data_dir, mode="console" if args.console else "hook",
+            data_dir, mode="console" if console else "hook",
             autoflush=False)
         crash_recorder.record("crash", tb, sev="fail")
         crash_recorder.flush()
     except Exception:
         pass
 
-    if args.console:
+    if console:
         return
 
     first_line = tb.strip().splitlines()[-1] if tb.strip() else "unknown error"
@@ -408,11 +505,11 @@ def _emit_engine_crash(tb):
             ),
         },
     }
-    pending = os.path.join(args.data_dir, "bootstrap_display.pending")
-    _write_atomic(pending, json.dumps(response))
+    pending = os.path.join(data_dir, "bootstrap_display.pending")
+    _write_pending_if_absent(pending, json.dumps(response))
     # Roll back the shell hook's optimistic cooldown stamp so the next
     # SessionStart re-runs instead of silently throttling on a crashed pass.
-    _clear_project_cooldown(args.data_dir, args.project_dir)
+    _clear_project_cooldown(data_dir, project_dir)
 
 
 def _append_detail(entries, text, detail=None, display=None):
@@ -737,9 +834,13 @@ def _main():
         load_registry,
     )
     _registry_path = os.path.join(plugins_dir, "installed_plugins.json")
-    _repair_dropped = apply_repair(_registry_path)
-    if _repair_dropped:
-        bootstrap_action_entries.append(describe_repair(_repair_dropped))
+    _repair_result = apply_repair(_registry_path)
+    if getattr(_repair_result, "error", ""):
+        bootstrap_action_entries.append(
+            f"registry: repair failed - {_repair_result.error}"
+        )
+    elif _repair_result:
+        bootstrap_action_entries.append(describe_repair(_repair_result))
     else:
         bootstrap_ok_entries.append("registry: no malformed records")
 
@@ -760,7 +861,11 @@ def _main():
     # scan and is absorbed by Step 4 (never appearing in new_plugins) -- the gap
     # the cache-kit end-to-end test surfaced.
     _registry_for_diff = os.path.join(plugins_dir, "installed_plugins.json")
-    installed_refs_before = set(_read_installed_plugins(_registry_for_diff))
+    # Both snapshots take the same registry-v2-empty cache fallback (the
+    # registry can stay {"plugins": {}} forever), or the diff is meaningless.
+    _refs_for_diff = _load_enabled_refs(args.project_dir)
+    installed_refs_before = set(
+        _read_installed_plugins(_registry_for_diff, enabled_refs=_refs_for_diff))
 
     # Step 3c: Process layered bootstrap manifests (user + project level)
     # Deprecation: warn if legacy user-bootstrap.json exists
@@ -841,7 +946,7 @@ def _main():
     # _run_agent_skills_link_check's docstring for why.
     asl_value = layered_manifest.get("agent_skills_link") if layered_manifest else None
     asl_action, asl_ok, asl_failures = _run_agent_skills_link_check(
-        args.project_dir, asl_value, current_os, data_dir, plugin_root,
+        args.project_dir, asl_value,
     )
     bootstrap_action_entries.extend(asl_action)
     bootstrap_ok_entries.extend(asl_ok)
@@ -907,12 +1012,11 @@ def _main():
 
     enabled_plugins.sort(key=_plugin_sort_key)
     deferred_plugin_logs = []
-    processed_plugin_refs = set()
+    processed_plugin_keys = set()
 
     for plugin_info in enabled_plugins:
-        ref = f"{plugin_info.marketplace}:{plugin_info.name}" if plugin_info.marketplace else plugin_info.name
-        processed_plugin_refs.add(ref)
-        _bootstrap_single_plugin(
+        processed_plugin_keys.add(_plugin_processed_key(plugin_info))
+        _bootstrap_single_plugin_isolated(
             plugin_info, current_os, data_dir, all_failures,
             log_success, display_sections, deferred_plugin_logs, args,
             engine_version=version, shared_lib_links=shared_lib_links,
@@ -929,14 +1033,10 @@ def _main():
         from .config import save_config
         save_config(data_dir, config)
 
-    new_plugins = [
-        pi for pi in phase2_plugins
-        if (f"{pi.marketplace}:{pi.name}" if pi.marketplace else pi.name)
-           not in processed_plugin_refs
-    ]
+    new_plugins = _phase2_new_plugins(phase2_plugins, processed_plugin_keys)
     new_plugins.sort(key=_plugin_sort_key)
     for plugin_info in new_plugins:
-        _bootstrap_single_plugin(
+        _bootstrap_single_plugin_isolated(
             plugin_info, current_os, data_dir, all_failures,
             log_success, display_sections, deferred_plugin_logs, args,
             engine_version=version, shared_lib_links=shared_lib_links,
@@ -997,7 +1097,7 @@ def _main():
     # (already-linked consumers report "cached" -> verbose-only); only a genuinely
     # converged or failed link surfaces. See _shared_lib_convergence_sweep.
     sweep_actions, sweep_quiets, sweep_oks, sweep_failures = _shared_lib_convergence_sweep(
-        enabled_plugins + new_plugins, data_dir, shared_lib_links,
+        enabled_plugins + new_plugins, data_dir, shared_lib_links, engine_version=version,
     )
     if sweep_failures:
         all_failures.extend(sweep_failures)
@@ -1035,15 +1135,21 @@ def _main():
     # output with no relay directive telling Claude to surface it.
     # Toggle off via config "notify_reload_needed".
     if config.get("notify_reload_needed", True):
+        # Same cache fallback as the "before" snapshot at Step 3b, so a plugin
+        # installed mid-pass on a registry-v2-empty machine still surfaces.
         newly_installed = _resolve_newly_installed(
-            installed_refs_before, _read_installed_plugins(_registry_for_diff),
+            installed_refs_before,
+            _read_installed_plugins(_registry_for_diff, enabled_refs=fallback_refs),
         )
         notices = [a for a in (
             _reload_advice(newly_installed),
             # Bootstrap self-staleness: a newer bootstrap is cached but this session
             # loaded the old one. /reload-plugins won't re-fire its SessionStart pass.
+            # Unlike the reload nag above, this is a single-point registry lookup
+            # (no before/after snapshot), so the registry-v2-empty cache fallback
+            # is safe to wire in directly.
             _bootstrap_stale_advice(version, boot_plugin_name, marketplace_name, prod_registry,
-                                    data_dir=data_dir),
+                                    data_dir=data_dir, enabled_refs=fallback_refs),
         ) if a]
         for advice in notices:
             advice_label = f"{bootstrap_label} notice"
@@ -1245,6 +1351,7 @@ def _main():
     # (set by _defer_transient_retry / harvest.run_harvest on a crash+relaunch).
     global_stamp(data_dir, "import_retry_pending").clear()
     global_stamp(data_dir, "import_retry_launched").clear()
+    _clear_transient_import_state(data_dir)
 
     # Absorb the installed/enabled plugin-set snapshot this pass just provisioned
     # (bootstrap_lib/plugins_snapshot.py). The UserPromptSubmit mid-session
@@ -1289,11 +1396,12 @@ def _elevation_step(all_failures, current_os, data_dir, args, plugin_root,
     """
     from .fix_queue import (
         queue_from_failures, write_or_clear_queue, fix_queue_failure,
-        launch_fix_runner, has_actionable,
+        launch_fix_runner, has_actionable, load_queue_tasks,
     )
-    tasks = queue_from_failures(all_failures, current_os)
+    origin = getattr(args, "project_dir", None) or ""
+    tasks = queue_from_failures(all_failures, current_os, origin=origin)
     try:
-        path = write_or_clear_queue(tasks, data_dir, current_os)
+        path = write_or_clear_queue(tasks, data_dir, current_os, origin=origin)
     except RuntimeError as exc:
         # render_queue raises when bash can't be resolved at write time and the
         # queue holds command/brew tasks (shell strings the runner needs bash
@@ -1327,9 +1435,14 @@ def _elevation_step(all_failures, current_os, data_dir, args, plugin_root,
         all_failures[:] = [f for f in all_failures if not _opportunistic(f)]
         return False
 
+    # The file may carry another project's deferrals too; the runner executes
+    # the whole file, so budget and disclose the merged queue, not this pass's.
+    queued = load_queue_tasks(path) or tasks
+
     launch_detail = None
+    launch_failed = False
     if getattr(args, "fix_all", False):
-        result = launch_fix_runner(path, current_os, tasks=tasks)
+        result = launch_fix_runner(path, current_os, tasks=queued)
         if result is not None:
             if result.succeeded:
                 note = (f"{label} -> fix runner completed successfully "
@@ -1339,12 +1452,22 @@ def _elevation_step(all_failures, current_os, data_dir, args, plugin_root,
                 else:
                     from .log import write_log_block
                     write_log_block(data_dir, f"{label} elevation", [note])
-                _spawn_recheck_pass(args, plugin_root)
-                return True
+                if _spawn_recheck_pass(args, plugin_root):
+                    return True
+                all_failures.append({
+                    "type": "recheck",
+                    "name": "elevation re-check",
+                    "message": "bootstrap re-check did not complete",
+                    "agent_msg": "bootstrap re-check did not complete",
+                    "user_msg": "bootstrap re-check did not complete",
+                })
+                return False
             launch_detail = result.detail
+            launch_failed = not result.launched
 
-    item = fix_queue_failure(tasks, current_os, data_dir,
-                             launch_detail=launch_detail)
+    item = fix_queue_failure(queued, current_os, data_dir,
+                             launch_detail=launch_detail,
+                             launch_failed=launch_failed)
     if current_os == "windows" and not getattr(args, "fix_all", False):
         # Name the consented invocation for Claude: on 'fix-all' it re-runs the
         # engine with --fix-all, and the engine launches the runner itself (so
@@ -1359,7 +1482,7 @@ def _elevation_step(all_failures, current_os, data_dir, args, plugin_root,
     return False
 
 
-def _spawn_recheck_pass(args, plugin_root):
+def _spawn_recheck_pass(args, plugin_root) -> bool:
     """Re-run the engine (same mode, WITHOUT --fix-all) after a successful
     elevated launch, so the elevated items re-check and clear in the same
     fix-all cycle.
@@ -1398,7 +1521,103 @@ def _spawn_recheck_pass(args, plugin_root):
         cmd += ["--console"]
     if args.background:
         cmd += ["--background"]
-    subprocess.run(cmd)
+    result = subprocess.run(cmd)
+    if result.returncode == 0:
+        return True
+
+    note = (
+        f"bootstrap re-check did not complete (child exit code "
+        f"{result.returncode})"
+    )
+    try:
+        from .log import write_log_block
+        write_log_block(args.data_dir, "bootstrap elevation", [note])
+    except Exception:
+        pass
+    if args.console:
+        print(note)
+    else:
+        emit_success_response(
+            note,
+            label="bootstrap",
+            output_file=(os.path.join(args.data_dir, "bootstrap_display.pending")
+                         if args.background else None),
+        )
+    return False
+
+
+def _plugin_processed_key(plugin_info):
+    """Identity key for the Phase-1/Phase-2 "already processed" set.
+
+    Keyed by (ref, version, install_path) rather than ref alone: a plugin
+    that Phase 1 processed at v1 and that Phase 1 itself (or a layered
+    ``plugins:`` install) then updated to v2 in the registry must be
+    reprocessed in Phase 2's rescan -- otherwise the completion stamps
+    (cooldown, engine_ran_version) acknowledge the NEW registry state while
+    the plugin's own dependencies/shared libs stay stale until the next
+    cooldown expiry notices the drift.
+    """
+    ref = f"{plugin_info.marketplace}:{plugin_info.name}" if plugin_info.marketplace else plugin_info.name
+    return (ref, plugin_info.version, plugin_info.install_path)
+
+
+def _phase2_new_plugins(phase2_plugins, processed_keys):
+    """Phase-2 rescan results not already processed in Phase 1, keyed by
+    ``_plugin_processed_key`` -- see that function's docstring for why version
+    and install_path are part of the identity, not just the ref."""
+    return [pi for pi in phase2_plugins if _plugin_processed_key(pi) not in processed_keys]
+
+
+def _bootstrap_single_plugin_isolated(
+    plugin_info, current_os, data_dir, all_failures,
+    log_success, display_sections, deferred_plugin_logs, args,
+    engine_version="", shared_lib_links=None, recorder=None,
+):
+    """Wrap ``_bootstrap_single_plugin`` so one plugin's crash never loses the
+    pass.
+
+    Before this wrapper, only a JSON parse error inside ``_bootstrap_single_plugin``
+    was caught -- a plain file at ``<data>/<mkt>/<plugin>`` (``NotADirectoryError``
+    from the ``os.makedirs`` call), a ``PermissionError``, or any exception raised
+    by a phase handler propagated out of the Step 4 / Step 4b loop and crashed the
+    whole pass: every already-processed plugin's log block, the display, the
+    elevation queue, and the ``engine_ran_version`` stamp were lost, and the crash
+    handler cleared the cooldown so the same crash repeated every session.
+
+    On an exception, this records a ``<plugin label>: FAILED - <type>: <message>``
+    action entry in the CRASHING plugin's own log block and display section (so
+    it is both logged and shown), appends a failure to the pass record, and lets
+    the caller continue with the next plugin.
+    """
+    try:
+        _bootstrap_single_plugin(
+            plugin_info, current_os, data_dir, all_failures,
+            log_success, display_sections, deferred_plugin_logs, args,
+            engine_version=engine_version, shared_lib_links=shared_lib_links,
+            recorder=recorder,
+        )
+    except Exception as e:
+        detail = f"{type(e).__name__}: {e}"
+        plugin_label = f"{plugin_info.name}@{plugin_info.version}" if plugin_info.version else plugin_info.name
+        entry = f"{plugin_label}: FAILED - {detail}"
+        plugin_data_dir = _plugin_data_dir(data_dir, plugin_info)
+        deferred_plugin_logs.append((plugin_data_dir, plugin_label, [entry]))
+        plugin_display_header = (
+            f"{plugin_info.marketplace}:{plugin_info.name}@{plugin_info.version}"
+            if plugin_info.marketplace else plugin_label
+        )
+        display_sections.append((plugin_display_header, [entry], []))
+        all_failures.append({
+            "type": "plugin_crash",
+            "name": plugin_info.name,
+            "plugin": plugin_info.name,
+            "message": detail,
+            "agent_msg": (
+                f"Bootstrap for plugin {plugin_info.name} crashed with {detail}. "
+                "Its setup was skipped for this pass; other plugins were still "
+                "processed."
+            ),
+        })
 
 
 def _plugin_data_dir(data_dir, plugin_info):
@@ -1442,6 +1661,39 @@ def _plugin_log_label(plugin_info, plugin_data_dir, data_dir, engine_version="")
     if is_self and engine_version and engine_version != plugin_info.version:
         return f"{label} (engine {engine_version})"
     return label
+
+
+def _plugin_headers(plugin_info, plugin_data_dir, data_dir, engine_version=""):
+    """``(log_label, display_header)`` for a plugin's own log block and display
+    section -- the ONE construction shared by every site in
+    ``_bootstrap_single_plugin`` that builds this pair: the manifest-parse
+    failure early return, the manifest-shape failure early return, the
+    requires_bootstrap gate early return, and the normal processing path. Two
+    of those early-return paths used to build the label inline instead of
+    calling ``_plugin_log_label``, so bootstrap's own section on those paths
+    lost the ``(engine <running>)`` disambiguation that path applies.
+    """
+    log_label = _plugin_log_label(plugin_info, plugin_data_dir, data_dir, engine_version)
+    display_header = (
+        f"{plugin_info.marketplace}:{plugin_info.name}@{plugin_info.version}"
+        if plugin_info.marketplace else log_label
+    )
+    return log_label, display_header
+
+
+def _requires_bootstrap_unmet(plugin_manifest, engine_version):
+    """The manifest's ``requires_bootstrap`` constraint when this engine does NOT
+    satisfy it, else ``None``.
+
+    The single gate shared by ``_bootstrap_single_plugin`` (which skips the
+    manifest entirely) and ``_shared_lib_convergence_sweep`` (which used to
+    re-link a gated plugin's ``shared_lib_imports`` with no gate at all --
+    honoring a manifest the per-plugin pass had just refused).
+    """
+    required_bootstrap = plugin_manifest.get("requires_bootstrap")
+    if required_bootstrap and engine_version and not _version_satisfies(engine_version, required_bootstrap):
+        return required_bootstrap
+    return None
 
 
 def _bootstrap_single_plugin(
@@ -1503,9 +1755,36 @@ def _bootstrap_single_plugin(
             "persist_across_sessions": True,
         })
         entry = f"bootstrap.json: PARSE FAILED - {error}"
-        plugin_label = f"{plugin_info.name}@{plugin_info.version}" if plugin_info.version else plugin_info.name
+        plugin_label, plugin_display_header = _plugin_headers(
+            plugin_info, plugin_data_dir, data_dir, engine_version)
         deferred_plugin_logs.append((plugin_data_dir, plugin_label, [entry]))
-        plugin_display_header = f"{plugin_info.marketplace}:{plugin_info.name}@{plugin_info.version}" if plugin_info.marketplace else plugin_label
+        display_sections.append((plugin_display_header, [entry], []))
+        return
+
+    # A syntactically valid bootstrap.json can still decode to a non-mapping
+    # (a bare `[]` or `null` at the top level) -- `.get()` on that raises
+    # AttributeError deep in the manifest phases. Treat it as the same
+    # manifest_parse failure the JSON-syntax path above produces, with a
+    # shape-specific message.
+    if not isinstance(plugin_manifest, dict):
+        error = f"manifest is not a JSON object (top level is {type(plugin_manifest).__name__})"
+        all_failures.append({
+            "type": "manifest_parse",
+            "path": plugin_manifest_path,
+            "message": error,
+            "agent_msg": (
+                f"The bootstrap manifest at {plugin_manifest_path} does not decode "
+                f"to a JSON object ({error}). Open the file, fix its top-level shape "
+                "(it must be a JSON object, not an array or null), and ask the user "
+                "to type 'fix-all' to re-run bootstrap."
+            ),
+            "plugin": plugin_info.name,
+            "persist_across_sessions": True,
+        })
+        entry = f"bootstrap.json: PARSE FAILED - {error}"
+        plugin_label, plugin_display_header = _plugin_headers(
+            plugin_info, plugin_data_dir, data_dir, engine_version)
+        deferred_plugin_logs.append((plugin_data_dir, plugin_label, [entry]))
         display_sections.append((plugin_display_header, [entry], []))
         return
 
@@ -1513,14 +1792,13 @@ def _bootstrap_single_plugin(
     # version it needs (e.g. it uses a `scoop:` fulfillment older engines can't
     # process). If THIS engine is too old, skip the manifest entirely and tell the
     # user to update bootstrap -- rather than misprocessing fields we don't grok.
-    required_bootstrap = plugin_manifest.get("requires_bootstrap")
-    if required_bootstrap and engine_version and not _version_satisfies(engine_version, required_bootstrap):
+    required_bootstrap = _requires_bootstrap_unmet(plugin_manifest, engine_version)
+    if required_bootstrap:
         msg = (f"skipped: requires bootstrap >= {required_bootstrap}, but bootstrap "
                f"{engine_version} is running — update the bootstrap plugin")
-        plugin_label = f"{plugin_info.name}@{plugin_info.version}" if plugin_info.version else plugin_info.name
+        plugin_label, plugin_display_header = _plugin_headers(
+            plugin_info, plugin_data_dir, data_dir, engine_version)
         deferred_plugin_logs.append((plugin_data_dir, plugin_label, [msg]))
-        plugin_display_header = (f"{plugin_info.marketplace}:{plugin_info.name}@{plugin_info.version}"
-                                 if plugin_info.marketplace else plugin_label)
         display_sections.append((plugin_display_header, [msg], []))
         all_failures.append({
             "type": "bootstrap_outdated",
@@ -1608,14 +1886,14 @@ def _bootstrap_single_plugin(
         all_failures.extend(failures)
 
     # Collect plugin log info (deferred — written after reading shell entries)
-    plugin_label = _plugin_log_label(plugin_info, plugin_data_dir, data_dir, engine_version)
+    plugin_label, plugin_display_header = _plugin_headers(
+        plugin_info, plugin_data_dir, data_dir, engine_version)
     # quiet_entries are logged unconditionally (they ARE remediations) but stay
     # out of the display section below -- Step 4c speaks for them in aggregate.
     plugin_log_entries = plugin_action_entries + quiet_entries + (plugin_ok_entries if log_success else [])
     deferred_plugin_logs.append((plugin_data_dir, plugin_label, plugin_log_entries))
 
     # Add plugin section to display
-    plugin_display_header = f"{plugin_info.marketplace}:{plugin_info.name}@{plugin_info.version}" if plugin_info.marketplace else plugin_label
     display_sections.append((plugin_display_header, list(plugin_action_entries), list(plugin_ok_entries)))
 
 
@@ -1664,7 +1942,7 @@ class _SharedLibLinkLog:
         return "; ".join(parts)
 
 
-def _shared_lib_convergence_sweep(plugins, data_dir, link_log=None):
+def _shared_lib_convergence_sweep(plugins, data_dir, link_log=None, engine_version=""):
     """Re-link every consumer's ``shared_lib_imports`` after all owners published.
 
     Consumer links (writing ``<lib>.pth`` into a plugin's own venv) happen inline
@@ -1685,6 +1963,13 @@ def _shared_lib_convergence_sweep(plugins, data_dir, link_log=None):
     sites appears once) and their per-plugin entry goes to ``quiets`` -- logged
     with its .pth path, but displayed only via the aggregated summary line.
 
+    ``engine_version`` applies the SAME ``requires_bootstrap`` gate
+    ``_bootstrap_single_plugin`` applies to the per-plugin pass: a manifest that
+    pass skipped as too-new-for-this-engine is skipped here too, rather than
+    this sweep re-linking its ``shared_lib_imports`` on its behalf. One
+    "skipped" entry per gated plugin lands in ``oks`` (verbose-only, same
+    convention as a cached/skipped per-lib entry) -- no link is attempted.
+
     Returns ``(actions, quiets, oks, failures)`` for the caller to log + display.
     """
     from .shared_lib import link_shared_lib
@@ -1698,9 +1983,19 @@ def _shared_lib_convergence_sweep(plugins, data_dir, link_log=None):
             continue
         try:
             with open(manifest_path, "r") as f:
-                imports = json.load(f).get("shared_lib_imports", [])
+                manifest = json.load(f)
         except (OSError, ValueError):
             continue
+        if not isinstance(manifest, dict):
+            continue
+        required_bootstrap = _requires_bootstrap_unmet(manifest, engine_version)
+        if required_bootstrap:
+            oks.append(
+                f"{plugin_info.name}: shared-lib sweep skipped: requires bootstrap "
+                f">= {required_bootstrap}, but {engine_version} is running"
+            )
+            continue
+        imports = manifest.get("shared_lib_imports", [])
         if not imports:
             continue
         # Key by the plugin's own marketplace (see _plugin_data_dir): the consumer
@@ -1761,7 +2056,7 @@ def _plugin_ships_sessionstart_hook(install_path):
     return False
 
 
-def _read_installed_plugins(registry_path):
+def _read_installed_plugins(registry_path, enabled_refs=None):
     """``{ref: installPath}`` for every installed plugin in the registry file
     (keys like ``cache-kit@plugins-kit``). Empty dict on any read/parse error (a
     missing registry just yields no nag rather than crashing the pass).
@@ -1771,13 +2066,21 @@ def _read_installed_plugins(registry_path):
     ``list_enabled_plugins`` never returns) is still resolvable for the reload nag.
     Registry entries may be a dict or a list of per-scope dicts; take the first
     ``installPath`` found.
+
+    ``enabled_refs``, when given, adds the same cache-derived fallback
+    ``list_enabled_plugins`` uses (``plugin_resolve.discover_cache_plugins``):
+    on a registry-v2-empty machine (``installed_plugins.json`` permanently
+    ``{"plugins": {}}`` for marketplace installs -- see the ``registry_v2_empty``
+    insight) the registry alone can never show a plugin entering or leaving, so
+    the Step 4d before/after diff would never notice anything. Registry entries
+    always take precedence; the fallback only fills refs the registry omits.
     """
     out = {}
     try:
         with open(registry_path) as f:
             plugins = json.load(f).get("plugins", {})
     except (OSError, ValueError):
-        return out
+        plugins = {}
     for ref, entry in plugins.items():
         ip = None
         if isinstance(entry, dict):
@@ -1788,6 +2091,13 @@ def _read_installed_plugins(registry_path):
                     ip = e["installPath"]
                     break
         out[ref] = ip
+    if enabled_refs:
+        from .plugin_resolve import discover_cache_plugins
+        plugins_root = os.path.dirname(os.path.abspath(registry_path))
+        for ref, entries in discover_cache_plugins(plugins_root, enabled_refs).items():
+            if out.get(ref):
+                continue
+            out[ref] = entries[0].get("installPath") if entries else None
     return out
 
 
@@ -1843,7 +2153,7 @@ def _reload_advice(newly_installed):
 
 
 def _bootstrap_stale_advice(running_version, plugin_name, marketplace_name, registry_path,
-                            data_dir=""):
+                            data_dir="", enabled_refs=None):
     """Restart notice (informational, not action-required) when the registry
     records a NEWER bootstrap than the one running this session, else None.
 
@@ -1862,6 +2172,12 @@ def _bootstrap_stale_advice(running_version, plugin_name, marketplace_name, regi
     user the truth. The comparison direction (registry > running) self-guards the
     common dev case (a dev tree running AHEAD of the cache never nags). See
     references/plugin-reload-lifecycle.md.
+
+    ``enabled_refs``, when given, falls back to the cache-derived discovery
+    ``list_enabled_plugins`` already uses when the registry has no record for
+    ``cli_ref`` at all (registry-v2-empty machines never record a version here,
+    so without this the nag can never fire there even when a newer bootstrap
+    is genuinely cached).
     """
     if not running_version or not plugin_name or not marketplace_name:
         return None
@@ -1870,9 +2186,15 @@ def _bootstrap_stale_advice(running_version, plugin_name, marketplace_name, regi
         with open(registry_path) as f:
             installs = json.load(f).get("plugins", {}).get(cli_ref, [])
     except (OSError, ValueError):
-        return None
+        installs = None
     from .plugin_resolve import pick_registry_record
-    rec = pick_registry_record(installs)
+    rec = pick_registry_record(installs) if installs is not None else None
+    if rec is None and enabled_refs:
+        from .plugin_resolve import discover_cache_plugins
+        plugins_root = os.path.dirname(os.path.abspath(registry_path))
+        fallback_entries = discover_cache_plugins(plugins_root, enabled_refs).get(cli_ref)
+        if fallback_entries:
+            rec = pick_registry_record(fallback_entries)
     registry_version = rec.get("version", "") if rec is not None else ""
     if not registry_version:
         return None
@@ -1959,6 +2281,16 @@ def _load_layered_manifests(project_dir, data_dir=None):
         except OSError as e:
             parse_errors.append({"path": path, "error": f"read error: {e}"})
             continue
+        if not isinstance(layer, dict):
+            # Syntactically valid JSON that decodes to a non-mapping (a bare
+            # `[]` or `null`) -- same failure family as a parse error, since
+            # merge_manifests(dict, non-dict) would misbehave the same way
+            # `.get()` on a non-mapping manifest does in _bootstrap_single_plugin.
+            parse_errors.append({
+                "path": path,
+                "error": f"manifest is not a JSON object (top level is {type(layer).__name__})",
+            })
+            continue
         merged = merge_manifests(merged, layer)
 
     return merged, parse_errors
@@ -2018,20 +2350,21 @@ def _link_tool_dir_to_path(result, prefix, action_entries):
         return
     from .path_check import add_path_to_shell_config, normalize_path_for_compare
     ok, msg = add_path_to_shell_config(tool_dir)
-    if not ok:
-        # Persistence failed; the live process PATH below is independent of
-        # it, so later phases this run still find the tool.
-        action_entries.append(
-            f"{prefix}{result.subject}: FAILED - could not persist PATH "
-            f"for {tool_dir} ({msg})"
-        )
+    # The live process PATH prepend happens on both outcomes, independent of
+    # persistence success, so later phases this run still find the tool.
     current_path = os.environ.get("PATH", "")
     norm = [normalize_path_for_compare(d) for d in current_path.split(os.pathsep)]
     if normalize_path_for_compare(tool_dir) not in norm:
         os.environ["PATH"] = tool_dir + os.pathsep + current_path
-    action_entries.append(
-        f"{prefix}{result.subject}: on disk but not on PATH — added {tool_dir} ({msg})"
-    )
+    if not ok:
+        action_entries.append(
+            f"{prefix}{result.subject}: FAILED - could not persist PATH "
+            f"for {tool_dir} ({msg})"
+        )
+    else:
+        action_entries.append(
+            f"{prefix}{result.subject}: on disk but not on PATH -- added {tool_dir} ({msg})"
+        )
 
 
 class _StrategyOutcome:
@@ -2260,21 +2593,44 @@ def _strategy_requires(ctx):
     return _StrategyOutcome(True, None)
 
 
+def _record_resolved(ctx, recheck, verb):
+    """Common recheck-passed tail, shared by every strategy that ends in a
+    resolved tool: record the path, link its dir onto PATH (idempotent -- a
+    no-op when already on PATH), and append the outcome line.
+
+    Before this helper only 3 of 6 success paths (resolve, apt, install
+    command) called _link_tool_dir_to_path; scoop, brew, and url_download
+    recorded a tool as installed without linking its directory, so a tool
+    that resolved via an installPath candidate stayed unreachable by bare
+    name. Centralizing the tail closes that gap everywhere at once.
+
+    ``verb`` is the detail text for the outcome line:
+      - None -> the resolve-only "ok - <message>" line (ok_entries).
+      - a string -> a tools_installed detail, e.g. "installed `pkg` via scoop".
+
+    Always terminal (_StrategyOutcome(True, None)).
+    """
+    from . import tool_paths
+    if recheck.path:
+        # data_dir=None -> the canonical bootstrap data dir; tool paths are
+        # recorded centrally regardless of which plugin's pass found them.
+        tool_paths.record(None, recheck.subject, recheck.path)
+    _link_tool_dir_to_path(recheck, ctx.prefix, ctx.action_entries)
+    if verb is None:
+        ctx.ok_entries.append(f"{ctx.prefix}{recheck.subject}: ok - {recheck.message}")
+    else:
+        ctx.tools_installed.append((recheck.subject, verb))
+    return _StrategyOutcome(True, None)
+
+
 def _strategy_resolve(ctx):
     """Precedence 1: already resolvable via installPath candidates / `check`
     cmd / which. On success record the path, link its dir onto PATH (owning
     the chain; no user "restart" instruction — philosophy P4), and finish."""
-    from . import tool_paths
     result = _tool_check(ctx)
     ctx.result = result
     if result.passed:
-        if result.path:
-            # data_dir=None -> the canonical bootstrap data dir; tool paths are
-            # recorded centrally regardless of which plugin's pass found them.
-            tool_paths.record(None, result.subject, result.path)
-        _link_tool_dir_to_path(result, ctx.prefix, ctx.action_entries)
-        ctx.ok_entries.append(f"{ctx.prefix}{result.subject}: ok - {result.message}")
-        return _StrategyOutcome(True, None)
+        return _record_resolved(ctx, result, None)
     return _StrategyOutcome(False)
 
 
@@ -2353,10 +2709,7 @@ def _strategy_scoop(ctx):
     repair_path()
     recheck = _tool_check(ctx)
     if recheck.passed:
-        if recheck.path:
-            tool_paths.record(None, recheck.subject, recheck.path)
-        ctx.tools_installed.append((ctx.name, f"installed `{pkg}` via scoop"))
-        return _StrategyOutcome(True, None)
+        return _record_resolved(ctx, recheck, f"installed `{pkg}` via scoop")
     if si.ok and si.path:
         # Resolvable on disk but not yet by bare name; record the shim path.
         tool_paths.record(None, ctx.name, si.path)
@@ -2378,7 +2731,6 @@ def _strategy_brew(ctx):
     unavailable manager. Only applies on macOS, where the canonical brew object
     is present at install.macos (ctx.brew_spec); on other hosts brew_spec is
     None and this falls through. Mirrors _strategy_scoop's shape."""
-    from . import tool_paths
     spec = ctx.brew_spec
     if not spec:
         return _StrategyOutcome(False)
@@ -2429,10 +2781,7 @@ def _strategy_brew(ctx):
     repair_path()
     recheck = _tool_check(ctx)
     if recheck.passed:
-        if recheck.path:
-            tool_paths.record(None, recheck.subject, recheck.path)
-        ctx.tools_installed.append((ctx.name, f"installed `{label}` via brew"))
-        return _StrategyOutcome(True, None)
+        return _record_resolved(ctx, recheck, f"installed `{label}` via brew")
     if bi.ok and cask:
         # CASK ONLY: brew reported success but the tool doesn't resolve by our
         # check -- a GUI cask may have no CLI binary and no `check` command, so
@@ -2488,7 +2837,6 @@ def _strategy_apt(ctx):
     apt: apt packages install real binaries/services, so the post-install
     re-check stays authoritative -- a package apt claims to have installed but
     that still does not resolve is an apt_failed failure."""
-    from . import tool_paths
     pkg = ctx.apt_pkg
     if not pkg:
         return _StrategyOutcome(False)
@@ -2526,11 +2874,7 @@ def _strategy_apt(ctx):
     repair_path()
     recheck = _tool_check(ctx)
     if recheck.passed:
-        if recheck.path:
-            tool_paths.record(None, recheck.subject, recheck.path)
-        _link_tool_dir_to_path(recheck, ctx.prefix, ctx.action_entries)
-        ctx.tools_installed.append((ctx.name, f"installed `{pkg}` via apt"))
-        return _StrategyOutcome(True, None)
+        return _record_resolved(ctx, recheck, f"installed `{pkg}` via apt")
     # Re-check failed: either the install errored, or the backend reported the
     # package present (apt install, or the dpkg already-installed guard) but the
     # tool still does not resolve (wrong check/binary name -- a manifest bug).
@@ -2550,7 +2894,6 @@ def _strategy_url_download(ctx):
     shelling out to a system package manager. See tool-resolution-redesign.md.
     On failure this logs and FALLS THROUGH to the install command (legacy
     fall-through preserved)."""
-    from . import tool_paths
     download_def = ctx.download_def
     if not (download_def and download_def.get("url") and download_def.get("sha256")):
         return _StrategyOutcome(False)
@@ -2568,10 +2911,7 @@ def _strategy_url_download(ctx):
         repair_path()
         recheck = _tool_check(ctx)
         if recheck.passed:
-            if recheck.path:
-                tool_paths.record(None, recheck.subject, recheck.path)
-            ctx.tools_installed.append((ctx.name, f"downloaded to {dl.path}"))
-            return _StrategyOutcome(True, None)
+            return _record_resolved(ctx, recheck, f"downloaded to {dl.path}")
         message = f"download completed, but re-check failed: {recheck.message}"
         ctx.action_entries.append(f"{ctx.prefix}{ctx.name}: download failed - {message}")
         return _StrategyOutcome(True, {
@@ -2596,7 +2936,6 @@ def _strategy_install_command(ctx):
 
     Always terminal: returns None on a successful re-check or the failure dict
     otherwise."""
-    from . import tool_paths
     result = ctx.result
     install_state = "no_install_cmd"
     install_output = ""
@@ -2641,12 +2980,8 @@ def _strategy_install_command(ctx):
         repair_path()
         recheck = _tool_check(ctx)
         if recheck.passed:
-            if recheck.path:
-                tool_paths.record(None, recheck.subject, recheck.path)
-            _link_tool_dir_to_path(recheck, ctx.prefix, ctx.action_entries)
             verb = "via" if ok else "already present after"
-            ctx.tools_installed.append((result.subject, f"{verb} `{result.install_cmd}`"))
-            return _StrategyOutcome(True, None)
+            return _record_resolved(ctx, recheck, f"{verb} `{result.install_cmd}`")
         # Re-check failed: distinguish "installer ran but we still can't find it"
         # from "installer itself errored".
         install_state = "installed_but_path_stale" if ok else "install_failed"
@@ -2682,7 +3017,7 @@ def _strategy_install_command(ctx):
         # difference between a report and a fabrication.
         _append_detail(
             ctx.action_entries,
-            f"{ctx.prefix}{result.subject}: could not be resolved — manual install required "
+            f"{ctx.prefix}{result.subject}: could not be resolved -- manual install required "
             f"(no unattended installer for this OS); install it and ensure it's on PATH",
             display=f"{result.subject}: manual install needed",
         )
@@ -2782,9 +3117,20 @@ def _normalize_tool_entry(tool_def, current_os):
     # 2. legacy download.scoop -> canonical install.<os>.scoop (host-resolved).
     download = tool_def.get("download", {})
     resolved_dl = _resolve_download_def(download, current_os)
-    if isinstance(resolved_dl, dict) and resolved_dl.get("scoop"):
-        # scoop precedence over any command spelled at install.<os>.
-        install[current_os] = {"scoop": resolved_dl["scoop"]}
+    existing_os_install = install.get(current_os)
+    if (isinstance(resolved_dl, dict) and resolved_dl.get("scoop")
+            and not (isinstance(existing_os_install, dict)
+                     and existing_os_install.get("skip"))):
+        # scoop precedence over any command spelled at install.<os> -- but the
+        # skip sentinel (checked above) beats everything, including a same-OS
+        # download (design-os-not-applicable.md). Merge rather than replace
+        # wholesale, so a sibling "elevated" flag on the download side (e.g.
+        # {"scoop": "bucket/pkg", "elevated": true} for an admin-gated Scoop
+        # manifest) survives the promotion.
+        scoop_val = {"scoop": resolved_dl["scoop"]}
+        if resolved_dl.get("elevated"):
+            scoop_val["elevated"] = True
+        install[current_os] = scoop_val
         # Strip scoop out of the download block so canonical form owns it and no
         # downstream code reads scoop from `download` again.
         new_download = {}
@@ -2814,7 +3160,7 @@ def _process_tool_entry(tool_def, current_os, data_dir, prefix, action_entries,
         if resolved, record the path and link its dir onto PATH (philosophy P4).
       - scoop / brew / url download / install command run in order on a miss. After
         ANY install attempt the tool is re-checked regardless of the
-        installer's exit code — installers exit non-zero for "already installed
+    installer's exit code -- installers exit non-zero for "already installed
         / no upgrade" (winget 43), so the re-check, not the exit code, decides
         presence. A failed url download falls through to the install command.
 
@@ -2826,6 +3172,22 @@ def _process_tool_entry(tool_def, current_os, data_dir, prefix, action_entries,
     never see `requires` entries may omit it (the strategy then builds its
     own over the user env.json layers).
     """
+    if not isinstance(tool_def, dict):
+        # A layered manifest's "tools": ["uv"] shape (a bare name, not an
+        # object) must be a per-item failure, never an exception that aborts
+        # the whole pass -- every other list section guards shape first.
+        action_entries.append(
+            f"{prefix}tool entry: FAILED - malformed entry (expected an "
+            f"object with a 'name', got {tool_def!r})"
+        )
+        return {
+            "type": "tool",
+            "name": None,
+            "message": f"malformed tool entry: {tool_def!r}",
+            "install_state": "malformed_entry",
+            "install_cmd": None,
+            "plugin": plugin_name,
+        }
     tool_def = _normalize_tool_entry(tool_def, current_os)
     ctx = _ToolEntryCtx(tool_def, current_os, prefix, action_entries,
                         ok_entries, tools_installed, plugin_name,
@@ -2848,25 +3210,40 @@ def _process_path_entries(path_entries, prefix, action_entries, ok_entries):
     """
     from .path_check import add_path_to_shell_config, check_path_entry, normalize_path_for_compare
 
+    def _prepend_live(expanded):
+        current_path = os.environ.get("PATH", "")
+        norm = [normalize_path_for_compare(d) for d in current_path.split(os.pathsep)]
+        if normalize_path_for_compare(expanded) not in norm:
+            os.environ["PATH"] = expanded + os.pathsep + current_path
+
     paths_added = []
     for path_entry in path_entries:
         expanded = os.path.expanduser(path_entry)
         result = check_path_entry(path_entry)
         if result.passed:
             ok_entries.append(f"{prefix}PATH {result.subject}: ok - {result.message}")
+            _prepend_live(expanded)
+            continue
+        # Attempt persistent remediation: add to shell RC files
+        ok, msg = add_path_to_shell_config(path_entry)
+        # Live-process PATH prepend happens regardless of the writer's
+        # outcome, so subsequent phases this run can still find things there.
+        _prepend_live(expanded)
+        if not ok:
+            action_entries.append(
+                f"{prefix}PATH {result.subject}: FAILED - {msg}"
+            )
+            continue
+        # The writer's say-so is not authoritative -- re-check exactly like
+        # every neighbouring phase (check -> fix -> authoritative re-check).
+        recheck = check_path_entry(path_entry)
+        if recheck.passed:
+            paths_added.append((result.subject, msg))
         else:
-            # Attempt persistent remediation: add to shell RC files
-            ok, msg = add_path_to_shell_config(path_entry)
-            if ok:
-                paths_added.append((result.subject, msg))
-            else:
-                action_entries.append(
-                    f"{prefix}PATH {result.subject}: FAILED - {msg}"
-                )
-        current_path = os.environ.get("PATH", "")
-        norm = [normalize_path_for_compare(d) for d in current_path.split(os.pathsep)]
-        if normalize_path_for_compare(expanded) not in norm:
-            os.environ["PATH"] = expanded + os.pathsep + current_path
+            action_entries.append(
+                f"{prefix}PATH {result.subject}: FAILED - added to shell "
+                f"config but still not resolving ({recheck.message})"
+            )
 
     if paths_added:
         action_entries.append(f"{prefix}PATH added: {_join_items(paths_added)}")
@@ -2994,7 +3371,7 @@ def _process_self_setup(self_setup, current_os, data_dir, plugin_root, action_en
     for tool_def in self_setup.get("tools", []):
         failure = _process_tool_entry(
             tool_def, current_os, data_dir, p,
-            action_entries, ok_entries, tools_installed, plugin_name="bootstrap",
+            action_entries, ok_entries, tools_installed, plugin_name=plugin_name,
         )
         if failure:
             failures.append(failure)
@@ -3105,6 +3482,44 @@ def _process_self_setup(self_setup, current_os, data_dir, plugin_root, action_en
     return failures
 
 
+def _resolve_project_subdir(project_dir, subdir, label):
+    """Resolve an optional project-relative subdir with REALPATH containment.
+
+    Shared by _process_project_venv and _process_project_npm: ``subdir``
+    becomes both the uv-sync/npm working directory and the .venv/node_modules
+    parent. An absolute subdir, or one that resolves outside project_dir, is
+    a descriptive per-item failure (fail fast; no fallback to the root).
+
+    Uses realpath rather than abspath. A lexical (abspath-only) check is
+    fooled by a symlink INSIDE the project that points somewhere else: the
+    subdir is lexically contained, passes an abspath check, and uv/npm then
+    write into the symlink's target -- outside the project entirely.
+
+    Returns (target_dir, None) on success, or (project_dir, failure_dict) on
+    a rejected subdir. ``label`` becomes the failure's "type" (e.g.
+    "project_venv" / "project_npm") so each caller's failure shape is
+    unchanged.
+    """
+    if not subdir:
+        return project_dir, None
+    root = os.path.realpath(project_dir)
+    resolved = os.path.realpath(os.path.join(root, subdir))
+    if os.path.isabs(subdir) or not (
+        resolved == root or resolved.startswith(root + os.sep)
+    ):
+        msg = (
+            f"subdir {subdir!r} must be a relative path inside the project "
+            f"(it resolves to {resolved}, outside {root})"
+        )
+        return project_dir, {
+            "type": label,
+            "message": msg,
+            "remediation_cmd": None,
+            "plugin": "config",
+        }
+    return resolved, None
+
+
 def _process_project_venv(venv_def, project_dir):
     """Process project_venv: ensure the project's own .venv is ready.
 
@@ -3130,27 +3545,21 @@ def _process_project_venv(venv_def, project_dir):
     ok_entries = []
     failures = []
 
-    target_dir = project_dir
-    subdir = venv_def.get("subdir")
-    if subdir:
-        root = os.path.abspath(project_dir)
-        resolved = os.path.abspath(os.path.join(root, subdir))
-        if os.path.isabs(subdir) or not (
-            resolved == root or resolved.startswith(root + os.sep)
-        ):
-            msg = (
-                f"subdir {subdir!r} must be a relative path inside the project "
-                f"(it resolves to {resolved}, outside {root})"
-            )
-            action_entries.append(f"project_venv: FAILED - {msg}")
-            failures.append({
-                "type": "project_venv",
-                "message": msg,
-                "remediation_cmd": None,
-                "plugin": "config",
-            })
-            return action_entries, ok_entries, failures
-        target_dir = resolved
+    target_dir, failure = _resolve_project_subdir(
+        project_dir, venv_def.get("subdir"), "project_venv")
+    if failure:
+        action_entries.append(f"project_venv: FAILED - {failure['message']}")
+        failures.append(failure)
+        return action_entries, ok_entries, failures
+
+    # A project_venv declared in ~/.claude/bootstrap.json (fleet-wide) applies
+    # to every project this runs in, Python or not. Mirror project_npm's
+    # ok-skip when package.json is absent (manifest-reference.md promises the
+    # same layering rules for both): no pyproject.toml means no Python
+    # project here, so `uv sync` never runs and no FAILED item is registered.
+    if not os.path.isfile(os.path.join(target_dir, "pyproject.toml")):
+        ok_entries.append("project_venv: ok - no pyproject.toml (not a Python project)")
+        return action_entries, ok_entries, failures
 
     # target_dir serves as both data_dir (.venv location) and plugin_root
     # (pyproject.toml location). No env-var export: the project venv belongs
@@ -3193,30 +3602,16 @@ def _process_project_npm(npm_def, project_dir):
     ok_entries = []
     failures = []
 
-    target_dir = project_dir
-    subdir = npm_def.get("subdir")
-    if subdir:
-        root = os.path.abspath(project_dir)
-        resolved = os.path.abspath(os.path.join(root, subdir))
-        if os.path.isabs(subdir) or not (
-            resolved == root or resolved.startswith(root + os.sep)
-        ):
-            msg = (
-                f"subdir {subdir!r} must be a relative path inside the project "
-                f"(it resolves to {resolved}, outside {root})"
-            )
-            action_entries.append(f"project_npm: FAILED - {msg}")
-            failures.append({
-                "type": "project_npm",
-                "message": msg,
-                # No remediation_cmd: a malformed manifest is not something a
-                # command can fix, so this routes to ASK rather than AUTO
-                # (see _auto_fixable_now).
-                "remediation_cmd": None,
-                "plugin": "config",
-            })
-            return action_entries, ok_entries, failures
-        target_dir = resolved
+    # No remediation_cmd: a malformed manifest is not something a command can
+    # fix, so this routes to ASK rather than AUTO (see _auto_fixable_now) --
+    # _resolve_project_subdir's failure dict already carries remediation_cmd:
+    # None for exactly that reason.
+    target_dir, failure = _resolve_project_subdir(
+        project_dir, npm_def.get("subdir"), "project_npm")
+    if failure:
+        action_entries.append(f"project_npm: FAILED - {failure['message']}")
+        failures.append(failure)
+        return action_entries, ok_entries, failures
 
     result, npm_entries = ensure_node_modules(
         target_dir, ignore_scripts=bool(npm_def.get("ignore_scripts", False)),
@@ -3253,6 +3648,8 @@ def _process_config(config_section, plugin_data_dir, plugin_root, action_entries
     from .config_check import config_init, config_validate, run_autodetect, load_yaml_config, save_yaml_config
     from .config_resolve import ConfigError
 
+    ok = ok_entries if ok_entries is not None else action_entries
+
     config_file = config_section["file"]
     defaults_source = config_section.get("defaults_source")
 
@@ -3272,7 +3669,7 @@ def _process_config(config_section, plugin_data_dir, plugin_root, action_entries
         action_entries.append(f"config: FAILED to load {config_path} - {exc}")
         return []
 
-    required_fields = config_section.get("required_fields", {})
+    required_fields = _normalize_required_fields(config_section.get("required_fields", {}))
 
     # 3. Autodetect (optional): always run when declared
     autodetect_spec = config_section.get("autodetect")
@@ -3280,10 +3677,7 @@ def _process_config(config_section, plugin_data_dir, plugin_root, action_entries
         try:
             changed, ad_actions, ad_ok = run_autodetect(plugin_root, autodetect_spec, config, config_path)
             action_entries.extend(ad_actions)
-            if ok_entries is not None:
-                ok_entries.extend(ad_ok)
-            else:
-                action_entries.extend(ad_ok)
+            ok.extend(ad_ok)
             if changed:
                 save_yaml_config(config_path, config)
                 if not ad_actions:
@@ -3296,10 +3690,7 @@ def _process_config(config_section, plugin_data_dir, plugin_root, action_entries
     # 4. Validate required fields (apply defaults, collect missing)
     # Skip validation when no project detected — required fields are project-scoped
     if not project_detected:
-        if ok_entries is not None:
-            ok_entries.append("config: skipped required_fields (no project detected)")
-        else:
-            action_entries.append("config: skipped required_fields (no project detected)")
+        ok.append("config: skipped required_fields (no project detected)")
         return []
 
     config, missing = config_validate(config, required_fields, config_path)
@@ -3316,10 +3707,7 @@ def _process_config(config_section, plugin_data_dir, plugin_root, action_entries
             save_yaml_config(config_path, config)
 
     if not missing:
-        if ok_entries is not None:
-            ok_entries.append("config ok")
-        else:
-            action_entries.append("config ok")
+        ok.append("config ok")
         return []
 
     # 5. Fix-all: aggregate missing fields into failure directives
@@ -3336,7 +3724,7 @@ def _process_config(config_section, plugin_data_dir, plugin_root, action_entries
     return failures
 
 
-def _normalize_project_required_fields(required_fields):
+def _normalize_required_fields(required_fields):
     """Normalize required_fields to dict form.
 
     Accepts either:
@@ -3416,7 +3804,7 @@ def _process_project_config(project_config_section, plugin_data_dir, plugin_root
     from .config_resolve import ConfigError
 
     config_file = project_config_section["file"]
-    required_fields_spec = _normalize_project_required_fields(
+    required_fields_spec = _normalize_required_fields(
         project_config_section.get("required_fields", [])
     )
     required_field_names = list(required_fields_spec.keys())
@@ -3493,7 +3881,7 @@ def _process_project_config(project_config_section, plugin_data_dir, plugin_root
         if missing_fields and autodetect_spec:
             # Some fields missing — try autodetect to fill gaps
             detected = run_project_autodetect(plugin_root, autodetect_spec, errors=action_entries)
-            if detected:
+            if detected is not None:
                 for field in missing_fields:
                     if detected.get(field):
                         project_data[field] = detected[field]
@@ -3517,7 +3905,7 @@ def _process_project_config(project_config_section, plugin_data_dir, plugin_root
         # File doesn't exist — try autodetect
         if autodetect_spec:
             detected = run_project_autodetect(plugin_root, autodetect_spec, errors=action_entries)
-            if detected:
+            if detected is not None:
                 os.makedirs(os.path.dirname(project_config_path), exist_ok=True)
                 project_data = dict(detected)
                 # Apply defaults for any declared field still missing from detected
@@ -3558,7 +3946,7 @@ def _process_project_config(project_config_section, plugin_data_dir, plugin_root
             if field_spec.get("default") is not None:
                 continue  # default already applied above
             if not field_spec:
-                # String-list form carries no messages — skip fix-all emission
+        # String-list form carries no messages -- skip fix-all emission
                 continue
             agent_msg = field_spec.get(
                 "agent_msg", f"Set {field_name} in {project_config_path}"
@@ -3660,7 +4048,6 @@ class _ManifestContext:
         # one, so a single unreachable marketplace produces one actionable
         # failure instead of one per plugin it owns.
         self.unusable_marketplaces = set()
-        self.prefix = ""
         self._config = self._UNSET
         self._variables = None
 
@@ -3708,7 +4095,7 @@ class _ManifestContext:
         return self._variables
 
     def ok(self, message):
-        self.ok_entries.append(f"{self.prefix}{message}")
+        self.ok_entries.append(message)
 
     def action(self, message, display=None, detail=None):
         """Append an action entry.
@@ -3720,13 +4107,13 @@ class _ManifestContext:
         carries structured context that belongs in the record but on no message
         surface. See messages.py and records.py.
         """
-        _append_detail(self.action_entries, f"{self.prefix}{message}",
+        _append_detail(self.action_entries, message,
                        display=display, detail=detail)
 
     def quiet(self, message):
         """Log-only remediation entry: written to the log unconditionally, never
         displayed. Use ONLY when the pass surfaces the same event in aggregate."""
-        self.quiet_entries.append(f"{self.prefix}{message}")
+        self.quiet_entries.append(message)
 
     def fail(self, entry, display=None, detail=None, **failure):
         """Append `entry` as an action line AND register `failure` for fix-all.
@@ -3851,7 +4238,7 @@ def _phase_tools(ctx):
     tools_installed = []
     for tool_def in ctx.manifest.get("tools", []):
         failure = _process_tool_entry(
-            tool_def, ctx.current_os, ctx.data_dir, ctx.prefix,
+            tool_def, ctx.current_os, ctx.data_dir, "",
             ctx.action_entries, ctx.ok_entries, tools_installed,
             plugin_name=ctx.plugin_name, machine_resolver=machine_resolver,
         )
@@ -3923,7 +4310,7 @@ def _phase_fonts(ctx):
 def _phase_path_entries(ctx):
     """path_entries: persistent PATH remediation (shared with self-setup)."""
     _process_path_entries(
-        ctx.manifest.get("path_entries", []), ctx.prefix,
+        ctx.manifest.get("path_entries", []), "",
         ctx.action_entries, ctx.ok_entries,
     )
 
@@ -3931,7 +4318,7 @@ def _phase_path_entries(ctx):
 def _phase_venv(ctx):
     """venv: the shared check -> uv sync -> re-check flow (ensure_venv)."""
     _process_venv_def(
-        ctx.manifest["venv"], ctx.data_dir, ctx.plugin_root, ctx.prefix, "venv",
+        ctx.manifest["venv"], ctx.data_dir, ctx.plugin_root, "", "venv",
         ctx.action_entries, ctx.ok_entries, ctx.failures,
         plugin_name=ctx.plugin_name,
         extras=ctx.manifest["venv"].get("extras", []),
@@ -4003,8 +4390,7 @@ _AGENT_SKILLS_FAILURE_KWARGS = {
 }
 
 
-def _run_agent_skills_link_check(project_dir, agent_skills_link_value,
-                                  current_os, data_dir, plugin_root):
+def _run_agent_skills_link_check(project_dir, agent_skills_link_value):
     """agent_skills_link: link <project>/.agents/skills -> .claude/skills for
     Codex, once per pass. Deliberately NOT dispatched via _MANIFEST_PHASES
     (that table's dispatch is truthy-gated at _process_manifest, so a
@@ -4016,14 +4402,22 @@ def _run_agent_skills_link_check(project_dir, agent_skills_link_value,
     bootstrap_lib.agent_skills_check; this function owns every user-facing
     message and routes outcomes through _ManifestContext.ok/action/fail so
     the "one outcome per check" contract is structural here too.
+
+    Takes only (project_dir, agent_skills_link_value): the check needs no
+    manifest config or variables, so the _ManifestContext below is built with
+    an empty manifest ({}) whose config/variables never load -- current_os,
+    data_dir, and plugin_root were formerly-accepted params that only ever
+    filled that context and were never read back by anything in this
+    function or _resolve_agent_skills_fix.
     """
     from .agent_skills_check import (
         check_project_agent_skills_link, create_agent_skills_link,
     )
 
     ctx = _ManifestContext(
-        {}, current_os, data_dir, plugin_root,
+        {}, None, None, None,
         [], [], "bootstrap", project_dir, True,
+        marketplace="bootstrap",
     )
 
     if not project_dir:
@@ -4171,6 +4565,12 @@ def _phase_sync_to_data(ctx):
     import shutil
 
     for sync_def in ctx.manifest.get("sync_to_data", []):
+        if not isinstance(sync_def, dict) or "src" not in sync_def or "dst" not in sync_def:
+            ctx.fail(
+                f"sync_to_data: FAILED - malformed entry (requires 'src' and 'dst'): {sync_def!r}",
+                type="sync_to_data", message="malformed sync_to_data entry (requires 'src' and 'dst')",
+            )
+            continue
         src_rel = sync_def["src"]
         dst_rel = sync_def["dst"]
         src = os.path.join(ctx.plugin_root, src_rel)
@@ -4184,9 +4584,16 @@ def _phase_sync_to_data(ctx):
                 message=f"source directory not found: {src}",
             )
             continue
-        os.makedirs(dst, exist_ok=True)
-        shutil.copytree(src, dst, dirs_exist_ok=True)
-        _ensure_shell_scripts_executable(dst)
+        try:
+            os.makedirs(dst, exist_ok=True)
+            shutil.copytree(src, dst, dirs_exist_ok=True)
+            _ensure_shell_scripts_executable(dst)
+        except OSError as e:
+            ctx.fail(
+                f"sync {src_rel} -> {dst_rel}: FAILED - {e}",
+                type="sync_to_data", src=src_rel, dst=dst_rel, message=str(e),
+            )
+            continue
         ctx.ok(f"sync {src_rel} -> {dst_rel}: ok")
 
 
@@ -4289,7 +4696,8 @@ def _phase_marketplaces(ctx):
     from .marketplace_lifecycle import (
         check_marketplace_exists, check_marketplace_current,
         add_marketplace, remove_marketplace, update_marketplace,
-        apply_marketplace_pin, release_marketplace_pin, load_pin_markers,
+        apply_marketplace_pin, release_marketplace_pin, remove_marketplace_pin_marker,
+        load_pin_markers,
         resolve_claude_cli,
     )
 
@@ -4316,7 +4724,7 @@ def _phase_marketplaces(ctx):
                 _pinned_marketplaces_this_run.add(mkt_def["name"])
         skipped = len(entries)
         ctx.action(
-            f"{ctx.prefix}marketplaces: skipped {skipped} "
+            f"marketplaces: skipped {skipped} "
             f"{'entry' if skipped == 1 else 'entries'} - claude CLI unavailable "
             f"(see the `claude` tool entry)"
         )
@@ -4337,11 +4745,29 @@ def _phase_marketplaces(ctx):
         # without erroring once the removal has happened.
         if mkt_def.get("remove") or mkt_def.get("enabled") is False:
             if not check_marketplace_exists(mkt_name).passed:
-                ctx.ok(f"marketplace {mkt_name}: already removed")
+                marker_result = remove_marketplace_pin_marker(mkt_name)
+                if marker_result.passed:
+                    ctx.ok(f"marketplace {mkt_name}: already removed")
+                else:
+                    ctx.fail(
+                        f"marketplace {mkt_name}: {marker_result.message}",
+                        display=f"marketplace {mkt_name}: remove cleanup failed",
+                        type="marketplace", name=mkt_name,
+                        message=marker_result.message,
+                    )
                 continue
             rm_result = remove_marketplace(mkt_name)
             if rm_result.passed:
-                ctx.action(f"marketplace {mkt_name}: removed")
+                marker_result = remove_marketplace_pin_marker(mkt_name)
+                if marker_result.passed:
+                    ctx.action(f"marketplace {mkt_name}: removed")
+                else:
+                    ctx.fail(
+                        f"marketplace {mkt_name}: removed; {marker_result.message}",
+                        display=f"marketplace {mkt_name}: remove cleanup failed",
+                        type="marketplace", name=mkt_name,
+                        message=marker_result.message,
+                    )
             else:
                 ctx.fail(
                     f"marketplace {mkt_name}: {rm_result.message}",
@@ -4467,8 +4893,8 @@ def _phase_plugins(ctx):
     """
     from .marketplace_lifecycle import (
         check_plugin_installed, install_plugin,
-        enable_plugin_in_claude, disable_plugin_in_claude,
-        check_plugin_enabled, check_plugin_enabled_at_scope,
+        enable_plugin_in_claude, disable_plugin_at_scope,
+        check_plugin_enabled_at_scope,
         enable_plugin_at_scope,
         check_plugin_version, check_plugin_min_version,
         update_plugin, ensure_registry_scope,
@@ -4482,7 +4908,7 @@ def _phase_plugins(ctx):
     if not resolve_claude_cli():
         skipped = len(ctx.manifest.get("plugins", []))
         ctx.action(
-            f"{ctx.prefix}plugins: skipped {skipped} "
+            f"plugins: skipped {skipped} "
             f"{'entry' if skipped == 1 else 'entries'} - claude CLI unavailable "
             f"(see the `claude` tool entry)"
         )
@@ -4515,7 +4941,6 @@ def _phase_plugins(ctx):
     installs_skipped = {}       # mkt -> [ref]
 
     plugins_installed = {}      # mkt -> [(name, detail)]
-    plugins_re_installed = {}   # mkt -> [(name, detail)]
     plugins_updated = {}        # mkt -> [(name, detail)]
     plugins_enabled = {}        # mkt -> [(name, detail)]
     plugins_disabled = {}       # mkt -> [(name, detail)]
@@ -4577,7 +5002,7 @@ def _phase_plugins(ctx):
         # not installed_plugins.json which can have stale scope metadata). Skip
         # for install: manual -- the user owns scope and enable state; we just
         # manage version updates.
-        if install_result.passed and install_mode != "manual":
+        if install_result.passed and install_mode != "manual" and enabled:
             scope_check = check_plugin_enabled_at_scope(plugin_ref, desired_scope, ctx.project_dir)
             if not scope_check.passed:
                 # Keep the scope-mismatch note as its own line so the user sees
@@ -4591,15 +5016,15 @@ def _phase_plugins(ctx):
                 # session, forever, while reporting success), and when it does
                 # write it reserialises the whole settings file, reordering
                 # keys in what is frequently a shared, source-controlled file.
-                enabled = enable_plugin_at_scope(plugin_ref, desired_scope, ctx.project_dir)
-                if enabled.passed:
+                enable_result = enable_plugin_at_scope(plugin_ref, desired_scope, ctx.project_dir)
+                if enable_result.passed:
                     _bucket(plugins_enabled, plugin_ref, f"at {desired_scope} scope")
                 else:
                     ctx.fail(
-                        f"plugin {plugin_ref}: could not enable at {desired_scope} scope - {enabled.message}",
+                        f"plugin {plugin_ref}: could not enable at {desired_scope} scope - {enable_result.message}",
                         display=f"plugin {plugin_ref}: enable failed",
                         type="plugin", ref=plugin_ref,
-                        message=f"enable at {desired_scope} scope failed: {enabled.message}",
+                        message=f"enable at {desired_scope} scope failed: {enable_result.message}",
                     )
                     continue
 
@@ -4707,11 +5132,15 @@ def _phase_plugins(ctx):
                     )
         else:
             # Only disable if currently enabled (check before acting)
-            enabled_result = check_plugin_enabled(plugin_ref)
+            enabled_result = check_plugin_enabled_at_scope(
+                plugin_ref, desired_scope, ctx.project_dir
+            )
             if not enabled_result.passed:
                 ctx.ok(f"plugin {plugin_ref}: already disabled")
             else:
-                dis_result = disable_plugin_in_claude(plugin_ref)
+                dis_result = disable_plugin_at_scope(
+                    plugin_ref, desired_scope, ctx.project_dir
+                )
                 if dis_result.passed:
                     _bucket(plugins_disabled, plugin_ref, "")
                 else:
@@ -4743,7 +5172,6 @@ def _phase_plugins(ctx):
             else:
                 ctx.action(f"{verb}: {_join_items(items)}")
     _emit_plugin_verb("installed", plugins_installed)
-    _emit_plugin_verb("re-installed", plugins_re_installed)
     _emit_plugin_verb("updated", plugins_updated)
     _emit_plugin_verb("enabled", plugins_enabled)
     _emit_plugin_verb("disabled", plugins_disabled)
@@ -4759,10 +5187,17 @@ def _phase_ini_settings(ctx):
         return
 
     for ini_def in ctx.manifest.get("ini_settings", []):
+        if not isinstance(ini_def, dict) or "file" not in ini_def or "section" not in ini_def:
+            ctx.fail(
+                f"ini_settings: FAILED - malformed entry (requires 'file' and 'section'): {ini_def!r}",
+                type="ini_settings", message="malformed ini_settings entry (requires 'file' and 'section')",
+            )
+            continue
         ini_file = resolve_vars(ini_def["file"], ctx.variables)
         if ini_file is None:
             ctx.ok(f"ini {ini_def['file']}: skipped (unresolved vars)")
             continue
+        ini_file = os.path.expanduser(ini_file)
 
         section = ini_def["section"]
         # Ensure section has brackets for check/write
@@ -4819,13 +5254,21 @@ def _phase_json_entries(ctx):
         if result.passed:
             ctx.ok(f"json {os.path.basename(target_path)}: ok")
         else:
-            result = merge_json_entries(ref_path, target_path, merge_fields, preserve_fields)
-            if result.passed:
+            merge_result = merge_json_entries(ref_path, target_path, merge_fields, preserve_fields)
+            if not merge_result.passed:
+                ctx.fail(
+                    f"json {os.path.basename(target_path)}: FAILED - {merge_result.message}",
+                    type="json", target=target_path, message=merge_result.message,
+                )
+                continue
+            recheck = check_json_entries(ref_path, target_path, merge_fields, preserve_fields)
+            if recheck.passed:
                 ctx.action(f"json {os.path.basename(target_path)}: merged")
             else:
+                message = f"write reported success, but re-check failed: {recheck.message}"
                 ctx.fail(
-                    f"json {os.path.basename(target_path)}: FAILED - {result.message}",
-                    type="json", target=target_path, message=result.message,
+                    f"json {os.path.basename(target_path)}: FAILED - {message}",
+                    type="json", target=target_path, message=message,
                 )
 
 
@@ -4836,6 +5279,12 @@ def _phase_pypi_packages(ctx):
 
     pypi_installed = []
     for pypi_def in ctx.manifest.get("pypi_packages", []):
+        if not isinstance(pypi_def, dict) or "extract_to" not in pypi_def or "package" not in pypi_def:
+            ctx.fail(
+                f"pypi_packages: FAILED - malformed entry (requires 'package' and 'extract_to'): {pypi_def!r}",
+                type="pypi_packages", message="malformed pypi_packages entry (requires 'package' and 'extract_to')",
+            )
+            continue
         extract_to = resolve_vars(pypi_def["extract_to"], ctx.variables)
         if extract_to is None:
             ctx.ok(f"pypi {pypi_def['package']}: skipped (unresolved vars)")
@@ -4921,7 +5370,7 @@ def _phase_script(ctx):
     script_failures = _run_script_phase(
         ctx.manifest["script"], ctx.plugin_root, ctx.data_dir, ctx.config,
         ctx.action_entries, ctx.ok_entries,
-        prefix=ctx.prefix, plugin_name=ctx.plugin_name, project_dir=ctx.project_dir,
+        prefix="", plugin_name=ctx.plugin_name, project_dir=ctx.project_dir,
     )
     ctx.failures.extend(script_failures)
 
@@ -5042,6 +5491,46 @@ def _env_section_entries(ctx, section, failure_type):
     return None
 
 
+def _env_report_fix(ctx, phase, failure_type, name, fix_ok, fix_msg,
+                     recheck_ok, recheck_message, *,
+                     message_label=None, action_text=None):
+    """The shared fix -> authoritative re-check reporting tail used by every
+    declarative env phase (symlinks, shell_rc, macos_defaults,
+    macos_hotkeys, login_items): each phase runs its own check -> fix ->
+    re-check, then ends here to turn the outcome into an ok/fail record.
+
+    On success (``fix_ok`` and ``recheck_ok``): ``ctx.action(f"{phase}
+    {name}: {action_text or fix_msg}")``. ``action_text`` overrides the
+    literal fix message when a phase needs a different success line
+    (macos_hotkeys' per-entry "applied - <label>" rather than the batch
+    fix's own message).
+
+    On failure: the shared detail is the fix's own message when the fix
+    itself failed, else "fix reported '<fix_msg>' but re-check failed:
+    <recheck_message>" -- then a persistent failure is recorded with
+    ``message=f"{message_label or name}: {detail}"``. ``message_label``
+    overrides the message's leading label when it must differ from the
+    failure record's ``name`` (macos_hotkeys keys its record by numeric id
+    but writes the human-facing message with the entry's description).
+
+    Returns True when ``ctx.action`` fired (fix succeeded and the
+    re-check passed), else False.
+    """
+    if fix_ok and recheck_ok:
+        ctx.action(f"{phase} {name}: {action_text if action_text is not None else fix_msg}")
+        return True
+    detail = fix_msg if not fix_ok else (
+        f"fix reported '{fix_msg}' but re-check failed: {recheck_message}"
+    )
+    label = name if message_label is None else message_label
+    ctx.fail(
+        f"{phase} {name}: FAILED - {detail}",
+        type=failure_type, name=name, message=f"{label}: {detail}",
+        persist_across_sessions=True,
+    )
+    return False
+
+
 def _env_phase_symlinks(ctx):
     """symlinks: ensure target is a symlink pointing at source (spec 4.3).
 
@@ -5097,10 +5586,22 @@ def _env_phase_symlinks(ctx):
             # the queue through Git Bash elevated, where
             # MSYS=winsymlinks:nativestrict makes `ln -s` create a REAL
             # Windows symlink (default MSYS ln copies instead). -sfn replaces
-            # a stale/dangling link left by an earlier attempt. Any backup of
-            # a pre-existing regular file already happened inside fix_symlink
-            # before os.symlink raised.
-            manual_cmd = f"MSYS=winsymlinks:nativestrict ln -sfn '{src}' '{tgt}'"
+            # a stale/dangling link left by an earlier attempt. A
+            # pre-existing regular file at target was moved aside before
+            # os.symlink raised and restored by fix_symlink itself, so it is
+            # back in place when the queued command runs -- and `ln -sfn`
+            # would force-replace it with no backup. The queued command
+            # therefore moves a REAL file (never a link) aside to a
+            # timestamped .backup_<ts> sibling first, whatever `backup` says:
+            # the in-pass path can delete its aside copy after a successful
+            # link, but nothing runs after the elevated command to do so, so
+            # the copy is kept and named in the deferral message.
+            backup_name = f"{tgt}.backup_{datetime.now():%Y%m%d_%H%M%S}"
+            manual_cmd = (
+                f"if [ -f '{tgt}' ] && [ ! -L '{tgt}' ]; then "
+                f"mv -f '{tgt}' '{backup_name}'; fi; "
+                f"MSYS=winsymlinks:nativestrict ln -sfn '{src}' '{tgt}'"
+            )
             ctx.fail(
                 f"symlink {name}: needs elevation - deferred; creating "
                 f"{tgt} -> {src} requires Developer Mode or admin rights "
@@ -5134,17 +5635,10 @@ def _env_phase_symlinks(ctx):
             )
             continue
         recheck = check_symlink(src, tgt)
-        if fix.ok and recheck.passed:
-            ctx.action(f"symlink {name}: {fix.message}")
-        else:
-            detail = fix.message if not fix.ok else (
-                f"fix reported '{fix.message}' but re-check failed: {recheck.message}"
-            )
-            ctx.fail(
-                f"symlink {name}: FAILED - {detail}",
-                type="env_symlink", name=name, message=f"{name}: {detail}",
-                persist_across_sessions=True,
-            )
+        _env_report_fix(
+            ctx, "symlink", "env_symlink", name,
+            fix.ok, fix.message, recheck.passed, recheck.message,
+        )
 
 
 def _env_phase_shell_rc(ctx):
@@ -5210,17 +5704,10 @@ def _env_phase_shell_rc(ctx):
             fix_ok, msg = fix_shell_ensure(content, ctx.current_os)
             recheck = check_shell_ensure(name, content)
 
-        if fix_ok and recheck.passed:
-            ctx.action(f"shell_rc {name}: {msg}")
-        else:
-            detail = msg if not fix_ok else (
-                f"fix reported '{msg}' but re-check failed: {recheck.message}"
-            )
-            ctx.fail(
-                f"shell_rc {name}: FAILED - {detail}",
-                type="env_shell_rc", name=name, message=f"{name}: {detail}",
-                persist_across_sessions=True,
-            )
+        _env_report_fix(
+            ctx, "shell_rc", "env_shell_rc", name,
+            fix_ok, msg, recheck.passed, recheck.message,
+        )
 
 
 def _env_phase_macos_defaults(ctx):
@@ -5270,19 +5757,11 @@ def _env_phase_macos_defaults(ctx):
             continue
         fix_ok, msg = fix_macos_default(domain, key, value)
         recheck = check_macos_default(domain, key, value)
-        if fix_ok and recheck.passed:
+        if _env_report_fix(
+            ctx, "macos_default", "env_macos_default", label,
+            fix_ok, msg, recheck.passed, recheck.message,
+        ):
             fixed_any = True
-            ctx.action(f"macos_default {label}: {msg}")
-        else:
-            detail = msg if not fix_ok else (
-                f"fix reported '{msg}' but re-check failed: {recheck.message}"
-            )
-            ctx.fail(
-                f"macos_default {label}: FAILED - {detail}",
-                type="env_macos_default", name=label,
-                message=f"{label}: {detail}",
-                persist_across_sessions=True,
-            )
     if fixed_any:
         flush_macos_defaults_cache()
         ctx.ok("macos_defaults: preference cache flushed")
@@ -5370,18 +5849,12 @@ def _env_phase_macos_hotkeys(ctx):
                 redata, entry["id"], entry["parameters"],
                 entry.get("enabled", True))
             re_ok = status == "ok"
-        if fix_ok and re_ok:
-            ctx.action(f"macos_hotkey {entry['id']}: applied - {_label(entry)}")
-        else:
-            detail2 = msg if not fix_ok else (
-                f"fix reported '{msg}' but re-check failed: {detail}"
-            )
-            ctx.fail(
-                f"macos_hotkey {entry['id']}: FAILED - {detail2}",
-                type="env_macos_hotkey", name=str(entry["id"]),
-                message=f"{_label(entry)}: {detail2}",
-                persist_across_sessions=True,
-            )
+        _env_report_fix(
+            ctx, "macos_hotkey", "env_macos_hotkey", str(entry["id"]),
+            fix_ok, msg, re_ok, detail,
+            message_label=_label(entry),
+            action_text=f"applied - {_label(entry)}",
+        )
 
 
 def _env_phase_login_items(ctx):
@@ -5397,7 +5870,7 @@ def _env_phase_login_items(ctx):
         ctx.ok("login_items: skipped (not macOS)")
         return
     from .env_features import (
-        add_login_item, check_login_item, expand_env_path,
+        add_login_item, check_login_item, expand_env_path, list_login_items,
     )
 
     entries = _env_section_entries(ctx, "login_items", "env_login_item")
@@ -5440,23 +5913,34 @@ def _env_phase_login_items(ctx):
             )
             continue
 
-        result = check_login_item(name)
+        # `path` lets check_login_item accept either the entry's declared
+        # `name` or the app bundle's basename -- macOS names a login item
+        # from the bundle, not the manifest, so a mismatch (entry "Docker
+        # Desktop" for Docker.app, which System Events reports as "Docker")
+        # must already pass here, or the fix below re-adds a duplicate every
+        # session it runs (the check fails by name, the fix succeeds under
+        # the bundle's own name, and a name-only re-check never sees it).
+        result = check_login_item(name, path=app_path)
         if result.passed:
             ctx.ok(f"login_item {name}: ok - {result.message}")
             continue
         fix_ok, msg = add_login_item(app_path, bool(entry.get("hidden", False)))
-        recheck = check_login_item(name)
-        if fix_ok and recheck.passed:
-            ctx.action(f"login_item {name}: {msg}")
-        else:
-            detail = msg if not fix_ok else (
-                f"fix reported '{msg}' but re-check failed: {recheck.message}"
+        recheck = check_login_item(name, path=app_path)
+        recheck_message = recheck.message
+        if fix_ok and not recheck.passed:
+            # The fix ran but neither the declared name nor the bundle
+            # basename matches what macOS now reports -- genuinely unusual,
+            # so name it rather than leaving the reader to guess.
+            items, _err = list_login_items()
+            recheck_message = (
+                f"{recheck.message} (the item may have been registered "
+                f"under a name other than '{name}' or the app bundle's "
+                f"basename; current login items: {', '.join(items) if items else 'none'})"
             )
-            ctx.fail(
-                f"login_item {name}: FAILED - {detail}",
-                type="env_login_item", name=name, message=f"{name}: {detail}",
-                persist_across_sessions=True,
-            )
+        _env_report_fix(
+            ctx, "login_item", "env_login_item", name,
+            fix_ok, msg, recheck.passed, recheck_message,
+        )
 
 
 def _env_check_user_text(name, text):
@@ -5549,6 +6033,22 @@ def _env_phase_env_checks(ctx):
                 f"env_check {name}: INVALID cost {cost!r} - must be 'quick' or 'slow'",
                 type="env_check", name=name,
                 message=f"{name}: invalid cost {cost!r}: must be 'quick' or 'slow'",
+                persist_across_sessions=True,
+            )
+            continue
+        # `cadence` is read by exactly one downstream line (the
+        # cadence_filter match above), so a typo silently removed the entry
+        # from every always lane -- validate it here like cost/timeout.
+        cadence = entry.get("cadence")
+        if cadence is not None and cadence != "always":
+            ctx.fail(
+                f"env_check {name}: INVALID cadence {cadence!r} - the only "
+                f"accepted value is 'always' (or omit the field)",
+                type="env_check", name=name,
+                message=(
+                    f"{name}: invalid cadence {cadence!r}: the only "
+                    f"accepted value is 'always' (or omit the field)"
+                ),
                 persist_across_sessions=True,
             )
             continue
@@ -5877,8 +6377,26 @@ def _process_env_pass(project_dir, current_os, data_dir, plugin_root,
         # the whole guarantee the cadence exists to make, so run them here too --
         # silently, and WITHOUT restamping env_state.json, which still describes
         # the last time the FULL manifest converged.
-        _run_always_entries_only(
-            merged, current_os, data_dir, plugin_root, project_dir, hostname)
+        #
+        # "Silently" means never displayed (this path writes no
+        # bootstrap_display.pending, mirroring the throttled always lane), but
+        # NOT silently in the log: a cadence:always fix that mutates (clone,
+        # pull, commit) or fails must still leave a trace, or the repo's
+        # "Anti-pattern: silent bootstrap operations" rule is violated on this
+        # path alone. Mirror the throttled lane's own choice at the run_kind
+        # == "always" branch (this module, ~L677-700): collect actions +
+        # failures into one log block via write_log_block. No cooldown stamp,
+        # env_state, or display-pending write from here.
+        _closed_gate_failures, _closed_gate_actions, _closed_gate_ok = \
+            _run_always_entries_only(
+                merged, current_os, data_dir, plugin_root, project_dir, hostname)
+        _closed_gate_entries = list(_closed_gate_actions)
+        _closed_gate_entries.extend(
+            f"env_check {f.get('name', '?')}: {f.get('message', 'FAILED')}"
+            for f in _closed_gate_failures)
+        if _closed_gate_entries:
+            from .log import write_log_block
+            write_log_block(data_dir, "bootstrap always", _closed_gate_entries)
         return []
     ok_entries.append(f"running ({reason})")
 
@@ -6340,7 +6858,17 @@ def _version_satisfies(current, required):
     """True if `current` >= the minimum `required` version (both dotted semver).
 
     `required` may be bare ("0.21.0") or ">=0.21.0" -- both mean "at least".
+    No other form (a caret/tilde range, a bare ">") is documented or
+    supported. `_parse_semver` only strips a leading ">="; handing it
+    anything else scans a non-digit leading character to 0 ("^1.2.0" ->
+    (0, 2, 0)), which would let a much older `current` falsely satisfy the
+    requirement. Guarded here rather than in `_parse_semver` itself, which
+    stays a generic tolerant parser other callers (own-vs-ran version
+    comparisons) rely on for plain version strings.
     """
+    req = str(required).strip()
+    if req and not req.startswith(">=") and not req[0].isdigit():
+        return False
     return _parse_semver(current) >= _parse_semver(required)
 
 
@@ -6525,7 +7053,10 @@ def emit_success_response(log_content, label="bootstrap", output_file=None,
         _write_atomic(output_file, json.dumps(response))
         _record_emit(recorder, "pending", response)
     else:
-        # SessionStart hook: supports hookSpecificOutput with hookEventName
+        # SessionStart hook: supports hookSpecificOutput with hookEventName.
+        # Same body as the background branch above (only hookEventName and
+        # the transport differ) -- see engine-internals.md's "Non-background
+        # output ... is identical except hookEventName".
         user_log = _user_visible_log(log_content)
         response = {
             "continue": True,
@@ -6536,7 +7067,7 @@ def emit_success_response(log_content, label="bootstrap", output_file=None,
             },
         }
         if user_log:
-            response["systemMessage"] = f"{label}:\n{user_log}"
+            response["systemMessage"] = f"{label} -> bootstrap complete:\n{user_log}"
         print(json.dumps(response))
         _record_emit(recorder, "stdout", response)
 
@@ -6609,17 +7140,18 @@ def _collapse_occurred(failures):
 
 
 def _is_elevation_only(failures):
-    """True when every failure is the elevation aggregate or covered by it.
+    """True when the aggregate is present and every remaining failure IS it.
 
-    The predicate for the focused message: an elevation_script item never
-    arrives alone (the per-task failures it summarizes persist alongside it by
-    design), so "all failures are elevation_script" would never fire.
+    The predicate for the focused message. The only call site
+    (emit_failure_response) always passes failures already filtered through
+    `_visible_failures`, which drops every item the aggregate speaks for --
+    so by the time this runs, nothing left is ever `_spoken_for` and the only
+    question is whether every remaining item is the aggregate itself.
     """
     has_aggregate = any(f.get("type") == "elevation_script" for f in failures)
     if not has_aggregate:
         return False
-    return all(f.get("type") == "elevation_script" or _spoken_for(f)
-               for f in failures)
+    return all(f.get("type") == "elevation_script" for f in failures)
 
 
 def _is_auto_fixable(failure):
@@ -6679,10 +7211,25 @@ _ASK_REASONS = ("elevation", "action", "info")
 _CREDENTIAL_NETWORK_TYPES = frozenset({"marketplace", "plugin", "git_dep"})
 
 
+def _normalize_scope_path(p):
+    """Resolve a path the same way on both sides of the scope compare:
+    expanduser, then realpath (follows symlinks -- a symlink planted inside
+    ~/.claude that points outside must not read as in-scope), then normcase
+    (a no-op except on Windows, where it casefolds and normalizes slashes).
+
+    Using expanduser() here -- rather than reading $HOME directly -- is what
+    keeps this in sync with the root: on Windows Git Bash, $HOME is msys-style
+    ("/c/Users/x") while os.path.expanduser() resolves the native profile via
+    USERPROFILE, so building the root from raw $HOME and the target from
+    expanduser compared two differently-shaped strings and never matched (see
+    fix_runner.py's HOME split note for the same underlying mismatch).
+    """
+    return os.path.normcase(os.path.realpath(os.path.expanduser(str(p))))
+
+
 def _user_scope_root():
     """The one tree bootstrap may write to unattended: ~/.claude."""
-    home = os.environ.get("HOME") or os.path.expanduser("~")
-    return os.path.normpath(os.path.join(home, ".claude"))
+    return _normalize_scope_path(os.path.join("~", ".claude"))
 
 
 def _path_in_user_scope(p):
@@ -6691,7 +7238,7 @@ def _path_in_user_scope(p):
     if not p:
         return True
     root = _user_scope_root()
-    ap = os.path.normpath(os.path.expanduser(str(p)))
+    ap = _normalize_scope_path(p)
     return ap == root or ap.startswith(root + os.sep)
 
 
@@ -6728,11 +7275,14 @@ def _ask_reason(failure):
     # user, not a doomed AUTO retry (see _CREDENTIAL_NETWORK_TYPES).
     if t in _CREDENTIAL_NETWORK_TYPES:
         return "info"
-    # Scope guard: an AUTO fix may only write inside ~/.claude. A json/ini
-    # remediation the manifest points at a shared or VCS-tracked file must ask
-    # first -- editing a shared file unattended is the failure we will not
-    # repeat. In-user-scope targets stay AUTO.
-    if t in ("json", "ini") and not _path_in_user_scope(_write_target(failure)):
+    # Scope guard: an AUTO fix may only write inside ~/.claude. A json/ini/
+    # sync_to_data remediation the manifest points at a shared or VCS-tracked
+    # file must ask first -- editing a shared file unattended is the failure
+    # we will not repeat. Every type _write_target knows a target for is
+    # covered here, not just json/ini, else a sync_to_data whose dst falls
+    # outside ~/.claude would slip through as AUTO. In-user-scope targets
+    # stay AUTO.
+    if t in ("json", "ini", "sync_to_data") and not _path_in_user_scope(_write_target(failure)):
         return "info"
     # Safety net: AUTO means "fix it now" and hands Claude a run-this directive,
     # so an item bootstrap CANNOT actually auto-fix (no runnable command/edit and
@@ -6749,9 +7299,27 @@ def _auto_fixable_now(failure):
     """True when Claude can carry the fix out with NO user input: a fix-all-
     eligible type, or an explicit runnable command on the failure. Distinct from
     `_is_auto_fixable` (fix-all-runnable specifically) -- an AUTO item may also be
-    a plain command Claude runs itself or a manifest edit it makes."""
+    a plain command Claude runs itself or a manifest edit it makes.
+
+    The fallback below must agree with `_is_auto_fixable` on the two shapes it
+    already routes ASK: a tool stuck in a blocked install_state (retrying just
+    says "already installed", or only the user can run the manual/elevated
+    step) still carries its old `install_cmd`, and a credential/network type
+    (_CREDENTIAL_NETWORK_TYPES) still carries its `remediation_cmd` -- both
+    would otherwise read as "genuinely runnable" here. In practice `_ask_reason`
+    already routes both to ASK before ever calling this, so the gap was
+    latent; a caller of this function on its own must still get the right
+    answer.
+    """
     if _is_auto_fixable(failure):
         return True
+    t = failure.get("type")
+    if t == "tool" and failure.get("install_state") in (
+        "installed_but_path_stale", "manual_install", "needs_elevation",
+    ):
+        return False
+    if t in _CREDENTIAL_NETWORK_TYPES:
+        return False
     return bool(failure.get("install_cmd") or failure.get("remediation_cmd")
                 or failure.get("remediation"))
 
@@ -6920,7 +7488,7 @@ def _auto_agent_directive(auto_idxs):
     )
 
 
-def _emit_unsupported_platform(message, data_dir, args):
+def _emit_unsupported_platform(message, data_dir, args, recorder=None):
     """Surface an unsupported-platform hard error and stop the pass.
 
     Non-Ubuntu Linux fails fast (detect_os raised UnsupportedPlatformError):
@@ -6933,6 +7501,11 @@ def _emit_unsupported_platform(message, data_dir, args):
     stamped the per-project cooldown BEFORE launching the engine, so leaving it
     in place means this message re-surfaces at most once per cooldown window
     (not on every session).
+
+    The background write uses _write_pending_if_absent, not _write_atomic:
+    an unconsumed bootstrap_display.pending is a verdict the user has not yet
+    seen, and this hard-error path must not clobber it -- the same reasoning
+    behind the crash sink (_emit_engine_crash) using the same guard.
     """
     label = "bootstrap"
     system_message = f"{label} -> {message}"
@@ -6954,7 +7527,8 @@ def _emit_unsupported_platform(message, data_dir, args):
             },
         }
         pending = os.path.join(data_dir, "bootstrap_display.pending")
-        _write_atomic(pending, json.dumps(response))
+        _write_pending_if_absent(pending, json.dumps(response))
+        _record_emit(recorder, "pending", response)
     else:
         response = {
             "continue": True,
@@ -6966,10 +7540,11 @@ def _emit_unsupported_platform(message, data_dir, args):
             },
         }
         print(json.dumps(response))
+        _record_emit(recorder, "stdout", response)
 
 
 def _emit_focused(failure, label, output_file, persistent_output_file,
-                  recorder=None):
+                  recorder=None, log_content=None):
     """Emit ONE failure's own messages as the whole response.
 
     Used when every failure shares a single remediation, so the numbered list
@@ -6981,16 +7556,24 @@ def _emit_focused(failure, label, output_file, persistent_output_file,
     other ASK-type focused failure (e.g. python_stub -- UAC elevation) is wrapped
     so its agent-facing text mandates the AskUserQuestion prompt instead of a
     bare 'walk them through it'.
+
+    ``log_content``'s reload/restart notice blocks (see _user_notice_blocks)
+    are threaded into the systemMessage for the same reason the general path
+    threads them: a pass that both installs a plugin and queues an elevation
+    aggregate must not lose the "restart to load it" notice just because it
+    took the focused path.
     """
     user_msg = failure.get("user_msg", failure.get("message", ""))
     agent_msg = failure.get("agent_msg", failure.get("message", ""))
     if _needs_user(failure) and failure.get("type") != "elevation_script":
         directive = _ask_agent_directive([failure], [1])
         agent_msg = f"{directive}\n\nAfter the user picks \"Fix\", the steps are:\n{agent_msg}"
+    system_message = _join_user_msg(
+        f"{label}: {user_msg}", _user_notice_blocks(log_content))
     response = {
         "continue": True,
         "suppressOutput": False,
-        "systemMessage": f"{label}: {user_msg}",
+        "systemMessage": system_message,
         "hookSpecificOutput": {
             "hookEventName": "UserPromptSubmit" if output_file else "SessionStart",
             "additionalContext": f"{label} -> {agent_msg}",
@@ -7136,10 +7719,14 @@ def emit_failure_response(failures, current_os, log_content, label="bootstrap", 
     # installing non-elevated software) or ASK (get the user's go-ahead via the
     # AskUserQuestion tool first, because the fix needs elevation, a user action,
     # or info only the user has). There is no third "manual attention" outcome.
-    auto = [f for f in failures if not _needs_user(f)]
-    ask = [f for f in failures if _needs_user(f)]
-    auto_idxs = [i for i, f in enumerate(failures, 1) if not _needs_user(f)]
-    ask_idxs = [i for i, f in enumerate(failures, 1) if _needs_user(f)]
+    auto, ask, auto_idxs, ask_idxs = [], [], [], []
+    for i, f in enumerate(failures, 1):
+        if _needs_user(f):
+            ask.append(f)
+            ask_idxs.append(i)
+        else:
+            auto.append(f)
+            auto_idxs.append(i)
 
     trailer_parts = []
     if auto_idxs:
@@ -7174,7 +7761,7 @@ def emit_failure_response(failures, current_os, log_content, label="bootstrap", 
 
     if focus is not None:
         _emit_focused(focus, label, output_file, persistent_output_file,
-                      recorder=recorder)
+                      recorder=recorder, log_content=log_content)
         return
 
     # General path: mixed failures.
@@ -7221,15 +7808,22 @@ def emit_failure_response(failures, current_os, log_content, label="bootstrap", 
         if persistent_output_file:
             _write_atomic(persistent_output_file, json.dumps(response))
     else:
-        # SessionStart hook: supports hookSpecificOutput with hookEventName
+        # SessionStart hook: supports hookSpecificOutput with hookEventName.
+        # Same body as the background branch above (only hookEventName and
+        # the transport differ) -- additionalContext always carries the
+        # complete log alongside the numbered remediation steps (see
+        # remediation-reference.md).
         response = {
             "continue": True,
             "suppressOutput": False,
-            "systemMessage": user_body or
-                f"{label}:\n{_user_visible_log(log_content)}".rstrip(),
+            "systemMessage": user_body or _join_user_msg(
+                f"{label} -> Setup issues found. Fix in order:\n"
+                f"{_user_visible_log(log_content)}".rstrip(),
+                user_msg,
+            ),
             "hookSpecificOutput": {
                 "hookEventName": "SessionStart",
-                "additionalContext": agent_msg,
+                "additionalContext": f"{label} -> bootstrap complete:\n{log_content}\n\n{agent_msg}",
             },
         }
         print(json.dumps(response))

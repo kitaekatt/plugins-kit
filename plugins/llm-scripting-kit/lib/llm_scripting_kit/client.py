@@ -43,19 +43,21 @@ def make_openai_client(
         ImportError: If the ``openai`` package is not installed.
         RuntimeError: If no API key can be resolved from any source.
     """
-    keyless = False
-    if endpoint is None:
-        base_url = BASE_URL
-        key_env_hint = "OPENROUTER_API_KEY"
-    else:
-        from .models import resolve_endpoint  # noqa: PLC0415
+    # endpoint=None follows the config's default_endpoint -- resolve_endpoint(None)
+    # -- exactly like a named endpoint does, rather than hardcoding OpenRouter's
+    # BASE_URL. A half-applied default (the model resolving to a local slug
+    # while the client still points at OpenRouter) would ship the OpenRouter
+    # key to the wrong host. Shipped-default behavior (default_endpoint:
+    # openrouter) is unchanged: resolve_endpoint(None) returns exactly BASE_URL
+    # / OPENROUTER_API_KEY for that case.
+    from .models import resolve_endpoint  # noqa: PLC0415
 
-        ep = resolve_endpoint(
-            endpoint, project_root=str(project_root) if project_root is not None else None
-        )
-        base_url = ep["base_url"]
-        key_env_hint = ep["key_env"]
-        keyless = ep["key_env"] is None
+    ep = resolve_endpoint(
+        endpoint, project_root=str(project_root) if project_root is not None else None
+    )
+    base_url = ep["base_url"]
+    key_env_hint = ep["key_env"]
+    keyless = ep["key_env"] is None
 
     if api_key is None and keyless:
         # Keyless endpoint: never consult get_api_key -- there is no variable

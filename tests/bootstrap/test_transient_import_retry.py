@@ -12,6 +12,7 @@ import json
 import sys
 
 from bootstrap_lib import harvest
+from bootstrap_lib import engine
 from bootstrap_lib.engine import _is_transient_import_crash, _defer_transient_retry
 from bootstrap_lib.harvest import run_harvest
 from bootstrap_lib.stamps import global_stamp
@@ -61,11 +62,15 @@ class TestDeferTransientRetry:
         data_dir.mkdir()
         proj = tmp_path / "proj"
         proj.mkdir()
-        monkeypatch.setattr(
-            sys, "argv",
-            ["engine", "--data-dir", str(data_dir), "--project-dir", str(proj)],
+        exc = ModuleNotFoundError(
+            "No module named 'bootstrap_lib.fix_queue'",
+            name="bootstrap_lib.fix_queue",
         )
-        _defer_transient_retry("Traceback...\nModuleNotFoundError: bootstrap_lib.fix_queue")
+        _defer_transient_retry(
+            "Traceback...\nModuleNotFoundError: bootstrap_lib.fix_queue",
+            exc,
+            (str(data_dir), str(proj), "", False, True, "full"),
+        )
         assert global_stamp(str(data_dir), "import_retry_pending").read() == "1"
         # SILENT: no user-facing crash display is written.
         assert not (data_dir / "bootstrap_display.pending").exists()
@@ -73,12 +78,58 @@ class TestDeferTransientRetry:
     def test_console_mode_writes_nothing(self, tmp_path, monkeypatch):
         data_dir = tmp_path / "data"
         data_dir.mkdir()
-        monkeypatch.setattr(
-            sys, "argv",
-            ["engine", "--data-dir", str(data_dir), "--console"],
+        _defer_transient_retry(
+            "tb",
+            ModuleNotFoundError("x", name="bootstrap_lib.x"),
+            (str(data_dir), "", "", True, False, "full"),
         )
-        _defer_transient_retry("tb")
         assert global_stamp(str(data_dir), "import_retry_pending").read() == ""
+
+    def test_fourth_identical_import_crash_becomes_loud(self, tmp_path, monkeypatch):
+        data_dir = tmp_path / "data"
+        data_dir.mkdir()
+        root = tmp_path / "root"
+        (root / ".claude-plugin").mkdir(parents=True)
+        (root / ".claude-plugin" / "plugin.json").write_text(
+            json.dumps({"version": "1.0.0"})
+        )
+        exc = ModuleNotFoundError("missing", name="bootstrap_lib.records")
+        lock_args = (str(data_dir), "", str(root), False, True, "full")
+        for _ in range(3):
+            assert _defer_transient_retry("tb", exc, lock_args)
+        assert not (data_dir / "bootstrap_display.pending").exists()
+
+        # Escalation is HANDLED by the retry helper (it emits the loud crash
+        # itself), so the caller must not emit a second crash for the same
+        # traceback: count the emits.
+        emits = []
+        monkeypatch.setattr(
+            engine, "_emit_engine_crash",
+            lambda tb, args, _real=engine._emit_engine_crash: (emits.append(tb), _real(tb, args)),
+        )
+        assert _defer_transient_retry("tb", exc, lock_args)
+        assert len(emits) == 1
+        pending = data_dir / "bootstrap_display.pending"
+        assert pending.is_file()
+        assert "bootstrap_lib.records" in pending.read_text()
+
+    def test_import_retry_counter_resets_for_new_engine_version(self, tmp_path):
+        data_dir = tmp_path / "data"
+        data_dir.mkdir()
+        root = tmp_path / "root"
+        (root / ".claude-plugin").mkdir(parents=True)
+        manifest = root / ".claude-plugin" / "plugin.json"
+        manifest.write_text(json.dumps({"version": "1.0.0"}))
+        exc = ModuleNotFoundError("missing", name="bootstrap_lib.records")
+        lock_args = (str(data_dir), "", str(root), False, True, "full")
+        for _ in range(3):
+            _defer_transient_retry("tb", exc, lock_args)
+
+        manifest.write_text(json.dumps({"version": "1.0.1"}))
+        assert _defer_transient_retry("tb", exc, lock_args)
+        state = json.loads((data_dir / "import_retry_state.json").read_text())
+        assert state["version"] == "1.0.1"
+        assert state["count"] == 1
 
 
 class TestHarvestImportRetry:

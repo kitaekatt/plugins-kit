@@ -114,7 +114,12 @@ merged = merge_preserved_fields(existing_record, fresh_record, policy=policy)
 ```
 
 `human_fields` and `carry_fields` both carry-when-present (kept distinct only
-to document intent); only `conditional_fields` gates on `unchanged`. Keyed
+to document intent); only `conditional_fields` gates on `unchanged`.
+Presence is decided by a `present` predicate (keyword-only on `MergePolicy`
+and `CollectionMerge`) whose default treats `None`, `""`, and an empty
+container as absent and everything else -- including `False` and `0` -- as
+present, so a human override of `False` or a carried count of `0` is never
+mistaken for absence and dropped. Keyed
 sub-collections (a list of per-line items) merge under a `CollectionMerge`
 with its own `id_key` and a `keep_orphans_when` rule that retains a dropped
 item still carrying authored work. Every rule is a field-name list, so the

@@ -168,6 +168,22 @@ class TestClaudeCliBackend:
         with pytest.raises(RuntimeError, match="exit 1"):
             _cli(runner).complete("s", "u", model="opus")
 
+    def test_empty_stdout_on_exit_0_raises_a_typed_error(self):
+        """Codex and opencode already raise a typed transport error naming the
+        condition when a zero exit carries no usable answer; the claude
+        transport must do the same rather than letting json.loads raise a raw
+        JSONDecodeError the seam's typed-RuntimeError convention does not
+        cover.
+        """
+        runner = _StubRunner([("", "", 0)])
+        with pytest.raises(RuntimeError, match="no JSON envelope"):
+            _cli(runner).complete("s", "u", model="opus")
+
+    def test_envelope_without_result_raises_a_typed_error(self):
+        runner = _StubRunner([(json.dumps({"is_error": False}), "", 0)])
+        with pytest.raises(RuntimeError, match="no result"):
+            _cli(runner).complete("s", "u", model="opus")
+
     def test_transient_500_retries_then_succeeds(self, monkeypatch):
         sleeps: list = []
         monkeypatch.setattr(_time, "sleep", lambda s: sleeps.append(s))
@@ -220,10 +236,11 @@ class TestClaudeCliBackend:
         assert excinfo.value is exc
         assert backend.classify_halt(excinfo.value) == halt.HALT_RATE_LIMIT
 
-    def test_timeout_diagnostics_dump(self, tmp_path: Path):
+    @pytest.mark.parametrize("flag", ["--system-prompt", "--append-system-prompt"])
+    def test_timeout_diagnostics_dump(self, tmp_path: Path, flag: str):
         exc = AgentTimeoutError(
             "timed out",
-            cmd=["claude", "-p", "--system-prompt", "S" * 100],
+            cmd=["claude", "-p", flag, "S" * 100],
             elapsed_s=901, stdout="OUT", stderr="ERR",
         )
         runner = _StubRunner([exc])
@@ -236,7 +253,7 @@ class TestClaudeCliBackend:
         body = dumps[0].read_text(encoding="utf-8")
         assert "elapsed 901s" in body
         assert "OUT" in body and "ERR" in body
-        # System prompt body redacted from the cmd line.
+        # System prompt body redacted from the cmd line, whichever flag built it.
         assert "S" * 100 not in body
         assert "<100 chars>" in body
 
@@ -311,6 +328,27 @@ class TestOpenRouterBackend:
         backend = OpenRouterBackend()
         assert backend.name == "openrouter"
         assert isinstance(backend, LLMBackend)
+
+    def test_unresolvable_alias_raises_the_typed_config_error(self, monkeypatch):
+        """The blanket ``except Exception: return model`` used to swallow this.
+
+        An unknown alias should surface as create_backend's own typed config
+        error, not dispatch the raw alias string to the provider and surface
+        as a confusing 404. A slug containing "/" is already returned as-is
+        by models.resolve_model itself, so the removed catch only ever hid
+        the wrong case.
+        """
+        from llm_scripting_kit.models import ModelResolveError
+
+        monkeypatch.setattr("llm_scripting_kit.models.load_model_config", lambda **kw: {})
+        backend = OpenRouterBackend()
+        with pytest.raises(ModelResolveError):
+            backend._resolve_model("bogus-alias-not-in-any-registry")
+
+    def test_concrete_slug_is_unchanged_by_resolution(self, monkeypatch):
+        monkeypatch.setattr("llm_scripting_kit.models.load_model_config", lambda **kw: {})
+        backend = OpenRouterBackend()
+        assert backend._resolve_model("openai/gpt-4o") == "openai/gpt-4o"
 
     def test_parses_response_and_cache_hit_tokens(self):
         client = _FakeClient()

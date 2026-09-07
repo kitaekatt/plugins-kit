@@ -33,6 +33,7 @@ Three empirical findings are encoded as hard behaviour rather than advice:
 
 from __future__ import annotations
 
+import ntpath
 import os
 import re
 import shutil
@@ -43,11 +44,6 @@ from typing import Iterable, Optional, Sequence, Tuple, Union
 CODEX_EXECUTABLE = "codex"
 
 #: Probe values for `-c` keys whose type is not a plain enum-ish string.
-_CONFIG_PROBE_VALUES = {
-    "sandbox_workspace_write.network_access": "true",
-}
-_DEFAULT_CONFIG_PROBE_VALUE = "low"
-
 _VERSION_RE = re.compile(
     r"^(?:codex(?:-cli)?\s+)?v?(\d+)\.(\d+)\.(\d+)",
     re.IGNORECASE,
@@ -224,6 +220,12 @@ def _reject_cmd_metacharacters(argv: Sequence[str]) -> None:
             )
 
 
+def _is_cmd_launcher(value: str) -> bool:
+    """Return whether ``value`` names cmd.exe, including a Windows path."""
+    stem, _suffix = ntpath.splitext(ntpath.basename(value))
+    return stem.casefold() == "cmd"
+
+
 def _absolute(value: PathLike, param: str) -> str:
     """Return ``value`` as a str, refusing a relative path.
 
@@ -330,54 +332,7 @@ def build_codex_exec_argv(
     argv += ["--skip-git-repo-check", "--color", "never", "-"]
     # Only when a batch launcher forced a cmd.exe hop -- a real executable is
     # handed straight to CreateProcess and never re-parsed.
-    if argv[0].lower() == "cmd":
+    if any(_is_cmd_launcher(part) for part in argv_prefix):
         _reject_cmd_metacharacters(argv)
     return argv
 
-
-def probe_config_key(key: str, *, timeout: float = 60.0) -> bool:
-    """Is ``key`` a config key this Codex build accepts? Costs zero tokens.
-
-    ``codex exec --help`` does not list config keys, so the only way to confirm
-    one's spelling is ``--strict-config``, which rejects an unknown key while
-    loading config -- before the prompt is read. An EMPTY prompt therefore
-    separates the outcomes: a known key gets as far as "No prompt provided", an
-    unknown one says "unknown configuration field" and never reaches the model.
-
-    Fails closed: a timeout, a missing CLI, or any unrecognized outcome is
-    False.
-    """
-    prefix = resolve_cli(CODEX_EXECUTABLE)
-    if prefix is None:
-        return False
-    value = _CONFIG_PROBE_VALUES.get(key, _DEFAULT_CONFIG_PROBE_VALUE)
-    argv = [
-        *prefix,
-        "exec",
-        "--strict-config",
-        "-s",
-        "read-only",
-        "--skip-git-repo-check",
-        "--color",
-        "never",
-        "-c",
-        "%s=%s" % (key, value),
-        "-",
-    ]
-    try:
-        proc = subprocess.run(
-            argv,
-            input="",
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True, encoding="utf-8", errors="replace",
-            timeout=timeout,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return False
-    output = _decode(proc.stdout)
-    if "unknown configuration field" in output:
-        return False
-    if "No prompt provided" in output:
-        return True
-    return proc.returncode == 0

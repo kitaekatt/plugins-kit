@@ -1,4 +1,4 @@
-"""Tests for marketplace pin operations — bootstrap.json marketplaces[].pin.
+"""Tests for marketplace pin operations -- bootstrap.json marketplaces[].pin.
 
 Library-level tests use real temp git repos (same approach as
 TestCheckMarketplaceCurrentNoUpstream in test_marketplace_lifecycle.py);
@@ -224,6 +224,41 @@ class TestApplyMarketplacePin:
         km_data = json.loads(open(pin_paths.km).read())
         assert km_data["my-market"]["autoUpdate"] is False
 
+    def test_absent_prior_auto_update_is_deleted_on_release(self, repos, pin_paths):
+        km_data = json.loads(open(pin_paths.km).read())
+        del km_data["my-market"]["autoUpdate"]
+        open(pin_paths.km, "w").write(json.dumps(km_data))
+
+        assert apply_marketplace_pin(
+            "my-market", repos.sha1, clone_dir=str(repos.clone),
+            pins_path=pin_paths.pins, km_path=pin_paths.km,
+        ).passed
+
+        result = release_marketplace_pin(
+            "my-market", clone_dir=str(repos.clone),
+            pins_path=pin_paths.pins, km_path=pin_paths.km,
+        )
+
+        assert result.passed is True
+        assert "autoUpdate" not in json.loads(open(pin_paths.km).read())["my-market"]
+
+    def test_malformed_marketplace_metadata_keeps_marker_and_fails_release(
+            self, repos, pin_paths):
+        assert apply_marketplace_pin(
+            "my-market", repos.sha1, clone_dir=str(repos.clone),
+            pins_path=pin_paths.pins, km_path=pin_paths.km,
+        ).passed
+        open(pin_paths.km, "w").write("{ not json")
+
+        result = release_marketplace_pin(
+            "my-market", clone_dir=str(repos.clone),
+            pins_path=pin_paths.pins, km_path=pin_paths.km,
+        )
+
+        assert result.passed is False
+        assert "restore" in result.message
+        assert load_pin_markers(pin_paths.pins)["my-market"]
+
     def test_resolves_clone_dir_from_registry_when_omitted(self, repos, pin_paths):
         """The engine call path: pin-only entry, clone dir from known_marketplaces."""
         result = apply_marketplace_pin(
@@ -338,6 +373,7 @@ class TestEnginePinFlow:
                 "installLocation": str(tmp_path / "marketplaces" / "my-market"),
                 "autoUpdate": True,
             }
+            (tmp_path / "marketplaces" / "my-market").mkdir(parents=True)
         km.write_text(json.dumps(entries))
         monkeypatch.setenv("HOME", str(tmp_path))
         monkeypatch.setenv("USERPROFILE", str(tmp_path))
@@ -489,11 +525,13 @@ class TestEnginePinVersionInteraction:
     def _setup_home(self, tmp_path, monkeypatch, installed_version):
         plugins_dir = tmp_path / ".claude" / "plugins"
         plugins_dir.mkdir(parents=True)
+        install_path = tmp_path / "cache"
+        install_path.mkdir()
         ip = plugins_dir / "installed_plugins.json"
         ip.write_text(json.dumps({
             "version": 2,
             "plugins": {
-                "bootstrap@plugins-kit": [{"scope": "user", "version": installed_version, "installPath": "/cache"}]
+                "bootstrap@plugins-kit": [{"scope": "user", "version": installed_version, "installPath": str(install_path)}]
             }
         }))
         settings = tmp_path / ".claude" / "settings.json"

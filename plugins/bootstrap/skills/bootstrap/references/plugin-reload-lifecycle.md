@@ -205,10 +205,16 @@ does not exist yet; `session-bootstrap.sh` is what installs it):
    `BOOTSTRAP_RESCUE_DELAY` (default 2s) and **stands down** if (a) the marker
    appeared — a genuinely-firing SessionStart pass claimed the session
    (fast-start / `claude -p` race) — or (b) **any** per-project cooldown stamp is
-   fresh (<120s) — a pass stamped it at entry moments ago, covering a
-   SessionStart pass that received no stdin and so wrote no marker. Both
-   stand-down paths run the **harvest** this prompt's foreground skipped, so a
-   single-prompt session still converges a pending update.
+   fresh (<120s) -- a pass stamped it at entry moments ago, covering a *FULL*
+   SessionStart pass that received no stdin and so wrote no marker. The
+   cooldown stamp is written only on a full pass (`RUN_KIND=full` in
+   `session-bootstrap.sh`); a *throttled* no-stdin start falls to the always
+   lane and touches neither the marker nor the cooldown stamp, so (b) does not
+   cover it -- the rescue can then launch one redundant pass, stood down by the
+   engine's own lock or throttled to the always lane in turn, never a second
+   full pass racing the throttled one. Both stand-down paths run the
+   **harvest** this prompt's foreground skipped, so a single-prompt session
+   still converges a pending update.
 4. Otherwise it takes an atomic **one-launch-per-session lock** (noclobber
    create of `sessions/rescue_launched.<session_id>`) — at most one rescue
    launch per session, ever — appends a `sessionstart-rescue:` audit line to

@@ -20,6 +20,7 @@ import os
 import pytest
 
 import bootstrap_lib.fix_queue as fq
+import bootstrap_lib.fix_runner as fr
 from bootstrap_lib.fix_queue import FixTask
 
 
@@ -45,7 +46,8 @@ class TestFixTaskToJson:
         """Required fields always serialize; unset optionals stay out so the
         queue file stays readable."""
         out = FixTask(id="t", kind="command", label="L").to_json()
-        assert out == {"id": "t", "kind": "command", "label": "L"}
+        assert out == {"id": "t", "kind": "command", "label": "L",
+                       "origin": ""}
 
     def test_opportunistic_is_emitted_only_when_set(self):
         """queue.json is a disclosure surface: an opportunistic task must say
@@ -123,6 +125,12 @@ class TestQueueFromFailures:
         assert tasks[0].kind == "apt"
         assert tasks[0].packages == ["net-tools", "tmux"]
         assert tasks[0].elevated is True
+
+    def test_apt_packages_are_deduplicated_in_input_order(self):
+        tasks = fq.queue_from_failures(
+            [desc("apt", package="age"), desc("apt", package="age-keygen"),
+             desc("apt", package="age")], "ubuntu")
+        assert tasks[0].packages == ["age", "age-keygen"]
 
     def test_commands_become_one_task_each_in_pass_order(self):
         tasks = fq.queue_from_failures(
@@ -389,6 +397,42 @@ class TestWriteOrClearQueue:
         assert os.path.exists(path)
         assert os.path.exists(fq.shim_path(str(tmp_path), "ubuntu"))
 
+    def test_tasks_are_tagged_with_their_project_origin(self, tmp_path):
+        task = FixTask(id="t", kind="command", label="L", command="x")
+        fq.write_or_clear_queue([task], str(tmp_path), "ubuntu",
+                                origin="/project-a")
+        body = json.load(open(fq.queue_path(str(tmp_path))))
+        assert body["tasks"][0]["origin"] == "/project-a"
+
+    def test_empty_project_pass_preserves_other_project_tasks(self, tmp_path):
+        fq.write_or_clear_queue(
+            [FixTask(id="a", kind="command", label="A", command="a")],
+            str(tmp_path), "ubuntu", origin="/project-a")
+        fq.write_or_clear_queue([], str(tmp_path), "ubuntu", origin="/project-b")
+        body = json.load(open(fq.queue_path(str(tmp_path))))
+        assert [task["label"] for task in body["tasks"]] == ["A"]
+
+    def test_project_pass_replaces_only_its_origin_and_keeps_shim_merged(self, tmp_path):
+        fq.write_or_clear_queue(
+            [FixTask(id="a", kind="command", label="A", command="a")],
+            str(tmp_path), "ubuntu", origin="/project-a")
+        fq.write_or_clear_queue(
+            [FixTask(id="b", kind="command", label="B", command="b")],
+            str(tmp_path), "ubuntu", origin="/project-b")
+        body = json.load(open(fq.queue_path(str(tmp_path))))
+        assert {(task["label"], task["origin"]) for task in body["tasks"]} == {
+            ("A", "/project-a"), ("B", "/project-b")}
+        shim = open(fq.shim_path(str(tmp_path), "ubuntu")).read()
+        assert fq.queue_path(str(tmp_path)) in shim
+
+    def test_cleanup_failure_is_reported(self, tmp_path, monkeypatch):
+        def fail_remove(path):
+            raise PermissionError("locked")
+
+        monkeypatch.setattr(fq.os, "remove", fail_remove)
+        with pytest.raises(fq.QueueCleanupError, match="locked"):
+            fq.write_or_clear_queue([], str(tmp_path), "ubuntu")
+
     def test_shim_basename_is_per_os(self):
         assert fq.shim_basename("windows") == "bootstrap-fix.bat"
         assert fq.shim_basename("ubuntu") == "bootstrap-fix.sh"
@@ -447,8 +491,8 @@ class TestWriteOrClearQueue:
 
 class TestFixQueueFailure:
     def test_windows_offers_fix_all_and_sets_the_uac_expectation(self):
-        tasks = [FixTask(id="a", kind="command", label="Link starship-config"),
-                 FixTask(id="b", kind="command", label="ssh-server-windows")]
+        tasks = [FixTask(id="a", kind="command", label="Link starship-config", elevated=True),
+                 FixTask(id="b", kind="command", label="ssh-server-windows", elevated=True)]
         item = fq.fix_queue_failure(tasks, "windows", "C:/data")
         assert "(1) Link starship-config; (2) ssh-server-windows" in item["user_msg"]
         assert "fix-all" in item["user_msg"]
@@ -473,8 +517,8 @@ class TestFixQueueFailure:
         """The question text and the user-facing intro are one string, so a
         reworded message can never leave the user answering a prompt that says
         something different from what they just read."""
-        tasks = [FixTask(id="a", kind="command", label="CUDA Toolkit"),
-                 FixTask(id="b", kind="command", label="ssh-server-windows")]
+        tasks = [FixTask(id="a", kind="command", label="CUDA Toolkit", elevated=True),
+                 FixTask(id="b", kind="command", label="ssh-server-windows", elevated=True)]
         item = fq.fix_queue_failure(tasks, "windows", "C:/data")
         intro = ("Bootstrap found issues that need admin access: "
                  "(1) CUDA Toolkit; (2) ssh-server-windows.")
@@ -530,6 +574,27 @@ class TestFixQueueFailure:
         assert expected in item["user_msg"]
         assert expected in item["agent_msg"]
 
+    def test_failed_launch_without_starting_has_no_transcript_claim(self):
+        item = fq.fix_queue_failure(
+            [FixTask(id="a", kind="command", label="x", elevated=True)],
+            "windows", "C:/data", launch_detail="access denied",
+            launch_failed=True)
+        assert item["user_msg"].startswith(
+            "could not launch the fix runner: access denied")
+        assert fq.transcript_path("C:/data") not in item["user_msg"]
+        assert fq.transcript_path("C:/data") not in item["agent_msg"]
+
+    def test_mixed_queue_identifies_admin_and_consent_items(self):
+        item = fq.fix_queue_failure(
+            [FixTask(id="a", kind="command", label="Install x", elevated=True),
+             FixTask(id="p", kind="path_prune", label="Prune PATH")],
+            "windows", "C:/data")
+        intro = item["user_msg"]
+        assert "Install x" in intro and "Prune PATH" in intro
+        assert "need admin access" in intro
+        assert "only need your go-ahead" in intro
+        assert '"Prune PATH"' not in intro
+
     def test_item_persists_across_sessions(self):
         item = fq.fix_queue_failure(
             [FixTask(id="a", kind="command", label="x")], "windows", "C:/data")
@@ -565,14 +630,14 @@ class TestLaunchFixRunner:
         assert "-Verb RunAs" in ps_cmd
         assert "-Wait" in ps_cmd
         assert "--engine" in ps_cmd
-        assert seen["timeout"] == fq.LAUNCH_TIMEOUT
+        assert seen["timeout"] == fq.launch_timeout_for([])
 
     def test_uac_decline_surfaces_as_detail_not_success(self, monkeypatch):
         monkeypatch.setattr(fq.subprocess, "run", lambda *a, **k: type(
             "P", (), {"returncode": 1,
                       "stderr": "Start-Process : The operation was canceled by the user"})())
         r = fq.launch_fix_runner("C:/data/queue.json", "windows")
-        assert r.launched and not r.succeeded
+        assert not r.launched and not r.succeeded
         assert "canceled by the user" in r.detail
 
     def test_detail_is_the_error_message_not_the_error_id(self, monkeypatch):
@@ -601,6 +666,31 @@ class TestLaunchFixRunner:
         r = fq.launch_fix_runner("C:/data/queue.json", "windows")
         assert not r.succeeded
         assert "exit code 2" in r.detail
+
+    @pytest.mark.parametrize("code, phrase", [
+        (fr.EXIT_ABORTED, "you declined at the briefing"),
+        (fr.EXIT_BAD_QUEUE, "the queue file was invalid"),
+    ])
+    def test_runner_outcomes_have_actionable_details(self, monkeypatch, code, phrase):
+        monkeypatch.setattr(fq.subprocess, "run", lambda *a, **k: type(
+            "P", (), {"returncode": code, "stderr": ""})())
+        r = fq.launch_fix_runner("C:/data/queue.json", "windows")
+        assert r.launched and phrase in r.detail
+
+    def test_declared_budget_is_clamped_below_bash_tool_limit(self):
+        task = FixTask(id="slow", kind="command", label="slow", timeout=3600)
+        assert fq.launch_timeout_for([task]) == fq.MAX_LAUNCH_WAIT
+        assert fq.MAX_LAUNCH_WAIT < 600
+
+    def test_quick_queue_uses_floor_plus_ack_grace(self):
+        assert fq.launch_timeout_for([]) == fq.LAUNCH_TIMEOUT + fq.ACK_GRACE
+
+    def test_budget_exceeded_message_warns_about_the_late_recheck(self):
+        item = fq.fix_queue_failure(
+            [FixTask(id="slow", kind="command", label="slow", elevated=True,
+                     timeout=3600)], "windows", "C:/data")
+        assert "runner may still be working after this pass returns" in item["user_msg"]
+        assert "re-run the check when it finishes" in item["user_msg"]
 
     def test_walkaway_is_bounded(self, monkeypatch):
         import subprocess as sp
@@ -655,3 +745,21 @@ class TestLaunchFixRunner:
         assert '\'"C:\\Users\\John Doe\\data\\queue.json"\'' in cmd
         # --engine has no space and needs no quoting; it must stay a bare literal.
         assert "'--engine'" in cmd
+
+
+def test_load_queue_tasks_returns_every_origin(tmp_path):
+    """The launched queue is the MERGED file, so the tasks the user is shown and
+    the wait budget must come from it, not from this pass's tasks alone."""
+    from bootstrap_lib import fix_queue as fq
+
+    a = fq.FixTask(id="a", kind="command", label="Install A", command="echo a",
+                   elevated=True, timeout=1000)
+    fq.write_or_clear_queue([a], str(tmp_path), "windows", origin="/proj/a")
+    b = fq.FixTask(id="b", kind="command", label="Install B", command="echo b",
+                   elevated=True, timeout=1000)
+    path = fq.write_or_clear_queue([b], str(tmp_path), "windows", origin="/proj/b")
+
+    merged = fq.load_queue_tasks(path)
+    assert sorted(t.id for t in merged) == ["a", "b"]
+    assert {t.origin for t in merged} == {"/proj/a", "/proj/b"}
+    assert fq.launch_timeout_for(merged) >= fq.launch_timeout_for([b])

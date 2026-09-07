@@ -118,6 +118,20 @@ Three schema gotchas worth calling out:
 - **`autodetect` is a string**, `"<script_path> <function_name>"` (e.g. `"scripts/autodetect.py detect"`), for both `config` and `project_config`. A dict form is not understood.
 - **`python_stub_check` is not a manifest field** — it lives only under `self_setup` in bootstrap's own `config.json` (see its section below).
 
+## `requires_bootstrap` -- Minimum Engine Version
+
+A top-level manifest key naming the oldest bootstrap engine that can process this
+manifest. Accepted forms are a bare version (`"1.2.0"`) or a `>=` form
+(`">=1.2.0"`); both mean "engine version at least this". Any other spelling
+(`"^1.2.0"`, `">1.2.0"`, `"~1.2"`) is never satisfied, so a manifest carrying one
+is skipped exactly as an outdated engine would skip it.
+
+When the running engine does not satisfy the constraint, the plugin's manifest is
+skipped in its entirety (every phase, and the shared-library convergence sweep
+that would otherwise re-link its `shared_lib_imports`), and one action entry says
+to update bootstrap. The plugin is processed on the first pass after bootstrap
+converges to a satisfying version.
+
 ## `venv` — Per-Plugin Python Environment
 
 A plugin declares a `venv` section to request a bootstrap-managed Python environment. The engine creates and syncs `<plugin_data_dir>/.venv` from the plugin's `pyproject.toml` (via `uv sync --project <plugin_root>`), then verifies each listed import works.
@@ -771,7 +785,13 @@ A per-project config file (under `<cwd>/.local-data/<plugin>/config.yaml`) disco
 
 ### `legacy_file` — one-shot path migration
 
-If the manifest declares `legacy_file`, the engine checks whether `<cwd>/<legacy_file>` exists at session start. If it does and `<cwd>/<file>` does not, the engine moves the file to the new path (creating parent dirs as needed) and emits a `project config: migrated <old> -> <new>` action entry. The downstream load/autodetect/required-fields flow then runs against the new path. The migration is idempotent — once the file lives at the new path, subsequent sessions see the legacy file as absent and skip the move.
+If the manifest declares `legacy_file`, the engine checks whether `<cwd>/<legacy_file>` exists at session start, and reconciles it against `<cwd>/<file>` before the downstream load/autodetect/required-fields flow runs against the new path:
+
+- **Only the legacy path exists** -- the engine moves the file to the new path (creating parent dirs as needed) and emits a `project config: migrated <old> -> <new>` action entry.
+- **Both paths exist** -- mtime decides which copy wins, since this is the shape left behind by a session that ran before `legacy_file` was honored: the engine had already created a new file from defaults/autodetect, leaving the legacy file orphaned alongside it. If the legacy file is no newer than the new path, the legacy file is deleted and a `project config: removed stale legacy <old> (new path <new> is fresher)` action entry is emitted. If the legacy file is newer, it overwrites the new path (same move as the only-legacy case) and the action entry notes `(overwrote stale new path)`.
+- **Only the new path exists, or neither exists** -- no-op; downstream logic handles creation.
+
+Whenever a move or deletion actually reconciles the two paths, the engine also removes the legacy file's directory if that removal leaves it empty. The migration is idempotent -- once the file lives at the new path (and the legacy path is gone or is not newer), subsequent sessions see nothing left to reconcile and skip the move.
 
 Use `legacy_file` only when an existing path is being relocated (e.g. moving project config out of `.claude/` and into `.local-data/`); it is not a general-purpose alias.
 
@@ -822,7 +842,7 @@ Each entry in the `marketplaces` array declares a marketplace the engine should 
 | `name` | Yes | Marketplace name; also the merge identity key |
 | `source` | For registration | Git URL passed to `claude plugin marketplace add` when the marketplace is not yet registered. Optional when it is already registered — the common case for a pin-only override in a user layer |
 | `remove` | No | When truthy (or `enabled: false`), deregister the marketplace via `claude plugin marketplace remove` (which also uninstalls its plugins). **Takes precedence over every other field** — `source`/`pin`/`alwaysUpdate` are meaningless for a marketplace being torn down. Idempotent: an already-absent marketplace is a verbose-only ok, so the directive can live in a checked-in layer forever without erroring once the removal has happened. See below |
-| `alwaysUpdate` | No | Refresh the marketplace **clone/listing** against its remote every session. NOTE: this does **not** bump *installed plugin versions* — for that the marketplace needs Claude Code's `autoUpdate: true` (set via an `extraKnownMarketplaces` block in a settings.json). Declaring a marketplace here with only `alwaysUpdate` keeps the listing fresh while installed plugins stay pinned — see the `plugin_autoupdate_propagation` fact in SKILL.md. **Ignored while `pin` is set** (a one-line warning action is emitted) |
+| `alwaysUpdate` | No | Refresh the marketplace **clone/listing** against its remote every session. NOTE: this does **not** bump *installed plugin versions* -- for that the marketplace needs Claude Code's `autoUpdate: true` (set via an `extraKnownMarketplaces` block in a settings.json). Declaring a marketplace here with only `alwaysUpdate` keeps the listing fresh while installed plugins stay pinned (update mechanics: references/plugin-reload-lifecycle.md) -- **Ignored while `pin` is set** (a one-line warning action is emitted) |
 | `pin` | No | Git committish (SHA or tag) that snapshots the ENTIRE marketplace repo at a moment in time — see below |
 
 ### `remove`
@@ -1114,11 +1134,16 @@ Three traits distinguish it from `bootstrap.json`:
    rewritten on disk, and an engine too old to know `env.json` skips the file
    entirely.
 
-All of `env.json`'s failure types are **manual-attention** items (never
-auto-fixable in the fix-all sense): the engine has *already* run each fix in the
-same pass. What surfaces is the residue that the fix could not resolve — a
-persistent failure that keeps the phase re-running (via the gate) every session
-until it converges. `env.json` failures never block `bootstrap.json` provisioning
+Most of `env.json`'s failure types are **manual-attention** items: the engine has
+*already* run each fix in the same pass, and what surfaces is the residue that the
+fix could not resolve -- a persistent failure that keeps the phase re-running (via
+the gate) every session until it converges. Two conditions are the exception and
+route into the **fix-all queue** instead, exactly like an elevated `bootstrap.json`
+strategy: an `env_checks` entry's `elevated: true` fix when privileges are missing,
+and a `symlinks` entry whose creation fails with Windows' WinError 1314 (no
+Developer Mode). Both are deferred `{method: "command"}` tasks the fix-all runner
+can execute elevated -- see the `env_checks` dispatch table and the `symlinks`
+section below. `env.json` failures never block `bootstrap.json` provisioning
 (tools, fonts, venvs); failure isolation is per-item, as everywhere in the engine.
 
 ## File homes and 4-layer precedence
@@ -1247,7 +1272,9 @@ registry-level machinery as a hosts-filter typo.
   manual-attention item).
 
 **The phase RUNS iff any of** (else it logs one verbose `env: up to date` line and
-is skipped entirely):
+is skipped -- except `env_checks` entries declaring `cadence: "always"`, which
+still run on that closed-gate path, logged to `bootstrap.log` and never displayed,
+without restamping `env_state.json`; see the `cadence` row under `env_checks`):
 
 1. **no stamp** — first run (an explicit reset recreates this state by deleting the
    stamp);
@@ -1339,7 +1366,7 @@ ConfigLinkManager semantics).
 | `name` | Yes | Identity key |
 | `source` | Yes | The tracked file the link points at. Must exist — a link "pointing at" a missing source **fails** (a dangling link means the manifest references a file not on disk, a content error to surface) |
 | `target` | Yes | Where the link is created |
-| `backup` | No (default false) | When a **real file** already sits at `target`, preserve it as a timestamped `.backup_<ts>` sibling before linking; else it is removed |
+| `backup` | No (default false) | A **real file** already sitting at `target` is always moved aside to a timestamped `.backup_<ts>` sibling before linking, and restored if the link attempt fails, whatever `backup` says. Once the link succeeds, `backup` decides only whether that aside copy is kept and reported (true) or removed (false) |
 
 Paths expand `~` and `$VARS` (an unresolved `$VAR` is an error — declare it via
 `bootstrap.json` `env_vars`). A **directory** at `target` is never replaced (a
@@ -1350,10 +1377,14 @@ refused (it would self-reference).
 **Windows elevation (WinError 1314).** Unelevated symlink creation on Windows
 requires Developer Mode (or `SeCreateSymbolicLinkPrivilege`). When creation
 fails with WinError 1314 the entry is **deferred** into the fix queue as a
-`command` task — `MSYS=winsymlinks:nativestrict ln -sfn '<source>' '<target>'`,
+`command` task -- a real (non-link) file at `<target>` is first moved aside to a
+timestamped `<target>.backup_<ts>` sibling (the in-pass attempt restored it before
+deferring, and `ln -sfn` would otherwise replace it with no copy; this aside copy
+is kept, whatever `backup` says, because nothing runs after the elevated command
+to remove it), then `MSYS=winsymlinks:nativestrict ln -sfn '<source>' '<target>'`,
 which the runner executes elevated through Git Bash (where
 `winsymlinks:nativestrict` makes `ln -s` create a real Windows symlink rather
-than copy) — instead of surfacing a raw failure. The task's label is the entry's
+than copy) -- instead of surfacing a raw failure. The task's label is the entry's
 `description`, else `Link <name>`. Alternatively the user can enable Developer Mode
 (Settings > System > For developers) and type `fix-all`; the re-check then
 creates the link unelevated.
@@ -1490,6 +1521,7 @@ command with an optional `fix` command.
 | `cost` | No (inferred) | `quick` or `slow` — whether the **fix** downloads. Orders the fix queue (quick first) and drives the runner's "this can take several minutes" note. **Usually omit it**: an entry whose `timeout` exceeds the 600s default is inferred `slow`, which already classifies a real install correctly. Declare it only to correct that inference |
 | `description` | No | The user-facing instruction for a check-only entry's manual-attention item. Doubles as the **label** when an `elevated` entry is deferred to the fix queue (else the label is `name`) |
 | `agent_instructions` | No | Agent-facing protocol text (non-empty string) surfaced ONLY to Claude on a runtime-state failure of this check. Rides in the hook's `additionalContext` (the message *to the agent*) as the failure's `agent_msg`, combined with the failure detail — the user-facing log is unchanged. Use it to tell Claude how to handle a specific check's failure (investigate, then offer a fix via `AskUserQuestion` with "do nothing" as the default). Attached on the check-could-not-run, check-only-manual, and fix-failed-recheck paths; NOT on manifest-validation errors (those are authoring bugs). Absent = `agent_msg` stays unset and the numbered item falls back to `message` (unchanged) |
+| `cadence` | No | The only accepted value is `"always"` (an unrecognized value is a persistent manifest-validation failure naming the field and the accepted value). When set, the entry ALSO runs -- beyond the ordinary full-pass dispatch above -- on the throttled always lane (the tiny pass that runs INSTEAD of a full pass in a session the per-project cooldown would otherwise have skipped) and on the closed-gate path of a full pass whose env gate is closed. On both of those paths the entry's outcome is logged to `bootstrap.log` and never displayed to the user; env_state.json, the cooldown stamp, and bootstrap_display.pending are untouched from either path. On a full pass whose gate is OPEN, a `cadence: "always"` entry runs through the ordinary reporting path like any other entry. Use it for a check that must stay current every session (e.g. a repo pulled to head) rather than only once per gate window |
 
 **Dispatch per applicable entry:**
 

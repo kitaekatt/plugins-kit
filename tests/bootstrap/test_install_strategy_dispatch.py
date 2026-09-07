@@ -153,6 +153,33 @@ class TestPrecedence:
         assert failure is None
         assert tools_installed and "via scoop" in tools_installed[0][1]
 
+    def test_scoop_recheck_pass_off_path_still_links_dir(self, tmp_path, monkeypatch):
+        """A scoop install that resolves via an installPath candidate, but
+        whose dir isn't on bare-name PATH, must still get that dir linked --
+        otherwise it's recorded installed while unreachable by bare name."""
+        _stub(monkeypatch)
+        monkeypatch.setenv("PATH", "/usr/bin")  # deliberately NOT tmp_path
+        monkeypatch.setattr(scoop_mod, "ensure_scoop",
+                            lambda: scoop_mod.ScoopResult(True, None, "already installed"))
+
+        def fake_install(pkg, tool_name=None):
+            (tmp_path / "p4").write_text("#!/bin/sh\n")
+            return scoop_mod.ScoopResult(True, str(tmp_path / "p4"), f"installed {pkg}")
+        monkeypatch.setattr(scoop_mod, "scoop_install", fake_install)
+
+        added = []
+        monkeypatch.setattr(path_check, "add_path_to_shell_config",
+                            lambda d: added.append(d) or (True, "added"))
+
+        tools_installed = []
+        failure = engine._process_tool_entry(
+            {"name": "p4", "installPath": str(tmp_path),
+             "download": {"windows": {"scoop": "main/p4"}}},
+            "windows", "/data", "", [], [], tools_installed, plugin_name="p4-kit",
+        )
+        assert failure is None
+        assert added == [str(tmp_path)]
+
     def test_url_download_precedes_install_command(self, tmp_path, monkeypatch):
         """A successful url download short-circuits the install command."""
         _stub(monkeypatch)

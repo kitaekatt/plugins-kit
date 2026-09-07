@@ -79,12 +79,14 @@ def evaluate_guard(
     The guard is accepted only when its flag rate is strictly under
     ``threshold`` -- the "known-good <10% acceptance gate". An accepted guard
     is safe to use as an advisory signal; a rejected one is a bad signal and
-    should not ship.
+    should not ship. The rate itself is :func:`corpus_flag_rate`'s to compute
+    -- this function delegates rather than re-deriving the flagged/population
+    ratio, so the two can never drift apart.
     """
     known_good = list(known_good)
     population = len(known_good)
     flagged = sum(1 for item in known_good if guard(item))
-    flag_rate = (flagged / population) if population else 0.0
+    flag_rate = corpus_flag_rate(guard, known_good)
     return GuardReport(
         name=name,
         flagged=flagged,

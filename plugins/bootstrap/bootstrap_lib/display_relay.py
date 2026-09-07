@@ -23,7 +23,7 @@ silent-report shape this exists to remove.
 
 Contract with hooks/userpromptsubmit/bootstrap-display.sh:
   exit 0 -- the message was emitted on stdout and the file was renamed to
-            ``bootstrap_display.displayed``. The caller must NOT also cat it.
+            a per-relay claim and then deleted. The caller must NOT also cat it.
   exit 1 -- nothing was written to stdout and nothing was renamed. The caller
             falls back to the plain `cat` + `mv` relay, which is also what runs
             when this module or a Python interpreter is unavailable at all (a
@@ -41,6 +41,7 @@ import json
 import os
 import sys
 import time
+import uuid
 
 PENDING_NAME = "bootstrap_display.pending"
 DISPLAYED_NAME = "bootstrap_display.displayed"
@@ -137,22 +138,50 @@ def annotate(payload, seconds, produced_at):
     return out
 
 
+def _release_claim(claimed, pending):
+    """Hand a claim the relay could not emit back to the shell fallback.
+
+    The exit-1 contract is "nothing written, nothing consumed": the hook then
+    cats the pending file itself, which only works if the claim is restored to
+    the pending name. A producer that replaced the pending file after the claim
+    wins -- its newer message is never overwritten; the stale claim is dropped.
+    """
+    if not os.path.exists(pending):
+        try:
+            os.replace(claimed, pending)
+            return
+        except OSError:
+            pass
+    try:
+        os.remove(claimed)
+    except OSError:
+        pass
+
+
 def relay(data_dir, now=None):
     """Emit the pending display file with an age stamp, then consume it.
 
     Returns the exit status described in the module docstring.
     """
     pending = os.path.join(data_dir, PENDING_NAME)
+    claimed = os.path.join(
+        data_dir, f".{PENDING_NAME}.{os.getpid()}.{uuid.uuid4().hex}")
     try:
-        produced_at = os.path.getmtime(pending)
-        with open(pending, "r", encoding="utf-8", errors="replace") as fh:
+        # Claim first. Only the relay that wins this atomic rename may emit the
+        # message; a producer can safely replace PENDING_NAME after this point.
+        os.replace(pending, claimed)
+    except OSError:
+        return 1
+
+    try:
+        produced_at = os.path.getmtime(claimed)
+        with open(claimed, "r", encoding="utf-8", errors="replace") as fh:
             payload = json.load(fh)
     except (OSError, ValueError):
-        # Missing, unreadable, or not JSON. The plain relay can still cat a
-        # malformed file, and Claude Code's own handling of it is unchanged by
-        # us, so hand it back rather than swallowing the message.
+        _release_claim(claimed, pending)
         return 1
     if not isinstance(payload, dict):
+        _release_claim(claimed, pending)
         return 1
 
     if now is None:
@@ -161,15 +190,15 @@ def relay(data_dir, now=None):
     try:
         text = json.dumps(annotate(payload, seconds, produced_at))
     except (TypeError, ValueError):
+        _release_claim(claimed, pending)
         return 1
 
-    # Write first, consume second: a rename-then-write ordering would lose the
-    # message outright if the write failed, while write-then-rename can at
-    # worst leave the file for one more prompt.
+    # The claim above made the message ours. Emit it, then delete the claim;
+    # anything produced after the claim remains at PENDING_NAME.
     sys.stdout.write(text)
     sys.stdout.flush()
     try:
-        os.replace(pending, os.path.join(data_dir, DISPLAYED_NAME))
+        os.remove(claimed)
     except OSError:
         pass
     return 0

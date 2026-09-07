@@ -5,11 +5,16 @@ by the ``default`` / ``defaultCheap`` selectors -- and this module resolves it t
 a concrete provider slug, reading a layered ``config.yaml``:
 
     shipped baseline (DEFAULT_MODEL_CONFIG, below)
-      -> user    (~/.claude/plugins/data/plugins-kit/llm-scripting-kit/config.yaml)
-        -> project, superseded location
-           (<project_root>/.local-data/llm-scripting-kit/config.yaml)
-          -> project, canonical
-             (<project_root>/.local-data/plugins-kit/llm-scripting-kit/config.yaml)
+      -> fleet   (~/.claude/config/llm-scripting-kit.yaml -- tracked, machine-neutral)
+        -> user  (~/.claude/plugins/data/plugins-kit/llm-scripting-kit/config.yaml)
+          -> project, superseded location
+             (<project_root>/.local-data/llm-scripting-kit/config.yaml)
+            -> project, canonical
+               (<project_root>/.local-data/plugins-kit/llm-scripting-kit/config.yaml)
+
+The fleet layer sits below every machine-local layer for the same reason
+``settings.local.json`` outranks ``settings.json``: a machine-specific answer
+beats the fleet-wide one. See ``fleet_config_path`` / ``load_model_config``.
 
 The canonical project layer carries the ``plugins-kit`` marketplace segment,
 matching both the user layer and the canonical project API-key path
@@ -55,10 +60,13 @@ from .model_endpoints import (
     EndpointEntry,
     EndpointMetadataError,
     EndpointRegistry,
+    _conserve_spec,
+    _optional_str,
+    _require_str,
     harness_entry_message,
     parse_classification_fields,
 )
-from .usage_budget import ConserveConfigError, ConserveSpec, parse_conserve_usage
+from .usage_budget import ConserveSpec
 
 # The name of the endpoint used when a caller does not name one.
 DEFAULT_ENDPOINT_NAME = "openrouter"
@@ -286,6 +294,10 @@ def _config_entry_kind(ep_name: str, ep: Mapping[str, object]) -> Optional[str]:
     return None
 
 
+def _config_source(ep_name: str, kind: str) -> str:
+    return f"endpoint '{ep_name}' is a {kind} entry and"
+
+
 def _config_required_str(
     ep_name: str,
     ep: Mapping[str, object],
@@ -293,13 +305,16 @@ def _config_required_str(
     kind: str,
     key: str,
 ) -> str:
-    value = ep.get(key)
-    if not isinstance(value, str) or not value.strip():
-        raise EndpointResolveError(
-            f"endpoint '{ep_name}' is a {kind} entry and has no '{key}' "
-            "(a non-empty string is required)"
-        )
-    return value.strip()
+    """Thin wrapper over ``model_endpoints._require_str``: same validation
+    logic as the model-endpoints registry loader, this layer's own message
+    prefix and error class (see that function's docstring)."""
+    return _require_str(
+        ep.get(key),
+        source=_config_source(ep_name, kind),
+        entry_id=ep_name,
+        key=key,
+        error=EndpointResolveError,
+    )
 
 
 def _config_optional_str(
@@ -309,15 +324,15 @@ def _config_optional_str(
     kind: str,
     key: str,
 ) -> Optional[str]:
-    value = ep.get(key)
-    if value is None:
-        return None
-    if not isinstance(value, str) or not value.strip():
-        raise EndpointResolveError(
-            f"endpoint '{ep_name}' is a {kind} entry and has a non-string "
-            f"'{key}' ({value!r})"
-        )
-    return value.strip()
+    """Thin wrapper over ``model_endpoints._optional_str`` -- see
+    ``_config_required_str``."""
+    return _optional_str(
+        ep.get(key),
+        source=_config_source(ep_name, kind),
+        entry_id=ep_name,
+        key=key,
+        error=EndpointResolveError,
+    )
 
 
 def _config_classification(
@@ -334,18 +349,14 @@ def _config_conserve(
 ) -> Optional["ConserveSpec"]:
     """Parse a layered-config ``conserve_usage``, loudly on a bad shape.
 
-    Mirrors ``model_endpoints._conserve_spec``: an unreadable declaration
-    leaves the entry opted in and never conserving, which is
-    indistinguishable from a working opt-in, so it is refused rather than
-    noted. Re-raised as ``EndpointMetadataError`` -- already the loud class
-    for invalid entry metadata here -- so callers meet one error family.
+    Thin wrapper over ``model_endpoints._conserve_spec``, shared with the
+    model-endpoints registry loader: an unreadable declaration leaves the
+    entry opted in and never conserving, which is indistinguishable from a
+    working opt-in, so it is refused rather than noted, raised as
+    ``EndpointMetadataError`` -- already the loud class for invalid entry
+    metadata here -- so callers meet one error family.
     """
-    try:
-        return parse_conserve_usage(
-            ep.get("conserve_usage"), source="layered model config", entry_id=ep_name
-        )
-    except ConserveConfigError as exc:
-        raise EndpointMetadataError(str(exc)) from exc
+    return _conserve_spec(ep, source="layered model config", entry_id=ep_name)
 
 
 def _config_model_entry(
@@ -437,6 +448,7 @@ def _registry_endpoint(ep_name: str) -> Optional[dict]:
         "name": entry.id,
         "base_url": entry.base_url,
         "key_env": entry.key_env,  # None unless the entry declares one
+        "key_file": None,  # the model-endpoints registry has no key_file field
         "models": {entry.id: {"slug": entry.model}},
         "default": entry.id,
         "defaultCheap": entry.id,
@@ -464,6 +476,15 @@ def resolve_endpoint(
 
     ``name`` None means the config's ``default_endpoint``. Raises
     EndpointResolveError for an unknown endpoint or one missing a base_url/key_env.
+
+    Passing ``config=`` skips loading the LAYERED config.yaml -- it does not
+    skip every file read. A name absent from ``config`` still falls through to
+    the model-endpoints registry (below), which is read from
+    ``$MODEL_ENDPOINTS_REGISTRY`` / ``~/.claude/config/model-endpoints.yaml``
+    regardless of whether ``config`` was supplied. An unparseable registry
+    surfaces as the registry's own :class:`EndpointResolveError` (naming the
+    parse defect); a registry that is simply absent leaves the lookup empty and
+    the caller sees the ordinary "unknown endpoint" error.
 
     An endpoint declaring ``key_env: null`` explicitly resolves KEYLESS
     (``key_env`` is None in the returned dict); an endpoint that merely OMITS
@@ -674,7 +695,10 @@ def resolve_model(
 
     ``endpoint`` None uses the config's default endpoint (``openrouter``); all
     existing no-arg / endpoint-less calls resolve exactly as before. Pass
-    ``config`` to resolve against an already-loaded config (skips file I/O).
+    ``config`` to resolve against an already-loaded config, which skips the
+    layered config.yaml file I/O -- it does NOT skip the model-endpoints
+    registry read that ``resolve_endpoint`` performs for an ``endpoint`` name
+    ``config`` does not define; see ``resolve_endpoint``'s docstring.
     Raises ModelResolveError if the name/selector cannot be resolved.
     """
     cfg = config if config is not None else load_model_config(project_root=project_root)

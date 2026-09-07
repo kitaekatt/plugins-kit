@@ -368,17 +368,84 @@ class TestKeyFileLayer:
         assert beats_env.key == "from-env"
         assert beats_env.source == "env"
 
-    def test_default_endpoint_never_loads_config_when_env_var_resolves(
+    def test_default_endpoint_falls_back_to_openrouter_key_env_when_config_unreadable(
         self, monkeypatch, isolated_paths
     ):
-        """The endpoint=None fast path must stay config-free when a higher
-        layer already resolves -- key_file lookup is lazy."""
+        """When the model layer cannot resolve a default endpoint at all (an
+        ImportError from an optional dependency, or any other resolve
+        failure), endpoint=None degrades to the hardcoded OPENROUTER_API_KEY
+        rather than raising -- the same degrade-to-missing-layer contract
+        ``_default_endpoint_key_file`` already applies one layer down."""
 
         def _boom(**kw):
-            raise AssertionError("config should not be loaded when the env var resolves")
+            raise AssertionError("boom")
 
-        monkeypatch.setattr("llm_scripting_kit.models.load_model_config", _boom)
+        monkeypatch.setattr("llm_scripting_kit.models.resolve_endpoint", _boom)
         monkeypatch.setenv("OPENROUTER_API_KEY", "from-env")
         result = get_api_key(project_root=isolated_paths / "project")
         assert result.key == "from-env"
         assert result.source == "env"
+
+
+class TestDefaultEndpointFollowsConfiguredDefault:
+    """I1: get_api_key(endpoint=None) must follow ``default_endpoint`` in
+    config exactly as ``resolve_endpoint(None)`` / ``resolve_model()`` do,
+    instead of hardcoding OPENROUTER_API_KEY. A half-applied default (model
+    resolves to a local slug while the key still targets OpenRouter) ships
+    the wrong credential to the wrong host."""
+
+    CONFIG = {
+        "default_endpoint": "local",
+        "endpoints": {
+            "local": {
+                "base_url": "http://localhost:8000/v1",
+                "key_env": "LOCAL_API_KEY",
+            },
+        },
+    }
+
+    def test_get_api_key_none_resolves_the_configured_default_endpoints_key_env(
+        self, monkeypatch, isolated_paths
+    ):
+        monkeypatch.setattr(
+            "llm_scripting_kit.models.load_model_config", lambda **kw: self.CONFIG
+        )
+        monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+        monkeypatch.setenv("LOCAL_API_KEY", "from-local-env")
+        result = get_api_key(project_root=isolated_paths / "project")
+        assert result.key == "from-local-env"
+        assert result.source == "env"
+
+    def test_default_openrouter_endpoint_is_unchanged(self, monkeypatch, isolated_paths):
+        """Shipped baseline (default_endpoint: openrouter) resolves exactly
+        as before -- existing OPENROUTER_API_KEY-based setups keep working."""
+        monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+        monkeypatch.setenv("OPENROUTER_API_KEY", "from-openrouter-env")
+        result = get_api_key(project_root=isolated_paths / "project")
+        assert result.key == "from-openrouter-env"
+        assert result.source == "env"
+
+
+class TestSkillMdDocumentsEveryKeyLookupSource:
+    """I2: KeyLookupResult.source documents 5 values (env, project, user,
+    key_file, missing) but the SKILL.md table + precedence sentence used to
+    list only 4, omitting key_file. Every value the code can emit must
+    appear in the skill doc."""
+
+    def test_every_source_value_appears_in_the_skill_doc(self):
+        import re
+
+        skill_path = (
+            Path(__file__).resolve().parents[2]
+            / "plugins"
+            / "llm-scripting-kit"
+            / "skills"
+            / "openrouter-account"
+            / "SKILL.md"
+        )
+        text = skill_path.read_text(encoding="utf-8")
+        docstring = get_api_key.__globals__["KeyLookupResult"].__doc__
+        values = re.findall(r'``"(\w+)"``', docstring)
+        assert set(values) == {"env", "project", "user", "key_file", "missing"}
+        for value in values:
+            assert value in text, f"SKILL.md never mentions source {value!r}"

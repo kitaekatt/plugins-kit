@@ -289,3 +289,50 @@ def discover():
         result = run_project_autodetect(plugin_root, "custom_bootstrap.py discover", errors=errors)
         assert result is None
         assert errors == []
+
+
+class TestProcessConfigAcceptsListFormRequiredFields:
+    """_process_config must accept required_fields in list form, same as
+    _process_project_config already does via _normalize_project_required_fields.
+    Passing the list straight to config_validate's .items()/.values() raises
+    AttributeError out of an unwrapped phase."""
+
+    def test_list_form_required_fields_does_not_raise(self, tmp_path):
+        plugin_root = tmp_path / "plugin"
+        plugin_root.mkdir()
+        data_dir = tmp_path / "data"
+        data_dir.mkdir()
+        (data_dir / "config.yaml").write_text("KEY: value\n")
+
+        action_entries = []
+        ok_entries = []
+        failures = _process_config(
+            {"file": "config.yaml", "required_fields": ["KEY"]},
+            str(data_dir),
+            str(plugin_root),
+            action_entries,
+            ok_entries=ok_entries,
+            plugin_name="test",
+        )
+
+        assert failures == []
+        assert any("config ok" in e for e in ok_entries)
+
+    def test_list_form_and_dict_form_agree_on_missing_field(self, tmp_path):
+        plugin_root = tmp_path / "plugin"
+        plugin_root.mkdir()
+        data_dir = tmp_path / "data"
+        data_dir.mkdir()
+        (data_dir / "config.yaml").write_text("OTHER: value\n")
+
+        action_entries = []
+        failures = _process_config(
+            {"file": "config.yaml", "required_fields": ["KEY"]},
+            str(data_dir),
+            str(plugin_root),
+            action_entries,
+            plugin_name="test",
+        )
+
+        assert len(failures) == 1
+        assert failures[0]["field"] == "KEY"

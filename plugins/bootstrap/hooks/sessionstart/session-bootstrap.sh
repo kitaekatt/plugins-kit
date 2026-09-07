@@ -215,7 +215,11 @@ if [ -f "$_COOLDOWN_FILE" ] && [ ! -f "$_ALERT_FILE" ] \
     _LAST_RUN=$(cat "$_COOLDOWN_FILE" 2>/dev/null || echo "0")
     _NOW=$(date +%s 2>/dev/null || echo "0")
     _AGE=$((_NOW - _LAST_RUN))
-    if [ $_AGE -lt $_COOLDOWN_SECS ]; then
+    # A backwards clock jump (or a corrupt/future-dated stamp) makes _AGE
+    # negative, which always satisfies `-lt $_COOLDOWN_SECS` -- throttling to
+    # the always lane forever, until the wall clock catches up to
+    # stamp+cooldown. Treat a negative age as expired (run full) instead.
+    if [ $_AGE -ge 0 ] && [ $_AGE -lt $_COOLDOWN_SECS ]; then
         # Throttled, but no longer a full stop. The pass still runs, restricted
         # to entries declaring `cadence: always` (RUN_KIND=always), which is how
         # cheap must-be-current work -- a single repo pulled to head -- happens

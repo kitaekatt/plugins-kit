@@ -12,14 +12,16 @@ from pathlib import Path
 import pytest
 
 from llm_scripting_kit.completion import halt
+from llm_scripting_kit.completion.adapter_capabilities import OPENCODE_CAPABILITIES
 from llm_scripting_kit.completion.claude_runner import AgentTimeoutError
+from llm_scripting_kit.completion.results import fixed_control_ids
 from llm_scripting_kit.harness_adapters import HarnessInvocation
 from llm_scripting_kit.completion.opencode_backend import (
     DEFAULT_OPENCODE_TIMEOUT_S,
     OPENCODE_FILESYSTEM_POSTURE,
+    OPENCODE_PROMPT_SEPARATOR,
     OpencodeCliBackend,
     OpencodeRunError,
-    PROMPT_SEPARATOR,
     _confined_opencode_env,
     compose_prompt,
 )
@@ -146,7 +148,7 @@ def test_inapplicable_options_are_not_forwarded_to_the_adapter(
 
 
 def test_prompt_composition_matches_the_single_stdin_channel():
-    assert compose_prompt("SYSTEM", "USER") == f"SYSTEM{PROMPT_SEPARATOR}USER"
+    assert compose_prompt("SYSTEM", "USER") == f"SYSTEM{OPENCODE_PROMPT_SEPARATOR}USER"
     assert compose_prompt("", "USER") == "USER"
     assert compose_prompt("SYSTEM", "") == "SYSTEM"
 
@@ -232,6 +234,69 @@ def test_zero_exit_with_failure_shaped_output_is_still_an_answer(tmp_path: Path)
     )
 
     assert response.text == failure_shaped
+
+
+def test_reports_the_deny_control_it_actually_emitted(tmp_path: Path):
+    """The conditional counterpart to the fixed set.
+
+    OPENCODE_CAPABILITIES carries three source=REQUEST deny controls that
+    _confined_opencode_env only emits when disallowed_tools names a matching
+    subject. Reporting them unconditionally as fixed would claim a deny the
+    request never carried; reporting none of them when one was actually
+    emitted would under-report the request the way the claude sibling's
+    disallowed-tools control must not.
+    """
+    runner = _StubRunner()
+    plain = _backend(runner).complete(
+        "s", "u", model="provider/model",
+        options=BackendOptions(cwd=tmp_path.resolve()),
+    )
+    assert "permission-edit-deny" not in plain.execution_controls_applied
+
+    runner2 = _StubRunner()
+    denied = _backend(runner2).complete(
+        "s", "u", model="provider/model",
+        options=BackendOptions(cwd=tmp_path.resolve(), disallowed_tools="Edit Bash"),
+    )
+    assert "permission-edit-deny" in denied.execution_controls_applied
+    assert "permission-bash-deny" in denied.execution_controls_applied
+    assert "permission-task-request-deny" not in denied.execution_controls_applied
+
+
+def test_an_unmapped_disallowed_tools_value_is_reported_as_dropped(tmp_path: Path):
+    """disallowed_tools naming no recognised subject vanishes without this.
+
+    "Read WebFetch" maps to no permission scalar at all (only edit/bash/task
+    have a translation), so nothing is emitted and no execution control fires
+    -- but the caller's deny request still went nowhere, and disallowed_tools
+    is not in OPENCODE_CAPABILITIES.dropped_params (it IS honoured when the
+    value names a recognised subject), so the generic derive_dropped_params
+    path never catches this per-call case on its own.
+    """
+    runner = _StubRunner()
+    resp = _backend(runner).complete(
+        "s", "u", model="provider/model",
+        options=BackendOptions(
+            cwd=tmp_path.resolve(), disallowed_tools="Read WebFetch"
+        ),
+    )
+    assert "disallowed_tools" in resp.dropped_params
+    assert resp.execution_controls_applied == fixed_control_ids(OPENCODE_CAPABILITIES)
+
+
+def test_a_partially_mapped_disallowed_tools_value_is_not_reported_as_dropped(
+    tmp_path: Path,
+):
+    """One recognised subject among unrecognised ones is still honoured."""
+    runner = _StubRunner()
+    resp = _backend(runner).complete(
+        "s", "u", model="provider/model",
+        options=BackendOptions(
+            cwd=tmp_path.resolve(), disallowed_tools="Edit WebFetch"
+        ),
+    )
+    assert "disallowed_tools" not in resp.dropped_params
+    assert "permission-edit-deny" in resp.execution_controls_applied
 
 
 def test_model_authored_text_never_reaches_nonzero_exception_message(

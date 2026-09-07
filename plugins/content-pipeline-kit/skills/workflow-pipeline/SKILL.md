@@ -66,9 +66,13 @@ invocation rather than a resume.
 ## Assembling the wave
 
 Call `build_wave_args` (`content_pipeline.execution.workerpack`) with the
-store, run id, adapter, `WorkerCommand`, and `max_agents`. It performs
-reap-first candidate selection (expired-lease reclaim ahead of pending-unit
-selection), mints a fresh Python-side `batchId`, pre-writes the `read` and
+store, run id, adapter, `WorkerCommand`, and `max_agents`, plus the same
+`strategy` and `max_wave_size` the run's `prepare_run` call was given
+(keyword-only): a `GraphWalkStrategy` mount admits at most one unit per
+wave, and a flat mount's `max_wave_size` caps it -- without them the wave is
+every pending unit. It performs reap-first candidate selection (expired-lease
+reclaim ahead of pending-unit selection), narrows it to the wave the strategy
+admits, returns an empty wave for a halted run, mints a fresh Python-side `batchId`, pre-writes the `read` and
 worker-scoped `claim` envelopes, and returns the JSON-serializable `args`
 object `run-ready-wave.js` expects. This skill does not restate that
 function's logic or hand-compose a wave pack -- point at

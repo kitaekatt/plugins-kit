@@ -75,6 +75,32 @@ def test_marker_rejects_empty_tag():
         Marker("")
 
 
+def test_marker_matches_whole_token_not_substring():
+    # A tag that is a substring of authored text ("gen" inside "regen") must
+    # NOT classify as machine-owned -- the tag is matched as a whole token.
+    gen_mark = Marker("gen")
+    assert gen_mark.is_marked("regen pending") is False
+    assert classify_ownership(True, "regen pending", gen_mark) is Ownership.HUMAN
+    # It survives a revert pass unchanged (never touched, since unmarked).
+    row = Row(id="h", value="human value", marker="regen pending")
+    spec = replace(SPEC, marker=gen_mark)
+    result = revert_marked([row], spec)
+    assert result.reverted == []
+    assert result.rows[0].marker == "regen pending"
+    assert result.rows[0].value == "human value"
+
+
+def test_marker_write_then_revert_round_trips_double_spaces_byte_for_byte():
+    # remove() must delete exactly the tag token and one adjacent separator,
+    # leaving the rest of the text byte-for-byte untouched -- including an
+    # authored double space nowhere near the tag.
+    original = "a  b"  # double space between "a" and "b"
+    marked = MARK.add(original)
+    assert marked == "a  b [MACHINE]"
+    restored = MARK.remove(marked)
+    assert restored == original
+
+
 def test_classify_ownership():
     assert classify_ownership(False, "", MARK) is Ownership.EMPTY
     assert classify_ownership(True, "[MACHINE]", MARK) is Ownership.MACHINE
@@ -118,6 +144,50 @@ def test_apply_is_idempotent():
     # Re-applying the same store yields the same rows; the value already matches,
     # but the row is still classified MACHINE and rewritten identically.
     assert second.rows[0].value == "AA"
+
+
+def test_apply_reapply_over_unchanged_marked_rows_writes_nothing():
+    # ApplyResult.mutated_ids is documented as "the exact write set" -- a row
+    # already marked and holding the store's current value must not be
+    # rewritten (and so must not appear in written / mutated_ids) on a
+    # no-op re-apply. This is the property a git-backed deliver relies on so
+    # a second run over unchanged content stages nothing.
+    rows = [Row(id="a")]
+    store = {"a": "AA"}
+    first = apply_inplace(rows, store, SPEC)
+    assert first.written == ["a"]
+
+    second = apply_inplace(first.rows, store, SPEC)
+    assert second.written == []
+    assert second.mutated_ids == []
+    assert second.rows == first.rows  # byte-for-byte unchanged
+
+
+def test_apply_reapply_with_in_place_setters_still_detects_the_diff():
+    # A caller whose set_value / set_marker mutate the row in place and return
+    # the same object must still get an exact write set: the first apply
+    # writes, the no-op second apply writes nothing.
+    @dataclass
+    class MutableRow:
+        id: str
+        value: str = ""
+        marker: str = ""
+
+    def set_value_in_place(row, value):
+        row.value = value
+        return row
+
+    def set_marker_in_place(row):
+        row.marker = MARK.add(row.marker)
+        return row
+
+    spec = replace(SPEC, set_value=set_value_in_place, set_marker=set_marker_in_place)
+    rows = [MutableRow(id="a")]
+    store = {"a": "AA"}
+    first = apply_inplace(rows, store, spec)
+    assert first.written == ["a"]
+    second = apply_inplace(first.rows, store, spec)
+    assert second.written == []
 
 
 def test_apply_policy_gate_holds_row():
@@ -333,6 +403,59 @@ def test_changeset_all_moves_fail_deletes_empty_cl():
     assert result.failed_moves == [("a", "a.txt", "move failed")]
     assert result.description == ""
     assert ("delete_if_empty", 0) in vcs.calls
+
+
+def test_changeset_apply_failure_reverts_the_open_item():
+    # An apply failure after open_for_edit succeeded must revert the item so
+    # a p4-backed run does not leave the file checked out. A revert failure
+    # must not mask the original apply failure.
+    vcs = MockVcs()
+
+    def apply_item(it):
+        if it["id"] == "bad":
+            raise RuntimeError("write failed")
+
+    items = [{"id": "good", "path": "g.txt"}, {"id": "bad", "path": "b.txt"}]
+    result = deliver_changeset(
+        items,
+        vcs=vcs,
+        item_id=lambda it: it["id"],
+        path_of=lambda it: it["path"],
+        apply_item=apply_item,
+        describe=lambda moved: ",".join(i for i, _p in moved),
+    )
+    assert result.failed == [("bad", "write failed")]
+    assert ("revert", "b.txt") in vcs.calls
+    # The good item was never reverted.
+    assert ("revert", "g.txt") not in vcs.calls
+    # GitVcs / NullVcs (real revert, no failure) is unaffected: the batch
+    # still proceeds and finalizes normally.
+    assert [i for i, _p in result.moved] == ["good"]
+
+
+def test_changeset_apply_failure_revert_failure_does_not_mask_apply_failure():
+    class RevertBoomVcs(MockVcs):
+        def revert(self, path):
+            super().revert(path)
+            raise RuntimeError("revert boom")
+
+    vcs = RevertBoomVcs()
+
+    def apply_item(it):
+        raise RuntimeError("write failed")
+
+    items = [{"id": "bad", "path": "b.txt"}]
+    result = deliver_changeset(
+        items,
+        vcs=vcs,
+        item_id=lambda it: it["id"],
+        path_of=lambda it: it["path"],
+        apply_item=apply_item,
+        describe=lambda moved: "",
+    )
+    # The apply failure is still recorded, not replaced by the revert error.
+    assert result.failed == [("bad", "write failed")]
+    assert ("revert", "b.txt") in vcs.calls
 
 
 def test_changeset_apply_and_move_failures_are_separate_buckets():

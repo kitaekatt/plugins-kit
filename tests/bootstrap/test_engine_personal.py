@@ -450,6 +450,45 @@ class TestLayeredManifests:
             msg = response.get("systemMessage", "")
             assert "project_venv" not in msg
 
+    def test_project_venv_subdir_symlink_escape_rejected(self, tmp_path, monkeypatch):
+        """A subdir that is LEXICALLY inside the project but resolves through
+        a symlink to somewhere outside it must be rejected -- a lexical
+        (abspath-only) containment check is fooled by this and would let
+        uv write into the symlink target."""
+        import bootstrap_lib.engine as engine
+        monkeypatch.setattr(engine, "_process_venv_def",
+                            lambda *a, **k: (_ for _ in ()).throw(
+                                AssertionError("venv work must not run for a symlink-escaping subdir")))
+        project_dir = str(tmp_path / "project")
+        outside_dir = str(tmp_path / "outside")
+        os.makedirs(project_dir)
+        os.makedirs(outside_dir)
+        link = os.path.join(project_dir, "escape")
+        os.symlink(outside_dir, link)
+
+        actions, oks, failures = engine._process_project_venv(
+            {"subdir": "escape", "check_imports": []}, project_dir)
+        assert len(failures) == 1
+        assert failures[0]["type"] == "project_venv"
+        assert "subdir" in failures[0]["message"]
+        assert any("FAILED" in a for a in actions)
+
+    def test_project_venv_skips_without_pyproject_toml(self, tmp_path, monkeypatch):
+        """A project with no pyproject.toml is skipped, not failed -- mirrors
+        project_npm's ok-skip when package.json is absent
+        (manifest-reference.md's layering rules promise the same for both)."""
+        import bootstrap_lib.engine as engine
+        monkeypatch.setattr(engine, "_process_venv_def",
+                            lambda *a, **k: (_ for _ in ()).throw(
+                                AssertionError("no venv work must run without a pyproject.toml")))
+        project_dir = str(tmp_path / "project")
+        os.makedirs(project_dir)
+
+        actions, oks, failures = engine._process_project_venv(
+            {"check_imports": []}, project_dir)
+        assert failures == []
+        assert any("pyproject.toml" in o for o in oks)
+
     def test_project_venv_already_ok(self, data_dir, tmp_path):
         """project_venv with existing working venv reports ok."""
         fake_root = make_minimal_root(tmp_path)
@@ -556,6 +595,30 @@ class TestLayeredManifests:
             {"subdir": abs_subdir}, project_dir)
         assert len(failures) == 1
         assert failures[0]["type"] == "project_npm"
+        assert "subdir" in failures[0]["message"]
+        assert any("FAILED" in a for a in actions)
+
+    def test_project_npm_subdir_symlink_escape_rejected(self, tmp_path, monkeypatch):
+        """Same symlink-escape guard as project_venv's, over the shared
+        containment helper -- a lexically-inside subdir that resolves through
+        a symlink to outside the project must be rejected."""
+        import bootstrap_lib.engine as engine
+        import bootstrap_lib.npm_check as npm_check
+        monkeypatch.setattr(npm_check, "ensure_node_modules",
+                            lambda *a, **k: (_ for _ in ()).throw(
+                                AssertionError("npm work must not run for a symlink-escaping subdir")))
+        project_dir = str(tmp_path / "project")
+        outside_dir = str(tmp_path / "outside")
+        os.makedirs(project_dir)
+        os.makedirs(outside_dir)
+        link = os.path.join(project_dir, "escape")
+        os.symlink(outside_dir, link)
+
+        actions, oks, failures = engine._process_project_npm(
+            {"subdir": "escape"}, project_dir)
+        assert len(failures) == 1
+        assert failures[0]["type"] == "project_npm"
+        assert failures[0]["remediation_cmd"] is None
         assert "subdir" in failures[0]["message"]
         assert any("FAILED" in a for a in actions)
 

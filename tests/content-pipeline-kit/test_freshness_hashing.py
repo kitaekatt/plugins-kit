@@ -161,3 +161,47 @@ def test_corpus_hash_changes_when_a_source_hash_changes():
 def test_corpus_hash_full_length_by_default():
     h = corpus_hash([("K1", "h1")])
     assert len(h) == 64
+
+
+# -- deterministic canonicalization of set-bearing payloads -------------------
+
+def test_content_hash_over_a_set_is_stable_across_process_hash_seeds():
+    import os
+    import subprocess
+    import sys
+
+    lib_path = os.path.normpath(
+        os.path.join(os.path.dirname(__file__), os.pardir, os.pardir,
+                     "plugins", "content-pipeline-kit", "lib")
+    )
+    script = (
+        "from content_pipeline.freshness.hashing import content_hash\n"
+        "print(content_hash({'tags': {'b', 'a', 'c'}, 'k': 1}))\n"
+    )
+    base_env = dict(os.environ)
+    base_env["PYTHONPATH"] = lib_path + os.pathsep + base_env.get("PYTHONPATH", "")
+
+    def run_with_seed(seed: str) -> str:
+        env = dict(base_env)
+        env["PYTHONHASHSEED"] = seed
+        return subprocess.run(
+            [sys.executable, "-c", script],
+            capture_output=True,
+            text=True,
+            check=True,
+            env=env,
+        ).stdout.strip()
+
+    assert run_with_seed("0") == run_with_seed("1000")
+
+
+def test_content_hash_over_a_plain_object_raises_type_error():
+    class Unhashable:
+        pass
+
+    try:
+        content_hash({"v": Unhashable()})
+    except TypeError as exc:
+        assert "v" in str(exc)
+    else:
+        raise AssertionError("expected TypeError for an uncanonicalizable value")

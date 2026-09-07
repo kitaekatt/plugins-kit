@@ -116,6 +116,19 @@ ALLOW-list is a real restriction (allow nothing) and is therefore reported.
 An empty DENY-list restricts nothing, so an unset `disallowed_tools` emits no
 flag and reports no control -- suppressing a flag is not a control.
 
+**A param that is honored for SOME values and not others reports per call,
+never in the static advertisement.** opencode's `disallowed_tools` is not in
+`dropped_params` -- the adapter does read it -- but a value naming no subject
+its permission-scalar translation recognizes (`subjects_for_disallowed_tools`
+returns empty) emits no scalar at all, so that call's deny request went
+nowhere. `dropped_params` on the RESPONSE carries `"disallowed_tools"` for
+that call, alongside the field's normal per-field entries, so a caller sees
+the request was not honored without the advertisement claiming the field is
+dropped outright -- which would be false for every value that does name a
+recognized subject. A value naming at least one recognized subject alongside
+unrecognized ones is honored in part and is not reported, matching what
+`execution_controls_applied` reports for it.
+
 **`system_prompt_mode` is a real mode choice, not two spellings.**
 `--system-prompt` makes the caller's text the WHOLE system prompt;
 `--append-system-prompt` adds it to the CLI's own default prompt. The model

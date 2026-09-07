@@ -98,6 +98,42 @@ class TestArgv:
         ]
         assert cmd == expected
 
+    def test_windows_sandbox_mode_is_reported_on_a_windows_build(
+        self, tmp_path: Path, monkeypatch
+    ):
+        """The windows-sandbox-mode control, exercised on a non-Windows host.
+
+        _applied_controls detects this control by the literal
+        'windows.sandbox="unelevated"' bootstrap_lib.codex emits, and no test
+        exercised that branch on a host where os.name != "nt". Fake os.name
+        (the one axis build_codex_exec_argv reads for this branch -- see the
+        suite_green_is_host_dependent insight) and run the REAL builder, so a
+        drift in the emitted spelling fails this test rather than going
+        unnoticed on every developer's Mac or Linux box.
+
+        Calls the builder directly rather than through ``complete()``:
+        ``pathlib.Path()`` also dispatches on ``os.name`` (choosing
+        ``WindowsPath`` vs ``PosixPath``), so faking it globally and then
+        letting the backend construct paths from a real macOS/Linux
+        filesystem (its temp-output file, its resolved ``cwd``) breaks on
+        unrelated ground -- a collateral effect this test must not trip.
+        ``root=tmp_path.resolve()`` is already a real ``PosixPath`` built
+        BEFORE the patch, and ``_absolute`` validates it via ``os.path``,
+        bound to this platform's flavour at import and unaffected by the
+        patch (see ``_absolute``'s own comment) -- so only the one branch
+        this test targets sees a different ``os.name``.
+        """
+        import bootstrap_lib.codex as codex_mod
+
+        monkeypatch.setattr(codex_mod.os, "name", "nt")
+        argv = codex_mod.build_codex_exec_argv(
+            root=tmp_path.resolve(), argv_prefix=ARGV_PREFIX,
+        )
+        assert 'windows.sandbox="unelevated"' in argv
+
+        backend = _backend(_StubRunner())
+        assert "windows-sandbox-mode" in backend._applied_controls(argv)
+
     def test_effort_and_model_forwarded(self, tmp_path: Path):
         runner = _StubRunner()
         _backend(runner).complete(

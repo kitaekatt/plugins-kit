@@ -125,18 +125,24 @@ class OpenRouterBackend:
         return self.client
 
     def _resolve_model(self, model: str) -> str:
-        """Resolve an alias to a concrete slug; a raw slug resolves to itself."""
+        """Resolve an alias to a concrete slug; a raw slug resolves to itself.
+
+        No blanket exception catch: ``resolve_model`` already returns a raw
+        slug (one containing ``/``) unresolved on its own, so the only cases a
+        catch here could hide are a genuine ``ModelResolveError`` (unknown
+        alias) or ``EndpointResolveError`` (broken endpoint config) -- both
+        typed config errors ``create_backend`` raises elsewhere in this
+        package, and both should propagate the same way here rather than
+        dispatch the raw string and surface downstream as a provider 404.
+        """
         from ..models import resolve_model  # noqa: PLC0415
-        try:
-            return resolve_model(
-                model,
-                endpoint=self.endpoint,
-                project_root=str(self.project_root)
-                if self.project_root is not None
-                else None,
-            )
-        except Exception:  # noqa: BLE001 - a concrete slug resolves to itself
-            return model
+        return resolve_model(
+            model,
+            endpoint=self.endpoint,
+            project_root=str(self.project_root)
+            if self.project_root is not None
+            else None,
+        )
 
     def complete(
         self,
@@ -458,7 +464,22 @@ class ClaudeCliBackend:
                 f"stderr: {stderr}\nstdout: {stdout}"
             )
 
-        data = json.loads(stdout)
+        try:
+            data = json.loads(stdout)
+        except json.JSONDecodeError as exc:
+            # A typed transport error, matching the codex (_read_output) and
+            # opencode (empty-stdout check) siblings: a zero exit with no
+            # usable answer is a fact about the transport, and the seam's
+            # typed-RuntimeError convention (types.py) has no room for a raw
+            # JSONDecodeError escaping across it uncaught.
+            raise RuntimeError(
+                f"claude -p exited 0 but wrote no JSON envelope: {exc}"
+            ) from exc
+        if "result" not in data:
+            raise RuntimeError(
+                "claude -p exited 0 but its JSON envelope has no result "
+                f"field: {sorted(data)}"
+            )
         # Surface hard-stop markers (rate-limit OR auth failure) even when the
         # CLI returns exit 0. Claude Max daily/weekly caps come back as
         # api_error_status=429 with "hit your limit" in the body; auth failures
@@ -555,12 +576,13 @@ class ClaudeCliBackend:
             self.diagnostics_dir.mkdir(parents=True, exist_ok=True)
             redacted_cmd = []
             skip = False
+            system_prompt_flags = set(_CLAUDE_SYSTEM_PROMPT_FLAGS.values())
             for arg in exc.cmd:
                 if skip:
                     redacted_cmd.append(f"<{len(arg)} chars>")
                     skip = False
                     continue
-                if arg == "--system-prompt":
+                if arg in system_prompt_flags:
                     skip = True
                 redacted_cmd.append(arg)
             with path.open("w", encoding="utf-8") as f:

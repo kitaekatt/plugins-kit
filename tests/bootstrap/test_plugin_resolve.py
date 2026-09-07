@@ -1,11 +1,17 @@
-"""Tests for plugin_resolve.py — plugin path resolution from registry."""
+"""Tests for plugin_resolve.py -- plugin path resolution from registry."""
 
 import json
 import os
 
 import pytest
 
-from bootstrap_lib.plugin_resolve import PluginInfo, list_enabled_plugins, parse_plugin_ref, resolve_plugin
+from bootstrap_lib.plugin_resolve import (
+    PluginInfo,
+    _version_sort_key,
+    list_enabled_plugins,
+    load_enabled_refs,
+    parse_plugin_ref,
+)
 
 
 class TestParsePluginRef:
@@ -32,71 +38,6 @@ class TestParsePluginRef:
         marketplace, name = parse_plugin_ref("mk:plug@extra")
         assert marketplace == "mk"
         assert name == "plug@extra"
-
-
-class TestResolvePlugin:
-    def test_resolves_relative_path(self, tmp_path):
-        """Relative installPath is resolved against base_dir."""
-        registry = {"plugins": {"kit:test-plugin": [{"installPath": "./test-plugin", "version": "1.0.0"}]}}
-        reg_path = str(tmp_path / "installed_plugins.json")
-        with open(reg_path, "w") as f:
-            json.dump(registry, f)
-
-        base_dir = str(tmp_path / "plugins")
-        result = resolve_plugin(reg_path, "kit:test-plugin", base_dir)
-
-        assert result is not None
-        assert result.name == "test-plugin"
-        assert result.version == "1.0.0"
-        assert os.path.isabs(result.install_path)
-        assert result.install_path == os.path.normpath(os.path.join(base_dir, "test-plugin"))
-
-    def test_resolves_absolute_path(self, tmp_path):
-        """Absolute installPath is used as-is."""
-        abs_path = str(tmp_path / "somewhere" / "plugin")
-        registry = {"plugins": {"src:my-plugin": [{"installPath": abs_path, "version": "2.0.0"}]}}
-        reg_path = str(tmp_path / "installed_plugins.json")
-        with open(reg_path, "w") as f:
-            json.dump(registry, f)
-
-        result = resolve_plugin(reg_path, "src:my-plugin", str(tmp_path))
-
-        assert result is not None
-        assert result.install_path == os.path.normpath(abs_path)
-
-    def test_returns_none_for_missing_ref(self, tmp_path):
-        """Unknown plugin ref returns None."""
-        registry = {"plugins": {}}
-        reg_path = str(tmp_path / "installed_plugins.json")
-        with open(reg_path, "w") as f:
-            json.dump(registry, f)
-
-        result = resolve_plugin(reg_path, "kit:nonexistent", str(tmp_path))
-        assert result is None
-
-    def test_returns_none_for_missing_file(self, tmp_path):
-        """Missing registry file returns None."""
-        result = resolve_plugin(str(tmp_path / "nope.json"), "y:x", str(tmp_path))
-        assert result is None
-
-    def test_returns_none_for_invalid_json(self, tmp_path):
-        """Malformed JSON returns None."""
-        reg_path = str(tmp_path / "installed_plugins.json")
-        with open(reg_path, "w") as f:
-            f.write("not json")
-
-        result = resolve_plugin(reg_path, "y:x", str(tmp_path))
-        assert result is None
-
-    def test_extracts_name_from_ref(self, tmp_path):
-        """Plugin name is the part after : in the ref."""
-        registry = {"plugins": {"baz:foo-bar": [{"installPath": "./foo", "version": "1.0.0"}]}}
-        reg_path = str(tmp_path / "installed_plugins.json")
-        with open(reg_path, "w") as f:
-            json.dump(registry, f)
-
-        result = resolve_plugin(reg_path, "baz:foo-bar", str(tmp_path))
-        assert result.name == "foo-bar"
 
 
 class TestListEnabledPlugins:
@@ -291,12 +232,24 @@ class TestCacheFallbackDiscovery:
         assert results == []
 
     def test_highest_version_dir_wins(self, tmp_path):
-        # Numeric compare, not string compare: 0.10.0 > 0.9.0.
-        root, reg = self._scaffold(tmp_path, plugins={"pluga@mkt": ["0.9.0", "0.10.0"]})
+        # Numeric compare, not string compare: 0.10.0 > 0.9.0, and a git SHA
+        # like cache name is below a semver.
+        root, reg = self._scaffold(
+            tmp_path, plugins={"pluga@mkt": ["0.9.0", "0.10.0", "deadbeef9"]}
+        )
         results, _ = list_enabled_plugins(
             {}, reg, str(root), fallback_enabled_refs={"pluga@mkt"}
         )
         assert results[0].version == "0.10.0"
+
+    def test_four_component_semver_wins_numerically(self, tmp_path):
+        root, reg = self._scaffold(
+            tmp_path, plugins={"pluga@mkt": ["1.2.3.4", "1.2.3.5"]}
+        )
+        results, _ = list_enabled_plugins(
+            {}, reg, str(root), fallback_enabled_refs={"pluga@mkt"}
+        )
+        assert results[0].version == "1.2.3.5"
 
     def test_cache_plugin_without_bootstrap_json_excluded(self, tmp_path):
         root, reg = self._scaffold(tmp_path, plugins={"pluga@mkt": ["1.0.0"]})
@@ -361,16 +314,41 @@ class TestPickRegistryRecord:
         assert self._pick(None) is None
         assert self._pick("nope") is None
 
-    def test_resolve_plugin_skips_stale_duplicate(self, tmp_path):
-        registry = tmp_path / "installed_plugins.json"
-        registry.write_text(json.dumps({"plugins": {
-            "plugins-kit:demo": [
-                {"version": "0.45.0", "installPath": "/stale",
-                 "projectPath": "D:/dev/x"},
-                {"version": "0.52.0", "installPath": "/healthy"},
-            ],
-        }}))
-        info = resolve_plugin(str(registry), "plugins-kit:demo", str(tmp_path))
-        assert info is not None
-        assert info.version == "0.52.0"
-        assert info.install_path == os.path.normpath("/healthy")
+
+
+class TestVersionSortKey:
+    def test_git_sha_like_name_is_below_semver(self):
+        assert max(("1.2.0", "deadbeef9"), key=_version_sort_key) == "1.2.0"
+
+    def test_any_number_of_numeric_components_is_semver(self):
+        assert max(("1.2.3.4", "1.2.3.5"), key=_version_sort_key) == "1.2.3.5"
+
+
+class TestLoadEnabledRefs:
+    def test_user_level_settings_local_is_not_read(self, tmp_path):
+        claude = tmp_path / ".claude"
+        claude.mkdir()
+        (claude / "settings.json").write_text(
+            json.dumps({"enabledPlugins": {}}), encoding="utf-8"
+        )
+        (claude / "settings.local.json").write_text(
+            json.dumps({"enabledPlugins": {"stale@mkt": True}}), encoding="utf-8"
+        )
+
+        assert load_enabled_refs(
+            home=str(tmp_path), include_registry=False
+        ) == set()
+
+    def test_project_settings_and_local_are_read(self, tmp_path):
+        claude = tmp_path / ".claude"
+        claude.mkdir()
+        (claude / "settings.json").write_text(
+            json.dumps({"enabledPlugins": {"project@mkt": True}}), encoding="utf-8"
+        )
+        (claude / "settings.local.json").write_text(
+            json.dumps({"enabledPlugins": {"local@mkt": True}}), encoding="utf-8"
+        )
+
+        assert load_enabled_refs(
+            project_dir=str(tmp_path), home=str(tmp_path), include_registry=False
+        ) == {"project@mkt", "local@mkt"}

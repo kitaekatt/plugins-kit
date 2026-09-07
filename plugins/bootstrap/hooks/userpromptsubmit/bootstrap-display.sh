@@ -164,10 +164,10 @@ fi
 # from the pending file's mtime) before emitting it, and consumes the file
 # itself -- so on success we must NOT also cat it.
 #
-# The plain cat + mv below stays as the fallback, and it is load-bearing rather
-# than defensive: on a fresh machine there is no Python yet, and the pending
-# file is often the message that says exactly that. Never let the age stamp
-# cost the user their bootstrap message.
+# The plain claim + cat + mv below stays as the fallback, and it is
+# load-bearing rather than defensive: on a fresh machine there is no Python
+# yet, and the pending file is often the message that says exactly that.
+# Never let the age stamp cost the user their bootstrap message.
 [ -f "$PENDING" ] || exit 0
 if [ -n "$_BOOT_PY" ] && [ -f "$PLUGIN_ROOT/bootstrap_lib/display_relay.py" ]; then
     if "$_BOOT_PY" "$PLUGIN_ROOT/bootstrap_lib/display_relay.py" \
@@ -175,5 +175,15 @@ if [ -n "$_BOOT_PY" ] && [ -f "$PLUGIN_ROOT/bootstrap_lib/display_relay.py" ]; t
         exit 0
     fi
 fi
-cat "$PENDING"
-mv -f "$PENDING" "${DATA_DIR}/bootstrap_display.displayed"
+# Mirror display_relay.py's claim pattern rather than cat-then-mv the shared
+# PENDING path directly: an engine that atomically replaces PENDING between
+# those two steps would have its FRESH verdict renamed straight to .displayed,
+# unread. Claiming PENDING first (a rename to a name unique to this process)
+# either wins the file outright or fails with nothing to emit -- a producer
+# racing in after the claim writes a new PENDING untouched by this run, left
+# for the next prompt.
+_CLAIM="${PENDING}.claim.$$"
+if mv "$PENDING" "$_CLAIM" 2>/dev/null; then
+    cat "$_CLAIM"
+    mv -f "$_CLAIM" "${DATA_DIR}/bootstrap_display.displayed"
+fi

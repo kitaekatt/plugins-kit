@@ -68,6 +68,23 @@ class TestProcessSelfSetup:
 
         assert test_path in os.environ["PATH"]
 
+    def test_tool_failure_plugin_name_matches_the_forwarded_param(self, tmp_path):
+        """A non-default plugin_name is forwarded to the venv failure
+        (existing test_venv_failure pins plugin="bootstrap" for the default);
+        a tool failure must be consistent with it too, instead of hardcoding
+        "bootstrap" regardless of what the caller passed."""
+        self_setup = {
+            "tools": [{"name": "nonexistent_tool_xyz_self_setup"}],
+        }
+        action_entries = []
+        ok_entries = []
+        failures = _process_self_setup(
+            self_setup, "windows", str(tmp_path), str(tmp_path),
+            action_entries, ok_entries, plugin_name="other-plugin",
+        )
+        assert len(failures) == 1
+        assert failures[0]["plugin"] == "other-plugin"
+
     def test_venv_failure(self, tmp_path):
         """Venv check that fails produces failure entry."""
         self_setup = {

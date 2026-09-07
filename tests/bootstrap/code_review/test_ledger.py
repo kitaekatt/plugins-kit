@@ -203,6 +203,17 @@ class TestRecordAndRoundtrip:
         led.write_text("{not json", encoding="utf-8")
         assert ledger.load_ledger(led) == ledger.default_ledger()
 
+    def test_hits_ignore_malformed_change_buckets_and_entries(self, tmp_path):
+        malformed = [
+            {"version": 1, "changes": {"CL1": []}},
+            {"version": 1, "changes": {"CL1": {"entries": None}}},
+            {"version": 1, "changes": {"CL1": {"entries": 7}}},
+        ]
+        for index, document in enumerate(malformed):
+            led = tmp_path / f"ledger-{index}.json"
+            led.write_text(json.dumps(document), encoding="utf-8")
+            assert ledger.ledger_hits(led, "CL1", "base") == []
+
     def test_baseline_token_is_deterministic(self):
         a = ledger.baseline_token({"shelf": {"//d/x": "abc"}, "actions": {}})
         b = ledger.baseline_token({"actions": {}, "shelf": {"//d/x": "abc"}})

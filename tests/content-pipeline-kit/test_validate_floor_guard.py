@@ -8,6 +8,7 @@ independently. The advisory application never blocks. No game concepts
 appear: a "guard" is any ``item -> bool`` and "known-good items" are opaque.
 """
 
+import content_pipeline.validate.floor_guard as floor_guard
 from content_pipeline.validate.floor_guard import (
     DEFAULT_THRESHOLD,
     corpus_flag_rate,
@@ -59,6 +60,23 @@ def test_threshold_is_strict_less_than():
     report = evaluate_guard(_over(9), known_good, threshold=0.10)
     assert report.flag_rate == 0.10
     assert report.accepted is False
+
+
+def test_evaluate_guard_delegates_its_rate_to_corpus_flag_rate(monkeypatch):
+    """evaluate_guard must not re-derive the flagged/population ratio itself
+    -- it delegates to corpus_flag_rate for that computation."""
+    calls = []
+    real_corpus_flag_rate = floor_guard.corpus_flag_rate
+
+    def spy(guard, known_good):
+        calls.append((guard, list(known_good)))
+        return real_corpus_flag_rate(guard, known_good)
+
+    monkeypatch.setattr(floor_guard, "corpus_flag_rate", spy)
+    known_good = list(range(20))
+    report = floor_guard.evaluate_guard(_over(19), known_good, name="sig")
+    assert len(calls) == 1
+    assert report.flag_rate == 0.05
 
 
 def test_empty_corpus_accepts_guard():

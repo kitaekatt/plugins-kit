@@ -246,6 +246,46 @@ def test_caller_extras_are_not_mutated(monkeypatch):
     assert mine == {}
 
 
+# --- effective_options / cache-key collision --------------------------------
+
+
+def test_effective_options_exposes_the_entry_default_reasoning_effort(monkeypatch):
+    """The seam platform.build_cache_key needs: the registry default is
+    resolved by the backend, downstream of where a caller would otherwise
+    build its cache key -- so the key must be built from THIS, not from the
+    caller's raw options."""
+    b = ModelEndpointBackend(endpoint="qwen38")
+    monkeypatch.setattr(b, "_entry_reasoning_effort", lambda: "medium")
+    resolved = b.effective_options(BackendOptions())
+    assert resolved.extras["reasoning_effort"] == "medium"
+
+
+def test_call_llm_cache_key_distinguishes_entries_by_effective_effort(monkeypatch, tmp_path):
+    """REFUTES the hypothesis that ``name`` (constant across every entry --
+    see test_name_is_constant_so_cache_keys_stay_stable) already keeps two
+    entries serving the same model id, with different registry-declared
+    reasoning_effort, from colliding on one cache entry. Without the
+    effective_options seam in call_llm, a call through entry A's cached
+    response would be served back for entry B."""
+    from content_pipeline.llm import platform
+
+    a = ModelEndpointBackend(endpoint="entry-a")
+    b = ModelEndpointBackend(endpoint="entry-b")
+    monkeypatch.setattr(a, "_entry_reasoning_effort", lambda: "low")
+    monkeypatch.setattr(b, "_entry_reasoning_effort", lambda: "high")
+    assert a.name == b.name == "model-endpoint"  # the collision precondition
+
+    key_a = platform.build_cache_key(
+        backend=a.name, model="m", system="s", user="u",
+        options=a.effective_options(BackendOptions()),
+    )
+    key_b = platform.build_cache_key(
+        backend=b.name, model="m", system="s", user="u",
+        options=b.effective_options(BackendOptions()),
+    )
+    assert key_a != key_b
+
+
 # --- halt classification ----------------------------------------------------
 
 
