@@ -809,7 +809,16 @@ def _shippable_dirty_paths(held_back: set[str] | None = None) -> list[str]:
         # Porcelain v1: two status columns, a space, then the path. A rename
         # carries "old -> new"; judge the DESTINATION, which is where the
         # content lands.
-        path = line[3:].strip().strip('"')
+        #
+        # Split on the first space rather than slicing a fixed width: git() strips
+        # its output, so an unstaged-only FIRST line (" M path") arrives already
+        # lstripped as "M path" and a [3:] slice eats the path's first character.
+        # The exemption below then matches no plugin, and a held-back or dev-only
+        # plugin's uncommitted file blocks the publish it is documented never to
+        # block. Later lines keep their leading space, so this only ever bit the
+        # first -- which is why a single dirty file failed and several did not.
+        _, _, path = line.partition(" ")
+        path = path.strip().strip('"')
         if " -> " in path:
             path = path.split(" -> ", 1)[1].strip().strip('"')
         if _dev_only_owned(path, dev_only):

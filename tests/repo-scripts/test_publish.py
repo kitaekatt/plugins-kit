@@ -209,6 +209,33 @@ class TestDirtyGateIgnoresDevOnlyPlugins:
         assert "scratch.txt" in message
         assert "dev-kit" not in message
 
+    def test_a_tracked_dev_only_file_modified_alone_does_not_refuse(self, repo):
+        """The regression the other tests in this class could not catch.
+
+        git() strips its output, so the FIRST line of an unstaged-only status
+        (" M path") arrives already lstripped as "M path", and the fixed-width
+        line[3:] slice then eats the path's first character --
+        "lugins/dev-kit/...". The dev-only match fails and the publish refuses
+        on work that reaches no consumer, which is precisely what this class
+        exists to prevent.
+
+        Every other test here writes an UNTRACKED file, whose status line is
+        "?? path" -- two real status columns, no leading space, so it survives
+        the strip intact and the slice lands correctly. Reproducing this needs
+        a TRACKED file, MODIFIED, and ALONE in the status: later lines keep
+        their leading space, so a second dirty path hides the bug again.
+        """
+        notes = repo / "plugins" / "dev-kit" / "notes.md"
+        notes.write_text("tracked\n")
+        _git(repo, "add", "--", "plugins/dev-kit/notes.md")
+        _git(repo, "commit", "-qm", "dev-kit notes")
+        self._bump_only_pub_kit(repo)
+        notes.write_text("modified, uncommitted\n")
+
+        assert publish._shippable_dirty_paths() == []
+        bumps, _excluded = publish.preflight()
+        assert any("pub-kit" in bump for bump in bumps)
+
     def test_a_published_plugin_still_refuses(self, repo):
         """The gate keeps working where it protects someone."""
         (repo / "plugins" / "pub-kit" / "scratch.py").write_text("wip\n")
