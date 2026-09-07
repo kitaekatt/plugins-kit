@@ -189,7 +189,7 @@
     {
       "name": "workflow-kit",
       "description": "Incremental, native-preserving improvements on the native Workflow tool: a declarative .workflow.yaml compiler plus node strategies (deterministic script + OpenRouter model calls) that run as cheap, context-light nodes via a file-passing contract. Experimental.",
-      "version": "0.6.1",
+      "version": "0.6.2",
       "author": {
         "name": "Christina"
       },

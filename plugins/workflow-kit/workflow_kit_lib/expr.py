@@ -58,13 +58,15 @@ class Scope:
         self.inputs = set(inputs) if inputs is not None else None
 
     def available(self) -> str:
+        # `names` always begins with the literal "inputs.*", so it is never
+        # empty and the join always has at least one entry to render.
         names = (
-            [f"inputs.*"]
+            ["inputs.*"]
             + [f"steps.{k}" for k in self.step_vars]
             + list(self.locals)
             + ([self.prev_stage[0]] if self.prev_stage else [])
         )
-        return ", ".join(names) if names else "(nothing)"
+        return ", ".join(names)
 
 
 def _split_idents(s: str, full: str) -> list:

@@ -13,6 +13,8 @@ import sys
 import types
 from pathlib import Path
 
+import pytest
+
 _SCRIPT = (
     Path(__file__).resolve().parents[2]
     / "plugins" / "workflow-kit" / "scripts" / "openrouter_run.py"
@@ -29,17 +31,6 @@ def _load():
 orr = _load()
 
 
-def test_build_messages_user_only():
-    assert orr.build_messages("hi") == [{"role": "user", "content": "hi"}]
-
-
-def test_build_messages_with_system():
-    assert orr.build_messages("hi", "sys") == [
-        {"role": "system", "content": "sys"},
-        {"role": "user", "content": "hi"},
-    ]
-
-
 def test_missing_llm_scripting_kit_exits_2_via_single_guard(monkeypatch, capsys, tmp_path):
     # W11: the two duplicated import guards are merged into one. Force the
     # import to fail (None in sys.modules raises ImportError) and check the
@@ -53,6 +44,36 @@ def test_missing_llm_scripting_kit_exits_2_via_single_guard(monkeypatch, capsys,
     assert "llm_scripting_kit not importable" in err
     assert "shared-libs .pth" in err
     assert _SCRIPT.read_text(encoding="utf-8").count("from llm_scripting_kit import") == 1
+
+
+def test_llm_scripting_kit_too_old_exits_2_with_a_distinct_message(monkeypatch, capsys, tmp_path):
+    # llm_scripting_kit is present (unlike the absent-package case above) but its
+    # `completion` module predates OpenRouterBackend -- a venv linked against an
+    # older shared lib. The message must name a minimum version and must not be
+    # the same text as the absent-package message.
+    fake_pkg = types.ModuleType("llm_scripting_kit")
+    fake_pkg.ModelResolveError = Exception
+    fake_pkg.resolve_model = lambda *a, **k: "m"
+    fake_completion = types.ModuleType("llm_scripting_kit.completion")
+    fake_completion.BackendOptions = object  # OpenRouterBackend deliberately absent
+
+    monkeypatch.setitem(sys.modules, "llm_scripting_kit", fake_pkg)
+    monkeypatch.setitem(sys.modules, "llm_scripting_kit.completion", fake_completion)
+
+    rc = orr.main(["--prompt", "hi", "--out", str(tmp_path / "o.txt")])
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "0.5.0" in err
+    assert "claude plugin update llm-scripting-kit@plugins-kit" in err
+    assert "llm_scripting_kit not importable" not in err
+
+
+# --------------------------------------------------------------------------- #
+# real seam: BackendOptions leaves temperature unset so the provider picks it
+# --------------------------------------------------------------------------- #
+def test_real_seam_backend_options_temperature_defaults_to_none():
+    completion = pytest.importorskip("llm_scripting_kit.completion")
+    assert completion.BackendOptions().temperature is None
 
 
 def _install_fake_llm_scripting_kit(monkeypatch, *, complete_impl, classify_halt_impl=None):

@@ -36,14 +36,6 @@ import sys
 from pathlib import Path
 
 
-def build_messages(prompt, system=None):
-    messages = []
-    if system:
-        messages.append({"role": "system", "content": system})
-    messages.append({"role": "user", "content": prompt})
-    return messages
-
-
 def _write_status(path, obj):
     if not path:
         return
@@ -83,14 +75,30 @@ def main(argv=None):
     # import. It owns model resolution (alias / slug / default / defaultCheap) and
     # the completion seam (transport, response normalization, halt classification);
     # workflow-kit does not reimplement any of it.
+    #
+    # The package and OpenRouterBackend are probed separately: a .pth links no
+    # version, so a workflow-kit venv can resolve an llm-scripting-kit predating
+    # OpenRouterBackend. An absent package and a too-old one are different repairs
+    # (enable the plugin vs. update it), so they need different messages.
     try:
         from llm_scripting_kit import ModelResolveError, resolve_model
-        from llm_scripting_kit.completion import BackendOptions, OpenRouterBackend
     except ImportError:
         print(
             "llm_scripting_kit not importable. Enable the llm-scripting-kit plugin and run this "
             "with workflow-kit's venv python (bootstrap links llm_scripting_kit onto it via "
             "the shared-libs .pth).",
+            file=sys.stderr,
+        )
+        return 2
+    try:
+        from llm_scripting_kit.completion import BackendOptions, OpenRouterBackend
+    except ImportError:
+        print(
+            "llm_scripting_kit's completion module has no OpenRouterBackend. This "
+            "requires llm-scripting-kit >= 0.5.0 (the version that shipped "
+            "OpenRouterBackend under the llm_scripting_kit package name). Run "
+            "`claude plugin update llm-scripting-kit@plugins-kit` and restart so "
+            "bootstrap re-links the newer shared lib onto workflow-kit's venv.",
             file=sys.stderr,
         )
         return 2

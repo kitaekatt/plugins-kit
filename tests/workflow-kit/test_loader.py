@@ -187,3 +187,66 @@ def test_two_kinds_on_one_step_raises(write_workflow):
             "  - id: s\n    agent: { prompt: hi }\n    script: { command: ls }\n",
             write_workflow,
         )
+
+
+# --------------------------------------------------------------------------- #
+# schema name validation: a schema NAME becomes a JS identifier at compile time
+# --------------------------------------------------------------------------- #
+def test_hyphenated_schema_name_raises(write_workflow):
+    with pytest.raises(WorkflowError, match="must be an identifier"):
+        _load_text(
+            "name: b\ndescription: x\n"
+            "schemas:\n  my-schema: { type: object }\n"
+            "steps:\n  - id: s\n    agent: { prompt: hi, schema: my-schema }\n",
+            write_workflow,
+        )
+
+
+def test_valid_schema_name_parses(write_workflow):
+    doc = _load_text(
+        "name: b\ndescription: x\n"
+        "schemas:\n  my_schema: { type: object }\n"
+        "steps:\n  - id: s\n    agent: { prompt: hi, schema: my_schema }\n",
+        write_workflow,
+    )
+    assert set(doc.schemas) == {"my_schema"}
+
+
+# --------------------------------------------------------------------------- #
+# a pipeline/fan_out `as` name must not collide with a stage id, or with the
+# enclosing pipeline `as` (both would silently shadow scope.prev_stage)
+# --------------------------------------------------------------------------- #
+def test_pipeline_as_colliding_with_stage_id_raises(write_workflow):
+    with pytest.raises(WorkflowError, match="review"):
+        _load_text(
+            "name: b\ndescription: x\nsteps:\n"
+            "  - id: p\n    pipeline:\n      over: [x]\n      as: review\n"
+            "      stages:\n"
+            "        - id: review\n          agent: { prompt: hi }\n"
+            "        - id: verify\n          agent: { prompt: \"{{ review }}\" }\n",
+            write_workflow,
+        )
+
+
+def test_fan_out_as_colliding_with_pipeline_as_raises(write_workflow):
+    with pytest.raises(WorkflowError, match="dim"):
+        _load_text(
+            "name: b\ndescription: x\nsteps:\n"
+            "  - id: p\n    pipeline:\n      over: [x]\n      as: dim\n"
+            "      stages:\n"
+            "        - id: s\n          agent: { prompt: hi }\n"
+            "          fan_out: { over: [1, 2], as: dim }\n",
+            write_workflow,
+        )
+
+
+def test_non_colliding_pipeline_still_compiles(write_workflow):
+    doc = _load_text(
+        "name: b\ndescription: x\nsteps:\n"
+        "  - id: p\n    pipeline:\n      over: [x]\n      as: dim\n"
+        "      stages:\n"
+        "        - id: s\n          agent: { prompt: hi }\n"
+        "          fan_out: { over: [1, 2], as: finding }\n",
+        write_workflow,
+    )
+    assert doc.steps[0].pipeline.as_ == "dim"

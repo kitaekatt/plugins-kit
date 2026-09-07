@@ -55,8 +55,8 @@ def test_example_compiles_to_pipeline_with_nested_parallel():
 def test_flat_step_compiles_to_parallel_map():
     js = _compile(FIXTURES / "good" / "flat.workflow.yaml")
 
-    # fan-out over a string expression
-    assert "await parallel(inputs.paths.map((item) => () => agent(" in js
+    # fan-out over a string expression -- shares the node seam's (item, i) arity
+    assert "await parallel(inputs.paths.map((item, i) => () => agent(" in js
     assert "agentType: \"Explore\"" in js
 
     # single agent step (no fan-out)
@@ -203,6 +203,40 @@ steps:
     agent: { prompt: "run {{ inputs.runId }}" }
 """
     assert "${inputs.runId}" in _compile_text(with_node, write_workflow)
+
+
+# --------------------------------------------------------------------------- #
+# input-doc header: a multi-line description must not escape the `//` comment
+# --------------------------------------------------------------------------- #
+def test_multiline_input_description_stays_inside_the_comment(write_workflow):
+    js = _compile_text(
+        "name: b\ndescription: x\n"
+        "inputs:\n"
+        "  diff:\n"
+        "    type: string\n"
+        "    description: |\n"
+        "      first line\n"
+        "      second line\n"
+        "steps:\n  - id: s\n    agent: { prompt: \"{{ inputs.diff }}\" }\n",
+        write_workflow,
+    )
+    header = js.split("// Inputs (provided via the Workflow `args` global):\n")[1].split("\n\n")[0]
+    for line in header.splitlines():
+        if line.strip():
+            assert line.startswith("//")
+
+
+# --------------------------------------------------------------------------- #
+# agent fan-out shares the node seam's fan-out shape (one arity across all three
+# emitters: script, openrouter, agent)
+# --------------------------------------------------------------------------- #
+def test_agent_for_each_emits_the_same_map_arity_as_a_node_step(write_workflow):
+    js = _compile_text(
+        "name: b\ndescription: x\ninputs:\n  xs: { type: list }\nsteps:\n"
+        "  - id: s\n    for_each: \"{{ inputs.xs }}\"\n    agent: { prompt: \"{{ item }}\" }\n",
+        write_workflow,
+    )
+    assert ".map((item, i) =>" in js
 
 
 def test_shipped_node_strategies_example_compiles():
