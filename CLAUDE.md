@@ -60,7 +60,9 @@ plugins-kit/                          # Marketplace root
 | `plugins/bootstrap/bootstrap.json` | Bootstrap plugin's own manifest |
 | `plugins/bootstrap/skills/bootstrap/references/engine-internals.md` | Bootstrap engine internals |
 | `docs/planning/bootstrap/MILESTONES.md` | Development milestones and progress |
-| `docs/planning/adapters/adapter-design.md` | Adapter concept: task-specific context attached for one model only (design record; the md-audit evidence pack is admitted, the seam is not chosen) |
+| `docs/reference/adapters.md` | Current adapter guidance: model-task selection, corpus independence, admission, artifact contract, and task-skill ownership at the emitter |
+| `docs/reference/adapters-negative-results.md` | Closed adapter experiments, disqualified candidates, cost rejections, and explicitly unmeasured deferrals |
+| `docs/planning/adapters/adapter-design.md` | Historical md-audit adapter design record and measurement tables; the task skill owns the adapter and enforces it at the emitter |
 | `tests/bootstrap/` | All bootstrap tests (mirrors bootstrap_lib/ structure) |
 
 ### Key Design Decisions

@@ -1,5 +1,9 @@
 # Adapter concept -- design record
 
+This is the historical design record for the md-audit adapter. Current guidance
+is in the [model-task adapter reference](../../reference/adapters.md) and the
+[negative-results catalog](../../reference/adapters-negative-results.md).
+
 Status: ADMITTED and IMPLEMENTED for one model-task pair. The `md-audit`
 EVIDENCE PACK, in its compact form at a single call, is the standard
 configuration for the local qwen3.8-27b endpoint auditing markdown. The owner
