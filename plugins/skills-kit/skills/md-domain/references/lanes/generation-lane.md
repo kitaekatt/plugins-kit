@@ -547,76 +547,70 @@ the sequence below. Load it with `../standards/human-html-standards.md`.
 Before writing a page, also load `../human-html-presentation.md`. PC-5 makes
 that presentation reference required input for this branch.
 
-**Everything mechanical is already implemented in
-`skills_kit_lib.human_html`.** Import it and call it. Do not hand-write a marker,
-re-derive a record path, recompute a source stamp, restate the CSS, or reimplement
-the navigation walk: the package is the single owner of all of it (DR-3), the
-host viewer reads the same interface, and a second implementation is exactly the
-drift the ownership rule exists to prevent.
+**Use `skills_kit_lib.human_html` for page mechanics.** Import it and call it. Do
+not hand-write a marker, re-derive a record path, recompute a source stamp,
+restate the CSS, or reimplement the navigation walk. The package is the single
+owner of those mechanics (DR-3), and the host viewer reads the same interface.
 
 | Rule | What the package gives you |
 |---|---|
-| DR-1, DR-3 | `record_path`, `validate_record`, `load_record`, `dumps_record`, `write_record`, `normalize_directory`, `reference_filename` |
-| DR-2 | `source_stamp(repo_root, directory) -> (source_sha, dirty)` |
-| DR-4 | `read_instructions`, and `write_record`'s default `preserve_instructions=True` |
+| DR-1, DR-3 | `record_path`, `validate_record`, `load_record`, `normalize_directory`, `reference_filename` |
+| DR-4 | `read_instructions` |
 | PC-1, RD-2 | `marker(record, kind, reference=None)`, `parse_marker` |
 | PC-2 | `navigation_targets(records, directory) -> (up, down)`, `navigation_label(directory)` |
 | PC-3 | `announce_script(record, file, kind, reference=None)` |
 | SA-1, PC-4 | `asset_css()` |
 
-### Step 1 -- Intake: the human analysis report is the only input
+### Step 1 -- Intake: read the machine-produced territory brief
 
-The lane's coverage input is the `coverage_human_html_directory` report for THIS
-directory: its warrant-exercise outcomes, its admitted units, its identity line,
-and its `PAGE-WARRANTED` / `NO-PAGE` decision. Use this session's report, or read
-the one named by `--coverage <path>`.
+The lane's only input is a machine-produced generation brief for THIS directory,
+assembled after placement has settled every decision. Use this session's brief,
+or read the one named by `--coverage <path>`. It contains:
 
-A code-coverage report is NOT a substitute and neither is your own reading of the
-directory. If no human analysis exists, run `analyze human-html <directory>`
-first and say that you did -- the two-dispatch chain is what keeps the decision a
-decision.
+- the persisted DR-1 record and its `page` or `none` decision.
+- the exact normalized directories that this page owns.
+- the exact normalized directories that this page excludes.
+- the child pages inside the territory, with each page's relationship to this
+  page.
 
-Re-check the stale-child gate before writing anything: `stale_child` true in
-`scripts/discover_human_html.py` means a descendant record is stale or missing,
-and TS-2 blocks this directory until those are refreshed bottom-up.
+This brief is not a placement agent's prose report. Placement decides `page` or
+`none` and writes the record (AD-1). It emits no content units. Generation reads
+that decision as settled, applies no warrant criterion, and never flips it.
 
-### Step 2 -- Persist the record, for `none` exactly as for `page` (DR-1, DR-2, DR-4)
+You will be TOLD, in your brief, the exact directories you are responsible for
+and the exact directories you are not. Do not work this out yourself and do not
+second-guess it. An excluded subtree is somebody else's job: you may LINK to its
+page and say in one line what lives behind it, but you never inventory it, never
+describe its files, and never let it consume your word budget. You will also be
+told the child pages inside your territory. Route to them. A reader who needs
+what a child page covers should leave your page for it, which means you say what
+it covers and why they would go, and then stop.
 
-Write one record per directory at the DR-1 path, in JSON syntax so a stdlib JSON
-parser reads it:
+A code-coverage report and a self-derived territory are not substitutes. If the
+machine brief is missing, stop and report the missing prerequisite. Apply the
+TS-2 and TS-3 gates to the records named by the brief before writing. TS-1 still
+orders multiple generation runs deepest first. This branch remains one run for
+one directory.
 
-```python
-from skills_kit_lib import human_html as hh
+Research the actual files in every owned directory before writing. The brief
+sets the boundary. It does not supply the page's content. Do not research inside
+an excluded directory.
 
-path = hh.record_path(repo_root, directory)          # DR-1 path mapping
-sha, dirty = hh.source_stamp(repo_root, directory)   # DR-2 subtree stamp
-record = hh.write_record(path, {                     # DR-4 preserves instructions
-    "schema_version": 1,
-    "directory": hh.normalize_directory(directory),
-    "decision": "page",                              # or "none"
-    "source_sha": sha,
-    "dirty": dirty,
-    "identity": "<the analysis report's identity line>",   # "" for none
-    "instructions": "",                              # rewritten from disk, see below
-    "references": [],
-})
-```
+### Step 2 -- Read the settled record; do not rewrite it (AD-1, DR-1, DR-4)
 
-**A `none` decision gets a record too (AD-1).** The absence of a page is a
-recorded finding, not a gap: it is what tells a later run that this directory was
-judged rather than skipped, it is what lets PC-2 traverse THROUGH the directory
-to the pages below it, and it is what stops the next parent generation from
-treating an unanalyzed child as an unfinished one.
+Resolve the DR-1 path with `hh.record_path`, then load and validate the record
+through the DR-3 interface. Placement owns record creation and every decision
+write. Generation does not persist the record, refresh its source stamp, or
+rewrite any field.
 
-**`instructions` is the one field you never write (DR-4).** It is the only
-human-managed field in the record and the only steering channel for a page nobody
-hand-edits. `write_record` reads the existing value off disk and writes it back
-byte-identical by default; do not pass `preserve_instructions=False` in this
-lane. Do READ it -- instructions steer the page's emphasis, and SZ-1 lets them
-override the word budget.
+**A `none` decision already has a record (AD-1).** Generation does not create or
+update it. Step 3 removes generated output for that decision.
 
-**`dirty: true` is persisted, not blocked on (DR-2).** It means no commit
-identifies the content that was judged. Report it as `INFO DIRTY` and carry on.
+**Read `instructions` as steering input (DR-4).** It can change the page's
+emphasis. It does not modify the SZ-1 result.
+
+**A loaded record with `dirty: true` does not block generation (DR-2).** Report
+`INFO DIRTY` and do not rewrite the record.
 
 ### Step 3 -- Emit the page, or remove one (PC-1 to PC-6, NF-1, SA-1)
 
@@ -643,26 +637,70 @@ all of it from the package:
 <script>                                      PC-3: the exact hh.announce_script(...) text
 ```
 
-**Navigation is COMPUTED, never composed by hand (PC-2).** Call
-`hh.navigation_targets(records, directory)`: `up` is the nearest ANCESTOR whose
-fresh record says `page`, `down` is every nearest DESCENDANT whose fresh record
-says `page`. Traversal passes through `none` directories and stops each branch at
-its first page, so a `none` directory is never a link target and a page below
-another page is not a root's target. The repository root has no up link; omit the
-descendant section entirely when `down` is empty. Describe each link with the
-TARGET RECORD'S identity line, which is why TS-1 requires the child to be
-finished first. Put the links in one `ul`, with one `a` in each `li`. Each link
-contains a `span.hh-nav-label` and a `span.hh-nav-identity`. Get the short label
-from `hh.navigation_label(target)`. Use the target record's complete identity
-for the second span. Do not reduce the navigation to adjacent identity links.
+**Navigation is MACHINE-COMPUTED, never composed by hand (PC-2).** Use the `up`
+and `down` targets in the brief. They come from `hh.navigation_targets` over the
+settled records. Traversal passes through `none` directories and stops each
+branch at its first page, so a `none` directory is never a link target and a page
+below another page is not a root's target. The repository root has no up link;
+omit the descendant section entirely when `down` is empty. Describe each link
+with the TARGET RECORD'S identity line, which is why TS-1 requires the child to
+be finished first. Put the links in one `ul`, with one `a` in each `li`. Each
+link contains a `span.hh-nav-label` and a `span.hh-nav-identity`. Get the short
+label from `hh.navigation_label(target)`. Use the target record's complete
+identity for the second span. Do not reduce the navigation to adjacent identity
+links.
 
 **Outside that chrome the body is evidence-shaped (PC-5).** Apply
-`../human-html-presentation.md`: use one `h1`, `h2` sections, `dl` evidence,
-resting link cues, and tables only for repeated multi-attribute comparisons.
-There is no template and there will not be one. Repository directories do not
-share one information shape, so build the page from scratch for the units the
-analysis admitted. The presentation reference governs judgment without taking
-ownership of SA-1's palette, fonts, theme, width, scripts, or external assets.
+`../human-html-presentation.md`. The page is an ORIENTATION and NAVIGATION
+artifact. Its job is to tell a returning owner WHAT IS HERE and WHERE TO GO.
+Detail lives in the files; the page routes the reader to them.
+
+It is NOT a list of gotchas, surprises, traps or facts. Surfacing a fact the
+reader did not know is NOT the value of this page.
+
+Select for NAVIGATIONAL VALUE. Admit a file or a group when a reader might want
+to GO there and would not find it, or would misjudge it, from the file tree
+alone. Collapse uniform families into one named group with a count
+(`systems/ -- 8 phase definitions`). Omit build output, caches, and files whose
+only story is that they exist.
+
+Section choice is part of generation, not a fixed template. Include only the
+content jobs that the territory supports, in this order:
+
+1. **Orientation prose** -- a short paragraph, three to six sentences. What this
+   territory is, how it is organized, and the one thing that makes its
+   organization make sense. Written for someone who has been away for months.
+2. **Where to start** -- one or two sentences naming the file to open first and
+   why. Concrete.
+3. **Routes** -- see below. Omit the section entirely if there are none.
+4. **Contents** -- grouped by ROLE, not alphabetically and not by file type. Each
+   entry: the path, and one line saying what it is and when you would open it.
+   Groups get a heading that names the job they do.
+5. **Next door** -- the directories a reader is likely to want next, and what is
+   in each. This is where child pages and the agent-facing `CLAUDE.md` go.
+
+Apply the flat job-named section contract in PC-7 without an added trigger or
+exception.
+
+**Routes are KIND-DEPENDENT.** The common ways a person actually moves through
+the territory, as ordered sequences of real files or commands:
+
+    Ship a build: build.sh -> publish.py -> GitHub Pages
+
+Two to five. Each must be traceable to something you READ -- a documented
+workflow, a call chain, or a script that invokes another. Do NOT invent a
+plausible-sounding workflow. If the territory has no real sequences -- static
+data, for instance -- OMIT THE SECTION rather than manufacturing routes.
+
+**Do not add an Edges section.** A boundary still earns a LINE inside another
+section where it changes WHERE the reader navigates -- most naturally in Next
+door -- but never a section of its own. A caveat is allowed ONLY where it changes
+WHERE the reader navigates. Never as a standalone finding, never as its own
+section.
+
+The GROUPING is the real work and is where a good page differs from `ls`. Group
+by the job a file does, in the vocabulary of this territory. Derive the groups
+from what you read, not from a template.
 
 **Nothing in the page reaches the network, and nothing names a location
 (PC-6, NF-1).** Every cross-file read is a relative URL the BROWSER resolves,
@@ -674,15 +712,15 @@ from a file manager, a static host, and the host viewer frame alike -- a page
 that fetches is not a slightly less portable page, it is a blank one wherever the
 fetch is blocked.
 
-**Report the visible-word count (SZ-1).** 1,200 words at the repository root, 600
-elsewhere and for each reference, unless the record's `instructions` override it.
-Over budget is `INFO`, never a failure -- it is a signal that the page has drifted
-from orientation toward exposition.
+**Report the visible-word count and enforce SZ-1's hard 900-word ceiling.** Apply
+the same ceiling to every main page and reference page. No record field overrides
+it. A count above that ceiling is a `FAIL`.
 
-### Step 4 -- References, only when the page needs one (RD-1, RD-2)
+### Step 4 -- References, only when the settled record names one (RD-1, RD-2)
 
-A reference is CONDITIONAL. Add one only when a page genuinely needs separate
-material; a directory whose orientation fits on one page needs none.
+A reference is CONDITIONAL. Emit one only when the settled record names it and
+the page genuinely needs separate material. If the record and brief disagree,
+report the inconsistent prerequisite. Do not rewrite the record.
 
 Each reference is `human.<slug>.html` beside `human.html`, with the slug matching
 `[a-z0-9]+(-[a-z0-9]+)*` and unique in that directory. Use
@@ -706,9 +744,9 @@ filenames, or template protocol ahead of that phase.
 python scripts/human_html_check.py <repo-root> <directory>
 ```
 
-`FAIL` is a broken contract and exits nonzero: fix it and rerun. `STALE`, `DIRTY`
-and the size signal are `INFO` and do not: they are resolved by rerunning the
-lane or editing prose, not by patching the output.
+`FAIL` is a broken contract and exits nonzero, including a count above the SZ-1
+ceiling. Fix it and rerun. `STALE` and `DIRTY` are `INFO`. Resolve them by
+rerunning the lane, not by patching the output.
 
 ### Regeneration: `replace-generated`
 
@@ -716,16 +754,14 @@ Regeneration here is NOT `sort-never-delete`. That contract exists because a
 CLAUDE.md may carry hand-written prose no rerun can re-derive, so unverifiable
 units are relocated rather than dropped. A human page carries no such prose by
 construction: PC-6 prohibits hand-written HTML content, and every page is emitted
-whole from a record plus an analysis report.
+whole from a settled record plus a machine-produced territory brief.
 
 So a regeneration REPLACES the generated output outright -- rewrite `human.html`,
 rewrite or delete each reference to match the record, and delete a page whose
-decision became `none`. Two things survive it, and only two:
-
-- `instructions` in the record (DR-4), read first and written back unchanged.
-- Nothing else. A hand edit to a generated page is not retained; it is
-  overwritten. Steering a page is what `instructions` is FOR, and it is the only
-  channel that survives.
+decision became `none`. The settled decision record is read-only input and stays
+untouched. Read its `instructions` before writing. Nothing in the generated HTML
+survives: a hand edit to a generated page is overwritten. Steering a page is
+what `instructions` is FOR.
 
 Do not import the `## Unverified` section, the retention markings, or the sort
 into this branch. They protect a hazard that does not exist here, and carrying
