@@ -530,6 +530,57 @@ class TestMasterOnlyGuardAsksDevHistory:
 
         assert publish._master_only_paths() == []
 
+    def test_a_projection_carrying_a_dev_side_revert_is_not_master_only(self, repo):
+        """The case a partial release creates, and the one every other dev-side
+        revert test misses: those leave master holding B, the newest content it
+        was handed, so master never sits on the earlier blob. Here dev ships A,
+        ships B, reverts itself to A, and a PROJECTION carries that revert
+        across -- so master holds A, which by content is indistinguishable from
+        a master-side retraction of B.
+
+        What separates them is the commit that moved master: a projection takes
+        dev's tree wholesale, so master chose nothing. Ranking by dev's
+        introduction order alone cannot see that, because a revert re-uses the
+        earlier blob and so scores earlier than the content it replaced -- master
+        then reads as having given up B when dev is the branch that gave it up.
+        Left unfixed this wedges permanently: every later publish of that plugin
+        is refused as a reconcile.
+        """
+        self._base(repo)
+        (repo / "shared.txt").write_text("A\n")
+        _git(repo, "add", "-A")
+        _git(repo, "commit", "-qm", "add shared.txt A")
+        self._project(repo)
+        (repo / "shared.txt").write_text("B\n")
+        _git(repo, "add", "-A")
+        _git(repo, "commit", "-qm", "shared.txt B")
+        self._project(repo)
+        (repo / "shared.txt").write_text("A\n")
+        _git(repo, "add", "-A")
+        _git(repo, "commit", "-qm", "revert shared.txt to A")
+        self._project(repo)
+
+        assert publish._master_only_paths() == []
+
+    def test_a_master_side_revert_after_a_projection_is_still_master_only(self, repo):
+        """The guard that keeps the fix above honest. Same shape -- master ends
+        on earlier content -- but the commit that put it there is a hand revert
+        on master, not a projection. That is a real retraction and a publish
+        would undo it, so it must still refuse.
+        """
+        self._base(repo)
+        (repo / "shared.txt").write_text("A\n")
+        _git(repo, "add", "-A")
+        _git(repo, "commit", "-qm", "add shared.txt A")
+        self._project(repo)
+        (repo / "shared.txt").write_text("B\n")
+        _git(repo, "add", "-A")
+        _git(repo, "commit", "-qm", "shared.txt B")
+        self._project(repo)
+        self._on_master(repo, "shared.txt", "A\n", "revert shared.txt to A")
+
+        assert publish._master_only_paths() == ["shared.txt"]
+
     def test_a_retraction_stops_refusing_once_it_is_published(self, repo):
         """A master-side revert is master-only until dev carries it, and no
         longer. Dev ships A, an infra sync carries B, master is reverted to A --

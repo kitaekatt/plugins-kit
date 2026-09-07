@@ -316,6 +316,21 @@ def _dev_introduction_order(path: str) -> dict[str, int]:
     return order
 
 
+def _is_projection_commit(commit: str) -> bool:
+    """True when `commit` is a publish projection rather than a master-side edit.
+
+    A projection's tree is taken wholesale from dev, so the blob it leaves at a
+    path is dev's own content and never a decision master made. Both publish
+    shapes record where they were built from -- a full publish writes
+    `Published-From:`, a partial one writes `Built-From:` -- and that trailer is
+    the signal that separates "master gave up newer content" from "dev reverted
+    and a publish carried the revert across".
+    """
+    message = git("log", "-1", "--format=%B", commit, check=False)
+    return any(line.strip().startswith((PUBLISHED_FROM, BUILT_FROM))
+               for line in message.splitlines())
+
+
 def _master_holds_discardable_state(path: str, master_base: str, master: str,
                                     master_blob: str) -> bool:
     """True when publishing over master's state at `path` would discard it.
@@ -361,26 +376,39 @@ def _master_holds_discardable_state(path: str, master_base: str, master: str,
     earlier content, and without the boundary the guard would see master
     holding old content having apparently given up nothing.
 
+    A backwards move made BY A PROJECTION is not master's move at all. When a
+    publish carries dev's own revert across, master lands on earlier content
+    having chosen nothing, so only non-projection commits are read as master
+    giving content up (`_is_projection_commit`). Without that, a `--only`
+    release that ships a revert wedges every later publish of the same plugin.
+
     Known limit, stated because the guard has no way to see past it: if dev
-    reverts and an infra sync then carries that revert to master, master's own
-    move is backwards too and this refuses. That direction is the safe one --
-    the operator is shown a path both branches moved backwards on -- and no
-    signal in either history distinguishes it from a master-side retraction of
-    the same content.
+    reverts and an INFRA SYNC -- a hand commit carrying dev content, recording
+    no trailer -- brings that revert to master, master's own move is backwards
+    with nothing to mark it as dev-sourced, and this refuses. That direction is
+    the safe one: the operator is shown a path both branches moved backwards on.
     """
     order = _dev_introduction_order(path)
     current = order.get(master_blob)
     if current is None:
         return True
-    commits = git("rev-list", f"{master_base}..{master}", "--", path,
-                  check=False).split()
-    held = _blobs_along(path, commits)
-    boundary = blob_at(master_base, path)
-    if boundary is not None:
-        held.append(boundary)
-    newest = max((order[blob] for blob in held if blob in order),
-                 default=current)
-    return newest > current
+    # Oldest to newest, seeded with the state the release handed master: the
+    # question is which COMMIT moved master onto earlier content, and the
+    # boundary commit is excluded from the range but is where a retraction of a
+    # just-published state starts from.
+    commits = git("rev-list", "--reverse", f"{master_base}..{master}", "--",
+                  path, check=False).split()
+    previous = blob_at(master_base, path)
+    for commit in commits:
+        # What matters is the state master LEAVES: master gives content up by
+        # moving off it. Comparing the pair instead misses a master-side move
+        # that lands on a hotfix -- a blob dev never had, so it ranks nowhere --
+        # before a later commit returns to earlier content.
+        if (previous in order and order[previous] > current
+                and not _is_projection_commit(commit)):
+            return True
+        previous = blob_at(commit, path)
+    return False
 
 
 def range_base() -> str:
