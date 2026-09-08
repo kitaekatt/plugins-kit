@@ -444,6 +444,21 @@ Read every line. If anything is unrelated to the feature, `git restore --staged 
 
 **Always use `uv run python` in shell scripts** -- never bare `python` or `python3`. On Windows, the system PATH contains Microsoft Store stubs (`WindowsApps/python.exe`) that take precedence over any user PATH entry, causing bare `python`/`python3` to fail with "Permission denied" (exit 126) in Git Bash. On macOS, bare `python` often doesn't exist. Since bootstrap guarantees `uv` is available, `uv run python` is the standard way to invoke Python from any shell script in this project. It resolves the correct Python, activates the venv (giving access to installed packages), and works on all platforms.
 
+**Scoped exception: `bin/` launcher shims.** `uv run python` resolves the venv
+from the CWD, so a launcher a user invokes from any directory -- the four
+`plugins/<name>/bin/` shims (hue-kit, job-kit, llm-scripting-kit, secrets-kit)
+and their `.cmd` twins -- would pick up the wrong environment, or none. Those
+shims resolve an absolute interpreter instead: the bootstrap-provisioned
+standalone Python or the plugin venv by its version-independent
+`~/.claude/plugins/data/<marketplace>/<plugin>/.venv/` path, falling back to
+`python3`/`python` on PATH. The Windows Store-stub hazard the rule exists to
+avoid is handled the same way -- by preferring an absolute path over a PATH
+lookup, not by reaching for `uv`.
+
+The exception is scoped to a launcher that must work from an arbitrary CWD. A
+shell script that runs inside this repo has a CWD it controls and still uses
+`uv run python`.
+
 **Shell scripts must survive bash 3.2 and zsh.** `/bin/bash` on macOS is bash
 3.2 (no bash 4+ since the licence change, and none at all without Homebrew),
 and the macOS login shell is zsh. Two consequences bite hardest -- a
