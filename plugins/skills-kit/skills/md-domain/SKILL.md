@@ -6,7 +6,7 @@ skill-type: domain-skill
 description: Use when auditing, authoring, generating, or analyzing markdown -- SKILL.md, CLAUDE.md, docs. Do NOT use for knowledge-encoding or update-documentation.
 disable-model-invocation: false
 user-invocable: true
-argument-hint: "[audit|author|generate|analyze] [skill|claude-md|project-doc|references|human-html|<directory>] [<path>|--diff|jobs <dir>] [--coverage <dir>] [--review] [--density] [--json] [--advanced] [fast]"
+argument-hint: "[audit|author|generate|analyze] [skill|claude-md|project-doc|references|human-html|<directory>] [<path>|--diff|jobs <dir>] [--coverage <dir>] [--tree] [--framework <path>] [--review] [--density] [--json] [--advanced] [fast]"
 ---
 
 # md-domain
@@ -52,13 +52,13 @@ and that is the whole of the difference.
 
 **That is why `generate` exists for `claude-md` and `human-html` alone.** Each
 has an analysis that produces its input: `analyze <directory>` reads code and
-emits coverage, and `analyze human-html <directory>` reads a subtree and emits a
-page-warrant decision. Nothing analyzes a codebase and emits skill or
+emits coverage, and `analyze human-html <directory>` reads a computed territory
+and emits a page-warrant decision. Nothing analyzes a codebase and emits skill or
 project-doc candidates, so those two artifacts are authored. If an analysis is
 ever built for them, they gain a generate lane; until then, do not improvise
 one.
 
-**REGENERATION is `generate` over a document that already exists.** Existence
+**CLAUDE.md REGENERATION is `generate` over a document that already exists.** Existence
 decides, not a flag. It NEVER deletes and never blocks: every unit is SORTED --
 content a directed check confirms against the code is kept in place, content
 explicitly MARKED to retain is kept verbatim, and everything else MOVES verbatim
@@ -99,8 +99,11 @@ live in `references/lanes/`, and the placement spine they all defer to lives in
 - **Human-html mode** -- say `human-html` after the verb, then name a directory.
   `analyze human-html <dir>` decides placement, persists the record and stops.
   `generate human-html <dir>` reads that settled record and writes or removes
-  the page to match it. Neither has a whole-repo default, and both run
-  deepest-first over a tree (TS-1).
+  the page to match it. Add `--tree` for an explicit repository-root pass.
+  `generate human-html <repository-root> --tree --framework <path>` is the
+  one-command corpus refresh: it completes placement first, then generates
+  leaf-first with separate prompts. The tree procedure is in the human-html
+  branches of `coverage-lane.md` and `generation-lane.md`.
 
 ### Bare-invocation greeting
 
@@ -110,7 +113,7 @@ Tell me in your own words what you want to do with your project markdown.
 WHAT I CAN DO
   audit      check an existing document against its standards, and give a verdict
   analyze    read one directory and report what a document there should carry --
-             its own code for a CLAUDE.md, or its whole subtree for a human page;
+             its own code for a CLAUDE.md, or its computed territory for a human page;
              not its subdirectories' code, each of which is its own run; never edits
   author     produce a document from content you supply, held to the standards
   generate   produce a CLAUDE.md or a human page out of analysis, so every claim
@@ -255,6 +258,10 @@ silently returns a SMALLER corpus, which then reads as the whole corpus.
   `coverageSubjects` by exactly those code-free directories. This is the
   cheap, model-free enumeration -- use it before estimating cost or proposing
   any phasing, and quote its count as the scope.
+- A human-html placement or generation tree:
+  `scripts/human_html_tree.py placement <repository-root>` or
+  `scripts/human_html_tree.py generation <repository-root> --framework <path>`.
+  Both consume `discover_human_html.py`; neither contains a second walk.
 
 ## Dispatch table
 
@@ -301,9 +308,9 @@ skill" is `author_skill`; say so rather than improvising a coverage input.
 **The two analyze lanes have different subjects, and the selector is not
 optional.** `coverage_code_subtree` reads one directory's OWN DIRECT code files
 and asks what its CLAUDE.md is missing. `coverage_human_html_directory` reads
-that directory's whole SUBTREE -- code, docs, data, assets, configuration, and
-its children's finished decision records -- and asks whether a person browsing
-it needs an orientation page. Neither answer substitutes for the other, so an
+that directory's computed TERRITORY -- code, docs, data, assets, configuration,
+and its excluded children's finished decision records -- and asks whether a
+person browsing it needs an orientation page. Neither answer substitutes for the other, so an
 `analyze` dispatch without the `human-html` token takes the code lane and never
 guesses at the other. There is no `audit` or `author` lane for `human-html`: the
 page is machine-emitted (CK-1 checks it, no human writes it), so there is
@@ -563,9 +570,9 @@ lanes:
 
 Audit/author positional form: `<verb> <artifact> [selector] [flags]`.
 Analyze form: `analyze (<directory> | --diff) [--json] [--advanced]`.
-Human-html analyze form: `analyze human-html <directory> [--json]`.
+Human-html analyze form: `analyze human-html <directory> [--tree] [--json]`.
 Generate form: `generate claude-md <directory> [--coverage <dir>]`.
-Human-html generate form: `generate human-html <directory> [--coverage <path>]`.
+Human-html generate form: `generate human-html <directory> [--coverage <path>] [--tree] [--framework <path>]`.
 Verb and subject may be inferred from natural language; when a required part is
 ambiguous, ask rather than guessing.
 
@@ -602,7 +609,14 @@ ambiguous, ask rather than guessing.
 - **Analyze subject** -- a named directory or `--diff`. There is NO whole-repo
   default: if neither is present, say so and stop rather than choosing the cwd.
   `analyze human-html` takes a directory only; `--diff` does not apply to it,
-  because a page's warrant is a property of a subtree rather than of a change.
+  because a page's warrant is a property of its computed territory rather than
+  of a change.
+- **`--tree`** -- human-html only. Treat the named directory as a repository
+  root and use `scripts/human_html_tree.py`. Placement completes before
+  generation starts. The two passes use separate prompts.
+- **`--framework <path>`** -- required with `generate human-html --tree`. Pass
+  this file byte-for-byte to every generating agent. The tree driver records
+  its SHA-256 digest and refuses a changed file at completion.
 - **`--diff` / `--json`** -- both analyze-only. `--diff` resolves changed code
   into per-directory subjects; `--json` emits the report as structured JSON on
   either analyze lane.
@@ -701,7 +715,8 @@ domain_skill:
       - The human-html lanes run as two BOTTOM-UP passes, one directory at a time (TS-1). Placement settles the whole tree before generation starts. Placement persists every `page` or `none` record and its identity. Generation reads the record and may write only its `references` field. A parent reads the records in its territory and each nearest page child's identity. Stale or missing dependencies block it under TS-2 rather than being guessed around.
       - A generated human page NEVER fetches. Every cross-file read is a relative URL the browser resolves (NF-1), so the page works from a file manager, a static host and the host viewer frame alike. Do not add fetch, XMLHttpRequest, an absolute URL or path, or an external-origin asset to make a page richer -- CK-1 fails all of them, and the page's whole value is that one file survives every environment.
       - Author and generate are chosen by INPUT PROVENANCE, never by the word the user typed. Content the user supplies is authored; coverage from an analyze run is generated. "Generate a skill" and "generate a README" are author dispatches, because no analysis produces coverage for those artifacts -- say which lane you are taking and why, rather than silently honouring or silently overriding the token.
-      - Regeneration never deletes and never blocks. Generating over a document that already exists SORTS every unit: content a DIRECTED check confirms against the code it describes is kept in place, marked content is kept verbatim, and everything else moves verbatim into the document's `## Unverified` section with the reason its check failed (NOT LOCATED, or CONTRADICTED at a named file:line). Verify by reading the code the claim describes -- never by whether this run's coverage happened to re-derive it, because coverage is a non-idempotent sample and sorting on coincidence churns the document. There is no proposal round and no pre-write marking chore; `retain` is how a user resolves a unit OUT of the Unverified section, never a precondition to running. Report the section with a count every run.
+      - >-
+        CLAUDE.md regeneration never deletes and never blocks. Generating over a CLAUDE.md that already exists SORTS every unit: content a DIRECTED check confirms against the code it describes is kept in place, marked content is kept verbatim, and everything else moves verbatim into the document's `## Unverified` section with the reason its check failed (NOT LOCATED, or CONTRADICTED at a named file:line). Verify by reading the code the claim describes -- never by whether this run's coverage happened to re-derive it, because coverage is a non-idempotent sample and sorting on coincidence churns the document. There is no proposal round and no pre-write marking chore; `retain` is how a user resolves a unit OUT of the Unverified section, never a precondition to running. Report the section with a count every run. Human-html regeneration uses `replace-generated`: it can remove generated HTML for a `none` decision and never preserves hand edits to generated output.
       - One lane at a time. On a bare invocation show the menu and wait; do not co-load standards docs or verb procedures. A typical invocation loads this SKILL.md plus one lane plus one standards doc.
       - Detection and remediation are separate phases for audit. The audit pass produces a verdict; it does not silently mutate the subject. Remediation is dispatched after the Q&A gate, as its own work. Analyze has no remediation phase and must stop after reporting.
       - An affirmative verdict is never emitted over inputs the run did not have. Analyze refuses DISCOVERY-FAILED directories, and that refusal is computed from an inventory the report carries in full, not asserted by the assessment.
@@ -778,12 +793,12 @@ domain_skill:
         summary: The references lane's A-K classification taxonomy -- detection signals, default remediations, the scanner-rule disposition table, and the background-agent brief template for cross-reference findings.
       - id: generation_lane
         path: references/lanes/generation-lane.md
-        keywords: [producing procedure, author lane, generate lane, confirm artifact, placement, apply standards, shape content, validate, coverage intake, regeneration, retention marking, propose markings, input provenance]
-        summary: The ONE producing procedure, shared by author and generate and parameterized by artifact -- confirm the artifact, resolve placement via cohesion-principles, apply the artifact's standards doc in the PRODUCING direction, shape per the authoring-patterns cluster, validate. Also the coverage intake that distinguishes generate from author, and the retention rules regeneration runs under.
+        keywords: [producing procedure, author lane, generate lane, confirm artifact, placement, apply standards, shape content, validate, coverage intake, regeneration, retention marking, propose markings, input provenance, human html, human-html branch, tree generation, leaf first, framework digest]
+        summary: The ONE producing procedure, shared by author and generate and parameterized by artifact -- confirm the artifact, resolve placement via cohesion-principles, apply the artifact's standards doc in the PRODUCING direction, shape per the authoring-patterns cluster, validate. Also the coverage intake that distinguishes generate from author, the human-html branch, tree generation, and the retention rules regeneration runs under.
       - id: coverage_lane
         path: references/lanes/coverage-lane.md
-        keywords: [analyze procedure, coverage procedure, one directory, direct code, non-recursive, ambient chain, report only, gaps found, coverage assessed, refs.criteria, analysis depth, no remediation]
-        summary: The ANALYZE procedure for the non-artifact code_subtree subject -- intent and depth gate, mechanical discovery, criteria-bound assessment, the coverage report shape, and STOP. It reads code and never remediates. Named for its output (coverage), not its verb.
+        keywords: [analyze procedure, coverage procedure, one directory, direct code, non-recursive, ambient chain, report only, gaps found, coverage assessed, refs.criteria, analysis depth, no remediation, human html, human_html_directory branch, page warrant, placement pass, tree, deepest first]
+        summary: The ANALYZE procedure for the non-artifact code_subtree subject and its human-html branch -- intent and depth gate, mechanical discovery, criteria-bound assessment, the coverage report shape, and STOP. It reads code and never remediates. Named for its output (coverage), not its verb.
       - id: authoring_patterns
         path: references/authoring-patterns/
         keywords: [content shape, three surfaces, yaml header markdown embedded yaml, structure asserts, area ownership, area config, actions pattern, query tool pattern, how to shape a fact]
@@ -825,6 +840,13 @@ domain_skill:
       tool: scripts/discover_human_html.py
       scope_axes: [single-directory, whole-repository]
       reference_section: standards/human-html-standards.md (CK-2)
+    - id: human_html_tree
+      keywords: [human html tree, tree placement, tree generation, batch driver, deepest first, leaf first, generation checkpoint, resume corpus refresh]
+      description: Drive the two human-html tree passes -- plan and persist placement deepest-first, then start, resume, plan, and complete generation leaf-first.
+      operation: python scripts/human_html_tree.py <placement|record-placement|start-generation|generation|complete-generation> <repository-root> [arguments]
+      tool: scripts/human_html_tree.py
+      scope_axes: [whole-repository]
+      reference_section: lanes/coverage-lane.md and lanes/generation-lane.md (tree-wide entry points)
     - id: tag
       keywords: [tag, write skill-type, frontmatter tagging, idempotent skill-type write]
       description: Write a skill-type value into a SKILL.md's frontmatter idempotently.

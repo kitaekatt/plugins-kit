@@ -29,12 +29,7 @@ refreshed anchors, MARKED content kept verbatim, unverified content REPORTED
 rather than deleted. Over a document carrying no markings at all the run proposes
 them and writes nothing.
 
-An earlier revision of this paragraph said the preservation half of regeneration
-"is already carried by the summarize-and-reference rule and its loss-free-deletion
-guard in Step 4". That was too weak to carry the weight: those rules govern
-whether a RESTATEMENT loses value, not whether an unverifiable fact survives a
-rewrite at all. Section 6.4 is the authority now; Step 4's guard still applies on
-top of it.
+Section 6.4 is the retention authority; Step 4's guard applies on top of it.
 
 **Authoring has no retention question.** There is no source to verify against and
 no coverage to compare with, so an author run over an existing document is an
@@ -45,8 +40,10 @@ and generating N documents is N runs of it. There is no pre-image, no
 detect/remediate split, and no review mode -- those belong to the audit lane and
 answer a question generation does not ask.
 
-**The one exception is TREE-SCALE `claude-md` generation**, which binds
-`workflow/claude-md-generate.js`. It exists because at tree scale the runs are
+**The exceptions are TREE-SCALE generation, and there are two.** `claude-md` at
+tree scale binds `workflow/claude-md-generate.js`; `human-html` at tree scale
+binds `scripts/human_html_tree.py` (see "Tree-wide generation entry point").
+Both exist because at tree scale the runs are
 not independent: parent composition below makes a directory's document an INPUT
 to its parent's, so the N runs carry a topological order whose violation is
 silent. The lane does not change this procedure -- each agent it dispatches
@@ -63,12 +60,7 @@ otherwise has to get right by hand every time:
   wording a hoist so it is true as stated at a new depth, de-duplicating against
   the chain -- is silently under- or over-powered.
 
-An earlier revision of this paragraph stated that the verb "has no fan-out
-machinery and gains none: no Workflow lanes ... New generation machinery would be
-new scope." That was the correct call while the only known consumer was a
-single-document request; it was overturned deliberately once tree-scale
-generation became a real workload. Single-document generation is unaffected and
-still needs no lane.
+Single-document generation still needs no lane.
 
 Load this together with exactly one standards doc, selected by the dispatch
 table:
@@ -589,22 +581,24 @@ it covers and why they would go, and then stop.
 A code-coverage report and a self-derived territory are not substitutes. If the
 machine brief is missing, stop and report the missing prerequisite. Apply the
 TS-2 and TS-3 gates to the records named by the brief before writing. TS-1 still
-orders multiple generation runs deepest first. This branch remains one run for
-one directory.
+orders multiple generation runs deepest first. The tree driver invokes this
+branch once for each unfinished directory.
 
 Research the actual files in every owned directory before writing. The brief
 sets the boundary. It does not supply the page's content. Do not research inside
 an excluded directory.
 
-### Step 2 -- Read the settled record; do not rewrite it (AD-1, DR-1, DR-4)
+### Step 2 -- Read the settled record; write only references (AD-1, DR-1, DR-4)
 
 Resolve the DR-1 path with `hh.record_path`, then load and validate the record
-through the DR-3 interface. Placement owns record creation and every decision
-write. Generation does not persist the record, refresh its source stamp, or
-rewrite any field.
+through the DR-3 interface. Placement owns record creation, `decision`,
+`source_sha`, `dirty`, and `identity`. Generation does not rewrite those fields
+or `instructions`. Generation writes only `references`, after it emits the
+matching reference files.
 
 **A `none` decision already has a record (AD-1).** Generation does not create or
-update it. Step 3 removes generated output for that decision.
+update it. Step 3 removes generated output for that decision. Its `references`
+array stays empty.
 
 **Read `instructions` as steering input (DR-4).** It can change the page's
 emphasis. It does not modify the SZ-1 result.
@@ -716,11 +710,12 @@ fetch is blocked.
 the same ceiling to every main page and reference page. No record field overrides
 it. A count above that ceiling is a `FAIL`.
 
-### Step 4 -- References, only when the settled record names one (RD-1, RD-2)
+### Step 4 -- References, only when the page needs one (RD-1, RD-2)
 
-A reference is CONDITIONAL. Emit one only when the settled record names it and
-the page genuinely needs separate material. If the record and brief disagree,
-report the inconsistent prerequisite. Do not rewrite the record.
+A reference is CONDITIONAL. Emit one only when the page genuinely needs
+separate material. Generation decides the emitted reference set, then writes
+exactly that set to the record's `references` field. It does not change another
+record field.
 
 Each reference is `human.<slug>.html` beside `human.html`, with the slug matching
 `[a-z0-9]+(-[a-z0-9]+)*` and unique in that directory. Use
@@ -747,6 +742,82 @@ python scripts/human_html_check.py <repo-root> <directory>
 `FAIL` is a broken contract and exits nonzero, including a count above the SZ-1
 ceiling. Fix it and rerun. `STALE` and `DIRTY` are `INFO`. Resolve them by
 rerunning the lane, not by patching the output.
+
+### Tree-wide generation entry point (AD-1, DR-4, TS-1 to TS-3)
+
+Use this entry point for
+`generate human-html <repository-root> --tree --framework <path>`. That one
+skill invocation completes the tree-wide placement pass first. It then starts
+generation with a separate prompt and separate criteria.
+
+First run the tree-wide placement procedure in `coverage-lane.md` to
+completion. Do not put its HC criteria in a generation prompt. Start the loop
+below only after the placement plan reports `complete`.
+
+Call this command once when the skill invocation enters generation:
+
+```
+python ${CLAUDE_PLUGIN_ROOT}/skills/md-domain/scripts/human_html_tree.py start-generation "<repository-root>" --framework "<path>" --json
+```
+
+It resumes an incomplete checkpoint. If the prior run is complete, it clears
+the finished set so this invocation regenerates every warranted page. A missing
+or stale checkpoint starts with an empty finished set.
+
+Then start each generation iteration with this read-only plan command:
+
+```
+python ${CLAUDE_PLUGIN_ROOT}/skills/md-domain/scripts/human_html_tree.py generation "<repository-root>" --framework "<path>" --json
+```
+
+The driver refuses generation until every placement record is fresh. For a
+settled tree, it runs CK-1 once and reads
+`.databench/human-tree-generation.json`. The checkpoint binds the finished set
+to the placement records and the digests of every complete prompt input: the
+framework, this lane, the standards, and the presentation reference. Only a
+checkpointed, compliant page is finished. A `none` directory with no generated
+output is finished. Every other directory stays in `work`, with its CK-1
+findings.
+
+Use only the `next` item. Give the generating agent these inputs without a
+summary or rewrite:
+
+- the complete `next` JSON object;
+- the complete framework file at `framework.path`, byte-for-byte;
+- this lane and `../standards/human-html-standards.md` as complete file inputs;
+- `../human-html-presentation.md` as the required PC-5 presentation input.
+
+The framework digest in the item identifies those exact bytes. Do not paste a
+paraphrase of the framework into the prompt. The generation prompt contains no
+HC warrant criteria and cannot change placement.
+
+For `action: generate`, write the page and any warranted reference files. For
+`action: remove`, remove `human.html` and every `human.<slug>.html` in that
+directory. Then complete the item with this command:
+
+```
+python ${CLAUDE_PLUGIN_ROOT}/skills/md-domain/scripts/human_html_tree.py complete-generation "<repository-root>" "<directory>" --framework "<path>" --framework-sha256 <digest> --source-sha <source-sha> --run-key <run-key> --references-json '<json-array>'
+```
+
+Use `[]` for a `none` decision or for a page with no references. The completion
+command refuses changed generation inputs, a changed source stamp, and any
+unfinished directory earlier in the leaf-first order. For a page, it changes
+only the record's `references` field. It then runs CK-1 for the directory.
+
+Repeat the plan command after each completion. If CK-1 reports a `FAIL`, the
+record and files stay available for diagnosis, and the directory stays pending.
+After an interruption, the next plan skips compliant output and resumes at the
+first unfinished item. A dangling page link is included in that item's findings
+and is never a silent skip.
+
+The checkpoint records whether its run is `in-progress` or `complete`. A later
+skill invocation resumes the former and restarts the latter, even when a
+completed page has acquired a CK-1 failure.
+
+The completion command writes the checkpoint only after CK-1 reports zero
+`FAIL`. It never makes the checkpoint an analysis input. A changed placement
+record, instruction, framework, lane, standard, or presentation input starts a
+separate generation run with an empty finished set.
 
 ### Regeneration: `replace-generated`
 
