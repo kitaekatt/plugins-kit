@@ -740,6 +740,63 @@ class TestFindUntrackedOrUnstaged:
 
 
 # ---------------------------------------------------------------------------
+# build_bundle -- untracked_or_unstaged filtered by review mode
+#
+# The hygiene scan exists to catch work the author FORGOT, not to re-report
+# the change under review as a candidate to fold in. --staged mode reviews
+# the index vs HEAD, so a staged file is the review's own subject; --working
+# mode reviews the worktree vs HEAD (staged and unstaged together), so both
+# a staged file and an unstaged modification are the review's own subject.
+# An untracked file is never part of any diff, so it stays reported in every
+# mode -- that is the case the scan is FOR.
+# ---------------------------------------------------------------------------
+
+
+class TestUntrackedOrUnstagedFilteredByMode:
+    def test_staged_mode_omits_the_staged_file_but_keeps_untracked_sibling(
+        self, tmp_path, git_repo
+    ):
+        src = git_repo.path / "src"
+        src.mkdir()
+        (src / "tracked.py").write_text("x = 1\n", encoding="utf-8")
+        git_repo.git("add", ".")
+        git_repo.git("commit", "-qm", "base")
+
+        # The file under review: staged, not yet committed.
+        (src / "tracked.py").write_text("x = 2\n", encoding="utf-8")
+        git_repo.git("add", "src/tracked.py")
+        # A genuinely forgotten sibling: untracked, not part of the review.
+        (src / "forgot.py").write_text("y = 3\n", encoding="utf-8")
+
+        bundle = pr.build_bundle("__staged__", tmp_path / "bundle")
+
+        paths = {i["path"]: i["kind"] for i in bundle["untracked_or_unstaged"]}
+        assert "src/tracked.py" not in paths
+        assert paths.get("src/forgot.py") == "untracked"
+
+    def test_working_mode_omits_the_modified_file_but_keeps_untracked_sibling(
+        self, tmp_path, git_repo
+    ):
+        src = git_repo.path / "src"
+        src.mkdir()
+        (src / "tracked.py").write_text("x = 1\n", encoding="utf-8")
+        git_repo.git("add", ".")
+        git_repo.git("commit", "-qm", "base")
+
+        # The file under review: an unstaged worktree modification (part of
+        # `git diff` vs HEAD, which is what --working reviews).
+        (src / "tracked.py").write_text("x = 2\n", encoding="utf-8")
+        # A genuinely forgotten sibling: untracked, not part of the review.
+        (src / "forgot.py").write_text("y = 3\n", encoding="utf-8")
+
+        bundle = pr.build_bundle("__working_tree__", tmp_path / "bundle")
+
+        paths = {i["path"]: i["kind"] for i in bundle["untracked_or_unstaged"]}
+        assert "src/tracked.py" not in paths
+        assert paths.get("src/forgot.py") == "untracked"
+
+
+# ---------------------------------------------------------------------------
 # find_merge_conflicts
 # ---------------------------------------------------------------------------
 

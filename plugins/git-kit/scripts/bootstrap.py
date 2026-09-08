@@ -50,6 +50,11 @@ def bootstrap(ctx) -> None:
         return
 
     auth_ok, auth_user = _check_auth(gh)
+    if auth_ok is None:
+        ctx.log(
+            "github auth: probe failed (gh auth status did not complete), skipping check"
+        )
+        return
     if not auth_ok:
         ctx.log("github auth: not logged in")
         ctx.add_failure(
@@ -75,6 +80,11 @@ def bootstrap(ctx) -> None:
         return
 
     member, orgs = _check_org_membership(gh, required_org)
+    if member is None:
+        ctx.log(
+            f"github org: probe failed checking membership in {required_org}, skipping check"
+        )
+        return
     if member:
         ctx.log_ok(f"github org: ok (member of {required_org})")
         return
@@ -114,13 +124,17 @@ def bootstrap(ctx) -> None:
 
 
 def _check_auth(gh: str):
+    """Returns (status, user) where status is True (authenticated), False
+    (genuinely not authenticated -- gh completed and said so), or None (the
+    probe itself failed to complete -- timeout, proxy, outage -- and tells us
+    nothing about the actual auth state)."""
     try:
         proc = subprocess.run(
             [gh, "auth", "status"],
             capture_output=True, text=True, timeout=10,
         )
     except (subprocess.SubprocessError, OSError):
-        return False, None
+        return None, None
     if proc.returncode != 0:
         return False, None
 
@@ -143,15 +157,24 @@ def _check_auth(gh: str):
 
 
 def _check_org_membership(gh: str, required_org: str):
+    """Returns (status, orgs) where status is True (a member), False
+    (genuinely not a member -- gh completed and returned the org list), or
+    None (the probe itself failed to complete -- timeout, proxy, outage --
+    and tells us nothing about actual membership)."""
     try:
         proc = subprocess.run(
             [gh, "api", "user/orgs", "--jq", ".[].login"],
             capture_output=True, text=True, timeout=10,
         )
     except (subprocess.SubprocessError, OSError):
-        return False, []
+        return None, []
     if proc.returncode != 0:
-        return False, []
+        # Not a negative. Membership is observed only on a completed call --
+        # gh exits zero, returns the org list, and the required org is absent
+        # from it. A non-zero exit means the call did not complete (a missing
+        # read:org scope, a rate limit, an outage), which says nothing about
+        # membership.
+        return None, []
     orgs = [line.strip() for line in proc.stdout.splitlines() if line.strip()]
     target = required_org.lower()
     member = any(o.lower() == target for o in orgs)
