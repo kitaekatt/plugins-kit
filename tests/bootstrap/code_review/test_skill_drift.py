@@ -368,3 +368,38 @@ class TestGeneratedYamlBlockParses:
             ) from None
         assert isinstance(data, dict), f"{rel}: contract block is not a mapping"
         assert "technique_skill" in data, f"{rel}: contract block lost technique_skill"
+
+
+class TestRenderedFilesAreDetectableAsMachineEmitted:
+    """The banner is a CONTRACT with two readers, so it needs its own guard.
+
+    The byte-identity checks above compare the rendered files to the generator,
+    so they stay green if the banner is dropped from the template AND the files
+    are regenerated -- which is exactly how it would be lost. What the banner
+    buys is that a code review classifies these files as machine-emitted (and
+    looks at the generator instead of auditing output nobody can hand-edit), and
+    that the pre-commit guard's exemption has something to exempt. Both of those
+    are properties of the CONTENT, so assert them against the real detector.
+    """
+
+    def test_every_rendered_file_is_detected_as_machine_emitted(self):
+        from bootstrap_lib.code_review.machine_emitted import detect_machine_emitted
+
+        for path in gen.targets():
+            rel = path.relative_to(REPO_ROOT).as_posix()
+            assert detect_machine_emitted("", str(path)) is not None, (
+                f"{rel}: no machine-emitted signature. A code review would audit "
+                "its content, where no finding can be acted on. Restore the "
+                "banner in gen_code_review_skills.py (BANNER / _with_banner)."
+            )
+
+    def test_the_banner_survives_the_bytes_detector_the_guard_uses(self):
+        from bootstrap_lib.code_review.machine_emitted import detect_signature_bytes
+
+        for path in gen.targets():
+            rel = path.relative_to(REPO_ROOT).as_posix()
+            assert detect_signature_bytes(path.read_bytes()) is not None, (
+                f"{rel}: the pre-commit guard reads blobs as BYTES, so a banner "
+                "the text detector finds but this one does not would exempt a "
+                "path with nothing to exempt."
+            )

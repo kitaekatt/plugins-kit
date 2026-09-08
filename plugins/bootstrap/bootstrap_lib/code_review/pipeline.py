@@ -320,8 +320,15 @@ def assemble_bundle(
     A machine-emitted file contributes NO chunks and no reviewer lanes, because
     the review target is its GENERATOR, which is reviewed separately as ordinary
     source. It is never a pass: the skill renders it as an honest "not
-    reviewed". Claimed files are evaluated first and are never re-routed here --
-    a subject-lens reviewer already owns them.
+    reviewed".
+
+    Either axis OUTRANKS a claim. Detection runs over every changed file and a
+    match removes the identifier from `claimed_idents`, so a claimed file that is
+    machine-emitted is reported under `machine_emitted_files` and NOT under
+    `claimed_files`; the two lists are disjoint. A claim promises a specialist
+    reviewer only for reviewable AUTHORED files -- classification precedes
+    routing, because a subject-lens auditor can act on a finding in generated
+    output no more than the generic lanes can.
 
     Each machine_emitted_files entry is the input dict verbatim (identifier
     retained), plus "machine_emitted_axis" ("content" or "declared_path"),
@@ -375,16 +382,30 @@ def assemble_bundle(
     # path a plugin declares that it writes. Neither subsumes the other: a
     # generator may emit no banner at all (nothing in such a file's bytes says a
     # tool wrote it), while a hand-written file never lands under a declared
-    # plugin-data path. Claimed files are skipped -- a subject-lens reviewer
-    # already owns them, and re-routing would take away the review they were
-    # claimed FOR.
+    # plugin-data path.
+    #
+    # Detection runs over EVERY changed file, claimed ones included, and a match
+    # OUTRANKS the claim. The two filters answer different questions and the
+    # order between them is not arbitrary: machine-emitted asks "is this an
+    # authored review target at all?", a claim asks "which reviewer owns this
+    # authored target?" -- so classification has to precede routing. Handing a
+    # generated file to a subject-lens auditor produces findings nobody can act
+    # on, because the fix belongs in the generator and an edit to the artifact is
+    # reverted by its drift guard; that is not hypothetical, it is how ASCII
+    # violations in this repo's own rendered code-review skills survived several
+    # reviews. Exempting only one axis would be worse than either consistent
+    # answer: a bannerless generated file under a declared path would be treated
+    # as authored content precisely when a broad claim happened to match it,
+    # which is the failure the declared-path axis exists to prevent.
+    #
+    # The exclusion is never silent -- the file is reported under
+    # `machine_emitted_files` with its axis and matched signature, and
+    # `review_machine_emitted=True` overrides the whole mechanism.
     machine_emitted_sigs: dict[str, tuple[str, str]] = {}
     if not review_machine_emitted:
         path_rules = declared_generated_rules(workspace_root)
         for f in files:
             ident = f["identifier"]
-            if ident in claimed_idents:
-                continue
             label = detect_machine_emitted(id_to_text.get(ident, ""), f.get("local"))
             if label:
                 machine_emitted_sigs[ident] = ("content", label)
@@ -392,6 +413,13 @@ def assemble_bundle(
             label = match_declared_path(f.get("local"), path_rules)
             if label:
                 machine_emitted_sigs[ident] = ("declared_path", label)
+
+    # A file can be matched by both filters; machine-emitted wins, so drop those
+    # identifiers from the claimed set. Doing it here rather than at each use
+    # keeps the two sets disjoint for every consumer below -- the chunk filter,
+    # the per-file dispatch, and the emitted `claimed_files` / `machine_emitted_files`
+    # lists alike -- so no caller can see the same path in both.
+    claimed_idents -= set(machine_emitted_sigs)
 
     # Claimed and machine-emitted files' diff sections must not reach the generic
     # reviewers, so drop them before chunking. Their records still flow through
