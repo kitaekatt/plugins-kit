@@ -79,8 +79,8 @@ one applies, the document is not a maturation candidate, and PD-2 returns PASS:
 - **Static reference text.** Content that reads the same whenever it is loaded
   is not a maturation candidate. Examples are a platform fact table, a format
   specification, and a lookup. It stays a project doc and never becomes a
-  skill. Provenance: `cohesion-principles.md` line 609
-  (`skill_packaging_razor`).
+  skill. Provenance: `cohesion-principles.md`, the `skill_packaging_razor`
+  step_1 `if_no` clause.
 - **Maintainer-only material at a published-plugin boundary.** Everything under
   a published plugin directory is copied into a consumer's plugin cache. Ask,
   "Who reads this on a machine that is not ours?" If the answer is nobody, keep
@@ -414,11 +414,14 @@ exception is declared, the built-in checks behave exactly as before.
 
 ## Decision rules
 
+- A PD-1 routing decline -> file is `NOT-AUDITED`, checked FIRST and
+  overriding the two rules below; never `COMPLIANT`.
 - Any FAIL finding (PD-5 chain, PD-6 back-reference, PD-8 live duplication, PD-9
   stranded agent facts in README, PD-10 unverifiable generation provenance,
   PD-12 unverifiable observation provenance, PD-H1 broken link, PD-11
   ancestor-convention violation) -> file is NON-COMPLIANT.
-- Only PASS / INFO / JUDGMENT findings -> file is COMPLIANT.
+- Only PASS / INFO / JUDGMENT findings, and no PD-1 decline -> file is
+  COMPLIANT.
 - JUDGMENT findings (PD-2 maturation, PD-3 split candidacy, PD-4 orphan) and
   INFO findings are advisory; they do not escalate to FAIL on subsequent runs
   even if unaddressed.
@@ -443,7 +446,7 @@ goldens all key on them, so they are carried verbatim.
 | `readme_role` | FAIL | PD-9 |
 | `machine_emitted_artifact_provenance` | FAIL | PD-10 |
 | `dated_record_role` | FAIL | PD-12 |
-| `hygiene_thresholds` | FAIL | PD-7, PD-H1 |
+| `hygiene_thresholds` | FAIL (PD-H1) / INFO (PD-7) | PD-7, PD-H1 |
 | `mechanical_convention_hygiene` | INFO | taxonomy N-R |
 | `ancestor_convention_conformance` | FAIL | PD-11 |
 

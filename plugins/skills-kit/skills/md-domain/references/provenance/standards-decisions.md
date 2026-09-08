@@ -2,7 +2,7 @@
 
 Decision provenance for the per-artifact standards docs in
 `references/standards/`. Each record follows the surface / finding /
-follow-up convention (plugins/skills-kit/CLAUDE.md, conventions). The
+follow-up convention (${CLAUDE_PLUGIN_ROOT}/CLAUDE.md, conventions). The
 canonical rule text lives in the standards doc it amended; this file records
 why the rule was tightened so the decision can be rewound.
 
@@ -10,7 +10,7 @@ why the rule was tightened so the decision can be rewound.
 claude_md:
   _schema_version: "1"
   scope:
-    directory: plugins/skills-kit/skills/md-domain/references/standards
+    directory: skills/md-domain/references/standards
     covers:
       - decisions that tightened or amended a standards-doc criterion
     excludes:
@@ -37,7 +37,7 @@ claude_md:
       summary: "H-9 amended 2026-08-03: a pointer-map annotation may exceed one line only for constraint/error-driver lines not stated at the target; lines summarizing the target's own content/structure trip H-9 regardless of the map's routing value."
       detail: |
         Surface: the same back-to-back audits disagreed on the
-        plugin_surface_overview map in plugins/skills-kit/CLAUDE.md -- run 1
+        plugin_surface_overview map in ${CLAUDE_PLUGIN_ROOT}/CLAUDE.md -- run 1
         passed H-9 ("the map is the file's declared routing payload, so it
         earns the annotation"), run 2 FAILed it (multi-line recaps of the
         targets' own layout and config format re-embed deferred
@@ -47,7 +47,7 @@ claude_md:
         agent-error driver absent at the target; collapse lines recapping the
         target's structure. Blanket load-bearing claims are explicitly not an
         exemption. Rule text: claude-md-standards.md H-9.
-      origin: Adjudicated 2026-08-03 after the run-1/run-2 disagreement; applied to plugins/skills-kit/CLAUDE.md in the same change.
+      origin: Adjudicated 2026-08-03 after the run-1/run-2 disagreement; applied to ${CLAUDE_PLUGIN_ROOT}/CLAUDE.md in the same change.
       added: "2026-08-03"
     - id: count_typing_exact_vs_illustrative
       keywords: [count claim, exact enumeration, illustrative magnitude, P_stale_factual_claim scope, CD-4 narrowed, counted magnitudes, enumerate not comment, stale comment confirms doc]

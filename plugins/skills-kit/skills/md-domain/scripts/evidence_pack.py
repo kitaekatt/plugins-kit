@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import argparse
 import difflib
+import importlib.util
 import re
 import sys
 from collections import Counter
@@ -39,6 +40,27 @@ from urllib.parse import unquote, urlsplit
 _PLUGIN_ROOT = Path(__file__).resolve().parents[3]
 if str(_PLUGIN_ROOT) not in sys.path:
     sys.path.insert(0, str(_PLUGIN_ROOT))
+
+_SCRIPTS_DIR = Path(__file__).resolve().parent
+_discover_claude_md_module = None
+
+
+def _discover_claude_md():
+    """Lazily load the sibling discover_claude_md.py by path (never by bare
+    `import`, which risks colliding with another module of the same name
+    already in sys.modules under a test's own importlib loading), and cache
+    it. Used only for classify_dimension -- the ONE place this plugin decides
+    the CLAUDE.md code-directory dimension, so evidence_pack must apply that
+    same rule rather than maintaining its own divergent one."""
+    global _discover_claude_md_module
+    if _discover_claude_md_module is None:
+        spec = importlib.util.spec_from_file_location(
+            "_evidence_pack_discover_claude_md", _SCRIPTS_DIR / "discover_claude_md.py"
+        )
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        _discover_claude_md_module = module
+    return _discover_claude_md_module
 
 
 CODE_EXTENSIONS = {
@@ -207,7 +229,12 @@ def _rel(repo: Path, path: Path | None) -> str:
     try:
         return path.resolve().relative_to(repo.resolve()).as_posix()
     except ValueError:
-        return _ascii(str(path))
+        # A reference that resolves outside the repo (a `../../..` escape, or
+        # an absolute candidate) must never surface its real machine path here
+        # -- this string is inlined verbatim into a prompt that can reach a
+        # toolless endpoint. Return a fixed, non-identifying token instead of
+        # the absolute path.
+        return f"<outside-repo>/{path.name}"
 
 
 def _text_file(path: Path) -> str | None:
@@ -267,9 +294,14 @@ def _identity(repo: Path, subject: Path, artifact: str, text: str) -> list[str]:
         except OSError:
             pass
         count_text = ", ".join(f"{key}={counts[key]}" for key in sorted(counts)) or "none"
-        has_contract = bool(re.search(r"^\s*claude_md\s*:", text, re.M))
-        has_skill = (subject.parent / "SKILL.md").is_file()
-        dimension = "code-directory" if role == "child" and counts and not has_contract and not has_skill else "classic"
+        # Defer to discover_claude_md.classify_dimension -- the ONE place this
+        # plugin decides the dimension -- rather than a second, divergent rule
+        # (this used to gate on role == "child" alone, missing Signal B and the
+        # root case entirely; see md-domain/CLAUDE.md for the observed defect).
+        try:
+            dimension = _discover_claude_md().classify_dimension(subject)
+        except OSError:
+            dimension = "classic"
         rows.append(f"[{criterion}] role={role} direct-code/data-files-by-extension: {count_text}")
         rows.append(f"[{criterion}] dimension={dimension}; CD dimension applies={'yes' if dimension == 'code-directory' else 'no'}")
     return rows
@@ -538,7 +570,10 @@ def _mechanical(repo: Path, subject: Path, text: str, artifact: str, bad_lines: 
         rows.append(f"[{criterion}] non-ascii line={line_number} char={char_number} codepoint=U+{ord(char):04X} value={_ascii(char)}")
     if len(non_ascii) > 20:
         rows.append(f"[{criterion}] non-ascii additional={len(non_ascii) - 20} (cap=20)")
-    absolute = re.compile(r"(?<![\w])(?:/home/[^\s`)>\]]+|~/[^\s`)>\]]+|[A-Za-z]:\\[^\s`)>\]]+)")
+    absolute = re.compile(
+        r"(?<![\w])(?:/home/[^\s`)>\]]+|/Users/[^\s`)>\]]+|/var/[^\s`)>\]]+"
+        r"|/opt/[^\s`)>\]]+|~/[^\s`)>\]]+|[A-Za-z]:\\[^\s`)>\]]+)"
+    )
     for line_number, line in enumerate(text.splitlines(), 1):
         for match in absolute.finditer(line):
             rows.append(f"[{criterion}] machine-path line={line_number} value=\"{_display(match.group(0))}\"")
@@ -666,6 +701,23 @@ def _render(
 
 
 
+def _rendered_len_after_popping(
+    working: dict, section: str, truncated: set[str], compact: bool, count: int
+) -> tuple[int, list]:
+    """Length of the whole pack if `count` rows were popped from the END of
+    `working[section]` (and that section marked truncated when count > 0),
+    without mutating `working`. Returns (length, the trial row list) so the
+    caller can commit it without re-slicing."""
+    original = working[section]
+    trial_rows = original[:-count] if count else list(original)
+    working[section] = trial_rows
+    trial_truncated = truncated | ({section} if count else set())
+    try:
+        return len(_render(working, trial_truncated, compact=compact)), trial_rows
+    finally:
+        working[section] = original
+
+
 def build_pack(
     repo_root: str | Path,
     rel_path: str | Path,
@@ -681,10 +733,39 @@ def build_pack(
     truncated: set[str] = set()
     rendered = _render(working, truncated, compact=compact)
     for section in TRUNCATION_ORDER:
-        while len(rendered) > max_chars and working[section]:
-            working[section].pop()
+        if len(rendered) <= max_chars:
+            return rendered
+        rows = working[section]
+        if not rows:
+            continue
+        # Binary search the MINIMAL number of rows to pop from the end of
+        # this section so the whole pack renders at or under max_chars --
+        # rendered length is monotonically non-increasing as rows are
+        # removed (compacting fewer resolved references can only shrink or
+        # leave unchanged their summary text), so this converges on the same
+        # stopping point the old one-row-at-a-time loop found, in O(log rows)
+        # renders instead of O(rows).
+        full_pop_len, full_pop_rows = _rendered_len_after_popping(
+            working, section, truncated, compact, len(rows)
+        )
+        if full_pop_len > max_chars:
+            # Even an empty section is not enough; drop it all and move on,
+            # matching the old loop's behavior of popping a section to empty.
+            working[section] = full_pop_rows
             truncated.add(section)
             rendered = _render(working, truncated, compact=compact)
+            continue
+        lo, hi = 1, len(rows)
+        while lo < hi:
+            mid = (lo + hi) // 2
+            mid_len, _ = _rendered_len_after_popping(working, section, truncated, compact, mid)
+            if mid_len <= max_chars:
+                hi = mid
+            else:
+                lo = mid + 1
+        working[section] = rows[:-lo] if lo < len(rows) else []
+        truncated.add(section)
+        rendered = _render(working, truncated, compact=compact)
         if len(rendered) <= max_chars:
             return rendered
     if len(rendered) <= max_chars:

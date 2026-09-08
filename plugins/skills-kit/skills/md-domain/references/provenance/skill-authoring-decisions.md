@@ -20,7 +20,7 @@ Insights here capture decision provenance -- the audits that reshaped the framew
 claude_md:
   _schema_version: "1"
   scope:
-    directory: plugins/skills-kit/skills/skill-authoring
+    directory: skills/skill-authoring
     covers:
       - canonical contract surface (glossary, framework, schemas) and how it evolved
       - audit-driven framework evolution decisions (Dec-1 / Dec-2 / Dec-3)
@@ -28,7 +28,7 @@ claude_md:
       - SSOT discipline between glossary, framework, schemas, and the scripts directory
     excludes:
       - validator / audit / classify / tag script internals (covered by skills_kit_lib/CLAUDE.md)
-      - per-plugin-dependency posture (covered by plugins-kit/CLAUDE.md and plugins/skills-kit/CLAUDE.md)
+      - per-plugin-dependency posture (covered by plugins-kit/CLAUDE.md and ${CLAUDE_PLUGIN_ROOT}/CLAUDE.md)
       - per-skill SKILL.md insights for other skills
   insights:
     - id: dec_1_form_choice_bias_structured
@@ -339,7 +339,7 @@ claude_md:
           that the OR-form is enforced at audit.py level on the rendered
           SKILL.md body, not in the YAML schema (the schema cannot detect
           a step-tracker invocation in step text).
-        - tests/skills-kit/ extended to demonstrate a technique-skill with
+        - the skills-kit test suite extended to demonstrate a technique-skill with
           a TaskCreate invocation in step body but no `- [ ]` markdown
           still passes the conditional row.
       origin: |

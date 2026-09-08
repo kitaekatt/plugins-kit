@@ -64,7 +64,7 @@ python -m skills_kit_lib.classify <path-to-SKILL.md> --json
 
 - Heuristic scoring is a fallback. A domain-skill with orientation sections that include ordered steps will score on technique-content; treat the verdict as a starting point, not a verdict.
 - A SKILL.md without canonical signals at all (no headings matching the heuristic vocabulary, no tables, no ordered lists) returns `indeterminate`. This is a real signal: the skill may be too thin to classify, or it may use vocabulary the heuristics don't recognize. Either way, the agent inspects directly.
-- The mixed-type threshold is constant `MIXED_THRESHOLD = 2` at top of the module. Tuning it changes how aggressive the classifier is about flagging cross-type drift.
+- The mixed-type threshold is the config-tunable `thresholds: {mixed_min_score: N}` (default 2), resolved via `skills_kit_lib.audit.THRESHOLDS` and read by `classify.py`. Tuning it changes how aggressive the classifier is about flagging cross-type drift.
 
 ## tag (skills_kit_lib/tag.py)
 

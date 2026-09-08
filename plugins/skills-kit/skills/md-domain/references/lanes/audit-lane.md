@@ -61,8 +61,7 @@ prompts in process against a pinned frontier model, so no adapter-admitted
 endpoint ever reaches them. Give a detect lane a configurable model and it
 becomes a second path to an audit prompt, outside that enforcement -- an audit
 that silently runs a measured-for-the-adapter model without the adapter, at
-roughly two thirds of its achievable score, with no error to notice. Design
-record: `docs/planning/adapters/adapter-design.md`, "Seam".
+roughly two thirds of its achievable score, with no error to notice.
 
 ## The pipeline
 
@@ -118,10 +117,19 @@ ONCE per run (not per file), resolve the configurable standards via the plugin v
    --project-root <workspace root> --primitive <artifact primitive>)
 ```
 
-Parse its JSON `{ disabled, thresholds, standards }`. Keep run-level
-`disabledCriteria` = `disabled`, and per target `standardsPaths` =
-`standards.<primitive>`. Both thread into DETECT. An empty or absent config
-yields empty lists, so default behavior is unchanged.
+A non-zero exit means STOP: the script wrote nothing to stdout and a single
+diagnostic line to stderr (a malformed config layer or an un-tunable rule id).
+No audit runs on a partial config -- surface that stderr line and stop rather
+than falling back to defaults.
+
+On a zero exit, parse its JSON `{ disabled, thresholds, standards, notes }`.
+Keep run-level `disabledCriteria` = `disabled`, and per target
+`standardsPaths` = `standards.<primitive>`. Both thread into DETECT. An empty
+or absent config yields empty lists, so default behavior is unchanged. A
+non-empty `notes` array (for example, "pyyaml unavailable; standards
+resolution degraded to defaults") must be surfaced in the report header
+verbatim -- it means the run is NOT the same as "no config", even though the
+disabled/threshold lists read identically to that case.
 
 ### Step 2 -- DETECT (before-Q&A)
 
@@ -404,6 +412,10 @@ Three behavioral differences, and nothing else:
    *this change introduced no failure*, not *this file is clean*. A DIFF-CLEAN
    file may still carry a surviving SERIOUS.
 
+Attributability is model-judged, not mechanical; what that means for a re-run
+is stated under "Attributability is judgment, not arithmetic" in the limits
+list below.
+
 Also: the fan-out threshold drops to 1 (always the Workflow path).
 
 Review-reducer invariants (preserved verbatim): `NOT-AUDITED` passes through
@@ -449,6 +461,12 @@ Two limits worth stating rather than hiding:
 - **Attributability is judgment, not arithmetic.** It rests on re-detection, so a
   pre-existing finding the pre-image check happens to miss can resurface as
   attributable. Generous structural matching mitigates this; nothing eliminates it.
+  There is no line-range anchor tying a finding to the edited hunks, so the
+  detected finding set is stable run-to-run but which of those findings are
+  suppressed as pre-existing is not guaranteed to be. `suppressedFindings` (the
+  filtered findings, carried next to the `suppressed` count in each per-file
+  result) is the diagnostic surface for that -- read it before treating a
+  re-run's different finding set as a lane defect.
 
 ## The density lens (`audit_claude_md` only)
 
@@ -591,8 +609,9 @@ single source of truth.
   CRP test before proposing a split, and offer the split only with a NAMED
   extraction candidate.
 - Idempotency: criteria, taxonomy, and bucket assignments are fixed. The same
-  input produces the same verdict; do not re-rank or re-order findings
-  session-to-session.
+  input produces the same detected finding set and, in normal mode, the same
+  verdict; do not re-rank or re-order findings session-to-session. The one
+  model-judged step is review-mode suppression, per "Review mode" above.
 - Detection and remediation are ALWAYS separate passes, even in workflow mode.
   The Q&A gate sits between them and a background workflow cannot ask the user
   anything. This split is what makes a re-run reproduce the same findings.

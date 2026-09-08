@@ -51,6 +51,12 @@ checker = _load("human_html_check", SCRIPTS_DIR / "human_html_check.py")
 # Repository fixture
 # ---------------------------------------------------------------------------
 
+@pytest.fixture(autouse=True)
+def isolated_standards_config(tmp_path, monkeypatch):
+    """Keep checker tests independent of the caller's user-level thresholds."""
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "empty-config"))
+
+
 def _git(repo, *args):
     subprocess.run(["git", *args], cwd=str(repo), check=True, capture_output=True, text=True)
 
@@ -242,6 +248,14 @@ class TestDiscoveryWalk:
         found = {entry["directory"] for entry in discover.scan(repo)["directories"]}
         assert found == {".", "src", "src/deep", "lib", "quiet"}
 
+    def test_subject_directories_stop_at_ownership_boundaries(self, repo):
+        files = discover.repository_files(repo)
+        assert discover.subject_directories(
+            files,
+            ".",
+            excluded=["lib", "src/deep"],
+        ) == [".", "quiet", "src"]
+
     def test_ignored_directories_are_not_subjects(self, repo):
         found = {entry["directory"] for entry in discover.scan(repo)["directories"]}
         assert "vendor" not in found
@@ -366,6 +380,31 @@ class TestDiscoveryNavigationAndStaleness:
         root = next(e for e in discover.scan(repo)["directories"] if e["directory"] == ".")
         assert root["nearest_page_descendants"] == ["src"]
 
+    def test_scan_emits_the_generation_brief_territory(self, repo):
+        make_record(repo, ".", decision="page")
+        make_record(repo, "src", decision="none")
+        make_record(repo, "src/deep", decision="page")
+        make_record(repo, "lib", decision="page")
+        make_record(repo, "quiet", decision="none")
+
+        entries = {entry["directory"]: entry for entry in discover.scan(repo)["directories"]}
+        assert entries["."]["territory"] == {
+            "owned_directories": [".", "quiet", "src"],
+            "excluded_directories": ["lib", "src/deep"],
+            "child_pages": [
+                {
+                    "directory": "lib",
+                    "identity": "The lib subsystem.",
+                    "relationship": "nearest-page-descendant",
+                },
+                {
+                    "directory": "src/deep",
+                    "identity": "The src/deep subsystem.",
+                    "relationship": "nearest-page-descendant",
+                },
+            ],
+        }
+
     def test_a_stale_child_propagates_to_every_ancestor(self, repo):
         for directory in (".", "src", "src/deep", "lib", "quiet"):
             make_record(repo, directory, decision="none")
@@ -376,6 +415,28 @@ class TestDiscoveryNavigationAndStaleness:
         assert entries["src"]["stale_child"] is True
         assert entries["."]["stale_child"] is True
         assert entries["lib"]["stale_child"] is False
+
+    def test_a_stale_page_below_the_nearest_page_does_not_freeze_the_root(self, repo):
+        decisions = {
+            ".": "page",
+            "src": "page",
+            "src/deep": "page",
+            "lib": "none",
+            "quiet": "none",
+        }
+        for directory, decision in decisions.items():
+            make_record(repo, directory, decision=decision)
+
+        (repo / "src" / "deep" / "mod.py").write_text("mod = 4\n", encoding="ascii")
+        _commit(repo, "change owned deep page input")
+        entries = {entry["directory"]: entry for entry in discover.scan(repo)["directories"]}
+
+        assert entries["src/deep"]["record"]["status"] == "stale"
+        assert entries["src"]["stale_children"] == ["src/deep"]
+        assert entries["src"]["stale_child"] is True
+        assert entries["."]["record"]["status"] == "fresh"
+        assert entries["."]["stale_children"] == []
+        assert entries["."]["stale_child"] is False
 
     def test_a_missing_child_record_also_propagates(self, repo):
         make_record(repo, ".", decision="none")
@@ -796,7 +857,65 @@ class TestReferenceFailures:
 
 
 # ---------------------------------------------------------------------------
-# CK-1 INFO signals
+# CK-1 placement-drift signal
+# ---------------------------------------------------------------------------
+
+class TestPlacementDrift:
+    @pytest.mark.parametrize(
+        ("before", "after"),
+        [("none", "page"), ("page", "none")],
+    )
+    def test_a_decision_flip_marks_the_nearest_ancestor_stale(
+        self,
+        repo,
+        before,
+        after,
+    ):
+        root = make_record(repo, ".", decision="page")
+        child = make_record(repo, "src", decision=before)
+        make_record(repo, "src/deep", decision="none")
+        make_record(repo, "lib", decision="none")
+        make_record(repo, "quiet", decision="none")
+
+        root_links = ["src/human.html"] if before == "page" else []
+        write_page(repo, ".", root, nav_links=root_links)
+        if before == "page":
+            write_page(repo, "src", child, nav_links=["../human.html"])
+
+        child = make_record(repo, "src", decision=after)
+        child_page = repo / "src" / hh.PAGE_FILENAME
+        if after == "page":
+            write_page(repo, "src", child, nav_links=["../human.html"])
+        else:
+            child_page.unlink()
+
+        root_state = next(
+            entry
+            for entry in discover.scan(repo)["directories"]
+            if entry["directory"] == "."
+        )
+        assert root_state["record"]["source_sha"] == root_state["source_sha"]
+        assert root_state["record"]["status"] == "fresh"
+
+        result = run_check(repo)
+        root_findings = [
+            finding for finding in result["findings"] if finding["directory"] == "."
+        ]
+        assert any(
+            finding["level"] == "FAIL" and finding["code"] == "navigation-mismatch"
+            for finding in root_findings
+        )
+        stale = [
+            finding
+            for finding in root_findings
+            if finding["level"] == "INFO" and finding["code"] == "STALE"
+        ]
+        assert stale
+        assert "placement drift" in stale[0]["message"]
+
+
+# ---------------------------------------------------------------------------
+# CK-1 staleness, dirty state, and size ceiling
 # ---------------------------------------------------------------------------
 
 class TestInfoSignals:
@@ -827,29 +946,81 @@ class TestInfoSignals:
         assert "DIRTY" in codes(result, "INFO")
         assert result["fail_count"] == 0
 
-    def test_an_oversized_page_is_info(self, repo):
+    def test_an_oversized_page_is_a_fail(self, repo):
         record = make_record(repo, "src")
-        write_page(repo, "src", record, body="<p>%s</p>" % ("word " * 700))
+        write_page(repo, "src", record, body="<p>%s</p>" % ("word " * 901))
         result = run_check(repo, "src")
-        assert "size" in codes(result, "INFO")
-        assert result["fail_count"] == 0
+        assert "size" in codes(result, "FAIL")
+        assert result["fail_count"] == 1
+        assert result["word_ceiling"] == 900
 
     def test_chrome_and_script_text_is_not_counted(self, repo):
         make_record(repo, "src/deep", decision="none")
         record = make_record(repo, "src")
         write_page(
             repo, "src", record,
-            body='<div data-human-html-chrome="footer">%s</div>' % ("word " * 700),
+            body='<div data-human-html-chrome="footer">%s</div>' % ("word " * 1000),
         )
-        assert codes(run_check(repo, "src"), "INFO") == []
+        assert "size" not in codes(run_check(repo, "src"), "FAIL")
 
-    def test_the_root_budget_is_larger(self, repo):
+    def test_the_root_uses_the_same_ceiling(self, repo):
         record = make_record(repo, ".")
-        write_page(repo, ".", record, body="<p>%s</p>" % ("word " * 700))
+        write_page(repo, ".", record, body="<p>%s</p>" % ("word " * 901))
         result = run_check(repo, ".")
-        assert "size" not in codes(result, "INFO")
+        assert "size" in codes(result, "FAIL")
 
-    def test_instructions_can_override_the_budget(self, repo):
-        record = make_record(repo, "src", instructions="budget: 100")
-        write_page(repo, "src", record, body="<p>%s</p>" % ("word " * 200))
-        assert "size" in codes(run_check(repo, "src"), "INFO")
+    def test_instructions_cannot_override_the_ceiling(self, repo):
+        record = make_record(repo, "src", instructions="budget: 2000")
+        write_page(repo, "src", record, body="<p>%s</p>" % ("word " * 901))
+        assert "size" in codes(run_check(repo, "src"), "FAIL")
+
+    def test_project_config_overrides_the_default_ceiling(self, repo):
+        config_dir = repo / ".claude" / "skills-kit"
+        config_dir.mkdir(parents=True)
+        (config_dir / "config.yaml").write_text(
+            "thresholds:\n  human_html_max_words: 100\n",
+            encoding="ascii",
+        )
+        record = make_record(repo, "src")
+        write_page(repo, "src", record, body="<p>%s</p>" % ("word " * 101))
+
+        result = run_check(repo, "src")
+        assert result["word_ceiling"] == 100
+        assert "size" in codes(result, "FAIL")
+
+    def test_invalid_threshold_configuration_is_loud(self, repo):
+        config_dir = repo / ".claude" / "skills-kit"
+        config_dir.mkdir(parents=True)
+        (config_dir / "config.yaml").write_text(
+            "thresholds:\n  unknown_human_html_limit: 100\n",
+            encoding="ascii",
+        )
+        with pytest.raises(checker.standards_resolve.StandardsConfigError):
+            run_check(repo, "src")
+
+    def test_the_same_ceiling_applies_to_a_reference_page(self, repo):
+        record = make_record(repo, "src", references=[("protocol", "Protocol map")])
+        write_page(
+            repo,
+            "src",
+            record,
+            body='<a href="human.protocol.html">reference</a>',
+        )
+        write_page(
+            repo,
+            "src",
+            record,
+            filename="human.protocol.html",
+            kind=hh.KIND_REFERENCE,
+            slug="protocol",
+            nav_links=[hh.PAGE_FILENAME],
+            body="<p>%s</p>" % ("word " * 901),
+        )
+
+        result = run_check(repo, "src")
+        size_findings = [
+            finding for finding in result["findings"] if finding["code"] == "size"
+        ]
+        assert len(size_findings) == 1
+        assert size_findings[0]["file"] == "src/human.protocol.html"
+        assert size_findings[0]["level"] == "FAIL"

@@ -25,7 +25,7 @@ discoverability convention; the block's `applies_to:` key is authoritative.
 | `doc-standards.md` | `plain_md` |
 
 The primitive ids are the file-type sub-kinds registered in
-`plugins/skills-kit/skills/md-domain/references/audit-framework.yaml`. If the
+`audit-framework.yaml` (this same references/ directory). If the
 filename and `applies_to` disagree, `applies_to` wins; keep them aligned so the
 file is discoverable by name.
 

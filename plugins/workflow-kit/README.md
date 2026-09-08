@@ -14,7 +14,4 @@ executor, run via a generic `workflow-kit-agent`) that fulfil a file-passing
 contract: node outputs travel on disk via `$OUT`/`$STATUS` with shell
 redirection, so payloads bypass the model context instead of flowing through
 it. The OpenRouter node reuses llm-scripting-kit's client and model registry;
-workflow-kit's own only Python dependency is pyyaml.
-
-Tests live in `tests/workflow-kit/`. Try it locally with
-`claude --plugin-dir plugins/workflow-kit`.
+workflow-kit's own declared Python dependencies are pyyaml and openai.

@@ -98,9 +98,9 @@ class TestBrewStrategyApplies:
         assert failure is None
         assert tools_installed and "google-chrome" in tools_installed[0][1]
 
-    def test_absent_brew_is_terminal_failure_dict(self, monkeypatch):
+    def test_absent_brew_is_terminal_failure_dict(
+            self, monkeypatch, empty_executable_path):
         _stub(monkeypatch)
-        monkeypatch.setenv("PATH", "/usr/bin")
         monkeypatch.setattr(brew_mod, "ensure_brew",
                             lambda: brew_mod.BrewResult(False, None,
                                 "Homebrew is not installed. Install it from https://brew.sh"))

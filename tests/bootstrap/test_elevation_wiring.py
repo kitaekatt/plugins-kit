@@ -32,9 +32,9 @@ def _stub(monkeypatch):
 # --------------------------------------------------------------------------- #
 
 class TestBrewInstallerSignal:
-    def test_missing_brew_emits_brew_installer_descriptor(self, monkeypatch):
+    def test_missing_brew_emits_brew_installer_descriptor(
+            self, monkeypatch, empty_executable_path):
         _stub(monkeypatch)
-        monkeypatch.setenv("PATH", "/usr/bin")
         monkeypatch.setattr(brew_mod, "ensure_brew",
                             lambda: brew_mod.BrewResult(False, None, "Homebrew is not installed."))
         monkeypatch.setattr(brew_mod, "brew_install",

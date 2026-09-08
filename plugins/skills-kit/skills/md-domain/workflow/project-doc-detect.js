@@ -77,7 +77,10 @@ const FILE_FINDINGS_SCHEMA = {
     kind: { type: 'string', enum: ['project_doc', 'skill_reference', 'other_claude_artifact'] },
     lines: { type: 'integer' },
     approx_tokens: { type: 'integer' },
-    inbound_citations: { type: 'integer' },
+    inbound_citations: {
+      type: ['integer', 'null'],
+      description: 'echo of the discover_project_doc.py inbound-citation count supplied as input; null when the caller did not supply one (e.g. a review-mode subject-lens call with no citer scan) -- NEVER fabricate a number, and never emit 0 unless the input signal itself was 0. A fabricated 0 is indistinguishable downstream from a genuine orphan.',
+    },
     findings: {
       type: 'array',
       items: {
@@ -133,10 +136,10 @@ function lanePrompt(f) {
       : `No discover_project_doc.py \`kind\` signal was provided (typical for a review-mode subject-lens call, where the caller does not classify). Run the PD-1 routing test YOURSELF from the path shape FIRST: a file inside a \`*/skills/*/references/\` directory is a \`skill_reference\`, and a \`CLAUDE.md\` / \`SKILL.md\` basename is an \`other_claude_artifact\` -- if either matches: ${declineInstruction} Otherwise treat it as a genuine project document and apply all the criteria below.`
 
   const orphanClause = f.inbound_citations === 0
-    ? `discover_project_doc.py reports ZERO inbound citations -- this doc is an ORPHAN in the agent load graph. Raise PD-4 (group ADP, criterion adp_discoverability, severity JUDGMENT, taxonomy H_orphan). Disposition IMPROVE by default (orphan-linking is a structural judgment -- offer add-a-CLAUDE.md-pointer or retire as a one-line pitch); but an intentionally human-only / companion-source / agent-definition doc is an accepted structural pattern -> SILENT (not surfaced). Do NOT auto-FAIL -- a doc can legitimately serve human readers who open it directly.`
+    ? `discover_project_doc.py reports ZERO inbound citations -- this doc is an ORPHAN in the agent load graph. Raise PD-4 (group ADP, criterion adp_discoverability, severity JUDGMENT, taxonomy H_orphan). Disposition IMPROVE by default (orphan-linking is a structural judgment -- offer add-a-CLAUDE.md-pointer or retire as a one-line pitch); but an intentionally human-only / companion-source / agent-definition doc is an accepted structural pattern -> SILENT (not surfaced). Do NOT auto-FAIL -- a doc can legitimately serve human readers who open it directly. Report \`inbound_citations: 0\` in your output -- that is a genuine signal here.`
     : typeof f.inbound_citations === 'number'
-      ? `discover_project_doc.py reports ${f.inbound_citations} inbound citation(s); the doc is reachable in the load graph. PD-4 PASSes (no orphan finding) unless you see a more specific discoverability problem.`
-      : `No inbound-citation signal was provided (e.g. a review-mode subject-lens call, where the discover_project_doc.py citer scan does not run). Orphan status is UNKNOWABLE without that scan, so PD-4 is N/A here -- do NOT emit an H_orphan finding.`
+      ? `discover_project_doc.py reports ${f.inbound_citations} inbound citation(s); the doc is reachable in the load graph. PD-4 PASSes (no orphan finding) unless you see a more specific discoverability problem. Report \`inbound_citations: ${f.inbound_citations}\` in your output, echoing this input.`
+      : `No inbound-citation signal was provided (e.g. a review-mode subject-lens call, where the discover_project_doc.py citer scan does not run). Orphan status is UNKNOWABLE without that scan, so PD-4 is N/A here -- do NOT emit an H_orphan finding. Report \`inbound_citations: null\` in your output -- do NOT fabricate a number, and never guess 0: a fabricated 0 is indistinguishable downstream from a genuine orphan.`
 
   const hasSize = typeof f.lines === 'number' || typeof f.approx_tokens === 'number'
   const sizeClause = !hasSize
@@ -272,15 +275,22 @@ const results = raw.map((r) => {
   // regardless of attributability, since it is the only record that nothing was
   // read. Relabelling this DIFF-CLEAN is the fake gate: a caller reads "audited,
   // no failure" where the truth is "declined, not my department".
-  if (r.verdict === 'NOT-AUDITED') return { ...r, suppressed: 0 }
+  if (r.verdict === 'NOT-AUDITED') return { ...r, suppressed: 0, suppressedFindings: [] }
   const kept = r.findings.filter(isKept)
-  const suppressed = r.findings.length - kept.length
+  // suppressedFindings carries the actual dropped findings (not just their
+  // count) as the diagnostic surface for an unstable suppression -- review
+  // mode's attributability filter is an LLM re-judgment against the
+  // pre-image, not a mechanical diff, so a different pre-existing finding can
+  // surface on each re-run of an unchanged file. The count stays alongside it
+  // for compatibility with existing readers.
+  const suppressedFindings = r.findings.filter((f) => !isKept(f))
+  const suppressed = suppressedFindings.length
   // The lane's verdict is computed over ALL findings, so it cannot stand once we
   // filter. DIFF-CLEAN says "the change under review introduced no failure" --
   // deliberately NOT the same claim as COMPLIANT, which would assert the whole
   // file is clean. A DIFF-CLEAN file may still carry a surviving SERIOUS.
   const attributableFail = kept.some((f) => f.severity === 'FAIL' && f.attributable !== false)
-  return { ...r, findings: kept, suppressed, verdict: attributableFail ? 'NON-COMPLIANT' : 'DIFF-CLEAN' }
+  return { ...r, findings: kept, suppressed, suppressedFindings, verdict: attributableFail ? 'NON-COMPLIANT' : 'DIFF-CLEAN' }
 })
 
 const totals = results.reduce((acc, r) => {

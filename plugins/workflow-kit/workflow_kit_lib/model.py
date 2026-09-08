@@ -289,7 +289,23 @@ class PipelineSpec:
         dupes = sorted({i for i in ids if ids.count(i) > 1})
         if dupes:
             raise WorkflowError(f"{where}: duplicate stage id(s) {dupes}")
-        return cls(over=over, as_=_ident(_req(d, "as", where), "as", where), stages=stages)
+        as_ = _ident(_req(d, "as", where), "as", where)
+        # `scope.locals` (the pipeline/fan_out `as` names) is consulted before
+        # `scope.prev_stage` in expr.compile_expr, so either collision below
+        # silently shadows the preceding stage's result with no diagnostic.
+        if as_ in ids:
+            raise WorkflowError(
+                f"{where}: pipeline 'as' {as_!r} collides with stage id {as_!r}; "
+                "rename one -- it would shadow that stage's result"
+            )
+        for stage in stages:
+            if stage.fan_out is not None and stage.fan_out.as_ == as_:
+                raise WorkflowError(
+                    f"{where}.stage[{stage.id!r}].fan_out: 'as' {as_!r} collides with "
+                    f"the enclosing pipeline 'as' {as_!r}; rename one -- it would make "
+                    "the pipeline item unreachable"
+                )
+        return cls(over=over, as_=as_, stages=stages)
 
 
 @dataclass
@@ -396,6 +412,7 @@ class WorkflowDoc:
 
         schemas = _as_dict(d.get("schemas") or {}, "schemas")
         for sn, sv in schemas.items():
+            _ident(sn, "schema name", f"schemas.{sn!r}")
             if not isinstance(sv, dict):
                 raise WorkflowError(f"schemas.{sn}: a schema must be a mapping (JSON Schema)")
 

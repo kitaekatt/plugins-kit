@@ -153,12 +153,12 @@ class TestPrecedence:
         assert failure is None
         assert tools_installed and "via scoop" in tools_installed[0][1]
 
-    def test_scoop_recheck_pass_off_path_still_links_dir(self, tmp_path, monkeypatch):
+    def test_scoop_recheck_pass_off_path_still_links_dir(
+            self, tmp_path, monkeypatch, empty_executable_path):
         """A scoop install that resolves via an installPath candidate, but
         whose dir isn't on bare-name PATH, must still get that dir linked --
         otherwise it's recorded installed while unreachable by bare name."""
         _stub(monkeypatch)
-        monkeypatch.setenv("PATH", "/usr/bin")  # deliberately NOT tmp_path
         monkeypatch.setattr(scoop_mod, "ensure_scoop",
                             lambda: scoop_mod.ScoopResult(True, None, "already installed"))
 
@@ -282,12 +282,11 @@ class TestSkipSentinel:
         assert failure is None
         assert tools_installed and "via apt" in tools_installed[0][1]
 
-    def test_omitted_os_key_still_fails_no_install_cmd(self, monkeypatch):
+    def test_omitted_os_key_still_fails_no_install_cmd(
+            self, monkeypatch, empty_executable_path):
         # Omission is NOT redefined: an ubuntu-only install map on windows with
         # the tool missing still surfaces the load-bearing FAILED item.
         _stub(monkeypatch)
-        monkeypatch.setenv("PATH", "/usr/bin")  # tool absent
-
         action_entries = []
         failure = engine._process_tool_entry(
             {"name": "tmux", "install": {"ubuntu": {"apt": "tmux"}}},

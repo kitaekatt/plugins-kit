@@ -41,6 +41,50 @@ class TestSkipRules:
             assert "/" not in name and "\\" not in name
 
 
+class TestIncludeDirsOverride:
+    """include_dirs lets a caller opt a normally-pruned name back in -- for a
+    consumer whose own first-party directory happens to share a noise name
+    (e.g. `Build/`, `tmp/`)."""
+
+    def test_named_dir_is_visited_when_included(self, tmp_path):
+        _mk(tmp_path, "tmp", "inner")
+        visited_default = _visited(tmp_path)
+        assert tmp_path / "tmp" not in visited_default
+
+        visited_included = {
+            p for p, _ in iter_dirs(tmp_path, 8, include_dirs=["tmp"])
+        }
+        assert tmp_path / "tmp" in visited_included
+        assert tmp_path / "tmp" / "inner" in visited_included
+
+    def test_other_noise_names_still_pruned_when_one_is_included(self, tmp_path):
+        _mk(tmp_path, "tmp", "inner")
+        _mk(tmp_path, ".git", "inner")
+        visited = {p for p, _ in iter_dirs(tmp_path, 8, include_dirs=["tmp"])}
+        assert tmp_path / "tmp" in visited
+        assert tmp_path / ".git" not in visited
+
+
+class TestSkippedOut:
+    """A caller can ask for the pruned directories themselves, so a discover
+    script can report what it silently walked past instead of dropping the
+    information on the floor."""
+
+    def test_pruned_directories_are_recorded(self, tmp_path):
+        _mk(tmp_path, "tmp", "inner")
+        _mk(tmp_path, "src")
+        skipped: list = []
+        list(iter_dirs(tmp_path, 8, skipped_out=skipped))
+        assert tmp_path / "tmp" in skipped
+        assert tmp_path / "src" not in skipped
+
+    def test_included_dir_is_not_recorded_as_skipped(self, tmp_path):
+        _mk(tmp_path, "tmp", "inner")
+        skipped: list = []
+        list(iter_dirs(tmp_path, 8, include_dirs=["tmp"], skipped_out=skipped))
+        assert tmp_path / "tmp" not in skipped
+
+
 class TestDepthLimit:
     def test_prunes_below_max_depth(self, tmp_path):
         _mk(tmp_path, "a", "b", "c")

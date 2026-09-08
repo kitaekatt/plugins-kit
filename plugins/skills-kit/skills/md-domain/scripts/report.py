@@ -172,16 +172,14 @@ scripts/discover_skill.py + the skills_kit_lib.audit validator).
 """
 
 
-def _force_utf8_stdout() -> None:
-    """Reconfigure stdout to UTF-8 so descriptions containing em-dashes / smart
-    quotes / etc. don't mojibake on Windows consoles (default cp1252)."""
-    try:
-        sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[attr-defined]
-    except (AttributeError, ValueError):
-        pass
-
-
 def main() -> int:
+    # Sibling module under skills-kit/skills/md-domain/scripts/. Imported here
+    # (rather than only inside the "hierarchy" branch below) so its
+    # _force_utf8_stdout can be reused instead of redefined -- report.py
+    # already imports render_html from this module further down, so the
+    # import direction is already report.py -> skill_hierarchy_report.py.
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from skill_hierarchy_report import _force_utf8_stdout  # type: ignore  # noqa: E402
     _force_utf8_stdout()
 
     # No-args case: print the usage block and exit 0 (informational).

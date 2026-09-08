@@ -15,8 +15,13 @@ FRONTMATTER_RE = re.compile(r"\A---\s*\n(.*?)\n---\s*\n", re.DOTALL)
 FIELD_RE = re.compile(r"^([a-zA-Z_][a-zA-Z0-9_-]*)\s*:\s*(.+?)\s*$", re.MULTILINE)
 
 # Canonical dashed type names, derived from the registry's skill-type roots
-# (single source of truth; do not restate the type list here).
-CANONICAL_TYPES = {root.replace("_", "-") for root in SKILL_TYPE_ROOTS}
+# (single source of truth; do not restate the type list here). An ORDERED
+# tuple, not a set: SKILL_TYPE_ROOTS is itself a deterministic
+# registration-order tuple, and type_signals' scores dict below inherits
+# CANONICAL_TYPES' iteration order -- a set here made classify's stable sort
+# (and its "top types tie" reason) vary with PYTHONHASHSEED across
+# interpreter starts (I2).
+CANONICAL_TYPES = tuple(root.replace("_", "-") for root in SKILL_TYPE_ROOTS)
 
 
 @dataclass
@@ -193,12 +198,27 @@ def is_user_only(fm) -> bool:
     return val is not None and str(val).lower() == "true"
 
 
+def high_scoring_types(scores: dict, threshold: int) -> list:
+    """The canonical types whose type_signals() score is at or above
+    `threshold`, in CANONICAL_TYPES order. The ONE per-type gate shared by
+    classify.py's heuristic-fallback verdict and audit.py's legacy mixed-type
+    signal (I5) -- do not re-implement this comparison at either call site."""
+    return [t for t in CANONICAL_TYPES if scores.get(t, 0) >= threshold]
+
+
 def type_signals(body_text: str, fm=None) -> dict:
     """Score each canonical skill type based on structural markers in the body.
 
     Returns a dict mapping canonical type names to integer scores.
     """
     narrative = strip_code_fences(body_text)
+    # Every canonical type gets a key (some callers, e.g. high_scoring_types,
+    # iterate CANONICAL_TYPES order and expect the full set present) --
+    # "audit-skill" is deliberately never incremented below (I6): its
+    # identity lives entirely in the structured criteria / taxonomy /
+    # procedures / remediations YAML contract (skill-standards.md's
+    # audit-skill contract), not in any narrative-only marker this
+    # legacy-fallback heuristic set could reliably score without guessing.
     scores = {t: 0 for t in CANONICAL_TYPES}
 
     # discipline signals (narrative-only)

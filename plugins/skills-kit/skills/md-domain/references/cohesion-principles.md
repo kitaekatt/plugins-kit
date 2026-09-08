@@ -10,8 +10,9 @@ CRP / CCP / ADP applied to the load graph; the L1/L2/L3 load levels are a derive
 primary frame.
 
 This is the shared spine: every `md-domain` lane (the artifact audits, reached via
-`/md-domain audit skill|claude-md|project-doc|references`, and the generation lanes reached via
-`/md-domain generate skill|claude-md|project-doc`) defers to it. `content-authoring`
+`/md-domain audit skill|claude-md|project-doc|references`; the authoring lanes,
+reached via `/md-domain author skill|claude-md|project-doc`; and the generation
+lanes, reached via `/md-domain generate claude-md|human-html`) defers to it. `content-authoring`
 (`authoring-patterns/content-authoring.md` in this skill's references) is the companion that answers the orthogonal
 question -- *how* a fact should be shaped (YAML vs prose vs frontmatter) -- not where it lives.
 
@@ -40,12 +41,12 @@ content_allocation:
         load_trigger: any cwd inside the project
         load_level: L1 (always loaded for any session in this project)
       - id: subsystem_claude_md
-        path_pattern: "<project>/<subsystem>/CLAUDE.md (e.g. plugins/skills-kit/CLAUDE.md)"
+        path_pattern: "<project>/<subsystem>/CLAUDE.md (e.g. src/subsystem/CLAUDE.md)"
         load_trigger: cwd inside the subsystem, OR file access (Read/Edit/Write) beneath it
         load_level: L1 (always loaded when working within the subsystem)
         notes: Multiple levels may exist (subsystem -> sub-subsystem). Each loads when the session descends into it -- by cwd or by touching files beneath it.
       - id: directory_claude_md
-        path_pattern: "<any-directory>/CLAUDE.md (e.g. plugins/skills-kit/skills/skill-authoring/CLAUDE.md)"
+        path_pattern: "<any-directory>/CLAUDE.md (e.g. src/subsystem/module/CLAUDE.md)"
         load_trigger: cwd inside this directory, OR file access (Read/Edit/Write) beneath it
         load_level: L1 (lazy-loaded; ambient whenever the session touches this directory's files)
         notes: |
@@ -192,7 +193,7 @@ content_allocation:
           wrong: framework.md (would force framework re-version on every script-internal change)
         - fact: "the merge-gate convention is zero FAILs across all SKILL.md and CLAUDE.md files"
           change_driver: plugin's release discipline
-          correct: plugins/skills-kit/CLAUDE.md (plugin scope)
+          correct: src/subsystem/CLAUDE.md (subsystem scope)
           wrong: skill-authoring/CLAUDE.md (too narrow), root CLAUDE.md (too broad)
         - fact: "the project uses Perforce, not git"
           change_driver: project tooling
@@ -217,9 +218,9 @@ content_allocation:
           correct: root CLAUDE.md (universal across the project's UE code)
           wrong: a single subsystem CLAUDE.md (sibling subsystems also write UE C++)
         - fact: "the Phase 4.6 P5 plugin-level orientation surface decisions"
-          reader_set: only sessions working inside plugins/skills-kit
-          correct: plugins/skills-kit/CLAUDE.md
-          wrong: root CLAUDE.md (irrelevant to non-skills-kit work)
+          reader_set: only sessions working inside this plugin's own directory
+          correct: src/subsystem/CLAUDE.md (subsystem scope)
+          wrong: root CLAUDE.md (irrelevant to non-subsystem work)
         - fact: "the validator's three-state output (yaml-validated/contract-staged/legacy-fallback) decision history"
           reader_set: only sessions editing the validator scripts
           correct: scripts/CLAUDE.md
@@ -665,7 +666,7 @@ content_allocation:
       scenario: Adding a fact about the validator's three-state output (yaml-validated / contract-staged / legacy-fallback).
       ccp_step: change driver is audit.py logic; the fact updates when the validator's branching changes.
       crp_step: only readers editing or reasoning about the validator scripts need this; readers writing skills do not.
-      adp_step: scripts/CLAUDE.md is downstream of skill-authoring/CLAUDE.md, which is downstream of plugins/skills-kit/CLAUDE.md. Placement at scripts/CLAUDE.md is valid (no upward references created).
+      adp_step: scripts/CLAUDE.md is downstream of skill-authoring/CLAUDE.md, which is downstream of the subsystem CLAUDE.md. Placement at scripts/CLAUDE.md is valid (no upward references created).
       verdict: scripts/CLAUDE.md.
     - id: skill_md_split
       scenario: A SKILL.md has grown to 600 lines with sections on (a) common operations and (b) edge-case handling.
@@ -674,7 +675,7 @@ content_allocation:
       adp_step: SKILL.md cites the edge-cases reference under references/ (one hop, downstream). Forward-only.
       verdict: split edge-case handling into a references/ doc (an edge-cases reference).
     - id: parent_to_child_temptation
-      scenario: Adding "for skill-authoring decisions, see skills/skill-authoring/CLAUDE.md" to plugins/skills-kit/CLAUDE.md.
+      scenario: Adding "for skill-authoring decisions, see skills/skill-authoring/CLAUDE.md" to the subsystem CLAUDE.md.
       ccp_step: this is a content pointer, not a placement decision. It is acceptable as orientation IF the parent's correctness does not depend on the child being loaded.
       crp_step: the parent is loaded for sessions in any sub-area of skills-kit; some of those sessions never enter skill-authoring/. The pointer must not gate parent correctness on the child.
       adp_step: the citation passes ADP only if it is informational. If the parent says "see child for the details on X" and X is critical, ADP-fail.

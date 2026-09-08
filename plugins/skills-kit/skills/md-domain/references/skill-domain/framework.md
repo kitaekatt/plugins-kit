@@ -8,7 +8,7 @@ first; this document references entries by name without redefining them.
 ## Canonical contract surface (schema v1, locked 2026-04-28)
 
 The **canonical** contract per skill type is the YAML schema declared in
-`plugins/skills-kit/skills_kit_lib/schema_registry.py` (with the schema
+`${CLAUDE_PLUGIN_ROOT}/skills_kit_lib/schema_registry.py` (with the schema
 literals in `skills_kit_lib/schemas/`). Each
 skill carries a `<type>:` YAML block in its SKILL.md body; the audit
 script validates that block against the schema. A skill is well-formed
@@ -393,7 +393,7 @@ A skill claiming a type must satisfy the **required** rows and the
 **conditionally required** rows whose conditions hold. Glossary terms are
 referenced by name; consult `glossary.md` for definitions.
 
-Tables are kept for human review; the canonical machine-readable contract is in `plugins/skills-kit/skills_kit_lib/schema_registry.py` (schema literals in `skills_kit_lib/schemas/`). When the two diverge, the registry wins; the table gets updated to match.
+Tables are kept for human review; the canonical machine-readable contract is in `${CLAUDE_PLUGIN_ROOT}/skills_kit_lib/schema_registry.py` (schema literals in `skills_kit_lib/schemas/`). When the two diverge, the registry wins; the table gets updated to match.
 
 ### reference-skill
 
@@ -417,7 +417,7 @@ Examples: `/bootstrap` (plugins-kit) -- engine behavior reference, config schema
 | **Prohibited patterns** | utility bundle, workflow checklist, rule + counter pairs |
 | **Audit** | Does the agent recognize when to apply *and* when not? Counter-examples must be exercised. |
 
-Examples: `flatten-with-flags`, `test-invariants`, `reducing-complexity` (from the obra/superpowers public skill set). The plugins-kit ecosystem currently has no pattern-skill -- see the audit-gap note in this directory's audit reports.
+Examples: `flatten-with-flags`, `test-invariants`, `reducing-complexity` (from the obra/superpowers public skill set). The plugins-kit ecosystem has no pattern-skill.
 
 ### technique-skill
 

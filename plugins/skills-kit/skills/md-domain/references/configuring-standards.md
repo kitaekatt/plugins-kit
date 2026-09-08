@@ -78,7 +78,10 @@ rules:
 ```
 
 A rule value accepts only `off` (or `false`); the id must be one of the optional
-rules below. Disabling an architectural or inoffensive rule is refused.
+rules below, or the `id` of a criterion declared by a standards file resolved
+for this project (any layer, any primitive) -- see
+[authoring-standards.md](authoring-standards.md). Disabling an architectural or
+inoffensive rule is refused.
 
 ### Worked example: tune a threshold
 
@@ -98,8 +101,9 @@ cannot be disabled.
 
 ## Rule-id catalog
 
-Every rule id the audit emits (the `rule` field on a finding) belongs to exactly
-one bucket. The tables below are the complete catalog.
+Every built-in rule id belongs to exactly one bucket. Audit findings use the
+`rule` field. The human HTML checker uses the existing `SZ-1` standards id.
+The tables below are the complete catalog.
 
 <!-- BEGIN GENERATED: rule-catalog (gen_standards_doc.py; SSOT: rule_catalog.py + audit.py THRESHOLDS) -->
 
@@ -169,10 +173,11 @@ document, so they carry no config knob.
 | `refs-cited-exist` | Every reference cited in the body resolves to a file. |
 | `asset-paths-resolve` | Every declared asset-dependency and `tools[].tests` path resolves. |
 | `refs-reachable` | Every file under `references/` is reachable from SKILL.md. |
+| `SZ-1` | Generated human HTML stays at or below `human_html_max_words` visible words. |
 
 ## Thresholds
 
-Five named thresholds carry the numeric limits some rules apply. Override any of
+Six named thresholds carry the numeric limits some rules apply. Override any of
 them in `thresholds:`; an override must be a positive integer.
 
 | Threshold | Default | Consumed by |
@@ -182,6 +187,7 @@ them in `thresholds:`; an override must be a positive integer.
 | `body_max_lines` | 500 | `body-size-signal` |
 | `body_max_tokens` | 3000 | `body-size-signal` |
 | `mixed_min_score` | 2 | `mixed-type` |
+| `human_html_max_words` | 900 | `SZ-1` |
 
 <!-- END GENERATED: rule-catalog -->
 
@@ -246,7 +252,8 @@ finding against a skills-kit rule quotes its `rule` id (one of the catalog ids
 above); a finding against an additive criterion quotes that criterion's `id`.
 This lets a reader go straight from a finding to the config line that would
 disable it: read the id, decide the opinion is not for this project, add
-`rules: {<id>: off}` (for a skills-kit rule) or disable the criterion.
+`rules: {<id>: off}` -- the same key takes a skills-kit rule id or an
+additive criterion's `id`.
 
 At the design level, the audit lanes consume the resolved configuration as
 follows:
@@ -270,10 +277,12 @@ degrading to an empty config, and the message names the problem:
 
 - **Disabling an un-tunable rule.** `rules: {yaml-contract: off}` (architectural)
   or `rules: {name-length: off}` (inoffensive) raises an error naming the id and
-  its bucket -- only optional rules are configurable.
-- **An unknown rule id.** A typo'd or removed id in `rules:` raises an error
-  naming the id (bucket `unknown`).
-- **An unknown threshold.** A `thresholds:` key not among the five above raises
+  its bucket -- only optional rules and authored standards criteria are
+  configurable.
+- **An unknown rule id.** A typo'd or removed id in `rules:` -- one that names
+  neither a catalog rule nor a criterion declared by a standards file resolved
+  for this project -- raises an error naming the id (bucket `unknown`).
+- **An unknown threshold.** A `thresholds:` key not among the six above raises
   an error listing the valid threshold names.
 - **A bad value.** A rule value other than `off`/`false`, or a threshold value
   that is not a positive integer, raises an error naming the offending value.
@@ -306,7 +315,7 @@ The rule-id catalog and threshold table above are GENERATED (the marked
 region): rule ids, buckets, and descriptions come from
 `skills_kit_lib/rule_catalog.py` (`RULES`), threshold defaults from
 `skills_kit_lib/audit.py` (`THRESHOLDS`). Edit those sources, then run
-`scripts/gen_standards_doc.py`; never hand-edit the generated region.
-`tests/skills-kit/test_standards_doc_drift.py` fails when the region is
-stale. The resolver's reject-un-tunable-rule check reads the same module
-directly, so the doc and the enforcement cannot disagree.
+`scripts/gen_standards_doc.py`; never hand-edit the generated region -- a
+stale region is caught by a drift check. The resolver's reject-un-tunable-rule
+check reads the same module directly, so the doc and the enforcement cannot
+disagree.

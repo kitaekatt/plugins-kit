@@ -73,7 +73,7 @@ class TestReducerPreservesNotAudited:
     @pytest.mark.parametrize("lane", LANE_IDS)
     def test_relabel_passes_not_audited_through(self, lane):
         src = detect_src(lane)
-        assert "if (r.verdict === 'NOT-AUDITED') return { ...r, suppressed: 0 }" in src, (
+        assert "if (r.verdict === 'NOT-AUDITED') return { ...r, suppressed: 0, suppressedFindings: [] }" in src, (
             f"workflow/{lane}-detect.js: the review relabel does not pass a "
             "NOT-AUDITED verdict through -- a declined file would be renamed "
             "DIFF-CLEAN, which is the fake gate this guard exists to prevent"

@@ -12,6 +12,10 @@ the sibling discover_* test files.
 """
 
 import importlib.util
+import json
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -97,6 +101,61 @@ class TestCollectCandidates:
         found = {p.name for p in pd.collect_candidates(tmp_path)}
         assert found == {"real.md", "SOURCES.txt"}
 
+    def test_force_added_tracked_doc_is_still_treated_as_ignored(self, tmp_path):
+        """The question is whether the project's ignore RULES cover the path,
+        not whether git happens to track it. Plain `git check-ignore` (no
+        --no-index) consults the index first and reports a tracked path as NOT
+        ignored -- the opposite of what this discovery step needs to know. A
+        doc force-added despite matching a .gitignore rule must still be
+        excluded from the candidate list."""
+        import subprocess
+
+        subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+        subprocess.run(["git", "-C", str(tmp_path), "config", "user.email", "t@example.com"], check=True)
+        subprocess.run(["git", "-C", str(tmp_path), "config", "user.name", "t"], check=True)
+        _write(tmp_path / ".gitignore", "forced/\n")
+        _write(tmp_path / "forced" / "kept.md")
+        subprocess.run(["git", "-C", str(tmp_path), "add", "-f", "forced/kept.md"], check=True)
+        subprocess.run(
+            ["git", "-C", str(tmp_path), "commit", "-qm", "force-add an ignored doc"], check=True
+        )
+        _write(tmp_path / "Docs" / "real.md")
+
+        found = {p.name for p in pd.collect_candidates(tmp_path)}
+
+        assert "real.md" in found
+        assert "kept.md" not in found
+
+    def test_skips_p4_ignored_candidates(
+            self, tmp_path, monkeypatch, default_p4_config_names):
+        """Mirrors the p4-detection fixture pattern in
+        tests/skills-kit/test_coverage_discover.py: a .p4config marker makes
+        the tree look like a Perforce workspace, and the p4 subprocess call is
+        faked to report one path ignored."""
+        _write(tmp_path / ".p4config", "P4CLIENT=ws\n")
+        _write(tmp_path / "Docs" / "real.md")
+        _write(tmp_path / "Docs" / "ignored.md")
+
+        real_run = pd.vcs_ignore.subprocess.run
+
+        def _fake_run(cmd, **kwargs):
+            if cmd[:1] != ["p4"]:
+                return real_run(cmd, **kwargs)
+
+            class _Result:
+                returncode = 0
+                stdout = f"{tmp_path / 'Docs' / 'ignored.md'} ignored\n"
+                stderr = ""
+
+            return _Result()
+
+        monkeypatch.setattr(pd.vcs_ignore.subprocess, "run", _fake_run)
+
+        found = {p.name for p in pd.collect_candidates(tmp_path)}
+
+        assert "real.md" in found
+        assert "ignored.md" not in found
+
 
 class TestOrphanDetection:
     def test_uncited_doc_is_orphan(self, tmp_path):
@@ -127,6 +186,122 @@ class TestOrphanDetection:
         inbound = pd.build_inbound_index(tmp_path, cands)
         rec = pd.describe(doc, inbound, tmp_path)
         assert rec["inbound_citations"] == 0
+
+
+class TestCitationResolution:
+    """Basename-collision handling: two candidates sharing a basename (e.g. two
+    README.md files in different directories) must not falsely credit each
+    other, and a path-qualified mention must resolve to the specific candidate
+    it names."""
+
+    def test_path_qualified_mention_credits_only_the_named_file(self, tmp_path):
+        api_readme = tmp_path / "api" / "README.md"
+        other_readme = tmp_path / "other" / "README.md"
+        _write(api_readme)
+        _write(other_readme)
+        _write(tmp_path / "citer.md", "See api/README.md for the API surface.\n")
+
+        cands = pd.collect_candidates(tmp_path)
+        inbound = pd.build_inbound_index(tmp_path, cands)
+
+        api_rec = pd.describe(api_readme, inbound, tmp_path)
+        other_rec = pd.describe(other_readme, inbound, tmp_path)
+
+        assert other_rec["inbound_citations"] == 0
+        assert api_rec["inbound_citations"] >= 1
+
+    def test_bare_basename_mention_with_two_candidates_credits_neither(self, tmp_path):
+        api_readme = tmp_path / "api" / "README.md"
+        other_readme = tmp_path / "other" / "README.md"
+        _write(api_readme)
+        _write(other_readme)
+        _write(tmp_path / "citer.md", "See README.md for details.\n")
+
+        cands = pd.collect_candidates(tmp_path)
+        inbound = pd.build_inbound_index(tmp_path, cands)
+
+        api_rec = pd.describe(api_readme, inbound, tmp_path)
+        other_rec = pd.describe(other_readme, inbound, tmp_path)
+
+        assert api_rec["inbound_citations"] == 0
+        assert other_rec["inbound_citations"] == 0
+
+
+class TestWalkAndScanEfficiency:
+    """collect_candidates and build_inbound_index used to walk the same tree
+    twice (once each) and, per citer file, run one substring search per
+    candidate basename -- O(candidates x citers). Both are perf-shape guards,
+    asserted by call count rather than wall-clock time."""
+
+    def test_candidate_and_citer_scans_share_one_tree_walk(self, tmp_path, monkeypatch):
+        _write(tmp_path / "Docs" / "a.md")
+        _write(tmp_path / "Docs" / "b.md", "cites a.md\n")
+
+        import os as os_module
+
+        calls = []
+        real_walk = os_module.walk
+
+        def _counting_walk(top, *args, **kwargs):
+            calls.append(str(top))
+            return real_walk(top, *args, **kwargs)
+
+        monkeypatch.setattr(os_module, "walk", _counting_walk)
+
+        candidates = pd.collect_candidates(tmp_path)
+        pd.build_inbound_index(tmp_path, candidates)
+
+        # One walk of this root serves both the candidate scan and the citer
+        # scan -- not one walk per consumer.
+        assert calls.count(str(tmp_path)) == 1
+
+    def test_citer_body_reads_scale_linearly_not_quadratically(self, tmp_path, monkeypatch):
+        """With C candidates and K citers, a quadratic implementation still
+        reads each citer body once (I/O), but the OLD implementation searched
+        for every one of the C basenames inside each read body -- exercised
+        here by asserting the read count itself stays exactly K regardless of
+        C, and by asserting the module's own citation-mention regex is
+        compiled once per index build rather than once per citer."""
+        candidate_count = 200
+        citer_count = 200
+        for i in range(candidate_count):
+            _write(tmp_path / "Docs" / f"doc{i}.md")
+        # .yaml is a citer extension (_CITER_EXT) but not a doc extension
+        # (DOC_EXT), so these contribute reads without inflating the
+        # candidate count.
+        for i in range(citer_count):
+            _write(tmp_path / "notes" / f"citer{i}.yaml", f"mentions doc{i % candidate_count}.md\n")
+
+        candidates = pd.collect_candidates(tmp_path)
+        assert len(candidates) == candidate_count
+
+        read_calls = {"n": 0}
+        real_read_text = Path.read_text
+
+        def _counting_read_text(self, *args, **kwargs):
+            read_calls["n"] += 1
+            return real_read_text(self, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "read_text", _counting_read_text)
+
+        compile_calls = {"n": 0}
+        real_compile = pd._compile_mention_regex
+
+        def _counting_compile(basenames):
+            compile_calls["n"] += 1
+            return real_compile(basenames)
+
+        monkeypatch.setattr(pd, "_compile_mention_regex", _counting_compile)
+
+        pd.build_inbound_index(tmp_path, candidates)
+
+        # Exactly one read per citer-eligible file -- the .md candidates are
+        # themselves valid citer sources (.md is in both DOC_EXT and
+        # _CITER_EXT), so the total is candidates + citers, never their
+        # product.
+        assert read_calls["n"] == candidate_count + citer_count
+        # The alternation is built once for the whole index, not once per citer.
+        assert compile_calls["n"] == 1
 
 
 class TestMeasure:
@@ -172,6 +347,36 @@ class TestProjectRootCiterScope:
         inbound = pd.build_inbound_index(tmp_path, [doc])
         rec = pd.describe(doc, inbound, tmp_path)
         assert rec["inbound_citations"] >= 1
+
+
+class TestCiterRootFallback:
+    """--citer-root falls back to the project root of the candidates, then to
+    an explicit --root, then to cwd -- matching the CLI help text. The bug:
+    the fallback chain skipped --root entirely and went straight to cwd, so a
+    marker-less --root scanned from a different process cwd made every doc
+    report inbound_citations == 0 (spuriously orphaned)."""
+
+    def test_explicit_root_used_when_candidates_have_no_project_markers(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        target = tmp_path / "target"
+        _write(target / "Docs" / "candidate.md")
+        _write(target / "CLAUDE.md", "See Docs/candidate.md for details.\n")
+
+        elsewhere = tmp_path / "elsewhere"
+        elsewhere.mkdir()
+        monkeypatch.chdir(elsewhere)
+
+        monkeypatch.setattr(
+            sys, "argv",
+            ["discover_project_doc.py", "--root", str(target), "--json", "--skip-plugin-cache"],
+        )
+        rc = pd.main()
+        assert rc == 0
+
+        records = json.loads(capsys.readouterr().out)
+        rec = next(r for r in records if r["path"].endswith("candidate.md"))
+        assert rec["inbound_citations"] > 0
 
 
 class TestGeneratedArtifactSignals:
@@ -338,3 +543,100 @@ class TestPluginCacheCiterScanning:
         (cfg / "settings.json").write_text(
             '{"enabledPlugins": {"mkt": {"c": true, "d": false}}}', encoding="utf-8")
         assert pd._read_enabled_plugin_names(cfg, None) == {"c"}
+
+
+class TestMentionPrefixIsSegmented:
+    """A basename that is the SUFFIX of another basename ("notes.md" inside
+    "release-notes.md") must not be credited by a mention of the longer name:
+    the optional path prefix is whole segments ending in a separator, never a
+    bare run of name characters."""
+
+    def test_suffix_basename_is_not_credited(self):
+        from discover_project_doc import _compile_mention_regex
+        rx = _compile_mention_regex({"notes.md", "release-notes.md"})
+        m = rx.search("see release-notes.md for details")
+        assert m is not None
+        assert m.group(2) == "release-notes.md"
+        assert m.group(1) == ""
+        m2 = rx.search("see docs/release-notes.md")
+        assert m2.group(1) == "docs/" and m2.group(2) == "release-notes.md"
+        assert rx.search("see notes.md.bak") is None
+        assert rx.search("see docs/notes.md.").group(2) == "notes.md"  # sentence period
+
+
+class TestSkippedDirsReporting:
+    """discover_project_doc.py gets the same --include-dir / MD_DOMAIN_INCLUDE_DIRS
+    / skipped_dirs treatment as discover_claude_md.py and discover_skill.py
+    (slice 2): a doc under a noise-named directory (tmp/, Build/) is silently
+    invisible to the default walk, and nothing said so."""
+
+    def _run(self, cwd: Path, *extra_args, env=None):
+        full_env = dict(os.environ)
+        if env:
+            full_env.update(env)
+        return subprocess.run(
+            [sys.executable, str(DISCOVER_PATH), "--json", "--root", str(cwd), *extra_args],
+            capture_output=True, text=True, timeout=60, env=full_env,
+        )
+
+    def test_doc_under_noise_dir_is_absent_by_default_and_reported_skipped(self, tmp_path):
+        buried = tmp_path / "tmp" / "Build" / "notes.md"
+        _write(buried)
+
+        result = self._run(tmp_path)
+        assert result.returncode == 0, result.stderr
+        payload = json.loads(result.stdout)
+
+        assert not any(rec.get("path") == str(buried) for rec in payload)
+        skip_records = [rec for rec in payload if "skipped_dir" in rec]
+        assert "tmp" in {rec["skipped_dir"] for rec in skip_records}
+        for rec in skip_records:
+            assert rec["reason"] == "noise-name"
+
+    def test_include_dir_flag_makes_it_discoverable(self, tmp_path):
+        buried = tmp_path / "tmp" / "Build" / "notes.md"
+        _write(buried)
+
+        result = self._run(tmp_path, "--include-dir", "tmp", "--include-dir", "Build")
+        assert result.returncode == 0, result.stderr
+        payload = json.loads(result.stdout)
+
+        assert any(rec.get("path") == str(buried) for rec in payload)
+
+    def test_env_var_fallback_makes_it_discoverable(self, tmp_path):
+        buried = tmp_path / "tmp" / "Build" / "notes.md"
+        _write(buried)
+
+        result = self._run(
+            tmp_path, env={"MD_DOMAIN_INCLUDE_DIRS": "tmp" + os.pathsep + "Build"}
+        )
+        assert result.returncode == 0, result.stderr
+        payload = json.loads(result.stdout)
+
+        assert any(rec.get("path") == str(buried) for rec in payload)
+
+    def test_no_skips_produces_no_skip_records(self, tmp_path):
+        _write(tmp_path / "Docs" / "a.md")
+
+        result = self._run(tmp_path)
+        assert result.returncode == 0, result.stderr
+        payload = json.loads(result.stdout)
+
+        assert all("skipped_dir" not in rec for rec in payload)
+
+
+class TestIncludeDirsOverride:
+    """In-process coverage of _resolve_include_dirs -- the CLI flag wins over
+    the environment fallback, matching discover_claude_md.py's contract."""
+
+    def test_cli_values_win_over_env(self, monkeypatch):
+        monkeypatch.setenv(pd.INCLUDE_DIRS_ENV, "fromenv")
+        assert pd._resolve_include_dirs(["fromcli"]) == ["fromcli"]
+
+    def test_env_used_when_cli_absent(self, monkeypatch):
+        monkeypatch.setenv(pd.INCLUDE_DIRS_ENV, "a" + os.pathsep + "b")
+        assert pd._resolve_include_dirs(None) == ["a", "b"]
+
+    def test_neither_present_is_empty(self, monkeypatch):
+        monkeypatch.delenv(pd.INCLUDE_DIRS_ENV, raising=False)
+        assert pd._resolve_include_dirs(None) == []

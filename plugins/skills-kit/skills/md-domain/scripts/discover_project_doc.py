@@ -44,9 +44,9 @@ import argparse
 import json
 import os
 import re
-import subprocess
 import sys
 from pathlib import Path
+from typing import Iterable
 
 # The shared walk lives in skills_kit_lib; make the plugin root importable
 # regardless of which interpreter/venv launched this script.
@@ -61,6 +61,7 @@ if str(_SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS_DIR))
 
 from project_root import PROJECT_MARKERS, find_project_root  # noqa: E402,F401
+import vcs_ignore  # noqa: E402
 
 try:
     from skills_kit_lib.dirwalk import iter_dirs  # noqa: E402
@@ -276,37 +277,69 @@ def _has_skipped_segment(path: Path, root: Path) -> bool:
     return any(part in _SKIP_DIRS for part in rel_parts)
 
 
-def _walk_files(root: Path):
+# Per-root cache of _walk_files' result, so the candidate scan and the citer
+# scan -- two independent callers over the SAME tree in the common case --
+# cost one directory walk rather than one each. Keyed by the resolved root
+# path; a process that discovers under two different roots (e.g. --root
+# scoped to a subdirectory with a wider --citer-root) still walks each once.
+_WALK_CACHE: dict[str, list[Path]] = {}
+
+
+def _walk_files(
+    root: Path,
+    include_dirs: Iterable[str] = (),
+    skipped_out: list[Path] | None = None,
+):
     """Yield every file under root, honoring depth + skip-dir rules.
 
     Uses skills_kit_lib.dirwalk when present (shared excludes); otherwise a
-    bounded stdlib walk with the same skip-dir set.
+    bounded stdlib walk with the same skip-dir set. Cached per (resolved root,
+    include_dirs) pair (see `_WALK_CACHE`): repeated calls for the same tree
+    and the same include_dirs replay the cached list instead of re-walking the
+    filesystem. `include_dirs` and `skipped_out` mirror discover_claude_md.py /
+    discover_skill.py's iter_dirs plumbing -- a directory pruned as noise
+    (tmp/, Build/) can be opted back in, and every directory actually pruned
+    that way (not the doc-specific `_SKIP_DIRS`/`_has_skipped_segment` prune
+    below, which is unaffected) is appended to `skipped_out` when given.
     """
+    include_key = tuple(sorted(include_dirs))
+    key = (str(Path(root).resolve()), include_key)
+    cached = _WALK_CACHE.get(key)
+    if cached is not None:
+        yield from cached
+        return
+
+    collected: list[Path] = []
     if iter_dirs is not None:
-        for dir_path, files in iter_dirs(root, SCAN_MAX_DEPTH):
+        for dir_path, files in iter_dirs(
+            root, SCAN_MAX_DEPTH, include_dirs=include_dirs, skipped_out=skipped_out
+        ):
             if _has_skipped_segment(dir_path, root):
                 continue
             for fname in files:
-                yield dir_path / fname
-        return
-    # Fallback: manual bounded walk.
-    root_depth = len(root.parts)
-    stack = [root]
-    while stack:
-        current = stack.pop()
-        try:
-            entries = list(current.iterdir())
-        except OSError:
-            continue
-        for entry in entries:
-            if entry.is_dir():
-                if entry.name in _SKIP_DIRS:
-                    continue
-                if len(entry.parts) - root_depth >= SCAN_MAX_DEPTH:
-                    continue
-                stack.append(entry)
-            elif entry.is_file():
-                yield entry
+                collected.append(dir_path / fname)
+    else:
+        # Fallback: manual bounded walk.
+        root_depth = len(root.parts)
+        stack = [root]
+        while stack:
+            current = stack.pop()
+            try:
+                entries = list(current.iterdir())
+            except OSError:
+                continue
+            for entry in entries:
+                if entry.is_dir():
+                    if entry.name in _SKIP_DIRS:
+                        continue
+                    if len(entry.parts) - root_depth >= SCAN_MAX_DEPTH:
+                        continue
+                    stack.append(entry)
+                elif entry.is_file():
+                    collected.append(entry)
+
+    _WALK_CACHE[key] = collected
+    yield from collected
 
 
 def _measure(path: Path) -> tuple[int, int]:
@@ -322,115 +355,166 @@ def _measure(path: Path) -> tuple[int, int]:
     return (len(lines), len(text) // 4)
 
 
-def _git_ignored(paths: list[Path], root: Path) -> set[str]:
-    """The subset of `paths` git reports as ignored, as strings.
-
-    Best-effort and VCS-tolerant: returns an empty set when git is absent, the
-    root is not inside a git work tree, or the invocation fails for any reason
-    -- discovery then behaves exactly as before. Uses `git check-ignore
-    --stdin -z` so one subprocess covers the whole candidate list.
-    """
-    if not paths:
-        return set()
-    try:
-        proc = subprocess.run(
-            ["git", "-C", str(root), "check-ignore", "--stdin", "-z"],
-            input="\0".join(str(p) for p in paths),
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return set()
-    # Exit 0: some ignored (listed on stdout). Exit 1: none ignored.
-    # Anything else (128: not a repo / bad usage): treat as no information.
-    if proc.returncode not in (0, 1):
-        return set()
-    return {p for p in proc.stdout.split("\0") if p}
-
-
-def collect_candidates(root: Path) -> list[Path]:
+def collect_candidates(
+    root: Path,
+    include_dirs: Iterable[str] = (),
+    skipped_out: list[Path] | None = None,
+) -> list[Path]:
     out: list[Path] = []
-    for path in _walk_files(root):
+    for path in _walk_files(root, include_dirs=include_dirs, skipped_out=skipped_out):
         if not is_doc_file(path.name):
             continue
         if _has_skipped_segment(path, root):
             continue
         out.append(path)
-    # Drop gitignored candidates (build artifacts like *.egg-info that the
-    # skip-dir set does not enumerate). Explicit --path nominations bypass
-    # this by construction -- they never go through collect_candidates.
-    ignored = _git_ignored(out, root)
+    # Drop paths the project's VCS ignore rules cover (build artifacts like
+    # *.egg-info that the skip-dir set does not enumerate). Explicit --path
+    # nominations bypass this by construction -- they never go through
+    # collect_candidates. Shared with discover_coverage.py / coverage_subjects.py
+    # via vcs_ignore.ignored_paths, which asks "do the ignore rules COVER this
+    # path" (git --no-index; p4 when there is no git project; nothing excluded
+    # otherwise) rather than "does git currently track it" -- see vcs_ignore's
+    # module docstring for why that distinction matters.
+    ignored = vcs_ignore.ignored_paths(out, root=root)
     if ignored:
-        out = [p for p in out if str(p) not in ignored]
+        out = [p for p in out if p not in ignored]
     out.sort(key=lambda p: str(p))
     return out
 
 
+# A citation mention is the longest run of path-like characters (word chars,
+# ".", "/", "\\", "-") immediately preceding and including a candidate
+# basename, not itself preceded by another such character -- so "api/README.md"
+# is recovered whole rather than as a bare "README.md" hit.
+_MENTION_CHARS = r"[\w./\\-]"
+
+
+def _compile_mention_regex(basenames: set[str]):
+    """One alternation over every candidate basename, or None when there are
+    none to look for. Longer basenames are tried first so a name that is a
+    prefix of another (rare, but possible with compound suffixes) does not
+    shadow it."""
+    if not basenames:
+        return None
+    alts = "|".join(re.escape(n) for n in sorted(basenames, key=len, reverse=True))
+    # The optional path prefix is a run of complete path SEGMENTS, each ending
+    # in a separator -- never a bare run of name characters. A greedy
+    # character-class prefix would eat "release-" out of "release-notes.md"
+    # and credit "notes.md" instead; requiring the prefix to end in a
+    # separator means a basename can only match where a basename starts.
+    # The trailing lookahead stops "notes.md" matching inside "notes.md.bak"
+    # while still allowing a sentence-ending period ("see docs/cited.md.").
+    prefix = r"((?:[\w.\\-]+[/\\])*)"
+    return re.compile(rf"(?<!{_MENTION_CHARS}){prefix}({alts})(?![\w-]|\.\w)")
+
+
+def _resolve_mention(
+    mention: str,
+    name: str,
+    by_basename: dict[str, list[Path]],
+) -> Path | None:
+    """Which candidate (if any) a single citation mention refers to.
+
+    This is a POLICY choice, not just a bugfix detail, because a basename alone
+    is ambiguous whenever two candidates share it (two README.md files in
+    different directories being the common case):
+
+      * If exactly one candidate in the whole tree carries this basename, the
+        mention is unambiguous regardless of whether it was path-qualified --
+        credit that candidate.
+      * Otherwise, a mention that carries a path separator is resolved by
+        SUFFIX match against each same-named candidate's path: "api/README.md"
+        matches a candidate whose path ends with "/api/README.md" (or equals
+        it outright). Exactly one match credits that candidate; zero or more
+        than one credits nobody, rather than guessing.
+      * A bare mention (no separator) with more than one same-named candidate
+        is ambiguous and credits nobody.
+    """
+    same_name = by_basename.get(name, [])
+    if len(same_name) == 1:
+        return same_name[0]
+    if "/" in mention or "\\" in mention:
+        normalized = mention.replace("\\", "/")
+        hits = [
+            c for c in same_name
+            if c.as_posix() == normalized or c.as_posix().endswith("/" + normalized)
+        ]
+        if len(hits) == 1:
+            return hits[0]
+    return None
+
+
 def _index_citer(
     path: Path,
-    basenames: set[str],
-    candidate_paths: set[str],
+    mention_re,
+    by_basename: dict[str, list[Path]],
     inbound: dict[str, set[str]],
 ) -> None:
-    """Record which candidate basenames a single citer file mentions."""
+    """Record which candidates a single citer file's body mentions."""
+    if mention_re is None:
+        return
     try:
         text = path.read_text(encoding="utf-8", errors="ignore")
     except OSError:
         return
     spath = str(path)
-    for name in basenames:
-        if name in text:
-            # Exclude the doc citing itself.
-            if spath in candidate_paths and Path(spath).name == name:
-                continue
-            inbound[name].add(spath)
+    for match in mention_re.finditer(text):
+        prefix, name = match.group(1), match.group(2)
+        credited = _resolve_mention(prefix + name, name, by_basename)
+        if credited is None:
+            continue
+        if str(credited) == spath:
+            continue  # Exact-path self-citation exclusion.
+        inbound[str(credited)].add(spath)
 
 
 def build_inbound_index(
     root: Path,
     candidates: list[Path],
     extra_citer_files=None,
+    include_dirs: Iterable[str] = (),
 ) -> dict[str, list[Path]]:
-    """One pass over citer files: map each candidate basename -> citing files.
+    """One pass over citer files: map each candidate PATH -> citing files.
 
-    A candidate is "cited" when its basename appears verbatim in another text
-    file (a CLAUDE.md pointer, a SKILL.md reference, a doc-to-doc link, a config
-    entry). Self-mentions are excluded. This is the orphan signal: an empty
-    list means nothing points at the doc.
+    Keyed by the candidate's own path, not its basename -- see
+    `_resolve_mention` for the resolution policy this enforces when two
+    candidates share a basename. This is the orphan signal: an empty list
+    means nothing points at the doc.
 
     Citer sources are the project tree under `root` PLUS `extra_citer_files` --
     files outside the project tree (installed plugin-cache skills) that are still
     part of the load graph. A doc referenced only by an installed plugin skill is
     therefore NOT an orphan.
     """
-    basenames = {p.name for p in candidates}
-    # Map basename -> set of citing paths.
-    inbound: dict[str, set[str]] = {name: set() for name in basenames}
-    candidate_paths = {str(p) for p in candidates}
+    by_basename: dict[str, list[Path]] = {}
+    for candidate in candidates:
+        by_basename.setdefault(candidate.name, []).append(candidate)
+    mention_re = _compile_mention_regex(set(by_basename))
+    inbound: dict[str, set[str]] = {str(c): set() for c in candidates}
 
-    for path in _walk_files(root):
+    for path in _walk_files(root, include_dirs=include_dirs):
         if path.suffix.lower() not in _CITER_EXT and not path.name.lower().endswith(
             MARKDEEP_SUFFIX
         ):
             continue
         if _has_skipped_segment(path, root):
             continue
-        _index_citer(path, basenames, candidate_paths, inbound)
+        _index_citer(path, mention_re, by_basename, inbound)
 
     # Extra citers live OUTSIDE the project tree (plugin cache), so the
     # in-tree skip-segment check does not apply -- index them directly.
     for path in extra_citer_files or ():
-        _index_citer(path, basenames, candidate_paths, inbound)
+        _index_citer(path, mention_re, by_basename, inbound)
 
-    return {name: sorted(Path(s) for s in paths) for name, paths in inbound.items()}
+    return {key: sorted(Path(s) for s in paths) for key, paths in inbound.items()}
 
 
 def describe(path: Path, inbound: dict[str, list[Path]], root: Path) -> dict:
     kind = classify_kind(path)
     lines, approx_tokens = _measure(path)
-    citing = inbound.get(path.name, [])
-    # Exclude self if the basename collides with the candidate itself.
+    citing = inbound.get(str(path), [])
+    # Self-citation is already excluded during indexing (by exact path
+    # equality); filtered again here as a cheap no-op safety net.
     citing = [c for c in citing if c != path]
     cited_by = []
     for c in citing[:5]:
@@ -452,6 +536,21 @@ def describe(path: Path, inbound: dict[str, list[Path]], root: Path) -> dict:
     }
 
 
+INCLUDE_DIRS_ENV = "MD_DOMAIN_INCLUDE_DIRS"
+
+
+def _resolve_include_dirs(cli_values: list[str] | None) -> list[str]:
+    """--include-dir values, falling back to the MD_DOMAIN_INCLUDE_DIRS
+    environment variable (os.pathsep-separated) when the flag was not passed.
+    Mirrors discover_claude_md.py / discover_skill.py exactly, including the
+    shared env var name -- one variable opts a directory back in for every
+    md-domain discover script in one setting."""
+    if cli_values:
+        return cli_values
+    env = os.environ.get(INCLUDE_DIRS_ENV)
+    return [name for name in env.split(os.pathsep) if name] if env else []
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--json", action="store_true", help="emit JSON instead of a numbered list")
@@ -471,14 +570,22 @@ def main() -> int:
     parser.add_argument("--config-dir", default=None,
                         help="harness config dir holding plugins/cache (default: $CLAUDE_CONFIG_DIR "
                              "or ~/.claude). Rarely needed; mainly for testing.")
+    parser.add_argument(
+        "--include-dir", action="append", default=None, metavar="NAME",
+        help="directory NAME to walk into even though it would otherwise be pruned "
+             "as noise (repeatable). Falls back to the MD_DOMAIN_INCLUDE_DIRS "
+             "environment variable (os.pathsep-separated) when omitted.",
+    )
     args = parser.parse_args()
 
     root = Path(args.root).resolve() if args.root else Path.cwd().resolve()
+    include_dirs = _resolve_include_dirs(args.include_dir)
+    skipped_dirs: list[Path] = []
 
     if args.path:
         candidates = [Path(p).resolve() for p in args.path]
     else:
-        candidates = collect_candidates(root)
+        candidates = collect_candidates(root, include_dirs=include_dirs, skipped_out=skipped_dirs)
 
     # The citer scan root is decoupled from the candidate root: an orphan check
     # must see the WHOLE project (a .claude/docs doc is cited from CLAUDE.md /
@@ -488,10 +595,12 @@ def main() -> int:
         citer_root = Path(args.citer_root).resolve()
     else:
         anchor = candidates[0].parent if candidates else root
-        # VCS marker (git/hg/svn/p4) -> the directory the audit was launched from
-        # (usually the project top) -> never silently the candidate subdir, which
-        # would under-count citations and false-flag orphans.
-        citer_root = find_project_root(anchor) or Path.cwd().resolve()
+        # VCS marker (git/hg/svn/p4) -> an explicit --root -> cwd. `root` already
+        # holds the explicit --root when one was given (or cwd otherwise), so
+        # falling back to it here -- rather than straight to cwd -- is what makes
+        # a marker-less --root scanned from a different process cwd resolve
+        # correctly instead of silently indexing citations from cwd.
+        citer_root = find_project_root(anchor) or root
 
     # Installed plugin-cache skills are part of the load graph but live outside
     # the project tree, so scan them as additional citation sources (unless
@@ -502,19 +611,26 @@ def main() -> int:
         config_dir = Path(args.config_dir).expanduser() if args.config_dir else _config_dir()
         extra_citers = list(plugin_cache_citer_files(config_dir, project_root=citer_root))
 
-    inbound = build_inbound_index(citer_root, candidates, extra_citer_files=extra_citers)
+    inbound = build_inbound_index(
+        citer_root, candidates, extra_citer_files=extra_citers, include_dirs=include_dirs
+    )
     records = [describe(p, inbound, citer_root) for p in candidates]
 
+    skipped_rel = sorted(str(_relative_or_self(p, root)) for p in skipped_dirs)
+
     if args.json:
-        print(json.dumps(
-            [{"index": i + 1, **rec} for i, rec in enumerate(records)], indent=2))
+        # Same shape as discover_claude_md.py / discover_skill.py: a flat LIST
+        # unchanged for the common case of no skips, plus one "skipped_dir"
+        # record (no "path"/other file keys) appended per pruned directory.
+        payload = [{"index": i + 1, **rec} for i, rec in enumerate(records)]
+        payload.extend({"skipped_dir": rel, "reason": "noise-name"} for rel in skipped_rel)
+        print(json.dumps(payload, indent=2))
         return 0
 
     if not records:
         print(f"No project documents found under {root}.")
-        return 0
-
-    print(f"Project documents under {root}:\n")
+    else:
+        print(f"Project documents under {root}:\n")
     for i, rec in enumerate(records, start=1):
         try:
             display = Path(rec["path"]).relative_to(root)
@@ -530,7 +646,19 @@ def main() -> int:
         if rec.get("role_hint"):
             extras += f" [{rec['role_hint']}]"
         print(f"  {i:>3}. [{tag:<10}] [{rec['lines']:>4}L] [{orphan:<7}] {display}{extras}")
+
+    if skipped_rel:
+        print(f"\nskipped {len(skipped_rel)} noise-named directory/ies (use --include-dir to opt one back in):")
+        for rel in skipped_rel:
+            print(f"  - {rel}")
     return 0
+
+
+def _relative_or_self(path: Path, root: Path) -> Path:
+    try:
+        return path.relative_to(root)
+    except ValueError:
+        return path
 
 
 if __name__ == "__main__":

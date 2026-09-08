@@ -362,6 +362,38 @@ class TestSourceStamp:
             hh.source_stamp(repo, "empty")
 
 
+class TestSubtreePathspecsTerritoryExclusion:
+    """`_subtree_pathspecs`'s optional `excluded` argument (territory scoping)."""
+
+    def test_no_excluded_reproduces_the_unscoped_dr2_pathspecs(self):
+        assert hh._subtree_pathspecs("src") == hh._subtree_pathspecs("src", excluded=())
+
+    def test_excluded_adds_one_negative_glob_per_directory(self):
+        specs = hh._subtree_pathspecs("src", excluded=["src/deep", "src/other"])
+        assert ":(exclude,glob)src/deep/**" in specs
+        assert ":(exclude,glob)src/other/**" in specs
+        assert len(specs) == len(hh._subtree_pathspecs("src")) + 2
+
+    def test_excluded_directory_names_are_glob_escaped(self):
+        specs = hh._subtree_pathspecs("app", excluded=["app/[slug]"])
+        assert ":(exclude,glob)app/\\[slug\\]/**" in specs
+
+    def test_excluded_subtree_is_actually_dropped_from_a_git_query(self, stamp_repo):
+        repo = stamp_repo["repo"]
+        pathspecs = hh._subtree_pathspecs("src", excluded=["src/deep"])
+        sha = hh._git(repo, ["log", "-1", "--format=%H", "HEAD", "--", *pathspecs]).strip()
+        # With "src/deep" excluded, only "src/y.txt" (committed at "src") remains
+        # in scope -- the newer "deep" commit that only touched src/deep/x.txt
+        # must not surface.
+        assert sha == stamp_repo["src"]
+
+    def test_unexcluded_directory_is_unaffected(self, stamp_repo):
+        repo = stamp_repo["repo"]
+        pathspecs = hh._subtree_pathspecs("src", excluded=["src/nonexistent"])
+        sha = hh._git(repo, ["log", "-1", "--format=%H", "HEAD", "--", *pathspecs]).strip()
+        assert sha == stamp_repo["deep"]
+
+
 # ---------------------------------------------------------------------------
 # SA-1 style asset
 # ---------------------------------------------------------------------------
@@ -601,3 +633,42 @@ class TestNavigationLabel:
 
     def test_path_input_is_normalized(self):
         assert hh.navigation_label("engine\\src") == "src"
+
+
+# ---------------------------------------------------------------------------
+# territory (ownership boundary)
+# ---------------------------------------------------------------------------
+
+class TestTerritory:
+    def test_worked_example_owns_the_gap_and_excludes_nested_pages(self):
+        pages = {"A", "A/B/C", "A/D"}
+        assert hh.territory("A", pages) == ("A", ["A/B/C", "A/D"])
+
+    def test_page_with_no_descendant_pages_owns_its_whole_subtree(self):
+        pages = {"A", "A/B/C", "A/D"}
+        assert hh.territory("A/B/C", pages) == ("A/B/C", [])
+        assert hh.territory("A/D", pages) == ("A/D", [])
+
+    def test_nested_pages_three_deep(self):
+        pages = {".", "a/b/c/d", "a/b/c/d/e/f"}
+        assert hh.territory(".", pages) == (".", ["a/b/c/d"])
+        assert hh.territory("a/b/c/d", pages) == ("a/b/c/d", ["a/b/c/d/e/f"])
+        assert hh.territory("a/b/c/d/e/f", pages) == ("a/b/c/d/e/f", [])
+
+    def test_page_whose_every_child_is_itself_a_page_owns_only_itself(self):
+        pages = {"root", "root/a", "root/b"}
+        assert hh.territory("root", pages) == ("root", ["root/a", "root/b"])
+
+    def test_a_page_is_never_its_own_exclusion(self):
+        assert hh.territory("x", {"x"}) == ("x", [])
+
+    def test_pages_outside_the_directory_do_not_leak_in(self):
+        assert hh.territory("a", {"a", "b", "b/c"}) == ("a", [])
+
+    def test_directory_and_pages_are_normalized(self):
+        assert hh.territory("a\\b", {"a/b/", "a/b/c/"}) == ("a/b", ["a/b/c"])
+
+    def test_agrees_with_navigation_targets_down_for_the_same_spine(self, spine):
+        _, down = hh.navigation_targets(spine, ".")
+        page_dirs = {key for key, record in spine.items() if record.decision == "page"}
+        assert hh.territory(".", page_dirs) == (".", down)

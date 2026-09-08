@@ -335,6 +335,16 @@ def _vendored_bundle_dir(path: Path) -> bool:
     return bool(minified) and len(minified) * 2 >= len(code)
 
 
+def is_nested_repo(path: Path) -> bool:
+    """True when `path` carries its own `.git` -- a separate repository whose
+    ambient chain is its own, never the outer repository's. One home for this
+    test so `walk_directory`, `walk_tree`, and any other consumer (e.g.
+    coverage_subjects.py's `--tree` walk) cannot disagree about what counts as
+    a nested repository.
+    """
+    return (path / ".git").exists()
+
+
 def _skip_reason(dir_name: str, path: Path | None = None) -> str | None:
     """Return the structural exclusion `dir_name` matches, or None.
 
@@ -351,6 +361,33 @@ def _skip_reason(dir_name: str, path: Path | None = None) -> str | None:
     if path is not None and _vendored_bundle_dir(path):
         return SKIP_VENDORED_BUNDLE
     return None
+
+
+def _child_disposition(entry: Path, ignored: set[Path]) -> str | None:
+    """Classify one child directory entry for reporting: `"noise"` (a
+    NOISE_DIR_NAMES member or a dot-directory other than `.claude` -- pruned
+    and counted, never itemized), one of the `SKIP_*` reason strings, or None
+    for an ordinary directory nobody needs telling about.
+
+    The order is `walk_directory`'s original, cheapest-first order: the
+    noise/dot-dir name check runs BEFORE `_skip_reason`, which is the only one
+    of these checks that can read a directory's contents
+    (`_vendored_bundle_dir`'s directory iteration). `walk_tree` used to run
+    `_skip_reason` before its own dot-dir check, paying that content-read cost
+    on every dot-directory (`.github` and friends) and -- for an entry
+    matching more than one rule -- reporting a different disposition than
+    `walk_directory` for the identical entry. Both callers are wired through
+    this one function so they cannot drift apart again.
+    """
+    name = entry.name
+    if name in NOISE_DIR_NAMES or (name.startswith(".") and name != ".claude"):
+        return "noise"
+    reason = _skip_reason(name, entry)
+    if reason is None and is_nested_repo(entry):
+        reason = SKIP_NESTED_REPO
+    if reason is None and entry in ignored:
+        reason = SKIP_IGNORED
+    return reason
 
 
 def walk_directory(
@@ -399,20 +436,13 @@ def walk_directory(
         name = entry.name
         if entry.is_dir():
             # A child directory is a SEPARATE subject. Nothing under it is
-            # collected here, so these branches only decide whether the child is
-            # worth telling the user about.
-            if name in NOISE_DIR_NAMES or (name.startswith(".") and name != ".claude"):
+            # collected here, so this only decides whether the child is worth
+            # telling the user about.
+            disposition = _child_disposition(entry, ignored)
+            if disposition == "noise":
                 noise_pruned += 1
-                continue
-            reason = _skip_reason(name, entry)
-            if reason is None and (entry / ".git").exists():
-                # Carries its own .git: a separate repository, whose ambient
-                # chain is not this one's.
-                reason = SKIP_NESTED_REPO
-            if reason is None and entry in ignored:
-                reason = SKIP_IGNORED
-            if reason is not None:
-                skipped.append({"path": str(entry), "reason": reason})
+            elif disposition is not None:
+                skipped.append({"path": str(entry), "reason": disposition})
             continue
         if not entry.is_file():
             continue
@@ -500,19 +530,12 @@ def walk_tree(root: Path) -> tuple[list[Path], list[Path], list[dict], int]:
         for entry in entries:
             name = entry.name
             if entry.is_dir():
-                if name in NOISE_DIR_NAMES:
+                disposition = _child_disposition(entry, ignored)
+                if disposition == "noise":
                     noise_pruned += 1
                     continue
-                reason = _skip_reason(name, entry)
-                if reason is None and (entry / ".git").exists():
-                    reason = SKIP_NESTED_REPO
-                if reason is None and entry in ignored:
-                    reason = SKIP_IGNORED
-                if reason is not None:
-                    skipped.append({"path": str(entry), "reason": reason})
-                    continue
-                if name.startswith(".") and name != ".claude":
-                    noise_pruned += 1
+                if disposition is not None:
+                    skipped.append({"path": str(entry), "reason": disposition})
                     continue
                 try:
                     target = entry.resolve()

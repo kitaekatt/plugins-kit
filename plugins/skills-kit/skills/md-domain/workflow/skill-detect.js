@@ -203,8 +203,8 @@ function lanePrompt(f) {
     : `No criteria were disabled for this run; apply every criterion normally.`
 
   const readStep = isRef
-    ? `Read the target reference document. Note the OWNING skill (the \`skills/<name>/\` directory it sits under) and read that skill's SKILL.md too -- you need its index entry for this file and its section headings to judge SR-1 and the back-reference check. Count lines and estimate tokens (~chars/4). Report \`skill_name\` = the owning skill's name and \`skill_type\` = "(skill reference)".`
-    : `Read the target SKILL.md. Note its frontmatter name + skill-type. Count lines and estimate tokens (~chars/4).`
+    ? `Read the target reference document. Note the OWNING skill (the \`skills/<name>/\` directory it sits under) and read that skill's SKILL.md too -- you need its index entry for this file and its section headings to judge SR-1 and the back-reference check. Count lines (report as \`lines\`) and estimate tokens, ~chars/4 (report as \`approx_tokens\`). Report \`skill_name\` = the owning skill's name and \`skill_type\` = "(skill reference)".`
+    : `Read the target SKILL.md. Note its frontmatter name + skill-type. Count lines (report as \`lines\`) and estimate tokens, ~chars/4 (report as \`approx_tokens\`).`
 
   const criteriaStep = isRef
     ? `Apply the SKILL-REFERENCE criteria (skill-standards.md section 10; this recap is self-contained -- do NOT load any framework doc). Judge the document's PROSE. You may read source ONLY to verify a claim the document already makes; a defect you find in the described system is a CODE-REVIEW finding and is OUT OF SCOPE for this lane -- do not report it.
@@ -311,15 +311,22 @@ const results = raw.map((r) => {
   // regardless of attributability, since it is the only record that nothing was
   // read. Relabelling this DIFF-CLEAN is the fake gate: a caller reads "audited,
   // no failure" where the truth is "declined, not my department".
-  if (r.verdict === 'NOT-AUDITED') return { ...r, suppressed: 0 }
+  if (r.verdict === 'NOT-AUDITED') return { ...r, suppressed: 0, suppressedFindings: [] }
   const kept = r.findings.filter(isKept)
-  const suppressed = r.findings.length - kept.length
+  // suppressedFindings carries the actual dropped findings (not just their
+  // count) as the diagnostic surface for an unstable suppression -- review
+  // mode's attributability filter is an LLM re-judgment against the
+  // pre-image, not a mechanical diff, so a different pre-existing finding can
+  // surface on each re-run of an unchanged file. The count stays alongside it
+  // for compatibility with existing readers.
+  const suppressedFindings = r.findings.filter((f) => !isKept(f))
+  const suppressed = suppressedFindings.length
   // The lane's verdict is computed over ALL findings, so it cannot stand once we
   // filter. DIFF-CLEAN says "the change under review introduced no failure" --
   // deliberately NOT the same claim as COMPLIANT, which would assert the whole
   // file is clean. A DIFF-CLEAN file may still carry a surviving SERIOUS.
   const attributableFail = kept.some((f) => f.severity === 'FAIL' && f.attributable !== false)
-  return { ...r, findings: kept, suppressed, verdict: attributableFail ? 'NON-COMPLIANT' : 'DIFF-CLEAN' }
+  return { ...r, findings: kept, suppressed, suppressedFindings, verdict: attributableFail ? 'NON-COMPLIANT' : 'DIFF-CLEAN' }
 })
 
 const totals = results.reduce((acc, r) => {

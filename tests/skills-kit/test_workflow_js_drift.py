@@ -113,3 +113,53 @@ class TestNoAccidentalTaggedTemplates:
             "parse in the Workflow tool even though node accepts it:\n"
             + "\n".join(offenders)
         )
+
+
+class TestDetectTotalsChunkIsNotDeadCode:
+    """DETECT_TOTALS_CHUNK was defined in gen_workflow_js.py but rendered nowhere
+    and pinned nowhere -- every SHARED_CHUNK_TARGETS entry actually uses
+    DETECT_REVIEW_TOTALS_CHUNK. A generator-level constant with no consumer is
+    dead code; it must not exist."""
+
+    def test_detect_totals_chunk_constant_is_gone(self):
+        assert not hasattr(gen, "DETECT_TOTALS_CHUNK")
+
+    def test_detect_totals_chunk_text_appears_in_no_workflow_script(self):
+        # Distinctive terminal accumulator shape unique to the removed chunk
+        # (DETECT_REVIEW_TOTALS_CHUNK's accumulator carries diffClean/notAudited/
+        # suppressed too, so this substring cannot false-positive on it).
+        needle = "fix: 0, serious: 0, improve: 0, silent: 0, special: 0, fail: 0, nonCompliant: 0 }"
+        workflow_dir = REPO_ROOT / "plugins" / "skills-kit" / "skills" / "md-domain" / "workflow"
+        offenders = [
+            p.name for p in sorted(workflow_dir.glob("*.js"))
+            if needle in p.read_text(encoding="utf-8")
+        ]
+        assert offenders == []
+
+
+class TestReviewTotalsChunkCarriesSuppressedFindings:
+    """Review mode used to report `suppressed` as a bare count and drop the
+    filtered findings, so an unstable suppression (a different pre-existing
+    finding surfacing on each re-run of an unchanged file) could not be
+    diagnosed. DETECT_REVIEW_TOTALS_CHUNK must carry the filtered findings
+    themselves (`suppressedFindings`) next to the count in each per-file
+    result -- the count stays for compatibility."""
+
+    def test_chunk_source_declares_suppressed_findings(self):
+        assert "suppressedFindings" in gen.DETECT_REVIEW_TOTALS_CHUNK
+
+    def test_suppressed_findings_is_the_filtered_findings_not_a_recount(self):
+        # The filtered set (findings.length - kept.length are dropped) must be
+        # the actual dropped findings, not merely their count restated.
+        chunk = gen.DETECT_REVIEW_TOTALS_CHUNK
+        assert "r.findings.filter(isKept)" in chunk
+        assert "suppressedFindings:" in chunk
+
+    def test_the_three_detect_lanes_carry_it_verbatim(self):
+        for lane, path in {
+            "claude-md-detect.js": gen.MD_DOMAIN / "workflow" / "claude-md-detect.js",
+            "skill-detect.js": gen.MD_DOMAIN / "workflow" / "skill-detect.js",
+            "project-doc-detect.js": gen.MD_DOMAIN / "workflow" / "project-doc-detect.js",
+        }.items():
+            text = path.read_text(encoding="utf-8")
+            assert "suppressedFindings" in text, lane

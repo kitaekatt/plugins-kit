@@ -223,7 +223,7 @@ compositions:
 audit_kinds:
 
   - id: references_audit
-    skill: 'skills-kit:md-domain (lane: references_audit)'
+    skill: 'skills-kit:md-domain (lane: audit_references)'
     subject_type: corpus
     discovery: "in-script (the scanner walks the scan tree itself; future: shared with corpus discovery)"
     evaluator_scaffolding: plugins/skills-kit/skills/md-domain/scripts/references_audit.py
@@ -238,7 +238,7 @@ audit_kinds:
     taxonomy_doc: plugins/skills-kit/skills/md-domain/references/references-finding-taxonomy.md
 
   - id: skill_md_audit
-    skill: 'skills-kit:md-domain (lane: skill_md_audit)'
+    skill: 'skills-kit:md-domain (lane: audit_skill)'
     subject_type: corpus
     discovery: plugins/skills-kit/skills/md-domain/scripts/discover_skill.py (cwd-relative)
     corpus_discovery: plugins/skills-kit/skills_kit_lib/corpus.py (User + Project + Plugins; shared with roster/hierarchy procedures)
@@ -261,7 +261,7 @@ audit_kinds:
     taxonomy_in_skill: 'plugins/skills-kit/skills/md-domain/references/standards/skill-standards.md (audit-direction taxonomy table)'
 
   - id: claude_md_audit
-    skill: 'skills-kit:md-domain (lane: claude_md_audit)'
+    skill: 'skills-kit:md-domain (lane: audit_claude_md)'
     subject_type: corpus
     discovery: plugins/skills-kit/skills/md-domain/scripts/discover_claude_md.py (cwd-relative; emits the role -- root / ancestor / child / local -- and the code-directory|classic dimension Level-1 trigger per file)
     evaluator_scaffolding: plugins/skills-kit/skills/md-domain/workflow/claude-md-detect.js (LLM lanes apply the criteria; skills_kit_lib/audit.py contributes the mechanical schema-validation and record-floor rows)
@@ -275,7 +275,7 @@ audit_kinds:
     note: 'Not every bound rule runs on every file: cd_* criteria fire only for targets discover.py flagged dimension=code-directory (the Level-1 trigger), and dd_* criteria only when the density lens is requested. The role (root / ancestor / child / local) further selects which hygiene checks apply.'
 
   - id: project_doc_audit
-    skill: 'skills-kit:md-domain (lane: project_doc_audit)'
+    skill: 'skills-kit:md-domain (lane: audit_project_doc)'
     subject_type: corpus
     discovery: plugins/skills-kit/skills/md-domain/scripts/discover_project_doc.py (scan-root relative; enumerates plain_md project docs and computes the mechanical orphan + size signals the lanes consume)
     evaluator_scaffolding: plugins/skills-kit/skills/md-domain/workflow/project-doc-detect.js (LLM lanes apply the cohesion criteria; discover.py is the only standalone mechanical step -- there is no separate evaluator binary)

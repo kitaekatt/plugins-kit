@@ -175,6 +175,21 @@ class TestCoverageVsCompositionSubjectSets:
         assert godot not in subject["coverageSubjects"]
         assert godot in subject["codeFreeCompositionSubjects"]
 
+    def test_announced_scope_count_is_composition_not_coverage(self, tmp_path):
+        """SKILL.md announces `compositionSubjects` as the tree-scale scope
+        count, because the analyze -> generate chain runs for a code-free
+        intermediate directory too (it is composed from its children even
+        though it is never assessed). `coverageSubjects` under-counts by
+        exactly those code-free composition subjects.
+        """
+        repo = _mkrepo(tmp_path / "repo")
+        _write(repo / "godot" / "project.godot")
+        _write(repo / "godot" / "scripts" / "player.gd")
+
+        subject = comp.build_subject(repo)
+
+        assert len(subject["compositionSubjects"]) > len(subject["coverageSubjects"])
+
     def test_subtree_with_no_code_anywhere_is_neither(self, tmp_path):
         repo = _mkrepo(tmp_path / "repo")
         _write(repo / "docs" / "notes.md")

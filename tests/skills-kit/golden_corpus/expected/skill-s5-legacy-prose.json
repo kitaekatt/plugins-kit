@@ -107,7 +107,7 @@
     "mixed_type": {
       "row": "mixed-type signal (legacy heuristic)",
       "verdict": "pass",
-      "note": "score=1",
+      "note": "score=0",
       "rule": "mixed-type"
     }
   }

@@ -25,11 +25,10 @@ Mapping (see the skill / plan for the authoring format):
 from __future__ import annotations
 
 import json
-import re
 from pathlib import Path
 
 from .errors import WorkflowError
-from .expr import Scope, compile_expr, compile_single, compile_template
+from .expr import Scope, compile_single, compile_template
 from .model import WorkflowDoc, Step, Stage
 
 _GENERATED_HEADER = (
@@ -53,8 +52,21 @@ _ARGS_NORMALIZE = (
 )
 
 
+def _header_safe(text: str) -> str:
+    """Collapse a value bound for a `//` header line to one safe line.
+
+    Any embedded newline turns the header into two JS statements -- the second
+    a bare top-level identifier or string -- so every run of whitespace
+    (newlines included) collapses to one space before the value is spliced
+    after `//`.
+    """
+    return " ".join(text.split())
+
+
 def _var(step_id: str) -> str:
-    return "step_" + re.sub(r"[^A-Za-z0-9_]", "_", step_id)
+    # model._ident already constrains step_id to [A-Za-z_][A-Za-z0-9_]*, so no
+    # character here can need scrubbing; only the "step_" prefix is added.
+    return "step_" + step_id
 
 
 def _phase_table(doc: WorkflowDoc):
@@ -126,13 +138,13 @@ def _load_preamble() -> str:
         raise WorkflowError(f"cannot read node-strategy preamble at {p}: {exc}")
 
 
-def _safe_id(step_id: str) -> str:
-    return re.sub(r"[^A-Za-z0-9_.-]", "_", step_id)
-
-
 def _default_out_js(step_id: str, suffix: str, fanout: bool) -> str:
-    """Default `$OUT` path as a JS template literal under ./.workflow-kit/<runId>/."""
-    base = f"./.workflow-kit/${{inputs.runId}}/{_safe_id(step_id)}"
+    """Default `$OUT` path as a JS template literal under ./.workflow-kit/<runId>/.
+
+    step_id is already constrained to [A-Za-z_][A-Za-z0-9_]* by model._ident,
+    so it is path-safe as-is.
+    """
+    base = f"./.workflow-kit/${{inputs.runId}}/{step_id}"
     return f"`{base}.${{i}}{suffix}`" if fanout else f"`{base}{suffix}`"
 
 
@@ -202,16 +214,9 @@ def _emit_openrouter_node(step: Step, defined: dict, phase_titles: dict, inputs:
 
 
 def _emit_flat_step(step: Step, defined: dict, phase_titles: dict, inputs: set) -> str:
-    var = _var(step.id)
-    if step.for_each is None:
-        scope = Scope(step_vars=defined, inputs=inputs)
-        call = _agent_call(step.agent, step.phase, scope, phase_titles)
-        return f"const {var} = await {call};"
-    # fan-out: parallel over a list, item bound to `item`
-    over_js = _over_js(step.for_each, Scope(step_vars=defined, inputs=inputs))
-    inner = Scope(step_vars=defined, locals={"item": "item"}, inputs=inputs)
-    call = _agent_call(step.agent, step.phase, inner, phase_titles)
-    return f"const {var} = await parallel({over_js}.map((item) => () => {call}));"
+    scope, over_js = _node_scope(step, defined, inputs)
+    call = _agent_call(step.agent, step.phase, scope, phase_titles)
+    return _wrap_node(_var(step.id), call, over_js)
 
 
 def _emit_stage_callback(
@@ -290,8 +295,8 @@ def compile_doc(doc: WorkflowDoc) -> str:
     # inputs documentation (the engine exposes them as the `args` global)
     if doc.inputs:
         doc_lines = "\n".join(
-            f"//   args.{name}: {spec.type}"
-            + (f" -- {spec.description}" if spec.description else "")
+            f"//   args.{name}: {_header_safe(spec.type)}"
+            + (f" -- {_header_safe(spec.description)}" if spec.description else "")
             for name, spec in doc.inputs.items()
         )
         lines.append("// Inputs (provided via the Workflow `args` global):\n" + doc_lines)
