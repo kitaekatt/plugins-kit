@@ -11,6 +11,8 @@ unattended at SessionStart.
 """
 
 import json
+import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -244,6 +246,87 @@ class TestCustomizedFlag:
         assert any("user customized" in m for m in ctx.ok_logs)
 
 
+class _SlowWriteFile:
+    """Wraps a real file handle so every write() trickles out one character
+    at a time with a delay -- long enough for a concurrent reader to catch
+    the target file mid-write if the write is not atomic."""
+
+    def __init__(self, real_file, delay):
+        self._f = real_file
+        self._delay = delay
+
+    def write(self, s):
+        for ch in s:
+            self._f.write(ch)
+            self._f.flush()
+            time.sleep(self._delay)
+        return len(s)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc_info):
+        return self._f.__exit__(*exc_info)
+
+    def __getattr__(self, name):
+        return getattr(self._f, name)
+
+
+class TestAtomicWrite:
+    """_write_statusline must never let a concurrent reader observe a
+    partially-written (non-empty, non-JSON) settings file. The truncating
+    `open(path, "w")` writes content in place; a reader polling during
+    that window could see a half-written file. The fix writes to a temp file
+    in the same directory and swaps it in with os.replace, which is atomic."""
+
+    def test_reader_never_observes_partial_write(self, ctx, fake_home, monkeypatch):
+        settings_path = _user_settings(fake_home)
+        settings_path.write_text(json.dumps({"model": "opus", "other": "kept"}))
+
+        real_open = open
+
+        def slow_open(file, mode="r", *args, **kwargs):
+            f = real_open(file, mode, *args, **kwargs)
+            if mode == "w" and kwargs.get("encoding") == "utf-8":
+                return _SlowWriteFile(f, 0.002)
+            return f
+
+        monkeypatch.setattr("builtins.open", slow_open)
+
+        observed_partial = []
+        stop = threading.Event()
+
+        def poll():
+            while not stop.is_set():
+                try:
+                    text = settings_path.read_text(encoding="utf-8")
+                except (FileNotFoundError, OSError):
+                    text = ""
+                if text:
+                    try:
+                        json.loads(text)
+                    except json.JSONDecodeError:
+                        observed_partial.append(text)
+                time.sleep(0.001)
+
+        poller = threading.Thread(target=poll)
+        poller.start()
+        try:
+            install_statusline.install(ctx)
+        finally:
+            stop.set()
+            poller.join()
+
+        assert observed_partial == [], (
+            f"reader observed a partial, non-JSON settings file during write: "
+            f"{observed_partial!r}"
+        )
+        # And the final content is correct, not just non-partial.
+        data = json.loads(settings_path.read_text())
+        assert data["statusLine"] == {"type": "command", "command": _expected_command(ctx)}
+        assert data["other"] == "kept"
+
+
 class TestMalformedSettings:
     def test_refuses_to_overwrite_unparseable_settings(self, ctx, fake_home):
         """A malformed ~/.claude/settings.json must NOT be replaced with just
@@ -257,6 +340,92 @@ class TestMalformedSettings:
         assert len(ctx.failures) == 1
         assert ctx.failures[0]["type"] == "statusline_settings_unparseable"
         assert "will not modify" in ctx.failures[0]["user_msg"]
+
+
+class TestAlternateDataRoot:
+    """A data root other than the canonical plugins/data/<mkt>/claude-ui-kit
+    (e.g. the repo's own claude_plugin_test.py harness, whose
+    DEFAULT_DATA_ROOT is plugins/data-dev) must never repoint the real,
+    fleet-shared ~/.claude/settings.json at a command that resolves only on
+    this machine's dev tree."""
+
+    @pytest.mark.parametrize("data_root_name", ["data-dev", "data-eval"])
+    def test_noncanonical_root_does_not_touch_real_settings(
+        self, fake_home, tmp_path, data_root_name
+    ):
+        data_dir = (fake_home / ".claude" / "plugins" / data_root_name
+                    / "plugins-kit" / "claude-ui-kit")
+        script = data_dir / "scripts" / "statusline.sh"
+        script.parent.mkdir(parents=True)
+        script.write_text("#!/bin/sh\necho hi\n")
+        project_dir = tmp_path / "project"
+        project_dir.mkdir()
+        alt_ctx = FakeCtx(data_dir, project_dir)
+
+        settings_path = _user_settings(fake_home)
+        settings_path.write_text(json.dumps({"model": "opus"}))
+        before = settings_path.read_text()
+
+        install_statusline.install(alt_ctx)
+
+        assert settings_path.read_text() == before
+        # No command referencing the alternate root may appear anywhere.
+        assert data_root_name not in settings_path.read_text()
+
+    def test_canonical_root_still_installs(self, ctx, fake_home):
+        """Sanity check: the guard must not swallow the real, canonical case."""
+        settings_path = _user_settings(fake_home)
+        settings_path.write_text(json.dumps({"model": "opus"}))
+
+        install_statusline.install(ctx)
+
+        data = json.loads(settings_path.read_text())
+        assert data["statusLine"] == {"type": "command", "command": _expected_command(ctx)}
+
+
+class TestArrayValuedSettings:
+    def test_top_level_array_is_refused_not_destroyed(self, ctx, fake_home):
+        """A settings.json whose top level is a JSON array must be REFUSED,
+        the same as malformed JSON -- not silently replaced wholesale by
+        _write_statusline, which only knows how to write into a dict."""
+        array_json = "[1,2,3]"
+        _user_settings(fake_home).write_text(array_json)
+
+        install_statusline.install(ctx)
+
+        assert _user_settings(fake_home).read_text() == array_json  # byte-identical
+        assert len(ctx.failures) == 1
+        assert ctx.failures[0]["type"] == "statusline_settings_unparseable"
+
+
+class TestSiblingKeysPreserved:
+    def test_extra_statusline_keys_survive_a_refresh(self, ctx, fake_home):
+        """statusLine carries documented sibling options this plugin does not
+        own (padding, refreshInterval, hideVimModeIndicator, ...).
+        _write_statusline must update only command (and type, which this
+        plugin does own), never replace the whole statusLine object."""
+        seeded = {
+            "statusLine": {
+                "type": "command",
+                "command": "/old/claude-ui-kit/scripts/statusline.sh",
+                "padding": 2,
+                "refreshInterval": 500,
+                "hideVimModeIndicator": True,
+            },
+            "model": "opus",
+        }
+        _user_settings(fake_home).write_text(json.dumps(seeded))
+
+        install_statusline.install(ctx)
+
+        data = json.loads(_user_settings(fake_home).read_text())
+        sl = data["statusLine"]
+        assert sl["command"] == _expected_command(ctx)
+        assert sl["type"] == "command"
+        assert sl["padding"] == 2
+        assert sl["refreshInterval"] == 500
+        assert sl["hideVimModeIndicator"] is True
+        assert data["model"] == "opus"
 
 
 class TestCommandBuilder:

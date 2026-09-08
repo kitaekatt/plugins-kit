@@ -818,8 +818,15 @@ class TestAssembleBundleMachineEmitted:
         assert core["machine_emitted_files"][0]["size_bytes"] == local.stat().st_size
         assert core["changed_files"] == []
 
-    def test_claimed_file_is_never_rerouted_as_machine_emitted(self, tmp_path):
-        """A claim promises a specialist reviewer; generation must not steal it."""
+    def test_machine_emitted_content_axis_outranks_a_claim(self, tmp_path):
+        """A claim promises a specialist reviewer only for AUTHORED files.
+
+        Classification precedes routing: whether a file is a review target at all
+        is settled before deciding which reviewer owns it. A subject-lens auditor
+        can act on a finding in generated Markdown no more than the generic lanes
+        can -- the fix belongs in the generator, and an edit to the artifact is
+        reverted by its drift guard.
+        """
         core = assemble_bundle(
             preamble="",
             sections=[_added_section("a/CLAUDE.md", [BANNER, "rule text"])],
@@ -828,6 +835,75 @@ class TestAssembleBundleMachineEmitted:
             max_chunk_bytes=1024 * 1024,
             workspace_root=None,
             claim_globs=["**/CLAUDE.md"],
+        )
+        assert core["machine_emitted_files"][0]["identifier"] == "a/CLAUDE.md"
+        assert core["machine_emitted_files"][0]["machine_emitted_axis"] == "content"
+        # Disjoint: a machine-emitted file is reported once, not in both lists.
+        assert core["claimed_files"] == []
+
+    def test_machine_emitted_declared_path_axis_outranks_a_claim(self, tmp_path):
+        """The SECOND axis outranks a claim too -- exempting one would be worse.
+
+        Were only the content axis to win, a bannerless generated file under a
+        declared write path would be treated as authored content exactly when a
+        broad claim happened to match it. That is the failure the declared-path
+        axis exists to prevent, so the two axes must rank identically.
+        """
+        ws = tmp_path / "ws"
+        doc = ws / ".plugin-data" / "a-marketplace" / "a-plugin" / "notes.md"
+        doc.parent.mkdir(parents=True)
+        doc.write_text("# notes\n\nno banner here at all\n", encoding="utf-8")
+
+        core = assemble_bundle(
+            preamble="",
+            sections=[
+                _added_section("notes.md", ["# notes", "no banner here at all"])
+            ],
+            files=[{"identifier": "notes.md", "local": str(doc), "pre_image": None}],
+            bundle_dir=tmp_path / "b",
+            max_chunk_bytes=1024 * 1024,
+            workspace_root=ws,
+            claim_globs=["**/*.md"],
+        )
+        assert core["machine_emitted_files"][0]["identifier"] == "notes.md"
+        assert (
+            core["machine_emitted_files"][0]["machine_emitted_axis"] == "declared_path"
+        )
+        assert core["claimed_files"] == []
+
+    def test_claim_still_wins_for_an_authored_file(self, tmp_path):
+        """The reversal is scoped to machine-emitted files and nothing else.
+
+        A claimed file with no banner and no declared path is still routed to the
+        subject-lens reviewer, which is the whole point of claiming it.
+        """
+        core = assemble_bundle(
+            preamble="",
+            sections=[_added_section("a/CLAUDE.md", ["# rules", "rule text"])],
+            files=[{"identifier": "a/CLAUDE.md", "local": None, "pre_image": None}],
+            bundle_dir=tmp_path / "b",
+            max_chunk_bytes=1024 * 1024,
+            workspace_root=None,
+            claim_globs=["**/CLAUDE.md"],
+        )
+        assert "machine_emitted_files" not in core
+        assert core["claimed_files"][0]["identifier"] == "a/CLAUDE.md"
+
+    def test_review_machine_emitted_returns_a_claimed_file_to_its_claim(self, tmp_path):
+        """The override is what makes the exclusion contestable rather than final.
+
+        With detection off there is no classification to precede routing, so the
+        claim decides again and the file reaches its specialist reviewer.
+        """
+        core = assemble_bundle(
+            preamble="",
+            sections=[_added_section("a/CLAUDE.md", [BANNER, "rule text"])],
+            files=[{"identifier": "a/CLAUDE.md", "local": None, "pre_image": None}],
+            bundle_dir=tmp_path / "b",
+            max_chunk_bytes=1024 * 1024,
+            workspace_root=None,
+            claim_globs=["**/CLAUDE.md"],
+            review_machine_emitted=True,
         )
         assert "machine_emitted_files" not in core
         assert core["claimed_files"][0]["identifier"] == "a/CLAUDE.md"

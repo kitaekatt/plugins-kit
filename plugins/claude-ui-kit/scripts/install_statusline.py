@@ -79,6 +79,7 @@ dirty.
 """
 
 import json
+import os
 import sys
 from datetime import date
 from pathlib import Path
@@ -110,6 +111,19 @@ def install(ctx) -> None:
     # about a "conflicting" statusLine the user intentionally chose.
     if (Path(ctx.data_dir) / CUSTOMIZED_FLAG).exists():
         ctx.log_ok("statusline: user customized (skipping)")
+        return
+
+    if not _is_canonical_data_root(ctx.data_dir):
+        # An alternate data root (e.g. the repo's own claude_plugin_test.py
+        # harness, whose DEFAULT_DATA_ROOT is plugins/data-dev) resolves to a
+        # command that only exists on THIS machine's dev tree. settings.json
+        # is fleet-shared, so writing that command there would poison every
+        # other machine's copy the moment it syncs. Refuse silently (verbose
+        # log only) rather than touch the shared file.
+        ctx.log_ok(
+            f"statusline: data dir {_posix(Path(ctx.data_dir))} is not under "
+            f"the canonical plugins/data root; skipping settings.json write"
+        )
         return
 
     installed_script = _resolve_installed_script(ctx.data_dir)
@@ -287,6 +301,36 @@ def _clear_declined_record(data_dir: str) -> None:
         pass
 
 
+def _is_canonical_data_root(data_dir: str) -> bool:
+    """True when `data_dir` sits under the canonical plugins/data root.
+
+    A plugin's data dir is `<data_root>/<marketplace>/<plugin>`, so its
+    grandparent is the shared data root. The only root that is safe to write
+    a settings.json command against is the one every machine actually has:
+    `~/.claude/plugins/data`. Any other root (e.g. plugins/data-dev, used by
+    scripts/claude_plugin_test.py to run the plugin-test harness without
+    touching real installs) names a location that exists only on this
+    machine, in this dev tree.
+    """
+    canonical = Path.home() / ".claude" / "plugins" / "data"
+    try:
+        data_root = Path(data_dir).parent.parent
+    except (OSError, ValueError):
+        return False
+    if data_root == canonical:
+        return True
+    # Compare resolved paths too. On a fleet where ~/.claude is a symlink into
+    # a checked-out settings repo, a caller that hands us an already-resolved
+    # data_dir spells the same directory differently, and a bare string compare
+    # would refuse the canonical root -- silently, since the refusal only logs
+    # verbose. Resolution can fail on a path that does not exist yet, which is
+    # not a reason to treat the root as canonical.
+    try:
+        return data_root.resolve() == canonical.resolve()
+    except (OSError, RuntimeError, ValueError):
+        return False
+
+
 def _resolve_installed_script(data_dir: str) -> Optional[Path]:
     p = Path(data_dir) / INSTALLED_SCRIPT_RELPATH
     return p if p.is_file() else None
@@ -346,14 +390,20 @@ def _is_ours(command: str) -> bool:
 
 
 def _refuse_unparseable(ctx, settings_path: Path) -> bool:
-    """Refuse to write over a settings file that exists but cannot be parsed.
+    """Refuse to write over a settings file that exists but is not a JSON object.
 
-    _load_json returns None for both "missing" and "malformed"; writing in the
-    malformed case would replace the user's entire settings file with just our
-    statusLine block, destroying every other setting. Surface a fix-all
-    failure instead and leave the file untouched.
+    _load_json returns None for both "missing" and "malformed". It also
+    returns non-None, non-dict values for valid JSON whose top level is not
+    an object -- an array, string, or number. _write_statusline only knows
+    how to merge into a dict, so either case would replace the user's entire
+    settings file with just our statusLine block, destroying every other
+    setting (or, for a non-dict top level, destroying content that was never
+    a settings dict to begin with). Surface a fix-all failure instead and
+    leave the file untouched.
     """
-    if not settings_path.is_file() or _load_json(settings_path) is not None:
+    if not settings_path.is_file():
+        return False
+    if isinstance(_load_json(settings_path), dict):
         return False
     ctx.add_failure(
         "statusline_settings_unparseable",
@@ -378,11 +428,29 @@ def _write_statusline(settings_path: Path, command: str) -> None:
     data = _load_json(settings_path) or {}
     if not isinstance(data, dict):
         data = {}
-    data["statusLine"] = {"type": "command", "command": command}
+    # Merge into whatever statusLine object is already there, updating only
+    # the two keys this plugin owns (command, type). statusLine carries
+    # documented sibling options (padding, refreshInterval,
+    # hideVimModeIndicator, ...) that belong to the user, not to us --
+    # replacing the whole object would silently discard them.
+    existing_sl = data.get("statusLine")
+    sl = dict(existing_sl) if isinstance(existing_sl, dict) else {}
+    sl["type"] = "command"
+    sl["command"] = command
+    data["statusLine"] = sl
     settings_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(settings_path, "w", encoding="utf-8") as f:
+    # Write to a temp file in the SAME directory, then os.replace it into
+    # place. os.replace is an atomic rename on every platform Python
+    # supports, so a concurrent reader either sees the old content or the
+    # new content in full -- never a truncated, mid-write state. A plain
+    # `open(settings_path, "w")` truncates immediately, so a reader could
+    # observe an empty or partially-written file while json.dump was still
+    # running. Same intent as statusline.sh's own SNAP_TMP + mv -f.
+    tmp_path = settings_path.with_name(f"{settings_path.name}.{os.getpid()}.tmp")
+    with open(tmp_path, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2)
         f.write("\n")
+    os.replace(tmp_path, settings_path)
 
 
 def _load_json(path: Path):

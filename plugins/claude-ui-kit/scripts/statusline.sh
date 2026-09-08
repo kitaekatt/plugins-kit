@@ -61,7 +61,11 @@ IFS=$'\x1f' read -r MODEL MODEL_ID DIR PCT SESS WEEK SESS_RESET WEEK_RESET EFFOR
 # exact failure this block promises never to cause.
 if [ "${STATUSLINE_RATE_LIMIT_SNAPSHOT:-1}" = "1" ] && [ -n "${HOME:-}" ] &&
    printf '%s' "$DATA" | "$JQ" -e '.rate_limits != null' >/dev/null 2>&1; then
-    SNAP_DIR="${HOME}/.claude/plugins/data/plugins-kit/claude-ui-kit"
+    # Derived from BASH_SOURCE, same as SEGMENTS_DIR below -- the snapshot
+    # lands in the data dir of the plugin that is actually running, rather
+    # than a marketplace name ("plugins-kit") hardcoded independently of
+    # where this script was installed.
+    SNAP_DIR="${STATUSLINE_SNAP_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." 2>/dev/null && pwd)}"
     SNAP_TMP="$SNAP_DIR/rate-limits.json.$$.tmp"
     {
         mkdir -p "$SNAP_DIR" &&
@@ -265,7 +269,15 @@ if [ -d "$SEGMENTS_DIR" ]; then
                 # segment that had nothing to report. One marker is appended
                 # below instead, once per render rather than once per segment.
                 if [ -n "$SEG_TIMEOUT_BIN" ]; then
-                    SEGOUT=$(printf '%s' "$DATA" | "$SEG_TIMEOUT_BIN" "$SEG_TIMEOUT" bash "$seg" 2>/dev/null || true)
+                    # Capture the exit status separately from `|| true` (which
+                    # only keeps `set -e` from killing the whole render): a
+                    # segment that prints and then fails, or is killed by the
+                    # timeout after printing, still has its stdout captured by
+                    # the command substitution. The contract is
+                    # absent-on-failure, so discard SEGOUT unless the segment
+                    # actually exited 0.
+                    SEGOUT=$(printf '%s' "$DATA" | "$SEG_TIMEOUT_BIN" "$SEG_TIMEOUT" bash "$seg" 2>/dev/null) && SEG_RC=0 || SEG_RC=$?
+                    [ "$SEG_RC" -eq 0 ] || SEGOUT=""
                 else
                     SEGOUT=""
                     SEG_SKIPPED=1

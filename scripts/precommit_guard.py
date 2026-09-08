@@ -46,6 +46,43 @@ PATTERN_DOC = PurePosixPath(
     "plugins/bootstrap/skills/bootstrap/references/durable-project-data.md"
 )
 
+# Generated files this repo commits ON PURPOSE, exempt from the "generated
+# artifact" rule ALONE.
+#
+# The rule's premise -- "we never check in generated artifacts" -- is true of
+# project-derived data and false of these ten. They are rendered by
+# scripts/gen_code_review_skills.py from one canonical template so the git and
+# p4 code-review skills cannot drift apart, and they are tracked deliberately
+# because a skill has to be readable on disk in a consumer's plugin cache. A
+# drift check (that script's --check mode, pinned by
+# tests/bootstrap/code_review/test_skill_drift.py) is what keeps them honest,
+# not the absence of a banner.
+#
+# They carry an `@generated` banner so a code review can classify them as
+# machine-emitted and route attention to the generator instead of auditing
+# output nobody can hand-edit. That banner is exactly what this rule matches on,
+# so without this allowlist the banner could not be committed at all -- and
+# `PLUGINS_KIT_ALLOW_PROJECT_DATA=1` is the wrong answer, since it would disable
+# every rule on every path for the whole commit, on every regeneration.
+#
+# The exemption is deliberately a fixed path list rather than a pattern: it must
+# not silently widen to cover a generated file someone adds later, which is the
+# case this rule is for. Every OTHER rule -- size, local terms, bootstrap write
+# targets -- still applies to these paths.
+GENERATED_ARTIFACT_EXEMPT_PATHS = frozenset(
+    {
+        f"plugins/{kit}-kit/skills/{kit}-code-review/{leaf}"
+        for kit in ("git", "p4")
+        for leaf in (
+            "SKILL.md",
+            "references/submit-gates.md",
+            "references/md-domain-review.md",
+            "references/declined-ledger.md",
+            "references/configuration.md",
+        )
+    }
+)
+
 _COPY_FUNCTIONS = frozenset({"copy", "copy2", "copyfile"})
 
 
@@ -403,9 +440,11 @@ def inspect_file(
 
     if content is None:
         return violations
-    label = (detect or default_detector())(content)
-    if label:
-        violations.append(Violation("generated artifact", path, label))
+    normalized = PurePosixPath(path).as_posix().removeprefix("./")
+    if normalized not in GENERATED_ARTIFACT_EXEMPT_PATHS:
+        label = (detect or default_detector())(content)
+        if label:
+            violations.append(Violation("generated artifact", path, label))
 
     searchable = path.casefold() + "\n" + content.decode(
         "utf-8", errors="replace"
