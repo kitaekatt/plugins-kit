@@ -437,6 +437,20 @@ class TestAsset:
     def test_asset_defines_no_light_theme_override(self):
         assert "prefers-color-scheme: light" not in hh.asset_css()
 
+    def test_asset_marks_a_human_page_card_from_its_href_alone(self):
+        css = hh.asset_css()
+        assert 'a[href="human.html"]::before' in css
+        assert 'a[href$="/human.html"]::before' in css
+
+    def test_the_card_icon_is_a_data_uri_and_fetches_nothing(self):
+        css = hh.asset_css()
+        icon = css.split('a[href$="/human.html"]::before', 1)[1].split("}", 1)[0]
+        assert 'url("data:image/svg+xml,' in icon
+        # The only scheme inside the icon is the namespace identifier the SVG
+        # document needs; nothing in it is a location a browser would request.
+        assert icon.count("://") == 1
+        assert "http://www.w3.org/2000/svg" in icon
+
     def test_asset_keeps_main_full_width(self):
         main_rule = hh.asset_css().split("main {", 1)[1].split("}", 1)[0]
         assert "width: 100%" in main_rule
