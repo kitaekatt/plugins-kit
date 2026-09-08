@@ -628,6 +628,13 @@ exactly that. Width still governs an entry with NO authored label: over-length
 text falls back to a whole clause derived at a separator, and is never cut
 mid-word. `tests/bootstrap/test_display_no_paths.py` enforces both halves.
 
+ONE EXCEPTION, and it is narrow: an entry whose whole purpose is to hand the
+user a command to run keeps that command in the display text. `needs elevation
+- run: <cmd>` and the fix-all invocation are the cases -- there the command IS
+the payload, and hiding it in the log defeats the entry. The test for the
+exception is whether the reader must retype the string; a path or command they
+only need in order to DIAGNOSE goes to the log.
+
 The venv handler applies this rule to `uv sync --project <absolute path>` and
 stale editable-install diagnostics. It logs those details as `quiet` and
 displays only `venv: created`, `venv: re-synced`, or `venv: FAILED`. An

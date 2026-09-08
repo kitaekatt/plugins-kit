@@ -2362,13 +2362,17 @@ def _link_tool_dir_to_path(result, prefix, action_entries):
     if normalize_path_for_compare(tool_dir) not in norm:
         os.environ["PATH"] = tool_dir + os.pathsep + current_path
     if not ok:
-        action_entries.append(
+        _append_detail(
+            action_entries,
             f"{prefix}{result.subject}: FAILED - could not persist PATH "
-            f"for {tool_dir} ({msg})"
+            f"for {tool_dir} ({msg})",
+            display=f"{prefix}{result.subject}: FAILED - could not persist PATH",
         )
     else:
-        action_entries.append(
-            f"{prefix}{result.subject}: on disk but not on PATH -- added {tool_dir} ({msg})"
+        _append_detail(
+            action_entries,
+            f"{prefix}{result.subject}: on disk but not on PATH -- added {tool_dir} ({msg})",
+            display=f"{prefix}{result.subject}: added to PATH",
         )
 
 
@@ -3913,8 +3917,10 @@ def _process_project_config(project_config_section, plugin_data_dir, plugin_root
             # source control (e.g. Perforce) hasn't checked it out for delete.
             # Surface as a warning and let the user resolve manually rather than
             # dying mid-bootstrap.
-            action_entries.append(
-                f"project config: WARNING failed to reconcile {legacy_path} -> {project_config_path}: {e}"
+            _append_detail(
+                action_entries,
+                f"project config: WARNING failed to reconcile {legacy_path} -> {project_config_path}: {e}",
+                display="project config: WARNING legacy reconcile failed",
             )
 
     file_changed = False  # Track whether project_data was modified from disk state
@@ -3924,8 +3930,11 @@ def _process_project_config(project_config_section, plugin_data_dir, plugin_root
         try:
             project_data = load_yaml_config(project_config_path)
         except ConfigError as exc:
-            action_entries.append(
-                f"project config: FAILED to load {project_config_path} - {exc}"
+            _append_detail(
+                action_entries,
+                f"project config: FAILED to load {project_config_path} - {exc}",
+                display=(f"project config: FAILED to load "
+                         f"{os.path.basename(project_config_path)}"),
             )
             return False
         missing_fields = [f for f in required_field_names if not project_data.get(f)]
@@ -3994,8 +4003,11 @@ def _process_project_config(project_config_section, plugin_data_dir, plugin_root
     defaults_applied_now = _apply_project_defaults(project_data, required_fields_spec)
     if defaults_applied_now:
         save_yaml_config(project_config_path, project_data)
-        action_entries.append(
-            f"project config: applied defaults [{', '.join(defaults_applied_now)}] to {project_config_path}"
+        _append_detail(
+            action_entries,
+            f"project config: applied defaults [{', '.join(defaults_applied_now)}] to {project_config_path}",
+            display=(f"project config: applied defaults to "
+                     f"{os.path.basename(project_config_path)}"),
         )
         file_changed = True
 
@@ -4027,8 +4039,11 @@ def _process_project_config(project_config_section, plugin_data_dir, plugin_root
         try:
             data_config = load_yaml_config(data_config_path)
         except ConfigError as exc:
-            action_entries.append(
-                f"project config: FAILED to load {data_config_path} - {exc}"
+            _append_detail(
+                action_entries,
+                f"project config: FAILED to load {data_config_path} - {exc}",
+                display=(f"project config: FAILED to load "
+                         f"{os.path.basename(data_config_path)}"),
             )
             return True
     else:
