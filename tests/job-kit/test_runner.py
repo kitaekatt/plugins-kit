@@ -527,6 +527,65 @@ def test_job_extras_reach_a_codex_shaped_backend(tmp_path: Path) -> None:
     assert backend.calls[0][3].extras == extras
 
 
+def test_unmapped_deny_floor_does_not_arm_the_codex_sandbox(tmp_path: Path) -> None:
+    """A floor naming only unmapped tools requires nothing, so the sandbox is
+    not armed -- arming it here would be a fake gate the floor never asked for."""
+    backend = FakeBackend()
+    backend.name = "codex-cli"
+
+    def codex_advertisement() -> dict[str, Capabilities]:
+        return {"codex-cli": CODEX_CAPABILITIES}
+
+    run_jobs(
+        [_job(tmp_path)],
+        tmp_path / "unmapped-floor.sqlite3",
+        disallowed_tools="WebFetch",
+        capabilities_provider=codex_advertisement,
+        backend_factory=_factory_for(backend),
+    )
+
+    assert backend.calls[0][3].extras == {}
+
+
+def test_filesystem_write_deny_floor_arms_the_codex_sandbox(tmp_path: Path) -> None:
+    """A floor naming a filesystem-write tool arms the read-only sandbox --
+    this is the guarantee the endpoint was selected on."""
+    backend = FakeBackend()
+    backend.name = "codex-cli"
+
+    def codex_advertisement() -> dict[str, Capabilities]:
+        return {"codex-cli": CODEX_CAPABILITIES}
+
+    run_jobs(
+        [_job(tmp_path)],
+        tmp_path / "fs-write-floor.sqlite3",
+        disallowed_tools="Edit",
+        capabilities_provider=codex_advertisement,
+        backend_factory=_factory_for(backend),
+    )
+
+    assert backend.calls[0][3].extras["sandbox"] == "read-only"
+
+
+def test_empty_deny_floor_does_not_arm_the_codex_sandbox(tmp_path: Path) -> None:
+    """An empty (but non-None) floor requires nothing, same as an unmapped one."""
+    backend = FakeBackend()
+    backend.name = "codex-cli"
+
+    def codex_advertisement() -> dict[str, Capabilities]:
+        return {"codex-cli": CODEX_CAPABILITIES}
+
+    run_jobs(
+        [_job(tmp_path)],
+        tmp_path / "empty-floor.sqlite3",
+        disallowed_tools="",
+        capabilities_provider=codex_advertisement,
+        backend_factory=_factory_for(backend),
+    )
+
+    assert backend.calls[0][3].extras == {}
+
+
 def test_runner_marks_not_run_failed_and_timeout_rejected(tmp_path: Path) -> None:
     """The runner treats an unavailable check as failure, but a timeout as rejection."""
     backend = FakeBackend()

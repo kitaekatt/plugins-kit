@@ -985,7 +985,7 @@ and nothing above it decides a page.
 | remediate workflow | NONE -- report-only, deliberately |
 | verdicts | `PAGE-WARRANTED` / `NO-PAGE` |
 | standards | `../standards/human-html-standards.md` |
-| supported flags | `--json` |
+| supported flags | `--json`, `--tree` |
 | unit | one directory's computed territory |
 
 **The subject is the computed TERRITORY (HC-1, HC-4), not an unbounded
@@ -999,10 +999,10 @@ Run `scripts/discover_human_html.py <repo-root> <directory>` first. Use its
 computed territory, current DR-2 stamp, dirty-input state, and descendant-record
 state as given.
 
-This branch handles exactly ONE directory. It does not enumerate a tree or
-dispatch the tree-wide placement pass. At tree scale, the caller invokes these
-runs deepest first. The caller completes placement for the whole requested tree
-before any generation starts (AD-1, TS-1).
+Without `--tree`, this branch handles exactly ONE directory. With `--tree`, the
+tree driver below invokes this same unit deepest first. The caller completes
+placement for the whole requested tree before any generation starts (AD-1,
+TS-1).
 
 **A stale or missing prerequisite record is a hard gate (TS-2).** Do not decide
 the parent from guessed descendant state. Refresh the named descendant placement
@@ -1096,7 +1096,50 @@ Decision record (DR-1): <record path> (persisted)
 
 Then STOP. Do not invoke generation. The generation lane consumes the persisted
 decision and identity as settled input. It writes or removes HTML. It writes no
-record field.
+record field except `references`.
+
+### Tree-wide placement entry point (AD-1, DR-1 to DR-4, TS-1 to TS-3)
+
+Use this entry point for `analyze human-html <repository-root> --tree`. The
+agent applies the single-directory procedure above to each work item. The
+stdlib driver owns the ordered cursor and the record write.
+
+Start the plan with this command:
+
+```
+python ${CLAUDE_PLUGIN_ROOT}/skills/md-domain/scripts/human_html_tree.py placement <repository-root> --json
+```
+
+Use only the `next` item from the result. Do not cache the remaining `work`
+array. A persisted child decision can change each parent territory, so run the
+plan command after every record write.
+
+For each `next` item:
+
+1. Give a placement-only prompt the complete item and this standards document.
+   Pass `../standards/human-html-standards.md` as a complete file input. Do not
+   summarize its HC criteria.
+2. Research only the listed owned directories (HC-4).
+3. Apply HC-1 through HC-3. Produce a decision and one identity line only.
+4. Persist the result with this command:
+
+```
+python ${CLAUDE_PLUGIN_ROOT}/skills/md-domain/scripts/human_html_tree.py record-placement "<repository-root>" "<directory>" --decision <page-or-none> --identity "<identity>" --source-sha <source-sha> --dirty <true-or-false> --brief-sha256 <digest>
+```
+
+Pass `source_sha`, `dirty`, and `brief_sha256` from the same `next` item. The
+driver refuses a changed brief and an out-of-order directory. It computes the
+DR-1 path, preserves `instructions`, preserves page references, and validates
+the record through DR-3. A `none` decision records an empty identity and
+references array.
+
+Repeat until the plan reports `complete`. A `blocked` result names the missing
+or invalid prerequisite. Report it and stop the placement pass. Do not start
+generation from a partial placement pass (AD-1).
+
+Fresh records and their fresh prerequisites are the completion markers. After
+an interruption, run the plan command again. It skips those records and returns
+the first unfinished directory in deepest-first order.
 
 ## Cross-references
 

@@ -120,6 +120,39 @@ def test_selection_skips_an_unknown_endpoint_name(tmp_path: Path) -> None:
     assert calls == ["unknown", "second"]
 
 
+def test_selection_does_not_fall_back_to_an_endpoint_keyed_advertisement(
+    tmp_path: Path,
+) -> None:
+    """The returned backend name owns the advertisement -- an endpoint-keyed
+    record for a DIFFERENT (stale/colliding) name must not satisfy selection,
+    or execution (which looks up only by backend name) can find nothing where
+    selection thought it found a match."""
+
+    class RenamedBackend(FakeBackend):
+        name = "unadvertised-v2"
+
+    def factory(endpoint: str) -> BackendSelection:
+        return BackendSelection(endpoint, "fake", RenamedBackend(), "fake-model")
+
+    job = Job(
+        id="stale-key",
+        prompt=Prompt(user="hello"),
+        endpoint_preference=("old-name",),
+        directory=tmp_path,
+        contract=Contract(command=("true",), directory=tmp_path),
+    )
+    # A satisfying record keyed by the ENDPOINT name only -- no
+    # "unadvertised-v2" entry exists, which is what execution would look up.
+    advertisement = {"old-name": Capabilities(adapter="old-name")}
+
+    with pytest.raises(job_kit_select.NoCompatibleEndpointError):
+        select_endpoint(
+            job,
+            capabilities=advertisement,
+            backend_factory=factory,
+        )
+
+
 def test_requirements_match_delegates_to_llm_scripting_kit_list_shorthand() -> None:
     """The list shorthand ({"params": [...]}) matches through the LSK matcher."""
     capabilities = Capabilities(
@@ -150,21 +183,24 @@ def test_requirements_match_delegates_to_llm_scripting_kit_dotted_path() -> None
     assert requirements_match(capabilities, mismatched) is False
 
 
-def test_import_raises_shared_lib_too_old_when_match_capabilities_missing() -> None:
+def test_import_raises_shared_lib_too_old_when_frontier_symbol_missing() -> None:
     """An old llm-scripting-kit shared lib fails import with a clear message.
 
     Simulates a job-kit venv linked (by the bootstrap shared-lib linker,
-    which pins no version) against an llm-scripting-kit older than 0.23.0,
-    where llm_scripting_kit.completion has no match_capabilities. Re-imports
-    job_kit.select against a stub module missing that symbol and restores
-    the real module afterward so later tests are unaffected.
+    which pins no version) against an llm-scripting-kit older than
+    _MIN_LLM_SCRIPTING_KIT_VERSION, where llm_scripting_kit.completion has
+    every symbol job-kit uses EXCEPT the frontier one,
+    subjects_for_disallowed_tools (added with the effect-based deny floor).
+    Re-imports job_kit.select against a stub module missing that symbol and
+    restores the real module afterward so later tests are unaffected.
     """
     stub = types.ModuleType("llm_scripting_kit.completion")
     stub.BackendSelection = llm_scripting_kit_completion.BackendSelection
     stub.Capabilities = llm_scripting_kit_completion.Capabilities
     stub.adapter_capabilities = llm_scripting_kit_completion.adapter_capabilities
     stub.create_backend = llm_scripting_kit_completion.create_backend
-    # match_capabilities deliberately omitted: the symbol added in 0.23.0.
+    stub.match_capabilities = llm_scripting_kit_completion.match_capabilities
+    # subjects_for_disallowed_tools deliberately omitted: the frontier symbol.
 
     real_completion = sys.modules["llm_scripting_kit.completion"]
     real_select = sys.modules["job_kit.select"]
@@ -191,4 +227,16 @@ def test_import_raises_shared_lib_too_old_when_match_capabilities_missing() -> N
     # What the contract actually requires is that the message name the owning
     # plugin, a version the user can act on, and the missing symbol.
     assert job_kit_select._MIN_LLM_SCRIPTING_KIT_VERSION in message
-    assert "match_capabilities" in message
+    assert "subjects_for_disallowed_tools" in message
+
+
+def test_readme_version_floor_matches_the_declared_frontier() -> None:
+    """The README's minimum-version claim tracks the code, not a stale number."""
+    readme = (
+        Path(__file__).resolve().parents[2] / "plugins" / "job-kit" / "README.md"
+    ).read_text(encoding="utf-8")
+    assert (
+        f"llm-scripting-kit >= {job_kit_select._MIN_LLM_SCRIPTING_KIT_VERSION}"
+        in readme
+    )
+    assert "subjects_for_disallowed_tools" in readme

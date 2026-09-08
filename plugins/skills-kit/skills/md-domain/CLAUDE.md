@@ -777,6 +777,30 @@ claude_md:
         file, since that file does not ship to a consumer's plugin cache.
       origin: AD-3 (human-html-standards.md), ratified 2026-09-04; test-file citation moved here 2026-09-06 so the shipped standards doc names no repo-relative test path.
       added: "2026-09-06"
+    - id: regeneration_retention_authority
+      keywords: [regeneration, retention authority, section 6.4, step 4 guard, unverifiable fact, loss-free deletion]
+      summary: Regeneration retention is governed by claude-md-standards.md section 6.4; Step 4's summarize-and-reference guard applies on top of that authority.
+      detail: |
+        An earlier revision of the generation-lane paragraph said the preservation half of regeneration
+        "is already carried by the summarize-and-reference rule and its loss-free-deletion
+        guard in Step 4". That was too weak to carry the weight: those rules govern
+        whether a RESTATEMENT loses value, not whether an unverifiable fact survives a
+        rewrite at all. Section 6.4 is the authority now; Step 4's guard still applies on
+        top of it.
+      origin: Generation-lane provenance relocated from the producing procedure during the SR-4 remediation.
+      added: "2026-09-07"
+    - id: tree_scale_generation_has_a_lane
+      keywords: [tree-scale generation, fan-out machinery, single-document generation, human html tree, generation lane, workflow lane]
+      summary: Tree-scale generation has a dedicated lane because its runs require ordering and coordination; single-document generation still needs no lane.
+      detail: |
+        An earlier revision of the generation-lane paragraph stated that the verb "has no fan-out
+        machinery and gains none: no Workflow lanes ... New generation machinery would be
+        new scope." That was the correct call while the only known consumer was a
+        single-document request; it was overturned deliberately once tree-scale
+        generation became a real workload. Single-document generation is unaffected and
+        still needs no lane.
+      origin: Generation-lane provenance relocated from the producing procedure during the SR-4 remediation.
+      added: "2026-09-07"
     - id: detect_lanes_never_take_a_configurable_model
       keywords: [detect lane model, adapter seam, md-audit-evidence-pack, configurable model, in-process prompt build, pinned frontier model]
       summary: The detect/classify lanes' model is pinned, never configurable; the rationale is audit-lane.md's "Model pinning (not negotiable)" section. The design record for the adapter seam is a plugins-kit planning document, not shipped content.

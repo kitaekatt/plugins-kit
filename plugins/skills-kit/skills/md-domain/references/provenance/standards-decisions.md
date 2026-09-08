@@ -300,4 +300,25 @@ claude_md:
         reference, CSS-owned structure, PC-2 checker coverage, and three
         regenerated comparison pages.
       added: "2026-09-04"
+    - id: human_html_territory_subject
+      keywords: [human-html, territory, unbounded subtree, overlap, ownership edge, AD-1, placement]
+      summary: The human-html subject is a territory bounded by the next descendant page because the unbounded-subtree argument missed overlap.
+      detail: |
+        **Territory overturns an argued decision, not an oversight.** The earlier
+        subject was one directory and its whole source subtree, and
+        an earlier revision of `references/lanes/coverage-lane.md` defended it explicitly as the one place this
+        artifact inverts the code lane's directory-only rule: "what is this directory
+        for" is a question about everything underneath it, so the material had to be the
+        subtree. That reasoning is sound and territory keeps it -- the subject is still a
+        subtree, and still not one directory's own files. What the argument missed is
+        overlap. With no truncation, a deep directory is analyzed as material by every
+        page above it, so the same files are judged two or three times, no page can
+        state what it is responsible for, and each ancestor either duplicates its
+        descendants or silently drops them. Stopping at the next page down keeps the
+        subtree subject and removes the overlap; it also makes the subject computable
+        only after placement, which is why AD-1 splits the passes. A future reader who
+        wants the unbounded subtree back must answer the overlap, not merely restate the
+        subtree argument.
+      origin: Human-html standards provenance relocated from the standards document during the SR-4 remediation.
+      added: "2026-09-07"
 ```

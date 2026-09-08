@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# job-kit -- shim that invokes the bundled CLI.
+#
+# Interpreter preference:
+#   1. the plugin venv bootstrap provisions -- it has the shared-lib links
+#      (llm_scripting_kit) job-kit requires at import time.
+#   2. anything on PATH.
+# The target is lib/job_kit_entrypoint.py rather than job_kit.cli directly:
+# it re-execs itself under the plugin venv (a no-op once already there), so
+# even the PATH fallback below gets a correct, actionable diagnostic instead
+# of a raw ImportError when the shared libs are not linked into that
+# interpreter.
+
+set -uo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PLUGIN_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+ENTRYPOINT="$PLUGIN_ROOT/lib/job_kit_entrypoint.py"
+DATA_DIR="${HOME}/.claude/plugins/data/plugins-kit/job-kit"
+
+OS="$(uname -s 2>/dev/null || echo Unknown)"
+if [[ "$OS" == MINGW* ]] || [[ "$OS" == MSYS* ]] || [[ "$OS" == CYGWIN* ]]; then
+    VENV_PY="${DATA_DIR}/.venv/Scripts/python.exe"
+else
+    VENV_PY="${DATA_DIR}/.venv/bin/python"
+fi
+
+if [ -x "$VENV_PY" ]; then
+    PY="$VENV_PY"
+elif command -v python3 >/dev/null 2>&1; then
+    PY="python3"
+elif command -v python >/dev/null 2>&1; then
+    PY="python"
+else
+    echo "job-kit: no Python interpreter found" >&2
+    exit 1
+fi
+
+exec "$PY" "$ENTRYPOINT" "$@"

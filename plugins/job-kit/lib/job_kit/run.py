@@ -53,6 +53,7 @@ from .model import (
 # ImportError naming a symbol the user has never heard of.
 from .select import SelectionError, select_endpoint
 from llm_scripting_kit.completion import subjects_for_disallowed_tools
+from llm_scripting_kit.completion.capabilities import FILESYSTEM_WRITE
 from .store import DuplicateJobError, JobStore, StoreError, UnknownRunError
 from .workspace import WorkspaceError, WorkspaceManager, WorkspaceResolution
 
@@ -367,12 +368,17 @@ def _backend_options(
     # control only delivers it at read-only -- the adapter default is
     # workspace-write. Selecting the endpoint on that guarantee and then not
     # arming it would make the floor a fake gate, so set it here unless the job
-    # asked for a specific mode itself.
+    # asked for a specific mode itself. Gate on the SUBJECTS the floor actually
+    # requires, not merely on a floor being present -- a floor naming only
+    # tools with no known subject (subjects_for_disallowed_tools returns an
+    # empty frozenset) asked for no guarantee, and arming the sandbox anyway
+    # would restrict the run without the floor ever having required it.
     extras = dict(extras_value)
     if (
-        run_floor is not None
+        run_floor
         and getattr(selection.backend, "name", None) == "codex-cli"
         and "sandbox" not in extras
+        and FILESYSTEM_WRITE in subjects_for_disallowed_tools(run_floor)
     ):
         extras["sandbox"] = "read-only"
 

@@ -91,14 +91,17 @@ The lane records have this target shape:
 ### AD-2. Explicit grammar
 
 - **Level:** REQUIRED
-- **Rule:** Route `analyze human-html <directory> [--json]` to
+- **Rule:** Route `analyze human-html <directory> [--tree] [--json]` to
 `coverage_human_html_directory`. Route
-`generate human-html <directory> [--coverage <path>]` to
-`generate_human_html`. Keep `analyze <directory>` and
-`generate claude-md <directory>` unchanged.
+`generate human-html <directory> [--coverage <path>] [--tree]
+[--framework <path>]` to `generate_human_html`. With `--tree`, treat the named
+directory as the repository root and use the tree driver. Require `--framework`
+for tree generation. Keep `analyze <directory>` and `generate claude-md
+<directory>` unchanged.
 - **Rationale:** An explicit selector avoids guessing between two analysis subjects. Changing the legacy defaults was rejected because it alters established calls.
 - **Test:** Each invocation selects one lane. The human analysis output is the
-only accepted coverage input for human generation.
+only accepted coverage input for human generation. Tree generation completes
+tree placement before it starts a separate leaf-first generation pass.
 
 ### AD-3. Registry integrity update
 
@@ -127,21 +130,7 @@ the analyzing or generating agent.
 Evidence can come from code, project guidance, documentation, data, assets, configuration, and finished descendant records anywhere inside the territory.
 Project guidance is evidence, not the source model. The analysis applies HC criteria, not the CV criteria in `references/standards/coverage-standards.md`.
 
-**Territory overturns an argued decision, not an oversight.** The earlier
-subject was one directory and its whole source subtree, and
-an earlier revision of `references/lanes/coverage-lane.md` defended it explicitly as the one place this
-artifact inverts the code lane's directory-only rule: "what is this directory
-for" is a question about everything underneath it, so the material had to be the
-subtree. That reasoning is sound and territory keeps it -- the subject is still a
-subtree, and still not one directory's own files. What the argument missed is
-overlap. With no truncation, a deep directory is analyzed as material by every
-page above it, so the same files are judged two or three times, no page can
-state what it is responsible for, and each ancestor either duplicates its
-descendants or silently drops them. Stopping at the next page down keeps the
-subtree subject and removes the overlap; it also makes the subject computable
-only after placement, which is why AD-1 splits the passes. A future reader who
-wants the unbounded subtree back must answer the overlap, not merely restate the
-subtree argument.
+The unbounded-subtree subject this replaced, and the overlap argument that retired it, are recorded in `references/provenance/standards-decisions.md`.
 
 ### HC-1. Checkable page warrant
 

@@ -64,7 +64,36 @@ def test_status_does_not_create_a_missing_store(tmp_path: Path, capsys: Any) -> 
 
 
 def test_package_reports_missing_bootstrap_before_cli_import(tmp_path: Path) -> None:
-    """A bare package import gets the canonical provisioning message."""
+    """A bare package import gets the canonical provisioning message when the
+    required owner, llm_scripting_kit, is unimportable."""
+    repo_root = Path(__file__).resolve().parents[2]
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "HOME": str(tmp_path / "home"),
+            "PYTHONNOUSERSITE": "1",
+            "PYTHONPATH": str(repo_root / "plugins" / "job-kit" / "lib"),
+            "_BOOTSTRAP_GUARD_VENV_REEXEC": "1",
+        }
+    )
+    result = subprocess.run(
+        [sys.executable, "-S", "-c", "import job_kit"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        env=environment,
+        check=False,
+    )
+
+    assert result.returncode == 3
+    assert "the 'plugins-kit:bootstrap' plugin has not provisioned" in result.stderr
+    assert "missing: llm_scripting_kit" in result.stderr
+    assert "No module named" not in result.stderr
+
+
+def test_package_import_succeeds_without_bootstrap_lib_present(tmp_path: Path) -> None:
+    """job_kit imports without bootstrap_lib present; only llm_scripting_kit is required."""
     repo_root = Path(__file__).resolve().parents[2]
     environment = os.environ.copy()
     environment.update(
@@ -81,6 +110,37 @@ def test_package_reports_missing_bootstrap_before_cli_import(tmp_path: Path) -> 
         }
     )
     result = subprocess.run(
+        [sys.executable, "-S", "-c", "import job_kit; print('imported')"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        env=environment,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert result.stdout.strip() == "imported"
+
+
+def test_absent_llm_scripting_kit_names_the_install_remedy(tmp_path: Path) -> None:
+    """A provisioned job-kit missing llm-scripting-kit is told to install it,
+    not told that bootstrap has not provisioned job-kit."""
+    repo_root = Path(__file__).resolve().parents[2]
+    home = tmp_path / "home"
+    log = home / ".claude" / "plugins" / "data" / "plugins-kit" / "job-kit"
+    log.mkdir(parents=True)
+    (log / "bootstrap.log").write_text("provisioned\n", encoding="utf-8")
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "HOME": str(home),
+            "PYTHONNOUSERSITE": "1",
+            "PYTHONPATH": str(repo_root / "plugins" / "job-kit" / "lib"),
+            "_BOOTSTRAP_GUARD_VENV_REEXEC": "1",
+        }
+    )
+    result = subprocess.run(
         [sys.executable, "-S", "-c", "import job_kit"],
         capture_output=True,
         text=True,
@@ -91,9 +151,53 @@ def test_package_reports_missing_bootstrap_before_cli_import(tmp_path: Path) -> 
     )
 
     assert result.returncode == 3
-    assert "the 'plugins-kit:bootstrap' plugin has not provisioned" in result.stderr
-    assert "missing: bootstrap_lib" in result.stderr
-    assert "No module named" not in result.stderr
+    assert "claude plugin install llm-scripting-kit@plugins-kit" in result.stderr
+    assert "has not provisioned" not in result.stderr
+
+
+def test_stale_llm_scripting_kit_names_the_update_remedy(tmp_path: Path) -> None:
+    """A present-but-too-old llm-scripting-kit is told to update, not install."""
+    repo_root = Path(__file__).resolve().parents[2]
+    fake_root = tmp_path / "fake-libs"
+    fake_llm = fake_root / "llm_scripting_kit"
+    fake_llm.mkdir(parents=True)
+    (fake_llm / "__init__.py").write_text("", encoding="utf-8")
+    (fake_llm / "completion.py").write_text(
+        "class BackendSelection:\n    pass\n"
+        "class Capabilities:\n    pass\n"
+        "def adapter_capabilities():\n    return {}\n"
+        "def create_backend(*a, **k):\n    pass\n"
+        "def match_capabilities(*a, **k):\n    return True\n"
+        "# subjects_for_disallowed_tools deliberately omitted: the too-old frontier.\n",
+        encoding="utf-8",
+    )
+    home = tmp_path / "home"
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "HOME": str(home),
+            "PYTHONNOUSERSITE": "1",
+            "PYTHONPATH": os.pathsep.join(
+                (
+                    str(fake_root),
+                    str(repo_root / "plugins" / "job-kit" / "lib"),
+                )
+            ),
+            "_BOOTSTRAP_GUARD_VENV_REEXEC": "1",
+        }
+    )
+    result = subprocess.run(
+        [sys.executable, "-S", "-c", "import job_kit"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        env=environment,
+        check=False,
+    )
+
+    assert "claude plugin update llm-scripting-kit@plugins-kit" in result.stderr
+    assert "claude plugin install llm-scripting-kit@plugins-kit" not in result.stderr
 
 
 def test_importing_package_does_not_reexec_under_an_arbitrary_interpreter(
