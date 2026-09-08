@@ -126,20 +126,29 @@ if not callable(_main):
 _CLAIMED_FILE_MIN_VERSION = "0.37.0"
 
 
-def _supports_claimed_file() -> bool:
-    """True if the installed review_lane._parse_args accepts --claimed-file.
+def _supports_claimed_file() -> bool | None:
+    """True/False if the probe ran and observed an answer; None if it could
+    not run at all because `_parse_args` is absent.
 
-    Parses a throwaway argv containing every required flag (--lane, --model,
-    --chunk) plus --claimed-file. `--chunk` is `type=Path` in every version
-    seen so far, which accepts any string without touching the filesystem,
-    so this is safe to call before any real dispatch. A pre-0.37.0 parser
-    raises SystemExit(2) ("unrecognized arguments: --claimed-file"); this
-    function converts that signal into a plain bool and swallows the stderr
-    argparse would otherwise print, since the caller reports its own message.
+    `_parse_args` is PRIVATE to llm-scripting-kit -- an owner that renames or
+    drops it is not thereby "too old"; it is simply an owner this probe
+    cannot ask, and that must not be misdiagnosed as the genuine too-old
+    signal (a present parser that rejects --claimed-file). Distinguishing
+    absent-probe (None) from present-and-rejects (False) is what lets the
+    caller fall through to main() in the former case instead of refusing.
+
+    When callable, parses a throwaway argv containing every required flag
+    (--lane, --model, --chunk) plus --claimed-file. `--chunk` is `type=Path`
+    in every version seen so far, which accepts any string without touching
+    the filesystem, so this is safe to call before any real dispatch. A
+    pre-0.37.0 parser raises SystemExit(2) ("unrecognized arguments:
+    --claimed-file"); this function converts that signal into a plain bool
+    and swallows the stderr argparse would otherwise print, since the caller
+    reports its own message.
     """
     parse_args = getattr(_review_lane, "_parse_args", None)
     if not callable(parse_args):
-        return False
+        return None
     probe_argv = [
         "--lane", "_probe", "--model", "_probe", "--chunk", "_probe",
         "--claimed-file", "_probe",
@@ -153,7 +162,7 @@ def _supports_claimed_file() -> bool:
 
 
 if __name__ == "__main__":
-    if "--claimed-file" in sys.argv[1:] and not _supports_claimed_file():
+    if "--claimed-file" in sys.argv[1:] and _supports_claimed_file() is False:
         _refuse_too_old(
             "review_lane._parse_args does not accept --claimed-file",
             min_version=_CLAIMED_FILE_MIN_VERSION,

@@ -612,6 +612,37 @@ def find_untracked_or_unstaged(
     return items
 
 
+# Hygiene `kind`s that are the review's OWN subject in a given mode, and so
+# must not be reported back as forgotten work to fold in. Keyed by
+# range_spec sentinel; a range/ref review (committed history) reviews none
+# of the working-tree/index state, so it is absent here and every kind stays
+# reported.
+_HYGIENE_KINDS_IN_SCOPE_BY_MODE = {
+    # __staged__ reviews the index vs HEAD (`git diff --cached`): a staged
+    # file IS the review. An unstaged worktree edit made after staging is
+    # NOT part of that diff, so it stays reported -- it is exactly the kind
+    # of change the author could have forgotten to also stage.
+    "__staged__": {"staged_uncommitted"},
+    # __working_tree__ reviews the worktree vs HEAD (`git diff`, which
+    # includes both staged and unstaged changes): both a staged file and an
+    # unstaged modification/deletion ARE the review.
+    "__working_tree__": {"staged_uncommitted", "unstaged_modified", "unstaged_deleted"},
+}
+
+
+def _filter_hygiene_kinds_for_mode(items: list[dict], range_spec: str) -> list[dict]:
+    """Drop hygiene-scan entries whose `kind` is the review's own subject.
+
+    "untracked" is never in an exclusion set above -- an untracked file is
+    never part of any diff, in any mode, so it always stays reported. That
+    is the case the scan exists to catch.
+    """
+    in_scope = _HYGIENE_KINDS_IN_SCOPE_BY_MODE.get(range_spec)
+    if not in_scope:
+        return items
+    return [item for item in items if item.get("kind") not in in_scope]
+
+
 def find_merge_conflicts(repo_root: Path) -> list[dict]:
     """`git ls-files -u` returns unmerged paths (one row per stage).
 
@@ -847,6 +878,7 @@ def build_bundle(
             touched_dirs.append(d)
 
     untracked_or_unstaged = find_untracked_or_unstaged(repo_root, touched_dirs)
+    untracked_or_unstaged = _filter_hygiene_kinds_for_mode(untracked_or_unstaged, range_spec)
     merge_conflicts = find_merge_conflicts(repo_root)
 
     # Declined-findings ledger. The baseline is the range base SHA; when it moves

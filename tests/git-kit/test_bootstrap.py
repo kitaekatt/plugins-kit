@@ -67,11 +67,14 @@ class TestCheckAuth:
         with patch.object(subprocess, "run", return_value=fake):
             assert gb._check_auth("gh") == (False, None)
 
-    def test_subprocess_error_means_not_authed(self):
+    def test_subprocess_error_means_probe_error(self):
+        """A timeout (or other exec-level failure) is a probe error, not a genuine
+        negative -- it must not collapse into the same falsy answer as 'not logged
+        in'."""
         with patch.object(
             subprocess, "run", side_effect=subprocess.TimeoutExpired("gh", 10)
         ):
-            assert gb._check_auth("gh") == (False, None)
+            assert gb._check_auth("gh") == (None, None)
 
 
 # ---------------------------------------------------------------------------
@@ -80,6 +83,27 @@ class TestCheckAuth:
 
 
 class TestCheckOrgMembership:
+    def test_nonzero_exit_is_a_probe_error_not_a_negative(self, monkeypatch):
+        """A failed API call says nothing about membership.
+
+        Genuine non-membership is observed only on a COMPLETED call: gh exits
+        zero, returns the org list, and the required org is absent from it. A
+        non-zero exit means the call itself did not complete -- a missing
+        read:org scope, a rate limit, an outage -- so reporting it as a
+        definitive negative sends an authenticated member to ask an
+        administrator for access they already hold.
+        """
+        def fake_run(*args, **kwargs):
+            return subprocess.CompletedProcess(
+                args=[], returncode=1, stdout="",
+                stderr="HTTP 403: Resource not accessible by personal access token",
+            )
+
+        monkeypatch.setattr(subprocess, "run", fake_run)
+        status, orgs = gb._check_org_membership("gh", "WidgetCo")
+        assert status is None
+        assert orgs == []
+
     def test_member(self):
         fake = subprocess.CompletedProcess(["gh"], 0, stdout="acme\nWidgetCo\n", stderr="")
         with patch.object(subprocess, "run", return_value=fake):
@@ -100,14 +124,25 @@ class TestCheckOrgMembership:
         assert member is False
         assert orgs == ["acme"]
 
-    def test_api_failure_returns_false_and_empty(self):
+    def test_api_failure_is_a_probe_error(self):
+        """An HTTP failure is a probe error, not a membership verdict."""
         fake = subprocess.CompletedProcess(["gh"], 1, stdout="", stderr="HTTP 403")
         with patch.object(subprocess, "run", return_value=fake):
-            assert gb._check_org_membership("gh", "WidgetCo") == (False, [])
+            assert gb._check_org_membership("gh", "WidgetCo") == (None, [])
 
-    def test_subprocess_error_returns_false_and_empty(self):
+    def test_absent_from_a_returned_list_is_the_genuine_negative(self):
+        """The one shape that means non-membership: a completed call whose
+        org list does not contain the required org."""
+        fake = subprocess.CompletedProcess(["gh"], 0, stdout="OtherOrg\n", stderr="")
+        with patch.object(subprocess, "run", return_value=fake):
+            assert gb._check_org_membership("gh", "WidgetCo") == (False, ["OtherOrg"])
+
+    def test_subprocess_error_returns_probe_error(self):
+        """An OSError (or other exec-level failure) is a probe error, not a genuine
+        negative -- it must not collapse into the same falsy answer as 'not a
+        member'."""
         with patch.object(subprocess, "run", side_effect=OSError("boom")):
-            assert gb._check_org_membership("gh", "WidgetCo") == (False, [])
+            assert gb._check_org_membership("gh", "WidgetCo") == (None, [])
 
 
 # ---------------------------------------------------------------------------
@@ -231,6 +266,40 @@ class TestBootstrap:
         assert "ask @admin for access" in kwargs["user_msg"]
         assert "ask @admin for access" in kwargs["agent_msg"]
         assert "acme" in kwargs["agent_msg"]
+
+    def test_auth_probe_error_skips_without_registering_failure(self):
+        """A probe_error (network hiccup, timeout, outage) must not be diagnosed as
+        'Not logged in to GitHub' -- that tells an authenticated user to re-login
+        for a problem that has nothing to do with their auth state."""
+        ctx = FakeCtx()
+        with patch.object(gb, "_resolve_gh", return_value="gh"), patch.object(
+            gb, "_check_auth", return_value=(None, None)
+        ):
+            gb.bootstrap(ctx)
+        assert ctx.failures == []
+        assert ctx.logs == [
+            "github auth: probe failed (gh auth status did not complete), skipping check"
+        ]
+
+    def test_org_probe_error_skips_without_registering_failure(self, tmp_path):
+        """A probe_error checking org membership must not be diagnosed as 'not a
+        member' -- that tells a member with a network hiccup to go ask an admin
+        for access they already have."""
+        cfg_dir = tmp_path / ".claude"
+        cfg_dir.mkdir()
+        (cfg_dir / "bootstrap.json").write_text(
+            json.dumps({"git_kit": {"required_organization": "WidgetCo"}}),
+            encoding="utf-8",
+        )
+        ctx = FakeCtx(project_dir=tmp_path)
+        with patch.object(gb, "_resolve_gh", return_value="gh"), patch.object(
+            gb, "_check_auth", return_value=(True, "christina")
+        ), patch.object(gb, "_check_org_membership", return_value=(None, [])):
+            gb.bootstrap(ctx)
+        assert ctx.failures == []
+        assert ctx.logs[-1] == (
+            "github org: probe failed checking membership in WidgetCo, skipping check"
+        )
 
     def test_auth_failure_takes_priority_over_org_check(self):
         """Org membership is only checked when authenticated."""

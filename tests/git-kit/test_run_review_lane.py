@@ -108,6 +108,37 @@ def test_claimed_file_probe_names_0_37_0_when_owner_lacks_support(
     assert "0.37.0" in stderr
 
 
+def test_claimed_file_falls_through_to_main_when_probe_symbol_is_absent(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """`_parse_args` is PRIVATE to llm-scripting-kit. An owner that renames or
+    drops it must not be misdiagnosed as 'too old' -- that is a false refusal
+    in the opposite direction from the bug the probe was added to fix. When
+    the probe symbol is absent, the wrapper must fall through to main() and
+    let the real argument parse produce whatever error it produces (the
+    status quo for an owner without the probe at all)."""
+    package = types.ModuleType("llm_scripting_kit")
+    package.__path__ = []
+    review_lane = types.ModuleType("llm_scripting_kit.review_lane")
+    # Deliberately NO _parse_args attribute on this fake owner module.
+    review_lane.main = lambda: 42
+    monkeypatch.setitem(sys.modules, "llm_scripting_kit.review_lane", review_lane)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            str(_SCRIPT), "--lane", "x", "--model", "y", "--chunk", "z",
+            "--claimed-file", "w",
+        ],
+    )
+
+    code = _run_wrapper(monkeypatch, package, review_lane)
+
+    assert code == 42
+    stderr = capsys.readouterr().err
+    assert "too old" not in stderr
+
+
 def test_wrapper_passes_through_to_shared_main(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
