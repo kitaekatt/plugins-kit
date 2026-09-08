@@ -122,7 +122,7 @@ from typing import Optional
 # before importing bootstrap_lib below -- a no-op when already there. The guard
 # is the vendored, stdlib-only bootstrap_guard next to this script; importing it
 # can never itself trip the missing-bootstrap_lib failure.
-from bootstrap_guard import reexec_under_plugin_venv  # noqa: E402
+from bootstrap_guard import data_dir, reexec_under_plugin_venv  # noqa: E402
 
 reexec_under_plugin_venv("git-kit")
 
@@ -172,15 +172,26 @@ repair_path()
 # diffs. Tune downward if a Read failure surfaces.
 MAX_CHUNK_BYTES = 1024 * 1024
 
-DEFAULT_BUNDLE_ROOT = (
-    Path.home() / ".claude" / "plugins" / "data"
-    / "plugins-kit" / "git-kit" / "reviews"
-)
+# Derived from bootstrap_guard.data_dir("git-kit") -- not hand-built from
+# Path.home() -- so CLAUDE_BOOTSTRAP_DATA_ROOT redirects this too. Without
+# that, a scripts/claude_plugin_test.py session correctly re-execs into the
+# REDIRECTED venv but this process would still write bundles, pre-images and
+# the durable ledger.json into the PRODUCTION tree: a test-session review that
+# declines a finding would mutate the real declined-findings memory.
+DEFAULT_BUNDLE_ROOT = data_dir("git-kit") / "reviews"
 
-# Declined-findings ledger: a single JSON file in the plugin's version-independent
-# data dir, a sibling of the per-range bundle dirs. Keyed per change-id (range).
-# See bootstrap_lib.code_review.ledger.
-LEDGER_PATH = DEFAULT_BUNDLE_ROOT / "ledger.json"
+
+def _ledger_path() -> Path:
+    """The declined-findings ledger path: a single JSON file in the plugin's
+    version-independent data dir, a sibling of the per-range bundle dirs.
+    Keyed per change-id (range). See bootstrap_lib.code_review.ledger.
+
+    Deliberately LAZY (re-derives from bootstrap_guard.data_dir on every
+    call) rather than a module-level constant -- a constant computed once at
+    import time would not honour CLAUDE_BOOTSTRAP_DATA_ROOT if it changes
+    within the same process after this module has already been imported.
+    """
+    return data_dir("git-kit") / "reviews" / "ledger.json"
 
 # git diff section header prefix: `diff --git a/<path> b/<path>`.
 # Paths may contain spaces (emitted unquoted) or non-ASCII characters
@@ -323,6 +334,16 @@ def fetch_diff(range_spec: str) -> str:
         cmd = ["diff", "HEAD"]
     else:
         cmd = ["diff", range_spec]
+    # Pin the header format regardless of the user's config chain.
+    # diff.noprefix=true drops the a/ b/ prefixes entirely (`diff --git
+    # d/foo d/foo`), which breaks the " b/" split point
+    # _parse_git_header_path relies on -- every header then fails to parse,
+    # the whole diff lands in the unparsed preamble, and the bundle carries
+    # zero sections for a change that was never empty. `-c diff.noprefix=false`
+    # pins the prefix explicitly; `--no-ext-diff` closes the second, untested
+    # vector (diff.external substituting a hand-rolled differ that need not
+    # honor either prefix convention).
+    cmd = ["-c", "diff.noprefix=false", cmd[0], "--no-ext-diff", *cmd[1:]]
     rc, out, err = run_git(cmd)
     if rc != 0:
         raise ValueError(f"git diff failed: {err.strip() or 'no output'}")
@@ -401,7 +422,7 @@ def fetch_description(range_spec: str) -> str:
 
 
 def _unquote_c_path(token: str) -> str:
-    """Undo git's C-style path quoting: '"r\\303\\251sum\\303\\251.txt"' -> 'résumé.txt'.
+    """Undo git's C-style path quoting: '"r\\303\\251sum\\303\\251.txt"' -> 'r\\xe9sum\\xe9.txt'.
 
     Octal escapes encode raw bytes; the byte sequence is decoded as UTF-8.
     Tokens that are not quoted pass through unchanged.
@@ -526,8 +547,18 @@ def find_untracked_or_unstaged(
       - "unstaged_modified"    -- worktree differs from index
       - "unstaged_deleted"     -- file removed from worktree but still tracked
       - "staged_uncommitted"   -- index differs from HEAD (different from the diff range we're reviewing)
+
+    Uses `-z` (NUL-separated) output for the same reason as
+    fetch_changed_files: without it git C-quotes non-ASCII paths (e.g.
+    `?? "src/caf\\303\\251.txt"`), and the escaped string is not a real
+    path -- the skill's own remediation (`git add <paths>`) fails with
+    "pathspec did not match". Line-oriented parsing also mistakes any
+    literal " -> " inside a legal filename for rename syntax and splits it.
+    In -z mode a rename/copy entry carries the NEW path first, then a
+    second NUL-delimited field for the OLD path (mirroring
+    fetch_changed_files' -z rename contract) -- never joined by an arrow.
     """
-    rc, out, _ = run_git(["status", "--porcelain", "-uall"], cwd=repo_root)
+    rc, out, _ = run_git(["status", "--porcelain=v1", "-z", "-uall"], cwd=repo_root)
     if rc != 0:
         return []
     touched_resolved = []
@@ -538,16 +569,23 @@ def find_untracked_or_unstaged(
             continue
 
     items: list[dict] = []
-    for raw in out.splitlines():
-        if len(raw) < 3:
+    tokens = out.split("\0")
+    i = 0
+    while i < len(tokens):
+        token = tokens[i]
+        if len(token) < 3:
+            i += 1
             continue
-        index_st = raw[0]
-        worktree_st = raw[1]
-        path_part = raw[3:].strip()
-        # Renames: "R  old -> new" -- use the new (post-rename) path
-        if " -> " in path_part:
-            path_part = path_part.split(" -> ", 1)[1]
-        path_part = path_part.strip().strip('"')
+        index_st = token[0]
+        worktree_st = token[1]
+        path_part = token[3:]
+        # Renamed/copied entries carry a second NUL-delimited field: the
+        # ORIGINAL (pre-rename) path. We want the post-rename path, already
+        # captured above, so just consume and discard the extra field.
+        if index_st in "RC" or worktree_st in "RC":
+            i += 2
+        else:
+            i += 1
 
         local = (repo_root / path_part).resolve()
         try:
@@ -781,11 +819,29 @@ def build_bundle(
     )
     changed_files = core["changed_files"]
 
-    # Touched parent dirs for the untracked/unstaged scan.
+    # Touched parent dirs for the untracked/unstaged scan. Derived from the
+    # union of changed + claimed + machine-emitted locals, NOT changed_files
+    # alone -- assemble_bundle excludes claimed and machine-emitted files from
+    # changed_files (their own contract routes them to claimed_files /
+    # machine_emitted_files instead), so scanning only changed_files silently
+    # skips their directories. A `--claim '**/*.md'` invocation (the normal
+    # case whenever skills-kit is present) on an md-only diff would then scan
+    # no directories at all and the "you forgot to stage something" gate
+    # would silently not run. This mirrors assemble_bundle's own all_locals,
+    # which already accumulates over every file (claimed included) for the
+    # submit-gate scan.
     touched_dirs: list[Path] = []
     seen_dirs: set[Path] = set()
-    for cf in changed_files:
-        d = Path(cf["local"]).parent
+    hygiene_sources = (
+        changed_files
+        + core.get("claimed_files", [])
+        + (core.get("machine_emitted_files") or core.get("generated_files") or [])
+    )
+    for cf in hygiene_sources:
+        local = cf.get("local")
+        if not local:
+            continue
+        d = Path(local).parent
         if d not in seen_dirs:
             seen_dirs.add(d)
             touched_dirs.append(d)
@@ -797,8 +853,14 @@ def build_bundle(
     # (origin/main advances, HEAD changes for working-tree mode) previously-
     # declined findings re-surface. Falls back to head_sha when no base resolves.
     ledger_baseline = _range_base_sha(range_spec) or head_sha or ""
-    change_id = range_spec
-    ledger_hits = ledger.ledger_hits(ledger_path or LEDGER_PATH, change_id, ledger_baseline)
+    # Prefixed with the per-repository name (same helper the bundle_dir uses,
+    # see its own docstring note): the range spec alone is the SAME string in
+    # every repo, and range sentinels like __working_tree__ are identical
+    # across repos too, so two worktrees or two clones at the same HEAD would
+    # otherwise share one ledger entry -- a finding declined in one silently
+    # collapses in the other, where the working tree differs.
+    change_id = f"{_repo_dir_name(repo_root)}:{range_spec}"
+    ledger_hits = ledger.ledger_hits(ledger_path or _ledger_path(), change_id, ledger_baseline)
 
     bundle: dict = {
         "vcs": "git",
@@ -868,7 +930,7 @@ def _parse_args(args: list[str]) -> tuple[list[str], list[str], bool]:
 def main(argv: list[str]) -> int:
     if len(argv) == 3 and argv[1] == "--ledger-record":
         try:
-            n = ledger.record_from_file(LEDGER_PATH, Path(argv[2]))
+            n = ledger.record_from_file(_ledger_path(), Path(argv[2]))
         except (OSError, ValueError) as e:
             print(f"Error: {e}", file=sys.stderr)
             return 1

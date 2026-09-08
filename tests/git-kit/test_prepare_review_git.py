@@ -51,7 +51,7 @@ SPACED_AND_QUOTED_DIFF = (
     "--- /dev/null\n"
     '+++ "b/r\\303\\251sum\\303\\251.txt"\n'
     "@@ -0,0 +1 @@\n"
-    "+café line\n"
+    "+caf\u00e9 line\n"
 )
 
 
@@ -282,11 +282,11 @@ class TestSplitGitDiffSectionsQuoting:
         assert [s["path"] for s in sections] == [
             "has space.txt",
             "plain.txt",
-            "résumé.txt",
+            "r\u00e9sum\u00e9.txt",
         ]
         assert "+spaced content" in sections[0]["body"]
         assert "+plain" in sections[1]["body"]
-        assert "+café line" in sections[2]["body"]
+        assert "+caf\u00e9 line" in sections[2]["body"]
 
 
 # ---------------------------------------------------------------------------
@@ -300,13 +300,13 @@ class TestFetchChangedFilesQuoting:
         path must be the raw filename, not the quoted escape string."""
         git_repo.commit_file("base.txt", "a\n", "base")
         (git_repo.path / "has space.txt").write_text("spaced content\n", encoding="utf-8")
-        (git_repo.path / "résumé.txt").write_text("café line\n", encoding="utf-8")
+        (git_repo.path / "r\u00e9sum\u00e9.txt").write_text("caf\u00e9 line\n", encoding="utf-8")
         git_repo.git("add", ".")
 
         files = pr.fetch_changed_files("__staged__")
 
         assert ("A", "has space.txt") in files
-        assert ("A", "résumé.txt") in files
+        assert ("A", "r\u00e9sum\u00e9.txt") in files
 
 
 # ---------------------------------------------------------------------------
@@ -319,7 +319,7 @@ class TestUnquoteCPath:
         assert pr._unquote_c_path("plain/path.txt") == "plain/path.txt"
 
     def test_octal_utf8_bytes(self):
-        assert pr._unquote_c_path('"r\\303\\251sum\\303\\251.txt"') == "résumé.txt"
+        assert pr._unquote_c_path('"r\\303\\251sum\\303\\251.txt"') == "r\u00e9sum\u00e9.txt"
 
     def test_escaped_quote_and_backslash(self):
         assert pr._unquote_c_path('"a\\"b.txt"') == 'a"b.txt'
@@ -339,11 +339,11 @@ class TestParseGitHeaderPath:
 
     def test_quoted_both_sides(self):
         line = 'diff --git "a/r\\303\\251sum\\303\\251.txt" "b/r\\303\\251sum\\303\\251.txt"'
-        assert pr._parse_git_header_path(line) == "résumé.txt"
+        assert pr._parse_git_header_path(line) == "r\u00e9sum\u00e9.txt"
 
     def test_quoted_b_side_only(self):
         line = 'diff --git a/old.txt "b/caf\\303\\251.txt"'
-        assert pr._parse_git_header_path(line) == "café.txt"
+        assert pr._parse_git_header_path(line) == "caf\u00e9.txt"
 
     def test_quoted_a_side_unquoted_b_side(self):
         line = 'diff --git "a/caf\\303\\251.txt" b/renamed.txt'
@@ -468,21 +468,26 @@ class TestGitDiffToSections:
 
 class TestFetchDiff:
     @pytest.mark.parametrize(
-        "range_spec,expected_cmd",
+        "range_spec,expected_tail",
         [
-            ("__working_tree__", ["diff", "HEAD"]),
-            ("__staged__", ["diff", "--cached"]),
+            ("__working_tree__", ["HEAD"]),
+            ("__staged__", ["--cached"]),
             # G1: merge mode must use a plain diff, not `--cc`.
-            ("__merge_in_progress__", ["diff", "HEAD"]),
-            ("__rebase_in_progress__", ["diff", "HEAD"]),
-            ("origin/main..HEAD", ["diff", "origin/main..HEAD"]),
+            ("__merge_in_progress__", ["HEAD"]),
+            ("__rebase_in_progress__", ["HEAD"]),
+            ("origin/main..HEAD", ["origin/main..HEAD"]),
         ],
     )
-    def test_command_per_mode(self, range_spec, expected_cmd):
+    def test_command_per_mode(self, range_spec, expected_tail):
+        """Every invocation is pinned with -c diff.noprefix=false and
+        --no-ext-diff (item 1), ahead of the per-mode tail asserted here."""
         with patch.object(pr, "run_git", return_value=(0, "out", "")) as mock:
             out = pr.fetch_diff(range_spec)
         assert out == "out"
-        assert mock.call_args[0][0] == expected_cmd
+        cmd = mock.call_args[0][0]
+        assert cmd[:3] == ["-c", "diff.noprefix=false", "diff"]
+        assert cmd[3] == "--no-ext-diff"
+        assert cmd[4:] == expected_tail
 
     def test_failure_raises_value_error(self):
         with patch.object(pr, "run_git", return_value=(128, "", "fatal: bad ref")):
@@ -525,11 +530,11 @@ class TestFetchChangedFiles:
     def test_non_ascii_rename_reports_raw_post_rename_path(self, git_repo):
         """G3 companion: a rename whose paths are C-quoted in non-z output."""
         git_repo.commit_file("plain.txt", "stable content here\n", "base")
-        git_repo.git("mv", "plain.txt", "résumé.txt")
+        git_repo.git("mv", "plain.txt", "r\u00e9sum\u00e9.txt")
 
         files = pr.fetch_changed_files("__staged__")
 
-        assert files == [("R", "résumé.txt")]
+        assert files == [("R", "r\u00e9sum\u00e9.txt")]
 
     def test_git_failure_returns_empty(self):
         with patch.object(pr, "run_git", return_value=(128, "", "fatal")):
@@ -703,6 +708,36 @@ class TestFindUntrackedOrUnstaged:
         with patch.object(pr, "run_git", return_value=(128, "", "fatal")):
             assert pr.find_untracked_or_unstaged(git_repo.path, [tmp_path]) == []
 
+    def test_nonascii_untracked_file_returns_real_path(self, git_repo):
+        """Git C-quotes non-ASCII paths in line-oriented porcelain output
+        (`?? "src/caf\\303\\251.txt"`); the literal backslash-escaped string
+        is not a real path, so the skill's own remediation (`git add
+        <paths>`) would fail with 'pathspec did not match'."""
+        src = self._repo_with_src(git_repo)
+        fname = "caf\u00e9.txt"
+        (src / fname).write_bytes(b"y")
+
+        items = pr.find_untracked_or_unstaged(git_repo.path, [src])
+
+        assert len(items) == 1
+        assert items[0]["path"] == f"src/{fname}"
+        assert Path(items[0]["local"]) == (src / fname).resolve()
+        assert Path(items[0]["local"]).exists()
+
+    def test_untracked_file_name_containing_arrow_returns_real_path(self, git_repo):
+        """A legal untracked filename containing the literal substring
+        ' -> ' must not be mistaken for rename syntax and split."""
+        src = self._repo_with_src(git_repo)
+        fname = "legal -> name.py"
+        (src / fname).write_text("z\n", encoding="utf-8")
+
+        items = pr.find_untracked_or_unstaged(git_repo.path, [src])
+
+        assert len(items) == 1
+        assert items[0]["path"] == f"src/{fname}"
+        assert Path(items[0]["local"]) == (src / fname).resolve()
+        assert Path(items[0]["local"]).exists()
+
 
 # ---------------------------------------------------------------------------
 # find_merge_conflicts
@@ -784,8 +819,8 @@ class TestBuildBundle:
 
         led = tmp_path / "ledger.json"
         first = pr.build_bundle("main..HEAD", tmp_path / "b1", ledger_path=led)
-        # change_id is the range; baseline is the range base SHA; no hits yet.
-        assert first["change_id"] == "main..HEAD"
+        # change_id is repo-scoped (item 6): the repo dir name, then the range.
+        assert first["change_id"] == f"{pr._repo_dir_name(git_repo.path)}:main..HEAD"
         assert first["ledger_baseline"] and len(first["ledger_baseline"]) >= 7
         assert first["ledger_hits"] == []
 
@@ -825,6 +860,55 @@ class TestBuildBundle:
         assert bundle["untracked_or_unstaged"][0]["kind"] == "untracked"
         assert bundle["untracked_or_unstaged"][0]["path"] == "src/forgot.py"
 
+    def test_diff_noprefix_config_does_not_empty_the_bundle(self, git_repo, tmp_path):
+        """diff.noprefix=true makes `git diff` emit `diff --git d/a.md d/a.md`
+        (no a/ b/ prefixes at all), which breaks the " b/" split point
+        _parse_git_header_path relies on. Every `diff --git` header must
+        still parse, and the diff must still land in a real section instead
+        of being swallowed whole into the preamble."""
+        git_repo.git("config", "diff.noprefix", "true")
+        (git_repo.path / "src").mkdir()
+        (git_repo.path / "foo.py").write_text("x = 0\n", encoding="utf-8")
+        git_repo.git("add", ".")
+        git_repo.git("commit", "-qm", "base")
+        git_repo.git("checkout", "-qb", "feature")
+        git_repo.commit_file("foo.py", "x = 1\n", "change foo")
+
+        bundle = pr.build_bundle("main..HEAD", tmp_path / "bundle")
+
+        assert len(bundle["diff_chunks"]) == 1
+        assert len(bundle["changed_files"]) == 1
+        cf = bundle["changed_files"][0]
+        assert cf["path"] == "foo.py"
+        assert cf["chunk_index"] is not None
+        diff = _concat_diff_from_chunks(bundle)
+        assert "-x = 0" in diff
+        assert "+x = 1" in diff
+
+    def test_untracked_sibling_surfaced_for_a_claimed_only_diff(self, git_repo, tmp_path):
+        """assemble_bundle excludes claimed files from changed_files, so an
+        md-only change (claimed via --claim '**/*.md', the normal case
+        whenever skills-kit is present) must still derive touched_dirs from
+        the claimed file's directory -- not scan nothing."""
+        src = git_repo.path / "src"
+        src.mkdir()
+        (src / "NOTES.md").write_text("base\n", encoding="utf-8")
+        git_repo.git("add", ".")
+        git_repo.git("commit", "-qm", "base")
+        git_repo.git("checkout", "-qb", "feature")
+        git_repo.commit_file("src/NOTES.md", "changed\n", "change notes")
+        (src / "forgot.py").write_text("y = 2\n", encoding="utf-8")
+
+        bundle = pr.build_bundle(
+            "main..HEAD", tmp_path / "bundle", claim_globs=["**/*.md"]
+        )
+
+        assert bundle["changed_files"] == []
+        assert len(bundle["claimed_files"]) == 1
+        assert len(bundle["untracked_or_unstaged"]) == 1
+        assert bundle["untracked_or_unstaged"][0]["kind"] == "untracked"
+        assert bundle["untracked_or_unstaged"][0]["path"] == "src/forgot.py"
+
     def test_outside_a_repo_raises(self, tmp_path, monkeypatch):
         monkeypatch.setenv("GIT_CEILING_DIRECTORIES", str(tmp_path))
         outside = tmp_path / "not-a-repo"
@@ -835,9 +919,101 @@ class TestBuildBundle:
             pr.build_bundle("main..HEAD", tmp_path / "bundle")
 
 
+class TestChangeIdIsRepoScoped:
+    def test_declined_finding_does_not_collapse_across_repos(
+        self, git_repo, tmp_path, monkeypatch
+    ):
+        """change_id is scoped to the repository, not just the range spec.
+
+        One ledger file serves every repository, so a bare range spec gives two
+        repositories at the same HEAD (a clone, or a second worktree) identical
+        change_id AND identical baseline. A finding declined in one would then
+        collapse in the other, where the working tree differs."""
+        git_repo.commit_file("a.txt", "base\n", "base")
+        git_repo.git("checkout", "-qb", "feature")
+        git_repo.commit_file("a.txt", "changed\n", "change")
+
+        repo2_path = tmp_path / "repo2"
+        subprocess.run(
+            ["git", "clone", "-q", str(git_repo.path), str(repo2_path)],
+            check=True, capture_output=True, encoding="utf-8",
+        )
+        # A local clone only checks out the source's checked-out branch
+        # (feature); "main" needs its own local ref to resolve the same
+        # range spec in repo2.
+        subprocess.run(
+            ["git", "branch", "main", "origin/main"],
+            cwd=repo2_path, check=True, capture_output=True, encoding="utf-8",
+        )
+
+        led = tmp_path / "ledger.json"
+        first = pr.build_bundle(
+            "main..HEAD", tmp_path / "bundle1", ledger_path=led
+        )
+        pr.ledger.record_declined(
+            led, first["change_id"], first["ledger_baseline"],
+            [{"kind": "code_review", "file": "a.txt", "reason": "bug",
+              "description": "constant assignment never used"}],
+        )
+
+        monkeypatch.chdir(repo2_path)
+        second = pr.build_bundle(
+            "main..HEAD", tmp_path / "bundle2", ledger_path=led
+        )
+
+        # Same range spec, same baseline SHA (same clone) -- but a different
+        # repo, so the decline in repo1 must not collapse the finding here.
+        assert second["ledger_baseline"] == first["ledger_baseline"]
+        assert second["change_id"] != first["change_id"]
+        assert second["ledger_hits"] == []
+
+
 # ---------------------------------------------------------------------------
 # main -- argv handling
 # ---------------------------------------------------------------------------
+
+
+class TestDataRootRedirect:
+    """bootstrap_guard.data_dir is the venv resolution path used by
+    reexec_under_plugin_venv, so hand-building DEFAULT_BUNDLE_ROOT /
+    LEDGER_PATH from Path.home() ignores the same redirect a test session
+    relies on -- see tests/bootstrap/test_plugin_test_session.py::TestDataRootRedirect."""
+
+    @staticmethod
+    def _reload_prepare_review():
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location(
+            "git_kit_prepare_review_reload_test", pr.__file__
+        )
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod
+
+    def test_redirect_moves_the_bundle_root(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("CLAUDE_BOOTSTRAP_DATA_ROOT", str(tmp_path))
+        mod = self._reload_prepare_review()
+        assert mod.DEFAULT_BUNDLE_ROOT == tmp_path / "plugins-kit" / "git-kit" / "reviews"
+
+    def test_redirect_moves_the_ledger(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("CLAUDE_BOOTSTRAP_DATA_ROOT", str(tmp_path))
+        mod = self._reload_prepare_review()
+        assert mod._ledger_path() == (
+            tmp_path / "plugins-kit" / "git-kit" / "reviews" / "ledger.json"
+        )
+
+    def test_ledger_path_is_lazy_after_import(self, monkeypatch, tmp_path):
+        """An env change AFTER import must still be honoured -- a module-level
+        constant computed once at import time would not see it."""
+        monkeypatch.delenv("CLAUDE_BOOTSTRAP_DATA_ROOT", raising=False)
+        mod = self._reload_prepare_review()
+        before = mod._ledger_path()
+
+        monkeypatch.setenv("CLAUDE_BOOTSTRAP_DATA_ROOT", str(tmp_path))
+        after = mod._ledger_path()
+
+        assert after == tmp_path / "plugins-kit" / "git-kit" / "reviews" / "ledger.json"
+        assert after != before
 
 
 class TestMain:
