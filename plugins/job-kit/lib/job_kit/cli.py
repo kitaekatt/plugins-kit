@@ -6,6 +6,7 @@ import argparse
 import re
 import json
 import sys
+import uuid
 from pathlib import Path
 from typing import Optional, Sequence
 
@@ -123,6 +124,8 @@ def _exit_for_snapshot(snapshot: RunSnapshot) -> int:
 
 def _run(args: argparse.Namespace) -> int:
     """Handle the run subcommand."""
+    if args.run_id is None:
+        args.run_id = uuid.uuid4().hex
     snapshot = run_job_file(
         args.jobs,
         store_path=args.store,
@@ -137,6 +140,22 @@ def _run(args: argparse.Namespace) -> int:
     )
     _emit(snapshot, store_path)
     return _exit_for_snapshot(snapshot)
+
+
+def _emit_interrupted_run(args: argparse.Namespace) -> None:
+    """Emit a durable snapshot when a run is interrupted after creation."""
+    if args.command != "run" or args.run_id is None:
+        return
+    store_path = (
+        args.store.expanduser().resolve()
+        if args.store is not None
+        else default_store_path()
+    )
+    try:
+        snapshot = JobStore(store_path, create=False).snapshot(args.run_id)
+    except Exception:
+        return
+    _emit(snapshot, store_path)
 
 
 def _status(args: argparse.Namespace) -> int:
@@ -195,6 +214,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             return _resume(args)
         if args.command == "gc":
             return _gc(args)
+    except KeyboardInterrupt:
+        _emit_interrupted_run(args)
+        raise
     except Exception as exc:
         print(f"job-kit: {exc}", file=sys.stderr)
         return EXIT_RUNNER_FAILURE

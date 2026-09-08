@@ -144,6 +144,17 @@ unconfigurable opinion whose test passes is a finding.
   a value a user can raise to infinity is not a guard. A run's own `--timeout` is the
   budget users are meant to set.
 
+- **job-kit confirms an unreachable endpoint with two sequential attempts, then excludes
+  it for the run.** `unreachable` halts one attempt; exclusion occurs only when a second
+  unreachable attempt starts after the first ends, with no non-unreachable attempt
+  between them. A team could reasonably want more confirmations, or never to exclude an
+  unreachable endpoint at all, especially on an intermittent network, and their remedy is
+  a new run that probes it again. We refuse a setting because availability is observable
+  runtime state, not workflow intent: the runner can ask the environment again instead of
+  making the user predict or restate it. Two is the minimum that distinguishes one
+  transient failure from a confirmed outage; never excluding would repeatedly spend later
+  jobs probing that outage.
+
 - **Only a reviewer lane may run on a configured endpoint.** A review profile's
   `model` may name an llm-scripting-kit endpoint instead of an Agent alias, but the runner
   accepts that for the three REVIEWER lanes only; `validator` is refused by name. (Until

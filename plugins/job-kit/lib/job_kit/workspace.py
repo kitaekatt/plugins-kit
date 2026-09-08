@@ -11,11 +11,17 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Mapping, Optional, Sequence
 
-from .model import Job, JobRecord, JobState, RunRecord, TERMINAL_STATES
+from .model import (
+    Job,
+    JobRecord,
+    JobState,
+    RunRecord,
+    TERMINAL_STATES,
+    WORKSPACE_STATUSES,
+)
 from .store import JobStore, StoreError
 
 
-WORKSPACE_STATUSES = frozenset({"isolated", "none", "removing", "removed"})
 WORKSPACE_REASON_NONE = "no git repository detected from the declared directory"
 WORKSPACE_REASON_DECLINED = "workspace isolation declined by the job"
 # Two bounds, because the Git commands here have two very different shapes.
