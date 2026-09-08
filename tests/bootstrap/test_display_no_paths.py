@@ -194,3 +194,103 @@ class TestAuthoredLabelWinsRegardlessOfWidth:
     def test_long_entry_without_a_label_still_derives_at_a_separator(self):
         long_text = "some-tool: FAILED - install attempted but not found in PATH"
         assert numbered([long_text]) == "some-tool: FAILED"
+
+
+class TestLinkToolDirToPath:
+    """Drives the real function -- reverting it to a bare append fails here."""
+
+    def test_added_to_path_keeps_the_dir_out_of_display(self, tmp_path, monkeypatch):
+        from bootstrap_lib import path_check
+
+        tool_dir = tmp_path / "Users" / "x" / ".local" / "bin"
+        tool_dir.mkdir(parents=True)
+        monkeypatch.setattr(
+            path_check, "add_path_to_shell_config",
+            lambda *a, **k: (True, "rc file updated"),
+        )
+        monkeypatch.setenv("PATH", "/usr/bin")
+
+        result = type("R", (), {
+            "on_path": False, "path": str(tool_dir / "uv"), "subject": "uv",
+        })()
+        actions = []
+        engine._link_tool_dir_to_path(result, "", actions)
+
+        assert actions, "the function must still emit an entry"
+        assert_display_clean(numbered(actions))
+        assert str(tool_dir) in str(actions[0]), "the log text keeps the dir"
+
+    def test_path_persist_failure_keeps_the_dir_out_of_display(self, tmp_path, monkeypatch):
+        from bootstrap_lib import path_check
+
+        tool_dir = tmp_path / "Users" / "x" / ".local" / "bin"
+        tool_dir.mkdir(parents=True)
+        monkeypatch.setattr(
+            path_check, "add_path_to_shell_config",
+            lambda *a, **k: (False, "rc file is read-only"),
+        )
+        monkeypatch.setenv("PATH", "/usr/bin")
+
+        result = type("R", (), {
+            "on_path": False, "path": str(tool_dir / "uv"), "subject": "uv",
+        })()
+        actions = []
+        engine._link_tool_dir_to_path(result, "", actions)
+
+        assert actions
+        assert_display_clean(numbered(actions))
+        assert "FAILED" in numbered(actions), "a failure must still read as one"
+
+
+class TestNoUnlabelledPathInterpolation:
+    """Source-level guard over the functions this work touched.
+
+    The runtime tests above cover behavior; this covers the SHAPE, so a new
+    branch added to one of these functions cannot reintroduce the defect by
+    appending a raw f-string. Scoped to named functions deliberately -- a
+    whole-module sweep needs an allowlist of legitimate exemptions (an entry
+    whose payload IS a command the user must retype), and that triage is not
+    yet done.
+    """
+
+    GUARDED = ("_link_tool_dir_to_path", "_process_venv_def",
+               "_process_project_npm", "_process_project_config")
+
+    def test_guarded_functions_label_every_path_bearing_entry(self):
+        import ast
+        import pathlib as _pl
+        import re as _re
+
+        src = _pl.Path(engine.__file__).read_text()
+        tree = ast.parse(src)
+        pathy = _re.compile(r"(cmd|command|argv|path|dir|root|target|dest|src|file|pth)$", _re.I)
+
+        offenders = []
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.FunctionDef) or node.name not in self.GUARDED:
+                continue
+            for call in ast.walk(node):
+                if not isinstance(call, ast.Call):
+                    continue
+                fn = call.func
+                # a bare `<something>action_entries.append(...)`
+                if not (isinstance(fn, ast.Attribute) and fn.attr == "append"):
+                    continue
+                owner = getattr(fn.value, "id", "") or getattr(fn.value, "attr", "")
+                if "action" not in owner:
+                    continue
+                for a in call.args:
+                    if not isinstance(a, ast.JoinedStr):
+                        continue
+                    for v in a.values:
+                        if isinstance(v, ast.FormattedValue):
+                            leaf = ast.unparse(v.value).split(".")[-1].split("[")[0]
+                            if pathy.search(leaf):
+                                offenders.append(
+                                    f"{node.name}:{call.lineno} interpolates {leaf!r} "
+                                    f"into an unlabelled action entry"
+                                )
+        assert not offenders, (
+            "rule 5: use _append_detail(..., display=...) instead of a bare "
+            "append:\n  " + "\n  ".join(offenders)
+        )
