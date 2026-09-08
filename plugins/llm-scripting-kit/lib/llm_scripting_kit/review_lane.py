@@ -248,6 +248,7 @@ def run_lane(
     diff_text: str,
     files: Sequence[str] = (),
     description: str = "",
+    claimed_files: Sequence[str] = (),
     project_root: Optional[str] = None,
     max_output_tokens: int = DEFAULT_MAX_OUTPUT_TOKENS,
     timeout_s: Optional[float] = DEFAULT_TIMEOUT_S,
@@ -271,7 +272,11 @@ def run_lane(
 
     system = LANE_PROMPTS[lane].system
     user = build_user_message(
-        lane, diff_text=diff_text, files=files, description=description
+        lane,
+        diff_text=diff_text,
+        files=files,
+        description=description,
+        claimed_files=claimed_files,
     )
 
     window = _endpoint_context_window(selection.endpoint, project_root)
@@ -395,6 +400,17 @@ def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
         dest="files",
         help="a path in this chunk; repeatable",
     )
+    parser.add_argument(
+        "--claimed-file",
+        action="append",
+        default=[],
+        dest="claimed_files",
+        help=(
+            "a path changed in this review but held back from the chunk for a "
+            "subject-lens reviewer; repeatable. Passed as a path only, never "
+            "as content"
+        ),
+    )
     parser.add_argument("--description", default="", help="the change description")
     parser.add_argument("--project-root", default=None)
     parser.add_argument(
@@ -421,6 +437,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             diff_text=diff_text,
             files=args.files,
             description=args.description,
+            claimed_files=args.claimed_files,
             project_root=args.project_root,
             max_output_tokens=args.max_output_tokens,
             timeout_s=args.timeout_s,

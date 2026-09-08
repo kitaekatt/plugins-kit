@@ -550,7 +550,15 @@ technique_skill:
             K = len(bundle.diff_chunks). Each subagent gets the chunk's absolute diff path
             (`<bundle.bundle_dir>/<diff_chunks[i].path>`), the @FILEPATHS@ of the files
             in that chunk (`diff_chunks[i].files`), and -- for reviewer_a -- the CLAUDE.md
-            mapping restricted to those files. Reviewers not listed in the selected profile are
+            mapping restricted to those files PLUS the repo-relative PATHS of every
+            `bundle.claimed_files` entry (paths only, never content), under the heading
+            "Also changed in this review". Claimed files are absent from the chunk, so
+            without that list reviewer_a reads the change as though the Markdown were
+            never touched and reports a docs-currency rule as violated when the update is
+            in fact present -- a false positive that is indistinguishable from a true one.
+            An endpoint-dispatched reviewer_a gets the same list via one `--claimed-file`
+            per path. Pass it for every lane that receives it; the other reviewers do not
+            take it. Reviewers not listed in the selected profile are
             NOT launched. If bundle.diff_chunks is empty (@RANGE_OR_CL@ has no diff content), skip
             step 6 and jump to step 9 with zero issues.
           tool: Agent (per the model-kind rule, a lane whose model is an endpoint id runs as a Bash call to @LANE_TOOL@ instead)
@@ -653,7 +661,7 @@ technique_skill:
     - name: reviewer_a_claude_md_compliance
       subagent_type: general-purpose
       scope: CLAUDE.md compliance only, restricted to the files in one chunk
-      input: "absolute path to ONE chunk .diff file, the @FILEPATHS@ of the files in that chunk, the per-file CLAUDE.md mapping restricted to those files, and the full text of each relevant CLAUDE.md (read in step 4)"
+      input: "absolute path to ONE chunk .diff file, the @FILEPATHS@ of the files in that chunk, the per-file CLAUDE.md mapping restricted to those files, the full text of each relevant CLAUDE.md (read in step 4), and the paths of every claimed file (paths only -- their content belongs to the subject-lens reviewer)"
       canonical_prompt_note: |
         This lane can run EITHER as an Agent subagent or, when its resolved `model` is an
         endpoint id, as a plain completion (see the step-6 model-kind rule). Both paths must

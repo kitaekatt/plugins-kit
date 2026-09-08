@@ -180,6 +180,34 @@ class TestBuildUserMessage:
         with pytest.raises(KeyError):
             lp.build_user_message("reviewer_z", diff_text="d")
 
+    def test_claimed_files_are_listed_by_path(self) -> None:
+        """A claimed file is absent from the chunk, so its PATH is the whole signal.
+
+        Without it the lane reads the change as though the Markdown were never
+        touched, and reports a docs-currency rule as violated when the update is
+        present in a file it was not shown.
+        """
+        message = lp.build_user_message(
+            "reviewer_a_claude_md_compliance",
+            diff_text="diff --git a/x.py b/x.py",
+            files=["x.py"],
+            claimed_files=["docs/architecture.md"],
+        )
+        assert "Also changed in this review" in message
+        assert "- docs/architecture.md" in message
+
+    def test_claimed_files_section_is_omitted_when_empty(self) -> None:
+        message = lp.build_user_message(
+            "reviewer_a_claude_md_compliance", diff_text="d", files=["x.py"]
+        )
+        assert "Also changed in this review" not in message
+
+    def test_reviewer_a_is_told_not_to_report_a_listed_path_as_missing(self) -> None:
+        """The prompt half of the fix -- the list alone does not say what to do with it."""
+        system = lp.LANE_PROMPTS["reviewer_a_claude_md_compliance"].system
+        assert "Also changed in this review" in system
+        assert "never report that" in system
+
 
 class TestLaneEligibility:
     """Which lanes may carry an endpoint id, and what a backend must be."""
