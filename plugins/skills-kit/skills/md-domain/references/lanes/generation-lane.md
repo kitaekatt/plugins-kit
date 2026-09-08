@@ -536,8 +536,14 @@ Expected: 0 FAILs on the target, or a stated reason a JUDGMENT row is accepted.
 The `generate_human_html` lane. Its output is a generated HTML page a person
 browses beside the files it explains, so it replaces the five steps above with
 the sequence below. Load it with `../standards/human-html-standards.md`.
-Before writing a page, also load `../human-html-presentation.md`. PC-5 makes
-that presentation reference required input for this branch.
+Before writing a page, also load `../human-html-presentation.md` and
+`../technical-english.md`. PC-5 makes that presentation reference required
+input for this branch; the technical-english reference is the PROSE contract
+and is required with it. Read it before drafting rather than after: this lane,
+the standards doc and the framework all describe the job in the generator's own
+vocabulary -- what a page OWNS, the TERRITORY it covers -- and an agent that
+reads only those publishes that scaffolding into the page. Those words scope
+your work; they are not words for the reader.
 
 **Use `skills_kit_lib.human_html` for page mechanics.** Import it and call it. Do
 not hand-write a marker, re-derive a record path, recompute a source stamp,
@@ -785,7 +791,8 @@ summary or rewrite:
 - the complete `next` JSON object;
 - the complete framework file at `framework.path`, byte-for-byte;
 - this lane and `../standards/human-html-standards.md` as complete file inputs;
-- `../human-html-presentation.md` as the required PC-5 presentation input.
+- `../human-html-presentation.md` as the required PC-5 presentation input;
+- `../technical-english.md` as the required prose contract.
 
 The framework digest in the item identifies those exact bytes. Do not paste a
 paraphrase of the framework into the prompt. The generation prompt contains no

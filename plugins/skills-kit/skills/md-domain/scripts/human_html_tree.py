@@ -67,6 +67,12 @@ GENERATION_INPUT_PATHS = (
         "human-html-presentation",
         _MD_DOMAIN_DIR / "references" / "human-html-presentation.md",
     ),
+    # The prose contract. The three documents above describe the job in the
+    # generator's own vocabulary -- what a page owns, the territory it covers --
+    # and an agent that reads only them publishes that scaffolding into the page
+    # it writes. This one says those words are for the instructions, not for the
+    # reader, and carries the rest of the writing standard with it.
+    ("technical-english", _MD_DOMAIN_DIR / "references" / "technical-english.md"),
 )
 
 
