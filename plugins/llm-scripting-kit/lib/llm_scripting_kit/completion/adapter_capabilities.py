@@ -61,7 +61,7 @@ def _dropped(honored: object) -> tuple:
 # -- openrouter (OpenAI-compatible HTTP) -----------------------------------
 #
 # OpenRouterBackend.complete builds chat-completions kwargs directly. It reads
-# temperature, max_tokens, timeout_s, user_cache_prefix and extras, and nothing
+# temperature, max_tokens, timeout_s, user_cache_prefix, client_id and extras, and nothing
 # else -- notably NOT cwd, effort or allowed_tools, which is why cwd is not a
 # core param of this seam.
 
@@ -88,6 +88,12 @@ _OPENROUTER_PARAMS = {
             "when set, the user message becomes a two-part content list with an "
             "ephemeral cache breakpoint on the static prefix"
         ),
+    ),
+    "client_id": ParamCapability(
+        type="string",
+        default=None,
+        emits="user",
+        note="uses the caller id, a process identity when None, nothing when empty",
     ),
     "extras": ParamCapability(
         type="json-object",

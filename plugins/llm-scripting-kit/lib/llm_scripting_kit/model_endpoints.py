@@ -38,6 +38,11 @@ the schema can grow additively)::
         context_window: <tokens>            # optional
         reasoning_effort: <effort>          # optional per-entry default
         key_env: <ENV VAR>                  # optional; omitted = keyless
+        routing:                            # optional; transport entries only
+          group: <front-door model name>
+          order: 1                          # lower tiers fill first
+          max_parallel: <int>               # omitted = uncapped
+          effort_style: top-level           # top-level | ninfer | chat_template_kwargs
       <harness entry id>:
         harness: <harness name>             # required instead of base_url
         model: <model id>                   # required, what the harness drives
@@ -113,6 +118,17 @@ class EndpointEntry:
     tier: Optional[int] = None
     family: Optional[str] = None
     conserve_usage: Optional[ConserveSpec] = None
+    routing: Optional["RoutingConfig"] = None
+
+
+@dataclass(frozen=True)
+class RoutingConfig:
+    """Optional front-door routing metadata for a transport entry."""
+
+    group: str
+    order: int = 1
+    max_parallel: Optional[int] = None
+    effort_style: str = "top-level"  # top-level | ninfer (top-level, high->xhigh) | chat_template_kwargs
 
 
 @dataclass(frozen=True)
@@ -247,6 +263,47 @@ def parse_classification_fields(
             )
         family = value.strip()
     return tier, family
+
+
+def parse_routing(
+    raw: Mapping[str, object], *, source: str, entry_id: str, notes: list[str]
+) -> Optional[RoutingConfig]:
+    """Parse optional front-door metadata, noting defects without skipping entry."""
+    value = raw.get("routing")
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        notes.append(f"{source}: entry '{entry_id}' has invalid 'routing'; ignored")
+        return None
+    known = {"group", "order", "max_parallel", "effort_style"}
+    for key in value:
+        if key not in known:
+            notes.append(f"{source}: entry '{entry_id}' routing key '{key}' ignored")
+    group = value.get("group")
+    if not isinstance(group, str) or not group.strip():
+        notes.append(f"{source}: entry '{entry_id}' routing has invalid 'group'; ignored")
+        return None
+    order = value.get("order", 1)
+    if isinstance(order, bool) or not isinstance(order, int) or order < 1:
+        notes.append(f"{source}: entry '{entry_id}' routing has invalid 'order'; defaulted to 1")
+        order = 1
+    max_parallel = value.get("max_parallel")
+    if max_parallel is not None and (
+        isinstance(max_parallel, bool) or not isinstance(max_parallel, int) or max_parallel < 1
+    ):
+        notes.append(
+            f"{source}: entry '{entry_id}' routing has invalid 'max_parallel'; treated as uncapped"
+        )
+        max_parallel = None
+    effort_style = value.get("effort_style", "top-level")
+    if effort_style not in ("top-level", "chat_template_kwargs", "ninfer"):
+        notes.append(
+            f"{source}: entry '{entry_id}' routing has invalid 'effort_style'; defaulted to top-level"
+        )
+        effort_style = "top-level"
+    return RoutingConfig(
+        group=group.strip(), order=order, max_parallel=max_parallel, effort_style=effort_style
+    )
 
 
 def _resolve_registry_path(env: Mapping[str, str]) -> "tuple[Path, bool]":
@@ -397,6 +454,9 @@ def load_endpoint_registry(
                 conserve_usage=_conserve_spec(
                     raw, source=f"model-endpoints registry '{path}'", entry_id=key
                 ),
+                routing=parse_routing(
+                    raw, source=f"model-endpoints registry '{path}'", entry_id=key, notes=notes
+                ),
             )
         except EndpointMetadataError:
             raise
@@ -480,7 +540,9 @@ __all__ = [
     "EndpointRegistry",
     "EndpointRegistryError",
     "EndpointMetadataError",
+    "RoutingConfig",
     "parse_classification_fields",
+    "parse_routing",
     "load_endpoint_registry",
     "resolve_registry_entry",
 ]

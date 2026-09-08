@@ -138,6 +138,34 @@ class TestSchema:
         assert alpha.key_env is None  # omitted = keyless
         assert reg.entries["beta"].key_env == "BETA_API_KEY"
 
+    def test_routing_parses_for_transport_and_unknown_keys_are_noted(self, fake_home):
+        _write_convention(
+            fake_home,
+            "models:\n  alpha:\n    base_url: http://alpha/v1\n    model: alpha\n"
+            "    routing:\n      group: qwen\n      order: 2\n"
+            "      max_parallel: 4\n      effort_style: chat_template_kwargs\n"
+            "      future: ignored\n",
+        )
+        reg = load_endpoint_registry()
+        assert reg.entries["alpha"].routing.group == "qwen"
+        assert reg.entries["alpha"].routing.max_parallel == 4
+        assert reg.entries["alpha"].routing.effort_style == "chat_template_kwargs"
+        assert any("future" in note for note in reg.notes)
+
+    def test_bad_max_parallel_keeps_transport_usable(self, fake_home):
+        _write_convention(
+            fake_home,
+            "models:\n  alpha:\n    base_url: http://alpha/v1\n    model: alpha\n"
+            "    routing: {group: qwen, max_parallel: many}\n",
+        )
+        reg = load_endpoint_registry()
+        assert reg.entries["alpha"].routing.max_parallel is None
+        assert any("max_parallel" in note for note in reg.notes)
+
+    def test_missing_routing_is_none(self, fake_home):
+        _write_convention(fake_home, "models:\n  alpha:\n    base_url: http://alpha/v1\n    model: alpha\n")
+        assert load_endpoint_registry().entries["alpha"].routing is None
+
     def test_unknown_keys_are_ignored(self, fake_home):
         _write_convention(
             fake_home,
@@ -325,3 +353,17 @@ class TestResolveRegistryEntry:
         reg = load_endpoint_registry()
         (fake_home / ".claude" / "config" / "model-endpoints.yaml").unlink()
         assert resolve_registry_entry("beta", registry=reg).id == "beta"
+
+
+def test_routing_effort_style_accepts_ninfer(tmp_path):
+    from llm_scripting_kit.model_endpoints import load_endpoint_registry
+
+    path = tmp_path / "m.yaml"
+    path.write_text(
+        "models:\n  a:\n    base_url: http://h/v1\n    model: m\n"
+        "    routing: {group: g, effort_style: ninfer}\n",
+        encoding="utf-8",
+    )
+    registry = load_endpoint_registry({"MODEL_ENDPOINTS_REGISTRY": str(path)})
+    assert registry.entries["a"].routing.effort_style == "ninfer"
+    assert registry.notes == []
