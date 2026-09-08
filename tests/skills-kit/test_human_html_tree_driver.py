@@ -1121,6 +1121,38 @@ def test_cli_start_generation_creates_a_resumable_run(
     assert (root_only / driver.CHECKPOINT_RELATIVE_PATH).is_file()
 
 
+def test_every_generation_input_exists_and_is_declared_by_the_lane() -> None:
+    """The generating agent's complete-file inputs are a contract, not an implementation detail.
+
+    Nothing else pins WHICH files reach the agent, so dropping one -- or adding one
+    the lane never tells the agent to read -- fails silently: pages still generate,
+    just without the input. The prose contract is the motivating case; it was added
+    after a corpus was generated with no writing guidance reaching the agent at all.
+    """
+    names = [name for name, _ in driver.GENERATION_INPUT_PATHS]
+    assert names == [
+        "generation-lane",
+        "human-html-standards",
+        "human-html-presentation",
+        "technical-english",
+    ]
+
+    for name, path in driver.GENERATION_INPUT_PATHS:
+        assert path.is_file(), "generation input %s is missing: %s" % (name, path)
+        assert path.read_bytes().strip(), "generation input %s is empty: %s" % (name, path)
+
+    generation = (MD_DOMAIN / "references" / "lanes" / "generation-lane.md").read_text(
+        encoding="ascii"
+    )
+    for _, path in driver.GENERATION_INPUT_PATHS:
+        if path.name == "generation-lane.md":
+            continue
+        assert path.name in generation, (
+            "generation-lane.md never tells the agent to read %s, so the file is "
+            "hashed into the run key but not requested" % path.name
+        )
+
+
 def test_lane_and_skill_contract_name_the_tree_driver() -> None:
     coverage = (MD_DOMAIN / "references" / "lanes" / "coverage-lane.md").read_text(
         encoding="ascii"

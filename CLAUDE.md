@@ -444,6 +444,25 @@ Read every line. If anything is unrelated to the feature, `git restore --staged 
 
 **Always use `uv run python` in shell scripts** -- never bare `python` or `python3`. On Windows, the system PATH contains Microsoft Store stubs (`WindowsApps/python.exe`) that take precedence over any user PATH entry, causing bare `python`/`python3` to fail with "Permission denied" (exit 126) in Git Bash. On macOS, bare `python` often doesn't exist. Since bootstrap guarantees `uv` is available, `uv run python` is the standard way to invoke Python from any shell script in this project. It resolves the correct Python, activates the venv (giving access to installed packages), and works on all platforms.
 
+**Scoped exception: Python CLI launcher shims.** `uv run python` resolves the
+venv from the CWD, so a launcher a user invokes from any directory -- the four
+Python-invoking `plugins/<name>/bin/` shims (hue-kit, job-kit,
+llm-scripting-kit, secrets-kit) and their `.cmd` twins -- would pick up the
+wrong environment, or none. Those shims resolve an absolute interpreter
+instead: the bootstrap-provisioned standalone Python or the plugin venv by its
+version-independent `~/.claude/plugins/data/<marketplace>/<plugin>/.venv/`
+path. POSIX shims fall back to `python3`, then `python`; `.cmd` shims fall back
+to `python.exe`. The absolute-path preference avoids the Windows Store stub
+when the preferred interpreter exists, but the PATH fallback can still resolve
+it. The `bin/qwen3*-server` scripts are outside this exception -- they invoke
+`model-server.sh`, not Python.
+
+Outside these four launchers, deviations are limited to bootstrap or recovery
+code that cannot depend on `uv`, latency-critical hooks, diagnostics that
+intentionally probe a named interpreter, and stdlib-only checks required on an
+unprovisioned clone. Each deviation must state its reason at the call site. All
+other shell scripts use `uv run python`.
+
 **Shell scripts must survive bash 3.2 and zsh.** `/bin/bash` on macOS is bash
 3.2 (no bash 4+ since the licence change, and none at all without Homebrew),
 and the macOS login shell is zsh. Two consequences bite hardest -- a

@@ -7,7 +7,7 @@ import subprocess
 import threading
 import time
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Mapping, Optional, Sequence
 
@@ -18,6 +18,12 @@ from .store import JobStore, StoreError
 WORKSPACE_STATUSES = frozenset({"isolated", "none", "removing", "removed"})
 WORKSPACE_REASON_NONE = "no git repository detected from the declared directory"
 WORKSPACE_REASON_DECLINED = "workspace isolation declined by the job"
+# Two bounds, because the Git commands here have two very different shapes.
+# A probe answers from metadata and is hung if it takes this long. A tree
+# operation writes or walks a whole working tree, which on a large repository
+# legitimately takes minutes.
+GIT_PROBE_TIMEOUT_S = 30.0
+GIT_TREE_TIMEOUT_S = 900.0
 
 # Git documents no concurrency promise for `worktree add` against one
 # repository, so creations are serialised per repository root. The lock is
@@ -92,9 +98,13 @@ class _WorkspacePlan:
 
 
 def _git_result(
-    args: Sequence[str], *, cwd: Path
+    args: Sequence[str], *, cwd: Path, timeout_s: float = GIT_TREE_TIMEOUT_S
 ) -> Optional[subprocess.CompletedProcess[str]]:
-    """Run one local Git command without raising for a missing executable."""
+    """Run one local Git command without raising for a missing executable.
+
+    The bound defaults to the tree-operation budget. A caller running a
+    metadata probe passes ``GIT_PROBE_TIMEOUT_S`` instead.
+    """
     try:
         return subprocess.run(
             ["git", *args],
@@ -104,8 +114,9 @@ def _git_result(
             encoding="utf-8",
             errors="replace",
             check=False,
+            timeout=timeout_s,
         )
-    except OSError:
+    except (OSError, subprocess.TimeoutExpired):
         return None
 
 
@@ -132,8 +143,9 @@ def _git_detection_result(
             encoding="utf-8",
             errors="replace",
             check=False,
+            timeout=GIT_PROBE_TIMEOUT_S,
         )
-    except OSError as exc:
+    except (OSError, subprocess.TimeoutExpired) as exc:
         raise WorkspaceDetectionError(
             f"could not run Git repository detection in {directory}: {exc}"
         ) from exc
@@ -344,12 +356,36 @@ class WorkspaceManager:
 
     def prepare(self, job: Job, attempt_no: int) -> WorkspaceResolution:
         """Create the worktree for an attempt or report explicit no-isolation."""
+        path = self.allocate_path(job, attempt_no)
+        return self.create(job, workspace_path=path)
+
+    def allocate_path(self, job: Job, attempt_no: int) -> Optional[Path]:
+        """Allocate a root-confined path without creating a Git worktree."""
         plan = self._plans.get(job.id)
         if plan is None:
             plan = self._plan_job(job, {})
         if plan.error is not None:
             raise WorkspaceCreationError(plan.error)
         if plan.status == "none":
+            return None
+        if plan.repo_root is None or plan.base_ref is None:
+            raise WorkspaceCreationError("Git workspace plan is incomplete")
+        return self._attempt_path(job, attempt_no)
+
+    def create(
+        self, job: Job, *, workspace_path: Optional[str | Path]
+    ) -> WorkspaceResolution:
+        """Create the Git worktree at a previously durable path."""
+        plan = self._plans.get(job.id)
+        if plan is None:
+            plan = self._plan_job(job, {})
+        if plan.error is not None:
+            raise WorkspaceCreationError(plan.error)
+        if plan.status == "none":
+            if workspace_path is not None:
+                raise WorkspaceCreationError(
+                    "a non-isolated workspace cannot have an allocated path"
+                )
             return WorkspaceResolution(
                 path=None,
                 base_ref=None,
@@ -360,7 +396,9 @@ class WorkspaceManager:
             )
         if plan.repo_root is None or plan.base_ref is None:
             raise WorkspaceCreationError("Git workspace plan is incomplete")
-        path = self._attempt_path(job, attempt_no)
+        if workspace_path is None:
+            raise WorkspaceCreationError("an isolated workspace requires an allocated path")
+        path = Path(workspace_path).expanduser().resolve()
         created = create_worktree(plan.repo_root, path, plan.base_ref)
         return WorkspaceResolution(
             path=created,
@@ -433,7 +471,9 @@ class WorkspaceGCReport:
 
 def _workspace_repo_root(workspace: Path) -> tuple[Optional[Path], Optional[str]]:
     """Find the Git repository root that owns a recorded worktree."""
-    result = _git_result(("rev-parse", "--show-toplevel"), cwd=workspace)
+    result = _git_result(
+        ("rev-parse", "--show-toplevel"), cwd=workspace, timeout_s=GIT_PROBE_TIMEOUT_S
+    )
     if result is None or result.returncode != 0:
         return None, f"workspace is not a readable Git worktree: {_git_detail(result)}"
     raw_root = result.stdout.strip()
@@ -444,7 +484,11 @@ def _workspace_repo_root(workspace: Path) -> tuple[Optional[Path], Optional[str]
 
 def _registered_worktrees(repo_root: Path) -> tuple[set[Path], Optional[str]]:
     """Read the registered worktree paths from the owning repository."""
-    result = _git_result(("worktree", "list", "--porcelain"), cwd=repo_root)
+    result = _git_result(
+        ("worktree", "list", "--porcelain"),
+        cwd=repo_root,
+        timeout_s=GIT_PROBE_TIMEOUT_S,
+    )
     if result is None or result.returncode != 0:
         return set(), f"could not list Git worktrees: {_git_detail(result)}"
     paths = {
@@ -608,6 +652,12 @@ def gc_workspaces(
         for attempt in snapshot.attempts
         if attempt.workspace is not None
     }
+    all_recorded_workspaces.update(
+        reservation.workspace_path.resolve()
+        for snapshot in snapshots.values()
+        for reservation in snapshot.reservations
+        if reservation.workspace_path is not None
+    )
     removed: list[WorkspaceGCEntry] = []
     refused: list[WorkspaceGCEntry] = []
     skipped: list[WorkspaceGCEntry] = []
@@ -695,6 +745,9 @@ def gc_workspaces(
                 continue
 
             cleanup_started = attempt.workspace_status == "removing"
+            recorded_forced = attempt.workspace_removal_forced
+            # A retry keeps a forced intent, even when the new CLI call omits --force.
+            effective_force = force or recorded_forced
             if cleanup_started and not attempt.workspace.is_dir():
                 registration = _workspace_registration_state(
                     attempt.workspace, snapshot.jobs
@@ -764,10 +817,9 @@ def gc_workspaces(
                 )
                 continue
             try:
-                if not cleanup_started:
-                    store_object.mark_workspace_removing(
-                        attempt.id, forced=force
-                    )
+                store_object.mark_workspace_removing(
+                    attempt.id, forced=effective_force
+                )
             except StoreError as exc:
                 refused.append(
                     WorkspaceGCEntry(
@@ -781,13 +833,14 @@ def gc_workspaces(
                 continue
 
             refusal = _reclaim_workspace(
-                attempt.workspace, snapshot.run, force=force
+                attempt.workspace, snapshot.run, force=effective_force
             )
             if refusal is not None:
-                try:
-                    store_object.restore_workspace_isolated(attempt.id)
-                except StoreError:
-                    pass
+                if not effective_force:
+                    try:
+                        store_object.restore_workspace_isolated(attempt.id)
+                    except StoreError:
+                        pass
                 refused.append(
                     WorkspaceGCEntry(
                         run_id=entry.run_id,
@@ -801,7 +854,7 @@ def gc_workspaces(
             store_object.record_workspace_removed(
                 attempt.id,
                 at=time.time(),
-                forced=force or attempt.workspace_removal_forced,
+                forced=effective_force,
             )
             removed.append(
                 WorkspaceGCEntry(
@@ -809,7 +862,146 @@ def gc_workspaces(
                     job_id=entry.job_id,
                     attempt_id=entry.attempt_id,
                     workspace=entry.workspace,
-                    reason="forced worktree removed" if force else "clean worktree removed",
+                    reason=(
+                        "forced worktree removed"
+                        if effective_force
+                        else "clean worktree removed"
+                    ),
+                )
+            )
+
+        for reservation in snapshot.reservations:
+            if (
+                reservation.disposition
+                not in {
+                    "process_lost",
+                    "process_lost_before_invoke",
+                    "pre_invoke_failure",
+                }
+                or reservation.workspace_path is None
+            ):
+                continue
+            reservation_id = reservation.id if reservation.id is not None else -1
+            entry = WorkspaceGCEntry(
+                run_id=current_run_id,
+                job_id=reservation.job_id,
+                attempt_id=reservation_id,
+                workspace=reservation.workspace_path,
+                reason="",
+            )
+            if reservation.workspace_removed_at is not None or (
+                reservation.workspace_status == "removed"
+            ):
+                skipped.append(
+                    WorkspaceGCEntry(
+                        run_id=entry.run_id,
+                        job_id=entry.job_id,
+                        attempt_id=entry.attempt_id,
+                        workspace=entry.workspace,
+                        reason="workspace was already removed",
+                    )
+                )
+                continue
+            if reservation.workspace_status not in {"isolated", "removing"}:
+                skipped.append(
+                    WorkspaceGCEntry(
+                        run_id=entry.run_id,
+                        job_id=entry.job_id,
+                        attempt_id=entry.attempt_id,
+                        workspace=entry.workspace,
+                        reason="reservation does not record an isolated worktree",
+                    )
+                )
+                continue
+            cleanup_started = reservation.workspace_status == "removing"
+            recorded_forced = reservation.workspace_removal_forced
+            # A retry keeps a forced intent, even when the new CLI call omits --force.
+            effective_force = force or recorded_forced
+            if cleanup_started and not reservation.workspace_path.is_dir():
+                registration = _workspace_registration_state(
+                    reservation.workspace_path, snapshot.jobs
+                )
+                if registration is True:
+                    refusal = _prune_interrupted_workspace(
+                        reservation.workspace_path, snapshot.jobs
+                    )
+                    if refusal is not None:
+                        refused.append(replace(entry, reason=refusal))
+                        continue
+                    store_object.record_reservation_workspace_removed(
+                        reservation_id,
+                        at=time.time(),
+                        forced=reservation.workspace_removal_forced,
+                    )
+                    removed.append(
+                        replace(
+                            entry,
+                            reason=(
+                                "forced stale Git worktree registration pruned after interrupted removal"
+                                if reservation.workspace_removal_forced
+                                else "stale Git worktree registration pruned after interrupted removal"
+                            ),
+                        )
+                    )
+                    continue
+                if registration is None:
+                    refused.append(
+                        replace(
+                            entry, reason="could not verify completed Git worktree removal"
+                        )
+                    )
+                    continue
+                store_object.record_reservation_workspace_removed(
+                    reservation_id,
+                    at=time.time(),
+                    forced=reservation.workspace_removal_forced,
+                )
+                removed.append(
+                    replace(
+                        entry,
+                        reason=(
+                            "forced worktree removal was already completed"
+                            if reservation.workspace_removal_forced
+                            else "clean worktree removal was already completed"
+                        ),
+                    )
+                )
+                continue
+            try:
+                store_object.mark_reservation_workspace_removing(
+                    reservation_id, forced=effective_force
+                )
+            except StoreError as exc:
+                refused.append(
+                    replace(
+                        entry, reason=f"could not record workspace removal intent: {exc}"
+                    )
+                )
+                continue
+            refusal = _reclaim_workspace(
+                reservation.workspace_path, snapshot.run, force=effective_force
+            )
+            if refusal is not None:
+                if not effective_force:
+                    try:
+                        store_object.restore_reservation_workspace_isolated(reservation_id)
+                    except StoreError:
+                        pass
+                refused.append(replace(entry, reason=refusal))
+                continue
+            store_object.record_reservation_workspace_removed(
+                reservation_id,
+                at=time.time(),
+                forced=effective_force,
+            )
+            removed.append(
+                replace(
+                    entry,
+                    reason=(
+                        "forced worktree removed"
+                        if effective_force
+                        else "clean worktree removed"
+                    ),
                 )
             )
 

@@ -78,8 +78,17 @@ def numbered(items: Iterable[str], sep: str = "; ",
         text = str(item).strip()
         if not text:
             continue
-        if limit is not None and len(text) > limit:
-            text = (short_form(item) or derive_short(text, limit) or text).strip()
+        # An AUTHORED short label wins unconditionally, not only when the full
+        # text overflows. `display=` is the author stating what the user should
+        # see; honouring it only past a width threshold made the display depend
+        # on whether the omitted part happened to be short -- which is how a
+        # brief absolute path ("project config: updated /tmp/x.yaml", 35 chars)
+        # reached display text under a rule forbidding exactly that.
+        authored = short_form(item)
+        if authored:
+            text = str(authored).strip() or text
+        elif limit is not None and len(text) > limit:
+            text = (derive_short(text, limit) or text).strip()
         listed.append(text)
     if len(listed) <= 1:
         return listed[0] if listed else ""

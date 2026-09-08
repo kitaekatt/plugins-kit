@@ -58,8 +58,10 @@ jobs:
   not a result, so nothing downstream has to trust the text.
 - **Durability.** Runs are recorded. `status` reports one, `resume` continues
   the non-terminal jobs of one, and an interrupted run does not restart from
-  the beginning. Every attempt is a row: job-kit never retries inside an
-  attempt, so the ledger's attempt count is the invocation count.
+  the beginning. A write-ahead reservation records the invocation boundary
+  before the seam. Every attempt is still exactly one observed seam invocation:
+  a process loss after arming is recorded as a reservation loss, not as a
+  fabricated attempt row, and it consumes one retry budget unit.
 - **Halts narrow the run; timeouts do not.** An endpoint that returns a
   persistent halt is excluded from the rest of the run. A `--timeout` expiry is
   job-kit's own budget rather than evidence about the endpoint, so it is

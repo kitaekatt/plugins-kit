@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import signal
 import subprocess
 import threading
 import time
@@ -132,6 +133,39 @@ def _tail_output(value: str) -> str:
     return marker + value[-(CONTRACT_OUTPUT_LIMIT - len(marker)) :]
 
 
+def _kill_contract_process_group(process: subprocess.Popen[str]) -> None:
+    """Kill a timed-out contract and every process in its group."""
+    if os.name == "posix":
+        try:
+            os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+        except ProcessLookupError:
+            process.kill()
+        return
+    try:
+        subprocess.run(
+            ["taskkill", "/T", "/F", "/PID", str(process.pid)],
+            capture_output=True,
+            check=False,
+            timeout=1.0,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        process.kill()
+
+
+def _timed_out_contract(contract: Contract, directory: Path) -> Acceptance:
+    """Return the contract result for a budget spent before contract launch."""
+    return Acceptance(
+        command=contract.command,
+        directory=directory,
+        exit_code=None,
+        stdout="",
+        stderr="",
+        wall_ms=0,
+        accepted=False,
+        outcome="timed_out",
+    )
+
+
 def run_contract(
     contract: Contract,
     *,
@@ -160,24 +194,32 @@ def run_contract(
     started = time.monotonic()
     outcome = "observed"
     try:
-        result = subprocess.run(
+        popen_options: dict[str, object] = {}
+        if os.name == "posix":
+            popen_options["start_new_session"] = True
+        elif os.name == "nt":
+            popen_options["creationflags"] = getattr(
+                subprocess, "CREATE_NEW_PROCESS_GROUP", 0
+            )
+        process = subprocess.Popen(
             list(contract.command),
             cwd=str(working_directory),
-            capture_output=True,
-            input=response_text,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             env=environment,
             text=True,
             encoding="utf-8",
             errors="replace",
-            check=False,
-            timeout=timeout_s,
+            **popen_options,
         )
-        stdout = _output_text(result.stdout)
-        stderr = _output_text(result.stderr)
-        exit_code: Optional[int] = result.returncode
+        stdout, stderr = process.communicate(input=response_text, timeout=timeout_s)
+        exit_code: Optional[int] = process.returncode
     except subprocess.TimeoutExpired as exc:
-        stdout = _output_text(exc.stdout)
-        stderr = _output_text(exc.stderr)
+        _kill_contract_process_group(process)
+        final_stdout, final_stderr = process.communicate()
+        stdout = _output_text(final_stdout if final_stdout is not None else exc.stdout)
+        stderr = _output_text(final_stderr if final_stderr is not None else exc.stderr)
         exit_code = None
         outcome = "timed_out"
     except OSError as exc:
@@ -196,11 +238,6 @@ def run_contract(
         accepted=exit_code == 0,
         outcome=outcome,
     )
-
-
-def _attempt_number(store: JobStore, run_id: str, job_id: str) -> int:
-    """Return the append-only number for the next attempt."""
-    return len(store.list_attempts(run_id, job_id)) + 1
 
 
 def _is_own_deadline(exc: BaseException) -> bool:
@@ -243,9 +280,9 @@ def _known_halt_kind(value: object) -> Optional[str]:
 
 
 def _terminal_state_after_attempt(
-    job: Job, attempt_no: int, outcome: JobState
+    job: Job, budget_no: int, outcome: JobState
 ) -> Optional[JobState]:
-    """Terminalize an outcome only when this attempt exhausts the policy."""
+    """Terminalize an outcome only when its budget allocation exhausts policy."""
     if outcome not in {
         JobState.ACCEPTED,
         JobState.REJECTED,
@@ -255,7 +292,7 @@ def _terminal_state_after_attempt(
         raise ValueError(f"invalid attempt outcome: {outcome.value}")
     if outcome is JobState.ACCEPTED:
         return outcome
-    return outcome if attempt_no >= job.max_attempts else None
+    return outcome if budget_no >= job.max_attempts else None
 
 
 def _capabilities_for(
@@ -408,6 +445,7 @@ def _exception_attempt(
     options: BackendOptions,
     capabilities: Optional[Capabilities],
     attempt_no: int,
+    budget_no: int,
     started_at: str,
     ended_at: str,
     exc: BaseException,
@@ -457,7 +495,7 @@ def _exception_attempt(
         ),
     )
     outcome = JobState.HALTED if halt_kind is not None else JobState.FAILED
-    return attempt, _terminal_state_after_attempt(job, attempt_no, outcome)
+    return attempt, _terminal_state_after_attempt(job, budget_no, outcome)
 
 
 def _response_attempt(
@@ -466,6 +504,7 @@ def _response_attempt(
     job: Job,
     selection: BackendSelection,
     attempt_no: int,
+    budget_no: int,
     response: object,
     workspace: WorkspaceResolution,
 ) -> tuple[Attempt, Optional[JobState]]:
@@ -526,7 +565,7 @@ def _response_attempt(
     )
     if status != COMPLETED:
         outcome = JobState.HALTED if halt_kind is not None else JobState.FAILED
-        return attempt, _terminal_state_after_attempt(job, attempt_no, outcome)
+        return attempt, _terminal_state_after_attempt(job, budget_no, outcome)
     return attempt, None
 
 
@@ -564,8 +603,6 @@ def run_job(
         backend_factory=backend_factory or create_backend,
         project_root=str(job.declared_directory),
     )
-    store.mark_running(run_id, job.id)
-    attempt_no = _attempt_number(store, run_id, job.id)
     manager = workspace_manager
     if manager is None:
         root = (
@@ -588,29 +625,87 @@ def run_job(
             store.mark_failed(run_id, job.id, str(exc))
             raise
         manager = WorkspaceManager(root, (job,), base_refs=base_refs)
+    else:
+        try:
+            store.ensure_workspace_root(run_id, manager.workspace_root)
+        except StoreError as exc:
+            store.mark_failed(run_id, job.id, str(exc))
+            raise
+    reservation = store.reserve_attempt(
+        run_id,
+        job.id,
+        endpoint=selection.endpoint,
+        backend=selection.backend.name,
+        model=selection.model,
+        reserved_at=utc_now_iso(),
+    )
+    attempt_no = reservation.attempt_no
     try:
-        workspace = manager.prepare(job, attempt_no)
+        workspace_path = manager.allocate_path(job, attempt_no)
+        reservation = store.record_reservation_workspace(
+            run_id,
+            job.id,
+            attempt_no,
+            workspace_path=workspace_path,
+        )
+        workspace = manager.create(job, workspace_path=workspace_path)
     except WorkspaceError as exc:
-        store.mark_failed(run_id, job.id, str(exc))
+        store.resolve_reservation_before_invoke(
+            run_id,
+            job.id,
+            attempt_no,
+            reason=str(exc),
+            at=utc_now_iso(),
+        )
         raise
     except (KeyboardInterrupt, SystemExit) as exc:
         reason = str(exc) or exc.__class__.__name__
-        store.mark_failed(run_id, job.id, reason)
+        store.resolve_reservation_before_invoke(
+            run_id, job.id, attempt_no, reason=reason, at=utc_now_iso()
+        )
         raise
     working_directory = (
         workspace.working_directory
         if workspace.path is not None
         else job.declared_directory
     )
-    options = _backend_options(
-        job,
-        selection,
-        working_directory,
-        timeout_s,
-        run_floor,
+    try:
+        options = _backend_options(
+            job,
+            selection,
+            working_directory,
+            timeout_s,
+            run_floor,
+        )
+        capabilities = _capabilities_for(selection, advertised)
+    except Exception as exc:
+        store.resolve_reservation_before_invoke(
+            run_id,
+            job.id,
+            attempt_no,
+            reason=str(exc) or exc.__class__.__name__,
+            at=utc_now_iso(),
+        )
+        raise
+    except (KeyboardInterrupt, SystemExit) as exc:
+        store.resolve_reservation_before_invoke(
+            run_id,
+            job.id,
+            attempt_no,
+            reason=str(exc) or exc.__class__.__name__,
+            at=utc_now_iso(),
+        )
+        raise
+    armed = store.arm_reservation(
+        run_id,
+        job.id,
+        attempt_no,
+        invoke_armed_at=utc_now_iso(),
     )
-    capabilities = _capabilities_for(selection, advertised)
-    started_at = utc_now_iso()
+    started_at = armed.invoke_armed_at
+    if started_at is None:  # pragma: no cover - arm_reservation guarantees this
+        raise StoreError("armed reservation has no invoke_armed_at")
+    completion_started = time.monotonic()
     try:
         response = selection.backend.complete(
             job.prompt.system,
@@ -618,6 +713,7 @@ def run_job(
             model=selection.model,
             options=options,
         )
+        completion_elapsed_s = time.monotonic() - completion_started
     except Exception as exc:
         attempt, terminal_state = _exception_attempt(
             run_id=run_id,
@@ -626,6 +722,7 @@ def run_job(
             options=options,
             capabilities=capabilities,
             attempt_no=attempt_no,
+            budget_no=reservation.budget_no,
             started_at=started_at,
             ended_at=utc_now_iso(),
             exc=exc,
@@ -640,6 +737,7 @@ def run_job(
             options=options,
             capabilities=capabilities,
             attempt_no=attempt_no,
+            budget_no=reservation.budget_no,
             started_at=started_at,
             ended_at=utc_now_iso(),
             exc=exc,
@@ -654,9 +752,11 @@ def run_job(
             job=job,
             selection=selection,
             attempt_no=attempt_no,
+            budget_no=reservation.budget_no,
             response=response,
             workspace=workspace,
         )
+        attempt = replace(attempt, started_at=started_at)
     except (KeyboardInterrupt, SystemExit) as exc:
         interrupted_attempt, _ = _exception_attempt(
             run_id=run_id,
@@ -665,6 +765,7 @@ def run_job(
             options=options,
             capabilities=capabilities,
             attempt_no=attempt_no,
+            budget_no=reservation.budget_no,
             started_at=started_at,
             ended_at=utc_now_iso(),
             exc=exc,
@@ -680,7 +781,7 @@ def run_job(
         store.append_attempt(
             interrupted_attempt,
             terminal_state=_terminal_state_after_attempt(
-                job, attempt_no, JobState.FAILED
+                job, reservation.budget_no, JobState.FAILED
             ),
         )
         raise
@@ -688,20 +789,24 @@ def run_job(
         return store.append_attempt(attempt, terminal_state=terminal_state)
 
     try:
-        acceptance = run_contract(
-            job.contract,
-            directory=working_directory,
-            timeout_s=timeout_s,
-            response_text=attempt.response_text or "",
-            context=ContractContext(
-                run_id=run_id,
-                job_id=job.id,
-                attempt_no=attempt_no,
-                endpoint=attempt.endpoint,
-                backend=attempt.backend,
-                model=attempt.model,
-            ),
-        )
+        contract_timeout_s = timeout_s - completion_elapsed_s
+        if contract_timeout_s <= 0:
+            acceptance = _timed_out_contract(job.contract, working_directory)
+        else:
+            acceptance = run_contract(
+                job.contract,
+                directory=working_directory,
+                timeout_s=contract_timeout_s,
+                response_text=attempt.response_text or "",
+                context=ContractContext(
+                    run_id=run_id,
+                    job_id=job.id,
+                    attempt_no=attempt_no,
+                    endpoint=attempt.endpoint,
+                    backend=attempt.backend,
+                    model=attempt.model,
+                ),
+            )
     except (KeyboardInterrupt, SystemExit) as exc:
         interrupted_attempt = replace(
             attempt,
@@ -713,7 +818,7 @@ def run_job(
         store.append_attempt(
             interrupted_attempt,
             terminal_state=_terminal_state_after_attempt(
-                job, attempt_no, JobState.FAILED
+                job, reservation.budget_no, JobState.FAILED
             ),
         )
         raise
@@ -728,7 +833,7 @@ def run_job(
         return store.append_attempt(
             failed_attempt,
             terminal_state=_terminal_state_after_attempt(
-                job, attempt_no, JobState.FAILED
+                job, reservation.budget_no, JobState.FAILED
             ),
         )
     try:
@@ -739,7 +844,9 @@ def run_job(
             outcome = JobState.ACCEPTED
         else:
             outcome = JobState.REJECTED
-        terminal_state = _terminal_state_after_attempt(job, attempt_no, outcome)
+        terminal_state = _terminal_state_after_attempt(
+            job, reservation.budget_no, outcome
+        )
     except (KeyboardInterrupt, SystemExit) as exc:
         interrupted_attempt = replace(
             attempt,
@@ -751,7 +858,7 @@ def run_job(
         store.append_attempt(
             interrupted_attempt,
             terminal_state=_terminal_state_after_attempt(
-                job, attempt_no, JobState.FAILED
+                job, reservation.budget_no, JobState.FAILED
             ),
         )
         raise
@@ -760,34 +867,7 @@ def run_job(
 
 def replace_attempt_acceptance(attempt: Attempt, acceptance: Acceptance) -> Attempt:
     """Return an attempt with its observed contract result attached."""
-    return Attempt(
-        run_id=attempt.run_id,
-        job_id=attempt.job_id,
-        attempt_no=attempt.attempt_no,
-        endpoint=attempt.endpoint,
-        backend=attempt.backend,
-        model=attempt.model,
-        status=attempt.status,
-        started_at=attempt.started_at,
-        ended_at=attempt.ended_at,
-        error=attempt.error,
-        halt_kind=attempt.halt_kind,
-        dropped_params=attempt.dropped_params,
-        execution_controls_applied=attempt.execution_controls_applied,
-        usage=attempt.usage,
-        response_text=attempt.response_text,
-        reasoning=attempt.reasoning,
-        finish_reason=attempt.finish_reason,
-        workspace=attempt.workspace,
-        base_ref=attempt.base_ref,
-        workspace_status=attempt.workspace_status,
-        workspace_reason=attempt.workspace_reason,
-        workspace_removed_at=attempt.workspace_removed_at,
-        workspace_removal_forced=attempt.workspace_removal_forced,
-        forwarded_params=attempt.forwarded_params,
-        acceptance=acceptance,
-        id=attempt.id,
-    )
+    return replace(attempt, acceptance=acceptance)
 
 
 def _store_object(store: JobStore | str | Path) -> JobStore:
@@ -922,6 +1002,7 @@ def _run_pending(
     driven inline, in that order, exactly as a sequential run always did.
     """
     bound = validate_max_parallel(max_parallel)
+    store.recover_reservations(run_id)
     records = store.list_jobs(run_id)
     root = (
         Path(workspace_root).expanduser().resolve()

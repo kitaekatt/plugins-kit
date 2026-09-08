@@ -761,6 +761,79 @@ class Attempt:
 
 
 @dataclass(frozen=True)
+class AttemptReservation:
+    """Durable write-ahead state for one possible seam invocation."""
+
+    run_id: str
+    job_id: str
+    attempt_no: int
+    budget_no: int
+    endpoint: str
+    backend: str
+    model: str
+    workspace_path: Optional[Path]
+    reserved_at: str
+    invoke_armed_at: Optional[str] = None
+    disposition: Optional[str] = None
+    resolved_at: Optional[str] = None
+    lost_at: Optional[str] = None
+    loss_reason: Optional[str] = None
+    workspace_status: str = "none"
+    workspace_reason: Optional[str] = None
+    workspace_removed_at: Optional[float] = None
+    workspace_removal_forced: bool = False
+    id: Optional[int] = None
+
+    def __post_init__(self) -> None:
+        if self.workspace_path is not None:
+            object.__setattr__(
+                self, "workspace_path", Path(self.workspace_path).expanduser().resolve()
+            )
+        if self.workspace_status not in {"isolated", "none", "removing", "removed"}:
+            raise ValueError(
+                "reservation workspace_status must be one of: "
+                "isolated, none, removing, removed"
+            )
+        if self.workspace_path is None and self.workspace_status != "none":
+            raise ValueError("a reservation without a workspace must have status none")
+        if self.workspace_path is not None and self.workspace_status == "none":
+            raise ValueError("a reservation with a workspace must not have status none")
+        if not isinstance(self.workspace_removal_forced, bool):
+            raise ValueError("workspace_removal_forced must be a boolean")
+
+    @property
+    def workspace(self) -> Optional[Path]:
+        """Compatibility alias for workspace-bearing ledger records."""
+        return self.workspace_path
+
+    def to_mapping(self) -> dict[str, object]:
+        """Return a JSON-compatible reservation mapping."""
+        return {
+            "id": self.id,
+            "run_id": self.run_id,
+            "job_id": self.job_id,
+            "attempt_no": self.attempt_no,
+            "budget_no": self.budget_no,
+            "endpoint": self.endpoint,
+            "backend": self.backend,
+            "model": self.model,
+            "workspace_path": (
+                str(self.workspace_path) if self.workspace_path is not None else None
+            ),
+            "reserved_at": self.reserved_at,
+            "invoke_armed_at": self.invoke_armed_at,
+            "disposition": self.disposition,
+            "resolved_at": self.resolved_at,
+            "lost_at": self.lost_at,
+            "loss_reason": self.loss_reason,
+            "workspace_status": self.workspace_status,
+            "workspace_reason": self.workspace_reason,
+            "workspace_removed_at": self.workspace_removed_at,
+            "workspace_removal_forced": self.workspace_removal_forced,
+        }
+
+
+@dataclass(frozen=True)
 class JobRecord:
     """A persisted job definition and its durable state."""
 
@@ -856,6 +929,7 @@ class RunSnapshot:
     run: RunRecord
     jobs: tuple[JobRecord, ...]
     attempts: tuple[Attempt, ...]
+    reservations: tuple[AttemptReservation, ...] = ()
 
     @property
     def status(self) -> RunState:
@@ -876,6 +950,9 @@ class RunSnapshot:
             "run": self.run.to_mapping(),
             "jobs": [job.to_mapping() for job in self.jobs],
             "attempts": [attempt.to_mapping() for attempt in self.attempts],
+            "reservations": [
+                reservation.to_mapping() for reservation in self.reservations
+            ],
             "counts": self.counts,
         }
 
@@ -907,6 +984,7 @@ __all__ = [
     "AttemptError",
     "Acceptance",
     "Attempt",
+    "AttemptReservation",
     "JobRecord",
     "RunRecord",
     "RunSnapshot",
