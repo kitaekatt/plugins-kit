@@ -946,6 +946,31 @@ class TestInfoSignals:
         assert "DIRTY" in codes(result, "INFO")
         assert result["fail_count"] == 0
 
+    def test_authoring_vocabulary_in_an_identity_is_info(self, repo):
+        """An identity is read by a person as the h1, the title and every ancestor's nav label.
+
+        Generation may not rewrite an identity, so a leak here either halts the
+        run or ships. INFO rather than FAIL because "owns" can legitimately
+        describe software behavior, which only a person can judge.
+        """
+        record = make_record(
+            repo, "src", identity="The core that owns ECS state and its territory."
+        )
+        write_page(repo, "src", record)
+        result = run_check(repo, "src")
+        assert "IDENTITY-VOCABULARY" in codes(result, "INFO")
+        assert result["fail_count"] == 0
+        finding = next(
+            f for f in result["findings"] if f["code"] == "IDENTITY-VOCABULARY"
+        )
+        assert "owns" in finding["message"] and "territory" in finding["message"]
+
+    def test_a_clean_identity_raises_no_vocabulary_signal(self, repo):
+        record = make_record(repo, "src", identity="The core that holds ECS state.")
+        write_page(repo, "src", record)
+        result = run_check(repo, "src")
+        assert "IDENTITY-VOCABULARY" not in codes(result, "INFO")
+
     def test_an_oversized_page_is_a_fail(self, repo):
         record = make_record(repo, "src")
         write_page(repo, "src", record, body="<p>%s</p>" % ("word " * 901))

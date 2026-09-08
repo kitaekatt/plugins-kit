@@ -120,7 +120,7 @@ def _write_fresh_record(
         decision=decision,
         source_sha=entry["source_sha"],
         dirty=entry["dirty"],
-        identity=(identity or "The %s territory." % directory)
+        identity=(identity or "The %s subsystem." % directory)
         if decision == hh.DECISION_PAGE
         else "",
         instructions=instructions,
@@ -271,7 +271,7 @@ class TestPlacementPlan:
             corpus,
             first["directory"],
             hh.DECISION_PAGE,
-            "The leaf territory.",
+            "The leaf subsystem.",
             first["source_sha"],
             first["dirty"],
             first["brief_sha256"],
@@ -286,7 +286,7 @@ class TestPlacementPlan:
         assert resumed["next"]["territory"]["child_pages"] == [
             {
                 "directory": "a/leaf",
-                "identity": "The leaf territory.",
+                "identity": "The leaf subsystem.",
                 "relationship": "nearest-page-descendant",
             }
         ]
@@ -294,7 +294,7 @@ class TestPlacementPlan:
     @pytest.mark.parametrize(
         ("decision", "identity", "expected_references"),
         [
-            (hh.DECISION_PAGE, "A refreshed root territory.", ["human.protocol.html"]),
+            (hh.DECISION_PAGE, "A refreshed root subsystem.", ["human.protocol.html"]),
             (hh.DECISION_NONE, "", []),
         ],
     )
@@ -383,7 +383,7 @@ class TestPlacementPlan:
             corpus,
             "a",
             hh.DECISION_PAGE,
-            "The a territory.",
+            "The a subsystem.",
             job["source_sha"],
             job["dirty"],
             job["brief_sha256"],
@@ -826,7 +826,7 @@ class TestGenerationCompletion:
 
         assert result["status"] == driver.STATUS_BLOCKED
         assert result["fail_count"] == 1
-        assert result["findings"][0]["code"] == "page-missing"
+        assert "page-missing" in [f["code"] for f in result["findings"]]
         assert not (root_only / driver.CHECKPOINT_RELATIVE_PATH).exists()
         assert driver.generation_plan(root_only, framework)["next"]["directory"] == "."
 
@@ -1030,7 +1030,7 @@ class TestGenerationCompletion:
             root,
             ".",
             hh.DECISION_PAGE,
-            "The root territory.",
+            "The root subsystem.",
             placement["source_sha"],
             placement["dirty"],
             placement["brief_sha256"],

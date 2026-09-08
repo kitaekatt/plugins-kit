@@ -117,6 +117,18 @@ _MARKER_RE = re.compile(r"<!--\s*human-html:\s*(?P<json>\{.*?\})\s*-->", re.DOTA
 
 # PC-3 announce message.
 ANNOUNCE_TYPE = "human-html:announce"
+
+# The scope model's OWN words, owned here because this package defines the model.
+# They are correct in the lane and the standards doc, whose subject IS the model.
+# They are wrong in a record's `identity`, which a person reads as the page h1,
+# the page title, and every ancestor's navigation label -- and which generation
+# may not rewrite, so a leak there either halts a run or ships. Not configurable
+# per project: a consuming project does not get to rename md-domain's scope
+# model, so there is no per-project value to set. The judgement that survives is
+# whether a given use is real software behaviour ("owns a lock"), which is why
+# the check that reads this reports INFO rather than FAIL.
+AUTHORING_VOCABULARY = ("owns", "owned", "ownership", "territory", "territories")
+
 ANNOUNCE_VERSION = 1
 
 # SA-1 packaged asset.
