@@ -23,7 +23,7 @@ def _argument_value(name):
     return ""
 
 
-def _write_pending(path, content):
+def _write_pending(path: str, content: str) -> bool:
     directory = os.path.dirname(os.path.abspath(path))
     os.makedirs(directory, exist_ok=True)
     fd, temporary = tempfile.mkstemp(prefix=".bootstrap-pending.", dir=directory)
@@ -33,7 +33,8 @@ def _write_pending(path, content):
         try:
             os.link(temporary, path)
         except FileExistsError:
-            pass
+            return False
+        return True
     finally:
         try:
             os.remove(temporary)
@@ -60,10 +61,12 @@ except ImportError as exc:
                     "additionalContext": note,
                 },
             }
-            _write_pending(
-                os.path.join(data_dir, "bootstrap_display.pending"),
-                json.dumps(response),
-            )
+            pending = os.path.join(data_dir, "bootstrap_display.pending")
+            if not _write_pending(pending, json.dumps(response)):
+                _write_pending(
+                    os.path.join(data_dir, "bootstrap_display.wrapper_import.pending"),
+                    json.dumps(response),
+                )
         except OSError:
             pass
     sys.stderr.write(note + "\n")

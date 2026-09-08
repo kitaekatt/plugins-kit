@@ -33,6 +33,7 @@ if [ -n "${CLAUDE_PLUGIN_TEST:-}" ] && case "$PLUGIN_ROOT" in
     exit 0
 fi
 PENDING="${DATA_DIR}/bootstrap_display.pending"
+SIDECAR="${DATA_DIR}/bootstrap_display.wrapper_import.pending"
 
 # --- Capture hook input (UserPromptSubmit JSON on stdin) ---
 # Needed by the SessionStart-missed rescue below to learn this session's id.
@@ -168,7 +169,7 @@ fi
 # load-bearing rather than defensive: on a fresh machine there is no Python
 # yet, and the pending file is often the message that says exactly that.
 # Never let the age stamp cost the user their bootstrap message.
-[ -f "$PENDING" ] || exit 0
+[ -f "$PENDING" ] || [ -f "$SIDECAR" ] || exit 0
 if [ -n "$_BOOT_PY" ] && [ -f "$PLUGIN_ROOT/bootstrap_lib/display_relay.py" ]; then
     if "$_BOOT_PY" "$PLUGIN_ROOT/bootstrap_lib/display_relay.py" \
         --data-dir "$DATA_DIR" 2>/dev/null; then
@@ -182,8 +183,16 @@ fi
 # either wins the file outright or fails with nothing to emit -- a producer
 # racing in after the claim writes a new PENDING untouched by this run, left
 # for the next prompt.
-_CLAIM="${PENDING}.claim.$$"
-if mv "$PENDING" "$_CLAIM" 2>/dev/null; then
+_CLAIM=""
+for _CANDIDATE in "$PENDING" "$SIDECAR"; do
+    [ -f "$_CANDIDATE" ] || continue
+    _CANDIDATE_CLAIM="${_CANDIDATE}.claim.$$"
+    if mv "$_CANDIDATE" "$_CANDIDATE_CLAIM" 2>/dev/null; then
+        _CLAIM="$_CANDIDATE_CLAIM"
+        break
+    fi
+done
+if [ -n "$_CLAIM" ]; then
     cat "$_CLAIM"
     mv -f "$_CLAIM" "${DATA_DIR}/bootstrap_display.displayed"
 fi

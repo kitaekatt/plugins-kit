@@ -170,7 +170,6 @@ cannot be removed is reported, never silently kept.
 | `command` | `bash -c <command>`, `sudo`-wrapped on Unix when the task is `elevated` |
 | `apt` | `apt-get update`, then one `apt-get install -y <all queued packages>` |
 | `brew_installer` | Runs the official Homebrew installer. Never elevated -- it refuses to run as root and elevates itself where it needs to |
-| `secret` | Prompts with echo off, writes the value 0600 and user-owned. **Available but unwired** -- no producer emits one yet |
 | `path_prune` | Removes the task's `entries` from the Windows User PATH, backing the old value up to `entries`' sibling `path_backup.txt` first. **Never elevated** -- `HKCU` is the user's own hive; it is queued for *consent*, not privilege, because it deletes things |
 
 The runner **prints the plan** before executing anything -- one numbered line per
@@ -332,12 +331,6 @@ same location leaves the PATH text -- and the hash -- untouched, and the stale
 verdict would delete a live directory. The queue says what to *consider*; the
 filesystem, at prune time, says what to *do*.
 
-**Why a `secret` kind at all.** Elevation is not the only operation that needs a
-console -- gathering a secret hits the same wall for a different reason, and the
-runner is the only place with a TTY to prompt on. Routing a secret through that
-console also keeps it out of the hook output and the Claude transcript. It is
-designed for, not yet wired up.
-
 ### fix-all is user consent for elevation (Windows)
 
 A SessionStart pass must never trigger a UAC or sudo prompt. But when the user
@@ -357,8 +350,8 @@ refused), a task fails, or the wait times out, the engine reports that outcome
 -- a launch that never happened claims no transcript -- and falls back to the
 run-it-yourself shim.
 
-On Ubuntu/macOS the fix-all run has no TTY for a foreground `sudo` (or a secret
-prompt), so the shim remains the only path there. That asymmetry is **encoded,
+On Ubuntu/macOS the fix-all run has no TTY for a foreground `sudo` prompt, so
+the shim remains the only path there. That asymmetry is **encoded,
 not remembered**: the engine attaches a `fix_all_cmd` to the aggregate item
 exactly when the launch can happen (Windows, and not already inside a fix-all
 run -- which doubles as the loop guard). Elevation is always an **ASK** outcome
