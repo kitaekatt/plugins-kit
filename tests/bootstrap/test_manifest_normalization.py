@@ -233,9 +233,9 @@ class TestParityInstallCommand:
 
 
 class TestParityManualSentinel:
-    def test_legacy_and_canonical_manual_both_surface_manual_item(self, tmp_path, monkeypatch):
+    def test_legacy_and_canonical_manual_both_surface_manual_item(
+            self, tmp_path, monkeypatch, empty_executable_path):
         _stub(monkeypatch)
-        monkeypatch.setenv("PATH", "/usr/bin")  # tool absent
 
         def run_both(install_block):
             action_entries = []

@@ -404,7 +404,7 @@ class TestSessionBootstrapMarker:
 
     def test_gate_skipped_invocation_still_writes_marker(self, tmp_path: Path) -> None:
         fake_home = tmp_path / "home"
-        data_dir = fake_home / ".claude" / "plugins" / "data" / "plugins-kit" / "bootstrap"
+        data_dir = fake_home / ".claude" / "plugins" / "data" / REPO_ROOT.name / "bootstrap"
         cooldowns = data_dir / "cooldowns"
         cooldowns.mkdir(parents=True)
         # Same-session Layer-1 skip: guard stamp already holds this session id.

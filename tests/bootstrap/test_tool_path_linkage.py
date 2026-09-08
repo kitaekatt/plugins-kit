@@ -206,7 +206,8 @@ class TestProcessToolEntry:
         assert failure is not None
         assert failure["install_state"] == "installed_but_path_stale"
 
-    def test_manual_sentinel_not_executed(self, tmp_path, monkeypatch):
+    def test_manual_sentinel_not_executed(
+            self, tmp_path, monkeypatch, empty_executable_path):
         """A missing tool whose install is the "manual" sentinel must NOT run
         `manual` as a command — it surfaces as a manual-attention failure."""
         self._stub(monkeypatch)
@@ -214,8 +215,6 @@ class TestProcessToolEntry:
         def boom(cmd):
             raise AssertionError(f"run_install should not be called for manual; got {cmd!r}")
         monkeypatch.setattr(tool_check, "run_install", boom)
-        monkeypatch.setenv("PATH", "/usr/bin")  # tool deliberately absent
-
         action_entries, ok_entries, tools_installed = [], [], []
         failure = engine._process_tool_entry(
             {"name": "p4", "install": {"linux": "manual"}},

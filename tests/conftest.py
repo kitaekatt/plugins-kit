@@ -252,6 +252,15 @@ def data_dir(tmp_path):
 
 
 @pytest.fixture
+def empty_executable_path(tmp_path, monkeypatch):
+    """Point PATH at an empty directory for missing-tool branch tests."""
+    d = tmp_path / "empty-path"
+    d.mkdir()
+    monkeypatch.setenv("PATH", str(d))
+    return d
+
+
+@pytest.fixture
 def defaults_dir():
     """Path to bootstrap defaults directory."""
     return os.path.join(BOOTSTRAP_ROOT, "defaults")
