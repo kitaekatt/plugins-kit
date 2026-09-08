@@ -324,6 +324,18 @@ key is set, run `llm-scripting-kit set-key` yourself -- the hidden prompt is
 interactive, so an agent cannot drive it. The `openrouter-account` skill covers
 verify / rotate / diagnose flows.
 
+### Front door
+
+The optional front door exposes configured OpenAI-compatible transport entries
+as one local `/v1/chat/completions` endpoint. Add a transport-only `routing:`
+mapping with a `group`, optional `order`, `max_parallel`, and `effort_style`;
+callers send the group as `model`. Lower orders fill first, then requests spill
+to the next tier. Run it with `llm-scripting-kit frontdoor ...` or
+`scripts/frontdoor.sh`; the launcher selects the plugin venv Python and supports
+`--print-command`. Use one uvicorn worker because concurrency counts are held in
+one process's memory. `--check` prints tiers and lists transport entries that
+are not tagged.
+
 ## When not to use
 
 If you just export `OPENROUTER_API_KEY` yourself and have a single consumer,

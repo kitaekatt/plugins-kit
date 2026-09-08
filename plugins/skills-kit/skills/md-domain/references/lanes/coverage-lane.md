@@ -1028,6 +1028,26 @@ derived from the HC-1 purpose answer. For a `none` decision, set `identity` to
 generation because HC-4 and PC-2 consume descendant identities. Generation must
 reflect the identity faithfully and never rewrite it.
 
+**DERIVE THE IDENTITY FROM THE TREE YOU JUST READ. Never carry forward the one
+already in the record.** An existing record is evidence of a past decision, not
+of present fact. Where a stale record is being re-decided, write the line as if
+no record existed, then compare: if it differs from the stored line, the stored
+line was wrong and yours replaces it. Two failures make this a rule rather than
+advice. `web/monkey-baiting` carried an identity naming a browser client that
+had been deleted four weeks before that record's own `source_sha`, and the
+generating agent had to halt rather than publish it as an `h1`. `devolver`
+carried an identity naming one of the two systems in its directory, so the page
+it produced was lopsided. Neither is repairable downstream: generation may not
+rewrite an identity, so a wrong one either halts the run or ships.
+
+**The identity is read by a person, so the prose contract applies to it.** Read
+`../technical-english.md` before writing the line. Its central rule binds hardest
+here, because this document and the standards it cites describe the job in terms
+of what a page OWNS and the TERRITORY it covers: those words scope your work and
+must not appear in the line you write. Say what the code does. An identity
+becomes the page's `h1` and its `<title>`, and it is quoted in every ancestor's
+navigation, so one leaked word is published in several places at once.
+
 Then decide under HC-1:
 
 - at least one gap passes HC-2 -> `PAGE-WARRANTED` / `decision: page`.

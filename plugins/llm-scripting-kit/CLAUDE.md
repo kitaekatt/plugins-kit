@@ -276,6 +276,41 @@ the subprocess it spawns, not run-level policy, and 429 / 401 never retry
 because they persist. `OpenRouterBackend` makes exactly one attempt and leaves
 retry to the caller, which holds the run-level context that decision needs.
 
+## The front door is a separate surface, and it is where cross-caller concurrency lives
+
+The run-of-many rule above governs the COMPLETION SEAM: one process, one
+`complete()`, no policy. `llm_scripting_kit.frontdoor` is not that seam. It is
+an OpenAI-compatible HTTP server (`llm-scripting-kit frontdoor`, launched by
+`scripts/frontdoor.sh` from the plugin venv, `--print-command` supported) that
+sits in FRONT of the registry's transport entries and arbitrates admission
+ACROSS every caller on the LAN -- job-kit runs, content-pipeline waves, opencode
+sessions, a curl. That is the one concurrency concern no caller can own, because
+no caller can see the others' in-flight requests; a bounded local model server
+queues or 503s whoever arrives fifth, so the arbitration has to sit where all
+the requests pass through. The seam stays run-once; the front door owns the
+run-of-many across processes.
+
+What it reads: `routing:` on a transport entry in the user's model-endpoints
+registry -- `group` (the model name callers send), `order` (tier; lower fills
+first), `max_parallel` (cap; omitted = uncapped, only sensible on the last
+tier), `effort_style` (`top-level`, `ninfer` = top-level with `high` mapped to
+`xhigh`, or `chat_template_kwargs`). Fill-first: the lowest tier fills to its
+cap, the next tier takes the excess, and `--spill-after` (default 0 s) is how
+long a request waits for a slot in a lower tier before spilling. A transport
+entry WITHOUT `routing:` is not a deployment, which is how the front door's own
+registry entry stays out of its own tiers; `--check` lists every untagged
+transport entry so a forgotten tag is visible rather than silently absent.
+
+What it owns and what it does not: in-memory in-flight counts (hence ONE uvicorn
+worker, enforced in `main`), one retry onto the next deployment on a connection
+error or 5xx, the `user` field stripped after logging (no backend sees it), a
+JSONL access log, `/health` (liveness plus per-deployment counts, never an
+upstream probe) and `/who` (in-flight requests with their `user` ids). It does
+NOT own cost accounting, caching, or budget guarding -- those stay with the
+caller exactly as the seam rule says. Keys for keyed deployments resolve through
+`api_key.get_api_key`, so the hosting machine needs the secrets layer, not an
+exported env var.
+
 **The seam is RUN-ONCE by default: one request, at most one invocation.**
 `retry_max_attempts` defaults to 1, so the claude retry is opt-in and
 `LLMResponse.attempts` above 1 is evidence of a caller's own policy rather than
@@ -302,6 +337,9 @@ claude_md:
       - usage pacing (`conserve_usage`), its declared pools, its fail-open rule,
         and the de-prioritize / disable split its two thresholds produce
       - the per-transport rules the Codex and OpenCode backends carry
+      - the front door: the `frontdoor` verb and launcher, the transport-only
+        `routing:` keys, fill-then-spill ordering, the single-worker constraint
+        and `--check`
     excludes:
       - codex dispatch mechanics (orchestrate's codex-dispatch.md)
       - codex dispatch mechanics and endpoint compatibility (awesome-kit's

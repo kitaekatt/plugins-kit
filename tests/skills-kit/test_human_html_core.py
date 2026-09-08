@@ -549,6 +549,37 @@ class TestAnnounceScript:
         assert 'directory: "%s"' % parsed["directory"] in script
         assert 'source_sha: "%s"' % parsed["source_sha"] in script
 
+    def test_announce_relays_a_file_link_to_the_host(self):
+        """A framed page's plain links resolve against the raw route, so the host gets bytes.
+
+        The host cannot intercept: the frame is sandboxed without
+        allow-same-origin, so postMessage is the only channel it has.
+        """
+        script = hh.announce_script(_page_record(), hh.PAGE_FILENAME, hh.KIND_PAGE)
+        assert hh.NAVIGATE_TYPE == "human-html:navigate"
+        assert '"human-html:navigate"' in script
+        assert "event.preventDefault();" in script
+        # resolved lexically against the record directory, never against a host URL
+        assert 'var parts = "src/example".split("/");' in script
+        assert "path: parts.join(\"/\")" in script
+
+    def test_relay_leaves_human_pages_to_the_announce_spine(self):
+        script = hh.announce_script(_page_record(), hh.PAGE_FILENAME, hh.KIND_PAGE)
+        assert '/(^|\\/)human(\\.[^/]+)?\\.html$/.test(target)' in script
+
+    def test_relay_ignores_absolute_anchors_schemes_and_modified_clicks(self):
+        script = hh.announce_script(_page_record(), hh.PAGE_FILENAME, hh.KIND_PAGE)
+        assert 'href.charAt(0) === "#" || href.charAt(0) === "/"' in script
+        assert "/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(href)" in script
+        assert "event.metaKey || event.ctrlKey || event.shiftKey || event.altKey" in script
+
+    def test_relay_is_inside_the_parent_guard_so_a_standalone_page_is_inert(self):
+        script = hh.announce_script(_page_record(), hh.PAGE_FILENAME, hh.KIND_PAGE)
+        lines = script.splitlines()
+        assert lines[0].startswith("if (window.parent !== window)")
+        assert lines[-1] == "}"
+        assert all(line.startswith((" ", "}")) for line in lines[1:])
+
     def test_announce_rejects_a_path_for_file(self):
         with pytest.raises(hh.MarkerError, match="file"):
             hh.announce_script(_page_record(), "sub/human.html", hh.KIND_PAGE)

@@ -117,6 +117,19 @@ _MARKER_RE = re.compile(r"<!--\s*human-html:\s*(?P<json>\{.*?\})\s*-->", re.DOTA
 
 # PC-3 announce message.
 ANNOUNCE_TYPE = "human-html:announce"
+NAVIGATE_TYPE = "human-html:navigate"
+
+# The scope model's OWN words, owned here because this package defines the model.
+# They are correct in the lane and the standards doc, whose subject IS the model.
+# They are wrong in a record's `identity`, which a person reads as the page h1,
+# the page title, and every ancestor's navigation label -- and which generation
+# may not rewrite, so a leak there either halts a run or ships. Not configurable
+# per project: a consuming project does not get to rename md-domain's scope
+# model, so there is no per-project value to set. The judgement that survives is
+# whether a given use is real software behaviour ("owns a lock"), which is why
+# the check that reads this reports INFO rather than FAIL.
+AUTHORING_VOCABULARY = ("owns", "owned", "ownership", "territory", "territories")
+
 ANNOUNCE_VERSION = 1
 
 # SA-1 packaged asset.
@@ -387,12 +400,43 @@ def announce_script(
         % (name, json.dumps(value, ensure_ascii=True), "," if index < len(fields) - 1 else "")
         for index, (name, value) in enumerate(fields)
     ]
+    relay = [
+        "  document.addEventListener(\"click\", function (event) {",
+        "    if (event.defaultPrevented || event.button !== 0) return;",
+        "    if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;",
+        "    var el = event.target;",
+        "    while (el && el.nodeName !== \"A\") el = el.parentNode;",
+        "    if (!el) return;",
+        "    var href = el.getAttribute(\"href\");",
+        "    if (!href) return;",
+        "    if (href.charAt(0) === \"#\" || href.charAt(0) === \"/\") return;",
+        "    if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(href)) return;",
+        "    var target = href.split(\"#\")[0].split(\"?\")[0];",
+        "    if (!target) return;",
+        "    if (/(^|\\/)human(\\.[^/]+)?\\.html$/.test(target)) return;",
+        "    var parts = %s.split(\"/\");" % json.dumps(data["directory"]),
+        "    if (parts.length === 1 && parts[0] === \".\") parts = [];",
+        "    var segs = target.split(\"/\");",
+        "    for (var i = 0; i < segs.length; i++) {",
+        "      if (segs[i] === \"\" || segs[i] === \".\") continue;",
+        "      if (segs[i] === \"..\") { parts.pop(); continue; }",
+        "      parts.push(segs[i]);",
+        "    }",
+        "    event.preventDefault();",
+        "    window.parent.postMessage({",
+        '      type: "%s",' % NAVIGATE_TYPE,
+        "      version: %d," % ANNOUNCE_VERSION,
+        "      path: parts.join(\"/\")",
+        '    }, "*");',
+        "  });",
+    ]
     return "\n".join(
         [
             "if (window.parent !== window) {",
             "  window.parent.postMessage({",
             *lines,
             '  }, "*");',
+            *relay,
             "}",
         ]
     )

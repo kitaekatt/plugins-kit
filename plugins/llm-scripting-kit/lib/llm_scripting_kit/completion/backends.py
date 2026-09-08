@@ -31,6 +31,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import socket
 import sys
 import threading
 import time
@@ -191,6 +192,15 @@ class OpenRouterBackend:
             ],
             "max_tokens": opts.max_tokens,
         }
+        # OpenAI `user`: the caller's id, else a process identity so a front
+        # door's access log can attribute the call. An EMPTY client_id omits
+        # the field entirely -- a caller may not want a hostname sent upstream.
+        if opts.client_id is None:
+            create_kwargs["user"] = (
+                f"{Path(sys.argv[0]).name or 'python'}@{socket.gethostname()}:{os.getpid()}"
+            )
+        elif opts.client_id:
+            create_kwargs["user"] = opts.client_id
         if opts.temperature is not None:
             create_kwargs["temperature"] = opts.temperature
         if opts.timeout_s is not None:
