@@ -475,7 +475,8 @@ def test_run_cli_preassigns_a_validated_run_id(
     assert cli.main(["run", "jobs.yaml", "--store", store, "--run-id", "refresh-2026.09_01-a1"]) == cli.EXIT_OK
     assert cli.main(["run", "jobs.yaml", "--store", store]) == cli.EXIT_OK
     capsys.readouterr()
-    assert seen == ["refresh-2026.09_01-a1", None]
+    assert seen[0] == "refresh-2026.09_01-a1"
+    assert seen[1]
 
     with pytest.raises(SystemExit) as exit_info:
         cli.main(["run", "jobs.yaml", "--store", store, "--run-id", "bad id/with slash"])
@@ -564,6 +565,36 @@ def test_run_cli_max_parallel_overrides_the_file_and_is_persisted(
     assert exit_code == cli.EXIT_OK
     store = JobStore(store_path, create=False)
     assert store.get_run("cli-parallel").max_parallel == 2
+
+
+def test_run_cli_emits_generated_run_id_before_propagating_keyboard_interrupt(
+    tmp_path: Path, monkeypatch: Any, capsys: Any
+) -> None:
+    """Ctrl-C prints the durable run identity and remains an interrupt."""
+    jobs_path = _jobs_file(tmp_path, ["interrupt"])
+    store_path = tmp_path / "interrupt.sqlite3"
+    seen_run_ids: list[str | None] = []
+
+    def interrupting_run(path: Path, **kwargs: Any) -> RunSnapshot:
+        run_id = kwargs["run_id"]
+        seen_run_ids.append(run_id)
+        job_file = load_job_file(path)
+        JobStore(kwargs["store_path"]).create_run(
+            run_id,
+            job_file.jobs,
+            jobs_path=path,
+            workspace_root=tmp_path / "ws",
+        )
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(cli, "run_job_file", interrupting_run)
+
+    with pytest.raises(KeyboardInterrupt):
+        cli.main(["run", str(jobs_path), "--store", str(store_path)])
+
+    payload = json.loads(capsys.readouterr().out)
+    assert seen_run_ids and seen_run_ids[0]
+    assert payload["run"]["id"] == seen_run_ids[0]
 
 
 def test_resume_cli_max_parallel_does_not_rewrite_the_ledger(

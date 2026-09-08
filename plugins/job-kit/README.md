@@ -63,15 +63,26 @@ jobs:
   a process loss after arming is recorded as a reservation loss, not as a
   fabricated attempt row, and it consumes one retry budget unit.
 - **Halts narrow the run; timeouts do not.** An endpoint that returns a
-  persistent halt is excluded from the rest of the run. A `--timeout` expiry is
-  job-kit's own budget rather than evidence about the endpoint, so it is
-  recorded as a retryable timeout and the endpoint stays eligible.
-- **Worktree-per-attempt isolation** for jobs in a git repository, so a failed
-  attempt leaves no residue. Set `workspace.isolate: false` for a job that must
-  run in its declared directory.
+  persistent halt is excluded from the rest of the run. An unreachable endpoint
+  is excluded from the run only after a confirming probe: two observed
+  unreachable attempts on that endpoint, where the later attempt starts after
+  the earlier attempt ends and no non-unreachable attempt starts between them.
+  An unreachable endpoint is excluded from later attempts of the same job after
+  its first unreachable result. A `--timeout` expiry is job-kit's own budget
+  rather than evidence about the endpoint, so it is recorded as a retryable
+  timeout and the endpoint stays eligible.
+- **Worktree-per-attempt isolation** for jobs in a git repository. A failed
+  attempt's worktree survives until garbage collection. Run `job-kit gc
+  <run-id> [--store PATH]` to reclaim it; a dirty worktree requires `--force`.
+  Set `workspace.isolate: false` for a job that must run in its declared
+  directory.
 - **A tool deny floor.** The job-file-level `disallowed_tools` applies to every
   job in the run. Harness endpoints are agent sessions, not plain completions;
   the floor is how a run declares what they may not do.
+
+When `--store` is omitted, the default store path is CWD-relative:
+`.local-data/plugins-kit/job-kit/runs.sqlite3` under the current working
+directory.
 
 ## Options
 
@@ -116,7 +127,7 @@ facts and no plugin feature:
 
 - the earlier job's contract writes its result somewhere OUTSIDE the workspaces
   (an absolute path, or a directory named by an environment variable you set
-  before `run`), because a worktree is discarded;
+  before `run`), because garbage collection can discard a worktree;
 - jobs run in declaration order, so the earlier job is finished before the later
   one starts.
 

@@ -573,3 +573,23 @@ def test_concurrent_store_construction_migrates_once(tmp_path: Path) -> None:
     with sqlite3.connect(str(db_path)) as connection:
         versions = connection.execute("SELECT version FROM schema_version").fetchall()
     assert len(versions) == 1
+
+
+def test_persistent_halt_vocabulary_agrees_across_modules() -> None:
+    """The runner's in-memory set and the store's query must name one vocabulary.
+
+    They are declared separately -- the runner builds its set from the shared
+    library's halt constants, the store spells them for a SQL placeholder list.
+    Nothing but this pin stops the two drifting, and a drift is silent: the
+    store would exclude an endpoint the runner still considers eligible, or the
+    reverse.
+    """
+    from job_kit import run as run_module
+    from job_kit import store as store_module
+
+    assert frozenset(store_module._PERSISTENT_HALT_KINDS) == frozenset(
+        run_module._PERSISTENT_HALT_KINDS
+    ), (
+        "store._PERSISTENT_HALT_KINDS and run._PERSISTENT_HALT_KINDS disagree; "
+        "a halt kind was added or renamed in one place only"
+    )
