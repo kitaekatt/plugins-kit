@@ -18,10 +18,10 @@ Inspect and customize the Claude Code status line. The plugin ships an opinionat
    - `<project>/.claude/settings.json`
    - `~/.claude/settings.json`
 
-   The first one with a `statusLine.command` is the active script. If none, before offering to install claude-ui-kit's default, check that bootstrap has provisioned the plugin: the synced script `~/.claude/plugins/data/plugins-kit/claude-ui-kit/scripts/statusline.sh` (equivalently the plugin's `~/.claude/plugins/data/plugins-kit/claude-ui-kit/bootstrap.log`) must exist. If it is missing, do **not** offer the default — tell the user "the bootstrap plugin hasn't provisioned claude-ui-kit — install/enable plugins-kit:bootstrap and start a new session" and stop. Only when the synced script is present, tell the user there is no statusLine configured and offer to install claude-ui-kit's default.
+   The first one with a `statusLine.command` is the active script. If none, before offering to install claude-ui-kit's default, check that bootstrap has provisioned the plugin: the synced script `~/.claude/plugins/data/plugins-kit/claude-ui-kit/scripts/statusline.sh` (equivalently the plugin's `~/.claude/plugins/data/plugins-kit/claude-ui-kit/bootstrap.log`) must exist. If it is missing, do **not** offer the default -- tell the user "the bootstrap plugin hasn't provisioned claude-ui-kit -- install/enable plugins-kit:bootstrap and start a new session" and stop. Only when the synced script is present, tell the user there is no statusLine configured and offer to install claude-ui-kit's default.
 
 2. **Read the script** at that command path. Identify what it displays (components) and how (colors, thresholds, separators). Summarize for the user in plain language. Example:
-   > Your current status line shows **directory**, **context %**, **5-hour usage**, and **7-day usage**, separated by `│`. The context number turns orange at 30% and red at 70%; the 5-hour number turns orange at 70% and red at 90%.
+   > Your current status line shows **directory**, **context %**, **5-hour usage**, and **7-day usage**, separated by `│`. All three percentages are capacity remaining (higher is better). The context number turns orange at or below 70% and red at or below 30%; the 5-hour and 7-day numbers turn orange at or below 30% and red at or below 10%.
 
 3. **Ask if they want to change anything.** Don't suggest specific changes ("would you like a gradient?"). Just: "Want to customize anything?"
 
@@ -31,20 +31,32 @@ Inspect and customize the Claude Code status line. The plugin ships an opinionat
 
 When the user requests a change:
 
-- **If the active script lives inside the plugin's data dir** (path contains `/claude-ui-kit/scripts/`), do NOT edit it in place — bootstrap will overwrite it on the next session. Instead:
-  1. Copy it to `~/.claude/statusline.sh` (or `<project>/.claude/statusline.sh` if the user wants a project-scoped version).
+- **If the active script lives inside the plugin's data dir** (path contains `/claude-ui-kit/scripts/`), do NOT edit it in place -- bootstrap will overwrite it on the next session. Instead:
+  1. Copy it to `~/.claude/statusline.sh` (or `<project>/.claude/statusline.sh` if the user wants a project-scoped version). The script resolves its segments directory relative to its OWN location (`BASH_SOURCE`), so a copy outside the plugin data dir loses every plugin-provided segment silently. Set `STATUSLINE_SEGMENTS_DIR` (env var in settings.json) to `~/.claude/plugins/data/plugins-kit/claude-ui-kit/segments` to keep them.
   2. Update the relevant settings.json's `statusLine.command` to the new path.
   3. Touch `<plugin_data_dir>/customized.flag` so bootstrap stops trying to manage it. The data dir is `~/.claude/plugins/data/plugins-kit/claude-ui-kit/`.
   4. Apply the requested edit to the copied script.
 - **If the active script is already user-owned**, edit it directly.
-- **Preserve the script's input contract** (`DATA=$(cat)`, jq parses session JSON from stdin) and the basic output discipline (single line, ANSI escapes, `echo -e`).
-- **Data storage convention** — the razor: if the file should be checked into source control, it goes in `<project>/.claude/`; if it shouldn't, it doesn't. Specifically:
-  - **Project-scoped, machine/developer-specific** (caches, flags, counters, messages tied to *this* project but not committed, e.g. `systemmessage.*.txt`) → `<cwd>/.local-data/claude-ui-kit/`.
-  - **User-scoped** (preferences that apply across all projects, e.g. `customized.flag`) → `~/.claude/plugins/data/plugins-kit/claude-ui-kit/`.
+- **Preserve the script's input contract** (`DATA=$(cat)`, jq parses session JSON from stdin) and the basic output discipline (single line, ANSI escapes, `printf '%s'` -- not `echo -e`, which interprets backslashes in the DATA, not just in the color codes, and corrupts a Windows cwd like `D:\dev\env-config`).
+- **Data storage convention** -- the razor: if the file should be checked into source control, it goes in `<project>/.claude/`; if it shouldn't, it doesn't. Specifically:
+  - **Project-scoped, machine/developer-specific** (caches, flags, counters, messages tied to *this* project but not committed, e.g. `systemmessage.*.txt`) -> `<cwd>/.local-data/claude-ui-kit/`.
+  - **User-scoped** (preferences that apply across all projects, e.g. `customized.flag`) -> `~/.claude/plugins/data/plugins-kit/claude-ui-kit/`.
   - `settings.local.json` is the one exception: machine-specific but lives in `.claude/` because the Claude Code harness reads it from there.
   - Do not write to `/tmp` or other ad-hoc paths.
 - After any edit, verify by piping a small fake JSON payload through the script and showing the user the rendered output.
-- **Windows: wrap the `.sh` in a Git Bash invocation when writing `statusLine.command`.** Claude Code spawns the status-line command through `cmd.exe /c`, which file-associates a bare `.sh` instead of executing it -> blank line. On Windows, set `statusLine.command` to `"<bash.exe>" "<path>/statusline.sh"`, resolving `<bash.exe>` from `CLAUDE_CODE_GIT_BASH_PATH` (fallback `C:/Program Files/Git/bin/bash.exe`). On macOS/Linux keep the bare path (the shebang executes it). This is the same rule the installer (`scripts/install_statusline.py`) and its self-heal apply; mirror it for any manual `statusLine.command` write.
+- **Write the SAME `statusLine.command` on every platform -- the exact string
+  `scripts/install_statusline.py` emits:
+  `bash ~/.claude/plugins/data/plugins-kit/claude-ui-kit/scripts/statusline.sh`.**
+  No absolute home, no drive letter, no `.exe`, and the `~` unquoted.
+  `~/.claude/settings.json` is shared across machines; an absolute form makes
+  every machine rewrite it and the file never stops going dirty. The
+  installer's self-heal rewrites any other form of our command back to this
+  one on the next SessionStart, so a hand-written absolute Git Bash command
+  never sticks -- it only churns. The `bash` prefix is deliberate: it runs
+  under Git Bash and under a non-shell launcher alike. Which launcher Claude
+  Code uses on Windows is undocumented; if a Windows user reports a blank bar
+  with this string in place, fix `_build_command` in the installer, do not
+  diverge here.
 
 ## Stay grounded
 
@@ -57,7 +69,7 @@ The user's request is the source of truth for what to change. Don't invent extra
 | "Use a powerline arrow instead of the pipe" | Swap `│` for ` ` (powerline arrow) wherever it appears. Don't redesign. |
 | "Reset to default" | Delete the user-owned script and the `customized.flag`, point settings.json back at `<data_dir>/scripts/statusline.sh` (claude-ui-kit's data dir). |
 
-Don't ask about themes, gradients, or other concepts the user hasn't mentioned. The reference docs below list common patterns — load them only when the user's request is specific enough to need them.
+Don't ask about themes, gradients, or other concepts the user hasn't mentioned. The reference docs below list common patterns -- load them only when the user's request is specific enough to need them.
 
 ```yaml
 technique_skill:

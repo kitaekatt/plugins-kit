@@ -3,7 +3,7 @@
 Behavior:
 - If no statusLine is configured in any settings.json layer, install ours into
   the user-global `~/.claude/settings.json`. The statusLine is a user-level
-  preference, not a project-level one — installing per-project meant every
+  preference, not a project-level one -- installing per-project meant every
   ephemeral cwd Claude was launched in (eval tmp dirs, etc.) got a stray
   `.claude/settings.local.json` written into it. This happens even if a
   declined record exists from an earlier, now-gone foreign statusLine -- see
@@ -11,7 +11,7 @@ Behavior:
   into an empty slot.
 - If the existing statusLine is already claude-ui-kit's (matches our path
   prefix), refresh it to point at the current installed location. This handles
-  plugin upgrades and reinstalls transparently — wherever it was found.
+  plugin upgrades and reinstalls transparently -- wherever it was found.
 - If the existing statusLine is something else (foreign), the script never
   overwrites it without consent, but it also does not nag forever:
     - No declined record yet -> surface a fix-all failure whose agent_msg
@@ -135,7 +135,7 @@ def install(ctx) -> None:
     expected_command = _build_command(installed_script)
 
     # Use the engine's canonical project_dir (Claude Code's launch CWD).
-    # Never walk up looking for .claude/ — Claude Code itself does not, so any
+    # Never walk up looking for .claude/ -- Claude Code itself does not, so any
     # parent .claude/ we'd find is a directory Claude Code never reads. Older
     # versions of this script walked up and silently wrote into the wrong file
     # (and worse, created stray .claude/ dirs that polluted sibling projects).
