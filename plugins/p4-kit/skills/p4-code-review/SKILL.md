@@ -220,7 +220,15 @@ technique_skill:
             K = len(bundle.diff_chunks). Each subagent gets the chunk's absolute diff path
             (`<bundle.bundle_dir>/<diff_chunks[i].path>`), the depot paths of the files
             in that chunk (`diff_chunks[i].files`), and -- for reviewer_a -- the CLAUDE.md
-            mapping restricted to those files. Reviewers not listed in the selected profile are
+            mapping restricted to those files PLUS the repo-relative PATHS of every
+            `bundle.claimed_files` entry (paths only, never content), under the heading
+            "Also changed in this review". Claimed files are absent from the chunk, so
+            without that list reviewer_a reads the change as though the Markdown were
+            never touched and reports a docs-currency rule as violated when the update is
+            in fact present -- a false positive that is indistinguishable from a true one.
+            An endpoint-dispatched reviewer_a gets the same list via one `--claimed-file`
+            per path. Pass it for every lane that receives it; the other reviewers do not
+            take it. Reviewers not listed in the selected profile are
             NOT launched. If bundle.diff_chunks is empty (CL has no diff content), skip
             step 6 and jump to step 9 with zero issues.
           tool: Agent (per the model-kind rule, a lane whose model is an endpoint id runs as a Bash call to python3 ${CLAUDE_PLUGIN_ROOT}/scripts/run_review_lane.py instead)
@@ -542,7 +550,7 @@ technique_skill:
     - name: reviewer_a_claude_md_compliance
       subagent_type: general-purpose
       scope: CLAUDE.md compliance only, restricted to the files in one chunk
-      input: "absolute path to ONE chunk .diff file, the depot paths of the files in that chunk, the per-file CLAUDE.md mapping restricted to those files, and the full text of each relevant CLAUDE.md (read in step 4)"
+      input: "absolute path to ONE chunk .diff file, the depot paths of the files in that chunk, the per-file CLAUDE.md mapping restricted to those files, the full text of each relevant CLAUDE.md (read in step 4), and the paths of every claimed file (paths only -- their content belongs to the subject-lens reviewer)"
       canonical_prompt_note: |
         This lane can run EITHER as an Agent subagent or, when its resolved `model` is an
         endpoint id, as a plain completion (see the step-6 model-kind rule). Both paths must
@@ -574,6 +582,17 @@ technique_skill:
         file's own directory and every CLAUDE.md in a parent directory up to the
         repository root yourself. Either way, read only CLAUDE.md files: no source
         files, no documentation, no history.
+
+        Files changed but not shown. The change may also touch files that a subject
+        specialist reviews instead of you -- Markdown, typically. When such files exist
+        they are listed by path under "Also changed in this review", and that list is
+        part of the change even though their diffs are not shown to you. Two
+        consequences, and the first is the one that goes wrong: never report that
+        something was NOT updated when a listed path is where that update would live.
+        A rule requiring a document to be kept current is SATISFIED, as far as you can
+        tell, by the presence of the corresponding path in that list. And do not audit
+        the content of a listed file -- you cannot see it, and it already has a
+        reviewer.
 
         Restrictions. Only report issues in files that appear in this diff, and only for
         what this change introduces -- a pre-existing violation is not yours to report.

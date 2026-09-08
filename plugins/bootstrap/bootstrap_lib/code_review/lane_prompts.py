@@ -225,7 +225,7 @@ def _validate_issue(item: Any, index: int) -> dict[str, Any]:
 # Bumped whenever any prompt text below changes, so a recorded lane result says
 # which wording produced it. A comparison across prompt versions is not a
 # like-for-like measurement, and without this the difference is invisible.
-PROMPT_VERSION = "2"
+PROMPT_VERSION = "3"
 
 
 # The false-positive guardrails, stated once. These are the same rules the
@@ -319,6 +319,17 @@ file's own directory and every CLAUDE.md in a parent directory up to the
 repository root yourself. Either way, read only CLAUDE.md files: no source
 files, no documentation, no history.
 
+Files changed but not shown. The change may also touch files that a subject
+specialist reviews instead of you -- Markdown, typically. When such files exist
+they are listed by path under "Also changed in this review", and that list is
+part of the change even though their diffs are not shown to you. Two
+consequences, and the first is the one that goes wrong: never report that
+something was NOT updated when a listed path is where that update would live.
+A rule requiring a document to be kept current is SATISFIED, as far as you can
+tell, by the presence of the corresponding path in that list. And do not audit
+the content of a listed file -- you cannot see it, and it already has a
+reviewer.
+
 Restrictions. Only report issues in files that appear in this diff, and only for
 what this change introduces -- a pre-existing violation is not yours to report.
 
@@ -376,8 +387,15 @@ def build_user_message(
     diff_text: str,
     files: Sequence[str] = (),
     description: str = "",
+    claimed_files: Sequence[str] = (),
 ) -> str:
     """Assemble the user message for a lane.
+
+    ``claimed_files`` names paths that changed in this review but were held
+    back from the chunk because a subject-lens reviewer owns them. Passing them
+    is what stops a lane reporting a missing update that is in fact present in
+    a file it was never shown -- the diff it receives is otherwise silent about
+    their existence, which reads as their absence.
 
     The diff is INLINED rather than referenced by path. The diff-only lane is a
     plain completion with no file access at all, so a path would name something
@@ -393,6 +411,12 @@ def build_user_message(
         parts.append(f"Change description: {description}")
     if files:
         parts.append("Files in this chunk:\n" + "\n".join(f"- {f}" for f in files))
+    if claimed_files:
+        parts.append(
+            "Also changed in this review, reviewed by a subject specialist "
+            "(paths only -- their diffs are deliberately not shown here):\n"
+            + "\n".join(f"- {f}" for f in claimed_files)
+        )
     parts.append("Diff:\n" + diff_text)
     return "\n\n".join(parts)
 
