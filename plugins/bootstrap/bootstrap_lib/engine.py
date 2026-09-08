@@ -810,6 +810,7 @@ def _main():
     failures = _process_self_setup(
         self_setup, current_os, data_dir, plugin_root,
         action_entries, ok_entries, plugin_name=boot_plugin_name,
+        quiet_entries=bootstrap_quiet_entries,
     )
     bootstrap_action_entries.extend(action_entries)
     bootstrap_ok_entries.extend(ok_entries)
@@ -910,9 +911,9 @@ def _main():
         prefixed_ok = [_reprefix(e, "config: ") for e in ok_entries]
         bootstrap_action_entries.extend(prefixed_action)
         bootstrap_ok_entries.extend(prefixed_ok)
-        # Log-only (displayed in aggregate by Step 4c). bootstrap_action_entries
-        # feeds both the log and bootstrap's display section, so quiet entries
-        # ride in the log-only list instead -- see _ManifestContext.quiet.
+        # Log-only detail represented by an adjacent display summary.
+        # bootstrap_action_entries feeds both the log and bootstrap's display
+        # section, so quiet entries ride in the log-only list instead.
         bootstrap_quiet_entries.extend(_reprefix(e, "config: ") for e in quiet_entries)
         if failures:
             all_failures.extend(failures)
@@ -920,10 +921,12 @@ def _main():
     # Step 3d: Process project_venv from layered manifest (needs --project-dir)
     project_venv_def = layered_manifest.get("project_venv") if layered_manifest else None
     if project_venv_def and args.project_dir:
+        pv_quiet = []
         pv_action, pv_ok, pv_failures = _process_project_venv(
-            project_venv_def, args.project_dir)
+            project_venv_def, args.project_dir, quiet_entries=pv_quiet)
         bootstrap_action_entries.extend(_reprefix(e, "config: ") for e in pv_action)
         bootstrap_ok_entries.extend(_reprefix(e, "config: ") for e in pv_ok)
+        bootstrap_quiet_entries.extend(_reprefix(e, "config: ") for e in pv_quiet)
         all_failures.extend(pv_failures)
 
     # Step 3d2: Process project_npm from layered manifest (needs --project-dir).
@@ -3252,11 +3255,13 @@ def _process_path_entries(path_entries, prefix, action_entries, ok_entries):
 def _process_venv_def(venv_def, data_dir, plugin_root, prefix, label, action_entries,
                       ok_entries, failures, plugin_name, failure_type="venv",
                       failure_plugin=None, always_sync=False, extras=(),
-                      export_env_var=True):
+                      export_env_var=True, quiet_entries=None):
     """Run the shared ensure_venv flow and route its outcome to the entry lists.
 
     One wrapper for all three venv call sites (self-setup, manifest, project
-    venv); `label` is the log-entry noun ("venv" / "project_venv").
+    venv); `label` is the log-entry noun ("venv" / "project_venv"). Detailed
+    sync commands and diagnostics are quiet entries. A successful remediation
+    emits one short action summary, and a failure emits one short display label.
     """
     from .venv_check import ensure_venv, export_venv_env_var
 
@@ -3266,15 +3271,32 @@ def _process_venv_def(venv_def, data_dir, plugin_root, prefix, label, action_ent
         check_imports=venv_def.get("check_imports", []),
         always_sync=always_sync,
     )
-    action_entries.extend(f"{prefix}{label}: {e}" for e in venv_entries)
+    quiet_entries = [] if quiet_entries is None else quiet_entries
+    summary = None
+    for entry in venv_entries:
+        if entry in ("created", "re-synced"):
+            summary = entry
+        else:
+            quiet_entries.append(f"{prefix}{label}: {entry}")
     if result.passed:
+        if venv_entries:
+            summary = summary or "re-synced"
+            _append_detail(
+                action_entries,
+                f"{prefix}{label}: {summary}",
+                display=f"{prefix}{label}: {summary}",
+            )
         ok_entries.append(f"{prefix}{label}: ok - {result.message}")
         if export_env_var:
             exported = export_venv_env_var(plugin_name, data_dir)
             if exported:
                 ok_entries.append(f"{prefix}{label}: exported {exported} to CLAUDE_ENV_FILE")
     else:
-        action_entries.append(f"{prefix}{label}: FAILED - {result.message}")
+        _append_detail(
+            action_entries,
+            f"{prefix}{label}: FAILED - {result.message}",
+            display=f"{prefix}{label}: FAILED",
+        )
         failures.append({
             "type": failure_type,
             "message": result.message,
@@ -3356,7 +3378,8 @@ def _process_dead_path_entries(data_dir, prefix, ok_entries):
     }
 
 
-def _process_self_setup(self_setup, current_os, data_dir, plugin_root, action_entries, ok_entries, plugin_name="bootstrap"):
+def _process_self_setup(self_setup, current_os, data_dir, plugin_root, action_entries,
+                        ok_entries, plugin_name="bootstrap", quiet_entries=None):
     """Process engine self-setup: tools, path_entries, venv.
 
     Only these 3 phases — the minimum needed to make the engine runnable.
@@ -3477,6 +3500,7 @@ def _process_self_setup(self_setup, current_os, data_dir, plugin_root, action_en
             action_entries, ok_entries, failures,
             plugin_name=plugin_name, failure_plugin="bootstrap", always_sync=True,
             extras=venv_def.get("extras", []),
+            quiet_entries=quiet_entries,
         )
 
     return failures
@@ -3520,7 +3544,7 @@ def _resolve_project_subdir(project_dir, subdir, label):
     return resolved, None
 
 
-def _process_project_venv(venv_def, project_dir):
+def _process_project_venv(venv_def, project_dir, quiet_entries=None):
     """Process project_venv: ensure the project's own .venv is ready.
 
     Unlike the plugin venv (which lives in data_dir), this targets the
@@ -3569,6 +3593,7 @@ def _process_project_venv(venv_def, project_dir):
         action_entries, ok_entries, failures,
         plugin_name="config", failure_type="project_venv", failure_plugin="config",
         extras=venv_def.get("extras", []), export_env_var=False,
+        quiet_entries=quiet_entries,
     )
 
     return action_entries, ok_entries, failures
@@ -4012,10 +4037,9 @@ class _ManifestContext:
     - ``ok(msg)``     -> ok_entries (verbose-only)
     - ``action(msg)`` -> action_entries (always shown)
     - ``quiet(msg)``  -> quiet_entries: ALWAYS logged (like an action, never
-      gated on log_success) but never displayed. For remediations whose
-      per-plugin line is noise because the pass reports them in aggregate --
-      currently only the shared-lib publish/link events, which Step 4c renders
-      as one line for the whole pass (see _SharedLibLinkLog).
+      gated on log_success) but never displayed. Use for detail represented by
+      an adjacent action/failure summary, including aggregated shared-lib
+      events and venv sync mechanics.
     - ``fail(msg, **failure)`` -> action entry AND fix-all failure dict in a
       single call, so a registered failure can never be invisible to the user.
 
@@ -4112,7 +4136,7 @@ class _ManifestContext:
 
     def quiet(self, message):
         """Log-only remediation entry: written to the log unconditionally, never
-        displayed. Use ONLY when the pass surfaces the same event in aggregate."""
+        displayed. Use only when an adjacent display entry summarizes it."""
         self.quiet_entries.append(message)
 
     def fail(self, entry, display=None, detail=None, **failure):
@@ -4322,6 +4346,7 @@ def _phase_venv(ctx):
         ctx.action_entries, ctx.ok_entries, ctx.failures,
         plugin_name=ctx.plugin_name,
         extras=ctx.manifest["venv"].get("extras", []),
+        quiet_entries=ctx.quiet_entries,
     )
 
 
@@ -5412,8 +5437,9 @@ def _process_manifest(manifest, current_os, data_dir, plugin_root, action_entrie
     are split into three lists:
     - action_entries: actions performed, failures, conditions not met (always displayed)
     - ok_entries: checks that passed (never displayed; written to log file when log_success is true)
-    - quiet_entries: remediations reported in aggregate elsewhere (always logged,
-      never displayed). Optional; when omitted the entries are dropped.
+    - quiet_entries: remediation detail represented by an adjacent display
+      summary (always logged, never displayed). Optional; when omitted the
+      entries are dropped.
 
     `shared_lib_links` is the pass-level _SharedLibLinkLog that collects
     shared-lib publish/link successes for Step 4c's single aggregated line.
@@ -6173,7 +6199,10 @@ def _env_phase_env_checks(ctx):
         # (task rule: env_checks has NO trust exceptions).
         re_rc, _re_detail = run_env_command(check, timeout)
         if re_rc == 0:
-            ctx.action(f"env_check {name}: fixed - {fix_detail}")
+            ctx.action(
+                f"env_check {name}: fixed - {fix_detail}",
+                display=f"env_check {name}: fixed",
+            )
         else:
             ctx.fail(
                 f"env_check {name}: FAILED - {fix_detail}",
@@ -6734,18 +6763,14 @@ class _ScriptContext:
 def _read_new_log_entries(data_dir, start_time=None):
     """Read log entries since the last time we displayed them.
 
-    Reads EVERY block, not just the shell's. That is deliberate and was briefly
-    got wrong: blocks written by OTHER processes are the whole point of reading
-    the log back at all. The shell hook's pre-Python block is one; so is the
-    `<label> elevation` block a fix-all pass writes for its spawned re-check
-    pass to surface, and the harvest/lock blocks a standing-down engine writes.
-    Scoping this to `Shell` headers silently swallowed the confirmation that an
-    elevated fix had run.
+    Reads every display-eligible block, not just the shell's. Blocks written by
+    other processes are the point of reading the log back: the shell hook's
+    pre-Python block and the `<label> elevation` block from a fix-all re-check
+    must surface. Internal `bootstrap always`, `bootstrap harvest`, and
+    `bootstrap lock` blocks are explicitly log-only and are skipped here.
 
-    Retention is decoupled from presentation by the pass record (records.py),
-    NOT by narrowing this reader: bootstrap.log stays curated (ok entries gated
-    on log_success, so they never reappear here) while
-    `bootstrap_events.jsonl` keeps everything unconditionally.
+    Filtering a block here changes presentation only. `bootstrap.log` retains
+    the block, and `bootstrap_events.jsonl` keeps every recorded entry.
 
     Uses a 'last_displayed_at' file to track the timestamp of the last display.
     Does NOT update the marker — call _update_display_marker() after all entries are written.
@@ -6802,7 +6827,9 @@ def _read_new_log_entries(data_dir, start_time=None):
         ts = _extract_timestamp(line)
         if ts:
             # This is a header line — decide whether to include this block
-            include_block = ts > effective_marker
+            include_block = (
+                ts > effective_marker and not _is_log_only_header(line)
+            )
         if include_block:
             new_lines.append(line)
 
@@ -6953,19 +6980,29 @@ def _extract_timestamp(line):
     return ""
 
 
-# Log blocks that are DIAGNOSTIC rather than user-facing: they report what the
-# engine did about itself, not what the machine needs. They stay in
-# bootstrap.log and in additionalContext (an agent driving --fix-all must be
-# able to tell a stand-down from a clean pass -- see _stand_down), but they are
-# stripped from the systemMessage so the user is never shown internal
-# scheduling. Matched as a header-label PREFIX, so both the timestamped
-# log-block header ("--- bootstrap lock <ts> ---") and the inline
-# caller-channel report ("--- bootstrap lock: stand-down: ... ---") are covered.
-_QUIET_LOG_BLOCK_PREFIXES = ("bootstrap lock",)
+# Log blocks that are retained for diagnosis but have no user-facing display
+# role. They remain available to the agent when emitted as additionalContext.
+# Match as a header-label prefix so timestamped log blocks and any inline
+# caller-channel form follow the same user-filtering rule.
+_LOG_ONLY_BLOCK_PREFIXES = (
+    "bootstrap always",
+    "bootstrap harvest",
+    "bootstrap lock",
+)
+
+
+def _is_log_only_header(line):
+    """Whether ``line`` starts a block classified as log-only."""
+    stripped = line.strip()
+    if not stripped.startswith("--- "):
+        return False
+    header = stripped[4:]
+    return any(header.startswith(prefix)
+               for prefix in _LOG_ONLY_BLOCK_PREFIXES)
 
 
 def _user_visible_log(log_content):
-    """Drop the quiet diagnostic blocks from log content bound for the user.
+    """Drop log-only blocks from log content bound for the user.
 
     A block runs from its ``--- ... ---`` header to the next header, so a
     hidden header suppresses its body too. Content before any header is kept
@@ -6977,9 +7014,7 @@ def _user_visible_log(log_content):
     for line in log_content.splitlines():
         stripped = line.strip()
         if stripped.startswith("--- "):
-            header = stripped[4:]
-            hiding = any(header.startswith(pre)
-                         for pre in _QUIET_LOG_BLOCK_PREFIXES)
+            hiding = _is_log_only_header(line)
         if not hiding:
             kept.append(line)
     return "\n".join(kept).strip("\n")
@@ -7035,8 +7070,8 @@ def emit_success_response(log_content, label="bootstrap", output_file=None,
     if output_file:
         # Background mode: consumed by UserPromptSubmit hook.
         # `systemMessage` is user-facing, `additionalContext` is Claude-facing.
-        # Only the user's half is filtered: Claude keeps the quiet diagnostic
-        # blocks, and a pass whose ONLY content was quiet shows the user
+        # Only the user's half is filtered: Claude keeps the log-only diagnostic
+        # blocks, and a pass whose ONLY content was log-only shows the user
         # nothing at all rather than an empty header.
         body = f"{label} -> bootstrap complete:\n{log_content}"
         user_log = _user_visible_log(log_content)
@@ -7056,7 +7091,8 @@ def emit_success_response(log_content, label="bootstrap", output_file=None,
         # SessionStart hook: supports hookSpecificOutput with hookEventName.
         # Same body as the background branch above (only hookEventName and
         # the transport differ) -- see engine-internals.md's "Non-background
-        # output ... is identical except hookEventName".
+        # output ... has the same channel split and differs only in
+        # hookEventName".
         user_log = _user_visible_log(log_content)
         response = {
             "continue": True,

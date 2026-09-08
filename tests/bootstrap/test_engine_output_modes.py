@@ -5,8 +5,8 @@ and the transport (print vs write-to-file) differ.
 
 remediation-reference.md ("Claude's additionalContext is unaffected on both
 paths: it always carries the complete log alongside the numbered remediation
-steps") and engine-internals.md ("Non-background output ... is identical
-except hookEventName") both assert this; before this test existed, nothing
+steps") and engine-internals.md ("Non-background output ... has the same
+channel split and differs only in hookEventName") both assert this; before this test existed, nothing
 pinned the stdout branch at all.
 """
 
