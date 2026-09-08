@@ -140,6 +140,14 @@ For deeper material -- manifest schema, condition categories, fix-all flow, engi
 
 **Automated tests required** -- every new module or integration point must have corresponding tests in `tests/` before the work is considered complete. Test directories mirror the plugin structure (e.g. `tests/bootstrap/` for the bootstrap plugin). This standard was established with the bootstrap plugin's M1 test suite and applies to all subsequent development.
 
+**A check must be shown to fail.** Before believing a test or guard protects
+something, remove what it protects and watch it go red -- revert the fix and
+run the named test; for a guard that compares a generated artifact to its
+generator, ask what happens when both move together. A check that stays green
+is worse than no check, because the green result stops anyone looking again.
+Both observed shapes, their worked examples, and the remedy:
+[docs/reference/vacuous-checks.md](docs/reference/vacuous-checks.md).
+
 **Targeted test runs** -- the full test suite is too slow for routine use. Always run only the specific test file(s) relevant to your changes:
 
 ```bash
@@ -900,6 +908,48 @@ claude_md:
         machine by hand" in the Bootstrap section above.
       origin: "User directive 2026-07-27 after nine plugins reported 'not cached' and the engine was run by hand to clear it -- the machine recovered, the root cause became unrecoverable, and no fix shipped to any other machine."
       added: "2026-07-27"
+    - id: a_check_must_be_shown_to_fail
+      keywords: [test passes with the fix reverted, tautological test, vacuous test, revert-check, does this test anything, green for the wrong reason, prove the test fails, counterfactual, which test would fail, runtime assertion not enough, derive_short]
+      summary: A test written alongside a fix can assert something that was already true. Revert the fix and watch the named test go RED before believing it -- a green run is not evidence the test exercises the fix.
+      detail: |
+        Three vacuous tests shipped in one task before the pattern was named
+        (bootstrap-display-rule5, 2026-09-08): two called `_append_detail` directly with
+        hand-written strings, asserting only that it honours an explicit `display=` label
+        (pinned elsewhere, and silent about the production call sites the fix changed);
+        one precedence test used a fixture identifier the claim glob `**/*.md` never
+        matches, so the claim it was meant to outrank was never made.
+        The live demonstration is the part that generalizes: reverting a production
+        display site to a bare append left the RUNTIME test green, because `derive_short`
+        cut the log line at a separator that happened to sit before the path. The rendered
+        text was clean for a reason unrelated to the fix; only the AST guard over the
+        source went red. So a passing runtime assertion is not evidence about the source.
+        The counterfactual is the only reliable signal, and it is cheap. This is also why
+        the task-level communication protocol asks which test would FAIL if the fix were
+        reverted -- naming it forces the check to be run rather than assumed.
+        Worked examples and the second shape: docs/reference/vacuous-checks.md.
+      origin: "2026-09-08 -- bootstrap-display-rule5 shipped three tests that passed with their fix reverted; the third was caught only when a reviewer asked what the fixture actually claimed."
+      added: "2026-09-08"
+    - id: guard_cannot_see_its_own_subject
+      keywords: [drift guard, byte-identity check, generated artifact, compare A to B, both move together, regenerate and it stays green, guard stops guarding, assert the property, detector on the rendered bytes, consistency check, test_skill_drift, banner]
+      summary: A guard comparing a generated artifact to its generator is green whenever the two agree, so it cannot protect any property that regeneration would remove from BOTH sides. Assert such a property directly against the real detector.
+      detail: |
+        `tests/bootstrap/code_review/test_skill_drift.py` asserts the ten rendered
+        code-review skill files are byte-identical to what `gen_code_review_skills.py`
+        renders. That stops the two kits drifting and stops a hand-edit. It does NOT
+        protect the machine-emitted banner: dropping `BANNER` from the template and
+        regenerating leaves both sides matching and the check green, while the property
+        that made those files safe to exclude from review is gone.
+        The remedy is to assert the PROPERTY against the real detectors rather than the
+        artifact against its source -- `detect_machine_emitted` on every rendered path,
+        and `detect_signature_bytes` on the rendered BYTES, because the pre-commit guard
+        reads blobs as bytes and a banner only the text detector finds would exempt a path
+        with nothing to exempt.
+        The general test, applicable to any A-vs-B check: ask what happens when A and B
+        move together. If the answer is "it stays green", it is a consistency check and
+        something else must carry the property. Companion to a_check_must_be_shown_to_fail;
+        both shapes: docs/reference/vacuous-checks.md.
+      origin: "2026-09-08 -- found while shipping the generated-skills machine-emitted exclusion in bootstrap-display-rule5; the drift guard would have gone on passing with the banner removed."
+      added: "2026-09-08"
     - id: never_hand_make_a_plugins_output
       keywords: [hand-create artifact, hand-place file, copy the file myself, plugin should generate it, refresh action, generated stub, index, report, prove the workflow, publish and run, skip the round trip, missing prerequisite, written not working, verify by running]
       summary: Never hand-create an artifact a plugin's workflow is supposed to produce. Build or fix the producing action, publish it, install it, and run it -- a hand-placed file cannot distinguish a working workflow from a broken one.
