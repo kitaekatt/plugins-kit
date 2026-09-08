@@ -31,6 +31,8 @@ from bootstrap_lib.fix_queue import queue_from_failures, write_or_clear_queue
 from bootstrap_lib.engine import _ENV_PHASES, _env_phase_env_checks, _process_env_pass
 from bootstrap_lib.env_features import ENV_CHECK_DEFAULT_TIMEOUT, run_env_command
 from bootstrap_lib.env_manifest import ENV_STATE_STAMP, read_env_state
+from bootstrap_lib.log import write_log_block
+from bootstrap_lib.messages import ITEM_MAX, numbered
 
 ENGINE_VERSION = "0.34.0"
 
@@ -197,9 +199,19 @@ class TestDispatchOrder:
         assert result.failures == []
         assert log.read_text().splitlines() == ["check", "fix", "check"]
         assert flag.exists()
-        # The action message carries the fix's last output line.
-        assert any("env_check flag-check: fixed - created flag" in e
-                   for e in result.action_entries)
+        entry = next(e for e in result.action_entries
+                     if "env_check flag-check: fixed" in e)
+        write_log_block(
+            str(run_env_pass.data_dir), "env", result.action_entries
+        )
+        display = numbered(result.action_entries)
+        log_text = (run_env_pass.data_dir / "bootstrap.log").read_text()
+
+        assert str(entry) == "env_check flag-check: fixed - created flag"
+        assert "fixed - created flag" in log_text
+        assert "created flag" not in display
+        assert display == "env_check flag-check: fixed"
+        assert len(display) <= ITEM_MAX
         assert read_env_state(str(run_env_pass.data_dir))["last_result"] == "clean"
 
     def test_path_is_repaired_between_fix_and_recheck(
