@@ -936,10 +936,12 @@ def _main():
     # without it.
     project_npm_def = layered_manifest.get("project_npm") if layered_manifest else None
     if project_npm_def and args.project_dir:
+        pn_quiet = []
         pn_action, pn_ok, pn_failures = _process_project_npm(
-            project_npm_def, args.project_dir)
+            project_npm_def, args.project_dir, quiet_entries=pn_quiet)
         bootstrap_action_entries.extend(_reprefix(e, "config: ") for e in pn_action)
         bootstrap_ok_entries.extend(_reprefix(e, "config: ") for e in pn_ok)
+        bootstrap_quiet_entries.extend(_reprefix(e, "config: ") for e in pn_quiet)
         all_failures.extend(pn_failures)
 
     # Step 3d3: agent_skills_link -- link <project>/.agents/skills to
@@ -3599,7 +3601,7 @@ def _process_project_venv(venv_def, project_dir, quiet_entries=None):
     return action_entries, ok_entries, failures
 
 
-def _process_project_npm(npm_def, project_dir):
+def _process_project_npm(npm_def, project_dir, quiet_entries=None):
     """Process project_npm: ensure the project's own node_modules is ready.
 
     The Node sibling of _process_project_venv. By default the target is the
@@ -3626,6 +3628,7 @@ def _process_project_npm(npm_def, project_dir):
     action_entries = []
     ok_entries = []
     failures = []
+    quiet_entries = [] if quiet_entries is None else quiet_entries
 
     # No remediation_cmd: a malformed manifest is not something a command can
     # fix, so this routes to ASK rather than AUTO (see _auto_fixable_now) --
@@ -3646,11 +3649,29 @@ def _process_project_npm(npm_def, project_dir):
         # package-lock.json into a tree pnpm/yarn owns.
         root=project_dir,
     )
-    action_entries.extend(f"project_npm: {e}" for e in npm_entries)
+    # Same split as _process_venv_def: the raw entries carry the npm argv and
+    # the project path, which are log material. The display gets one short
+    # summary, and `bootstrap.log` keeps every line.
+    summary = None
+    for entry in npm_entries:
+        if entry in ("created", "re-synced"):
+            summary = entry
+        else:
+            quiet_entries.append(f"project_npm: {entry}")
     if result.passed:
+        if npm_entries:
+            _append_detail(
+                action_entries,
+                f"project_npm: {summary or 'installed'}",
+                display=f"project_npm: {summary or 'installed'}",
+            )
         ok_entries.append(f"project_npm: ok - {result.message}")
     else:
-        action_entries.append(f"project_npm: FAILED - {result.message}")
+        _append_detail(
+            action_entries,
+            f"project_npm: FAILED - {result.message}",
+            display="project_npm: FAILED",
+        )
         failures.append({
             "type": "project_npm",
             "message": result.message,
@@ -3861,21 +3882,27 @@ def _process_project_config(project_config_section, plugin_data_dir, plugin_root
                 os.makedirs(os.path.dirname(project_config_path), exist_ok=True)
                 _legacy_replace(legacy_path, project_config_path)
                 migrated = True
-                action_entries.append(
-                    f"project config: migrated {legacy_path} -> {project_config_path}"
+                _append_detail(
+                    action_entries,
+                    f"project config: migrated {legacy_path} -> {project_config_path}",
+                    display="project config: migrated from the legacy path",
                 )
             elif legacy_exists and new_exists:
                 if os.path.getmtime(legacy_path) <= os.path.getmtime(project_config_path):
                     _legacy_remove(legacy_path)
                     migrated = True
-                    action_entries.append(
-                        f"project config: removed stale legacy {legacy_path} (new path {project_config_path} is fresher)"
+                    _append_detail(
+                        action_entries,
+                        f"project config: removed stale legacy {legacy_path} (new path {project_config_path} is fresher)",
+                        display="project config: removed a stale legacy copy",
                     )
                 else:
                     _legacy_replace(legacy_path, project_config_path)
                     migrated = True
-                    action_entries.append(
-                        f"project config: migrated {legacy_path} -> {project_config_path} (overwrote stale new path)"
+                    _append_detail(
+                        action_entries,
+                        f"project config: migrated {legacy_path} -> {project_config_path} (overwrote stale new path)",
+                        display="project config: migrated from the legacy path",
                     )
             # Clean up after the migration: if the legacy file was the only thing
             # in its directory, drop the now-empty directory too.
@@ -3913,7 +3940,11 @@ def _process_project_config(project_config_section, plugin_data_dir, plugin_root
                         file_changed = True
                 if file_changed:
                     save_yaml_config(project_config_path, project_data)
-                    action_entries.append(f"project config: updated {project_config_path}")
+                    _append_detail(
+                        action_entries,
+                        f"project config: updated {project_config_path}",
+                        display=f"project config: updated {os.path.basename(project_config_path)}",
+                    )
                 else:
                     if ok_entries is not None:
                         ok_entries.append(f"project config: ok - {project_config_path}")
@@ -3937,11 +3968,17 @@ def _process_project_config(project_config_section, plugin_data_dir, plugin_root
                 defaults_applied = _apply_project_defaults(project_data, required_fields_spec)
                 save_yaml_config(project_config_path, project_data)
                 if defaults_applied:
-                    action_entries.append(
-                        f"project config: created {project_config_path} (with defaults: {', '.join(defaults_applied)})"
+                    _append_detail(
+                        action_entries,
+                        f"project config: created {project_config_path} (with defaults: {', '.join(defaults_applied)})",
+                        display=f"project config: created {os.path.basename(project_config_path)}",
                     )
                 else:
-                    action_entries.append(f"project config: created {project_config_path}")
+                    _append_detail(
+                        action_entries,
+                        f"project config: created {project_config_path}",
+                        display=f"project config: created {os.path.basename(project_config_path)}",
+                    )
                 file_changed = True
             else:
                 if ok_entries is not None:
