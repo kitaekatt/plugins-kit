@@ -62,12 +62,21 @@ P4_DECLINED_LEDGER = REPO_ROOT / "plugins/p4-kit/skills/p4-code-review/reference
 GIT_CONFIGURATION = REPO_ROOT / "plugins/git-kit/skills/git-code-review/references/configuration.md"
 P4_CONFIGURATION = REPO_ROOT / "plugins/p4-kit/skills/p4-code-review/references/configuration.md"
 
-# Non-ASCII glyphs the rendered files use, escaped so THIS source stays ASCII
-# (matching gen_workflow_js.py's EM convention).
-X = "×"   # multiplication sign, in "reviewer x chunk" / "R x K"
-DOT = "·"  # middle dot, in git's "Branch: ...  .  HEAD: ..." header
-CHK = "✓"  # check mark, submit-gate confirmed
-CRS = "✗"  # ballot X, submit-gate unconfirmed
+# Punctuation the rendered files use. These are ASCII, and they have to be:
+# the RENDERED SKILL.md files are tracked, so the root CLAUDE.md "ASCII only in
+# tracked files" rule reaches them through this generator, and that rule names
+# these exact characters -- "no other non-ASCII character is covered, including
+# status glyphs such as a check mark or a ballot X". The box-drawing carve-out
+# does not apply: none of these draws a diagram.
+#
+# An earlier revision held the Unicode glyphs here behind a comment claiming
+# they were "escaped so THIS source stays ASCII". They were not escaped, so the
+# generator was non-ASCII too, and every regeneration rewrote the violation into
+# both kits.
+X = "x"    # in "reviewer x chunk" / "R x K"
+DOT = "|"  # separates the fields of the review header's Branch/HEAD line
+CHK = "x"  # submit-gate MET, read as a ticked checkbox
+CRS = "!"  # submit-gate NOT MET
 
 
 # ===========================================================================

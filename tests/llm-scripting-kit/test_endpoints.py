@@ -23,6 +23,7 @@ from llm_scripting_kit import (
 from llm_scripting_kit import account as account_mod
 from llm_scripting_kit import api_key as api_key_mod
 from llm_scripting_kit.env_file import write_env_file
+from llm_scripting_kit.model_endpoints import load_endpoint_registry
 
 
 # A pre-endpoints user config: top-level registry only, no `endpoints` map.
@@ -215,6 +216,7 @@ models:
     base_url: https://vendor.invalid/v1
     model: vendor-1
     key_env: VENDOR_API_KEY
+    key_file: ~/secrets/vendor-key.txt
 """
 
 
@@ -290,20 +292,21 @@ class TestRegistryEndpoints:
         assert ep["request_defaults"] == {"reasoning_effort": "medium"}
         assert ep["context_window"] == 262144
 
-    def test_keyed_entry_carries_its_key_env(self, registry_file):
+    def test_keyed_entry_carries_credential_metadata(self, registry_file):
+        entry = load_endpoint_registry().entries["keyed"]
+        assert entry.key_env == "VENDOR_API_KEY"
+        assert entry.key_file == "~/secrets/vendor-key.txt"
+
         ep = resolve_endpoint("keyed", config=CUSTOM_CFG)
         assert ep["key_env"] == "VENDOR_API_KEY"
+        assert ep["key_file"] == "~/secrets/vendor-key.txt"
         assert ep["request_defaults"] == {}
         assert ep["context_window"] is None
 
     def test_registry_endpoint_carries_every_key_resolve_endpoint_documents(
         self, registry_file
     ):
-        """I4: resolve_endpoint's docstring promises name/base_url/key_env/
-        key_file/models/default/defaultCheap/account_check on every returned
-        dict, but a registry-sourced endpoint (models._registry_endpoint) is
-        missing key_file entirely -- a caller reading ep["key_file"] on one
-        raises KeyError instead of finding None."""
+        """Registry endpoints keep the documented shape when no key file is set."""
         ep = resolve_endpoint("alpha", config=CUSTOM_CFG)
         documented = {
             "name", "base_url", "key_env", "key_file",

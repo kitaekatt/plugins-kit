@@ -8,7 +8,7 @@ description: Use when reviewing a pending Perforce changelist, or before asking 
 
 # P4 Code Review
 
-Run a multi-agent code review of a Perforce changelist directly in conversation. The diff is partitioned on disk into chunks (one per file boundary cluster, balanced under a 1 MB cap); reviewer subagents (set by the selected review profile) run **once per (role × chunk)** so a single large CL fans out across multiple parallel agents instead of forcing each reviewer to ingest the full diff. Each flagged issue is then validated by an independent subagent to suppress false positives. Path-scoped pre-submit reminders (submit gates) authored in ancestor CLAUDE.md files are surfaced alongside the review for author confirmation. Results are rendered as markdown -- no persistence to disk.
+Run a multi-agent code review of a Perforce changelist directly in conversation. The diff is partitioned on disk into chunks (one per file boundary cluster, balanced under a 1 MB cap); reviewer subagents (set by the selected review profile) run **once per (role x chunk)** so a single large CL fans out across multiple parallel agents instead of forcing each reviewer to ingest the full diff. Each flagged issue is then validated by an independent subagent to suppress false positives. Path-scoped pre-submit reminders (submit gates) authored in ancestor CLAUDE.md files are surfaced alongside the review for author confirmation. Results are rendered as markdown -- no persistence to disk.
 
 ```yaml
 technique_skill:
@@ -215,8 +215,8 @@ technique_skill:
             Then proceed with the normal fan-out. When the pass runs, the md-domain Workflow(s) execute in
             PARALLEL with the reviewer fan-out; keep each `{perFile, totals, review}` for step 9's labeled
             section.
-            Then launch one subagent per (reviewer × chunk) pair in parallel via
-            a single message with R × K Agent calls, where R = len(profile.reviewers) and
+            Then launch one subagent per (reviewer x chunk) pair in parallel via
+            a single message with R x K Agent calls, where R = len(profile.reviewers) and
             K = len(bundle.diff_chunks). Each subagent gets the chunk's absolute diff path
             (`<bundle.bundle_dir>/<diff_chunks[i].path>`), the depot paths of the files
             in that chunk (`diff_chunks[i].files`), and -- for reviewer_a -- the CLAUDE.md
@@ -372,7 +372,7 @@ technique_skill:
         - All CLAUDE.md files read
         - Submit gates discharged by the agent (if any), each with a MET / NOT APPLICABLE / NOT MET / NEEDS THE USER verdict and its evidence
         - Executable review-profile table resolved via render_review_profiles.py (step 4); profile selected from the resolved table using review_profiles guidance
-        - Reviewers launched in parallel (single message, R × K Agent calls -- one per (reviewer × chunk) pair, where K = len(bundle.diff_chunks))
+        - Reviewers launched in parallel (single message, R x K Agent calls -- one per (reviewer x chunk) pair, where K = len(bundle.diff_chunks))
         - Validators launched in parallel (single message, N Agent calls), models picked from the profile's validator_models
         - Filtered to confirmed-only
         - Launch rationale line emitted once (file-type-driven; md_trivial variant when the change is all-mechanical)
@@ -385,7 +385,7 @@ technique_skill:
         - Newly declined findings recorded to the ledger via `prepare_review.py --ledger-record` (skipped when nothing was declined)
       gotchas:
         - Always quote the exact CLAUDE.md rule text when flagging a claude_md issue. If you cannot quote it verbatim, do not flag it.
-        - Sequential reviewer or validator calls waste time. Reviewers run in one message with one concurrent Agent call per (reviewer × chunk) pair (R reviewers × K chunks). For a small CL (K=1) that's still 2 calls for data_only / 3 for code; for a large CL (K=N) it scales to R × N. Validators run in one message with N concurrent Agent calls.
+        - Sequential reviewer or validator calls waste time. Reviewers run in one message with one concurrent Agent call per (reviewer x chunk) pair (R reviewers x K chunks). For a small CL (K=1) that's still 2 calls for data_only / 3 for code; for a large CL (K=N) it scales to R x N. Validators run in one message with N concurrent Agent calls.
         - Each reviewer subagent reads ONE chunk path, not the whole diff. Do not pass `bundle_dir` and expect the subagent to glob -- pass the absolute chunk path the subagent should Read.
         - Render only -- this skill outputs in chat. There is no Swarm comment, PR comment, or disk write step.
         - If prepare_review.py fails, report the error and stop. No retry.
@@ -442,7 +442,7 @@ technique_skill:
       - when: "Before step 5 (G >= 1)"
         template: "Found <G> submit-gate reminder(s) applying to this CL. Discharging each against the change."
       - when: "Before step 6"
-        template: "Selected review profile: <P>. Diff partitioned into <K> chunk(s). Launching <RK> subagent(s) in parallel (<R> reviewer(s) × <K> chunk(s)): <reviewer_summary>."
+        template: "Selected review profile: <P>. Diff partitioned into <K> chunk(s). Launching <RK> subagent(s) in parallel (<R> reviewer(s) x <K> chunk(s)): <reviewer_summary>."
       - when: "After step 6, before step 7 (X >= 1)"
         template: "Reviewers returned <X> candidate issue(s) (<B> bug, <C> CLAUDE.md). Launching <X> validator(s) in parallel."
       - when: "After step 6 (X = 0)"
@@ -804,13 +804,13 @@ technique_skill:
       When bundle.submit_gates is non-empty, the rendered review prepends a
       `## Submit checklist` section ABOVE the per-file review body. Each gate renders as:
 
-        - **[✓|✗|-|?] <summary>** -- per `<source>`, triggered by `<file>` (+N more if many).
+        - **[x|!|-|?] <summary>** -- per `<source>`, triggered by `<file>` (+N more if many).
           <the step-5 verdict, then the evidence for it, on one line>
           > <rationale, indented as blockquote, omitted if empty>
 
-      ✓ = MET. The evidence line names what satisfies it -- a file, a key and its
+      x = MET. The evidence line names what satisfies it -- a file, a key and its
               default, a test, or a command and its result.
-      ✗ = NOT MET. The obligation applies and is unsatisfied; this is a finding, and
+      ! = NOT MET. The obligation applies and is unsatisfied; this is a finding, and
               the review is not clean.
       -     = NOT APPLICABLE. Scope matched but the subject is absent from this change;
               the evidence line says why.
@@ -830,8 +830,8 @@ technique_skill:
       - `path/to/other.csv` -- branch resolve pending
 
       ## Submit checklist
-      - **[✓] ./build.sh configbinaries must pass before submit** -- per `<path>/CLAUDE.md`, triggered by `GameConfigs/Real/x.csv`.
-      - **[✗] Regenerate the asset index** -- per `<path>/CLAUDE.md`, triggered by `Content/Assets/y.uasset`.
+      - **[x] ./build.sh configbinaries must pass before submit** -- per `<path>/CLAUDE.md`, triggered by `GameConfigs/Real/x.csv`.
+      - **[!] Regenerate the asset index** -- per `<path>/CLAUDE.md`, triggered by `Content/Assets/y.uasset`.
         > <rationale if any, as a blockquote>
 
       ## Review: CL <CL> -- <description>
@@ -843,7 +843,7 @@ technique_skill:
       - **[claude_md]** L78: Violates `src/CLAUDE.md` rule "Use absl::Status not bool returns".
     empty_template: |
       ## Submit checklist
-      - **[✓] ./build.sh configbinaries must pass before submit** -- per `<path>/CLAUDE.md`, triggered by `GameConfigs/Real/x.csv`.
+      - **[x] ./build.sh configbinaries must pass before submit** -- per `<path>/CLAUDE.md`, triggered by `GameConfigs/Real/x.csv`.
 
       ## Review: CL <CL> -- <description>
 

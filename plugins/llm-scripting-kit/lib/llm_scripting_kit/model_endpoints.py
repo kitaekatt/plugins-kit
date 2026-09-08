@@ -38,6 +38,7 @@ the schema can grow additively)::
         context_window: <tokens>            # optional
         reasoning_effort: <effort>          # optional per-entry default
         key_env: <ENV VAR>                  # optional; omitted = keyless
+        key_file: <path>                    # optional bare-value credential file
         routing:                            # optional; transport entries only
           group: <front-door model name>
           order: 1                          # lower tiers fill first
@@ -100,6 +101,9 @@ class EndpointMetadataError(EndpointRegistryError):
 class EndpointEntry:
     """One declared model entry. ``key_env`` None means keyless.
 
+    ``key_file`` retains its configured, unexpanded path; credential lookup
+    expands it only when every higher-precedence source misses.
+
     The first fields retain the original transport-entry order so callers that
     construct an ``EndpointEntry`` positionally keep working.  A harness entry
     has ``base_url`` set to None and carries its harness-specific fields.
@@ -119,6 +123,7 @@ class EndpointEntry:
     family: Optional[str] = None
     conserve_usage: Optional[ConserveSpec] = None
     routing: Optional["RoutingConfig"] = None
+    key_file: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -447,6 +452,9 @@ def load_endpoint_registry(
                 ),
                 key_env=_optional_str(
                     raw.get("key_env"), source=entry_source, entry_id=key, key="key_env"
+                ),
+                key_file=_optional_str(
+                    raw.get("key_file"), source=entry_source, entry_id=key, key="key_file"
                 ),
                 kind=TRANSPORT_KIND,
                 tier=tier,
