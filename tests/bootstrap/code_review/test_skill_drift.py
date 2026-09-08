@@ -201,11 +201,20 @@ class TestDeclinedLedgerPresent:
             assert "ledger_hits" in body
 
     def test_record_step_uses_correct_launch_prefix(self):
-        # p4 must launch via python3; git via the bare plugin-root path.
+        # prepare_review.py ships mode 100644 with no shebang, so a bare-path
+        # launch exits 126 (permission denied) -- BOTH kits must launch it via
+        # an explicit python3 interpreter, at every prepare and ledger-record
+        # site. There is no bare-path form left to assert for either kit.
         p4 = gen.render_skill("p4")
         git = gen.render_skill("git")
-        assert "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/prepare_review.py" in p4
-        assert "tool: ${CLAUDE_PLUGIN_ROOT}/scripts/prepare_review.py" in git
+        for body in (p4, git):
+            assert "tool: python3 ${CLAUDE_PLUGIN_ROOT}/scripts/prepare_review.py" in body
+            assert "tool: ${CLAUDE_PLUGIN_ROOT}/scripts/prepare_review.py" not in body
+        # ledger-record site (@PREPARE_TOOL@ token, shared LEDGER_RECORD_STEP body)
+        p4_ledger = gen.render_declined_ledger("p4")
+        git_ledger = gen.render_declined_ledger("git")
+        for ledger in (p4_ledger, git_ledger):
+            assert "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/prepare_review.py --ledger-record" in ledger
 
     def test_both_ledger_references_render(self):
         git_ref = gen.render_declined_ledger("git")
@@ -286,6 +295,47 @@ class TestTrivialityGatePresent:
             assert "fails CLOSED" in ref
 
 
+class TestEmptyChunksFastPathCannotSkipMdDomainPass:
+    """Item 2: step 6's diff_chunks-empty fast path must not skip the md-domain
+    subject-lens pass while a non-trivial claimed file exists -- an md-only
+    change reviewed with `--claim '**/*.md'` has zero diff_chunks BY
+    CONSTRUCTION, so an unconditional "diff_chunks empty -> skip step 6" reads
+    as "skip the audit too" and renders zero issues for the only files that
+    changed.
+
+    Three cases the fast-path wording must get right:
+      - generic-only (diff_chunks non-empty): the fast path never fires --
+        it is gated on diff_chunks being empty in the first place.
+      - claimed-non-trivial-only (diff_chunks empty, a NON-TRIVIAL claimed
+        file exists): must NOT fire -- the md-domain pass still runs.
+      - all-trivial-only (diff_chunks empty, every claimed file trivial):
+        still fires, covered by the pre-existing MD_DOMAIN_LAUNCH conjunctive
+        gate ("skip the reviewer fan-out AND this md-domain pass ENTIRELY").
+    """
+
+    def test_generic_only_fast_path_still_gated_on_diff_chunks(self):
+        for vcs in ("git", "p4"):
+            body = gen.render_skill(vcs)
+            assert "If bundle.diff_chunks is empty" in body
+
+    def test_claimed_non_trivial_blocks_the_fast_path(self):
+        for vcs in ("git", "p4"):
+            body = gen.render_skill(vcs)
+            # the fast path must be qualified so a non-trivial claimed file
+            # keeps the md-domain pass running even with zero diff_chunks
+            assert "no claimed file is NON-TRIVIAL" in body
+            # scoped to the reviewer fan-out, not the whole of step 6 (the
+            # md-domain launch lives inside step 6 too and must not be implied
+            # skipped by this sentence)
+            assert "skip the reviewer fan-out and jump to step 9" in body
+            assert "skip step 6 and jump to step 9" not in body
+
+    def test_all_trivial_fast_path_still_skips_everything(self):
+        for vcs in ("git", "p4"):
+            body = gen.render_skill(vcs)
+            assert "skip the reviewer fan-out AND this md-domain pass ENTIRELY" in body
+
+
 class TestVcsSeamsRendered:
     """The per-VCS seams the substitution table exists for must actually land."""
 
@@ -307,6 +357,38 @@ class TestVcsSeamsRendered:
         assert "auto-created shelf" in body     # p4-only cleanup step content
         assert "python3` interpreter" in body  # p4-only launch gotcha
         assert "Branch: <branch>" not in body  # no git output header
+
+
+class TestSkillsKitRootResolvesFromRegistryFirst:
+    """Item 3: the skills-kit plugin root must be resolved from the
+    installed_plugins.json REGISTRY first, falling back to the highest-semver
+    cache directory only when the registry is empty or unreadable.
+
+    The old rule -- always pick the highest semver directory under the plugin
+    cache -- is wrong whenever a higher STALE cache directory outlives the
+    active install (a downgrade, a scoped install, a dev-tree entry): the
+    registry's `[0].installPath` is the ACTIVE install per the platform
+    reference, and this machine's registry is observed populated, not the
+    permanently-empty state the root CLAUDE.md's registry_v2_empty insight
+    asserts. The fallback is kept so the rule stays correct under EITHER
+    reading of that contradiction.
+    """
+
+    def test_registry_checked_first(self):
+        for vcs in ("git", "p4"):
+            ref = gen.render_md_domain_review(vcs)
+            assert "installed_plugins.json" in ref
+            assert "skills-kit@plugins-kit" in ref
+            assert "installPath" in ref
+
+    def test_cache_highest_kept_as_explicit_fallback(self):
+        for vcs in ("git", "p4"):
+            ref = gen.render_md_domain_review(vcs)
+            assert "highest semver dir" in ref
+            # the fallback must be explicitly conditioned on the registry
+            # being empty or unreadable, not offered as the primary rule
+            assert "registry" in ref.lower()
+            assert "empty or unreadable" in ref or "is empty" in ref
 
 
 class TestGeneratedYamlBlockParses:
@@ -403,3 +485,28 @@ class TestRenderedFilesAreDetectableAsMachineEmitted:
                 "the text detector finds but this one does not would exempt a "
                 "path with nothing to exempt."
             )
+
+
+class TestRenderedSkillDoesNotClaimDiskFreeOperation:
+    """Item 4: prepare_review writes diff chunks, bundle.json, materialized
+    pre-images, and a durable ledger.json under the plugin data root -- the
+    ledger outlives the review by design. The rendered SKILL.md must not claim
+    "no persistence to disk" (both intros do this in the SAME sentence that
+    also says the diff is "partitioned on disk into chunks", which is a
+    self-contradiction) or otherwise claim disk-free operation.
+    """
+
+    def test_intro_does_not_claim_no_disk_persistence(self):
+        for vcs in ("git", "p4"):
+            body = gen.render_skill(vcs)
+            assert "no persistence to disk" not in body
+            assert "disk-free" not in body
+
+    def test_intro_states_what_actually_persists(self):
+        for vcs in ("git", "p4"):
+            body = gen.render_skill(vcs)
+            # the transient review bundle vs. the durable ledger must both be
+            # named, so the reader is told what is retained and where -- not
+            # just that "something" is written
+            assert "bundle_dir" in body or "bundle.bundle_dir" in body
+            assert "ledger" in body.lower()

@@ -9,7 +9,7 @@ description: Use when reviewing local git changes -- before push, before opening
 
 # Git Code Review
 
-Run a multi-agent code review of a git diff range directly in conversation. The default diff range is inferred from workspace state (mid-merge / mid-rebase / branch-with-upstream / origin-main-fallback), so the agent does the right thing for "review what I'm about to push" without forcing the user to spell out a range; arguments accepted for explicit control. The diff is partitioned on disk into chunks (one per file boundary cluster, balanced under a 1 MB cap); reviewer subagents (set by the selected review profile) run **once per (role x chunk)** so a single large branch fans out across multiple parallel agents instead of forcing each reviewer to ingest the full diff. Each flagged issue is then validated by an independent subagent to suppress false positives. Path-scoped pre-submit reminders (submit gates) authored in ancestor CLAUDE.md files are surfaced alongside the review and discharged by the agent against the change. Results are rendered as markdown -- no persistence to disk.
+Run a multi-agent code review of a git diff range directly in conversation. The default diff range is inferred from workspace state (mid-merge / mid-rebase / branch-with-upstream / origin-main-fallback), so the agent does the right thing for "review what I'm about to push" without forcing the user to spell out a range; arguments accepted for explicit control. The diff is partitioned on disk into chunks (one per file boundary cluster, balanced under a 1 MB cap); reviewer subagents (set by the selected review profile) run **once per (role x chunk)** so a single large branch fans out across multiple parallel agents instead of forcing each reviewer to ingest the full diff. Each flagged issue is then validated by an independent subagent to suppress false positives. Path-scoped pre-submit reminders (submit gates) authored in ancestor CLAUDE.md files are surfaced alongside the review and discharged by the agent against the change. Results are rendered as markdown; the diff chunks, bundle.json, and pre-images in bundle.bundle_dir are transient scratch under the plugin data root, while declined findings persist in a durable ledger (references/declined-ledger.md).
 
 ```yaml
 technique_skill:
@@ -82,7 +82,7 @@ technique_skill:
             After prepare returns, emit the launch rationale line ONCE (see narration.launch_message):
             select the row from the file-type mix of the changed + claimed files, or the md_trivial row
             when the step-6 triviality gate will fire. This is the single launch message -- do not repeat it.
-          tool: ${CLAUDE_PLUGIN_ROOT}/scripts/prepare_review.py
+          tool: python3 ${CLAUDE_PLUGIN_ROOT}/scripts/prepare_review.py
           input: "<range or argument from step 1>  (append `--claim '**/*.md'` when md-domain is available, per the claim probe)"
           expected: |
             JSON with vcs, range, head_sha, branch, description, project_root, bundle_dir, diff_chunks, changed_files, unique_claude_mds, untracked_or_unstaged, merge_conflicts, submit_gates, change_id, ledger_baseline, ledger_hits, -- only when --claim was passed -- claimed_files, and -- only when a changed file was detected as machine-emitted -- machine_emitted_files (each entry carries identifier, local, size_bytes, and the axis that matched -- machine_emitted_axis `content` or `declared_path` plus the naming machine_emitted_signature; such files are excluded from diff_chunks and changed_files, and `--review-machine-emitted` turns that exclusion off). The raw diff text is NOT inline -- it lives in per-chunk files at `<bundle_dir>/<diff_chunks[i].path>` (paths are relative to bundle_dir). Each `changed_files` entry carries `chunk_index` pointing to the chunk that contains its diff.
@@ -243,8 +243,11 @@ technique_skill:
             An endpoint-dispatched reviewer_a gets the same list via one `--claimed-file`
             per path. Pass it for every lane that receives it; the other reviewers do not
             take it. Reviewers not listed in the selected profile are
-            NOT launched. If bundle.diff_chunks is empty (range has no diff content), skip
-            step 6 and jump to step 9 with zero issues.
+            NOT launched. If bundle.diff_chunks is empty (range has no diff content) and
+            no claimed file is NON-TRIVIAL (per the triviality gate above -- when a non-trivial
+            claimed file exists, the md-domain pass above still runs on it even with zero
+            diff_chunks), skip the reviewer fan-out and jump to step 9 with zero code-review
+            issues.
           tool: Agent (per the model-kind rule, a lane whose model is an endpoint id runs as a Bash call to python3 ${CLAUDE_PLUGIN_ROOT}/scripts/run_review_lane.py instead)
           expected: JSON arrays of candidate issues from each launched reviewer (one array per (reviewer, chunk) lane), plus a recorded failure for any lane that exited non-zero.
         - n: 7
@@ -359,7 +362,7 @@ technique_skill:
             normalized anchor (never line numbers or exact wording) and NEVER records a SERIOUS
             md-domain finding (those always re-surface). Do NOT hand-edit the ledger JSON -- always go
             through --ledger-record so keying stays deterministic.
-          tool: ${CLAUDE_PLUGIN_ROOT}/scripts/prepare_review.py
+          tool: python3 ${CLAUDE_PLUGIN_ROOT}/scripts/prepare_review.py
           input: "--ledger-record <bundle.bundle_dir>/declined.json"
       checklist:
         - Diff range resolved (auto-detected from workspace state OR explicit user arg) and surfaced in the step-1 narration line

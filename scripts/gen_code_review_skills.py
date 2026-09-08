@@ -569,8 +569,11 @@ technique_skill:
             An endpoint-dispatched reviewer_a gets the same list via one `--claimed-file`
             per path. Pass it for every lane that receives it; the other reviewers do not
             take it. Reviewers not listed in the selected profile are
-            NOT launched. If bundle.diff_chunks is empty (@RANGE_OR_CL@ has no diff content), skip
-            step 6 and jump to step 9 with zero issues.
+            NOT launched. If bundle.diff_chunks is empty (@RANGE_OR_CL@ has no diff content) and
+            no claimed file is NON-TRIVIAL (per the triviality gate above -- when a non-trivial
+            claimed file exists, the md-domain pass above still runs on it even with zero
+            diff_chunks), skip the reviewer fan-out and jump to step 9 with zero code-review
+            issues.
           tool: Agent (per the model-kind rule, a lane whose model is an endpoint id runs as a Bash call to @LANE_TOOL@ instead)
           expected: JSON arrays of candidate issues from each launched reviewer (one array per (reviewer, chunk) lane), plus a recorded failure for any lane that exited non-zero.
         - n: 7
@@ -801,7 +804,9 @@ GIT_INTRO = (
     'agents instead of forcing each reviewer to ingest the full diff. Each flagged issue is then '
     'validated by an independent subagent to suppress false positives. Path-scoped pre-submit '
     'reminders (submit gates) authored in ancestor CLAUDE.md files are surfaced alongside the '
-    'review and discharged by the agent against the change. Results are rendered as markdown -- no persistence to disk.'
+    'review and discharged by the agent against the change. Results are rendered as markdown; the '
+    'diff chunks, bundle.json, and pre-images in bundle.bundle_dir are transient scratch under the '
+    'plugin data root, while declined findings persist in a durable ledger (references/declined-ledger.md).'
 )
 
 P4_INTRO = (
@@ -812,7 +817,9 @@ P4_INTRO = (
     'each reviewer to ingest the full diff. Each flagged issue is then validated by an '
     'independent subagent to suppress false positives. Path-scoped pre-submit reminders (submit '
     'gates) authored in ancestor CLAUDE.md files are surfaced alongside the review for author '
-    'confirmation. Results are rendered as markdown -- no persistence to disk.'
+    'confirmation. Results are rendered as markdown; the diff chunks, bundle.json, and pre-images '
+    'in bundle.bundle_dir are transient scratch under the plugin data root, while declined '
+    'findings persist in a durable ledger (references/declined-ledger.md).'
 )
 
 GIT_SCOPE_COVERS_HEAD = """\
@@ -872,7 +879,7 @@ GIT_STEP2 = """\
 __CLAIM_PROBE__
             Then run prepare_review.py to fetch the diff, partition it into chunked .diff fragments on disk, enumerate changed files via `git diff --name-status`, map ancestor CLAUDE.md files for each, detect untracked-or-unstaged files in the directories the diff touches, detect unresolved merge conflicts, and scan ancestor CLAUDE.md files for submit-gate reminders that apply to this range.
 __LAUNCH_EMIT__
-          tool: ${CLAUDE_PLUGIN_ROOT}/scripts/prepare_review.py
+          tool: python3 ${CLAUDE_PLUGIN_ROOT}/scripts/prepare_review.py
           input: "<range or argument from step 1>  (append `--claim '**/*.md'` when md-domain is available, per the claim probe)"
           expected: |
             JSON with vcs, range, head_sha, branch, description, project_root, bundle_dir, diff_chunks, changed_files, unique_claude_mds, untracked_or_unstaged, merge_conflicts, submit_gates, change_id, ledger_baseline, ledger_hits, -- only when --claim was passed -- claimed_files, and -- only when a changed file was detected as machine-emitted -- machine_emitted_files (each entry carries identifier, local, size_bytes, and the axis that matched -- machine_emitted_axis `content` or `declared_path` plus the naming machine_emitted_signature; such files are excluded from diff_chunks and changed_files, and `--review-machine-emitted` turns that exclusion off). The raw diff text is NOT inline -- it lives in per-chunk files at `<bundle_dir>/<diff_chunks[i].path>` (paths are relative to bundle_dir). Each `changed_files` entry carries `chunk_index` pointing to the chunk that contains its diff.
@@ -1239,7 +1246,7 @@ FRAGMENTS = {
         "ISSUE_PATH": "<repo-relative or absolute path>",
         "SG_DESC": GIT_SG_DESC,
         "OUTPUT_FORMAT": GIT_OUTPUT_FORMAT,
-        "PREPARE_TOOL": "${CLAUDE_PLUGIN_ROOT}/scripts/prepare_review.py",
+        "PREPARE_TOOL": "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/prepare_review.py",
         "LEDGER_RECORD_N": "10",
         "BASELINE_DESC": "the range base SHA advances -- origin/main moves, or HEAD changes for a working-tree review",
     },
@@ -1305,8 +1312,10 @@ _SHARED = {
     "LAUNCH_NARRATION": LAUNCH_NARRATION,
     # render_review_profiles.py resolves the review-profile config layers; its
     # launch gotcha (missing shebang / lost exec bit on Windows checkouts making
-    # a bare path parse as sh) matches PREPARE_TOOL's p4 form, so BOTH kits use
-    # the explicit python3 launcher here even though only p4's PREPARE_TOOL does.
+    # a bare path parse as sh) is the same hazard PREPARE_TOOL guards against
+    # for BOTH kits (git's prepare_review.py ships mode 100644 with no shebang
+    # and exits 126 on a bare-path launch), so both use the explicit python3
+    # launcher here too.
     "RENDER_TOOL": "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/render_review_profiles.py",
     "X": X,
     "CHK": CHK,
@@ -1482,10 +1491,16 @@ for the full review overrides the gate.
 md-domain's detect lanes are native Workflow scripts; the code-review skill (running in the main
 session) invokes them via the Workflow tool. Locate the INSTALLED skills-kit plugin:
 
-- Plugin root (`<root>`): the newest version directory under the plugins cache for this
-  marketplace -- `~/.claude/plugins/cache/plugins-kit/skills-kit/<version>/` (pick the highest
-  semver dir present). `${CLAUDE_PLUGIN_ROOT}` of the CURRENT skill is NOT it -- that points at
-  git-kit / p4-kit, not skills-kit.
+- Plugin root (`<root>`): resolve via the REGISTRY first, falling back to a cache scan only
+  when the registry is empty or unreadable. Read `~/.claude/plugins/installed_plugins.json`;
+  when its `plugins["skills-kit@plugins-kit"]` array is present and non-empty, `<root>` is
+  entry `[0]`'s `installPath` -- the ACTIVE install, which can differ from the highest cached
+  version after a downgrade, a scoped install, or a dev-tree entry. Only when that key is
+  missing, the array is empty, or the file cannot be read, fall back to the newest version
+  directory under the plugins cache for this marketplace --
+  `~/.claude/plugins/cache/plugins-kit/skills-kit/<version>/` (pick the highest semver dir
+  present). `${CLAUDE_PLUGIN_ROOT}` of the CURRENT skill is NOT it -- that points at git-kit /
+  p4-kit, not skills-kit.
 - Detect-lane entry points, all under the one md-domain skill:
   `<root>/skills/md-domain/workflow/claude-md-detect.js` (the `audit_claude_md` lane, for CLAUDE.md
   subjects), `<root>/skills/md-domain/workflow/skill-detect.js` (the `audit_skill` lane, for
@@ -1736,7 +1751,7 @@ DECLINED_LEDGER_FRAGMENTS = {
         "SKILL_NAME": "git-code-review",
         "CHANGE_ID_LEDGER": "the diff range spec (e.g. `origin/main..HEAD`)",
         "BASELINE_LEDGER": "the range base SHA (`git rev-parse <base>`)",
-        "PREPARE_TOOL": "${CLAUDE_PLUGIN_ROOT}/scripts/prepare_review.py",
+        "PREPARE_TOOL": "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/prepare_review.py",
         "LEDGER_STORE": "~/.claude/plugins/data/plugins-kit/git-kit/reviews/ledger.json",
     },
     "p4": {

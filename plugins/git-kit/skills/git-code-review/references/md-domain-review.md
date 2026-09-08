@@ -62,10 +62,16 @@ for the full review overrides the gate.
 md-domain's detect lanes are native Workflow scripts; the code-review skill (running in the main
 session) invokes them via the Workflow tool. Locate the INSTALLED skills-kit plugin:
 
-- Plugin root (`<root>`): the newest version directory under the plugins cache for this
-  marketplace -- `~/.claude/plugins/cache/plugins-kit/skills-kit/<version>/` (pick the highest
-  semver dir present). `${CLAUDE_PLUGIN_ROOT}` of the CURRENT skill is NOT it -- that points at
-  git-kit / p4-kit, not skills-kit.
+- Plugin root (`<root>`): resolve via the REGISTRY first, falling back to a cache scan only
+  when the registry is empty or unreadable. Read `~/.claude/plugins/installed_plugins.json`;
+  when its `plugins["skills-kit@plugins-kit"]` array is present and non-empty, `<root>` is
+  entry `[0]`'s `installPath` -- the ACTIVE install, which can differ from the highest cached
+  version after a downgrade, a scoped install, or a dev-tree entry. Only when that key is
+  missing, the array is empty, or the file cannot be read, fall back to the newest version
+  directory under the plugins cache for this marketplace --
+  `~/.claude/plugins/cache/plugins-kit/skills-kit/<version>/` (pick the highest semver dir
+  present). `${CLAUDE_PLUGIN_ROOT}` of the CURRENT skill is NOT it -- that points at git-kit /
+  p4-kit, not skills-kit.
 - Detect-lane entry points, all under the one md-domain skill:
   `<root>/skills/md-domain/workflow/claude-md-detect.js` (the `audit_claude_md` lane, for CLAUDE.md
   subjects), `<root>/skills/md-domain/workflow/skill-detect.js` (the `audit_skill` lane, for

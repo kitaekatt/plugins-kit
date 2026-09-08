@@ -9,7 +9,7 @@ description: Use when reviewing a pending Perforce changelist, or before asking 
 
 # P4 Code Review
 
-Run a multi-agent code review of a Perforce changelist directly in conversation. The diff is partitioned on disk into chunks (one per file boundary cluster, balanced under a 1 MB cap); reviewer subagents (set by the selected review profile) run **once per (role x chunk)** so a single large CL fans out across multiple parallel agents instead of forcing each reviewer to ingest the full diff. Each flagged issue is then validated by an independent subagent to suppress false positives. Path-scoped pre-submit reminders (submit gates) authored in ancestor CLAUDE.md files are surfaced alongside the review for author confirmation. Results are rendered as markdown -- no persistence to disk.
+Run a multi-agent code review of a Perforce changelist directly in conversation. The diff is partitioned on disk into chunks (one per file boundary cluster, balanced under a 1 MB cap); reviewer subagents (set by the selected review profile) run **once per (role x chunk)** so a single large CL fans out across multiple parallel agents instead of forcing each reviewer to ingest the full diff. Each flagged issue is then validated by an independent subagent to suppress false positives. Path-scoped pre-submit reminders (submit gates) authored in ancestor CLAUDE.md files are surfaced alongside the review for author confirmation. Results are rendered as markdown; the diff chunks, bundle.json, and pre-images in bundle.bundle_dir are transient scratch under the plugin data root, while declined findings persist in a durable ledger (references/declined-ledger.md).
 
 ```yaml
 technique_skill:
@@ -230,8 +230,11 @@ technique_skill:
             An endpoint-dispatched reviewer_a gets the same list via one `--claimed-file`
             per path. Pass it for every lane that receives it; the other reviewers do not
             take it. Reviewers not listed in the selected profile are
-            NOT launched. If bundle.diff_chunks is empty (CL has no diff content), skip
-            step 6 and jump to step 9 with zero issues.
+            NOT launched. If bundle.diff_chunks is empty (CL has no diff content) and
+            no claimed file is NON-TRIVIAL (per the triviality gate above -- when a non-trivial
+            claimed file exists, the md-domain pass above still runs on it even with zero
+            diff_chunks), skip the reviewer fan-out and jump to step 9 with zero code-review
+            issues.
           tool: Agent (per the model-kind rule, a lane whose model is an endpoint id runs as a Bash call to python3 ${CLAUDE_PLUGIN_ROOT}/scripts/run_review_lane.py instead)
           expected: JSON arrays of candidate issues from each launched reviewer (one array per (reviewer, chunk) lane), plus a recorded failure for any lane that exited non-zero.
         - n: 7
