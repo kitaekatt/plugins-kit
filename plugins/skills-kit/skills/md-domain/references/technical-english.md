@@ -55,6 +55,11 @@ next. Where there is no single best start, say what separates the alternatives.
 Label what is generated rather than authored, and what is planned rather than
 current -- those are the distinctions an owner forgets first.
 
+A "Where to start" section stops at two sentences: the entry point and why, or
+two alternatives and what separates them. The overrun is a second destination
+carrying a rationale of its own; let the file listing carry that one. Count the
+sentences before you move on.
+
 Link what the reader is likely to open. A sentence whose content is mostly
 filenames has ranked nothing.
 

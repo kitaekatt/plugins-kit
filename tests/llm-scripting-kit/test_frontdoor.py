@@ -111,6 +111,67 @@ async def _test_frontdoor_strips_user_normalizes_effort_and_sets_header(tmp_path
     assert seen["reasoning_effort"] == "xhigh"
 
 
+def test_frontdoor_reads_registry_key_file_and_sets_authorization(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    asyncio.run(
+        _test_frontdoor_reads_registry_key_file_and_sets_authorization(
+            tmp_path, monkeypatch
+        )
+    )
+
+
+async def _test_frontdoor_reads_registry_key_file_and_sets_authorization(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    key_file = tmp_path / "frontdoor-key.txt"
+    key_file.write_text("test-frontdoor-key", encoding="utf-8")
+    registry_path = tmp_path / "models.yaml"
+    registry_path.write_text(
+        "models:\n"
+        "  openrouter-tier:\n"
+        "    base_url: https://vendor.invalid/v1\n"
+        "    model: vendor/model\n"
+        "    key_env: FRONTDOOR_TEST_API_KEY\n"
+        "    key_file: ~/frontdoor-key.txt\n"
+        "    routing: {group: routed, order: 1}\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    monkeypatch.setenv("MODEL_ENDPOINTS_REGISTRY", str(registry_path))
+    monkeypatch.delenv("FRONTDOOR_TEST_API_KEY", raising=False)
+    monkeypatch.setattr(
+        "llm_scripting_kit.api_key.USER_ENV_FILE", tmp_path / "missing.env"
+    )
+    monkeypatch.setattr("llm_scripting_kit.frontdoor.server._KEY_CACHE", {})
+    registry = load_endpoint_registry()
+    seen_headers: dict[str, str] = {}
+
+    class FakeClient:
+        async def post(
+            self, url: str, *, json: dict[str, Any], headers: dict[str, str]
+        ) -> httpx.Response:
+            seen_headers.update(headers)
+            return httpx.Response(200, json={"choices": [], "usage": {}})
+
+        async def aclose(self) -> None:
+            pass
+
+    app = create_app(registry)
+    asgi_client = httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://frontdoor"
+    )
+    monkeypatch.setattr(httpx, "AsyncClient", lambda *a, **k: FakeClient())
+    response = await asgi_client.post(
+        "/v1/chat/completions", json={"model": "routed", "messages": []}
+    )
+    await asgi_client.aclose()
+
+    assert response.status_code == 200
+    assert seen_headers["Authorization"] == "Bearer test-frontdoor-key"
+
+
 def test_frontdoor_health_and_who_shapes(tmp_path):
     asyncio.run(_test_frontdoor_health_and_who_shapes(tmp_path))
 
