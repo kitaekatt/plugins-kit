@@ -150,9 +150,14 @@ def select_endpoint(
         backend_name = getattr(selection.backend, "name", None)
         if not isinstance(backend_name, str):
             continue
+        # The advertisement is keyed by the RETURNED backend name only -- run.py's
+        # _capabilities_for looks it up the same way at execution time, with no
+        # fallback. An endpoint-keyed fallback here would let a stale or
+        # colliding endpoint-keyed record satisfy selection while execution
+        # finds no advertisement for the same backend, silently admitting a job
+        # whose requirements (including a deny-floor guarantee) were never
+        # actually checked against what runs it.
         record = advertised.get(backend_name)
-        if record is None:
-            record = advertised.get(endpoint)
         if record is not None and requirements_match(record, job.requirements):
             return selection
     raise NoCompatibleEndpointError(job.id, job.endpoint_preference)

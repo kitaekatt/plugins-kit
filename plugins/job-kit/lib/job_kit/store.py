@@ -407,6 +407,25 @@ class JobStore:
 
     def _migrate(self) -> None:
         """Apply all pending schema steps atomically."""
+        # Read the stored version through a connection that changes nothing --
+        # no pragma, no row -- so a database from a NEWER job-kit is refused
+        # before anything is written, not merely before the migration loop
+        # (which runs inside _connect(), which itself writes pragmas).
+        probe = sqlite3.connect(
+            str(self.db_path), timeout=self.busy_timeout_ms / 1000.0
+        )
+        try:
+            probe.row_factory = sqlite3.Row
+            stored_version = self._read_schema_version(probe)
+        finally:
+            probe.close()
+        if stored_version > len(_MIGRATIONS):
+            raise StoreError(
+                f"database schema version {stored_version} is newer than this "
+                f"job-kit supports (max {len(_MIGRATIONS)}); refusing to open "
+                "it -- update job-kit, or point at a database this version "
+                "understands"
+            )
         with self._connect() as conn:
             if self._read_schema_version(conn) >= len(_MIGRATIONS):
                 return

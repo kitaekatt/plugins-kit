@@ -13,8 +13,10 @@ from job_kit.model import Acceptance, Attempt, AttemptError, Contract, Job, JobS
 from job_kit.store import (
     DEFAULT_BUSY_TIMEOUT_MS,
     JobStore,
+    StoreError,
     StoreNotFoundError,
     TerminalStateError,
+    _MIGRATIONS,
 )
 
 
@@ -232,6 +234,52 @@ def test_store_migrates_the_job_error_column_from_schema_v1(tmp_path: Path) -> N
         "reasoning",
         "finish_reason",
     } <= attempt_columns
+
+
+def test_opening_a_future_schema_refuses_before_writing_anything(
+    tmp_path: Path,
+) -> None:
+    """A database created by a NEWER job-kit is refused, not silently opened
+    and written to by code that does not understand its invariants.
+
+    The future version is expressed relative to len(_MIGRATIONS) -- never a
+    literal -- so this test does not rot when a migration is added.
+    """
+    db_path = tmp_path / "future.sqlite3"
+    JobStore(db_path)  # build a fully current, valid ledger first
+
+    future_version = len(_MIGRATIONS) + 1
+    with sqlite3.connect(str(db_path)) as connection:
+        connection.execute("DELETE FROM schema_version")
+        connection.execute(
+            "INSERT INTO schema_version(version) VALUES (?)", (future_version,)
+        )
+        table_names_before = {
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()
+        }
+
+    with pytest.raises(StoreError) as excinfo:
+        JobStore(db_path, create=False)
+
+    message = str(excinfo.value)
+    assert str(future_version) in message
+    assert str(len(_MIGRATIONS)) in message
+
+    with sqlite3.connect(str(db_path)) as connection:
+        stored_version = connection.execute(
+            "SELECT version FROM schema_version"
+        ).fetchone()[0]
+        table_names_after = {
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()
+        }
+    assert stored_version == future_version
+    assert table_names_after == table_names_before
 
 
 def test_store_connection_posture_is_applied_per_connection(tmp_path: Path) -> None:
