@@ -589,3 +589,21 @@ def test_set_key_with_an_unwritable_target_gets_the_configuration_envelope_not_a
     envelope = json.loads(capsys.readouterr().err)
     assert envelope["error"]["kind"] == "configuration"
     assert "Permission denied" in envelope["error"]["message"]
+
+
+def test_frontdoor_verb_forwards_leading_options(monkeypatch, tmp_path):
+    """`llm-scripting-kit frontdoor --check ...` reaches the front door's own
+    parser with every argument intact (argparse.REMAINDER drops a leading
+    option, so main() hands the verb off before parsing)."""
+    from llm_scripting_kit import cli as cli_mod
+    import llm_scripting_kit.frontdoor as frontdoor_mod
+
+    seen = {}
+
+    def fake_main(argv):
+        seen["argv"] = argv
+        return 0
+
+    monkeypatch.setattr(frontdoor_mod, "main", fake_main)
+    assert cli_mod.main(["frontdoor", "--check", "--port", "4001"]) == 0
+    assert seen["argv"] == ["--check", "--port", "4001"]

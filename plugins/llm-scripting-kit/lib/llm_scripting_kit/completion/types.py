@@ -238,6 +238,9 @@ class BackendOptions:
       which is why claude advertises a ``values`` menu for it.
     - ``cwd`` -- CLI working directory. ``None`` uses the process cwd; an
       OpenCode ``--dir`` is not a filesystem-confinement boundary.
+    - ``client_id`` -- OpenAI ``user`` identity for the transport backend.
+      ``None`` sends a process identity (``<argv0>@<host>:<pid>``); an empty
+      string sends no ``user`` field at all.
     - ``log_prefix`` -- stderr tag so mixed logs from parallel runs stay
       attributable.
     - ``extras`` -- open map for consumer-specific knobs a backend may read.
@@ -258,6 +261,7 @@ class BackendOptions:
     disallowed_tools: Optional[str] = None
     system_prompt_mode: str = "replace"
     cwd: Optional[Path] = None
+    client_id: Optional[str] = None
     log_prefix: str = "[llm]"
     extras: Mapping[str, Any] = field(default_factory=dict)
 

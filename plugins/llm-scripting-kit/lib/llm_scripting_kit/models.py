@@ -716,6 +716,13 @@ def resolve_model(
             return slug
         if "/" in alias_or_slug:  # a raw provider slug, used directly
             return alias_or_slug
+        # A registry entry injects one alias (its entry id) whose slug is the
+        # id the server actually serves. Callers that hold the SERVED id -- a
+        # job-kit selection, a front-door group name -- pass that rather than
+        # the alias, so a name equal to a registered slug is that slug.
+        for entry in models.values():
+            if isinstance(entry, dict) and entry.get("slug") == alias_or_slug:
+                return alias_or_slug
         raise ModelResolveError(
             f"{what} '{alias_or_slug}' is not a known model alias or a provider slug"
         )

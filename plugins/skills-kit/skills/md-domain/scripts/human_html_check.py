@@ -71,6 +71,12 @@ import discover_human_html as discover  # noqa: E402
 FAIL = "FAIL"
 INFO = "INFO"
 
+# The vocabulary itself is owned by skills_kit_lib.human_html (see its comment):
+# it is md-domain's own scope model, not a per-project setting.
+AUTHORING_VOCABULARY_RE = re.compile(
+    r"\b(%s)\b" % "|".join(hh.AUTHORING_VOCABULARY), re.IGNORECASE
+)
+
 # SZ-1 is one flat hard ceiling. The shipped default is overlaid by the same
 # layered `thresholds:` configuration that the other skills-kit limits use.
 # A record's `instructions` cannot override this ceiling.
@@ -615,6 +621,13 @@ def check_directory(repo_root: Path, entry: dict, word_ceiling: int, add) -> Non
     if record.dirty:
         add(INFO, "DIRTY", directory,
             "the record carries dirty: true, so no commit identifies the judged content (DR-2)")
+
+    leaked = sorted({m.group(0).lower() for m in AUTHORING_VOCABULARY_RE.finditer(record.identity)})
+    if leaked:
+        add(INFO, "IDENTITY-VOCABULARY", directory,
+            "the identity uses authoring vocabulary (%s); it becomes the page h1, "
+            "the page title and every ancestor's navigation label, so say what the "
+            "code does instead (references/technical-english.md)" % ", ".join(leaked))
 
     if record.decision == hh.DECISION_NONE:
         for name in ([page_file] if page_file else []) + reference_files:

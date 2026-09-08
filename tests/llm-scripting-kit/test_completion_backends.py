@@ -7,6 +7,7 @@ spawn) with ``executable=`` set so no CLI need be on PATH.
 from __future__ import annotations
 
 import json
+import os
 import time as _time
 from pathlib import Path
 from types import SimpleNamespace
@@ -93,6 +94,7 @@ class TestClaudeCliBackend:
         # User prompt rides stdin (the request), not argv.
         assert runner.calls[0]["request"] == "USER"
         assert runner.calls[0]["timeout_s"] == 900.0
+
 
     def test_options_effort_tools_timeout(self):
         runner = _StubRunner([(_envelope(), "", 0)])
@@ -664,3 +666,25 @@ class TestKeylessClientBuild:
         assert captured["base_url"] == "http://localhost:8080/v1"
         assert captured["api_key"] == client_mod.KEYLESS_API_KEY
         assert captured["api_key"]  # the SDK requires a truthy key
+
+
+def test_openrouter_user_identity_default_and_override(monkeypatch):
+    class FakeCompletions:
+        def __init__(self):
+            self.kwargs = None
+
+        def create(self, **kwargs):
+            self.kwargs = kwargs
+            return SimpleNamespace(
+                choices=[SimpleNamespace(message=SimpleNamespace(content="ok"), finish_reason="stop")]
+            )
+
+    fake = FakeCompletions()
+    backend = OpenRouterBackend(client=SimpleNamespace(chat=SimpleNamespace(completions=fake)))
+    monkeypatch.setattr(backends_mod, "socket", SimpleNamespace(gethostname=lambda: "host"))
+    backend.complete("s", "u", model="provider/m")
+    assert fake.kwargs["user"].endswith("@host:" + str(os.getpid()))
+    backend.complete("s", "u", model="provider/m", options=BackendOptions(client_id="caller"))
+    assert fake.kwargs["user"] == "caller"
+    backend.complete("s", "u", model="provider/m", options=BackendOptions(client_id=""))
+    assert "user" not in fake.kwargs
