@@ -152,6 +152,89 @@ class TestSymlink:
         source.write_text("source")
         return source, target, Symlink(source, target, "agents", backup)
 
+    def model_windows_junction(self, target: Path, monkeypatch):
+        # These tests model documented Windows semantics; junction behavior is
+        # UNVERIFIED ON A REAL WINDOWS HOST.
+        real_is_symlink = Path.is_symlink
+
+        def is_symlink(path):
+            if Path(path) == target:
+                return False
+            return real_is_symlink(path)
+
+        monkeypatch.setattr(Path, "is_symlink", is_symlink)
+        monkeypatch.setattr(
+            symlink_module.os.path,
+            "isjunction",
+            lambda path: Path(path) == target,
+        )
+
+    def test_junction_to_source_is_current(self, tmp_path, monkeypatch):
+        source, target, resource = self.resource(tmp_path)
+        target.parent.mkdir(parents=True)
+        target.write_text("junction placeholder")
+        self.model_windows_junction(target, monkeypatch)
+        real_realpath = symlink_module.os.path.realpath
+        real_samefile = symlink_module.os.path.samefile
+
+        def realpath(path, *args, **kwargs):
+            if Path(path) == target:
+                return str(source)
+            return real_realpath(path, *args, **kwargs)
+
+        def samefile(first, second):
+            if {Path(first), Path(second)} == {source, target}:
+                return True
+            return real_samefile(first, second)
+
+        monkeypatch.setattr(symlink_module.os.path, "realpath", realpath)
+        monkeypatch.setattr(symlink_module.os.path, "samefile", samefile)
+        assert target.is_symlink() is False
+        assert symlink_module.os.path.isjunction(target) is True
+        assert resource.inspect().state is State.CURRENT
+
+    def test_junction_to_wrong_source_is_drifted(self, tmp_path, monkeypatch):
+        source, target, resource = self.resource(tmp_path)
+        target.parent.mkdir(parents=True)
+        target.write_text("junction placeholder")
+        wrong = tmp_path / "wrong source.txt"
+        wrong.write_text("wrong")
+        self.model_windows_junction(target, monkeypatch)
+        real_realpath = symlink_module.os.path.realpath
+
+        def realpath(path, *args, **kwargs):
+            if Path(path) == target:
+                return str(wrong)
+            return real_realpath(path, *args, **kwargs)
+
+        monkeypatch.setattr(symlink_module.os.path, "realpath", realpath)
+        assert resource.inspect().state is State.DRIFTED
+
+    def test_update_replaces_wrong_junction_without_backup(
+        self, tmp_path, monkeypatch
+    ):
+        source, target, resource = self.resource(tmp_path)
+        target.parent.mkdir(parents=True)
+        target.write_text("junction placeholder")
+        wrong = tmp_path / "wrong source.txt"
+        wrong.write_text("wrong")
+        self.model_windows_junction(target, monkeypatch)
+        readlink_calls = []
+        real_readlink = symlink_module.os.readlink
+
+        def readlink(path):
+            readlink_calls.append(Path(path))
+            if Path(path) == target and not symlink_module.os.path.islink(path):
+                return str(wrong)
+            return real_readlink(path)
+
+        monkeypatch.setattr(symlink_module.os, "readlink", readlink)
+        report = run([resource], "update")
+        assert report.ok and report.changed
+        assert report.results[0].backup is None
+        assert readlink_calls and readlink_calls[0] == target
+        assert os.path.samefile(target, source)
+
     def test_missing_target_install_and_correct_noop(self, tmp_path):
         source, target, resource = self.resource(tmp_path)
         report = run([resource], "install")
