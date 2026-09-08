@@ -971,6 +971,30 @@ class TestInfoSignals:
         result = run_check(repo, "src")
         assert "IDENTITY-VOCABULARY" not in codes(result, "INFO")
 
+    def test_a_bare_separator_literal_is_not_an_absolute_path(self, repo):
+        """NF-1 forbids REACHING an absolute location; splitting a relative path reaches nothing.
+
+        The PC-3 link relay resolves a clicked href lexically and needs "/" to
+        split and join on, so treating the bare separator as an absolute path
+        would make the relay unshippable.
+        """
+        record = make_record(repo, "src")
+        write_page(
+            repo, "src", record,
+            body='<p>Prose.</p><script>var p = "a/b".split("/").join("/");</script>',
+        )
+        result = run_check(repo, "src")
+        assert "script-absolute-reference" not in codes(result, "FAIL")
+
+    def test_a_real_absolute_path_literal_is_still_a_fail(self, repo):
+        record = make_record(repo, "src")
+        write_page(
+            repo, "src", record,
+            body='<p>Prose.</p><script>var p = "/etc/passwd";</script>',
+        )
+        result = run_check(repo, "src")
+        assert "script-absolute-reference" in codes(result, "FAIL")
+
     def test_an_oversized_page_is_a_fail(self, repo):
         record = make_record(repo, "src")
         write_page(repo, "src", record, body="<p>%s</p>" % ("word " * 901))

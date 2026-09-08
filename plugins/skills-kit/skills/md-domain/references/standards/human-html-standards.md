@@ -330,9 +330,31 @@ if (window.parent !== window) {
 
 Use the normalized record directory. Use the generated file's basename. The
 host viewer validates the message under HV-5.
-- **Rationale:** A small viewer-agnostic message lets an enclosing tree follow browser navigation. A viewer-specific API was rejected because standalone pages lack it.
+
+The same snippet also relays ORDINARY FILE LINKS to the host, and only when
+framed. A click on a relative link that is not itself a human page is prevented
+and posted as:
+
+```js
+{ type: "human-html:navigate", version: 1, path: "<repository-relative path>" }
+```
+
+The path is resolved LEXICALLY against the record directory, so the page never
+learns the host's URL shape and NF-1 still holds. A link to another human page
+is left alone -- it navigates in the frame and announces itself, which is the
+existing spine. Absolute paths, anchors, other schemes, and modified or
+non-primary clicks are all left alone.
+
+This exists because a framed page resolves its relative links against the raw
+route, so a plain link to `router.c` served bytes into the frame instead of the
+host's rendered viewer. The host cannot fix this itself: the frame is sandboxed
+without `allow-same-origin` (HV-4), so it can see nothing but `postMessage`. A
+page opened directly from a file manager has no parent, sends nothing, and its
+links work exactly as before.
+- **Rationale:** A small viewer-agnostic message lets an enclosing tree follow browser navigation. A viewer-specific API was rejected because standalone pages lack it. The relay reuses that channel rather than adding a second one.
 - **Test:** The script sends once after document parsing, sends nothing without a
-parent, and matches the page marker.
+parent, matches the page marker, and posts a lexically-resolved path for a
+non-human relative link while leaving human-page links to the announce spine.
 
 ### PC-4. Shared inline style
 

@@ -420,6 +420,12 @@ def check_scripts(page: ParsedPage, directory: str, rel: str, add) -> None:
                 add(FAIL, "script-absolute-reference", directory,
                     "inline script literal %r carries a URL scheme or protocol-relative "
                     "URL" % literal, rel)
+            elif value == "/":
+                # The bare separator, not a path. NF-1 forbids a page REACHING an
+                # absolute location; splitting or joining a relative path on "/"
+                # reaches nothing. The PC-3 relay resolves link targets lexically
+                # and needs it.
+                continue
             elif value.startswith("/"):
                 add(FAIL, "script-absolute-reference", directory,
                     "inline script literal %r is an absolute path" % literal, rel)
