@@ -229,6 +229,33 @@ class TestSegmentApi:
         assert result.returncode == 0
         assert "myproj" in result.stdout
 
+    def test_segment_that_prints_then_fails_leaks_nothing(self, tmp_path):
+        """A bare `|| true` erases only the EXIT STATUS of a failing segment,
+        not its captured stdout -- so a segment that printed before exiting
+        non-zero rendered its partial output. The contract is absent-on-
+        failure: a failed segment must contribute nothing at all."""
+        segs = tmp_path / "segments"
+        segs.mkdir()
+        (segs / "50-bad.sh").write_text(
+            "#!/usr/bin/env bash\nprintf LEAKED\nexit 3\n")
+        result = self._run_with_segments(tmp_path, segs)
+        assert result.returncode == 0
+        assert "LEAKED" not in result.stdout
+        assert "myproj" in result.stdout
+
+    def test_segment_that_prints_then_hangs_leaks_nothing(self, tmp_path):
+        """Same contract for a segment killed by the timeout: printed output
+        before the hang must not survive into the bar."""
+        segs = tmp_path / "segments"
+        segs.mkdir()
+        (segs / "50-hang.sh").write_text(
+            "#!/usr/bin/env bash\nprintf LEAKED\nsleep 30\n")
+        result = self._run_with_segments(
+            tmp_path, segs, extra_env={"STATUSLINE_SEGMENT_TIMEOUT": "1"})
+        assert result.returncode == 0
+        assert "LEAKED" not in result.stdout
+        assert "myproj" in result.stdout
+
     def test_hanging_segment_times_out_bar_survives(self, tmp_path):
         segs = tmp_path / "segments"
         segs.mkdir()
@@ -311,10 +338,19 @@ class TestRateLimitSnapshot:
             body["rate_limits"] = limits
         return json.dumps(body)
 
-    def _run(self, tmp_path, payload):
+    def _run(self, tmp_path, payload, extra_env=None):
+        # SNAP_DIR is derived from BASH_SOURCE in production (so it follows
+        # the plugin that is actually running); these tests run the repo's
+        # own statusline.sh directly rather than from an installed layout, so
+        # STATUSLINE_SNAP_DIR pins the snapshot to the fake HOME the way an
+        # installed copy under that HOME would resolve on its own.
         home = tmp_path / "home"
         home.mkdir()
-        result = run_statusline(payload, tmp_path, extra_env={"HOME": str(home)})
+        snap_dir = home / ".claude" / self.SNAPSHOT.parent
+        env = {"HOME": str(home), "STATUSLINE_SNAP_DIR": str(snap_dir)}
+        if extra_env:
+            env.update(extra_env)
+        result = run_statusline(payload, tmp_path, extra_env=env)
         return result, home / ".claude" / self.SNAPSHOT
 
     def test_snapshot_is_written_from_the_payload(self, tmp_path):
@@ -336,14 +372,11 @@ class TestRateLimitSnapshot:
         assert not snapshot.exists()
 
     def test_snapshot_can_be_disabled(self, tmp_path):
-        home = tmp_path / "home"
-        home.mkdir()
         payload = self._payload(tmp_path, five_hour={"used_percentage": 10.0})
-        result = run_statusline(
-            payload, tmp_path,
-            extra_env={"HOME": str(home), "STATUSLINE_RATE_LIMIT_SNAPSHOT": "0"})
+        result, snapshot = self._run(
+            tmp_path, payload, extra_env={"STATUSLINE_RATE_LIMIT_SNAPSHOT": "0"})
         assert result.returncode == 0
-        assert not (home / ".claude" / self.SNAPSHOT).exists()
+        assert not snapshot.exists()
 
     def test_no_temp_files_are_left_behind(self, tmp_path):
         payload = self._payload(tmp_path, five_hour={"used_percentage": 10.0})
@@ -351,11 +384,16 @@ class TestRateLimitSnapshot:
         assert list(snapshot.parent.glob("*.tmp")) == []
 
     def test_statusline_still_renders_when_the_snapshot_cannot_be_written(self, tmp_path):
-        """An unwritable HOME degrades the snapshot, never the status line."""
+        """An unwritable snapshot location degrades the snapshot, never the
+        status line."""
         blocker = tmp_path / "blocked"
         blocker.write_text("not a directory", encoding="utf-8")
         payload = self._payload(tmp_path / "myproj", five_hour={"used_percentage": 10.0})
-        result = run_statusline(payload, tmp_path, extra_env={"HOME": str(blocker)})
+        home = tmp_path / "home"
+        home.mkdir()
+        result = run_statusline(
+            payload, tmp_path,
+            extra_env={"HOME": str(home), "STATUSLINE_SNAP_DIR": str(blocker / "nested")})
         assert result.returncode == 0
         # Assert the real content rendered. `or result.stdout.strip()` would
         # pass on ANY non-empty output, including a degraded fallback line.
@@ -375,6 +413,63 @@ class TestRateLimitSnapshot:
         assert result.returncode == 0, result.stderr
         assert "myproj" in result.stdout
         assert "unbound variable" not in result.stderr
+
+
+@pytest.mark.skipif(not _HAS_TOOLS, reason="bash + jq required")
+class TestSnapDirFollowsRunningPlugin:
+    """SNAP_DIR hardcoded the marketplace segment "plugins-kit" while
+    SEGMENTS_DIR derived its location from ${BASH_SOURCE[0]}. Deriving
+    SNAP_DIR the same way means the snapshot lands beside the plugin that is
+    actually running, under whatever marketplace name installed it -- not a
+    literal "plugins-kit" that happens to not match a fork or a differently
+    named marketplace.
+    """
+
+    def test_snapshot_lands_beside_the_running_script_not_a_hardcoded_marketplace(
+        self, tmp_path
+    ):
+        # Lay out a fake install under a marketplace name that is NOT
+        # "plugins-kit", mirroring the real <data_root>/<marketplace>/<plugin>
+        # shape SEGMENTS_DIR already derives from BASH_SOURCE.
+        home = tmp_path / "home"
+        installed_script = (
+            home / ".claude" / "plugins" / "data" / "othermarket"
+            / "claude-ui-kit" / "scripts" / "statusline.sh"
+        )
+        installed_script.parent.mkdir(parents=True)
+        installed_script.write_bytes(_STATUSLINE.read_bytes())
+        installed_script.chmod(0o755)
+
+        payload = json.dumps({
+            "model": {"display_name": "TestModel", "id": "m-1"},
+            "cwd": str(tmp_path / "myproj"),
+            "rate_limits": {"five_hour": {"used_percentage": 10.0}},
+        })
+        env = dict(os.environ)
+        env.pop("BOOTSTRAP_BIN_JQ", None)
+        env["HOME"] = str(home)
+        if _TIMEOUT_SHIM is not None:
+            env["BOOTSTRAP_BIN_TIMEOUT"] = _TIMEOUT_SHIM
+        result = subprocess.run(
+            ["bash", str(installed_script)], input=payload, cwd=tmp_path,
+            env=env, capture_output=True, text=True, timeout=30,
+            encoding="utf-8", errors="replace")
+
+        assert result.returncode == 0, result.stderr
+        expected_snapshot = (
+            home / ".claude" / "plugins" / "data" / "othermarket"
+            / "claude-ui-kit" / "rate-limits.json"
+        )
+        assert expected_snapshot.exists(), (
+            "snapshot must land in the data dir of the plugin that is "
+            "actually running (derived from BASH_SOURCE), not a hardcoded "
+            "'plugins-kit' segment"
+        )
+        wrong_snapshot = (
+            home / ".claude" / "plugins" / "data" / "plugins-kit"
+            / "claude-ui-kit" / "rate-limits.json"
+        )
+        assert not wrong_snapshot.exists()
 
 
 class TestNoTimeoutBinaryIsVisible:
