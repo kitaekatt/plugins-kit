@@ -402,6 +402,29 @@ def test_git_detection_failure_fails_closed_without_an_attempt_row(
     assert snapshot.attempts == ()
 
 
+def test_git_probe_timeout_returns_without_blocking(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A hung Git command is bounded for both workspace probe paths."""
+    calls: list[tuple[object, float | None]] = []
+
+    def hanging_git(*args: object, **kwargs: object) -> object:
+        calls.append((args[0], kwargs.get("timeout")))
+        raise subprocess.TimeoutExpired(args[0], kwargs["timeout"])
+
+    monkeypatch.setattr(workspace_module.subprocess, "run", hanging_git)
+
+    assert workspace_module._git_result(("status",), cwd=tmp_path) is None
+    with pytest.raises(WorkspaceDetectionError, match="could not run Git repository detection"):
+        workspace_module._git_detection_result(tmp_path)
+
+    assert len(calls) == 2
+    # The bare _git_result call takes the tree-operation default; the
+    # repository detection probe takes the shorter probe bound.
+    assert calls[0][1] == workspace_module.GIT_TREE_TIMEOUT_S
+    assert calls[1][1] == workspace_module.GIT_PROBE_TIMEOUT_S
+
+
 def test_workspace_creation_interruption_records_a_pre_seam_failure(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -614,6 +637,50 @@ def test_gc_repairs_a_removal_started_before_an_interruption(
     assert len(report.removed) == 1
     assert report.removed[0].reason == "clean worktree removal was already completed"
     assert JobStore(db_path).snapshot("interrupted-gc-run").attempts[0].workspace_status == "removed"
+
+
+def test_gc_retry_keeps_a_recorded_forced_removal_intent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A retry without the flag continues with a recorded forced intent."""
+    repository, _ = _git_repository(tmp_path / "repository")
+    db_path = tmp_path / "run.sqlite3"
+    snapshot = run_jobs(
+        [_job(repository, "sticky-force", _print_cwd_command())],
+        db_path,
+        run_id="sticky-force-run",
+        workspace_root=tmp_path / "workspaces",
+        capabilities_provider=_advertisement,
+        backend_factory=_factory_for(FakeBackend()),
+    )
+    attempt = snapshot.attempts[0]
+    assert attempt.id is not None
+
+    force_values: list[bool] = []
+
+    def interrupt_removal(
+        workspace: Path, run: object, *, force: bool
+    ) -> str | None:
+        force_values.append(force)
+        if len(force_values) == 1:
+            raise KeyboardInterrupt
+        return "synthetic removal refusal"
+
+    monkeypatch.setattr(workspace_module, "_reclaim_workspace", interrupt_removal)
+    with pytest.raises(KeyboardInterrupt):
+        gc_workspaces(db_path, "sticky-force-run", force=True)
+
+    interrupted = JobStore(db_path).snapshot("sticky-force-run").attempts[0]
+    assert interrupted.workspace_status == "removing"
+    assert interrupted.workspace_removal_forced is True
+
+    report = gc_workspaces(db_path, "sticky-force-run")
+
+    assert force_values == [True, True]
+    assert report.refused[0].reason == "synthetic removal refusal"
+    retried = JobStore(db_path).snapshot("sticky-force-run").attempts[0]
+    assert retried.workspace_status == "removing"
+    assert retried.workspace_removal_forced is True
 
 
 def test_gc_prunes_a_registration_after_directory_removal_interruption(

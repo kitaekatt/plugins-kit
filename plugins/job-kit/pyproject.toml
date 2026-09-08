@@ -1,6 +1,6 @@
 [project]
 name = "job-kit"
-version = "0.4.1"
+version = "0.4.2"
 description = "Durable execution for heterogeneous agent jobs through a bounded worker pool."
 requires-python = ">=3.12"
 dependencies = [

@@ -123,6 +123,27 @@ unconfigurable opinion whose test passes is a finding.
   answer is a lease plus an expiry plus a fencing token, which is a distributed runner --
   a different plugin, not a column.
 
+- **A recorded forced worktree removal stays forced.** Once `gc --force` has begun
+  removing an attempt's worktree, a later `gc` over that attempt continues as forced even
+  without the flag, and a refusal never clears the recorded intent. A team could
+  reasonably want `--force` to bind only the invocation that passed it, and we refuse
+  that because it does not buy the safety it looks like: the first pass may already have
+  removed part of the tree, so a downgraded retry cannot restore anything -- it refuses a
+  dirty worktree and leaves it unreclaimable, which is exactly the state the forced pass
+  was invoked to clear. The remedy for an accidental `--force` is that the ledger records
+  it: the attempt row says the removal was forced and by which pass.
+
+- **job-kit bounds every Git call, on two fixed budgets rather than one setting.** A
+  metadata probe (`rev-parse`, `worktree list`) gets a short bound and is presumed hung
+  past it; an operation that writes or walks a working tree (`worktree add`, `status
+  --untracked-files=all`, `worktree remove`, `worktree prune`) gets a long one, because on
+  a large repository it legitimately takes minutes. Neither is configurable. A team on
+  unusually slow storage could reasonably want the long bound raised, and the reason we do
+  not offer the knob is that the bound is a hang guard, not a policy: it exists so an
+  unattended run cannot block forever on a credential prompt or a wedged filesystem, and
+  a value a user can raise to infinity is not a guard. A run's own `--timeout` is the
+  budget users are meant to set.
+
 - **Only a reviewer lane may run on a configured endpoint.** A review profile's
   `model` may name an llm-scripting-kit endpoint instead of an Agent alias, but the runner
   accepts that for the three REVIEWER lanes only; `validator` is refused by name. (Until

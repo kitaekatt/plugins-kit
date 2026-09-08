@@ -21,6 +21,7 @@ from .model import (
     Acceptance,
     Attempt,
     AttemptError,
+    AttemptReservation,
     Job,
     JobRecord,
     JobState,
@@ -148,6 +149,35 @@ _MIGRATIONS: list[list[str]] = [
     [
         "ALTER TABLE attempts ADD COLUMN reasoning TEXT",
         "ALTER TABLE attempts ADD COLUMN finish_reason TEXT",
+    ],
+    [
+        """
+        CREATE TABLE reservations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            run_id TEXT NOT NULL,
+            job_id TEXT NOT NULL,
+            attempt_no INTEGER NOT NULL,
+            budget_no INTEGER NOT NULL,
+            endpoint TEXT NOT NULL,
+            backend TEXT NOT NULL,
+            model TEXT NOT NULL,
+            workspace_path TEXT,
+            reserved_at TEXT NOT NULL,
+            invoke_armed_at TEXT,
+            disposition TEXT,
+            resolved_at TEXT,
+            lost_at TEXT,
+            loss_reason TEXT,
+            workspace_status TEXT NOT NULL DEFAULT 'none',
+            workspace_reason TEXT,
+            workspace_removed_at REAL,
+            workspace_removal_forced INTEGER NOT NULL DEFAULT 0,
+            FOREIGN KEY (run_id, job_id) REFERENCES jobs(run_id, id),
+            UNIQUE (run_id, job_id, attempt_no)
+        )
+        """,
+        "CREATE INDEX idx_reservations_run_job ON reservations(run_id, job_id, id)",
+        "CREATE UNIQUE INDEX idx_attempts_run_job_no ON attempts(run_id, job_id, attempt_no)",
     ],
 ]
 
@@ -284,6 +314,50 @@ def _row_to_attempt(row: sqlite3.Row) -> Attempt:
         ),
         workspace_removal_forced=bool(row["workspace_removal_forced"]),
         acceptance=_acceptance_from_json(row["acceptance_json"]),
+    )
+
+
+def _row_to_reservation(row: sqlite3.Row) -> AttemptReservation:
+    """Convert a reservations row into its public record."""
+    workspace_path = row["workspace_path"]
+    return AttemptReservation(
+        id=int(row["id"]),
+        run_id=str(row["run_id"]),
+        job_id=str(row["job_id"]),
+        attempt_no=int(row["attempt_no"]),
+        budget_no=int(row["budget_no"]),
+        endpoint=str(row["endpoint"]),
+        backend=str(row["backend"]),
+        model=str(row["model"]),
+        workspace_path=(Path(workspace_path) if workspace_path is not None else None),
+        reserved_at=str(row["reserved_at"]),
+        invoke_armed_at=(
+            str(row["invoke_armed_at"])
+            if row["invoke_armed_at"] is not None
+            else None
+        ),
+        disposition=(
+            str(row["disposition"]) if row["disposition"] is not None else None
+        ),
+        resolved_at=(
+            str(row["resolved_at"]) if row["resolved_at"] is not None else None
+        ),
+        lost_at=(str(row["lost_at"]) if row["lost_at"] is not None else None),
+        loss_reason=(
+            str(row["loss_reason"]) if row["loss_reason"] is not None else None
+        ),
+        workspace_status=str(row["workspace_status"] or "none"),
+        workspace_reason=(
+            str(row["workspace_reason"])
+            if row["workspace_reason"] is not None
+            else None
+        ),
+        workspace_removed_at=(
+            float(row["workspace_removed_at"])
+            if row["workspace_removed_at"] is not None
+            else None
+        ),
+        workspace_removal_forced=bool(row["workspace_removal_forced"]),
     )
 
 
@@ -616,19 +690,42 @@ class JobStore:
             ).fetchone()
         return _row_to_job(row) if row is not None else None
 
-    def mark_running(self, run_id: str, job_id: str, *, at: Optional[float] = None) -> JobRecord:
-        """Mark a non-terminal job as running before its seam invocation."""
+    def _transition(
+        self,
+        run_id: str,
+        job_id: str,
+        target: JobState,
+        reason: Optional[str],
+        *,
+        at: Optional[float],
+        require_attempt: bool = False,
+    ) -> JobRecord:
+        """Move a non-terminal job to ``target``, writing its error message.
+
+        ``reason`` of ``None`` clears the error message to NULL; any other
+        value is truncated to ``ERROR_LIMIT`` and stored. When
+        ``require_attempt`` is set, the job must already have a recorded
+        attempt row, checked inside the same transaction before the update.
+        """
         when = time.time() if at is None else at
+        error_message = None if reason is None else str(reason)[:ERROR_LIMIT]
         with self._writer() as conn:
             self._require_run(conn, run_id)
             row = self._require_job(conn, run_id, job_id)
             state = JobState(row["state"])
             if state in TERMINAL_STATES:
                 raise TerminalStateError(f"{run_id!r}/{job_id!r} is already {state.value}")
+            if require_attempt:
+                attempt = conn.execute(
+                    "SELECT 1 FROM attempts WHERE run_id = ? AND job_id = ? LIMIT 1",
+                    (run_id, job_id),
+                ).fetchone()
+                if attempt is None:
+                    raise ValueError("halted jobs must be marked with an attempt")
             conn.execute(
-                "UPDATE jobs SET state = ?, error_message = NULL, updated_at = ? "
+                "UPDATE jobs SET state = ?, error_message = ?, updated_at = ? "
                 "WHERE run_id = ? AND id = ?",
-                (JobState.RUNNING.value, when, run_id, job_id),
+                (target.value, error_message, when, run_id, job_id),
             )
             updated = conn.execute(
                 "SELECT * FROM jobs WHERE run_id = ? AND id = ?", (run_id, job_id)
@@ -636,6 +733,10 @@ class JobStore:
         if updated is None:  # pragma: no cover - protected by the transaction
             raise UnknownJobError(f"{run_id!r}/{job_id!r}")
         return _row_to_job(updated)
+
+    def mark_running(self, run_id: str, job_id: str, *, at: Optional[float] = None) -> JobRecord:
+        """Mark a non-terminal job as running before its seam invocation."""
+        return self._transition(run_id, job_id, JobState.RUNNING, None, at=at)
 
     def mark_unroutable(
         self,
@@ -646,32 +747,7 @@ class JobStore:
         at: Optional[float] = None,
     ) -> JobRecord:
         """Terminalize a job whose seam invocation could not be selected."""
-        when = time.time() if at is None else at
-        with self._writer() as conn:
-            self._require_run(conn, run_id)
-            row = self._require_job(conn, run_id, job_id)
-            state = JobState(row["state"])
-            if state in TERMINAL_STATES:
-                raise TerminalStateError(
-                    f"{run_id!r}/{job_id!r} is already {state.value}"
-                )
-            conn.execute(
-                "UPDATE jobs SET state = ?, error_message = ?, updated_at = ? "
-                "WHERE run_id = ? AND id = ?",
-                (
-                    JobState.UNROUTABLE.value,
-                    str(reason)[:ERROR_LIMIT],
-                    when,
-                    run_id,
-                    job_id,
-                ),
-            )
-            updated = conn.execute(
-                "SELECT * FROM jobs WHERE run_id = ? AND id = ?", (run_id, job_id)
-            ).fetchone()
-        if updated is None:  # pragma: no cover - protected by the transaction
-            raise UnknownJobError(f"{run_id!r}/{job_id!r}")
-        return _row_to_job(updated)
+        return self._transition(run_id, job_id, JobState.UNROUTABLE, reason, at=at)
 
     def mark_halted(
         self,
@@ -682,38 +758,9 @@ class JobStore:
         at: Optional[float] = None,
     ) -> JobRecord:
         """Terminalize a job whose prior attempts exhausted endpoint eligibility."""
-        when = time.time() if at is None else at
-        with self._writer() as conn:
-            self._require_run(conn, run_id)
-            row = self._require_job(conn, run_id, job_id)
-            state = JobState(row["state"])
-            if state in TERMINAL_STATES:
-                raise TerminalStateError(
-                    f"{run_id!r}/{job_id!r} is already {state.value}"
-                )
-            attempt = conn.execute(
-                "SELECT 1 FROM attempts WHERE run_id = ? AND job_id = ? LIMIT 1",
-                (run_id, job_id),
-            ).fetchone()
-            if attempt is None:
-                raise ValueError("halted jobs must be marked with an attempt")
-            conn.execute(
-                "UPDATE jobs SET state = ?, error_message = ?, updated_at = ? "
-                "WHERE run_id = ? AND id = ?",
-                (
-                    JobState.HALTED.value,
-                    str(reason)[:ERROR_LIMIT],
-                    when,
-                    run_id,
-                    job_id,
-                ),
-            )
-            updated = conn.execute(
-                "SELECT * FROM jobs WHERE run_id = ? AND id = ?", (run_id, job_id)
-            ).fetchone()
-        if updated is None:  # pragma: no cover - protected by the transaction
-            raise UnknownJobError(f"{run_id!r}/{job_id!r}")
-        return _row_to_job(updated)
+        return self._transition(
+            run_id, job_id, JobState.HALTED, reason, at=at, require_attempt=True
+        )
 
     def mark_failed(
         self,
@@ -724,32 +771,342 @@ class JobStore:
         at: Optional[float] = None,
     ) -> JobRecord:
         """Terminalize a job failure that happened before seam invocation."""
-        when = time.time() if at is None else at
+        return self._transition(run_id, job_id, JobState.FAILED, reason, at=at)
+
+    @staticmethod
+    def _reservation_budget_count(
+        conn: sqlite3.Connection, run_id: str, job_id: str
+    ) -> int:
+        """Count observed invocations and armed process losses for one job."""
+        attempt_count = conn.execute(
+            "SELECT COUNT(*) AS count FROM attempts WHERE run_id = ? AND job_id = ?",
+            (run_id, job_id),
+        ).fetchone()
+        loss_count = conn.execute(
+            """
+            SELECT COUNT(*) AS count FROM reservations
+            WHERE run_id = ? AND job_id = ?
+              AND disposition = 'process_lost'
+              AND invoke_armed_at IS NOT NULL
+            """,
+            (run_id, job_id),
+        ).fetchone()
+        return int(attempt_count["count"]) + int(loss_count["count"])
+
+    @staticmethod
+    def _next_reservation_attempt_no(
+        conn: sqlite3.Connection, run_id: str, job_id: str
+    ) -> int:
+        """Return a free positive number, preserving gaps occupied by losses."""
+        row = conn.execute(
+            """
+            SELECT MAX(attempt_no) AS attempt_no FROM (
+                SELECT attempt_no FROM attempts WHERE run_id = ? AND job_id = ?
+                UNION ALL
+                SELECT attempt_no FROM reservations WHERE run_id = ? AND job_id = ?
+            )
+            """,
+            (run_id, job_id, run_id, job_id),
+        ).fetchone()
+        return int(row["attempt_no"] or 0) + 1
+
+    def reserve_attempt(
+        self,
+        run_id: str,
+        job_id: str,
+        *,
+        endpoint: str,
+        backend: str,
+        model: str,
+        reserved_at: str,
+        workspace_path: Optional[str | Path] = None,
+    ) -> AttemptReservation:
+        """Reserve one seam invocation and mark its job running atomically."""
+        path = Path(workspace_path).expanduser().resolve() if workspace_path is not None else None
         with self._writer() as conn:
             self._require_run(conn, run_id)
-            row = self._require_job(conn, run_id, job_id)
-            state = JobState(row["state"])
+            job_row = self._require_job(conn, run_id, job_id)
+            state = JobState(job_row["state"])
             if state in TERMINAL_STATES:
-                raise TerminalStateError(
-                    f"{run_id!r}/{job_id!r} is already {state.value}"
+                raise TerminalStateError(f"{run_id!r}/{job_id!r} is already {state.value}")
+            if state is not JobState.PENDING:
+                raise StoreError(
+                    f"{run_id!r}/{job_id!r} cannot reserve from {state.value}"
                 )
+            budget_no = self._reservation_budget_count(conn, run_id, job_id) + 1
+            attempt_no = self._next_reservation_attempt_no(conn, run_id, job_id)
+            conn.execute(
+                """
+                INSERT INTO reservations(
+                    run_id, job_id, attempt_no, budget_no, endpoint, backend, model,
+                    workspace_path, reserved_at, workspace_status
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    run_id,
+                    job_id,
+                    attempt_no,
+                    budget_no,
+                    endpoint,
+                    backend,
+                    model,
+                    str(path) if path is not None else None,
+                    str(reserved_at),
+                    "isolated" if path is not None else "none",
+                ),
+            )
+            conn.execute(
+                "UPDATE jobs SET state = ?, error_message = NULL, updated_at = ? "
+                "WHERE run_id = ? AND id = ?",
+                (JobState.RUNNING.value, time.time(), run_id, job_id),
+            )
+            row = conn.execute(
+                "SELECT * FROM reservations WHERE run_id = ? AND job_id = ? "
+                "AND attempt_no = ?",
+                (run_id, job_id, attempt_no),
+            ).fetchone()
+        if row is None:  # pragma: no cover - protected by the transaction
+            raise StoreError("reservation was not persisted")
+        return _row_to_reservation(row)
+
+    def get_reservation(
+        self, run_id: str, job_id: str, attempt_no: int
+    ) -> Optional[AttemptReservation]:
+        """Read one reservation by its run, job and allocated number."""
+        with self._connect() as conn:
+            self._require_run(conn, run_id)
+            row = conn.execute(
+                "SELECT * FROM reservations WHERE run_id = ? AND job_id = ? "
+                "AND attempt_no = ?",
+                (run_id, job_id, attempt_no),
+            ).fetchone()
+        return _row_to_reservation(row) if row is not None else None
+
+    def list_reservations(
+        self, run_id: str, job_id: Optional[str] = None
+    ) -> list[AttemptReservation]:
+        """Read reservations in durable insertion order."""
+        with self._connect() as conn:
+            self._require_run(conn, run_id)
+            if job_id is None:
+                rows = conn.execute(
+                    "SELECT * FROM reservations WHERE run_id = ? ORDER BY id",
+                    (run_id,),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT * FROM reservations WHERE run_id = ? AND job_id = ? "
+                    "ORDER BY id",
+                    (run_id, job_id),
+                ).fetchall()
+        return [_row_to_reservation(row) for row in rows]
+
+    def record_reservation_workspace(
+        self,
+        run_id: str,
+        job_id: str,
+        attempt_no: int,
+        *,
+        workspace_path: Optional[str | Path],
+        workspace_reason: Optional[str] = None,
+    ) -> AttemptReservation:
+        """Persist a workspace path before Git is asked to create it."""
+        path = Path(workspace_path).expanduser().resolve() if workspace_path is not None else None
+        with self._writer() as conn:
+            row = conn.execute(
+                "SELECT * FROM reservations WHERE run_id = ? AND job_id = ? "
+                "AND attempt_no = ?",
+                (run_id, job_id, attempt_no),
+            ).fetchone()
+            if row is None:
+                raise StoreError("reservation does not exist")
+            if row["disposition"] is not None:
+                raise StoreError("reservation is already resolved")
+            conn.execute(
+                "UPDATE reservations SET workspace_path = ?, workspace_status = ?, "
+                "workspace_reason = ? WHERE run_id = ? AND job_id = ? AND attempt_no = ?",
+                (
+                    str(path) if path is not None else None,
+                    "isolated" if path is not None else "none",
+                    workspace_reason,
+                    run_id,
+                    job_id,
+                    attempt_no,
+                ),
+            )
+            updated = conn.execute(
+                "SELECT * FROM reservations WHERE run_id = ? AND job_id = ? "
+                "AND attempt_no = ?",
+                (run_id, job_id, attempt_no),
+            ).fetchone()
+        if updated is None:  # pragma: no cover - protected by the transaction
+            raise StoreError("reservation disappeared")
+        return _row_to_reservation(updated)
+
+    def arm_reservation(
+        self,
+        run_id: str,
+        job_id: str,
+        attempt_no: int,
+        *,
+        invoke_armed_at: str,
+    ) -> AttemptReservation:
+        """Commit the seam-invocation uncertainty marker before the seam call."""
+        with self._writer() as conn:
+            row = conn.execute(
+                "SELECT * FROM reservations WHERE run_id = ? AND job_id = ? "
+                "AND attempt_no = ?",
+                (run_id, job_id, attempt_no),
+            ).fetchone()
+            if row is None:
+                raise StoreError("reservation does not exist")
+            if row["disposition"] is not None:
+                raise StoreError("reservation is already resolved")
+            conn.execute(
+                "UPDATE reservations SET invoke_armed_at = ? "
+                "WHERE run_id = ? AND job_id = ? AND attempt_no = ?",
+                (str(invoke_armed_at), run_id, job_id, attempt_no),
+            )
+            updated = conn.execute(
+                "SELECT * FROM reservations WHERE run_id = ? AND job_id = ? "
+                "AND attempt_no = ?",
+                (run_id, job_id, attempt_no),
+            ).fetchone()
+        if updated is None:  # pragma: no cover - protected by the transaction
+            raise StoreError("reservation disappeared")
+        return _row_to_reservation(updated)
+
+    def resolve_reservation_before_invoke(
+        self,
+        run_id: str,
+        job_id: str,
+        attempt_no: int,
+        *,
+        reason: str,
+        at: Optional[str] = None,
+    ) -> AttemptReservation:
+        """Resolve a normal pre-seam failure without consuming the attempt budget."""
+        when = str(at) if at is not None else str(time.time())
+        with self._writer() as conn:
+            row = conn.execute(
+                "SELECT * FROM reservations WHERE run_id = ? AND job_id = ? "
+                "AND attempt_no = ?",
+                (run_id, job_id, attempt_no),
+            ).fetchone()
+            if row is None or row["disposition"] is not None:
+                raise StoreError("reservation is not active")
+            if row["invoke_armed_at"] is not None:
+                raise StoreError("armed reservation cannot be resolved before invoke")
+            conn.execute(
+                "UPDATE reservations SET disposition = ?, resolved_at = ?, "
+                "loss_reason = ? WHERE run_id = ? AND job_id = ? AND attempt_no = ?",
+                (
+                    "pre_invoke_failure",
+                    when,
+                    str(reason)[:ERROR_LIMIT],
+                    run_id,
+                    job_id,
+                    attempt_no,
+                ),
+            )
             conn.execute(
                 "UPDATE jobs SET state = ?, error_message = ?, updated_at = ? "
                 "WHERE run_id = ? AND id = ?",
                 (
                     JobState.FAILED.value,
                     str(reason)[:ERROR_LIMIT],
-                    when,
+                    time.time(),
                     run_id,
                     job_id,
                 ),
             )
             updated = conn.execute(
-                "SELECT * FROM jobs WHERE run_id = ? AND id = ?", (run_id, job_id)
+                "SELECT * FROM reservations WHERE run_id = ? AND job_id = ? "
+                "AND attempt_no = ?",
+                (run_id, job_id, attempt_no),
             ).fetchone()
         if updated is None:  # pragma: no cover - protected by the transaction
-            raise UnknownJobError(f"{run_id!r}/{job_id!r}")
-        return _row_to_job(updated)
+            raise StoreError("reservation disappeared")
+        return _row_to_reservation(updated)
+
+    def recover_reservations(
+        self, run_id: str, *, at: Optional[str] = None
+    ) -> list[AttemptReservation]:
+        """Resolve every live reservation left by a lost runner process."""
+        when = str(at) if at is not None else str(time.time())
+        recovered: list[AttemptReservation] = []
+        with self._writer() as conn:
+            self._require_run(conn, run_id)
+            rows = conn.execute(
+                "SELECT * FROM reservations WHERE run_id = ? AND disposition IS NULL "
+                "ORDER BY id",
+                (run_id,),
+            ).fetchall()
+            reserved_jobs = {str(row["job_id"]) for row in rows}
+            # A ledger written before reservations existed can hold a RUNNING
+            # job with no reservation row. Nothing above resolves it, and a
+            # reservation cannot be taken from RUNNING, so the run would be
+            # unresumable forever. Its seam invocation was never recorded, so
+            # it returns to PENDING exactly as such a ledger always retried it.
+            legacy = conn.execute(
+                "SELECT id FROM jobs WHERE run_id = ? AND state = ?",
+                (run_id, JobState.RUNNING.value),
+            ).fetchall()
+            for job_row in legacy:
+                if str(job_row["id"]) in reserved_jobs:
+                    continue
+                conn.execute(
+                    "UPDATE jobs SET state = ?, updated_at = ? "
+                    "WHERE run_id = ? AND id = ?",
+                    (JobState.PENDING.value, time.time(), run_id, str(job_row["id"])),
+                )
+            for row in rows:
+                run_job = (str(row["run_id"]), str(row["job_id"]))
+                if row["invoke_armed_at"] is None:
+                    disposition = "process_lost_before_invoke"
+                    loss_reason = "process lost before seam invocation"
+                    terminal_state = JobState.PENDING
+                    error_message = None
+                    lost_at = None
+                else:
+                    disposition = "process_lost"
+                    loss_reason = "process lost after seam invocation was armed"
+                    lost_at = when
+                    job_row = self._require_job(conn, *run_job)
+                    budget_count = self._reservation_budget_count(conn, *run_job) + 1
+                    max_attempts = int(
+                        Job.from_mapping(json.loads(job_row["definition_json"])).max_attempts
+                    )
+                    terminal_state = (
+                        JobState.FAILED if budget_count >= max_attempts else JobState.PENDING
+                    )
+                    error_message = (
+                        "process lost after seam invocation was armed"
+                        if terminal_state is JobState.FAILED
+                        else None
+                    )
+                conn.execute(
+                    "UPDATE reservations SET disposition = ?, resolved_at = ?, "
+                    "lost_at = ?, loss_reason = ? WHERE id = ?",
+                    (disposition, when, lost_at, loss_reason, int(row["id"])),
+                )
+                conn.execute(
+                    "UPDATE jobs SET state = ?, error_message = ?, updated_at = ? "
+                    "WHERE run_id = ? AND id = ?",
+                    (
+                        terminal_state.value,
+                        error_message,
+                        time.time(),
+                        run_job[0],
+                        run_job[1],
+                    ),
+                )
+                updated = conn.execute(
+                    "SELECT * FROM reservations WHERE id = ?", (int(row["id"]),)
+                ).fetchone()
+                if updated is not None:
+                    recovered.append(_row_to_reservation(updated))
+        return recovered
 
     def append_attempt(
         self,
@@ -760,9 +1117,11 @@ class JobStore:
     ) -> Attempt:
         """Append one attempt and update its job state atomically.
 
-        The attempt number must be the next append-only number. The method
-        never updates an attempt row and refuses a terminal job. A null
-        ``terminal_state`` leaves the job pending for another attempt.
+        A live reservation supplies the allocated attempt number. The legacy
+        direct-append path accepts the next available number for stores that
+        predate reservations. The method never updates an attempt row and
+        refuses a terminal job. A null ``terminal_state`` leaves the job
+        pending for another attempt.
         """
         if terminal_state is not None and terminal_state not in TERMINAL_STATES:
             raise ValueError("append_attempt requires a terminal or null job state")
@@ -778,16 +1137,38 @@ class JobStore:
                 raise TerminalStateError(
                     f"{attempt.run_id!r}/{attempt.job_id!r} is already {state.value}"
                 )
-            count_row = conn.execute(
-                "SELECT COUNT(*) AS count FROM attempts WHERE run_id = ? AND job_id = ?",
+            reservation = conn.execute(
+                "SELECT * FROM reservations WHERE run_id = ? AND job_id = ? "
+                "AND attempt_no = ?",
+                (attempt.run_id, attempt.job_id, attempt.attempt_no),
+            ).fetchone()
+            active_reservation = conn.execute(
+                "SELECT 1 FROM reservations WHERE run_id = ? AND job_id = ? "
+                "AND disposition IS NULL LIMIT 1",
                 (attempt.run_id, attempt.job_id),
             ).fetchone()
-            expected = int(count_row["count"]) + 1
-            if attempt.attempt_no != expected:
-                raise ValueError(
-                    f"attempt_no {attempt.attempt_no} is not the append-only next "
-                    f"number {expected} for {attempt.run_id!r}/{attempt.job_id!r}"
+            if reservation is not None and reservation["disposition"] is not None:
+                raise StoreError("reservation is already resolved")
+            if reservation is not None and reservation["disposition"] is None:
+                if reservation["invoke_armed_at"] is None:
+                    raise StoreError("cannot append an unarmed reservation")
+                attempt = replace(
+                    attempt, started_at=str(reservation["invoke_armed_at"])
                 )
+            elif active_reservation is not None:
+                raise StoreError("cannot append beside a live reservation")
+            else:
+                count_row = conn.execute(
+                    "SELECT MAX(attempt_no) AS attempt_no FROM attempts "
+                    "WHERE run_id = ? AND job_id = ?",
+                    (attempt.run_id, attempt.job_id),
+                ).fetchone()
+                expected = int(count_row["attempt_no"] or 0) + 1
+                if attempt.attempt_no != expected:
+                    raise ValueError(
+                        f"attempt_no {attempt.attempt_no} is not the next available "
+                        f"number {expected} for {attempt.run_id!r}/{attempt.job_id!r}"
+                    )
             error_code = attempt.error.code if attempt.error is not None else None
             error_message = (
                 attempt.error.message[:ERROR_LIMIT]
@@ -861,6 +1242,12 @@ class JobStore:
                 ),
             )
             attempt_id = int(conn.execute("SELECT last_insert_rowid()").fetchone()[0])
+            if reservation is not None and reservation["disposition"] is None:
+                conn.execute(
+                    "UPDATE reservations SET disposition = ?, resolved_at = ? "
+                    "WHERE id = ?",
+                    ("completed", str(when), int(reservation["id"])),
+                )
             conn.execute(
                 "UPDATE jobs SET state = ?, error_message = NULL, updated_at = ? "
                 "WHERE run_id = ? AND id = ?",
@@ -981,6 +1368,106 @@ class JobStore:
             raise StoreError(f"attempt does not exist: {attempt_id}")
         return _row_to_attempt(updated)
 
+    def mark_reservation_workspace_removing(
+        self, reservation_id: int, *, forced: bool = False
+    ) -> AttemptReservation:
+        """Record cleanup intent for a lost reservation workspace."""
+        with self._writer() as conn:
+            row = conn.execute(
+                "SELECT * FROM reservations WHERE id = ?", (reservation_id,)
+            ).fetchone()
+            if row is None:
+                raise StoreError(f"reservation does not exist: {reservation_id}")
+            if row["workspace_path"] is None:
+                raise StoreError(f"reservation has no workspace: {reservation_id}")
+            if row["workspace_status"] == "removing":
+                if forced and not bool(row["workspace_removal_forced"]):
+                    conn.execute(
+                        "UPDATE reservations SET workspace_removal_forced = ? WHERE id = ?",
+                        (1, reservation_id),
+                    )
+                    row = conn.execute(
+                        "SELECT * FROM reservations WHERE id = ?", (reservation_id,)
+                    ).fetchone()
+                if row is None:  # pragma: no cover - protected by the transaction
+                    raise StoreError(f"reservation does not exist: {reservation_id}")
+                return _row_to_reservation(row)
+            if row["workspace_status"] != "isolated":
+                raise StoreError(f"reservation has no isolated workspace: {reservation_id}")
+            conn.execute(
+                "UPDATE reservations SET workspace_status = ?, "
+                "workspace_removal_forced = ? WHERE id = ?",
+                ("removing", int(forced), reservation_id),
+            )
+            updated = conn.execute(
+                "SELECT * FROM reservations WHERE id = ?", (reservation_id,)
+            ).fetchone()
+        if updated is None:  # pragma: no cover - protected by the transaction
+            raise StoreError(f"reservation does not exist: {reservation_id}")
+        return _row_to_reservation(updated)
+
+    def restore_reservation_workspace_isolated(
+        self, reservation_id: int
+    ) -> AttemptReservation:
+        """Clear reservation workspace cleanup intent after a refusal."""
+        with self._writer() as conn:
+            row = conn.execute(
+                "SELECT * FROM reservations WHERE id = ?", (reservation_id,)
+            ).fetchone()
+            if row is None:
+                raise StoreError(f"reservation does not exist: {reservation_id}")
+            if row["workspace_status"] != "removing":
+                raise StoreError(f"reservation is not being removed: {reservation_id}")
+            conn.execute(
+                "UPDATE reservations SET workspace_status = ?, "
+                "workspace_removal_forced = ? WHERE id = ?",
+                ("isolated", 0, reservation_id),
+            )
+            updated = conn.execute(
+                "SELECT * FROM reservations WHERE id = ?", (reservation_id,)
+            ).fetchone()
+        if updated is None:  # pragma: no cover - protected by the transaction
+            raise StoreError(f"reservation does not exist: {reservation_id}")
+        return _row_to_reservation(updated)
+
+    def record_reservation_workspace_removed(
+        self,
+        reservation_id: int,
+        *,
+        at: Optional[float] = None,
+        forced: bool = False,
+    ) -> AttemptReservation:
+        """Record successful cleanup without changing loss evidence."""
+        when = time.time() if at is None else at
+        with self._writer() as conn:
+            row = conn.execute(
+                "SELECT * FROM reservations WHERE id = ?", (reservation_id,)
+            ).fetchone()
+            if row is None:
+                raise StoreError(f"reservation does not exist: {reservation_id}")
+            if row["workspace_path"] is None:
+                raise StoreError(f"reservation has no workspace: {reservation_id}")
+            if row["workspace_status"] == "removed":
+                return _row_to_reservation(row)
+            if row["workspace_status"] not in {"isolated", "removing"}:
+                raise StoreError(f"reservation has no removable workspace: {reservation_id}")
+            conn.execute(
+                "UPDATE reservations SET workspace_status = ?, "
+                "workspace_removed_at = ?, workspace_removal_forced = ? WHERE id = ?",
+                (
+                    "removed",
+                    when,
+                    int(bool(forced) or bool(row["workspace_removal_forced"])),
+                    reservation_id,
+                ),
+            )
+            updated = conn.execute(
+                "SELECT * FROM reservations WHERE id = ?", (reservation_id,)
+            ).fetchone()
+        if updated is None:  # pragma: no cover - protected by the transaction
+            raise StoreError(f"reservation does not exist: {reservation_id}")
+        return _row_to_reservation(updated)
+
     def get_attempt(self, attempt_id: int) -> Optional[Attempt]:
         """Read one attempt by its database identifier."""
         with self._connect() as conn:
@@ -1018,10 +1505,16 @@ class JobStore:
             attempt_rows = conn.execute(
                 "SELECT * FROM attempts WHERE run_id = ? ORDER BY id", (run_id,)
             ).fetchall()
+            reservation_rows = conn.execute(
+                "SELECT * FROM reservations WHERE run_id = ? ORDER BY id", (run_id,)
+            ).fetchall()
             run = self._run_record(run_row, job_rows)
             jobs = tuple(_row_to_job(row) for row in job_rows)
             attempts = tuple(_row_to_attempt(row) for row in attempt_rows)
-        return RunSnapshot(run=run, jobs=jobs, attempts=attempts)
+            reservations = tuple(_row_to_reservation(row) for row in reservation_rows)
+        return RunSnapshot(
+            run=run, jobs=jobs, attempts=attempts, reservations=reservations
+        )
 
 __all__ = [
     "DEFAULT_BUSY_TIMEOUT_MS",
@@ -1031,5 +1524,6 @@ __all__ = [
     "UnknownJobError",
     "DuplicateJobError",
     "TerminalStateError",
+    "AttemptReservation",
     "JobStore",
 ]
