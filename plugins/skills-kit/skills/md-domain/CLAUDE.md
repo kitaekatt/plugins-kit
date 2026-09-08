@@ -755,9 +755,9 @@ claude_md:
         or one network, and PC-4 inlines the SA-1 style asset for the same reason
         rather than linking it.
 
-        This is why the size and staleness signals are INFO while every
-        portability breach is FAIL in `scripts/human_html_check.py`. A long or
-        stale page is still a working page; a page that reaches for the network
+        This is why a stale page is INFO while an over-ceiling page and every
+        portability breach are FAIL in `scripts/human_html_check.py`. A stale
+        page is still a working page; a page that reaches for the network
         is a blank one somewhere, and the failure leaves no trace in the file.
       origin: |
         The human-html standards doc rules NF-1 and PC-6, ratified 2026-09-04,

@@ -107,11 +107,11 @@ only accepted coverage input for human generation.
 registry integrity check enforces must recognize the added lanes: the scalar axis (`artifact`
 OR `subject`, never both), path resolution for every bound reference, the
 three-phrasing minimum, a nonempty change driver, the producing-provenance
-check, and the markdown table row for each new dispatch entry (`generate x
+check, and the markdown table row for each human-html dispatch entry (`generate x
 human-html`, and an `analyze` row whose `table_key` names the non-artifact
 lane).
 - **Rationale:** The registry integrity check must recognize the added lanes without weakening the invariants that made a list-valued subject invalid.
-- **Test:** The registry-integrity test passes with both new records and fails
+- **Test:** The registry-integrity test passes with both human-html lane records and fails
 for a missing path, missing phrase, empty driver, or mixed axis.
 
 ## 2. Human coverage criteria
@@ -129,7 +129,7 @@ Project guidance is evidence, not the source model. The analysis applies HC crit
 
 **Territory overturns an argued decision, not an oversight.** The earlier
 subject was one directory and its whole source subtree, and
-`references/lanes/coverage-lane.md` defended it explicitly as the one place this
+an earlier revision of `references/lanes/coverage-lane.md` defended it explicitly as the one place this
 artifact inverts the code lane's directory-only rule: "what is this directory
 for" is a question about everything underneath it, so the material had to be the
 subtree. That reasoning is sound and territory keeps it -- the subject is still a
@@ -163,7 +163,7 @@ the territory:
 
 Record a reason for each question that does not apply. If all applicable
 answers exist, choose `none`. If an answer is materially absent or fragmented,
-apply HC-2. Choose `page` only when HC-2 admits at least one unit. A `none`
+apply HC-2. Choose `page` only when HC-2 admits at least one gap. A `none`
 decision is a normal result.
 - **Rationale:** A repeatable browsing exercise makes page warrant observable. Intuition alone was rejected because it cannot distinguish a useful page from decoration. The exercise is bounded at the ownership edge so a page and its descendant page never answer the same question over the same files; an unbounded browse was rejected because the deepest material would then re-warrant a page at every level above it. The bound is why placement runs deepest first: the descendant decisions that draw the edge must already exist.
 - **Test:** The analysis report names the territory it judged -- the owned
@@ -173,15 +173,15 @@ inapplicable reason, the HC-2 result, and the final `page` or `none` decision.
 ### HC-2. Orientation-first admission
 
 - **Level:** REQUIRED
-- **Rule:** Admit a content unit only when it answers one HC-1 question and
-reduces reacquisition work. It must state why the fact matters and cite
-repository evidence. Give priority to purpose and boundaries, structural reasons,
-non-obvious hazards, and concrete entry points. Exclude file inventories,
-source paraphrases, facts already clear in plain browsing, unsupported
-inference, and duplicated project guidance.
+- **Rule:** Admit an HC-1 gap for placement only when the missing orientation
+causes reacquisition work. The admission establishes page warrant. It does not
+specify page content or produce a content-unit payload. Exclude gaps whose only
+possible answer is a file inventory, source paraphrase, unsupported inference,
+or duplicated project guidance.
 - **Rationale:** Orientation earns page space. A source tour was rejected because the host viewer already exposes files.
-- **Test:** For every admitted unit, the report gives `question`, `claim`,
-`why`, `evidence`, and `plain_browsing_gap`. An omitted field rejects the unit.
+- **Test:** The report names each qualifying HC-1 question and states why the
+gap causes reacquisition work. It emits no claim, evidence, or proposed page
+content.
 
 ### HC-3. Reader order
 
@@ -189,8 +189,9 @@ inference, and duplicated project guidance.
 - **Rule:** Write first for an owner returning after context loss. Add only the
 extra context that a newcomer needs to use the same orientation path.
 - **Rationale:** The returning owner defines the durable reading task. A newcomer-only tutorial was rejected because it obscures reacquisition cues.
-- **Test:** Each admitted unit helps the returning owner, or adds a necessary
-definition beside a unit that does.
+- **Test:** The qualifying HC-1 gap and the identity line are stated for an owner
+  returning after context loss, and any added context is only what a newcomer
+  needs to follow the same orientation path.
 
 ### HC-4. Repository research
 
@@ -278,12 +279,15 @@ the host viewer.
 ### DR-4. Instructions survive regeneration
 
 - **Level:** REQUIRED
-- **Rule:** The generator rewrites every record field except `instructions`.
-A human or an agent edits `instructions` directly, and every regeneration
-reads it as input and writes it back unchanged.
+- **Rule:** Placement preserves `instructions` byte-for-byte whenever it writes
+the record. A human or an agent edits `instructions` directly. Generation reads
+the record as input and may write only the `references` field, because it alone
+knows which reference pages it emitted; placement does not write `references`.
 - **Rationale:** The record mixes generated fields with the one human-managed field. Clobbering it was rejected because instructions are the only steering channel for a page nobody hand-edits.
-- **Test:** Regenerating a directory whose record carries nonempty
-`instructions` leaves that field byte-identical.
+- **Test:** Reanalyzing a directory whose record carries nonempty
+`instructions` leaves that field byte-identical. Regeneration leaves every
+record field unchanged except `references`, which matches the reference pages
+it emitted.
 
 ## 4. Page contract
 
@@ -464,11 +468,12 @@ package resource, and every page contains those exact bytes.
 ### SZ-1. Hard visible-word ceiling
 
 - **Level:** REQUIRED
-- **Rule:** Report the visible-word count for every page. The ceiling is 900
-visible words for every main page and every reference page. It does not vary
-with territory size, with depth, or between the repository root and any other
-page, and a record's `instructions` does not raise it. Parse HTML text and
-exclude `script`, `style`, `template`, and every subtree marked
+- **Rule:** Report the visible-word count for every page. The default ceiling is
+900 visible words for every main page and every reference page. Configure the
+flat ceiling with the positive integer `thresholds.human_html_max_words`. This
+ceiling does not vary with territory size, with depth, or between the repository
+root and any other page. A record's `instructions` does not raise it. Parse HTML
+text and exclude `script`, `style`, `template`, and every subtree marked
 `data-human-html-chrome`. Count tokens that match
 `[A-Za-z0-9]+(?:[-'][A-Za-z0-9]+)*`.
 - **Rationale:** This rule REVERSES the position it replaces -- that size is a

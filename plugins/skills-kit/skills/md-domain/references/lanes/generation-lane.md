@@ -758,8 +758,10 @@ whole from a settled record plus a machine-produced territory brief.
 
 So a regeneration REPLACES the generated output outright -- rewrite `human.html`,
 rewrite or delete each reference to match the record, and delete a page whose
-decision became `none`. The settled decision record is read-only input and stays
-untouched. Read its `instructions` before writing. Nothing in the generated HTML
+decision became `none`. The settled decision record is input, not output: the
+`decision`, `source_sha` and `identity` placement wrote stay untouched, and
+`references` is the one field generation may write, because it alone knows which
+reference pages it emitted (DR-4). Read its `instructions` before writing. Nothing in the generated HTML
 survives: a hand edit to a generated page is overwritten. Steering a page is
 what `instructions` is FOR.
 

@@ -79,11 +79,11 @@ EXPECTED_LANES = {
         "table_key": "analyze (one directory)",
     },
     "coverage_human_html_directory": {
-        # The second analyze subject. Its unit is also one directory, but the
-        # material it reads is that directory's whole SUBTREE, and its question
+        # The second analyze subject. Its scalar axis stays one directory, but
+        # discovery supplies that directory's computed TERRITORY. Its question
         # is page warrant rather than ambient-guidance coverage. The selector is
-        # explicit in the table key because the two analyze lanes are told apart
-        # by the `human-html` token, never by inspecting the directory.
+        # explicit because the two analyze lanes are told apart by the
+        # `human-html` token, never by inspecting the directory.
         "verb": "analyze",
         "subject": "human_html_directory",
         "table_key": "analyze human-html (one directory)",
@@ -215,6 +215,29 @@ class TestDispatchTable:
             "generate must take exactly the artifacts an analyze lane feeds -- nothing "
             f"analyzes a codebase and emits skill or project-doc coverage; got {sorted(arts)}"
         )
+
+    def test_human_html_lane_records_match_the_landed_two_pass_shape(self):
+        placement = next(
+            record
+            for record in LANE_RECORDS
+            if record["id"] == "coverage_human_html_directory"
+        )
+        generation = next(
+            record for record in LANE_RECORDS if record["id"] == "generate_human_html"
+        )
+
+        assert placement["subject"] == "human_html_directory"
+        assert "artifact" not in placement
+        assert placement["report_only"] is True
+        assert len(placement["invocation_phrasings"]) >= 3
+        assert placement["change_driver"].strip()
+
+        assert generation["artifact"] == "human-html"
+        assert "subject" not in generation
+        assert generation["input_provenance"] == "coverage"
+        assert generation["regeneration"] == "replace-generated"
+        assert len(generation["invocation_phrasings"]) >= 3
+        assert generation["change_driver"].strip()
 
     def test_every_lane_declares_exactly_one_subject_axis(self):
         """A lane is keyed by `artifact` OR `subject`, never both and never neither.

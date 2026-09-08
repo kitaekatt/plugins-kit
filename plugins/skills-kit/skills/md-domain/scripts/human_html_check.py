@@ -9,7 +9,7 @@ Usage:
 Judges what a generation run produced against `human-html-standards.md`: the
 decision record (DR-1, DR-2), the page identity, navigation, announce snippet
 and inline style (PC-1 to PC-4), the portability prohibitions (PC-6, NF-1), the
-reference contract (RD-1, RD-2), and the size signal (SZ-1).
+reference contract (RD-1, RD-2), and the hard visible-word ceiling (SZ-1).
 
 TWO LEVELS, AND THE SPLIT IS THE POINT.
 
@@ -18,10 +18,9 @@ TWO LEVELS, AND THE SPLIT IS THE POINT.
     least one FAIL exits nonzero.
   * `INFO` is a signal for a human to act on: `STALE` (the recorded source stamp
     is not the one DR-2 recomputes, including stale-child propagation under
-    TS-2), `DIRTY` (the record itself says no commit identifies the judged
-    content), and a visible-word count above its SZ-1 budget. None of these
-    makes the exit status nonzero, because each is resolved by rerunning the
-    lane or by editing prose, not by fixing a defect in the output.
+    TS-2 and placement drift under TS-3) or `DIRTY` (the record itself says no
+    commit identifies the judged content). Neither makes the exit status
+    nonzero. A visible-word count above the SZ-1 ceiling is a `FAIL`.
 
 WHAT IS CHECKED. A directory is checked when it carries a decision record, or
 when generated output sits in it, or when the caller names it explicitly. A
@@ -35,11 +34,11 @@ reach. A directory holding no analysis input is not a discovery subject, so a
 that silently passes over a generated page is the one outcome this script exists
 to prevent. `orphaned_output` sweeps for exactly those files and FAILs them.
 
-Imports: the Python standard library, `skills_kit_lib.human_html`, and the
-sibling `discover_human_html.py` (CK-1, CK-2). The sibling is itself
-stdlib-plus-package-only, so the no-provisioning property holds transitively --
-and sharing its walk is what stops the checker from disagreeing with the
-generator about navigation targets or ordering.
+Imports: the Python standard library, `skills_kit_lib.human_html`, the existing
+standards resolver for the SZ-1 threshold, and the sibling
+`discover_human_html.py` (CK-1, CK-2). The package modules degrade without
+PyYAML, so the no-provisioning property holds. Sharing the discovery walk stops
+the checker from disagreeing with the generator about navigation or ordering.
 
 One prohibition in PC-6 is deliberately NOT machine-checked: hand-written HTML
 content. Authorship is not observable in the bytes. It is held instead by the
@@ -63,6 +62,8 @@ if str(_SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS_DIR))
 
 from skills_kit_lib import human_html as hh  # noqa: E402
+from skills_kit_lib import standards_resolve  # noqa: E402
+from skills_kit_lib.audit import THRESHOLDS  # noqa: E402
 
 import discover_human_html as discover  # noqa: E402
 
@@ -70,13 +71,12 @@ import discover_human_html as discover  # noqa: E402
 FAIL = "FAIL"
 INFO = "INFO"
 
-# SZ-1 budgets: six minutes at the repository root, three minutes elsewhere, at
-# 200 visible words per minute.
-ROOT_WORD_BUDGET = 1200
-WORD_BUDGET = 600
+# SZ-1 is one flat hard ceiling. The shipped default is overlaid by the same
+# layered `thresholds:` configuration that the other skills-kit limits use.
+# A record's `instructions` cannot override this ceiling.
+WORD_CEILING_KEY = "human_html_max_words"
+DEFAULT_WORD_CEILING = THRESHOLDS[WORD_CEILING_KEY]
 _WORD_RE = re.compile(r"[A-Za-z0-9]+(?:[-'][A-Za-z0-9]+)*")
-# SZ-1 lets a record's `instructions` override its page budget.
-_BUDGET_OVERRIDE_RE = re.compile(r"\bbudget\s*[:=]\s*(\d{2,5})\b", re.IGNORECASE)
 
 # PC-6 / NF-1 prohibited forms.
 _SCHEME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*:")
@@ -448,6 +448,8 @@ def check_html_file(
     kind: str,
     slug: str | None,
     expected_nav: list[tuple[str, str, str]],
+    word_ceiling: int,
+    placement_fresh: bool,
     add,
 ) -> None:
     """Check one generated file against PC-1 to PC-4, PC-6, NF-1, RD-2 and SZ-1."""
@@ -539,6 +541,11 @@ def check_html_file(
             add(FAIL, "navigation-mismatch", directory,
                 "navigation links %s do not match the computed spine %s"
                 % (sorted(found), sorted(wanted)), rel)
+            if kind == hh.KIND_PAGE and placement_fresh:
+                add(INFO, "STALE", directory,
+                    "computed navigation changed while the territory source_sha "
+                    "stayed fresh; placement drift invalidates this page under TS-3",
+                    rel)
         if (
             page.nav_lists != 1
             or page.nav_list_items != len(page.nav_items)
@@ -568,24 +575,18 @@ def check_html_file(
     check_urls(repo_root, file_path, page, directory, add)
     check_scripts(page, directory, rel, add)
 
-    # SZ-1 size signal.
-    budget = ROOT_WORD_BUDGET if (
-        kind == hh.KIND_PAGE and directory == hh.ROOT_DIRECTORY
-    ) else WORD_BUDGET
-    override = _BUDGET_OVERRIDE_RE.search(record.instructions or "")
-    if override:
-        budget = int(override.group(1))
-    if page.visible_words > budget:
-        add(INFO, "size", directory,
-            "%d visible words exceeds the %d-word budget (SZ-1)"
-            % (page.visible_words, budget), rel)
+    # SZ-1 hard ceiling. It is flat across kind, territory size, and depth.
+    if page.visible_words > word_ceiling:
+        add(FAIL, "size", directory,
+            "%d visible words exceeds the %d-word ceiling (SZ-1)"
+            % (page.visible_words, word_ceiling), rel)
 
 
 # ---------------------------------------------------------------------------
 # One directory
 # ---------------------------------------------------------------------------
 
-def check_directory(repo_root: Path, entry: dict, add) -> None:
+def check_directory(repo_root: Path, entry: dict, word_ceiling: int, add) -> None:
     """Check one discovered directory: its record, then every generated file."""
     directory = entry["directory"]
     status = entry["record"]["status"]
@@ -648,7 +649,16 @@ def check_directory(repo_root: Path, entry: dict, add) -> None:
 
     page_path = repo_root / _rel(directory, page_file)
     check_html_file(
-        repo_root, directory, record, page_path, hh.KIND_PAGE, None, expected_nav, add,
+        repo_root,
+        directory,
+        record,
+        page_path,
+        hh.KIND_PAGE,
+        None,
+        expected_nav,
+        word_ceiling,
+        not entry["stale"],
+        add,
     )
 
     page_text = page_path.read_text(encoding="utf-8", errors="replace")
@@ -664,6 +674,8 @@ def check_directory(repo_root: Path, entry: dict, add) -> None:
             hh.KIND_REFERENCE,
             reference.slug,
             [(hh.PAGE_FILENAME, hh.navigation_label(directory), record.identity)],
+            word_ceiling,
+            False,
             add,
         )
 
@@ -709,6 +721,9 @@ def check(repo_root: str | Path, directory: str | Path = hh.ROOT_DIRECTORY) -> d
     """Run every CK-1 check and return the machine-readable result."""
     root_path = Path(repo_root).resolve()
     scope = hh.normalize_directory(directory)
+    resolved = standards_resolve.resolve(root_path)
+    effective_thresholds = {**THRESHOLDS, **resolved.thresholds}
+    word_ceiling = effective_thresholds[WORD_CEILING_KEY]
     result = discover.scan(root_path, scope)
 
     findings: list[Finding] = []
@@ -728,7 +743,7 @@ def check(repo_root: str | Path, directory: str | Path = hh.ROOT_DIRECTORY) -> d
         if not subject:
             continue
         checked.append(entry["directory"])
-        check_directory(root_path, entry, add)
+        check_directory(root_path, entry, word_ceiling, add)
 
     for orphan, names in sorted(orphaned_output(root_path).items()):
         if not discover.in_scope(orphan, scope):
@@ -749,6 +764,7 @@ def check(repo_root: str | Path, directory: str | Path = hh.ROOT_DIRECTORY) -> d
     return {
         "repo_root": str(root_path),
         "scope": scope,
+        "word_ceiling": word_ceiling,
         "checked": checked,
         "findings": [f.to_dict() for f in findings],
         "fail_count": len(fails),
@@ -795,7 +811,11 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
         result = check(args.repo_root, args.directory)
-    except (discover.DiscoveryError, hh.HumanHtmlError) as exc:
+    except (
+        discover.DiscoveryError,
+        hh.HumanHtmlError,
+        standards_resolve.StandardsConfigError,
+    ) as exc:
         print("human_html_check: %s" % exc, file=sys.stderr)
         return 2
     print(json.dumps(result, indent=2, ensure_ascii=True) if args.json else render(result))
