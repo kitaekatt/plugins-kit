@@ -313,3 +313,25 @@ class TestConfigSkipsFileIONotRegistryLookup:
         # this test doing anything host-dependent itself.
         with pytest.raises(EndpointResolveError, match="unknown endpoint 'nope'"):
             resolve_endpoint("nope", config=DEFAULT_MODEL_CONFIG)
+
+
+def test_resolve_model_accepts_a_registered_slug_without_a_slash():
+    """A registry entry's SERVED id (no '/') resolves when passed as the name,
+    because callers that hold the served id -- job-kit, the front door group --
+    pass it rather than the alias."""
+    from llm_scripting_kit.models import resolve_model
+
+    config = {
+        "default_endpoint": "local",
+        "endpoints": {
+            "local": {
+                "name": "local",
+                "base_url": "http://127.0.0.1:1/v1",
+                "key_env": None,
+                "models": {"local": {"slug": "qwen3.8"}},
+                "default": "local",
+            }
+        },
+    }
+    assert resolve_model("qwen3.8", config=config, endpoint="local") == "qwen3.8"
+    assert resolve_model("local", config=config, endpoint="local") == "qwen3.8"

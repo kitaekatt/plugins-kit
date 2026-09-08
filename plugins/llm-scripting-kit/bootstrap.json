@@ -5,8 +5,8 @@
   ],
   "shared_lib_imports": ["bootstrap_lib"],
   "venv": {
-    "extras": ["sdk"],
-    "check_imports": ["openai", "yaml"]
+    "extras": ["sdk", "frontdoor"],
+    "check_imports": ["openai", "yaml", "fastapi", "uvicorn", "httpx"]
   },
   "config": {
     "file": "config.yaml",

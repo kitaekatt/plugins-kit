@@ -218,10 +218,19 @@ def _parser() -> argparse.ArgumentParser:
         "request-schema",
         help="Print the accepted `complete --request-file` request shape.",
     )
+    # Listed for --help only: main() hands `frontdoor ...` straight to the
+    # front door's own parser, because argparse.REMAINDER on a subparser's sole
+    # positional drops a leading option (`frontdoor --check` would not parse).
+    sub.add_parser("frontdoor", help="Run the OpenAI-compatible fill-first front door.", add_help=False)
     return parser
 
 
 def main(argv: Optional[list[str]] = None) -> int:
+    raw = list(sys.argv[1:] if argv is None else argv)
+    if raw and raw[0] == "frontdoor":
+        from .frontdoor import main as frontdoor_main  # noqa: PLC0415
+
+        return frontdoor_main(raw[1:])
     args = _parser().parse_args(argv)
     try:
         if args.cmd == "status":

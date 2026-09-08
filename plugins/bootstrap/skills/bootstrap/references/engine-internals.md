@@ -614,9 +614,19 @@ declare a short `label`. Nothing breaks without one -- the `name` fallback is
 short by construction -- but the label is the friendlier name the user reads.
 
 **5. Never put absolute paths or shell command strings in display text.** Keep
-the complete entry in `bootstrap.log`. Add an authored `display=` label so
-`numbered()` applies `ITEM_MAX` to the display item. If the detail is separate
-from a displayed summary, route the detail through `quiet_entries`.
+the complete entry in `bootstrap.log`. Add an authored `display=` label via
+`_append_detail`; `numbered()` uses that label in place of the entry text. If
+the detail is separate from a displayed summary, route the detail through
+`quiet_entries`.
+
+An authored label wins UNCONDITIONALLY, not only when the entry text overflows
+`ITEM_MAX`. `display=` is the author stating what the user reads, so honouring
+it on a width test alone made the display depend on whether the part being
+omitted happened to be short -- a 35-character entry
+(`project config: updated /tmp/x.yaml`) kept its path under a rule that forbids
+exactly that. Width still governs an entry with NO authored label: over-length
+text falls back to a whole clause derived at a separator, and is never cut
+mid-word. `tests/bootstrap/test_display_no_paths.py` enforces both halves.
 
 The venv handler applies this rule to `uv sync --project <absolute path>` and
 stale editable-install diagnostics. It logs those details as `quiet` and
@@ -747,9 +757,16 @@ in a display section. Use `quiet` only when another displayed entry in the same
 pass summarizes the outcome.
 
 The sanctioned uses are shared-lib events represented by the Step 4c aggregate,
-raw CLI output represented by a classified failure clause, and venv sync
-mechanics represented by a short venv action or failure. A check that uses
-`quiet` without a displayed summary is a silent bootstrap operation.
+raw CLI output represented by a classified failure clause, and dependency-sync
+mechanics represented by a short action or failure. The dependency-sync case
+covers `venv`, `project_venv`, and `project_npm` alike: each embeds a package
+manager's argv and an absolute project path, so `_process_venv_def` and
+`_process_project_npm` route those to `quiet` and display one summary
+(`created`, `re-synced`, `installed`, or `FAILED`). The project-config phase
+follows rule 5 by a different route -- its paths ride an authored `display=`
+label rather than `quiet`, because the entry has no separate detail to split
+off. A check that uses `quiet` without a displayed summary is a silent
+bootstrap operation.
 
 **The precondition exception (a phase that stands down).** A phase whose every operation depends on one unmet precondition emits a single `action` entry and returns, adding **no** fix-all failures — an exception to the "detect → fail → add to fix-all failures" rule above, and the second and last sanctioned deviation from this contract. There are two sanctioned instances, both in the marketplace/plugin phases:
 
