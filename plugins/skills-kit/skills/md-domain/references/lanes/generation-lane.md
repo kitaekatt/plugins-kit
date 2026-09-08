@@ -637,7 +637,8 @@ all of it from the package:
 <script>                                      PC-3: the exact hh.announce_script(...) text
 ```
 
-**Navigation is MACHINE-COMPUTED, never composed by hand (PC-2).** Use the `up`
+**The human-page cards are MACHINE-COMPUTED, never composed by hand (PC-2).**
+Use the `up`
 and `down` targets in the brief. They come from `hh.navigation_targets` over the
 settled records. Traversal passes through `none` directories and stops each
 branch at its first page, so a `none` directory is never a link target and a page
@@ -649,6 +650,14 @@ link contains a `span.hh-nav-label` and a `span.hh-nav-identity`. Get the short
 label from `hh.navigation_label(target)`. Use the target record's complete
 identity for the second span. Do not reduce the navigation to adjacent identity
 links.
+
+**The same region also carries the OTHER cards, after the human-page ones.**
+PC-2 admits a second card kind for anything else a reader is likely to want next
+-- the agent-facing `CLAUDE.md`, a neighbouring directory with no page of its
+own. You choose that set; it uses the same markup and the same two text levels,
+and its href is a relative repository path. Every human-page card comes first,
+and SA-1 marks a human-page card by its href alone, so add no icon element,
+class, or attribute yourself.
 
 **Outside that chrome the body is evidence-shaped (PC-5).** Apply
 `../human-html-presentation.md`. The page is an ORIENTATION and NAVIGATION
@@ -676,8 +685,12 @@ content jobs that the territory supports, in this order:
 4. **Contents** -- grouped by ROLE, not alphabetically and not by file type. Each
    entry: the path, and one line saying what it is and when you would open it.
    Groups get a heading that names the job they do.
-5. **Next door** -- the directories a reader is likely to want next, and what is
-   in each. This is where child pages and the agent-facing `CLAUDE.md` go.
+
+There is NO fifth section. A "Next door" section was RETIRED on 2026-09-08
+because it repeated the navigation cards almost word for word. Everything a
+reader is likely to want next -- a child page, a neighbouring directory with no
+page of its own, the agent-facing `CLAUDE.md` -- is a CARD under PC-2, and a
+link to another `human.html` appears NOWHERE ELSE on the page.
 
 Apply the flat job-named section contract in PC-7 without an added trigger or
 exception.
@@ -693,8 +706,8 @@ plausible-sounding workflow. If the territory has no real sequences -- static
 data, for instance -- OMIT THE SECTION rather than manufacturing routes.
 
 **Do not add an Edges section.** A boundary still earns a LINE inside another
-section where it changes WHERE the reader navigates -- most naturally in Next
-door -- but never a section of its own. A caveat is allowed ONLY where it changes
+section where it changes WHERE the reader navigates -- most naturally beside the
+card that routes there -- but never a section of its own. A caveat is allowed ONLY where it changes
 WHERE the reader navigates. Never as a standalone finding, never as its own
 section.
 

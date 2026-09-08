@@ -3,8 +3,10 @@
 
 Bootstrap runs in background mode: the engine (or, on the pre-Python paths, the
 SessionStart shell hook) writes its verdict to ``bootstrap_display.pending``,
-and the UserPromptSubmit hook emits that file as its own stdout on the next
-prompt -- in WHATEVER session gets there first.
+and the UserPromptSubmit hook emits one pending file as its own stdout on the
+next prompt -- in WHATEVER session gets there first. A wrapper import failure
+uses ``bootstrap_display.wrapper_import.pending`` when the primary channel is
+occupied, and the sidecar waits behind the primary channel.
 
 Those two moments are not the same moment, and nothing in the payload said so.
 A pending file survives until some session's first prompt consumes it, so a
@@ -44,6 +46,8 @@ import time
 import uuid
 
 PENDING_NAME = "bootstrap_display.pending"
+WRAPPER_IMPORT_PENDING_NAME = "bootstrap_display.wrapper_import.pending"
+PENDING_NAMES = (PENDING_NAME, WRAPPER_IMPORT_PENDING_NAME)
 DISPLAYED_NAME = "bootstrap_display.displayed"
 
 # Rendering granularity only -- how a duration is spelled, not a verdict about
@@ -159,49 +163,53 @@ def _release_claim(claimed, pending):
 
 
 def relay(data_dir, now=None):
-    """Emit the pending display file with an age stamp, then consume it.
+    """Emit one pending display file with an age stamp, then consume it.
 
+    The primary channel is always claimed before the wrapper-import sidecar.
     Returns the exit status described in the module docstring.
     """
-    pending = os.path.join(data_dir, PENDING_NAME)
-    claimed = os.path.join(
-        data_dir, f".{PENDING_NAME}.{os.getpid()}.{uuid.uuid4().hex}")
-    try:
-        # Claim first. Only the relay that wins this atomic rename may emit the
-        # message; a producer can safely replace PENDING_NAME after this point.
-        os.replace(pending, claimed)
-    except OSError:
-        return 1
+    for pending_name in PENDING_NAMES:
+        pending = os.path.join(data_dir, pending_name)
+        claimed = os.path.join(
+            data_dir, f".{pending_name}.{os.getpid()}.{uuid.uuid4().hex}")
+        try:
+            # Claim first. Only the relay that wins this atomic rename may emit
+            # the message; a producer can safely write either pending channel
+            # after this point.
+            os.replace(pending, claimed)
+        except OSError:
+            continue
 
-    try:
-        produced_at = os.path.getmtime(claimed)
-        with open(claimed, "r", encoding="utf-8", errors="replace") as fh:
-            payload = json.load(fh)
-    except (OSError, ValueError):
-        _release_claim(claimed, pending)
-        return 1
-    if not isinstance(payload, dict):
-        _release_claim(claimed, pending)
-        return 1
+        try:
+            produced_at = os.path.getmtime(claimed)
+            with open(claimed, "r", encoding="utf-8", errors="replace") as fh:
+                payload = json.load(fh)
+        except (OSError, ValueError):
+            _release_claim(claimed, pending)
+            return 1
+        if not isinstance(payload, dict):
+            _release_claim(claimed, pending)
+            return 1
 
-    if now is None:
-        now = time.time()
-    seconds = int(now - produced_at)
-    try:
-        text = json.dumps(annotate(payload, seconds, produced_at))
-    except (TypeError, ValueError):
-        _release_claim(claimed, pending)
-        return 1
+        if now is None:
+            now = time.time()
+        seconds = int(now - produced_at)
+        try:
+            text = json.dumps(annotate(payload, seconds, produced_at))
+        except (TypeError, ValueError):
+            _release_claim(claimed, pending)
+            return 1
 
-    # The claim above made the message ours. Emit it, then delete the claim;
-    # anything produced after the claim remains at PENDING_NAME.
-    sys.stdout.write(text)
-    sys.stdout.flush()
-    try:
-        os.remove(claimed)
-    except OSError:
-        pass
-    return 0
+        # The claim above made the message ours. Emit it, then delete the claim;
+        # anything produced after the claim remains at its pending channel.
+        sys.stdout.write(text)
+        sys.stdout.flush()
+        try:
+            os.remove(claimed)
+        except OSError:
+            pass
+        return 0
+    return 1
 
 
 def main(argv=None):

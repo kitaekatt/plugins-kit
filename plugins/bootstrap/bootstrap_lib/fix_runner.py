@@ -3,9 +3,7 @@
 Bootstrap runs as a NON-INTERACTIVE Claude Code SessionStart hook. That single
 fact is the root constraint behind this module: the hook has no TTY and must
 never prompt for a sudo password, trigger a UAC dialog, or block on any dialog
-at all. Elevation is the first thing that ran into that wall, but it is not the
-only one -- gathering a secret hits the identical wall for a different reason.
-Both need the same thing: a console with the user's attention.
+at all. Elevation needs a console with the user's attention.
 
 So the engine DEFERS such operations (recording an ``elevation`` descriptor on
 the failure), serializes them into ``<data_dir>/elevate/queue.json``, and this
@@ -33,12 +31,11 @@ longer spliced).
 Privilege model (per-task, not per-script)
 ------------------------------------------
 The old script ran wholesale under ``sudo``, which is more privilege than most
-tasks need and actively harmful for one: a secret written under sudo lands
-root-owned in the user's home, so every later unelevated write fails. Here:
+tasks need. Here:
 
   * **Unix**: the runner runs AS THE USER and wraps only ``elevated`` tasks in
-    ``sudo``. Unelevated tasks -- notably secret prompts and their writes --
-    stay the user's, so the files they create are the user's too.
+    ``sudo``. Unelevated tasks stay the user's, so the files they create are
+    the user's too.
   * **Windows**: the engine launches the whole runner elevated (one UAC hop).
     That is safe in a way the Unix case is not: UAC preserves the user profile,
     so ``HOME`` and file ownership are unchanged. ``elevated`` is therefore
@@ -70,7 +67,6 @@ must not rely on package-relative imports -- the same trap that made the harvest
 silently no-op in 0.22.0.
 """
 
-import getpass
 import json
 import os
 import shutil
@@ -94,7 +90,7 @@ QUEUE_VERSION = 1
 # Kinds the runner knows how to execute. A queue naming anything else is a
 # version skew (a newer engine wrote it) -- fail loudly rather than skip
 # silently, since a skipped elevated task looks like success to the re-check.
-KNOWN_KINDS = frozenset({"command", "apt", "brew_installer", "secret", "path_prune"})
+KNOWN_KINDS = frozenset({"command", "apt", "brew_installer", "path_prune"})
 
 # How long a task is expected to take, as declared by the engine (see
 # fix_queue.COST_*). The runner uses it for one thing only: telling the user
@@ -476,31 +472,6 @@ class Runner:
         return _run([self.bash, "-c", HOMEBREW_INSTALLER], "install Homebrew",
                     env=self.env)
 
-    def run_secret(self, task):
-        """Prompt for a secret and write it to a file, owned by the user.
-
-        The value is read with echo off and written 0600. It deliberately never
-        passes through the engine, the hook output, or the Claude transcript --
-        the console is the only place it exists. This is why the task must NOT
-        be elevated on Unix: a root-owned secret file breaks every later
-        unelevated write.
-        """
-        target = os.path.expanduser(task["target"])
-        value = getpass.getpass(f"  {task.get('prompt') or task['label']}: ")
-        if not value:
-            print("  ! empty value, skipped")
-            return False
-        parent = os.path.dirname(target)
-        if parent:
-            os.makedirs(parent, exist_ok=True)
-        # Create with 0600 from the outset rather than chmod-after-write, which
-        # would leave the secret world-readable for the width of the write.
-        fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        with os.fdopen(fd, "w") as fh:
-            fh.write(value)
-        print(f"  wrote {target}")
-        return True
-
     def run_path_prune(self, task):
         """Remove named entries from the Windows User PATH.
 
@@ -609,8 +580,6 @@ class Runner:
             return self.run_apt(task)
         if kind == "brew_installer":
             return self.run_brew_installer(task)
-        if kind == "secret":
-            return self.run_secret(task)
         raise ValueError(f"unknown task kind {kind!r}")
 
 
@@ -640,8 +609,6 @@ def validate(queue):
             problems.append(f"task {i}: missing label")
         if kind == "command" and not task.get("command"):
             problems.append(f"task {i}: command task has no command")
-        if kind == "secret" and not task.get("target"):
-            problems.append(f"task {i}: secret task has no target")
         if kind == "path_prune":
             entries = task.get("entries")
             # An empty/missing list is a version skew or a writer bug, not a
@@ -831,7 +798,7 @@ def main(argv=None):
     path = argv[0]
     # Tee everything the runner (and, via _run's pump, its children) prints
     # into a transcript beside the queue, so the window's content survives the
-    # window. stdin/getpass are untouched -- secrets never reach the log.
+    # window.
     transcript = _open_transcript(path)
     saved_stdout, saved_stderr = sys.stdout, sys.stderr
     if transcript is not None:

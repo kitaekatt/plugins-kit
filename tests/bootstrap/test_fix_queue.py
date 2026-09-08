@@ -608,7 +608,7 @@ class TestFixQueueFailure:
 
 class TestLaunchFixRunner:
     def test_unix_never_launches(self, monkeypatch):
-        """No TTY in the fix-all subprocess -- a sudo/secret prompt could not be
+        """No TTY in the fix-all subprocess -- a sudo prompt could not be
         answered, so the honest move is not to try."""
         monkeypatch.setattr(fq.subprocess, "run",
                             lambda *a, **k: pytest.fail("must not launch on unix"))

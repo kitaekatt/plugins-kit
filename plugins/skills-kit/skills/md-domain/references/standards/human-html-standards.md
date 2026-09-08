@@ -294,21 +294,49 @@ Include `<!doctype html>`, `<html lang="en">`, UTF-8 `charset`, a responsive
 - **Test:** The marker values match the decision record and the generated file's
 directory.
 
-### PC-2. Navigation spine
+### PC-2. Navigation cards, the page's one navigation context
 
 - **Level:** REQUIRED
-- **Rule:** Add one navigation region marked `data-human-html-chrome="nav"`.
-Link up to the nearest ancestor whose fresh record says `page`. Link down once to every nearest descendant whose fresh
-record says `page`. Traverse through `none` directories and stop a branch at its first page. Repository root has no
-up link. Put all links in one `ul`, with one link in each `li`. Each link has a
-`span.hh-nav-label` followed by a `span.hh-nav-identity`. Use `Repository root`
-as the root label. Otherwise use the target directory's final path segment.
-Use the target record's complete identity as the identity text. Omit the
-descendant section when no down link exists.
-- **Rationale:** Nearest-page links keep the tree navigable without exposing no-page gaps. Direct-child links were rejected because they strand skipped directories.
-- **Test:** Discovery computes the expected up and down targets. The check script
-compares that set with the navigation links, then checks the list, label, and
-identity structure.
+- **Rule:** Add one navigation region marked `data-human-html-chrome="nav"`
+holding one `ul`, with one link in each `li`. Each link is a CARD: a
+`span.hh-nav-label` followed by a `span.hh-nav-identity` saying in one line what
+is behind the card and why a reader would go there.
+
+The cards are the page's ONE navigation context. EVERY link to another
+`human.html` is a card. Such a link never appears in body prose, in a contents
+group, or in any section the generator invents.
+
+A card carries one of two kinds of destination:
+
+1. **A human page.** Link up to the nearest ancestor whose fresh record says
+   `page`, and down once to every nearest descendant whose fresh record says
+   `page`. Traverse through `none` directories and stop a branch at its first
+   page. The repository root has no up link. This set is machine-computed and
+   the generator neither adds to it nor drops from it. Use `Repository root` as
+   the root label; otherwise use the target directory's final path segment. Use
+   the target record's complete identity as the identity text.
+2. **Anything else a reader is likely to want next**, such as the agent-facing
+   `CLAUDE.md` or a neighbouring directory that has no page of its own. The
+   generator chooses this set from the admitted units. Each such card still
+   carries both text levels, and its href is a relative repository path under
+   NF-1. That one line is the whole of what a neighbouring area gets; it does
+   not also earn a section.
+
+Human-page cards come FIRST, in document order, ahead of every other card. A
+human-page card is marked with the human icon SA-1 supplies. The icon is a data
+URI inside the shared style asset, so it is never a file beside the page and
+never a URL.
+- **Rationale:** Nearest-page links keep the tree navigable without exposing
+no-page gaps. Direct-child links were rejected because they strand skipped
+directories. A separate "Next door" section was retired on 2026-09-08 because it
+repeated the cards almost word for word; folding its destinations into the cards
+leaves one place a reader looks for a destination, and the icon plus the sort
+keep the two card kinds apart without a second region.
+- **Test:** Discovery computes the expected up and down targets. CK-1 compares
+that set with the cards whose target is a `human.html`, checks the list, label,
+and identity structure of every card, fails a human-page card that follows a
+card of the other kind, fails a link to another `human.html` outside the region,
+and fails a retired "Next door" section.
 
 ### PC-3. Announce message
 
@@ -464,7 +492,8 @@ surface, border, link, link hover, and accent. It also defines the body
 font stack and the monospace font stack. It sets no maximum width on `main` or
 prose, so a page always fills its viewport. It owns a small spacing scale and
 gap-based section rhythm; the PC-2 navigation list with its label and identity
-levels; `dl` evidence; underlined links at rest and the visible focus outline;
+levels; the PC-2 human-page card icon, carried as a data URI so the page fetches
+nothing; `dl` evidence; underlined links at rest and the visible focus outline;
 the one-`h1`, `h2`-section hierarchy; bounded scrolling for code blocks and
 tables; and table styling for multi-attribute comparison. Seed it from the host
 viewer's established dark theme. Keep every concrete value in the asset. The

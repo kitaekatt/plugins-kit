@@ -7,7 +7,7 @@ Usage:
     python human_html_check.py <repository-root> [<directory>] --json
 
 Judges what a generation run produced against `human-html-standards.md`: the
-decision record (DR-1, DR-2), the page identity, navigation, announce snippet
+decision record (DR-1, DR-2), the page identity, the navigation cards, announce snippet
 and inline style (PC-1 to PC-4), the portability prohibitions (PC-6, NF-1), the
 reference contract (RD-1, RD-2), and the hard visible-word ceiling (SZ-1).
 
@@ -39,6 +39,13 @@ standards resolver for the SZ-1 threshold, and the sibling
 `discover_human_html.py` (CK-1, CK-2). The package modules degrade without
 PyYAML, so the no-provisioning property holds. Sharing the discovery walk stops
 the checker from disagreeing with the generator about navigation or ordering.
+
+THE CARDS ARE THE ONE NAVIGATION CONTEXT (PC-2). Three findings hold that, all
+`FAIL`: `human-link-outside-cards` for a link to another `human.html` anywhere
+but the navigation region, `retired-section` for the "Next door" section the
+cards replaced, and `navigation-order` for a human-page card that follows a card
+of the other kind. The human icon needs no finding of its own: SA-1 draws it
+from the href, and PC-4 already requires the asset bytes verbatim.
 
 One prohibition in PC-6 is deliberately NOT machine-checked: hand-written HTML
 content. Authorship is not observable in the bytes. It is held instead by the
@@ -111,6 +118,21 @@ CHROME_ATTR = "data-human-html-chrome"
 CHROME_NAV = "nav"
 STYLE_ATTR = "data-human-html-style"
 
+_HEADING_TAGS = ("h1", "h2", "h3", "h4", "h5", "h6")
+# The section PC-2 retired on 2026-09-08. The cards absorbed its destinations,
+# so a page that still carries it has two navigation contexts, not one.
+RETIRED_SECTION_HEADINGS = ("next door",)
+
+
+def is_human_page_link(href: str) -> bool:
+    """True when this href targets another `human.html`.
+
+    A reference page (`human.<slug>.html`) is deliberately NOT one: RD-2 links
+    a reference from the body, and PC-2 governs pages, not references.
+    """
+    target = href.strip().partition("#")[0].partition("?")[0]
+    return target == hh.PAGE_FILENAME or target.endswith("/" + hh.PAGE_FILENAME)
+
 
 @dataclass
 class Finding:
@@ -169,6 +191,8 @@ class ParsedPage:
     nav_list_items: int = 0
     nav_item_link_counts: list[int] = field(default_factory=list)
     nav_items: list[ParsedNavLink] = field(default_factory=list)
+    body_links: list = field(default_factory=list)   # a[href] outside the nav region
+    headings: list = field(default_factory=list)     # normalized heading text
     visible_words: int = 0
 
 
@@ -192,6 +216,8 @@ class _PageParser(HTMLParser):
         self._nav_item_stack: list[int] = []
         self._nav_anchor: ParsedNavLink | None = None
         self._nav_text_role: str | None = None
+        self._heading_tag: str | None = None
+        self._heading_parts: list[str] = []
         self._skip_depth = 0
         self._capture: str | None = None
         self._buffer: list[str] = []
@@ -214,8 +240,15 @@ class _PageParser(HTMLParser):
         for attr in ("href", "src"):
             if attr in mapping:
                 self.page.urls.append((tag, attr, mapping[attr]))
-                if self._nav_depth and tag == "a" and carrier == attr:
-                    self.page.nav_links.append(mapping[attr])
+                if tag == "a" and carrier == attr:
+                    if self._nav_depth:
+                        self.page.nav_links.append(mapping[attr])
+                    else:
+                        self.page.body_links.append(mapping[attr])
+
+        if tag in _HEADING_TAGS and self._heading_tag is None:
+            self._heading_tag = tag
+            self._heading_parts = []
 
         if self._nav_depth and tag == "ul":
             self.page.nav_lists += 1
@@ -287,6 +320,12 @@ class _PageParser(HTMLParser):
             self._nav_item_stack.pop()
         if self._nav_depth and tag == "ul" and self._nav_list_depth:
             self._nav_list_depth -= 1
+        if tag == self._heading_tag:
+            self.page.headings.append(
+                " ".join("".join(self._heading_parts).split()).strip().lower().rstrip(".:")
+            )
+            self._heading_tag = None
+            self._heading_parts = []
         while self._open:
             open_tag = self._open.pop()
             if self._chrome_depth:
@@ -312,6 +351,8 @@ class _PageParser(HTMLParser):
         if self._capture is not None:
             self._buffer.append(data)
             return
+        if self._heading_tag is not None:
+            self._heading_parts.append(data)
         if self._nav_anchor is not None and self._nav_text_role == "label":
             self._nav_anchor.label_parts.append(data)
         elif self._nav_anchor is not None and self._nav_text_role == "identity":
@@ -547,11 +588,13 @@ def check_html_file(
             '%d regions marked `%s="%s"` found, exactly one is required'
             % (page.nav_regions, CHROME_ATTR, CHROME_NAV), rel)
     else:
-        found = [link.strip() for link in page.nav_links]
+        found = [
+            link.strip() for link in page.nav_links if is_human_page_link(link)
+        ]
         wanted = [href for href, _label, _identity in expected_nav]
         if sorted(found) != sorted(wanted):
             add(FAIL, "navigation-mismatch", directory,
-                "navigation links %s do not match the computed spine %s"
+                "human-page cards %s do not match the computed spine %s"
                 % (sorted(found), sorted(wanted)), rel)
             if kind == hh.KIND_PAGE and placement_fresh:
                 add(INFO, "STALE", directory,
@@ -572,6 +615,13 @@ def check_html_file(
         for item in page.nav_items:
             expected = expected_by_href.get(item.href.strip())
             if expected is None:
+                # A card of the other PC-2 kind. Its destination is the
+                # generator's to choose, so only the two text levels are judged
+                # here; check_urls judges the href itself under NF-1.
+                if item.label_nodes != 1 or item.identity_nodes != 1:
+                    add(FAIL, "navigation-structure", directory,
+                        "card %r must carry one `hh-nav-label` and one "
+                        "`hh-nav-identity` (PC-2)" % item.href, rel)
                 continue
             label, identity = expected
             if (
@@ -583,6 +633,26 @@ def check_html_file(
                 add(FAIL, "navigation-structure", directory,
                     "navigation link %r must contain label %r and the target identity %r"
                     % (item.href, label, identity), rel)
+
+        # PC-2 sort: every human-page card precedes every other card.
+        kinds = [is_human_page_link(item.href) for item in page.nav_items]
+        if any(kinds[index] and not all(kinds[:index]) for index in range(len(kinds))):
+            add(FAIL, "navigation-order", directory,
+                "PC-2 requires every human-page card before every other card; "
+                "found the order %s"
+                % [item.href.strip() for item in page.nav_items], rel)
+
+    # PC-2: the cards are the page's one navigation context.
+    outside = sorted({link.strip() for link in page.body_links if is_human_page_link(link)})
+    if outside:
+        add(FAIL, "human-link-outside-cards", directory,
+            "links to another human page from outside the navigation region: %s "
+            "(PC-2 puts every one of them in the cards)" % outside, rel)
+    retired = sorted(set(page.headings) & set(RETIRED_SECTION_HEADINGS))
+    if retired:
+        add(FAIL, "retired-section", directory,
+            "carries the retired %s section; PC-2 folded its destinations into "
+            "the navigation cards" % ", ".join(repr(name) for name in retired), rel)
 
     check_urls(repo_root, file_path, page, directory, add)
     check_scripts(page, directory, rel, add)
