@@ -879,8 +879,10 @@ def _main():
 
     layered_manifest, layered_parse_errors = _load_layered_manifests(args.project_dir, data_dir)
     for pe in layered_parse_errors:
-        bootstrap_action_entries.append(
-            f"layered manifest {pe['path']}: PARSE FAILED - {pe['error']}"
+        _append_detail(
+            bootstrap_action_entries,
+            f"layered manifest {pe['path']}: PARSE FAILED - {pe['error']}",
+            display="layered manifest: PARSE FAILED",
         )
         all_failures.append({
             "type": "manifest_parse",
@@ -2317,6 +2319,17 @@ def _activate_bootstrap_venv(data_dir):
                 sys.path.insert(0, sp)
 
 
+def _join_names(items):
+    """Names only, for a display line whose detail belongs in the log.
+
+    ``_join_items`` embeds each item's detail, and a tool's detail routinely
+    carries the shim path or the install command it ran (rule 5, and well past
+    ITEM_MAX once two tools install in one pass). The log line keeps the whole
+    thing; the collated line names the tools.
+    """
+    return ", ".join(name for name, _detail in items)
+
+
 def _join_items(items):
     """Format items as 'name [detail], name [detail]' or 'name, name'.
 
@@ -2854,6 +2867,7 @@ def _strategy_apt(ctx):
     ai = apt_install(pkg)
     if ai.needs_elevation:
         manual_cmd = f"sudo apt-get install -y {pkg}"
+        # rule5-exempt: the apt command IS the payload -- the user retypes it
         ctx.action_entries.append(
             f"{ctx.prefix}{ctx.name}: needs elevation - passwordless sudo "
             f"unavailable; run: {manual_cmd}"
@@ -2958,6 +2972,7 @@ def _strategy_install_command(ctx):
         # privileges ARE available (or the command is not elevated -- N2/N3) this
         # branch is skipped and the command runs directly, unchanged.
         manual_cmd = result.install_cmd
+        # rule5-exempt: the install command IS the payload -- the user retypes it
         ctx.action_entries.append(
             f"{ctx.prefix}{result.subject}: needs elevation - run: {manual_cmd}"
         )
@@ -3406,7 +3421,11 @@ def _process_self_setup(self_setup, current_os, data_dir, plugin_root, action_en
             failures.append(failure)
 
     if tools_installed:
-        action_entries.append(f"{p}tools installed: {_join_items(tools_installed)}")
+        _append_detail(
+            action_entries,
+            f"{p}tools installed: {_join_items(tools_installed)}",
+            display=f"{p}tools installed: {_join_names(tools_installed)}",
+        )
 
     # Check path entries (consolidate adds into one line)
     _process_path_entries(self_setup.get("path_entries", []), p, action_entries, ok_entries)
@@ -3433,9 +3452,11 @@ def _process_self_setup(self_setup, current_os, data_dir, plugin_root, action_en
             ok_write, write_msg, script_path = write_fix_script(good_python_dir, script_output_dir)
             if ok_write:
                 # User-visible action entry (also written into the bootstrap log)
-                action_entries.append(
+                _append_detail(
+                    action_entries,
                     f"{p}python stub: detected {stub_result.bad_python}; "
-                    f"wrote fix script to {script_path}"
+                    f"wrote fix script to {script_path}",
+                    display=f"{p}python stub: fix script written",
                 )
                 # Focused user-facing and Claude-facing messages.
                 user_msg = (
@@ -3467,9 +3488,11 @@ def _process_self_setup(self_setup, current_os, data_dir, plugin_root, action_en
                     "persist_across_sessions": True,
                 })
             else:
-                action_entries.append(
+                _append_detail(
+                    action_entries,
                     f"{p}python stub: detected {stub_result.bad_python}, "
-                    f"could not write fix script: {write_msg}"
+                    f"could not write fix script: {write_msg}",
+                    display=f"{p}python stub: fix script FAILED",
                 )
                 user_msg = (
                     "Claude needs your help! A bad python is shadowing the standalone "
@@ -3578,7 +3601,11 @@ def _process_project_venv(venv_def, project_dir, quiet_entries=None):
     target_dir, failure = _resolve_project_subdir(
         project_dir, venv_def.get("subdir"), "project_venv")
     if failure:
-        action_entries.append(f"project_venv: FAILED - {failure['message']}")
+        _append_detail(
+            action_entries,
+            f"project_venv: FAILED - {failure['message']}",
+            display="project_venv: FAILED - bad subdir",
+        )
         failures.append(failure)
         return action_entries, ok_entries, failures
 
@@ -3641,7 +3668,11 @@ def _process_project_npm(npm_def, project_dir, quiet_entries=None):
     target_dir, failure = _resolve_project_subdir(
         project_dir, npm_def.get("subdir"), "project_npm")
     if failure:
-        action_entries.append(f"project_npm: FAILED - {failure['message']}")
+        _append_detail(
+            action_entries,
+            f"project_npm: FAILED - {failure['message']}",
+            display="project_npm: FAILED - bad subdir",
+        )
         failures.append(failure)
         return action_entries, ok_entries, failures
 
@@ -3716,7 +3747,11 @@ def _process_config(config_section, plugin_data_dir, plugin_root, action_entries
     try:
         config = load_yaml_config(config_path)
     except ConfigError as exc:
-        action_entries.append(f"config: FAILED to load {config_path} - {exc}")
+        _append_detail(
+            action_entries,
+            f"config: FAILED to load {config_path} - {exc}",
+            display="config: FAILED to load",
+        )
         return []
 
     required_fields = _normalize_required_fields(config_section.get("required_fields", {}))
@@ -3751,7 +3786,11 @@ def _process_config(config_section, plugin_data_dir, plugin_root, action_entries
         try:
             current_on_disk = load_yaml_config(config_path)
         except ConfigError as exc:
-            action_entries.append(f"config: FAILED to load {config_path} - {exc}")
+            _append_detail(
+                action_entries,
+                f"config: FAILED to load {config_path} - {exc}",
+                display="config: FAILED to load",
+            )
             return []
         if config != current_on_disk:
             save_yaml_config(config_path, config)
@@ -4322,7 +4361,10 @@ def _phase_tools(ctx):
             ctx.failures.append(failure)
 
     if tools_installed:
-        ctx.action(f"tools installed: {_join_items(tools_installed)}")
+        ctx.action(
+            f"tools installed: {_join_items(tools_installed)}",
+            display=f"tools installed: {_join_names(tools_installed)}",
+        )
 
 
 def _phase_fonts(ctx):
@@ -4871,6 +4913,7 @@ def _phase_marketplaces(ctx):
                     continue
                 add_result = add_marketplace(source_url, mkt_name)
                 if add_result.passed:
+                    # rule5-exempt: a marketplace URL, not a filesystem path
                     ctx.action(f"marketplace {mkt_name}: added ({source_url})")
                 else:
                     _report_marketplace_add_failure(
@@ -4955,6 +4998,7 @@ def _phase_marketplaces(ctx):
             # Auto-add marketplace via CLI
             add_result = add_marketplace(source_url, mkt_name)
             if add_result.passed:
+                # rule5-exempt: a marketplace URL, not a filesystem path
                 ctx.action(f"marketplace {mkt_name}: added ({source_url})")
             else:
                 _report_marketplace_add_failure(
@@ -5684,6 +5728,7 @@ def _env_phase_symlinks(ctx):
                 f"symlink {name}: needs elevation - deferred; creating "
                 f"{tgt} -> {src} requires Developer Mode or admin rights "
                 f"on Windows",
+                display=f"symlink {name}: needs elevation",
                 type="env_symlink", name=name,
                 message=(
                     f"{name}: creating symlink {tgt} -> {src} requires "
@@ -5981,6 +6026,7 @@ def _env_phase_login_items(ctx):
         if not os.path.exists(app_path):
             ctx.fail(
                 f"login_item {name}: FAILED - app not found at {app_path}",
+                display=f"login_item {name}: app not found",
                 type="env_login_item", name=name,
                 message=(
                     f"{name}: app not found at {app_path}. Install the app "
@@ -6492,6 +6538,7 @@ def _process_env_pass(project_dir, current_os, data_dir, plugin_root,
     for pe in parse_errors:
         ctx.fail(
             f"manifest {pe['path']}: PARSE FAILED - {pe['error']}",
+            display="manifest: PARSE FAILED",
             type="manifest_parse",
             path=pe["path"],
             message=pe["error"],
@@ -6615,7 +6662,11 @@ def _load_plugin_config(data_dir, action_entries=None, *, project_dir=None,
     except Exception as e:
         if action_entries is not None:
             joined_paths = ", ".join(str(path) for path in config_paths)
-            action_entries.append(f"config load FAILED - {joined_paths}: {e}")
+            _append_detail(
+                action_entries,
+                f"config load FAILED - {joined_paths}: {e}",
+                display="config load FAILED",
+            )
         return {}
 
     if project_dir and marketplace and plugin_name and "plugin_data_dir" in config:

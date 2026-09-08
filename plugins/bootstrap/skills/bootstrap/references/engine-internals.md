@@ -635,6 +635,22 @@ the payload, and hiding it in the log defeats the entry. The test for the
 exception is whether the reader must retype the string; a path or command they
 only need in order to DIAGNOSE goes to the log.
 
+`tests/bootstrap/test_display_no_paths.py` enforces the rule across the whole
+of `bootstrap_lib`: an AST guard flags any call that appends to a display-bound
+list, or reaches `ctx.action` / `ctx.fail`, with an f-string interpolating a
+path- or command-shaped name and no `display=`. `ok_entries` and
+`quiet_entries` are out of scope by construction, since neither reaches a
+collated line. Declare a deliberate exception at the site:
+
+```python
+ctx.action(f"{name}: needs elevation - run: {manual_cmd}")
+# rule5-exempt: the install command IS the payload -- the user retypes it
+```
+
+The reason is required. Rule 5 has a real exception, so an exemption nobody had
+to justify is indistinguishable from an oversight -- and a marker travels with
+the code, which a line-number allowlist does not.
+
 The venv handler applies this rule to `uv sync --project <absolute path>` and
 stale editable-install diagnostics. It logs those details as `quiet` and
 displays only `venv: created`, `venv: re-synced`, or `venv: FAILED`. An
