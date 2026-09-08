@@ -42,6 +42,7 @@ import json
 import os
 
 from .atomic_write import write_atomic
+from .records import Entry
 
 
 def declared_plugin_ids(manifest):
@@ -107,23 +108,26 @@ def ensure_self_registration(local_path, candidate_refs, declared_refs,
             with open(local_path, "r") as f:
                 data = json.load(f)
         except (json.JSONDecodeError, OSError) as e:
-            actions.append(
+            actions.append(Entry(
                 f"self-register: {local_path} unreadable ({e}); "
-                "left untouched, no entries added")
+                "left untouched, no entries added",
+                short="self-register: local file unreadable"))
             return actions, oks
         if not isinstance(data, dict):
-            actions.append(
+            actions.append(Entry(
                 f"self-register: {local_path} is not a JSON object; "
-                "left untouched, no entries added")
+                "left untouched, no entries added",
+                short="self-register: local file not JSON"))
             return actions, oks
 
     plugins = data.get("plugins")
     if plugins is None:
         plugins = []
     if not isinstance(plugins, list):
-        actions.append(
+        actions.append(Entry(
             f"self-register: {local_path} 'plugins' is not a list; "
-            "left untouched, no entries added")
+            "left untouched, no entries added",
+            short="self-register: bad 'plugins' list"))
         return actions, oks
 
     # Belt over the merged-layer check: skip refs the file itself already
@@ -143,7 +147,8 @@ def ensure_self_registration(local_path, candidate_refs, declared_refs,
     data["plugins"] = plugins
     write_atomic(local_path, json.dumps(data, indent=2) + "\n")
     for ref in added:
-        actions.append(
+        actions.append(Entry(
             f"self-register: added {ref} to {local_path} "
-            "(install: manual -- auto-update only, never auto-install)")
+            "(install: manual -- auto-update only, never auto-install)",
+            short=f"self-register: added {ref}"))
     return actions, oks

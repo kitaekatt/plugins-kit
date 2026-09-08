@@ -243,37 +243,131 @@ class TestLinkToolDirToPath:
 
 
 class TestNoUnlabelledPathInterpolation:
-    """Source-level guard over the functions this work touched.
+    """Source-level guard over EVERY display-bound entry in ``bootstrap_lib``.
 
-    The runtime tests above cover behavior; this covers the SHAPE, so a new
-    branch added to one of these functions cannot reintroduce the defect by
-    appending a raw f-string. Scoped to named functions deliberately -- a
-    whole-module sweep needs an allowlist of legitimate exemptions (an entry
-    whose payload IS a command the user must retype), and that triage is not
-    yet done.
+    The runtime tests above cover behavior; this covers the SHAPE, so a branch
+    added anywhere in the package cannot reintroduce the defect by appending a
+    raw f-string. The scope is the whole package deliberately: a guard scoped to
+    the functions one change happened to touch only watches sites already fixed.
+
+    Exemptions are declared AT THE SITE with a reason:
+
+        ctx.action(f"... {manual_cmd}")  # rule5-exempt: the user retypes it
+
+    A marker on the call's own lines, or on the line directly above it, clears
+    that call. The reason text is required and is the point: rule 5 has a real
+    exception (a command whose whole purpose is to be retyped), and an
+    exemption nobody had to justify is indistinguishable from an oversight. A
+    marker travels with the code, which a line-number allowlist does not -- and
+    this tree is edited by several sessions at once.
     """
 
-    GUARDED = ("_link_tool_dir_to_path", "_process_venv_def",
-               "_process_project_npm", "_process_project_config")
+    #: Interpolated names whose values are paths or command strings.
+    PATHY = r"(cmd|command|argv|path|dir|root|target|dest|src|file|url|pth)$"
 
-    def test_guarded_functions_label_every_path_bearing_entry(self):
-        import ast
+    #: `# rule5-exempt: <reason>` -- the reason is not optional.
+    MARKER = r"#\s*rule5-exempt:\s*\S"
+
+    @staticmethod
+    def _lib_sources():
         import pathlib as _pl
+        lib = _pl.Path(engine.__file__).parent
+        return sorted(lib.rglob("*.py"))
+
+    def test_no_unlabelled_path_interpolation_in_bootstrap_lib(self):
+        import ast
         import re as _re
 
-        src = _pl.Path(engine.__file__).read_text()
-        tree = ast.parse(src)
-        pathy = _re.compile(r"(cmd|command|argv|path|dir|root|target|dest|src|file|pth)$", _re.I)
-
+        pathy = _re.compile(self.PATHY, _re.I)
+        marker = _re.compile(self.MARKER)
         offenders = []
-        for node in ast.walk(tree):
-            if not isinstance(node, ast.FunctionDef) or node.name not in self.GUARDED:
-                continue
-            for call in ast.walk(node):
+
+        for src_path in self._lib_sources():
+            src = src_path.read_text()
+            lines = src.splitlines()
+            tree = ast.parse(src)
+
+            for call in ast.walk(tree):
+                if not isinstance(call, ast.Call):
+                    continue
+
+                fn = call.func
+                takes_display = False
+                if isinstance(fn, ast.Attribute) and fn.attr == "append":
+                    owner = getattr(fn.value, "id", "") or getattr(fn.value, "attr", "")
+                    # Only lists that reach the collated display. `ok_entries`
+                    # is verbose-only and `quiet_entries` never displays, so
+                    # neither is in rule 5's scope.
+                    if "action" not in owner:
+                        continue
+                elif (isinstance(fn, ast.Attribute)
+                      and fn.attr in ("action", "fail")
+                      and getattr(fn.value, "id", "") == "ctx"):
+                    takes_display = True
+                else:
+                    continue
+
+                # `display=` clears a call only where it is a REAL parameter.
+                # `list.append` takes no keyword arguments, so honouring it on
+                # the append shape would accept a call that raises TypeError
+                # the moment it runs -- silencing the guard with code that
+                # cannot work. The append shape's fix is `_append_detail`,
+                # which this matcher does not match at all.
+                if takes_display and any(k.arg == "display" for k in call.keywords):
+                    continue
+
+                leaves = []
+                for a in call.args:
+                    if not isinstance(a, ast.JoinedStr):
+                        continue
+                    for v in a.values:
+                        if not isinstance(v, ast.FormattedValue):
+                            continue
+                        leaf = ast.unparse(v.value).split(".")[-1].split("[")[0]
+                        if pathy.search(leaf):
+                            leaves.append(leaf)
+                if not leaves:
+                    continue
+
+                # A marker anywhere in the call's own span, or immediately above it.
+                first = max(call.lineno - 2, 0)
+                last = min(call.end_lineno or call.lineno, len(lines))
+                if any(marker.search(ln) for ln in lines[first:last]):
+                    continue
+
+                offenders.append(
+                    f"{src_path.name}:{call.lineno} interpolates "
+                    f"{', '.join(sorted(set(leaves)))} into an unlabelled "
+                    f"display entry"
+                )
+
+        assert not offenders, (
+            "rule 5 (engine-internals.md, 'Collated message text'): pass "
+            "display=... / _append_detail(..., display=...) so the path or "
+            "command stays in the log, or declare an exemption at the site "
+            "with `# rule5-exempt: <reason>`:\n  " + "\n  ".join(offenders)
+        )
+
+    def test_guard_would_catch_a_regression(self):
+        """The guard has to be able to FAIL -- verified against a real site.
+
+        A guard nobody has seen go red is not a guard. This drives the same
+        matcher over a synthetic module shaped like the production call it is
+        meant to catch.
+        """
+        import ast
+        import re as _re
+
+        pathy = _re.compile(self.PATHY, _re.I)
+        marker = _re.compile(self.MARKER)
+
+        def offenders_in(source):
+            found = []
+            lines = source.splitlines()
+            for call in ast.walk(ast.parse(source)):
                 if not isinstance(call, ast.Call):
                     continue
                 fn = call.func
-                # a bare `<something>action_entries.append(...)`
                 if not (isinstance(fn, ast.Attribute) and fn.attr == "append"):
                     continue
                 owner = getattr(fn.value, "id", "") or getattr(fn.value, "attr", "")
@@ -283,14 +377,44 @@ class TestNoUnlabelledPathInterpolation:
                     if not isinstance(a, ast.JoinedStr):
                         continue
                     for v in a.values:
-                        if isinstance(v, ast.FormattedValue):
-                            leaf = ast.unparse(v.value).split(".")[-1].split("[")[0]
-                            if pathy.search(leaf):
-                                offenders.append(
-                                    f"{node.name}:{call.lineno} interpolates {leaf!r} "
-                                    f"into an unlabelled action entry"
-                                )
-        assert not offenders, (
-            "rule 5: use _append_detail(..., display=...) instead of a bare "
-            "append:\n  " + "\n  ".join(offenders)
+                        if not isinstance(v, ast.FormattedValue):
+                            continue
+                        leaf = ast.unparse(v.value).split(".")[-1].split("[")[0]
+                        if not pathy.search(leaf):
+                            continue
+                        first = max(call.lineno - 2, 0)
+                        last = min(call.end_lineno or call.lineno, len(lines))
+                        if any(marker.search(ln) for ln in lines[first:last]):
+                            continue
+                        found.append(leaf)
+            return found
+
+        bare = 'action_entries.append(f"config: FAILED to load {config_path}")'
+        assert offenders_in(bare) == ["config_path"]
+
+        # The real fix for the append shape is _append_detail, which the
+        # matcher does not match at all.
+        fixed = (
+            '_append_detail(action_entries,\n'
+            '               f"config: FAILED to load {config_path}",\n'
+            '               display="config: FAILED to load")'
         )
+        assert offenders_in(fixed) == []
+
+        # And a `display=` passed to list.append does NOT clear the call: that
+        # code raises TypeError, so accepting it would let a broken call
+        # silence the guard.
+        bogus = (
+            'action_entries.append(f"config: FAILED to load {config_path}",\n'
+            '                      display="config: FAILED to load")'
+        )
+        assert offenders_in(bogus) == ["config_path"]
+
+        exempted = (
+            'action_entries.append(f"run: {manual_cmd}")'
+            '  # rule5-exempt: the user retypes it'
+        )
+        assert offenders_in(exempted) == []
+
+        unreasoned = 'action_entries.append(f"run: {manual_cmd}")  # rule5-exempt:'
+        assert offenders_in(unreasoned) == ["manual_cmd"]
