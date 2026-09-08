@@ -261,6 +261,19 @@ def empty_executable_path(tmp_path, monkeypatch):
 
 
 @pytest.fixture
+def default_p4_config_names(monkeypatch):
+    """Clear P4CONFIG so vcs_ignore falls back to its conventional marker names.
+
+    _p4_config_above honours P4CONFIG when it is set -- Perforce's own
+    mechanism, and correct in production. A test that writes a `.p4config`
+    marker is therefore asserting the FALLBACK list, so it must not inherit a
+    P4CONFIG naming some other file: on a machine that exports one, the marker
+    the test just wrote is never looked for and the tree reads as no-VCS.
+    """
+    monkeypatch.delenv("P4CONFIG", raising=False)
+
+
+@pytest.fixture
 def defaults_dir():
     """Path to bootstrap defaults directory."""
     return os.path.join(BOOTSTRAP_ROOT, "defaults")
