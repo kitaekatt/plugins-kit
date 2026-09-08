@@ -227,6 +227,11 @@ def write_page(repo, directory, record, **kwargs):
     return path
 
 
+def _root_identity(repo):
+    """The identity line the root record carries, for a card's second span."""
+    return hh.load_record(hh.record_path(repo, ".")).identity
+
+
 def run_check(repo, directory="."):
     return checker.check(repo, directory)
 
@@ -732,6 +737,98 @@ class TestPageFailures:
         write_page(repo, "src", src, nav_links=["../human.html"])
         write_page(repo, "lib", lib, nav_links=["../human.html"])
         assert "navigation-structure" in codes(run_check(repo, "."), "FAIL")
+
+    # -- PC-2: the cards are the page's one navigation context --------------
+
+    def _root_and_src(self, repo):
+        """A root page linking down to `src`, and `src`'s own fresh record."""
+        root = make_record(repo, ".", decision="page")
+        src = make_record(repo, "src", decision="page")
+        write_page(repo, ".", root, nav_links=["src/human.html"])
+        return root, src
+
+    def test_a_card_pointing_at_something_other_than_a_page_passes(self, repo):
+        _root, src = self._root_and_src(repo)
+        write_page(
+            repo, "src", src,
+            nav_items=[
+                ("../human.html", hh.navigation_label("."), _root_identity(repo)),
+                ("app.py", "app.py", "The entry module."),
+            ],
+        )
+        assert codes(run_check(repo, "src"), "FAIL") == []
+
+    def test_a_human_page_card_after_another_card_fails(self, repo):
+        _root, src = self._root_and_src(repo)
+        write_page(
+            repo, "src", src,
+            nav_items=[
+                ("app.py", "app.py", "The entry module."),
+                ("../human.html", hh.navigation_label("."), _root_identity(repo)),
+            ],
+        )
+        assert "navigation-order" in codes(run_check(repo, "src"), "FAIL")
+
+    def test_a_card_of_the_other_kind_still_needs_both_text_levels(self, repo):
+        _root, src = self._root_and_src(repo)
+        write_page(
+            repo, "src", src,
+            nav_markup=(
+                '<nav data-human-html-chrome="nav"><ul><li>'
+                '<a href="../human.html">'
+                '<span class="hh-nav-label">%s</span>'
+                '<span class="hh-nav-identity">%s</span></a></li><li>'
+                '<a href="app.py">'
+                '<span class="hh-nav-label">app.py</span></a>'
+                "</li></ul></nav>"
+                % (hh.navigation_label("."), _root_identity(repo))
+            ),
+        )
+        assert "navigation-structure" in codes(run_check(repo, "src"), "FAIL")
+
+    def test_a_human_page_link_outside_the_cards_fails(self, repo):
+        _root, src = self._root_and_src(repo)
+        write_page(
+            repo, "src", src,
+            nav_links=["../human.html"],
+            body='<p>Go up to the <a href="../human.html">root page</a>.</p>',
+        )
+        assert "human-link-outside-cards" in codes(run_check(repo, "src"), "FAIL")
+
+    def test_a_reference_link_in_the_body_is_not_a_card_link(self, repo):
+        record = make_record(repo, "src", references=[("protocol", "Protocol")])
+        write_page(
+            repo, "src", record,
+            body='<p>See <a href="human.protocol.html">the protocol</a>.</p>',
+        )
+        write_page(
+            repo, "src", record,
+            filename=hh.reference_filename("protocol"),
+            kind=hh.KIND_REFERENCE, slug="protocol",
+            nav_links=[hh.PAGE_FILENAME],
+        )
+        assert "human-link-outside-cards" not in codes(run_check(repo, "src"), "FAIL")
+
+    def test_a_retired_next_door_section_fails(self, repo):
+        record = make_record(repo, "src")
+        write_page(
+            repo, "src", record,
+            body="<h2>Next door</h2><p>The neighbouring areas.</p>",
+        )
+        assert "retired-section" in codes(run_check(repo, "src"), "FAIL")
+
+    def test_a_next_door_heading_is_matched_case_insensitively(self, repo):
+        record = make_record(repo, "src")
+        write_page(
+            repo, "src", record,
+            body="<h2>NEXT  DOOR:</h2><p>The neighbouring areas.</p>",
+        )
+        assert "retired-section" in codes(run_check(repo, "src"), "FAIL")
+
+    def test_an_ordinary_section_heading_is_not_the_retired_one(self, repo):
+        record = make_record(repo, "src")
+        write_page(repo, "src", record, body="<h2>Where to start</h2><p>Open it.</p>")
+        assert "retired-section" not in codes(run_check(repo, "src"), "FAIL")
 
     def test_a_missing_announce_fails(self, repo):
         record = make_record(repo, "src")

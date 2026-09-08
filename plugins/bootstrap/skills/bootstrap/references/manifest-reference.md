@@ -601,7 +601,7 @@ current OS into **ONE queue file**, plus a small launcher shim:
 - **Regenerated every pass** from the current descriptors; **both are deleted**
   when nothing is deferred — the offer disappears once the deferred ops succeed.
 - **Contents**: typed tasks, not shell text. Each carries `id`, `kind`
-  (`command` | `apt` | `brew_installer` | `secret` | `path_prune`), `label` and
+  (`command` | `apt` | `brew_installer` | `path_prune`), `label` and
   `elevated`, plus its payload (`command`, `packages`, `entries`, …), and the
   `bash` path the engine resolved at write time (an elevated console's PATH may
   lack Git's bin dir). Tasks are ordered **quickest first** (`cost: quick|slow`),
@@ -674,8 +674,7 @@ window is the only account the user gets of what ran elevated on their machine,
 and it is spawned detached, so closing it on success would hide exactly the runs
 that had nothing to complain about. SessionStart passes never carry `--fix-all` and never
 launch or prompt. Ubuntu/macOS keep the shim instruction even under `fix-all`:
-the run has no TTY, so neither a foreground `sudo` nor a secret prompt could be
-answered.
+the run has no TTY for a foreground `sudo` prompt.
 
 ### Non-Ubuntu Linux fails fast
 

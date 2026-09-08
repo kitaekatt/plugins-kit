@@ -640,11 +640,12 @@ of `bootstrap_lib`: an AST guard flags any call that appends to a display-bound
 list, or reaches `ctx.action` / `ctx.fail`, with an f-string interpolating a
 path- or command-shaped name and no `display=`. `ok_entries` and
 `quiet_entries` are out of scope by construction, since neither reaches a
-collated line. Declare a deliberate exception at the site:
+collated line. Declare a deliberate exception at the site -- on the call's own
+lines, or on the line directly above it:
 
 ```python
-ctx.action(f"{name}: needs elevation - run: {manual_cmd}")
 # rule5-exempt: the install command IS the payload -- the user retypes it
+ctx.action(f"{name}: needs elevation - run: {manual_cmd}")
 ```
 
 The reason is required. Rule 5 has a real exception, so an exemption nobody had

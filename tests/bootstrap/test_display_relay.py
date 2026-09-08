@@ -258,10 +258,11 @@ def test_display_hook_prefers_the_relay_and_keeps_the_plain_fallback():
                         "userpromptsubmit", "bootstrap-display.sh")
     text = open(hook, encoding="utf-8").read()
     assert "bootstrap_lib/display_relay.py" in text
-    # Claim pattern: PENDING is renamed to a per-process claim name FIRST
-    # (mirrors display_relay.py's os.replace claim), then the claim (not
-    # PENDING) is cat'd and finally renamed to .displayed.
-    assert 'mv "$PENDING" "$_CLAIM"' in text
+    # Claim pattern: each pending channel is renamed to a per-process claim
+    # name FIRST, then the claim (not the pending path) is cat'd and finally
+    # renamed to .displayed.
+    assert 'for _CANDIDATE in "$PENDING" "$SIDECAR"' in text
+    assert 'mv "$_CANDIDATE" "$_CANDIDATE_CLAIM"' in text
     assert 'cat "$_CLAIM"' in text
     assert 'mv -f "$_CLAIM"' in text
 
@@ -316,6 +317,22 @@ class TestShellFallbackClaimPattern:
         assert displayed.exists()
         assert "hello" in displayed.read_text(encoding="utf-8")
 
+    def test_fallback_emits_wrapper_import_sidecar(self, tmp_path: Path) -> None:
+        s = self._scaffold(tmp_path)
+        sidecar = s["data_dir"] / "bootstrap_display.wrapper_import.pending"
+        sidecar.write_text(
+            '{"continue": true, "systemMessage": "wrapper import"}',
+            encoding="utf-8",
+        )
+
+        result = self._run(s)
+        assert result.returncode == 0, result.stderr
+        assert "wrapper import" in result.stdout
+        assert not sidecar.exists()
+        displayed = s["data_dir"] / "bootstrap_display.displayed"
+        assert displayed.exists()
+        assert "wrapper import" in displayed.read_text(encoding="utf-8")
+
     def test_producer_replacement_after_claim_leaves_new_content_pending(self, tmp_path: Path) -> None:
         """The observed bug: an engine that atomically replaces the pending
         file between the plain `cat` and the plain `mv` gets its FRESH verdict
@@ -362,6 +379,50 @@ class TestShellFallbackClaimPattern:
         displayed = s["data_dir"] / "bootstrap_display.displayed"
         assert displayed.exists()
         assert "OLD-VERDICT" in displayed.read_text(encoding="utf-8")
+
+
+def test_primary_precedes_wrapper_import_sidecar(tmp_path, capsys):
+    primary = tmp_path / display_relay.PENDING_NAME
+    sidecar = tmp_path / display_relay.WRAPPER_IMPORT_PENDING_NAME
+    primary.write_text(json.dumps({"systemMessage": "primary"}), encoding="utf-8")
+    sidecar.write_text(json.dumps({"systemMessage": "sidecar"}), encoding="utf-8")
+
+    assert display_relay.relay(str(tmp_path), now=0) == 0
+    assert json.loads(capsys.readouterr().out)["systemMessage"].startswith("primary")
+    assert not primary.exists()
+    assert sidecar.exists()
+
+    assert display_relay.relay(str(tmp_path), now=0) == 0
+    assert json.loads(capsys.readouterr().out)["systemMessage"].startswith("sidecar")
+    assert not sidecar.exists()
+
+
+@pytest.mark.parametrize("pending_name", [
+    display_relay.PENDING_NAME,
+    display_relay.WRAPPER_IMPORT_PENDING_NAME,
+])
+def test_new_primary_racing_either_consume_stays_pending(
+    tmp_path, monkeypatch, capsys, pending_name
+):
+    pending = tmp_path / pending_name
+    pending.write_text(json.dumps({"systemMessage": "old"}), encoding="utf-8")
+    replacement = tmp_path / display_relay.PENDING_NAME
+    original_replace = display_relay.os.replace
+
+    def replace_and_produce(source, destination):
+        original_replace(source, destination)
+        if source == str(pending):
+            replacement.write_text(
+                json.dumps({"systemMessage": "new primary"}), encoding="utf-8"
+            )
+
+    monkeypatch.setattr(display_relay.os, "replace", replace_and_produce)
+    assert display_relay.relay(str(tmp_path), now=0) == 0
+    assert json.loads(capsys.readouterr().out)["systemMessage"].startswith("old")
+    assert replacement.exists()
+    assert json.loads(replacement.read_text(encoding="utf-8"))["systemMessage"] == (
+        "new primary"
+    )
 
 
 def test_non_object_json_payload_is_left_for_the_shell_fallback(tmp_path, capsys):

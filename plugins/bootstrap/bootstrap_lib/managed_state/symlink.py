@@ -47,9 +47,15 @@ def _remove_if_present(path: Path | None) -> None:
         os.unlink(path)
 
 
+def _is_link(path: Path) -> bool:
+    # Junction behavior is UNVERIFIED ON A REAL WINDOWS HOST; tests model the
+    # documented Python semantics.
+    return path.is_symlink() or os.path.isjunction(path)
+
+
 def _link_spelling(path: Path) -> str | None:
     try:
-        return os.readlink(path) if path.is_symlink() else None
+        return os.readlink(path) if _is_link(path) else None
     except OSError:
         return None
 
@@ -84,7 +90,7 @@ class Symlink:
             return Inspection(State.ERROR, f"source and target are the same path: {source}")
         if not os.path.lexists(target):
             return Inspection(State.MISSING, f"missing: {target}")
-        if not target.is_symlink():
+        if not _is_link(target):
             try:
                 if os.path.samefile(source, target):
                     return Inspection(
@@ -118,7 +124,7 @@ class Symlink:
             return ResourceResult(
                 self.name, Status.UNCHANGED, before.state, current.state,
                 current.detail)
-        if os.path.lexists(target) and not target.is_symlink() and target.is_dir():
+        if os.path.lexists(target) and not _is_link(target) and target.is_dir():
             raise IsADirectoryError(f"refusing to replace directory: {target}")
 
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -161,10 +167,10 @@ class Symlink:
             temp_path = Path(temp_name)
             os.symlink(source, temp_path, target_is_directory=source.is_dir())
 
-            existing_regular = os.path.lexists(target) and not target.is_symlink()
+            existing_regular = os.path.lexists(target) and not _is_link(target)
             if existing_regular and self.backup:
                 backup_path = _reserve_backup(target)
-            elif target.is_symlink():
+            elif _is_link(target):
                 old_link = os.readlink(target)
                 old_link_is_dir = target.is_dir()
             os.replace(temp_path, target)

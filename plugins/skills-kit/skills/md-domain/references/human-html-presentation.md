@@ -85,7 +85,8 @@ A useful default order is:
 1. What the directory is for.
 2. Why it has this shape.
 3. What can cause harm or confusion.
-4. Where the reader goes next.
+
+Where the reader goes next is not a section. The PC-2 cards carry it.
 
 This order is not a template. Omit a section with no admitted unit. Rename or
 reorder sections when the evidence gives the reader a better route.
@@ -101,10 +102,14 @@ is a real sequence. They do not carry ornamental labels or all-caps eyebrows.
 Start the generated body with the `h1` or with a header that contains it.
 Follow it with a short orientation statement when that statement adds context.
 
-### 4. Mark up the navigation spine
+### 4. Mark up the navigation cards
 
-PC-2 computes destinations. Present those destinations as one semantic list.
-Each list item contains one link with two text levels:
+PC-2 owns which destinations the cards carry, how the two card kinds sort, and
+which label and identity text each one uses. Read it and do not restate it here.
+This step owns only the markup that carries those destinations.
+
+Present the cards as one semantic list. Each list item contains one link with
+two text levels:
 
 ```html
 <nav data-human-html-chrome="nav" aria-label="Orientation pages">
@@ -115,15 +120,25 @@ Each list item contains one link with two text levels:
         <span class="hh-nav-identity">The shared engine and test surface.</span>
       </a>
     </li>
+    <li>
+      <a href="CLAUDE.md">
+        <span class="hh-nav-label">CLAUDE.md</span>
+        <span class="hh-nav-identity">The agent-facing rules for this tree.</span>
+      </a>
+    </li>
   </ul>
 </nav>
 ```
 
-Use `Repository root` for the root label. For another directory, use its final
-path segment. Use the target record's complete identity as secondary text.
+Both card kinds use the same markup. SA-1 marks the human-page card from its
+href alone, so add no icon element, no class, and no attribute of your own.
 
 Keep every destination visible at rest. Do not hide navigation in a menu,
 disclosure, tab set, tooltip, hover state, or script-controlled component.
+
+The cards are the page's only navigation context. When a boundary or a caveat
+changes where a reader goes, put that line beside the card that routes there
+rather than in a section of its own.
 
 ### 5. Present claims and evidence
 
@@ -219,6 +234,9 @@ Review the real generated file, not a detached body fragment.
 - Confirm that one `h1` names the page and `h2` headings expose its route.
 - Scan only headings, nav labels, and first sentences. The purpose must survive.
 - Confirm that navigation reads as labels with secondary identity text.
+- Confirm that human-page cards carry the icon and come before the other cards.
+- Confirm that no body section repeats a card, and that no `human.html` link
+  appears outside the cards.
 - Confirm that evidence uses definition lists, not bold-label paragraphs.
 - Confirm that every visible link is recognizable without hover.
 - Confirm that tables compare attributes rather than arrange content.

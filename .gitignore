@@ -40,3 +40,6 @@ dev/tasks/
 plugins/installed_plugins.json
 
 .agents
+
+# tooling-friction reports (per-machine measurement output, not source)
+.claude/friction/

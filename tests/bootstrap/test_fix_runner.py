@@ -3,9 +3,8 @@
 The runner is the executing half of the interactive-remediation system. Its
 load-bearing contracts, in rough order of "what breaks the user if wrong":
 
-  * per-task privilege -- sudo wraps ONLY elevated tasks on Unix, so a secret
-    prompt and its write stay the user's (a root-owned secret file in the
-    user's home breaks every later unelevated write);
+  * per-task privilege -- sudo wraps ONLY elevated tasks on Unix, so
+    unelevated tasks stay the user's;
   * commands reach bash as ONE argv element, never re-parsed by an outer shell
     (this is what removes the old renderer's double-quote ban);
   * an unknown task kind fails loudly -- a silently skipped elevated task looks
@@ -27,6 +26,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+import bootstrap_lib.fix_queue as fq
 import bootstrap_lib.fix_runner as fr
 
 # is_dead answers "dead" only after confirming the entry's VOLUME is reachable,
@@ -436,36 +436,6 @@ class TestPathPrune:
         reg.SetValueEx.assert_not_called()
 
 
-class TestSecret:
-    def test_secret_is_written_0600_and_never_echoed(self, monkeypatch, tmp_path, capsys):
-        target = tmp_path / "sub" / "key.txt"
-        monkeypatch.setattr(fr.getpass, "getpass", lambda prompt: "s3cret")
-        r = fr.Runner({"os": "ubuntu", "bash": "/usr/bin/bash", "tasks": []})
-        assert r.run_secret({"label": "API key", "target": str(target),
-                             "prompt": "Enter key"}) is True
-        assert target.read_text() == "s3cret"
-        # The value must not reach stdout -- this console output is the one place
-        # the secret exists, and the engine never sees it either way.
-        assert "s3cret" not in capsys.readouterr().out
-        if os.name != "nt":
-            assert oct(target.stat().st_mode)[-3:] == "600"
-
-    def test_empty_secret_is_a_failure_not_an_empty_file(self, monkeypatch, tmp_path):
-        target = tmp_path / "key.txt"
-        monkeypatch.setattr(fr.getpass, "getpass", lambda prompt: "")
-        r = fr.Runner({"os": "ubuntu", "bash": "/usr/bin/bash", "tasks": []})
-        assert r.run_secret({"label": "API key", "target": str(target)}) is False
-        assert not target.exists()
-
-    def test_secret_target_is_user_expanded(self, monkeypatch, tmp_path):
-        monkeypatch.setenv("HOME", str(tmp_path))
-        monkeypatch.setenv("USERPROFILE", str(tmp_path))
-        monkeypatch.setattr(fr.getpass, "getpass", lambda prompt: "v")
-        r = fr.Runner({"os": "ubuntu", "bash": "/usr/bin/bash", "tasks": []})
-        r.run_secret({"label": "k", "target": "~/key.txt"})
-        assert (tmp_path / "key.txt").read_text() == "v"
-
-
 # --------------------------------------------------------------------------- #
 # Validation
 # --------------------------------------------------------------------------- #
@@ -480,17 +450,20 @@ class TestValidate:
             {"kind": "command", "label": "L", "command": "x"}]})
         assert any("version" in p for p in problems)
 
+    def test_runner_and_queue_kinds_are_identical(self):
+        assert fr.KNOWN_KINDS == fq.QUEUE_KINDS
+
     def test_unknown_kind_is_reported(self):
-        problems = fr.validate({"version": 1, "tasks": [{"kind": "wat", "label": "L"}]})
+        problems = fr.validate({"version": 1, "tasks": [
+            {"kind": "wat", "label": "L"},
+            {"kind": "secret", "label": "stale"},
+        ]})
         assert any("unknown kind" in p for p in problems)
+        assert sum("unknown kind" in p for p in problems) == 2
 
     def test_command_task_without_command_is_reported(self):
         problems = fr.validate({"version": 1, "tasks": [{"kind": "command", "label": "L"}]})
         assert any("no command" in p for p in problems)
-
-    def test_secret_task_without_target_is_reported(self):
-        problems = fr.validate({"version": 1, "tasks": [{"kind": "secret", "label": "L"}]})
-        assert any("no target" in p for p in problems)
 
     def test_missing_label_is_reported(self):
         """The label is the only thing a human reads, in the plan AND in the

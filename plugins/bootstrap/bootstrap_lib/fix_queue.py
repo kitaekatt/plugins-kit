@@ -54,6 +54,16 @@ from typing import List, Optional
 from .apt import sudo_noninteractive_available, windows_admin_available
 from .atomic_write import write_atomic
 from .tool_check import resolve_bash
+
+QUEUE_KINDS = frozenset({"command", "apt", "brew_installer", "path_prune"})
+
+
+def _queue_kind(kind: str) -> str:
+    if kind not in QUEUE_KINDS:
+        raise ValueError(f"unknown emitted queue kind {kind!r}")
+    return kind
+
+
 from .fix_runner import (
     COST_QUICK, COST_SLOW, EXIT_ABORTED, EXIT_BAD_QUEUE, LOG_BASENAME,
     QUEUE_VERSION,
@@ -249,7 +259,7 @@ def _brew_cask_task(desc: dict, token: str) -> FixTask:
             explain.append(f"    {line}".rstrip())
     return FixTask(
         id=desc.get("id") or f"brew_cask:{token}",
-        kind="command",
+        kind=_queue_kind("command"),
         label=desc.get("label") or f"Install {token} (needs your password)",
         elevated=False,
         command=command,
@@ -303,7 +313,7 @@ def queue_from_failures(failures, current_os: str,
             if cmd:
                 commands.append(FixTask(
                     id=desc.get("id") or f"command:{len(commands)}",
-                    kind="command",
+                    kind=_queue_kind("command"),
                     # Falling back to the raw command is the worst collated
                     # item there is -- a full `winget install --id ... -e
                     # --accept-package-agreements` line is 100+ chars of flags.
@@ -329,7 +339,7 @@ def queue_from_failures(failures, current_os: str,
                 count = len(entries)
                 prune = FixTask(
                     id=desc.get("id") or "path_prune",
-                    kind="path_prune",
+                    kind=_queue_kind("path_prune"),
                     label=desc.get("label") or (
                         f"Remove {count} dead PATH entr"
                         f"{'y' if count == 1 else 'ies'}"
@@ -347,7 +357,7 @@ def queue_from_failures(failures, current_os: str,
     tasks: List[FixTask] = []
     if brew:
         tasks.append(FixTask(
-            id="brew_installer", kind="brew_installer",
+            id="brew_installer", kind=_queue_kind("brew_installer"),
             label="Install Homebrew",
             # The installer elevates itself where it needs to and refuses to
             # run as root, so it must NOT be wrapped in sudo.
@@ -357,7 +367,7 @@ def queue_from_failures(failures, current_os: str,
         ))
     if apt_packages:
         tasks.append(FixTask(
-            id="apt:" + ",".join(apt_ids), kind="apt",
+            id="apt:" + ",".join(apt_ids), kind=_queue_kind("apt"),
             label="Install " + ", ".join(apt_packages),
             elevated=True, packages=apt_packages,
             # An apt-get update + install is a network fetch by definition, so
@@ -662,8 +672,8 @@ def launch_fix_runner(queue: str, current_os: str,
     walks away hits the bounded ``timeout``.
 
     Unix: returns None -- no launch is attempted. The fix-all run executes
-    inside a non-interactive hook/Bash-tool subprocess with NO TTY, so neither
-    a sudo password prompt nor a secret prompt could be answered. The runner
+    inside a non-interactive hook/Bash-tool subprocess with NO TTY, so a sudo
+    password prompt could not be answered. The runner
     needs a console the user is actually sitting at, which only the
     run-it-yourself shim provides.
     """
