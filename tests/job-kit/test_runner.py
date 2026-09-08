@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import os
+import signal
 import sys
 import threading
+import time
 from dataclasses import replace
 from pathlib import Path
 from typing import Callable, Sequence
@@ -25,9 +28,20 @@ from llm_scripting_kit.completion import (
 from llm_scripting_kit.completion.adapter_capabilities import CODEX_CAPABILITIES
 from llm_scripting_kit.models import EndpointResolveError
 
-from job_kit.model import Contract, ContractContext, Job, JobState, Prompt
+from job_kit.model import (
+    Acceptance,
+    Attempt,
+    AttemptError,
+    Contract,
+    ContractContext,
+    Job,
+    JobState,
+    Prompt,
+    Usage,
+)
 from job_kit.run import (
     default_store_path,
+    replace_attempt_acceptance,
     resume_run,
     run_contract,
     run_job_file,
@@ -306,6 +320,41 @@ def test_acceptance_timeout_is_recorded_as_a_non_accepting_result(
     assert result.outcome == "timed_out"
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="Windows process-tree termination is not verified on this host",
+)
+def test_contract_timeout_kills_descendant_processes(tmp_path: Path) -> None:
+    """A timed-out contract does not leave a child process running."""
+    child_pid_file = tmp_path / "child.pid"
+    parent_code = (
+        "import subprocess, sys, time; "
+        "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'], "
+        "stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL); "
+        "open(sys.argv[1], 'w').write(str(child.pid)); "
+        "time.sleep(30)"
+    )
+    contract = Contract(
+        command=(sys.executable, "-c", parent_code, str(child_pid_file)),
+        directory=tmp_path,
+    )
+
+    result = run_contract(contract, timeout_s=0.2)
+
+    assert result.outcome == "timed_out"
+    child_pid = int(child_pid_file.read_text(encoding="utf-8"))
+    deadline = time.monotonic() + 2.0
+    while time.monotonic() < deadline:
+        try:
+            os.kill(child_pid, 0)
+        except ProcessLookupError:
+            break
+        time.sleep(0.01)
+    else:
+        os.kill(child_pid, signal.SIGKILL)
+        pytest.fail("contract descendant survived the timeout")
+
+
 def test_acceptance_not_run_records_the_launch_error(tmp_path: Path) -> None:
     """A contract that cannot launch is distinct from a timed-out check."""
     missing = tmp_path / "missing-contract-command"
@@ -353,6 +402,104 @@ def test_runner_sets_timeout_and_records_truthful_response(tmp_path: Path) -> No
     assert snapshot.attempts[0].acceptance.exit_code == 0
     assert len(backend.calls) == 1
     assert backend.calls[0][3].timeout_s == 17.0
+
+
+def test_runner_gives_contract_only_the_remaining_timeout_budget(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The contract receives the timeout left after the completion seam."""
+    backend = FakeBackend()
+    completion_elapsed: list[float] = []
+    original_complete = backend.complete
+
+    def slow_complete(
+        system: str,
+        user: str,
+        *,
+        model: str,
+        options: object = None,
+    ) -> LLMResponse:
+        started = time.monotonic()
+        time.sleep(0.08)
+        response = original_complete(system, user, model=model, options=options)
+        completion_elapsed.append(time.monotonic() - started)
+        return response
+
+    backend.complete = slow_complete
+    contract_timeouts: list[float | None] = []
+
+    def record_contract(
+        contract: Contract,
+        *,
+        directory: Path | None = None,
+        timeout_s: float | None = None,
+        response_text: str = "",
+        context: ContractContext | None = None,
+    ) -> Acceptance:
+        contract_timeouts.append(timeout_s)
+        return Acceptance(
+            command=contract.command,
+            directory=directory or contract.directory or tmp_path,
+            exit_code=0,
+            stdout="",
+            stderr="",
+            wall_ms=0,
+            accepted=True,
+        )
+
+    monkeypatch.setattr(run_module, "run_contract", record_contract)
+    run_jobs(
+        [_job(tmp_path)],
+        tmp_path / "remaining-timeout.sqlite3",
+        timeout_s=0.1,
+        capabilities_provider=_advertisement,
+        backend_factory=_factory_for(backend),
+    )
+
+    assert len(completion_elapsed) == 1
+    assert len(contract_timeouts) == 1
+    assert contract_timeouts[0] == pytest.approx(
+        0.1 - completion_elapsed[0], abs=0.01
+    )
+    assert contract_timeouts[0] != 0.1
+
+
+def test_runner_times_out_contract_when_completion_spends_the_budget(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The runner records an immediate contract timeout when no budget remains."""
+    backend = FakeBackend()
+    original_complete = backend.complete
+
+    def over_budget_complete(
+        system: str,
+        user: str,
+        *,
+        model: str,
+        options: object = None,
+    ) -> LLMResponse:
+        time.sleep(0.02)
+        return original_complete(system, user, model=model, options=options)
+
+    backend.complete = over_budget_complete
+
+    def unexpected_contract(*_: object, **__: object) -> Acceptance:
+        raise AssertionError("the contract must not run with no budget")
+
+    monkeypatch.setattr(run_module, "run_contract", unexpected_contract)
+    job = replace(_job(tmp_path), max_attempts=1)
+    snapshot = run_jobs(
+        [job],
+        tmp_path / "spent-timeout.sqlite3",
+        timeout_s=0.01,
+        capabilities_provider=_advertisement,
+        backend_factory=_factory_for(backend),
+    )
+
+    acceptance = snapshot.attempts[0].acceptance
+    assert acceptance is not None
+    assert acceptance.outcome == "timed_out"
+    assert acceptance.exit_code is None
 
 
 def test_runner_omits_temperature_when_job_does_not_set_one(tmp_path: Path) -> None:
@@ -1505,3 +1652,59 @@ def test_attempts_of_one_job_never_overlap_in_a_pool(tmp_path: Path) -> None:
         ]
         assert numbers == [1, 2]
     assert {job.state for job in snapshot.jobs} == {JobState.REJECTED}
+
+
+def test_replace_attempt_acceptance_changes_only_acceptance(tmp_path: Path) -> None:
+    """replace_attempt_acceptance returns a new Attempt with every other field intact."""
+    original_acceptance = Acceptance(
+        command=("true",),
+        directory=tmp_path,
+        exit_code=0,
+        stdout="",
+        stderr="",
+        wall_ms=1,
+        accepted=True,
+    )
+    attempt = Attempt(
+        run_id="run-1",
+        job_id="job-1",
+        attempt_no=1,
+        endpoint="fake",
+        backend="fake",
+        model="fake-model",
+        status="completed",
+        started_at="2026-09-01T00:00:00Z",
+        ended_at="2026-09-01T00:00:01Z",
+        error=AttemptError(code="execution", message="unknown"),
+        halt_kind="rate_limit",
+        dropped_params=("extras.top_p",),
+        forwarded_params=("extras.top_k",),
+        execution_controls_applied=("timeout",),
+        usage=Usage(input_tokens=4, output_tokens=6, cache_hit_tokens=0),
+        response_text="done",
+        reasoning="internal reasoning",
+        finish_reason="stop",
+        workspace=tmp_path,
+        acceptance=original_acceptance,
+        id=7,
+        base_ref="base-ref",
+        workspace_status="isolated",
+        workspace_reason="attempt",
+        workspace_removed_at=123.0,
+        workspace_removal_forced=True,
+    )
+    new_acceptance = Acceptance(
+        command=("false",),
+        directory=tmp_path,
+        exit_code=1,
+        stdout="out",
+        stderr="err",
+        wall_ms=2,
+        accepted=False,
+    )
+
+    updated = replace_attempt_acceptance(attempt, new_acceptance)
+
+    assert updated is not attempt
+    assert updated.acceptance == new_acceptance
+    assert replace(updated, acceptance=attempt.acceptance) == attempt

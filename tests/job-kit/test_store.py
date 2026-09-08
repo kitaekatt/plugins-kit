@@ -12,6 +12,7 @@ import pytest
 from job_kit.model import Acceptance, Attempt, AttemptError, Contract, Job, JobState, Prompt, Usage
 from job_kit.store import (
     DEFAULT_BUSY_TIMEOUT_MS,
+    ERROR_LIMIT,
     JobStore,
     StoreError,
     StoreNotFoundError,
@@ -107,6 +108,145 @@ def test_store_round_trip_and_terminal_refusal(tmp_path: Path) -> None:
         reopened.append_attempt(
             _attempt("run-1", job.id, tmp_path), terminal_state=JobState.ACCEPTED
         )
+
+
+def _pending_run(tmp_path: Path, run_id: str = "pending-run") -> tuple[JobStore, Path, Job]:
+    """Build a store with one fresh pending job, ready for a transition call."""
+    db_path = tmp_path / f"{run_id}.sqlite3"
+    store = JobStore(db_path)
+    job = _job(tmp_path)
+    store.create_run(run_id, [job])
+    return store, db_path, job
+
+
+def test_mark_running_happy_path_clears_error_message(tmp_path: Path) -> None:
+    """mark_running moves a pending job to running and writes a null error."""
+    store, db_path, job = _pending_run(tmp_path)
+    with sqlite3.connect(str(db_path)) as connection:
+        connection.execute(
+            "UPDATE jobs SET error_message = ? WHERE run_id = ? AND id = ?",
+            ("stale error", "pending-run", job.id),
+        )
+        connection.commit()
+
+    record = store.mark_running("pending-run", job.id, at=20.0)
+
+    assert record.state is JobState.RUNNING
+    assert record.error is None
+    assert record.updated_at == 20.0
+
+
+def test_mark_running_refuses_terminal_job(tmp_path: Path) -> None:
+    """mark_running refuses a job already in a terminal state."""
+    store, _, job = _pending_run(tmp_path, "mark-running-terminal")
+    store.mark_failed("mark-running-terminal", job.id, "boom")
+
+    with pytest.raises(TerminalStateError):
+        store.mark_running("mark-running-terminal", job.id)
+
+
+def test_mark_unroutable_happy_path_and_error_message(tmp_path: Path) -> None:
+    """mark_unroutable terminalizes the job and stores the given reason."""
+    store, _, job = _pending_run(tmp_path, "unroutable-run")
+
+    record = store.mark_unroutable("unroutable-run", job.id, "no endpoint fits", at=21.0)
+
+    assert record.state is JobState.UNROUTABLE
+    assert record.error == "no endpoint fits"
+    assert record.updated_at == 21.0
+
+
+def test_mark_unroutable_refuses_terminal_job(tmp_path: Path) -> None:
+    """mark_unroutable refuses a job already in a terminal state."""
+    store, _, job = _pending_run(tmp_path, "unroutable-terminal")
+    store.mark_failed("unroutable-terminal", job.id, "boom")
+
+    with pytest.raises(TerminalStateError):
+        store.mark_unroutable("unroutable-terminal", job.id, "no endpoint fits")
+
+
+def test_mark_unroutable_truncates_error_message(tmp_path: Path) -> None:
+    """mark_unroutable truncates a reason longer than ERROR_LIMIT."""
+    store, _, job = _pending_run(tmp_path, "unroutable-truncate")
+    long_reason = "x" * (ERROR_LIMIT + 50)
+
+    record = store.mark_unroutable("unroutable-truncate", job.id, long_reason)
+
+    assert record.error == long_reason[:ERROR_LIMIT]
+    assert len(record.error) == ERROR_LIMIT
+
+
+def test_mark_halted_happy_path_and_error_message(tmp_path: Path) -> None:
+    """mark_halted terminalizes a job that has an existing attempt row."""
+    store, db_path, job = _pending_run(tmp_path, "halted-run")
+    store.append_attempt(_attempt("halted-run", job.id, tmp_path), terminal_state=None)
+
+    record = store.mark_halted("halted-run", job.id, "endpoints exhausted", at=22.0)
+
+    assert record.state is JobState.HALTED
+    assert record.error == "endpoints exhausted"
+    assert record.updated_at == 22.0
+
+
+def test_mark_halted_refuses_terminal_job(tmp_path: Path) -> None:
+    """mark_halted refuses a job already in a terminal state."""
+    store, _, job = _pending_run(tmp_path, "halted-terminal")
+    store.append_attempt(_attempt("halted-terminal", job.id, tmp_path), terminal_state=None)
+    store.mark_failed("halted-terminal", job.id, "boom")
+
+    with pytest.raises(TerminalStateError):
+        store.mark_halted("halted-terminal", job.id, "endpoints exhausted")
+
+
+def test_mark_halted_requires_an_existing_attempt_row(tmp_path: Path) -> None:
+    """mark_halted refuses a job with no recorded attempts."""
+    store, _, job = _pending_run(tmp_path, "halted-no-attempt")
+
+    with pytest.raises(ValueError, match="halted jobs must be marked with an attempt"):
+        store.mark_halted("halted-no-attempt", job.id, "endpoints exhausted")
+
+
+def test_mark_halted_truncates_error_message(tmp_path: Path) -> None:
+    """mark_halted truncates a reason longer than ERROR_LIMIT."""
+    store, _, job = _pending_run(tmp_path, "halted-truncate")
+    store.append_attempt(_attempt("halted-truncate", job.id, tmp_path), terminal_state=None)
+    long_reason = "y" * (ERROR_LIMIT + 50)
+
+    record = store.mark_halted("halted-truncate", job.id, long_reason)
+
+    assert record.error == long_reason[:ERROR_LIMIT]
+    assert len(record.error) == ERROR_LIMIT
+
+
+def test_mark_failed_happy_path_and_error_message(tmp_path: Path) -> None:
+    """mark_failed terminalizes the job and stores the given reason."""
+    store, _, job = _pending_run(tmp_path, "failed-run")
+
+    record = store.mark_failed("failed-run", job.id, "pre-seam failure", at=23.0)
+
+    assert record.state is JobState.FAILED
+    assert record.error == "pre-seam failure"
+    assert record.updated_at == 23.0
+
+
+def test_mark_failed_refuses_terminal_job(tmp_path: Path) -> None:
+    """mark_failed refuses a job already in a terminal state."""
+    store, _, job = _pending_run(tmp_path, "failed-terminal")
+    store.mark_failed("failed-terminal", job.id, "boom")
+
+    with pytest.raises(TerminalStateError):
+        store.mark_failed("failed-terminal", job.id, "boom again")
+
+
+def test_mark_failed_truncates_error_message(tmp_path: Path) -> None:
+    """mark_failed truncates a reason longer than ERROR_LIMIT."""
+    store, _, job = _pending_run(tmp_path, "failed-truncate")
+    long_reason = "z" * (ERROR_LIMIT + 50)
+
+    record = store.mark_failed("failed-truncate", job.id, long_reason)
+
+    assert record.error == long_reason[:ERROR_LIMIT]
+    assert len(record.error) == ERROR_LIMIT
 
 
 def test_unknown_usage_round_trips_as_null_not_zero(tmp_path: Path) -> None:
