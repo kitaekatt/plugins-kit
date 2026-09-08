@@ -448,7 +448,7 @@ def _registry_endpoint(ep_name: str) -> Optional[dict]:
         "name": entry.id,
         "base_url": entry.base_url,
         "key_env": entry.key_env,  # None unless the entry declares one
-        "key_file": None,  # the model-endpoints registry has no key_file field
+        "key_file": entry.key_file,
         "models": {entry.id: {"slug": entry.model}},
         "default": entry.id,
         "defaultCheap": entry.id,
