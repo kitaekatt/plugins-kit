@@ -1025,6 +1025,201 @@ def test_openai_connection_failure_rotates_to_the_next_preference(
     assert snapshot.attempts[0].error_code == HALT_UNREACHABLE
 
 
+def test_unreachable_blip_does_not_exclude_later_jobs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """One unreachable attempt narrows only that job's later selection."""
+    monkeypatch.setattr(
+        run_module,
+        "_openai",
+        type("OpenAISurface", (), {"APIConnectionError": ConnectionError})(),
+    )
+    first_backend = SequenceBackend([ConnectionError("connection refused")])
+    second_backend = SequenceBackend([None])
+    later_backend = SequenceBackend([None])
+    backends = {"first": first_backend, "second": second_backend}
+
+    def factory(endpoint: str, **_: object) -> BackendSelection:
+        backend = (
+            later_backend
+            if endpoint == "first" and backends["first"].calls
+            else backends[endpoint]
+        )
+        return BackendSelection(endpoint, "fake", backend, "fake-model")
+
+    blip = replace(
+        _job(tmp_path, "blip"),
+        endpoint_preference=("first", "second"),
+        max_attempts=2,
+    )
+    later = replace(
+        _job(tmp_path, "later"), endpoint_preference=("first",), max_attempts=1
+    )
+
+    snapshot = run_jobs(
+        [blip, later],
+        tmp_path / "unreachable-blip.sqlite3",
+        capabilities_provider=_advertisement,
+        backend_factory=factory,
+    )
+
+    assert snapshot.jobs[0].state is JobState.ACCEPTED
+    assert snapshot.jobs[1].state is JobState.ACCEPTED
+    assert [(attempt.job_id, attempt.endpoint) for attempt in snapshot.attempts] == [
+        ("blip", "first"),
+        ("blip", "second"),
+        ("later", "first"),
+    ]
+
+
+def test_confirmed_unreachable_probe_excludes_later_jobs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Two sequential unreachable attempts exclude an endpoint for the run."""
+    monkeypatch.setattr(
+        run_module,
+        "_openai",
+        type("OpenAISurface", (), {"APIConnectionError": ConnectionError})(),
+    )
+    ticks = iter(range(100))
+    monkeypatch.setattr(
+        run_module,
+        "utc_now_iso",
+        lambda: f"2026-09-08T00:00:{next(ticks):02d}Z",
+    )
+    backend = SequenceBackend(
+        [ConnectionError("first"), ConnectionError("second")]
+    )
+
+    def factory(endpoint: str, **_: object) -> BackendSelection:
+        return BackendSelection(endpoint, "fake", backend, "fake-model")
+
+    jobs = [
+        replace(_job(tmp_path, job_id), endpoint_preference=("first",), max_attempts=1)
+        for job_id in ("probe-1", "probe-2", "later")
+    ]
+    snapshot = run_jobs(
+        jobs,
+        tmp_path / "confirmed-probe.sqlite3",
+        capabilities_provider=_advertisement,
+        backend_factory=factory,
+    )
+
+    assert [attempt.job_id for attempt in snapshot.attempts] == ["probe-1", "probe-2"]
+    assert snapshot.jobs[2].state is JobState.UNROUTABLE
+    assert "excluded after a confirming probe" in (snapshot.jobs[2].error or "")
+
+
+def test_concurrent_unreachable_failures_are_one_probe(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Concurrent failures do not satisfy the sequential confirming probe."""
+    monkeypatch.setattr(
+        run_module,
+        "_openai",
+        type("OpenAISurface", (), {"APIConnectionError": ConnectionError})(),
+    )
+    barrier = threading.Barrier(4)
+    first_jobs = {f"probe-{index}" for index in range(4)}
+
+    class ConcurrentBackend(FakeBackend):
+        """Fail four calls behind a barrier and accept the later call."""
+
+        def complete(
+            self,
+            system: str,
+            user: str,
+            *,
+            model: str,
+            options: object = None,
+        ) -> LLMResponse:
+            self.calls.append((system, user, model, options))
+            if user in first_jobs:
+                barrier.wait(timeout=30)
+                raise ConnectionError("shared outage")
+            return self.response
+
+    backend = ConcurrentBackend()
+
+    def factory(endpoint: str, **_: object) -> BackendSelection:
+        return BackendSelection(endpoint, "fake", backend, "fake-model")
+
+    jobs = [
+        replace(
+            _job(tmp_path, job_id), endpoint_preference=("first",), max_attempts=1
+        )
+        for job_id in (*sorted(first_jobs), "later")
+    ]
+    snapshot = run_jobs(
+        jobs,
+        tmp_path / "concurrent-probe.sqlite3",
+        max_parallel=4,
+        capabilities_provider=_advertisement,
+        backend_factory=factory,
+    )
+
+    assert snapshot.jobs[-1].state is JobState.ACCEPTED
+    assert snapshot.attempts[-1].job_id == "later"
+    assert JobStore(tmp_path / "concurrent-probe.sqlite3").halted_endpoints(
+        snapshot.run.id
+    ) == frozenset()
+
+
+def test_unreachable_exclusion_is_recomputed_on_resume(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Resume applies the store's confirming-probe result to pending jobs."""
+    monkeypatch.setattr(
+        run_module,
+        "_openai",
+        type("OpenAISurface", (), {"APIConnectionError": ConnectionError})(),
+    )
+    ticks = iter(range(100))
+    monkeypatch.setattr(
+        run_module,
+        "utc_now_iso",
+        lambda: f"2026-09-08T00:00:{next(ticks):02d}Z",
+    )
+    backend = SequenceBackend(
+        [ConnectionError("first"), ConnectionError("second")]
+    )
+
+    def factory(endpoint: str, **_: object) -> BackendSelection:
+        return BackendSelection(endpoint, "fake", backend, "fake-model")
+
+    jobs = [
+        replace(_job(tmp_path, job_id), endpoint_preference=("first",), max_attempts=1)
+        for job_id in ("probe-1", "probe-2", "later")
+    ]
+    store = JobStore(tmp_path / "resume-probe.sqlite3")
+    store.create_run("resume-probe", jobs, workspace_root=tmp_path / "workspaces")
+    run_module.run_job(
+        store,
+        "resume-probe",
+        jobs[0],
+        capabilities_provider=_advertisement,
+        backend_factory=factory,
+    )
+    run_module.run_job(
+        store,
+        "resume-probe",
+        jobs[1],
+        capabilities_provider=_advertisement,
+        backend_factory=factory,
+    )
+
+    resumed = resume_run(
+        "resume-probe",
+        store,
+        capabilities_provider=_advertisement,
+        backend_factory=factory,
+    )
+
+    assert resumed.jobs[2].state is JobState.UNROUTABLE
+    assert len(resumed.attempts) == 2
+    assert "excluded after a confirming probe" in (resumed.jobs[2].error or "")
+
+
 def test_openai_timeout_is_our_deadline_not_an_unreachable_endpoint(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

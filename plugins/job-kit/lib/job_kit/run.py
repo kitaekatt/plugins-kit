@@ -65,6 +65,9 @@ HALT_UNREACHABLE = "unreachable"
 _HALT_KINDS = frozenset(
     {HALT_AUTH, HALT_RATE_LIMIT, HALT_INSUFFICIENT_CREDIT, HALT_UNREACHABLE}
 )
+_PERSISTENT_HALT_KINDS = frozenset(
+    {HALT_AUTH, HALT_RATE_LIMIT, HALT_INSUFFICIENT_CREDIT}
+)
 
 try:
     import openai as _openai
@@ -273,7 +276,7 @@ def _halt_for_exception(backend: object, exc: BaseException) -> Optional[str]:
 
 
 def _known_halt_kind(value: object) -> Optional[str]:
-    """Accept only halt labels defined by llm-scripting-kit's taxonomy."""
+    """Accept only halt labels job-kit can classify and record."""
     if isinstance(value, str) and value in _HALT_KINDS:
         return value
     return None
@@ -596,9 +599,14 @@ def run_job(
     selection_job = (
         _require_floor_subjects(job, run_floor) if run_floor is not None else job
     )
+    same_job_halts = {
+        attempt.endpoint
+        for attempt in store.list_attempts(run_id, job.id)
+        if attempt.halt_kind is not None
+    }
     selection = select_endpoint(
         selection_job,
-        halted_endpoints=halted_endpoints,
+        halted_endpoints=frozenset(halted_endpoints) | same_job_halts,
         capabilities=advertised,
         backend_factory=backend_factory or create_backend,
         project_root=str(job.declared_directory),
@@ -890,12 +898,12 @@ def _selection_halted_reason(
         described.add(attempt.endpoint)
     for endpoint in job.endpoint_preference:
         if endpoint in halted_endpoints and endpoint not in described:
-            exclusions.append(f"{endpoint!r} (persistent halt)")
+            exclusions.append(f"{endpoint!r} (excluded after a confirming probe or persistent halt)")
             described.add(endpoint)
     if exclusions:
         return (
             f"job {job.id!r} halted: endpoint(s) {', '.join(exclusions)} "
-            "were excluded by persistent halt classification"
+            "were excluded after a confirming probe, persistent halt, or same-job halt"
         )
     return (
         f"job {job.id!r} halted: no endpoint remained after "
@@ -976,12 +984,18 @@ def _drive_job(
                     job.id,
                     _selection_halted_reason(job, attempts, halted_endpoints),
                 )
+            elif set(job.endpoint_preference) & set(halted_endpoints):
+                store.mark_unroutable(
+                    run_id,
+                    job.id,
+                    _selection_halted_reason(job, attempts, halted_endpoints),
+                )
             else:
                 store.mark_unroutable(run_id, job.id, str(exc))
             return
         except WorkspaceError:
             return
-        if attempt.halt_kind is not None:
+        if attempt.halt_kind in _PERSISTENT_HALT_KINDS:
             halts.record(attempt.endpoint)
 
 

@@ -70,6 +70,7 @@ from .run import (
 from .select import (
     NoCompatibleEndpointError,
     SelectionError,
+    SharedLibTooOldError,
     choose_endpoint,
     requirements_match,
     select_endpoint,
@@ -133,6 +134,7 @@ __all__ = [
     "run_jobs",
     "NoCompatibleEndpointError",
     "SelectionError",
+    "SharedLibTooOldError",
     "choose_endpoint",
     "requirements_match",
     "select_endpoint",

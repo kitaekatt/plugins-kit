@@ -41,6 +41,7 @@ counts. Unknown usage is represented by ``None`` rather than zero.
 from __future__ import annotations
 
 import math
+import os
 import shlex
 from dataclasses import dataclass, field
 from numbers import Real
@@ -63,6 +64,11 @@ _JOB_OPTION_KEYS = frozenset(
         "temperature",
     }
 )
+
+
+def _split_command(value: str) -> tuple[str, ...]:
+    """Split a scalar command using the host platform's quoting rules."""
+    return tuple(shlex.split(value, posix=os.name != "nt"))
 
 
 def _normalize_job_options(value: object) -> dict[str, object]:
@@ -141,6 +147,9 @@ TERMINAL_STATES = frozenset(
 )
 
 
+WORKSPACE_STATUSES = frozenset({"isolated", "none", "removing", "removed"})
+
+
 COMPLETED = "completed"
 TIMEOUT = "timeout"
 ERROR = "error"
@@ -201,7 +210,7 @@ class Contract:
     def __post_init__(self) -> None:
         command: tuple[str, ...]
         if isinstance(self.command, str):
-            command = tuple(shlex.split(self.command))
+            command = _split_command(self.command)
         else:
             command = tuple(str(part) for part in self.command)
         if not command:
@@ -219,7 +228,7 @@ class Contract:
         if command is None:
             raise ValueError("contract requires command")
         if isinstance(command, str):
-            command_value: tuple[str, ...] = tuple(shlex.split(command))
+            command_value = _split_command(command)
         elif isinstance(command, Sequence) and not isinstance(command, (bytes, bytearray)):
             command_value = tuple(str(part) for part in command)
         else:
@@ -696,7 +705,7 @@ class Attempt:
         if self.workspace is not None:
             object.__setattr__(self, "workspace", Path(self.workspace).expanduser().resolve())
         status = str(self.workspace_status)
-        if status not in {"isolated", "none", "removing", "removed"}:
+        if status not in WORKSPACE_STATUSES:
             raise ValueError(
                 "workspace_status must be one of: isolated, none, removing, removed"
             )
@@ -968,6 +977,7 @@ __all__ = [
     "PathLike",
     "JobState",
     "TERMINAL_STATES",
+    "WORKSPACE_STATUSES",
     "COMPLETED",
     "TIMEOUT",
     "ERROR",

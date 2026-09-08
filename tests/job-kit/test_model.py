@@ -6,6 +6,9 @@ from pathlib import Path
 
 import pytest
 
+import job_kit.workspace as workspace_module
+import job_kit.model as model_module
+from job_kit import SharedLibTooOldError
 from job_kit.model import (
     Acceptance,
     Contract,
@@ -15,6 +18,25 @@ from job_kit.model import (
     load_job_file,
     validate_max_parallel,
 )
+
+
+def test_workspace_statuses_have_one_definition_and_shared_error_is_public() -> None:
+    """The package shares workspace status vocabulary and exports its error."""
+    assert model_module.WORKSPACE_STATUSES is workspace_module.WORKSPACE_STATUSES
+    assert SharedLibTooOldError.__name__ == "SharedLibTooOldError"
+
+
+def test_windows_scalar_contract_command_preserves_backslashes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Windows command parsing is tested through its platform-specific path."""
+    monkeypatch.setattr(model_module.os, "name", "nt")
+
+    contract = Contract.from_mapping(
+        {"command": r"C:\Tools\verify.exe --check"}
+    )
+
+    assert contract.command == (r"C:\Tools\verify.exe", "--check")
 
 
 def test_load_job_file_resolves_relative_job_paths(tmp_path: Path) -> None:

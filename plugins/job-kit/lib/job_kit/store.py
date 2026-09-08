@@ -36,6 +36,7 @@ from .model import (
 
 DEFAULT_BUSY_TIMEOUT_MS = 5000
 ERROR_LIMIT = 2000
+_PERSISTENT_HALT_KINDS = ("auth", "rate_limit", "insufficient_credit")
 
 
 class StoreError(Exception):
@@ -1483,13 +1484,44 @@ class JobStore:
         return [str(row["id"]) for row in rows]
 
     def halted_endpoints(self, run_id: str) -> frozenset[str]:
-        """Return endpoints with a persistent halt recorded in this run."""
+        """Return endpoints excluded for persistent halts or a confirmed outage."""
         with self._connect() as conn:
             self._require_run(conn, run_id)
+            persistent_placeholders = ", ".join("?" for _ in _PERSISTENT_HALT_KINDS)
             rows = conn.execute(
-                "SELECT DISTINCT endpoint FROM attempts "
-                "WHERE run_id = ? AND halt_kind IS NOT NULL",
-                (run_id,),
+                f"""
+                SELECT DISTINCT endpoint
+                FROM attempts
+                WHERE run_id = ? AND halt_kind IN ({persistent_placeholders})
+                UNION
+                SELECT DISTINCT later.endpoint
+                FROM attempts AS earlier
+                JOIN attempts AS later
+                  ON later.run_id = earlier.run_id
+                 AND later.endpoint = earlier.endpoint
+                 AND later.halt_kind = 'unreachable'
+                 AND later.started_at IS NOT NULL
+                 AND later.ended_at IS NOT NULL
+                 AND earlier.halt_kind = 'unreachable'
+                 AND earlier.started_at IS NOT NULL
+                 AND earlier.ended_at IS NOT NULL
+                 AND later.started_at > earlier.started_at
+                 AND later.started_at > earlier.ended_at
+                WHERE earlier.run_id = ?
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM attempts AS between_attempt
+                      WHERE between_attempt.run_id = earlier.run_id
+                        AND between_attempt.endpoint = earlier.endpoint
+                        AND between_attempt.started_at > earlier.started_at
+                        AND between_attempt.started_at < later.started_at
+                        AND (
+                            between_attempt.halt_kind IS NULL
+                            OR between_attempt.halt_kind <> 'unreachable'
+                        )
+                  )
+                """,
+                (run_id, *_PERSISTENT_HALT_KINDS, run_id),
             ).fetchall()
         return frozenset(str(row["endpoint"]) for row in rows)
 
