@@ -408,6 +408,57 @@ class TestEnsureVenvEditableRemediation:
         assert any("stale editable install" in e for e in entries)
         assert any(e == "re-synced" for e in entries)
 
+    def test_engine_logs_sync_mechanics_but_displays_only_summary(
+        self, tmp_path, monkeypatch
+    ):
+        from bootstrap_lib.engine import _process_venv_def
+        from bootstrap_lib.log import write_log_block
+        from bootstrap_lib.messages import ITEM_MAX, numbered
+        from bootstrap_lib.result import Result
+
+        detail = (
+            "not ready, running `uv sync --project C:\\Users\\truff\\cache\\job-kit` - "
+            "stale editable install: __editable__.job_kit-0.4.0.pth points at "
+            "D:\\Dev\\cache\\job-kit\\0.4.0\\lib, expected under "
+            "C:\\Users\\truff\\cache\\job-kit\\0.4.1"
+        )
+        passed = Result(
+            passed=True,
+            subject=str(tmp_path / ".venv"),
+            message="venv ok (1 import verified)",
+        )
+        monkeypatch.setattr(
+            "bootstrap_lib.venv_check.ensure_venv",
+            lambda *args, **kwargs: (passed, [detail, "re-synced"]),
+        )
+        monkeypatch.setattr(
+            "bootstrap_lib.venv_check.export_venv_env_var", lambda *args: None
+        )
+        actions, quiet, oks, failures = [], [], [], []
+
+        _process_venv_def(
+            {"check_imports": ["job_kit"]},
+            str(tmp_path / "data"),
+            str(tmp_path / "plugin"),
+            "",
+            "venv",
+            actions,
+            oks,
+            failures,
+            plugin_name="job-kit",
+            quiet_entries=quiet,
+        )
+        write_log_block(str(tmp_path / "log"), "job-kit", actions + quiet)
+        display = numbered(actions)
+        log_text = (tmp_path / "log" / "bootstrap.log").read_text()
+
+        assert detail in log_text
+        assert "uv sync --project" not in display
+        assert "stale editable install" not in display
+        assert display == "venv: re-synced"
+        assert len(display) <= ITEM_MAX
+        assert failures == []
+
 
 class TestVenvEnvVarName:
     def test_kebab_to_upper_underscore(self):
@@ -802,6 +853,7 @@ class TestManifestExtrasReachEnsureVenv:
             plugin_name = "llm-scripting-kit"
             action_entries: list = []
             ok_entries: list = []
+            quiet_entries: list = []
             failures: list = []
 
         engine._phase_venv(Ctx())
@@ -820,6 +872,7 @@ class TestManifestExtrasReachEnsureVenv:
             plugin_name = "some-plugin"
             action_entries: list = []
             ok_entries: list = []
+            quiet_entries: list = []
             failures: list = []
 
         engine._phase_venv(Ctx())

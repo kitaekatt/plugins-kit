@@ -469,13 +469,17 @@ and an ungated ok entry would reappear in the next pass's display. What the gate
 no longer decides is *retention* -- every ok entry reaches the record whether or
 not it reaches the log.
 
-Note what was NOT done: `_read_new_log_entries` still reads **every** block, not
-just the shell's. Narrowing it to `--- Shell ... ---` headers looks like a
-tidier decoupling and is wrong -- blocks written by *other processes* are the
-reason the log is read back at all. A fix-all pass writes a `<label> elevation`
-block specifically so the re-check pass it spawns can surface "fix runner
-completed successfully"; the harvest and lock stand-down write theirs the same
-way. Scoping the reader to `Shell` swallows all of them.
+`_read_new_log_entries` reads every display-eligible block, not only
+`--- Shell ... ---` blocks. Blocks from other processes can carry required
+results. For example, a fix-all pass writes a `<label> elevation` block so its
+re-check can display "fix runner completed successfully".
+
+Three block prefixes are hidden from the user: `bootstrap always`,
+`bootstrap harvest`, and `bootstrap lock`. They report internal scheduling and do not enter
+`systemMessage`. This filter also prevents repeated harvest launches from
+producing repeated user-facing lines. The complete blocks stay in
+`bootstrap.log` and remain available in `additionalContext` when a caller
+reports them directly.
 
 The payoff is that **presentation became free**. A collated line may be as short
 as the UX wants; a label may be swapped for a slug; a whole section may be
@@ -525,7 +529,7 @@ pass.
 
 A **collated** message is one that flattens several independent items onto a
 single line: a display section's action list, the elevation queue's task
-labels, the ASK-item list in the `AskUserQuestion` directive. Four rules apply
+labels, the ASK-item list in the `AskUserQuestion` directive. Five rules apply
 to every one of them; `bootstrap_lib/messages.py` is the implementation.
 
 **1. Number the items: `(1) x; (2) y`.** A bare separator produces a run-on
@@ -609,9 +613,30 @@ For manifest authors: an entry whose `description` is documentation should also
 declare a short `label`. Nothing breaks without one -- the `name` fallback is
 short by construction -- but the label is the friendlier name the user reads.
 
+**5. Never put absolute paths or shell command strings in display text.** Keep
+the complete entry in `bootstrap.log`. Add an authored `display=` label via
+`_append_detail`; `numbered()` uses that label in place of the entry text. If
+the detail is separate from a displayed summary, route the detail through
+`quiet_entries`.
+
+An authored label wins UNCONDITIONALLY, not only when the entry text overflows
+`ITEM_MAX`. `display=` is the author stating what the user reads, so honouring
+it on a width test alone made the display depend on whether the part being
+omitted happened to be short -- a 35-character entry
+(`project config: updated /tmp/x.yaml`) kept its path under a rule that forbids
+exactly that. Width still governs an entry with NO authored label: over-length
+text falls back to a whole clause derived at a separator, and is never cut
+mid-word. `tests/bootstrap/test_display_no_paths.py` enforces both halves.
+
+The venv handler applies this rule to `uv sync --project <absolute path>` and
+stale editable-install diagnostics. It logs those details as `quiet` and
+displays only `venv: created`, `venv: re-synced`, or `venv: FAILED`. An
+`env_check` fix logs its last output line but displays only
+`env_check <name>: fixed`, because the last line is not a change description.
+
 ## Execution Flow
 
-The engine accepts a `--background` flag. When set, output is written atomically to `bootstrap_display.pending` in the data directory instead of stdout. The UserPromptSubmit display hook renames `.pending` to `.displayed` after emitting (handshake protocol). Background output uses UserPromptSubmit fields: `systemMessage` (user-facing) plus `hookSpecificOutput` with `hookEventName: "UserPromptSubmit"` and `additionalContext` (Claude-facing) — on failure, `additionalContext` carries the fix-all instructions so Claude can act on them. Non-background output (stdout, consumed by the SessionStart hook itself) is identical except `hookEventName: "SessionStart"`. When there's nothing to display (silent success with `log_success_checks` off), no file is written.
+The engine accepts a `--background` flag. When set, output is written atomically to `bootstrap_display.pending` in the data directory instead of stdout. The UserPromptSubmit display hook renames `.pending` to `.displayed` after emitting (handshake protocol). Background output uses UserPromptSubmit fields: `systemMessage` (user-facing) plus `hookSpecificOutput` with `hookEventName: "UserPromptSubmit"` and `additionalContext` (Claude-facing). `additionalContext` carries the full emitted log content; `systemMessage` carries the user-visible projection and is omitted when that projection is empty. Thus, a log-only stand-down still writes a pending payload that tells the agent no work occurred. On failure, `additionalContext` carries the fix-all instructions so Claude can act on them. Non-background output (stdout, consumed by the SessionStart hook itself) has the same channel split and differs only in `hookEventName: "SessionStart"`.
 
 1. **Auto-run phase**: Bootstrap runs on session start. For each tool check, the engine runs check -> remediate -> re-check:
    - Tool present -> log `<name>: passed`, continue
@@ -711,15 +736,37 @@ run; its output is the evidence to attach before any repair.
 
 **Commit pinning for git_deps.** Git dependencies can optionally specify a `commit` SHA to pin to a specific version. After cloning, the engine checks out the pinned commit. On subsequent runs, it verifies HEAD matches the expected SHA. If mismatched, it fetches and checks out the correct commit.
 
-**Every check must log its outcome.** (Cited by that exact name from `CLAUDE.md`, `manifest-reference.md`, and several engine modules -- keep the phrase.) The entry an author emits is also what reaches the pass record, automatically, because the entry lists are `RecordingList`s: the log and both message surfaces are *projections*, and `bootstrap_events.jsonl` is the complete copy. An entry omitted to keep a display quiet is therefore an entry missing from the evidence -- and there is no reason to omit one, because suppressing an entry from the user costs nothing.
+**Every check must log its outcome.** Keep this exact phrase because
+`CLAUDE.md`, `manifest-reference.md`, and engine modules cite it. An author's
+entry also reaches the pass record because the entry lists are
+`RecordingList`s. The log and message surfaces are projections.
+`bootstrap_events.jsonl` is the complete copy. Do not omit an entry to make the
+display quiet. Classify it as `quiet` instead.
 
-The engine uses two entry lists: `action_entries` (always displayed) and `ok_entries` (displayed only in verbose mode). Every check -- whether built-in (tools, venv, git deps) or custom (autodetect, bootstrap scripts) -- must emit exactly one entry:
+The engine has four entry severities: `fail`, `action`, `quiet`, and `ok`.
+Every check -- built-in or custom -- must emit at least one outcome entry:
 
 - **detect → ok (no change needed)** → append to `ok_entries` (silent unless verbose)
 - **detect → remediate (created, installed, updated)** → append to `action_entries` (always logged)
+- **remediation detail represented by an adjacent summary** -> append to `quiet_entries` (always logged, never displayed)
 - **detect → fail (unresolvable)** → append to `action_entries` + add to fix-all failures
 
-**The aggregate exception (`quiet_entries`).** One narrow third list exists for remediations the pass reports **in aggregate**: `_ManifestContext.quiet(msg)` appends to `quiet_entries`, which are written to the log unconditionally (they are actions, so they are never gated on `log_success`) but never rendered into a display section. It is legitimate ONLY when some other entry displayed in the same pass speaks for what went quiet. Two sanctioned uses: the shared-lib publish/link events, aggregated by `_SharedLibLinkLog` into the single Step 4c line; and the raw CLI output behind a failed marketplace add or plugin install, where the displayed failure entry carries the classified one-clause cause and `quiet()` keeps the full text recoverable from the log (see "Collated message text", rule 4). The user-visible outcome is still logged; what is suppressed is the *per-plugin repetition*, not the outcome. A check that goes quiet without an aggregate line is the "silent bootstrap operation" bug this contract exists to prevent.
+**The detail rule (`quiet_entries`).** `_ManifestContext.quiet(msg)` appends to
+`quiet_entries`. These entries are always written to the log and never rendered
+in a display section. Use `quiet` only when another displayed entry in the same
+pass summarizes the outcome.
+
+The sanctioned uses are shared-lib events represented by the Step 4c aggregate,
+raw CLI output represented by a classified failure clause, and dependency-sync
+mechanics represented by a short action or failure. The dependency-sync case
+covers `venv`, `project_venv`, and `project_npm` alike: each embeds a package
+manager's argv and an absolute project path, so `_process_venv_def` and
+`_process_project_npm` route those to `quiet` and display one summary
+(`created`, `re-synced`, `installed`, or `FAILED`). The project-config phase
+follows rule 5 by a different route -- its paths ride an authored `display=`
+label rather than `quiet`, because the entry has no separate detail to split
+off. A check that uses `quiet` without a displayed summary is a silent
+bootstrap operation.
 
 **The precondition exception (a phase that stands down).** A phase whose every operation depends on one unmet precondition emits a single `action` entry and returns, adding **no** fix-all failures — an exception to the "detect → fail → add to fix-all failures" rule above, and the second and last sanctioned deviation from this contract. There are two sanctioned instances, both in the marketplace/plugin phases:
 

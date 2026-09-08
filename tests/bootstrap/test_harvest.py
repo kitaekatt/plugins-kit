@@ -9,11 +9,13 @@ per-installed-version dedup guard.
 import json
 import subprocess
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
 
 from bootstrap_lib import harvest
+from bootstrap_lib.engine import _read_new_log_entries
 from bootstrap_lib.harvest import (
     read_installed_bootstrap,
     read_path_version,
@@ -559,6 +561,33 @@ class TestMainTriggerSequencing:
         ])
         assert rc == 0
         assert relaunch_calls == [1]
+
+    def test_registry_relaunch_is_logged_but_not_displayed(
+        self, tmp_path, monkeypatch
+    ):
+        status = (
+            "registry-change: relaunched bootstrap pass "
+            "(installed/enabled plugin set changed mid-session)"
+        )
+        monkeypatch.setattr(harvest, "run_harvest", lambda *args, **kwargs: None)
+        monkeypatch.setattr(
+            harvest, "run_registry_relaunch", lambda *args, **kwargs: status
+        )
+
+        rc = harvest.main([
+            "--data-dir", str(tmp_path),
+            "--project-dir", "/proj",
+            "--marketplace", "plugins-kit",
+            "--registry", str(tmp_path / "r.json"),
+        ])
+        log_text = (tmp_path / "bootstrap.log").read_text()
+        display = _read_new_log_entries(
+            str(tmp_path), start_time=datetime.now(timezone.utc)
+        )
+
+        assert rc == 0
+        assert status in log_text
+        assert "registry-change" not in display
 
 
 class TestRelaunchScriptInvocation:

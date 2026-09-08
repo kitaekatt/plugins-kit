@@ -5,6 +5,7 @@ These tests guard against the regression where a missing or stale
 bootstrap log to the user as a single 40+ KB systemMessage.
 """
 
+import json
 import os
 from datetime import datetime, timedelta, timezone
 
@@ -107,16 +108,38 @@ class TestReadNewLogEntries:
         out = _read_new_log_entries(data_dir, start_time=now)
         assert out == ""
 
+    def test_internal_scheduling_blocks_stay_log_only(self, data_dir):
+        """Always, harvest, and lock outcomes stay in the log, not display."""
+        now = datetime(2026, 9, 8, 16, 48, 0, tzinfo=timezone.utc)
+        log = (
+            "--- bootstrap always 2026-09-08T16:47:40Z ---\n"
+            "env_check repo-sync: fixed - all repos in sync\n"
+            "--- bootstrap harvest 2026-09-08T16:47:41Z ---\n"
+            "registry-change: relaunched bootstrap pass\n"
+            "--- bootstrap harvest 2026-09-08T16:47:42Z ---\n"
+            "registry-change: relaunched bootstrap pass\n"
+            "--- bootstrap lock 2026-09-08T16:47:43Z ---\n"
+            "stand-down: engine 0.96.12 yielded to running engine pass\n"
+            "--- bootstrap elevation 2026-09-08T16:47:44Z ---\n"
+            "fix runner completed successfully\n"
+        )
+        _write_log(data_dir, log)
+
+        out = _read_new_log_entries(data_dir, start_time=now)
+
+        with open(os.path.join(data_dir, LOG_FILENAME)) as log_file:
+            persisted = log_file.read()
+        assert "repo-sync" in persisted
+        assert persisted.count("registry-change") == 2
+        assert "stand-down" in persisted
+        assert "repo-sync" not in out
+        assert "registry-change" not in out
+        assert "stand-down" not in out
+        assert "fix runner completed successfully" in out
+
 
 class TestUserVisibleLog:
-    """`_user_visible_log` strips the DIAGNOSTIC blocks from the user's copy.
-
-    The stand-down report ("bootstrap lock") says what the engine did about its
-    own scheduling -- it is not something the user can act on, and it displaced
-    the finding they actually needed to read. It stays in bootstrap.log and in
-    additionalContext, because an agent driving --fix-all must be able to tell
-    a stand-down from a clean pass (see _stand_down).
-    """
+    """`_user_visible_log` strips log-only scheduling blocks."""
 
     LOCK = (
         "--- bootstrap lock 2026-08-19T15:19:08Z ---\n"
@@ -154,8 +177,30 @@ class TestUserVisibleLog:
         out = tmp_path / "pending.json"
         emit_success_response(self.LOCK, label="mkt:bootstrap@test",
                               output_file=str(out))
-        import json
         payload = json.loads(out.read_text())
         assert "systemMessage" not in payload
         ac = payload["hookSpecificOutput"]["additionalContext"]
         assert "stand-down" in ac
+
+    def test_emitted_channels_split_log_only_from_user_content(
+        self, tmp_path, capsys
+    ):
+        """Both transports keep full agent context and filter the user's copy."""
+        content = self.LOCK + self.REAL
+        out = tmp_path / "pending.json"
+        emit_success_response(content, label="mkt:bootstrap@test",
+                              output_file=str(out))
+        background_payload = json.loads(out.read_text())
+
+        emit_success_response(content, label="mkt:bootstrap@test")
+        stdout_payload = json.loads(capsys.readouterr().out)
+
+        for payload in (background_payload, stdout_payload):
+            agent_message = payload["hookSpecificOutput"]["additionalContext"]
+            user_message = payload["systemMessage"]
+            assert "bootstrap lock" in agent_message
+            assert "stand-down" in agent_message
+            assert "env_check repo-sync: FAILED" in agent_message
+            assert "bootstrap lock" not in user_message
+            assert "stand-down" not in user_message
+            assert "env_check repo-sync: FAILED" in user_message
