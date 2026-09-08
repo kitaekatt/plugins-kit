@@ -200,6 +200,25 @@ worktree when done (`git worktree remove ../plugins-kit-master`). The
 back-port-then-clobber rule is what makes the wholesale "dev wins" resolution
 safe rather than blind.
 
+**Before committing the merge, assert the resolved tree matches dev:
+`git diff --stat origin/dev` must be EMPTY.** Resolving every CONFLICT toward
+dev does not give you dev's tree, because the files git merged cleanly never
+became conflicts and were never resolved. A clean auto-merge can still be
+wrong: where master and dev each added the same block at slightly different
+offsets, git takes BOTH, and the result is a silently duplicated block with
+whatever sat between the two insertion points orphaned inside it. Nothing
+reports this -- there is no conflict marker, the merge exits 0, and the file
+looks plausible.
+
+Observed 2026-09-07 on
+`plugins/llm-scripting-kit/lib/llm_scripting_kit/completion/capabilities.py`:
+the "canonical guarantee subjects" block landed twice with the `BYPASS`
+docstring stranded between the copies. The conflict loop never touched the file
+because it never conflicted; only the diff against dev exposed it. When the
+diff is non-empty, inspect each file it names and take dev's copy
+(`git checkout origin/dev -- <file>`) unless that file is a genuine
+back-port from the guard above.
+
 ## Master infra-drift sync (periodic, no version bumps)
 
 A release projects dev's tree onto master, but the publish flow is SCOPED to

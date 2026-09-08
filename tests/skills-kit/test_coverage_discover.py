@@ -1030,7 +1030,8 @@ class TestVcsIgnorePredicate:
         assert vcs.detect_vcs(plain) is None
         assert vcs.ignored_paths([plain / "main.c"], root=plain) == set()
 
-    def test_p4_project_is_detected_from_a_config_marker(self, tmp_path):
+    def test_p4_project_is_detected_from_a_config_marker(
+            self, tmp_path, default_p4_config_names):
         """Filesystem-only detection, deliberately: `p4 info` contacts a server,
         so a machine with P4PORT set and no reachable server would pay a timeout
         per directory and a wrong answer would look like a slow one.

@@ -126,7 +126,8 @@ class TestCollectCandidates:
         assert "real.md" in found
         assert "kept.md" not in found
 
-    def test_skips_p4_ignored_candidates(self, tmp_path, monkeypatch):
+    def test_skips_p4_ignored_candidates(
+            self, tmp_path, monkeypatch, default_p4_config_names):
         """Mirrors the p4-detection fixture pattern in
         tests/skills-kit/test_coverage_discover.py: a .p4config marker makes
         the tree look like a Perforce workspace, and the p4 subprocess call is
