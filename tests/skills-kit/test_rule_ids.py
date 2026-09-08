@@ -72,6 +72,7 @@ def test_thresholds_have_expected_keys_and_values():
         "body_max_lines": 500,
         "body_max_tokens": 3000,
         "mixed_min_score": 2,
+        "human_html_max_words": 900,
     }
 
 

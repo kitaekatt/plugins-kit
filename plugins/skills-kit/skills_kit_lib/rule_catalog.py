@@ -1,8 +1,8 @@
 """rule_catalog -- SSOT for every audit rule id: its bucket, sub-group, and
 user-facing description.
 
-Every rule id emitted by audit.py (the ``rule`` field on a CheckResult) is
-mapped here to exactly one of three buckets:
+Every rule id emitted by audit.py (the ``rule`` field on a CheckResult), plus
+the configured SZ-1 checker rule, is mapped here to one of three buckets:
 
 - ``architectural`` -- structural-contract checks (the YAML type contract,
   mixed-type / cross-block drift). These are the spine of the framework and are
@@ -41,6 +41,7 @@ RULES: dict[str, tuple[str, str, str]] = {
     "refs-cited-exist": ("inoffensive", "integrity", "Every reference cited in the body resolves to a file."),
     "asset-paths-resolve": ("inoffensive", "integrity", "Every declared asset-dependency and `tools[].tests` path resolves."),
     "refs-reachable": ("inoffensive", "integrity", "Every file under `references/` is reachable from SKILL.md."),
+    "SZ-1": ("inoffensive", "integrity", "Generated human HTML stays at or below `human_html_max_words` visible words."),
     # -- architectural: structural contract -------------------------------
     "yaml-contract": ("architectural", "contract", "The YAML type-contract block is recognized and validates against its schema (root key found, required keys present, rules satisfied)."),
     "mixed-type": ("architectural", "contract", "A SKILL.md declares exactly one skill-type root -- no drift across two type contracts (consumes `mixed_min_score`)."),
@@ -103,6 +104,7 @@ THRESHOLD_CONSUMERS: dict[str, str] = {
     "body_max_lines": "`body-size-signal`",
     "body_max_tokens": "`body-size-signal`",
     "mixed_min_score": "`mixed-type`",
+    "human_html_max_words": "`SZ-1`",
 }
 
 

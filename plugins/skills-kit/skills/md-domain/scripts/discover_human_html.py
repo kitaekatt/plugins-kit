@@ -40,10 +40,10 @@ Three properties are load-bearing:
     caller walking the emitted list in order always reads a finished child
     before composing its parent. Ties break on path for determinism.
 
-  * NAVIGATION AND STALENESS ARE COMPUTED OVER EVERY RECORD IN THE REPOSITORY,
-    not only over the emitted scope. Narrowing the scope to one directory must
-    not change where that directory's up-link points, so the record map is
-    always loaded whole.
+  * NAVIGATION IS COMPUTED OVER EVERY RECORD IN THE REPOSITORY, not only over
+    the emitted scope. STALENESS IS BOUNDED BY TERRITORY: owned directories and
+    each nearest descendant page are dependencies, while deeper page-owned
+    subtrees are not. Narrowing the emitted scope does not change either answer.
 """
 
 import argparse
@@ -51,6 +51,7 @@ import json
 import subprocess
 import sys
 from pathlib import Path
+from typing import Iterable
 
 # skills_kit_lib lives at the plugin root; make it importable regardless of
 # which interpreter launched the script. `skills_kit_lib.human_html` is
@@ -132,13 +133,21 @@ def repository_files(repo_root: Path) -> list[str]:
     return sorted({entry for entry in out.split("\0") if entry})
 
 
-def subject_directories(files: list[str]) -> list[str]:
-    """Every directory holding an analysis input somewhere in its subtree.
+def subject_directories(
+    files: list[str],
+    directory: str | Path = hh.ROOT_DIRECTORY,
+    excluded: Iterable[str | Path] = (),
+) -> list[str]:
+    """Return analysis-input directories inside one ownership boundary.
 
     A directory with no analysis input under it is not a subject: that covers a
     directory holding only generated output, a `.databench/` record tree, and an
-    ignored tree alike.
+    ignored tree alike. `directory` limits the result to that subtree, and each
+    `excluded` directory removes its whole subtree. Passing neither optional
+    argument returns every subject in the repository.
     """
+    owned_root = hh.normalize_directory(directory)
+    excluded_roots = [hh.normalize_directory(item) for item in excluded]
     subjects: set[str] = set()
     for rel in files:
         if not is_analysis_input(rel):
@@ -147,7 +156,12 @@ def subject_directories(files: list[str]) -> list[str]:
         subjects.add(hh.ROOT_DIRECTORY)
         for depth in range(1, len(parts) + 1):
             subjects.add("/".join(parts[:depth]))
-    return sorted(subjects)
+    return sorted(
+        subject
+        for subject in subjects
+        if in_scope(subject, owned_root)
+        and not any(in_scope(subject, boundary) for boundary in excluded_roots)
+    )
 
 
 def depth_of(directory: str) -> int:
@@ -225,6 +239,43 @@ def generated_files(repo_root: Path, directory: str) -> tuple[str | None, list[s
     return page, references
 
 
+def territory_source_stamp(
+    repo_root: Path,
+    directory: str,
+    excluded: Iterable[str],
+) -> tuple[str, bool]:
+    """Return the DR-2 source stamp for a computed territory.
+
+    Stage 2 owns the pathspec construction. This scan supplies the territory's
+    excluded page subtrees and runs the same two read-only queries as
+    `hh.source_stamp` over those pathspecs.
+    """
+    normalized = hh.normalize_directory(directory)
+    pathspecs = hh._subtree_pathspecs(normalized, excluded)
+    log_out = _git(
+        repo_root,
+        ["log", "-1", "--format=%H", "HEAD", "--", *pathspecs],
+    ).strip()
+    if not hh.SHA_RE.match(log_out):
+        raise hh.SourceStampError(
+            "no committed analysis input under %r in %s" % (normalized, repo_root)
+        )
+    status_out = _git(
+        repo_root,
+        [
+            "status",
+            "--porcelain",
+            "--untracked-files=all",
+            "--no-renames",
+            "-z",
+            "--",
+            *pathspecs,
+        ],
+    )
+    dirty = any(entry for entry in status_out.split("\0") if entry.strip())
+    return log_out, dirty
+
+
 def scan(repo_root: str | Path, directory: str | Path = hh.ROOT_DIRECTORY) -> dict:
     """Scan `repo_root` and return the CK-2 discovery result.
 
@@ -238,10 +289,40 @@ def scan(repo_root: str | Path, directory: str | Path = hh.ROOT_DIRECTORY) -> di
     subjects = subject_directories(files)
     records, record_errors = load_records(root_path)
 
+    page_directories = {
+        candidate
+        for candidate, record in records.items()
+        if record.decision == hh.DECISION_PAGE
+    }
+    territories: dict[str, dict] = {}
+    for subject in subjects:
+        owned_root, excluded_directories = hh.territory(subject, page_directories)
+        owned_directories = subject_directories(
+            files,
+            owned_root,
+            excluded_directories,
+        )
+        territories[subject] = {
+            "owned_directories": owned_directories,
+            "excluded_directories": excluded_directories,
+            "child_pages": [
+                {
+                    "directory": child,
+                    "identity": records[child].identity,
+                    "relationship": "nearest-page-descendant",
+                }
+                for child in excluded_directories
+            ],
+        }
+
     stamps: dict[str, tuple[str | None, bool, str | None]] = {}
     for subject in subjects:
         try:
-            sha, dirty = hh.source_stamp(root_path, subject)
+            sha, dirty = territory_source_stamp(
+                root_path,
+                subject,
+                territories[subject]["excluded_directories"],
+            )
             stamps[subject] = (sha, dirty, None)
         except hh.HumanHtmlError as exc:
             # No committed analysis input yet. Nothing identifies the judged
@@ -259,15 +340,15 @@ def scan(repo_root: str | Path, directory: str | Path = hh.ROOT_DIRECTORY) -> di
         else:
             statuses[subject] = RECORD_STATUS_FRESH
 
-    # TS-2: a stale or missing child makes every dependent ancestor stale.
+    # TS-2: depend on records inside this territory and on each page at its
+    # ownership boundary. A deeper page-owned record belongs to that page.
     stale_children: dict[str, list[str]] = {}
     for subject in subjects:
+        dependencies = set(territories[subject]["owned_directories"])
+        dependencies.discard(subject)
+        dependencies.update(territories[subject]["excluded_directories"])
         stale_children[subject] = sorted(
-            other
-            for other in subjects
-            if other != subject
-            and in_scope(other, subject)
-            and statuses[other] in _UNFRESH
+            other for other in dependencies if statuses.get(other) in _UNFRESH
         )
 
     emitted = []
@@ -304,6 +385,7 @@ def scan(repo_root: str | Path, directory: str | Path = hh.ROOT_DIRECTORY) -> di
                 "reference_files": reference_files,
                 "nearest_page_ancestor": up,
                 "nearest_page_descendants": down,
+                "territory": territories[subject],
                 "stale_children": stale_children[subject],
                 "stale_child": bool(stale_children[subject]),
                 "stale": status in _UNFRESH or bool(stale_children[subject]),
