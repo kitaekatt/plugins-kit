@@ -2427,6 +2427,142 @@ class TestBuildBundleHygieneSources:
 
         assert [u["depot"] for u in bundle["unreconciled"]] == ["//depot/src/forgot.cpp"]
 
+    def test_stale_open_edit_then_missing_surfaces_as_stale_open(self, tmp_path):
+        """The CL has foo.cpp open for edit; reconcile finds it missing from
+        the workspace and proposes `delete`. That is not a forgotten sibling
+        -- it is a CL that will fail `p4 submit` outright -- so it must
+        surface under the new `stale_open` bundle key, carrying the CL's own
+        open action (`edit`, from the describe output) and
+        `workspace_state: missing`, and it must not appear in `unreconciled`."""
+        ws = tmp_path / "ws"
+        src = ws / "src"
+        src.mkdir(parents=True)
+        sibling = src / "forgot.cpp"
+        sibling.write_text("int y = 2;\n", encoding="utf-8")
+        # foo.cpp deliberately absent from disk -- it was deleted locally
+        # while still open for edit in the CL.
+        own_local = src / "foo.cpp"
+
+        describe_out = (
+            "Change 1001 by user@client on 2026/01/01\n"
+            "\n"
+            "\tEdit foo\n"
+            "\n"
+            "Affected files ...\n"
+            "... //depot/src/foo.cpp#1 edit\n"
+            "\n"
+            "Differences ...\n"
+            "\n"
+            "==== //depot/src/foo.cpp#1 (text) ====\n"
+            "@@ -1 +1 @@\n"
+            "-int x = 0;\n"
+            "+int x = 1;\n"
+        )
+        where_out = f"... depotFile //depot/src/foo.cpp\n... path {own_local}\n"
+        info_out = f"... clientRoot {ws}\n"
+        reconcile_out = (
+            "... depotFile //depot/src/foo.cpp\n"
+            f"... clientFile {own_local}\n"
+            "... rev 1\n"
+            "... action delete\n"
+            "... type text\n"
+            "\n"
+            "... depotFile //depot/src/forgot.cpp\n"
+            f"... clientFile {sibling}\n"
+            "... rev 1\n"
+            "... action add\n"
+            "... type text\n"
+        )
+
+        def fake_run_p4(args):
+            if args[:2] == ["describe", "-du"]:
+                return (0, describe_out, "")
+            if args[:2] == ["-ztag", "where"]:
+                return (0, where_out, "")
+            if args[:2] == ["-ztag", "info"]:
+                return (0, info_out, "")
+            if args[:3] == ["-ztag", "reconcile", "-n"]:
+                return (0, reconcile_out, "")
+            if args[:4] == ["-ztag", "resolve", "-n", "-c"]:
+                return (1, "", "no file(s) to resolve.\n")
+            return (1, "", f"unexpected: {args}")
+
+        with patch.object(pr, "run_p4", side_effect=fake_run_p4):
+            bundle = pr.build_bundle("1001", tmp_path / "bundle")
+
+        assert [u["depot"] for u in bundle["unreconciled"]] == ["//depot/src/forgot.cpp"]
+        assert bundle["stale_open"] == [
+            {
+                "depot": "//depot/src/foo.cpp",
+                "local": str(own_local),
+                "open_action": "edit",
+                "workspace_state": "missing",
+            }
+        ]
+
+    def test_stale_open_delete_then_present_surfaces_as_stale_open(self, tmp_path):
+        """The CL has bar.cpp open for delete; reconcile finds it present on
+        disk (recreated after the delete was opened) and proposes `add`. The
+        submit would delete content that is on disk, so this must surface as
+        `stale_open` with `workspace_state: present` and the CL's own
+        `delete` open action, and must not appear in `unreconciled`."""
+        ws = tmp_path / "ws"
+        src = ws / "src"
+        src.mkdir(parents=True)
+        own_local = src / "bar.cpp"
+        own_local.write_text("int z = 3;\n", encoding="utf-8")
+
+        describe_out = (
+            "Change 1002 by user@client on 2026/01/01\n"
+            "\n"
+            "\tDelete bar\n"
+            "\n"
+            "Affected files ...\n"
+            "... //depot/src/bar.cpp#1 delete\n"
+            "\n"
+            "Differences ...\n"
+            "\n"
+        )
+        where_out = f"... depotFile //depot/src/bar.cpp\n... path {own_local}\n"
+        info_out = f"... clientRoot {ws}\n"
+        reconcile_out = (
+            "... depotFile //depot/src/bar.cpp\n"
+            f"... clientFile {own_local}\n"
+            "... rev 1\n"
+            "... action add\n"
+            "... type text\n"
+        )
+
+        def fake_run_p4(args):
+            if args[:2] == ["describe", "-du"]:
+                return (0, describe_out, "")
+            if args[:2] == ["-ztag", "where"]:
+                return (0, where_out, "")
+            if args[:2] == ["-ztag", "info"]:
+                return (0, info_out, "")
+            if args[:3] == ["-ztag", "reconcile", "-n"]:
+                return (0, reconcile_out, "")
+            if args[:4] == ["-ztag", "resolve", "-n", "-c"]:
+                return (1, "", "no file(s) to resolve.\n")
+            if args[:3] == ["print", "-q", "-o"]:
+                Path(args[3]).parent.mkdir(parents=True, exist_ok=True)
+                Path(args[3]).write_text("int z = 3;\n", encoding="utf-8")
+                return (0, "", "")
+            return (1, "", f"unexpected: {args}")
+
+        with patch.object(pr, "run_p4", side_effect=fake_run_p4):
+            bundle = pr.build_bundle("1002", tmp_path / "bundle")
+
+        assert bundle["unreconciled"] == []
+        assert bundle["stale_open"] == [
+            {
+                "depot": "//depot/src/bar.cpp",
+                "local": str(own_local),
+                "open_action": "delete",
+                "workspace_state": "present",
+            }
+        ]
+
 
 # ---------------------------------------------------------------------------
 # Submitted-CL guard: --claim requires a pending CL (#have would be POST-change)

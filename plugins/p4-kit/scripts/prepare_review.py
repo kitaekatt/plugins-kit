@@ -21,6 +21,15 @@ directories containing CL files, and reports any unreconciled files
 forgotten to include in the CL. `.p4ignore` is honored by p4 itself; files
 already opened in any pending CL are skipped by reconcile.
 
+Reconcile can also report a depot path the CL already has open, under two
+action-transition sequences: opened for edit then deleted from the
+workspace, or opened for delete then recreated in the workspace. Neither is
+a forgotten file -- the CL already owns the path -- so neither is offered
+via `unreconciled`. Each instead surfaces via the `stale_open` bundle key:
+the CL will fail `p4 submit` outright (open for edit, file missing) or the
+submit would delete content that is on disk (open for delete, file
+present).
+
 Also runs `p4 resolve -n -c <CL>` to report any files in the CL with
 pending merge/integrate resolves. These are informational: the diff still
 goes to reviewers (conflict markers in the file content are themselves
@@ -76,6 +85,11 @@ Output schema:
       "unique_claude_mds": ["<absolute path>", ...],
       "unreconciled": [
         {"local": "<local path>", "depot": "<depot path>", "action": "add"|"edit"|"delete"}
+      ],
+      "stale_open": [
+        {"depot": "<depot path>", "local": "<local path or null>",
+         "open_action": "<the action the CL has this file open for>",
+         "workspace_state": "missing"|"present"}
       ],
       "unresolved": [
         {"local": "<local path>", "depot": "<depot path>",
@@ -865,16 +879,53 @@ def find_unreconciled(dir_specs: list[tuple[Path, bool]]) -> list[dict]:
     return items
 
 
-def _exclude_own_depot_files(items: list[dict], own_depot_files: set[str]) -> list[dict]:
-    """Drop reconcile hits whose depot path is already open in this CL.
+def _partition_own_depot_files(
+    items: list[dict],
+    own_depot_files: set[str],
+    actions: dict[str, tuple[str, str]],
+) -> tuple[list[dict], list[dict]]:
+    """Split reconcile hits into (unreconciled, stale_open) by CL ownership.
 
     `p4 reconcile -n` can report a file already open in the CL under some
     action-transition sequences (opened for edit then deleted locally, or
     opened for delete then recreated) even though nothing was forgotten --
-    the file is already part of the CL. Filtering by depot path keeps
-    `unreconciled` scoped to genuinely missing siblings.
+    the file is already part of the CL. A hit whose depot path is not owned
+    by the CL passes through to `unreconciled` unchanged.
+
+    A hit that IS owned by the CL carries real submit-blocking signal when
+    reconcile's proposed action is `delete` (the CL has the file open for
+    edit, but it is missing from the workspace) or `add` (the CL has the
+    file open for delete, but it is present on disk). Those become
+    `stale_open` entries, with `open_action` taken from the CL's own parsed
+    actions (not the reconcile row). Any other proposed action on an owned
+    depot path (e.g. a spurious `edit` re-detection) carries neither signal
+    and is dropped entirely, matching how ownership filtering worked before
+    `stale_open` existed.
     """
-    return [i for i in items if i.get("depot") not in own_depot_files]
+    unreconciled: list[dict] = []
+    stale_open: list[dict] = []
+    for item in items:
+        depot = item.get("depot")
+        if depot not in own_depot_files:
+            unreconciled.append(item)
+            continue
+        proposed = item.get("action")
+        if proposed == "delete":
+            workspace_state = "missing"
+        elif proposed == "add":
+            workspace_state = "present"
+        else:
+            continue
+        open_action = actions.get(depot, ("", ""))[1]
+        stale_open.append(
+            {
+                "depot": depot,
+                "local": item.get("local") or None,
+                "open_action": open_action,
+                "workspace_state": workspace_state,
+            }
+        )
+    return unreconciled, stale_open
 
 
 def _parse_reconcile_output(out: str) -> list[dict]:
@@ -1113,8 +1164,8 @@ def build_bundle(
     minimal_dirs = compute_minimal_dirs(
         [f["local"] for f in hygiene_sources], workspace_root
     )
-    unreconciled = _exclude_own_depot_files(
-        find_unreconciled(minimal_dirs), set(depot_files)
+    unreconciled, stale_open = _partition_own_depot_files(
+        find_unreconciled(minimal_dirs), set(depot_files), actions
     )
     unresolved = find_unresolved(cl)
 
@@ -1138,6 +1189,7 @@ def build_bundle(
         "changed_files": changed_files,
         "unique_claude_mds": core["unique_claude_mds"],
         "unreconciled": unreconciled,
+        "stale_open": stale_open,
         "unresolved": unresolved,
         "submit_gates": core["submit_gates"],
         "auto_shelved": auto_shelved,

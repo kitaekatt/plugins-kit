@@ -510,3 +510,29 @@ class TestRenderedSkillDoesNotClaimDiskFreeOperation:
             # just that "something" is written
             assert "bundle_dir" in body or "bundle.bundle_dir" in body
             assert "ledger" in body.lower()
+
+
+class TestStaleOpenRenderedOnP4Only:
+    """p4-kit surfaces bundle.stale_open (a CL that already owns a depot path
+    reconcile flags: opened for edit then deleted locally, or opened for
+    delete then recreated) beside bundle.unresolved under one not-submittable
+    heading. git-kit has no open-action concept -- git tracks index state, not
+    a per-file open action -- so the rendered git skill must not carry any of
+    this."""
+
+    def test_p4_skill_renders_the_stale_open_section(self):
+        # Assert on strings the RENDER BLOCK alone carries. "stale_open" by
+        # itself is not one of them -- the step-2 expected-key list and the
+        # step-9 checklist line both name the key, so that substring stays
+        # present when the render block is deleted and would pin nothing.
+        body = gen.render_skill("p4")
+        assert "## CL is not in a submittable state -- fix before review" in body
+        assert "`p4 reconcile <path>` flips the CL's open action" in body
+        assert "`p4 revert <path>` discards the CL's" in body
+        assert "bundle.stale_open` is non-empty, list each entry's depot" in body
+
+    def test_git_skill_has_none_of_it(self):
+        body = gen.render_skill("git")
+        assert "stale_open" not in body
+        assert "## CL is not in a submittable state -- fix before review" not in body
+        assert "p4 reconcile <path>" not in body
