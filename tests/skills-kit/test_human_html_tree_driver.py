@@ -242,6 +242,41 @@ def _write_page(
 
 
 class TestPlacementPlan:
+    def test_empty_territory_is_not_a_plan_wide_blocker(self, tmp_path: Path) -> None:
+        root = tmp_path / "phantom"
+        (root / "boundary" / "child").mkdir(parents=True)
+        _git(root.parent, "init", "-q", str(root))
+        _git(root, "config", "user.email", "tests@example.invalid")
+        _git(root, "config", "user.name", "tests")
+        (root / "README.md").write_text("root\n", encoding="ascii")
+        (root / "boundary" / "child" / "item.txt").write_text("child\n", encoding="ascii")
+        _commit(root, "phantom territory")
+
+        child_entry = _entry(root, "boundary/child")
+        _write_fresh_record(root, "boundary/child", hh.DECISION_PAGE)
+        boundary_sha, boundary_dirty = hh.source_stamp(root, "boundary")
+        hh.write_record(
+            hh.record_path(root, "boundary"),
+            hh.Record(
+                directory="boundary",
+                decision=hh.DECISION_PAGE,
+                source_sha=boundary_sha,
+                dirty=boundary_dirty,
+                identity="The boundary subsystem.",
+                instructions="",
+                references=(),
+            ),
+            preserve_instructions=False,
+        )
+
+        plan = driver.placement_plan(root)
+
+        assert child_entry["source_sha"] is not None
+        assert "boundary" not in plan["directory_order"]
+        assert plan["status"] == driver.STATUS_WORK
+        assert plan["blockers"] == []
+        assert plan["diagnostics"][0]["code"] == discover.EMPTY_TERRITORY
+
     def test_reuses_discovery_order_and_returns_one_deepest_item(self, corpus: Path) -> None:
         discovered = discover.scan(corpus)
         plan = driver.placement_plan(corpus)

@@ -582,6 +582,9 @@ root mapping, and reference HTML.
 - **Rule:** Implement `scripts/discover_human_html.py` with `skills_kit_lib.human_html` and Python standard-library imports only. Make no writes. Accept a repository root and an
 optional directory. Walk non-ignored repository directories. Exclude VCS
 metadata, `.databench/`, and directories that contain only generated output.
+After descendant-page exclusions are applied, a directory with no owned analysis
+input is also not a subject; omit its record from navigation and TS-2, and emit
+the named `empty-territory` diagnosis.
 Emit JSON records in deepest-first order. For each directory, report its normalized path, current DR-2 commit, dirty-input state,
 record status, decision, and identity. Also report page and reference files,
 nearest page ancestor, nearest page descendants, and stale-child state. For each
