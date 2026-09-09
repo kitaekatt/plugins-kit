@@ -43,3 +43,8 @@ plugins/installed_plugins.json
 
 # tooling-friction reports (per-machine measurement output, not source)
 .claude/friction/
+
+# claude-ui-kit rate-limit snapshot: runtime telemetry statusline.sh writes
+# beside itself (SNAP_DIR = BASH_SOURCE/..), which lands in the source tree
+# when the statusline runs from a dev checkout. Never publishable.
+plugins/claude-ui-kit/rate-limits.json
