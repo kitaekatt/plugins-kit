@@ -916,7 +916,7 @@ __LAUNCH_EMIT__
           tool: python3 ${CLAUDE_PLUGIN_ROOT}/scripts/prepare_review.py
           input: "<CL>  (append `--claim '**/*.md'` when md-domain is available, per the claim probe)"
           expected: |
-            JSON with cl, description, project_root, bundle_dir, diff_chunks, changed_files, unique_claude_mds, unreconciled, unresolved, submit_gates, auto_shelved, shelf_fingerprint, change_id, ledger_baseline, ledger_hits, -- only when --claim was passed -- claimed_files, and -- only when a changed file was detected as machine-emitted -- machine_emitted_files (each entry carries identifier, local, size_bytes, and the axis that matched -- machine_emitted_axis `content` or `declared_path` plus the naming machine_emitted_signature; such files are excluded from diff_chunks and changed_files, and `--review-machine-emitted` turns that exclusion off). The raw diff text is NOT inline -- it lives in per-chunk files at `<bundle_dir>/<diff_chunks[i].path>` (paths are relative to bundle_dir). Each `changed_files` entry carries `chunk_index` pointing to the chunk that contains its diff. `auto_shelved=true` means prepare_review created the shelf and step 10 must clean it up.
+            JSON with cl, description, project_root, bundle_dir, diff_chunks, changed_files, unique_claude_mds, unreconciled, stale_open, unresolved, submit_gates, auto_shelved, shelf_fingerprint, change_id, ledger_baseline, ledger_hits, -- only when --claim was passed -- claimed_files, and -- only when a changed file was detected as machine-emitted -- machine_emitted_files (each entry carries identifier, local, size_bytes, and the axis that matched -- machine_emitted_axis `content` or `declared_path` plus the naming machine_emitted_signature; such files are excluded from diff_chunks and changed_files, and `--review-machine-emitted` turns that exclusion off). The raw diff text is NOT inline -- it lives in per-chunk files at `<bundle_dir>/<diff_chunks[i].path>` (paths are relative to bundle_dir). Each `changed_files` entry carries `chunk_index` pointing to the chunk that contains its diff. `auto_shelved=true` means prepare_review created the shelf and step 10 must clean it up.
           on_failure: |
             Surface the stderr message to the user and stop. No retry.
             Launch note: ALWAYS invoke with an explicit `python3` interpreter (as shown in `tool:`), never as a bare path. Bare `${CLAUDE_PLUGIN_ROOT}/scripts/prepare_review.py <CL>` lets bash try to run the file as a shell script -- it has no shebang line in older checkouts and the exec bit does not survive on Windows checkouts, so bash parses the Python as sh and exits 2. The script self-relocates under the p4-kit venv via reexec, so any python3 launcher is sufficient. And NEVER pipe the invocation (`... | tail`, `... | head`): a pipe makes `$?` the last pipeline stage's status, not the script's, which silently masks a launch failure as success.""".replace(
@@ -953,10 +953,20 @@ GIT_STEP9_TAIL = """\
               after editing), but the review still renders."""
 
 P4_STEP9_TAIL = """\
-            - When `bundle.unresolved` is non-empty, prepend a `## Unresolved merges`
-              section listing each unresolved file with its resolve type. This is
-              informational, not a finding -- the CL is not submittable until the
-              user runs `p4 resolve` on each entry, but the review still renders."""
+            - When `bundle.unresolved` or `bundle.stale_open` is non-empty, prepend a
+              `## CL is not in a submittable state -- fix before review` section.
+              This is informational, not a finding -- the review still renders.
+              - When `bundle.unresolved` is non-empty, list each unresolved file
+                with its resolve type. The CL is not submittable until the user
+                runs `p4 resolve` on each entry.
+              - When `bundle.stale_open` is non-empty, list each entry's depot
+                path, open action, and workspace state, with the repair commands:
+                `p4 reconcile <path>` flips the CL's open action to match what is
+                on disk (edit -> delete when the file is missing, delete -> add
+                when the file is present); `p4 revert <path>` discards the CL's
+                open action instead and restores the workspace to match the
+                depot. The CL is not submittable until one of the two is run on
+                each entry."""
 
 GIT_STEP10 = ""
 
@@ -1014,7 +1024,7 @@ P4_CHECKLIST = f"""\
         - Trivial claimed files (prepare's `trivial` flag) reported via the `## Mechanical checks (audit skipped)` section, never as an audit or DIFF-CLEAN; nothing written to the ledger for them; whole review skipped when every claimed file is trivial and there are no generic diff chunks
         - Machine-emitted artifacts (bundle.machine_emitted_files) reported via the `## Machine-emitted artifacts (not reviewed)` section, naming each file's exclusion axis (content banner or declared plugin-write path) and the rule that matched, never as an audit or DIFF-CLEAN; review of machine-emitted output belongs on the generator
         - Previously-declined findings collapsed via the ledger (bundle.ledger_hits); SERIOUS md-domain findings never collapsed
-        - Markdown rendered to chat (Submit checklist section prepended when gates applied; Unresolved merges section prepended when bundle.unresolved is non-empty; separate `## md-domain (subject-lens) findings` section when the md-domain pass ran)
+        - Markdown rendered to chat (Submit checklist section prepended when gates applied; CL-not-submittable section prepended when bundle.unresolved or bundle.stale_open is non-empty; separate `## md-domain (subject-lens) findings` section when the md-domain pass ran)
         - Auto-shelf cleanup invoked when bundle.auto_shelved is true (`prepare_review.py --cleanup <bundle_dir>`)
         - Newly declined findings recorded to the ledger via `prepare_review.py --ledger-record` (skipped when nothing was declined)"""
 
