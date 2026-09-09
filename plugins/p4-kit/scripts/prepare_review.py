@@ -190,12 +190,13 @@ past it, so `--claim` on a submitted CL exits with an error (re-run without
 Stderr-only diagnostics. Non-zero exit on hard failure.
 """
 
-import json
 import hashlib
+import json
 import os
 import re
 import sys
 import tempfile
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
@@ -280,20 +281,14 @@ _P4_TIMEOUT_ENV_VAR = "P4KIT_VCS_TIMEOUT_S"
 _P4_DEFAULT_TIMEOUT_S = 60.0
 
 
-class ShelfFingerprint(dict[str, str]):
-    """JSON-compatible shelf digests with the shelved action sidecar."""
+@dataclass(frozen=True)
+class ShelfScanResult:
+    """Shelf digests, actions, and scan status used during bundle assembly."""
 
-    def __init__(
-        self,
-        *args: object,
-        scan_ok: bool = True,
-        scan_reason: str = "",
-        **kwargs: str,
-    ) -> None:
-        super().__init__(*args, **kwargs)
-        self.actions: dict[str, str] = {}
-        self.scan_ok = scan_ok
-        self.scan_reason = scan_reason
+    digests: dict[str, str] = field(default_factory=dict)
+    actions: dict[str, str] = field(default_factory=dict)
+    scan_ok: bool = True
+    scan_reason: str = ""
 
 
 def _p4_timeout_s() -> float:
@@ -427,10 +422,10 @@ def fetch_describe(cl: str) -> tuple[str, bool]:
     raise ValueError(f"no describe content found for CL {cl} (tried committed and shelved)")
 
 
-def fetch_shelf_fingerprint(cl: str) -> ShelfFingerprint:
-    """Return {depot_path: digest} for files currently shelved on CL.
+def fetch_shelf_fingerprint(cl: str) -> ShelfScanResult:
+    """Return shelf digests, actions, and scan status for a CL.
 
-    Empty dict if no shelf exists. Uses `p4 -ztag fstat -Ol //...@=<CL>`;
+    Empty digests if no shelf exists. Uses `p4 -ztag fstat -Ol //...@=<CL>`;
     `-Ol` forces the per-revision `digest` field so the fingerprint is a
     content-hash of the shelved file (cheap — no content download).
 
@@ -441,12 +436,13 @@ def fetch_shelf_fingerprint(cl: str) -> ShelfFingerprint:
     if rc != 0:
         detail = err.strip() or out.strip()
         if "no such file" in detail.lower() or "no file(s)" in detail.lower():
-            return ShelfFingerprint()
-        return ShelfFingerprint(
+            return ShelfScanResult()
+        return ShelfScanResult(
             scan_ok=False,
             scan_reason=detail or f"exit {rc}",
         )
-    fingerprint = ShelfFingerprint()
+    digests: dict[str, str] = {}
+    actions: dict[str, str] = {}
     current_depot: Optional[str] = None
     current_digest: str = ""
     current_action: str = ""
@@ -459,17 +455,17 @@ def fetch_shelf_fingerprint(cl: str) -> ShelfFingerprint:
             current_action = line.split(" ", 2)[2].strip()
         elif line.strip() == "":
             if current_depot:
-                fingerprint[current_depot] = current_digest
+                digests[current_depot] = current_digest
                 if current_action:
-                    fingerprint.actions[current_depot] = current_action
+                    actions[current_depot] = current_action
             current_depot = None
             current_digest = ""
             current_action = ""
     if current_depot:
-        fingerprint[current_depot] = current_digest
+        digests[current_depot] = current_digest
         if current_action:
-            fingerprint.actions[current_depot] = current_action
-    return fingerprint
+            actions[current_depot] = current_action
+    return ShelfScanResult(digests=digests, actions=actions)
 
 
 def _parse_opened_files(output: str) -> dict[str, str]:
@@ -503,21 +499,22 @@ def fetch_opened_files(cl: str) -> tuple[dict[str, str], list[dict[str, str]]]:
 
 def shelf_divergence(
     cl: str,
-    shelf_fingerprint: ShelfFingerprint,
+    shelf_scan: ShelfScanResult,
     opened: Optional[dict[str, str]] = None,
 ) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
     """Return deterministic membership and action differences for a pending CL."""
     incomplete: list[dict[str, str]] = []
-    if not shelf_fingerprint.scan_ok:
+    if not shelf_scan.scan_ok:
         incomplete.append(
-            {"scan": "shelf_fingerprint", "reason": shelf_fingerprint.scan_reason}
+            {"scan": "shelf_fingerprint", "reason": shelf_scan.scan_reason}
         )
         return [], incomplete
     if opened is None:
         opened, incomplete = fetch_opened_files(cl)
         if incomplete:
             return [], incomplete
-    shelf_actions = shelf_fingerprint.actions
+    shelf_fingerprint = shelf_scan.digests
+    shelf_actions = shelf_scan.actions
     divergence: list[dict[str, str]] = []
     for depot in sorted(set(opened) - set(shelf_fingerprint)):
         divergence.append({"depot": depot, "kind": "opened after shelving"})
@@ -558,7 +555,7 @@ def _shelf_content_drift(
     return drift, incomplete
 
 
-def auto_shelve_cl(cl: str) -> dict[str, str]:
+def auto_shelve_cl(cl: str) -> ShelfScanResult:
     """Run `p4 shelve -c <cl>` and return the resulting shelf fingerprint.
 
     Raises ValueError on shelve failure or if no shelved files appear afterward
@@ -570,12 +567,12 @@ def auto_shelve_cl(cl: str) -> dict[str, str]:
         raise ValueError(
             f"p4 shelve -c {cl} failed: {(err or out).strip() or '(no output)'}"
         )
-    fingerprint = fetch_shelf_fingerprint(cl)
-    if not fingerprint:
+    shelf_scan = fetch_shelf_fingerprint(cl)
+    if not shelf_scan.digests:
         raise ValueError(
             f"p4 shelve -c {cl} reported success but no shelved files were found afterward"
         )
-    return fingerprint
+    return shelf_scan
 
 
 def parse_description(describe_output: str) -> str:
@@ -1352,35 +1349,38 @@ def build_bundle(
     """
     claim_globs = claim_globs or []
     auto_shelved = False
-    shelf_fingerprint = ShelfFingerprint()
-    shelf_observed: Optional[ShelfFingerprint] = None
+    shelf_fingerprint: dict[str, str] = {}
+    shelf_observed: Optional[ShelfScanResult] = None
     shelf_scan_incomplete: list[dict[str, str]] = []
-    opened: dict[str, str] = {}
+    opened: Optional[dict[str, str]] = None
     opened_incomplete: list[dict[str, str]] = []
     try:
         describe, is_shelved = fetch_describe(cl)
     except PendingUnshelvedError:
-        # auto_shelve_cl fetches and validates the post-shelve fingerprint;
-        # capture that result instead of making a separate depot-wide query.
-        shelf_fingerprint = auto_shelve_cl(cl)
-        if not isinstance(shelf_fingerprint, ShelfFingerprint):
-            shelf_fingerprint = ShelfFingerprint(shelf_fingerprint)
-        shelf_observed = shelf_fingerprint
-        describe, is_shelved = fetch_describe(cl)
-        auto_shelved = True
+        # A shelf can appear after fetch_describe reports an unshelved CL.
+        # Preserve a shelf created by another process and reuse this scan.
+        shelf_observed = fetch_shelf_fingerprint(cl)
+        if not shelf_observed.scan_ok:
+            raise ValueError(
+                f"could not check CL {cl} for a shelf before auto-shelve: "
+                f"{shelf_observed.scan_reason}"
+            )
+        if shelf_observed.digests:
+            describe, is_shelved = fetch_describe(cl)
+        else:
+            # auto_shelve_cl fetches and validates the post-shelve fingerprint;
+            # capture that result instead of making another post-shelve query.
+            shelf_observed = auto_shelve_cl(cl)
+            shelf_fingerprint = shelf_observed.digests
+            describe, is_shelved = fetch_describe(cl)
+            auto_shelved = True
 
     if _is_pending(describe) and is_shelved and not auto_shelved:
         if shelf_observed is None:
             shelf_observed = fetch_shelf_fingerprint(cl)
-            if not isinstance(shelf_observed, ShelfFingerprint):
-                shelf_observed = ShelfFingerprint(shelf_observed)
         divergence = []
         if shelf_observed.scan_ok:
-            opened_result = fetch_opened_files(cl)
-            if isinstance(opened_result, tuple):
-                opened, opened_incomplete = opened_result
-            else:
-                opened, opened_incomplete = opened_result, []
+            opened, opened_incomplete = fetch_opened_files(cl)
             if not opened_incomplete:
                 divergence, divergence_incomplete = shelf_divergence(
                     cl, shelf_observed, opened
@@ -1428,15 +1428,11 @@ def build_bundle(
     shelf_drift_incomplete: list[dict[str, str]] = []
     if _is_pending(describe) and is_shelved:
         if shelf_observed is not None and shelf_observed.scan_ok:
-            if not opened_incomplete and not opened:
-                opened_result = fetch_opened_files(cl)
-                if isinstance(opened_result, tuple):
-                    opened, opened_incomplete = opened_result
-                else:
-                    opened, opened_incomplete = opened_result, []
+            if opened is None:
+                opened, opened_incomplete = fetch_opened_files(cl)
             if not opened_incomplete:
                 shelf_drift, shelf_drift_incomplete = _shelf_content_drift(
-                    shelf_observed, opened, local_map
+                    shelf_observed.digests, opened, local_map
                 )
         if shelf_drift:
             paths = ", ".join(item["depot"] for item in shelf_drift)
@@ -1519,9 +1515,7 @@ def build_bundle(
     # cheap `fstat -Ol` (no content download), tolerant of an absent shelf.
     if shelf_observed is None:
         shelf_observed = fetch_shelf_fingerprint(cl)
-        if not isinstance(shelf_observed, ShelfFingerprint):
-            shelf_observed = ShelfFingerprint(shelf_observed)
-    shelf_now = shelf_observed
+    shelf_now = shelf_observed.digests
     ledger_baseline = ledger.baseline_token({"actions": actions, "shelf": shelf_now})
     change_id = cl
     ledger_hits = ledger.ledger_hits(ledger_path or _ledger_path(), change_id, ledger_baseline)
@@ -1584,7 +1578,7 @@ def cleanup_auto_shelve(bundle_dir: Path) -> int:
         return 0
     cl = bundle["cl"]
     recorded = bundle.get("shelf_fingerprint", {})
-    current = fetch_shelf_fingerprint(cl)
+    current = fetch_shelf_fingerprint(cl).digests
     if not current:
         print(
             f"prepare_review: CL {cl} shelf already gone; nothing to clean up.",

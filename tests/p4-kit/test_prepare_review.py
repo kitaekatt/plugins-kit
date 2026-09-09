@@ -3,6 +3,7 @@
 import json
 import subprocess
 from pathlib import Path
+from typing import get_type_hints
 from unittest.mock import patch
 
 import pytest
@@ -1680,14 +1681,15 @@ class TestFetchShelfFingerprint:
     def test_empty_when_p4_fails(self):
         """`p4 fstat ... @=<CL>` with no shelf returns non-zero; treat as empty."""
         with patch.object(pr, "run_p4", return_value=(1, "", "no such file(s)")):
-            assert pr.fetch_shelf_fingerprint("123") == {}
+            scan = pr.fetch_shelf_fingerprint("123")
+        assert scan.digests == {}
 
     def test_failure_is_marked_incomplete(self):
         with patch.object(pr, "run_p4", return_value=(1, "", "server unavailable")):
-            fp = pr.fetch_shelf_fingerprint("123")
-        assert fp == {}
-        assert fp.scan_ok is False
-        assert fp.scan_reason == "server unavailable"
+            scan = pr.fetch_shelf_fingerprint("123")
+        assert scan.digests == {}
+        assert scan.scan_ok is False
+        assert scan.scan_reason == "server unavailable"
 
     def test_parses_multi_file_shelf(self):
         out = (
@@ -1701,8 +1703,8 @@ class TestFetchShelfFingerprint:
             "\n"
         )
         with patch.object(pr, "run_p4", return_value=(0, out, "")) as mock:
-            fp = pr.fetch_shelf_fingerprint("123")
-        assert fp == {
+            scan = pr.fetch_shelf_fingerprint("123")
+        assert scan.digests == {
             "//depot/a.cpp": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
             "//depot/b.cpp": "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
         }
@@ -1718,9 +1720,9 @@ class TestFetchShelfFingerprint:
             "\n"
         )
         with patch.object(pr, "run_p4", return_value=(0, out, "")):
-            fp = pr.fetch_shelf_fingerprint("123")
-        assert fp == {"//depot/gone.cpp": ""}
-        assert fp.actions == {"//depot/gone.cpp": "delete"}
+            scan = pr.fetch_shelf_fingerprint("123")
+        assert scan.digests == {"//depot/gone.cpp": ""}
+        assert scan.actions == {"//depot/gone.cpp": "delete"}
 
     def test_no_trailing_blank_line_still_captured(self):
         """Last record may not end with blank line; must still be parsed."""
@@ -1729,21 +1731,24 @@ class TestFetchShelfFingerprint:
             "... digest AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
         )
         with patch.object(pr, "run_p4", return_value=(0, out, "")):
-            fp = pr.fetch_shelf_fingerprint("123")
-        assert fp == {"//depot/a.cpp": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}
+            scan = pr.fetch_shelf_fingerprint("123")
+        assert scan.digests == {
+            "//depot/a.cpp": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+        }
 
 
 class TestShelfDivergence:
-    def _fingerprint(self) -> dict[str, str]:
-        fingerprint = pr.ShelfFingerprint({
-            "//depot/a.cpp": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
-            "//depot/gone.cpp": "",
-        })
-        fingerprint.actions.update({
-            "//depot/a.cpp": "edit",
-            "//depot/gone.cpp": "delete",
-        })
-        return fingerprint
+    def _fingerprint(self) -> "pr.ShelfScanResult":
+        return pr.ShelfScanResult(
+            digests={
+                "//depot/a.cpp": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                "//depot/gone.cpp": "",
+            },
+            actions={
+                "//depot/a.cpp": "edit",
+                "//depot/gone.cpp": "delete",
+            },
+        )
 
     def test_opened_after_shelving_is_reported(self):
         opened = "... depotFile //depot/new.cpp\n... action add\n\n"
@@ -1809,8 +1814,12 @@ class TestAutoShelveCl:
             return (0, fstat_out, "")
 
         with patch.object(pr, "run_p4", side_effect=side) as mock:
-            fp = pr.auto_shelve_cl("123")
-        assert fp == {"//depot/x.cpp": "ABCDEF0123456789ABCDEF0123456789"}
+            scan = pr.auto_shelve_cl("123")
+        assert get_type_hints(pr.auto_shelve_cl)["return"] is pr.ShelfScanResult
+        assert isinstance(scan, pr.ShelfScanResult)
+        assert scan.digests == {
+            "//depot/x.cpp": "ABCDEF0123456789ABCDEF0123456789"
+        }
         # First call is the shelve, second is the fingerprint fstat.
         assert mock.call_args_list[0][0][0] == ["shelve", "-c", "123"]
         assert mock.call_args_list[1][0][0] == ["-ztag", "fstat", "-Ol", "//...@=123"]
@@ -2021,12 +2030,16 @@ class TestBuildBundleAutoShelve:
             # 1st call: pre-shelve check -> empty (no race).
             # 2nd call: post-shelve fingerprint.
             if fstat_calls == 1:
-                return {}
-            return {"//depot/new.py": "DEADBEEF"}
+                return pr.ShelfScanResult()
+            return pr.ShelfScanResult(
+                digests={"//depot/new.py": "DEADBEEF"}
+            )
 
         def fake_auto_shelve(cl):
             shelve_calls.append(cl)
-            return {"//depot/new.py": "DEADBEEF"}
+            return pr.ShelfScanResult(
+                digests={"//depot/new.py": "DEADBEEF"}
+            )
 
         with patch.object(pr, "fetch_describe", side_effect=fake_fetch_describe), \
                 patch.object(pr, "fetch_shelf_fingerprint", side_effect=fake_fingerprint), \
@@ -2041,32 +2054,66 @@ class TestBuildBundleAutoShelve:
         assert bundle["shelf_fingerprint"] == {"//depot/new.py": "DEADBEEF"}
         assert shelve_calls == ["123"]
 
-    def test_pending_unshelved_auto_shelves_once(self, tmp_path):
-        """An unshelved pending CL uses the single auto-shelve query."""
+    def test_pre_shelve_race_preserves_foreign_shelf(self, tmp_path):
+        """A shelf found by the race check remains owned by its author."""
         shelved_describe = self._committed_describe()
-        attempts = {"describe": 0, "shelve": 0}
+        describe_calls = 0
 
         def fake_fetch_describe(cl):
-            attempts["describe"] += 1
-            if attempts["describe"] == 1:
+            nonlocal describe_calls
+            describe_calls += 1
+            if describe_calls == 1:
                 raise pr.PendingUnshelvedError("no shelf")
             return shelved_describe, True
 
-        def fake_auto_shelve(cl):
-            attempts["shelve"] += 1
-            return {}
+        race_shelf = pr.ShelfScanResult(
+            digests={"//depot/other.py": "FEEDFACE"}
+        )
 
         with patch.object(pr, "fetch_describe", side_effect=fake_fetch_describe), \
-                patch.object(pr, "auto_shelve_cl", side_effect=fake_auto_shelve), \
+                patch.object(pr, "fetch_shelf_fingerprint", return_value=race_shelf) as fingerprint_mock, \
+                patch.object(
+                    pr,
+                    "auto_shelve_cl",
+                    return_value=pr.ShelfScanResult(
+                        digests={"//depot/new.py": "DEADBEEF"}
+                    ),
+                ) as shelve_mock, \
                 patch.object(pr, "resolve_local_paths", return_value={"//depot/new.py": None}), \
                 patch.object(pr, "get_workspace_root", return_value=None), \
                 patch.object(pr, "find_unreconciled", return_value=([], [])), \
                 patch.object(pr, "find_unresolved", return_value=([], [])):
             bundle = pr.build_bundle("123", tmp_path / "bundle")
 
-        assert attempts["shelve"] == 1
-        assert bundle["auto_shelved"] is True
+        shelve_mock.assert_not_called()
+        assert bundle["auto_shelved"] is False
         assert bundle["shelf_fingerprint"] == {}
+        fingerprint_mock.assert_called_once_with("123")
+
+    def test_failed_race_scan_refuses_auto_shelve(self, tmp_path):
+        failed_scan = pr.ShelfScanResult(
+            scan_ok=False,
+            scan_reason="server unavailable",
+        )
+
+        with patch.object(
+            pr,
+            "fetch_describe",
+            side_effect=pr.PendingUnshelvedError("no shelf"),
+        ), patch.object(
+            pr,
+            "fetch_shelf_fingerprint",
+            return_value=failed_scan,
+        ), patch.object(
+            pr,
+            "auto_shelve_cl",
+            return_value=pr.ShelfScanResult(digests={"//depot/new.py": "A"}),
+        ) as shelve_mock:
+            with pytest.raises(ValueError) as exc:
+                pr.build_bundle("123", tmp_path / "bundle")
+
+        shelve_mock.assert_not_called()
+        assert "could not check CL 123 for a shelf" in str(exc.value)
 
     def test_normal_path_records_no_auto_shelve(self, tmp_path):
         """When fetch_describe succeeds directly, no shelve happens and the bundle reflects that."""
@@ -2074,7 +2121,7 @@ class TestBuildBundleAutoShelve:
 
         with patch.object(pr, "fetch_describe", return_value=(shelved_describe, False)), \
                 patch.object(pr, "auto_shelve_cl") as shelve_mock, \
-                patch.object(pr, "fetch_shelf_fingerprint", return_value={}), \
+                patch.object(pr, "fetch_shelf_fingerprint", return_value=pr.ShelfScanResult()), \
                 patch.object(pr, "resolve_local_paths", return_value={"//depot/new.py": None}), \
                 patch.object(pr, "get_workspace_root", return_value=None), \
                 patch.object(pr, "find_unreconciled", return_value=([], [])), \
@@ -2094,6 +2141,7 @@ class TestBuildBundleAutoShelve:
         shelved_describe = self._committed_describe()
         describe_calls = {"n": 0}
         shelved = {"done": False}
+        fstat_calls_before_shelve = {"n": 0}
         fstat_calls_after_shelve = {"n": 0}
         fstat_out = (
             "... depotFile //depot/new.py\n"
@@ -2112,6 +2160,7 @@ class TestBuildBundleAutoShelve:
                 if shelved["done"]:
                     fstat_calls_after_shelve["n"] += 1
                     return (0, fstat_out, "")
+                fstat_calls_before_shelve["n"] += 1
                 return (0, "", "")  # pre-shelve race check: no shelf yet
             if args[:2] == ["shelve", "-c"]:
                 shelved["done"] = True
@@ -2127,7 +2176,9 @@ class TestBuildBundleAutoShelve:
             bundle = pr.build_bundle("123", tmp_path / "bundle")
 
         assert bundle["auto_shelved"] is True
+        assert type(bundle["shelf_fingerprint"]) is dict
         assert bundle["shelf_fingerprint"] == {"//depot/new.py": "DEADBEEF"}
+        assert fstat_calls_before_shelve["n"] == 1
         assert fstat_calls_after_shelve["n"] == 1
 
 
@@ -2162,8 +2213,10 @@ class TestBuildBundleShelfState:
         ],
     )
     def test_shelf_divergence_refuses_with_repair_command(self, opened, expected, tmp_path):
-        shelf = pr.ShelfFingerprint({"//depot/a.cpp": "A"})
-        shelf.actions["//depot/a.cpp"] = "edit"
+        shelf = pr.ShelfScanResult(
+            digests={"//depot/a.cpp": "A"},
+            actions={"//depot/a.cpp": "edit"},
+        )
         with patch.object(pr, "fetch_describe", return_value=(self._pending_describe(), True)), \
                 patch.object(pr, "fetch_shelf_fingerprint", return_value=shelf), \
                 patch.object(pr, "run_p4", return_value=(0, opened, "")):
@@ -2172,7 +2225,7 @@ class TestBuildBundleShelfState:
         assert expected in str(exc.value)
 
     def test_opened_failure_does_not_refuse_and_is_incomplete(self, tmp_path):
-        shelf = pr.ShelfFingerprint({"//depot/a.cpp": "A"})
+        shelf = pr.ShelfScanResult(digests={"//depot/a.cpp": "A"})
         with patch.object(pr, "fetch_describe", return_value=(self._pending_describe(), True)), \
                 patch.object(pr, "fetch_shelf_fingerprint", return_value=shelf), \
                 patch.object(pr, "run_p4", return_value=(1, "", "server unavailable")), \
@@ -2186,12 +2239,13 @@ class TestBuildBundleShelfState:
         ]
 
     def test_matching_shelf_does_not_refuse(self, tmp_path):
-        shelf = pr.ShelfFingerprint({"//depot/a.cpp": "A"})
-        shelf.actions["//depot/a.cpp"] = "edit"
-        opened = "... depotFile //depot/a.cpp\n... action edit\n\n"
+        shelf = pr.ShelfScanResult(
+            digests={"//depot/a.cpp": "A"},
+            actions={"//depot/a.cpp": "edit"},
+        )
         with patch.object(pr, "fetch_describe", return_value=(self._pending_describe(), True)), \
                 patch.object(pr, "fetch_shelf_fingerprint", return_value=shelf), \
-                patch.object(pr, "fetch_opened_files", return_value={"//depot/a.cpp": "edit"}), \
+                patch.object(pr, "fetch_opened_files", return_value=({"//depot/a.cpp": "edit"}, [])), \
                 patch.object(pr, "resolve_local_paths", return_value={"//depot/a.cpp": None}), \
                 patch.object(pr, "get_workspace_root", return_value=None), \
                 patch.object(pr, "find_unreconciled", return_value=([], [])), \
@@ -2200,12 +2254,27 @@ class TestBuildBundleShelfState:
         assert bundle["shelf_drift"] == []
         assert bundle["shelf_fingerprint"] == {}
 
+    def test_empty_opened_result_is_not_refetched(self, tmp_path):
+        with patch.object(pr, "fetch_describe", return_value=(self._pending_describe(), True)), \
+                patch.object(pr, "fetch_shelf_fingerprint", return_value=pr.ShelfScanResult()), \
+                patch.object(pr, "fetch_opened_files", return_value=({}, [])) as opened_mock, \
+                patch.object(pr, "resolve_local_paths", return_value={"//depot/a.cpp": None}), \
+                patch.object(pr, "get_workspace_root", return_value=None), \
+                patch.object(pr, "find_unreconciled", return_value=([], [])), \
+                patch.object(pr, "find_unresolved", return_value=([], [])):
+            pr.build_bundle("123", tmp_path / "bundle")
+
+        opened_mock.assert_called_once_with("123")
+
     def test_auto_created_shelf_skips_divergence_check(self, tmp_path):
         describe = self._pending_describe()
-        shelf = pr.ShelfFingerprint({"//depot/a.cpp": "A"})
-        shelf.actions["//depot/a.cpp"] = "edit"
+        shelf = pr.ShelfScanResult(
+            digests={"//depot/a.cpp": "A"},
+            actions={"//depot/a.cpp": "edit"},
+        )
         fetch_calls = iter([pr.PendingUnshelvedError("no shelf"), (describe, True)])
         with patch.object(pr, "fetch_describe", side_effect=fetch_calls), \
+                patch.object(pr, "fetch_shelf_fingerprint", return_value=pr.ShelfScanResult()), \
                 patch.object(pr, "auto_shelve_cl", return_value=shelf), \
                 patch.object(pr, "shelf_divergence", side_effect=AssertionError("called")), \
                 patch.object(pr, "resolve_local_paths", return_value={"//depot/a.cpp": None}), \
@@ -2229,12 +2298,14 @@ class TestBuildBundleShelfState:
     def test_content_drift_warns_and_returns_bundle(self, tmp_path, capsys):
         local = tmp_path / "a.cpp"
         local.write_text("workspace\n", encoding="utf-8")
-        shelf = pr.ShelfFingerprint({"//depot/a.cpp": "A"})
-        shelf.actions["//depot/a.cpp"] = "edit"
+        shelf = pr.ShelfScanResult(
+            digests={"//depot/a.cpp": "A"},
+            actions={"//depot/a.cpp": "edit"},
+        )
         opened = {"//depot/a.cpp": "edit"}
         with patch.object(pr, "fetch_describe", return_value=(self._pending_describe(), True)), \
                 patch.object(pr, "fetch_shelf_fingerprint", return_value=shelf) as fingerprint_mock, \
-                patch.object(pr, "fetch_opened_files", return_value=opened) as opened_mock, \
+                patch.object(pr, "fetch_opened_files", return_value=(opened, [])) as opened_mock, \
                 patch.object(pr, "resolve_local_paths", return_value={"//depot/a.cpp": str(local)}), \
                 patch.object(pr, "get_workspace_root", return_value=None), \
                 patch.object(pr, "find_unreconciled", return_value=([], [])), \
@@ -2246,11 +2317,13 @@ class TestBuildBundleShelfState:
         assert opened_mock.call_count == 1
 
     def test_unhashable_path_is_incomplete_not_clean(self, tmp_path):
-        shelf = pr.ShelfFingerprint({"//depot/a.cpp": "A"})
-        shelf.actions["//depot/a.cpp"] = "edit"
+        shelf = pr.ShelfScanResult(
+            digests={"//depot/a.cpp": "A"},
+            actions={"//depot/a.cpp": "edit"},
+        )
         with patch.object(pr, "fetch_describe", return_value=(self._pending_describe(), True)), \
                 patch.object(pr, "fetch_shelf_fingerprint", return_value=shelf), \
-                patch.object(pr, "fetch_opened_files", return_value={"//depot/a.cpp": "edit"}), \
+                patch.object(pr, "fetch_opened_files", return_value=({"//depot/a.cpp": "edit"}, [])), \
                 patch.object(pr, "resolve_local_paths", return_value={"//depot/a.cpp": None}), \
                 patch.object(pr, "get_workspace_root", return_value=None), \
                 patch.object(pr, "find_unreconciled", return_value=([], [])), \
