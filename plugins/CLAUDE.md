@@ -243,6 +243,31 @@ Criteria AD-1..AD-5, detection methods, the findings table with per-site verdict
 the audit procedure:
 [docs/reference/agent-directive-standards.md](../docs/reference/agent-directive-standards.md).
 
+### Where a plugin writes its own data
+
+A plugin's write path is named, not discovered. Data about the consuming
+project goes under that project (`.plugin-data` durable, `.local-data`
+ephemeral); data about the user or the machine goes under the plugin's own
+`~/.claude/plugins/data/<marketplace>/<plugin>/`. Neither is ever resolved from
+`BASH_SOURCE`, `__file__` or `$0`: reading beside the script is fine because
+assets ship with the code, but writing beside it lands user data in a git
+working tree whenever the plugin runs from a checkout instead of the installed
+copy -- a disclosure when that repo is public, and invisible to every consumer
+reading the real path. Where the artifact has outside readers it is a file
+contract with ONE absolute path, and the writer names the same literal the
+readers do.
+
+**Submit gate:** For every path this change WRITES to, name which of the three
+homes it is (project-durable, project-ephemeral, or user-scoped) and confirm it
+is not derived from the script's own location -- or state that this change
+writes no new paths.
+Applies to:
+- plugins/
+
+The discriminator, the paired project locations, the user-scoped location, the
+one-contract-path rule, and the audit procedure:
+[bootstrap/skills/bootstrap/references/durable-project-data.md](bootstrap/skills/bootstrap/references/durable-project-data.md).
+
 ### Optional use of another plugin
 
 A plugin that imports another plugin's shared library when it is installed, and does without it when it is not, answers two questions before it ships. Can it do its job without the library at all? If not, the library is REQUIRED and is declared `install: "auto"`. If so, can the action still hand the user an artifact that is true as read when the library is missing? If the artifact would be read as if the library had participated, the unit that needs it REFUSES with a diagnosis; if the gap can be stated inside the artifact, the unit is omitted and the artifact DISCLOSES it. Neither branch substitutes silently. A shared-lib link pins no version (the mechanism is described under "The bootstrap-provisioned venv and shared libs" below), so "absent", "too old" and "stale after uninstall" are three states an `import` cannot distinguish: probe the newest symbol you use and diagnose them apart, following the probe-failure message rule stated with that mechanism.

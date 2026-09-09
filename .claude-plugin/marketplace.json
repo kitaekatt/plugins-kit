@@ -35,7 +35,7 @@
     {
       "name": "bootstrap",
       "description": "Installs each plugin's tools, Python venvs, and config automatically at session start.",
-      "version": "0.98.0",
+      "version": "0.98.1",
       "author": {
         "name": "Christina"
       },
@@ -84,7 +84,7 @@
     {
       "name": "claude-ui-kit",
       "description": "Claude Code status line with context-window and rate-limit threshold colors, plus the /statusline skill to inspect and customize it.",
-      "version": "0.12.1",
+      "version": "0.12.3",
       "author": {
         "name": "Christina"
       },
