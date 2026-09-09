@@ -393,10 +393,13 @@ reference_skill:
         consumes it, and the plugin-author wiring steps.
     - id: durable_project_data_ref
       path: references/durable-project-data.md
-      keywords: [durable project data, plugin data dir, plugin_data_dir, .plugin-data, .local-data, tracked generated artifact, version control, project VCS, explicit refresh, size, churn]
+      keywords: [durable project data, plugin data dir, plugin_data_dir, .plugin-data, .local-data, tracked generated artifact, version control, project VCS, explicit refresh, size, churn, where should my plugin write, write path, scratch directory, user-scoped data, BASH_SOURCE, __file__, beside the script, wrote into the source tree, file contract path, audit write paths]
       summary: >-
-        The plugin-author pattern for choosing durable versus ephemeral project data,
-        resolving the namespaced path and override, and keeping SessionStart read-only.
+        Where a plugin may write: durable versus ephemeral PROJECT data, the user-scoped
+        location for data belonging to no project, the rule that a write path is never
+        derived from the script's own location, the one-path rule for a file contract
+        with outside readers, a grep-based audit procedure, and keeping SessionStart
+        read-only.
     - id: action_triggered_install_ref
       path: references/action-triggered-install.md
       keywords: [action-triggered install, opt-in by encountering need, install manual, specialty plugin, preflight, guarded import, shared lib path check, ask before install, claude plugin install, mid-session install no restart, skill requirement wiring, auto vs manual, optional dependency]

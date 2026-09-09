@@ -1,10 +1,16 @@
-# Durable Project Data
+# Where a Plugin Writes Its Own Data
 
-How a plugin stores generated or derived data that belongs to the consuming
-project and should travel with that project's source control history.
+How a plugin stores what it generates: data belonging to the consuming project
+(durable if it should travel with that project's source control history,
+ephemeral otherwise), and data belonging to no project at all.
 
-Audience: plugin authors choosing a storage location and authors of explicit
-refresh actions that materialize project data.
+Audience: plugin authors choosing a storage location, authors of explicit
+refresh actions that materialize project data, and anyone auditing a plugin's
+write paths.
+
+Most of this document concerns PROJECT data; "Data that is not the project's"
+below covers the user- and machine-scoped case and the rule that a write path
+is never derived from the script's own location.
 
 ## The discriminator
 
@@ -60,6 +66,58 @@ config resolver.
 variables: `ini_settings.file`, `json_entries.reference` and `.target`, and
 `pypi_packages.extract_to`. Availability is path resolution only; it does not
 authorize those SessionStart phases to write durable data.
+
+## Data that is not the project's
+
+Everything above concerns data ABOUT the consuming project. A plugin also
+writes data about the USER or the MACHINE -- a credential cache, a captured API
+response, a snapshot another plugin reads. That data has no project to belong
+to, so neither `.plugin-data` nor `.local-data` is its home. It belongs in the
+plugin's own user-scoped data directory, which bootstrap already provisions:
+
+```
+~/.claude/plugins/data/<marketplace>/<plugin>/
+```
+
+### Never derive a WRITE path from the script's own location
+
+A write path is named, not discovered. Resolving one from `BASH_SOURCE`,
+`__file__`, or `$0` binds where the data lands to where the code happens to be
+executing -- and every published plugin runs from at least two places: the
+installed copy under the data root, and a developer's checkout of the source
+repo.
+
+Reading beside the script is correct, because assets ship with the code.
+Writing beside it is not. From a checkout, "beside the script" is a git working
+tree, so the plugin deposits user data into a source repository -- and if the
+repo is public, that is a disclosure, not just untidiness.
+
+Observed: claude-ui-kit's statusline derived its rate-limit snapshot directory
+from `BASH_SOURCE/..`. That is the plugin data dir when installed and a
+deliberately public git repo when run from a dev checkout, so an account's
+usage percentages landed in the repo while every consumer kept reading the
+empty canonical path.
+
+### One contract path, named identically at both ends
+
+When the data is exchanged with other plugins it is a FILE CONTRACT, and a
+contract has one absolute path. Writer and readers must name the SAME literal:
+if the readers hardcode it, the writer hardcodes it too. A path that merely
+COINCIDES with the contract under the common configuration is not a contract --
+it is a bug waiting for the uncommon one.
+
+An environment variable is the seam for a caller who genuinely wants the data
+elsewhere. Honouring a ROOT variable in the writer that no reader honours does
+not relocate the pair, it desyncs it.
+
+### Auditing a plugin against this
+
+Search the plugin for a directory resolved from `BASH_SOURCE`, `__file__`, or
+`$0`, then ask of each whether it is read from or written to. A read needs no
+further thought. A write is a finding unless the resolved path is provably
+under one of the three homes above -- the project's `.plugin-data` or
+`.local-data`, or the plugin's user-scoped directory. Where the artifact has outside readers, confirm the
+writer's literal path matches theirs rather than reproducing it.
 
 ## Who writes durable data
 
