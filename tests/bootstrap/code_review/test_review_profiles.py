@@ -788,8 +788,102 @@ def test_the_projection_only_ever_carries_a_resolved_string(tmp_path: Path) -> N
 
     for profile in projection["profiles"]:
         for reviewer in profile["reviewers"]:
-            assert set(reviewer) == {"name", "model"}
+            # `effort` is optional and omitted when unset, so it is allowed but
+            # never required; `model` must always be present and resolved.
+            assert set(reviewer) <= {"name", "model", "effort"}
+            assert {"name", "model"} <= set(reviewer)
             assert isinstance(reviewer["model"], str)
+            if "effort" in reviewer:
+                assert reviewer["effort"] in rp.EFFORT_LEVELS
+
+
+def test_shipped_effort_is_low_on_the_compliance_lane_only(tmp_path: Path) -> None:
+    """The compliance lane is the only lane shipped at a stated effort.
+
+    Every other lane omits `effort` and so inherits the session's level, which
+    is the behavior all lanes had before the field existed.
+    """
+    resolved, _disclosures, _diag = rp.apply_model_priority(_shipped(tmp_path))
+    projection = rp.canonical_projection(resolved)
+
+    stated = {
+        (profile["id"], reviewer["name"]): reviewer["effort"]
+        for profile in projection["profiles"]
+        for reviewer in profile["reviewers"]
+        if "effort" in reviewer
+    }
+    assert stated == {
+        ("data_only", "reviewer_a_claude_md_compliance"): "low",
+        ("code", "reviewer_a_claude_md_compliance"): "low",
+    }
+
+
+def test_effort_merges_by_name_without_disturbing_model(tmp_path: Path) -> None:
+    """A layer restating only `effort` keeps the shipped model for that lane."""
+    config = _resolved(
+        tmp_path,
+        project={
+            "profiles": [
+                {
+                    "id": "data_only",
+                    "reviewers": [
+                        {"name": "reviewer_a_claude_md_compliance", "effort": "high"}
+                    ],
+                }
+            ]
+        },
+    )
+    reviewer = _profile(config, "data_only")["reviewers"][0]
+
+    assert reviewer["effort"] == "high"
+    assert reviewer["model"] == "sonnet"
+
+
+def test_an_unknown_effort_is_a_hard_error(tmp_path: Path) -> None:
+    """Effort is a closed menu, so a typo fails at resolve, not at dispatch."""
+    with pytest.raises(rp.ConfigError) as excinfo:
+        _resolved(
+            tmp_path,
+            project={
+                "profiles": [
+                    {
+                        "id": "data_only",
+                        "reviewers": [
+                            {
+                                "name": "reviewer_a_claude_md_compliance",
+                                "effort": "minimal",
+                            }
+                        ],
+                    }
+                ]
+            },
+        )
+
+    message = str(excinfo.value)
+    assert "minimal" in message
+    assert "low" in message
+
+
+def test_a_lane_may_state_effort_without_stating_a_model(tmp_path: Path) -> None:
+    """Effort alone is a valid patch of a known reviewer, like `disabled`."""
+    config = _resolved(
+        tmp_path,
+        user={
+            "profiles": [
+                {
+                    "id": "code",
+                    "reviewers": [
+                        {"name": "reviewer_b_diff_only_bugs", "effort": "max"}
+                    ],
+                }
+            ]
+        },
+    )
+    reviewer = _profile(config, "code")["reviewers"][1]
+
+    assert reviewer["name"] == "reviewer_b_diff_only_bugs"
+    assert reviewer["effort"] == "max"
+    assert reviewer["model"] == "opus"
 
 
 def test_projecting_an_unresolved_list_is_refused(tmp_path: Path) -> None:

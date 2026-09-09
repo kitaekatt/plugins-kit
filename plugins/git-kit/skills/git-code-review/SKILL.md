@@ -187,6 +187,22 @@ technique_skill:
             missing. Only the lanes the runner supports may carry an endpoint id; it refuses
             the rest by name and exits 2, which is a configuration error for the user to fix,
             not something to work around.
+
+            Effort rule (per lane, mechanical -- applies to AGENT lanes only): a reviewer
+            record in the RESOLVED table may carry an `effort` value alongside its `model`.
+            When it does, dispatch that lane with `subagent_type: git-kit:review-lane-<effort>`
+            instead of `general-purpose`. When it does not, use `general-purpose` and the lane
+            inherits this session's effort -- the behavior every lane had before the field
+            existed, which is why an unstated effort is never a silent change. The effort
+            agent binds ONLY the reasoning budget: pass the lane's resolved `model` at the
+            call site exactly as you would otherwise (a call-site model overrides an agent
+            definition's own) and pass the lane's canonical prompt verbatim as always, because
+            the agent adds no review criteria of its own.
+            `effort` does NOT reach an ENDPOINT lane: an endpoint's effort comes from its own
+            llm-scripting-kit configuration, so a record carrying both an endpoint id and an
+            `effort` runs at the endpoint's configured effort. Note that in one line rather
+            than reporting an effort the lane did not run at, and do not substitute an Agent
+            to honour the field.
             Triviality gate (pure-mechanical, decided by prepare_review -- do NOT re-judge it):
             each `bundle.claimed_files` entry carries `trivial` (bool) and `trivial_reasons` (the
             disqualifier codes when false). Partition the claimed files into TRIVIAL (`trivial == true`)
@@ -419,6 +435,8 @@ technique_skill:
         - A `model` value is NOT always an Agent-tool model. The four aliases `sonnet`, `opus`, `haiku` and `fable` name the Agent tool; every other value is an llm-scripting-kit endpoint id and that lane runs through python3 ${CLAUDE_PLUGIN_ROOT}/scripts/run_review_lane.py instead (step 6's model-kind rule). Every `model` in the RESOLVED table is a single string -- the renderer has already picked one entry out of any priority list the configuration stated -- so this rule needs no extra case.
         - A reviewer's configured `model` may be an ORDERED PRIORITY LIST rather than a single name, and an entry spelled `peer:<name>` asks the renderer to run that lane on a reachable PEER endpoint -- same tier as `<name>`, different model family -- when llm-scripting-kit is installed and current. The renderer evaluates the list and prints one resolved model, so the table you read already carries the chosen value, and the lane dispatches through python3 ${CLAUDE_PLUGIN_ROOT}/scripts/run_review_lane.py under the ordinary step-6 model-kind rule. Do not probe for a peer yourself, and do not treat a resolved peer endpoint as an override the user forgot to make.
         - An endpoint lane that fails is a FAILED lane. There is no fallback to an Agent, by design: silently substituting one produces a review the user reads as having run on the model they configured, which is a false claim about the change's coverage. Report it and mark the coverage missing.
+        - A reviewer record may carry an `effort` (`low`, `medium`, `high`, `xhigh`, `max`) beside its `model`. It selects the DISPATCH TARGET, not a parameter: the Agent tool has no effort argument, so an effort-carrying lane goes to the `git-kit:review-lane-<effort>` agent, whose frontmatter sets it. A lane with no `effort` keeps `general-purpose` and inherits this session's effort. Do not attempt to pass effort as an Agent argument, and do not read a lane's effort off the agent's page -- the RESOLVED table is the authority.
+        - Effort and model are independent and BOTH are honoured: the profile's `model` goes at the CALL SITE, where it overrides whatever the effort agent's own frontmatter would imply. Never move a lane to a different model to obtain an effort level, and never move it to a different effort to obtain a model.
   narration:
     note: Reviews involve long silent stretches (batched file reads, parallel subagents that take 30s+). Post one short status line per step using these templates verbatim, filling in the bracketed counts. Do not paraphrase, omit, or add extras.
     templates:
