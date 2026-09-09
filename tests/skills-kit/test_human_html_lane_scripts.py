@@ -876,6 +876,46 @@ class TestPortabilityFailures:
         write_page(repo, "src", record, body='<a href="missing.html">x</a>')
         assert "url-unresolvable" in codes(run_check(repo, "src"), "FAIL")
 
+    def test_a_percent_encoded_directory_href_passes(self, repo):
+        record = make_record(repo, "src")
+        target = repo / "Reference" / "window install"
+        target.mkdir(parents=True)
+        (target / "notes.txt").write_text("notes\n", encoding="ascii")
+        write_page(
+            repo, "src", record,
+            body='<a href="../Reference/window%20install/">window install</a>',
+        )
+        assert "url-unresolvable" not in codes(run_check(repo, "src"), "FAIL")
+
+    def test_a_percent_encoded_slash_stays_one_path_segment(self, repo):
+        record = make_record(repo, "src")
+        target = repo / "folder" / "missing.html"
+        target.parent.mkdir()
+        target.write_text("not the encoded URL\n", encoding="ascii")
+        write_page(
+            repo, "src", record,
+            body='<a href="../folder%2Fmissing.html">missing</a>',
+        )
+        assert "url-unresolvable" in codes(run_check(repo, "src"), "FAIL")
+
+    def test_a_missing_warranted_up_card_is_nonblocking(self, repo):
+        root = make_record(repo, ".", decision="page")
+        child = make_record(repo, "src", decision="page")
+        write_page(repo, "src", child, nav_links=["../human.html"])
+        result = run_check(repo, "src")
+        assert "url-unresolvable-pending-up-card" in codes(result, "INFO")
+        assert "url-unresolvable" not in codes(result, "FAIL")
+
+    def test_a_dangling_non_up_href_still_fails_with_pending_up_card(self, repo):
+        make_record(repo, ".", decision="page")
+        child = make_record(repo, "src", decision="page")
+        write_page(
+            repo, "src", child,
+            nav_links=["../human.html"],
+            body='<a href="still-missing.html">missing</a>',
+        )
+        assert "url-unresolvable" in codes(run_check(repo, "src"), "FAIL")
+
     def test_a_missing_same_document_fragment_fails(self, repo):
         record = make_record(repo, "src")
         write_page(repo, "src", record, body='<a href="#nowhere">x</a>')
