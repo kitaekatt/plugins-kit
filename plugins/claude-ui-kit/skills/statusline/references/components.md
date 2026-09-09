@@ -8,7 +8,7 @@ Fields available from the JSON piped to a statusline script on stdin. Load this 
 DATA=$(cat)
 ```
 
-Then extract via `jq`. Parsing every field in a single jq call (with `@tsv`) is fastest — see `scripts/statusline.sh` for the pattern.
+Then extract via `jq`. Parsing every field in a single jq call is fastest -- see `scripts/statusline.sh` for the pattern. Delimit the joined output with `\x1f` (unit separator), not `@tsv`: tab is IFS whitespace, so bash `read` collapses consecutive tabs and an absent field (e.g. a missing rate-limit window) shifts every later value left.
 
 ## Available fields
 
@@ -55,8 +55,8 @@ specific model's usage is spent.
 
 ## Out-of-scope (would require external commands)
 
-- Git branch / status — `git branch --show-current`, `git status --porcelain`
-- Cost — needs a usage-tracker; not in stdin JSON
-- Time of day — `date +%H:%M`
+- Git branch / status -- `git branch --show-current`, `git status --porcelain`
+- Cost -- needs a usage-tracker; not in stdin JSON
+- Time of day -- `date +%H:%M`
 
 These can be added; they cost a fork+exec per render. Keep the script fast; users notice slowness.

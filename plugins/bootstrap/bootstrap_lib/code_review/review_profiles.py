@@ -43,8 +43,30 @@ PROFILE_FIELDS = frozenset(
     {"id", "selection", "reviewers", "validator_models", "disabled"}
 )
 SELECTION_FIELDS = frozenset({"data_only_extensions"})
-REVIEWER_FIELDS = frozenset({"name", "model", "disabled"})
+REVIEWER_FIELDS = frozenset({"name", "model", "effort", "disabled"})
 REQUIRED_PROFILE_FIELDS = frozenset({"selection", "reviewers", "validator_models"})
+
+# --------------------------------------------------------------------------
+# effort: the reasoning budget one lane runs under
+# --------------------------------------------------------------------------
+# `effort` is OPTIONAL on a reviewer record. Absent, the lane inherits the
+# invoking session's effort -- the pre-existing behavior, kept as the default so
+# an unstated effort is never a silent change.
+#
+# It is deliberately a fixed MENU rather than the free-form string `model` is.
+# A model may name an endpoint id this library knows nothing about, but effort
+# is a vocabulary the Agent tool defines, so a typo ("lo", "minimal") would
+# otherwise resolve to an agent that does not exist and fail at dispatch, far
+# from the configuration line that caused it.
+#
+# An effort-carrying lane dispatches to a per-level reviewer AGENT instead of to
+# `general-purpose`, because the Agent tool has no effort parameter -- effort is
+# set in an agent definition's frontmatter. git-kit and p4-kit each ship the
+# agents as `<kit>:review-lane-<level>`, and the skill's step-6 dispatch rule
+# maps a resolved level to that name. Model is unaffected: a call-site `model`
+# overrides an agent definition's frontmatter, so the profile keeps owning model
+# exactly as it did, and the agent contributes effort and nothing else.
+EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max")
 
 # --------------------------------------------------------------------------
 # model priority lists: the optional llm-scripting-kit seats edge
@@ -238,6 +260,20 @@ def _validate_model(value: Any, source: Path | str, location: str) -> None:
             )
 
 
+def _validate_effort(value: Any, source: Path | str, location: str) -> None:
+    """Validate a reviewer's effort against the fixed level menu.
+
+    Unlike ``model`` this is a closed vocabulary (see ``EFFORT_LEVELS``), so an
+    unknown level is rejected here rather than becoming a dispatch to an agent
+    that does not exist.
+    """
+    if not isinstance(value, str) or not value.strip():
+        _fail(source, location, "must be a non-empty string")
+    if value not in EFFORT_LEVELS:
+        levels = ", ".join(repr(level) for level in EFFORT_LEVELS)
+        _fail(source, location, f"unknown effort {value!r}; known levels: {levels}")
+
+
 def _records_by_name(records: Any, identity: str) -> dict[str, Mapping[str, Any]]:
     """Index already-validated records by their identity field."""
     if not isinstance(records, list):
@@ -311,6 +347,8 @@ def _validate_reviewer(
 
     if "model" in value:
         _validate_model(value["model"], source, f"{location}.model")
+    if "effort" in value:
+        _validate_effort(value["effort"], source, f"{location}.effort")
     needs_model = (complete and not parent_disabled) or (existing is None and not parent_disabled)
     if needs_model and not disabled and "model" not in value:
         _fail(source, location, "required field missing: model")
@@ -881,9 +919,17 @@ def canonical_projection(value: Mapping[str, Any]) -> dict[str, Any]:
                 "id": profile["id"],
                 "selection": selection_projection,
                 "reviewers": [
+                    # `effort` is omitted when unset rather than projected as a
+                    # null: absent means "inherit the session's effort", and a
+                    # rendered `effort: null` would read as a stated level.
                     {
                         "name": reviewer["name"],
                         "model": _projected_model(profile, reviewer),
+                        **(
+                            {"effort": reviewer["effort"]}
+                            if "effort" in reviewer
+                            else {}
+                        ),
                     }
                     for reviewer in profile["reviewers"]
                 ],

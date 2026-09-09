@@ -35,10 +35,12 @@ Default thresholds in `scripts/statusline.sh`:
 
 | Var | Default | Meaning |
 |---|---|---|
-| `STATUSLINE_CTX_ORANGE_AT` | `70` | Context turns orange when remaining ≤ 70% |
-| `STATUSLINE_CTX_RED_AT` | `30` | Context turns red when remaining ≤ 30% |
-| `STATUSLINE_SESS_ORANGE_AT` | `30` | 5-hour budget turns orange when remaining ≤ 30% |
-| `STATUSLINE_SESS_RED_AT` | `10` | 5-hour budget turns red when remaining ≤ 10% |
+| `STATUSLINE_CTX_ORANGE_AT` | `70` | Context turns orange when remaining <= 70% |
+| `STATUSLINE_CTX_RED_AT` | `30` | Context turns red when remaining <= 30% |
+| `STATUSLINE_SESS_ORANGE_AT` | `30` | 5-hour budget turns orange when remaining <= 30% |
+| `STATUSLINE_SESS_RED_AT` | `10` | 5-hour budget turns red when remaining <= 10% |
+| `STATUSLINE_WEEK_ORANGE_AT` | `30` | 7-day budget turns orange when remaining <= 30% |
+| `STATUSLINE_WEEK_RED_AT` | `10` | 7-day budget turns red when remaining <= 10% |
 
 Override in `settings.json` -> `env`. If you build a custom statusline that displays "% used" instead, flip the comparison back to `-ge` and pick used-side thresholds (e.g. orange at 70% used).
 
@@ -65,7 +67,7 @@ Color the whole bar one color, OR color filled vs empty separately, OR use a gra
 
 ## Gradients
 
-For a smooth red->yellow->green over a 0-100 range, sample the 256-color palette at: red `196`, orange `208`, yellow `226`, green-yellow `190`, green `46`. Map percentage buckets to these codes; do not interpolate truecolor unless the user explicitly asks — buckets render fine and stay terminal-safe.
+For a smooth red->yellow->green over a 0-100 range, sample the 256-color palette at: red `196`, orange `208`, yellow `226`, green-yellow `190`, green `46`. Map percentage buckets to these codes; do not interpolate truecolor unless the user explicitly asks -- buckets render fine and stay terminal-safe.
 
 If the user wants a gradient on a progress bar specifically: color each filled cell by its position. Example for a 10-cell red->green bar at 80%:
 
@@ -120,4 +122,4 @@ Common community themes referenced by name:
 | Tokyo Night | Deep blue-purple |
 | Solarized | Beige/teal accents |
 
-If the user names one, look up the official palette and map to 256-color codes. Don't ship them in the default script — they balloon the script for users who don't want them.
+If the user names one, look up the official palette and map to 256-color codes. Don't ship them in the default script -- they balloon the script for users who don't want them.

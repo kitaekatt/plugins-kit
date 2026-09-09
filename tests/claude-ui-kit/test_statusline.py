@@ -322,6 +322,16 @@ class TestSegmentApi:
         assert "X" * 120 in result.stdout
         assert "X" * 200 not in result.stdout
 
+    def test_readme_documents_the_cap_this_test_enforces(self):
+        """README.md's segment-API section must name the 120-char cap this
+        test pins, and the missing-timeout(1) case -- see claude-ui-kit
+        slice2 item 8."""
+        readme = _PLUGIN_ROOT / "README.md"
+        text = readme.read_text(encoding="utf-8")
+        segment_section = text.split("## Segment API", 1)[1].split("##", 1)[0]
+        assert "120" in segment_section
+        assert "timeout(1)" in segment_section
+
 
 @pytest.mark.skipif(not _HAS_TOOLS, reason="bash + jq required")
 class TestRateLimitSnapshot:

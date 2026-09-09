@@ -9,7 +9,7 @@ description: Use when reviewing local git changes -- before push, before opening
 
 # Git Code Review
 
-Run a multi-agent code review of a git diff range directly in conversation. The default diff range is inferred from workspace state (mid-merge / mid-rebase / branch-with-upstream / origin-main-fallback), so the agent does the right thing for "review what I'm about to push" without forcing the user to spell out a range; arguments accepted for explicit control. The diff is partitioned on disk into chunks (one per file boundary cluster, balanced under a 1 MB cap); reviewer subagents (set by the selected review profile) run **once per (role x chunk)** so a single large branch fans out across multiple parallel agents instead of forcing each reviewer to ingest the full diff. Each flagged issue is then validated by an independent subagent to suppress false positives. Path-scoped pre-submit reminders (submit gates) authored in ancestor CLAUDE.md files are surfaced alongside the review and discharged by the agent against the change. Results are rendered as markdown -- no persistence to disk.
+Run a multi-agent code review of a git diff range directly in conversation. The default diff range is inferred from workspace state (mid-merge / mid-rebase / branch-with-upstream / origin-main-fallback), so the agent does the right thing for "review what I'm about to push" without forcing the user to spell out a range; arguments accepted for explicit control. The diff is partitioned on disk into chunks (one per file boundary cluster, balanced under a 1 MB cap); reviewer subagents (set by the selected review profile) run **once per (role x chunk)** so a single large branch fans out across multiple parallel agents instead of forcing each reviewer to ingest the full diff. Each flagged issue is then validated by an independent subagent to suppress false positives. Path-scoped pre-submit reminders (submit gates) authored in ancestor CLAUDE.md files are surfaced alongside the review and discharged by the agent against the change. Results are rendered as markdown; the diff chunks, bundle.json, and pre-images in bundle.bundle_dir are transient scratch under the plugin data root, while declined findings persist in a durable ledger (references/declined-ledger.md).
 
 ```yaml
 technique_skill:
@@ -82,7 +82,7 @@ technique_skill:
             After prepare returns, emit the launch rationale line ONCE (see narration.launch_message):
             select the row from the file-type mix of the changed + claimed files, or the md_trivial row
             when the step-6 triviality gate will fire. This is the single launch message -- do not repeat it.
-          tool: ${CLAUDE_PLUGIN_ROOT}/scripts/prepare_review.py
+          tool: python3 ${CLAUDE_PLUGIN_ROOT}/scripts/prepare_review.py
           input: "<range or argument from step 1>  (append `--claim '**/*.md'` when md-domain is available, per the claim probe)"
           expected: |
             JSON with vcs, range, head_sha, branch, description, project_root, bundle_dir, diff_chunks, changed_files, unique_claude_mds, untracked_or_unstaged, merge_conflicts, submit_gates, change_id, ledger_baseline, ledger_hits, -- only when --claim was passed -- claimed_files, and -- only when a changed file was detected as machine-emitted -- machine_emitted_files (each entry carries identifier, local, size_bytes, and the axis that matched -- machine_emitted_axis `content` or `declared_path` plus the naming machine_emitted_signature; such files are excluded from diff_chunks and changed_files, and `--review-machine-emitted` turns that exclusion off). The raw diff text is NOT inline -- it lives in per-chunk files at `<bundle_dir>/<diff_chunks[i].path>` (paths are relative to bundle_dir). Each `changed_files` entry carries `chunk_index` pointing to the chunk that contains its diff.
@@ -187,6 +187,22 @@ technique_skill:
             missing. Only the lanes the runner supports may carry an endpoint id; it refuses
             the rest by name and exits 2, which is a configuration error for the user to fix,
             not something to work around.
+
+            Effort rule (per lane, mechanical -- applies to AGENT lanes only): a reviewer
+            record in the RESOLVED table may carry an `effort` value alongside its `model`.
+            When it does, dispatch that lane with `subagent_type: git-kit:review-lane-<effort>`
+            instead of `general-purpose`. When it does not, use `general-purpose` and the lane
+            inherits this session's effort -- the behavior every lane had before the field
+            existed, which is why an unstated effort is never a silent change. The effort
+            agent binds ONLY the reasoning budget: pass the lane's resolved `model` at the
+            call site exactly as you would otherwise (a call-site model overrides an agent
+            definition's own) and pass the lane's canonical prompt verbatim as always, because
+            the agent adds no review criteria of its own.
+            `effort` does NOT reach an ENDPOINT lane: an endpoint's effort comes from its own
+            llm-scripting-kit configuration, so a record carrying both an endpoint id and an
+            `effort` runs at the endpoint's configured effort. Note that in one line rather
+            than reporting an effort the lane did not run at, and do not substitute an Agent
+            to honour the field.
             Triviality gate (pure-mechanical, decided by prepare_review -- do NOT re-judge it):
             each `bundle.claimed_files` entry carries `trivial` (bool) and `trivial_reasons` (the
             disqualifier codes when false). Partition the claimed files into TRIVIAL (`trivial == true`)
@@ -243,8 +259,11 @@ technique_skill:
             An endpoint-dispatched reviewer_a gets the same list via one `--claimed-file`
             per path. Pass it for every lane that receives it; the other reviewers do not
             take it. Reviewers not listed in the selected profile are
-            NOT launched. If bundle.diff_chunks is empty (range has no diff content), skip
-            step 6 and jump to step 9 with zero issues.
+            NOT launched. If bundle.diff_chunks is empty (range has no diff content) and
+            no claimed file is NON-TRIVIAL (per the triviality gate above -- when a non-trivial
+            claimed file exists, the md-domain pass above still runs on it even with zero
+            diff_chunks), skip the reviewer fan-out and jump to step 9 with zero code-review
+            issues.
           tool: Agent (per the model-kind rule, a lane whose model is an endpoint id runs as a Bash call to python3 ${CLAUDE_PLUGIN_ROOT}/scripts/run_review_lane.py instead)
           expected: JSON arrays of candidate issues from each launched reviewer (one array per (reviewer, chunk) lane), plus a recorded failure for any lane that exited non-zero.
         - n: 7
@@ -359,7 +378,7 @@ technique_skill:
             normalized anchor (never line numbers or exact wording) and NEVER records a SERIOUS
             md-domain finding (those always re-surface). Do NOT hand-edit the ledger JSON -- always go
             through --ledger-record so keying stays deterministic.
-          tool: ${CLAUDE_PLUGIN_ROOT}/scripts/prepare_review.py
+          tool: python3 ${CLAUDE_PLUGIN_ROOT}/scripts/prepare_review.py
           input: "--ledger-record <bundle.bundle_dir>/declined.json"
       checklist:
         - Diff range resolved (auto-detected from workspace state OR explicit user arg) and surfaced in the step-1 narration line
@@ -416,6 +435,8 @@ technique_skill:
         - A `model` value is NOT always an Agent-tool model. The four aliases `sonnet`, `opus`, `haiku` and `fable` name the Agent tool; every other value is an llm-scripting-kit endpoint id and that lane runs through python3 ${CLAUDE_PLUGIN_ROOT}/scripts/run_review_lane.py instead (step 6's model-kind rule). Every `model` in the RESOLVED table is a single string -- the renderer has already picked one entry out of any priority list the configuration stated -- so this rule needs no extra case.
         - A reviewer's configured `model` may be an ORDERED PRIORITY LIST rather than a single name, and an entry spelled `peer:<name>` asks the renderer to run that lane on a reachable PEER endpoint -- same tier as `<name>`, different model family -- when llm-scripting-kit is installed and current. The renderer evaluates the list and prints one resolved model, so the table you read already carries the chosen value, and the lane dispatches through python3 ${CLAUDE_PLUGIN_ROOT}/scripts/run_review_lane.py under the ordinary step-6 model-kind rule. Do not probe for a peer yourself, and do not treat a resolved peer endpoint as an override the user forgot to make.
         - An endpoint lane that fails is a FAILED lane. There is no fallback to an Agent, by design: silently substituting one produces a review the user reads as having run on the model they configured, which is a false claim about the change's coverage. Report it and mark the coverage missing.
+        - A reviewer record may carry an `effort` (`low`, `medium`, `high`, `xhigh`, `max`) beside its `model`. It selects the DISPATCH TARGET, not a parameter: the Agent tool has no effort argument, so an effort-carrying lane goes to the `git-kit:review-lane-<effort>` agent, whose frontmatter sets it. A lane with no `effort` keeps `general-purpose` and inherits this session's effort. Do not attempt to pass effort as an Agent argument, and do not read a lane's effort off the agent's page -- the RESOLVED table is the authority.
+        - Effort and model are independent and BOTH are honoured: the profile's `model` goes at the CALL SITE, where it overrides whatever the effort agent's own frontmatter would imply. Never move a lane to a different model to obtain an effort level, and never move it to a different effort to obtain a model.
   narration:
     note: Reviews involve long silent stretches (batched file reads, parallel subagents that take 30s+). Post one short status line per step using these templates verbatim, filling in the bracketed counts. Do not paraphrase, omit, or add extras.
     templates:

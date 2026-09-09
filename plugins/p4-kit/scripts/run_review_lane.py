@@ -8,7 +8,9 @@ llm_scripting_kit.review_lane.
 
 from __future__ import annotations
 
+import contextlib
 import importlib
+import io
 import re
 import sys
 from pathlib import Path
@@ -74,10 +76,14 @@ def _refuse_absent(exc: BaseException) -> None:
     raise SystemExit(_EXIT_USAGE) from exc
 
 
-def _refuse_too_old(reason: str) -> None:
+def _refuse_too_old(
+    reason: str,
+    min_version: str = "0.29.0",
+    capability: str = "llm_scripting_kit.review_lane.main",
+) -> None:
     print(
-        "the installed llm-scripting-kit is too old for this endpoint lane: "
-        "llm_scripting_kit.review_lane.main requires owner version 0.29.0. "
+        f"the installed llm-scripting-kit is too old for this endpoint lane: "
+        f"{capability} requires owner version {min_version}. "
         "Update it with "
         "`claude plugin update llm-scripting-kit@plugins-kit` and start a "
         "new session so bootstrap re-syncs its shared library. "
@@ -105,5 +111,61 @@ _main = getattr(_review_lane, "main", None)
 if not callable(_main):
     _refuse_too_old("review_lane.main is missing")
 
+# review_lane.main is present but that alone does not mean it accepts every
+# flag THIS wrapper's caller may pass. --claimed-file first became a valid
+# review_lane._parse_args argument in llm-scripting-kit 0.37.0 (commit
+# 3d047281); against an owner in 0.29.0..0.36.x the module/main presence
+# checks above both PASS, and calling main() with --claimed-file on argv
+# reaches argparse's own "unrecognized arguments" error, which exits 2 --
+# the SAME code this wrapper uses for "this lane is not endpoint-eligible".
+# The skill then tells the agent a 2 is a configuration error for the user
+# to fix, never mentioning that llm-scripting-kit itself needs an update.
+# Probe the CAPABILITY (does the parser accept --claimed-file) rather than
+# comparing a version string, so a genuinely newer-but-differently-versioned
+# owner is not misdiagnosed.
+_CLAIMED_FILE_MIN_VERSION = "0.37.0"
+
+
+def _supports_claimed_file() -> bool | None:
+    """True/False if the probe ran and observed an answer; None if it could
+    not run at all because `_parse_args` is absent.
+
+    `_parse_args` is PRIVATE to llm-scripting-kit -- an owner that renames or
+    drops it is not thereby "too old"; it is simply an owner this probe
+    cannot ask, and that must not be misdiagnosed as the genuine too-old
+    signal (a present parser that rejects --claimed-file). Distinguishing
+    absent-probe (None) from present-and-rejects (False) is what lets the
+    caller fall through to main() in the former case instead of refusing.
+
+    When callable, parses a throwaway argv containing every required flag
+    (--lane, --model, --chunk) plus --claimed-file. `--chunk` is `type=Path`
+    in every version seen so far, which accepts any string without touching
+    the filesystem, so this is safe to call before any real dispatch. A
+    pre-0.37.0 parser raises SystemExit(2) ("unrecognized arguments:
+    --claimed-file"); this function converts that signal into a plain bool
+    and swallows the stderr argparse would otherwise print, since the caller
+    reports its own message.
+    """
+    parse_args = getattr(_review_lane, "_parse_args", None)
+    if not callable(parse_args):
+        return None
+    probe_argv = [
+        "--lane", "_probe", "--model", "_probe", "--chunk", "_probe",
+        "--claimed-file", "_probe",
+    ]
+    try:
+        with contextlib.redirect_stderr(io.StringIO()):
+            parse_args(probe_argv)
+    except SystemExit:
+        return False
+    return True
+
+
 if __name__ == "__main__":
+    if "--claimed-file" in sys.argv[1:] and _supports_claimed_file() is False:
+        _refuse_too_old(
+            "review_lane._parse_args does not accept --claimed-file",
+            min_version=_CLAIMED_FILE_MIN_VERSION,
+            capability="--claimed-file support",
+        )
     sys.exit(_main())

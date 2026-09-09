@@ -147,7 +147,23 @@ MODEL_KIND = """\
             Keep its stderr line, report the lane as failed in step 9, and mark its coverage
             missing. Only the lanes the runner supports may carry an endpoint id; it refuses
             the rest by name and exits 2, which is a configuration error for the user to fix,
-            not something to work around."""
+            not something to work around.
+
+            Effort rule (per lane, mechanical -- applies to AGENT lanes only): a reviewer
+            record in the RESOLVED table may carry an `effort` value alongside its `model`.
+            When it does, dispatch that lane with `subagent_type: @KIT@:review-lane-<effort>`
+            instead of `general-purpose`. When it does not, use `general-purpose` and the lane
+            inherits this session's effort -- the behavior every lane had before the field
+            existed, which is why an unstated effort is never a silent change. The effort
+            agent binds ONLY the reasoning budget: pass the lane's resolved `model` at the
+            call site exactly as you would otherwise (a call-site model overrides an agent
+            definition's own) and pass the lane's canonical prompt verbatim as always, because
+            the agent adds no review criteria of its own.
+            `effort` does NOT reach an ENDPOINT lane: an endpoint's effort comes from its own
+            llm-scripting-kit configuration, so a record carrying both an endpoint id and an
+            `effort` runs at the endpoint's configured effort. Note that in one line rather
+            than reporting an effort the lane did not run at, and do not substitute an Agent
+            to honour the field."""
 
 # ===========================================================================
 # SUBJECT-LENS md-domain CONTRIBUTOR (deliverable of this phase, shared).
@@ -396,7 +412,9 @@ PROFILE_GOTCHAS = """
         - See references/configuration.md for the layer precedence, merge rules (profiles/reviewers merge by id/name; validator_models and other mappings deep-merge; `disabled: true` removes a record; plain lists like `data_only_extensions` replace), the shipped default table, what a `model` value may name, which lanes may take an endpoint id, what happens when an endpoint lane fails, and how a reviewer's ordered `model` priority list resolves a `peer:` entry (plus the `--explain-peer-seats` diagnostic).
         - A `model` value is NOT always an Agent-tool model. The four aliases `sonnet`, `opus`, `haiku` and `fable` name the Agent tool; every other value is an llm-scripting-kit endpoint id and that lane runs through @LANE_TOOL@ instead (step 6's model-kind rule). Every `model` in the RESOLVED table is a single string -- the renderer has already picked one entry out of any priority list the configuration stated -- so this rule needs no extra case.
         - A reviewer's configured `model` may be an ORDERED PRIORITY LIST rather than a single name, and an entry spelled `peer:<name>` asks the renderer to run that lane on a reachable PEER endpoint -- same tier as `<name>`, different model family -- when llm-scripting-kit is installed and current. The renderer evaluates the list and prints one resolved model, so the table you read already carries the chosen value, and the lane dispatches through @LANE_TOOL@ under the ordinary step-6 model-kind rule. Do not probe for a peer yourself, and do not treat a resolved peer endpoint as an override the user forgot to make.
-        - An endpoint lane that fails is a FAILED lane. There is no fallback to an Agent, by design: silently substituting one produces a review the user reads as having run on the model they configured, which is a false claim about the change's coverage. Report it and mark the coverage missing."""
+        - An endpoint lane that fails is a FAILED lane. There is no fallback to an Agent, by design: silently substituting one produces a review the user reads as having run on the model they configured, which is a false claim about the change's coverage. Report it and mark the coverage missing.
+        - A reviewer record may carry an `effort` (`low`, `medium`, `high`, `xhigh`, `max`) beside its `model`. It selects the DISPATCH TARGET, not a parameter: the Agent tool has no effort argument, so an effort-carrying lane goes to the `@KIT@:review-lane-<effort>` agent, whose frontmatter sets it. A lane with no `effort` keeps `general-purpose` and inherits this session's effort. Do not attempt to pass effort as an Agent argument, and do not read a lane's effort off the agent's page -- the RESOLVED table is the authority.
+        - Effort and model are independent and BOTH are honoured: the profile's `model` goes at the CALL SITE, where it overrides whatever the effort agent's own frontmatter would imply. Never move a lane to a different model to obtain an effort level, and never move it to a different effort to obtain a model."""
 
 
 # ===========================================================================
@@ -569,8 +587,11 @@ technique_skill:
             An endpoint-dispatched reviewer_a gets the same list via one `--claimed-file`
             per path. Pass it for every lane that receives it; the other reviewers do not
             take it. Reviewers not listed in the selected profile are
-            NOT launched. If bundle.diff_chunks is empty (@RANGE_OR_CL@ has no diff content), skip
-            step 6 and jump to step 9 with zero issues.
+            NOT launched. If bundle.diff_chunks is empty (@RANGE_OR_CL@ has no diff content) and
+            no claimed file is NON-TRIVIAL (per the triviality gate above -- when a non-trivial
+            claimed file exists, the md-domain pass above still runs on it even with zero
+            diff_chunks), skip the reviewer fan-out and jump to step 9 with zero code-review
+            issues.
           tool: Agent (per the model-kind rule, a lane whose model is an endpoint id runs as a Bash call to @LANE_TOOL@ instead)
           expected: JSON arrays of candidate issues from each launched reviewer (one array per (reviewer, chunk) lane), plus a recorded failure for any lane that exited non-zero.
         - n: 7
@@ -801,7 +822,9 @@ GIT_INTRO = (
     'agents instead of forcing each reviewer to ingest the full diff. Each flagged issue is then '
     'validated by an independent subagent to suppress false positives. Path-scoped pre-submit '
     'reminders (submit gates) authored in ancestor CLAUDE.md files are surfaced alongside the '
-    'review and discharged by the agent against the change. Results are rendered as markdown -- no persistence to disk.'
+    'review and discharged by the agent against the change. Results are rendered as markdown; the '
+    'diff chunks, bundle.json, and pre-images in bundle.bundle_dir are transient scratch under the '
+    'plugin data root, while declined findings persist in a durable ledger (references/declined-ledger.md).'
 )
 
 P4_INTRO = (
@@ -812,7 +835,9 @@ P4_INTRO = (
     'each reviewer to ingest the full diff. Each flagged issue is then validated by an '
     'independent subagent to suppress false positives. Path-scoped pre-submit reminders (submit '
     'gates) authored in ancestor CLAUDE.md files are surfaced alongside the review for author '
-    'confirmation. Results are rendered as markdown -- no persistence to disk.'
+    'confirmation. Results are rendered as markdown; the diff chunks, bundle.json, and pre-images '
+    'in bundle.bundle_dir are transient scratch under the plugin data root, while declined '
+    'findings persist in a durable ledger (references/declined-ledger.md).'
 )
 
 GIT_SCOPE_COVERS_HEAD = """\
@@ -872,7 +897,7 @@ GIT_STEP2 = """\
 __CLAIM_PROBE__
             Then run prepare_review.py to fetch the diff, partition it into chunked .diff fragments on disk, enumerate changed files via `git diff --name-status`, map ancestor CLAUDE.md files for each, detect untracked-or-unstaged files in the directories the diff touches, detect unresolved merge conflicts, and scan ancestor CLAUDE.md files for submit-gate reminders that apply to this range.
 __LAUNCH_EMIT__
-          tool: ${CLAUDE_PLUGIN_ROOT}/scripts/prepare_review.py
+          tool: python3 ${CLAUDE_PLUGIN_ROOT}/scripts/prepare_review.py
           input: "<range or argument from step 1>  (append `--claim '**/*.md'` when md-domain is available, per the claim probe)"
           expected: |
             JSON with vcs, range, head_sha, branch, description, project_root, bundle_dir, diff_chunks, changed_files, unique_claude_mds, untracked_or_unstaged, merge_conflicts, submit_gates, change_id, ledger_baseline, ledger_hits, -- only when --claim was passed -- claimed_files, and -- only when a changed file was detected as machine-emitted -- machine_emitted_files (each entry carries identifier, local, size_bytes, and the axis that matched -- machine_emitted_axis `content` or `declared_path` plus the naming machine_emitted_signature; such files are excluded from diff_chunks and changed_files, and `--review-machine-emitted` turns that exclusion off). The raw diff text is NOT inline -- it lives in per-chunk files at `<bundle_dir>/<diff_chunks[i].path>` (paths are relative to bundle_dir). Each `changed_files` entry carries `chunk_index` pointing to the chunk that contains its diff.
@@ -1214,6 +1239,7 @@ P4_OUTPUT_FORMAT = f"""\
 FRAGMENTS = {
     "git": {
         "NAME": "git-code-review",
+        "KIT": "git-kit",
         "DESC": "Use when reviewing local git changes -- before push, before opening a PR, or auditing a branch. Do NOT use for Perforce CLs or existing PRs by URL.",
         "TITLE": "Git Code Review",
         "INTRO": GIT_INTRO,
@@ -1239,12 +1265,13 @@ FRAGMENTS = {
         "ISSUE_PATH": "<repo-relative or absolute path>",
         "SG_DESC": GIT_SG_DESC,
         "OUTPUT_FORMAT": GIT_OUTPUT_FORMAT,
-        "PREPARE_TOOL": "${CLAUDE_PLUGIN_ROOT}/scripts/prepare_review.py",
+        "PREPARE_TOOL": "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/prepare_review.py",
         "LEDGER_RECORD_N": "10",
         "BASELINE_DESC": "the range base SHA advances -- origin/main moves, or HEAD changes for a working-tree review",
     },
     "p4": {
         "NAME": "p4-code-review",
+        "KIT": "p4-kit",
         "DESC": "Use when reviewing a pending Perforce changelist, or before asking the user to submit a CL. Do NOT use for git diffs or submitted CLs.",
         "TITLE": "P4 Code Review",
         "INTRO": P4_INTRO,
@@ -1305,8 +1332,10 @@ _SHARED = {
     "LAUNCH_NARRATION": LAUNCH_NARRATION,
     # render_review_profiles.py resolves the review-profile config layers; its
     # launch gotcha (missing shebang / lost exec bit on Windows checkouts making
-    # a bare path parse as sh) matches PREPARE_TOOL's p4 form, so BOTH kits use
-    # the explicit python3 launcher here even though only p4's PREPARE_TOOL does.
+    # a bare path parse as sh) is the same hazard PREPARE_TOOL guards against
+    # for BOTH kits (git's prepare_review.py ships mode 100644 with no shebang
+    # and exits 126 on a bare-path launch), so both use the explicit python3
+    # launcher here too.
     "RENDER_TOOL": "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/render_review_profiles.py",
     "X": X,
     "CHK": CHK,
@@ -1333,7 +1362,7 @@ _SKILL_TOKEN_ORDER = [
     "STEP1", "STEP2", "STEP3", "STEP9_TAIL", "STEP10",
     "CHECKLIST", "GOTCHAS", "NARRATION_TEMPLATES", "NARRATION_VARIABLES",
     "DIFF_OR_CL", "RANGE_OR_CL", "FILEPATHS", "CHANGE_DESC", "ISSUE_PATH",
-    "SG_DESC", "OUTPUT_FORMAT", "PREPARE_TOOL", "RENDER_TOOL", "LANE_TOOL", "LEDGER_RECORD_N", "BASELINE_DESC",
+    "SG_DESC", "OUTPUT_FORMAT", "PREPARE_TOOL", "RENDER_TOOL", "LANE_TOOL", "LEDGER_RECORD_N", "BASELINE_DESC", "KIT",
     # glyph tokens last -- they appear inside already-substituted blocks too,
     # but those blocks embed the literal glyph (via f-strings), so the only
     # remaining @X@/@CHK@/@CRS@ markers are in the template body.
@@ -1482,10 +1511,16 @@ for the full review overrides the gate.
 md-domain's detect lanes are native Workflow scripts; the code-review skill (running in the main
 session) invokes them via the Workflow tool. Locate the INSTALLED skills-kit plugin:
 
-- Plugin root (`<root>`): the newest version directory under the plugins cache for this
-  marketplace -- `~/.claude/plugins/cache/plugins-kit/skills-kit/<version>/` (pick the highest
-  semver dir present). `${CLAUDE_PLUGIN_ROOT}` of the CURRENT skill is NOT it -- that points at
-  git-kit / p4-kit, not skills-kit.
+- Plugin root (`<root>`): resolve via the REGISTRY first, falling back to a cache scan only
+  when the registry is empty or unreadable. Read `~/.claude/plugins/installed_plugins.json`;
+  when its `plugins["skills-kit@plugins-kit"]` array is present and non-empty, `<root>` is
+  entry `[0]`'s `installPath` -- the ACTIVE install, which can differ from the highest cached
+  version after a downgrade, a scoped install, or a dev-tree entry. Only when that key is
+  missing, the array is empty, or the file cannot be read, fall back to the newest version
+  directory under the plugins cache for this marketplace --
+  `~/.claude/plugins/cache/plugins-kit/skills-kit/<version>/` (pick the highest semver dir
+  present). `${CLAUDE_PLUGIN_ROOT}` of the CURRENT skill is NOT it -- that points at git-kit /
+  p4-kit, not skills-kit.
 - Detect-lane entry points, all under the one md-domain skill:
   `<root>/skills/md-domain/workflow/claude-md-detect.js` (the `audit_claude_md` lane, for CLAUDE.md
   subjects), `<root>/skills/md-domain/workflow/skill-detect.js` (the `audit_skill` lane, for
@@ -1736,7 +1771,7 @@ DECLINED_LEDGER_FRAGMENTS = {
         "SKILL_NAME": "git-code-review",
         "CHANGE_ID_LEDGER": "the diff range spec (e.g. `origin/main..HEAD`)",
         "BASELINE_LEDGER": "the range base SHA (`git rev-parse <base>`)",
-        "PREPARE_TOOL": "${CLAUDE_PLUGIN_ROOT}/scripts/prepare_review.py",
+        "PREPARE_TOOL": "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/prepare_review.py",
         "LEDGER_STORE": "~/.claude/plugins/data/plugins-kit/git-kit/reviews/ledger.json",
     },
     "p4": {
@@ -1799,7 +1834,7 @@ back to the process working directory.
   is deep-merged into it; an unknown `id` is appended as a new profile.
 - Within one profile record, `reviewers` is a list of records identified by `name`, merged the
   same way -- a higher layer only needs to restate the reviewer it is changing. A reviewer
-  record's fields are `name`, `model`, and `disabled`; any other key is a hard error rather
+  record's fields are `name`, `model`, `effort`, and `disabled`; any other key is a hard error rather
   than an ignored one.
 - Every other mapping -- a profile's `selection`, and `validator_models` -- deep-merges key by
   key, so a higher layer states only the keys it changes.
@@ -1831,6 +1866,7 @@ profiles:
   reviewers:
   - name: reviewer_a_claude_md_compliance
     model: sonnet
+    effort: low
   - name: reviewer_b_diff_only_bugs
     model: sonnet
   validator_models:
@@ -1841,6 +1877,7 @@ profiles:
   reviewers:
   - name: reviewer_a_claude_md_compliance
     model: sonnet
+    effort: low
   - name: reviewer_b_diff_only_bugs
     model: opus
   - name: reviewer_c_introduced_code
@@ -1851,6 +1888,51 @@ profiles:
     bug: opus
     claude_md: sonnet
 ```
+
+## What an `effort` value may name
+
+A reviewer's optional `effort` is one of `low`, `medium`, `high`, `xhigh`, `max` -- a CLOSED
+menu, unlike `model`, so an unknown level is a hard error at resolve time rather than a
+dispatch to an agent that does not exist. Which levels a model actually offers depends on the
+model; the resolver validates the name, not the pairing.
+
+Omitting `effort` is the default and means the lane INHERITS the invoking session's effort,
+which is what every lane did before the field existed. So an unstated effort never changes
+behavior, and a review whose profile states no effort anywhere behaves exactly as it did.
+
+`effort` selects a DISPATCH TARGET rather than passing a parameter, because the Agent tool has
+no effort argument -- effort is set in an agent definition's frontmatter. A lane stating
+`effort: low` is dispatched to the `@KIT@:review-lane-low` agent that this plugin ships;
+a lane stating none is dispatched to `general-purpose` as before.
+
+`model` still comes from the profile and is passed at the CALL SITE, where it overrides
+whatever model the effort agent's own frontmatter would imply. The two fields are therefore
+independent: any model may pair with any effort, and neither is ever traded for the other.
+
+An ENDPOINT lane ignores `effort`. An endpoint's reasoning budget comes from its own
+llm-scripting-kit configuration, so a record carrying both an endpoint id and an `effort`
+runs at the endpoint's configured effort; the skill says so in one line rather than reporting
+an effort the lane did not run at. State effort on an endpoint lane only as documentation of
+intent -- to change it, change the endpoint.
+
+### Worked effort override
+
+To raise the CLAUDE.md-compliance lane above its shipped `low` in one project, add to
+`<project_root>/.claude/review_profiles.yaml`:
+
+```yaml
+profiles:
+- id: data_only
+  reviewers:
+  - name: reviewer_a_claude_md_compliance
+    effort: high
+```
+
+Only the changed field needs restating: the by-name reviewer merge keeps that lane's shipped
+`model`, and the other reviewers, `selection`, and `validator_models` are untouched. There is
+no way to spell "unset" -- to return a lane to session-inherited effort, remove the shipped
+`effort` from that record by disabling and restating the reviewer, or state the level you
+actually want.
 
 ## What a `model` value may name
 
@@ -2049,11 +2131,13 @@ diagnostics, never part of the table.
 CONFIGURATION_FRAGMENTS = {
     "git": {
         "SKILL_NAME": "git-code-review",
+        "KIT": "git-kit",
         "RENDER_TOOL": "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/render_review_profiles.py",
         "LANE_TOOL": "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/run_review_lane.py",
     },
     "p4": {
         "SKILL_NAME": "p4-code-review",
+        "KIT": "p4-kit",
         "RENDER_TOOL": "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/render_review_profiles.py",
         "LANE_TOOL": "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/run_review_lane.py",
     },

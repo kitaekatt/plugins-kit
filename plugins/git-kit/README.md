@@ -32,8 +32,11 @@ diff":
   compliance findings. These assignments are the defaults; ask Claude to use
   a different model to override them.
 
-Output is rendered markdown in chat. Nothing is written to disk, no PR
-comment is posted.
+Output is rendered markdown in chat; no PR comment is posted. The diff
+bundle (chunks, pre-images, `bundle.json`) is transient scratch under the
+plugin's data root, discarded per review. Findings you decline persist in a
+durable ledger keyed on the change, so re-reviewing the same change at the
+same baseline does not re-raise them.
 
 ## How it differs from the built-in /code-review
 

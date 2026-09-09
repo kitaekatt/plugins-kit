@@ -113,6 +113,43 @@ reference_skill:
         - Advising a restart as the fix for an unconverged manifest is the anti-pattern
           this fact exists to block; the advisory is only ever a notice about layer 3,
           never a remediation step for layers 1-2.
+    - id: cooldown_reset_request
+      summary: >-
+        A request about the cooldown ITSELF asks only for the skip stamps to be deleted -- it
+        runs nothing. Report the script's verdict and stop; a pass is a separate, WRITING
+        action that needs its own ask.
+      keywords: [reset the cooldown, clear the cooldown, bootstrap-reset-cooldown, no cooldown to reset, did it detect the issue, force a pass, run bootstrap now, reset then run, cooldown request protocol, no-op reset, unasked pass, side effects of a pass, reset did nothing]
+      detail: |
+        The script deletes the Layer-1 session-id marker and the Layer-2 per-project cooldown
+        stamp (see update_lifecycle for both gates). It does NO git, NO network and NO
+        convergence -- it only removes the gate that would make the NEXT pass skip. Nothing
+        observable happens until a pass actually runs.
+
+        Protocol, keyed to what the user said:
+        - "reset / clear the cooldown" -> run the script, report its verdict VERBATIM
+          ("cleared ..." or "no cooldown to reset for <project>"), and STOP.
+        - "reset it and run it" / "converge now" / "force a pass" -> run both, in that order.
+        - "why didn't bootstrap do X" / "see if it detects Y" -> the reset alone cannot answer
+          this; a pass has to run. SAY so and get agreement, rather than inferring the pass
+          from the intent clause and running it unasked.
+
+        Never run a pass merely to make the reset produce output. A pass is not read-only: it
+        syncs venvs, writes the persistent PATH, merges config, and OVERWRITES plugin-managed
+        files in the user's home -- a plugin's policy fragment is rewritten every pass, silently
+        reverting local edits to it. It takes minutes, and it holds an engine lock, so
+        concurrent passes stand down: an unasked pass can block the fix the user actually
+        wanted.
+      gotchas:
+        - '"no cooldown to reset" is the ANSWER, not a failure to work around. It means nothing
+          was gating a pass. Re-running the script, adding --project, or launching a pass to
+          produce output are the same mistake wearing three hats.'
+        - Scope this gate to a request about the COOLDOWN ITSELF. When the user has already
+          asked to converge -- after an install, an update, or a manifest edit --
+          manual_convergence's reset-then-run recipe IS the "converge now" branch and is the
+          whole answer; do not re-ask for the pass they just requested. The two facts only
+          conflict if this one is read as gating every pass rather than the unasked one.
+        - The reset is trivially reversible; the pass it can tempt you into is not. Weigh them
+          separately whenever the user asked for the reset ALONE.
     - id: remediation_phases
       summary: The engine remediates silently first; only escalates to fix-all when user action is required.
       keywords: [auto-remediation, fix-all, two-phase, silent install, remediation flow, autodetect, default values]
@@ -326,8 +363,8 @@ reference_skill:
         Layered configs are merged before plugin bootstrap.json files are processed.
   groupings:
     - name: engine_behavior
-      keywords: [engine, session start, processing order, messages, remediation flow, update, harvest, restart, claude --resume]
-      fact_ids: [message_outcomes, update_lifecycle, manual_convergence, remediation_phases]
+      keywords: [engine, session start, processing order, messages, remediation flow, update, harvest, restart, claude --resume, reset the cooldown]
+      fact_ids: [message_outcomes, update_lifecycle, manual_convergence, cooldown_reset_request, remediation_phases]
     - name: config_files
       keywords: [bootstrap.json, env.json, manifest, layers, merge, override, pin, auto-update, autoUpdate, plugin not updating, machines registry, env gate, personalization, install manual, opt-in plugin, action-triggered install]
       fact_ids: [config_layers, env_manifest, marketplace_pinning, plugin_autoupdate_propagation, action_triggered_install, merge_semantics]

@@ -30,7 +30,7 @@ back to the process working directory.
   is deep-merged into it; an unknown `id` is appended as a new profile.
 - Within one profile record, `reviewers` is a list of records identified by `name`, merged the
   same way -- a higher layer only needs to restate the reviewer it is changing. A reviewer
-  record's fields are `name`, `model`, and `disabled`; any other key is a hard error rather
+  record's fields are `name`, `model`, `effort`, and `disabled`; any other key is a hard error rather
   than an ignored one.
 - Every other mapping -- a profile's `selection`, and `validator_models` -- deep-merges key by
   key, so a higher layer states only the keys it changes.
@@ -62,6 +62,7 @@ profiles:
   reviewers:
   - name: reviewer_a_claude_md_compliance
     model: sonnet
+    effort: low
   - name: reviewer_b_diff_only_bugs
     model: sonnet
   validator_models:
@@ -72,6 +73,7 @@ profiles:
   reviewers:
   - name: reviewer_a_claude_md_compliance
     model: sonnet
+    effort: low
   - name: reviewer_b_diff_only_bugs
     model: opus
   - name: reviewer_c_introduced_code
@@ -82,6 +84,51 @@ profiles:
     bug: opus
     claude_md: sonnet
 ```
+
+## What an `effort` value may name
+
+A reviewer's optional `effort` is one of `low`, `medium`, `high`, `xhigh`, `max` -- a CLOSED
+menu, unlike `model`, so an unknown level is a hard error at resolve time rather than a
+dispatch to an agent that does not exist. Which levels a model actually offers depends on the
+model; the resolver validates the name, not the pairing.
+
+Omitting `effort` is the default and means the lane INHERITS the invoking session's effort,
+which is what every lane did before the field existed. So an unstated effort never changes
+behavior, and a review whose profile states no effort anywhere behaves exactly as it did.
+
+`effort` selects a DISPATCH TARGET rather than passing a parameter, because the Agent tool has
+no effort argument -- effort is set in an agent definition's frontmatter. A lane stating
+`effort: low` is dispatched to the `git-kit:review-lane-low` agent that this plugin ships;
+a lane stating none is dispatched to `general-purpose` as before.
+
+`model` still comes from the profile and is passed at the CALL SITE, where it overrides
+whatever model the effort agent's own frontmatter would imply. The two fields are therefore
+independent: any model may pair with any effort, and neither is ever traded for the other.
+
+An ENDPOINT lane ignores `effort`. An endpoint's reasoning budget comes from its own
+llm-scripting-kit configuration, so a record carrying both an endpoint id and an `effort`
+runs at the endpoint's configured effort; the skill says so in one line rather than reporting
+an effort the lane did not run at. State effort on an endpoint lane only as documentation of
+intent -- to change it, change the endpoint.
+
+### Worked effort override
+
+To raise the CLAUDE.md-compliance lane above its shipped `low` in one project, add to
+`<project_root>/.claude/review_profiles.yaml`:
+
+```yaml
+profiles:
+- id: data_only
+  reviewers:
+  - name: reviewer_a_claude_md_compliance
+    effort: high
+```
+
+Only the changed field needs restating: the by-name reviewer merge keeps that lane's shipped
+`model`, and the other reviewers, `selection`, and `validator_models` are untouched. There is
+no way to spell "unset" -- to return a lane to session-inherited effort, remove the shipped
+`effort` from that record by disabling and restating the reviewer, or state the level you
+actually want.
 
 ## What a `model` value may name
 
