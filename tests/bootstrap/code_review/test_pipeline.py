@@ -81,6 +81,50 @@ class TestRunVcs:
             run_vcs("x", ["status"])
         assert captured.get("cwd") is None
 
+    def test_passes_a_finite_timeout_to_subprocess_run_by_default(self):
+        """An unreachable server hangs subprocess.run forever with no
+        timeout kwarg at all; a caller that never names one must still get
+        a finite, non-None bound passed through to subprocess.run."""
+        captured: dict = {}
+
+        def fake_run(cmd, **kwargs):
+            captured.update(kwargs)
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+        with patch.object(subprocess, "run", side_effect=fake_run):
+            run_vcs("x", ["status"])
+
+        assert captured.get("timeout") is not None
+        assert captured["timeout"] > 0
+
+    def test_passes_through_an_explicit_timeout(self):
+        captured: dict = {}
+
+        def fake_run(cmd, **kwargs):
+            captured.update(kwargs)
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+        with patch.object(subprocess, "run", side_effect=fake_run):
+            run_vcs("x", ["status"], timeout=5.0)
+
+        assert captured.get("timeout") == 5.0
+
+    def test_normalizes_timeout_expired_to_a_failure_tuple(self):
+        """A subprocess.TimeoutExpired must never propagate past run_vcs --
+        every existing caller's error handling expects (rc, out, err), not
+        an exception."""
+
+        def fake_run(cmd, **kwargs):
+            raise subprocess.TimeoutExpired(cmd=cmd, timeout=kwargs.get("timeout"))
+
+        with patch.object(subprocess, "run", side_effect=fake_run):
+            rc, out, err = run_vcs("x", ["status"], timeout=5.0)
+
+        assert rc == 1
+        assert out == ""
+        assert "x status" in err
+        assert "timed out after 5.0s" in err
+
 
 # ---------------------------------------------------------------------------
 # split_sections

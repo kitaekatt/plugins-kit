@@ -13,7 +13,11 @@ reviewers see the full introduced/removed code, this script synthesizes
 new-file / deleted-file hunks for those actions by fetching content via
 `p4 print`. Supports both shelved (`@=<CL>`) and submitted (`#<rev>`) forms.
 Non-text filetypes (binary, apple, resource, ...) are never content-inlined;
-they get a one-line `(binary file added: N bytes)` placeholder instead.
+they get a one-line `(binary file added: N bytes)` placeholder instead. A
+`utf16`-typed add/delete file stays text-like -- its content is fetched via a
+temp-file `p4 print -q -o` write and sniffed for a UTF-16 BOM or the
+NUL-alternation byte pattern before being decoded, so real UTF-16 bytes decode
+correctly instead of mojibaking through a forced UTF-8 read.
 
 Also runs `p4 reconcile -n` recursively over the minimal covering set of
 directories containing CL files, and reports any unreconciled files
@@ -35,6 +39,14 @@ pending merge/integrate resolves. These are informational: the diff still
 goes to reviewers (conflict markers in the file content are themselves
 a legitimate review observation), but the user is warned that the CL is
 not submittable until each unresolved file is run through `p4 resolve`.
+
+Either hygiene scan (reconcile or resolve) can itself fail to run -- a bad
+workspace, an unreachable server -- for a reason other than "nothing to
+report". That case is never folded into a clean empty `unreconciled` or
+`unresolved` list, which would read identically to "ran and found nothing";
+it is recorded in the `hygiene_incomplete` bundle key instead, naming which
+scan did not complete and why. A failed hygiene scan does not abort the
+prepare -- the diff review is still worth having.
 
 The workspace root is intentionally excluded from recursive scans -- if a
 CL touches a root-level file, the root is scanned non-recursively (`/*`)
@@ -95,6 +107,14 @@ Output schema:
         {"local": "<local path>", "depot": "<depot path>",
          "resolve_type": "<p4 resolveType, e.g. content/branch/delete>",
          "from_file": "<source depot path, may be empty>"}
+      ],
+      "hygiene_incomplete": [                 # always present; empty means both
+                                               # scans ran and found nothing --
+                                               # a non-empty entry means a scan
+                                               # below could NOT run, so its own
+                                               # empty list must not be read as
+                                               # "clean"
+        {"scan": "unreconciled"|"unresolved", "reason": "<p4 error detail>"}
       ],
       "claimed_files": [                      # present only when --claim was passed
         {"identifier": "<depot path>", "depot": "<depot path>",
@@ -163,8 +183,10 @@ Stderr-only diagnostics. Non-zero exit on hard failure.
 """
 
 import json
+import os
 import re
 import sys
+import tempfile
 from pathlib import Path
 from typing import Optional
 
@@ -239,6 +261,30 @@ _RECONCILE_ACTIONS = {"add", "edit", "delete"}
 _ADD_ACTIONS = {"add", "branch", "move/add", "import"}
 _DELETE_ACTIONS = {"delete", "move/delete", "purge"}
 
+# Shared with p4kit_vcs's own adapter (lib/p4kit_vcs/p4_vcs.py, whose
+# _runner_timeout_s does the equivalent read) so a p4 subprocess spawned by
+# either path honors the same knob. Read directly here rather than imported:
+# this script does not put plugins/p4-kit/lib on sys.path (only its own
+# scripts/ dir and the plugin root), so importing p4kit_vcs.p4_vcs would add a
+# path-manipulation step this small a read does not justify.
+_P4_TIMEOUT_ENV_VAR = "P4KIT_VCS_TIMEOUT_S"
+_P4_DEFAULT_TIMEOUT_S = 60.0
+
+
+def _p4_timeout_s() -> float:
+    """Read the p4 subprocess timeout (seconds) from `P4KIT_VCS_TIMEOUT_S`.
+
+    Falls back to `_P4_DEFAULT_TIMEOUT_S` when the variable is unset or holds
+    a value `float()` rejects.
+    """
+    raw = os.environ.get(_P4_TIMEOUT_ENV_VAR)
+    if not raw:
+        return _P4_DEFAULT_TIMEOUT_S
+    try:
+        return float(raw)
+    except ValueError:
+        return _P4_DEFAULT_TIMEOUT_S
+
 # Cap each `p4 ... <paths>` invocation. Windows' CreateProcess limits the
 # combined command line to ~32 KB; bulk CLs (asset reconciles, regen passes)
 # can easily push 500+ depot paths totalling 70+ KB into one call and trip
@@ -283,9 +329,10 @@ def run_p4(args: list[str]) -> tuple[int, str, str]:
     Thin wrapper over the shared run_vcs, which forces UTF-8 decoding so
     non-Latin-1 content (CJK, emoji) in diffs doesn't abort the subprocess
     reader thread on Windows, whose default text decoder is the system
-    ANSI codepage (cp1252 on en-US/en-GB).
+    ANSI codepage (cp1252 on en-US/en-GB). Bounded by `_p4_timeout_s`
+    (`P4KIT_VCS_TIMEOUT_S`) so an unreachable server cannot hang the review.
     """
-    return run_vcs("p4", args)
+    return run_vcs("p4", args, timeout=_p4_timeout_s())
 
 
 def has_describe_content(output: str) -> bool:
@@ -493,13 +540,92 @@ def _content_spec(
     return f"{depot_path}#{rev}"
 
 
+_UTF16_BOM_LE = b"\xff\xfe"
+_UTF16_BOM_BE = b"\xfe\xff"
+
+
+def _is_utf16_filetype(filetype: Optional[str]) -> bool:
+    """True when a p4 filetype's base (before `+modifiers`) is exactly `utf16`."""
+    if not filetype:
+        return False
+    return filetype.split("+", 1)[0].strip().lower() == "utf16"
+
+
+def _decode_utf16_aware(data: bytes) -> str:
+    """Decode raw file bytes as UTF-16 when a BOM or the classic every-other-
+    byte-NUL pattern is present, else as UTF-8.
+
+    Whether `p4 print` emits a `utf16`-typed file's bytes verbatim (as UTF-16)
+    or translates them to the client charset (UTF-8) is `hypothesis:` here --
+    untestable without a live p4 server in unicode mode. This function is
+    correct under either reading: real UTF-16 bytes are recovered via the
+    sniff; already-UTF-8 bytes carry neither a UTF-16 BOM nor the
+    NUL-alternation pattern, so they fall through to the UTF-8 branch exactly
+    as before this function existed.
+    """
+    if data[:2] in (_UTF16_BOM_LE, _UTF16_BOM_BE):
+        return data.decode("utf-16", errors="replace")
+    sample = data[:512]
+    if len(sample) >= 4:
+        even_nul = sum(1 for b in sample[0::2] if b == 0)
+        odd_nul = sum(1 for b in sample[1::2] if b == 0)
+        threshold = len(sample) // 4
+        if even_nul > threshold or odd_nul > threshold:
+            return data.decode("utf-16", errors="replace")
+    return data.decode("utf-8", errors="replace")
+
+
+def _fetch_content_bytes_via_outfile(spec: str) -> Optional[bytes]:
+    """Fetch `spec`'s content as raw bytes via `p4 print -q -o <tmp>`.
+
+    Writing to a file sidesteps `run_vcs`'s forced UTF-8 stdout decode (see
+    its docstring in bootstrap_lib.code_review.pipeline), so the bytes read
+    back are exactly what p4 wrote -- needed to sniff for UTF-16 before
+    committing to a text decoding. Used only for utf16-typed files; every
+    other filetype keeps the plain captured-stdout path.
+    """
+    fd, tmp_name = tempfile.mkstemp(prefix="prepare_review_print_")
+    os.close(fd)
+    tmp_path = Path(tmp_name)
+    try:
+        rc, _, _ = run_p4(["print", "-q", "-o", str(tmp_path), spec])
+        if rc != 0:
+            return None
+        return tmp_path.read_bytes()
+    finally:
+        try:
+            tmp_path.unlink()
+        except OSError:
+            pass
+
+
 def fetch_file_content(
-    depot_path: str, rev: str, cl: str, is_shelved: bool, is_delete: bool
+    depot_path: str,
+    rev: str,
+    cl: str,
+    is_shelved: bool,
+    is_delete: bool,
+    filetype: Optional[str] = None,
 ) -> Optional[str]:
-    """Fetch file content via `p4 print -q` (see _content_spec for addressing)."""
+    """Fetch file content via `p4 print -q` (see _content_spec for addressing).
+
+    A `utf16`-typed file is fetched via a temp-file `-o` write and sniffed for
+    a UTF-16 BOM / NUL-alternation pattern before deciding how to decode it --
+    see `_fetch_content_bytes_via_outfile` and `_decode_utf16_aware`. This is
+    a decoding concern only: `utf16` stays classified as text-like by
+    `_is_text_filetype` (unchanged), so it keeps going through the normal
+    add/delete hunk synthesis rather than the binary-placeholder path.
+    `filetype` defaults to `None`, which is never `utf16`, so every existing
+    caller that does not pass it keeps the unchanged captured-stdout path.
+    """
     spec = _content_spec(depot_path, rev, cl, is_shelved, is_delete)
     if spec is None:
         return None
+    if _is_utf16_filetype(filetype):
+        data = _fetch_content_bytes_via_outfile(spec)
+        if data is None:
+            return None
+        return _decode_utf16_aware(data)
     rc, out, _ = run_p4(["print", "-q", spec])
     if rc != 0:
         return None
@@ -657,7 +783,9 @@ def extract_diff(
             skipped_binaries.append(depot)
             continue
         if is_add:
-            content = fetch_file_content(depot, rev, cl, is_shelved, is_delete=False)
+            content = fetch_file_content(
+                depot, rev, cl, is_shelved, is_delete=False, filetype=sec.get("type")
+            )
             if content is not None:
                 hunk = synthesize_add_hunk(content)
                 result_parts.append(header + body + hunk)
@@ -665,7 +793,9 @@ def extract_diff(
                 continue
             unhandled.append((depot, action))
         elif is_delete:
-            content = fetch_file_content(depot, rev, cl, is_shelved, is_delete=True)
+            content = fetch_file_content(
+                depot, rev, cl, is_shelved, is_delete=True, filetype=sec.get("type")
+            )
             if content is not None:
                 hunk = synthesize_delete_hunk(content)
                 result_parts.append(header + body + hunk)
@@ -698,14 +828,18 @@ def extract_diff(
             skipped_binaries.append(depot)
             continue
         if is_add:
-            content = fetch_file_content(depot, rev, cl, is_shelved, is_delete=False)
+            content = fetch_file_content(
+                depot, rev, cl, is_shelved, is_delete=False, filetype=filetype
+            )
             if content is not None:
                 result_parts.append(synthesized_header + synthesize_add_hunk(content))
                 synthesized_adds.append(depot)
                 continue
             unhandled.append((depot, action))
         else:
-            content = fetch_file_content(depot, rev, cl, is_shelved, is_delete=True)
+            content = fetch_file_content(
+                depot, rev, cl, is_shelved, is_delete=True, filetype=filetype
+            )
             if content is not None:
                 result_parts.append(synthesized_header + synthesize_delete_hunk(content))
                 synthesized_deletes.append(depot)
@@ -846,7 +980,9 @@ def compute_minimal_dirs(
     return minimal
 
 
-def find_unreconciled(dir_specs: list[tuple[Path, bool]]) -> list[dict]:
+def find_unreconciled(
+    dir_specs: list[tuple[Path, bool]]
+) -> tuple[list[dict], list[dict]]:
     """Run `p4 -ztag reconcile -n` over `dir_specs` and return unreconciled files.
 
     `dir_specs` is a list of (directory, recursive) pairs. Recursive entries are
@@ -854,29 +990,41 @@ def find_unreconciled(dir_specs: list[tuple[Path, bool]]) -> list[dict]:
     children only -- used for the workspace root to avoid crawling the whole
     tree).
 
-    Each result entry: {"local": <path>, "depot": <path>, "action": "add"|"edit"|"delete"}.
+    Returns `(items, incomplete)`. Each `items` entry:
+    {"local": <path>, "depot": <path>, "action": "add"|"edit"|"delete"}.
     `.p4ignore` is honored by p4. Files already opened in any pending CL are skipped.
-    A single p4 invocation handles all specs at once.
+    A single p4 invocation handles all specs at once (batched -- see
+    `_P4_PATH_BATCH`).
 
-    On failure (p4 error, no workspace, etc.) returns []; the review still proceeds.
+    A batch failing for a reason other than "no file(s) to reconcile" (a p4
+    error, no workspace, an unreachable server, ...) is NOT folded into an
+    empty `items` list -- that would read identically to "ran and found
+    nothing" to a caller, the exact ambiguity this scan exists to avoid (see
+    the module docstring's `hygiene_incomplete` key). Instead each such batch
+    contributes one `{"scan": "unreconciled", "reason": <detail>}` entry to
+    `incomplete`, and the scan continues with the remaining batches -- a
+    partial hygiene failure must not abort the whole prepare.
     """
     if not dir_specs:
-        return []
+        return [], []
     specs = [f"{d}/..." if recursive else f"{d}/*" for d, recursive in dir_specs]
 
     items: list[dict] = []
+    incomplete: list[dict] = []
     for i in range(0, len(specs), _P4_PATH_BATCH):
         chunk = specs[i:i + _P4_PATH_BATCH]
         rc, out, err = run_p4(["-ztag", "reconcile", "-n", *chunk])
         # rc != 0 with "no file(s) to reconcile" means nothing to report -- not an error.
         if rc != 0 and "no file(s) to reconcile" not in (err + out):
+            reason = err.strip() or out.strip() or f"exit {rc}"
             print(
-                f"prepare_review: reconcile check failed (rc={rc}): {err.strip() or out.strip()}",
+                f"prepare_review: reconcile check failed (rc={rc}): {reason}",
                 file=sys.stderr,
             )
+            incomplete.append({"scan": "unreconciled", "reason": reason})
             continue
         items.extend(_parse_reconcile_output(out))
-    return items
+    return items, incomplete
 
 
 def _partition_own_depot_files(
@@ -959,23 +1107,28 @@ def _parse_reconcile_output(out: str) -> list[dict]:
     return items
 
 
-def find_unresolved(cl: str) -> list[dict]:
+def find_unresolved(cl: str) -> tuple[list[dict], list[dict]]:
     """Run `p4 -ztag resolve -n -c <CL>` and return unresolved files in this CL.
 
-    Each result entry: {"local": <path>, "depot": <path>,
-                        "resolve_type": <p4 resolveType>, "from_file": <source>}.
+    Returns `(items, incomplete)`. Each `items` entry: {"local": <path>,
+    "depot": <path>, "resolve_type": <p4 resolveType>, "from_file": <source>}.
 
     p4 exits non-zero with "no file(s) to resolve" when the CL is clean -- that
-    isn't an error. On other failures, returns [] and logs to stderr; the
-    review still proceeds.
+    isn't an error. On any other failure, `items` is `[]` (no invented
+    findings) but `incomplete` carries one `{"scan": "unresolved", "reason":
+    <detail>}` entry, so a caller can tell "ran, found nothing" from "did not
+    run" -- an empty `unresolved` alone would look identical to a submittable
+    CL. The review still proceeds; this scan failing is not fatal to the
+    prepare.
     """
     rc, out, err = run_p4(["-ztag", "resolve", "-n", "-c", cl])
     if rc != 0 and "no file(s) to resolve" not in (err + out):
+        reason = err.strip() or out.strip() or f"exit {rc}"
         print(
-            f"prepare_review: resolve check failed (rc={rc}): {err.strip() or out.strip()}",
+            f"prepare_review: resolve check failed (rc={rc}): {reason}",
             file=sys.stderr,
         )
-        return []
+        return [], [{"scan": "unresolved", "reason": reason}]
 
     items: list[dict] = []
     current: dict = {}
@@ -1006,7 +1159,7 @@ def find_unresolved(cl: str) -> list[dict]:
                 current = {}
     if current:
         flush()
-    return items
+    return items, []
 
 
 def get_workspace_root() -> Optional[Path]:
@@ -1164,10 +1317,16 @@ def build_bundle(
     minimal_dirs = compute_minimal_dirs(
         [f["local"] for f in hygiene_sources], workspace_root
     )
+    unreconciled_raw, unreconciled_incomplete = find_unreconciled(minimal_dirs)
     unreconciled, stale_open = _partition_own_depot_files(
-        find_unreconciled(minimal_dirs), set(depot_files), actions
+        unreconciled_raw, set(depot_files), actions
     )
-    unresolved = find_unresolved(cl)
+    unresolved, unresolved_incomplete = find_unresolved(cl)
+    # A failed scan must never serialize as an empty list indistinguishable
+    # from "ran and found nothing" -- hygiene_incomplete is always present
+    # (empty when both scans ran cleanly) and names which scan(s) could not
+    # complete and why. See find_unreconciled / find_unresolved.
+    hygiene_incomplete = unreconciled_incomplete + unresolved_incomplete
 
     # Declined-findings ledger. The baseline folds the CL's shelf fingerprint
     # (content) and per-file (rev, action) map (identity) into one token: when
@@ -1191,6 +1350,7 @@ def build_bundle(
         "unreconciled": unreconciled,
         "stale_open": stale_open,
         "unresolved": unresolved,
+        "hygiene_incomplete": hygiene_incomplete,
         "submit_gates": core["submit_gates"],
         "auto_shelved": auto_shelved,
         "shelf_fingerprint": shelf_fingerprint,
@@ -1306,44 +1466,58 @@ def _usage() -> int:
 
 
 def main(argv: list[str]) -> int:
-    if len(argv) == 3 and argv[1] == "--cleanup":
-        return cleanup_auto_shelve(Path(argv[2]))
-    if len(argv) == 3 and argv[1] == "--ledger-record":
+    # `p4` missing from PATH surfaces as subprocess.run's FileNotFoundError from
+    # deep inside whichever p4 call happens to run first (describe, reconcile,
+    # shelve fingerprinting, ...) -- catch it here, once, rather than in every
+    # call site, and exit with the same convention a build_bundle ValueError
+    # uses (1) instead of letting it escape as an unhandled traceback.
+    try:
+        if len(argv) == 3 and argv[1] == "--cleanup":
+            return cleanup_auto_shelve(Path(argv[2]))
+        if len(argv) == 3 and argv[1] == "--ledger-record":
+            try:
+                n = ledger.record_from_file(_ledger_path(), Path(argv[2]))
+            except (OSError, ValueError) as e:
+                print(f"Error: {e}", file=sys.stderr)
+                return 1
+            print(f"prepare_review: recorded {n} declined finding(s) into the ledger.", file=sys.stderr)
+            return 0
         try:
-            n = ledger.record_from_file(_ledger_path(), Path(argv[2]))
-        except (OSError, ValueError) as e:
+            positionals, claim_globs, review_machine_emitted = _parse_args(argv[1:])
+        except ValueError as e:
+            print(f"Error: {e}", file=sys.stderr)
+            return 2
+        if len(positionals) != 1 or positionals[0].startswith("-"):
+            return _usage()
+        cl = positionals[0]
+        # Validate before building bundle_dir from the unvalidated positional --
+        # "../../foo" would otherwise write outside the reviews root and "."
+        # would write into the root itself, beside ledger.json, where the
+        # stale-chunk sweep operates.
+        if not re.fullmatch(r"[0-9]+", cl):
+            print(f"Error: CL must be a positive integer, got {cl!r}", file=sys.stderr)
+            return 2
+        bundle_dir = DEFAULT_BUNDLE_ROOT / cl
+        bundle_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            bundle = build_bundle(
+                cl,
+                bundle_dir,
+                claim_globs=claim_globs,
+                review_machine_emitted=review_machine_emitted,
+            )
+        except ValueError as e:
             print(f"Error: {e}", file=sys.stderr)
             return 1
-        print(f"prepare_review: recorded {n} declined finding(s) into the ledger.", file=sys.stderr)
-        return 0
-    try:
-        positionals, claim_globs, review_machine_emitted = _parse_args(argv[1:])
-    except ValueError as e:
-        print(f"Error: {e}", file=sys.stderr)
-        return 2
-    if len(positionals) != 1 or positionals[0].startswith("-"):
-        return _usage()
-    cl = positionals[0]
-    # Validate before building bundle_dir from the unvalidated positional --
-    # "../../foo" would otherwise write outside the reviews root and "."
-    # would write into the root itself, beside ledger.json, where the
-    # stale-chunk sweep operates.
-    if not re.fullmatch(r"[0-9]+", cl):
-        print(f"Error: CL must be a positive integer, got {cl!r}", file=sys.stderr)
-        return 2
-    bundle_dir = DEFAULT_BUNDLE_ROOT / cl
-    bundle_dir.mkdir(parents=True, exist_ok=True)
-    try:
-        bundle = build_bundle(
-            cl,
-            bundle_dir,
-            claim_globs=claim_globs,
-            review_machine_emitted=review_machine_emitted,
+        return emit_bundle(bundle, bundle_dir)
+    except FileNotFoundError as e:
+        missing = e.filename or "p4"
+        print(
+            f"Error: '{missing}' executable not found. p4-kit requires the "
+            "Helix Core Command-Line Client (p4) to be installed and on PATH.",
+            file=sys.stderr,
         )
-    except ValueError as e:
-        print(f"Error: {e}", file=sys.stderr)
         return 1
-    return emit_bundle(bundle, bundle_dir)
 
 
 if __name__ == "__main__":

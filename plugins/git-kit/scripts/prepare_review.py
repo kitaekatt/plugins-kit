@@ -111,6 +111,7 @@ Stderr-only diagnostics. Non-zero exit on hard failure.
 """
 
 import hashlib
+import os
 import re
 import sys
 from pathlib import Path
@@ -206,15 +207,37 @@ _C_ESCAPES = {"a": 7, "b": 8, "t": 9, "n": 10, "v": 11, "f": 12, "r": 13}
 # Status letters in `git diff --name-status` and `git status --porcelain`.
 _STATUS_CHARS = set("AMDRCT")
 
+# The parallel knob to p4-kit's P4KIT_VCS_TIMEOUT_S: one env var covers
+# every git subprocess this plugin spawns.
+_GIT_TIMEOUT_ENV_VAR = "GITKIT_VCS_TIMEOUT_S"
+_GIT_DEFAULT_TIMEOUT_S = 60.0
+
+
+def _git_timeout_s() -> float:
+    """Read the git subprocess timeout (seconds) from `GITKIT_VCS_TIMEOUT_S`.
+
+    Falls back to `_GIT_DEFAULT_TIMEOUT_S` when the variable is unset or
+    holds a value `float()` rejects.
+    """
+    raw = os.environ.get(_GIT_TIMEOUT_ENV_VAR)
+    if not raw:
+        return _GIT_DEFAULT_TIMEOUT_S
+    try:
+        return float(raw)
+    except ValueError:
+        return _GIT_DEFAULT_TIMEOUT_S
+
 
 def run_git(args: list[str], cwd: Optional[Path] = None) -> tuple[int, str, str]:
     """Run a git command, return (returncode, stdout, stderr).
 
     Thin wrapper over the shared run_vcs, which forces UTF-8 decoding --
     non-Latin-1 file content (CJK, emoji) in diffs would abort the
-    subprocess reader on Windows under cp1252.
+    subprocess reader on Windows under cp1252. Bounded by `_git_timeout_s`
+    (`GITKIT_VCS_TIMEOUT_S`) so a fetch against a dead remote cannot hang the
+    review.
     """
-    return run_vcs("git", args, cwd=cwd)
+    return run_vcs("git", args, cwd=cwd, timeout=_git_timeout_s())
 
 
 # ---------------------------------------------------------------------------

@@ -185,7 +185,10 @@ def annotate_triviality(entry: dict, section_text: str) -> None:
 
 
 def run_vcs(
-    executable: str, args: list[str], cwd: Optional[Path] = None
+    executable: str,
+    args: list[str],
+    cwd: Optional[Path] = None,
+    timeout: float = 60.0,
 ) -> tuple[int, str, str]:
     """Run a VCS command, return (returncode, stdout, stderr).
 
@@ -193,14 +196,31 @@ def run_vcs(
     (CJK, emoji) in diffs would abort the subprocess reader on Windows,
     whose default text decoder is the system ANSI codepage (cp1252 on
     en-US/en-GB). None stdout/stderr coalesce to ''.
+
+    `timeout` is a bounded, finite default -- an unreachable server hangs
+    `subprocess.run` forever with nothing passed, so every caller is bounded
+    whether or not it names its own value. A caller that wants a different
+    bound (e.g. a kit resolving its own environment-variable override) passes
+    `timeout` explicitly; this function exposes only the parameter, never an
+    environment variable of its own. `subprocess.TimeoutExpired` is caught and
+    normalized into the same `(rc, out, err)` failure shape every other
+    failure already takes -- never raised past this function.
     """
-    proc = subprocess.run(
-        [executable, *args],
-        capture_output=True,
-        encoding="utf-8",
-        errors="replace",
-        cwd=str(cwd) if cwd else None,
-    )
+    try:
+        proc = subprocess.run(
+            [executable, *args],
+            capture_output=True,
+            encoding="utf-8",
+            errors="replace",
+            cwd=str(cwd) if cwd else None,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        return (
+            1,
+            "",
+            f"{executable} {' '.join(args)} timed out after {timeout}s",
+        )
     return proc.returncode, proc.stdout or "", proc.stderr or ""
 
 

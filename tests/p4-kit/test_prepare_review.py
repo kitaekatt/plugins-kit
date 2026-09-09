@@ -74,6 +74,51 @@ class TestRunP4:
         assert "互動" in out
         assert "🧪" in out
 
+    def test_timeout_reads_p4kit_vcs_timeout_s_env_var(self, monkeypatch):
+        """run_p4 shares P4KIT_VCS_TIMEOUT_S with p4kit_vcs's own adapter --
+        one knob covers every p4 subprocess this plugin spawns."""
+        monkeypatch.setenv("P4KIT_VCS_TIMEOUT_S", "5")
+        captured: dict = {}
+
+        def fake_run(cmd, **kwargs):
+            captured.update(kwargs)
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+        with patch.object(subprocess, "run", side_effect=fake_run):
+            pr.run_p4(["info"])
+
+        assert captured.get("timeout") == 5.0
+
+    def test_timeout_falls_back_to_the_default_when_env_var_is_garbage(
+        self, monkeypatch
+    ):
+        monkeypatch.setenv("P4KIT_VCS_TIMEOUT_S", "not-a-number")
+        captured: dict = {}
+
+        def fake_run(cmd, **kwargs):
+            captured.update(kwargs)
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+        with patch.object(subprocess, "run", side_effect=fake_run):
+            pr.run_p4(["info"])
+
+        assert captured.get("timeout") == 60.0
+
+    def test_timeout_falls_back_to_the_default_when_env_var_is_unset(
+        self, monkeypatch
+    ):
+        monkeypatch.delenv("P4KIT_VCS_TIMEOUT_S", raising=False)
+        captured: dict = {}
+
+        def fake_run(cmd, **kwargs):
+            captured.update(kwargs)
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+        with patch.object(subprocess, "run", side_effect=fake_run):
+            pr.run_p4(["info"])
+
+        assert captured.get("timeout") == 60.0
+
 
 # ---------------------------------------------------------------------------
 # parse_description
@@ -311,6 +356,107 @@ class TestFetchFileContent:
 
 
 # ---------------------------------------------------------------------------
+# fetch_file_content -- utf16 filetype: decode-aware, not reclassified as binary
+# ---------------------------------------------------------------------------
+#
+# p4's base filetype set includes `utf16`. Whether `p4 print` emits such a
+# file's bytes verbatim (as UTF-16) or translates them to the client charset
+# is untestable here (no live p4 server, and it depends on unicode mode) --
+# these tests drive both sides of that fork through the SAME code path and
+# assert the decode is correct either way, per the module's utf16 handling.
+
+
+class TestFetchFileContentUtf16Aware:
+    def test_non_utf16_filetype_uses_the_plain_captured_stdout_path(self):
+        """filetype=None (or any non-utf16 value) must not go through the
+        temp-file byte path at all -- behavior byte-identical to before this
+        change."""
+        with patch.object(pr, "run_p4", return_value=(0, "content\n", "")) as mock:
+            result = pr.fetch_file_content(
+                "//depot/x.py", "1", "12345", is_shelved=False, is_delete=False,
+                filetype="text",
+            )
+        assert result == "content\n"
+        assert mock.call_args_list[0][0][0] == ["print", "-q", "//depot/x.py#1"]
+
+    def test_utf16_filetype_with_bom_decodes_as_utf16(self, tmp_path):
+        """If p4 print emits real UTF-16 bytes (BOM present), the sniff must
+        recover the text rather than mojibake it through a forced UTF-8
+        decode."""
+        utf16_bytes = b"\xff\xfe" + "hello utf16\n".encode("utf-16-le")
+
+        def fake_run_p4(args):
+            assert args[:3] == ["print", "-q", "-o"]
+            Path(args[3]).write_bytes(utf16_bytes)
+            return (0, "", "")
+
+        with patch.object(pr, "run_p4", side_effect=fake_run_p4):
+            result = pr.fetch_file_content(
+                "//depot/x.txt", "1", "12345", is_shelved=False, is_delete=False,
+                filetype="utf16",
+            )
+        assert result == "hello utf16\n"
+
+    def test_utf16_filetype_without_bom_falls_back_to_utf8(self):
+        """If p4 translates to the client charset (UTF-8, no BOM, no
+        NUL-alternation pattern), the sniff must not misfire and mangle
+        already-correct UTF-8 content."""
+        utf8_bytes = "plain utf8 text\n".encode("utf-8")
+
+        def fake_run_p4(args):
+            Path(args[3]).write_bytes(utf8_bytes)
+            return (0, "", "")
+
+        with patch.object(pr, "run_p4", side_effect=fake_run_p4):
+            result = pr.fetch_file_content(
+                "//depot/x.txt", "1", "12345", is_shelved=False, is_delete=False,
+                filetype="utf16",
+            )
+        assert result == "plain utf8 text\n"
+
+    def test_utf16_filetype_writes_and_cleans_up_a_temp_file(self, tmp_path):
+        """The byte-sniffing path must go through a temp file (to sidestep
+        run_vcs's forced UTF-8 stdout decode) and must not leak it."""
+        seen_path = {}
+
+        def fake_run_p4(args):
+            seen_path["path"] = Path(args[3])
+            seen_path["path"].write_bytes(b"\xff\xfeh\x00i\x00")
+            return (0, "", "")
+
+        with patch.object(pr, "run_p4", side_effect=fake_run_p4):
+            pr.fetch_file_content(
+                "//depot/x.txt", "1", "12345", is_shelved=False, is_delete=False,
+                filetype="utf16",
+            )
+        assert not seen_path["path"].exists()
+
+    def test_utf16_filetype_p4_failure_returns_none(self):
+        with patch.object(pr, "run_p4", return_value=(1, "", "error")):
+            result = pr.fetch_file_content(
+                "//depot/x.txt", "1", "12345", is_shelved=False, is_delete=False,
+                filetype="utf16",
+            )
+        assert result is None
+
+    def test_utf16_modifier_suffix_still_recognized(self):
+        """A `+modifiers` suffix (e.g. `utf16+ko`) must not defeat the base-type
+        match -- same convention as `_is_text_filetype`."""
+        utf16_bytes = b"\xff\xfe" + "x\n".encode("utf-16-le")
+
+        def fake_run_p4(args):
+            Path(args[3]).write_bytes(utf16_bytes)
+            return (0, "", "")
+
+        with patch.object(pr, "run_p4", side_effect=fake_run_p4):
+            result = pr.fetch_file_content(
+                "//depot/x.txt", "1", "12345", is_shelved=False, is_delete=False,
+                filetype="utf16+ko",
+            )
+        assert result == "x\n"
+
+
+# ---------------------------------------------------------------------------
 # extract_diff
 # ---------------------------------------------------------------------------
 
@@ -365,6 +511,35 @@ class TestExtractDiff:
         assert "@@ -0,0 +1,2 @@" in diff
         assert "+def foo():" in diff
         assert "+    return 42" in diff
+
+    def test_synthesizes_add_hunk_for_utf16_add_via_bom_sniff(self):
+        """A utf16-typed add file's synthesized hunk must come from the
+        BOM/NUL-sniffed decode, not a forced-UTF-8 stdout capture that would
+        mojibake real UTF-16 bytes. utf16 stays classified as text-like (the
+        binary placeholder path is never taken)."""
+        describe = (
+            "Affected files ...\n"
+            "... //depot/new.txt#1 add\n"
+            "Differences ...\n"
+            "\n"
+            "==== //depot/new.txt#1 (utf16) ====\n"
+            "\n"
+        )
+        actions = pr.parse_file_actions(describe)
+        utf16_bytes = b"\xff\xfe" + "hi there\n".encode("utf-16-le")
+
+        def fake_run_p4(args):
+            if args[:3] == ["print", "-q", "-o"]:
+                Path(args[3]).write_bytes(utf16_bytes)
+                return (0, "", "")
+            return (1, "", f"unexpected p4 call: {args}")
+
+        with patch.object(pr, "run_p4", side_effect=fake_run_p4):
+            diff = pr.extract_diff(describe, actions, cl="300", is_shelved=False)
+
+        assert "==== //depot/new.txt#1" in diff
+        assert "(binary file" not in diff
+        assert "+hi there" in diff
 
     def test_synthesizes_delete_hunk_for_delete(self):
         describe = (
@@ -896,12 +1071,13 @@ class TestFindUnreconciled:
             "... type text\n"
         )
         with patch.object(pr, "run_p4", return_value=(0, out, "")):
-            result = pr.find_unreconciled([(d, True)])
+            result, incomplete = pr.find_unreconciled([(d, True)])
         assert result == [
             {"local": "/ws/src/new.cpp", "depot": "//depot/src/new.cpp", "action": "add"},
             {"local": "/ws/src/edited.cpp", "depot": "//depot/src/edited.cpp", "action": "edit"},
             {"local": "/ws/src/gone.cpp", "depot": "//depot/src/gone.cpp", "action": "delete"},
         ]
+        assert incomplete == []
 
     def test_uses_recursive_dir_specs(self, tmp_path):
         a = tmp_path / "a"
@@ -947,7 +1123,7 @@ class TestFindUnreconciled:
     def test_empty_dirs_returns_empty(self):
         # No p4 call should be made when there's nothing to scan.
         with patch.object(pr, "run_p4") as mock:
-            assert pr.find_unreconciled([]) == []
+            assert pr.find_unreconciled([]) == ([], [])
         assert mock.call_count == 0
 
     def test_no_files_to_reconcile_treated_as_empty(self, tmp_path):
@@ -958,13 +1134,22 @@ class TestFindUnreconciled:
             "run_p4",
             return_value=(1, "", "/ws/x - no file(s) to reconcile.\n"),
         ):
-            assert pr.find_unreconciled([(d, True)]) == []
+            assert pr.find_unreconciled([(d, True)]) == ([], [])
 
-    def test_p4_failure_returns_empty_with_warning(self, tmp_path, capsys):
+    def test_p4_failure_returns_incomplete_entry_not_a_clean_empty(self, tmp_path, capsys):
+        """A hygiene scan that could not run must not serialize as a clean `[]` --
+        it must say so via a `{scan, reason}` incomplete entry, so a consumer can
+        tell "ran, found nothing" from "did not run". This replaces a prior test
+        that asserted the empty-list fail-open result; that assertion pinned the
+        defect this change fixes."""
         d = tmp_path / "x"
         d.mkdir()
         with patch.object(pr, "run_p4", return_value=(1, "", "fatal: bad workspace\n")):
-            assert pr.find_unreconciled([(d, True)]) == []
+            items, incomplete = pr.find_unreconciled([(d, True)])
+        assert items == []
+        assert len(incomplete) == 1
+        assert incomplete[0]["scan"] == "unreconciled"
+        assert "bad workspace" in incomplete[0]["reason"]
         err = capsys.readouterr().err
         assert "reconcile check failed" in err
 
@@ -984,9 +1169,56 @@ class TestFindUnreconciled:
             "... action add\n"
         )
         with patch.object(pr, "run_p4", return_value=(0, out, "")):
-            result = pr.find_unreconciled([(d, True)])
+            result, incomplete = pr.find_unreconciled([(d, True)])
         assert len(result) == 1
         assert result[0]["local"] == "/ws/good.cpp"
+        assert incomplete == []
+
+
+# ---------------------------------------------------------------------------
+# find_unresolved
+# ---------------------------------------------------------------------------
+
+
+class TestFindUnresolved:
+    def test_parses_ztag_output(self):
+        out = (
+            "... clientFile /ws/src/a.cpp\n"
+            "... toFile //depot/src/a.cpp\n"
+            "... fromFile //depot/src/a.cpp\n"
+            "... resolveType content\n"
+        )
+        with patch.object(pr, "run_p4", return_value=(0, out, "")):
+            result, incomplete = pr.find_unresolved("123")
+        assert result == [
+            {
+                "local": "/ws/src/a.cpp",
+                "depot": "//depot/src/a.cpp",
+                "resolve_type": "content",
+                "from_file": "//depot/src/a.cpp",
+            }
+        ]
+        assert incomplete == []
+
+    def test_no_files_to_resolve_treated_as_empty(self):
+        with patch.object(
+            pr, "run_p4", return_value=(1, "", "no file(s) to resolve.\n")
+        ):
+            assert pr.find_unresolved("123") == ([], [])
+
+    def test_p4_failure_returns_incomplete_entry_not_a_clean_empty(self, capsys):
+        """Same governing principle as find_unreconciled: a resolve check that
+        could not run must say so, not serialize as a clean `[]`. Unresolved
+        files gate submittability, so a silent empty list here is exactly the
+        "review looks complete-and-clean while a mechanism did not run" shape."""
+        with patch.object(pr, "run_p4", return_value=(1, "", "fatal: bad workspace\n")):
+            items, incomplete = pr.find_unresolved("123")
+        assert items == []
+        assert len(incomplete) == 1
+        assert incomplete[0]["scan"] == "unresolved"
+        assert "bad workspace" in incomplete[0]["reason"]
+        err = capsys.readouterr().err
+        assert "resolve check failed" in err
 
 
 # ---------------------------------------------------------------------------
@@ -1034,6 +1266,8 @@ class TestBuildBundle:
                 return (0, info_out, "")
             if args[:3] == ["-ztag", "reconcile", "-n"]:
                 return (1, "", "no file(s) to reconcile.\n")
+            if args[:4] == ["-ztag", "resolve", "-n", "-c"]:
+                return (1, "", "no file(s) to resolve.\n")
             return (1, "", "")
 
         bundle_dir = tmp_path / "bundle"
@@ -1057,6 +1291,64 @@ class TestBuildBundle:
         assert Path(cf["claude_mds"][0]).read_text() == "workspace rule\n"
         assert len(bundle["unique_claude_mds"]) == 1
         assert bundle["unreconciled"] == []
+        # A clean run reports hygiene_incomplete as an empty list -- distinct
+        # from a scan that could not run at all (see test_hygiene_incomplete_*).
+        assert bundle["hygiene_incomplete"] == []
+
+    def test_hygiene_incomplete_reports_a_reconcile_scan_that_could_not_run(self, tmp_path):
+        """A failed hygiene scan must never serialize as a clean empty
+        `unreconciled` list with no other
+        signal. When `p4 reconcile -n` fails for a reason other than "no
+        file(s) to reconcile", build_bundle must still return `unreconciled=[]`
+        (do not invent findings) but flag the scan as incomplete."""
+        ws = tmp_path / "ws"
+        src = ws / "src"
+        src.mkdir(parents=True)
+        local_file = src / "foo.cpp"
+        local_file.write_text("int x = 1;\n")
+
+        describe_out = (
+            "Change 999 by user@client on 2026/01/01 12:00:00 *pending*\n"
+            "\n"
+            "\tFix the thing\n"
+            "\n"
+            "Affected files ...\n"
+            "... //depot/src/foo.cpp#1 edit\n"
+            "\n"
+            "Differences ...\n"
+            "\n"
+            "==== //depot/src/foo.cpp#1 (text) ====\n"
+            "@@ -1 +1 @@\n"
+            "-int x = 0;\n"
+            "+int x = 1;\n"
+        )
+        where_out = (
+            "... depotFile //depot/src/foo.cpp\n"
+            f"... path {local_file}\n"
+        )
+        info_out = f"... clientRoot {ws}\n"
+
+        def fake_run_p4(args):
+            if args[:2] == ["describe", "-du"]:
+                return (0, describe_out, "")
+            if args[:2] == ["-ztag", "where"]:
+                return (0, where_out, "")
+            if args[:2] == ["-ztag", "info"]:
+                return (0, info_out, "")
+            if args[:3] == ["-ztag", "reconcile", "-n"]:
+                return (1, "", "fatal: bad workspace\n")
+            if args[:4] == ["-ztag", "resolve", "-n", "-c"]:
+                return (1, "", "no file(s) to resolve.\n")
+            return (1, "", "")
+
+        with patch.object(pr, "run_p4", side_effect=fake_run_p4):
+            bundle = pr.build_bundle("999", tmp_path / "bundle")
+
+        # No invented findings: an incomplete scan reports no items either.
+        assert bundle["unreconciled"] == []
+        assert len(bundle["hygiene_incomplete"]) == 1
+        assert bundle["hygiene_incomplete"][0]["scan"] == "unreconciled"
+        assert "bad workspace" in bundle["hygiene_incomplete"][0]["reason"]
 
     def test_unreconciled_files_surfaced(self, tmp_path):
         """build_bundle reports files missing from the CL via `p4 reconcile -n`."""
@@ -1683,8 +1975,8 @@ class TestBuildBundleAutoShelve:
                 patch.object(pr, "auto_shelve_cl", side_effect=fake_auto_shelve), \
                 patch.object(pr, "resolve_local_paths", return_value={"//depot/new.py": None}), \
                 patch.object(pr, "get_workspace_root", return_value=None), \
-                patch.object(pr, "find_unreconciled", return_value=[]), \
-                patch.object(pr, "find_unresolved", return_value=[]):
+                patch.object(pr, "find_unreconciled", return_value=([], [])), \
+                patch.object(pr, "find_unresolved", return_value=([], [])):
             bundle = pr.build_bundle("123", tmp_path / "bundle")
 
         assert bundle["auto_shelved"] is True
@@ -1715,8 +2007,8 @@ class TestBuildBundleAutoShelve:
                 patch.object(pr, "auto_shelve_cl", side_effect=fake_auto_shelve), \
                 patch.object(pr, "resolve_local_paths", return_value={"//depot/new.py": None}), \
                 patch.object(pr, "get_workspace_root", return_value=None), \
-                patch.object(pr, "find_unreconciled", return_value=[]), \
-                patch.object(pr, "find_unresolved", return_value=[]):
+                patch.object(pr, "find_unreconciled", return_value=([], [])), \
+                patch.object(pr, "find_unresolved", return_value=([], [])):
             bundle = pr.build_bundle("123", tmp_path / "bundle")
 
         # We did NOT shelve; someone else owns this shelf.
@@ -1733,8 +2025,8 @@ class TestBuildBundleAutoShelve:
                 patch.object(pr, "fetch_shelf_fingerprint", return_value={}), \
                 patch.object(pr, "resolve_local_paths", return_value={"//depot/new.py": None}), \
                 patch.object(pr, "get_workspace_root", return_value=None), \
-                patch.object(pr, "find_unreconciled", return_value=[]), \
-                patch.object(pr, "find_unresolved", return_value=[]):
+                patch.object(pr, "find_unreconciled", return_value=([], [])), \
+                patch.object(pr, "find_unresolved", return_value=([], [])):
             bundle = pr.build_bundle("123", tmp_path / "bundle")
 
         assert shelve_mock.call_count == 0
@@ -1778,8 +2070,8 @@ class TestBuildBundleAutoShelve:
                 patch.object(pr, "run_p4", side_effect=fake_run_p4), \
                 patch.object(pr, "resolve_local_paths", return_value={"//depot/new.py": None}), \
                 patch.object(pr, "get_workspace_root", return_value=None), \
-                patch.object(pr, "find_unreconciled", return_value=[]), \
-                patch.object(pr, "find_unresolved", return_value=[]):
+                patch.object(pr, "find_unreconciled", return_value=([], [])), \
+                patch.object(pr, "find_unresolved", return_value=([], [])):
             bundle = pr.build_bundle("123", tmp_path / "bundle")
 
         assert bundle["auto_shelved"] is True
@@ -1804,6 +2096,32 @@ class TestMain:
             rc = pr.main(["prepare_review.py", "123"])
         assert rc == 1
         assert "nope" in capsys.readouterr().err
+
+    def test_missing_p4_executable_returns_1_not_a_traceback(self, capsys, tmp_path):
+        """subprocess.run raises FileNotFoundError when `p4` is absent from
+        PATH; main() must catch it and print an actionable message rather than
+        letting it escape as an unhandled traceback."""
+        with patch.object(pr, "DEFAULT_BUNDLE_ROOT", tmp_path / "reviews"), \
+                patch.object(
+                    pr, "build_bundle",
+                    side_effect=FileNotFoundError(2, "No such file or directory", "p4"),
+                ):
+            rc = pr.main(["prepare_review.py", "123"])
+        assert rc == 1
+        err = capsys.readouterr().err
+        assert "p4" in err
+        assert "PATH" in err or "Helix" in err
+
+    def test_missing_p4_executable_during_cleanup_returns_1_not_a_traceback(self, capsys, tmp_path):
+        bundle_dir = tmp_path / "bundle"
+        with patch.object(
+            pr, "cleanup_auto_shelve",
+            side_effect=FileNotFoundError(2, "No such file or directory", "p4"),
+        ):
+            rc = pr.main(["prepare_review.py", "--cleanup", str(bundle_dir)])
+        assert rc == 1
+        err = capsys.readouterr().err
+        assert "p4" in err
 
     def test_success_prints_json_and_persists_bundle(self, capsys, tmp_path):
         """main() prints the bundle to stdout AND persists bundle.json next to chunks."""

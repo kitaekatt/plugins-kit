@@ -96,6 +96,49 @@ class TestRunGit:
             pr.run_git(["status"], cwd=tmp_path)
         assert captured.get("cwd") == str(tmp_path)
 
+    def test_timeout_reads_gitkit_vcs_timeout_s_env_var(self, monkeypatch):
+        monkeypatch.setenv("GITKIT_VCS_TIMEOUT_S", "5")
+        captured: dict = {}
+
+        def fake_run(cmd, **kwargs):
+            captured.update(kwargs)
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+        with patch.object(subprocess, "run", side_effect=fake_run):
+            pr.run_git(["status"])
+
+        assert captured.get("timeout") == 5.0
+
+    def test_timeout_falls_back_to_the_default_when_env_var_is_garbage(
+        self, monkeypatch
+    ):
+        monkeypatch.setenv("GITKIT_VCS_TIMEOUT_S", "not-a-number")
+        captured: dict = {}
+
+        def fake_run(cmd, **kwargs):
+            captured.update(kwargs)
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+        with patch.object(subprocess, "run", side_effect=fake_run):
+            pr.run_git(["status"])
+
+        assert captured.get("timeout") == 60.0
+
+    def test_timeout_falls_back_to_the_default_when_env_var_is_unset(
+        self, monkeypatch
+    ):
+        monkeypatch.delenv("GITKIT_VCS_TIMEOUT_S", raising=False)
+        captured: dict = {}
+
+        def fake_run(cmd, **kwargs):
+            captured.update(kwargs)
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+        with patch.object(subprocess, "run", side_effect=fake_run):
+            pr.run_git(["status"])
+
+        assert captured.get("timeout") == 60.0
+
 
 # ---------------------------------------------------------------------------
 # detect_default_range -- G2: auto-detect on main/master without upstream
