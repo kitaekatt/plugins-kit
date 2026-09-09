@@ -65,14 +65,32 @@ if [ "${STATUSLINE_RATE_LIMIT_SNAPSHOT:-1}" = "1" ] && [ -n "${HOME:-}" ] &&
     # lands in the data dir of the plugin that is actually running, rather
     # than a marketplace name ("plugins-kit") hardcoded independently of
     # where this script was installed.
-    SNAP_DIR="${STATUSLINE_SNAP_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." 2>/dev/null && pwd)}"
-    SNAP_TMP="$SNAP_DIR/rate-limits.json.$$.tmp"
+    #
+    # But SEGMENTS_DIR only READS beside the script, and this WRITES. Run from
+    # a dev checkout rather than the installed copy, "beside the script" is a
+    # source tree -- so an account's rate-limit usage lands in a git working
+    # copy, and plugins-kit is deliberately public. The derived path is
+    # therefore honoured only when it really is under the plugin data root;
+    # anywhere else the snapshot is skipped rather than written somewhere it
+    # does not belong. An explicit STATUSLINE_SNAP_DIR is always obeyed -- a
+    # caller naming a directory has made the decision this guard exists to
+    # make.
+    SNAP_DIR="${STATUSLINE_SNAP_DIR:-}"
+    if [ -z "$SNAP_DIR" ]; then
+        SNAP_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." 2>/dev/null && pwd)
+        case "$SNAP_DIR/" in
+            "${CLAUDE_BOOTSTRAP_DATA_ROOT:-$HOME/.claude/plugins/data}"/*) ;;
+            *) SNAP_DIR="" ;;
+        esac
+    fi
+    [ -n "$SNAP_DIR" ] &&
+    SNAP_TMP="$SNAP_DIR/rate-limits.json.$$.tmp" &&
     {
         mkdir -p "$SNAP_DIR" &&
         printf '%s' "$DATA" | "$JQ" -c --argjson now "$(date +%s)" \
             '{captured_at: $now, rate_limits: .rate_limits}' > "$SNAP_TMP" &&
         mv -f "$SNAP_TMP" "$SNAP_DIR/rate-limits.json"
-    } 2>/dev/null || rm -f "$SNAP_TMP" 2>/dev/null || true
+    } 2>/dev/null || rm -f "${SNAP_TMP:-}" 2>/dev/null || true
 fi
 
 # Model segment: display name with version tokens stripped ("Fable 5" -> "Fable",
