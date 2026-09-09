@@ -1269,6 +1269,10 @@ class TestBuildBundle:
         def fake_run_p4(args):
             if args[:2] == ["describe", "-du"]:
                 return (0, describe_out, "")
+            if args[:2] == ["-ztag", "fstat"]:
+                return (1, "", "no such file(s)")
+            if args[:3] == ["-ztag", "opened", "-c"]:
+                return (0, "", "")
             if args[:2] == ["-ztag", "where"]:
                 return (0, where_out, "")
             if args[:2] == ["-ztag", "info"]:
@@ -1300,9 +1304,7 @@ class TestBuildBundle:
         assert Path(cf["claude_mds"][0]).read_text() == "workspace rule\n"
         assert len(bundle["unique_claude_mds"]) == 1
         assert bundle["unreconciled"] == []
-        assert bundle["hygiene_incomplete"] == [
-            {"scan": "shelf_fingerprint", "reason": "exit 1"}
-        ]
+        assert bundle["hygiene_incomplete"] == []
 
     def test_hygiene_incomplete_reports_a_reconcile_scan_that_could_not_run(self, tmp_path):
         """A failed hygiene scan must never serialize as a clean empty
@@ -1340,6 +1342,10 @@ class TestBuildBundle:
         def fake_run_p4(args):
             if args[:2] == ["describe", "-du"]:
                 return (0, describe_out, "")
+            if args[:2] == ["-ztag", "fstat"]:
+                return (1, "", "no such file(s)")
+            if args[:3] == ["-ztag", "opened", "-c"]:
+                return (0, "", "")
             if args[:2] == ["-ztag", "where"]:
                 return (0, where_out, "")
             if args[:2] == ["-ztag", "info"]:
@@ -1357,7 +1363,6 @@ class TestBuildBundle:
         assert bundle["unreconciled"] == []
         assert bundle["hygiene_incomplete"] == [
             {"scan": "unreconciled", "reason": "fatal: bad workspace"},
-            {"scan": "shelf_fingerprint", "reason": "exit 1"},
         ]
 
     def test_unreconciled_files_surfaced(self, tmp_path):
@@ -1683,6 +1688,7 @@ class TestFetchShelfFingerprint:
         with patch.object(pr, "run_p4", return_value=(1, "", "no such file(s)")):
             scan = pr.fetch_shelf_fingerprint("123")
         assert scan.digests == {}
+        assert scan.scan_ok is True
 
     def test_failure_is_marked_incomplete(self):
         with patch.object(pr, "run_p4", return_value=(1, "", "server unavailable")):
@@ -2276,6 +2282,7 @@ class TestBuildBundleShelfState:
         with patch.object(pr, "fetch_describe", side_effect=fetch_calls), \
                 patch.object(pr, "fetch_shelf_fingerprint", return_value=pr.ShelfScanResult()), \
                 patch.object(pr, "auto_shelve_cl", return_value=shelf), \
+                patch.object(pr, "fetch_opened_files", return_value=({"//depot/new.cpp": "add"}, [])), \
                 patch.object(pr, "shelf_divergence", side_effect=AssertionError("called")), \
                 patch.object(pr, "resolve_local_paths", return_value={"//depot/a.cpp": None}), \
                 patch.object(pr, "get_workspace_root", return_value=None), \
@@ -2286,8 +2293,13 @@ class TestBuildBundleShelfState:
 
     def test_submitted_cl_skips_divergence_check(self, tmp_path):
         describe = self._pending_describe().replace(" *pending*", "")
+        shelf = pr.ShelfScanResult(
+            digests={"//depot/a.cpp": "A"},
+            actions={"//depot/a.cpp": "edit"},
+        )
         with patch.object(pr, "fetch_describe", return_value=(describe, False)), \
-                patch.object(pr, "shelf_divergence", side_effect=AssertionError("called")), \
+                patch.object(pr, "fetch_shelf_fingerprint", return_value=shelf), \
+                patch.object(pr, "fetch_opened_files", return_value=({"//depot/new.cpp": "add"}, [])), \
                 patch.object(pr, "resolve_local_paths", return_value={"//depot/a.cpp": None}), \
                 patch.object(pr, "get_workspace_root", return_value=None), \
                 patch.object(pr, "find_unreconciled", return_value=([], [])), \
@@ -2317,6 +2329,7 @@ class TestBuildBundleShelfState:
         assert opened_mock.call_count == 1
 
     def test_unhashable_path_is_incomplete_not_clean(self, tmp_path):
+        missing = tmp_path / "missing.cpp"
         shelf = pr.ShelfScanResult(
             digests={"//depot/a.cpp": "A"},
             actions={"//depot/a.cpp": "edit"},
@@ -2324,15 +2337,17 @@ class TestBuildBundleShelfState:
         with patch.object(pr, "fetch_describe", return_value=(self._pending_describe(), True)), \
                 patch.object(pr, "fetch_shelf_fingerprint", return_value=shelf), \
                 patch.object(pr, "fetch_opened_files", return_value=({"//depot/a.cpp": "edit"}, [])), \
-                patch.object(pr, "resolve_local_paths", return_value={"//depot/a.cpp": None}), \
+                patch.object(pr, "resolve_local_paths", return_value={"//depot/a.cpp": str(missing)}), \
                 patch.object(pr, "get_workspace_root", return_value=None), \
                 patch.object(pr, "find_unreconciled", return_value=([], [])), \
                 patch.object(pr, "find_unresolved", return_value=([], [])):
             bundle = pr.build_bundle("123", tmp_path / "bundle")
         assert bundle["shelf_drift"] == []
-        assert bundle["hygiene_incomplete"] == [
-            {"scan": "shelf_drift", "reason": "no local mapping for //depot/a.cpp"}
-        ]
+        assert len(bundle["hygiene_incomplete"]) == 1
+        incomplete = bundle["hygiene_incomplete"][0]
+        assert incomplete["scan"] == "shelf_drift"
+        assert incomplete["reason"].startswith("could not hash //depot/a.cpp:")
+        assert str(missing) in incomplete["reason"]
 
     def test_empty_local_path_is_incomplete_not_clean(self):
         drift, incomplete = pr._shelf_content_drift(
