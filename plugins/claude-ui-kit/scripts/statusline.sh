@@ -61,29 +61,23 @@ IFS=$'\x1f' read -r MODEL MODEL_ID DIR PCT SESS WEEK SESS_RESET WEEK_RESET EFFOR
 # exact failure this block promises never to cause.
 if [ "${STATUSLINE_RATE_LIMIT_SNAPSHOT:-1}" = "1" ] && [ -n "${HOME:-}" ] &&
    printf '%s' "$DATA" | "$JQ" -e '.rate_limits != null' >/dev/null 2>&1; then
-    # Derived from BASH_SOURCE, same as SEGMENTS_DIR below -- the snapshot
-    # lands in the data dir of the plugin that is actually running, rather
-    # than a marketplace name ("plugins-kit") hardcoded independently of
-    # where this script was installed.
+    # The snapshot is a FILE CONTRACT at one absolute path, and every reader
+    # hardcodes it: llm_scripting_kit.usage_budget.CLAUDE_SNAPSHOT, the
+    # content-pipeline-kit and llm-scripting-kit docs, and this plugin's own
+    # skills/statusline/references/components.md all name
+    # ~/.claude/plugins/data/plugins-kit/claude-ui-kit/rate-limits.json.
+    # So the writer names it too, rather than deriving it from BASH_SOURCE as
+    # SEGMENTS_DIR does: that derivation produced this path only by
+    # coincidence when running from the installed copy, and produced a git
+    # source tree when running from a dev checkout -- writing an account's
+    # rate-limit usage into a deliberately public repo. Deriving a write path
+    # from the script's own location is what made "where consumers read" and
+    # "where we write" separable in the first place.
     #
-    # But SEGMENTS_DIR only READS beside the script, and this WRITES. Run from
-    # a dev checkout rather than the installed copy, "beside the script" is a
-    # source tree -- so an account's rate-limit usage lands in a git working
-    # copy, and plugins-kit is deliberately public. The derived path is
-    # therefore honoured only when it really is under the plugin data root;
-    # anywhere else the snapshot is skipped rather than written somewhere it
-    # does not belong. An explicit STATUSLINE_SNAP_DIR is always obeyed -- a
-    # caller naming a directory has made the decision this guard exists to
-    # make.
-    SNAP_DIR="${STATUSLINE_SNAP_DIR:-}"
-    if [ -z "$SNAP_DIR" ]; then
-        SNAP_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." 2>/dev/null && pwd)
-        case "$SNAP_DIR/" in
-            "${CLAUDE_BOOTSTRAP_DATA_ROOT:-$HOME/.claude/plugins/data}"/*) ;;
-            *) SNAP_DIR="" ;;
-        esac
-    fi
-    [ -n "$SNAP_DIR" ] &&
+    # Not CLAUDE_BOOTSTRAP_DATA_ROOT: no reader honours it, so respecting it
+    # here would desync writer from readers rather than relocate the pair.
+    # STATUSLINE_SNAP_DIR is the seam for a caller that wants elsewhere.
+    SNAP_DIR="${STATUSLINE_SNAP_DIR:-$HOME/.claude/plugins/data/plugins-kit/claude-ui-kit}"
     SNAP_TMP="$SNAP_DIR/rate-limits.json.$$.tmp" &&
     {
         mkdir -p "$SNAP_DIR" &&
