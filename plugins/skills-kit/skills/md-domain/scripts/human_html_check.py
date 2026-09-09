@@ -57,6 +57,7 @@ import argparse
 import json
 import re
 import sys
+from urllib.parse import unquote
 from dataclasses import dataclass, field
 from html.parser import HTMLParser
 from pathlib import Path
@@ -386,6 +387,7 @@ def check_urls(
     page: ParsedPage,
     directory: str,
     add,
+    pending_up_card: tuple[str, bool] | None = None,
 ) -> None:
     """Apply NF-1 and the PC-6 URL prohibitions to every href and src."""
     rel = file_path.relative_to(repo_root).as_posix()
@@ -427,7 +429,18 @@ def check_urls(
                 add(FAIL, "url-unresolvable", directory,
                     "%s: same-document fragment #%s has no matching id" % (where, fragment), rel)
             continue
-        resolved = (file_path.parent / target).resolve()
+        decoded_segments = [unquote(segment) for segment in target.split("/")]
+        if any("/" in segment for segment in decoded_segments):
+            # An encoded slash is data inside one URL segment, never a path
+            # boundary, so no file can answer to it. Fail without touching the
+            # filesystem: probing for a name chosen to be absent would accept
+            # this href if a directory ever happened to carry that name.
+            add(FAIL, "url-unresolvable", directory,
+                "%s: %%2F encodes a literal separator inside a path segment, "
+                "so it names no file" % where, rel)
+            continue
+        decoded_target = "/".join(decoded_segments)
+        resolved = (file_path.parent / decoded_target).resolve()
         try:
             resolved.relative_to(repo_root)
         except ValueError:
@@ -435,6 +448,11 @@ def check_urls(
                 "%s: resolves outside the repository (%s)" % (where, resolved), rel)
             continue
         if not resolved.exists():
+            if pending_up_card == (target, False):
+                add(INFO, "url-unresolvable-pending-up-card", directory,
+                    "%s: up-card target is warranted but its page is not written yet"
+                    % where, rel)
+                continue
             add(FAIL, "url-unresolvable", directory,
                 "%s: does not resolve from %s" % (where, rel), rel)
             continue
@@ -504,6 +522,7 @@ def check_html_file(
     word_ceiling: int,
     placement_fresh: bool,
     add,
+    pending_up_card: tuple[str, bool] | None = None,
 ) -> None:
     """Check one generated file against PC-1 to PC-4, PC-6, NF-1, RD-2 and SZ-1."""
     rel = file_path.relative_to(repo_root).as_posix()
@@ -654,7 +673,7 @@ def check_html_file(
             "carries the retired %s section; PC-2 folded its destinations into "
             "the navigation cards" % ", ".join(repr(name) for name in retired), rel)
 
-    check_urls(repo_root, file_path, page, directory, add)
+    check_urls(repo_root, file_path, page, directory, add, pending_up_card)
     check_scripts(page, directory, rel, add)
 
     # SZ-1 hard ceiling. It is flat across kind, territory size, and depth.
@@ -735,6 +754,11 @@ def check_directory(repo_root: Path, entry: dict, word_ceiling: int, add) -> Non
         )
         for target in targets
     ]
+    pending_up_card = None
+    if up:
+        up_href = _relative_link(directory, up)
+        up_page = repo_root / _rel(up, hh.PAGE_FILENAME)
+        pending_up_card = (up_href, up_page.is_file())
 
     page_path = repo_root / _rel(directory, page_file)
     check_html_file(
@@ -748,6 +772,7 @@ def check_directory(repo_root: Path, entry: dict, word_ceiling: int, add) -> Non
         word_ceiling,
         not entry["stale"],
         add,
+        pending_up_card,
     )
 
     page_text = page_path.read_text(encoding="utf-8", errors="replace")
