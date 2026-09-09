@@ -160,7 +160,7 @@ from typing import Optional
 # before importing bootstrap_lib below -- a no-op when already there. The guard
 # is the vendored, stdlib-only bootstrap_guard next to this script; importing it
 # can never itself trip the missing-bootstrap_lib failure.
-from bootstrap_guard import reexec_under_plugin_venv  # noqa: E402
+from bootstrap_guard import data_dir, reexec_under_plugin_venv  # noqa: E402
 
 reexec_under_plugin_venv("p4-kit")
 
@@ -241,15 +241,26 @@ MAX_CHUNK_BYTES = 1024 * 1024
 
 # Where bundles land on disk. <CL> directory holds bundle.json and
 # chunks/. Overwritten on each prepare_review run for the same CL.
-DEFAULT_BUNDLE_ROOT = (
-    Path.home() / ".claude" / "plugins" / "data"
-    / "plugins-kit" / "p4-kit" / "reviews"
-)
+# Derived from bootstrap_guard.data_dir("p4-kit") -- not hand-built from
+# Path.home() -- so CLAUDE_BOOTSTRAP_DATA_ROOT redirects this too. Without
+# that, a scripts/claude_plugin_test.py session correctly re-execs into the
+# REDIRECTED venv but this process would still write bundles, pre-images and
+# the durable ledger.json into the PRODUCTION tree: a test-session review that
+# declines a finding would mutate the real declined-findings memory.
+DEFAULT_BUNDLE_ROOT = data_dir("p4-kit") / "reviews"
 
-# Declined-findings ledger: a single JSON file in the plugin's version-independent
-# data dir, a sibling of the per-CL bundle dirs. Keyed per change-id (CL). See
-# bootstrap_lib.code_review.ledger.
-LEDGER_PATH = DEFAULT_BUNDLE_ROOT / "ledger.json"
+
+def _ledger_path() -> Path:
+    """The declined-findings ledger path: a single JSON file in the plugin's
+    version-independent data dir, a sibling of the per-CL bundle dirs.
+    Keyed per change-id (CL). See bootstrap_lib.code_review.ledger.
+
+    Deliberately LAZY (re-derives from bootstrap_guard.data_dir on every
+    call) rather than a module-level constant -- a constant computed once at
+    import time would not honour CLAUDE_BOOTSTRAP_DATA_ROOT if it changes
+    within the same process after this module has already been imported.
+    """
+    return data_dir("p4-kit") / "reviews" / "ledger.json"
 
 
 def run_p4(args: list[str]) -> tuple[int, str, str]:
@@ -737,6 +748,13 @@ def resolve_local_paths(depot_paths: list[str]) -> dict[str, Optional[str]]:
 
     Batched in chunks of `_P4_PATH_BATCH` so bulk CLs don't trip the Windows
     CreateProcess command-line length limit (~32 KB).
+
+    A batch's overall return code is non-zero when ANY argument in it is
+    unmapped (e.g. `<path> - file(s) not in client view.`), but `p4 where`
+    still emits ztag rows for every argument it COULD map. Stdout is parsed
+    unconditionally so one unmapped file doesn't cost the rest of the batch
+    its local paths; a batch is treated as empty only when stdout itself is
+    empty.
     """
     result: dict[str, Optional[str]] = {p: None for p in depot_paths}
     if not depot_paths:
@@ -744,9 +762,7 @@ def resolve_local_paths(depot_paths: list[str]) -> dict[str, Optional[str]]:
 
     for i in range(0, len(depot_paths), _P4_PATH_BATCH):
         chunk = depot_paths[i:i + _P4_PATH_BATCH]
-        rc, out, _ = run_p4(["-ztag", "where", *chunk])
-        if rc != 0:
-            continue
+        _, out, _ = run_p4(["-ztag", "where", *chunk])
         current_depot: Optional[str] = None
         for line in out.splitlines():
             if line.startswith("... depotFile "):
@@ -847,6 +863,18 @@ def find_unreconciled(dir_specs: list[tuple[Path, bool]]) -> list[dict]:
             continue
         items.extend(_parse_reconcile_output(out))
     return items
+
+
+def _exclude_own_depot_files(items: list[dict], own_depot_files: set[str]) -> list[dict]:
+    """Drop reconcile hits whose depot path is already open in this CL.
+
+    `p4 reconcile -n` can report a file already open in the CL under some
+    action-transition sequences (opened for edit then deleted locally, or
+    opened for delete then recreated) even though nothing was forgotten --
+    the file is already part of the CL. Filtering by depot path keeps
+    `unreconciled` scoped to genuinely missing siblings.
+    """
+    return [i for i in items if i.get("depot") not in own_depot_files]
 
 
 def _parse_reconcile_output(out: str) -> list[dict]:
@@ -995,6 +1023,7 @@ def build_bundle(
     """
     claim_globs = claim_globs or []
     auto_shelved = False
+    shelf_fingerprint: dict[str, str] = {}
     try:
         describe, is_shelved = fetch_describe(cl)
     except PendingUnshelvedError:
@@ -1004,7 +1033,12 @@ def build_bundle(
         if fetch_shelf_fingerprint(cl):
             describe, is_shelved = fetch_describe(cl)
         else:
-            auto_shelve_cl(cl)
+            # auto_shelve_cl already fetched and validated the post-shelve
+            # fingerprint (raising if empty) -- capture its return instead of
+            # dropping it and re-fetching below, which would cost a second
+            # depot-wide fstat and could record a DIFFERENT fingerprint than
+            # the one just validated.
+            shelf_fingerprint = auto_shelve_cl(cl)
             describe, is_shelved = fetch_describe(cl)
             auto_shelved = True
 
@@ -1019,10 +1053,6 @@ def build_bundle(
             f"CL {cl} is submitted; claim pre-images require a pending CL -- "
             f"re-run without --claim for a plain informational review"
         )
-
-    # Fingerprint AFTER our last shelf-affecting operation so --cleanup compares
-    # against the exact shelf state we leave behind.
-    shelf_fingerprint = fetch_shelf_fingerprint(cl) if auto_shelved else {}
 
     description = parse_description(describe)
     actions = parse_file_actions(describe)
@@ -1067,10 +1097,25 @@ def build_bundle(
     )
     changed_files = core["changed_files"]
 
-    minimal_dirs = compute_minimal_dirs(
-        [f["local"] for f in changed_files], workspace_root
+    # Seed the hygiene scan from files BEFORE routing, not from changed_files
+    # alone. assemble_bundle has already stripped claimed and machine-emitted
+    # identifiers out of changed_files (their own contract routes them to
+    # claimed_files / machine_emitted_files instead), so a fully-claimed CL
+    # would otherwise collapse to an empty changed_files, compute_minimal_dirs
+    # would return [], find_unreconciled would short-circuit, and p4 would
+    # never be invoked -- the forgotten-files gate would report clean without
+    # running. Mirrors git-kit's hygiene_sources.
+    hygiene_sources = (
+        changed_files
+        + core.get("claimed_files", [])
+        + (core.get("machine_emitted_files") or core.get("generated_files") or [])
     )
-    unreconciled = find_unreconciled(minimal_dirs)
+    minimal_dirs = compute_minimal_dirs(
+        [f["local"] for f in hygiene_sources], workspace_root
+    )
+    unreconciled = _exclude_own_depot_files(
+        find_unreconciled(minimal_dirs), set(depot_files)
+    )
     unresolved = find_unresolved(cl)
 
     # Declined-findings ledger. The baseline folds the CL's shelf fingerprint
@@ -1082,7 +1127,7 @@ def build_bundle(
     shelf_now = shelf_fingerprint if auto_shelved else fetch_shelf_fingerprint(cl)
     ledger_baseline = ledger.baseline_token({"actions": actions, "shelf": shelf_now})
     change_id = cl
-    ledger_hits = ledger.ledger_hits(ledger_path or LEDGER_PATH, change_id, ledger_baseline)
+    ledger_hits = ledger.ledger_hits(ledger_path or _ledger_path(), change_id, ledger_baseline)
 
     bundle: dict = {
         "cl": cl,
@@ -1213,7 +1258,7 @@ def main(argv: list[str]) -> int:
         return cleanup_auto_shelve(Path(argv[2]))
     if len(argv) == 3 and argv[1] == "--ledger-record":
         try:
-            n = ledger.record_from_file(LEDGER_PATH, Path(argv[2]))
+            n = ledger.record_from_file(_ledger_path(), Path(argv[2]))
         except (OSError, ValueError) as e:
             print(f"Error: {e}", file=sys.stderr)
             return 1
@@ -1227,6 +1272,13 @@ def main(argv: list[str]) -> int:
     if len(positionals) != 1 or positionals[0].startswith("-"):
         return _usage()
     cl = positionals[0]
+    # Validate before building bundle_dir from the unvalidated positional --
+    # "../../foo" would otherwise write outside the reviews root and "."
+    # would write into the root itself, beside ledger.json, where the
+    # stale-chunk sweep operates.
+    if not re.fullmatch(r"[0-9]+", cl):
+        print(f"Error: CL must be a positive integer, got {cl!r}", file=sys.stderr)
+        return 2
     bundle_dir = DEFAULT_BUNDLE_ROOT / cl
     bundle_dir.mkdir(parents=True, exist_ok=True)
     try:

@@ -16,6 +16,13 @@ works from the plugin root Claude actually loaded and does not assume a plugin
 `bin/qwen38l-server` are thin shell adapters for interactive environments that
 deliberately put them on PATH.
 
+For lifecycle operations, use `qwen-switch start qwen36|qwen38|qwen38l` to
+replace the managed server on the selected profile's port and wait for the
+profile's exact OpenAI model id. Use `qwen-switch status` to report the managed
+resident profile. It composes `model-server.sh`; it does not duplicate any
+profile arguments. It refuses to terminate a port occupant unless `lsof` and
+`ps` identify it as `ninfer-serve` or `llama-server`.
+
 Each profile preserves its measured GPU settings while keeping paths and ports
 overridable through environment variables. `qwen36` resolves NInfer from
 `NINFER_ROOT` or conventional dev roots and uses INT8 KV plus MTP3. `qwen38`
