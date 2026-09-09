@@ -753,7 +753,32 @@ class TestResolveLocalPaths:
     def test_empty_input(self):
         assert pr.resolve_local_paths([]) == {}
 
-    def test_p4_failure_returns_none_for_each(self):
+    def test_partial_failure_keeps_mapped_rows(self):
+        """A batch can return non-zero (one unmapped depot path in the
+        argument list) while still emitting ztag rows for the depot paths it
+        COULD map. Parsing must not be skipped just because the batch's
+        overall rc is non-zero -- otherwise one unmapped file in a batch of
+        100 costs the whole batch its local paths."""
+        out = (
+            "... depotFile //depot/a.cpp\n"
+            "... clientFile //ws/a.cpp\n"
+            "... path C:\\workspace\\a.cpp\n"
+            "\n"
+        )
+        with patch.object(
+            pr,
+            "run_p4",
+            return_value=(1, out, "//depot/b.h - file(s) not in client view.\n"),
+        ):
+            result = pr.resolve_local_paths(["//depot/a.cpp", "//depot/b.h"])
+        assert result == {
+            "//depot/a.cpp": "C:\\workspace\\a.cpp",
+            "//depot/b.h": None,
+        }
+
+    def test_full_batch_failure_with_empty_stdout_returns_none_for_each(self):
+        """A batch is treated as empty only when stdout yields nothing --
+        this is the one case where every path in the batch stays None."""
         with patch.object(pr, "run_p4", return_value=(1, "", "error")):
             result = pr.resolve_local_paths(["//depot/a.cpp"])
         assert result == {"//depot/a.cpp": None}
@@ -1716,6 +1741,51 @@ class TestBuildBundleAutoShelve:
         assert bundle["auto_shelved"] is False
         assert bundle["shelf_fingerprint"] == {}
 
+    def test_auto_shelve_fingerprint_is_not_refetched(self, tmp_path):
+        """auto_shelve_cl shelves, fetches the fingerprint, and RETURNS it.
+        build_bundle must capture and use that return value directly rather
+        than dropping it and re-fetching via a second fstat round trip --
+        two depot-wide fstats where one suffices, and the recorded
+        fingerprint would not be the one auto_shelve_cl validated."""
+        shelved_describe = self._committed_describe()
+        describe_calls = {"n": 0}
+        shelved = {"done": False}
+        fstat_calls_after_shelve = {"n": 0}
+        fstat_out = (
+            "... depotFile //depot/new.py\n"
+            "... digest DEADBEEF\n"
+            "\n"
+        )
+
+        def fake_fetch_describe(cl):
+            describe_calls["n"] += 1
+            if describe_calls["n"] == 1:
+                raise pr.PendingUnshelvedError("no shelf")
+            return shelved_describe, True
+
+        def fake_run_p4(args):
+            if args[:2] == ["-ztag", "fstat"]:
+                if shelved["done"]:
+                    fstat_calls_after_shelve["n"] += 1
+                    return (0, fstat_out, "")
+                return (0, "", "")  # pre-shelve race check: no shelf yet
+            if args[:2] == ["shelve", "-c"]:
+                shelved["done"] = True
+                return (0, "Change 123 files shelved.\n", "")
+            return (1, "", f"unexpected: {args}")
+
+        with patch.object(pr, "fetch_describe", side_effect=fake_fetch_describe), \
+                patch.object(pr, "run_p4", side_effect=fake_run_p4), \
+                patch.object(pr, "resolve_local_paths", return_value={"//depot/new.py": None}), \
+                patch.object(pr, "get_workspace_root", return_value=None), \
+                patch.object(pr, "find_unreconciled", return_value=[]), \
+                patch.object(pr, "find_unresolved", return_value=[]):
+            bundle = pr.build_bundle("123", tmp_path / "bundle")
+
+        assert bundle["auto_shelved"] is True
+        assert bundle["shelf_fingerprint"] == {"//depot/new.py": "DEADBEEF"}
+        assert fstat_calls_after_shelve["n"] == 1
+
 
 # ---------------------------------------------------------------------------
 # main — CLI
@@ -1759,6 +1829,25 @@ class TestMain:
         rc = pr.main(["prepare_review.py", "--cleanup"])
         assert rc == 2
         assert "Usage" in capsys.readouterr().err
+
+    def test_non_numeric_cl_rejected_before_mkdir(self, tmp_path, capsys):
+        """`../../foo` or `.` as the positional would otherwise be joined onto
+        DEFAULT_BUNDLE_ROOT unvalidated and mkdir'd, writing outside the
+        reviews root (or into the root itself, beside ledger.json)."""
+        with patch.object(pr, "DEFAULT_BUNDLE_ROOT", tmp_path / "reviews"), \
+                patch.object(Path, "mkdir") as mkdir_mock:
+            rc = pr.main(["prepare_review.py", "../../foo"])
+        assert rc == 2
+        assert mkdir_mock.call_count == 0
+        assert "Error" in capsys.readouterr().err
+
+    def test_dot_cl_rejected_before_mkdir(self, tmp_path, capsys):
+        with patch.object(pr, "DEFAULT_BUNDLE_ROOT", tmp_path / "reviews"), \
+                patch.object(Path, "mkdir") as mkdir_mock:
+            rc = pr.main(["prepare_review.py", "."])
+        assert rc == 2
+        assert mkdir_mock.call_count == 0
+        assert "Error" in capsys.readouterr().err
 
 
 # ---------------------------------------------------------------------------
@@ -2198,6 +2287,148 @@ class TestBuildBundleClaims:
 
 
 # ---------------------------------------------------------------------------
+# build_bundle -- hygiene scan seeded from pre-routing files
+# ---------------------------------------------------------------------------
+
+
+class TestBuildBundleHygieneSources:
+    def test_fully_claimed_cl_still_runs_the_reconcile_scan(self, tmp_path):
+        """A CL whose ONLY file is claimed must not skip the forgotten-files
+        gate. minimal_dirs derived from post-routing changed_files (which
+        routing has already stripped the claimed file from) would be empty,
+        so find_unreconciled would never run and a genuinely unreconciled
+        sibling on disk would go unreported."""
+        ws = tmp_path / "ws"
+        src = ws / "src"
+        src.mkdir(parents=True)
+        claude = src / "CLAUDE.md"
+        claude.write_text("new rule\n", encoding="utf-8")
+        # A sibling file that exists on disk but isn't in the CL.
+        forgotten = src / "forgot.cpp"
+        forgotten.write_text("int y = 2;\n", encoding="utf-8")
+
+        describe_out = (
+            "Change 999 by user@client on 2026/01/01 12:00:00 *pending*\n"
+            "\n"
+            "\tEdit rules\n"
+            "\n"
+            "Affected files ...\n"
+            "... //depot/src/CLAUDE.md#3 edit\n"
+            "\n"
+            "Differences ...\n"
+            "\n"
+            "==== //depot/src/CLAUDE.md#3 (text) ====\n"
+            "@@ -1 +1 @@\n"
+            "-old rule\n"
+            "+new rule\n"
+        )
+        where_out = f"... depotFile //depot/src/CLAUDE.md\n... path {claude}\n"
+        info_out = f"... clientRoot {ws}\n"
+        reconcile_out = (
+            "... depotFile //depot/src/forgot.cpp\n"
+            f"... clientFile {forgotten}\n"
+            "... rev 1\n"
+            "... action add\n"
+            "... type text\n"
+        )
+        reconcile_calls = []
+
+        def fake_run_p4(args):
+            if args[:2] == ["describe", "-du"]:
+                return (0, describe_out, "")
+            if args[:2] == ["-ztag", "where"]:
+                return (0, where_out, "")
+            if args[:2] == ["-ztag", "info"]:
+                return (0, info_out, "")
+            if args[:3] == ["-ztag", "reconcile", "-n"]:
+                reconcile_calls.append(args)
+                return (0, reconcile_out, "")
+            if args[:4] == ["-ztag", "resolve", "-n", "-c"]:
+                return (1, "", "no file(s) to resolve.\n")
+            if args[:3] == ["print", "-q", "-o"]:
+                Path(args[3]).parent.mkdir(parents=True, exist_ok=True)
+                Path(args[3]).write_text("old rule\n", encoding="utf-8")
+                return (0, "", "")
+            return (1, "", f"unexpected: {args}")
+
+        with patch.object(pr, "run_p4", side_effect=fake_run_p4):
+            bundle = pr.build_bundle(
+                "999", tmp_path / "bundle", claim_globs=["**/CLAUDE.md"]
+            )
+
+        assert bundle["changed_files"] == []
+        assert len(reconcile_calls) == 1
+        assert str(src) in reconcile_calls[0][-1]
+        assert len(bundle["unreconciled"]) == 1
+        assert bundle["unreconciled"][0]["depot"] == "//depot/src/forgot.cpp"
+
+    def test_own_depot_files_excluded_from_unreconciled(self, tmp_path):
+        """p4 reconcile can report a file already open in the CL (e.g. opened
+        for edit then deleted locally, or opened for delete then recreated).
+        Such a hit isn't something the user forgot -- it's already part of
+        the CL -- so it must not appear in `unreconciled` alongside a
+        genuinely missing sibling."""
+        ws = tmp_path / "ws"
+        src = ws / "src"
+        src.mkdir(parents=True)
+        own_file = src / "foo.cpp"
+        own_file.write_text("int x = 1;\n", encoding="utf-8")
+        sibling = src / "forgot.cpp"
+        sibling.write_text("int y = 2;\n", encoding="utf-8")
+
+        describe_out = (
+            "Change 1000 by user@client on 2026/01/01\n"
+            "\n"
+            "\tEdit foo\n"
+            "\n"
+            "Affected files ...\n"
+            "... //depot/src/foo.cpp#1 edit\n"
+            "\n"
+            "Differences ...\n"
+            "\n"
+            "==== //depot/src/foo.cpp#1 (text) ====\n"
+            "@@ -1 +1 @@\n"
+            "-int x = 0;\n"
+            "+int x = 1;\n"
+        )
+        where_out = f"... depotFile //depot/src/foo.cpp\n... path {own_file}\n"
+        info_out = f"... clientRoot {ws}\n"
+        # Reconcile reports BOTH the CL's own file (a spurious re-detection)
+        # and a genuine sibling that was never included in the CL.
+        reconcile_out = (
+            "... depotFile //depot/src/foo.cpp\n"
+            f"... clientFile {own_file}\n"
+            "... rev 1\n"
+            "... action edit\n"
+            "... type text\n"
+            "\n"
+            "... depotFile //depot/src/forgot.cpp\n"
+            f"... clientFile {sibling}\n"
+            "... rev 1\n"
+            "... action add\n"
+            "... type text\n"
+        )
+
+        def fake_run_p4(args):
+            if args[:2] == ["describe", "-du"]:
+                return (0, describe_out, "")
+            if args[:2] == ["-ztag", "where"]:
+                return (0, where_out, "")
+            if args[:2] == ["-ztag", "info"]:
+                return (0, info_out, "")
+            if args[:3] == ["-ztag", "reconcile", "-n"]:
+                return (0, reconcile_out, "")
+            if args[:4] == ["-ztag", "resolve", "-n", "-c"]:
+                return (1, "", "no file(s) to resolve.\n")
+            return (1, "", f"unexpected: {args}")
+
+        with patch.object(pr, "run_p4", side_effect=fake_run_p4):
+            bundle = pr.build_bundle("1000", tmp_path / "bundle")
+
+        assert [u["depot"] for u in bundle["unreconciled"]] == ["//depot/src/forgot.cpp"]
+
+
+# ---------------------------------------------------------------------------
 # Submitted-CL guard: --claim requires a pending CL (#have would be POST-change)
 # ---------------------------------------------------------------------------
 
@@ -2339,3 +2570,52 @@ class TestBundleLedgerWiring:
             second = pr.build_bundle("999", tmp_path / "b2", ledger_path=led)
         assert len(second["ledger_hits"]) == 1
         assert second["ledger_hits"][0]["label"] == "off by one in loop"
+
+
+# ---------------------------------------------------------------------------
+# bootstrap_guard.data_dir redirect -- bundle root and ledger path
+# ---------------------------------------------------------------------------
+
+
+class TestDataRootRedirect:
+    """bootstrap_guard.data_dir is the venv resolution path used by
+    reexec_under_plugin_venv, so hand-building DEFAULT_BUNDLE_ROOT /
+    LEDGER_PATH from Path.home() ignores the same redirect a test session
+    relies on -- see tests/bootstrap/test_plugin_test_session.py::TestDataRootRedirect
+    and git-kit's mirror of this class."""
+
+    @staticmethod
+    def _reload_prepare_review():
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location(
+            "p4_kit_prepare_review_reload_test", pr.__file__
+        )
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod
+
+    def test_redirect_moves_the_bundle_root(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("CLAUDE_BOOTSTRAP_DATA_ROOT", str(tmp_path))
+        mod = self._reload_prepare_review()
+        assert mod.DEFAULT_BUNDLE_ROOT == tmp_path / "plugins-kit" / "p4-kit" / "reviews"
+
+    def test_redirect_moves_the_ledger(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("CLAUDE_BOOTSTRAP_DATA_ROOT", str(tmp_path))
+        mod = self._reload_prepare_review()
+        assert mod._ledger_path() == (
+            tmp_path / "plugins-kit" / "p4-kit" / "reviews" / "ledger.json"
+        )
+
+    def test_ledger_path_is_lazy_after_import(self, monkeypatch, tmp_path):
+        """An env change AFTER import must still be honoured -- a module-level
+        constant computed once at import time would not see it."""
+        monkeypatch.delenv("CLAUDE_BOOTSTRAP_DATA_ROOT", raising=False)
+        mod = self._reload_prepare_review()
+        before = mod._ledger_path()
+
+        monkeypatch.setenv("CLAUDE_BOOTSTRAP_DATA_ROOT", str(tmp_path))
+        after = mod._ledger_path()
+
+        assert after == tmp_path / "plugins-kit" / "p4-kit" / "reviews" / "ledger.json"
+        assert after != before
