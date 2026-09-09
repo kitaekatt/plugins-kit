@@ -178,6 +178,7 @@ def _placement_plan(root: Path, result: Mapping[str, Any]) -> dict[str, Any]:
         "pending_count": len(work),
         "blocked_count": len(blockers),
         "blockers": blockers,
+        "diagnostics": list(result.get("diagnostics", [])),
         "work": work,
         "next": next_job,
     }

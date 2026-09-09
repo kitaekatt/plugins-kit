@@ -300,6 +300,30 @@ class TestDiscoveryWalk:
         assert entry["record"]["path"] == ".databench/human/decision.yaml"
         assert entry["record"]["status"] == "fresh"
 
+    def test_empty_excluded_territory_is_diagnosed_and_not_a_subject(self, repo):
+        (repo / "boundary" / "child").mkdir(parents=True)
+        (repo / "boundary" / "child" / "item.txt").write_text("child\n", encoding="ascii")
+        _commit(repo, "add excluded child")
+
+        make_record(repo, "boundary/child")
+        make_record(repo, "boundary")
+
+        result = discover.scan(repo)
+        directories = {entry["directory"] for entry in result["directories"]}
+
+        assert "boundary" not in directories
+        assert "boundary/child" in directories
+        assert result["diagnostics"] == [
+            {
+                "directory": "boundary",
+                "code": discover.EMPTY_TERRITORY,
+                "message": (
+                    "no analysis input remains in the territory after excluding "
+                    "nearer descendant page subtrees"
+                ),
+            }
+        ]
+
 
 class TestDiscoveryRecordState:
     def test_missing_record_is_reported(self, repo):
@@ -450,6 +474,19 @@ class TestDiscoveryNavigationAndStaleness:
         assert entries["src"]["stale_child"] is True
         assert "src/deep" in entries["src"]["stale_children"]
 
+    def test_a_real_directory_still_stales_and_propagates_under_ts2(self, repo):
+        make_record(repo, ".", decision="page")
+        make_record(repo, "quiet", decision="page")
+
+        (repo / "quiet" / "notes.txt").write_text("changed\n", encoding="ascii")
+        _commit(repo, "change ordinary directory")
+
+        entries = {entry["directory"]: entry for entry in discover.scan(repo)["directories"]}
+        assert entries["quiet"]["record"]["status"] == discover.RECORD_STATUS_STALE
+        assert entries["quiet"]["source_sha"] is not None
+        assert entries["."]["stale_child"] is True
+        assert "quiet" in entries["."]["stale_children"]
+
 
 class TestDiscoveryCli:
     def test_cli_emits_json(self, repo):
@@ -538,6 +575,39 @@ class TestCleanCases:
 # ---------------------------------------------------------------------------
 
 class TestRecordFailures:
+    def test_phantom_record_does_not_hide_child_or_skip_its_generated_page(self, repo):
+        (repo / "boundary" / "child").mkdir(parents=True)
+        (repo / "boundary" / "child" / "item.txt").write_text("child\n", encoding="ascii")
+        _commit(repo, "add child page territory")
+
+        child = make_record(repo, "boundary/child")
+        phantom = make_record(repo, "boundary")
+        make_record(repo, ".")
+        write_page(repo, "boundary", phantom)
+        write_page(
+            repo,
+            "boundary/child",
+            child,
+            marker_text="<!-- malformed marker -->",
+            nav_links=["../../human.html"],
+        )
+
+        result = run_check(repo)
+        entries = {entry["directory"]: entry for entry in discover.scan(repo)["directories"]}
+
+        assert "boundary" in result["checked"]
+        assert "boundary/child" in result["checked"]
+        assert any(
+            finding["directory"] == "boundary" and finding["code"] == "page-orphaned"
+            for finding in result["findings"]
+        )
+        assert any(
+            finding["directory"] == "boundary/child" and finding["code"] == "marker"
+            for finding in result["findings"]
+        )
+        assert entries["."]["nearest_page_descendants"] == ["boundary/child"]
+        assert entries["boundary/child"]["nearest_page_ancestor"] == "."
+
     def test_missing_record_fails(self, repo):
         result = run_check(repo, "lib")
         assert "record-missing" in codes(result, "FAIL")

@@ -817,7 +817,9 @@ def orphaned_output(repo_root: Path) -> dict:
     remedy is to delete it or to look at why its inputs are gone.
     """
     files = discover.repository_files(repo_root)
-    subjects = set(discover.subject_directories(files))
+    records, _record_errors = discover.load_records(repo_root)
+    subjects, _territories, _diagnostics = discover._live_subject_state(files, records)
+    subject_set = set(subjects)
     orphans: dict[str, list[str]] = {}
     record_root = hh.RECORD_ROOT.split("/")[0]
     for rel in files:
@@ -825,7 +827,7 @@ def orphaned_output(repo_root: Path) -> dict:
         if record_root in parts or not discover.is_generated_name(parts[-1]):
             continue
         directory = "/".join(parts[:-1]) or hh.ROOT_DIRECTORY
-        if directory in subjects:
+        if directory in subject_set:
             continue
         orphans.setdefault(directory, []).append(parts[-1])
     return {directory: sorted(names) for directory, names in orphans.items()}

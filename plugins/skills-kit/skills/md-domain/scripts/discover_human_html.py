@@ -67,6 +67,7 @@ RECORD_STATUS_MISSING = "missing"
 RECORD_STATUS_INVALID = "invalid"
 RECORD_STATUS_FRESH = "fresh"
 RECORD_STATUS_STALE = "stale"
+EMPTY_TERRITORY = "empty-territory"
 
 # A record status that is anything but `fresh` makes the directory itself stale,
 # and TS-2 propagates that to every dependent ancestor.
@@ -153,6 +154,9 @@ def subject_directories(
         if not is_analysis_input(rel):
             continue
         parts = rel.split("/")[:-1]
+        file_directory = "/".join(parts) or hh.ROOT_DIRECTORY
+        if any(in_scope(file_directory, boundary) for boundary in excluded_roots):
+            continue
         subjects.add(hh.ROOT_DIRECTORY)
         for depth in range(1, len(parts) + 1):
             subjects.add("/".join(parts[:depth]))
@@ -190,7 +194,7 @@ def _record_directory(repo_root: Path, path: Path) -> str:
     return hh.normalize_directory(relative.as_posix())
 
 
-def load_records(repo_root: Path) -> tuple[dict[str, hh.Record], dict[str, str]]:
+def _load_all_records(repo_root: Path) -> tuple[dict[str, hh.Record], dict[str, str]]:
     """Load every decision record in the repository.
 
     Returns `(records, errors)`: the valid records keyed by normalized
@@ -219,6 +223,104 @@ def load_records(repo_root: Path) -> tuple[dict[str, hh.Record], dict[str, str]]
             continue
         records[directory] = record
     return records, errors
+
+
+def load_records(
+    repo_root: Path,
+    subjects: Iterable[str] | None = None,
+) -> tuple[dict[str, hh.Record], dict[str, str]]:
+    """Load records for the live subjects, omitting obsolete records.
+
+    A caller may provide the already computed live subject set. Without one,
+    compute it from the repository so record consumers cannot accidentally use
+    a record for a directory whose territory is empty after page exclusions.
+    """
+    records, errors = _load_all_records(repo_root)
+    if subjects is None:
+        files = repository_files(repo_root)
+        subjects, _territories, _diagnostics = _live_subject_state(files, records)
+    subject_set = set(subjects)
+    return (
+        {directory: record for directory, record in records.items() if directory in subject_set},
+        {directory: error for directory, error in errors.items() if directory in subject_set},
+    )
+
+
+def _territory_metadata(
+    files: list[str],
+    subjects: set[str],
+    records: dict[str, hh.Record],
+) -> dict[str, dict]:
+    """Return territory metadata using page records in the current subject set."""
+    page_directories = {
+        directory
+        for directory in subjects
+        if records.get(directory) is not None
+        and records[directory].decision == hh.DECISION_PAGE
+    }
+    territories: dict[str, dict] = {}
+    for subject in subjects:
+        owned_root, excluded_directories = hh.territory(subject, page_directories)
+        owned_directories = subject_directories(files, owned_root, excluded_directories)
+        territories[subject] = {
+            "owned_directories": owned_directories,
+            "excluded_directories": excluded_directories,
+            "child_pages": [
+                {
+                    "directory": child,
+                    "identity": records[child].identity,
+                    "relationship": "nearest-page-descendant",
+                }
+                for child in excluded_directories
+            ],
+        }
+    return territories
+
+
+def _live_subject_state(
+    files: list[str],
+    records: dict[str, hh.Record],
+) -> tuple[list[str], dict[str, dict], list[dict[str, str]]]:
+    """Return live subjects, their territories, and structural diagnoses.
+
+    Removing an empty territory removes a page boundary, so repeat until page
+    boundaries and live subjects reach a fixed point.
+
+    What convergence fixes is the NAVIGATION METADATA of the subjects that
+    survive, not their ownership. The subject set is reached in one pass either
+    way: pruning a phantom never hands a surviving ancestor content it did not
+    already own, because anything below the phantom's boundary sits behind one
+    of the phantom's own real child pages. What a single pass gets wrong is
+    `excluded_directories` and `child_pages` -- an ancestor whose nearest
+    descendant page is itself a phantom would name the phantom as its nearest
+    page instead of drilling through to the real page nested under it.
+    """
+    subjects = set(subject_directories(files))
+    diagnoses: list[dict[str, str]] = []
+    diagnosed: set[str] = set()
+    while True:
+        territories = _territory_metadata(files, subjects, records)
+        empty = sorted(
+            directory
+            for directory, territory_data in territories.items()
+            if not territory_data["owned_directories"]
+        )
+        if not empty:
+            return sorted(subjects), territories, diagnoses
+        for directory in empty:
+            if directory not in diagnosed:
+                diagnoses.append(
+                    {
+                        "directory": directory,
+                        "code": EMPTY_TERRITORY,
+                        "message": (
+                            "no analysis input remains in the territory after excluding "
+                            "nearer descendant page subtrees"
+                        ),
+                    }
+                )
+                diagnosed.add(directory)
+        subjects.difference_update(empty)
 
 
 # ---------------------------------------------------------------------------
@@ -286,34 +388,9 @@ def scan(repo_root: str | Path, directory: str | Path = hh.ROOT_DIRECTORY) -> di
     root_path = Path(repo_root).resolve()
     scope = hh.normalize_directory(directory)
     files = repository_files(root_path)
-    subjects = subject_directories(files)
-    records, record_errors = load_records(root_path)
-
-    page_directories = {
-        candidate
-        for candidate, record in records.items()
-        if record.decision == hh.DECISION_PAGE
-    }
-    territories: dict[str, dict] = {}
-    for subject in subjects:
-        owned_root, excluded_directories = hh.territory(subject, page_directories)
-        owned_directories = subject_directories(
-            files,
-            owned_root,
-            excluded_directories,
-        )
-        territories[subject] = {
-            "owned_directories": owned_directories,
-            "excluded_directories": excluded_directories,
-            "child_pages": [
-                {
-                    "directory": child,
-                    "identity": records[child].identity,
-                    "relationship": "nearest-page-descendant",
-                }
-                for child in excluded_directories
-            ],
-        }
+    all_records, _all_record_errors = _load_all_records(root_path)
+    subjects, territories, diagnostics = _live_subject_state(files, all_records)
+    records, record_errors = load_records(root_path, subjects)
 
     stamps: dict[str, tuple[str | None, bool, str | None]] = {}
     for subject in subjects:
@@ -396,6 +473,7 @@ def scan(repo_root: str | Path, directory: str | Path = hh.ROOT_DIRECTORY) -> di
         "repo_root": str(root_path),
         "scope": scope,
         "count": len(emitted),
+        "diagnostics": diagnostics,
         "directories": emitted,
     }
 
