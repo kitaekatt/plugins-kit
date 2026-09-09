@@ -103,6 +103,9 @@ Output schema:
          "open_action": "<the action the CL has this file open for>",
          "workspace_state": "missing"|"present"}
       ],
+      "shelf_drift": [
+        {"depot": "<depot path>", "local": "<local workspace path>"}
+      ],
       "unresolved": [
         {"local": "<local path>", "depot": "<depot path>",
          "resolve_type": "<p4 resolveType, e.g. content/branch/delete>",
@@ -114,7 +117,8 @@ Output schema:
                                                # below could NOT run, so its own
                                                # empty list must not be read as
                                                # "clean"
-        {"scan": "unreconciled"|"unresolved", "reason": "<p4 error detail>"}
+        {"scan": "unreconciled"|"unresolved"|"shelf_fingerprint"|"shelf_opened"|"shelf_drift",
+         "reason": "<p4 error detail>"}
       ],
       "claimed_files": [                      # present only when --claim was passed
         {"identifier": "<depot path>", "depot": "<depot path>",
@@ -150,6 +154,10 @@ shelf -- captured so a subsequent `--cleanup <bundle_dir>` invocation can verify
 the shelf still matches what we created before deleting it. Empty when
 `auto_shelved` is false (we did not create the shelf and must not touch it).
 
+`shelf_drift` contains one entry for each opened shelved file whose local
+workspace digest differs. It warns rather than refuses because the shelf
+digest is server-normalized; an entry contains the depot path and local path.
+
 A `<CL>` invocation also accepts `--claim <glob>` (repeatable). A changed file
 whose depot path matches a claim glob is held back from the generic reviewer
 fan-out (its diff is excluded from the chunks and it is dropped from
@@ -183,6 +191,7 @@ Stderr-only diagnostics. Non-zero exit on hard failure.
 """
 
 import json
+import hashlib
 import os
 import re
 import sys
@@ -269,6 +278,22 @@ _DELETE_ACTIONS = {"delete", "move/delete", "purge"}
 # path-manipulation step this small a read does not justify.
 _P4_TIMEOUT_ENV_VAR = "P4KIT_VCS_TIMEOUT_S"
 _P4_DEFAULT_TIMEOUT_S = 60.0
+
+
+class ShelfFingerprint(dict[str, str]):
+    """JSON-compatible shelf digests with the shelved action sidecar."""
+
+    def __init__(
+        self,
+        *args: object,
+        scan_ok: bool = True,
+        scan_reason: str = "",
+        **kwargs: str,
+    ) -> None:
+        super().__init__(*args, **kwargs)
+        self.actions: dict[str, str] = {}
+        self.scan_ok = scan_ok
+        self.scan_reason = scan_reason
 
 
 def _p4_timeout_s() -> float:
@@ -402,7 +427,7 @@ def fetch_describe(cl: str) -> tuple[str, bool]:
     raise ValueError(f"no describe content found for CL {cl} (tried committed and shelved)")
 
 
-def fetch_shelf_fingerprint(cl: str) -> dict[str, str]:
+def fetch_shelf_fingerprint(cl: str) -> ShelfFingerprint:
     """Return {depot_path: digest} for files currently shelved on CL.
 
     Empty dict if no shelf exists. Uses `p4 -ztag fstat -Ol //...@=<CL>`;
@@ -412,25 +437,125 @@ def fetch_shelf_fingerprint(cl: str) -> dict[str, str]:
     Files shelved as deletes have no digest; recorded as empty string so the
     file's presence in the shelf is still part of the fingerprint.
     """
-    rc, out, _ = run_p4(["-ztag", "fstat", "-Ol", f"//...@={cl}"])
+    rc, out, err = run_p4(["-ztag", "fstat", "-Ol", f"//...@={cl}"])
     if rc != 0:
-        return {}
-    fingerprint: dict[str, str] = {}
+        detail = err.strip() or out.strip()
+        if "no such file" in detail.lower() or "no file(s)" in detail.lower():
+            return ShelfFingerprint()
+        return ShelfFingerprint(
+            scan_ok=False,
+            scan_reason=detail or f"exit {rc}",
+        )
+    fingerprint = ShelfFingerprint()
     current_depot: Optional[str] = None
     current_digest: str = ""
+    current_action: str = ""
     for line in out.splitlines():
         if line.startswith("... depotFile "):
             current_depot = line[len("... depotFile "):].strip()
         elif line.startswith("... digest "):
             current_digest = line[len("... digest "):].strip()
+        elif line.startswith("... headAction ") or line.startswith("... action "):
+            current_action = line.split(" ", 2)[2].strip()
         elif line.strip() == "":
             if current_depot:
                 fingerprint[current_depot] = current_digest
+                if current_action:
+                    fingerprint.actions[current_depot] = current_action
             current_depot = None
             current_digest = ""
+            current_action = ""
     if current_depot:
         fingerprint[current_depot] = current_digest
+        if current_action:
+            fingerprint.actions[current_depot] = current_action
     return fingerprint
+
+
+def _parse_opened_files(output: str) -> dict[str, str]:
+    """Parse depot path and action pairs from `p4 -ztag opened`."""
+    opened: dict[str, str] = {}
+    current_depot: Optional[str] = None
+    current_action: Optional[str] = None
+    for line in output.splitlines():
+        if line.startswith("... depotFile "):
+            current_depot = line[len("... depotFile "):].strip()
+        elif line.startswith("... action "):
+            current_action = line[len("... action "):].strip()
+        elif line.strip() == "":
+            if current_depot and current_action:
+                opened[current_depot] = current_action
+            current_depot = None
+            current_action = None
+    if current_depot and current_action:
+        opened[current_depot] = current_action
+    return opened
+
+
+def fetch_opened_files(cl: str) -> tuple[dict[str, str], list[dict[str, str]]]:
+    """Return the CL's open depot paths and actions."""
+    rc, out, err = run_p4(["-ztag", "opened", "-c", cl])
+    if rc != 0:
+        reason = err.strip() or out.strip() or f"exit {rc}"
+        return {}, [{"scan": "shelf_opened", "reason": reason}]
+    return _parse_opened_files(out), []
+
+
+def shelf_divergence(
+    cl: str,
+    shelf_fingerprint: ShelfFingerprint,
+    opened: Optional[dict[str, str]] = None,
+) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
+    """Return deterministic membership and action differences for a pending CL."""
+    incomplete: list[dict[str, str]] = []
+    if not shelf_fingerprint.scan_ok:
+        incomplete.append(
+            {"scan": "shelf_fingerprint", "reason": shelf_fingerprint.scan_reason}
+        )
+        return [], incomplete
+    if opened is None:
+        opened, incomplete = fetch_opened_files(cl)
+        if incomplete:
+            return [], incomplete
+    shelf_actions = shelf_fingerprint.actions
+    divergence: list[dict[str, str]] = []
+    for depot in sorted(set(opened) - set(shelf_fingerprint)):
+        divergence.append({"depot": depot, "kind": "opened after shelving"})
+    for depot in sorted(set(shelf_fingerprint) - set(opened)):
+        divergence.append({"depot": depot, "kind": "not open in CL"})
+    for depot in sorted(set(opened) & set(shelf_fingerprint)):
+        if shelf_actions.get(depot) and opened[depot] != shelf_actions[depot]:
+            divergence.append({"depot": depot, "kind": "open action differs"})
+    return divergence, incomplete
+
+
+def _shelf_content_drift(
+    shelf_fingerprint: dict[str, str],
+    opened: dict[str, str],
+    local_map: dict[str, Optional[str]],
+) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
+    """Compare readable local files against the shelf and report skipped paths."""
+    drift: list[dict[str, str]] = []
+    incomplete: list[dict[str, str]] = []
+    for depot in sorted(set(shelf_fingerprint) & set(opened)):
+        digest = shelf_fingerprint[depot]
+        local = local_map.get(depot)
+        if not digest or not local:
+            if digest and not local:
+                incomplete.append(
+                    {"scan": "shelf_drift", "reason": f"no local mapping for {depot}"}
+                )
+            continue
+        try:
+            local_digest = hashlib.md5(Path(local).read_bytes()).hexdigest().upper()
+        except (OSError, ValueError) as exc:
+            incomplete.append({"scan": "shelf_drift", "reason": f"could not hash {depot}: {exc}"})
+            continue
+        # The shelf digest is server-normalized; local line-ending differences
+        # can false-positive, so this path warns rather than refuses.
+        if local_digest != digest.upper():
+            drift.append({"depot": depot, "local": local})
+    return drift, incomplete
 
 
 def auto_shelve_cl(cl: str) -> dict[str, str]:
@@ -1227,24 +1352,55 @@ def build_bundle(
     """
     claim_globs = claim_globs or []
     auto_shelved = False
-    shelf_fingerprint: dict[str, str] = {}
+    shelf_fingerprint = ShelfFingerprint()
+    shelf_observed: Optional[ShelfFingerprint] = None
+    shelf_scan_incomplete: list[dict[str, str]] = []
+    opened: dict[str, str] = {}
+    opened_incomplete: list[dict[str, str]] = []
     try:
         describe, is_shelved = fetch_describe(cl)
     except PendingUnshelvedError:
-        # Empty shelf is the trigger for auto-shelve. A race could have left a
-        # shelf in place between fetch_describe and now; if so, don't touch it
-        # -- re-run fetch_describe and use whatever shelved content arrived.
-        if fetch_shelf_fingerprint(cl):
-            describe, is_shelved = fetch_describe(cl)
+        # auto_shelve_cl fetches and validates the post-shelve fingerprint;
+        # capture that result instead of making a separate depot-wide query.
+        shelf_fingerprint = auto_shelve_cl(cl)
+        if not isinstance(shelf_fingerprint, ShelfFingerprint):
+            shelf_fingerprint = ShelfFingerprint(shelf_fingerprint)
+        shelf_observed = shelf_fingerprint
+        describe, is_shelved = fetch_describe(cl)
+        auto_shelved = True
+
+    if _is_pending(describe) and is_shelved and not auto_shelved:
+        if shelf_observed is None:
+            shelf_observed = fetch_shelf_fingerprint(cl)
+            if not isinstance(shelf_observed, ShelfFingerprint):
+                shelf_observed = ShelfFingerprint(shelf_observed)
+        divergence = []
+        if shelf_observed.scan_ok:
+            opened_result = fetch_opened_files(cl)
+            if isinstance(opened_result, tuple):
+                opened, opened_incomplete = opened_result
+            else:
+                opened, opened_incomplete = opened_result, []
+            if not opened_incomplete:
+                divergence, divergence_incomplete = shelf_divergence(
+                    cl, shelf_observed, opened
+                )
+                opened_incomplete += divergence_incomplete
         else:
-            # auto_shelve_cl already fetched and validated the post-shelve
-            # fingerprint (raising if empty) -- capture its return instead of
-            # dropping it and re-fetching below, which would cost a second
-            # depot-wide fstat and could record a DIFFERENT fingerprint than
-            # the one just validated.
-            shelf_fingerprint = auto_shelve_cl(cl)
-            describe, is_shelved = fetch_describe(cl)
-            auto_shelved = True
+            shelf_scan_incomplete = [
+                {
+                    "scan": "shelf_fingerprint",
+                    "reason": shelf_observed.scan_reason,
+                }
+            ]
+        if divergence:
+            details = "; ".join(
+                f"{item['depot']} ({item['kind']})" for item in divergence
+            )
+            raise ValueError(
+                f"CL {cl} shelf does not match its open files: {details}; "
+                f"repair with p4 shelve -f -c {cl}"
+            )
 
     # Claim pre-images are materialized from the workspace's #have revision,
     # which for a SUBMITTED CL is POST-change once the workspace has synced past
@@ -1267,6 +1423,27 @@ def build_bundle(
     depot_files = list(actions.keys())
     local_map = resolve_local_paths(depot_files)
     workspace_root = get_workspace_root()
+
+    shelf_drift: list[dict[str, str]] = []
+    shelf_drift_incomplete: list[dict[str, str]] = []
+    if _is_pending(describe) and is_shelved:
+        if shelf_observed is not None and shelf_observed.scan_ok:
+            if not opened_incomplete and not opened:
+                opened_result = fetch_opened_files(cl)
+                if isinstance(opened_result, tuple):
+                    opened, opened_incomplete = opened_result
+                else:
+                    opened, opened_incomplete = opened_result, []
+            if not opened_incomplete:
+                shelf_drift, shelf_drift_incomplete = _shelf_content_drift(
+                    shelf_observed, opened, local_map
+                )
+        if shelf_drift:
+            paths = ", ".join(item["depot"] for item in shelf_drift)
+            print(
+                f"prepare_review: shelf content differs from the workspace for {paths}",
+                file=sys.stderr,
+            )
 
     preamble, sections = _p4_diff_to_sections(diff)
     files = [
@@ -1326,7 +1503,13 @@ def build_bundle(
     # from "ran and found nothing" -- hygiene_incomplete is always present
     # (empty when both scans ran cleanly) and names which scan(s) could not
     # complete and why. See find_unreconciled / find_unresolved.
-    hygiene_incomplete = unreconciled_incomplete + unresolved_incomplete
+    hygiene_incomplete = (
+        unreconciled_incomplete
+        + unresolved_incomplete
+        + shelf_scan_incomplete
+        + opened_incomplete
+        + shelf_drift_incomplete
+    )
 
     # Declined-findings ledger. The baseline folds the CL's shelf fingerprint
     # (content) and per-file (rev, action) map (identity) into one token: when
@@ -1334,7 +1517,11 @@ def build_bundle(
     # changes and previously-declined findings re-surface. `shelf_now` reuses
     # the just-captured fingerprint when we auto-shelved; otherwise it is a
     # cheap `fstat -Ol` (no content download), tolerant of an absent shelf.
-    shelf_now = shelf_fingerprint if auto_shelved else fetch_shelf_fingerprint(cl)
+    if shelf_observed is None:
+        shelf_observed = fetch_shelf_fingerprint(cl)
+        if not isinstance(shelf_observed, ShelfFingerprint):
+            shelf_observed = ShelfFingerprint(shelf_observed)
+    shelf_now = shelf_observed
     ledger_baseline = ledger.baseline_token({"actions": actions, "shelf": shelf_now})
     change_id = cl
     ledger_hits = ledger.ledger_hits(ledger_path or _ledger_path(), change_id, ledger_baseline)
@@ -1351,6 +1538,7 @@ def build_bundle(
         "stale_open": stale_open,
         "unresolved": unresolved,
         "hygiene_incomplete": hygiene_incomplete,
+        "shelf_drift": shelf_drift,
         "submit_gates": core["submit_gates"],
         "auto_shelved": auto_shelved,
         "shelf_fingerprint": shelf_fingerprint,

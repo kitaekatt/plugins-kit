@@ -10,6 +10,14 @@ import pytest
 import prepare_review as pr
 
 
+def test_rendered_p4_skill_discloses_shelf_drift():
+    skill = Path("plugins/p4-kit/skills/p4-code-review/SKILL.md").read_text(
+        encoding="utf-8"
+    )
+    assert "shelf_drift" in skill
+    assert "disclose each depot path" in skill
+
+
 def _concat_diff_from_chunks(bundle: dict) -> str:
     """Read all chunk files for a bundle and concatenate -- the historical
     bundle["diff"] string, reconstructed from on-disk chunks.
@@ -1291,9 +1299,9 @@ class TestBuildBundle:
         assert Path(cf["claude_mds"][0]).read_text() == "workspace rule\n"
         assert len(bundle["unique_claude_mds"]) == 1
         assert bundle["unreconciled"] == []
-        # A clean run reports hygiene_incomplete as an empty list -- distinct
-        # from a scan that could not run at all (see test_hygiene_incomplete_*).
-        assert bundle["hygiene_incomplete"] == []
+        assert bundle["hygiene_incomplete"] == [
+            {"scan": "shelf_fingerprint", "reason": "exit 1"}
+        ]
 
     def test_hygiene_incomplete_reports_a_reconcile_scan_that_could_not_run(self, tmp_path):
         """A failed hygiene scan must never serialize as a clean empty
@@ -1346,9 +1354,10 @@ class TestBuildBundle:
 
         # No invented findings: an incomplete scan reports no items either.
         assert bundle["unreconciled"] == []
-        assert len(bundle["hygiene_incomplete"]) == 1
-        assert bundle["hygiene_incomplete"][0]["scan"] == "unreconciled"
-        assert "bad workspace" in bundle["hygiene_incomplete"][0]["reason"]
+        assert bundle["hygiene_incomplete"] == [
+            {"scan": "unreconciled", "reason": "fatal: bad workspace"},
+            {"scan": "shelf_fingerprint", "reason": "exit 1"},
+        ]
 
     def test_unreconciled_files_surfaced(self, tmp_path):
         """build_bundle reports files missing from the CL via `p4 reconcile -n`."""
@@ -1673,6 +1682,13 @@ class TestFetchShelfFingerprint:
         with patch.object(pr, "run_p4", return_value=(1, "", "no such file(s)")):
             assert pr.fetch_shelf_fingerprint("123") == {}
 
+    def test_failure_is_marked_incomplete(self):
+        with patch.object(pr, "run_p4", return_value=(1, "", "server unavailable")):
+            fp = pr.fetch_shelf_fingerprint("123")
+        assert fp == {}
+        assert fp.scan_ok is False
+        assert fp.scan_reason == "server unavailable"
+
     def test_parses_multi_file_shelf(self):
         out = (
             "... depotFile //depot/a.cpp\n"
@@ -1704,6 +1720,7 @@ class TestFetchShelfFingerprint:
         with patch.object(pr, "run_p4", return_value=(0, out, "")):
             fp = pr.fetch_shelf_fingerprint("123")
         assert fp == {"//depot/gone.cpp": ""}
+        assert fp.actions == {"//depot/gone.cpp": "delete"}
 
     def test_no_trailing_blank_line_still_captured(self):
         """Last record may not end with blank line; must still be parsed."""
@@ -1715,6 +1732,47 @@ class TestFetchShelfFingerprint:
             fp = pr.fetch_shelf_fingerprint("123")
         assert fp == {"//depot/a.cpp": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}
 
+
+class TestShelfDivergence:
+    def _fingerprint(self) -> dict[str, str]:
+        fingerprint = pr.ShelfFingerprint({
+            "//depot/a.cpp": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            "//depot/gone.cpp": "",
+        })
+        fingerprint.actions.update({
+            "//depot/a.cpp": "edit",
+            "//depot/gone.cpp": "delete",
+        })
+        return fingerprint
+
+    def test_opened_after_shelving_is_reported(self):
+        opened = "... depotFile //depot/new.cpp\n... action add\n\n"
+        with patch.object(pr, "run_p4", return_value=(0, opened, "")):
+            divergence, incomplete = pr.shelf_divergence("123", self._fingerprint())
+        assert {"depot": "//depot/new.cpp", "kind": "opened after shelving"} in divergence
+        assert incomplete == []
+
+    def test_missing_open_is_reported(self):
+        opened = "... depotFile //depot/a.cpp\n... action edit\n\n"
+        with patch.object(pr, "run_p4", return_value=(0, opened, "")):
+            divergence, incomplete = pr.shelf_divergence("123", self._fingerprint())
+        assert {"depot": "//depot/gone.cpp", "kind": "not open in CL"} in divergence
+        assert incomplete == []
+
+    def test_action_change_is_reported(self):
+        opened = "... depotFile //depot/a.cpp\n... action delete\n\n"
+        with patch.object(pr, "run_p4", return_value=(0, opened, "")):
+            divergence, incomplete = pr.shelf_divergence("123", self._fingerprint())
+        assert {"depot": "//depot/a.cpp", "kind": "open action differs"} in divergence
+        assert incomplete == []
+
+    def test_opened_failure_is_incomplete(self):
+        with patch.object(pr, "run_p4", return_value=(1, "", "server unavailable")):
+            opened, incomplete = pr.fetch_opened_files("123")
+        assert opened == {}
+        assert incomplete == [
+            {"scan": "shelf_opened", "reason": "server unavailable"}
+        ]
 
 # ---------------------------------------------------------------------------
 # auto_shelve_cl
@@ -1983,8 +2041,8 @@ class TestBuildBundleAutoShelve:
         assert bundle["shelf_fingerprint"] == {"//depot/new.py": "DEADBEEF"}
         assert shelve_calls == ["123"]
 
-    def test_pre_shelve_race_skips_auto_shelve(self, tmp_path):
-        """If a shelf appears between PendingUnshelvedError and our re-check, don't auto-shelve."""
+    def test_pending_unshelved_auto_shelves_once(self, tmp_path):
+        """An unshelved pending CL uses the single auto-shelve query."""
         shelved_describe = self._committed_describe()
         attempts = {"describe": 0, "shelve": 0}
 
@@ -1994,16 +2052,11 @@ class TestBuildBundleAutoShelve:
                 raise pr.PendingUnshelvedError("no shelf")
             return shelved_describe, True
 
-        def fake_fingerprint(cl):
-            # Race: someone else shelved between the failed describe and our check.
-            return {"//depot/other.py": "FEEDFACE"}
-
         def fake_auto_shelve(cl):
             attempts["shelve"] += 1
             return {}
 
         with patch.object(pr, "fetch_describe", side_effect=fake_fetch_describe), \
-                patch.object(pr, "fetch_shelf_fingerprint", side_effect=fake_fingerprint), \
                 patch.object(pr, "auto_shelve_cl", side_effect=fake_auto_shelve), \
                 patch.object(pr, "resolve_local_paths", return_value={"//depot/new.py": None}), \
                 patch.object(pr, "get_workspace_root", return_value=None), \
@@ -2011,9 +2064,8 @@ class TestBuildBundleAutoShelve:
                 patch.object(pr, "find_unresolved", return_value=([], [])):
             bundle = pr.build_bundle("123", tmp_path / "bundle")
 
-        # We did NOT shelve; someone else owns this shelf.
-        assert attempts["shelve"] == 0
-        assert bundle["auto_shelved"] is False
+        assert attempts["shelve"] == 1
+        assert bundle["auto_shelved"] is True
         assert bundle["shelf_fingerprint"] == {}
 
     def test_normal_path_records_no_auto_shelve(self, tmp_path):
@@ -2077,6 +2129,148 @@ class TestBuildBundleAutoShelve:
         assert bundle["auto_shelved"] is True
         assert bundle["shelf_fingerprint"] == {"//depot/new.py": "DEADBEEF"}
         assert fstat_calls_after_shelve["n"] == 1
+
+
+class TestBuildBundleShelfState:
+    def _pending_describe(self) -> str:
+        return (
+            "Change 123 by u@c on 2026/01/01 12:00:00 *pending*\n"
+            "\n\tdesc\n\n"
+            "Shelved files ...\n\n"
+            "... //depot/a.cpp#1 edit\n\n"
+            "Differences ...\n"
+            "==== //depot/a.cpp#1 (text) ====\n"
+            "@@ -1 +1 @@\n"
+            "+hello\n"
+        )
+
+    @pytest.mark.parametrize(
+        ("opened", "expected"),
+        [
+            (
+                "... depotFile //depot/new.cpp\n... action add\n\n",
+                "//depot/new.cpp (opened after shelving)",
+            ),
+            (
+                "",
+                "//depot/a.cpp (not open in CL)",
+            ),
+            (
+                "... depotFile //depot/a.cpp\n... action delete\n\n",
+                "//depot/a.cpp (open action differs)",
+            ),
+        ],
+    )
+    def test_shelf_divergence_refuses_with_repair_command(self, opened, expected, tmp_path):
+        shelf = pr.ShelfFingerprint({"//depot/a.cpp": "A"})
+        shelf.actions["//depot/a.cpp"] = "edit"
+        with patch.object(pr, "fetch_describe", return_value=(self._pending_describe(), True)), \
+                patch.object(pr, "fetch_shelf_fingerprint", return_value=shelf), \
+                patch.object(pr, "run_p4", return_value=(0, opened, "")):
+            with pytest.raises(ValueError, match=r"p4 shelve -f -c 123") as exc:
+                pr.build_bundle("123", tmp_path / "bundle")
+        assert expected in str(exc.value)
+
+    def test_opened_failure_does_not_refuse_and_is_incomplete(self, tmp_path):
+        shelf = pr.ShelfFingerprint({"//depot/a.cpp": "A"})
+        with patch.object(pr, "fetch_describe", return_value=(self._pending_describe(), True)), \
+                patch.object(pr, "fetch_shelf_fingerprint", return_value=shelf), \
+                patch.object(pr, "run_p4", return_value=(1, "", "server unavailable")), \
+                patch.object(pr, "resolve_local_paths", return_value={"//depot/a.cpp": None}), \
+                patch.object(pr, "get_workspace_root", return_value=None), \
+                patch.object(pr, "find_unreconciled", return_value=([], [])), \
+                patch.object(pr, "find_unresolved", return_value=([], [])):
+            bundle = pr.build_bundle("123", tmp_path / "bundle")
+        assert bundle["hygiene_incomplete"] == [
+            {"scan": "shelf_opened", "reason": "server unavailable"}
+        ]
+
+    def test_matching_shelf_does_not_refuse(self, tmp_path):
+        shelf = pr.ShelfFingerprint({"//depot/a.cpp": "A"})
+        shelf.actions["//depot/a.cpp"] = "edit"
+        opened = "... depotFile //depot/a.cpp\n... action edit\n\n"
+        with patch.object(pr, "fetch_describe", return_value=(self._pending_describe(), True)), \
+                patch.object(pr, "fetch_shelf_fingerprint", return_value=shelf), \
+                patch.object(pr, "fetch_opened_files", return_value={"//depot/a.cpp": "edit"}), \
+                patch.object(pr, "resolve_local_paths", return_value={"//depot/a.cpp": None}), \
+                patch.object(pr, "get_workspace_root", return_value=None), \
+                patch.object(pr, "find_unreconciled", return_value=([], [])), \
+                patch.object(pr, "find_unresolved", return_value=([], [])):
+            bundle = pr.build_bundle("123", tmp_path / "bundle")
+        assert bundle["shelf_drift"] == []
+        assert bundle["shelf_fingerprint"] == {}
+
+    def test_auto_created_shelf_skips_divergence_check(self, tmp_path):
+        describe = self._pending_describe()
+        shelf = pr.ShelfFingerprint({"//depot/a.cpp": "A"})
+        shelf.actions["//depot/a.cpp"] = "edit"
+        fetch_calls = iter([pr.PendingUnshelvedError("no shelf"), (describe, True)])
+        with patch.object(pr, "fetch_describe", side_effect=fetch_calls), \
+                patch.object(pr, "auto_shelve_cl", return_value=shelf), \
+                patch.object(pr, "shelf_divergence", side_effect=AssertionError("called")), \
+                patch.object(pr, "resolve_local_paths", return_value={"//depot/a.cpp": None}), \
+                patch.object(pr, "get_workspace_root", return_value=None), \
+                patch.object(pr, "find_unreconciled", return_value=([], [])), \
+                patch.object(pr, "find_unresolved", return_value=([], [])):
+            bundle = pr.build_bundle("123", tmp_path / "bundle")
+        assert bundle["auto_shelved"] is True
+
+    def test_submitted_cl_skips_divergence_check(self, tmp_path):
+        describe = self._pending_describe().replace(" *pending*", "")
+        with patch.object(pr, "fetch_describe", return_value=(describe, False)), \
+                patch.object(pr, "shelf_divergence", side_effect=AssertionError("called")), \
+                patch.object(pr, "resolve_local_paths", return_value={"//depot/a.cpp": None}), \
+                patch.object(pr, "get_workspace_root", return_value=None), \
+                patch.object(pr, "find_unreconciled", return_value=([], [])), \
+                patch.object(pr, "find_unresolved", return_value=([], [])):
+            bundle = pr.build_bundle("123", tmp_path / "bundle")
+        assert bundle["shelf_drift"] == []
+
+    def test_content_drift_warns_and_returns_bundle(self, tmp_path, capsys):
+        local = tmp_path / "a.cpp"
+        local.write_text("workspace\n", encoding="utf-8")
+        shelf = pr.ShelfFingerprint({"//depot/a.cpp": "A"})
+        shelf.actions["//depot/a.cpp"] = "edit"
+        opened = {"//depot/a.cpp": "edit"}
+        with patch.object(pr, "fetch_describe", return_value=(self._pending_describe(), True)), \
+                patch.object(pr, "fetch_shelf_fingerprint", return_value=shelf) as fingerprint_mock, \
+                patch.object(pr, "fetch_opened_files", return_value=opened) as opened_mock, \
+                patch.object(pr, "resolve_local_paths", return_value={"//depot/a.cpp": str(local)}), \
+                patch.object(pr, "get_workspace_root", return_value=None), \
+                patch.object(pr, "find_unreconciled", return_value=([], [])), \
+                patch.object(pr, "find_unresolved", return_value=([], [])):
+            bundle = pr.build_bundle("123", tmp_path / "bundle")
+        assert bundle["shelf_drift"] == [{"depot": "//depot/a.cpp", "local": str(local)}]
+        assert "shelf content differs" in capsys.readouterr().err
+        assert fingerprint_mock.call_count == 1
+        assert opened_mock.call_count == 1
+
+    def test_unhashable_path_is_incomplete_not_clean(self, tmp_path):
+        shelf = pr.ShelfFingerprint({"//depot/a.cpp": "A"})
+        shelf.actions["//depot/a.cpp"] = "edit"
+        with patch.object(pr, "fetch_describe", return_value=(self._pending_describe(), True)), \
+                patch.object(pr, "fetch_shelf_fingerprint", return_value=shelf), \
+                patch.object(pr, "fetch_opened_files", return_value={"//depot/a.cpp": "edit"}), \
+                patch.object(pr, "resolve_local_paths", return_value={"//depot/a.cpp": None}), \
+                patch.object(pr, "get_workspace_root", return_value=None), \
+                patch.object(pr, "find_unreconciled", return_value=([], [])), \
+                patch.object(pr, "find_unresolved", return_value=([], [])):
+            bundle = pr.build_bundle("123", tmp_path / "bundle")
+        assert bundle["shelf_drift"] == []
+        assert bundle["hygiene_incomplete"] == [
+            {"scan": "shelf_drift", "reason": "no local mapping for //depot/a.cpp"}
+        ]
+
+    def test_empty_local_path_is_incomplete_not_clean(self):
+        drift, incomplete = pr._shelf_content_drift(
+            {"//depot/a.cpp": "A"},
+            {"//depot/a.cpp": "edit"},
+            {"//depot/a.cpp": ""},
+        )
+        assert drift == []
+        assert incomplete == [
+            {"scan": "shelf_drift", "reason": "no local mapping for //depot/a.cpp"}
+        ]
 
 
 # ---------------------------------------------------------------------------
