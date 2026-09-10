@@ -182,7 +182,8 @@ fan-out (its diff is excluded from the chunks and it is dropped from
 `changed_files`) and surfaced under `claimed_files` instead, with its `#have`
 pre-image materialized to `<bundle_dir>/pre-images/<name>`. Claimed files still
 contribute to `unique_claude_mds` and the submit-gate scan. With no `--claim`
-the bundle is byte-identical to today's (no `claimed_files` key).
+the bundle is byte-identical to a bundle built without claims (no
+`claimed_files` key).
 
 A glob prefixed with `!` is an EXCLUSION and beats every positive pattern, so a
 caller can claim a broad shape while carving out a subset that no specialist
@@ -209,6 +210,8 @@ Stderr-only diagnostics. Non-zero exit on hard failure.
 """
 
 import hashlib
+import importlib
+import inspect
 import json
 import os
 import re
@@ -216,7 +219,7 @@ import sys
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
+from typing import NoReturn, Optional
 
 # Plugins define their own bootstrap-provisioned venv and must run under it
 # preferentially. A bare `python` or `uv run` invocation lands in a different
@@ -234,35 +237,69 @@ reexec_under_plugin_venv("p4-kit")
 # under that venv the import below just works -- no path discovery. The try/except
 # below remains as a safety net for the installed-but-not-yet-provisioned window.
 
+_MIN_BOOTSTRAP_VERSION = "0.99.0"
+_BOOTSTRAP_FRONTIER = (
+    "bootstrap_lib.code_review.pipeline.run_vcs(timeout=...)"
+)
+
+
+def _exit_bootstrap_too_old() -> NoReturn:
+    """Refuse a review when bootstrap lacks the required shared API."""
+    from bootstrap_guard import EXIT_BOOTSTRAP_MISSING
+
+    print(
+        "[p4-kit] the installed 'plugins-kit:bootstrap' plugin is too old or "
+        "stale for p4-kit's code review "
+        f"(requires bootstrap >= {_MIN_BOOTSTRAP_VERSION}; "
+        f"missing: {_BOOTSTRAP_FRONTIER}). Run "
+        "`claude plugin update bootstrap@plugins-kit`. Then start a new "
+        "session and retry.",
+        file=sys.stderr,
+    )
+    sys.exit(EXIT_BOOTSTRAP_MISSING)
+
+try:
+    review_pipeline = importlib.import_module("bootstrap_lib.code_review.pipeline")
+    ledger = importlib.import_module("bootstrap_lib.code_review.ledger")
+except ModuleNotFoundError as exc:
+    from bootstrap_guard import require_bootstrap
+
+    if exc.name == "bootstrap_lib":
+        require_bootstrap(
+            "p4-kit", feature="code review", missing="bootstrap_lib", force=True
+        )
+    _exit_bootstrap_too_old()
+except ImportError:
+    _exit_bootstrap_too_old()
+
+# `run_vcs(timeout=...)` is the frontier API. Importing its module cannot prove
+# that the linked bootstrap copy accepts the keyword, so inspect the signature
+# before any review path can call it.
+try:
+    run_vcs_parameters = inspect.signature(review_pipeline.run_vcs).parameters
+except (AttributeError, TypeError, ValueError):
+    _exit_bootstrap_too_old()
+if "timeout" not in run_vcs_parameters:
+    _exit_bootstrap_too_old()
+
 # Repair PATH before any subprocess fan-out. On Windows, a bloated
 # launching-shell PATH can overrun cmd.exe's variable size limit during
 # venv activation and leave this Python with a stripped PATH that
 # breaks `subprocess.run(["p4", ...])` with FileNotFoundError. Pulling
 # the registry-canonical PATH back in restores p4 visibility.
-try:
-    from bootstrap_lib.path_repair import repair_path  # noqa: E402
+from bootstrap_lib.path_repair import repair_path  # noqa: E402
 
-    # Shared VCS-neutral review pipeline -- subprocess wrapper, section
-    # splitting, chunking + CLAUDE.md walk + submit-gate scan, bundle
-    # emission. See bootstrap_lib/code_review/pipeline.py.
-    from bootstrap_lib.code_review.pipeline import (  # noqa: E402
-        assemble_bundle,
-        emit_bundle,
-        matches_claim,
-        preimage_relpath,
-        run_vcs,
-        split_sections,
-    )
-    from bootstrap_lib.code_review import ledger  # noqa: E402
-except ImportError:
-    # Belt-and-suspenders: _ensure_bootstrap_lib_importable() should already
-    # have exited if bootstrap_lib is missing, but guard the import directly
-    # too so a partial install can't surface a raw ModuleNotFoundError.
-    from bootstrap_guard import require_bootstrap
-
-    require_bootstrap(
-        "p4-kit", feature="code review", missing="bootstrap_lib", force=True
-    )
+# Shared VCS-neutral review pipeline -- subprocess wrapper, section
+# splitting, chunking + CLAUDE.md walk + submit-gate scan, bundle
+# emission. See bootstrap_lib/code_review/pipeline.py.
+from bootstrap_lib.code_review.pipeline import (  # noqa: E402
+    assemble_bundle,
+    emit_bundle,
+    matches_claim,
+    preimage_relpath,
+    run_vcs,
+    split_sections,
+)
 
 repair_path()
 
@@ -310,6 +347,39 @@ class ShelfScanResult:
     actions: dict[str, str] = field(default_factory=dict)
     scan_ok: bool = True
     scan_reason: str = ""
+
+
+def _read_ztag_records(
+    output: str, *, record_start_field: Optional[str] = None
+) -> list[dict[str, str]]:
+    """Parse `p4 -ztag` output into field-value records.
+
+    A blank line ends a record. The final record does not require a trailing
+    blank line. Some commands omit separators, so callers can name a field
+    that also starts the next record.
+    """
+    records: list[dict[str, str]] = []
+    record: dict[str, str] = {}
+
+    def flush() -> None:
+        nonlocal record
+        if record:
+            records.append(record)
+            record = {}
+
+    for line in output.splitlines():
+        if line.strip() == "":
+            flush()
+            continue
+        if not line.startswith("... "):
+            continue
+        tagged = line[len("... "):]
+        field, separator, value = tagged.partition(" ")
+        if record_start_field == field and record:
+            flush()
+        record[field] = value.strip() if separator else ""
+    flush()
+    return records
 
 
 def _p4_timeout_s() -> float:
@@ -460,7 +530,7 @@ def fetch_shelf_fingerprint(cl: str) -> ShelfScanResult:
 
     Empty digests if no shelf exists. Uses `p4 -ztag fstat -Ol //...@=<CL>`;
     `-Ol` forces the per-revision `digest` field so the fingerprint is a
-    content-hash of the shelved file (cheap — no content download).
+    content-hash of the shelved file (cheap -- no content download).
 
     Files shelved as deletes have no digest; recorded as empty string so the
     file's presence in the shelf is still part of the fingerprint.
@@ -476,48 +546,28 @@ def fetch_shelf_fingerprint(cl: str) -> ShelfScanResult:
         )
     digests: dict[str, str] = {}
     actions: dict[str, str] = {}
-    current_depot: Optional[str] = None
-    current_digest: str = ""
-    current_action: str = ""
-    for line in out.splitlines():
-        if line.startswith("... depotFile "):
-            current_depot = line[len("... depotFile "):].strip()
-        elif line.startswith("... digest "):
-            current_digest = line[len("... digest "):].strip()
-        elif line.startswith("... headAction ") or line.startswith("... action "):
-            current_action = line.split(" ", 2)[2].strip()
-        elif line.strip() == "":
-            if current_depot:
-                digests[current_depot] = current_digest
-                if current_action:
-                    actions[current_depot] = current_action
-            current_depot = None
-            current_digest = ""
-            current_action = ""
-    if current_depot:
-        digests[current_depot] = current_digest
-        if current_action:
-            actions[current_depot] = current_action
+    for record in _read_ztag_records(out):
+        depot = record.get("depotFile")
+        if not depot:
+            continue
+        digests[depot] = record.get("digest", "")
+        action = ""
+        for field, value in record.items():
+            if field in {"headAction", "action"}:
+                action = value
+        if action:
+            actions[depot] = action
     return ShelfScanResult(digests=digests, actions=actions)
 
 
 def _parse_opened_files(output: str) -> dict[str, str]:
     """Parse depot path and action pairs from `p4 -ztag opened`."""
     opened: dict[str, str] = {}
-    current_depot: Optional[str] = None
-    current_action: Optional[str] = None
-    for line in output.splitlines():
-        if line.startswith("... depotFile "):
-            current_depot = line[len("... depotFile "):].strip()
-        elif line.startswith("... action "):
-            current_action = line[len("... action "):].strip()
-        elif line.strip() == "":
-            if current_depot and current_action:
-                opened[current_depot] = current_action
-            current_depot = None
-            current_action = None
-    if current_depot and current_action:
-        opened[current_depot] = current_action
+    for record in _read_ztag_records(output):
+        depot = record.get("depotFile")
+        action = record.get("action")
+        if depot and action:
+            opened[depot] = action
     return opened
 
 
@@ -592,7 +642,7 @@ def auto_shelve_cl(cl: str) -> ShelfScanResult:
     """Run `p4 shelve -c <cl>` and return the resulting shelf fingerprint.
 
     Raises ValueError on shelve failure or if no shelved files appear afterward
-    (pathological — shouldn't happen since the caller only invokes this when
+    (pathological -- impossible because the caller only invokes this when
     the CL has open files but no shelf).
     """
     rc, out, err = run_p4(["shelve", "-c", cl])
@@ -636,7 +686,7 @@ def parse_depot_files(describe_output: str) -> list[str]:
 
 
 def parse_file_actions(describe_output: str) -> dict[str, tuple[str, str]]:
-    """Map depot path → (rev, action) from 'Affected files ...' / 'Shelved files ...' sections.
+    """Map depot path -> (rev, action) from 'Affected files ...' / 'Shelved files ...' sections.
 
     Lines look like: `... //depot/path#rev action` (action e.g. `add`, `edit`, `delete`, `move/add`).
     Stops parsing when `Differences ...` is reached.
@@ -715,8 +765,7 @@ def _decode_utf16_aware(data: bytes) -> str:
     untestable without a live p4 server in unicode mode. This function is
     correct under either reading: real UTF-16 bytes are recovered via the
     sniff; already-UTF-8 bytes carry neither a UTF-16 BOM nor the
-    NUL-alternation pattern, so they fall through to the UTF-8 branch exactly
-    as before this function existed.
+    NUL-alternation pattern, so they use the UTF-8 branch.
     """
     if data[:2] in (_UTF16_BOM_LE, _UTF16_BOM_BE):
         return data.decode("utf-16", errors="replace")
@@ -796,7 +845,7 @@ def fetch_filetype(
     pure adds in mixed shelved CLs) need an fstat. `type` is the open/shelved
     filetype; `headType` covers submitted revisions -- prefer `type`, fall
     back to `headType`. Returns None on any failure (caller defaults to text,
-    the historical behavior).
+    the default behavior).
     """
     spec = _content_spec(depot_path, rev, cl, is_shelved, is_delete)
     if spec is None:
@@ -839,7 +888,7 @@ def fetch_file_size(
 # p4 base filetypes whose content must not be inlined into a text diff.
 # Substring "binary" covers binary/xbinary/ubinary/...; the named set covers
 # the remaining non-text bases. Unknown or empty types default to text
-# (the historical behavior before the binary guard existed).
+# (the default behavior without a recognized non-text type).
 _NON_TEXT_BASE_TYPES = {"apple", "resource", "tempobj", "ctempobj", "uresource"}
 
 
@@ -1066,15 +1115,10 @@ def resolve_local_paths(depot_paths: list[str]) -> dict[str, Optional[str]]:
     for i in range(0, len(depot_paths), _P4_PATH_BATCH):
         chunk = depot_paths[i:i + _P4_PATH_BATCH]
         _, out, _ = run_p4(["-ztag", "where", *chunk])
-        current_depot: Optional[str] = None
-        for line in out.splitlines():
-            if line.startswith("... depotFile "):
-                current_depot = line[len("... depotFile "):].strip()
-            elif line.startswith("... path ") and current_depot:
-                result[current_depot] = line[len("... path "):].strip()
-                current_depot = None
-            elif line.strip() == "":
-                current_depot = None
+        for record in _read_ztag_records(out, record_start_field="depotFile"):
+            depot = record.get("depotFile")
+            if depot and "path" in record:
+                result[depot] = record["path"]
     return result
 
 
@@ -1241,65 +1285,29 @@ def _partition_own_depot_files(
 
 def _parse_reconcile_output(out: str) -> list[dict]:
     items: list[dict] = []
-    current: dict = {}
-    for line in out.splitlines():
-        if line.startswith("... depotFile "):
-            current["depot"] = line[len("... depotFile "):].strip()
-        elif line.startswith("... clientFile "):
-            current["local"] = line[len("... clientFile "):].strip()
-        elif line.startswith("... action "):
-            current["action"] = line[len("... action "):].strip()
-        elif line.strip() == "":
-            if current.get("action") in _RECONCILE_ACTIONS and current.get("local"):
-                items.append(
-                    {
-                        "local": current["local"],
-                        "depot": current.get("depot", ""),
-                        "action": current["action"],
-                    }
-                )
-            current = {}
-    if current.get("action") in _RECONCILE_ACTIONS and current.get("local"):
-        items.append(
-            {
-                "local": current["local"],
-                "depot": current.get("depot", ""),
-                "action": current["action"],
-            }
-        )
+    for record in _read_ztag_records(out):
+        action = record.get("action")
+        local = record.get("clientFile")
+        if action in _RECONCILE_ACTIONS and local:
+            items.append(
+                {
+                    "local": local,
+                    "depot": record.get("depotFile", ""),
+                    "action": action,
+                }
+            )
     return items
 
 
 def _parse_default_open_output(out: str) -> list[dict[str, str]]:
     """Parse depot path, client path, and action from ztag opened records."""
     items: list[dict[str, str]] = []
-    current: dict[str, str] = {}
-
-    def flush() -> None:
-        if current.get("depot") and current.get("local") and current.get("action"):
-            items.append(
-                {
-                    "local": current["local"],
-                    "depot": current["depot"],
-                    "action": current["action"],
-                }
-            )
-
-    for line in out.splitlines():
-        if line.startswith("... depotFile "):
-            if current:
-                flush()
-                current = {}
-            current["depot"] = line[len("... depotFile "):].strip()
-        elif line.startswith("... clientFile "):
-            current["local"] = line[len("... clientFile "):].strip()
-        elif line.startswith("... action "):
-            current["action"] = line[len("... action "):].strip()
-        elif line.strip() == "" and current:
-            flush()
-            current = {}
-    if current:
-        flush()
+    for record in _read_ztag_records(out, record_start_field="depotFile"):
+        depot = record.get("depotFile")
+        local = record.get("clientFile")
+        action = record.get("action")
+        if depot and local and action:
+            items.append({"local": local, "depot": depot, "action": action})
     return items
 
 
@@ -1353,34 +1361,18 @@ def find_unresolved(cl: str) -> tuple[list[dict], list[dict]]:
         return [], [{"scan": "unresolved", "reason": reason}]
 
     items: list[dict] = []
-    current: dict = {}
-
-    def flush() -> None:
-        if current.get("local") or current.get("depot"):
+    for record in _read_ztag_records(out):
+        local = record.get("clientFile", "")
+        depot = record.get("toFile", "")
+        if local or depot:
             items.append(
                 {
-                    "local": current.get("local", ""),
-                    "depot": current.get("depot", ""),
-                    "resolve_type": current.get("resolve_type", ""),
-                    "from_file": current.get("from_file", ""),
+                    "local": local,
+                    "depot": depot,
+                    "resolve_type": record.get("resolveType", ""),
+                    "from_file": record.get("fromFile", ""),
                 }
             )
-
-    for line in out.splitlines():
-        if line.startswith("... clientFile "):
-            current["local"] = line[len("... clientFile "):].strip()
-        elif line.startswith("... toFile "):
-            current["depot"] = line[len("... toFile "):].strip()
-        elif line.startswith("... fromFile "):
-            current["from_file"] = line[len("... fromFile "):].strip()
-        elif line.startswith("... resolveType "):
-            current["resolve_type"] = line[len("... resolveType "):].strip()
-        elif line.strip() == "":
-            if current:
-                flush()
-                current = {}
-    if current:
-        flush()
     return items, []
 
 
@@ -1391,11 +1383,11 @@ def get_workspace_root() -> tuple[Optional[Path], Optional[str]]:
         return None, None
     workspace_root: Optional[Path] = None
     client_name: Optional[str] = None
-    for line in out.splitlines():
-        if line.startswith("... clientRoot "):
-            workspace_root = Path(line[len("... clientRoot "):].strip())
-        elif line.startswith("... clientName "):
-            value = line[len("... clientName "):].strip()
+    for record in _read_ztag_records(out):
+        if "clientRoot" in record:
+            workspace_root = Path(record["clientRoot"])
+        if "clientName" in record:
+            value = record["clientName"]
             if value and value.lower() not in {"unknown", "*unknown*"}:
                 client_name = value
     return workspace_root, client_name
@@ -1443,7 +1435,8 @@ def build_bundle(
     claim pattern are held back from the generic reviewers (see
     assemble_bundle): their pre-image is materialized into the bundle and they
     are surfaced under a top-level `claimed_files` list instead of
-    `changed_files`. When empty the bundle is byte-identical to today's.
+    `changed_files`. When empty the bundle is byte-identical to a bundle built
+    without claims.
 
     Machine-emitted files -- detected from a content signature OR from living
     under a path a plugin declares that it writes (bootstrap_lib.code_review

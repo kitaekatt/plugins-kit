@@ -22,12 +22,12 @@ sharp edges:
   -i`` footgun). The ``P4Changeset`` carries the parsed CL number.
 - **open_for_edit == ``p4 edit <path>``.** A real per-file checkout-for-edit
   (unlike git, where it is a no-op).
-- **add == ``p4 add <path>``.**
+- **add == ``p4 add [ -f ] <path>``.**
 - **move_into == ``p4 reopen -c <cl> <path>`` per exact path -- NEVER a
   wildcard, and VERIFIED.** A wildcard reopen (``p4 reopen -c <cl> <path>/...``)
   moves every opened file under the path, including files organized into other
   pending CLs, silently destroying CL organization that is recorded nowhere. A
-  path containing ``...`` or ``*`` is rejected outright. Beyond that, ``p4
+  path containing ``...`` is rejected outright. Beyond that, ``p4
   reopen`` exits 0 even when it did nothing (file not open for edit) or landed
   the file in the wrong CL, so the stdout diagnostic is parsed -- a move is
   accepted only on ``"reopened"``, ``"currently opened for edit; change
@@ -108,7 +108,7 @@ def _runner_timeout_s() -> float:
 
 
 class P4VcsError(RuntimeError):
-    """Raised when a p4 command fails non-recoverably (or a wildcard is refused)."""
+    """Raised when a p4 command fails non-recoverably (or ellipsis is refused)."""
 
 
 def _default_runner(
@@ -165,20 +165,24 @@ def _is_not_opened_failure(out: str, err: str) -> bool:
     return bool(_NOT_OPENED_RE.search(out) or _NOT_OPENED_RE.search(err))
 
 
-def _reject_wildcard(path) -> str:
-    """Return ``str(path)`` unless it carries a p4 wildcard (``...`` or ``*``).
+def _refuse_ellipsis(path) -> str:
+    """Return ``str(path)`` unless it carries p4's ellipsis wildcard.
 
-    The never-wildcard discipline: seam ops touch exactly the paths handed to
-    them, one at a time. A wildcard would let a single reopen/revert sweep in
-    files the caller never named -- the CL-organization-destroying bug this seam
-    was built to avoid.
+    The seam accepts literal filesystem names. Ellipsis has no literal encoding
+    and is refused so each operation addresses exactly one named file.
     """
     s = str(path)
-    if "..." in s or "*" in s:
+    if "..." in s:
         raise P4VcsError(
-            f"refusing wildcard path (never-wildcard discipline): {s!r}"
+            f"refusing ellipsis path (literal-name contract): {s!r}"
         )
     return s
+
+
+def _filespec(path) -> str:
+    """Return a literal p4 filespec with reserved characters encoded."""
+    s = _refuse_ellipsis(path)
+    return s.replace("%", "%25").replace("@", "%40").replace("#", "%23").replace("*", "%2A")
 
 
 def _tab_prefix(description: str) -> str:
@@ -278,6 +282,10 @@ class P4Changeset:
 class P4Vcs:
     """``VcsBackend`` over a Perforce client workspace.
 
+    Seam callers pass literal filesystem names, never glob patterns or
+    pre-encoded names. Existing-file operations encode reserved characters at
+    the p4 boundary; add passes the literal name and uses ``-f`` when needed.
+
     - ``cwd`` -- directory p4 commands run in (for ``.p4config`` discovery);
       ``None`` runs in the process cwd.
     - ``client`` / ``user`` -- values for the ``Client:`` / ``User:`` fields of a
@@ -308,11 +316,13 @@ class P4Vcs:
 
     def open_for_edit(self, path) -> None:
         """Open ``path`` for edit (``p4 edit <path>``)."""
-        self._p4("edit", _reject_wildcard(path))
+        self._p4("edit", _filespec(path))
 
     def add(self, path) -> None:
-        """Add ``path`` to the depot (``p4 add <path>``)."""
-        self._p4("add", _reject_wildcard(path))
+        """Add literal ``path`` to the depot, using ``-f`` when reserved."""
+        s = _refuse_ellipsis(path)
+        args = ["add", "-f", s] if any(char in s for char in "@#%*") else ["add", s]
+        self._p4(*args)
 
     def make_changeset(self, description: str) -> P4Changeset:
         """Create a fresh pending changelist and return its :class:`P4Changeset`.
@@ -361,7 +371,8 @@ class P4Vcs:
             raise P4VcsError("move_into called on a changeset with no CL number")
         cl = changeset.cl
         for path in paths:
-            p = _reject_wildcard(path)
+            literal = _refuse_ellipsis(path)
+            p = _filespec(path)
             rc, out, err = self._p4("reopen", "-c", cl, p, check=False)
             stdout = out or ""
             reopened = "reopened" in stdout
@@ -375,7 +386,7 @@ class P4Vcs:
                     f"p4 reopen did not move {p!r} into CL {cl} "
                     f"(exit {rc}): {reason}"
                 )
-            changeset._add_path(p)
+            changeset._add_path(literal)
 
     def finalize_description(
         self, changeset: P4Changeset, description: str
@@ -397,8 +408,8 @@ class P4Vcs:
         return changeset.cl
 
     def revert(self, path) -> None:
-        """Revert exactly ``path`` (``p4 revert <path>``). Never a wildcard."""
-        self._p4("revert", _reject_wildcard(path))
+        """Revert exactly literal ``path`` (``p4 revert <path>``)."""
+        self._p4("revert", _filespec(path))
 
     def delete_if_empty(self, changeset: P4Changeset) -> None:
         """Delete the pending CL (``p4 change -d <cl>``) when it moved no files."""
@@ -437,7 +448,7 @@ class P4Vcs:
         every failure into the same ``None`` a legitimate "not open anywhere"
         result returns would make the two indistinguishable to a caller.
         """
-        p = _reject_wildcard(path)
+        p = _filespec(path)
         rc, out, err = self._p4("-ztag", "opened", p, check=False)
         if rc != 0:
             if _is_not_opened_failure(out, err):

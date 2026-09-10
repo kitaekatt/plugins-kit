@@ -1,9 +1,11 @@
 """Tests for p4-kit scripts/prepare_review.py."""
 
 import json
+import os
 import subprocess
+import sys
 from pathlib import Path
-from typing import get_type_hints
+from typing import Any, Callable, get_type_hints
 from unittest.mock import patch
 
 import pytest
@@ -73,7 +75,7 @@ def _concat_diff_from_chunks(bundle: dict) -> str:
 
 class TestRunP4:
     def test_forces_utf8_decoding(self):
-        """On Windows, default text decoding is cp1252 — CJK bytes abort the reader.
+        """On Windows, default text decoding is cp1252 -- CJK bytes abort the reader.
 
         `run_p4` must pin encoding to utf-8 with errors='replace' so diffs with
         non-Latin-1 content (CJK, emoji) decode cleanly on any platform.
@@ -91,9 +93,6 @@ class TestRunP4:
         assert captured.get("encoding") == "utf-8"
         assert captured.get("errors") == "replace"
         assert captured.get("capture_output") is True
-        # Must NOT pass text=True alongside encoding (the combination is fine
-        # but text=True alone — without encoding — is the original bug).
-        assert captured.get("text") is not True or captured.get("encoding") == "utf-8"
 
     def test_coalesces_none_stdout_to_empty_string(self):
         """If the subprocess produced no output, callers should see '' not None."""
@@ -104,18 +103,29 @@ class TestRunP4:
         assert out == ""
         assert err == ""
 
-    def test_decodes_cjk_content(self, tmp_path):
-        """End-to-end: a p4-like command emitting UTF-8 CJK bytes decodes cleanly."""
-        # Use python itself as a stand-in for `p4` to emit known UTF-8 bytes.
-        # We can't easily reroute the argv[0]="p4" inside run_p4, so patch
-        # subprocess.run to simulate the Popen/read path with real bytes decoding.
-        payload = "差分 diff with emoji 🧪 and CJK 互動\n"
-        fake = subprocess.CompletedProcess(["p4"], 0, stdout=payload, stderr="")
-        with patch.object(subprocess, "run", return_value=fake):
-            rc, out, _ = pr.run_p4(["describe", "-du", "1"])
-        assert rc == 0
-        assert "互動" in out
-        assert "🧪" in out
+    def test_replaces_invalid_utf8_bytes(self):
+        """A real child emits invalid UTF-8 so replacement is observable."""
+        payload = b"diff: \xff\n"
+        expected = "diff: \ufffd\n"
+        expected_command = ["p4", "describe", "-du", "1"]
+        real_run = subprocess.run
+
+        def run_python(
+            cmd: list[str], **kwargs: Any
+        ) -> subprocess.CompletedProcess[str]:
+            if cmd != expected_command:
+                raise AssertionError(f"unexpected command: {cmd!r}")
+            emit = (
+                "import sys; sys.stdout.buffer.write(bytes.fromhex("
+                f"{payload.hex()!r}))"
+            )
+            return real_run([sys.executable, "-c", emit], **kwargs)
+
+        with patch.object(subprocess, "run", side_effect=run_python):
+            result = pr.run_p4(["describe", "-du", "1"])
+
+        assert result == (0, expected, "")
+
 
     def test_timeout_reads_p4kit_vcs_timeout_s_env_var(self, monkeypatch):
         """run_p4 shares P4KIT_VCS_TIMEOUT_S with p4kit_vcs's own adapter --
@@ -161,6 +171,231 @@ class TestRunP4:
             pr.run_p4(["info"])
 
         assert captured.get("timeout") == 60.0
+
+
+class TestBootstrapDependencyDiagnostics:
+    @staticmethod
+    def _run_prepare(env: dict[str, str]) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [sys.executable, "-S", str(Path(pr.__file__))],
+            capture_output=True,
+            text=True,
+            env=env,
+            check=False,
+        )
+
+    def test_absent_bootstrap_reports_install_remedy(self, tmp_path):
+        env = dict(os.environ)
+        env["_BOOTSTRAP_GUARD_VENV_REEXEC"] = "1"
+        env["PYTHONPATH"] = str(tmp_path)
+
+        completed = self._run_prepare(env)
+
+        assert completed.stderr == (
+            "[p4-kit] the 'plugins-kit:bootstrap' plugin has not provisioned "
+            "p4-kit's code review (missing: bootstrap_lib). Install/enable the "
+            "bootstrap plugin and start a new session so it can build this "
+            "plugin's dependencies, then retry.\n"
+        )
+
+    def test_manifest_requires_bootstrap_099_api_floor(self):
+        manifest = json.loads(
+            Path("plugins/p4-kit/bootstrap.json").read_text(encoding="utf-8")
+        )
+
+        assert manifest["requires_bootstrap"] == "0.99.0"
+
+    def test_bootstrap_without_run_vcs_timeout_reports_update_remedy(self, tmp_path):
+        bootstrap_package = tmp_path / "bootstrap_lib"
+        code_review_package = bootstrap_package / "code_review"
+        code_review_package.mkdir(parents=True)
+        (bootstrap_package / "__init__.py").write_text("", encoding="utf-8")
+        (code_review_package / "__init__.py").write_text("", encoding="utf-8")
+        (bootstrap_package / "path_repair.py").write_text(
+            "def repair_path() -> None:\n"
+            "    return None\n",
+            encoding="utf-8",
+        )
+        (code_review_package / "ledger.py").write_text("", encoding="utf-8")
+        (code_review_package / "pipeline.py").write_text(
+            "assemble_bundle = emit_bundle = matches_claim = None\n"
+            "preimage_relpath = split_sections = None\n"
+            "def run_vcs(executable: str, args: list[str], cwd: object = None) "
+            "-> tuple[int, str, str]:\n"
+            "    return 0, '', ''\n",
+            encoding="utf-8",
+        )
+        env = dict(os.environ)
+        env["_BOOTSTRAP_GUARD_VENV_REEXEC"] = "1"
+        env["PYTHONPATH"] = str(tmp_path)
+
+        completed = self._run_prepare(env)
+
+        assert completed.stderr == (
+            "[p4-kit] the installed 'plugins-kit:bootstrap' plugin is too old "
+            "or stale for p4-kit's code review (requires bootstrap >= 0.99.0; "
+            "missing: bootstrap_lib.code_review.pipeline.run_vcs(timeout=...)). "
+            "Run `claude plugin update bootstrap@plugins-kit`. Then start a new "
+            "session and retry.\n"
+        )
+
+
+class TestZtagReaderCharacterization:
+    @staticmethod
+    def _response(
+        expected_command: list[str], output: str
+    ) -> Callable[[list[str]], tuple[int, str, str]]:
+        def run(args: list[str]) -> tuple[int, str, str]:
+            if args != expected_command:
+                raise AssertionError(f"unexpected p4 command: {args!r}")
+            return 0, output, ""
+
+        return run
+
+    def test_shelf_fingerprint_keeps_trailing_record(self):
+        output = (
+            "... depotFile //depot/a.cpp\n"
+            "... digest AAAA\n"
+            "... headAction edit\n\n"
+            "... depotFile //depot/b.cpp\n"
+            "... digest BBBB\n"
+            "... action add\n"
+        )
+        command = ["-ztag", "fstat", "-Ol", "//...@=123"]
+        with patch.object(pr, "run_p4", side_effect=self._response(command, output)):
+            result = pr.fetch_shelf_fingerprint("123")
+        assert result == pr.ShelfScanResult(
+            digests={"//depot/a.cpp": "AAAA", "//depot/b.cpp": "BBBB"},
+            actions={"//depot/a.cpp": "edit", "//depot/b.cpp": "add"},
+        )
+
+    def test_opened_files_keeps_trailing_record(self):
+        output = (
+            "... depotFile //depot/a.cpp\n"
+            "... action edit\n\n"
+            "... depotFile //depot/b.cpp\n"
+            "... action add\n"
+        )
+        assert pr._parse_opened_files(output) == {
+            "//depot/a.cpp": "edit",
+            "//depot/b.cpp": "add",
+        }
+
+    def test_local_paths_keeps_trailing_record(self):
+        output = (
+            "... depotFile //depot/a.cpp\n"
+            "... path /ws/a.cpp\n\n"
+            "... depotFile //depot/b.cpp\n"
+            "... path /ws/b.cpp\n"
+        )
+        depots = ["//depot/a.cpp", "//depot/b.cpp"]
+        command = ["-ztag", "where", *depots]
+        with patch.object(pr, "run_p4", side_effect=self._response(command, output)):
+            result = pr.resolve_local_paths(depots)
+        assert result == {
+            "//depot/a.cpp": "/ws/a.cpp",
+            "//depot/b.cpp": "/ws/b.cpp",
+        }
+
+    def test_local_paths_splits_records_without_blank_separator(self):
+        output = (
+            "... depotFile //depot/a.cpp\n"
+            "... path /ws/a.cpp\n"
+            "... depotFile //depot/b.cpp\n"
+            "... path /ws/b.cpp\n"
+        )
+        depots = ["//depot/a.cpp", "//depot/b.cpp"]
+        command = ["-ztag", "where", *depots]
+        with patch.object(pr, "run_p4", side_effect=self._response(command, output)):
+            result = pr.resolve_local_paths(depots)
+        assert result == {
+            "//depot/a.cpp": "/ws/a.cpp",
+            "//depot/b.cpp": "/ws/b.cpp",
+        }
+
+    def test_reconcile_keeps_trailing_record(self):
+        output = (
+            "... depotFile //depot/a.cpp\n"
+            "... clientFile /ws/a.cpp\n"
+            "... action edit\n\n"
+            "... depotFile //depot/b.cpp\n"
+            "... clientFile /ws/b.cpp\n"
+            "... action add\n"
+        )
+        assert pr._parse_reconcile_output(output) == [
+            {"local": "/ws/a.cpp", "depot": "//depot/a.cpp", "action": "edit"},
+            {"local": "/ws/b.cpp", "depot": "//depot/b.cpp", "action": "add"},
+        ]
+
+    def test_default_open_keeps_trailing_record(self):
+        output = (
+            "... depotFile //depot/a.cpp\n"
+            "... clientFile /ws/a.cpp\n"
+            "... action edit\n\n"
+            "... depotFile //depot/b.cpp\n"
+            "... clientFile /ws/b.cpp\n"
+            "... action add\n"
+        )
+        assert pr._parse_default_open_output(output) == [
+            {"local": "/ws/a.cpp", "depot": "//depot/a.cpp", "action": "edit"},
+            {"local": "/ws/b.cpp", "depot": "//depot/b.cpp", "action": "add"},
+        ]
+
+    def test_default_open_splits_records_without_blank_separator(self):
+        output = (
+            "... depotFile //depot/a.cpp\n"
+            "... clientFile /ws/a.cpp\n"
+            "... action edit\n"
+            "... depotFile //depot/b.cpp\n"
+            "... clientFile /ws/b.cpp\n"
+            "... action add\n"
+        )
+        assert pr._parse_default_open_output(output) == [
+            {"local": "/ws/a.cpp", "depot": "//depot/a.cpp", "action": "edit"},
+            {"local": "/ws/b.cpp", "depot": "//depot/b.cpp", "action": "add"},
+        ]
+
+    def test_unresolved_keeps_trailing_record(self):
+        output = (
+            "... clientFile /ws/a.cpp\n"
+            "... toFile //depot/a.cpp\n"
+            "... resolveType content\n\n"
+            "... clientFile /ws/b.cpp\n"
+            "... toFile //depot/b.cpp\n"
+            "... fromFile //depot/source.cpp\n"
+            "... resolveType branch\n"
+        )
+        command = ["-ztag", "resolve", "-n", "-c", "123"]
+        with patch.object(pr, "run_p4", side_effect=self._response(command, output)):
+            result = pr.find_unresolved("123")
+        assert result == (
+            [
+                {
+                    "local": "/ws/a.cpp",
+                    "depot": "//depot/a.cpp",
+                    "resolve_type": "content",
+                    "from_file": "",
+                },
+                {
+                    "local": "/ws/b.cpp",
+                    "depot": "//depot/b.cpp",
+                    "resolve_type": "branch",
+                    "from_file": "//depot/source.cpp",
+                },
+            ],
+            [],
+        )
+
+    def test_workspace_identity_keeps_trailing_record(self):
+        output = (
+            "... serverAddress perforce.example:1666\n\n"
+            "... clientRoot /ws\n"
+            "... clientName review-client\n"
+        )
+        command = ["-ztag", "info"]
+        with patch.object(pr, "run_p4", side_effect=self._response(command, output)):
+            result = pr.get_workspace_root()
+        assert result == (Path("/ws"), "review-client")
 
 
 # ---------------------------------------------------------------------------
