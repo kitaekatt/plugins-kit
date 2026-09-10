@@ -1,6 +1,7 @@
 """Static manifest invariants for awesome-kit after pdf-kit extraction."""
 
 import json
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -49,4 +50,50 @@ def test_awesome_kit_description_matches_remaining_skills() -> None:
             "recap",
             "verbose-updates",
         )
+    )
+
+
+def test_no_private_paths_in_shipped_files() -> None:
+    # plugins/awesome-kit ships to every consumer's plugin cache, and this
+    # repo is deliberately public, so no private repo name or home path may
+    # appear in a tracked file under that plugin. The forbidden strings are
+    # built from fragments so this test file's own scan does not flag
+    # itself for containing the literal strings it is checking for.
+    repo_root = Path(__file__).resolve().parents[2]
+    # Identifiers that must never ship. Append to this tuple as more are
+    # found; the fragments keep this file's own scan from flagging itself.
+    forbidden = (
+        "christina" + "-norman",
+        "~" + "/Dev/",
+        "home" + "assistant",
+        "env" + "-config",
+        "bra" + "via",
+    )
+
+    result = subprocess.run(
+        ["git", "ls-files", "plugins/awesome-kit"],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    tracked_files = [
+        line.strip() for line in result.stdout.splitlines() if line.strip()
+    ]
+    assert tracked_files, "expected tracked files under plugins/awesome-kit"
+
+    offenders: list[str] = []
+    for rel_path in tracked_files:
+        path = repo_root / rel_path
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (UnicodeDecodeError, OSError):
+            continue
+        lowered = text.lower()
+        if any(needle.lower() in lowered for needle in forbidden):
+            offenders.append(rel_path)
+
+    assert not offenders, (
+        "tracked files under plugins/awesome-kit contain a private "
+        f"identifier that must not ship: {offenders}"
     )

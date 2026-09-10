@@ -264,6 +264,6 @@ references:
     summary: "The full task-system design specification (implementation contract; code is authoritative on divergence). Load for semantics questions the capability records do not settle."
   - id: task_items_design
     path: design/task-items-design.md
-    keywords: [task items design, item vocabulary, work item, item states, no done state, no sub-task, priorities as references, mined evidence, homeassistant test case]
-    summary: "The task-items design proposal (ratified 2026-07-09): evidence from real task folders, the vocabulary decision (item, not sub-task/goal/deliverable), and the full contract rationale. Load for why-questions about items; the operating contract lives in handoff-template.md."
+    keywords: [task items design, item vocabulary, work item, item states, no done state, no sub-task, priorities as references, test case, converted task folder, evidence relocated]
+    summary: "The task-items design proposal (ratified 2026-07-09): the vocabulary decision (item, not sub-task/goal/deliverable) and the full contract rationale; the mined evidence and the worked conversion are recorded outside this document. Load for why-questions about items; the operating contract lives in handoff-template.md."
 ```
