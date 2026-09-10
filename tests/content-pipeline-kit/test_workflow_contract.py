@@ -1,4 +1,4 @@
-"""C1's test contract (``dev/tasks/cpk-session-recipients/c1-design.md``
+"""C1's test contract (``dev/tasks/content-pipeline-kit-improvements/c1-design.md``
 section 6) for the workflow lane: ``workflows/run-ready-wave.js`` and the
 Python pack builder in ``execution/workerpack.py``.
 

@@ -62,7 +62,7 @@ ASTERISK_BANNER = "backgrounded * a47add3f"
 # the FULL multi-line (stdout, stderr, rc) triple the driver actually
 # receives from `subprocess.run`, unlike REAL_BANNER above, which is a
 # single-line `cat -A` rendering of just the banner line. Recorded verbatim
-# in dev/tasks/cpk-session-recipients/log.md, section "THE REAL BANNER,
+# in dev/tasks/content-pipeline-kit-improvements/log.md, section "THE REAL BANNER,
 # captured at the process boundary". The separator is a single U+00B7 MIDDLE
 # DOT and it arrived un-mojibaked -- the UTF-8 `C2 B7` decoding fix works on
 # this machine's real subprocess call. Written as escapes constructed via
