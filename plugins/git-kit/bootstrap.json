@@ -1,4 +1,5 @@
 {
+  "requires_bootstrap": "0.99.0",
   "tools": [
     {
       "name": "gh",

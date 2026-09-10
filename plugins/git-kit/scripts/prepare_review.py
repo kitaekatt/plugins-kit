@@ -14,7 +14,7 @@ fan-out (its diff is excluded from the chunks and it is dropped from
 `changed_files`) and surfaced under `claimed_files` instead, with its pre-image
 materialized to `<bundle_dir>/pre-images/<name>`. Claimed files still contribute
 to `unique_claude_mds` and the submit-gate scan. With no `--claim` the bundle is
-byte-identical to today's (no `claimed_files` key).
+byte-identical to the pre-claim bundle contract (no `claimed_files` key).
 
 A glob prefixed with `!` is an EXCLUSION and beats every positive pattern, so a
 caller can claim a broad shape while carving out a subset that no specialist
@@ -111,11 +111,13 @@ Stderr-only diagnostics. Non-zero exit on hard failure.
 """
 
 import hashlib
+import importlib
+import inspect
 import os
 import re
 import sys
 from pathlib import Path
-from typing import Optional
+from typing import NoReturn, Optional
 
 # Plugins define their own bootstrap-provisioned venv and must run under it
 # preferentially. A bare `python` or `uv run` invocation lands in a different
@@ -127,30 +129,65 @@ from bootstrap_guard import data_dir, reexec_under_plugin_venv  # noqa: E402
 
 reexec_under_plugin_venv("git-kit")
 
-try:
-    from bootstrap_lib.path_repair import repair_path  # noqa: E402
+_MIN_BOOTSTRAP_VERSION = "0.99.0"
+_BOOTSTRAP_FRONTIER = (
+    "bootstrap_lib.code_review.pipeline.run_vcs(timeout=...)"
+)
 
-    # Shared VCS-neutral review pipeline -- subprocess wrapper, section
-    # splitting, chunking + CLAUDE.md walk + submit-gate scan, bundle
-    # emission. See bootstrap_lib/code_review/pipeline.py.
-    from bootstrap_lib.code_review.pipeline import (  # noqa: E402
-        assemble_bundle,
-        emit_bundle,
-        matches_claim,
-        preimage_relpath,
-        run_vcs,
-        split_sections,
+
+def _exit_bootstrap_too_old() -> NoReturn:
+    """Refuse a review when bootstrap lacks the required shared API."""
+    from bootstrap_guard import EXIT_BOOTSTRAP_MISSING
+
+    print(
+        "[git-kit] the installed 'plugins-kit:bootstrap' plugin is too old or "
+        "stale for git-kit's code review "
+        f"(requires bootstrap >= {_MIN_BOOTSTRAP_VERSION}; "
+        f"missing: {_BOOTSTRAP_FRONTIER}). Run "
+        "`claude plugin update bootstrap@plugins-kit`. Then start a new "
+        "session and retry.",
+        file=sys.stderr,
     )
-    from bootstrap_lib.code_review import ledger  # noqa: E402
-except ImportError:
-    # bootstrap_lib is absent -> the bootstrap plugin never provisioned this
-    # plugin's venv. Convert the raw ModuleNotFoundError traceback into an
-    # actionable "install/enable plugins-kit:bootstrap" message and exit.
+    sys.exit(EXIT_BOOTSTRAP_MISSING)
+
+
+try:
+    review_pipeline = importlib.import_module("bootstrap_lib.code_review.pipeline")
+    ledger = importlib.import_module("bootstrap_lib.code_review.ledger")
+except ModuleNotFoundError as exc:
     from bootstrap_guard import require_bootstrap
 
-    require_bootstrap(
-        "git-kit", feature="code review", missing="bootstrap_lib", force=True
-    )
+    if exc.name == "bootstrap_lib":
+        require_bootstrap(
+            "git-kit", feature="code review", missing="bootstrap_lib", force=True
+        )
+    _exit_bootstrap_too_old()
+except ImportError:
+    _exit_bootstrap_too_old()
+
+# `run_vcs(timeout=...)` is the frontier API. Importing its module cannot prove
+# that the linked bootstrap copy accepts the keyword, so inspect the signature
+# before any review path can call it.
+try:
+    run_vcs_parameters = inspect.signature(review_pipeline.run_vcs).parameters
+except (AttributeError, TypeError, ValueError):
+    _exit_bootstrap_too_old()
+if "timeout" not in run_vcs_parameters:
+    _exit_bootstrap_too_old()
+
+from bootstrap_lib.path_repair import repair_path  # noqa: E402
+
+# Shared VCS-neutral review pipeline -- subprocess wrapper, section
+# splitting, chunking + CLAUDE.md walk + submit-gate scan, bundle
+# emission. See bootstrap_lib/code_review/pipeline.py.
+from bootstrap_lib.code_review.pipeline import (  # noqa: E402
+    assemble_bundle,
+    emit_bundle,
+    matches_claim,
+    preimage_relpath,
+    run_vcs,
+    split_sections,
+)
 
 repair_path()
 
@@ -816,7 +853,8 @@ def build_bundle(
     matches a claim pattern are held back from the generic reviewers (see
     assemble_bundle): their pre-image is materialized into the bundle and they
     are surfaced under a top-level `claimed_files` list instead of
-    `changed_files`. When empty the bundle is byte-identical to today's.
+    `changed_files`. When empty the bundle is byte-identical to the pre-claim
+    bundle contract.
 
     Machine-emitted files -- detected from a content signature OR from living
     under a path a plugin declares that it writes (bootstrap_lib.code_review

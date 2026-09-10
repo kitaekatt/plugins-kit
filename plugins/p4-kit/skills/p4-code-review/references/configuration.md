@@ -98,8 +98,10 @@ behavior, and a review whose profile states no effort anywhere behaves exactly a
 
 `effort` selects a DISPATCH TARGET rather than passing a parameter, because the Agent tool has
 no effort argument -- effort is set in an agent definition's frontmatter. A lane stating
-`effort: low` is dispatched to the `p4-kit:review-lane-low` agent that this plugin ships;
-a lane stating none is dispatched to `general-purpose` as before.
+`effort: <level>` is dispatched to `p4-kit:review-lane-<level>`. This plugin ships one agent
+per level in the menu. The menu and the shipped agents are the same set, so accepting a level
+at resolve time guarantees that its dispatch target exists. A lane stating no effort is
+dispatched to `general-purpose` as before.
 
 `model` still comes from the profile and is passed at the CALL SITE, where it overrides
 whatever model the effort agent's own frontmatter would imply. The two fields are therefore
