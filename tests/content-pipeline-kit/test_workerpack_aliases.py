@@ -1,5 +1,5 @@
 """Alias/no-regression test for the C1 scope amendment
-(``dev/tasks/cpk-session-recipients/c1-design.md`` section 5).
+(``dev/tasks/content-pipeline-kit-improvements/c1-design.md`` section 5).
 
 The worker-pack and reap assets B1 built were MOVED verbatim out of
 ``execution/drivers/claude_bg.py`` into the transport-neutral
