@@ -59,11 +59,18 @@ unconfigurable opinion whose test passes is a finding.
   rather than configured because a second VCS backend would be carried without being
   exercised: the maintainers track tasks in git, so a p4 path would ship untested and its
   first real failure would be on a consumer's machine. The degradation is deliberate and
-  bounded, not silent -- outside a git repo the scripts run NO VCS commands, record the
-  final state, keep the folder (`vcs_pending`), and hand submission to the agent. A
-  Perforce team therefore gets a working task system whose retirement step is manual, and
-  should either accept that or drive submission themselves; there is no half-working git
-  path to be surprised by.
+  bounded, not silent -- the scripts run read-only git commands (repo detection, status,
+  ignore checks) to work out what state a folder is in even outside a git repo or before
+  the repo question is settled, but no git command that WRITES (add, commit) ever runs
+  once detection fails to find a usable repo. Outside a git repo, archive records the
+  final state, keeps the folder (`vcs_pending`), and hands submission to the agent. Where
+  git IS present but configured to ignore the folder, archive records the final state and
+  either parks it (fully git-ignored) or keeps it in place (partially git-ignored, some
+  files force-added) -- both `vcs_ignored` outcomes. In both, the folder holds the only
+  copy of everything git ignores; in the partial case git still holds the force-added
+  files, which is exactly why that folder is kept in place rather than parked. A Perforce team therefore gets a working
+  task system whose retirement step is manual, and should either accept that or drive
+  submission themselves; there is no half-working git path to be surprised by.
 
 - **job-kit selects deterministically from the caller's stated preference order.** No
   scoring, no endpoint aliases, no learned or adaptive routing: a job names an ordered
@@ -456,8 +463,8 @@ safe with nothing to remember:
 os.environ.setdefault("_BOOTSTRAP_GUARD_VENV_REEXEC", "1")
 ```
 
-Current setters: `tests/awesome-kit`, `tests/git-kit`, `tests/p4-kit`,
-`tests/unreal-kit`. A dir whose tests import a re-execing script and which does
+Current setters: `tests/awesome-kit`, `tests/git-kit`, `tests/job-kit`,
+`tests/p4-kit`, `tests/unreal-kit`. A dir whose tests import a re-execing script and which does
 NOT set this is a latent false green, and the failure hides itself: in a
 full-suite run an earlier conftest (alphabetically, `tests/awesome-kit`) sets
 the var first, so the dir looks healthy and only breaks when run ALONE -- i.e.
@@ -477,7 +484,8 @@ to the script that imports them (e.g. `plugins/p4-kit/scripts/bootstrap_guard.py
 location. `tests/bootstrap/test_bootstrap_guard.py` asserts every copy matches
 the canonical, and the guard must never `import bootstrap_lib`. Current vendored
 copies: `git-kit/scripts`, `p4-kit/scripts`, `skills-kit/scripts`,
-`unreal-kit/lib`, `hue-kit/scripts`, `awesome-kit/skills/task/scripts`,
+`unreal-kit/lib`, `hue-kit/scripts`, `job-kit/lib`,
+`awesome-kit/skills/task/scripts`,
 `awesome-kit/skills/orchestrate/scripts`.
 
 **The test globs `plugins/**/bootstrap_guard.py`, so it is the authority on that

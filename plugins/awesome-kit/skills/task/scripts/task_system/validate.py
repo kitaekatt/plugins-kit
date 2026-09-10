@@ -94,6 +94,11 @@ DIARY_MARKER_MAX = 3
 _DIARY_RE = re.compile(r"^\s*\*\*\s?20\d{2}-\d{2}-\d{2}")
 _LOG_EXEMPT_RE = re.compile(r"^log(-[A-Za-z0-9._-]+)?\.md$")
 
+# The dev/tasks-uncommitted warning's leading clause, exposed so init.py can
+# recognize this specific warning without prose-matching a copy of its own.
+# init reads this constant; do not restate the literal anywhere else.
+UNCOMMITTED_DEV_TASKS = "uncommitted dev/tasks folder"
+
 
 @dataclass
 class ValidationResult:
@@ -486,7 +491,7 @@ def validate_ref(
         vcs = git_vcs_state(folder)
         if vcs == "dirty":
             warnings.append(
-                f"uncommitted dev/tasks folder: {resolved.canonical} has unsaved "
+                f"{UNCOMMITTED_DEV_TASKS}: {resolved.canonical} has unsaved "
                 "durable work -- commit it (version control is the record; "
                 "archive commits the final state itself, delete refuses until "
                 "committed)"

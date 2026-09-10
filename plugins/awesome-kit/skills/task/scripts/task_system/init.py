@@ -57,12 +57,12 @@ from pathlib import Path
 import yaml
 
 from . import resolve
+from . import validate
 from .types import TaskType, get_type
 from .validate import validate_ref
 
 _STUB_RE = re.compile(r"[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?")
 _MAX_STUB_LEN = 60
-_EXPECTED_DEV_TASKS_WARNING = "uncommitted dev/tasks folder"
 
 
 class InitError(ValueError):
@@ -263,7 +263,7 @@ def _unexpected_findings(errors: list[str], warnings: list[str], dest: str) -> l
     unexpected = [f"error: {e}" for e in errors]
     for w in warnings:
         expected = dest == resolve.LOCATION_DEV_TASKS and w.startswith(
-            _EXPECTED_DEV_TASKS_WARNING
+            validate.UNCOMMITTED_DEV_TASKS
         )
         if not expected:
             unexpected.append(f"warning: {w}")
