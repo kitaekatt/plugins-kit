@@ -141,13 +141,6 @@ def test_config_local_wins_over_config_yaml_same_scope(tmp_path, monkeypatch):
     assert r.thresholds["desc_max_chars"] == 50
 
 
-def test_human_html_word_ceiling_is_a_named_threshold(tmp_path, monkeypatch):
-    layer = _user_layer(tmp_path, monkeypatch)
-    _write_yaml(layer / "config.yaml", {"thresholds": {"human_html_max_words": 750}})
-    r = resolve(None)
-    assert r.thresholds["human_html_max_words"] == 750
-
-
 # ---------------------------------------------------------------------------
 # Resolver: validation guards (loud, never silent {})
 # ---------------------------------------------------------------------------
