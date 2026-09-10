@@ -18,7 +18,7 @@ import sys
 import time
 from dataclasses import replace as _replace_dataclass
 from pathlib import Path
-from typing import Any, Optional, Sequence
+from typing import Any, Mapping, Optional, Sequence
 
 from bootstrap_lib.code_review.lane_prompts import (
     ENDPOINT_ELIGIBLE_LANES,
@@ -250,6 +250,7 @@ def run_lane(
     description: str = "",
     claimed_files: Sequence[str] = (),
     mechanical_findings: Sequence[dict[str, Any]] | None = None,
+    claude_mds_by_file: Mapping[str, Sequence[str]] | None = None,
     project_root: Optional[str] = None,
     max_output_tokens: int = DEFAULT_MAX_OUTPUT_TOKENS,
     timeout_s: Optional[float] = DEFAULT_TIMEOUT_S,
@@ -342,7 +343,11 @@ def run_lane(
                 f"endpoint {selection.endpoint!r} failed: {type(exc).__name__}: {exc}"
             ) from exc
         try:
-            issues = parse_issue_array(response.text)
+            issues = parse_issue_array(
+                response.text,
+                lane=lane,
+                claude_mds_by_file=claude_mds_by_file,
+            )
             last_error = None
             break
         except LaneOutputError as exc:
