@@ -255,3 +255,65 @@ class TestMechanicalRegistry:
         assert snapshot.post_image_text == "before\nnew\nafter"
         scan = mechanical.scan_file("asset.bin", "Binary files differ\n")
         assert scan == {"file": "asset.bin", "checks_run": [], "findings": []}
+
+    def test_structured_parse_failure_is_added_line_only(self):
+        diff = _hunk("@@ -1,1 +1,1 @@", '-{"ok": 1}', '+{"ok": }')
+        scan = mechanical.scan_file("config/data.json", diff, pre_image_text='{"ok": 1}\n')
+        assert "structured_parse" in scan["checks_run"]
+        assert [(f["check"], f["line"]) for f in scan["findings"]] == [("structured_parse", 1)]
+
+    def test_duplicate_keys_preserve_later_key_location(self):
+        diff = _hunk("@@ -1,1 +1,1 @@", '-{"a": 1}', '+{"a": 1, "a": 2}')
+        scan = mechanical.scan_file("config/data.json", diff, pre_image_text='{"a": 1}\n')
+        assert [(f["check"], f["line"]) for f in scan["findings"]] == [("duplicate_keys", 1)]
+
+    def test_csv_row_width_uses_header(self):
+        diff = _hunk("@@ -1,2 +1,2 @@", "-a,b", "+a,b", "-1,2", "+1,2,3")
+        scan = mechanical.scan_file("data/rows.csv", diff, pre_image_text="a,b\n1,2\n")
+        assert [(f["check"], f["line"]) for f in scan["findings"]] == [("column_counts", 2)]
+
+    def test_a_reused_key_name_is_not_a_finding_on_an_unrelated_added_line(self):
+        """A pairs hook says WHICH key repeated, never where, so the position
+        had to be recovered by grepping the file for that key name. That cannot
+        tell a genuine repeat inside one object from the same name used
+        legitimately in a SIBLING object -- the common shape in real JSON.
+
+        Here the only true duplicate is pre-existing on line 2 and is not
+        reportable, while line 4 uses the same name once and IS added. The grep
+        located occurrences at lines 2 and 4, so line 4 became a confident
+        finding about a line with nothing wrong on it. The lane is told to
+        trust the scan, which is exactly what makes a false mechanical finding
+        worse than none."""
+        pre = '[\n{"id": 1, "id": 2},\n{"z": 0},\n{"z": 1}\n]\n'
+        diff = (
+            '@@ -1,5 +1,5 @@\n [\n {"id": 1, "id": 2},\n {"z": 0},\n'
+            '-{"z": 1}\n+{"id": 9}\n ]\n'
+        )
+        scan = mechanical.scan_file("x.json", diff, pre_image_text=pre)
+        assert scan["findings"] == []
+
+    def test_a_genuine_duplicate_on_an_added_line_is_still_reported(self):
+        """The companion to the test above: declining the false positive must
+        not have been bought by declining everything."""
+        pre = '{\n"a": 1\n}\n'
+        diff = '@@ -1,3 +1,4 @@\n {\n "a": 1\n+,"a": 2\n }\n'
+        scan = mechanical.scan_file("y.json", diff, pre_image_text=pre)
+        assert [(f["check"], f["line"]) for f in scan["findings"]] == [
+            ("duplicate_keys", 3)
+        ]
+
+    def test_csv_locates_by_physical_line_not_row_ordinal(self):
+        """A quoted field may contain newlines, after which a row's ordinal is
+        short of its physical position -- so a finding lands on the wrong line,
+        or on a line that merely happens to be in the added set."""
+        pre = 'a,b\n"x\ny",2\n1,2\n'
+        diff = '@@ -1,3 +1,3 @@\n a,b\n "x\n y",2\n-1,2\n+1,2,3\n'
+        scan = mechanical.scan_file("d.csv", diff, pre_image_text=pre)
+        assert [(f["check"], f["line"]) for f in scan["findings"]] == [
+            ("column_counts", 4)
+        ]
+
+    def test_templated_yaml_declines_all_structured_checks(self):
+        diff = _hunk("@@ -1,1 +1,1 @@", "-name: old", "+name: {{ value }}")
+        scan = mechanical.scan_file("config/data.yaml", diff, pre_image_text="name: old\n")
+        assert scan["checks_run"] == ["non_ascii", "abs_path"]

@@ -127,7 +127,7 @@ def _run_checks(
 
 # One module plus one entry here is the complete registration surface for a
 # later Seam A check. Registration order is stable output order.
-from . import abs_path, non_ascii  # noqa: E402
+from . import abs_path, column_counts, duplicate_keys, non_ascii, structured_parse  # noqa: E402
 
 REGISTRY: tuple[MechanicalCheck, ...] = (
     MechanicalCheck(
@@ -143,6 +143,27 @@ REGISTRY: tuple[MechanicalCheck, ...] = (
         required_inputs=frozenset({"added_lines"}),
         precondition=abs_path.precondition,
         scan=abs_path.scan,
+    ),
+    MechanicalCheck(
+        check_id="structured_parse",
+        phrase="structured-data parse failures",
+        required_inputs=frozenset({"file", "post_image_text"}),
+        precondition=structured_parse.precondition,
+        scan=structured_parse.scan,
+    ),
+    MechanicalCheck(
+        check_id="duplicate_keys",
+        phrase="duplicate keys",
+        required_inputs=frozenset({"file", "post_image_text"}),
+        precondition=duplicate_keys.precondition,
+        scan=duplicate_keys.scan,
+    ),
+    MechanicalCheck(
+        check_id="column_counts",
+        phrase="CSV/TSV column counts",
+        required_inputs=frozenset({"file", "post_image_text"}),
+        precondition=column_counts.precondition,
+        scan=column_counts.scan,
     ),
 )
 
