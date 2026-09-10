@@ -10,10 +10,13 @@
   host refuses (spec 7.3) even when a same-named local folder exists. The
   CLI has no host flag in v1 (consistent with Steps 1-4).
 - **Reference-rewrite mechanism** (spec 7.2): after relocating the folder,
-  every ``*.md`` under the project root is scanned. This is DELIBERATELY
-  broader than discovery's project document set, which covers only the task
-  roots (spec 8 step 1): a stale reference is wrong wherever it lives, so
-  the rewrite must reach documents ``list`` never enumerates. Fenced YAML blocks are located span-accurately with the same
+  every ``*.md`` under the project root is scanned, including through a
+  symlinked directory (the standard ``dev/tasks`` -> private tasks repo
+  setup) -- a visited-directory-identity guard stops a symlink cycle from
+  looping the scan forever. This is DELIBERATELY broader than discovery's
+  project document set, which covers only the task roots (spec 8 step 1): a
+  stale reference is wrong wherever it lives, so the rewrite must reach
+  documents ``list`` never enumerates. Fenced YAML blocks are located span-accurately with the same
   compiled regex document_walker's ``iter_yaml_blocks`` uses (imported, not
   duplicated -- a public span API in skills-kit would be a cross-plugin
   change out of this step's scope). Each block is parsed with
@@ -36,6 +39,7 @@
 
 from __future__ import annotations
 
+import os
 import shutil
 from pathlib import Path
 
@@ -122,16 +126,43 @@ def _rewrite_doc_text(
     return text
 
 
+def _iter_markdown_files(project_root: Path) -> list[Path]:
+    """Every ``*.md`` file under ``project_root``, sorted, descending into
+    symlinked directories -- unlike ``Path.rglob``, which never follows a
+    symlink, so a task root reached only through one (the standard
+    ``dev/tasks`` -> private tasks repo setup) would otherwise never be
+    scanned. A visited-directory-identity guard stops a symlink cycle from
+    looping the walk forever."""
+    found: list[Path] = []
+    visited: set[tuple[int, int]] = set()
+    for dirpath, dirnames, filenames in os.walk(project_root, followlinks=True):
+        try:
+            st = os.stat(dirpath)
+        except OSError:
+            dirnames[:] = []
+            continue
+        key = (st.st_dev, st.st_ino)
+        if key in visited:
+            dirnames[:] = []  # a symlink cycle folds back on a visited dir
+            continue
+        visited.add(key)
+        for name in filenames:
+            if name.endswith(".md"):
+                found.append(Path(dirpath) / name)
+    return sorted(found)
+
+
 def _rewrite_references(
     project_root: Path, old_canonical: str, new_canonical: str
 ) -> list[Path]:
     """Spec 7.2 step 2: rewrite every task_list reference to the old path
-    across ALL *.md under the project root -- intentionally WIDER than
-    discovery's project document set, which is scoped to the task roots: a
-    stale reference is wrong wherever it lives, including in documents
-    ``list`` never enumerates. Returns the docs rewritten."""
+    across ALL *.md under the project root, including through a symlinked
+    task root -- intentionally WIDER than discovery's project document set,
+    which is scoped to the task roots: a stale reference is wrong wherever
+    it lives, including in documents ``list`` never enumerates. Returns the
+    docs rewritten."""
     rewritten: list[Path] = []
-    for doc in sorted(project_root.rglob("*.md")):
+    for doc in _iter_markdown_files(project_root):
         try:
             text = doc.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):

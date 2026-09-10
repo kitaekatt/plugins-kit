@@ -94,11 +94,28 @@ def _normalize_parts(path_str: str, project_root: Path) -> tuple[str, ...]:
     p = Path(path_str)
     if p.is_absolute():
         try:
-            rel = p.resolve().relative_to(project_root.resolve())
-        except ValueError as exc:
-            raise RefResolutionError(
-                f"path is outside the project root: {path_str!r}"
-            ) from exc
+            # Lexical containment first: an absolute path built by joining
+            # project_root with a project-relative form (as ``init`` prints
+            # it) starts with project_root as literally given, with no
+            # filesystem access at all -- so a symlinked root (dev/tasks ->
+            # a private tasks repo) never enters into it. Only when the
+            # input is NOT lexically under project_root do the two sides
+            # get resolved (following symlinks) for the genuine containment
+            # check, which still rejects a real outside path.
+            rel = p.relative_to(project_root)
+            if ".." in rel.parts:
+                # A lexical match can still carry `..`, which pathlib keeps
+                # verbatim. Uncollapsed, `dev/tasks/..` would classify as a
+                # task whose stub is `..`. Hand those to the resolving branch,
+                # which collapses them exactly as the relative form below does.
+                raise ValueError(path_str)
+        except ValueError:
+            try:
+                rel = p.resolve().relative_to(project_root.resolve())
+            except ValueError as exc:
+                raise RefResolutionError(
+                    f"path is outside the project root: {path_str!r}"
+                ) from exc
         return rel.parts
     parts: list[str] = []
     for seg in path_str.split("/"):

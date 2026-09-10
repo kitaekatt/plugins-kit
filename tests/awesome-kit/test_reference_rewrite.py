@@ -10,6 +10,7 @@ them -- the two modules describe one project's temp-directory conventions.
 import pytest
 
 from task_system import reference_rewrite
+from task_system.discovery import discover
 from task_system.state_ops import StateOpError
 from test_task_location_ops import (
     LOCAL,
@@ -159,3 +160,41 @@ class TestMoveLib:
         with pytest.raises(StateOpError, match="unknown dest"):
             reference_rewrite.move_task("tmp/spike-x", "docs", tmp_path)
 
+
+class TestSymlinkedTaskRoot:
+    """Bug: ``_rewrite_references`` walked ``project_root.rglob("*.md")``,
+    and ``pathlib`` glob never descends into a symlinked directory. Under the
+    standard ``dev/tasks`` -> private tasks repo setup, a ``task_list``
+    reference living in a doc physically under the link TARGET was never
+    reached, so it survived a ``move`` stale -- and ``discover()`` then
+    reported a phantom ``archived`` record at the old id, silently, since
+    nobody archived it."""
+
+    def test_reference_under_link_target_is_rewritten(self, symlinked_root):
+        project_root, link_target = symlinked_root
+        make_task(project_root, "tmp/spike-x")
+        doc = write_doc(
+            link_target / "notes.md", fenced_task_list([{"path": "tmp/spike-x"}])
+        )
+
+        result = reference_rewrite.move_task("tmp/spike-x", "dev/tasks", project_root)
+
+        assert doc.resolve() in {p.resolve() for p in result.rewritten_docs}
+        text = doc.read_text(encoding="utf-8")
+        assert "dev/tasks/spike-x" in text
+        assert "tmp/spike-x" not in text
+
+    def test_no_phantom_archived_record_after_move(self, symlinked_root):
+        # A dev/tasks -> tmp demote: the absent-folder tri-state reads a
+        # missing NON-TMP path as "archived" (validate.py), so an unrewritten
+        # dev/tasks reference is exactly what manufactures the phantom.
+        project_root, link_target = symlinked_root
+        make_task(project_root, "dev/tasks/durable")
+        write_doc(
+            link_target / "notes.md", fenced_task_list([{"path": "dev/tasks/durable"}])
+        )
+
+        reference_rewrite.move_task("dev/tasks/durable", "tmp", project_root)
+
+        archived = discover("project", project_root, status="archived")
+        assert "dev/tasks/durable" not in {r.id for r in archived}
