@@ -259,8 +259,9 @@ technique_skill:
             [{file, checks_run, findings}]}`. Render its coverage and findings under
             "Mechanical scan (added lines only)", one file at a time. For each file,
             derive the covered-check list from THAT record's `checks_run`; render each id
-            with its human phrase from this generated registry map:
-            `non_ascii` = non-ASCII characters, `abs_path` = absolute paths, `structured_parse` = structured-data parse failures, `duplicate_keys` = duplicate keys, `column_counts` = CSV/TSV column counts. Render each finding as
+            with its human phrase from `bundle.mechanical_check_phrases`. If an id
+            is absent from that map, render the bare id; this is the
+            forward-compatible case, not an error. Render each finding as
             `- <file>:<line> [<check>] <detail>`. An empty `checks_run` means no mechanical coverage for this file.
             Named checks with an empty findings list mean those
             checks ran cleanly. These states are different and neither may be omitted.

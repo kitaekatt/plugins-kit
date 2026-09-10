@@ -129,7 +129,7 @@ from bootstrap_guard import data_dir, reexec_under_plugin_venv  # noqa: E402
 
 reexec_under_plugin_venv("git-kit")
 
-_MIN_BOOTSTRAP_VERSION = "0.102.0"
+_MIN_BOOTSTRAP_VERSION = "0.103.0"
 _BOOTSTRAP_FRONTIER = (
     "bootstrap_lib.code_review.pipeline.run_vcs(timeout=...), "
     "bootstrap_lib.code_review.mechanical"

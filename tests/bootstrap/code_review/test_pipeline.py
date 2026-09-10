@@ -25,6 +25,7 @@ from bootstrap_lib.code_review.pipeline import (
     run_vcs,
     split_sections,
 )
+from bootstrap_lib.code_review.mechanical import REGISTRY
 
 
 # ---------------------------------------------------------------------------
@@ -822,6 +823,7 @@ class TestAssembleBundleMachineEmitted:
         assert set(core) == {
             "bundle_dir",
             "diff_chunks",
+            "mechanical_check_phrases",
             "changed_files",
             "unique_claude_mds",
             "submit_gates",
@@ -1238,6 +1240,9 @@ class TestMechanicalFindingsReachReviewedFiles:
             workspace_root=None,
         )
         scan = core["diff_chunks"][0]["mechanical_scan"]
+        assert core["mechanical_check_phrases"] == {
+            check.check_id: check.phrase for check in REGISTRY
+        }
         assert scan["schema_version"] == 2
         assert scan["files"] == [
             {
