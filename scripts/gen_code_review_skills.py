@@ -138,7 +138,11 @@ MODEL_KIND = """\
             name>`, `--model <the value>`, `--chunk <absolute chunk diff path>`, one
             `--file` per repo-relative path in that chunk, `--description <the change
             description>`, and `--project-root <bundle.project_root>` when the bundle has
-            one. Its stdout is a JSON envelope whose `issues` array is that lane's candidate
+            one. For reviewer_a and reviewer_b ONLY, also pass `--mechanical-scan-ran` and
+            one `--mechanical-finding '<JSON object>'` per entry in
+            `diff_chunks[i].mechanical_findings`; pass no finding flags to reviewer_c.
+            The scan flag is required even when the list is empty, because an empty scan
+            result differs from no scan. Its stdout is a JSON envelope whose `issues` array is that lane's candidate
             issues, in the same shape an Agent lane returns.
             Endpoint lanes and Agent lanes go out in the SAME message as one another; mixing
             the two dispatch mechanisms in one fan-out is normal and expected.

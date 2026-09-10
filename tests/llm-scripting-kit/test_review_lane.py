@@ -166,6 +166,19 @@ class TestDispatchRefusals:
 
 
 class TestRunLane:
+    def test_cli_distinguishes_no_scan_from_clean_scan(self) -> None:
+        assert lr._parse_args(["--lane", LANE, "--model", "m", "--chunk", "d"]).mechanical_findings is None
+        assert lr._parse_args([
+            "--lane", LANE, "--model", "m", "--chunk", "d", "--mechanical-scan-ran"
+        ]).mechanical_findings == []
+
+    def test_passes_mechanical_findings_to_prompt(self, seam) -> None:
+        seam.selection = _transport([FakeResponse("[]")])
+        finding = {"file": "a.py", "line": 4, "check": "abs_path", "detail": "absolute path"}
+        lr.run_lane(lane=LANE, model="my-endpoint", diff_text="d", mechanical_findings=[finding])
+        assert "Mechanical scan (added lines only)" in seam.selection.backend.calls[0]["user"]
+        assert "a.py:4 [abs_path] absolute path" in seam.selection.backend.calls[0]["user"]
+
     def test_returns_issues_and_an_audit_envelope(self, seam) -> None:
         seam.selection = _transport([FakeResponse(ONE_ISSUE)])
         result = lr.run_lane(lane=LANE, model="my-endpoint", diff_text="d", files=["a.py"])

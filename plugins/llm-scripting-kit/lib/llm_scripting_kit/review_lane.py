@@ -249,6 +249,7 @@ def run_lane(
     files: Sequence[str] = (),
     description: str = "",
     claimed_files: Sequence[str] = (),
+    mechanical_findings: Sequence[dict[str, Any]] | None = None,
     project_root: Optional[str] = None,
     max_output_tokens: int = DEFAULT_MAX_OUTPUT_TOKENS,
     timeout_s: Optional[float] = DEFAULT_TIMEOUT_S,
@@ -277,6 +278,7 @@ def run_lane(
         files=files,
         description=description,
         claimed_files=claimed_files,
+        mechanical_findings=mechanical_findings,
     )
 
     window = _endpoint_context_window(selection.endpoint, project_root)
@@ -412,6 +414,19 @@ def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
         ),
     )
     parser.add_argument("--description", default="", help="the change description")
+    parser.add_argument(
+        "--mechanical-finding",
+        action="append",
+        default=[],
+        type=json.loads,
+        dest="mechanical_findings",
+        help="one mechanical finding as a JSON object; repeatable",
+    )
+    parser.add_argument(
+        "--mechanical-scan-ran",
+        action="store_true",
+        help="the mechanical scan ran, including when it found nothing",
+    )
     parser.add_argument("--project-root", default=None)
     parser.add_argument(
         "--max-output-tokens", type=int, default=DEFAULT_MAX_OUTPUT_TOKENS
@@ -419,7 +434,10 @@ def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument(
         "--timeout", type=float, default=DEFAULT_TIMEOUT_S, dest="timeout_s"
     )
-    return parser.parse_args(list(argv))
+    args = parser.parse_args(list(argv))
+    if not args.mechanical_scan_ran and not args.mechanical_findings:
+        args.mechanical_findings = None
+    return args
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -438,6 +456,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             files=args.files,
             description=args.description,
             claimed_files=args.claimed_files,
+            mechanical_findings=args.mechanical_findings,
             project_root=args.project_root,
             max_output_tokens=args.max_output_tokens,
             timeout_s=args.timeout_s,

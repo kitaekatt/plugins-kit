@@ -126,6 +126,9 @@ if not callable(_main):
 _CLAIMED_FILE_MIN_VERSION = "0.37.0"
 
 
+_MECHANICAL_FINDINGS_MIN_VERSION = "0.40.0"
+
+
 def _supports_claimed_file() -> bool | None:
     """True/False if the probe ran and observed an answer; None if it could
     not run at all because `_parse_args` is absent.
@@ -161,11 +164,37 @@ def _supports_claimed_file() -> bool | None:
     return True
 
 
+def _supports_mechanical_findings() -> bool | None:
+    """Return whether the shared parser accepts the mechanical scan flags."""
+    parse_args = getattr(_review_lane, "_parse_args", None)
+    if not callable(parse_args):
+        return None
+    probe_argv = [
+        "--lane", "_probe", "--model", "_probe", "--chunk", "_probe",
+        "--mechanical-scan-ran", "--mechanical-finding", "{}",
+    ]
+    try:
+        with contextlib.redirect_stderr(io.StringIO()):
+            parse_args(probe_argv)
+    except SystemExit:
+        return False
+    return True
+
+
 if __name__ == "__main__":
     if "--claimed-file" in sys.argv[1:] and _supports_claimed_file() is False:
         _refuse_too_old(
             "review_lane._parse_args does not accept --claimed-file",
             min_version=_CLAIMED_FILE_MIN_VERSION,
             capability="--claimed-file support",
+        )
+    if (
+        ("--mechanical-finding" in sys.argv[1:] or "--mechanical-scan-ran" in sys.argv[1:])
+        and _supports_mechanical_findings() is False
+    ):
+        _refuse_too_old(
+            "review_lane._parse_args does not accept mechanical scan findings",
+            min_version=_MECHANICAL_FINDINGS_MIN_VERSION,
+            capability="mechanical scan finding support",
         )
     sys.exit(_main())
