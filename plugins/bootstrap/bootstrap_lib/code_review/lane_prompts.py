@@ -38,6 +38,8 @@ import json
 from dataclasses import dataclass
 from typing import Any, Mapping, Sequence
 
+from bootstrap_lib.code_review.mechanical import LEGACY_CHECK_IDS, check_phrase
+
 
 # --------------------------------------------------------------------------
 # Model classification
@@ -225,7 +227,7 @@ def _validate_issue(item: Any, index: int) -> dict[str, Any]:
 # Bumped whenever any prompt text below changes, so a recorded lane result says
 # which wording produced it. A comparison across prompt versions is not a
 # like-for-like measurement, and without this the difference is invisible.
-PROMPT_VERSION = "4"
+PROMPT_VERSION = "5"
 
 
 # The false-positive guardrails, stated once. These are the same rules the
@@ -271,25 +273,23 @@ speculative finding."""
 # license a lane to skip a check nothing had run. Travelling with the findings
 # makes the claim true whenever it is made and absent whenever it is not.
 MECHANICAL_PREAMBLE = """\
-Already checked mechanically. A deterministic scan has ALREADY run over every
-line this change ADDS in your chunk, and its results are given to you below
-under "Mechanical scan". It covers exactly two things: non-ASCII characters and
-absolute paths.
+Already checked mechanically. Deterministic checks have ALREADY run where their
+preconditions were met. Coverage and results are listed per file below under
+"Mechanical scan". A check listed for one file says nothing about another file.
 
 What this means for you:
-- Do not scan for non-ASCII characters or absolute paths yourself. The scan
-  reads every added byte and does not miss any; re-deriving its results wastes
-  your attention and cannot improve on them.
-- Do not report a non-ASCII character or an absolute path that the scan did
-  NOT list. If it is not listed, it is not in the added lines.
+- For a file/check pair listed under "Checks run", do not run that check again.
+  Re-deriving its result wastes your attention and cannot improve on it.
+- Do not report a hit for a listed file/check pair unless the scan lists that
+  hit. This restriction does not apply to a check omitted for that file.
 - The scan detects; it does not decide. Each listed hit is a LOCATION, not a
   verdict. Whether it violates a rule is yours to judge from the governing
   standards, exactly as with any other finding -- a project may permit a
   character class in some contexts and forbid it in others, and the scan
   cannot read the rule. Report a listed hit only when a rule you can quote
   forbids it, and stay silent otherwise.
-- An empty "Mechanical scan" section means the scan found nothing, not that it
-  did not run."""
+- "Checks run: none" explicitly means no mechanical coverage for that file.
+  An empty findings list with named checks means those checks ran cleanly."""
 
 
 OUTPUT_INSTRUCTION = """\
@@ -419,35 +419,76 @@ LANE_PROMPTS: dict[str, LanePrompt] = {
 }
 
 
-def format_mechanical_findings(findings: Sequence[Mapping[str, Any]]) -> str:
-    """Render pre-computed deterministic findings for a lane's user message.
+def _mechanical_file_records(
+    value: Mapping[str, Any] | Sequence[Mapping[str, Any]],
+    files: Sequence[str],
+) -> list[Mapping[str, Any]]:
+    """Normalize version 2 scans and legacy finding lists to file records."""
+    if isinstance(value, Mapping):
+        records = value.get("files", [])
+        return list(records) if isinstance(records, Sequence) else []
 
-    One line per hit, sorted by file then line so a reviewer reads them in the
-    order it reads the diff. Returns the explicit "found nothing" text on an
-    empty list rather than the empty string, because a SILENT section and an
-    ABSENT section are indistinguishable to the reader -- and a reviewer that
-    cannot tell "the scan found nothing" from "the scan did not run" has to
-    re-scan to be safe, which is the duplicated work this removes.
-    """
-    if not findings:
-        return (
-            MECHANICAL_PREAMBLE
-            + "\n\nMechanical scan: no non-ASCII characters and no absolute "
-            "paths in the added lines."
-        )
-    rows = sorted(
-        findings,
-        key=lambda f: (str(f.get("file", "")), int(f.get("line", 0))),
-    )
-    lines = [
-        f"- {r.get('file', '?')}:{r.get('line', '?')} [{r.get('check', '?')}] {r.get('detail', '')}"
-        for r in rows
+    rows = list(value)
+    if rows and all("checks_run" in row and "findings" in row for row in rows):
+        return rows
+
+    by_file: dict[str, list[Mapping[str, Any]]] = {
+        file: [] for file in files
+    }
+    for row in rows:
+        by_file.setdefault(str(row.get("file", "?")), []).append(row)
+    if not by_file:
+        by_file["this chunk"] = []
+    return [
+        {
+            "file": file,
+            "checks_run": list(LEGACY_CHECK_IDS),
+            "findings": file_findings,
+        }
+        for file, file_findings in by_file.items()
     ]
-    return (
-        MECHANICAL_PREAMBLE
-        + "\n\nMechanical scan (added lines only):\n"
-        + "\n".join(lines)
+
+
+def format_mechanical_findings(
+    findings: Mapping[str, Any] | Sequence[Mapping[str, Any]],
+    *,
+    files: Sequence[str] = (),
+) -> str:
+    """Render deterministic findings with per-file, derived coverage."""
+    records = sorted(
+        _mechanical_file_records(findings, files),
+        key=lambda record: str(record.get("file", "")),
     )
+    lines = ["Mechanical scan (added lines only):"]
+    for record in records:
+        file = str(record.get("file", "?"))
+        checks_run = [str(check) for check in record.get("checks_run", [])]
+        rows = sorted(
+            record.get("findings", []),
+            key=lambda finding: (
+                int(finding.get("line", 0)),
+                str(finding.get("check", "")),
+            ),
+        )
+        lines.append(f"- File: {file}")
+        if checks_run:
+            coverage = ", ".join(
+                f"{check} ({check_phrase(check)})" for check in checks_run
+            )
+            lines.append(f"  Checks run: {coverage}")
+        else:
+            lines.append("  Checks run: none (no mechanical coverage for this file)")
+        if rows:
+            lines.append("  Findings:")
+            lines.extend(
+                "  - "
+                f"{file}:{row.get('line', '?')} [{row.get('check', '?')}] "
+                f"{row.get('detail', '')}"
+                for row in rows
+            )
+        else:
+            lines.append("  Findings: none for the checks listed above")
+    return MECHANICAL_PREAMBLE + "\n\n" + "\n".join(lines)
 
 
 def build_user_message(
@@ -457,7 +498,7 @@ def build_user_message(
     files: Sequence[str] = (),
     description: str = "",
     claimed_files: Sequence[str] = (),
-    mechanical_findings: Sequence[Mapping[str, Any]] | None = None,
+    mechanical_findings: Mapping[str, Any] | Sequence[Mapping[str, Any]] | None = None,
 ) -> str:
     """Assemble the user message for a lane.
 
@@ -467,13 +508,10 @@ def build_user_message(
     a file it was never shown -- the diff it receives is otherwise silent about
     their existence, which reads as their absence.
 
-    ``mechanical_findings`` carries the pre-computed deterministic scan for
-    this chunk (see ``bootstrap_lib.code_review.triviality``). Passing ``None``
-    -- the default -- omits the section entirely, which is what a caller
-    predating the scan does; passing an empty SEQUENCE renders the explicit
-    "found nothing" line. The two are deliberately different: a lane must be
-    able to tell a clean scan from no scan, since only the first licenses it to
-    stop looking.
+    ``mechanical_findings`` keeps its compatibility name and accepts either a
+    version 2 mechanical_scan object/file-record sequence or the legacy flat
+    finding sequence. Passing ``None`` omits the section. An empty legacy
+    sequence still means the two legacy checks ran cleanly.
 
     The diff is INLINED rather than referenced by path. The diff-only lane is a
     plain completion with no file access at all, so a path would name something
@@ -496,7 +534,7 @@ def build_user_message(
             + "\n".join(f"- {f}" for f in claimed_files)
         )
     if mechanical_findings is not None:
-        parts.append(format_mechanical_findings(mechanical_findings))
+        parts.append(format_mechanical_findings(mechanical_findings, files=files))
     parts.append("Diff:\n" + diff_text)
     return "\n\n".join(parts)
 

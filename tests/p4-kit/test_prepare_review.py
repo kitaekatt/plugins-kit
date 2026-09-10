@@ -69,7 +69,7 @@ def _concat_diff_from_chunks(bundle: dict) -> str:
 
 
 # ---------------------------------------------------------------------------
-# run_p4 — subprocess invocation
+# run_p4 -- subprocess invocation
 # ---------------------------------------------------------------------------
 
 
@@ -198,12 +198,12 @@ class TestBootstrapDependencyDiagnostics:
             "plugin's dependencies, then retry.\n"
         )
 
-    def test_manifest_requires_bootstrap_099_api_floor(self):
+    def test_manifest_requires_bootstrap_0101_api_floor(self):
         manifest = json.loads(
             Path("plugins/p4-kit/bootstrap.json").read_text(encoding="utf-8")
         )
 
-        assert manifest["requires_bootstrap"] == "0.99.0"
+        assert manifest["requires_bootstrap"] == "0.101.0"
 
     def test_bootstrap_without_run_vcs_timeout_reports_update_remedy(self, tmp_path):
         bootstrap_package = tmp_path / "bootstrap_lib"
@@ -589,7 +589,7 @@ class TestSynthesizeHunks:
 
 
 # ---------------------------------------------------------------------------
-# fetch_file_content — p4 print spec selection
+# fetch_file_content -- p4 print spec selection
 # ---------------------------------------------------------------------------
 
 
@@ -610,7 +610,7 @@ class TestFetchFileContent:
         assert mock.call_args_list[0][0][0] == ["print", "-q", "//depot/x.py#4"]
 
     def test_submitted_delete_at_rev_1_returns_none(self):
-        # No rev 0 to fetch — pre-history has no content.
+        # No rev 0 to fetch -- pre-history has no content.
         with patch.object(pr, "run_p4") as mock:
             result = pr.fetch_file_content(
                 "//depot/x.py", "1", "12345", is_shelved=False, is_delete=True
@@ -750,7 +750,7 @@ class TestExtractDiff:
 
     def test_no_actions_returns_raw(self):
         out = "Differences ...\n==== //a.cpp#1 (text) ====\n@@ -1 +1 @@\n"
-        # actions=None → behave like a passthrough
+        # actions=None -> behave like a passthrough
         result = pr.extract_diff(out, actions=None)
         assert "==== //a.cpp#1" in result
 
@@ -1036,7 +1036,7 @@ class TestHasDescribeContent:
 
 
 # ---------------------------------------------------------------------------
-# fetch_describe — shelved fallback
+# fetch_describe -- shelved fallback
 # ---------------------------------------------------------------------------
 
 
@@ -1072,7 +1072,7 @@ class TestFetchDescribe:
                 pr.fetch_describe("123")
 
     def test_accepts_add_only_cl_without_hunks(self):
-        # An add-only CL has file headers but no @@ — should still succeed.
+        # An add-only CL has file headers but no @@ -- should still succeed.
         add_only = (
             "Differences ...\n"
             "==== //depot/new.py#1 (text) ====\n"
@@ -1251,7 +1251,7 @@ class TestComputeMinimalDirs:
         c.mkdir()
         files = [str(a / "f1.cpp"), str(ab / "f2.cpp"), str(c / "f3.cpp")]
         result = pr.compute_minimal_dirs(files)
-        # /a covers /a/b → only /a and /c remain, both recursive
+        # /a covers /a/b -> only /a and /c remain, both recursive
         assert {(p.resolve(), r) for p, r in result} == {
             (a.resolve(), True),
             (c.resolve(), True),
@@ -1610,7 +1610,7 @@ class TestFindUnresolved:
 
 
 # ---------------------------------------------------------------------------
-# build_bundle — integration
+# build_bundle -- integration
 # ---------------------------------------------------------------------------
 
 
@@ -1662,6 +1662,10 @@ class TestBuildBundle:
                 return (1, "", "no file(s) to reconcile.\n")
             if args[:4] == ["-ztag", "resolve", "-n", "-c"]:
                 return (1, "", "no file(s) to resolve.\n")
+            if args[:3] == ["print", "-q", "-o"]:
+                Path(args[3]).parent.mkdir(parents=True, exist_ok=True)
+                Path(args[3]).write_text("int x = 0;\n", encoding="utf-8")
+                return (0, "", "")
             raise AssertionError(f"unexpected p4 command: {args}")
 
         bundle_dir = tmp_path / "bundle"
@@ -1684,6 +1688,10 @@ class TestBuildBundle:
         assert len(cf["claude_mds"]) == 1
         assert Path(cf["claude_mds"][0]).read_text() == "workspace rule\n"
         assert len(bundle["unique_claude_mds"]) == 1
+        # No registered mechanical check reads the post-image, and a pre-image
+        # costs one `p4 print` per file, so an unclaimed file gets none. The
+        # gate's other direction is pinned in the git kit's registry test.
+        assert not (bundle_dir / pr.preimage_relpath("//depot/src/foo.cpp")).exists()
         assert bundle["unreconciled"] == []
         assert bundle["hygiene_incomplete"] == []
 
@@ -1737,6 +1745,10 @@ class TestBuildBundle:
                 return (1, "", "fatal: bad workspace\n")
             if args[:4] == ["-ztag", "resolve", "-n", "-c"]:
                 return (1, "", "no file(s) to resolve.\n")
+            if args[:3] == ["print", "-q", "-o"]:
+                Path(args[3]).parent.mkdir(parents=True, exist_ok=True)
+                Path(args[3]).write_text("int x = 0;\n", encoding="utf-8")
+                return (0, "", "")
             raise AssertionError(f"unexpected p4 command: {args}")
 
         with patch.object(pr, "run_p4", side_effect=fake_run_p4):
@@ -1961,7 +1973,7 @@ class TestBuildBundle:
         ws = tmp_path / "ws"
         ws.mkdir()
 
-        # Committed describe finds no Differences section → shelved fallback.
+        # Committed describe finds no Differences section -> shelved fallback.
         committed_out = "Change 1 by u@c on 2026/01/01\n\n\tdesc\n\nShelved files ...\n"
         shelved_out = (
             "Change 1 by u@c on 2026/01/01\n"
@@ -2060,6 +2072,10 @@ class TestBuildBundle:
                 return (0, "mod_b contents\n", "")
             if args == ["print", "-q", "//depot/mod_c.cpp@=144098"]:
                 return (0, "mod_c contents\n", "")
+            if args[:3] == ["print", "-q", "-o"]:
+                Path(args[3]).parent.mkdir(parents=True, exist_ok=True)
+                Path(args[3]).write_text("wire_old();\n", encoding="utf-8")
+                return (0, "", "")
             if args[:4] == ["-ztag", "resolve", "-n", "-c"]:
                 return (1, "", "no file(s) to resolve.\n")
             if args[:2] == ["-ztag", "fstat"]:
@@ -2073,7 +2089,7 @@ class TestBuildBundle:
         with patch.object(pr, "run_p4", side_effect=fake_run_p4):
             bundle = pr.build_bundle("144098", tmp_path / "bundle")
 
-        # All four files in changed_files — not just the edit
+        # All four files in changed_files -- not just the edit
         depots = [f["depot"] for f in bundle["changed_files"]]
         assert depots == [
             "//depot/facade.cpp",
@@ -2413,7 +2429,7 @@ class TestCleanupAutoShelve:
 
 
 # ---------------------------------------------------------------------------
-# build_bundle — auto-shelve integration
+# build_bundle -- auto-shelve integration
 # ---------------------------------------------------------------------------
 
 
@@ -2781,7 +2797,7 @@ class TestBuildBundleShelfState:
 
 
 # ---------------------------------------------------------------------------
-# main — CLI
+# main -- CLI
 # ---------------------------------------------------------------------------
 
 
@@ -3308,6 +3324,10 @@ class TestBuildBundleClaims:
                 return (1, "", "no file(s) to resolve.\n")
             if args[:2] == ["-ztag", "fstat"]:
                 return (1, "", "no such file(s)")
+            if args[:3] == ["print", "-q", "-o"]:
+                Path(args[3]).parent.mkdir(parents=True, exist_ok=True)
+                Path(args[3]).write_text("old content\n", encoding="utf-8")
+                return (0, "", "")
             raise AssertionError(f"unexpected p4 command: {args}")
 
         with patch.object(pr, "run_p4", side_effect=fake_run_p4):
@@ -3461,6 +3481,10 @@ class TestBuildBundleHygieneSources:
                 return (1, "", "no file(s) to resolve.\n")
             if args[:2] == ["-ztag", "fstat"]:
                 return (1, "", "no such file(s)")
+            if args[:3] == ["print", "-q", "-o"]:
+                Path(args[3]).parent.mkdir(parents=True, exist_ok=True)
+                Path(args[3]).write_text("int x = 0;\n", encoding="utf-8")
+                return (0, "", "")
             raise AssertionError(f"unexpected p4 command: {args}")
 
         with patch.object(pr, "run_p4", side_effect=fake_run_p4):
@@ -3961,6 +3985,10 @@ class TestBundleLedgerWiring:
                 return (1, "", "no file(s) to resolve.\n")
             if args[:2] == ["-ztag", "fstat"]:
                 return (1, "", "no such file(s)")
+            if args[:3] == ["print", "-q", "-o"]:
+                Path(args[3]).parent.mkdir(parents=True, exist_ok=True)
+                Path(args[3]).write_text("int x = 0;\n", encoding="utf-8")
+                return (0, "", "")
             raise AssertionError(f"unexpected p4 command: {args}")
 
         return fake_run_p4

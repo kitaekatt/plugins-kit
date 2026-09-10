@@ -292,6 +292,7 @@ from bootstrap_lib.path_repair import repair_path  # noqa: E402
 # Shared VCS-neutral review pipeline -- subprocess wrapper, section
 # splitting, chunking + CLAUDE.md walk + submit-gate scan, bundle
 # emission. See bootstrap_lib/code_review/pipeline.py.
+from bootstrap_lib.code_review.mechanical import requires_pre_image  # noqa: E402
 from bootstrap_lib.code_review.pipeline import (  # noqa: E402
     assemble_bundle,
     emit_bundle,
@@ -1575,15 +1576,28 @@ def build_bundle(
         {"identifier": depot, "depot": depot, "local": local_map.get(depot)}
         for depot in depot_files
     ]
-    # Materialize pre-images for claimed files BEFORE assembly so the front-half
-    # keeps the VCS-specific mechanics; assemble_bundle only routes/excludes.
-    # `action` is attached to claimed entries only, so non-claimed changed_files
-    # stay byte-identical to the no-claim contract.
-    for f in files:
-        if matches_claim(f["identifier"], claim_globs):
+    # Materialize immutable pre-images for locally-owned pending files. A
+    # foreign workspace's #have and a submitted CL's #have are not the reviewed
+    # pre-image, so those cases deliberately leave the post-image precondition
+    # unmet. Within that set, a claimed file always needs one (the triviality
+    # guard reads it) and every other file needs one only when a registered
+    # mechanical check reads the post-image -- each costs a `p4 print`, so on a
+    # large CL the difference is one round-trip per file. Asking the registry
+    # rather than assuming means this widens by itself when the first
+    # structured-parse check lands. `action` remains an output field only for
+    # claims; assemble_bundle strips it from generic changed-file records.
+    if foreign_change is None and _is_pending(describe):
+        scan_needs_pre_image = requires_pre_image()
+        for f in files:
+            if not (
+                scan_needs_pre_image
+                or matches_claim(f["identifier"], claim_globs)
+            ):
+                continue
             action = actions.get(f["identifier"], ("", ""))[1]
             f["action"] = action
             f["pre_image"] = materialize_preimage(f["depot"], action, bundle_dir)
+            f["pre_image_is_empty"] = action in _ADD_ACTIONS
     skip_machine_emitted_scan = (
         foreign_change is not None and not review_machine_emitted
     )

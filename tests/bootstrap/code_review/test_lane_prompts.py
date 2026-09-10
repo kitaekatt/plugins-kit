@@ -339,7 +339,9 @@ class TestMechanicalFindingsInPrompt:
             "reviewer_b_diff_only_bugs", diff_text="d", mechanical_findings=[]
         )
         assert "Already checked mechanically" in msg
-        assert "no non-ASCII characters and no absolute paths" in msg
+        assert "non_ascii (non-ASCII characters)" in msg
+        assert "abs_path (absolute paths)" in msg
+        assert "Findings: none for the checks listed above" in msg
 
     def test_findings_are_rendered_with_file_line_and_check(self):
         msg = lp.build_user_message(
@@ -360,10 +362,27 @@ class TestMechanicalFindingsInPrompt:
         # Parse only the rows BELOW the scan header -- the preamble above it
         # is a bulleted list too, and would otherwise be read as findings.
         body = msgs.split("Mechanical scan (added lines only):", 1)[1]
-        order = [
-            line.split()[1] for line in body.splitlines() if line.startswith("- ")
-        ]
+        order = [line.split()[1] for line in body.splitlines() if line.startswith("  - ")]
         assert order == ["a.yaml:3", "a.yaml:9", "b.yaml:2"]
+
+    def test_v2_coverage_is_derived_and_scoped_per_file(self):
+        msg = lp.format_mechanical_findings(
+            {
+                "schema_version": 2,
+                "files": [
+                    {
+                        "file": "a.yaml",
+                        "checks_run": ["non_ascii"],
+                        "findings": [],
+                    },
+                    {"file": "b.jsonc", "checks_run": [], "findings": []},
+                ],
+            }
+        )
+        assert "Checks run: non_ascii (non-ASCII characters)" in msg
+        assert "abs_path (absolute paths)" not in msg
+        assert "File: b.jsonc\n  Checks run: none (no mechanical coverage" in msg
+        assert "file/check pair" in msg
 
     def test_the_preamble_tells_the_lane_the_scan_does_not_adjudicate(self):
         """Detection is the script's and adjudication the reviewer's. Without
@@ -372,5 +391,5 @@ class TestMechanicalFindingsInPrompt:
         box-drawing characters inside a diagram."""
         text = lp.MECHANICAL_PREAMBLE
         assert "detects; it does not decide" in text
-        assert "Do not scan for non-ASCII characters or absolute paths yourself" in text
-        assert "not in the added lines" in text
+        assert 'file/check pair listed under "Checks run"' in text
+        assert "restriction does not apply to a check omitted for that file" in text

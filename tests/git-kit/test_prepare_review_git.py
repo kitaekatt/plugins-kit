@@ -1291,6 +1291,24 @@ class TestBuildBundleClaims:
         assert "claimed_files" not in bundle
         assert [f["path"] for f in bundle["changed_files"]] == ["CLAUDE.md"]
 
+    def test_pre_image_materialization_follows_the_check_registry(
+        self, git_repo, tmp_path, monkeypatch
+    ):
+        """A pre-image costs one `git show` PER CHANGED FILE, so an unclaimed
+        file gets one only when a registered mechanical check would read the
+        post-image. Both directions are pinned: asserting only the current
+        answer would pass whichever way the gate was wired."""
+        git_repo.commit_file("CLAUDE.md", "base\n", "base")
+        git_repo.commit_file("CLAUDE.md", "changed\n", "change")
+
+        pr.build_bundle("HEAD~1..HEAD", tmp_path / "off")
+        assert not (tmp_path / "off" / pr.preimage_relpath("CLAUDE.md")).exists()
+
+        monkeypatch.setattr(pr, "requires_pre_image", lambda: True)
+        pr.build_bundle("HEAD~1..HEAD", tmp_path / "on")
+        snapshot = tmp_path / "on" / pr.preimage_relpath("CLAUDE.md")
+        assert snapshot.read_text(encoding="utf-8") == "base\n"
+
     def test_main_with_claim_emits_claimed_files(self, git_repo, tmp_path, monkeypatch, capsys):
         git_repo.commit_file("CLAUDE.md", "base\n", "base")
         git_repo.commit_file("CLAUDE.md", "changed\n", "change")

@@ -39,6 +39,18 @@ from __future__ import annotations
 import re
 from typing import Optional
 
+from bootstrap_lib.code_review.mechanical import mechanical_findings
+from bootstrap_lib.code_review.mechanical._diff import (
+    _DiffMismatchError,
+    _HunkParseError,
+    _added_lines_with_numbers,
+    _delta_lines,
+    _parse_hunks,
+    _reconstruct,
+)
+from bootstrap_lib.code_review.mechanical.abs_path import find_abs_path
+from bootstrap_lib.code_review.mechanical.non_ascii import has_non_ascii
+
 # A change touching more than this many lines is never trivial -- past a handful
 # of lines a diff is large enough to warrant real review regardless of shape.
 MAX_CHANGED_LINES = 5
@@ -57,7 +69,6 @@ _KEYWORD_RE = re.compile(
 # prose -- a content edit inside one of these is meaning-bearing.
 _YAML_FENCE_LANGS = {"yaml", "yml", "json", "toml", "config", "cfg", "ini"}
 
-_HUNK_HEADER_RE = re.compile(r"^@@+ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
 _HEADING_RE = re.compile(r"^(#{1,6})\s+(.*?)\s*#*\s*$")
 _LIST_RE = re.compile(r"^(\s*)([-*+]|\d+[.)])\s+")
 _BLOCKQUOTE_RE = re.compile(r"^(\s*>)+")
@@ -72,106 +83,6 @@ _REF_DEF_RE = re.compile(r"^\s*\[[^\]]+\]:\s*(\S+)", re.MULTILINE)
 _BARE_URL_RE = re.compile(r"(?:https?|ftp)://[^\s)>\]]+", re.IGNORECASE)
 _PATH_TOKEN_RE = re.compile(r"[\w.@~-]*/[\w./@~-]+")
 _BACKTICK_PATH_RE = re.compile(r"`([^`]*/[^`]*)`")
-
-# Absolute-path detectors for the mechanical scan.
-_WIN_ABS_RE = re.compile(r"[A-Za-z]:[\\/]")
-_POSIX_ABS_RE = re.compile(r"(?:^|[\s(\"'`])/[A-Za-z0-9._-]+/")
-
-
-class _HunkParseError(Exception):
-    """Raised when the diff hunks cannot be parsed / applied to the pre-image."""
-
-
-class _DiffMismatchError(Exception):
-    """Raised when a context or deletion line disagrees with the pre-image."""
-
-
-def _parse_hunks(diff_section_text: str) -> list[dict]:
-    """Extract unified-diff hunks from one file's diff section.
-
-    Returns a list of {old_start, old_count, ops} where ops is a list of
-    (op, content) with op in {' ', '+', '-'}. Only lines inside an `@@` hunk are
-    considered, so file-header noise (`diff --git`, `index`, `--- a/`, `+++ b/`,
-    p4 `==== ... ====`) never counts as a change. Raises _HunkParseError on a
-    body line that is not a valid hunk-body line.
-    """
-    hunks: list[dict] = []
-    current: Optional[dict] = None
-    for line in diff_section_text.splitlines():
-        m = _HUNK_HEADER_RE.match(line)
-        if m:
-            current = {
-                "old_start": int(m.group(1)),
-                "old_count": int(m.group(2)) if m.group(2) is not None else 1,
-                # Post-image start, so an added line can be reported at the
-                # line number a reader will actually find it on.
-                "new_start": int(m.group(3)),
-                "ops": [],
-            }
-            hunks.append(current)
-            continue
-        if current is None:
-            continue
-        if line == "":
-            # A bare blank line inside a hunk is a context line with empty content
-            # (git emits a single space for context, but tolerate a stray blank).
-            current["ops"].append((" ", ""))
-            continue
-        op = line[0]
-        if op == "\\":  # "\ No newline at end of file" marker -- ignore.
-            continue
-        if op in (" ", "+", "-"):
-            current["ops"].append((op, line[1:]))
-        else:
-            raise _HunkParseError(f"unexpected hunk body line: {line!r}")
-    return hunks
-
-
-def _reconstruct(pre_lines: list[str], hunks: list[dict]) -> tuple[list[str], set[int], set[int]]:
-    """Apply hunks to `pre_lines`, returning (post_lines, added_post, removed_pre).
-
-    `added_post` is the set of 0-based indices in post_lines that were ADDED;
-    `removed_pre` is the set of 0-based indices in pre_lines that were REMOVED.
-    Raises _HunkParseError if a context/remove line does not match the pre-image
-    (a diff that doesn't apply -- the caller then fails closed).
-    """
-    post: list[str] = []
-    pre_idx = 0  # 0-based cursor into pre_lines
-    added_post: set[int] = set()
-    removed_pre: set[int] = set()
-    for hunk in hunks:
-        old_start = hunk["old_start"]
-        old_count = hunk["old_count"]
-        # Number of unchanged pre lines before this hunk's first change.
-        context_end = old_start if old_count == 0 else old_start - 1
-        if context_end < pre_idx or context_end > len(pre_lines):
-            raise _HunkParseError("hunk start out of range for pre-image")
-        while pre_idx < context_end:
-            post.append(pre_lines[pre_idx])
-            pre_idx += 1
-        for op, content in hunk["ops"]:
-            if op == " ":
-                if pre_idx >= len(pre_lines):
-                    raise _HunkParseError("context past end of pre-image")
-                if pre_lines[pre_idx] != content:
-                    raise _DiffMismatchError("context does not match pre-image")
-                post.append(pre_lines[pre_idx])
-                pre_idx += 1
-            elif op == "-":
-                if pre_idx >= len(pre_lines):
-                    raise _HunkParseError("remove past end of pre-image")
-                if pre_lines[pre_idx] != content:
-                    raise _DiffMismatchError("deletion does not match pre-image")
-                removed_pre.add(pre_idx)
-                pre_idx += 1
-            else:  # "+"
-                added_post.add(len(post))
-                post.append(content)
-    while pre_idx < len(pre_lines):
-        post.append(pre_lines[pre_idx])
-        pre_idx += 1
-    return post, added_post, removed_pre
-
 
 def _skeleton(lines: list[str]) -> list[tuple]:
     """Structural skeleton of a Markdown document.
@@ -271,13 +182,6 @@ def _yaml_region_indices(lines: list[str]) -> set[int]:
     return region
 
 
-def _delta_lines(hunks: list[dict]) -> tuple[list[str], list[str]]:
-    """Return (added_texts, removed_texts) -- the content of the +/- lines."""
-    added = [c for h in hunks for op, c in h["ops"] if op == "+"]
-    removed = [c for h in hunks for op, c in h["ops"] if op == "-"]
-    return added, removed
-
-
 def triviality_profile(
     diff_section_text: str, pre_image_text: Optional[str]
 ) -> dict:
@@ -336,80 +240,6 @@ def triviality_profile(
     return {"trivial": not reasons, "reasons": reasons}
 
 
-def _added_lines_with_numbers(hunks: list[dict]) -> list[tuple[int, str]]:
-    """Return [(post_image_line_number, text), ...] for every ADDED line."""
-    out: list[tuple[int, str]] = []
-    for hunk in hunks:
-        lineno = hunk.get("new_start", 1)
-        for op, content in hunk["ops"]:
-            if op == "+":
-                out.append((lineno, content))
-                lineno += 1
-            elif op == " ":
-                lineno += 1
-            # a removed line consumes no post-image line number
-    return out
-
-
-def mechanical_findings(diff_section_text: str) -> list[dict]:
-    """Deterministic findings over the ADDED lines of one file's diff.
-
-    Returns a list of {"check", "line", "detail"} dicts, one per offending
-    line, drawn from the same two scans `mechanical_checks` reports as booleans:
-    non-ASCII bytes and absolute paths.
-
-    THREE DELIBERATE DIFFERENCES from `mechanical_checks`, all of which follow
-    from these findings being HANDED TO A REVIEWER rather than rendered as a
-    disclosure line.
-
-    1. ADDED LINES ONLY. `mechanical_checks` scans added and removed lines
-       alike, which is harmless for a "what we checked" line and wrong for a
-       finding: a change that DELETES a stray em dash would otherwise be
-       reported as introducing one. A reviewer reports what a change
-       introduces, so the removed side is not scanned here.
-    2. LOCATED, NOT AGGREGATED. A boolean tells a reviewer that something
-       somewhere is wrong and leaves it to re-derive where -- which is the
-       inference this whole mechanism exists to remove. Each finding carries
-       the post-image line number and the offending text.
-    3. DETECTION, NOT ADJUDICATION. `detail` names the codepoint (U+XXXX plus
-       the character) rather than asserting a violation, because whether a
-       given non-ASCII character is permitted is a PROJECT question a script
-       cannot answer -- this repo, for one, allows the Unicode Box Drawing
-       block inside a diagram and forbids it as punctuation. Full recall on
-       detection belongs to the script; the exception belongs to the reviewer.
-       Reporting these as settled violations would trade one probabilistic
-       answer for a confidently wrong one.
-    """
-    if not diff_section_text:
-        return []
-    try:
-        hunks = _parse_hunks(diff_section_text)
-    except _HunkParseError:
-        return []
-    findings: list[dict] = []
-    for lineno, text in _added_lines_with_numbers(hunks):
-        for ch in text:
-            if ord(ch) >= 128:
-                findings.append(
-                    {
-                        "check": "non_ascii",
-                        "line": lineno,
-                        "detail": f"U+{ord(ch):04X} ({ch!r}) in: {text.strip()[:120]}",
-                    }
-                )
-                break
-        m = _WIN_ABS_RE.search(text) or _POSIX_ABS_RE.search(text)
-        if m:
-            findings.append(
-                {
-                    "check": "abs_path",
-                    "line": lineno,
-                    "detail": f"{m.group(0).strip()!r} in: {text.strip()[:120]}",
-                }
-            )
-    return findings
-
-
 def mechanical_checks(diff_section_text: str) -> dict:
     """Cheap script-side scans over the CHANGED LINES only, as booleans.
 
@@ -429,8 +259,6 @@ def mechanical_checks(diff_section_text: str) -> dict:
         return {"ascii_clean": True, "no_abs_paths": True}
     added, removed = _delta_lines(hunks)
     changed = added + removed
-    ascii_clean = all(ord(ch) < 128 for line in changed for ch in line)
-    no_abs_paths = not any(
-        _WIN_ABS_RE.search(line) or _POSIX_ABS_RE.search(line) for line in changed
-    )
+    ascii_clean = not any(has_non_ascii(line) for line in changed)
+    no_abs_paths = not any(find_abs_path(line) for line in changed)
     return {"ascii_clean": ascii_clean, "no_abs_paths": no_abs_paths}

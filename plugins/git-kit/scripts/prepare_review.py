@@ -142,6 +142,9 @@ try:
         split_sections,
     )
     from bootstrap_lib.code_review import ledger  # noqa: E402
+    from bootstrap_lib.code_review.mechanical import (  # noqa: E402
+        requires_pre_image,
+    )
 except ImportError:
     # bootstrap_lib is absent -> the bootstrap plugin never provisioned this
     # plugin's venv. Convert the raw ModuleNotFoundError traceback into an
@@ -812,11 +815,10 @@ def build_bundle(
 ) -> dict:
     """Gather context for `range_spec`, write chunks to disk, return the index bundle.
 
-    When `claim_globs` is non-empty, changed files whose repo-relative path
-    matches a claim pattern are held back from the generic reviewers (see
-    assemble_bundle): their pre-image is materialized into the bundle and they
-    are surfaced under a top-level `claimed_files` list instead of
-    `changed_files`. When empty the bundle is byte-identical to today's.
+    Changed-file pre-images are materialized into the bundle so file-local
+    mechanical checks can reconstruct the immutable post-image under review.
+    When `claim_globs` is non-empty, matching files are held back from generic
+    reviewers (see assemble_bundle) and surfaced under `claimed_files`.
 
     Machine-emitted files -- detected from a content signature OR from living
     under a path a plugin declares that it writes (bootstrap_lib.code_review
@@ -849,11 +851,20 @@ def build_bundle(
         }
         for status, path in changed
     ]
-    # Materialize pre-images for claimed files BEFORE assembly so the front-half
-    # keeps the VCS-specific mechanics; assemble_bundle only routes/excludes.
+    # Materialize pre-images BEFORE assembly, so the front-half keeps the
+    # VCS-specific mechanics and assemble_bundle only reconstructs and
+    # dispatches. A claimed file always needs one -- the triviality guard reads
+    # it. Every OTHER changed file needs one only when a registered mechanical
+    # check reads the post-image, and each costs a `git show`, so the registry
+    # is asked rather than assumed: while it holds only added-line checks this
+    # loop does nothing extra, and it widens by itself when the first
+    # structured-parse check lands.
+    scan_needs_pre_image = requires_pre_image()
     for f in files:
-        if matches_claim(f["identifier"], claim_globs):
-            f["pre_image"] = materialize_preimage(range_spec, f["path"], bundle_dir)
+        if not (scan_needs_pre_image or matches_claim(f["identifier"], claim_globs)):
+            continue
+        f["pre_image"] = materialize_preimage(range_spec, f["path"], bundle_dir)
+        f["pre_image_is_empty"] = f["status"] == "A"
     core = assemble_bundle(
         preamble=preamble,
         sections=sections,

@@ -179,7 +179,7 @@ technique_skill:
             description>`, and `--project-root <bundle.project_root>` when the bundle has
             one. For reviewer_a and reviewer_b ONLY, also pass `--mechanical-scan-ran` and
             one `--mechanical-finding '<JSON object>'` per entry in
-            `diff_chunks[i].mechanical_findings`; pass no finding flags to reviewer_c.
+            `diff_chunks[i].mechanical_scan.files`; pass no finding flags to reviewer_c.
             The scan flag is required even when the list is empty, because an empty scan
             result differs from no scan. Its stdout is a JSON envelope whose `issues` array is that lane's candidate
             issues, in the same shape an Agent lane returns.
@@ -265,23 +265,22 @@ technique_skill:
             take it.
 
             Mechanical scan results -- reviewer_a and reviewer_b ONLY. Each chunk carries
-            `diff_chunks[i].mechanical_findings`: a list of already-made deterministic
-            findings over that chunk's ADDED lines, each `{file, line, check, detail}`,
-            where `check` is `non_ascii` or `abs_path`. Render them into the lane's prompt
-            under the heading "Mechanical scan (added lines only)" as one line per hit,
-            `- <file>:<line> [<check>] <detail>`, and tell the lane the scan has ALREADY
-            run over every added line, covers exactly those two checks, and that it must
-            neither re-scan for them nor report a hit the scan did not list. State
-            explicitly that the scan DETECTS but does not DECIDE: a listed hit is a
-            location, and whether a quotable rule forbids that instance is still the
-            lane's judgment (this repo, for one, permits box-drawing characters inside a
-            diagram and forbids them as punctuation).
-            When the list is EMPTY, say so in those words -- "no non-ASCII characters and
-            no absolute paths in the added lines" -- rather than omitting the section. A
-            silent section and an absent section read identically, and a lane that cannot
-            tell a clean scan from no scan has to re-scan to be safe, which is the
-            duplicated work this removes. Omit the section ENTIRELY only for reviewer_c,
-            which is not asked for either check.
+            `diff_chunks[i].mechanical_scan`, shaped as `{schema_version: 2, files:
+            [{file, checks_run, findings}]}`. Render its coverage and findings under
+            "Mechanical scan (added lines only)", one file at a time. For each file,
+            derive the covered-check list from THAT record's `checks_run`; render each id
+            with its human phrase from this generated registry map:
+            `non_ascii` = non-ASCII characters, `abs_path` = absolute paths. Render each finding as
+            `- <file>:<line> [<check>] <detail>`. An empty `checks_run` means no mechanical coverage for this file.
+            Named checks with an empty findings list mean those
+            checks ran cleanly. These states are different and neither may be omitted.
+            Tell the lane that for each listed file/check pair the scan has ALREADY run,
+            so it must neither re-run that check for that file nor report a hit the scan
+            did not list. A check omitted for one file remains reviewer scope for that
+            file, regardless of another file's coverage. State explicitly that the scan
+            DETECTS but does not DECIDE: a listed hit is a location, and whether a
+            quotable rule forbids that instance is still the lane's judgment. Omit the
+            section ENTIRELY only for reviewer_c, which is not assigned mechanical checks.
             Reviewers not listed in the selected profile are
             NOT launched. If bundle.diff_chunks is empty (range has no diff content) and
             no claimed file is NON-TRIVIAL (per the triviality gate above -- when a non-trivial

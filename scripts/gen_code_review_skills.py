@@ -51,6 +51,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 # forgot to regenerate" into a suite failure.
 sys.path.insert(0, str(REPO_ROOT / "plugins" / "bootstrap"))
 from bootstrap_lib.code_review import lane_prompts  # noqa: E402
+from bootstrap_lib.code_review.mechanical import REGISTRY  # noqa: E402
 GIT_SKILL = REPO_ROOT / "plugins/git-kit/skills/git-code-review/SKILL.md"
 P4_SKILL = REPO_ROOT / "plugins/p4-kit/skills/p4-code-review/SKILL.md"
 GIT_SUBMIT_GATES = REPO_ROOT / "plugins/git-kit/skills/git-code-review/references/submit-gates.md"
@@ -140,7 +141,7 @@ MODEL_KIND = """\
             description>`, and `--project-root <bundle.project_root>` when the bundle has
             one. For reviewer_a and reviewer_b ONLY, also pass `--mechanical-scan-ran` and
             one `--mechanical-finding '<JSON object>'` per entry in
-            `diff_chunks[i].mechanical_findings`; pass no finding flags to reviewer_c.
+            `diff_chunks[i].mechanical_scan.files`; pass no finding flags to reviewer_c.
             The scan flag is required even when the list is empty, because an empty scan
             result differs from no scan. Its stdout is a JSON envelope whose `issues` array is that lane's candidate
             issues, in the same shape an Agent lane returns.
@@ -593,23 +594,22 @@ technique_skill:
             take it.
 
             Mechanical scan results -- reviewer_a and reviewer_b ONLY. Each chunk carries
-            `diff_chunks[i].mechanical_findings`: a list of already-made deterministic
-            findings over that chunk's ADDED lines, each `{file, line, check, detail}`,
-            where `check` is `non_ascii` or `abs_path`. Render them into the lane's prompt
-            under the heading "Mechanical scan (added lines only)" as one line per hit,
-            `- <file>:<line> [<check>] <detail>`, and tell the lane the scan has ALREADY
-            run over every added line, covers exactly those two checks, and that it must
-            neither re-scan for them nor report a hit the scan did not list. State
-            explicitly that the scan DETECTS but does not DECIDE: a listed hit is a
-            location, and whether a quotable rule forbids that instance is still the
-            lane's judgment (this repo, for one, permits box-drawing characters inside a
-            diagram and forbids them as punctuation).
-            When the list is EMPTY, say so in those words -- "no non-ASCII characters and
-            no absolute paths in the added lines" -- rather than omitting the section. A
-            silent section and an absent section read identically, and a lane that cannot
-            tell a clean scan from no scan has to re-scan to be safe, which is the
-            duplicated work this removes. Omit the section ENTIRELY only for reviewer_c,
-            which is not asked for either check.
+            `diff_chunks[i].mechanical_scan`, shaped as `{schema_version: 2, files:
+            [{file, checks_run, findings}]}`. Render its coverage and findings under
+            "Mechanical scan (added lines only)", one file at a time. For each file,
+            derive the covered-check list from THAT record's `checks_run`; render each id
+            with its human phrase from this generated registry map:
+            @MECHANICAL_CHECK_PHRASES@. Render each finding as
+            `- <file>:<line> [<check>] <detail>`. An empty `checks_run` means no mechanical coverage for this file.
+            Named checks with an empty findings list mean those
+            checks ran cleanly. These states are different and neither may be omitted.
+            Tell the lane that for each listed file/check pair the scan has ALREADY run,
+            so it must neither re-run that check for that file nor report a hit the scan
+            did not list. A check omitted for one file remains reviewer scope for that
+            file, regardless of another file's coverage. State explicitly that the scan
+            DETECTS but does not DECIDE: a listed hit is a location, and whether a
+            quotable rule forbids that instance is still the lane's judgment. Omit the
+            section ENTIRELY only for reviewer_c, which is not assigned mechanical checks.
             Reviewers not listed in the selected profile are
             NOT launched. If bundle.diff_chunks is empty (@RANGE_OR_CL@ has no diff content) and
             no claimed file is NON-TRIVIAL (per the triviality gate above -- when a non-trivial
@@ -1383,6 +1383,10 @@ FRAGMENTS = {
 _SHARED = {
     "DISPATCH": DISPATCH,
     "MODEL_KIND": MODEL_KIND,
+    "MECHANICAL_CHECK_PHRASES": ", ".join(
+        f"`{check.check_id}` = {check.phrase}"
+        for check in REGISTRY
+    ),
     # The canonical reviewer prompts, rendered from the module the endpoint
     # runner imports so the two dispatch paths cannot state different rules.
     # Indented to sit under `canonical_prompt: |` in the subagents block.
@@ -1422,6 +1426,7 @@ _SKILL_TOKEN_ORDER = [
     # Model-kind rule: shared body carrying a nested @LANE_TOOL@ -- substitute
     # the block first, then that token resolves below.
     "MODEL_KIND",
+    "MECHANICAL_CHECK_PHRASES",
     "REVIEWER_A_PROMPT", "REVIEWER_B_PROMPT", "REVIEWER_C_PROMPT",  # rendered prompt text, no nested @tokens@
     "MD_DOMAIN_LAUNCH", "MD_DOMAIN_REPORT",  # shared, no nested @tokens@
     "GENERATED_REPORT",  # shared, no nested @tokens@

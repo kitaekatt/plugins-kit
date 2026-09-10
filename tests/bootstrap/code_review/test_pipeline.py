@@ -1219,6 +1219,35 @@ class TestMechanicalFindingsReachReviewedFiles:
         assert core["diff_chunks"][0]["mechanical_findings"] == []
         assert core["changed_files"][0]["mechanical_findings"] == []
 
+    def test_v2_scan_preserves_per_file_coverage(self, tmp_path):
+        core = assemble_bundle(
+            preamble="",
+            sections=[
+                {
+                    "identifier": "src/a.py",
+                    "text": "@@ -0,0 +1,1 @@\n+clean line\n",
+                },
+                {"identifier": "asset.bin", "text": "Binary files differ\n"},
+            ],
+            files=[
+                {"identifier": "src/a.py", "local": None},
+                {"identifier": "asset.bin", "local": None},
+            ],
+            bundle_dir=tmp_path / "b",
+            max_chunk_bytes=1024 * 1024,
+            workspace_root=None,
+        )
+        scan = core["diff_chunks"][0]["mechanical_scan"]
+        assert scan["schema_version"] == 2
+        assert scan["files"] == [
+            {
+                "file": "src/a.py",
+                "checks_run": ["non_ascii", "abs_path"],
+                "findings": [],
+            },
+            {"file": "asset.bin", "checks_run": [], "findings": []},
+        ]
+
     def test_a_NON_trivial_claimed_file_is_scanned(self, tmp_path):
         """The inverted guard. `mechanical_checks` ran only when `trivial` was
         true -- i.e. only where no lane would read it. A non-trivial claimed

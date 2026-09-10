@@ -42,6 +42,7 @@ from bootstrap_lib.code_review.machine_emitted_paths import (
     declared_generated_rules,
     match_declared_path,
 )
+from bootstrap_lib.code_review.mechanical import scan_file
 from bootstrap_lib.code_review.triviality import (
     mechanical_checks,
     mechanical_findings,
@@ -188,6 +189,19 @@ def annotate_triviality(entry: dict, section_text: str) -> None:
     # scan and being reviewed was never a reason not to: the scan answers its
     # own questions, and the reviewer's remaining scope is what changes.
     entry["mechanical_findings"] = mechanical_findings(section_text)
+
+
+def _review_pre_image_text(entry: dict) -> Optional[str]:
+    """Read the materialized review pre-image, never the live file."""
+    if entry.get("pre_image_is_empty"):
+        return ""
+    pre_path = entry.get("pre_image")
+    if not pre_path:
+        return None
+    try:
+        return Path(pre_path).read_text(encoding="utf-8")
+    except (OSError, UnicodeError):
+        return None
 
 
 def run_vcs(
@@ -364,7 +378,8 @@ def assemble_bundle(
     the pre-rename "generated_axis" / "generated_signature" spellings with
     identical values (see the compat aliases below).
 
-    Each changed_files entry is the input dict minus "identifier", plus
+    Each changed_files entry is the input dict minus internal snapshot fields
+    and "identifier", plus
     "chunk_index" (int or None when absent from the diff), "claude_mds"
     (nearest-ancestor-first absolute paths) and "mechanical_findings". Each
     claimed_files entry is the input dict verbatim (identifier retained),
@@ -381,6 +396,13 @@ def assemble_bundle(
     the scan answers its own questions independently of whether an agent also
     runs. What being reviewed changes is who consumes the result, not whether
     it is computed. See bootstrap_lib.code_review.triviality.
+
+    Each diff_chunks entry also carries "mechanical_scan", a version 2 object
+    with one record per file: {file, checks_run, findings}. Coverage is local to
+    that file. An empty checks_run means no check met its preconditions, while
+    a non-empty checks_run plus empty findings means those checks ran cleanly.
+    Seam B, for repository-wide and changed-file-set checks, is deliberately
+    not implemented by this file-local scan.
     """
     if review_generated is not None:
         # Deprecated spelling. Honour it, but never silently pick a winner when
@@ -480,6 +502,7 @@ def assemble_bundle(
     claimed_files: list[dict] = []
     machine_emitted_files: list[dict] = []
     unchunked_files: list[dict] = []
+    scans_by_ident: dict[str, dict[str, object]] = {}
     unique: list[str] = []
     seen: set[str] = set()
     all_locals: list[str] = []
@@ -514,6 +537,7 @@ def assemble_bundle(
             # instead -- plus located `mechanical_findings` for the lane that
             # reviews a NON-trivial claimed file.
             annotate_triviality(entry, id_to_text.get(f["identifier"], ""))
+            entry.pop("pre_image_is_empty", None)
             claimed_files.append(entry)
             continue
         if f["identifier"] in machine_emitted_sigs:
@@ -522,7 +546,11 @@ def assemble_bundle(
             # NOT review. Size is reported because "how much review was skipped"
             # is the question a reader asks next; it is never why the file was
             # skipped.
-            entry = dict(f)
+            entry = {
+                k: v
+                for k, v in f.items()
+                if k not in {"pre_image", "pre_image_is_empty", "action"}
+            }
             if local:
                 entry["local"] = canonical_local(local)
             axis, label = machine_emitted_sigs[f["identifier"]]
@@ -537,7 +565,11 @@ def assemble_bundle(
             entry["size_bytes"] = size
             machine_emitted_files.append(entry)
             continue
-        out = {k: v for k, v in f.items() if k != "identifier"}
+        out = {
+            k: v
+            for k, v in f.items()
+            if k not in {"identifier", "pre_image", "pre_image_is_empty", "action"}
+        }
         if local:
             out["local"] = canonical_local(local)
         out["chunk_index"] = id_to_chunk.get(f["identifier"])
@@ -551,6 +583,11 @@ def assemble_bundle(
         # NOT-AUDITED, which a caller misreads as a pass.
         out["mechanical_findings"] = mechanical_findings(
             id_to_text.get(f["identifier"], "")
+        )
+        scans_by_ident[f["identifier"]] = scan_file(
+            f["identifier"],
+            id_to_text.get(f["identifier"], ""),
+            pre_image_text=_review_pre_image_text(f),
         )
         if out["chunk_index"] is None:
             unchunked_files.append(
@@ -583,6 +620,10 @@ def assemble_bundle(
             for finding in findings_by_ident.get(ident, []):
                 chunk_findings.append({"file": ident, **finding})
         entry["mechanical_findings"] = chunk_findings
+        entry["mechanical_scan"] = {
+            "schema_version": 2,
+            "files": [scans_by_ident[ident] for ident in entry["files"]],
+        }
 
     submit_gates = collect_submit_gates(unique, all_locals, workspace_root)
 

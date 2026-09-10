@@ -6,7 +6,7 @@ disqualifier the design enumerates (keyword flip, link change, heading rename,
 absolute paths over the changed lines only).
 """
 
-from bootstrap_lib.code_review import triviality
+from bootstrap_lib.code_review import mechanical, triviality
 from bootstrap_lib.code_review.triviality import (
     mechanical_checks,
     mechanical_findings,
@@ -141,7 +141,7 @@ class TestMechanicalChecks:
         }
 
     def test_non_ascii_flagged(self):
-        diff = _hunk("@@ -1,1 +1,1 @@", "-plain", "+smärt quote")
+        diff = _hunk("@@ -1,1 +1,1 @@", "-plain", "+sm\u00e4rt quote")
         assert triviality.mechanical_checks(diff)["ascii_clean"] is False
 
     def test_windows_abs_path_flagged(self):
@@ -231,3 +231,27 @@ class TestMechanicalFindings:
     def test_empty_and_unparseable_diffs_yield_no_findings(self):
         assert mechanical_findings("") == []
         assert mechanical_findings("not a diff at all\n") == []
+
+
+class TestMechanicalRegistry:
+    def test_registry_contract_and_snapshot_preconditions(self):
+        entries = {
+            check.check_id: (check.phrase, check.required_inputs)
+            for check in mechanical.REGISTRY
+        }
+        assert entries["non_ascii"] == (
+            "non-ASCII characters",
+            frozenset({"added_lines"}),
+        )
+        assert entries["abs_path"] == (
+            "absolute paths",
+            frozenset({"added_lines"}),
+        )
+        assert mechanical.LEGACY_CHECK_IDS == ("non_ascii", "abs_path")
+        diff = _hunk("@@ -2,1 +2,1 @@", "-old", "+new")
+        snapshot = mechanical.build_snapshot(
+            "config/example.json", diff, pre_image_text="before\nold\nafter\n"
+        )
+        assert snapshot.post_image_text == "before\nnew\nafter"
+        scan = mechanical.scan_file("asset.bin", "Binary files differ\n")
+        assert scan == {"file": "asset.bin", "checks_run": [], "findings": []}

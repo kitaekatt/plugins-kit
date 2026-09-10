@@ -69,6 +69,20 @@ class TestDispatchRulePresent:
             assert "Workflow tool" in body
 
 
+class TestMechanicalScanContract:
+    def test_both_skills_derive_per_file_coverage_from_the_registry(self):
+        phrases = ", ".join(
+            f"`{check.check_id}` = {check.phrase}" for check in gen.REGISTRY
+        )
+        for vcs in ("git", "p4"):
+            body = gen.render_skill(vcs)
+            assert "diff_chunks[i].mechanical_scan" in body
+            assert "derive the covered-check list from THAT record" in body
+            assert phrases in body
+            assert "no mechanical coverage for this file" in body
+            assert "covers exactly those two checks" not in body
+
+
 class TestMdDomainContributorPresent:
     """The subject-lens md-domain wiring must reach BOTH skills verbatim."""
 
