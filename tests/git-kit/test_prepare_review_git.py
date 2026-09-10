@@ -8,7 +8,9 @@ runs in one process.
 """
 
 import json
+import os
 import subprocess
+import sys
 from pathlib import Path
 from unittest.mock import patch
 
@@ -139,6 +141,73 @@ class TestRunGit:
 
         assert captured.get("timeout") == 60.0
 
+
+class TestBootstrapDependencyDiagnostics:
+    @staticmethod
+    def _run_prepare(env: dict[str, str]) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [sys.executable, "-S", str(Path(pr.__file__))],
+            capture_output=True,
+            text=True,
+            env=env,
+            check=False,
+        )
+
+    def test_absent_bootstrap_reports_install_remedy(self, tmp_path):
+        env = dict(os.environ)
+        env["_BOOTSTRAP_GUARD_VENV_REEXEC"] = "1"
+        env["PYTHONPATH"] = str(tmp_path)
+
+        completed = self._run_prepare(env)
+
+        assert completed.stderr == (
+            "[git-kit] the 'plugins-kit:bootstrap' plugin has not provisioned "
+            "git-kit's code review (missing: bootstrap_lib). Install/enable the "
+            "bootstrap plugin and start a new session so it can build this "
+            "plugin's dependencies, then retry.\n"
+        )
+
+    def test_manifest_requires_bootstrap_0101_api_floor(self):
+        manifest = json.loads(
+            Path("plugins/git-kit/bootstrap.json").read_text(encoding="utf-8")
+        )
+
+        assert manifest["requires_bootstrap"] == "0.101.0"
+
+    def test_bootstrap_without_run_vcs_timeout_reports_update_remedy(self, tmp_path):
+        bootstrap_package = tmp_path / "bootstrap_lib"
+        code_review_package = bootstrap_package / "code_review"
+        code_review_package.mkdir(parents=True)
+        (bootstrap_package / "__init__.py").write_text("", encoding="utf-8")
+        (code_review_package / "__init__.py").write_text("", encoding="utf-8")
+        (bootstrap_package / "path_repair.py").write_text(
+            "def repair_path() -> None:\n"
+            "    return None\n",
+            encoding="utf-8",
+        )
+        (code_review_package / "ledger.py").write_text("", encoding="utf-8")
+        (code_review_package / "pipeline.py").write_text(
+            "assemble_bundle = emit_bundle = matches_claim = None\n"
+            "preimage_relpath = split_sections = None\n"
+            "def run_vcs(executable: str, args: list[str], cwd: object = None) "
+            "-> tuple[int, str, str]:\n"
+            "    return 0, '', ''\n",
+            encoding="utf-8",
+        )
+        env = dict(os.environ)
+        env["_BOOTSTRAP_GUARD_VENV_REEXEC"] = "1"
+        env["PYTHONPATH"] = str(tmp_path)
+
+        completed = self._run_prepare(env)
+
+        assert completed.stderr == (
+            "[git-kit] the installed 'plugins-kit:bootstrap' plugin is too old "
+            "or stale for git-kit's code review (requires bootstrap >= 0.101.0; "
+            "missing: bootstrap_lib.code_review.pipeline.run_vcs(timeout=...), "
+            "bootstrap_lib.code_review.mechanical). "
+            "Run `claude plugin update bootstrap@plugins-kit`. Then start a new "
+            "session and retry.\n"
+        )
 
 # ---------------------------------------------------------------------------
 # detect_default_range -- G2: auto-detect on main/master without upstream

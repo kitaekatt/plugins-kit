@@ -24,7 +24,7 @@ technique_skill:
       - surfacing path-scoped pre-submit reminders (submit gates) from CLAUDE.md
     excludes:
       - git diffs and non-Perforce review workflows
-      - persisting review output to disk or Swarm
+      - publishing the rendered review to Swarm or a PR comment
       - reviewing previously-submitted changelists
       - enforcing submit gates (advisory only; enforcement belongs in a pre-shelve/pre-submit hook)
   techniques:
@@ -38,7 +38,7 @@ technique_skill:
         - n: 1
           action: Resolve the CL number (from argument, else list pending CLs and prompt the user).
           tool: p4
-          input: "p4 -ztag changes -s pending -u $(p4 set -q P4USER | cut -d= -f2) -m 20"
+          input: "p4 changes --me -s pending -m 20"
           expected: A single integer CL number confirmed by the user.
         - n: 2
           action: |
@@ -61,7 +61,7 @@ technique_skill:
             `**/*.md` glob supersedes the older two-glob form; `.md.html`
             (Markdeep) is NOT `.md`, so it is deliberately left to the generic reviewers. If
             md-domain is NOT available, invoke
-            prepare with NO `--claim` flags -- degrade silently to today's behavior (the md files get
+            prepare with NO `--claim` flags -- degrade silently to the generic review path (the md files get
             thin generic data_only coverage), noting the degradation in one line. A second prepare invocation is
             reserved for the foreign-client claim refusal below.
             Then run prepare_review.py to fetch the diff (with shelved fallback; auto-shelves a pending CL with no existing shelf so the diff is fetchable), partition the diff into chunked .diff fragments on disk, map ancestor CLAUDE.md files for each changed file, detect unreconciled and default-changelist files in the directories the CL touches, detect unresolved merges in the CL, and scan ancestor CLAUDE.md files for submit-gate reminders that apply to this CL.
@@ -115,13 +115,12 @@ technique_skill:
           action: |
             If bundle.submit_gates is non-empty, DISCHARGE each gate yourself. Do NOT ask the
             user to confirm it.
-            A submit gate is an instruction to whoever performed the work in this range. In an
-            agent-driven session that is YOU: you made these edits, so you are the one who can
-            say whether the obligation is met. Asking the user "which of these have you already
-            done?" asks them to account for work they did not do -- they cannot answer it, and
-            an "I don't know" is neither a confirmation nor a decline, so the gate collects
-            nothing. A gate is preflight, and preflight is the operator's job, not the
-            passenger's.
+            Discharge each gate yourself against the change. A gate is evaluated from the diff,
+            the repo, and commands you can run, not from anyone's memory of what was done. This
+            rule applies when you made the edits in this session. It also applies when the user
+            handed you a change they wrote by hand. In neither case is "did you do it?" evidence.
+            An "I don't know" is neither a confirmation nor a decline. A gate answered that way
+            collects nothing while appearing to have run.
             For each gate, decide from the change itself and record ONE verdict:
               - MET -- the obligation is satisfied. State HOW, citing the specific evidence in
                 this range (a file, a key and its default, a test, a command you ran and its
@@ -226,8 +225,9 @@ technique_skill:
             and skill reference: ancestorClaudeMdPaths; project-doc: ancestorClaudeMdPaths) resolved from each claimed file's
             `claude_mds` per references/md-domain-review.md. Resolve the skills-kit plugin root and
             venvPython defensively per that reference. On a skills-kit version skew (a detect lane
-            entry point or documented args contract missing, OR an installed `audit_skill` lane that
-            predates the skill-REFERENCE subject), do NOT guess -- re-run prepare_review.py
+            entry point, `discover_claude_md.classify_dimension`, or a documented args contract
+            missing, OR an installed `audit_skill` lane that predates the skill-REFERENCE subject),
+            do NOT guess -- re-run prepare_review.py
             per the THREE-TIER fallback in references/md-domain-review.md (broad skew re-runs with no
             `--claim`; project-doc-only skew keeps the CLAUDE.md / SKILL.md / skill-reference
             claims; skill-reference skew re-adds the `!**/skills/*/references/*.md` exclusion as a
@@ -451,24 +451,24 @@ technique_skill:
         - Always quote the exact CLAUDE.md rule text when flagging a claude_md issue. If you cannot quote it verbatim, do not flag it.
         - Sequential reviewer or validator calls waste time. Reviewers run in one message with one concurrent Agent call per (reviewer x chunk) pair (R reviewers x K chunks). For a small CL (K=1) that's still 2 calls for data_only / 3 for code; for a large CL (K=N) it scales to R x N. Validators run in one message with N concurrent Agent calls.
         - Each reviewer subagent reads ONE chunk path, not the whole diff. Do not pass `bundle_dir` and expect the subagent to glob -- pass the absolute chunk path the subagent should Read.
-        - Render only -- this skill outputs in chat. There is no Swarm comment, PR comment, or disk write step.
+        - The rendered review stays in chat. This skill does not post a Swarm or PR comment. prepare_review.py writes transient diff chunks, bundle.json, and pre-images under bundle.bundle_dir. ledger.py writes a durable ledger.json.
         - If prepare_review.py fails, report the error and stop. No retry.
         - Validators are independent of reviewers. The validator does not see who flagged the issue.
         - The unreconciled and default-changelist checks must happen BEFORE reviewers spawn. Folding in files after agents reviewed the diff wastes their work and produces a stale review.
         - On the post-fold re-run, do NOT prompt again about unreconciled or default-changelist files. The user chose once. Re-prompting on the same list is annoying; re-prompting on a smaller list implies the rest were forgotten when they were declined.
         - Submit gates are reminders, not findings -- they do NOT go through reviewer or validator subagents. They are parsed deterministically by prepare_review.py and rendered verbatim in a separate output section. Do not try to validate, score, or filter them.
-        - A submit gate is addressed to whoever did the work, and in an agent-driven session that is YOU. Discharge it yourself against the change; never ask the user which obligations they have completed. They did not make these edits and cannot answer, and an "I don't know how to answer this" is neither a confirmation nor a decline -- the gate then collects nothing while appearing to have run. Preflight is the operator's job, not the passenger's.
-        - A MET verdict means met WITH EVIDENCE. Name the file, the key and its default, the test, or the command and its result. A verdict with no evidence is the same empty signal as an unanswered prompt, just harder to notice.
-        - NEEDS THE USER is for a fact you cannot derive -- an external system's state, a check that only runs on their hardware, an intent only they hold. It is not an escape hatch for a gate that is tedious to evaluate, and when you do use it, ask for that specific fact rather than asking whether they did the work.
         - A NOT MET gate is a finding. Render it and do not describe the review as clean.
         - Unresolved merges are NOT findings -- they do NOT go through reviewer or validator subagents. They are detected deterministically by prepare_review.py (`p4 resolve -n -c <CL>`) and rendered verbatim in a separate output section. The reviewers see the raw diff (including any conflict markers) and may legitimately flag bugs in it; the unresolved section is a separate informational warning to the user.
         - Auto-shelf cleanup (step 10) must run whenever `bundle.auto_shelved` is true, no matter what happened in steps 3-9. The cleanup script is deterministic and safe (it only deletes the shelf when the live fingerprint exactly matches what we recorded), so there is no scenario where skipping it is the right call. Skipping leaves an orphan shelf the author didn't ask for.
         - --claim requires a PENDING CL. On a submitted CL, `#have` pre-images are POST-change once the workspace synced past the CL, so prepare_review exits with an error when --claim is passed on a submitted CL; re-run without --claim for a plain informational review.
+        - Discharge each submit gate yourself against the change. A gate is evaluated from the diff, the repo, and commands you can run, not from anyone's memory of what was done. This rule applies when you made the edits in this session. It also applies when the user handed you a change they wrote by hand. In neither case is "did you do it?" evidence. An "I don't know" is neither a confirmation nor a decline. A gate answered that way collects nothing while appearing to have run.
+        - A MET verdict means met WITH EVIDENCE. Name the file, the key and its default, the test, or the command and its result. A verdict with no evidence is the same empty signal as an unanswered prompt, just harder to notice.
+        - NEEDS THE USER is for a fact you cannot derive -- an external system's state, a check that only runs on their hardware, an intent only they hold. It is not an escape hatch for a gate that is tedious to evaluate, and when you do use it, ask for that specific fact rather than asking whether they did the work.
         - md-domain findings are a SEPARATE, labeled section -- never interleave them with the code-review issue list. They come from md-domain's detect lanes (a subject-lens reviewer), not from the generic reviewer/validator subagents, so they are not filtered by the validators.
         - The claim decision happens ONCE, at the step-2 probe: md-domain available -> `--claim '**/*.md'` (one glob covering CLAUDE.md, SKILL.md, a skill's `references/*.md`, and generic docs); md-domain absent -> no `--claim`. Claiming a skill's `references/*.md` assumes the INSTALLED audit_skill lane owns that subject shape; these kits declare no version constraint on skills-kit, so step 6 probes for it by capability and the skill-reference skew tier re-adds the exclusion when it is missing. Do not run prepare a second time just to add claims -- the only re-runs are the version-skew FALLBACKS (broad skew re-runs WITHOUT `--claim`; project-doc-only skew re-runs with `--claim '**/CLAUDE.md' --claim '**/SKILL.md' --claim '**/skills/*/references/*.md'`; skill-reference skew re-adds the `!**/skills/*/references/*.md` exclusion as a compatibility shim).
         - Claimed `.md` files route THREE ways in step 6 -- `CLAUDE.md` -> the `audit_claude_md` lane; `SKILL.md` OR a file inside a `*/skills/<name>/references/` folder -> the `audit_skill` lane (its two subject shapes); every other `.md` -> the `audit_project_doc` lane (full routing table in references/md-domain-review.md; `.md.html` is never claimed). Never claim a shape no lane can audit: a declined file comes back NOT-AUDITED, which a caller can misread as a pass.
         - A `NOT-AUDITED` verdict from a lane is NOT a pass. It means the lane declined the file as outside its criteria and read nothing. Render it as its own line, never fold it into the clean count, and never let it satisfy a submit gate -- treat it like the `## Mechanical checks (audit skipped)` section: an honest "not reviewed", not a result. Seeing one on a claimed file means the claim routing sent a file somewhere that cannot audit it; report that rather than accepting the verdict.
-        - When skills-kit md-domain is absent the whole mechanism degrades silently: no `--claim`, no claimed_files, no md-domain section -- the md files get today's thin generic data_only coverage. Note the degradation in one line; do not treat it as an error.
+        - When skills-kit md-domain is absent the whole mechanism degrades silently: no `--claim`, no claimed_files, no md-domain section -- the md files get thin generic data_only coverage. Note the degradation in one line; do not treat it as an error.
         - The triviality gate is pure-mechanical and decided by prepare_review (per-claimed-file `trivial` / `trivial_reasons`); the skill never re-judges it. A TRIVIAL claimed file is reported via the mechanical-checks line and is NEVER sent to a detect lane or written to the ledger. When EVERY claimed file is trivial and there are no generic diff chunks, the whole audit is skipped -- render the `## Mechanical checks (audit skipped)` section, never a DIFF-CLEAN verdict, and never present the skip as an audit. A user or author asking for the full review overrides the gate.
         - The Workflow tool is unavailable inside subagents. Launch the md-domain detect-lane Workflow from the MAIN session (the same message that fans out the reviewers), never from within a reviewer subagent.
         - A machine-emitted file is NEVER a pass. `bundle.machine_emitted_files` means "not reviewed", exactly like a `NOT-AUDITED` verdict or the `## Mechanical checks (audit skipped)` section: render it as its own honest line, never inside the clean count, never as DIFF-CLEAN, and never as satisfying a submit gate.

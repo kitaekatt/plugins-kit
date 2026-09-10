@@ -7,8 +7,8 @@ the shared back-half drifted by accident -- a fix landed in one kit's SKILL.md
 and never reached the other (findings G6/G7 of the 2026-06-09 architecture
 review).
 
-Both SKILL.md files AND both references/submit-gates.md files are now rendered
-from ONE template + a per-VCS substitution table in
+Both SKILL.md files, their shared references, and all effort agents are rendered
+from shared templates plus per-VCS substitutions in
 scripts/gen_code_review_skills.py. This test asserts the committed files are
 byte-identical to what the generator renders, so the two kits cannot drift: a
 hand-edit to either rendered file fails the byte-identity check, and a template
@@ -17,8 +17,8 @@ tests/skills-kit/test_workflow_js_drift.py.
 
 To change either skill: edit the template/fragments in
 scripts/gen_code_review_skills.py, run
-`uv run python scripts/gen_code_review_skills.py`, and commit all four rendered
-files together.
+`uv run python scripts/gen_code_review_skills.py`, and commit every rendered file
+together.
 
 Lives in tests/bootstrap/code_review/ because the invariant is the shared
 review-pipeline contract embodied by bootstrap_lib/code_review -- neither kit
@@ -576,3 +576,15 @@ class TestP4ClaimProbeSubstitution:
         fallback = "once unless the foreign-client fallback below applies"
         assert fallback in gen.render_skill("p4")
         assert fallback not in gen.render_skill("git")
+
+
+class TestP4PendingChangeLookup:
+    """The picker asks p4 for the effective user's pending changes."""
+
+    def test_uses_the_effective_user_directly(self):
+        body = gen.P4_SKILL.read_text(encoding="utf-8")
+        assert 'input: "p4 changes --me -s pending -m 20"' in body
+
+    def test_does_not_derive_the_user_from_configured_variables(self):
+        body = gen.P4_SKILL.read_text(encoding="utf-8")
+        assert "p4 set -q P4USER" not in body

@@ -110,9 +110,9 @@ def test_the_exemption_does_not_widen_to_neighbouring_paths():
 def test_exempt_paths_match_the_generator_targets():
     """The allowlist is the generator's output set, and stays that way.
 
-    Two hand-maintained lists of the same ten paths would drift, and the drift
-    would be silent in the direction that matters: a renamed target would be
-    refused at commit time with a message about project data.
+    Two hand-maintained lists of the same paths would drift, and the drift
+    would be silent in the direction that matters: a renamed or added target
+    would be refused at commit time with a message about project data.
     """
     spec = importlib.util.spec_from_file_location(
         "gen_code_review_skills", ROOT / "scripts" / "gen_code_review_skills.py"

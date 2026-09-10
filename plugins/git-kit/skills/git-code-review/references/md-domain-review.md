@@ -21,7 +21,7 @@ passing verdict -- a fake gate. At the time no audit lane read a skill reference
 shape was carved out of the claim entirely and returned to the generic reviewers.
 
 That carve-out was a placeholder for the real fix, and the real fix has shipped: the `audit_skill`
-lane now owns BOTH of the `skill` artifact's subject shapes -- the SKILL.md contract root AND the
+lane owns BOTH of the `skill` artifact's subject shapes -- the SKILL.md contract root AND the
 skill's `references/*.md` documents, the latter under skill-standards.md section 10 (inbound anchor
 integrity, internal consistency, claim calibration, reader fit, plus the shared ancestor-convention
 and back-reference checks). The claim is therefore a single `**/*.md` glob again, and the routing in
@@ -87,9 +87,10 @@ missing, a documented args contract is not what this doc describes, or the insta
 a subject shape this skill claims. Check the tiers in order and take the FIRST that matches:
 
 - **Broad skew** -- `<root>` cannot be located, OR the `claude-md-detect.js` / `skill-detect.js`
-  entry point or args contract is missing: emit a one-line warning and RE-RUN prepare_review.py
-  WITHOUT any `--claim` flags. All claimed md files return to `changed_files` for generic review,
-  and the whole md-domain section is skipped for this run.
+  entry point or args contract is missing, OR `discover_claude_md.classify_dimension is unavailable`:
+  emit a one-line warning and RE-RUN prepare_review.py WITHOUT any `--claim` flags. All claimed md
+  files return to `changed_files` for generic review, and the whole md-domain section is skipped for
+  this run.
 - **project-doc-only skew** -- `claude-md-detect.js` and `skill-detect.js` are present but ONLY
   `project-doc-detect.js` is missing (a skills-kit that predates
   project-doc review): emit a one-line warning and RE-RUN prepare_review.py with
@@ -164,9 +165,13 @@ For a **CLAUDE.md** file (`audit_claude_md` lane `files[]`):
 - `path` = `local`.
 - `role` = `"child"` when `ancestorClaudeMdPaths` is non-empty, else `"root"` (a standalone file
   with no ancestor CLAUDE.md audits as its natural role). Use `"local"` for a `CLAUDE.local.md`.
-- `dimension` = `"classic"` by default; `"code-directory"` only if the file has code/yaml/csv
-  siblings and no `claude_md:` block (the heuristic in
-  `<root>/skills/md-domain/scripts/discover_claude_md.py`). When unsure, `"classic"`.
+- `dimension` = call the shipped classifier for this file and use its stdout (`"classic"` or
+  `"code-directory"`) verbatim. Run it with the already-resolved skills-kit interpreter and root:
+
+      "<venvPython>" -c 'import sys; from pathlib import Path; sys.path.insert(0, sys.argv[1]); from discover_claude_md import classify_dimension; print(classify_dimension(Path(sys.argv[2])))' "<root>/skills/md-domain/scripts" "<local>"
+
+  The imported script makes the skills-kit plugin root available to its own dependencies. If the
+  import or call fails, take the broad-skew fallback above. Do not derive the dimension by hand.
 - `parentPath` = the FIRST entry of `ancestorClaudeMdPaths` (the nearest ancestor CLAUDE.md), else
   `null`.
 - `parentPreImagePath` = if that `parentPath` is ITSELF a claimed file (it changed in this review),

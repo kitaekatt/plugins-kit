@@ -14,7 +14,7 @@ fan-out (its diff is excluded from the chunks and it is dropped from
 `changed_files`) and surfaced under `claimed_files` instead, with its pre-image
 materialized to `<bundle_dir>/pre-images/<name>`. Claimed files still contribute
 to `unique_claude_mds` and the submit-gate scan. With no `--claim` the bundle is
-byte-identical to today's (no `claimed_files` key).
+byte-identical to the pre-claim bundle contract (no `claimed_files` key).
 
 A glob prefixed with `!` is an EXCLUSION and beats every positive pattern, so a
 caller can claim a broad shape while carving out a subset that no specialist
@@ -111,11 +111,13 @@ Stderr-only diagnostics. Non-zero exit on hard failure.
 """
 
 import hashlib
+import importlib
+import inspect
 import os
 import re
 import sys
 from pathlib import Path
-from typing import Optional
+from typing import NoReturn, Optional
 
 # Plugins define their own bootstrap-provisioned venv and must run under it
 # preferentially. A bare `python` or `uv run` invocation lands in a different
@@ -127,33 +129,71 @@ from bootstrap_guard import data_dir, reexec_under_plugin_venv  # noqa: E402
 
 reexec_under_plugin_venv("git-kit")
 
-try:
-    from bootstrap_lib.path_repair import repair_path  # noqa: E402
+_MIN_BOOTSTRAP_VERSION = "0.101.0"
+_BOOTSTRAP_FRONTIER = (
+    "bootstrap_lib.code_review.pipeline.run_vcs(timeout=...), "
+    "bootstrap_lib.code_review.mechanical"
+)
 
-    # Shared VCS-neutral review pipeline -- subprocess wrapper, section
-    # splitting, chunking + CLAUDE.md walk + submit-gate scan, bundle
-    # emission. See bootstrap_lib/code_review/pipeline.py.
-    from bootstrap_lib.code_review.pipeline import (  # noqa: E402
-        assemble_bundle,
-        emit_bundle,
-        matches_claim,
-        preimage_relpath,
-        run_vcs,
-        split_sections,
+
+def _exit_bootstrap_too_old() -> NoReturn:
+    """Refuse a review when bootstrap lacks the required shared API."""
+    from bootstrap_guard import EXIT_BOOTSTRAP_MISSING
+
+    print(
+        "[git-kit] the installed 'plugins-kit:bootstrap' plugin is too old or "
+        "stale for git-kit's code review "
+        f"(requires bootstrap >= {_MIN_BOOTSTRAP_VERSION}; "
+        f"missing: {_BOOTSTRAP_FRONTIER}). Run "
+        "`claude plugin update bootstrap@plugins-kit`. Then start a new "
+        "session and retry.",
+        file=sys.stderr,
     )
-    from bootstrap_lib.code_review import ledger  # noqa: E402
-    from bootstrap_lib.code_review.mechanical import (  # noqa: E402
-        requires_pre_image,
-    )
-except ImportError:
-    # bootstrap_lib is absent -> the bootstrap plugin never provisioned this
-    # plugin's venv. Convert the raw ModuleNotFoundError traceback into an
-    # actionable "install/enable plugins-kit:bootstrap" message and exit.
+    sys.exit(EXIT_BOOTSTRAP_MISSING)
+
+
+try:
+    review_pipeline = importlib.import_module("bootstrap_lib.code_review.pipeline")
+    ledger = importlib.import_module("bootstrap_lib.code_review.ledger")
+except ModuleNotFoundError as exc:
     from bootstrap_guard import require_bootstrap
 
-    require_bootstrap(
-        "git-kit", feature="code review", missing="bootstrap_lib", force=True
-    )
+    if exc.name == "bootstrap_lib":
+        require_bootstrap(
+            "git-kit", feature="code review", missing="bootstrap_lib", force=True
+        )
+    _exit_bootstrap_too_old()
+except ImportError:
+    _exit_bootstrap_too_old()
+
+# `run_vcs(timeout=...)` is the frontier API. Importing its module cannot prove
+# that the linked bootstrap copy accepts the keyword, so inspect the signature
+# before any review path can call it.
+try:
+    run_vcs_parameters = inspect.signature(review_pipeline.run_vcs).parameters
+except (AttributeError, TypeError, ValueError):
+    _exit_bootstrap_too_old()
+if "timeout" not in run_vcs_parameters:
+    _exit_bootstrap_too_old()
+
+from bootstrap_lib.path_repair import repair_path  # noqa: E402
+
+# Shared VCS-neutral review pipeline -- subprocess wrapper, section
+# splitting, chunking + CLAUDE.md walk + submit-gate scan, bundle
+# emission. See bootstrap_lib/code_review/pipeline.py.
+from bootstrap_lib.code_review.pipeline import (  # noqa: E402
+    assemble_bundle,
+    emit_bundle,
+    matches_claim,
+    preimage_relpath,
+    run_vcs,
+    split_sections,
+)
+
+# The Seam A check registry. Imported for `requires_pre_image` alone: it answers
+# whether any registered check reads a post-image, and so whether this front-half
+# should spend a `git show` per changed file materializing pre-images.
+from bootstrap_lib.code_review.mechanical import requires_pre_image  # noqa: E402
 
 repair_path()
 
@@ -815,10 +855,17 @@ def build_bundle(
 ) -> dict:
     """Gather context for `range_spec`, write chunks to disk, return the index bundle.
 
-    Changed-file pre-images are materialized into the bundle so file-local
-    mechanical checks can reconstruct the immutable post-image under review.
-    When `claim_globs` is non-empty, matching files are held back from generic
-    reviewers (see assemble_bundle) and surfaced under `claimed_files`.
+    When `claim_globs` is non-empty, changed files whose repo-relative path
+    matches a claim pattern are held back from the generic reviewers (see
+    assemble_bundle): their pre-image is materialized into the bundle and they
+    are surfaced under a top-level `claimed_files` list instead of
+    `changed_files`. When empty the bundle is byte-identical to the pre-claim
+    bundle contract.
+
+    An UNCLAIMED file's pre-image is materialized only when a registered
+    mechanical check reads the post-image, because each one costs a `git show`.
+    File-local parsers need the git snapshot under review, which can differ from
+    the live worktree for staged and historical ranges.
 
     Machine-emitted files -- detected from a content signature OR from living
     under a path a plugin declares that it writes (bootstrap_lib.code_review
@@ -851,20 +898,18 @@ def build_bundle(
         }
         for status, path in changed
     ]
-    # Materialize pre-images BEFORE assembly, so the front-half keeps the
-    # VCS-specific mechanics and assemble_bundle only reconstructs and
-    # dispatches. A claimed file always needs one -- the triviality guard reads
-    # it. Every OTHER changed file needs one only when a registered mechanical
-    # check reads the post-image, and each costs a `git show`, so the registry
-    # is asked rather than assumed: while it holds only added-line checks this
-    # loop does nothing extra, and it widens by itself when the first
-    # structured-parse check lands.
+    # Materialize pre-images BEFORE assembly so the front-half keeps the
+    # VCS-specific mechanics; assemble_bundle only routes/excludes. A claimed
+    # file always needs one -- the triviality guard reads it. Every OTHER
+    # changed file needs one only when a registered mechanical check reads the
+    # post-image, and each costs a `git show`, so the registry is asked rather
+    # than assumed: while it holds only added-line checks this loop does nothing
+    # extra, and it widens by itself when the first structured-parse check lands.
     scan_needs_pre_image = requires_pre_image()
     for f in files:
-        if not (scan_needs_pre_image or matches_claim(f["identifier"], claim_globs)):
-            continue
-        f["pre_image"] = materialize_preimage(range_spec, f["path"], bundle_dir)
-        f["pre_image_is_empty"] = f["status"] == "A"
+        if scan_needs_pre_image or matches_claim(f["identifier"], claim_globs):
+            f["pre_image"] = materialize_preimage(range_spec, f["path"], bundle_dir)
+            f["pre_image_is_empty"] = f["status"] == "A"
     core = assemble_bundle(
         preamble=preamble,
         sections=sections,
