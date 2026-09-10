@@ -44,6 +44,7 @@ from bootstrap_lib.code_review.machine_emitted_paths import (
 )
 from bootstrap_lib.code_review.triviality import (
     mechanical_checks,
+    mechanical_findings,
     triviality_profile,
 )
 
@@ -182,6 +183,11 @@ def annotate_triviality(entry: dict, section_text: str) -> None:
     entry["trivial_reasons"] = profile["reasons"]
     if profile["trivial"]:
         entry["trivial_checks"] = mechanical_checks(section_text)
+    # Located findings for the lane that WILL review this file. Computed
+    # regardless of `trivial`, because being skipped was never a reason to
+    # scan and being reviewed was never a reason not to: the scan answers its
+    # own questions, and the reviewer's remaining scope is what changes.
+    entry["mechanical_findings"] = mechanical_findings(section_text)
 
 
 def run_vcs(
@@ -359,14 +365,22 @@ def assemble_bundle(
     identical values (see the compat aliases below).
 
     Each changed_files entry is the input dict minus "identifier", plus
-    "chunk_index" (int or None when absent from the diff) and
-    "claude_mds" (nearest-ancestor-first absolute paths). Each claimed_files
-    entry is the input dict verbatim (identifier retained), carrying whatever
-    the front-half attached (local, status/action, pre_image), PLUS the
-    pure-mechanical triviality profile: "trivial" (bool), "trivial_reasons"
-    (machine-readable disqualifier codes, [] when trivial) and -- only when
-    trivial -- "trivial_checks" ({"ascii_clean", "no_abs_paths"} over the
-    changed lines). See bootstrap_lib.code_review.triviality.
+    "chunk_index" (int or None when absent from the diff), "claude_mds"
+    (nearest-ancestor-first absolute paths) and "mechanical_findings". Each
+    claimed_files entry is the input dict verbatim (identifier retained),
+    carrying whatever the front-half attached (local, status/action,
+    pre_image), PLUS the pure-mechanical triviality profile: "trivial" (bool),
+    "trivial_reasons" (machine-readable disqualifier codes, [] when trivial),
+    "mechanical_findings", and -- only when trivial -- "trivial_checks"
+    ({"ascii_clean", "no_abs_paths"} over the changed lines).
+
+    "mechanical_findings" is a list of {"check", "line", "detail"} dicts over
+    the file's ADDED lines, and each diff_chunks entry carries the same list
+    for its own files with a "file" key added. It is computed for every file a
+    reviewer will read -- claimed and generic alike, trivial or not -- because
+    the scan answers its own questions independently of whether an agent also
+    runs. What being reviewed changes is who consumes the result, not whether
+    it is computed. See bootstrap_lib.code_review.triviality.
     """
     if review_generated is not None:
         # Deprecated spelling. Honour it, but never silently pick a winner when
@@ -494,9 +508,11 @@ def assemble_bundle(
             if local:
                 entry["local"] = canonical_local(local)
             entry["claude_mds"] = claude_mds
-            # Pure-mechanical triviality profile (+ mechanical checks when
-            # trivial), so the skill can skip the audit lane for a typo-sized
-            # change and report an honest what-was-checked line instead.
+            # Pure-mechanical triviality profile (+ the aggregate check line
+            # when trivial), so the skill can skip the audit lane for a
+            # typo-sized change and report an honest what-was-checked line
+            # instead -- plus located `mechanical_findings` for the lane that
+            # reviews a NON-trivial claimed file.
             annotate_triviality(entry, id_to_text.get(f["identifier"], ""))
             claimed_files.append(entry)
             continue
@@ -526,6 +542,16 @@ def assemble_bundle(
             out["local"] = canonical_local(local)
         out["chunk_index"] = id_to_chunk.get(f["identifier"])
         out["claude_mds"] = claude_mds
+        # The deterministic scan reaches GENERIC chunk files too -- a .yaml or
+        # .csv row, not only a claimed .md. This is the half that was missing:
+        # the scanner was reachable solely through the claimed-file path, so
+        # the file types whose defects it catches best never met it. Note this
+        # deliberately does NOT claim those files: claiming implies a
+        # subject-lens audit owns them, and a claim no lane can audit returns
+        # NOT-AUDITED, which a caller misreads as a pass.
+        out["mechanical_findings"] = mechanical_findings(
+            id_to_text.get(f["identifier"], "")
+        )
         if out["chunk_index"] is None:
             unchunked_files.append(
                 {"path": f["identifier"], "reason": "no_diff_section"}
@@ -540,6 +566,23 @@ def assemble_bundle(
             f"warning: enumerated files not present in diff sections: {details}",
             file=sys.stderr,
         )
+
+    # Roll the per-file findings up onto the chunk each file belongs to, so a
+    # lane can be handed exactly the findings for the diff it is reading
+    # without walking `changed_files` and re-deriving the membership the
+    # pipeline already computed.
+    findings_by_ident = {
+        f["identifier"]: mechanical_findings(id_to_text.get(f["identifier"], ""))
+        for f in files
+        if f["identifier"] not in claimed_idents
+        and f["identifier"] not in machine_emitted_sigs
+    }
+    for entry in diff_chunks:
+        chunk_findings: list[dict] = []
+        for ident in entry["files"]:
+            for finding in findings_by_ident.get(ident, []):
+                chunk_findings.append({"file": ident, **finding})
+        entry["mechanical_findings"] = chunk_findings
 
     submit_gates = collect_submit_gates(unique, all_locals, workspace_root)
 

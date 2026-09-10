@@ -1131,3 +1131,151 @@ class TestMachineEmittedCompatAliases:
             self._core(tmp_path, review_machine_emitted=True, review_generated=False)
         with pytest.raises(TypeError):
             self._core(tmp_path, review_machine_emitted=False, review_generated=True)
+
+
+# ---------------------------------------------------------------------------
+# Mechanical findings reach every file a reviewer will read
+# ---------------------------------------------------------------------------
+
+
+def _dirty_section(ident: str) -> dict:
+    """A diff section whose ADDED line carries both scanned defects."""
+    return {
+        "identifier": ident,
+        "text": f"@@ -1,1 +1,2 @@\n unchanged in {ident}\n+bad \u2014 /Users/x/y here\n",
+    }
+
+
+class TestMechanicalFindingsReachReviewedFiles:
+    """The scan used to be reachable only through the claimed-file path, and
+    only for a file the pipeline had decided to SKIP. Both halves are pinned
+    here: revert either and one of these goes red."""
+
+    def test_generic_chunk_files_are_scanned(self, tmp_path):
+        """A .yaml or .csv in a generic chunk never met the scanner before --
+        it was reachable solely via a claim. This is the half the em-dash
+        defect fell through."""
+        core = assemble_bundle(
+            preamble="",
+            sections=[_dirty_section("config/rows.yaml")],
+            files=[{"identifier": "config/rows.yaml", "local": None}],
+            bundle_dir=tmp_path / "b",
+            max_chunk_bytes=1024 * 1024,
+            workspace_root=None,
+        )
+        checks = {
+            f["check"] for f in core["changed_files"][0]["mechanical_findings"]
+        }
+        assert checks == {"non_ascii", "abs_path"}
+
+    def test_generic_files_are_scanned_without_being_claimed(self, tmp_path):
+        """Reaching the scanner must not require a claim.
+
+        A claim asserts a subject-lens lane owns the file, and a claim no lane
+        can audit returns NOT-AUDITED -- which a caller misreads as a pass. So
+        the scan has to arrive without one: no claim_globs here, and the file
+        must still stay a generic chunk file rather than becoming claimed.
+        """
+        core = assemble_bundle(
+            preamble="",
+            sections=[_dirty_section("config/rows.yaml")],
+            files=[{"identifier": "config/rows.yaml", "local": None}],
+            bundle_dir=tmp_path / "b",
+            max_chunk_bytes=1024 * 1024,
+            workspace_root=None,
+        )
+        assert "claimed_files" not in core
+        assert core["changed_files"][0]["mechanical_findings"]
+
+    def test_chunk_carries_its_files_findings_with_the_path(self, tmp_path):
+        """A lane reads one chunk, so the findings roll up onto the chunk and
+        each carries the file it belongs to."""
+        core = assemble_bundle(
+            preamble="",
+            sections=[_dirty_section("a.yaml"), _dirty_section("b.yaml")],
+            files=[
+                {"identifier": "a.yaml", "local": None},
+                {"identifier": "b.yaml", "local": None},
+            ],
+            bundle_dir=tmp_path / "b",
+            max_chunk_bytes=1024 * 1024,
+            workspace_root=None,
+        )
+        rolled = core["diff_chunks"][0]["mechanical_findings"]
+        assert {f["file"] for f in rolled} == {"a.yaml", "b.yaml"}
+        assert all("line" in f and "check" in f for f in rolled)
+
+    def test_a_clean_chunk_reports_an_empty_list_not_a_missing_key(self, tmp_path):
+        """Absent and empty must be distinguishable downstream: a lane that
+        cannot tell a clean scan from no scan has to re-scan to be safe."""
+        core = assemble_bundle(
+            preamble="",
+            sections=_sections_for("src/a.py"),
+            files=[{"identifier": "src/a.py", "local": None}],
+            bundle_dir=tmp_path / "b",
+            max_chunk_bytes=1024 * 1024,
+            workspace_root=None,
+        )
+        assert core["diff_chunks"][0]["mechanical_findings"] == []
+        assert core["changed_files"][0]["mechanical_findings"] == []
+
+    def test_a_NON_trivial_claimed_file_is_scanned(self, tmp_path):
+        """The inverted guard. `mechanical_checks` ran only when `trivial` was
+        true -- i.e. only where no lane would read it. A non-trivial claimed
+        file is exactly the case that WILL be reviewed and used to get nothing.
+        """
+        big = "@@ -1,1 +1,9 @@\n unchanged\n" + "".join(
+            f"+added line {i} must never always \u2014\n" for i in range(8)
+        )
+        core = assemble_bundle(
+            preamble="",
+            sections=[{"identifier": "docs/x.md", "text": big}],
+            files=[{"identifier": "docs/x.md", "local": None}],
+            bundle_dir=tmp_path / "b",
+            max_chunk_bytes=1024 * 1024,
+            workspace_root=None,
+            claim_globs=["**/*.md"],
+        )
+        entry = core["claimed_files"][0]
+        assert entry["trivial"] is False, "fixture must be non-trivial"
+        assert entry["mechanical_findings"], "a reviewed file got no scan"
+
+    def test_machine_emitted_files_are_not_scanned(self, tmp_path):
+        """No agent reviews a generated artifact, so nothing consumes a scan
+        of one -- and a finding there is unactionable anyway, since the fix
+        belongs in the generator and an edit to the artifact is reverted by its
+        drift guard.
+
+        The paired assertion is what makes this test mean anything: the SAME
+        dirty content is scanned when it is not machine-emitted, so a green
+        result cannot come from the fixture simply having nothing to find.
+        """
+        emitted = {
+            "identifier": "gen/out.md",
+            "text": (
+                "@@ -1,1 +1,3 @@\n unchanged\n"
+                "+# Generated by tool -- DO NOT EDIT\n"
+                "+bad \u2014 /Users/x/y here\n"
+            ),
+        }
+        core = assemble_bundle(
+            preamble="",
+            sections=[emitted, _dirty_section("src/hand.yaml")],
+            files=[
+                {"identifier": "gen/out.md", "local": None},
+                {"identifier": "src/hand.yaml", "local": None},
+            ],
+            bundle_dir=tmp_path / "b",
+            max_chunk_bytes=1024 * 1024,
+            workspace_root=None,
+        )
+        emitted_paths = {e["identifier"] for e in core["machine_emitted_files"]}
+        assert emitted_paths == {"gen/out.md"}, "fixture must trip detection"
+        # The generated file carries no scan at all ...
+        assert all(
+            "mechanical_findings" not in e for e in core["machine_emitted_files"]
+        )
+        rolled = core["diff_chunks"][0]["mechanical_findings"]
+        assert {f["file"] for f in rolled} == {"src/hand.yaml"}
+        # ... while the hand-written file with identical defects does.
+        assert rolled
