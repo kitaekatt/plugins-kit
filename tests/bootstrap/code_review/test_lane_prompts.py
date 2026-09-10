@@ -70,6 +70,56 @@ class TestShippedDefaultsPreserveAgentDispatch:
 
 
 class TestParseIssueArray:
+    def test_verifies_reviewer_a_citation_against_governing_chain(self, tmp_path: Path) -> None:
+        claude_md = tmp_path / "CLAUDE.md"
+        claude_md.write_text("Use pathlib.Path for file paths.\n", encoding="utf-8")
+        text = json.dumps([{
+            "file": "src/a.py",
+            "lines": "4",
+            "reason": "claude_md",
+            "description": "bad path",
+            "citation": "Use pathlib.Path for\nfile paths.",
+        }])
+
+        issue = lp.parse_issue_array(
+            text,
+            lane="reviewer_a_claude_md_compliance",
+            claude_mds_by_file={"src/a.py": [str(claude_md)]},
+        )[0]
+
+        assert issue["citation_verification"] == "verified"
+
+    def test_unverifiable_citation_is_retained(self, tmp_path: Path) -> None:
+        claude_md = tmp_path / "CLAUDE.md"
+        claude_md.write_text("Use pathlib.Path for file paths.\n", encoding="utf-8")
+        text = json.dumps([{
+            "file": "src/a.py", "lines": "4", "reason": "claude_md",
+            "description": "bad path", "citation": "Invented rule",
+        }])
+
+        issue = lp.parse_issue_array(
+            text,
+            lane="reviewer_a_claude_md_compliance",
+            claude_mds_by_file={"src/a.py": [str(claude_md)]},
+        )[0]
+
+        assert issue["citation_verification"] == "unverifiable"
+        assert issue["citation"] == "Invented rule"
+
+    def test_empty_governing_chain_is_unchecked(self) -> None:
+        text = json.dumps([{
+            "file": "a.py", "lines": "4", "reason": "claude_md",
+            "description": "bad path", "citation": "Any rule",
+        }])
+
+        issue = lp.parse_issue_array(
+            text,
+            lane="reviewer_a_claude_md_compliance",
+            claude_mds_by_file={"a.py": []},
+        )[0]
+
+        assert issue["citation_verification"] == "unchecked"
+
     def test_accepts_a_minimal_issue(self) -> None:
         text = json.dumps(
             [{"file": "a.py", "lines": "4", "reason": "bug", "description": "boom"}]

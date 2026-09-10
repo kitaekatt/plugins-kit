@@ -35,7 +35,9 @@ and probes the shared module. The boundary is enforced by
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from bootstrap_lib.code_review.mechanical import LEGACY_CHECK_IDS, check_phrase
@@ -133,12 +135,19 @@ ISSUE_ARRAY_SCHEMA: dict[str, Any] = {
             "reason": {"type": "string", "enum": ["bug", "claude_md"]},
             "description": {"type": "string", "minLength": 1},
             "citation": {"type": "string"},
+            "citation_verification": {
+                "type": "string",
+                "enum": ["verified", "unverifiable", "unchecked"],
+            },
         },
     },
 }
 
 _REQUIRED_ISSUE_FIELDS = ("file", "lines", "reason", "description")
-_ALLOWED_ISSUE_FIELDS = _REQUIRED_ISSUE_FIELDS + ("citation",)
+_ALLOWED_ISSUE_FIELDS = _REQUIRED_ISSUE_FIELDS + (
+    "citation",
+    "citation_verification",
+)
 _ALLOWED_REASONS = ("bug", "claude_md")
 
 
@@ -166,7 +175,12 @@ def _strip_code_fence(text: str) -> str:
     return "\n".join(body).strip()
 
 
-def parse_issue_array(text: str) -> list[dict[str, Any]]:
+def parse_issue_array(
+    text: str,
+    *,
+    lane: str | None = None,
+    claude_mds_by_file: Mapping[str, Sequence[str]] | None = None,
+) -> list[dict[str, Any]]:
     """Parse and validate a reviewer lane's response.
 
     Raises ``LaneOutputError`` with a reason a human can act on. An empty
@@ -191,8 +205,36 @@ def parse_issue_array(text: str) -> list[dict[str, Any]]:
         )
     issues: list[dict[str, Any]] = []
     for index, item in enumerate(value):
-        issues.append(_validate_issue(item, index))
+        issue = _validate_issue(item, index)
+        if lane == "reviewer_a_claude_md_compliance":
+            issue["citation_verification"] = _citation_verification(
+                issue, claude_mds_by_file
+            )
+        issues.append(issue)
     return issues
+
+
+def _citation_verification(
+    issue: Mapping[str, Any],
+    claude_mds_by_file: Mapping[str, Sequence[str]] | None,
+) -> str:
+    """Verify a reviewer_a citation without changing or suppressing its issue."""
+    chain = (claude_mds_by_file or {}).get(str(issue["file"]), ())
+    if not chain:
+        return "unchecked"
+    citation = issue.get("citation", "")
+    if not citation:
+        return "unverifiable"
+    normalized_citation = re.sub(r"\s+", " ", citation).strip()
+    for path in chain:
+        try:
+            governing_text = Path(path).read_text(encoding="utf-8")
+        except (OSError, UnicodeError):
+            continue
+        normalized_rule = re.sub(r"\s+", " ", governing_text).strip()
+        if normalized_citation in normalized_rule:
+            return "verified"
+    return "unverifiable"
 
 
 def _validate_issue(item: Any, index: int) -> dict[str, Any]:
