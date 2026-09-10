@@ -67,7 +67,6 @@ EXPECTED_LANES = {
     "author_claude_md": {"verb": "author", "artifact": "claude-md"},
     "author_project_doc": {"verb": "author", "artifact": "project-doc"},
     "generate_claude_md": {"verb": "generate", "artifact": "claude-md"},
-    "generate_human_html": {"verb": "generate", "artifact": "human-html"},
     "coverage_code_subtree": {
         # The verb is `analyze`; the lane id, its procedure, its standards doc
         # and its scripts are all named for the OUTPUT (coverage) instead.
@@ -78,16 +77,6 @@ EXPECTED_LANES = {
         # own direct code files, never a subtree.
         "table_key": "analyze (one directory)",
     },
-    "coverage_human_html_directory": {
-        # The second analyze subject. Its scalar axis stays one directory, but
-        # discovery supplies that directory's computed TERRITORY. Its question
-        # is page warrant rather than ambient-guidance coverage. The selector is
-        # explicit because the two analyze lanes are told apart by the
-        # `human-html` token, never by inspecting the directory.
-        "verb": "analyze",
-        "subject": "human_html_directory",
-        "table_key": "analyze human-html (one directory)",
-    },
 }
 
 # The producing lane per artifact axis value, for the assertions that used to
@@ -95,12 +84,10 @@ EXPECTED_LANES = {
 # contract checkable once more than one lane shares a verb.
 GENERATE_LANES = {
     "generate_claude_md": {"artifact": "claude-md", "regeneration": "sort-never-delete"},
-    "generate_human_html": {"artifact": "human-html", "regeneration": "replace-generated"},
 }
 
 ANALYZE_LANES = {
     "coverage_code_subtree": ["GAPS-FOUND", "COVERAGE-ASSESSED"],
-    "coverage_human_html_directory": ["PAGE-WARRANTED", "NO-PAGE"],
 }
 
 # Lane-record keys whose value is a path relative to the md-domain skill dir.
@@ -205,9 +192,8 @@ class TestDispatchTable:
 
         The roster is the invariant, not the count: an artifact earns a generate
         lane when some analyze lane emits its input, and gains one no other way.
-        `claude-md` is fed by `coverage_code_subtree`, `human-html` by
-        `coverage_human_html_directory`; skill and project-doc have no analysis,
-        so they stay authored.
+        `claude-md` is fed by `coverage_code_subtree`; skill and project-doc
+        have no analysis, so they stay authored.
         """
         arts = {r.get("artifact") for r in LANE_RECORDS if r.get("verb") == "generate"}
         expected = {spec["artifact"] for spec in GENERATE_LANES.values()}
@@ -215,29 +201,6 @@ class TestDispatchTable:
             "generate must take exactly the artifacts an analyze lane feeds -- nothing "
             f"analyzes a codebase and emits skill or project-doc coverage; got {sorted(arts)}"
         )
-
-    def test_human_html_lane_records_match_the_landed_two_pass_shape(self):
-        placement = next(
-            record
-            for record in LANE_RECORDS
-            if record["id"] == "coverage_human_html_directory"
-        )
-        generation = next(
-            record for record in LANE_RECORDS if record["id"] == "generate_human_html"
-        )
-
-        assert placement["subject"] == "human_html_directory"
-        assert "artifact" not in placement
-        assert placement["report_only"] is True
-        assert len(placement["invocation_phrasings"]) >= 3
-        assert placement["change_driver"].strip()
-
-        assert generation["artifact"] == "human-html"
-        assert "subject" not in generation
-        assert generation["input_provenance"] == "coverage"
-        assert generation["regeneration"] == "replace-generated"
-        assert len(generation["invocation_phrasings"]) >= 3
-        assert generation["change_driver"].strip()
 
     def test_every_lane_declares_exactly_one_subject_axis(self):
         """A lane is keyed by `artifact` OR `subject`, never both and never neither.

@@ -31,12 +31,11 @@ grammar: pick a verb (`audit`, `author`, `generate`, or `analyze`) and, for
   contract for the artifact you are producing, where the content belongs, and
   what shape it takes. "Generate a skill" routes here -- no analysis produces
   coverage for a skill.
-- **generate** writes a CLAUDE.md (or the human-html orientation page) from
-  analysis-produced coverage, so its claims stay re-checkable against the code
-  that produced them. It takes only `claude-md` or `human-html`.
-- **analyze** is report-only: it reads one directory's direct code (or, with
-  the `human-html` selector, a whole subtree) and reports what it found. It
-  never remediates.
+- **generate** writes a CLAUDE.md from analysis-produced coverage, so its claims
+  stay re-checkable against the code that produced them. It takes only
+  `claude-md`.
+- **analyze** is report-only: it reads one directory's direct code and reports
+  what it found. It never remediates.
 
 Both verbs read the same four standards documents -- one per artifact,
 covering SKILL.md, CLAUDE.md, project documents, and cross-references. That
