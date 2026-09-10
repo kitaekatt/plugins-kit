@@ -237,7 +237,7 @@ reexec_under_plugin_venv("p4-kit")
 # under that venv the import below just works -- no path discovery. The try/except
 # below remains as a safety net for the installed-but-not-yet-provisioned window.
 
-_MIN_BOOTSTRAP_VERSION = "0.102.0"
+_MIN_BOOTSTRAP_VERSION = "0.103.0"
 _BOOTSTRAP_FRONTIER = (
     "bootstrap_lib.code_review.pipeline.run_vcs(timeout=...), "
     "bootstrap_lib.code_review.mechanical"

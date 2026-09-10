@@ -42,7 +42,7 @@ from bootstrap_lib.code_review.machine_emitted_paths import (
     declared_generated_rules,
     match_declared_path,
 )
-from bootstrap_lib.code_review.mechanical import scan_file
+from bootstrap_lib.code_review.mechanical import REGISTRY, scan_file
 from bootstrap_lib.code_review.triviality import (
     mechanical_checks,
     mechanical_findings,
@@ -630,6 +630,9 @@ def assemble_bundle(
     result = {
         "bundle_dir": str(bundle_dir),
         "diff_chunks": diff_chunks,
+        "mechanical_check_phrases": {
+            check.check_id: check.phrase for check in REGISTRY
+        },
         "changed_files": changed_files,
         "unique_claude_mds": unique,
         "submit_gates": submit_gates,

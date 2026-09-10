@@ -51,7 +51,6 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 # forgot to regenerate" into a suite failure.
 sys.path.insert(0, str(REPO_ROOT / "plugins" / "bootstrap"))
 from bootstrap_lib.code_review import lane_prompts  # noqa: E402
-from bootstrap_lib.code_review.mechanical import REGISTRY  # noqa: E402
 from bootstrap_lib.code_review.review_profiles import EFFORT_LEVELS  # noqa: E402
 GIT_SKILL = REPO_ROOT / "plugins/git-kit/skills/git-code-review/SKILL.md"
 P4_SKILL = REPO_ROOT / "plugins/p4-kit/skills/p4-code-review/SKILL.md"
@@ -658,8 +657,9 @@ technique_skill:
             [{file, checks_run, findings}]}`. Render its coverage and findings under
             "Mechanical scan (added lines only)", one file at a time. For each file,
             derive the covered-check list from THAT record's `checks_run`; render each id
-            with its human phrase from this generated registry map:
-            @MECHANICAL_CHECK_PHRASES@. Render each finding as
+            with its human phrase from `bundle.mechanical_check_phrases`. If an id
+            is absent from that map, render the bare id; this is the
+            forward-compatible case, not an error. Render each finding as
             `- <file>:<line> [<check>] <detail>`. An empty `checks_run` means no mechanical coverage for this file.
             Named checks with an empty findings list mean those
             checks ran cleanly. These states are different and neither may be omitted.
@@ -1442,10 +1442,6 @@ FRAGMENTS = {
 _SHARED = {
     "DISPATCH": DISPATCH,
     "MODEL_KIND": MODEL_KIND,
-    "MECHANICAL_CHECK_PHRASES": ", ".join(
-        f"`{check.check_id}` = {check.phrase}"
-        for check in REGISTRY
-    ),
     # The canonical reviewer prompts, rendered from the module the endpoint
     # runner imports so the two dispatch paths cannot state different rules.
     # Indented to sit under `canonical_prompt: |` in the subagents block.
@@ -1485,7 +1481,6 @@ _SKILL_TOKEN_ORDER = [
     # Model-kind rule: shared body carrying a nested @LANE_TOOL@ -- substitute
     # the block first, then that token resolves below.
     "MODEL_KIND",
-    "MECHANICAL_CHECK_PHRASES",
     "REVIEWER_A_PROMPT", "REVIEWER_B_PROMPT", "REVIEWER_C_PROMPT",  # rendered prompt text, no nested @tokens@
     "MD_DOMAIN_LAUNCH", "MD_DOMAIN_REPORT",  # shared, no nested @tokens@
     "GENERATED_REPORT",  # shared, no nested @tokens@
