@@ -123,6 +123,7 @@ reexec_under_plugin_venv("awesome-kit")
 
 try:
     from task_system import location_ops  # noqa: E402
+    from task_system import reference_rewrite  # noqa: E402
     from task_system import resolve  # noqa: E402
     from task_system import state_ops  # noqa: E402
     from task_system.discovery import (  # noqa: E402
@@ -470,7 +471,7 @@ def _cmd_delete(args: argparse.Namespace) -> int:
 def _cmd_move(args: argparse.Namespace) -> int:
     root = (args.root if args.root is not None else Path.cwd()).resolve()
     try:
-        result = location_ops.move_task(
+        result = reference_rewrite.move_task(
             args.ref, args.dest, root
         )
     except StateOpError as exc:
