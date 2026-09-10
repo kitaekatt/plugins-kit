@@ -167,12 +167,12 @@ class TestBootstrapDependencyDiagnostics:
             "plugin's dependencies, then retry.\n"
         )
 
-    def test_manifest_requires_bootstrap_0101_api_floor(self):
+    def test_manifest_requires_bootstrap_0102_api_floor(self):
         manifest = json.loads(
             Path("plugins/git-kit/bootstrap.json").read_text(encoding="utf-8")
         )
 
-        assert manifest["requires_bootstrap"] == "0.101.0"
+        assert manifest["requires_bootstrap"] == "0.102.0"
 
     def test_bootstrap_without_run_vcs_timeout_reports_update_remedy(self, tmp_path):
         bootstrap_package = tmp_path / "bootstrap_lib"
@@ -202,7 +202,7 @@ class TestBootstrapDependencyDiagnostics:
 
         assert completed.stderr == (
             "[git-kit] the installed 'plugins-kit:bootstrap' plugin is too old "
-            "or stale for git-kit's code review (requires bootstrap >= 0.101.0; "
+            "or stale for git-kit's code review (requires bootstrap >= 0.102.0; "
             "missing: bootstrap_lib.code_review.pipeline.run_vcs(timeout=...), "
             "bootstrap_lib.code_review.mechanical). "
             "Run `claude plugin update bootstrap@plugins-kit`. Then start a new "
@@ -1370,6 +1370,7 @@ class TestBuildBundleClaims:
         git_repo.commit_file("CLAUDE.md", "base\n", "base")
         git_repo.commit_file("CLAUDE.md", "changed\n", "change")
 
+        monkeypatch.setattr(pr, "requires_pre_image", lambda: False)
         pr.build_bundle("HEAD~1..HEAD", tmp_path / "off")
         assert not (tmp_path / "off" / pr.preimage_relpath("CLAUDE.md")).exists()
 

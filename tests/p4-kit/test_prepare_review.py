@@ -198,12 +198,12 @@ class TestBootstrapDependencyDiagnostics:
             "plugin's dependencies, then retry.\n"
         )
 
-    def test_manifest_requires_bootstrap_0101_api_floor(self):
+    def test_manifest_requires_bootstrap_0102_api_floor(self):
         manifest = json.loads(
             Path("plugins/p4-kit/bootstrap.json").read_text(encoding="utf-8")
         )
 
-        assert manifest["requires_bootstrap"] == "0.101.0"
+        assert manifest["requires_bootstrap"] == "0.102.0"
 
     def test_bootstrap_without_run_vcs_timeout_reports_update_remedy(self, tmp_path):
         bootstrap_package = tmp_path / "bootstrap_lib"
@@ -233,8 +233,9 @@ class TestBootstrapDependencyDiagnostics:
 
         assert completed.stderr == (
             "[p4-kit] the installed 'plugins-kit:bootstrap' plugin is too old "
-            "or stale for p4-kit's code review (requires bootstrap >= 0.99.0; "
-            "missing: bootstrap_lib.code_review.pipeline.run_vcs(timeout=...)). "
+            "or stale for p4-kit's code review (requires bootstrap >= 0.102.0; "
+            "missing: bootstrap_lib.code_review.pipeline.run_vcs(timeout=...), "
+            "bootstrap_lib.code_review.mechanical). "
             "Run `claude plugin update bootstrap@plugins-kit`. Then start a new "
             "session and retry.\n"
         )
@@ -1688,10 +1689,12 @@ class TestBuildBundle:
         assert len(cf["claude_mds"]) == 1
         assert Path(cf["claude_mds"][0]).read_text() == "workspace rule\n"
         assert len(bundle["unique_claude_mds"]) == 1
-        # No registered mechanical check reads the post-image, and a pre-image
-        # costs one `p4 print` per file, so an unclaimed file gets none. The
-        # gate's other direction is pinned in the git kit's registry test.
-        assert not (bundle_dir / pr.preimage_relpath("//depot/src/foo.cpp")).exists()
+        # Registered structured-data checks read the post-image, so an
+        # unclaimed file's pre-image IS materialized. The gate itself -- that
+        # this follows the registry rather than being unconditional -- is
+        # pinned in the git kit's registry test, which forces both answers.
+        snapshot = bundle_dir / pr.preimage_relpath("//depot/src/foo.cpp")
+        assert snapshot.read_text(encoding="utf-8") == "int x = 0;\n"
         assert bundle["unreconciled"] == []
         assert bundle["hygiene_incomplete"] == []
 
