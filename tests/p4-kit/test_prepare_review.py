@@ -19,6 +19,40 @@ def test_rendered_p4_skill_discloses_shelf_drift():
     assert "disclose each depot path" in skill
 
 
+def test_rendered_p4_skill_discloses_foreign_change():
+    skill = Path("plugins/p4-kit/skills/p4-code-review/SKILL.md").read_text(
+        encoding="utf-8"
+    )
+    assert (
+        "When `bundle.foreign_change` is present, disclose the author and foreign client"
+        in skill
+    )
+
+
+def test_rendered_p4_skill_retries_foreign_claim_without_claim():
+    skill = Path("plugins/p4-kit/skills/p4-code-review/SKILL.md").read_text(
+        encoding="utf-8"
+    )
+    assert (
+        "If prepare reports that the CL belongs to a foreign client, re-run once "
+        "without `--claim` and use that bundle."
+        in skill
+    )
+
+
+def test_rendered_p4_skill_uses_reopen_for_default_open_in_step_three():
+    skill = Path("plugins/p4-kit/skills/p4-code-review/SKILL.md").read_text(
+        encoding="utf-8"
+    )
+    step_three = skill.split("        - n: 3\n", 1)[1].split(
+        "        - n: 4\n", 1
+    )[0]
+    assert (
+        "For `bundle.default_open`, use `p4 reopen -c <CL> <local-paths>`"
+        in step_three
+    )
+
+
 def _concat_diff_from_chunks(bundle: dict) -> str:
     """Read all chunk files for a bundle and concatenate -- the historical
     bundle["diff"] string, reconstructed from on-disk chunks.
@@ -1185,6 +1219,116 @@ class TestFindUnreconciled:
 
 
 # ---------------------------------------------------------------------------
+# find_default_open
+# ---------------------------------------------------------------------------
+
+
+class TestFindDefaultOpen:
+    def test_reports_open_files_from_the_scoped_default_changelist(self, tmp_path):
+        src = tmp_path / "src"
+        src.mkdir()
+        expected_command = [
+            "-ztag",
+            "opened",
+            "-c",
+            "default",
+            f"{src}/...",
+        ]
+        output = (
+            "... depotFile //depot/src/extra.cpp\n"
+            "... clientFile /ws/src/extra.cpp\n"
+            "... rev 3\n"
+            "... action edit\n"
+            "... change default\n"
+            "... type text\n"
+        )
+        commands = []
+
+        def fake_run_p4(args):
+            if args != expected_command:
+                raise AssertionError(f"unexpected p4 command: {args}")
+            commands.append(args)
+            return 0, output, ""
+
+        with patch.object(pr, "run_p4", side_effect=fake_run_p4):
+            items, incomplete = pr.find_default_open([(src, True)])
+
+        assert (items, incomplete, commands) == (
+            [
+                {
+                    "local": "/ws/src/extra.cpp",
+                    "depot": "//depot/src/extra.cpp",
+                    "action": "edit",
+                }
+            ],
+            [],
+            [expected_command],
+        )
+
+    def test_failure_is_reported_as_incomplete(self, tmp_path):
+        src = tmp_path / "src"
+        src.mkdir()
+        expected_command = [
+            "-ztag",
+            "opened",
+            "-c",
+            "default",
+            f"{src}/...",
+        ]
+
+        def fake_run_p4(args):
+            if args != expected_command:
+                raise AssertionError(f"unexpected p4 command: {args}")
+            return 1, "", "server unavailable"
+
+        with patch.object(pr, "run_p4", side_effect=fake_run_p4):
+            result = pr.find_default_open([(src, True)])
+
+        assert result == (
+            [],
+            [{"scan": "default_open", "reason": "server unavailable"}],
+        )
+
+    def test_nonzero_empty_spec_keeps_other_open_records(self, tmp_path):
+        src = tmp_path / "src"
+        empty = tmp_path / "empty"
+        src.mkdir()
+        empty.mkdir()
+        expected_command = [
+            "-ztag",
+            "opened",
+            "-c",
+            "default",
+            f"{src}/...",
+            f"{empty}/...",
+        ]
+        output = (
+            "... depotFile //depot/src/extra.cpp\n"
+            "... clientFile /ws/src/extra.cpp\n"
+            "... action edit\n"
+        )
+
+        def fake_run_p4(args):
+            if args != expected_command:
+                raise AssertionError(f"unexpected p4 command: {args}")
+            return 1, output, f"{empty}/... - file(s) not opened on this client.\n"
+
+        with patch.object(pr, "run_p4", side_effect=fake_run_p4):
+            result = pr.find_default_open([(src, True), (empty, True)])
+
+        assert result == (
+            [
+                {
+                    "local": "/ws/src/extra.cpp",
+                    "depot": "//depot/src/extra.cpp",
+                    "action": "edit",
+                }
+            ],
+            [],
+        )
+
+
+# ---------------------------------------------------------------------------
 # find_unresolved
 # ---------------------------------------------------------------------------
 
@@ -1271,6 +1415,8 @@ class TestBuildBundle:
                 return (0, describe_out, "")
             if args[:2] == ["-ztag", "fstat"]:
                 return (1, "", "no such file(s)")
+            if args[:4] == ["-ztag", "opened", "-c", "default"]:
+                return (0, "", "")
             if args[:3] == ["-ztag", "opened", "-c"]:
                 return (0, "", "")
             if args[:2] == ["-ztag", "where"]:
@@ -1281,7 +1427,7 @@ class TestBuildBundle:
                 return (1, "", "no file(s) to reconcile.\n")
             if args[:4] == ["-ztag", "resolve", "-n", "-c"]:
                 return (1, "", "no file(s) to resolve.\n")
-            return (1, "", "")
+            raise AssertionError(f"unexpected p4 command: {args}")
 
         bundle_dir = tmp_path / "bundle"
         with patch.object(pr, "run_p4", side_effect=fake_run_p4):
@@ -1344,6 +1490,8 @@ class TestBuildBundle:
                 return (0, describe_out, "")
             if args[:2] == ["-ztag", "fstat"]:
                 return (1, "", "no such file(s)")
+            if args[:4] == ["-ztag", "opened", "-c", "default"]:
+                return (0, "", "")
             if args[:3] == ["-ztag", "opened", "-c"]:
                 return (0, "", "")
             if args[:2] == ["-ztag", "where"]:
@@ -1354,7 +1502,7 @@ class TestBuildBundle:
                 return (1, "", "fatal: bad workspace\n")
             if args[:4] == ["-ztag", "resolve", "-n", "-c"]:
                 return (1, "", "no file(s) to resolve.\n")
-            return (1, "", "")
+            raise AssertionError(f"unexpected p4 command: {args}")
 
         with patch.object(pr, "run_p4", side_effect=fake_run_p4):
             bundle = pr.build_bundle("999", tmp_path / "bundle")
@@ -1413,7 +1561,13 @@ class TestBuildBundle:
                 return (0, info_out, "")
             if args[:3] == ["-ztag", "reconcile", "-n"]:
                 return (0, reconcile_out, "")
-            return (1, "", f"unexpected: {args}")
+            if args[:4] == ["-ztag", "opened", "-c", "default"]:
+                return (0, "", "")
+            if args[:4] == ["-ztag", "resolve", "-n", "-c"]:
+                return (1, "", "no file(s) to resolve.\n")
+            if args[:2] == ["-ztag", "fstat"]:
+                return (1, "", "no such file(s)")
+            raise AssertionError(f"unexpected p4 command: {args}")
 
         with patch.object(pr, "run_p4", side_effect=fake_run_p4):
             bundle = pr.build_bundle("1000", tmp_path / "bundle")
@@ -1477,7 +1631,13 @@ class TestBuildBundle:
             if args[:3] == ["-ztag", "reconcile", "-n"]:
                 captured_reconcile_specs.extend(args[3:])
                 return (1, "", "no file(s) to reconcile.\n")
-            return (1, "", f"unexpected: {args}")
+            if args[:4] == ["-ztag", "opened", "-c", "default"]:
+                return (0, "", "")
+            if args[:4] == ["-ztag", "resolve", "-n", "-c"]:
+                return (1, "", "no file(s) to resolve.\n")
+            if args[:2] == ["-ztag", "fstat"]:
+                return (1, "", "no such file(s)")
+            raise AssertionError(f"unexpected p4 command: {args}")
 
         with patch.object(pr, "run_p4", side_effect=fake_run_p4):
             pr.build_bundle("7", tmp_path / "bundle")
@@ -1536,9 +1696,15 @@ class TestBuildBundle:
                 return (0, info_out, "")
             if args[:3] == ["-ztag", "reconcile", "-n"]:
                 return (1, "", "no file(s) to reconcile.\n")
+            if args[:4] == ["-ztag", "opened", "-c", "default"]:
+                return (0, "", "")
+            if args[:4] == ["-ztag", "resolve", "-n", "-c"]:
+                return (1, "", "no file(s) to resolve.\n")
+            if args[:2] == ["-ztag", "fstat"]:
+                return (1, "", "no such file(s)")
             if args == ["print", "-q", "//depot/new.py#1"]:
                 return (0, "def brief():\n    pass\n", "")
-            return (1, "", f"unexpected: {args}")
+            raise AssertionError(f"unexpected p4 command: {args}")
 
         with patch.object(pr, "run_p4", side_effect=fake_run_p4):
             bundle = pr.build_bundle("144072", tmp_path / "bundle")
@@ -1595,7 +1761,15 @@ class TestBuildBundle:
                 return (0, "content of a\n", "")
             if args == ["print", "-q", "//depot/b.py@=1"]:
                 return (0, "content of b\n", "")
-            return (1, "", f"unexpected: {args}")
+            if args[:4] == ["-ztag", "resolve", "-n", "-c"]:
+                return (1, "", "no file(s) to resolve.\n")
+            if args[:2] == ["-ztag", "fstat"]:
+                return (1, "", "no such file(s)")
+            if args[:3] == ["-ztag", "opened", "-c"]:
+                return (0, "", "")
+            if args[:2] == ["fstat", "-T"]:
+                return (1, "", "no such file(s)")
+            raise AssertionError(f"unexpected p4 command: {args}")
 
         with patch.object(pr, "run_p4", side_effect=fake_run_p4):
             bundle = pr.build_bundle("1", tmp_path / "bundle")
@@ -1651,7 +1825,15 @@ class TestBuildBundle:
                 return (0, "mod_b contents\n", "")
             if args == ["print", "-q", "//depot/mod_c.cpp@=144098"]:
                 return (0, "mod_c contents\n", "")
-            return (1, "", f"unexpected: {args}")
+            if args[:4] == ["-ztag", "resolve", "-n", "-c"]:
+                return (1, "", "no file(s) to resolve.\n")
+            if args[:2] == ["-ztag", "fstat"]:
+                return (1, "", "no such file(s)")
+            if args[:3] == ["-ztag", "opened", "-c"]:
+                return (0, "", "")
+            if args[:2] == ["fstat", "-T"]:
+                return (1, "", "no such file(s)")
+            raise AssertionError(f"unexpected p4 command: {args}")
 
         with patch.object(pr, "run_p4", side_effect=fake_run_p4):
             bundle = pr.build_bundle("144098", tmp_path / "bundle")
@@ -2051,7 +2233,7 @@ class TestBuildBundleAutoShelve:
                 patch.object(pr, "fetch_shelf_fingerprint", side_effect=fake_fingerprint), \
                 patch.object(pr, "auto_shelve_cl", side_effect=fake_auto_shelve), \
                 patch.object(pr, "resolve_local_paths", return_value={"//depot/new.py": None}), \
-                patch.object(pr, "get_workspace_root", return_value=None), \
+                patch.object(pr, "get_workspace_root", return_value=(None, None)), \
                 patch.object(pr, "find_unreconciled", return_value=([], [])), \
                 patch.object(pr, "find_unresolved", return_value=([], [])):
             bundle = pr.build_bundle("123", tmp_path / "bundle")
@@ -2086,7 +2268,7 @@ class TestBuildBundleAutoShelve:
                     ),
                 ) as shelve_mock, \
                 patch.object(pr, "resolve_local_paths", return_value={"//depot/new.py": None}), \
-                patch.object(pr, "get_workspace_root", return_value=None), \
+                patch.object(pr, "get_workspace_root", return_value=(None, None)), \
                 patch.object(pr, "find_unreconciled", return_value=([], [])), \
                 patch.object(pr, "find_unresolved", return_value=([], [])):
             bundle = pr.build_bundle("123", tmp_path / "bundle")
@@ -2129,7 +2311,7 @@ class TestBuildBundleAutoShelve:
                 patch.object(pr, "auto_shelve_cl") as shelve_mock, \
                 patch.object(pr, "fetch_shelf_fingerprint", return_value=pr.ShelfScanResult()), \
                 patch.object(pr, "resolve_local_paths", return_value={"//depot/new.py": None}), \
-                patch.object(pr, "get_workspace_root", return_value=None), \
+                patch.object(pr, "get_workspace_root", return_value=(None, None)), \
                 patch.object(pr, "find_unreconciled", return_value=([], [])), \
                 patch.object(pr, "find_unresolved", return_value=([], [])):
             bundle = pr.build_bundle("123", tmp_path / "bundle")
@@ -2176,7 +2358,7 @@ class TestBuildBundleAutoShelve:
         with patch.object(pr, "fetch_describe", side_effect=fake_fetch_describe), \
                 patch.object(pr, "run_p4", side_effect=fake_run_p4), \
                 patch.object(pr, "resolve_local_paths", return_value={"//depot/new.py": None}), \
-                patch.object(pr, "get_workspace_root", return_value=None), \
+                patch.object(pr, "get_workspace_root", return_value=(None, None)), \
                 patch.object(pr, "find_unreconciled", return_value=([], [])), \
                 patch.object(pr, "find_unresolved", return_value=([], [])):
             bundle = pr.build_bundle("123", tmp_path / "bundle")
@@ -2236,7 +2418,7 @@ class TestBuildBundleShelfState:
                 patch.object(pr, "fetch_shelf_fingerprint", return_value=shelf), \
                 patch.object(pr, "run_p4", return_value=(1, "", "server unavailable")), \
                 patch.object(pr, "resolve_local_paths", return_value={"//depot/a.cpp": None}), \
-                patch.object(pr, "get_workspace_root", return_value=None), \
+                patch.object(pr, "get_workspace_root", return_value=(None, None)), \
                 patch.object(pr, "find_unreconciled", return_value=([], [])), \
                 patch.object(pr, "find_unresolved", return_value=([], [])):
             bundle = pr.build_bundle("123", tmp_path / "bundle")
@@ -2253,7 +2435,7 @@ class TestBuildBundleShelfState:
                 patch.object(pr, "fetch_shelf_fingerprint", return_value=shelf), \
                 patch.object(pr, "fetch_opened_files", return_value=({"//depot/a.cpp": "edit"}, [])), \
                 patch.object(pr, "resolve_local_paths", return_value={"//depot/a.cpp": None}), \
-                patch.object(pr, "get_workspace_root", return_value=None), \
+                patch.object(pr, "get_workspace_root", return_value=(None, None)), \
                 patch.object(pr, "find_unreconciled", return_value=([], [])), \
                 patch.object(pr, "find_unresolved", return_value=([], [])):
             bundle = pr.build_bundle("123", tmp_path / "bundle")
@@ -2265,7 +2447,7 @@ class TestBuildBundleShelfState:
                 patch.object(pr, "fetch_shelf_fingerprint", return_value=pr.ShelfScanResult()), \
                 patch.object(pr, "fetch_opened_files", return_value=({}, [])) as opened_mock, \
                 patch.object(pr, "resolve_local_paths", return_value={"//depot/a.cpp": None}), \
-                patch.object(pr, "get_workspace_root", return_value=None), \
+                patch.object(pr, "get_workspace_root", return_value=(None, None)), \
                 patch.object(pr, "find_unreconciled", return_value=([], [])), \
                 patch.object(pr, "find_unresolved", return_value=([], [])):
             pr.build_bundle("123", tmp_path / "bundle")
@@ -2285,7 +2467,7 @@ class TestBuildBundleShelfState:
                 patch.object(pr, "fetch_opened_files", return_value=({"//depot/new.cpp": "add"}, [])), \
                 patch.object(pr, "shelf_divergence", side_effect=AssertionError("called")), \
                 patch.object(pr, "resolve_local_paths", return_value={"//depot/a.cpp": None}), \
-                patch.object(pr, "get_workspace_root", return_value=None), \
+                patch.object(pr, "get_workspace_root", return_value=(None, None)), \
                 patch.object(pr, "find_unreconciled", return_value=([], [])), \
                 patch.object(pr, "find_unresolved", return_value=([], [])):
             bundle = pr.build_bundle("123", tmp_path / "bundle")
@@ -2301,7 +2483,7 @@ class TestBuildBundleShelfState:
                 patch.object(pr, "fetch_shelf_fingerprint", return_value=shelf), \
                 patch.object(pr, "fetch_opened_files", return_value=({"//depot/new.cpp": "add"}, [])), \
                 patch.object(pr, "resolve_local_paths", return_value={"//depot/a.cpp": None}), \
-                patch.object(pr, "get_workspace_root", return_value=None), \
+                patch.object(pr, "get_workspace_root", return_value=(None, None)), \
                 patch.object(pr, "find_unreconciled", return_value=([], [])), \
                 patch.object(pr, "find_unresolved", return_value=([], [])):
             bundle = pr.build_bundle("123", tmp_path / "bundle")
@@ -2319,8 +2501,9 @@ class TestBuildBundleShelfState:
                 patch.object(pr, "fetch_shelf_fingerprint", return_value=shelf) as fingerprint_mock, \
                 patch.object(pr, "fetch_opened_files", return_value=(opened, [])) as opened_mock, \
                 patch.object(pr, "resolve_local_paths", return_value={"//depot/a.cpp": str(local)}), \
-                patch.object(pr, "get_workspace_root", return_value=None), \
+                patch.object(pr, "get_workspace_root", return_value=(None, None)), \
                 patch.object(pr, "find_unreconciled", return_value=([], [])), \
+                patch.object(pr, "find_default_open", return_value=([], [])), \
                 patch.object(pr, "find_unresolved", return_value=([], [])):
             bundle = pr.build_bundle("123", tmp_path / "bundle")
         assert bundle["shelf_drift"] == [{"depot": "//depot/a.cpp", "local": str(local)}]
@@ -2338,8 +2521,9 @@ class TestBuildBundleShelfState:
                 patch.object(pr, "fetch_shelf_fingerprint", return_value=shelf), \
                 patch.object(pr, "fetch_opened_files", return_value=({"//depot/a.cpp": "edit"}, [])), \
                 patch.object(pr, "resolve_local_paths", return_value={"//depot/a.cpp": str(missing)}), \
-                patch.object(pr, "get_workspace_root", return_value=None), \
+                patch.object(pr, "get_workspace_root", return_value=(None, None)), \
                 patch.object(pr, "find_unreconciled", return_value=([], [])), \
+                patch.object(pr, "find_default_open", return_value=([], [])), \
                 patch.object(pr, "find_unresolved", return_value=([], [])):
             bundle = pr.build_bundle("123", tmp_path / "bundle")
         assert bundle["shelf_drift"] == []
@@ -2821,13 +3005,19 @@ class TestBuildBundleClaims:
                 return (0, info_out, "")
             if args[:3] == ["-ztag", "reconcile", "-n"]:
                 return (1, "", "no file(s) to reconcile.\n")
+            if args[:4] == ["-ztag", "opened", "-c", "default"]:
+                return (0, "", "")
+            if args[:3] == ["-ztag", "opened", "-c"]:
+                return (0, "", "")
             if args[:4] == ["-ztag", "resolve", "-n", "-c"]:
                 return (1, "", "no file(s) to resolve.\n")
+            if args[:2] == ["-ztag", "fstat"]:
+                return (1, "", "no such file(s)")
             if args[:3] == ["print", "-q", "-o"]:
                 Path(args[3]).parent.mkdir(parents=True, exist_ok=True)
                 Path(args[3]).write_text("old rule\n", encoding="utf-8")
                 return (0, "", "")
-            return (1, "", "")
+            raise AssertionError(f"unexpected p4 command: {args}")
 
         with patch.object(pr, "run_p4", side_effect=fake_run_p4):
             bundle = pr.build_bundle(
@@ -2875,9 +3065,15 @@ class TestBuildBundleClaims:
                 return (0, info_out, "")
             if args[:3] == ["-ztag", "reconcile", "-n"]:
                 return (1, "", "no file(s) to reconcile.\n")
+            if args[:4] == ["-ztag", "opened", "-c", "default"]:
+                return (0, "", "")
+            if args[:3] == ["-ztag", "opened", "-c"]:
+                return (0, "", "")
             if args[:4] == ["-ztag", "resolve", "-n", "-c"]:
                 return (1, "", "no file(s) to resolve.\n")
-            return (1, "", "")
+            if args[:2] == ["-ztag", "fstat"]:
+                return (1, "", "no such file(s)")
+            raise AssertionError(f"unexpected p4 command: {args}")
 
         with patch.object(pr, "run_p4", side_effect=fake_run_p4):
             bundle = pr.build_bundle("999", tmp_path / "bundle")
@@ -2943,13 +3139,19 @@ class TestBuildBundleHygieneSources:
             if args[:3] == ["-ztag", "reconcile", "-n"]:
                 reconcile_calls.append(args)
                 return (0, reconcile_out, "")
+            if args[:4] == ["-ztag", "opened", "-c", "default"]:
+                return (0, "", "")
+            if args[:3] == ["-ztag", "opened", "-c"]:
+                return (0, "", "")
             if args[:4] == ["-ztag", "resolve", "-n", "-c"]:
                 return (1, "", "no file(s) to resolve.\n")
+            if args[:2] == ["-ztag", "fstat"]:
+                return (1, "", "no such file(s)")
             if args[:3] == ["print", "-q", "-o"]:
                 Path(args[3]).parent.mkdir(parents=True, exist_ok=True)
                 Path(args[3]).write_text("old rule\n", encoding="utf-8")
                 return (0, "", "")
-            return (1, "", f"unexpected: {args}")
+            raise AssertionError(f"unexpected p4 command: {args}")
 
         with patch.object(pr, "run_p4", side_effect=fake_run_p4):
             bundle = pr.build_bundle(
@@ -3018,9 +3220,13 @@ class TestBuildBundleHygieneSources:
                 return (0, info_out, "")
             if args[:3] == ["-ztag", "reconcile", "-n"]:
                 return (0, reconcile_out, "")
+            if args[:4] == ["-ztag", "opened", "-c", "default"]:
+                return (0, "", "")
             if args[:4] == ["-ztag", "resolve", "-n", "-c"]:
                 return (1, "", "no file(s) to resolve.\n")
-            return (1, "", f"unexpected: {args}")
+            if args[:2] == ["-ztag", "fstat"]:
+                return (1, "", "no such file(s)")
+            raise AssertionError(f"unexpected p4 command: {args}")
 
         with patch.object(pr, "run_p4", side_effect=fake_run_p4):
             bundle = pr.build_bundle("1000", tmp_path / "bundle")
@@ -3083,9 +3289,13 @@ class TestBuildBundleHygieneSources:
                 return (0, info_out, "")
             if args[:3] == ["-ztag", "reconcile", "-n"]:
                 return (0, reconcile_out, "")
+            if args[:4] == ["-ztag", "opened", "-c", "default"]:
+                return (0, "", "")
             if args[:4] == ["-ztag", "resolve", "-n", "-c"]:
                 return (1, "", "no file(s) to resolve.\n")
-            return (1, "", f"unexpected: {args}")
+            if args[:2] == ["-ztag", "fstat"]:
+                return (1, "", "no such file(s)")
+            raise AssertionError(f"unexpected p4 command: {args}")
 
         with patch.object(pr, "run_p4", side_effect=fake_run_p4):
             bundle = pr.build_bundle("1001", tmp_path / "bundle")
@@ -3142,13 +3352,17 @@ class TestBuildBundleHygieneSources:
                 return (0, info_out, "")
             if args[:3] == ["-ztag", "reconcile", "-n"]:
                 return (0, reconcile_out, "")
+            if args[:4] == ["-ztag", "opened", "-c", "default"]:
+                return (0, "", "")
             if args[:4] == ["-ztag", "resolve", "-n", "-c"]:
                 return (1, "", "no file(s) to resolve.\n")
+            if args[:2] == ["-ztag", "fstat"]:
+                return (1, "", "no such file(s)")
             if args[:3] == ["print", "-q", "-o"]:
                 Path(args[3]).parent.mkdir(parents=True, exist_ok=True)
                 Path(args[3]).write_text("int z = 3;\n", encoding="utf-8")
                 return (0, "", "")
-            return (1, "", f"unexpected: {args}")
+            raise AssertionError(f"unexpected p4 command: {args}")
 
         with patch.object(pr, "run_p4", side_effect=fake_run_p4):
             bundle = pr.build_bundle("1002", tmp_path / "bundle")
@@ -3162,6 +3376,94 @@ class TestBuildBundleHygieneSources:
                 "workspace_state": "present",
             }
         ]
+
+
+class TestDefaultOpenBundle:
+    def test_keeps_default_open_separate_and_uses_reconcile_scope(self, tmp_path):
+        ws = tmp_path / "ws"
+        src = ws / "src"
+        src.mkdir(parents=True)
+        local = src / "foo.cpp"
+        local.write_text("int x = 1;\n", encoding="utf-8")
+        forgotten = src / "forgot.cpp"
+        forgotten.write_text("int y = 2;\n", encoding="utf-8")
+        default_file = src / "extra.cpp"
+        default_file.write_text("int z = 3;\n", encoding="utf-8")
+        describe = (
+            "Change 812 by author@author-client on 2026/01/01 12:00:00\n"
+            "\n"
+            "\tEdit foo\n"
+            "\n"
+            "Affected files ...\n"
+            "... //depot/src/foo.cpp#1 edit\n"
+            "\n"
+            "Differences ...\n"
+            "\n"
+            "==== //depot/src/foo.cpp#1 (text) ====\n"
+            "@@ -1 +1 @@\n"
+            "-int x = 0;\n"
+            "+int x = 1;\n"
+        )
+        where_output = (
+            "... depotFile //depot/src/foo.cpp\n"
+            f"... path {local}\n"
+        )
+        reconcile_output = (
+            "... depotFile //depot/src/forgot.cpp\n"
+            f"... clientFile {forgotten}\n"
+            "... action add\n"
+        )
+        default_output = (
+            "... depotFile //depot/src/extra.cpp\n"
+            f"... clientFile {default_file}\n"
+            "... action edit\n"
+            "... change default\n"
+        )
+        reconcile_commands = []
+        default_commands = []
+
+        def fake_run_p4(args):
+            if args == ["describe", "-du", "812"]:
+                return 0, describe, ""
+            if args == ["-ztag", "info"]:
+                return 0, f"... clientRoot {ws}\n", ""
+            if args == ["-ztag", "where", "//depot/src/foo.cpp"]:
+                return 0, where_output, ""
+            if args[:3] == ["-ztag", "reconcile", "-n"]:
+                reconcile_commands.append(args)
+                return 0, reconcile_output, ""
+            if args[:4] == ["-ztag", "opened", "-c", "default"]:
+                default_commands.append(args)
+                return 0, default_output, ""
+            if args == ["-ztag", "resolve", "-n", "-c", "812"]:
+                return 1, "", "no file(s) to resolve.\n"
+            if args == ["-ztag", "fstat", "-Ol", "//...@=812"]:
+                return 1, "", "no such file(s)"
+            raise AssertionError(f"unexpected p4 command: {args}")
+
+        with patch.object(pr, "run_p4", side_effect=fake_run_p4):
+            bundle = pr.build_bundle("812", tmp_path / "bundle")
+
+        assert {
+            "unreconciled": bundle["unreconciled"],
+            "default_open": bundle["default_open"],
+        } == {
+            "unreconciled": [
+                {
+                    "local": str(forgotten),
+                    "depot": "//depot/src/forgot.cpp",
+                    "action": "add",
+                }
+            ],
+            "default_open": [
+                {
+                    "local": str(default_file),
+                    "depot": "//depot/src/extra.cpp",
+                    "action": "edit",
+                }
+            ],
+        }
+        assert default_commands[0][4:] == reconcile_commands[0][3:]
 
 
 # ---------------------------------------------------------------------------
@@ -3204,9 +3506,13 @@ class TestSubmittedClaimGuard:
                 return (0, info_out, "")
             if args[:3] == ["-ztag", "reconcile", "-n"]:
                 return (1, "", "no file(s) to reconcile.\n")
+            if args[:4] == ["-ztag", "opened", "-c", "default"]:
+                return (0, "", "")
             if args[:4] == ["-ztag", "resolve", "-n", "-c"]:
                 return (1, "", "no file(s) to resolve.\n")
-            return (1, "", "")
+            if args[:2] == ["-ztag", "fstat"]:
+                return (1, "", "no such file(s)")
+            raise AssertionError(f"unexpected p4 command: {args}")
 
         return fake_run_p4
 
@@ -3233,6 +3539,150 @@ class TestSubmittedClaimGuard:
             bundle = pr.build_bundle("555", tmp_path / "bundle")
         assert bundle["cl"] == "555"
         assert "claimed_files" not in bundle
+
+
+class TestForeignChangeClient:
+    @staticmethod
+    def _pending_describe():
+        return (
+            "Change 701 by author@author-client on 2026/01/01 12:00:00 *pending*\n"
+            "\n"
+            "\tEdit foo\n"
+            "\n"
+            "Affected files ...\n"
+            "... //depot/src/foo.cpp#1 edit\n"
+            "\n"
+            "Differences ...\n"
+            "\n"
+            "==== //depot/src/foo.cpp#1 (text) ====\n"
+            "@@ -1 +1 @@\n"
+            "-int x = 0;\n"
+            "+int x = 1;\n"
+        )
+
+    def test_parses_change_owner_from_header(self):
+        assert pr._parse_change_owner(self._pending_describe()) == {
+            "user": "author",
+            "client": "author-client",
+        }
+
+    def test_workspace_identity_uses_one_info_call(self, tmp_path):
+        calls = []
+
+        def fake_run_p4(args):
+            if args != ["-ztag", "info"]:
+                raise AssertionError(f"unexpected p4 command: {args}")
+            calls.append(args)
+            return (
+                0,
+                f"... clientName reviewer-client\n... clientRoot {tmp_path}\n",
+                "",
+            )
+
+        with patch.object(pr, "run_p4", side_effect=fake_run_p4):
+            identity = pr.get_workspace_root()
+
+        assert (identity, calls) == (
+            (tmp_path, "reviewer-client"),
+            [["-ztag", "info"]],
+        )
+
+    def test_foreign_change_skips_local_scans_and_keeps_reviewer_instructions(
+        self, tmp_path
+    ):
+        ws = tmp_path / "reviewer-ws"
+        src = ws / "src"
+        src.mkdir(parents=True)
+        local = src / "foo.cpp"
+        local.write_text("// GENERATED BY reviewer state\n", encoding="utf-8")
+        claude = ws / "CLAUDE.md"
+        claude.write_text("reviewer rule\n", encoding="utf-8")
+        shelf = pr.ShelfScanResult(
+            digests={"//depot/src/foo.cpp": "ABC"},
+            actions={"//depot/src/foo.cpp": "edit"},
+        )
+        owner = {"user": "author", "client": "author-client"}
+
+        with patch.object(pr, "fetch_describe", return_value=(self._pending_describe(), True)), \
+                patch.object(pr, "fetch_shelf_fingerprint", return_value=shelf), \
+                patch.object(pr, "fetch_opened_files", side_effect=AssertionError("opened scan ran")) as opened_scan, \
+                patch.object(pr, "resolve_local_paths", return_value={"//depot/src/foo.cpp": str(local)}), \
+                patch.object(pr, "get_workspace_root", return_value=(ws, "reviewer-client")), \
+                patch.object(pr, "_shelf_content_drift", side_effect=AssertionError("shelf drift ran")) as drift_scan, \
+                patch.object(pr, "find_unreconciled", side_effect=AssertionError("reconcile ran")) as reconcile_scan, \
+                patch.object(pr, "find_default_open", side_effect=AssertionError("default opened ran")) as default_scan, \
+                patch.object(pr, "find_unresolved", side_effect=AssertionError("resolve ran")) as resolve_scan:
+            bundle = pr.build_bundle("701", tmp_path / "bundle")
+
+        assert [
+            opened_scan.call_count,
+            drift_scan.call_count,
+            reconcile_scan.call_count,
+            default_scan.call_count,
+            resolve_scan.call_count,
+        ] == [0, 0, 0, 0, 0]
+        assert bundle["hygiene_incomplete"] == [
+            {"scan": "unreconciled", "reason": "skipped for foreign client author-client"},
+            {"scan": "default_open", "reason": "skipped for foreign client author-client"},
+            {"scan": "unresolved", "reason": "skipped for foreign client author-client"},
+            {"scan": "shelf_opened", "reason": "skipped for foreign client author-client"},
+            {"scan": "shelf_drift", "reason": "skipped for foreign client author-client"},
+            {"scan": "machine_emitted", "reason": "skipped for foreign client author-client"},
+        ]
+        assert bundle["foreign_change"] == owner
+        assert bundle["unique_claude_mds"] == [str(claude)]
+        assert "machine_emitted_files" not in bundle
+
+    def test_foreign_change_with_claim_is_refused(self, tmp_path):
+        with patch.object(pr, "fetch_describe", return_value=(self._pending_describe(), False)), \
+                patch.object(pr, "get_workspace_root", return_value=(tmp_path, "reviewer-client")), \
+                patch.object(pr, "resolve_local_paths", return_value={"//depot/src/foo.cpp": None}), \
+                patch.object(pr, "materialize_preimage", side_effect=AssertionError("pre-image read")):
+            with pytest.raises(
+                ValueError,
+                match=r"foreign client author-client.*re-run without --claim",
+            ):
+                pr.build_bundle(
+                    "701", tmp_path / "bundle", claim_globs=["**/*.cpp"]
+                )
+
+    @pytest.mark.parametrize(
+        "owner, client_name",
+        [
+            ({"user": "author", "client": "reviewer-client"}, "reviewer-client"),
+            (None, "reviewer-client"),
+            ({"user": "author", "client": "author-client"}, None),
+        ],
+        ids=["matching-client", "owner-undetermined", "client-undetermined"],
+    )
+    def test_matching_or_undetermined_client_runs_local_scans(
+        self, owner, client_name, tmp_path
+    ):
+        local = tmp_path / "foo.cpp"
+        local.write_text("int x = 1;\n", encoding="utf-8")
+        shelf = pr.ShelfScanResult(
+            digests={"//depot/src/foo.cpp": "ABC"},
+            actions={"//depot/src/foo.cpp": "edit"},
+        )
+        with patch.object(pr, "fetch_describe", return_value=(self._pending_describe(), True)), \
+                patch.object(pr, "_parse_change_owner", return_value=owner), \
+                patch.object(pr, "fetch_shelf_fingerprint", return_value=shelf), \
+                patch.object(pr, "fetch_opened_files", return_value=({"//depot/src/foo.cpp": "edit"}, [])), \
+                patch.object(pr, "resolve_local_paths", return_value={"//depot/src/foo.cpp": str(local)}), \
+                patch.object(pr, "get_workspace_root", return_value=(tmp_path, client_name)), \
+                patch.object(pr, "_shelf_content_drift", return_value=([], [])) as drift_scan, \
+                patch.object(pr, "find_unreconciled", return_value=([], [])) as reconcile_scan, \
+                patch.object(pr, "find_default_open", return_value=([], [])) as default_scan, \
+                patch.object(pr, "find_unresolved", return_value=([], [])) as resolve_scan:
+            bundle = pr.build_bundle("701", tmp_path / "bundle")
+
+        assert [
+            drift_scan.call_count,
+            reconcile_scan.call_count,
+            default_scan.call_count,
+            resolve_scan.call_count,
+        ] == [1, 1, 1, 1]
+        assert "foreign_change" not in bundle
 
 
 # ---------------------------------------------------------------------------
@@ -3268,9 +3718,15 @@ class TestBundleLedgerWiring:
                 return (0, info_out, "")
             if args[:3] == ["-ztag", "reconcile", "-n"]:
                 return (1, "", "no file(s) to reconcile.\n")
+            if args[:4] == ["-ztag", "opened", "-c", "default"]:
+                return (0, "", "")
+            if args[:3] == ["-ztag", "opened", "-c"]:
+                return (0, "", "")
             if args[:4] == ["-ztag", "resolve", "-n", "-c"]:
                 return (1, "", "no file(s) to resolve.\n")
-            return (1, "", "")
+            if args[:2] == ["-ztag", "fstat"]:
+                return (1, "", "no such file(s)")
+            raise AssertionError(f"unexpected p4 command: {args}")
 
         return fake_run_p4
 

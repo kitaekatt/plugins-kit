@@ -25,6 +25,11 @@ directories containing CL files, and reports any unreconciled files
 forgotten to include in the CL. `.p4ignore` is honored by p4 itself; files
 already opened in any pending CL are skipped by reconcile.
 
+The same directory set is queried with `p4 -ztag opened -c default` to report
+files open in the default changelist. These use the `default_open` bundle key
+because folding them into the numbered CL requires `p4 reopen -c`, while
+unreconciled files require `p4 reconcile -c`.
+
 Reconcile can also report a depot path the CL already has open, under two
 action-transition sequences: opened for edit then deleted from the
 workspace, or opened for delete then recreated in the workspace. Neither is
@@ -40,7 +45,13 @@ goes to reviewers (conflict markers in the file content are themselves
 a legitimate review observation), but the user is warned that the CL is
 not submittable until each unresolved file is run through `p4 resolve`.
 
-Either hygiene scan (reconcile or resolve) can itself fail to run -- a bad
+When the CL header names a different client than `p4 -ztag info`, the review
+continues against the shelf but skips client-local hygiene scans. Each skipped
+scan is recorded in `hygiene_incomplete`, claim pre-images are refused, and a
+`foreign_change` entry identifies the CL owner. CLAUDE.md discovery uses the
+invoking workspace so its review rules govern the review.
+
+Any hygiene scan can itself fail to run -- a bad
 workspace, an unreachable server -- for a reason other than "nothing to
 report". That case is never folded into a clean empty `unreconciled` or
 `unresolved` list, which would read identically to "ran and found nothing";
@@ -98,6 +109,9 @@ Output schema:
       "unreconciled": [
         {"local": "<local path>", "depot": "<depot path>", "action": "add"|"edit"|"delete"}
       ],
+      "default_open": [
+        {"local": "<local path>", "depot": "<depot path>", "action": "<open action>"}
+      ],
       "stale_open": [
         {"depot": "<depot path>", "local": "<local path or null>",
          "open_action": "<the action the CL has this file open for>",
@@ -106,18 +120,22 @@ Output schema:
       "shelf_drift": [
         {"depot": "<depot path>", "local": "<local workspace path>"}
       ],
+      "foreign_change": {                    # present only when the CL header
+        "user": "<CL owner>",                 # names a different client
+        "client": "<CL client>"               # than p4 info
+      },
       "unresolved": [
         {"local": "<local path>", "depot": "<depot path>",
          "resolve_type": "<p4 resolveType, e.g. content/branch/delete>",
          "from_file": "<source depot path, may be empty>"}
       ],
-      "hygiene_incomplete": [                 # always present; empty means both
-                                               # scans ran and found nothing --
+      "hygiene_incomplete": [                 # always present; empty means all
+                                               # applicable scans completed --
                                                # a non-empty entry means a scan
                                                # below could NOT run, so its own
                                                # empty list must not be read as
                                                # "clean"
-        {"scan": "unreconciled"|"unresolved"|"shelf_fingerprint"|"shelf_opened"|"shelf_drift",
+        {"scan": "unreconciled"|"default_open"|"unresolved"|"shelf_fingerprint"|"shelf_opened"|"shelf_drift"|"machine_emitted",
          "reason": "<p4 error detail>"}
       ],
       "claimed_files": [                      # present only when --claim was passed
@@ -266,6 +284,9 @@ repair_path()
 # `binary+l`) drives the binary guard in extract_diff's hunk synthesis.
 _FILE_HEADER = re.compile(r"^==== (//[^#]+)#(\d+) \(([^)]*)\) ====\s*$")
 _AFFECTED_LINE = re.compile(r"^\.\.\. (//[^#]+)#(\d+) ([\w/]+)\s*$")
+_CHANGE_OWNER_HEADER = re.compile(
+    r"^Change\s+\d+\s+by\s+([^@\s]+)@([^\s]+)\s+on(?:\s|$)"
+)
 _RECONCILE_ACTIONS = {"add", "edit", "delete"}
 
 _ADD_ACTIONS = {"add", "branch", "move/add", "import"}
@@ -385,6 +406,18 @@ def _is_pending(output: str) -> bool:
         if line.startswith("Change "):
             return "*pending*" in line
     return False
+
+
+def _parse_change_owner(output: str) -> Optional[dict[str, str]]:
+    """Return the user and client from the first parseable Change header."""
+    for line in output.splitlines():
+        if not line.startswith("Change "):
+            continue
+        match = _CHANGE_OWNER_HEADER.match(line)
+        if match:
+            return {"user": match.group(1), "client": match.group(2)}
+        return None
+    return None
 
 
 class PendingUnshelvedError(ValueError):
@@ -1102,6 +1135,14 @@ def compute_minimal_dirs(
     return minimal
 
 
+def _p4_paths_for_dir_specs(dir_specs: list[tuple[Path, bool]]) -> list[str]:
+    """Convert scan directories to recursive or immediate-child file specs."""
+    return [
+        f"{directory}/..." if recursive else f"{directory}/*"
+        for directory, recursive in dir_specs
+    ]
+
+
 def find_unreconciled(
     dir_specs: list[tuple[Path, bool]]
 ) -> tuple[list[dict], list[dict]]:
@@ -1129,7 +1170,7 @@ def find_unreconciled(
     """
     if not dir_specs:
         return [], []
-    specs = [f"{d}/..." if recursive else f"{d}/*" for d, recursive in dir_specs]
+    specs = _p4_paths_for_dir_specs(dir_specs)
 
     items: list[dict] = []
     incomplete: list[dict] = []
@@ -1229,6 +1270,65 @@ def _parse_reconcile_output(out: str) -> list[dict]:
     return items
 
 
+def _parse_default_open_output(out: str) -> list[dict[str, str]]:
+    """Parse depot path, client path, and action from ztag opened records."""
+    items: list[dict[str, str]] = []
+    current: dict[str, str] = {}
+
+    def flush() -> None:
+        if current.get("depot") and current.get("local") and current.get("action"):
+            items.append(
+                {
+                    "local": current["local"],
+                    "depot": current["depot"],
+                    "action": current["action"],
+                }
+            )
+
+    for line in out.splitlines():
+        if line.startswith("... depotFile "):
+            if current:
+                flush()
+                current = {}
+            current["depot"] = line[len("... depotFile "):].strip()
+        elif line.startswith("... clientFile "):
+            current["local"] = line[len("... clientFile "):].strip()
+        elif line.startswith("... action "):
+            current["action"] = line[len("... action "):].strip()
+        elif line.strip() == "" and current:
+            flush()
+            current = {}
+    if current:
+        flush()
+    return items
+
+
+def find_default_open(
+    dir_specs: list[tuple[Path, bool]],
+) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
+    """Return files open in the default CL under the reconcile scan paths."""
+    if not dir_specs:
+        return [], []
+    specs = _p4_paths_for_dir_specs(dir_specs)
+    items: list[dict[str, str]] = []
+    incomplete: list[dict[str, str]] = []
+    for i in range(0, len(specs), _P4_PATH_BATCH):
+        chunk = specs[i:i + _P4_PATH_BATCH]
+        rc, out, err = run_p4(["-ztag", "opened", "-c", "default", *chunk])
+        detail = err.strip() or out.strip()
+        no_open_files = "not opened on this client" in (out + err).lower()
+        if rc != 0 and not no_open_files:
+            reason = detail or f"exit {rc}"
+            print(
+                f"prepare_review: default changelist check failed (rc={rc}): {reason}",
+                file=sys.stderr,
+            )
+            incomplete.append({"scan": "default_open", "reason": reason})
+            continue
+        items.extend(_parse_default_open_output(out))
+    return items, incomplete
+
+
 def find_unresolved(cl: str) -> tuple[list[dict], list[dict]]:
     """Run `p4 -ztag resolve -n -c <CL>` and return unresolved files in this CL.
 
@@ -1284,15 +1384,21 @@ def find_unresolved(cl: str) -> tuple[list[dict], list[dict]]:
     return items, []
 
 
-def get_workspace_root() -> Optional[Path]:
-    """Get the local workspace root via `p4 -ztag info` → `clientRoot`."""
+def get_workspace_root() -> tuple[Optional[Path], Optional[str]]:
+    """Get clientRoot and clientName from one `p4 -ztag info` call."""
     rc, out, _ = run_p4(["-ztag", "info"])
     if rc != 0:
-        return None
+        return None, None
+    workspace_root: Optional[Path] = None
+    client_name: Optional[str] = None
     for line in out.splitlines():
         if line.startswith("... clientRoot "):
-            return Path(line[len("... clientRoot "):].strip())
-    return None
+            workspace_root = Path(line[len("... clientRoot "):].strip())
+        elif line.startswith("... clientName "):
+            value = line[len("... clientName "):].strip()
+            if value and value.lower() not in {"unknown", "*unknown*"}:
+                client_name = value
+    return workspace_root, client_name
 
 
 def materialize_preimage(depot: str, action: str, bundle_dir: Path) -> Optional[str]:
@@ -1375,18 +1481,42 @@ def build_bundle(
             describe, is_shelved = fetch_describe(cl)
             auto_shelved = True
 
+    workspace_root, client_name = get_workspace_root()
+    change_owner = _parse_change_owner(describe)
+    foreign_change: Optional[dict[str, str]] = None
+    if (
+        change_owner is not None
+        and client_name is not None
+        and change_owner["client"] != client_name
+    ):
+        foreign_change = change_owner
+
+    if claim_globs and foreign_change is not None:
+        raise ValueError(
+            f"CL {cl} belongs to foreign client {foreign_change['client']}; "
+            f"claim pre-images require its client workspace -- "
+            f"re-run without --claim for a plain informational review"
+        )
+
     if _is_pending(describe) and is_shelved and not auto_shelved:
         if shelf_observed is None:
             shelf_observed = fetch_shelf_fingerprint(cl)
         divergence = []
-        if shelf_observed.scan_ok:
+        if foreign_change is not None:
+            opened_incomplete = [
+                {
+                    "scan": "shelf_opened",
+                    "reason": f"skipped for foreign client {foreign_change['client']}",
+                }
+            ]
+        if shelf_observed.scan_ok and foreign_change is None:
             opened, opened_incomplete = fetch_opened_files(cl)
             if not opened_incomplete:
                 divergence, divergence_incomplete = shelf_divergence(
                     cl, shelf_observed, opened
                 )
                 opened_incomplete += divergence_incomplete
-        else:
+        elif not shelf_observed.scan_ok:
             shelf_scan_incomplete = [
                 {
                     "scan": "shelf_fingerprint",
@@ -1422,11 +1552,17 @@ def build_bundle(
     # section entirely, so deriving the file list from ==== headers undercounts.
     depot_files = list(actions.keys())
     local_map = resolve_local_paths(depot_files)
-    workspace_root = get_workspace_root()
 
     shelf_drift: list[dict[str, str]] = []
     shelf_drift_incomplete: list[dict[str, str]] = []
-    if _is_pending(describe) and is_shelved:
+    if foreign_change is not None:
+        shelf_drift_incomplete = [
+            {
+                "scan": "shelf_drift",
+                "reason": f"skipped for foreign client {foreign_change['client']}",
+            }
+        ]
+    elif _is_pending(describe) and is_shelved:
         if shelf_observed is not None and shelf_observed.scan_ok:
             if opened is None:
                 opened, opened_incomplete = fetch_opened_files(cl)
@@ -1455,6 +1591,17 @@ def build_bundle(
             action = actions.get(f["identifier"], ("", ""))[1]
             f["action"] = action
             f["pre_image"] = materialize_preimage(f["depot"], action, bundle_dir)
+    skip_machine_emitted_scan = (
+        foreign_change is not None and not review_machine_emitted
+    )
+    machine_emitted_incomplete: list[dict[str, str]] = []
+    if skip_machine_emitted_scan:
+        machine_emitted_incomplete = [
+            {
+                "scan": "machine_emitted",
+                "reason": f"skipped for foreign client {foreign_change['client']}",
+            }
+        ]
     core = assemble_bundle(
         preamble=preamble,
         sections=sections,
@@ -1470,7 +1617,10 @@ def build_bundle(
         # there raises TypeError on every review. The post-rename
         # assemble_bundle still accepts this spelling as a deprecated alias,
         # so the old name works against both. Retire per rename-spec H.2.
-        review_generated=review_machine_emitted,
+        # Machine-emitted detection prefers local file bytes when available.
+        # A foreign CL maps to reviewer bytes, so disable that classification
+        # rather than excluding shelf content based on another workspace.
+        review_generated=review_machine_emitted or skip_machine_emitted_scan,
     )
     changed_files = core["changed_files"]
 
@@ -1487,24 +1637,46 @@ def build_bundle(
         + core.get("claimed_files", [])
         + (core.get("machine_emitted_files") or core.get("generated_files") or [])
     )
-    minimal_dirs = compute_minimal_dirs(
-        [f["local"] for f in hygiene_sources], workspace_root
-    )
-    unreconciled_raw, unreconciled_incomplete = find_unreconciled(minimal_dirs)
-    unreconciled, stale_open = _partition_own_depot_files(
-        unreconciled_raw, set(depot_files), actions
-    )
-    unresolved, unresolved_incomplete = find_unresolved(cl)
+    # Foreign ownership is determined before this block. Keep every client-local
+    # scan inside the non-foreign branch so reviewer workspace state cannot be
+    # attributed to the CL author.
+    if foreign_change is not None:
+        skip_reason = f"skipped for foreign client {foreign_change['client']}"
+        unreconciled: list[dict] = []
+        default_open: list[dict] = []
+        stale_open: list[dict] = []
+        unresolved: list[dict] = []
+        unreconciled_incomplete = [
+            {"scan": "unreconciled", "reason": skip_reason}
+        ]
+        default_open_incomplete = [
+            {"scan": "default_open", "reason": skip_reason}
+        ]
+        unresolved_incomplete = [
+            {"scan": "unresolved", "reason": skip_reason}
+        ]
+    else:
+        minimal_dirs = compute_minimal_dirs(
+            [f["local"] for f in hygiene_sources], workspace_root
+        )
+        unreconciled_raw, unreconciled_incomplete = find_unreconciled(minimal_dirs)
+        unreconciled, stale_open = _partition_own_depot_files(
+            unreconciled_raw, set(depot_files), actions
+        )
+        default_open, default_open_incomplete = find_default_open(minimal_dirs)
+        unresolved, unresolved_incomplete = find_unresolved(cl)
     # A failed scan must never serialize as an empty list indistinguishable
     # from "ran and found nothing" -- hygiene_incomplete is always present
-    # (empty when both scans ran cleanly) and names which scan(s) could not
-    # complete and why. See find_unreconciled / find_unresolved.
+    # (empty when all applicable scans ran cleanly) and names which scan(s)
+    # could not complete and why. See find_unreconciled / find_unresolved.
     hygiene_incomplete = (
         unreconciled_incomplete
+        + default_open_incomplete
         + unresolved_incomplete
         + shelf_scan_incomplete
         + opened_incomplete
         + shelf_drift_incomplete
+        + machine_emitted_incomplete
     )
 
     # Declined-findings ledger. The baseline folds the CL's shelf fingerprint
@@ -1529,6 +1701,7 @@ def build_bundle(
         "changed_files": changed_files,
         "unique_claude_mds": core["unique_claude_mds"],
         "unreconciled": unreconciled,
+        "default_open": default_open,
         "stale_open": stale_open,
         "unresolved": unresolved,
         "hygiene_incomplete": hygiene_incomplete,
@@ -1542,6 +1715,8 @@ def build_bundle(
     }
     if claim_globs:
         bundle["claimed_files"] = core.get("claimed_files", [])
+    if foreign_change is not None:
+        bundle["foreign_change"] = foreign_change
     # Read NEW-key-or-OLD-key: a bootstrap predating the machine_emitted rename
     # still writes `generated_files`. Tolerating both spellings keeps this kit
     # order-free against the bootstrap half of the rename -- reading only the new

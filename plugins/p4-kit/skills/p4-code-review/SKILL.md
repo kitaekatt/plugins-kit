@@ -43,7 +43,7 @@ technique_skill:
         - n: 2
           action: |
             Claim probe -- decide the `--claim` flags BEFORE invoking prepare, and invoke prepare
-            only ONCE. Check whether skills-kit's md-domain skill is available in this session (it
+            once unless the foreign-client fallback below applies. Check whether skills-kit's md-domain skill is available in this session (it
             appears in the available-skills list as `skills-kit:md-domain`). If it IS available, add
             `--claim '**/*.md'` to the prepare
             invocation below so EVERY changed Markdown file (any `.md` at any depth, root included --
@@ -62,27 +62,30 @@ technique_skill:
             (Markdeep) is NOT `.md`, so it is deliberately left to the generic reviewers. If
             md-domain is NOT available, invoke
             prepare with NO `--claim` flags -- degrade silently to today's behavior (the md files get
-            thin generic data_only coverage), noting the degradation in one line. Do NOT run prepare
-            twice.
-            Then run prepare_review.py to fetch the diff (with shelved fallback; auto-shelves a pending CL with no existing shelf so the diff is fetchable), partition the diff into chunked .diff fragments on disk, map ancestor CLAUDE.md files for each changed file, detect unreconciled files in the directories the CL touches, detect unresolved merges in the CL, and scan ancestor CLAUDE.md files for submit-gate reminders that apply to this CL.
+            thin generic data_only coverage), noting the degradation in one line. A second prepare invocation is
+            reserved for the foreign-client claim refusal below.
+            Then run prepare_review.py to fetch the diff (with shelved fallback; auto-shelves a pending CL with no existing shelf so the diff is fetchable), partition the diff into chunked .diff fragments on disk, map ancestor CLAUDE.md files for each changed file, detect unreconciled and default-changelist files in the directories the CL touches, detect unresolved merges in the CL, and scan ancestor CLAUDE.md files for submit-gate reminders that apply to this CL.
             After prepare returns, emit the launch rationale line ONCE (see narration.launch_message):
             select the row from the file-type mix of the changed + claimed files, or the md_trivial row
             when the step-6 triviality gate will fire. This is the single launch message -- do not repeat it.
           tool: python3 ${CLAUDE_PLUGIN_ROOT}/scripts/prepare_review.py
           input: "<CL>  (append `--claim '**/*.md'` when md-domain is available, per the claim probe)"
           expected: |
-            JSON with cl, description, project_root, bundle_dir, diff_chunks, changed_files, unique_claude_mds, unreconciled, stale_open, shelf_drift, unresolved, submit_gates, auto_shelved, shelf_fingerprint, change_id, ledger_baseline, ledger_hits, -- only when --claim was passed -- claimed_files, and -- only when a changed file was detected as machine-emitted -- machine_emitted_files (each entry carries identifier, local, size_bytes, and the axis that matched -- machine_emitted_axis `content` or `declared_path` plus the naming machine_emitted_signature; such files are excluded from diff_chunks and changed_files, and `--review-machine-emitted` turns that exclusion off). The raw diff text is NOT inline -- it lives in per-chunk files at `<bundle_dir>/<diff_chunks[i].path>` (paths are relative to bundle_dir). Each `changed_files` entry carries `chunk_index` pointing to the chunk that contains its diff. `auto_shelved=true` means prepare_review created the shelf and step 10 must clean it up.
+            JSON with cl, description, project_root, bundle_dir, diff_chunks, changed_files, unique_claude_mds, unreconciled, default_open, stale_open, shelf_drift, unresolved, hygiene_incomplete, submit_gates, auto_shelved, shelf_fingerprint, change_id, ledger_baseline, ledger_hits, -- only when the CL belongs to a different client -- foreign_change, -- only when --claim was passed -- claimed_files, and -- only when a changed file was detected as machine-emitted -- machine_emitted_files (each entry carries identifier, local, size_bytes, and the axis that matched -- machine_emitted_axis `content` or `declared_path` plus the naming machine_emitted_signature; such files are excluded from diff_chunks and changed_files, and `--review-machine-emitted` turns that exclusion off). The raw diff text is NOT inline -- it lives in per-chunk files at `<bundle_dir>/<diff_chunks[i].path>` (paths are relative to bundle_dir). Each `changed_files` entry carries `chunk_index` pointing to the chunk that contains its diff. `auto_shelved=true` means prepare_review created the shelf and step 10 must clean it up.
           on_failure: |
-            Surface the stderr message to the user and stop. No retry.
+            If prepare reports that the CL belongs to a foreign client, re-run once without `--claim` and use that bundle. State that md-domain subject-lens review is unavailable because claim pre-images depend on the author's client workspace.
+            For any other failure, surface the stderr message to the user and stop. No retry.
             Launch note: ALWAYS invoke with an explicit `python3` interpreter (as shown in `tool:`), never as a bare path. Bare `${CLAUDE_PLUGIN_ROOT}/scripts/prepare_review.py <CL>` lets bash try to run the file as a shell script -- it has no shebang line in older checkouts and the exec bit does not survive on Windows checkouts, so bash parses the Python as sh and exits 2. The script self-relocates under the p4-kit venv via reexec, so any python3 launcher is sufficient. And NEVER pipe the invocation (`... | tail`, `... | head`): a pipe makes `$?` the last pipeline stage's status, not the script's, which silently masks a launch failure as success.
         - n: 3
           action: |
-            If bundle.unreconciled is non-empty, list the files (grouped by action: add / edit / delete) and ask the user whether any should be folded into the CL before review.
-            - If the user picks one or more: run `p4 reconcile -c <CL> <local-paths>` to open them directly into the CL, then re-run prepare_review.py and use the new bundle.
+            If bundle.unreconciled or bundle.default_open is non-empty, list each non-empty group by action and ask one question about which files should be folded into the CL before review.
+            - For `bundle.unreconciled`, use `p4 reconcile -c <CL> <local-paths>` on the selected files.
+            - For `bundle.default_open`, use `p4 reopen -c <CL> <local-paths>` on the selected files.
+            - If the user picks files from either group, run the command for each selected group, then re-run prepare_review.py and use the new bundle.
             - If the user declines all: continue with the current bundle.
-            On the post-reconcile re-run, do NOT prompt again about unreconciled files even if some remain -- the user already decided.
-            Skip this step entirely if bundle.unreconciled is empty.
-          tool: AskUserQuestion + p4 reconcile + prepare_review.py
+            On the post-fold re-run, do NOT prompt again about either group even if files remain -- the user already decided.
+            Skip this step entirely if both groups are empty.
+          tool: AskUserQuestion + p4 reconcile/reopen + prepare_review.py
         - n: 4
           action: |
             Read every CLAUDE.md path in unique_claude_mds. Subagents do not need to re-read.
@@ -305,6 +308,9 @@ technique_skill:
               whose shelf content differs from the local file. Each entry
               contains the depot path and local path; this is a warning, not a
               refusal, because the shelf digest is server-normalized.
+            - When `bundle.foreign_change` is present, disclose the author and foreign client
+              and state that client-local hygiene scans were skipped. CLAUDE.md scopes come
+              from the reviewer's workspace, as listed by `bundle.unique_claude_mds`.
             - When the md-domain subject-lens pass ran (bundle.claimed_files was non-empty and the
               Workflow did NOT fall back), render its results as a distinct, clearly LABELED section
               titled `## md-domain (subject-lens) findings`, kept SEPARATE from the code-review issue
@@ -402,7 +408,8 @@ technique_skill:
       checklist:
         - CL number resolved
         - Context bundled via prepare_review.py
-        - Unreconciled files surfaced (and either folded in via `p4 reconcile -c <CL>` with a re-run, or explicitly declined)
+        - Foreign CL ownership disclosed when bundle.foreign_change is present, including the skipped client-local scans
+        - Unreconciled and default-changelist files surfaced in one question (and either folded in via the matching `p4 reconcile -c <CL>` or `p4 reopen -c <CL>` command with a re-run, or explicitly declined)
         - All CLAUDE.md files read
         - Submit gates discharged by the agent (if any), each with a MET / NOT APPLICABLE / NOT MET / NEEDS THE USER verdict and its evidence
         - Executable review-profile table resolved via render_review_profiles.py (step 4); profile selected from the resolved table using review_profiles guidance
@@ -424,8 +431,8 @@ technique_skill:
         - Render only -- this skill outputs in chat. There is no Swarm comment, PR comment, or disk write step.
         - If prepare_review.py fails, report the error and stop. No retry.
         - Validators are independent of reviewers. The validator does not see who flagged the issue.
-        - The unreconciled check must happen BEFORE reviewers spawn. Folding in forgotten files after agents have already reviewed the diff wastes their work and produces a stale review.
-        - On the post-reconcile re-run, do NOT prompt again about unreconciled files. The user already chose. Re-prompting on the same list is annoying; re-prompting on a smaller list (because they only added some) implies the rest were forgotten when they were declined.
+        - The unreconciled and default-changelist checks must happen BEFORE reviewers spawn. Folding in files after agents reviewed the diff wastes their work and produces a stale review.
+        - On the post-fold re-run, do NOT prompt again about unreconciled or default-changelist files. The user chose once. Re-prompting on the same list is annoying; re-prompting on a smaller list implies the rest were forgotten when they were declined.
         - Submit gates are reminders, not findings -- they do NOT go through reviewer or validator subagents. They are parsed deterministically by prepare_review.py and rendered verbatim in a separate output section. Do not try to validate, score, or filter them.
         - A submit gate is addressed to whoever did the work, and in an agent-driven session that is YOU. Discharge it yourself against the change; never ask the user which obligations they have completed. They did not make these edits and cannot answer, and an "I don't know how to answer this" is neither a confirmation nor a decline -- the gate then collects nothing while appearing to have run. Preflight is the operator's job, not the passenger's.
         - A MET verdict means met WITH EVIDENCE. Name the file, the key and its default, the test, or the command and its result. A verdict with no evidence is the same empty signal as an unanswered prompt, just harder to notice.
@@ -463,12 +470,12 @@ technique_skill:
       - when: "Before step 1 (only if no CL arg was passed)"
         template: "Listing your pending changelists."
       - when: "Before step 2"
-        template: "Gathering context for CL <CL>: fetching diff, mapping CLAUDE.md scopes, scanning for unreconciled files."
-      - when: "Before step 3 (U >= 1)"
-        template: "Found <U> unreconciled file(s) in the directories this CL touches. Asking before reviewing."
-      - when: "After step 3 if user folded files in (U_added >= 1)"
-        template: "Folded <U_added> file(s) into CL <CL> via `p4 reconcile`. Re-running prepare to refresh the diff."
-      - when: "After step 3 if user declined (U_added = 0 and U >= 1)"
+        template: "Gathering context for CL <CL>: fetching diff, mapping CLAUDE.md scopes, scanning client-local file state."
+      - when: "Before step 3 (F >= 1)"
+        template: "Found <U> unreconciled and <D> default-changelist file(s) in the directories this CL touches. Asking one fold-in question before reviewing."
+      - when: "After step 3 if user folded files in (F_added >= 1)"
+        template: "Folded <F_added> file(s) into CL <CL> via `p4 reconcile` or `p4 reopen`. Re-running prepare to refresh the diff."
+      - when: "After step 3 if user declined (F_added = 0 and F >= 1)"
         template: "Continuing with CL <CL> as-is."
       - when: "After step 3, before step 4 (M >= 1)"
         template: "Got <N> changed file(s) and <M> unique CLAUDE.md scope(s). Reading them now."
@@ -495,7 +502,9 @@ technique_skill:
       "<N>": "len(bundle.changed_files)"
       "<M>": "len(bundle.unique_claude_mds)"
       "<U>": "len(bundle.unreconciled)"
-      "<U_added>": "count of files the user chose to fold into the CL"
+      "<D>": "len(bundle.default_open)"
+      "<F>": "<U> + <D>"
+      "<F_added>": "count of unreconciled and default-changelist files the user chose to fold into the CL"
       "<X>": "total candidate issues from all launched reviewers combined"
       "<B>": "count where reason == 'bug'"
       "<C>": "count where reason == 'claude_md'"
