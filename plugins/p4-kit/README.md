@@ -37,7 +37,10 @@ The mechanisms that make it more than "ask a model about a diff":
   the recorded fingerprint. If you reshelved or edited in the meantime, the
   cleanup is a silent no-op; your work is never touched.
 
-Output is rendered markdown in chat. Nothing is written to disk or Swarm.
+The review is rendered as markdown in chat. The prepare step writes
+`bundle.json`, diff chunks, and claim pre-images to the plugin data directory.
+Each prepare replaces the bundle for that CL. The durable `ledger.json`
+file keeps declined findings across reviews. Nothing is written to Swarm.
 
 ## How it differs from the built-in /code-review
 

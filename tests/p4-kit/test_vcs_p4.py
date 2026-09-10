@@ -5,8 +5,8 @@ the exact operation mapping required for safe changelist handling:
 
 - make_changeset builds a minimal ``p4 change -i`` spec with tab-prefixed
   description lines and NO ``Files:`` section, and parses the new CL number.
-- open_for_edit / add / revert / move_into issue the exact p4 verbs on the
-  exact paths, and reject p4 wildcards (``...`` / ``*``).
+- open_for_edit / add / revert / move_into issue the exact p4 verbs on literal
+  paths, with ellipsis refused.
 - finalize_description dump-edit-restores, replacing ONLY the Description block
   and preserving the auto-populated ``Files:`` section.
 - delete_if_empty deletes an empty CL and leaves a non-empty one alone.
@@ -19,6 +19,7 @@ module itself imports nothing from content_pipeline.
 """
 
 import os
+import re
 import sys
 
 import pytest
@@ -42,6 +43,7 @@ from p4kit_vcs.p4_vcs import (  # noqa: E402
     P4ChangesetContents,
     P4Vcs,
     P4VcsError,
+    _filespec,
 )
 
 
@@ -157,6 +159,47 @@ def test_add_issues_p4_add():
     assert ["add", "foo/new.txt"] in fake.arg_vectors
 
 
+@pytest.mark.parametrize(
+    ("name", "expected"),
+    [("%", "%25"), ("@", "%40"), ("#", "%23"), ("*", "%2A"),
+     ("a%40", "a%2540"), ("a@b#c%d*e", "a%40b%23c%25d%2Ae"),
+     ("plain.txt", "plain.txt")],
+)
+def test_filespec_encodes_reserved_characters_in_order(name, expected):
+    assert _filespec(name) == expected
+
+
+def test_filespec_refuses_ellipsis():
+    with pytest.raises(P4VcsError):
+        _filespec("foo/...")
+
+
+def test_add_reserved_name_uses_literal_and_force():
+    fake = FakeP4()
+    P4Vcs(runner=fake).add("docs/a@b.txt")
+    assert ["add", "-f", "docs/a@b.txt"] in fake.arg_vectors
+
+
+def test_open_for_edit_star_is_literal_encoded():
+    fake = FakeP4()
+    P4Vcs(runner=fake).open_for_edit("a*b.txt")
+    assert ["edit", "a%2Ab.txt"] in fake.arg_vectors
+
+
+def test_existing_file_operations_encode_reserved_name():
+    fake = FakeP4(opened_ztag="... change 1\n")
+    vcs = P4Vcs(runner=fake)
+    encoded = "a%40b%23c%25d%2Ae.txt"
+    vcs.open_for_edit("a@b#c%d*e.txt")
+    vcs.revert("a@b#c%d*e.txt")
+    vcs.move_into(P4Changeset(cl="1"), ["a@b#c%d*e.txt"])
+    vcs.owning_changeset("a@b#c%d*e.txt")
+    assert ["edit", encoded] in fake.arg_vectors
+    assert ["revert", encoded] in fake.arg_vectors
+    assert ["reopen", "-c", "1", encoded] in fake.arg_vectors
+    assert ["-ztag", "opened", encoded] in fake.arg_vectors
+
+
 def test_revert_issues_p4_revert_exact_path():
     fake = FakeP4()
     P4Vcs(runner=fake).revert("foo/bar.txt")
@@ -190,8 +233,8 @@ def test_move_into_requires_a_cl():
         vcs.move_into(P4Changeset(cl=None), ["a.txt"])
 
 
-@pytest.mark.parametrize("bad", ["depot/...", "foo/*.txt", "a/.../b"])
-def test_wildcards_are_rejected_everywhere(bad):
+@pytest.mark.parametrize("bad", ["depot/...", "a/.../b"])
+def test_ellipsis_is_rejected_everywhere(bad):
     vcs = P4Vcs(runner=FakeP4())
     with pytest.raises(P4VcsError):
         vcs.open_for_edit(bad)
@@ -201,6 +244,35 @@ def test_wildcards_are_rejected_everywhere(bad):
         vcs.revert(bad)
     with pytest.raises(P4VcsError):
         vcs.move_into(P4Changeset(cl="1"), [bad])
+
+
+def test_move_into_encodes_argv_and_records_literal():
+    fake = FakeP4()
+    vcs = P4Vcs(runner=fake)
+    changeset = P4Changeset(cl="1")
+    vcs.move_into(changeset, ["foo/a@b#c%d*.txt"])
+    assert ["reopen", "-c", "1", "foo/a%40b%23c%25d%2A.txt"] in fake.arg_vectors
+    assert changeset.paths == ["foo/a@b#c%d*.txt"]
+
+
+def test_reserved_character_argv_invariant():
+    fake = FakeP4(opened_ztag="... change 1\n")
+    vcs = P4Vcs(runner=fake)
+    name = "a@b#c%d*.txt"
+    vcs.open_for_edit(name)
+    vcs.add(name)
+    vcs.revert(name)
+    vcs.move_into(P4Changeset(cl="1"), [name])
+    vcs.owning_changeset(name)
+
+    for args in fake.arg_vectors:
+        for index, token in enumerate(args):
+            if token == name:
+                assert index > 0 and args[index - 1] == "-f"
+                continue
+            elif token not in {"add", "edit", "revert", "reopen", "-c", "1", "-f", "-ztag", "opened"}:
+                assert not any(char in token for char in "@#*")
+            assert not re.search(r"%(?![0-9A-Fa-f]{2})", token)
 
 
 # -- move_into: reopen output verification (no-op / wrong-CL detection) -------

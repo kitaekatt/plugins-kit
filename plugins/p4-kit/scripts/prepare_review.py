@@ -25,6 +25,11 @@ directories containing CL files, and reports any unreconciled files
 forgotten to include in the CL. `.p4ignore` is honored by p4 itself; files
 already opened in any pending CL are skipped by reconcile.
 
+The same directory set is queried with `p4 -ztag opened -c default` to report
+files open in the default changelist. These use the `default_open` bundle key
+because folding them into the numbered CL requires `p4 reopen -c`, while
+unreconciled files require `p4 reconcile -c`.
+
 Reconcile can also report a depot path the CL already has open, under two
 action-transition sequences: opened for edit then deleted from the
 workspace, or opened for delete then recreated in the workspace. Neither is
@@ -40,7 +45,13 @@ goes to reviewers (conflict markers in the file content are themselves
 a legitimate review observation), but the user is warned that the CL is
 not submittable until each unresolved file is run through `p4 resolve`.
 
-Either hygiene scan (reconcile or resolve) can itself fail to run -- a bad
+When the CL header names a different client than `p4 -ztag info`, the review
+continues against the shelf but skips client-local hygiene scans. Each skipped
+scan is recorded in `hygiene_incomplete`, claim pre-images are refused, and a
+`foreign_change` entry identifies the CL owner. CLAUDE.md discovery uses the
+invoking workspace so its review rules govern the review.
+
+Any hygiene scan can itself fail to run -- a bad
 workspace, an unreachable server -- for a reason other than "nothing to
 report". That case is never folded into a clean empty `unreconciled` or
 `unresolved` list, which would read identically to "ran and found nothing";
@@ -98,23 +109,34 @@ Output schema:
       "unreconciled": [
         {"local": "<local path>", "depot": "<depot path>", "action": "add"|"edit"|"delete"}
       ],
+      "default_open": [
+        {"local": "<local path>", "depot": "<depot path>", "action": "<open action>"}
+      ],
       "stale_open": [
         {"depot": "<depot path>", "local": "<local path or null>",
          "open_action": "<the action the CL has this file open for>",
          "workspace_state": "missing"|"present"}
       ],
+      "shelf_drift": [
+        {"depot": "<depot path>", "local": "<local workspace path>"}
+      ],
+      "foreign_change": {                    # present only when the CL header
+        "user": "<CL owner>",                 # names a different client
+        "client": "<CL client>"               # than p4 info
+      },
       "unresolved": [
         {"local": "<local path>", "depot": "<depot path>",
          "resolve_type": "<p4 resolveType, e.g. content/branch/delete>",
          "from_file": "<source depot path, may be empty>"}
       ],
-      "hygiene_incomplete": [                 # always present; empty means both
-                                               # scans ran and found nothing --
+      "hygiene_incomplete": [                 # always present; empty means all
+                                               # applicable scans completed --
                                                # a non-empty entry means a scan
                                                # below could NOT run, so its own
                                                # empty list must not be read as
                                                # "clean"
-        {"scan": "unreconciled"|"unresolved", "reason": "<p4 error detail>"}
+        {"scan": "unreconciled"|"default_open"|"unresolved"|"shelf_fingerprint"|"shelf_opened"|"shelf_drift"|"machine_emitted",
+         "reason": "<p4 error detail>"}
       ],
       "claimed_files": [                      # present only when --claim was passed
         {"identifier": "<depot path>", "depot": "<depot path>",
@@ -150,13 +172,18 @@ shelf -- captured so a subsequent `--cleanup <bundle_dir>` invocation can verify
 the shelf still matches what we created before deleting it. Empty when
 `auto_shelved` is false (we did not create the shelf and must not touch it).
 
+`shelf_drift` contains one entry for each opened shelved file whose local
+workspace digest differs. It warns rather than refuses because the shelf
+digest is server-normalized; an entry contains the depot path and local path.
+
 A `<CL>` invocation also accepts `--claim <glob>` (repeatable). A changed file
 whose depot path matches a claim glob is held back from the generic reviewer
 fan-out (its diff is excluded from the chunks and it is dropped from
 `changed_files`) and surfaced under `claimed_files` instead, with its `#have`
 pre-image materialized to `<bundle_dir>/pre-images/<name>`. Claimed files still
 contribute to `unique_claude_mds` and the submit-gate scan. With no `--claim`
-the bundle is byte-identical to today's (no `claimed_files` key).
+the bundle is byte-identical to a bundle built without claims (no
+`claimed_files` key).
 
 A glob prefixed with `!` is an EXCLUSION and beats every positive pattern, so a
 caller can claim a broad shape while carving out a subset that no specialist
@@ -182,13 +209,17 @@ past it, so `--claim` on a submitted CL exits with an error (re-run without
 Stderr-only diagnostics. Non-zero exit on hard failure.
 """
 
+import hashlib
+import importlib
+import inspect
 import json
 import os
 import re
 import sys
 import tempfile
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
+from typing import NoReturn, Optional
 
 # Plugins define their own bootstrap-provisioned venv and must run under it
 # preferentially. A bare `python` or `uv run` invocation lands in a different
@@ -206,35 +237,69 @@ reexec_under_plugin_venv("p4-kit")
 # under that venv the import below just works -- no path discovery. The try/except
 # below remains as a safety net for the installed-but-not-yet-provisioned window.
 
+_MIN_BOOTSTRAP_VERSION = "0.99.0"
+_BOOTSTRAP_FRONTIER = (
+    "bootstrap_lib.code_review.pipeline.run_vcs(timeout=...)"
+)
+
+
+def _exit_bootstrap_too_old() -> NoReturn:
+    """Refuse a review when bootstrap lacks the required shared API."""
+    from bootstrap_guard import EXIT_BOOTSTRAP_MISSING
+
+    print(
+        "[p4-kit] the installed 'plugins-kit:bootstrap' plugin is too old or "
+        "stale for p4-kit's code review "
+        f"(requires bootstrap >= {_MIN_BOOTSTRAP_VERSION}; "
+        f"missing: {_BOOTSTRAP_FRONTIER}). Run "
+        "`claude plugin update bootstrap@plugins-kit`. Then start a new "
+        "session and retry.",
+        file=sys.stderr,
+    )
+    sys.exit(EXIT_BOOTSTRAP_MISSING)
+
+try:
+    review_pipeline = importlib.import_module("bootstrap_lib.code_review.pipeline")
+    ledger = importlib.import_module("bootstrap_lib.code_review.ledger")
+except ModuleNotFoundError as exc:
+    from bootstrap_guard import require_bootstrap
+
+    if exc.name == "bootstrap_lib":
+        require_bootstrap(
+            "p4-kit", feature="code review", missing="bootstrap_lib", force=True
+        )
+    _exit_bootstrap_too_old()
+except ImportError:
+    _exit_bootstrap_too_old()
+
+# `run_vcs(timeout=...)` is the frontier API. Importing its module cannot prove
+# that the linked bootstrap copy accepts the keyword, so inspect the signature
+# before any review path can call it.
+try:
+    run_vcs_parameters = inspect.signature(review_pipeline.run_vcs).parameters
+except (AttributeError, TypeError, ValueError):
+    _exit_bootstrap_too_old()
+if "timeout" not in run_vcs_parameters:
+    _exit_bootstrap_too_old()
+
 # Repair PATH before any subprocess fan-out. On Windows, a bloated
 # launching-shell PATH can overrun cmd.exe's variable size limit during
 # venv activation and leave this Python with a stripped PATH that
 # breaks `subprocess.run(["p4", ...])` with FileNotFoundError. Pulling
 # the registry-canonical PATH back in restores p4 visibility.
-try:
-    from bootstrap_lib.path_repair import repair_path  # noqa: E402
+from bootstrap_lib.path_repair import repair_path  # noqa: E402
 
-    # Shared VCS-neutral review pipeline -- subprocess wrapper, section
-    # splitting, chunking + CLAUDE.md walk + submit-gate scan, bundle
-    # emission. See bootstrap_lib/code_review/pipeline.py.
-    from bootstrap_lib.code_review.pipeline import (  # noqa: E402
-        assemble_bundle,
-        emit_bundle,
-        matches_claim,
-        preimage_relpath,
-        run_vcs,
-        split_sections,
-    )
-    from bootstrap_lib.code_review import ledger  # noqa: E402
-except ImportError:
-    # Belt-and-suspenders: _ensure_bootstrap_lib_importable() should already
-    # have exited if bootstrap_lib is missing, but guard the import directly
-    # too so a partial install can't surface a raw ModuleNotFoundError.
-    from bootstrap_guard import require_bootstrap
-
-    require_bootstrap(
-        "p4-kit", feature="code review", missing="bootstrap_lib", force=True
-    )
+# Shared VCS-neutral review pipeline -- subprocess wrapper, section
+# splitting, chunking + CLAUDE.md walk + submit-gate scan, bundle
+# emission. See bootstrap_lib/code_review/pipeline.py.
+from bootstrap_lib.code_review.pipeline import (  # noqa: E402
+    assemble_bundle,
+    emit_bundle,
+    matches_claim,
+    preimage_relpath,
+    run_vcs,
+    split_sections,
+)
 
 repair_path()
 
@@ -256,6 +321,9 @@ repair_path()
 # `binary+l`) drives the binary guard in extract_diff's hunk synthesis.
 _FILE_HEADER = re.compile(r"^==== (//[^#]+)#(\d+) \(([^)]*)\) ====\s*$")
 _AFFECTED_LINE = re.compile(r"^\.\.\. (//[^#]+)#(\d+) ([\w/]+)\s*$")
+_CHANGE_OWNER_HEADER = re.compile(
+    r"^Change\s+\d+\s+by\s+([^@\s]+)@([^\s]+)\s+on(?:\s|$)"
+)
 _RECONCILE_ACTIONS = {"add", "edit", "delete"}
 
 _ADD_ACTIONS = {"add", "branch", "move/add", "import"}
@@ -269,6 +337,49 @@ _DELETE_ACTIONS = {"delete", "move/delete", "purge"}
 # path-manipulation step this small a read does not justify.
 _P4_TIMEOUT_ENV_VAR = "P4KIT_VCS_TIMEOUT_S"
 _P4_DEFAULT_TIMEOUT_S = 60.0
+
+
+@dataclass(frozen=True)
+class ShelfScanResult:
+    """Shelf digests, actions, and scan status used during bundle assembly."""
+
+    digests: dict[str, str] = field(default_factory=dict)
+    actions: dict[str, str] = field(default_factory=dict)
+    scan_ok: bool = True
+    scan_reason: str = ""
+
+
+def _read_ztag_records(
+    output: str, *, record_start_field: Optional[str] = None
+) -> list[dict[str, str]]:
+    """Parse `p4 -ztag` output into field-value records.
+
+    A blank line ends a record. The final record does not require a trailing
+    blank line. Some commands omit separators, so callers can name a field
+    that also starts the next record.
+    """
+    records: list[dict[str, str]] = []
+    record: dict[str, str] = {}
+
+    def flush() -> None:
+        nonlocal record
+        if record:
+            records.append(record)
+            record = {}
+
+    for line in output.splitlines():
+        if line.strip() == "":
+            flush()
+            continue
+        if not line.startswith("... "):
+            continue
+        tagged = line[len("... "):]
+        field, separator, value = tagged.partition(" ")
+        if record_start_field == field and record:
+            flush()
+        record[field] = value.strip() if separator else ""
+    flush()
+    return records
 
 
 def _p4_timeout_s() -> float:
@@ -367,6 +478,18 @@ def _is_pending(output: str) -> bool:
     return False
 
 
+def _parse_change_owner(output: str) -> Optional[dict[str, str]]:
+    """Return the user and client from the first parseable Change header."""
+    for line in output.splitlines():
+        if not line.startswith("Change "):
+            continue
+        match = _CHANGE_OWNER_HEADER.match(line)
+        if match:
+            return {"user": match.group(1), "client": match.group(2)}
+        return None
+    return None
+
+
 class PendingUnshelvedError(ValueError):
     """Raised when a pending CL has no shelved content to diff.
 
@@ -402,42 +525,124 @@ def fetch_describe(cl: str) -> tuple[str, bool]:
     raise ValueError(f"no describe content found for CL {cl} (tried committed and shelved)")
 
 
-def fetch_shelf_fingerprint(cl: str) -> dict[str, str]:
-    """Return {depot_path: digest} for files currently shelved on CL.
+def fetch_shelf_fingerprint(cl: str) -> ShelfScanResult:
+    """Return shelf digests, actions, and scan status for a CL.
 
-    Empty dict if no shelf exists. Uses `p4 -ztag fstat -Ol //...@=<CL>`;
+    Empty digests if no shelf exists. Uses `p4 -ztag fstat -Ol //...@=<CL>`;
     `-Ol` forces the per-revision `digest` field so the fingerprint is a
-    content-hash of the shelved file (cheap — no content download).
+    content-hash of the shelved file (cheap -- no content download).
 
     Files shelved as deletes have no digest; recorded as empty string so the
     file's presence in the shelf is still part of the fingerprint.
     """
-    rc, out, _ = run_p4(["-ztag", "fstat", "-Ol", f"//...@={cl}"])
+    rc, out, err = run_p4(["-ztag", "fstat", "-Ol", f"//...@={cl}"])
     if rc != 0:
-        return {}
-    fingerprint: dict[str, str] = {}
-    current_depot: Optional[str] = None
-    current_digest: str = ""
-    for line in out.splitlines():
-        if line.startswith("... depotFile "):
-            current_depot = line[len("... depotFile "):].strip()
-        elif line.startswith("... digest "):
-            current_digest = line[len("... digest "):].strip()
-        elif line.strip() == "":
-            if current_depot:
-                fingerprint[current_depot] = current_digest
-            current_depot = None
-            current_digest = ""
-    if current_depot:
-        fingerprint[current_depot] = current_digest
-    return fingerprint
+        detail = err.strip() or out.strip()
+        if "no such file" in detail.lower() or "no file(s)" in detail.lower():
+            return ShelfScanResult()
+        return ShelfScanResult(
+            scan_ok=False,
+            scan_reason=detail or f"exit {rc}",
+        )
+    digests: dict[str, str] = {}
+    actions: dict[str, str] = {}
+    for record in _read_ztag_records(out):
+        depot = record.get("depotFile")
+        if not depot:
+            continue
+        digests[depot] = record.get("digest", "")
+        action = ""
+        for field, value in record.items():
+            if field in {"headAction", "action"}:
+                action = value
+        if action:
+            actions[depot] = action
+    return ShelfScanResult(digests=digests, actions=actions)
 
 
-def auto_shelve_cl(cl: str) -> dict[str, str]:
+def _parse_opened_files(output: str) -> dict[str, str]:
+    """Parse depot path and action pairs from `p4 -ztag opened`."""
+    opened: dict[str, str] = {}
+    for record in _read_ztag_records(output):
+        depot = record.get("depotFile")
+        action = record.get("action")
+        if depot and action:
+            opened[depot] = action
+    return opened
+
+
+def fetch_opened_files(cl: str) -> tuple[dict[str, str], list[dict[str, str]]]:
+    """Return the CL's open depot paths and actions."""
+    rc, out, err = run_p4(["-ztag", "opened", "-c", cl])
+    if rc != 0:
+        reason = err.strip() or out.strip() or f"exit {rc}"
+        return {}, [{"scan": "shelf_opened", "reason": reason}]
+    return _parse_opened_files(out), []
+
+
+def shelf_divergence(
+    cl: str,
+    shelf_scan: ShelfScanResult,
+    opened: Optional[dict[str, str]] = None,
+) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
+    """Return deterministic membership and action differences for a pending CL."""
+    incomplete: list[dict[str, str]] = []
+    if not shelf_scan.scan_ok:
+        incomplete.append(
+            {"scan": "shelf_fingerprint", "reason": shelf_scan.scan_reason}
+        )
+        return [], incomplete
+    if opened is None:
+        opened, incomplete = fetch_opened_files(cl)
+        if incomplete:
+            return [], incomplete
+    shelf_fingerprint = shelf_scan.digests
+    shelf_actions = shelf_scan.actions
+    divergence: list[dict[str, str]] = []
+    for depot in sorted(set(opened) - set(shelf_fingerprint)):
+        divergence.append({"depot": depot, "kind": "opened after shelving"})
+    for depot in sorted(set(shelf_fingerprint) - set(opened)):
+        divergence.append({"depot": depot, "kind": "not open in CL"})
+    for depot in sorted(set(opened) & set(shelf_fingerprint)):
+        if shelf_actions.get(depot) and opened[depot] != shelf_actions[depot]:
+            divergence.append({"depot": depot, "kind": "open action differs"})
+    return divergence, incomplete
+
+
+def _shelf_content_drift(
+    shelf_fingerprint: dict[str, str],
+    opened: dict[str, str],
+    local_map: dict[str, Optional[str]],
+) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
+    """Compare readable local files against the shelf and report skipped paths."""
+    drift: list[dict[str, str]] = []
+    incomplete: list[dict[str, str]] = []
+    for depot in sorted(set(shelf_fingerprint) & set(opened)):
+        digest = shelf_fingerprint[depot]
+        local = local_map.get(depot)
+        if not digest or not local:
+            if digest and not local:
+                incomplete.append(
+                    {"scan": "shelf_drift", "reason": f"no local mapping for {depot}"}
+                )
+            continue
+        try:
+            local_digest = hashlib.md5(Path(local).read_bytes()).hexdigest().upper()
+        except (OSError, ValueError) as exc:
+            incomplete.append({"scan": "shelf_drift", "reason": f"could not hash {depot}: {exc}"})
+            continue
+        # The shelf digest is server-normalized; local line-ending differences
+        # can false-positive, so this path warns rather than refuses.
+        if local_digest != digest.upper():
+            drift.append({"depot": depot, "local": local})
+    return drift, incomplete
+
+
+def auto_shelve_cl(cl: str) -> ShelfScanResult:
     """Run `p4 shelve -c <cl>` and return the resulting shelf fingerprint.
 
     Raises ValueError on shelve failure or if no shelved files appear afterward
-    (pathological — shouldn't happen since the caller only invokes this when
+    (pathological -- impossible because the caller only invokes this when
     the CL has open files but no shelf).
     """
     rc, out, err = run_p4(["shelve", "-c", cl])
@@ -445,12 +650,12 @@ def auto_shelve_cl(cl: str) -> dict[str, str]:
         raise ValueError(
             f"p4 shelve -c {cl} failed: {(err or out).strip() or '(no output)'}"
         )
-    fingerprint = fetch_shelf_fingerprint(cl)
-    if not fingerprint:
+    shelf_scan = fetch_shelf_fingerprint(cl)
+    if not shelf_scan.digests:
         raise ValueError(
             f"p4 shelve -c {cl} reported success but no shelved files were found afterward"
         )
-    return fingerprint
+    return shelf_scan
 
 
 def parse_description(describe_output: str) -> str:
@@ -481,7 +686,7 @@ def parse_depot_files(describe_output: str) -> list[str]:
 
 
 def parse_file_actions(describe_output: str) -> dict[str, tuple[str, str]]:
-    """Map depot path → (rev, action) from 'Affected files ...' / 'Shelved files ...' sections.
+    """Map depot path -> (rev, action) from 'Affected files ...' / 'Shelved files ...' sections.
 
     Lines look like: `... //depot/path#rev action` (action e.g. `add`, `edit`, `delete`, `move/add`).
     Stops parsing when `Differences ...` is reached.
@@ -560,8 +765,7 @@ def _decode_utf16_aware(data: bytes) -> str:
     untestable without a live p4 server in unicode mode. This function is
     correct under either reading: real UTF-16 bytes are recovered via the
     sniff; already-UTF-8 bytes carry neither a UTF-16 BOM nor the
-    NUL-alternation pattern, so they fall through to the UTF-8 branch exactly
-    as before this function existed.
+    NUL-alternation pattern, so they use the UTF-8 branch.
     """
     if data[:2] in (_UTF16_BOM_LE, _UTF16_BOM_BE):
         return data.decode("utf-16", errors="replace")
@@ -641,7 +845,7 @@ def fetch_filetype(
     pure adds in mixed shelved CLs) need an fstat. `type` is the open/shelved
     filetype; `headType` covers submitted revisions -- prefer `type`, fall
     back to `headType`. Returns None on any failure (caller defaults to text,
-    the historical behavior).
+    the default behavior).
     """
     spec = _content_spec(depot_path, rev, cl, is_shelved, is_delete)
     if spec is None:
@@ -684,7 +888,7 @@ def fetch_file_size(
 # p4 base filetypes whose content must not be inlined into a text diff.
 # Substring "binary" covers binary/xbinary/ubinary/...; the named set covers
 # the remaining non-text bases. Unknown or empty types default to text
-# (the historical behavior before the binary guard existed).
+# (the default behavior without a recognized non-text type).
 _NON_TEXT_BASE_TYPES = {"apple", "resource", "tempobj", "ctempobj", "uresource"}
 
 
@@ -911,15 +1115,10 @@ def resolve_local_paths(depot_paths: list[str]) -> dict[str, Optional[str]]:
     for i in range(0, len(depot_paths), _P4_PATH_BATCH):
         chunk = depot_paths[i:i + _P4_PATH_BATCH]
         _, out, _ = run_p4(["-ztag", "where", *chunk])
-        current_depot: Optional[str] = None
-        for line in out.splitlines():
-            if line.startswith("... depotFile "):
-                current_depot = line[len("... depotFile "):].strip()
-            elif line.startswith("... path ") and current_depot:
-                result[current_depot] = line[len("... path "):].strip()
-                current_depot = None
-            elif line.strip() == "":
-                current_depot = None
+        for record in _read_ztag_records(out, record_start_field="depotFile"):
+            depot = record.get("depotFile")
+            if depot and "path" in record:
+                result[depot] = record["path"]
     return result
 
 
@@ -980,6 +1179,14 @@ def compute_minimal_dirs(
     return minimal
 
 
+def _p4_paths_for_dir_specs(dir_specs: list[tuple[Path, bool]]) -> list[str]:
+    """Convert scan directories to recursive or immediate-child file specs."""
+    return [
+        f"{directory}/..." if recursive else f"{directory}/*"
+        for directory, recursive in dir_specs
+    ]
+
+
 def find_unreconciled(
     dir_specs: list[tuple[Path, bool]]
 ) -> tuple[list[dict], list[dict]]:
@@ -1007,7 +1214,7 @@ def find_unreconciled(
     """
     if not dir_specs:
         return [], []
-    specs = [f"{d}/..." if recursive else f"{d}/*" for d, recursive in dir_specs]
+    specs = _p4_paths_for_dir_specs(dir_specs)
 
     items: list[dict] = []
     incomplete: list[dict] = []
@@ -1078,33 +1285,56 @@ def _partition_own_depot_files(
 
 def _parse_reconcile_output(out: str) -> list[dict]:
     items: list[dict] = []
-    current: dict = {}
-    for line in out.splitlines():
-        if line.startswith("... depotFile "):
-            current["depot"] = line[len("... depotFile "):].strip()
-        elif line.startswith("... clientFile "):
-            current["local"] = line[len("... clientFile "):].strip()
-        elif line.startswith("... action "):
-            current["action"] = line[len("... action "):].strip()
-        elif line.strip() == "":
-            if current.get("action") in _RECONCILE_ACTIONS and current.get("local"):
-                items.append(
-                    {
-                        "local": current["local"],
-                        "depot": current.get("depot", ""),
-                        "action": current["action"],
-                    }
-                )
-            current = {}
-    if current.get("action") in _RECONCILE_ACTIONS and current.get("local"):
-        items.append(
-            {
-                "local": current["local"],
-                "depot": current.get("depot", ""),
-                "action": current["action"],
-            }
-        )
+    for record in _read_ztag_records(out):
+        action = record.get("action")
+        local = record.get("clientFile")
+        if action in _RECONCILE_ACTIONS and local:
+            items.append(
+                {
+                    "local": local,
+                    "depot": record.get("depotFile", ""),
+                    "action": action,
+                }
+            )
     return items
+
+
+def _parse_default_open_output(out: str) -> list[dict[str, str]]:
+    """Parse depot path, client path, and action from ztag opened records."""
+    items: list[dict[str, str]] = []
+    for record in _read_ztag_records(out, record_start_field="depotFile"):
+        depot = record.get("depotFile")
+        local = record.get("clientFile")
+        action = record.get("action")
+        if depot and local and action:
+            items.append({"local": local, "depot": depot, "action": action})
+    return items
+
+
+def find_default_open(
+    dir_specs: list[tuple[Path, bool]],
+) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
+    """Return files open in the default CL under the reconcile scan paths."""
+    if not dir_specs:
+        return [], []
+    specs = _p4_paths_for_dir_specs(dir_specs)
+    items: list[dict[str, str]] = []
+    incomplete: list[dict[str, str]] = []
+    for i in range(0, len(specs), _P4_PATH_BATCH):
+        chunk = specs[i:i + _P4_PATH_BATCH]
+        rc, out, err = run_p4(["-ztag", "opened", "-c", "default", *chunk])
+        detail = err.strip() or out.strip()
+        no_open_files = "not opened on this client" in (out + err).lower()
+        if rc != 0 and not no_open_files:
+            reason = detail or f"exit {rc}"
+            print(
+                f"prepare_review: default changelist check failed (rc={rc}): {reason}",
+                file=sys.stderr,
+            )
+            incomplete.append({"scan": "default_open", "reason": reason})
+            continue
+        items.extend(_parse_default_open_output(out))
+    return items, incomplete
 
 
 def find_unresolved(cl: str) -> tuple[list[dict], list[dict]]:
@@ -1131,46 +1361,36 @@ def find_unresolved(cl: str) -> tuple[list[dict], list[dict]]:
         return [], [{"scan": "unresolved", "reason": reason}]
 
     items: list[dict] = []
-    current: dict = {}
-
-    def flush() -> None:
-        if current.get("local") or current.get("depot"):
+    for record in _read_ztag_records(out):
+        local = record.get("clientFile", "")
+        depot = record.get("toFile", "")
+        if local or depot:
             items.append(
                 {
-                    "local": current.get("local", ""),
-                    "depot": current.get("depot", ""),
-                    "resolve_type": current.get("resolve_type", ""),
-                    "from_file": current.get("from_file", ""),
+                    "local": local,
+                    "depot": depot,
+                    "resolve_type": record.get("resolveType", ""),
+                    "from_file": record.get("fromFile", ""),
                 }
             )
-
-    for line in out.splitlines():
-        if line.startswith("... clientFile "):
-            current["local"] = line[len("... clientFile "):].strip()
-        elif line.startswith("... toFile "):
-            current["depot"] = line[len("... toFile "):].strip()
-        elif line.startswith("... fromFile "):
-            current["from_file"] = line[len("... fromFile "):].strip()
-        elif line.startswith("... resolveType "):
-            current["resolve_type"] = line[len("... resolveType "):].strip()
-        elif line.strip() == "":
-            if current:
-                flush()
-                current = {}
-    if current:
-        flush()
     return items, []
 
 
-def get_workspace_root() -> Optional[Path]:
-    """Get the local workspace root via `p4 -ztag info` → `clientRoot`."""
+def get_workspace_root() -> tuple[Optional[Path], Optional[str]]:
+    """Get clientRoot and clientName from one `p4 -ztag info` call."""
     rc, out, _ = run_p4(["-ztag", "info"])
     if rc != 0:
-        return None
-    for line in out.splitlines():
-        if line.startswith("... clientRoot "):
-            return Path(line[len("... clientRoot "):].strip())
-    return None
+        return None, None
+    workspace_root: Optional[Path] = None
+    client_name: Optional[str] = None
+    for record in _read_ztag_records(out):
+        if "clientRoot" in record:
+            workspace_root = Path(record["clientRoot"])
+        if "clientName" in record:
+            value = record["clientName"]
+            if value and value.lower() not in {"unknown", "*unknown*"}:
+                client_name = value
+    return workspace_root, client_name
 
 
 def materialize_preimage(depot: str, action: str, bundle_dir: Path) -> Optional[str]:
@@ -1215,7 +1435,8 @@ def build_bundle(
     claim pattern are held back from the generic reviewers (see
     assemble_bundle): their pre-image is materialized into the bundle and they
     are surfaced under a top-level `claimed_files` list instead of
-    `changed_files`. When empty the bundle is byte-identical to today's.
+    `changed_files`. When empty the bundle is byte-identical to a bundle built
+    without claims.
 
     Machine-emitted files -- detected from a content signature OR from living
     under a path a plugin declares that it writes (bootstrap_lib.code_review
@@ -1228,23 +1449,81 @@ def build_bundle(
     claim_globs = claim_globs or []
     auto_shelved = False
     shelf_fingerprint: dict[str, str] = {}
+    shelf_observed: Optional[ShelfScanResult] = None
+    shelf_scan_incomplete: list[dict[str, str]] = []
+    opened: Optional[dict[str, str]] = None
+    opened_incomplete: list[dict[str, str]] = []
     try:
         describe, is_shelved = fetch_describe(cl)
     except PendingUnshelvedError:
-        # Empty shelf is the trigger for auto-shelve. A race could have left a
-        # shelf in place between fetch_describe and now; if so, don't touch it
-        # -- re-run fetch_describe and use whatever shelved content arrived.
-        if fetch_shelf_fingerprint(cl):
+        # A shelf can appear after fetch_describe reports an unshelved CL.
+        # Preserve a shelf created by another process and reuse this scan.
+        shelf_observed = fetch_shelf_fingerprint(cl)
+        if not shelf_observed.scan_ok:
+            raise ValueError(
+                f"could not check CL {cl} for a shelf before auto-shelve: "
+                f"{shelf_observed.scan_reason}"
+            )
+        if shelf_observed.digests:
             describe, is_shelved = fetch_describe(cl)
         else:
-            # auto_shelve_cl already fetched and validated the post-shelve
-            # fingerprint (raising if empty) -- capture its return instead of
-            # dropping it and re-fetching below, which would cost a second
-            # depot-wide fstat and could record a DIFFERENT fingerprint than
-            # the one just validated.
-            shelf_fingerprint = auto_shelve_cl(cl)
+            # auto_shelve_cl fetches and validates the post-shelve fingerprint;
+            # capture that result instead of making another post-shelve query.
+            shelf_observed = auto_shelve_cl(cl)
+            shelf_fingerprint = shelf_observed.digests
             describe, is_shelved = fetch_describe(cl)
             auto_shelved = True
+
+    workspace_root, client_name = get_workspace_root()
+    change_owner = _parse_change_owner(describe)
+    foreign_change: Optional[dict[str, str]] = None
+    if (
+        change_owner is not None
+        and client_name is not None
+        and change_owner["client"] != client_name
+    ):
+        foreign_change = change_owner
+
+    if claim_globs and foreign_change is not None:
+        raise ValueError(
+            f"CL {cl} belongs to foreign client {foreign_change['client']}; "
+            f"claim pre-images require its client workspace -- "
+            f"re-run without --claim for a plain informational review"
+        )
+
+    if _is_pending(describe) and is_shelved and not auto_shelved:
+        if shelf_observed is None:
+            shelf_observed = fetch_shelf_fingerprint(cl)
+        divergence = []
+        if foreign_change is not None:
+            opened_incomplete = [
+                {
+                    "scan": "shelf_opened",
+                    "reason": f"skipped for foreign client {foreign_change['client']}",
+                }
+            ]
+        if shelf_observed.scan_ok and foreign_change is None:
+            opened, opened_incomplete = fetch_opened_files(cl)
+            if not opened_incomplete:
+                divergence, divergence_incomplete = shelf_divergence(
+                    cl, shelf_observed, opened
+                )
+                opened_incomplete += divergence_incomplete
+        elif not shelf_observed.scan_ok:
+            shelf_scan_incomplete = [
+                {
+                    "scan": "shelf_fingerprint",
+                    "reason": shelf_observed.scan_reason,
+                }
+            ]
+        if divergence:
+            details = "; ".join(
+                f"{item['depot']} ({item['kind']})" for item in divergence
+            )
+            raise ValueError(
+                f"CL {cl} shelf does not match its open files: {details}; "
+                f"repair with p4 shelve -f -c {cl}"
+            )
 
     # Claim pre-images are materialized from the workspace's #have revision,
     # which for a SUBMITTED CL is POST-change once the workspace has synced past
@@ -1266,7 +1545,30 @@ def build_bundle(
     # section entirely, so deriving the file list from ==== headers undercounts.
     depot_files = list(actions.keys())
     local_map = resolve_local_paths(depot_files)
-    workspace_root = get_workspace_root()
+
+    shelf_drift: list[dict[str, str]] = []
+    shelf_drift_incomplete: list[dict[str, str]] = []
+    if foreign_change is not None:
+        shelf_drift_incomplete = [
+            {
+                "scan": "shelf_drift",
+                "reason": f"skipped for foreign client {foreign_change['client']}",
+            }
+        ]
+    elif _is_pending(describe) and is_shelved:
+        if shelf_observed is not None and shelf_observed.scan_ok:
+            if opened is None:
+                opened, opened_incomplete = fetch_opened_files(cl)
+            if not opened_incomplete:
+                shelf_drift, shelf_drift_incomplete = _shelf_content_drift(
+                    shelf_observed.digests, opened, local_map
+                )
+        if shelf_drift:
+            paths = ", ".join(item["depot"] for item in shelf_drift)
+            print(
+                f"prepare_review: shelf content differs from the workspace for {paths}",
+                file=sys.stderr,
+            )
 
     preamble, sections = _p4_diff_to_sections(diff)
     files = [
@@ -1282,6 +1584,17 @@ def build_bundle(
             action = actions.get(f["identifier"], ("", ""))[1]
             f["action"] = action
             f["pre_image"] = materialize_preimage(f["depot"], action, bundle_dir)
+    skip_machine_emitted_scan = (
+        foreign_change is not None and not review_machine_emitted
+    )
+    machine_emitted_incomplete: list[dict[str, str]] = []
+    if skip_machine_emitted_scan:
+        machine_emitted_incomplete = [
+            {
+                "scan": "machine_emitted",
+                "reason": f"skipped for foreign client {foreign_change['client']}",
+            }
+        ]
     core = assemble_bundle(
         preamble=preamble,
         sections=sections,
@@ -1297,7 +1610,10 @@ def build_bundle(
         # there raises TypeError on every review. The post-rename
         # assemble_bundle still accepts this spelling as a deprecated alias,
         # so the old name works against both. Retire per rename-spec H.2.
-        review_generated=review_machine_emitted,
+        # Machine-emitted detection prefers local file bytes when available.
+        # A foreign CL maps to reviewer bytes, so disable that classification
+        # rather than excluding shelf content based on another workspace.
+        review_generated=review_machine_emitted or skip_machine_emitted_scan,
     )
     changed_files = core["changed_files"]
 
@@ -1314,19 +1630,47 @@ def build_bundle(
         + core.get("claimed_files", [])
         + (core.get("machine_emitted_files") or core.get("generated_files") or [])
     )
-    minimal_dirs = compute_minimal_dirs(
-        [f["local"] for f in hygiene_sources], workspace_root
-    )
-    unreconciled_raw, unreconciled_incomplete = find_unreconciled(minimal_dirs)
-    unreconciled, stale_open = _partition_own_depot_files(
-        unreconciled_raw, set(depot_files), actions
-    )
-    unresolved, unresolved_incomplete = find_unresolved(cl)
+    # Foreign ownership is determined before this block. Keep every client-local
+    # scan inside the non-foreign branch so reviewer workspace state cannot be
+    # attributed to the CL author.
+    if foreign_change is not None:
+        skip_reason = f"skipped for foreign client {foreign_change['client']}"
+        unreconciled: list[dict] = []
+        default_open: list[dict] = []
+        stale_open: list[dict] = []
+        unresolved: list[dict] = []
+        unreconciled_incomplete = [
+            {"scan": "unreconciled", "reason": skip_reason}
+        ]
+        default_open_incomplete = [
+            {"scan": "default_open", "reason": skip_reason}
+        ]
+        unresolved_incomplete = [
+            {"scan": "unresolved", "reason": skip_reason}
+        ]
+    else:
+        minimal_dirs = compute_minimal_dirs(
+            [f["local"] for f in hygiene_sources], workspace_root
+        )
+        unreconciled_raw, unreconciled_incomplete = find_unreconciled(minimal_dirs)
+        unreconciled, stale_open = _partition_own_depot_files(
+            unreconciled_raw, set(depot_files), actions
+        )
+        default_open, default_open_incomplete = find_default_open(minimal_dirs)
+        unresolved, unresolved_incomplete = find_unresolved(cl)
     # A failed scan must never serialize as an empty list indistinguishable
     # from "ran and found nothing" -- hygiene_incomplete is always present
-    # (empty when both scans ran cleanly) and names which scan(s) could not
-    # complete and why. See find_unreconciled / find_unresolved.
-    hygiene_incomplete = unreconciled_incomplete + unresolved_incomplete
+    # (empty when all applicable scans ran cleanly) and names which scan(s)
+    # could not complete and why. See find_unreconciled / find_unresolved.
+    hygiene_incomplete = (
+        unreconciled_incomplete
+        + default_open_incomplete
+        + unresolved_incomplete
+        + shelf_scan_incomplete
+        + opened_incomplete
+        + shelf_drift_incomplete
+        + machine_emitted_incomplete
+    )
 
     # Declined-findings ledger. The baseline folds the CL's shelf fingerprint
     # (content) and per-file (rev, action) map (identity) into one token: when
@@ -1334,7 +1678,9 @@ def build_bundle(
     # changes and previously-declined findings re-surface. `shelf_now` reuses
     # the just-captured fingerprint when we auto-shelved; otherwise it is a
     # cheap `fstat -Ol` (no content download), tolerant of an absent shelf.
-    shelf_now = shelf_fingerprint if auto_shelved else fetch_shelf_fingerprint(cl)
+    if shelf_observed is None:
+        shelf_observed = fetch_shelf_fingerprint(cl)
+    shelf_now = shelf_observed.digests
     ledger_baseline = ledger.baseline_token({"actions": actions, "shelf": shelf_now})
     change_id = cl
     ledger_hits = ledger.ledger_hits(ledger_path or _ledger_path(), change_id, ledger_baseline)
@@ -1348,9 +1694,11 @@ def build_bundle(
         "changed_files": changed_files,
         "unique_claude_mds": core["unique_claude_mds"],
         "unreconciled": unreconciled,
+        "default_open": default_open,
         "stale_open": stale_open,
         "unresolved": unresolved,
         "hygiene_incomplete": hygiene_incomplete,
+        "shelf_drift": shelf_drift,
         "submit_gates": core["submit_gates"],
         "auto_shelved": auto_shelved,
         "shelf_fingerprint": shelf_fingerprint,
@@ -1360,6 +1708,8 @@ def build_bundle(
     }
     if claim_globs:
         bundle["claimed_files"] = core.get("claimed_files", [])
+    if foreign_change is not None:
+        bundle["foreign_change"] = foreign_change
     # Read NEW-key-or-OLD-key: a bootstrap predating the machine_emitted rename
     # still writes `generated_files`. Tolerating both spellings keeps this kit
     # order-free against the bootstrap half of the rename -- reading only the new
@@ -1396,7 +1746,7 @@ def cleanup_auto_shelve(bundle_dir: Path) -> int:
         return 0
     cl = bundle["cl"]
     recorded = bundle.get("shelf_fingerprint", {})
-    current = fetch_shelf_fingerprint(cl)
+    current = fetch_shelf_fingerprint(cl).digests
     if not current:
         print(
             f"prepare_review: CL {cl} shelf already gone; nothing to clean up.",

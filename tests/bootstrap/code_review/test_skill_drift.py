@@ -536,3 +536,29 @@ class TestStaleOpenRenderedOnP4Only:
         assert "stale_open" not in body
         assert "## CL is not in a submittable state -- fix before review" not in body
         assert "p4 reconcile <path>" not in body
+
+
+class TestP4ClaimProbeSubstitution:
+    """The p4 claim probe overrides the shared probe's single-invocation
+    wording, because a foreign-client CL refuses `--claim` and the skill then
+    runs prepare a second time without it. The two texts must not agree.
+
+    A byte-identity check between artifact and generator cannot protect this:
+    regenerating moves both sides together, so a substitution that stopped
+    matching its source would leave the generator, the rendered file and that
+    check all consistent, and the p4 skill would carry an instruction its own
+    on_failure block contradicts."""
+
+    def test_p4_probe_drops_the_single_invocation_wording(self):
+        assert gen.P4_CLAIM_PROBE != gen.CLAIM_PROBE
+        assert "only ONCE" not in gen.P4_CLAIM_PROBE
+        assert "Do NOT run prepare" not in gen.P4_CLAIM_PROBE
+
+    def test_substitute_refuses_a_source_it_cannot_find(self):
+        with pytest.raises(ValueError, match="substitution source not found"):
+            gen._substitute("some text", "absent needle", "replacement")
+
+    def test_only_the_p4_skill_carries_the_fallback_wording(self):
+        fallback = "once unless the foreign-client fallback below applies"
+        assert fallback in gen.render_skill("p4")
+        assert fallback not in gen.render_skill("git")
