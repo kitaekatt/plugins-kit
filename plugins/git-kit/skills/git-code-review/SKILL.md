@@ -258,7 +258,27 @@ technique_skill:
             in fact present -- a false positive that is indistinguishable from a true one.
             An endpoint-dispatched reviewer_a gets the same list via one `--claimed-file`
             per path. Pass it for every lane that receives it; the other reviewers do not
-            take it. Reviewers not listed in the selected profile are
+            take it.
+
+            Mechanical scan results -- reviewer_a and reviewer_b ONLY. Each chunk carries
+            `diff_chunks[i].mechanical_findings`: a list of already-made deterministic
+            findings over that chunk's ADDED lines, each `{file, line, check, detail}`,
+            where `check` is `non_ascii` or `abs_path`. Render them into the lane's prompt
+            under the heading "Mechanical scan (added lines only)" as one line per hit,
+            `- <file>:<line> [<check>] <detail>`, and tell the lane the scan has ALREADY
+            run over every added line, covers exactly those two checks, and that it must
+            neither re-scan for them nor report a hit the scan did not list. State
+            explicitly that the scan DETECTS but does not DECIDE: a listed hit is a
+            location, and whether a quotable rule forbids that instance is still the
+            lane's judgment (this repo, for one, permits box-drawing characters inside a
+            diagram and forbids them as punctuation).
+            When the list is EMPTY, say so in those words -- "no non-ASCII characters and
+            no absolute paths in the added lines" -- rather than omitting the section. A
+            silent section and an absent section read identically, and a lane that cannot
+            tell a clean scan from no scan has to re-scan to be safe, which is the
+            duplicated work this removes. Omit the section ENTIRELY only for reviewer_c,
+            which is not asked for either check.
+            Reviewers not listed in the selected profile are
             NOT launched. If bundle.diff_chunks is empty (range has no diff content) and
             no claimed file is NON-TRIVIAL (per the triviality gate above -- when a non-trivial
             claimed file exists, the md-domain pass above still runs on it even with zero

@@ -7,6 +7,10 @@ absolute paths over the changed lines only).
 """
 
 from bootstrap_lib.code_review import triviality
+from bootstrap_lib.code_review.triviality import (
+    mechanical_checks,
+    mechanical_findings,
+)
 
 
 def _hunk(header, *lines):
@@ -157,3 +161,73 @@ class TestMechanicalChecks:
             "+new body",
         )
         assert triviality.mechanical_checks(diff)["no_abs_paths"] is True
+
+
+# ---------------------------------------------------------------------------
+# mechanical_findings -- located, added-lines-only findings for a review lane
+# ---------------------------------------------------------------------------
+
+
+class TestMechanicalFindings:
+    """The finding form of the deterministic scan.
+
+    These pin the three differences from `mechanical_checks` that make the
+    output safe to hand to a reviewer rather than render as a disclosure line.
+    """
+
+    def test_reports_a_non_ascii_character_added(self):
+        diff = "@@ -1,1 +1,2 @@\n unchanged\n+an em dash \u2014 here\n"
+        findings = mechanical_findings(diff)
+        assert [f["check"] for f in findings] == ["non_ascii"]
+        assert "U+2014" in findings[0]["detail"]
+
+    def test_does_not_report_a_non_ascii_character_that_was_REMOVED(self):
+        """A change deleting a stray em dash introduces nothing.
+
+        `mechanical_checks` scans removed lines too, which is right for a
+        "what we checked" line and wrong for a finding -- it would report the
+        fix as the defect. Revert the added-lines-only scan in
+        `mechanical_findings` and this goes red.
+        """
+        diff = "@@ -1,2 +1,1 @@\n unchanged\n-an em dash \u2014 here\n"
+        assert mechanical_findings(diff) == []
+        # The aggregate form still sees it; the two forms differ deliberately.
+        assert mechanical_checks(diff)["ascii_clean"] is False
+
+    def test_reports_an_absolute_path_added(self):
+        diff = "@@ -1,1 +1,2 @@\n unchanged\n+see /Users/someone/thing for more\n"
+        findings = mechanical_findings(diff)
+        assert [f["check"] for f in findings] == ["abs_path"]
+
+    def test_locates_each_finding_at_its_post_image_line(self):
+        """A boolean makes the lane re-derive WHERE, which is the inference
+        this mechanism removes. Line numbers are post-image, and a removed
+        line consumes none."""
+        diff = (
+            "@@ -10,3 +10,4 @@\n"
+            " context\n"
+            "-removed line\n"
+            "+first added \u2014 here\n"
+            "+second added \u2014 here\n"
+            " trailing\n"
+        )
+        findings = mechanical_findings(diff)
+        assert [f["line"] for f in findings] == [11, 12]
+
+    def test_reports_the_codepoint_rather_than_asserting_a_violation(self):
+        """Detection is the script's; adjudication is the reviewer's.
+
+        This repo permits the Box Drawing block inside a diagram and forbids
+        it as punctuation -- a distinction no scan can make. The finding must
+        therefore name the character, not call it a violation.
+        """
+        diff = "@@ -1,1 +1,2 @@\n unchanged\n+\u2500\u2500 a diagram rule\n"
+        findings = mechanical_findings(diff)
+        assert findings and findings[0]["check"] == "non_ascii"
+        assert "U+2500" in findings[0]["detail"]
+        detail = findings[0]["detail"].lower()
+        assert "violation" not in detail and "forbidden" not in detail
+
+    def test_empty_and_unparseable_diffs_yield_no_findings(self):
+        assert mechanical_findings("") == []
+        assert mechanical_findings("not a diff at all\n") == []

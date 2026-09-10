@@ -103,6 +103,9 @@ def _parse_hunks(diff_section_text: str) -> list[dict]:
             current = {
                 "old_start": int(m.group(1)),
                 "old_count": int(m.group(2)) if m.group(2) is not None else 1,
+                # Post-image start, so an added line can be reported at the
+                # line number a reader will actually find it on.
+                "new_start": int(m.group(3)),
                 "ops": [],
             }
             hunks.append(current)
@@ -333,8 +336,87 @@ def triviality_profile(
     return {"trivial": not reasons, "reasons": reasons}
 
 
+def _added_lines_with_numbers(hunks: list[dict]) -> list[tuple[int, str]]:
+    """Return [(post_image_line_number, text), ...] for every ADDED line."""
+    out: list[tuple[int, str]] = []
+    for hunk in hunks:
+        lineno = hunk.get("new_start", 1)
+        for op, content in hunk["ops"]:
+            if op == "+":
+                out.append((lineno, content))
+                lineno += 1
+            elif op == " ":
+                lineno += 1
+            # a removed line consumes no post-image line number
+    return out
+
+
+def mechanical_findings(diff_section_text: str) -> list[dict]:
+    """Deterministic findings over the ADDED lines of one file's diff.
+
+    Returns a list of {"check", "line", "detail"} dicts, one per offending
+    line, drawn from the same two scans `mechanical_checks` reports as booleans:
+    non-ASCII bytes and absolute paths.
+
+    THREE DELIBERATE DIFFERENCES from `mechanical_checks`, all of which follow
+    from these findings being HANDED TO A REVIEWER rather than rendered as a
+    disclosure line.
+
+    1. ADDED LINES ONLY. `mechanical_checks` scans added and removed lines
+       alike, which is harmless for a "what we checked" line and wrong for a
+       finding: a change that DELETES a stray em dash would otherwise be
+       reported as introducing one. A reviewer reports what a change
+       introduces, so the removed side is not scanned here.
+    2. LOCATED, NOT AGGREGATED. A boolean tells a reviewer that something
+       somewhere is wrong and leaves it to re-derive where -- which is the
+       inference this whole mechanism exists to remove. Each finding carries
+       the post-image line number and the offending text.
+    3. DETECTION, NOT ADJUDICATION. `detail` names the codepoint (U+XXXX plus
+       the character) rather than asserting a violation, because whether a
+       given non-ASCII character is permitted is a PROJECT question a script
+       cannot answer -- this repo, for one, allows the Unicode Box Drawing
+       block inside a diagram and forbids it as punctuation. Full recall on
+       detection belongs to the script; the exception belongs to the reviewer.
+       Reporting these as settled violations would trade one probabilistic
+       answer for a confidently wrong one.
+    """
+    if not diff_section_text:
+        return []
+    try:
+        hunks = _parse_hunks(diff_section_text)
+    except _HunkParseError:
+        return []
+    findings: list[dict] = []
+    for lineno, text in _added_lines_with_numbers(hunks):
+        for ch in text:
+            if ord(ch) >= 128:
+                findings.append(
+                    {
+                        "check": "non_ascii",
+                        "line": lineno,
+                        "detail": f"U+{ord(ch):04X} ({ch!r}) in: {text.strip()[:120]}",
+                    }
+                )
+                break
+        m = _WIN_ABS_RE.search(text) or _POSIX_ABS_RE.search(text)
+        if m:
+            findings.append(
+                {
+                    "check": "abs_path",
+                    "line": lineno,
+                    "detail": f"{m.group(0).strip()!r} in: {text.strip()[:120]}",
+                }
+            )
+    return findings
+
+
 def mechanical_checks(diff_section_text: str) -> dict:
-    """Cheap script-side scans over the CHANGED LINES only, for a skipped file.
+    """Cheap script-side scans over the CHANGED LINES only, as booleans.
+
+    This is the AGGREGATE form, retained for the "Mechanical checks (audit
+    skipped)" disclosure a skipped file renders. For findings handed to a
+    reviewer lane use `mechanical_findings`, which scans added lines only and
+    locates each hit -- see its docstring for why the two differ.
 
     Returns {"ascii_clean": bool, "no_abs_paths": bool}. Never gates -- this is
     the honest "what we checked before skipping" line the skill renders. On an

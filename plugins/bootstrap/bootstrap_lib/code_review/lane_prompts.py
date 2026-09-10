@@ -225,7 +225,7 @@ def _validate_issue(item: Any, index: int) -> dict[str, Any]:
 # Bumped whenever any prompt text below changes, so a recorded lane result says
 # which wording produced it. A comparison across prompt versions is not a
 # like-for-like measurement, and without this the difference is invisible.
-PROMPT_VERSION = "3"
+PROMPT_VERSION = "4"
 
 
 # The false-positive guardrails, stated once. These are the same rules the
@@ -252,6 +252,44 @@ Never flag any of these:
 If you are not certain an issue is real, do not flag it. False positives erode
 trust: an empty array is a perfectly good answer and is much better than a
 speculative finding."""
+
+
+# Pre-computed deterministic findings, stated once for the lanes that receive
+# them. The point of the block is the DIVISION it draws: the script owns
+# detection (it reads every added byte, every time), the reviewer owns
+# adjudication (whether a project rule actually forbids this instance). A lane
+# told only "non-ASCII: present" would have to re-scan to find where, which is
+# the inference this mechanism exists to remove.
+#
+# It lives in the USER message, not in a reviewer's system prompt, and that
+# placement is load-bearing. The text asserts that a scan section is present
+# and that the lane may therefore stop looking -- an assertion only the CALLER
+# can make good on. The two dispatch paths do not adopt the scan in lockstep
+# (the Agent path is driven by the generated SKILL.md, the endpoint path by
+# llm_scripting_kit.review_lane), so a system prompt carrying this text would
+# be FALSE for any caller that had not yet started passing findings, and would
+# license a lane to skip a check nothing had run. Travelling with the findings
+# makes the claim true whenever it is made and absent whenever it is not.
+MECHANICAL_PREAMBLE = """\
+Already checked mechanically. A deterministic scan has ALREADY run over every
+line this change ADDS in your chunk, and its results are given to you below
+under "Mechanical scan". It covers exactly two things: non-ASCII characters and
+absolute paths.
+
+What this means for you:
+- Do not scan for non-ASCII characters or absolute paths yourself. The scan
+  reads every added byte and does not miss any; re-deriving its results wastes
+  your attention and cannot improve on them.
+- Do not report a non-ASCII character or an absolute path that the scan did
+  NOT list. If it is not listed, it is not in the added lines.
+- The scan detects; it does not decide. Each listed hit is a LOCATION, not a
+  verdict. Whether it violates a rule is yours to judge from the governing
+  standards, exactly as with any other finding -- a project may permit a
+  character class in some contexts and forbid it in others, and the scan
+  cannot read the rule. Report a listed hit only when a rule you can quote
+  forbids it, and stay silent otherwise.
+- An empty "Mechanical scan" section means the scan found nothing, not that it
+  did not run."""
 
 
 OUTPUT_INSTRUCTION = """\
@@ -381,6 +419,37 @@ LANE_PROMPTS: dict[str, LanePrompt] = {
 }
 
 
+def format_mechanical_findings(findings: Sequence[Mapping[str, Any]]) -> str:
+    """Render pre-computed deterministic findings for a lane's user message.
+
+    One line per hit, sorted by file then line so a reviewer reads them in the
+    order it reads the diff. Returns the explicit "found nothing" text on an
+    empty list rather than the empty string, because a SILENT section and an
+    ABSENT section are indistinguishable to the reader -- and a reviewer that
+    cannot tell "the scan found nothing" from "the scan did not run" has to
+    re-scan to be safe, which is the duplicated work this removes.
+    """
+    if not findings:
+        return (
+            MECHANICAL_PREAMBLE
+            + "\n\nMechanical scan: no non-ASCII characters and no absolute "
+            "paths in the added lines."
+        )
+    rows = sorted(
+        findings,
+        key=lambda f: (str(f.get("file", "")), int(f.get("line", 0))),
+    )
+    lines = [
+        f"- {r.get('file', '?')}:{r.get('line', '?')} [{r.get('check', '?')}] {r.get('detail', '')}"
+        for r in rows
+    ]
+    return (
+        MECHANICAL_PREAMBLE
+        + "\n\nMechanical scan (added lines only):\n"
+        + "\n".join(lines)
+    )
+
+
 def build_user_message(
     lane: str,
     *,
@@ -388,6 +457,7 @@ def build_user_message(
     files: Sequence[str] = (),
     description: str = "",
     claimed_files: Sequence[str] = (),
+    mechanical_findings: Sequence[Mapping[str, Any]] | None = None,
 ) -> str:
     """Assemble the user message for a lane.
 
@@ -396,6 +466,14 @@ def build_user_message(
     is what stops a lane reporting a missing update that is in fact present in
     a file it was never shown -- the diff it receives is otherwise silent about
     their existence, which reads as their absence.
+
+    ``mechanical_findings`` carries the pre-computed deterministic scan for
+    this chunk (see ``bootstrap_lib.code_review.triviality``). Passing ``None``
+    -- the default -- omits the section entirely, which is what a caller
+    predating the scan does; passing an empty SEQUENCE renders the explicit
+    "found nothing" line. The two are deliberately different: a lane must be
+    able to tell a clean scan from no scan, since only the first licenses it to
+    stop looking.
 
     The diff is INLINED rather than referenced by path. The diff-only lane is a
     plain completion with no file access at all, so a path would name something
@@ -417,6 +495,8 @@ def build_user_message(
             "(paths only -- their diffs are deliberately not shown here):\n"
             + "\n".join(f"- {f}" for f in claimed_files)
         )
+    if mechanical_findings is not None:
+        parts.append(format_mechanical_findings(mechanical_findings))
     parts.append("Diff:\n" + diff_text)
     return "\n\n".join(parts)
 
@@ -431,12 +511,14 @@ __all__ = [
     "LANE_PROMPTS",
     "LaneOutputError",
     "LanePrompt",
+    "MECHANICAL_PREAMBLE",
     "OUTPUT_INSTRUCTION",
     "PROMPT_VERSION",
     "REVIEWER_A_SYSTEM",
     "REVIEWER_B_SYSTEM",
     "REVIEWER_C_SYSTEM",
     "build_user_message",
+    "format_mechanical_findings",
     "is_agent_alias",
     "parse_issue_array",
 ]
