@@ -1240,9 +1240,10 @@ class TestMechanicalFindingsReachReviewedFiles:
             workspace_root=None,
         )
         scan = core["diff_chunks"][0]["mechanical_scan"]
-        assert core["mechanical_check_phrases"] == {
-            check.check_id: check.phrase for check in REGISTRY
-        }
+        assert core["mechanical_check_phrases"]["non_ascii"] == "non-ASCII characters"
+        assert core["mechanical_check_phrases"]["local_link_targets"] == (
+            "local file and Markdown link targets"
+        )
         assert scan["schema_version"] == 2
         assert scan["files"] == [
             {
@@ -1252,6 +1253,51 @@ class TestMechanicalFindingsReachReviewedFiles:
             },
             {"file": "asset.bin", "checks_run": [], "findings": []},
         ]
+
+    def test_repository_scan_reaches_claimed_and_generic_markdown(self, tmp_path):
+        from bootstrap_lib.code_review.mechanical_repository import PathEffect, StatResult
+
+        class Reader:
+            def stat(self, paths):
+                return {path: StatResult("missing") for path in paths}
+
+            def read(self, paths):
+                return {}
+
+        sections = [
+            {
+                "identifier": "docs/claimed.md",
+                "text": "@@ -0,0 +1 @@\n+[x](gone.md)\n",
+            },
+            {
+                "identifier": "docs/generic.md",
+                "text": "@@ -0,0 +1 @@\n+[x](gone.md)\n",
+            },
+        ]
+        core = assemble_bundle(
+            preamble="",
+            sections=sections,
+            files=[
+                {"identifier": "docs/claimed.md", "local": None, "pre_image_is_empty": True},
+                {"identifier": "docs/generic.md", "local": None, "pre_image_is_empty": True},
+            ],
+            bundle_dir=tmp_path / "b",
+            max_chunk_bytes=1024 * 1024,
+            workspace_root=None,
+            claim_globs=["docs/claimed.md"],
+            snapshot_seed="git:base:post:digest",
+            path_effects=(
+                PathEffect("docs/claimed.md", "add", "review", b"[x](gone.md)"),
+                PathEffect("docs/generic.md", "add", "review", b"[x](gone.md)"),
+            ),
+            snapshot_reader=Reader(),
+        )
+        claimed = core["claimed_files"][0]["mechanical_scan"]["files"][0]
+        generic = core["diff_chunks"][0]["mechanical_scan"]["files"][0]
+        assert "local_link_targets" in claimed["checks_run"]
+        assert "local_link_targets" in generic["checks_run"]
+        assert claimed["findings"][-1]["line"] == 1
+        assert generic["findings"][-1]["line"] == 1
 
     def test_a_NON_trivial_claimed_file_is_scanned(self, tmp_path):
         """The inverted guard. `mechanical_checks` ran only when `trivial` was

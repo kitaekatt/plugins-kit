@@ -119,9 +119,9 @@ reference_skill:
     - id: bootstrap_cli_lever
       summary: >-
         `bootstrap` is a fleet-wide PATH command, installed into ~/.local/bin every
-        session. Bare, it REPORTS whether a pass is running (read-only). `bootstrap run`
-        runs a full pass on stdout -- or, when one is already running, attaches to THAT
-        pass and streams it to completion instead of starting a second one.
+        session. Bare, it reports whether a pass is running and, when one IS, stays
+        attached and streams it to completion. `bootstrap run` does the same and also
+        STARTS a pass when none is running. Neither ever starts a second one.
       keywords: [bootstrap command, bootstrap CLI, bootstrap run, is bootstrap running, is a pass running, from the terminal, without starting Claude, tail the pass, attach to running pass, engine lock, events.watch, live output, ~/.local/bin lever, BOOTSTRAP_MARKETPLACE, bootstrap --json]
       detail: |
         Installed alongside bootstrap-reset-cooldown and env-reset-cooldown by
@@ -129,17 +129,19 @@ reference_skill:
         version. Implementation: `scripts/bootstrap.sh` (a shim that finds the highest
         installed cache version and an interpreter) -> `scripts/bootstrap_cli.py`.
 
-          bootstrap             "no bootstrap pass is running" / "RUNNING (pid N, 42s elapsed)"
-          bootstrap --json      the same, machine-readable
-          bootstrap run         a full pass, synchronous, on stdout; exits with the engine's code
+          bootstrap             reports; BLOCKS on a running pass and streams it to the end
+          bootstrap --json      report only, never blocking -- the scripting form
+          bootstrap run         the same, and starts a pass when none is running;
+                                exits with the engine's code when it started one
           bootstrap run --verbose   trailing flags pass through to the engine
 
-        Why it is not two independent things: a pass is single-instance
-        (proc_lock.engine_lock), so a second `run` launched next to a live one would
-        only stand down on the lock and print nothing. `run` therefore checks the lock
-        FIRST and, if it is held, attaches. Status uses `proc_lock.lock_holder`, a
-        read-only query -- never try-acquire-then-release, which would clear a stale
-        lock and could make a genuine launcher stand down.
+        Why the two verbs differ only in that one clause: a pass is single-instance
+        (proc_lock.engine_lock), so a second engine launched next to a live one would
+        only stand down on the lock and print nothing. BOTH forms therefore check the
+        lock FIRST and attach when it is held; `run` adds "and launch one if it is
+        not". The lock check is `proc_lock.lock_holder`, a read-only query -- never
+        try-acquire-then-release, which would clear a stale lock and could make a
+        genuine launcher stand down.
 
         Attaching drops `events.watch` in the data dir, which switches the pass
         recorder from its normal buffered write (two writes per pass) to a throttled
@@ -150,10 +152,17 @@ reference_skill:
         Layer-1 session guard never engages, and both skip gates exempt it from the
         always-lane downgrade. It IS "converge now".
       gotchas:
-        - Status exits 0 whether or not a pass is running -- both are correct answers to
-          the question asked. Use `--json` when a script needs the answer, never `$?`.
-        - With more than one marketplace holding a bootstrap data dir, status reports on
-          all of them but `run` REFUSES rather than guess which engine to run; set
+        - The bare command BLOCKS whenever a pass is running -- that is the intended
+          behavior, not a hang. `--json` is the form that always returns immediately,
+          and it is what a script or a hook should call.
+        - The BARE command exits 0 whether or not a pass was running -- both are
+          correct answers to the question asked -- so read `--json`, never `$?`, to
+          learn which. `bootstrap run` is different and its `$?` IS meaningful: when
+          it starts a pass it exits with the engine's own code, and 2 when it refuses
+          on an ambiguous marketplace.
+        - With more than one marketplace holding a bootstrap data dir, the bare command
+          reports on all of them and follows one only when exactly one is running;
+          `run` REFUSES rather than guess which engine to launch. Set
           BOOTSTRAP_MARKETPLACE. Running the wrong one provisions the wrong machine state silently.
         - Attaching tails from the CURRENT end of the event stream, so records a pass
           already emitted before you attached are not replayed. Read bootstrap.log for

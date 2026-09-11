@@ -446,6 +446,13 @@ Read every line. If anything is unrelated to the feature, `git restore --staged 
 
 **The cache keys on version** -- same version = same code; the cache never refreshes without a bump, and fresh installs between releases copy HEAD code under the old version string (**silent divergence**). Consequences: `plugin.json` and `marketplace.json` versions must move together (the regenerator + `scripts/pre-commit-version-check.sh` enforce this); **manifest edits count as code edits** (a `bootstrap.json` change without a bump is structurally invisible to consumers -- see the `manifest_changes_need_version_bump` insight below); never copy files directly into the plugin cache; and don't omit the version field hoping for rolling updates (Claude Code substitutes a git SHA that becomes a static cache key anyway).
 
+**Submit gate:** Verify every changed plugin is version-bumped since the last publish, each stated pyproject version matches plugin.json, and marketplace derived data matches the manifests.
+Applies to:
+- plugins/
+- .claude-plugin/marketplace.json
+
+For a staged Git change, run `scripts/pre-commit-version-check.sh`; its existing version checks read the Git index. For a Git commit range or a Perforce changelist, establish the same three facts from the reviewed diff and repository state. The index-scoped command is evidence only when the index is the reviewed change; an empty staged run is not evidence.
+
 **Keep architecture docs current** -- when modifying bootstrap behavior, update the bootstrap skill references (`plugins/bootstrap/skills/bootstrap/references/`) to reflect the changes. These are the source of truth for how the system works.
 
 **Anti-pattern: silent bootstrap operations.** Every bootstrap check must log its outcome -- `ok_entries` when passing (verbose-only), `action_entries` when remediating (always visible). Adding a check that creates files, clones repos, or writes config without emitting a log entry is a bug. See the "Every check must log its outcome" principle in [engine-internals.md](plugins/bootstrap/skills/bootstrap/references/engine-internals.md).

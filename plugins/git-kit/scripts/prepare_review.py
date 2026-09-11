@@ -115,7 +115,9 @@ import importlib
 import inspect
 import os
 import re
+import subprocess
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 from typing import NoReturn, Optional
 
@@ -129,10 +131,10 @@ from bootstrap_guard import data_dir, reexec_under_plugin_venv  # noqa: E402
 
 reexec_under_plugin_venv("git-kit")
 
-_MIN_BOOTSTRAP_VERSION = "0.106.0"
+_MIN_BOOTSTRAP_VERSION = "0.108.0"
 _BOOTSTRAP_FRONTIER = (
     "bootstrap_lib.code_review.pipeline.run_vcs(timeout=...), "
-    "bootstrap_lib.code_review.mechanical"
+    "bootstrap_lib.code_review.mechanical_repository"
 )
 
 
@@ -155,6 +157,7 @@ def _exit_bootstrap_too_old() -> NoReturn:
 try:
     review_pipeline = importlib.import_module("bootstrap_lib.code_review.pipeline")
     ledger = importlib.import_module("bootstrap_lib.code_review.ledger")
+    importlib.import_module("bootstrap_lib.code_review.mechanical_repository")
 except ModuleNotFoundError as exc:
     from bootstrap_guard import require_bootstrap
 
@@ -194,6 +197,12 @@ from bootstrap_lib.code_review.pipeline import (  # noqa: E402
 # whether any registered check reads a post-image, and so whether this front-half
 # should spend a `git show` per changed file materializing pre-images.
 from bootstrap_lib.code_review.mechanical import requires_pre_image  # noqa: E402
+from bootstrap_lib.code_review.mechanical import build_snapshot  # noqa: E402
+from bootstrap_lib.code_review.mechanical_repository import (  # noqa: E402
+    PathEffect,
+    ReadResult,
+    StatResult,
+)
 
 repair_path()
 
@@ -414,6 +423,163 @@ def fetch_diff(range_spec: str) -> str:
     if rc != 0:
         raise ValueError(f"git diff failed: {err.strip() or 'no output'}")
     return out
+
+
+@dataclass(frozen=True)
+class GitSnapshotCapture:
+    diff: str
+    base_oid: str
+    post_label: str
+    snapshot_seed: str | None
+
+
+class GitSnapshotReader:
+    """Pinned object-database reader; it never consults refs or the worktree."""
+
+    def __init__(self, repo_root: Path, base_oid: str) -> None:
+        self.repo_root = repo_root
+        self.base_oid = base_oid
+
+    def _batch(self, paths: tuple[str, ...], *, contents: bool) -> bytes:
+        if not paths:
+            return b""
+        payload = b"".join(
+            f"{self.base_oid}:{path}\n".encode("utf-8", errors="strict")
+            for path in paths
+        )
+        command = ["git", "cat-file", "--batch" if contents else "--batch-check"]
+        proc = subprocess.run(
+            command,
+            input=payload,
+            capture_output=True,
+            cwd=self.repo_root,
+            timeout=_git_timeout_s(),
+        )
+        if proc.returncode != 0:
+            raise RuntimeError(proc.stderr.decode("utf-8", errors="replace").strip())
+        return proc.stdout
+
+    def stat(self, paths: tuple[str, ...]) -> dict[str, StatResult]:
+        unsafe_paths = {path for path in paths if "\n" in path or "\r" in path}
+        safe_paths = tuple(path for path in paths if path not in unsafe_paths)
+        lines = self._batch(safe_paths, contents=False).splitlines()
+        if len(lines) != len(safe_paths):
+            raise RuntimeError("git cat-file --batch-check returned the wrong record count")
+        results: dict[str, StatResult] = {
+            path: StatResult("unsupported", diagnostic="Git batch protocol cannot represent this path")
+            for path in paths
+            if path in unsafe_paths
+        }
+        for path, line in zip(safe_paths, lines):
+            fields = line.rsplit(b" ", 2)
+            if line.endswith(b" missing"):
+                results[path] = StatResult("missing")
+            elif len(fields) == 3 and fields[1] == b"blob":
+                results[path] = StatResult("file", int(fields[2]), fields[0].decode("ascii"))
+            elif len(fields) == 3 and fields[1] == b"tree":
+                results[path] = StatResult("directory", identity=fields[0].decode("ascii"))
+            else:
+                results[path] = StatResult("unsupported", diagnostic=line.decode("utf-8", errors="replace"))
+        return results
+
+    def read(self, paths: tuple[str, ...]) -> dict[str, ReadResult]:
+        unsafe_paths = {path for path in paths if "\n" in path or "\r" in path}
+        safe_paths = tuple(path for path in paths if path not in unsafe_paths)
+        raw = self._batch(safe_paths, contents=True)
+        offset = 0
+        results: dict[str, ReadResult] = {
+            path: ReadResult("unsupported", diagnostic="Git batch protocol cannot represent this path")
+            for path in paths
+            if path in unsafe_paths
+        }
+        for path in safe_paths:
+            end = raw.find(b"\n", offset)
+            if end < 0:
+                raise RuntimeError("truncated git cat-file header")
+            header = raw[offset:end]
+            offset = end + 1
+            if header.endswith(b" missing"):
+                results[path] = ReadResult("missing")
+                continue
+            fields = header.rsplit(b" ", 2)
+            if len(fields) != 3 or fields[1] != b"blob":
+                results[path] = ReadResult("unsupported", diagnostic=header.decode("utf-8", errors="replace"))
+                continue
+            size = int(fields[2])
+            data = raw[offset : offset + size]
+            offset += size + 1
+            if len(data) != size:
+                raise RuntimeError("truncated git cat-file content")
+            results[path] = ReadResult("file", data, fields[0].decode("ascii"))
+        return results
+
+
+def _resolve_git_snapshot(range_spec: str) -> tuple[str, str, str]:
+    rc, head, err = run_git(["rev-parse", "HEAD^{commit}"])
+    if rc != 0:
+        raise ValueError(f"could not resolve HEAD: {err.strip()}")
+    head = head.strip()
+    if range_spec == "__staged__":
+        rc, tree, err = run_git(["write-tree"])
+        if rc != 0:
+            raise ValueError(f"git write-tree failed: {err.strip()}")
+        return head, tree.strip(), "tree"
+    if range_spec in {"__working_tree__", "__merge_in_progress__", "__rebase_in_progress__"}:
+        return head, "diff", "diff"
+    if "..." in range_spec:
+        left, right = range_spec.split("...", 1)
+        rc, left_oid, err = run_git(["rev-parse", f"{left or 'HEAD'}^{{commit}}"])
+        if rc != 0:
+            raise ValueError(f"could not resolve range left endpoint: {err.strip()}")
+        rc, right_oid, err = run_git(["rev-parse", f"{right or 'HEAD'}^{{commit}}"])
+        if rc != 0:
+            raise ValueError(f"could not resolve range right endpoint: {err.strip()}")
+        rc, base, err = run_git(["merge-base", left_oid.strip(), right_oid.strip()])
+        if rc != 0:
+            raise ValueError(f"could not resolve merge base: {err.strip()}")
+        return base.strip(), right_oid.strip(), "commit"
+    left, right = range_spec.split("..", 1)
+    rc, base, err = run_git(["rev-parse", f"{left or 'HEAD'}^{{commit}}"])
+    if rc != 0:
+        raise ValueError(f"could not resolve range base: {err.strip()}")
+    rc, post, err = run_git(["rev-parse", f"{right or 'HEAD'}^{{commit}}"])
+    if rc != 0:
+        raise ValueError(f"could not resolve range post: {err.strip()}")
+    return base.strip(), post.strip(), "commit"
+
+
+def capture_git_snapshot(range_spec: str) -> GitSnapshotCapture:
+    base_oid, post, post_kind = _resolve_git_snapshot(range_spec)
+    common = [
+        "-c", "diff.noprefix=false", "-c", "diff.external=", "diff",
+        "--no-ext-diff", "--no-textconv", "--binary", "--full-index",
+        "--find-renames", "--find-copies",
+    ]
+    args = common + ([base_oid, post] if post_kind != "diff" else [base_oid])
+
+    def once() -> str:
+        rc, out, err = run_git(args)
+        if rc != 0:
+            raise ValueError(f"git snapshot diff failed: {err.strip() or 'no output'}")
+        return out
+
+    if post_kind == "diff":
+        accepted: str | None = None
+        for _ in range(2):
+            first = once()
+            second = once()
+            if hashlib.sha256(first.encode("utf-8")).digest() == hashlib.sha256(second.encode("utf-8")).digest():
+                accepted = first
+                break
+        if accepted is None:
+            return GitSnapshotCapture(second, base_oid, post, None)
+        diff = accepted
+    else:
+        diff = once()
+    if "\ufffd" in diff:
+        return GitSnapshotCapture(diff, base_oid, post, None)
+    digest = hashlib.sha256(diff.encode("utf-8")).hexdigest()
+    return GitSnapshotCapture(diff, base_oid, post, f"git:{base_oid}:{post}:{digest}")
 
 
 def fetch_changed_files(range_spec: str) -> list[tuple[str, str]]:
@@ -810,14 +976,19 @@ def _range_base(range_spec: str) -> Optional[str]:
     return None
 
 
-def materialize_preimage(range_spec: str, path: str, bundle_dir: Path) -> Optional[str]:
+def materialize_preimage(
+    range_spec: str,
+    path: str,
+    bundle_dir: Path,
+    base_object: str | None = None,
+) -> Optional[str]:
     """Write `path`'s content at the range base into the bundle; return its path.
 
     `git show <base>:<path>` fails when the file did not exist at the base
     (an add, or the post-rename side of a rename); that case returns None so
     the subject-lens reviewer treats every finding as attributable.
     """
-    base = _range_base(range_spec)
+    base = base_object or _range_base(range_spec)
     if base is None:
         return None
     rc, out, _ = run_git(["show", f"{base}:{path}"])
@@ -843,6 +1014,29 @@ def _range_base_sha(range_spec: str) -> Optional[str]:
         return None
     rc, out, _ = run_git(["rev-parse", base])
     return out.strip() if rc == 0 and out.strip() else None
+
+
+def _snapshot_section_effects(section: dict) -> tuple[str, str | None, str]:
+    text = section["text"]
+    new_path = section["identifier"]
+    rename_from = next((_unquote_c_path(line[12:]) for line in text.splitlines() if line.startswith("rename from ")), None)
+    rename_to = next((_unquote_c_path(line[10:]) for line in text.splitlines() if line.startswith("rename to ")), None)
+    copy_from = next((_unquote_c_path(line[10:]) for line in text.splitlines() if line.startswith("copy from ")), None)
+    copy_to = next((_unquote_c_path(line[8:]) for line in text.splitlines() if line.startswith("copy to ")), None)
+    old_path = rename_from or copy_from
+    if rename_to:
+        new_path = rename_to
+    elif copy_to:
+        new_path = copy_to
+    if rename_from:
+        return "R", old_path, new_path
+    if copy_from:
+        return "C", old_path, new_path
+    if "deleted file mode " in text:
+        return "D", None, new_path
+    if "new file mode " in text:
+        return "A", None, new_path
+    return "M", None, new_path
 
 
 def build_bundle(
@@ -880,8 +1074,8 @@ def build_bundle(
     if repo_root is None:
         raise ValueError("not inside a git repository")
 
-    diff = fetch_diff(range_spec)
-    changed = fetch_changed_files(range_spec)
+    capture = capture_git_snapshot(range_spec)
+    diff = capture.diff
     description = fetch_description(range_spec)
 
     rc, head_out, _ = run_git(["rev-parse", "--short", "HEAD"])
@@ -889,14 +1083,21 @@ def build_bundle(
     branch = get_current_branch() or "DETACHED"
 
     preamble, sections = _git_diff_to_sections(diff)
+    section_effects = [_snapshot_section_effects(section) for section in sections]
+    snapshot_paths_supported = all(
+        path is None or ("\ufffd" not in path and "\x00" not in path)
+        for _, old_path, new_path in section_effects
+        for path in (old_path, new_path)
+    )
     files = [
         {
-            "identifier": path,
-            "path": path,
-            "local": str((repo_root / path).resolve()),
+            "identifier": new_path,
+            "path": new_path,
+            "local": str((repo_root / new_path).resolve()),
             "status": status,
+            "_old_path": old_path,
         }
-        for status, path in changed
+        for status, old_path, new_path in section_effects
     ]
     # Materialize pre-images BEFORE assembly so the front-half keeps the
     # VCS-specific mechanics; assemble_bundle only routes/excludes. A claimed
@@ -908,8 +1109,61 @@ def build_bundle(
     scan_needs_pre_image = requires_pre_image()
     for f in files:
         if scan_needs_pre_image or matches_claim(f["identifier"], claim_globs):
-            f["pre_image"] = materialize_preimage(range_spec, f["path"], bundle_dir)
+            preimage_path = f.get("_old_path") or f["path"]
+            f["pre_image"] = materialize_preimage(
+                range_spec, preimage_path, bundle_dir, capture.base_oid
+            )
             f["pre_image_is_empty"] = f["status"] == "A"
+    path_effects: list[PathEffect] = []
+    for file, section in zip(files, sections):
+        status = file["status"]
+        old_path = file.get("_old_path")
+        if status == "R" and old_path:
+            path_effects.append(PathEffect(old_path, "delete", range_spec))
+        if status == "D":
+            path_effects.append(PathEffect(file["path"], "delete", range_spec))
+            file.pop("_old_path", None)
+            continue
+        pre_text: str | None = None
+        pre_path = file.get("pre_image")
+        if file.get("pre_image_is_empty"):
+            pre_text = ""
+        elif pre_path:
+            try:
+                pre_text = Path(pre_path).read_text(encoding="utf-8")
+            except (OSError, UnicodeError):
+                pass
+        snapshot = build_snapshot(file["identifier"], section["text"], pre_image_text=pre_text)
+        post_image = snapshot.post_image_text
+        if post_image is None and status == "A" and "new file mode " in section["text"]:
+            post_image = ""
+        elif post_image is None and status in {"R", "C"} and pre_text is not None:
+            post_image = pre_text
+        elif post_image is None and status == "M" and pre_text is not None and "@@" not in section["text"]:
+            post_image = pre_text
+        path_effects.append(
+            PathEffect(
+                file["path"],
+                "add" if status in {"A", "R", "C"} else "edit",
+                range_spec,
+                post_image.encode("utf-8") if post_image is not None else None,
+                0,
+                None,
+                None if post_image is not None else "could not reconstruct changed post-image",
+            )
+        )
+        file.pop("_old_path", None)
+    if capture.snapshot_seed is not None and snapshot_paths_supported:
+        identity_material = diff.encode("utf-8") + b"\n" + b"\n".join(
+            f"{effect.effect}\0{effect.path}\0{effect.review_id}".encode("utf-8")
+            for effect in sorted(path_effects, key=lambda item: (item.path, item.effect))
+        )
+        snapshot_seed = (
+            f"git:{capture.base_oid}:{capture.post_label}:"
+            f"{hashlib.sha256(identity_material).hexdigest()}"
+        )
+    else:
+        snapshot_seed = None
     core = assemble_bundle(
         preamble=preamble,
         sections=sections,
@@ -926,6 +1180,9 @@ def build_bundle(
         # assemble_bundle still accepts this spelling as a deprecated alias,
         # so the old name works against both. Retire per rename-spec H.2.
         review_generated=review_machine_emitted,
+        snapshot_seed=snapshot_seed,
+        path_effects=tuple(path_effects),
+        snapshot_reader=GitSnapshotReader(repo_root, capture.base_oid),
     )
     changed_files = core["changed_files"]
 
@@ -990,7 +1247,10 @@ def build_bundle(
         "change_id": change_id,
         "ledger_baseline": ledger_baseline,
         "ledger_hits": ledger_hits,
+        "mechanical_check_phrases": core["mechanical_check_phrases"],
     }
+    if core.get("snapshot_identity") is not None:
+        bundle["snapshot_identity"] = core["snapshot_identity"]
     if auto_reason:
         bundle["auto_detected_reason"] = auto_reason
     if claim_globs:

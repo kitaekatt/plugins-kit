@@ -237,10 +237,10 @@ reexec_under_plugin_venv("p4-kit")
 # under that venv the import below just works -- no path discovery. The try/except
 # below remains as a safety net for the installed-but-not-yet-provisioned window.
 
-_MIN_BOOTSTRAP_VERSION = "0.106.0"
+_MIN_BOOTSTRAP_VERSION = "0.108.0"
 _BOOTSTRAP_FRONTIER = (
     "bootstrap_lib.code_review.pipeline.run_vcs(timeout=...), "
-    "bootstrap_lib.code_review.mechanical"
+    "bootstrap_lib.code_review.mechanical_repository"
 )
 
 
@@ -262,6 +262,7 @@ def _exit_bootstrap_too_old() -> NoReturn:
 try:
     review_pipeline = importlib.import_module("bootstrap_lib.code_review.pipeline")
     ledger = importlib.import_module("bootstrap_lib.code_review.ledger")
+    importlib.import_module("bootstrap_lib.code_review.mechanical_repository")
 except ModuleNotFoundError as exc:
     from bootstrap_guard import require_bootstrap
 
@@ -293,7 +294,13 @@ from bootstrap_lib.path_repair import repair_path  # noqa: E402
 # Shared VCS-neutral review pipeline -- subprocess wrapper, section
 # splitting, chunking + CLAUDE.md walk + submit-gate scan, bundle
 # emission. See bootstrap_lib/code_review/pipeline.py.
-from bootstrap_lib.code_review.mechanical import requires_pre_image  # noqa: E402
+from bootstrap_lib.code_review.mechanical import build_snapshot, requires_pre_image  # noqa: E402
+from bootstrap_lib.code_review.mechanical_repository import (  # noqa: E402
+    MAX_SOURCE_BYTES,
+    PathEffect,
+    ReadResult,
+    StatResult,
+)
 from bootstrap_lib.code_review.pipeline import (  # noqa: E402
     assemble_bundle,
     emit_bundle,
@@ -304,6 +311,238 @@ from bootstrap_lib.code_review.pipeline import (  # noqa: E402
 )
 
 repair_path()
+
+
+class P4SnapshotReader:
+    """Reader pinned to the workspace's captured have revisions."""
+
+    def __init__(self, workspace_root: Path) -> None:
+        self.workspace_root = workspace_root
+        self._specs: dict[str, str] = {}
+        self._sizes: dict[str, int] = {}
+        self._directory_revisions: dict[str, tuple[str, ...]] = {}
+
+    @staticmethod
+    def _batches(paths: tuple[str, ...]) -> list[tuple[str, ...]]:
+        return [paths[index : index + _P4_PATH_BATCH] for index in range(0, len(paths), _P4_PATH_BATCH)]
+
+    @staticmethod
+    def _escape_filespec(value: str, *, preserve_encoded: bool = False) -> str:
+        result: list[str] = []
+        index = 0
+        while index < len(value):
+            character = value[index]
+            if (
+                preserve_encoded
+                and character == "%"
+                and index + 2 < len(value)
+                and all(part in "0123456789abcdefABCDEF" for part in value[index + 1 : index + 3])
+            ):
+                result.append(value[index : index + 3])
+                index += 3
+                continue
+            result.append({"%": "%25", "@": "%40", "#": "%23", "*": "%2A"}.get(character, character))
+            index += 1
+        return "".join(result)
+
+    @classmethod
+    def _revision_spec(cls, depot: str, revision: str) -> str:
+        return f"{cls._escape_filespec(depot, preserve_encoded=True)}#{revision}"
+
+    @staticmethod
+    def _only_have_miss(output: str, error: str) -> bool:
+        diagnostics = [
+            line.strip().lower()
+            for line in (error + "\n" + output).splitlines()
+            if line.strip() and not line.startswith("... ")
+        ]
+        return bool(diagnostics) and all(
+            "no such file" in line
+            or "no file(s)" in line
+            or "not on client" in line
+            or "not in client view" in line
+            for line in diagnostics
+        )
+
+    @staticmethod
+    def _only_descendant_miss(output: str, error: str) -> bool:
+        diagnostics = [
+            line.strip().lower()
+            for line in (error + "\n" + output).splitlines()
+            if line.strip() and not line.startswith("... ")
+        ]
+        return len(diagnostics) == 1 and "no such file(s)" in diagnostics[0]
+
+    def stat(self, paths: tuple[str, ...]) -> dict[str, StatResult]:
+        results: dict[str, StatResult] = {}
+        for batch in self._batches(paths):
+            locals_by_path = {path: str(self.workspace_root / path) for path in batch}
+            rc, out, err = run_p4(
+                ["-ztag", "where", *[self._escape_filespec(value) for value in locals_by_path.values()]]
+            )
+            if rc != 0 and not out:
+                reason = err.strip() or f"p4 where exited {rc}"
+                results.update({path: StatResult("error", diagnostic=reason) for path in batch})
+                continue
+            depot_by_local = {
+                record.get("path", ""): record.get("depotFile", "")
+                for record in _read_ztag_records(out, record_start_field="depotFile")
+            }
+            mapped = {
+                path: depot_by_local.get(local, "")
+                for path, local in locals_by_path.items()
+            }
+            mapped_depots = [value for value in mapped.values() if value]
+            if mapped_depots:
+                rc, have_out, have_err = run_p4(
+                    [
+                        "-ztag",
+                        "have",
+                        *[
+                            self._escape_filespec(value, preserve_encoded=True)
+                            for value in mapped_depots
+                        ],
+                    ]
+                )
+            else:
+                rc, have_out, have_err = 0, "", ""
+            have_records = _read_ztag_records(have_out, record_start_field="depotFile")
+            have_by_depot = {
+                record.get("depotFile", ""): record.get("haveRev", "")
+                for record in have_records
+            }
+            specs_by_path = {
+                path: self._revision_spec(depot, have_by_depot[depot])
+                for path, depot in mapped.items()
+                if depot and have_by_depot.get(depot)
+            }
+            size_by_depot: dict[str, int] = {}
+            if specs_by_path:
+                size_rc, size_out, size_err = run_p4(
+                    ["-ztag", "fstat", "-Ol", "-T", "depotFile,fileSize", *specs_by_path.values()]
+                )
+                for record in _read_ztag_records(size_out, record_start_field="depotFile"):
+                    size = record.get("fileSize", "")
+                    if record.get("depotFile") and size.isdigit():
+                        size_by_depot[record["depotFile"]] = int(size)
+            unresolved: list[str] = []
+            have_detail = (have_err or "").strip()
+            have_expected_miss = self._only_have_miss(have_out, have_err)
+            have_malformed = any(
+                not record.get("depotFile") or not record.get("haveRev")
+                for record in have_records
+            )
+            have_failed = (rc != 0 and not have_expected_miss) or have_malformed
+            for path in batch:
+                depot = mapped.get(path, "")
+                revision = have_by_depot.get(depot, "")
+                if depot and revision:
+                    spec = self._revision_spec(depot, revision)
+                    self._specs[path] = spec
+                    if depot in size_by_depot:
+                        self._sizes[path] = size_by_depot[depot]
+                        results[path] = StatResult("file", size_by_depot[depot], spec)
+                    else:
+                        results[path] = StatResult("error", diagnostic=size_err.strip() or "file size unavailable")
+                else:
+                    unresolved.append(path)
+            if unresolved:
+                if have_failed:
+                    message = have_detail or "malformed P4 have response"
+                    results.update(
+                        {path: StatResult("error", diagnostic=message) for path in unresolved}
+                    )
+                    continue
+                probes = [
+                    self._escape_filespec(str(self.workspace_root / path)) + "/..."
+                    for path in unresolved
+                ]
+                probe_rc, probe_out, probe_err = run_p4(
+                    ["-ztag", "fstat", "-Rh", "-m", "1000", "-T", "depotFile,haveRev", *probes]
+                )
+                records = _read_ztag_records(probe_out, record_start_field="depotFile")
+                truncated = len(records) >= 1000
+                complete_records = [
+                    record
+                    for record in records
+                    if record.get("depotFile") and record.get("haveRev")
+                ]
+                malformed = len(complete_records) != len(records)
+                for path in unresolved:
+                    local_prefix = str(self.workspace_root / path)
+                    depot_prefix = mapped.get(path, "")
+                    descendants = tuple(sorted(
+                        self._revision_spec(record["depotFile"], record["haveRev"])
+                        for record in complete_records
+                        if depot_prefix
+                        and record["depotFile"].startswith(depot_prefix.rstrip("/") + "/")
+                    ))
+                    proven = bool(descendants)
+                    if proven:
+                        self._directory_revisions[path] = descendants
+                    if proven:
+                        results[path] = StatResult("directory")
+                    elif malformed:
+                        results[path] = StatResult("error", diagnostic="malformed P4 descendant record")
+                    elif truncated:
+                        results[path] = StatResult("unsupported", diagnostic="P4 descendant probe truncated")
+                    elif self._only_descendant_miss(probe_out, probe_err):
+                        results[path] = StatResult("missing")
+                    else:
+                        results[path] = StatResult("error", diagnostic=probe_err.strip() or f"P4 probe failed for {local_prefix}")
+        return results
+
+    def read(self, paths: tuple[str, ...]) -> dict[str, ReadResult]:
+        results: dict[str, ReadResult] = {}
+        for batch in self._batches(paths):
+            ready = [path for path in batch if path in self._specs and path in self._sizes]
+            for path in set(batch) - set(ready):
+                results[path] = ReadResult("error", diagnostic="P4 revision was not captured")
+            if not ready:
+                continue
+            rc, out, err = run_p4(["print", "-q", *[self._specs[path] for path in ready]])
+            if rc != 0:
+                message = err.strip() or "p4 print failed"
+                results.update({path: ReadResult("error", diagnostic=message) for path in ready})
+                continue
+            if "\ufffd" in out:
+                results.update(
+                    {
+                        path: ReadResult(
+                            "unsupported",
+                            diagnostic="P4 target content is not representable as strict UTF-8",
+                        )
+                        for path in ready
+                    }
+                )
+                continue
+            raw = out.encode("utf-8")
+            offset = 0
+            for path in ready:
+                size = self._sizes[path]
+                data = raw[offset : offset + size]
+                offset += size
+                if len(data) != size:
+                    results[path] = ReadResult("error", diagnostic="p4 print returned truncated content")
+                else:
+                    results[path] = ReadResult("file", data, self._specs[path])
+            if offset != len(raw):
+                for path in ready:
+                    results[path] = ReadResult("error", diagnostic="p4 print byte count did not match metadata")
+        return results
+
+    def finalize_identity(self, seed: str, effects: tuple[PathEffect, ...]) -> str:
+        del effects
+        material = seed + "\n" + "\n".join(
+            f"{path}\0{spec}" for path, spec in sorted(self._specs.items())
+        )
+        material += "\n" + "\n".join(
+            f"{path}\0{spec}"
+            for path, specs in sorted(self._directory_revisions.items())
+            for spec in specs
+        )
+        client = seed.split(":", 2)[1]
+        return f"p4:{client}:{hashlib.sha256(material.encode('utf-8')).hexdigest()}"
 
 
 # This module is the PERFORCE VcsAdapter (bootstrap_lib.code_review.vcs_adapter)
@@ -734,8 +973,11 @@ def _content_spec(
 
     Returns None when no addressable content exists (delete at rev 1).
     """
+    escaped = P4SnapshotReader._escape_filespec(
+        depot_path, preserve_encoded=True
+    )
     if is_shelved:
-        return f"{depot_path}#head" if is_delete else f"{depot_path}@={cl}"
+        return f"{escaped}#head" if is_delete else f"{escaped}@={cl}"
     if is_delete:
         try:
             rev_num = int(rev)
@@ -743,8 +985,8 @@ def _content_spec(
             return None
         if rev_num <= 1:
             return None
-        return f"{depot_path}#{rev_num - 1}"
-    return f"{depot_path}#{rev}"
+        return f"{escaped}#{rev_num - 1}"
+    return f"{escaped}#{rev}"
 
 
 _UTF16_BOM_LE = b"\xff\xfe"
@@ -1395,19 +1637,24 @@ def get_workspace_root() -> tuple[Optional[Path], Optional[str]]:
     return workspace_root, client_name
 
 
-def materialize_preimage(depot: str, action: str, bundle_dir: Path) -> Optional[str]:
-    """Write `depot`'s #have (pre-edit) content into the bundle; return its path.
+def materialize_preimage(
+    depot: str, action: str, bundle_dir: Path, base_revision: str | None = None
+) -> Optional[str]:
+    """Write the exact describe base revision into the bundle; return its path.
 
     An add-style action (add / branch / move/add / import) has no prior
     content, so returns None -- the subject-lens reviewer treats every finding
-    as attributable. For an edit/delete/integrate the `#have` revision is the
-    workspace's synced copy, i.e. the file as it was before this CL touched it.
+    as attributable. Pending review capture passes ``base_revision`` from the
+    accepted describe record. The #have fallback remains for older direct
+    callers only.
     """
     if action in _ADD_ACTIONS:
         return None
     dest = bundle_dir / preimage_relpath(depot)
     dest.parent.mkdir(parents=True, exist_ok=True)
-    rc, _, _ = run_p4(["print", "-q", "-o", str(dest), f"{depot}#have"])
+    escaped = P4SnapshotReader._escape_filespec(depot, preserve_encoded=True)
+    spec = f"{escaped}#{base_revision}" if base_revision else f"{escaped}#have"
+    rc, _, _ = run_p4(["print", "-q", "-o", str(dest), spec])
     if rc != 0:
         return None
     return str(dest)
@@ -1419,6 +1666,7 @@ def build_bundle(
     claim_globs: Optional[list[str]] = None,
     ledger_path: Optional[Path] = None,
     review_machine_emitted: bool = False,
+    _seam_b_retry: bool = False,
 ) -> dict:
     """Gather CL context, partition diff into chunks on disk, return the index bundle.
 
@@ -1451,7 +1699,10 @@ def build_bundle(
     claim_globs = claim_globs or []
     auto_shelved = False
     shelf_fingerprint: dict[str, str] = {}
-    shelf_observed: Optional[ShelfScanResult] = None
+    # F0 precedes the describe so one Seam B attempt is genuinely bracketed:
+    # fingerprint -> describe/actions/content/queries -> fingerprint. Pending
+    # unshelved changes replace this empty observation with the post-shelve F0.
+    shelf_observed: Optional[ShelfScanResult] = fetch_shelf_fingerprint(cl)
     shelf_scan_incomplete: list[dict[str, str]] = []
     opened: Optional[dict[str, str]] = None
     opened_incomplete: list[dict[str, str]] = []
@@ -1459,7 +1710,8 @@ def build_bundle(
         describe, is_shelved = fetch_describe(cl)
     except PendingUnshelvedError:
         # A shelf can appear after fetch_describe reports an unshelved CL.
-        # Preserve a shelf created by another process and reuse this scan.
+        # Recheck at that boundary, preserve a shelf created by another
+        # process, and use this observation as F0 for the accepted describe.
         shelf_observed = fetch_shelf_fingerprint(cl)
         if not shelf_observed.scan_ok:
             raise ValueError(
@@ -1475,6 +1727,16 @@ def build_bundle(
             shelf_fingerprint = shelf_observed.digests
             describe, is_shelved = fetch_describe(cl)
             auto_shelved = True
+
+    if _is_pending(describe) and is_shelved and not shelf_observed.digests and not _seam_b_retry:
+        return build_bundle(
+            cl,
+            bundle_dir,
+            claim_globs=claim_globs,
+            ledger_path=ledger_path,
+            review_machine_emitted=review_machine_emitted,
+            _seam_b_retry=True,
+        )
 
     workspace_root, client_name = get_workspace_root()
     change_owner = _parse_change_owner(describe)
@@ -1573,14 +1835,29 @@ def build_bundle(
             )
 
     preamble, sections = _p4_diff_to_sections(diff)
+    def repository_path(depot: str) -> str:
+        local = local_map.get(depot)
+        if workspace_root is None or not local:
+            return depot
+        try:
+            return Path(local).resolve().relative_to(workspace_root.resolve()).as_posix()
+        except (OSError, ValueError):
+            return depot
+
     files = [
-        {"identifier": depot, "depot": depot, "local": local_map.get(depot)}
+        {
+            "identifier": depot,
+            "depot": depot,
+            "local": local_map.get(depot),
+            "repository_path": repository_path(depot),
+        }
         for depot in depot_files
     ]
     # Materialize immutable pre-images for locally-owned pending files. A
-    # foreign workspace's #have and a submitted CL's #have are not the reviewed
-    # pre-image, so those cases deliberately leave the post-image precondition
-    # unmet. Within that set, a claimed file always needs one (the triviality
+    # submitted or foreign-client review has no supported pinned base view, so
+    # those cases deliberately leave the post-image precondition unmet. For a
+    # locally owned pending shelf, use each describe record's exact base
+    # revision. Within that set, a claimed file always needs one (the triviality
     # guard reads it) and every other file needs one only when a registered
     # mechanical check reads the post-image -- each costs a `p4 print`, so on a
     # large CL the difference is one round-trip per file. Asking the registry
@@ -1596,9 +1873,103 @@ def build_bundle(
             ):
                 continue
             action = actions.get(f["identifier"], ("", ""))[1]
+            base_revision = actions.get(f["identifier"], ("", ""))[0]
             f["action"] = action
-            f["pre_image"] = materialize_preimage(f["depot"], action, bundle_dir)
+            f["pre_image"] = materialize_preimage(
+                f["depot"], action, bundle_dir, base_revision
+            )
             f["pre_image_is_empty"] = action in _ADD_ACTIONS
+
+    seam_b_supported = (
+        foreign_change is None
+        and _is_pending(describe)
+        and is_shelved
+        and workspace_root is not None
+    )
+    if seam_b_supported and shelf_observed is None:
+        shelf_observed = fetch_shelf_fingerprint(cl)
+    snapshot_seed: str | None = None
+    path_effects: list[PathEffect] = []
+    seam_b_supported = bool(
+        seam_b_supported
+        and shelf_observed is not None
+        and shelf_observed.scan_ok
+        and shelf_observed.digests
+    )
+    if seam_b_supported and shelf_observed is not None:
+        canonical_actions = "\n".join(
+            f"{depot}\0{revision}\0{action}"
+            for depot, (revision, action) in sorted(actions.items())
+        )
+        canonical_fingerprint = "\n".join(
+            f"{depot}\0{digest}" for depot, digest in sorted(shelf_observed.digests.items())
+        )
+        seed_digest = hashlib.sha256(
+            (canonical_fingerprint + "\n" + canonical_actions).encode("utf-8")
+        ).hexdigest()
+        snapshot_seed = f"p4:{client_name}:{seed_digest}"
+        if set(shelf_observed.digests) != set(actions) or any(
+            shelf_observed.actions.get(depot, action) != action
+            for depot, (_, action) in actions.items()
+        ):
+            snapshot_seed = None
+        sections_by_depot = {section["identifier"]: section for section in sections}
+        for file in files:
+            depot = file["depot"]
+            revision, action = actions.get(depot, ("", ""))
+            repository_path = file["repository_path"]
+            if action in _DELETE_ACTIONS:
+                path_effects.append(PathEffect(repository_path, "delete", cl))
+                continue
+            expected = shelf_observed.digests.get(depot, "").upper()
+            data: bytes | None = None
+            diagnostic = None
+            section = sections_by_depot.get(depot)
+            if section is not None and file["repository_path"].lower().endswith((".md", ".markdown")):
+                pre_text: str | None = None
+                if file.get("pre_image_is_empty"):
+                    pre_text = ""
+                elif file.get("pre_image"):
+                    try:
+                        pre_text = Path(file["pre_image"]).read_text(encoding="utf-8")
+                    except (OSError, UnicodeError):
+                        pass
+                reconstructed = build_snapshot(
+                    file["repository_path"], section["text"], pre_image_text=pre_text
+                ).post_image_text
+                if reconstructed is None and action in _ADD_ACTIONS:
+                    reconstructed = ""
+                if reconstructed is None:
+                    diagnostic = "could not reconstruct changed Markdown post-image"
+                elif len(reconstructed.encode("utf-8")) > MAX_SOURCE_BYTES:
+                    diagnostic = "changed Markdown post-image exceeds source limit"
+                else:
+                    content = fetch_file_content(
+                        depot, revision, cl, is_shelved=True, is_delete=False
+                    )
+                    if content is None:
+                        diagnostic = "could not fetch changed Markdown shelf content"
+                    elif reconstructed != "\n".join(content.splitlines()):
+                        diagnostic = "changed Markdown content did not match captured diff"
+                        snapshot_seed = None
+                    else:
+                        data = content.encode("utf-8")
+                        actual = hashlib.md5(data).hexdigest().upper()
+                        if expected and actual != expected:
+                            diagnostic = "changed Markdown digest did not match shelf fingerprint"
+                            data = None
+                            snapshot_seed = None
+            path_effects.append(
+                PathEffect(
+                    repository_path,
+                    "add" if action in _ADD_ACTIONS else "edit",
+                    cl,
+                    post_image=data,
+                    post_size=len(data) if data is not None else 0,
+                    post_identity=expected or None,
+                    post_image_error=diagnostic,
+                )
+            )
     skip_machine_emitted_scan = (
         foreign_change is not None and not review_machine_emitted
     )
@@ -1629,7 +2000,47 @@ def build_bundle(
         # A foreign CL maps to reviewer bytes, so disable that classification
         # rather than excluding shelf content based on another workspace.
         review_generated=review_machine_emitted or skip_machine_emitted_scan,
+        snapshot_seed=snapshot_seed,
+        path_effects=tuple(path_effects),
+        snapshot_reader=(P4SnapshotReader(workspace_root) if seam_b_supported else None),
     )
+    if seam_b_supported:
+        final_fingerprint = fetch_shelf_fingerprint(cl)
+        snapshot_mismatch = (
+            snapshot_seed is None
+            or shelf_observed is None
+            or not final_fingerprint.scan_ok
+            or final_fingerprint.digests != shelf_observed.digests
+            or final_fingerprint.actions != shelf_observed.actions
+        )
+        if snapshot_mismatch and not _seam_b_retry:
+            retried = build_bundle(
+                cl,
+                bundle_dir,
+                claim_globs=claim_globs,
+                ledger_path=ledger_path,
+                review_machine_emitted=review_machine_emitted,
+                _seam_b_retry=True,
+            )
+            if auto_shelved:
+                retried["auto_shelved"] = True
+                retried["shelf_fingerprint"] = shelf_fingerprint
+            return retried
+        if snapshot_mismatch:
+            for entry in [*core.get("claimed_files", []), *core.get("diff_chunks", [])]:
+                scan = entry.get("mechanical_scan", {})
+                for record in scan.get("files", []):
+                    record["checks_run"] = [
+                        check for check in record.get("checks_run", []) if check != "local_link_targets"
+                    ]
+                    record["findings"] = [
+                        finding for finding in record.get("findings", [])
+                        if finding.get("check") != "local_link_targets"
+                    ]
+                    record.setdefault("diagnostics", []).append(
+                        "local_link_targets omitted because the P4 shelf changed during capture"
+                    )
+            core.pop("snapshot_identity", None)
     changed_files = core["changed_files"]
 
     # Seed the hygiene scan from files BEFORE routing, not from changed_files
@@ -1720,7 +2131,10 @@ def build_bundle(
         "change_id": change_id,
         "ledger_baseline": ledger_baseline,
         "ledger_hits": ledger_hits,
+        "mechanical_check_phrases": core["mechanical_check_phrases"],
     }
+    if core.get("snapshot_identity") is not None:
+        bundle["snapshot_identity"] = core["snapshot_identity"]
     if claim_globs:
         bundle["claimed_files"] = core.get("claimed_files", [])
     if foreign_change is not None:
