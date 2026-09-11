@@ -12,6 +12,7 @@ dev = [
     "websocket-client>=1.6",
     "fastapi>=0.110",
     "httpx>=0.27",
+    "markdown-it-py",
 ]
 
 [tool.pytest.ini_options]

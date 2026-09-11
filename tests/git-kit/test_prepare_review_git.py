@@ -167,12 +167,12 @@ class TestBootstrapDependencyDiagnostics:
             "plugin's dependencies, then retry.\n"
         )
 
-    def test_manifest_requires_bootstrap_0106_api_floor(self):
+    def test_manifest_requires_bootstrap_0108_api_floor(self):
         manifest = json.loads(
             Path("plugins/git-kit/bootstrap.json").read_text(encoding="utf-8")
         )
 
-        assert manifest["requires_bootstrap"] == "0.106.0"
+        assert manifest["requires_bootstrap"] == "0.108.0"
 
     def test_bootstrap_without_run_vcs_timeout_reports_update_remedy(self, tmp_path):
         bootstrap_package = tmp_path / "bootstrap_lib"
@@ -202,9 +202,9 @@ class TestBootstrapDependencyDiagnostics:
 
         assert completed.stderr == (
             "[git-kit] the installed 'plugins-kit:bootstrap' plugin is too old "
-            "or stale for git-kit's code review (requires bootstrap >= 0.106.0; "
+            "or stale for git-kit's code review (requires bootstrap >= 0.108.0; "
             "missing: bootstrap_lib.code_review.pipeline.run_vcs(timeout=...), "
-            "bootstrap_lib.code_review.mechanical). "
+            "bootstrap_lib.code_review.mechanical_repository). "
             "Run `claude plugin update bootstrap@plugins-kit`. Then start a new "
             "session and retry.\n"
         )
@@ -1466,3 +1466,42 @@ class TestBuildBundleGenerated:
         bundle = json.loads(capsys.readouterr().out)
         assert "machine_emitted_files" not in bundle
         assert [f["path"] for f in bundle["changed_files"]] == ["stub.py"]
+# Seam B immutable snapshot capture
+def test_staged_snapshot_writes_one_tree_and_uses_pinned_diff_flags():
+    calls = []
+
+    def fake(args, cwd=None):
+        del cwd
+        calls.append(args)
+        if args == ["rev-parse", "HEAD^{commit}"]:
+            return 0, "a" * 40 + "\n", ""
+        if args == ["write-tree"]:
+            return 0, "b" * 40 + "\n", ""
+        return 0, "", ""
+
+    with patch.object(pr, "run_git", side_effect=fake):
+        capture = pr.capture_git_snapshot("__staged__")
+
+    assert capture.base_oid == "a" * 40
+    assert capture.post_label == "b" * 40
+    diff_call = calls[-1]
+    assert "--binary" in diff_call
+    assert "--full-index" in diff_call
+    assert "--find-renames" in diff_call
+    assert "--find-copies" in diff_call
+
+
+def test_working_snapshot_retries_one_race_then_accepts_stable_pair():
+    outputs = iter(["first", "second", "stable", "stable"])
+
+    def fake(args, cwd=None):
+        del cwd
+        if args == ["rev-parse", "HEAD^{commit}"]:
+            return 0, "a" * 40 + "\n", ""
+        return 0, next(outputs), ""
+
+    with patch.object(pr, "run_git", side_effect=fake):
+        capture = pr.capture_git_snapshot("__working_tree__")
+
+    assert capture.diff == "stable"
+    assert capture.snapshot_seed is not None

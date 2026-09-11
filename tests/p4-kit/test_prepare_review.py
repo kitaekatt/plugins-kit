@@ -1,12 +1,13 @@
 """Tests for p4-kit scripts/prepare_review.py."""
 
+import hashlib
 import json
 import os
 import subprocess
 import sys
 from pathlib import Path
 from typing import Any, Callable, get_type_hints
-from unittest.mock import patch
+from unittest.mock import call, patch
 
 import pytest
 
@@ -198,12 +199,12 @@ class TestBootstrapDependencyDiagnostics:
             "plugin's dependencies, then retry.\n"
         )
 
-    def test_manifest_requires_bootstrap_0106_api_floor(self):
+    def test_manifest_requires_bootstrap_0108_api_floor(self):
         manifest = json.loads(
             Path("plugins/p4-kit/bootstrap.json").read_text(encoding="utf-8")
         )
 
-        assert manifest["requires_bootstrap"] == "0.106.0"
+        assert manifest["requires_bootstrap"] == "0.108.0"
 
     def test_bootstrap_without_run_vcs_timeout_reports_update_remedy(self, tmp_path):
         bootstrap_package = tmp_path / "bootstrap_lib"
@@ -233,9 +234,9 @@ class TestBootstrapDependencyDiagnostics:
 
         assert completed.stderr == (
             "[p4-kit] the installed 'plugins-kit:bootstrap' plugin is too old "
-            "or stale for p4-kit's code review (requires bootstrap >= 0.106.0; "
+            "or stale for p4-kit's code review (requires bootstrap >= 0.108.0; "
             "missing: bootstrap_lib.code_review.pipeline.run_vcs(timeout=...), "
-            "bootstrap_lib.code_review.mechanical). "
+            "bootstrap_lib.code_review.mechanical_repository). "
             "Run `claude plugin update bootstrap@plugins-kit`. Then start a new "
             "session and retry.\n"
         )
@@ -2469,9 +2470,9 @@ class TestBuildBundleAutoShelve:
         def fake_fingerprint(cl):
             nonlocal fstat_calls
             fstat_calls += 1
-            # 1st call: pre-shelve check -> empty (no race).
-            # 2nd call: post-shelve fingerprint.
-            if fstat_calls == 1:
+            # F0 precedes describe, then the pre-shelve race check repeats at
+            # the failure boundary. auto_shelve_cl returns the post-shelve F0.
+            if fstat_calls <= 2:
                 return pr.ShelfScanResult()
             return pr.ShelfScanResult(
                 digests={"//depot/new.py": "DEADBEEF"}
@@ -2530,7 +2531,7 @@ class TestBuildBundleAutoShelve:
         shelve_mock.assert_not_called()
         assert bundle["auto_shelved"] is False
         assert bundle["shelf_fingerprint"] == {}
-        fingerprint_mock.assert_called_once_with("123")
+        assert fingerprint_mock.call_args_list == [call("123"), call("123")]
 
     def test_failed_race_scan_refuses_auto_shelve(self, tmp_path):
         failed_scan = pr.ShelfScanResult(
@@ -2620,7 +2621,7 @@ class TestBuildBundleAutoShelve:
         assert bundle["auto_shelved"] is True
         assert type(bundle["shelf_fingerprint"]) is dict
         assert bundle["shelf_fingerprint"] == {"//depot/new.py": "DEADBEEF"}
-        assert fstat_calls_before_shelve["n"] == 1
+        assert fstat_calls_before_shelve["n"] == 2
         assert fstat_calls_after_shelve["n"] == 1
 
 
@@ -4083,3 +4084,184 @@ class TestDataRootRedirect:
 
         assert after == tmp_path / "plugins-kit" / "p4-kit" / "reviews" / "ledger.json"
         assert after != before
+# Seam B pinned P4 primitives
+def test_materialize_preimage_uses_describe_base_revision(tmp_path):
+    with patch.object(pr, "run_p4", return_value=(0, "", "")) as run:
+        result = pr.materialize_preimage("//depot/a.md", "edit", tmp_path, "7")
+
+    assert result is not None
+    assert run.call_args.args[0][-1] == "//depot/a.md#7"
+
+
+def test_p4_snapshot_reader_batches_at_one_hundred_paths(tmp_path):
+    reader = pr.P4SnapshotReader(tmp_path)
+    paths = tuple(f"docs/{index}.md" for index in range(201))
+    assert [len(batch) for batch in reader._batches(paths)] == [100, 100, 1]
+
+
+def test_p4_snapshot_reader_escapes_raw_and_preserves_encoded_depot_paths(tmp_path):
+    reader = pr.P4SnapshotReader(tmp_path)
+    assert reader._escape_filespec("a%40b#c@d*") == "a%2540b%23c%40d%2A"
+    assert reader._revision_spec("//depot/a%40b#c", "7") == (
+        "//depot/a%40b%23c#7"
+    )
+
+
+def test_have_error_preserves_complete_file_and_fails_unresolved_without_probe(tmp_path):
+    reader = pr.P4SnapshotReader(tmp_path)
+    a_local = str(tmp_path / "a.md")
+    b_local = str(tmp_path / "b.md")
+
+    def fake(args):
+        if args[:2] == ["-ztag", "where"]:
+            return 0, (
+                f"... depotFile //depot/a.md\n... path {a_local}\n\n"
+                f"... depotFile //depot/b.md\n... path {b_local}\n"
+            ), ""
+        if args[:2] == ["-ztag", "have"]:
+            return 1, "... depotFile //depot/a.md\n... haveRev 3\n", "server unavailable"
+        if args[:2] == ["-ztag", "fstat"]:
+            assert "-Rh" not in args
+            return 0, "... depotFile //depot/a.md\n... fileSize 4\n", ""
+        raise AssertionError(args)
+
+    with patch.object(pr, "run_p4", side_effect=fake):
+        results = reader.stat(("a.md", "b.md"))
+
+    assert results["a.md"].kind == "file"
+    assert results["b.md"].kind == "error"
+    assert results["b.md"].diagnostic == "server unavailable"
+
+
+def test_directory_descendant_revisions_change_snapshot_identity(tmp_path):
+    def identity_for(revision):
+        reader = pr.P4SnapshotReader(tmp_path)
+        local = str(tmp_path / "docs")
+
+        def fake(args):
+            if args[:2] == ["-ztag", "where"]:
+                return 0, f"... depotFile //depot/docs\n... path {local}\n", ""
+            if args[:2] == ["-ztag", "have"]:
+                return 1, "", "no such file(s)"
+            if args[:2] == ["-ztag", "fstat"] and "-Rh" in args:
+                return 0, (
+                    "... depotFile //depot/docs/a.md\n"
+                    f"... haveRev {revision}\n"
+                ), ""
+            raise AssertionError(args)
+
+        with patch.object(pr, "run_p4", side_effect=fake):
+            assert reader.stat(("docs",))["docs"].kind == "directory"
+        return reader.finalize_identity("p4:client:seed", ())
+
+    assert identity_for("7") != identity_for("8")
+
+
+def test_directory_probe_mixed_diagnostic_is_error_not_missing(tmp_path):
+    reader = pr.P4SnapshotReader(tmp_path)
+    local = str(tmp_path / "missing")
+
+    def fake(args):
+        if args[:2] == ["-ztag", "where"]:
+            return 0, f"... depotFile //depot/missing\n... path {local}\n", ""
+        if args[:2] == ["-ztag", "have"]:
+            return 1, "", "no such file(s)"
+        if args[:2] == ["-ztag", "fstat"] and "-Rh" in args:
+            return 1, "", "no such file(s)\nserver unavailable"
+        raise AssertionError(args)
+
+    with patch.object(pr, "run_p4", side_effect=fake):
+        result = reader.stat(("missing",))["missing"]
+
+    assert result.kind == "error"
+    assert result.diagnostic == "no such file(s)\nserver unavailable"
+
+
+@pytest.mark.parametrize(
+    ("probe_result", "diagnostic"),
+    [
+        ((0, "", ""), "P4 probe failed"),
+        ((1, "", "file(s) not on client"), "file(s) not on client"),
+        ((1, "", "file(s) not in client view"), "file(s) not in client view"),
+    ],
+)
+def test_directory_probe_requires_documented_no_such_diagnostic(
+    tmp_path, probe_result, diagnostic
+):
+    reader = pr.P4SnapshotReader(tmp_path)
+    local = str(tmp_path / "missing")
+
+    def fake(args):
+        if args[:2] == ["-ztag", "where"]:
+            return 0, f"... depotFile //depot/missing\n... path {local}\n", ""
+        if args[:2] == ["-ztag", "have"]:
+            return 1, "", "no such file(s)"
+        if args[:2] == ["-ztag", "fstat"] and "-Rh" in args:
+            return probe_result
+        raise AssertionError(args)
+
+    with patch.object(pr, "run_p4", side_effect=fake):
+        result = reader.stat(("missing",))["missing"]
+
+    assert result.kind == "error"
+    assert diagnostic in (result.diagnostic or "")
+
+
+def test_directory_probe_documented_no_such_diagnostic_is_missing(tmp_path):
+    reader = pr.P4SnapshotReader(tmp_path)
+    local = str(tmp_path / "missing")
+
+    def fake(args):
+        if args[:2] == ["-ztag", "where"]:
+            return 0, f"... depotFile //depot/missing\n... path {local}\n", ""
+        if args[:2] == ["-ztag", "have"]:
+            return 1, "", "no such file(s)"
+        if args[:2] == ["-ztag", "fstat"] and "-Rh" in args:
+            return 1, "", "//depot/missing/... - no such file(s)."
+        raise AssertionError(args)
+
+    with patch.object(pr, "run_p4", side_effect=fake):
+        result = reader.stat(("missing",))["missing"]
+
+    assert result.kind == "missing"
+
+
+def test_pending_shelf_race_retries_complete_capture_once(tmp_path):
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    local = workspace / "guide.md"
+    local.write_text("new\n", encoding="utf-8")
+    preimage = tmp_path / "pre.md"
+    preimage.write_text("old\n", encoding="utf-8")
+    depot = "//depot/guide.md"
+    describe = (
+        "Change 9 by user@client on 2026/01/01 *pending*\n\n"
+        "\tEdit guide\n\nShelved files ...\n"
+        f"... {depot}#3 edit\n\nDifferences ...\n\n"
+        f"==== {depot}#3 (text) ====\n"
+        "@@ -1 +1 @@\n-old\n+new\n"
+    )
+    digest = hashlib.md5(b"new\n").hexdigest().upper()
+    stable = pr.ShelfScanResult({depot: digest}, {depot: "edit"})
+    changed = pr.ShelfScanResult({depot: "DIFFERENT"}, {depot: "edit"})
+
+    with (
+        patch.object(pr, "fetch_shelf_fingerprint", side_effect=[stable, changed, stable, stable]) as fingerprints,
+        patch.object(pr, "fetch_describe", return_value=(describe, True)) as describes,
+        patch.object(pr, "get_workspace_root", return_value=(workspace, "client")),
+        patch.object(pr, "resolve_local_paths", return_value={depot: str(local)}),
+        patch.object(pr, "fetch_opened_files", return_value=({depot: "edit"}, [])),
+        patch.object(pr, "_shelf_content_drift", return_value=([], [])),
+        patch.object(pr, "materialize_preimage", return_value=str(preimage)),
+        patch.object(pr, "fetch_file_content", return_value="new\n"),
+        patch.object(pr, "find_unreconciled", return_value=([], [])),
+        patch.object(pr, "find_default_open", return_value=([], [])),
+        patch.object(pr, "find_unresolved", return_value=([], [])),
+    ):
+        bundle = pr.build_bundle("9", tmp_path / "bundle")
+
+    assert fingerprints.call_count == 4
+    assert describes.call_count == 2
+    assert bundle["snapshot_identity"].startswith("p4:client:")
+    record = bundle["diff_chunks"][0]["mechanical_scan"]["files"][0]
+    assert "local_link_targets" in record["checks_run"]

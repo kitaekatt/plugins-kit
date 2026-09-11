@@ -1,8 +1,8 @@
 [project]
 name = "bootstrap"
-version = "0.107.0"
+version = "0.108.0"
 requires-python = ">=3.12,!=3.14.*"
-dependencies = ["pyyaml", "regex"]
+dependencies = ["markdown-it-py", "pyyaml", "regex"]
 
 [project.scripts]
 bootstrap-engine = "bootstrap_lib.engine:main"

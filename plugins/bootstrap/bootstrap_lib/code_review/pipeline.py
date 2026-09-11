@@ -41,7 +41,18 @@ from bootstrap_lib.code_review.machine_emitted_paths import (
     declared_generated_rules,
     match_declared_path,
 )
-from bootstrap_lib.code_review.mechanical import REGISTRY, resolve_checks, scan_file
+from bootstrap_lib.code_review.mechanical import (
+    REGISTRY,
+    build_snapshot,
+    resolve_checks,
+    scan_file,
+)
+from bootstrap_lib.code_review.mechanical_repository import (
+    PathEffect,
+    REGISTRY as REPOSITORY_REGISTRY,
+    SnapshotReader,
+    scan_repository,
+)
 from bootstrap_lib.code_review._globs import _matches_one_glob, matches_claim
 from bootstrap_lib.code_review.triviality import (
     mechanical_checks,
@@ -235,6 +246,9 @@ def assemble_bundle(
     claim_globs: Optional[list[str]] = None,
     review_machine_emitted: Optional[bool] = None,
     review_generated: Optional[bool] = None,
+    snapshot_seed: Optional[str] = None,
+    path_effects: Optional[tuple[PathEffect, ...]] = None,
+    snapshot_reader: Optional[SnapshotReader] = None,
 ) -> dict:
     """Chunk the diff to disk and build the VCS-neutral bundle core.
 
@@ -424,6 +438,54 @@ def assemble_bundle(
     # lists alike -- so no caller can see the same path in both.
     claimed_idents -= set(machine_emitted_sigs)
 
+    # Build every authored source before routing. Repository checks may inspect
+    # the complete authored changed set, while machine-emitted files remain an
+    # explicit disclosure whose generator is the review target.
+    effective_effects = path_effects or ()
+    deleted_only = {
+        effect.path for effect in effective_effects if effect.effect == "delete"
+    } - {
+        effect.path for effect in effective_effects if effect.effect in {"add", "edit"}
+    }
+    repository_sources = {
+        f["identifier"]: build_snapshot(
+            f.get("repository_path", f["identifier"]),
+            id_to_text.get(f["identifier"], ""),
+            pre_image_text=_review_pre_image_text(f),
+        )
+        for f in files
+        if f["identifier"] not in machine_emitted_sigs
+        and f.get("repository_path", f["identifier"]) not in deleted_only
+    }
+    if snapshot_seed is None and path_effects is None and snapshot_reader is None:
+        repository_scans: dict[str, dict[str, object]] = {}
+        snapshot_identity = None
+    else:
+        repository_scans, snapshot_identity = scan_repository(
+            repository_sources,
+            snapshot_seed=snapshot_seed,
+            path_effects=effective_effects,
+            reader=snapshot_reader,
+        )
+
+    def merged_scan(file: dict) -> dict[str, object]:
+        ident = file["identifier"]
+        local_scan = scan_file(
+            ident,
+            id_to_text.get(ident, ""),
+            pre_image_text=_review_pre_image_text(file),
+            checks=checks,
+        )
+        repository_scan = repository_scans.get(ident)
+        if repository_scan is None:
+            return local_scan
+        local_scan["checks_run"].extend(repository_scan["checks_run"])
+        local_scan["findings"].extend(repository_scan["findings"])
+        diagnostics = repository_scan.get("diagnostics", [])
+        if diagnostics:
+            local_scan.setdefault("diagnostics", []).extend(diagnostics)
+        return local_scan
+
     # Claimed and machine-emitted files' diff sections must not reach the generic
     # reviewers, so drop them before chunking. Their records still flow through
     # the CLAUDE.md / submit-gate walk below.
@@ -487,12 +549,7 @@ def assemble_bundle(
             entry["mechanical_scan"] = {
                 "schema_version": 2,
                 "files": [
-                    scan_file(
-                        f["identifier"],
-                        id_to_text.get(f["identifier"], ""),
-                        pre_image_text=_review_pre_image_text(f),
-                        checks=checks,
-                    )
+                    merged_scan(f)
                 ],
             }
             entry.pop("pre_image_is_empty", None)
@@ -542,12 +599,7 @@ def assemble_bundle(
         out["mechanical_findings"] = mechanical_findings(
             id_to_text.get(f["identifier"], "")
         )
-        scans_by_ident[f["identifier"]] = scan_file(
-            f["identifier"],
-            id_to_text.get(f["identifier"], ""),
-            pre_image_text=_review_pre_image_text(f),
-            checks=checks,
-        )
+        scans_by_ident[f["identifier"]] = merged_scan(f)
         if out["chunk_index"] is None:
             unchunked_files.append(
                 {"path": f["identifier"], "reason": "no_diff_section"}
@@ -590,13 +642,15 @@ def assemble_bundle(
         "bundle_dir": str(bundle_dir),
         "diff_chunks": diff_chunks,
         "mechanical_check_phrases": {
-            check.check_id: check.phrase for check in checks
+            check.check_id: check.phrase for check in (*checks, *REPOSITORY_REGISTRY)
         },
         "changed_files": changed_files,
         "unique_claude_mds": unique,
         "submit_gates": submit_gates,
         "unchunked_files": unchunked_files,
     }
+    if snapshot_identity is not None:
+        result["snapshot_identity"] = snapshot_identity
     if claim_globs:
         result["claimed_files"] = claimed_files
     if machine_emitted_files:
