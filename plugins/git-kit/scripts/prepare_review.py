@@ -165,9 +165,13 @@ except ModuleNotFoundError as exc:
         require_bootstrap(
             "git-kit", feature="code review", missing="bootstrap_lib", force=True
         )
-    _exit_bootstrap_too_old()
-except ImportError:
-    _exit_bootstrap_too_old()
+    if exc.name and exc.name.startswith("bootstrap_lib."):
+        _exit_bootstrap_too_old()
+    raise
+except ImportError as exc:
+    if exc.name == "bootstrap_lib" or (exc.name and exc.name.startswith("bootstrap_lib.")):
+        _exit_bootstrap_too_old()
+    raise
 
 # `run_vcs(timeout=...)` is the frontier API. Importing its module cannot prove
 # that the linked bootstrap copy accepts the keyword, so inspect the signature

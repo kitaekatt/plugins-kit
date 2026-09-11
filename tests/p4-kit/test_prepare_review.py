@@ -206,6 +206,29 @@ class TestBootstrapDependencyDiagnostics:
 
         assert manifest["requires_bootstrap"] == "0.108.0"
 
+    @pytest.mark.parametrize(("error", "bootstrap_failure"), [
+        ("ModuleNotFoundError(\"No module named 'markdown_it'\", name='markdown_it')", False),
+        ("ImportError('broken third-party package', name='yaml')", False),
+        ("ImportError('unclassified import failure')", False),
+        ("ImportError('missing shared symbol', name='bootstrap_lib.code_review.pipeline')", True),
+    ])
+    def test_import_failure_diagnostics(
+        self, tmp_path: Path, error: str, bootstrap_failure: bool,
+    ) -> None:
+        package = tmp_path / "bootstrap_lib" / "code_review"
+        package.mkdir(parents=True)
+        (package.parent / "__init__.py").write_text("", encoding="utf-8")
+        (package / "__init__.py").write_text("", encoding="utf-8")
+        (package / "pipeline.py").write_text(f"raise {error}\n", encoding="utf-8")
+        env = dict(os.environ, _BOOTSTRAP_GUARD_VENV_REEXEC="1", PYTHONPATH=str(tmp_path))
+
+        completed = self._run_prepare(env)
+
+        assert completed.returncode != 0
+        assert ("Traceback" in completed.stderr) is not bootstrap_failure
+        assert ("stale for" in completed.stderr) is bootstrap_failure
+        assert ("claude plugin update" in completed.stderr) is bootstrap_failure
+
     def test_bootstrap_without_run_vcs_timeout_reports_update_remedy(self, tmp_path):
         bootstrap_package = tmp_path / "bootstrap_lib"
         code_review_package = bootstrap_package / "code_review"
