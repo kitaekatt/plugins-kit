@@ -86,7 +86,7 @@ reference_skill:
         After a plugin download or version change, run bootstrap MANUALLY to converge
         provisioning -- a restart is an optimization taken when convenient, never the
         remediation.
-      keywords: [do I need to restart, restart required, restart not required, converge by hand, manual bootstrap run, bootstrap-reset-cooldown, session-bootstrap.sh, run bootstrap manually, after plugin update, after plugin install, no restart needed, restart vs manual run, three layers, code loading vs provisioning]
+      keywords: [do I need to restart, restart required, restart not required, converge by hand, manual bootstrap run, bootstrap-reset-cooldown, bootstrap reset, session-bootstrap.sh, run bootstrap manually, after plugin update, after plugin install, no restart needed, restart vs manual run, three layers, code loading vs provisioning]
       detail: |
         Three separable layers, only the last of which a restart actually serves (see
         update_lifecycle for the state-file mechanics behind each):
@@ -97,7 +97,9 @@ reference_skill:
            bootstrap_cli_lever). No restart. The long form, for when a specific
            plugin tree has to be named: `hooks/sessionstart/session-bootstrap.sh
            --console`, invoked from that tree. Neither needs a cooldown reset --
-           `--console` is exempt from both skip gates.
+           `--console` is exempt from both skip gates. When a change must converge
+           through a genuine SessionStart instead, `bootstrap reset` clears the
+           throttle (the same lever as bootstrap-reset-cooldown).
         3. Code loading (new hooks/skills REGISTERING in the current session) -- the
            only residue a manual run cannot converge; this is what /reload-plugins or a
            restart is for.
@@ -122,7 +124,8 @@ reference_skill:
         session. Bare, it reports whether a pass is running and, when one IS, stays
         attached and streams it to completion. `bootstrap run` does the same and also
         STARTS a pass when none is running. Neither ever starts a second one.
-      keywords: [bootstrap command, bootstrap CLI, bootstrap run, is bootstrap running, is a pass running, from the terminal, without starting Claude, tail the pass, attach to running pass, engine lock, events.watch, live output, ~/.local/bin lever, BOOTSTRAP_MARKETPLACE, bootstrap --json, BOOTSTRAP_PLUGIN_ROOT, dev checkout, worktree, point bootstrap at a checkout, cooldown stamp]
+        `bootstrap reset` clears the cooldown, delegating to bootstrap-reset-cooldown.
+      keywords: [bootstrap command, bootstrap CLI, bootstrap run, bootstrap reset, clear the cooldown from the cli, reset the cooldown, is bootstrap running, is a pass running, from the terminal, without starting Claude, tail the pass, attach to running pass, engine lock, events.watch, live output, ~/.local/bin lever, BOOTSTRAP_MARKETPLACE, bootstrap --json, BOOTSTRAP_PLUGIN_ROOT, dev checkout, worktree, point bootstrap at a checkout, cooldown stamp]
       detail: |
         Installed alongside bootstrap-reset-cooldown and env-reset-cooldown by
         session-bootstrap.sh, re-copied every session so it tracks the cached plugin
@@ -134,8 +137,12 @@ reference_skill:
           bootstrap run         the same, and starts a pass when none is running;
                                 exits with the engine's code when it started one
           bootstrap run --verbose   trailing flags pass through to the engine
+          bootstrap reset       clears this project's cooldown stamp and the session-id
+                                guard, so the NEXT session start runs a real pass
+          bootstrap reset --all     every project (--status, --project <dir>,
+                                --clear-alerts and --help all pass through)
 
-        Why the two verbs differ only in that one clause: a pass is single-instance
+        Why `bootstrap` and `bootstrap run` differ only in that one clause: a pass is single-instance
         (proc_lock.engine_lock), so a second engine launched next to a live one would
         only stand down on the lock and print nothing. BOTH forms therefore check the
         lock FIRST and attach when it is held; `run` adds "and launch one if it is
@@ -146,6 +153,13 @@ reference_skill:
         `bootstrap run` is exempt from the cooldown in BOTH directions, so it needs no
         reset -- it is neither throttled by the stamp nor writes it, because a manual
         run is not the session-start schedule. It IS "converge now".
+
+        `bootstrap reset` is therefore NOT a smaller `run` -- it runs no pass. It is
+        for what `run` cannot do: make the NEXT SessionStart a real pass, which is the
+        only sanctioned way to get bootstrap running again on a wedged machine, and
+        what a layered bootstrap.json edit needs. It owns no logic of its own; every
+        flag and the exit code belong to bootstrap-reset-cooldown, which stays on PATH
+        under its own name.
 
         Full command reference -- streaming and the events.watch marker, exit codes,
         marketplace scoping, BOOTSTRAP_PLUGIN_ROOT, how the lever reaches a machine,

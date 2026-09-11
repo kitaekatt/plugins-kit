@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# bootstrap -- report on, or run, the bootstrap provisioning pass
+# bootstrap -- report on, run, or reset the bootstrap provisioning pass
 #
 # Usage:
 #   bootstrap                 report whether a bootstrap pass is running; if
@@ -8,12 +8,17 @@
 #   bootstrap --json          report only, never blocking (the scripting form)
 #   bootstrap run             the same, plus START a pass when none is running
 #   bootstrap run --verbose   extra flags are passed through to the engine
+#   bootstrap reset           clear this project's cooldown so the next session
+#                             start runs a real pass
+#   bootstrap reset --all     clear every project's cooldown (--status to list,
+#                             --project <dir>, --clear-alerts; --help for all)
 #   bootstrap -h | --help     show this help
 #
 # Scoping: acts on the single marketplace that has a bootstrap data dir under
 # ${CLAUDE_BOOTSTRAP_DATA_ROOT:-~/.claude/plugins/data}. Set
 # BOOTSTRAP_MARKETPLACE to choose when there is more than one -- status reports
-# on all of them, but a `run` has to name one rather than guess.
+# on all of them, but a `run` has to name one rather than guess. `reset` acts
+# on every marketplace, like the bootstrap-reset-cooldown lever it delegates to.
 #
 # This is a THIN shim: it resolves the plugin tree and an interpreter, then
 # hands off to scripts/bootstrap_cli.py, which holds all the behavior. It is
@@ -27,7 +32,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 case "${1:-}" in
     -h|--help)
-        sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//'
+        sed -n '2,27p' "$0" | sed 's/^# \{0,1\}//'
         exit 0
         ;;
 esac
@@ -108,6 +113,14 @@ if [ -z "$PYTHON" ]; then
         shift
         echo "bootstrap: no Python yet; the pass will install one first."
         exec bash "$WRAPPER" --console "$@"
+    fi
+    # `reset` needs no interpreter either -- it delegates to a pure-bash lever
+    # -- so route it here rather than reporting a Python problem it does not
+    # have. (The normal path still goes through bootstrap_cli.py, so there is
+    # one dispatch, not two.)
+    if [ "${1:-}" = "reset" ]; then
+        shift
+        exec bash "$PLUGIN_ROOT/scripts/bootstrap-reset-cooldown.sh" "$@"
     fi
     echo "bootstrap: no Python 3 found, so the engine lock cannot be read." >&2
     echo "Run 'bootstrap run' -- the pass installs a standalone Python first." >&2
