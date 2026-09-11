@@ -11,6 +11,7 @@ project_dir, the throttle bumped to 3600s, and skips logged with a reset hint.
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 import time
@@ -588,18 +589,56 @@ class TestCooldownGateBehavior:
 
 
 class TestResetLeverInstall:
-    """Both reset levers must land on PATH.
+    """Every documented lever must land on PATH.
 
     env-reset-cooldown is what SKILL.md and manifest-reference.md name as the
     "re-converge my machine" lever, but only its sibling was ever installed,
     so a user following that guidance verbatim got `command not found`.
+    `bootstrap` is the status/run front end and is documented the same way.
     """
 
-    def test_both_levers_are_installed(self) -> None:
+    LEVERS = ("bootstrap", "bootstrap-reset-cooldown", "env-reset-cooldown")
+
+    def test_every_lever_is_installed(self) -> None:
         text = SESSION_BOOTSTRAP.read_text()
-        assert "for _lever in bootstrap-reset-cooldown env-reset-cooldown" in text, (
-            "both levers must be installed into ~/.local/bin"
-        )
+        match = re.search(r"^for _lever in (.+); do$", text, re.MULTILINE)
+        assert match, "the lever install loop must exist"
+        installed = match.group(1).split()
+        for lever in self.LEVERS:
+            assert lever in installed, (
+                f"{lever} must be installed into ~/.local/bin"
+            )
+
+    def test_every_lever_source_is_committed_executable(self) -> None:
+        """On Unix the loop SYMLINKS the lever, and a symlink onto a
+        non-executable target is not runnable by name -- so a lever committed
+        100644 is a documented command that only ever works as `bash <path>`.
+        This already happened once to bootstrap-reset-cooldown; a Windows
+        checkout (core.fileMode false) silently reintroduces it, because a
+        local `chmod +x` there changes nothing git records."""
+        out = subprocess.run(
+            ["git", "ls-files", "-s", "plugins/bootstrap/scripts"],
+            cwd=REPO_ROOT, capture_output=True, text=True, check=True).stdout
+        modes = {
+            line.split("\t", 1)[1]: line.split(" ", 1)[0]
+            for line in out.splitlines() if "\t" in line
+        }
+        for lever in self.LEVERS:
+            path = f"plugins/bootstrap/scripts/{lever}.sh"
+            assert modes.get(path) == "100755", (
+                f"{path} must be committed executable (is {modes.get(path)}); "
+                f"fix with: git update-index --chmod=+x {path}"
+            )
+
+    def test_every_lever_has_a_source_script(self) -> None:
+        """The loop maps <name> -> scripts/<name>.sh and silently `continue`s
+        past a missing source, so a name with no script installs nothing and
+        reports it nowhere."""
+        scripts = REPO_ROOT / "plugins" / "bootstrap" / "scripts"
+        for lever in self.LEVERS:
+            assert (scripts / f"{lever}.sh").is_file(), (
+                f"scripts/{lever}.sh must exist for the install loop to copy"
+            )
 
     def test_env_reset_resolves_its_sibling_without_the_extension(self) -> None:
         """Installed as a shim the sibling has no .sh, so a hardcoded

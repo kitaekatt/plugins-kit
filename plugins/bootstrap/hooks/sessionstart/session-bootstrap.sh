@@ -381,16 +381,18 @@ esac
 # Python install/install-path logic further down.
 OS="$(uname -s)"
 
-# --- Install the user-facing reset levers into ~/.local/bin ---
+# --- Install the user-facing levers into ~/.local/bin ---
 # bootstrap-reset-cooldown clears the per-project cooldown when bootstrap needs
 # to re-run sooner than the throttle allows; env-reset-cooldown additionally
 # drops env_state.json, which is the documented "re-converge my machine" lever.
 # BOTH are installed: env-reset-cooldown is named by SKILL.md and
 # manifest-reference.md as the thing to run, and for as long as only its
 # sibling was installed, a user following that guidance verbatim got
-# `command not found`. Re-installed every session so they stay in sync with
-# the cached plugin version.
-for _lever in bootstrap-reset-cooldown env-reset-cooldown; do
+# `command not found`. `bootstrap` is the status/run front end: the fleet-wide
+# way to ask whether a pass is running, and to drive one from a terminal
+# without starting Claude. Re-installed every session so they stay in sync
+# with the cached plugin version.
+for _lever in bootstrap bootstrap-reset-cooldown env-reset-cooldown; do
     _RESET_SRC="$PLUGIN_ROOT/scripts/${_lever}.sh"
     _RESET_DST="$LOCAL_BIN/${_lever}"
     [ -f "$_RESET_SRC" ] || continue

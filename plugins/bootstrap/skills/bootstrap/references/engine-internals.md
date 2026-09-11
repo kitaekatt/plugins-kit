@@ -487,6 +487,23 @@ suppressed -- none of it loses anything, because the full text is one `grep`
 away. Every rule in the next section is therefore a readability judgement, not a
 safeguard.
 
+**Write discipline, and the one thing that changes it.** Records are buffered
+and written at exit (`atexit`), so a pass costs two file writes rather than
+hundreds, and a single append-mode `write()` keeps each pass's block contiguous
+even when another pass appends concurrently -- the same `O_APPEND` discipline
+`log.py` uses. The cost is that there is nothing to *tail* mid-pass.
+
+`events.watch` in the same data dir is the opt-in that lifts it. While that
+marker exists, `record()` flushes as it goes (`_flush_if_watched`), throttled by
+`WATCH_POLL_INTERVAL` -- one second, which also bounds how often the marker is
+stat'd, so an unwatched pass pays one `os.path.exists` per second and nothing
+else. The marker is written and removed by the `bootstrap` PATH lever's
+attach-and-tail path (`scripts/bootstrap_cli.py`), and is the only reason a live
+tail of a running pass shows anything. Removal is covered on the normal path, on
+an exception, and on the Ctrl-C that is the likeliest way a tail ends: a marker
+left behind would make every later pass flush per second for a reader who has
+gone.
+
 **Division of labour:**
 
 | Artifact | Role | Filtered by |
@@ -710,6 +727,8 @@ The lock is **engine-wide, not per-project** -- concurrent passes from *differen
 **Stand-down re-arms the harvest.** When the standing-down engine carries an update, `_stand_down_lock_contended` also **clears** `harvest_launched_version`. The older reasoning for leaving that marker alone -- "ANY completed pass stamps `engine_ran_version`, so the marker self-clears" -- is false when the pass that completes is an *older* engine: it stamps a version still behind the installed one, `should_harvest` stays true, and the already-consumed per-installed-version marker disarms every future harvest. That is a permanent wedge no later session recovers from without a manual pass. Clearing the marker is safe because the stamp is now monotonic (below): if a *newer* engine holds the lock, it completes and stamps `>=` our own version, making `should_harvest` false -- so a cleared marker cannot produce a duplicate spawn storm. The import-retry and registry-relaunch markers are still left alone; neither is version-keyed, so neither can wedge this way.
 
 **Stale-lock recovery.** A crashed or killed holder's lock is recovered, not permanently wedged: on contention, `_try_acquire` reads the recorded PID and checks liveness (`os.kill(pid, 0)` POSIX, `OpenProcess` Windows); a dead PID makes the lock stale and it is unlinked and re-claimed through the same exclusive-create path (never a non-exclusive overwrite, which would let two racers both believe they won). A lock whose PID is alive but whose file has aged past a generous ceiling is *also* treated as stale, guarding against the PID-reuse case (an unrelated new process recycling the dead holder's PID number) wedging the lock forever.
+
+**Reading the lock without taking it.** `proc_lock.lock_holder(data_dir)` answers "is a pass running right now?" as a pure read -- it returns the holder's PID, the lock file's age, and the epoch the holder recorded, or `None`. It exists for the `bootstrap` PATH lever's status verb and for `bootstrap run`'s decision to attach rather than launch a second pass. Deliberately NOT expressed as try-acquire-then-release: acquiring clears a stale lock and holds the mutex for an instant, so a mere status probe could make a genuine launcher stand down. It applies exactly the staleness rules `_try_acquire` applies (dead PID, or a live PID whose lock has aged past the ceiling, both read as "not running"), so the query and the acquisition can never disagree; an unparseable lock younger than the in-flight grace window reads as running with a `None` PID, because some process is mid-claim.
 
 **Elevation is the one caller that releases early.** The `--fix-all` flow's `_spawn_recheck_pass` synchronously spawns a full second `bootstrap_engine.py` process with the *same* `--data-dir` and waits on it -- while the parent is still inside its own `engine_lock()`. Without intervention the child would see the parent's still-alive PID as the lock holder and stand down without running its post-elevation re-check. `_spawn_recheck_pass` calls `proc_lock.release_lock(data_dir)` immediately before spawning; it is safe because the parent has no more work after the child exits (the caller returns immediately), and `release_lock` only removes the lock file if it still records the caller's own PID -- it can never touch a lock some other process has since legitimately acquired.
 

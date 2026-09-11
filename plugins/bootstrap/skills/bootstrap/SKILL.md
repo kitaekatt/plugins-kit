@@ -93,8 +93,11 @@ reference_skill:
         1. Download/activation (new plugin files onto disk) -- `claude plugin
            marketplace update <mkt>` + `claude plugin update`. No restart.
         2. Provisioning (bootstrap applying the manifest -- ini writes, venvs, PATH,
-           config merges) -- run `scripts/bootstrap-reset-cooldown.sh` then invoke
-           `hooks/sessionstart/session-bootstrap.sh` directly. No restart.
+           config merges) -- run `bootstrap run` (the PATH lever; see
+           bootstrap_cli_lever). No restart. The long form, for when a specific
+           plugin tree has to be named: `hooks/sessionstart/session-bootstrap.sh
+           --console`, invoked from that tree. Neither needs a cooldown reset --
+           `--console` is exempt from both skip gates.
         3. Code loading (new hooks/skills REGISTERING in the current session) -- the
            only residue a manual run cannot converge; this is what /reload-plugins or a
            restart is for.
@@ -113,6 +116,48 @@ reference_skill:
         - Advising a restart as the fix for an unconverged manifest is the anti-pattern
           this fact exists to block; the advisory is only ever a notice about layer 3,
           never a remediation step for layers 1-2.
+    - id: bootstrap_cli_lever
+      summary: >-
+        `bootstrap` is a fleet-wide PATH command, installed into ~/.local/bin every
+        session. Bare, it REPORTS whether a pass is running (read-only). `bootstrap run`
+        runs a full pass on stdout -- or, when one is already running, attaches to THAT
+        pass and streams it to completion instead of starting a second one.
+      keywords: [bootstrap command, bootstrap CLI, bootstrap run, is bootstrap running, is a pass running, from the terminal, without starting Claude, tail the pass, attach to running pass, engine lock, events.watch, live output, ~/.local/bin lever, BOOTSTRAP_MARKETPLACE, bootstrap --json]
+      detail: |
+        Installed alongside bootstrap-reset-cooldown and env-reset-cooldown by
+        session-bootstrap.sh, re-copied every session so it tracks the cached plugin
+        version. Implementation: `scripts/bootstrap.sh` (a shim that finds the highest
+        installed cache version and an interpreter) -> `scripts/bootstrap_cli.py`.
+
+          bootstrap             "no bootstrap pass is running" / "RUNNING (pid N, 42s elapsed)"
+          bootstrap --json      the same, machine-readable
+          bootstrap run         a full pass, synchronous, on stdout; exits with the engine's code
+          bootstrap run --verbose   trailing flags pass through to the engine
+
+        Why it is not two independent things: a pass is single-instance
+        (proc_lock.engine_lock), so a second `run` launched next to a live one would
+        only stand down on the lock and print nothing. `run` therefore checks the lock
+        FIRST and, if it is held, attaches. Status uses `proc_lock.lock_holder`, a
+        read-only query -- never try-acquire-then-release, which would clear a stale
+        lock and could make a genuine launcher stand down.
+
+        Attaching drops `events.watch` in the data dir, which switches the pass
+        recorder from its normal buffered write (two writes per pass) to a throttled
+        flush while a reader is present, and removes it on the way out. That marker is
+        the only reason a tail shows anything mid-pass.
+
+        `bootstrap run` needs no cooldown reset: `--console` reads no hook stdin, so the
+        Layer-1 session guard never engages, and both skip gates exempt it from the
+        always-lane downgrade. It IS "converge now".
+      gotchas:
+        - Status exits 0 whether or not a pass is running -- both are correct answers to
+          the question asked. Use `--json` when a script needs the answer, never `$?`.
+        - With more than one marketplace holding a bootstrap data dir, status reports on
+          all of them but `run` REFUSES rather than guess which engine to run; set
+          BOOTSTRAP_MARKETPLACE. Running the wrong one provisions the wrong machine state silently.
+        - Attaching tails from the CURRENT end of the event stream, so records a pass
+          already emitted before you attached are not replayed. Read bootstrap.log for
+          the completed record of a pass.
     - id: cooldown_reset_request
       summary: >-
         A request about the cooldown ITSELF asks only for the skip stamps to be deleted -- it
@@ -363,8 +408,8 @@ reference_skill:
         Layered configs are merged before plugin bootstrap.json files are processed.
   groupings:
     - name: engine_behavior
-      keywords: [engine, session start, processing order, messages, remediation flow, update, harvest, restart, claude --resume, reset the cooldown]
-      fact_ids: [message_outcomes, update_lifecycle, manual_convergence, cooldown_reset_request, remediation_phases]
+      keywords: [engine, session start, processing order, messages, remediation flow, update, harvest, restart, claude --resume, reset the cooldown, bootstrap command, is a pass running, run from the terminal]
+      fact_ids: [message_outcomes, update_lifecycle, manual_convergence, bootstrap_cli_lever, cooldown_reset_request, remediation_phases]
     - name: config_files
       keywords: [bootstrap.json, env.json, manifest, layers, merge, override, pin, auto-update, autoUpdate, plugin not updating, machines registry, env gate, personalization, install manual, opt-in plugin, action-triggered install]
       fact_ids: [config_layers, env_manifest, marketplace_pinning, plugin_autoupdate_propagation, action_triggered_install, merge_semantics]
