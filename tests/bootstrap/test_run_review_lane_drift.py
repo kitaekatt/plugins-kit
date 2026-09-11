@@ -52,13 +52,18 @@ class TestWrapperCopiesMatch:
             )
 
     def test_consumers_require_the_parser_owner_version(self) -> None:
-        for kit in ("git-kit", "p4-kit", "llm-scripting-kit"):
+        expected = {
+            "git-kit": "0.106.0",
+            "p4-kit": "0.106.0",
+            "llm-scripting-kit": "0.105.0",
+        }
+        for kit, floor in expected.items():
             manifest = json.loads(
                 (REPO_ROOT / "plugins" / kit / "bootstrap.json").read_text(
                     encoding="utf-8"
                 )
             )
-            assert manifest["requires_bootstrap"] == "0.105.0"
+            assert manifest["requires_bootstrap"] == floor
 
     def test_parser_copies_are_byte_identical(self) -> None:
         first, *rest = [path.read_bytes() for path in PARSER_COPIES]

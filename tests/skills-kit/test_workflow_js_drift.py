@@ -52,6 +52,39 @@ class TestDetectClassifySharedSkeleton:
         problems = gen.check_shared_chunks()
         assert problems == [], "\n".join(problems)
 
+    def test_claimed_mechanical_scan_reaches_all_three_detect_lanes(self):
+        for path in gen.SHARED_CHUNK_TARGETS:
+            if path.name not in {
+                "claude-md-detect.js",
+                "skill-detect.js",
+                "project-doc-detect.js",
+            }:
+                continue
+            text = path.read_text(encoding="utf-8")
+            assert "mechanicalPreamble(f)" in text
+            assert "mechanicalCheckPhrases" in text
+            assert "mechanicalScan: f.mechanicalScan" in text
+            assert "Mechanical scan: absent for this file" in text
+            assert "none (no mechanical coverage for this file)" in text
+            assert "phrases[id] || id" in text
+            assert "Diagnostics (failed checks are uncovered)" in text
+            assert "A listed hit is a located observation, not a verdict" in text
+            assert "judge it against this lane's governing standards" in text
+            assert "return it through the lane's normal finding schema only when a rule forbids it" in text
+            assert "stay silent otherwise" in text
+            assert "Never invent a hit for a covered file/check pair" in text
+            assert "remains this lane's responsibility" in text
+            assert "does not audit the file" in text
+
+    def test_generator_requires_specialist_adjudication_of_mechanical_hits(self):
+        chunk = gen.DETECT_MECHANICAL_CHUNK
+        assert "A listed hit is a located observation, not a verdict" in chunk
+        assert "judge it against this lane's governing standards" in chunk
+        assert "return it through the lane's normal finding schema only when a rule forbids it" in chunk
+        assert "stay silent otherwise" in chunk
+        assert "Never invent a hit for a covered file/check pair" in chunk
+        assert "remains this lane's responsibility" in chunk
+
 
 class TestCheckMode:
     def test_check_mode_passes_on_clean_tree(self):

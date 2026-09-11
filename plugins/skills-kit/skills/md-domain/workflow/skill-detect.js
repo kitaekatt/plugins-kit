@@ -63,6 +63,10 @@
 //            against them under criterion H-11 (group Hygiene, taxonomy
 //            M_ancestor_convention_violation). When absent/empty NO H-11 finding
 //            is emitted.)
+//   files[i].mechanicalScan: object|undefined  (the claimed file's version-2
+//            per-file scan record: {file, checks_run, findings, diagnostics?}.)
+//   mechanicalCheckPhrases: object|undefined  (the bundle's check-id-to-phrase
+//            map, shared by every file in this call.)
 //   refs:  { pluginRoot: <abs path to plugins/skills-kit (parent of skills_kit_lib)>,
 //            venvPython: <abs path to skills-kit venv python> }
 // }
@@ -126,6 +130,34 @@ if (!input || !Array.isArray(input.files) || input.files.length === 0) {
 }
 const refs = input.refs || {}
 const review = input.review === true
+
+function mechanicalPreamble(f) {
+  const scan = f.mechanicalScan
+  if (!scan || typeof scan !== 'object') {
+    return `Mechanical scan: absent for this file. Do not infer mechanical coverage.`
+  }
+  const phrases = input.mechanicalCheckPhrases && typeof input.mechanicalCheckPhrases === 'object'
+    ? input.mechanicalCheckPhrases
+    : {}
+  const checks = Array.isArray(scan.checks_run) ? scan.checks_run : []
+  const findings = Array.isArray(scan.findings) ? scan.findings : []
+  const diagnostics = Array.isArray(scan.diagnostics) ? scan.diagnostics : []
+  const coverage = checks.length > 0
+    ? checks.map((id) => `${id} (${phrases[id] || id})`).join(', ')
+    : 'none (no mechanical coverage for this file)'
+  const findingLines = findings.length > 0
+    ? findings.map((row) => `- ${scan.file || f.path}:${row.line ?? '?'} [${row.check || '?'}] ${row.detail || ''}`).join('\n')
+    : 'none for the checks listed above'
+  const diagnosticLines = diagnostics.length > 0
+    ? `\nDiagnostics (failed checks are uncovered):\n${diagnostics.map((row) => `- ${row}`).join('\n')}`
+    : ''
+  return `Mechanical scan (added lines only):
+- File: ${scan.file || f.path}
+  Checks run: ${coverage}
+  Findings: ${findingLines}${diagnosticLines}
+
+The checks listed above already ran. Do not repeat any listed check for this file. A listed hit is a located observation, not a verdict: judge it against this lane's governing standards and return it through the lane's normal finding schema only when a rule forbids it; stay silent otherwise. Never invent a hit for a covered file/check pair that the scan did not list. An omitted or uncovered check, an unrecognized result, or a diagnostic remains this lane's responsibility; inspect it normally. This scan answers only its mechanical questions. It does not audit the file, does not satisfy this lane, and does not change a NOT-AUDITED verdict.`
+}
 
 // The `skill` artifact's two subject shapes, decided from the PATH. `kind` (when
 // the caller supplies one) decides whether the file is DECLINED; the path shape
@@ -233,6 +265,8 @@ function lanePrompt(f) {
 
   return `You are ONE lane of a ${subjectLabel} audit. Audit exactly one file and return structured findings. This is DETECTION ONLY — do not modify any file.
 
+${mechanicalPreamble(f)}
+
 Target:    ${f.path}
 Subject:   ${subject}   (${subjectLabel})
 SkillType: ${isRef ? '(skill reference -- no declared type)' : (f.skillType || '(read from frontmatter)')}
@@ -286,7 +320,7 @@ const perFile = await parallel(input.files.map((f) => () =>
     model: 'opus',
     effort: 'high',
     schema: FILE_FINDINGS_SCHEMA,
-  }).then((r) => ({ ...r, path: f.path }))
+  }).then((r) => ({ ...r, path: f.path, mechanicalScan: f.mechanicalScan }))
 ))
 
 const raw = perFile.filter(Boolean)

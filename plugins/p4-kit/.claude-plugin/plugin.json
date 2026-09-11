@@ -1,6 +1,6 @@
 {
   "name": "p4-kit",
-  "version": "0.47.0",
+  "version": "0.48.0",
   "dependencies": [
     "bootstrap"
   ],

@@ -223,7 +223,10 @@ technique_skill:
             and, per claimed
             file, `preImagePath` = its `pre_image` from the bundle (null for an add), with the per-lane
             `files[]` fields (CLAUDE.md: role / dimension / parentPath / ancestorClaudeMdPaths; SKILL.md
-            and skill reference: ancestorClaudeMdPaths; project-doc: ancestorClaudeMdPaths) resolved from each claimed file's
+            and skill reference: ancestorClaudeMdPaths; project-doc: ancestorClaudeMdPaths), plus
+            `mechanicalScan` = the claimed entry's sole `mechanical_scan.files[0]` record. Pass
+            `mechanicalCheckPhrases` = `bundle.mechanical_check_phrases` once at the top level of
+            EVERY Workflow args object. Resolve the remaining fields from each claimed file's
             `claude_mds` per references/md-domain-review.md. Resolve the skills-kit plugin root and
             venvPython defensively per that reference. On a skills-kit version skew (a detect lane
             entry point, `discover_claude_md.classify_dimension`, or a documented args contract
@@ -363,6 +366,8 @@ technique_skill:
               was verified mechanically (the change is typo-sized -- <= 5 changed lines; Markdown structure
               unchanged; no link/path/anchor reference changed; no meaning-bearing keyword touched; no
               YAML/front-matter touched) plus its `trivial_checks` results (`ascii_clean`, `no_abs_paths`),
+              then render its `mechanical_scan` coverage, findings, and diagnostics using
+              `bundle.mechanical_check_phrases` (a diagnostic leaves that check uncovered),
               then state plainly that the full audit was SKIPPED because the change is mechanical. NEVER
               call this DIFF-CLEAN and NEVER present it as an audit result; write NOTHING to the ledger for
               a skipped file. If the author or user asks for the full review, run the md-domain pass on these

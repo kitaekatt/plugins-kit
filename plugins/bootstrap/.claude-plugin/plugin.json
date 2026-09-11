@@ -1,6 +1,6 @@
 {
   "name": "bootstrap",
-  "version": "0.105.0",
+  "version": "0.106.0",
   "description": "Installs each plugin's tools, Python venvs, and config automatically at session start.",
   "author": {
     "name": "Christina"
