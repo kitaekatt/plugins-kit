@@ -370,10 +370,16 @@ does not need one.
 `bootstrap_lib/codex.py` is stdlib-only because `bootstrap_lib` is imported from
 contexts where no third-party dependency is guaranteed to exist (SessionStart
 hooks, a plugin whose venv has not been provisioned yet), so nothing here may
-import outside the stdlib. `orchestrate` deliberately does NOT consume it.
-orchestrate's `detect_backend` stays stdlib-only and generic on purpose: coupling a policy
-renderer to a codex-specific module would cost a manifest change, a version bump
-and a venv re-exec guard to dedupe three lines.
+import outside the stdlib. `orchestrate` consumes it at exactly one seam: the
+thing that LAUNCHES codex (`scripts/dispatch.py`) hard-imports
+`build_codex_exec_argv` behind the re-exec guard, because launcher resolution
+(`codex.cmd` via `cmd /c`) and the cmd-metacharacter refusal are the
+injection-and-Windows protections and must not be re-implemented; the
+awesome-kit manifest carries the matching `requires_bootstrap` floor. The
+POLICY RENDERER does not: `orchestration_guidance.py`'s `detect_backend` stays
+stdlib-only and generic over every backend, duplicating `resolve_cli` (three
+lines, trusted config argv, no caller-supplied path) rather than coupling a
+renderer to a codex-specific module. Change both copies together.
 
 The venv-scoping above is the ordinary consequence of a per-venv install rather
 than fragility -- a `.pth` written into one environment no more appears in

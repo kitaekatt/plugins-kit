@@ -27,6 +27,7 @@ Usage:
 
 import argparse
 from functools import partial
+import inspect
 import json
 import os
 import re
@@ -84,6 +85,12 @@ RECORD_LISTS = (
     "examples",
     "backend_notes",
 )
+
+# Layers process against this script's fixed understanding of the config
+# shape, so a layer declaring any other schema_version is a config error, not
+# something deep_merge can absorb: without this check a wrong-typed layer
+# passed silently (see validate_layer below).
+SUPPORTED_SCHEMA_VERSIONS = (3,)
 
 DECISION_KEYS = frozenset(
     (
@@ -255,6 +262,35 @@ def status_is_applied(status: str) -> bool:
     return status.startswith("applied")
 
 
+def validate_layer(layer: str, path: Path, data: Dict[str, Any]) -> None:
+    """Fail loudly on a layer whose shape deep_merge cannot safely absorb.
+
+    Before this check: a higher-precedence layer declaring a SCALAR under a
+    RECORD_LISTS key (e.g. `backends: not-a-list`) replaced the shipped list
+    outright via deep_merge's plain-scalar branch, and active() then iterated
+    the scalar character by character -- every character fails
+    isinstance(x, dict), so the record list read back as EMPTY. Rendering
+    succeeded with no active backends and no degraded marker. schema_version
+    was not validated at all. This does not touch a valid PARTIAL override
+    (a record list whose members carry `id`, patched by merge_records).
+    """
+    schema_version = data.get("schema_version")
+    if schema_version is not None and schema_version not in SUPPORTED_SCHEMA_VERSIONS:
+        raise ValueError(
+            f"{layer} layer ({path}): `schema_version` is {schema_version!r}, "
+            f"but this script only understands {SUPPORTED_SCHEMA_VERSIONS!r}"
+        )
+    for key in RECORD_LISTS:
+        if key not in data:
+            continue
+        value = data[key]
+        if not isinstance(value, list):
+            raise ValueError(
+                f"{layer} layer ({path}): `{key}` must be a list, got "
+                f"{type(value).__name__} ({value!r})"
+            )
+
+
 def resolve_config(project_root: Path) -> Tuple[Dict[str, Any], List[Tuple[str, Path, str]]]:
     """Merge the layers. Returns (config, provenance) where provenance is
     (layer, path, status) with status in {applied, empty, absent}, or
@@ -270,6 +306,7 @@ def resolve_config(project_root: Path) -> Tuple[Dict[str, Any], List[Tuple[str, 
         if not data:
             provenance.append((layer, path, "empty"))
             continue
+        validate_layer(layer, path, data)
         status = "applied"
         if layer == "machine":
             status = machine_layer_status(data)
@@ -1430,6 +1467,23 @@ def adapter_command_text_provider(
         allowed_paths = {placeholder_root, placeholder_result}
         if harness == "codex":
             kwargs["output_file"] = placeholder_result
+            # Probe the KEYWORD before calling, rather than letting a too-old
+            # adapter's TypeError fall into the bare except below: that
+            # message ("build_argv() got an unexpected keyword argument
+            # 'add_dirs'") names neither the owning plugin nor the remedy, and
+            # is indistinguishable from an adapter bug. add_dirs was added in
+            # llm-scripting-kit 0.10.0 -- the first published version carrying
+            # it (bootstrap 7e4b18ab added the kwarg without a version bump;
+            # the next bump, same day, was to 0.10.0).
+            if "add_dirs" not in inspect.signature(build_argv).parameters:
+                return _command_fallback(
+                    backend,
+                    notes,
+                    "llm-scripting-kit is older than 0.10.0 (its CodexAdapter."
+                    "build_argv has no add_dirs parameter, so the scratchpad "
+                    "--add-dir cannot be rendered); update with `claude "
+                    "plugin update llm-scripting-kit@plugins-kit`",
+                )
             # The scratchpad --add-dir is not decoration. Under
             # `-s workspace-write` the session scratchpad sits outside the
             # writable root, so a unit told to write there exits 0 having
@@ -1770,6 +1824,26 @@ def render(
     seat_result, seat_status, seat_detail = discover_consult_seats(
         self_ref, project_root
     )
+    # The other three optional-library sites (model definitions, quota, the
+    # adapter command renderer) all disclose a degraded render via
+    # degradation_notes. Without this note, a too-old or absent
+    # llm_scripting_kit makes the whole "## Consult seats" section vanish
+    # with nothing said -- and a
+    # render missing the section is indistinguishable from one where no seat
+    # qualified, even though SKILL.md tells the reader a healthy render is
+    # authoritative. self_not_provided is not a degradation (the feature was
+    # simply not requested) and stays silent, matching render_consult_seats.
+    if seat_status == "library_absent":
+        degradation_notes.append(
+            "consult seats unavailable: llm_scripting_kit is absent; install "
+            "with `claude plugin install llm-scripting-kit@plugins-kit`"
+        )
+    elif seat_status == "library_too_old":
+        degradation_notes.append(
+            "consult seats unavailable: llm_scripting_kit lacks discover_seats; "
+            "owner version is 0.28.0; update with `claude plugin update "
+            "llm-scripting-kit@plugins-kit`"
+        )
     render_consult_seats(seat_result, seat_status, seat_detail, out)
     render_backends(
         config,

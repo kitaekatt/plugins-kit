@@ -1,5 +1,6 @@
 {
-  "$comment": "awesome-kit depends on plugins-kit:skills-kit for the plugin-ecosystem audit framework and skills_kit_lib, and orchestrate optionally consumes llm_scripting_kit plus bootstrap_lib for harness model definitions and presence detection. Auto-install skills-kit when missing.",
+  "$comment": "awesome-kit depends on plugins-kit:skills-kit for the plugin-ecosystem audit framework and skills_kit_lib, and dispatch.py requires bootstrap_lib.codex for launcher resolution and the cmd-metacharacter refusal, while the renderer consumes llm_scripting_kit plus bootstrap_lib optionally for harness model definitions and presence detection. Auto-install skills-kit when missing. requires_bootstrap is set from the newest bootstrap_lib call this plugin makes -- dispatch.py's bootstrap_lib.codex.build_codex_exec_argv, which first shipped (alongside the module) in bootstrap 0.79.0 -- not from the module import alone.",
+  "requires_bootstrap": "0.79.0",
   "plugins": [
     {
       "ref": "plugins-kit:skills-kit",

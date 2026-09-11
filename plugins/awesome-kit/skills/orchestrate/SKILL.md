@@ -105,11 +105,17 @@ technique_skill:
     - path: references/codex-dispatch.md
       consumer: defaults/orchestration.yaml (backends[codex].dispatch)
       purpose: the flag catalog and launch mechanics the rendered summary points at
-      invariant: The one-line `command:` in the backend record matches the worked example here.
+      invariant: >-
+        The one-line `command:` in the backend record matches the ARGV-only worked-example
+        line here (the one under "backend record's one-line command is:"), not the
+        redirect-completed shape below it -- an argv list cannot express a shell redirect.
     - path: references/opencode-dispatch.md
       consumer: defaults/orchestration.yaml (backends[opencode].dispatch)
       purpose: the flag catalog and launch mechanics the rendered summary points at
-      invariant: The one-line `command:` in the backend record matches the worked example here.
+      invariant: >-
+        The one-line `command:` in the backend record matches the ARGV-only worked-example
+        line here (the one under "backend record's one-line command is:"), not the
+        redirect-completed shape below it -- an argv list cannot express a shell redirect.
   techniques:
     - id: orchestrate
       name: Orchestrate work through background agents

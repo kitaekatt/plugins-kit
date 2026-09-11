@@ -509,6 +509,7 @@ def test_runner_omits_temperature_when_job_does_not_set_one(tmp_path: Path) -> N
     run_jobs(
         [_job(tmp_path)],
         tmp_path / "temperature-default.sqlite3",
+        run_id="run-id",
         capabilities_provider=_advertisement,
         backend_factory=_factory_for(backend),
     )
@@ -516,6 +517,7 @@ def test_runner_omits_temperature_when_job_does_not_set_one(tmp_path: Path) -> N
     options = backend.calls[0][3]
     assert options.temperature is None
     assert options.max_tokens == 4096
+    assert options.client_id == "job-kit:run-id:job"
 
 
 def test_runner_sends_job_temperature_override(tmp_path: Path) -> None:

@@ -130,12 +130,18 @@ was accepted."
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Any, Callable, List, Optional, Sequence
 
 from content_pipeline.execution.controller import RunAdapter, record_halt
 from content_pipeline.execution.model import ExecutionError, RunHaltedError, UnitRecord
 from content_pipeline.execution.store import ExecutionStore, lease_for
-from content_pipeline.llm.platform import PipelineHaltError, LLMBackend, submit_validated
+from content_pipeline.llm.platform import (
+    BackendOptions,
+    PipelineHaltError,
+    LLMBackend,
+    submit_validated,
+)
 from content_pipeline.pipeline.workunit import WorkUnit
 
 DEFAULT_INLINE_WORKER_ID = "inline"
@@ -208,6 +214,11 @@ def run_wave(
     if backend is not None and (adapter.parse_fn is None or adapter.user_for is None):
         raise ValueError(
             "the `backend` path requires both `adapter.parse_fn` and `adapter.user_for`"
+        )
+    if backend is not None:
+        options = submit_kwargs.get("options") or BackendOptions()
+        submit_kwargs["options"] = replace(
+            options, client_id=f"content-pipeline:{run_id}"
         )
 
     accepted: List[str] = []
