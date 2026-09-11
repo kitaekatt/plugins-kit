@@ -16,7 +16,6 @@ here. Chunking policy lives in chunking.py; CLAUDE.md collection and
 submit-gate parsing live in claude_mds.py -- this module composes them.
 """
 
-import fnmatch
 import hashlib
 import json
 import re
@@ -42,7 +41,8 @@ from bootstrap_lib.code_review.machine_emitted_paths import (
     declared_generated_rules,
     match_declared_path,
 )
-from bootstrap_lib.code_review.mechanical import REGISTRY, scan_file
+from bootstrap_lib.code_review.mechanical import REGISTRY, resolve_checks, scan_file
+from bootstrap_lib.code_review._globs import _matches_one_glob, matches_claim
 from bootstrap_lib.code_review.triviality import (
     mechanical_checks,
     mechanical_findings,
@@ -61,66 +61,6 @@ from bootstrap_lib.code_review.triviality import (
 # lives here (shared) so a kit front-half and the back-half agree on exactly
 # which files are claimed. Front-halves use it to decide which pre-images to
 # materialize; assemble_bundle uses it to do the exclusion + routing.
-
-
-def _matches_one_glob(norm: str, base: str, gnorm: str) -> bool:
-    """Match one posix-normalized pattern against a normalized identifier.
-
-    A `**/` prefix means "at ANY depth, including the root". For a single-segment
-    tail (`**/CLAUDE.md`) that is a basename compare -- fnmatch's `*` alone would
-    not match a bare-root `CLAUDE.md` against `*/CLAUDE.md`. For a multi-segment
-    tail (`**/skills/*/references/*.md`) a basename compare is meaningless, so the
-    tail is also tried ROOTED, which is what makes `**/` mean "including the root"
-    for those too. Any pattern without the prefix is an ordinary fnmatch against
-    the whole identifier.
-    """
-    if gnorm.startswith("**/"):
-        tail = gnorm[3:]
-        if "/" in tail:
-            if fnmatch.fnmatch(norm, tail):
-                return True
-        elif fnmatch.fnmatch(base, tail):
-            return True
-    return fnmatch.fnmatch(norm, gnorm)
-
-
-def matches_claim(identifier: str, claim_globs: list[str]) -> bool:
-    """True if `identifier` is claimed by `claim_globs`.
-
-    `identifier` is the kit's chunk-map key (git repo-relative path, p4 depot
-    path). A pattern prefixed with `!` is an EXCLUSION; exclusions are evaluated
-    FIRST and are absolute, so a caller can claim a broad shape while carving out
-    a subset -- e.g. `["**/*.md", "!**/skills/*/references/*.md"]` claims every
-    markdown file EXCEPT a skill's reference docs.
-
-    The carve-out is not cosmetic. A claimed file is pulled out of the generic
-    reviewer fan-out on the promise that a specialist reviews it instead; when no
-    specialist actually reads that shape of file, claiming it removes the only
-    review it had. Without negation the caller's only options are claim-everything
-    (which strands those files) or drop the catch-all (which strands the files the
-    specialist genuinely owns) -- neither expresses the real intent.
-
-    A list of only exclusions claims nothing, which is the honest reading: no
-    positive pattern was offered.
-    """
-    if not claim_globs:
-        return False
-    norm = identifier.replace("\\", "/")
-    base = norm.rsplit("/", 1)[-1]
-
-    positives: list[str] = []
-    for g in claim_globs:
-        gnorm = g.replace("\\", "/")
-        if gnorm.startswith("!"):
-            # An exclusion wins outright -- no positive pattern can re-claim the
-            # file. Order-independent by design: a caller listing patterns in a
-            # config should not have to reason about precedence.
-            if _matches_one_glob(norm, base, gnorm[1:]):
-                return False
-        else:
-            positives.append(gnorm)
-
-    return any(_matches_one_glob(norm, base, g) for g in positives)
 
 
 def canonical_local(local: Optional[str]) -> Optional[str]:
@@ -423,6 +363,11 @@ def assemble_bundle(
     review_machine_emitted = bool(review_machine_emitted)
 
     claim_globs = claim_globs or []
+    if workspace_root is None:
+        # No project root means low-level callers retain the code registry only.
+        checks = REGISTRY
+    else:
+        checks = resolve_checks(workspace_root)
     bundle_dir.mkdir(parents=True, exist_ok=True)
 
     claimed_idents = {
@@ -588,6 +533,7 @@ def assemble_bundle(
             f["identifier"],
             id_to_text.get(f["identifier"], ""),
             pre_image_text=_review_pre_image_text(f),
+            checks=checks,
         )
         if out["chunk_index"] is None:
             unchunked_files.append(
@@ -631,7 +577,7 @@ def assemble_bundle(
         "bundle_dir": str(bundle_dir),
         "diff_chunks": diff_chunks,
         "mechanical_check_phrases": {
-            check.check_id: check.phrase for check in REGISTRY
+            check.check_id: check.phrase for check in checks
         },
         "changed_files": changed_files,
         "unique_claude_mds": unique,
