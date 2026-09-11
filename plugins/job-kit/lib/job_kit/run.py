@@ -380,6 +380,7 @@ def _require_floor_subjects(job: Job, run_floor: str) -> Job:
 
 
 def _backend_options(
+    run_id: str,
     job: Job,
     selection: BackendSelection,
     working_directory: Path,
@@ -435,6 +436,7 @@ def _backend_options(
         system_prompt_mode=(
             system_prompt_mode if system_prompt_mode is not None else "replace"
         ),
+        client_id=f"job-kit:{run_id}:{job.id}",
         log_prefix=f"[job:{job.id}]",
         extras=extras,
     )
@@ -679,6 +681,7 @@ def run_job(
     )
     try:
         options = _backend_options(
+            run_id,
             job,
             selection,
             working_directory,

@@ -240,6 +240,7 @@ class BackendOptions:
     - ``allowed_tools`` -- claude-cli ``--allowedTools`` value. ``None`` means
       a pure completion (no tools).
     - ``cwd`` -- claude-cli working directory.
+    - ``client_id`` -- access-log identity for the front door.
     - ``log_prefix`` -- stderr tag so mixed logs from parallel runs stay
       attributable.
     - ``extras`` -- open map for consumer-specific knobs a backend may read.
@@ -253,6 +254,7 @@ class BackendOptions:
     effort: Optional[str] = None
     allowed_tools: Optional[str] = None
     cwd: Optional[Path] = None
+    client_id: str = ""
     log_prefix: str = "[llm]"
     extras: Mapping[str, Any] = field(default_factory=dict)
 
