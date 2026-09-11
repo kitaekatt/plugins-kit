@@ -47,6 +47,27 @@ success case, not a sign that bootstrap is broken. The first session after
 installing a plugin may take longer while tools and dependencies download;
 after that, steady state is quiet.
 
+## The `bootstrap` command
+
+Bootstrap installs a `bootstrap` command into `~/.local/bin` on every session,
+so a pass can be inspected or driven from any terminal without starting Claude.
+
+```bash
+bootstrap          # is a pass running right now? (read-only)
+bootstrap --json   # the same answer, machine-readable
+bootstrap run      # run a full pass now, synchronously, on stdout
+```
+
+A pass is single-instance. If one is already running when you type
+`bootstrap run`, it says so and streams that pass to your terminal until it
+finishes, rather than starting a second one that would immediately stand down
+on the engine lock. `run` needs no cooldown reset -- it is already a full
+pass.
+
+With more than one marketplace installed, `bootstrap` reports on all of them
+and `bootstrap run` asks you to set `BOOTSTRAP_MARKETPLACE` rather than guess
+which engine to run.
+
 To verify bootstrap actually ran for a plugin, read its log:
 
 ```
