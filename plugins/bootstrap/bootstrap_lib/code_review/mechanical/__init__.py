@@ -145,11 +145,12 @@ def _run_checks(
     return checks_run, findings, diagnostics
 
 
-# One module plus one entry here is the complete registration surface for a
-# later Seam A check. Registration order is stable output order.
 from . import abs_path, column_counts, duplicate_keys, non_ascii, structured_parse  # noqa: E402
 
-REGISTRY: tuple[MechanicalCheck, ...] = (
+# Private compatibility definitions are not shipped coverage. Older consumers
+# still call mechanical_findings and render legacy phrases; new scans opt in
+# to these personal conventions through user configuration.
+_LEGACY_CHECKS: tuple[MechanicalCheck, ...] = (
     MechanicalCheck(
         check_id="non_ascii",
         phrase="non-ASCII characters",
@@ -164,6 +165,11 @@ REGISTRY: tuple[MechanicalCheck, ...] = (
         precondition=abs_path.precondition,
         scan=abs_path.scan,
     ),
+)
+
+# One module plus one entry here is the complete registration surface for a
+# later Seam A check. Registration order is stable output order.
+REGISTRY: tuple[MechanicalCheck, ...] = (
     MechanicalCheck(
         check_id="structured_parse",
         phrase="structured-data parse failures",
@@ -190,7 +196,7 @@ REGISTRY: tuple[MechanicalCheck, ...] = (
 if len({check.check_id for check in REGISTRY}) != len(REGISTRY):
     raise ValueError("mechanical check ids must be unique")
 
-_CHECKS_BY_ID = {check.check_id: check for check in REGISTRY}
+_CHECKS_BY_ID = {check.check_id: check for check in (*_LEGACY_CHECKS, *REGISTRY)}
 LEGACY_CHECK_IDS = ("non_ascii", "abs_path")
 
 
@@ -222,8 +228,7 @@ def mechanical_findings(diff_section_text: str) -> list[MechanicalFinding]:
     reviewer. New registry checks never enter this result.
     """
     snapshot = build_snapshot("", diff_section_text)
-    legacy_checks = tuple(_CHECKS_BY_ID[check_id] for check_id in LEGACY_CHECK_IDS)
-    _, findings, _ = _run_checks(snapshot, legacy_checks)
+    _, findings, _ = _run_checks(snapshot, _LEGACY_CHECKS)
     return findings
 
 
@@ -254,10 +259,24 @@ def check_phrase(check_id: str) -> str:
 
 
 def resolve_checks(project_root: str | Path, home: str | Path | None = None) -> tuple[MechanicalCheck, ...]:
-    """Return code-registered checks followed by additive config checks."""
-    from bootstrap_lib.code_review.mechanical_config import build_check, resolve_config
+    """Resolve unique default, user builtin, and additive pattern checks."""
+    from bootstrap_lib.code_review.mechanical_config import (
+        MechanicalConfigError, build_check, resolve_builtin_checks, resolve_config,
+    )
 
-    return REGISTRY + tuple(build_check(record, project_root) for record in resolve_config(project_root, home=home))
+    checks = (
+        REGISTRY + resolve_builtin_checks(home=home)
+        + tuple(build_check(record, project_root) for record in resolve_config(project_root, home=home))
+    )
+    seen: dict[str, str] = {}
+    for check in checks:
+        if check.check_id in seen:
+            raise MechanicalConfigError(
+                f"check {check.check_id!r}: duplicate id in source layers "
+                f"{seen[check.check_id]} and {check.source_layer}"
+            )
+        seen[check.check_id] = check.source_layer
+    return checks
 
 
 __all__ = [

@@ -4,10 +4,41 @@ Which reviewer-lane criteria a script can answer at FULL RECALL, and which
 genuinely need a model. Written to bound how far the deterministic scan in
 `bootstrap_lib.code_review` should extend.
 
-The file-local registry currently implements `non_ascii`, `abs_path`,
-`structured_parse`, `duplicate_keys`, and `column_counts`. Table 2 is the
-original backlog; the current status and ordering live in the task plan. Do not
-re-derive the criterion inventory here. Extend it when a seam is settled.
+The default file-local registry implements `structured_parse`, `duplicate_keys`,
+and `column_counts`. The repository registry implements `local_link_targets`.
+`non_ascii` and `abs_path` are personal conventions. They run in current scans
+only when the user selects them. Private definitions, legacy bundle fields,
+and triviality results retain compatibility with older consumers.
+
+Table 2 is the original backlog. The task plan owns current status, ordering,
+and admission: each check must replace existing reviewer work and deliver its
+answer to that reviewer. The reviewer must receive instructions not to repeat
+the covered question. Build execution and new reviewer responsibilities are
+outside this task.
+
+### Personal check configuration
+
+The user-only file `~/.claude/config/mechanical_builtin_checks.yaml` selects
+trusted implementations. Its complete schema is:
+
+```yaml
+checks: [non_ascii, abs_path]
+```
+
+Each listed ID runs the preserved implementation over every parsed added line.
+The checks retain exact finding details, including Unicode codepoints. They
+scan complete lines without the generic regex engine's length cap. An absent
+file or `checks: []` selects neither check. The only accepted IDs are
+`non_ascii` and `abs_path`. Selection order controls check order.
+
+This filename first appears in bootstrap 0.112. Older versions ignore it and
+retain their shipped checks. Thus one user file works across both versions
+without duplicate coverage. The selector has no project or shipped layer.
+
+Generic pattern checks remain additive through `mechanical_checks.yaml` in
+the shipped, user, and project layers. Duplicate IDs across the default
+registry, builtin selector, or any pattern layer are errors. The selector
+accepts no custom code, patterns, or detail templates.
 
 ## Scope and provenance
 
@@ -21,7 +52,10 @@ delegates to `llm_scripting_kit.review_lane` (`run_review_lane.py:96-112,
 skills (`gen_code_review_skills.py:1316-1335`). No second criterion source was
 found on either dispatch path.
 
-## Premises
+## Original audit premises
+
+These premises record the pipeline before the task's implementation. The
+current scans cover authored files before routing, including claimed files.
 
 | Premise | Result | Evidence and correction |
 |---|---|---|
@@ -31,8 +65,8 @@ found on either dispatch path.
 
 ## Table 1: criterion inventory
 
-"Exists" means covered by `mechanical_checks`, unless the cell names another
-existing deterministic check.
+This table records the original audit. "Exists" means covered by the legacy
+`mechanical_checks`, unless the cell names another deterministic check.
 
 | Reviewer | Criterion | Class | Check and current status |
 |---|---|---|---|
@@ -41,9 +75,9 @@ existing deterministic check.
 | A | Quote the exact governing rule for every finding. | DECIDABLE | Require the citation to be a substring of one governing file. Output validation checks only type and presence today. |
 | A | Treat a claimed path as satisfying a matching document-current rule. | JUDGMENT | Decidable only when the rule names an exact path or a declared source-to-document map. |
 | A | Report only violations introduced by this diff. | JUDGMENT | Added-line location is decidable. Causation and changed applicability are not. |
-| A | Added text contains non-ASCII code points. | DECIDABLE | Scan added post-image lines. `ascii_clean` exists, but it also scans removed lines. |
+| A | Added text contains non-ASCII code points. | DECIDABLE | The optional user builtin scans added lines. Legacy `ascii_clean` also scans removed lines. |
 | A | Apply the repo ASCII rule and its diagram exception. | JUDGMENT | The permitted box-drawing-in-a-diagram exception needs context. The code-point scan alone cannot settle it. |
-| A | Enforce an unconditional absolute-path ban after its scope is established. | DECIDABLE | Tokenize added text and detect platform path forms. `no_abs_paths` exists, but scans deletions and is not proof that a ban applies. |
+| A | Enforce an unconditional absolute-path ban after its scope is established. | DECIDABLE | The optional user builtin detects path forms on added lines. Legacy `no_abs_paths` also scans deletions. Neither establishes that a ban applies. |
 | A | Keep paired plugin and marketplace version fields synchronized. | DECIDABLE | Map a changed plugin to both manifests and compare post-image versions. This is not in `mechanical_checks`. Publish and pre-commit checks cover related cases. |
 | B | Code will not compile. | JUDGMENT | A configured build is a decidable sub-case. Toolchain, platform, generated input, and build selection prevent a universal result. |
 | B | Code has a syntax error. | JUDGMENT | Parsing a recognized, non-templated language is a decidable sub-case. The prompt covers arbitrary code. |

@@ -1153,10 +1153,8 @@ class TestMechanicalFindingsReachReviewedFiles:
     only for a file the pipeline had decided to SKIP. Both halves are pinned
     here: revert either and one of these goes red."""
 
-    def test_generic_chunk_files_are_scanned(self, tmp_path):
-        """A .yaml or .csv in a generic chunk never met the scanner before --
-        it was reachable solely via a claim. This is the half the em-dash
-        defect fell through."""
+    def test_generic_chunk_files_keep_legacy_findings_without_default_coverage(self, tmp_path):
+        """Old consumers retain their fields; current scans use effective coverage."""
         core = assemble_bundle(
             preamble="",
             sections=[_dirty_section("config/rows.yaml")],
@@ -1169,6 +1167,9 @@ class TestMechanicalFindingsReachReviewedFiles:
             f["check"] for f in core["changed_files"][0]["mechanical_findings"]
         }
         assert checks == {"non_ascii", "abs_path"}
+        scan = core["diff_chunks"][0]["mechanical_scan"]["files"][0]
+        assert scan["checks_run"] == []
+        assert scan["findings"] == []
 
     def test_generic_files_are_scanned_without_being_claimed(self, tmp_path):
         """Reaching the scanner must not require a claim.
@@ -1240,7 +1241,8 @@ class TestMechanicalFindingsReachReviewedFiles:
             workspace_root=None,
         )
         scan = core["diff_chunks"][0]["mechanical_scan"]
-        assert core["mechanical_check_phrases"]["non_ascii"] == "non-ASCII characters"
+        assert "non_ascii" not in core["mechanical_check_phrases"]
+        assert "abs_path" not in core["mechanical_check_phrases"]
         assert core["mechanical_check_phrases"]["local_link_targets"] == (
             "local file and Markdown link targets"
         )
@@ -1248,7 +1250,7 @@ class TestMechanicalFindingsReachReviewedFiles:
         assert scan["files"] == [
             {
                 "file": "src/a.py",
-                "checks_run": ["non_ascii", "abs_path"],
+                "checks_run": [],
                 "findings": [],
             },
             {"file": "asset.bin", "checks_run": [], "findings": []},
@@ -1299,11 +1301,8 @@ class TestMechanicalFindingsReachReviewedFiles:
         assert claimed["findings"][-1]["line"] == 1
         assert generic["findings"][-1]["line"] == 1
 
-    def test_a_NON_trivial_claimed_file_is_scanned(self, tmp_path):
-        """The inverted guard. `mechanical_checks` ran only when `trivial` was
-        true -- i.e. only where no lane would read it. A non-trivial claimed
-        file is exactly the case that WILL be reviewed and used to get nothing.
-        """
+    def test_claimed_file_keeps_legacy_findings_without_default_coverage(self, tmp_path):
+        """Claimed files keep compatibility fields without imposing personal checks."""
         big = "@@ -1,1 +1,9 @@\n unchanged\n" + "".join(
             f"+added line {i} must never always \u2014\n" for i in range(8)
         )
@@ -1324,8 +1323,8 @@ class TestMechanicalFindingsReachReviewedFiles:
             "files": [
                 {
                     "file": "docs/x.md",
-                    "checks_run": ["non_ascii", "abs_path"],
-                    "findings": entry["mechanical_findings"],
+                    "checks_run": [],
+                    "findings": [],
                 }
             ],
         }

@@ -8,13 +8,15 @@ deliberately conservative because configuration is shared repository input.
 from __future__ import annotations
 
 from copy import deepcopy
+from dataclasses import replace
 from pathlib import Path
 from string import Formatter
-from typing import Any, NoReturn
+from typing import TYPE_CHECKING, Any, NoReturn
 
 from bootstrap_lib.code_review._globs import matches_claim
 
 CONFIG_NAME = "mechanical_checks.yaml"
+BUILTIN_CONFIG_NAME = "mechanical_builtin_checks.yaml"
 DEFAULTS_PATH = Path(__file__).resolve().parent / "defaults" / CONFIG_NAME
 MAX_PATTERN_LENGTH = 1024
 MAX_LINE_LENGTH = 10000
@@ -23,6 +25,9 @@ MATCH_TIMEOUT_MS = 50
 CHECK_TOTAL_TIMEOUT_MS = 500
 MAX_DETAIL_LENGTH = 120
 _FIELDS = {"match", "line", "file", "text"}
+
+if TYPE_CHECKING:
+    from bootstrap_lib.code_review.mechanical import MechanicalCheck
 
 
 class MechanicalConfigError(ValueError):
@@ -131,6 +136,34 @@ def resolve_config(project_root: str | Path, *, home: str | Path | None = None) 
     if len(records) > MAX_CHECK_COUNT:
         _fail("resolved layers", "<all>", f"check count exceeds {MAX_CHECK_COUNT}")
     return tuple(records)
+
+
+def resolve_builtin_checks(*, home: str | Path | None = None) -> tuple[MechanicalCheck, ...]:
+    """Select trusted personal checks from a user-only, rollout-safe file.
+
+    Older consumers ignore this filename and retain their legacy registry.
+    Selecting the preserved implementations keeps their full-line detection
+    and exact details, without the generic pattern engine's input caps.
+    """
+    from bootstrap_lib.code_review.mechanical import _LEGACY_CHECKS
+
+    path = _home_path(home) / ".claude" / "config" / BUILTIN_CONFIG_NAME
+    data = _load(path)
+    if data is None:
+        return ()
+    if set(data) != {"checks"} or not isinstance(data.get("checks"), list):
+        raise MechanicalConfigError(f"{path}: expected only a checks list of builtin ids")
+    allowed = {check.check_id: check for check in _LEGACY_CHECKS}
+    selected: list[MechanicalCheck] = []
+    seen: set[str] = set()
+    for ident in data["checks"]:
+        if not isinstance(ident, str) or ident not in allowed:
+            _fail(path, ident, f"builtin id must be one of: {', '.join(allowed)}")
+        if ident in seen:
+            _fail(path, ident, "duplicate id in user builtin layer")
+        seen.add(ident)
+        selected.append(replace(allowed[ident], source_layer=str(path)))
+    return tuple(selected)
 
 
 def normalize_project_path(identifier: str, project_root: str | Path) -> str:

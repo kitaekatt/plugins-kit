@@ -239,15 +239,10 @@ class TestMechanicalRegistry:
             check.check_id: (check.phrase, check.required_inputs)
             for check in mechanical.REGISTRY
         }
-        assert entries["non_ascii"] == (
-            "non-ASCII characters",
-            frozenset({"added_lines"}),
-        )
-        assert entries["abs_path"] == (
-            "absolute paths",
-            frozenset({"added_lines"}),
-        )
+        assert set(entries) == {"structured_parse", "duplicate_keys", "column_counts"}
         assert mechanical.LEGACY_CHECK_IDS == ("non_ascii", "abs_path")
+        assert mechanical.check_phrase("non_ascii") == "non-ASCII characters"
+        assert mechanical.check_phrase("abs_path") == "absolute paths"
         diff = _hunk("@@ -2,1 +2,1 @@", "-old", "+new")
         snapshot = mechanical.build_snapshot(
             "config/example.json", diff, pre_image_text="before\nold\nafter\n"
@@ -316,4 +311,4 @@ class TestMechanicalRegistry:
     def test_templated_yaml_declines_all_structured_checks(self):
         diff = _hunk("@@ -1,1 +1,1 @@", "-name: old", "+name: {{ value }}")
         scan = mechanical.scan_file("config/data.yaml", diff, pre_image_text="name: old\n")
-        assert scan["checks_run"] == ["non_ascii", "abs_path"]
+        assert scan["checks_run"] == []

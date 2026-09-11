@@ -3255,7 +3255,10 @@ class TestBuildBundleClaims:
             "+int x = 1;\n"
         )
 
-    def test_claimed_claude_md_excluded_and_preimage_materialized(self, tmp_path):
+    def test_claimed_claude_md_excluded_and_preimage_materialized(self, tmp_path, monkeypatch):
+        from bootstrap_lib.code_review import mechanical_config
+
+        monkeypatch.setattr(mechanical_config, "_home_path", lambda _: tmp_path / "home")
         ws = tmp_path / "ws"
         src = ws / "src"
         src.mkdir(parents=True)
@@ -3315,7 +3318,7 @@ class TestBuildBundleClaims:
         assert [record["file"] for record in scan["files"]] == [
             "//depot/src/CLAUDE.md"
         ]
-        assert scan["files"][0]["checks_run"]
+        assert scan["files"][0]["checks_run"] == []
         # Claimed file's diff excluded from chunks; generic file present.
         diff = _concat_diff_from_chunks(bundle)
         assert "//depot/src/foo.cpp" in diff
