@@ -52,13 +52,18 @@ class TestWrapperCopiesMatch:
             )
 
     def test_consumers_require_the_parser_owner_version(self) -> None:
-        for kit in ("git-kit", "p4-kit", "llm-scripting-kit"):
+        expected = {
+            "git-kit": "0.106.0",
+            "p4-kit": "0.106.0",
+            "llm-scripting-kit": "0.107.0",
+        }
+        for kit, floor in expected.items():
             manifest = json.loads(
                 (REPO_ROOT / "plugins" / kit / "bootstrap.json").read_text(
                     encoding="utf-8"
                 )
             )
-            assert manifest["requires_bootstrap"] == "0.105.0"
+            assert manifest["requires_bootstrap"] == floor
 
     def test_parser_copies_are_byte_identical(self) -> None:
         first, *rest = [path.read_bytes() for path in PARSER_COPIES]
@@ -147,6 +152,54 @@ class TestCopiesStayIdentical:
         stderr = capsys.readouterr().err
         assert "prepared review bundle support" in stderr
         assert "0.42.0" in stderr
+
+    def test_phrase_map_probe_refuses_owner_that_only_parses_bundle(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        package = types.ModuleType("llm_scripting_kit")
+        package.__path__ = []
+        review_lane = types.ModuleType("llm_scripting_kit.review_lane")
+
+        def old_run_lane(*, lane, model, diff_text, mechanical_findings=None):
+            return {}
+
+        def old_parse(argv):
+            parser = argparse.ArgumentParser()
+            parser.add_argument("--lane")
+            parser.add_argument("--model")
+            parser.add_argument("--chunk")
+            parser.add_argument("--bundle")
+            parser.add_argument("--mechanical-scan-ran", action="store_true")
+            parser.add_argument("--mechanical-finding", action="append")
+            return parser.parse_args(argv)
+
+        review_lane._parse_args = old_parse
+        review_lane.run_lane = old_run_lane
+        review_lane.main = lambda: 42
+        bootstrap_guard = types.ModuleType("bootstrap_guard")
+        bootstrap_guard.reexec_under_plugin_venv = lambda _plugin: None
+        bootstrap_guard.require_bootstrap = lambda *_args, **_kwargs: None
+        monkeypatch.setitem(sys.modules, "bootstrap_guard", bootstrap_guard)
+        monkeypatch.setitem(sys.modules, "llm_scripting_kit", package)
+        monkeypatch.setitem(sys.modules, "llm_scripting_kit.review_lane", review_lane)
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                str(COPIES[0]),
+                "--bundle", "bundle.json",
+                "--mechanical-scan-ran",
+            ],
+        )
+        monkeypatch.syspath_prepend(str(COPIES[0].parent))
+
+        with pytest.raises(SystemExit) as excinfo:
+            runpy.run_path(str(COPIES[0]), run_name="__main__")
+
+        assert excinfo.value.code != 0
+        stderr = capsys.readouterr().err
+        assert "bundle mechanical check phrase support" in stderr
+        assert "0.43.0" in stderr
 
 
 class TestNoSeamImportLeakedIntoBootstrapLib:

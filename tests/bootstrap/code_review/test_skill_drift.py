@@ -80,6 +80,17 @@ class TestMechanicalScanContract:
             assert "no mechanical coverage for this file" in body
             assert "covers exactly those two checks" not in body
 
+    def test_both_skills_transport_claimed_scan_to_md_domain(self):
+        for vcs in ("git", "p4"):
+            body = gen.render_skill(vcs)
+            ref = gen.render_md_domain_review(vcs)
+            for rendered in (body, ref):
+                assert "mechanicalScan" in rendered
+                assert "mechanicalCheckPhrases" in rendered
+                assert "bundle.mechanical_check_phrases" in rendered
+            assert "mechanical_scan.files[0]" in body
+            assert "does not" in ref and "audit the file" in ref
+
 
 class TestCitationVerificationDispatch:
     def test_both_skills_parse_native_lanes_and_pass_bundle_to_endpoints(self):

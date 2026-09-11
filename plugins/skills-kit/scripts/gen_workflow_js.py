@@ -446,6 +446,36 @@ if (typeof input === 'string') {
 if (!input || !Array.isArray(input.files) || input.files.length === 0) {
 """
 
+DETECT_MECHANICAL_CHUNK = """\
+function mechanicalPreamble(f) {
+  const scan = f.mechanicalScan
+  if (!scan || typeof scan !== 'object') {
+    return `Mechanical scan: absent for this file. Do not infer mechanical coverage.`
+  }
+  const phrases = input.mechanicalCheckPhrases && typeof input.mechanicalCheckPhrases === 'object'
+    ? input.mechanicalCheckPhrases
+    : {}
+  const checks = Array.isArray(scan.checks_run) ? scan.checks_run : []
+  const findings = Array.isArray(scan.findings) ? scan.findings : []
+  const diagnostics = Array.isArray(scan.diagnostics) ? scan.diagnostics : []
+  const coverage = checks.length > 0
+    ? checks.map((id) => `${id} (${phrases[id] || id})`).join(', ')
+    : 'none (no mechanical coverage for this file)'
+  const findingLines = findings.length > 0
+    ? findings.map((row) => `- ${scan.file || f.path}:${row.line ?? '?'} [${row.check || '?'}] ${row.detail || ''}`).join('\\n')
+    : 'none for the checks listed above'
+  const diagnosticLines = diagnostics.length > 0
+    ? `\\nDiagnostics (failed checks are uncovered):\\n${diagnostics.map((row) => `- ${row}`).join('\\n')}`
+    : ''
+  return `Mechanical scan (added lines only):
+- File: ${scan.file || f.path}
+  Checks run: ${coverage}
+  Findings: ${findingLines}${diagnosticLines}
+
+The checks listed above already ran. Do not repeat any listed check for this file. A listed hit is a located observation, not a verdict: judge it against this lane's governing standards and return it through the lane's normal finding schema only when a rule forbids it; stay silent otherwise. Never invent a hit for a covered file/check pair that the scan did not list. An omitted or uncovered check, an unrecognized result, or a diagnostic remains this lane's responsibility; inspect it normally. This scan answers only its mechanical questions. It does not audit the file, does not satisfy this lane, and does not change a NOT-AUDITED verdict.`
+}
+"""
+
 # Only one totals-reducer chunk is shipped: DETECT_REVIEW_TOTALS_CHUNK below,
 # shared verbatim by the three lanes that implement `--review` (audit_claude_md,
 # audit_skill, audit_project_doc). A prior non-review variant, DETECT_TOTALS_CHUNK,
@@ -520,9 +550,9 @@ const totals = results.reduce((acc, r) => {
 """
 
 SHARED_CHUNK_TARGETS = {
-    MD_DOMAIN / "workflow" / "claude-md-detect.js": [ARGS_NORM_CHUNK, DETECT_REVIEW_TOTALS_CHUNK],
-    MD_DOMAIN / "workflow" / "skill-detect.js": [ARGS_NORM_CHUNK, DETECT_REVIEW_TOTALS_CHUNK],
-    MD_DOMAIN / "workflow" / "project-doc-detect.js": [ARGS_NORM_CHUNK, DETECT_REVIEW_TOTALS_CHUNK],
+    MD_DOMAIN / "workflow" / "claude-md-detect.js": [ARGS_NORM_CHUNK, DETECT_MECHANICAL_CHUNK, DETECT_REVIEW_TOTALS_CHUNK],
+    MD_DOMAIN / "workflow" / "skill-detect.js": [ARGS_NORM_CHUNK, DETECT_MECHANICAL_CHUNK, DETECT_REVIEW_TOTALS_CHUNK],
+    MD_DOMAIN / "workflow" / "project-doc-detect.js": [ARGS_NORM_CHUNK, DETECT_MECHANICAL_CHUNK, DETECT_REVIEW_TOTALS_CHUNK],
     MD_DOMAIN / "workflow" / "references-classify.js": [ARGS_NORM_CHUNK],
 }
 

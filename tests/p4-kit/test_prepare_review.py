@@ -198,12 +198,12 @@ class TestBootstrapDependencyDiagnostics:
             "plugin's dependencies, then retry.\n"
         )
 
-    def test_manifest_requires_bootstrap_0105_api_floor(self):
+    def test_manifest_requires_bootstrap_0106_api_floor(self):
         manifest = json.loads(
             Path("plugins/p4-kit/bootstrap.json").read_text(encoding="utf-8")
         )
 
-        assert manifest["requires_bootstrap"] == "0.105.0"
+        assert manifest["requires_bootstrap"] == "0.106.0"
 
     def test_bootstrap_without_run_vcs_timeout_reports_update_remedy(self, tmp_path):
         bootstrap_package = tmp_path / "bootstrap_lib"
@@ -233,7 +233,7 @@ class TestBootstrapDependencyDiagnostics:
 
         assert completed.stderr == (
             "[p4-kit] the installed 'plugins-kit:bootstrap' plugin is too old "
-            "or stale for p4-kit's code review (requires bootstrap >= 0.103.0; "
+            "or stale for p4-kit's code review (requires bootstrap >= 0.106.0; "
             "missing: bootstrap_lib.code_review.pipeline.run_vcs(timeout=...), "
             "bootstrap_lib.code_review.mechanical). "
             "Run `claude plugin update bootstrap@plugins-kit`. Then start a new "
@@ -3286,6 +3286,12 @@ class TestBuildBundleClaims:
         assert claimed["action"] == "edit"
         assert Path(claimed["pre_image"]).read_text(encoding="utf-8") == "old rule\n"
         assert claimed["claude_mds"]  # nearest-first, includes self
+        scan = claimed["mechanical_scan"]
+        assert scan["schema_version"] == 2
+        assert [record["file"] for record in scan["files"]] == [
+            "//depot/src/CLAUDE.md"
+        ]
+        assert scan["files"][0]["checks_run"]
         # Claimed file's diff excluded from chunks; generic file present.
         diff = _concat_diff_from_chunks(bundle)
         assert "//depot/src/foo.cpp" in diff

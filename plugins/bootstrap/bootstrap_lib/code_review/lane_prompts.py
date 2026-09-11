@@ -269,7 +269,7 @@ def _validate_issue(item: Any, index: int) -> dict[str, Any]:
 # Bumped whenever any prompt text below changes, so a recorded lane result says
 # which wording produced it. A comparison across prompt versions is not a
 # like-for-like measurement, and without this the difference is invisible.
-PROMPT_VERSION = "5"
+PROMPT_VERSION = "6"
 
 
 # The false-positive guardrails, stated once. These are the same rules the
@@ -495,8 +495,15 @@ def format_mechanical_findings(
     findings: Mapping[str, Any] | Sequence[Mapping[str, Any]],
     *,
     files: Sequence[str] = (),
+    mechanical_check_phrases: Mapping[str, str] | None = None,
 ) -> str:
-    """Render deterministic findings with per-file, derived coverage."""
+    """Render deterministic findings with per-file, derived coverage.
+
+    A supplied phrase map is the producer's authoritative check set. Missing
+    ids remain bare for forward compatibility. Without a map, use the local
+    registry so callers that predate bundle phrase transport keep their
+    existing labels.
+    """
     records = sorted(
         _mechanical_file_records(findings, files),
         key=lambda record: str(record.get("file", "")),
@@ -514,9 +521,17 @@ def format_mechanical_findings(
         )
         lines.append(f"- File: {file}")
         if checks_run:
-            coverage = ", ".join(
-                f"{check} ({check_phrase(check)})" for check in checks_run
-            )
+            coverage_parts = []
+            for check in checks_run:
+                phrase = (
+                    mechanical_check_phrases.get(check)
+                    if mechanical_check_phrases is not None
+                    else check_phrase(check)
+                )
+                coverage_parts.append(
+                    f"{check} ({phrase})" if phrase and phrase != check else check
+                )
+            coverage = ", ".join(coverage_parts)
             lines.append(f"  Checks run: {coverage}")
         else:
             lines.append("  Checks run: none (no mechanical coverage for this file)")
@@ -541,6 +556,7 @@ def build_user_message(
     description: str = "",
     claimed_files: Sequence[str] = (),
     mechanical_findings: Mapping[str, Any] | Sequence[Mapping[str, Any]] | None = None,
+    mechanical_check_phrases: Mapping[str, str] | None = None,
 ) -> str:
     """Assemble the user message for a lane.
 
@@ -554,6 +570,10 @@ def build_user_message(
     version 2 mechanical_scan object/file-record sequence or the legacy flat
     finding sequence. Passing ``None`` omits the section. An empty legacy
     sequence still means the two legacy checks ran cleanly.
+
+    ``mechanical_check_phrases`` comes from the prepared bundle. When present,
+    it supplies labels for config-declared checks that the local code registry
+    cannot know. An id absent from the map renders bare.
 
     The diff is INLINED rather than referenced by path. The diff-only lane is a
     plain completion with no file access at all, so a path would name something
@@ -576,7 +596,11 @@ def build_user_message(
             + "\n".join(f"- {f}" for f in claimed_files)
         )
     if mechanical_findings is not None:
-        parts.append(format_mechanical_findings(mechanical_findings, files=files))
+        parts.append(format_mechanical_findings(
+            mechanical_findings,
+            files=files,
+            mechanical_check_phrases=mechanical_check_phrases,
+        ))
     parts.append("Diff:\n" + diff_text)
     return "\n\n".join(parts)
 
