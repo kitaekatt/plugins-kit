@@ -57,12 +57,12 @@ from pathlib import Path
 import yaml
 
 from . import resolve
+from . import validate
 from .types import TaskType, get_type
 from .validate import validate_ref
 
 _STUB_RE = re.compile(r"[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?")
 _MAX_STUB_LEN = 60
-_EXPECTED_DEV_TASKS_WARNING = "uncommitted dev/tasks folder"
 
 
 class InitError(ValueError):
@@ -146,10 +146,16 @@ list) -- never by listing it here.
 ### Opening response protocol
 
 After invoking the always-invoke skills AND reading the required docs above,
-BEFORE any tool use, end the first turn with:
+open the first turn with:
 
 > "Read plan.md. Current goal: <restated in own words>. Starting with:
 > <first concrete action>. Unclear / blocked on: <issue, or 'none'>."
+
+Then START the first concrete action in the SAME turn. That line is an
+orientation announcement, not a request for confirmation: "Unclear /
+blocked on: none" means proceed. End the turn there when the clause names
+a real blocker, or when the Autonomy status section below claims the next
+decision for the user -- those checkpoints stand.
 
 ### Communication protocol
 
@@ -263,7 +269,7 @@ def _unexpected_findings(errors: list[str], warnings: list[str], dest: str) -> l
     unexpected = [f"error: {e}" for e in errors]
     for w in warnings:
         expected = dest == resolve.LOCATION_DEV_TASKS and w.startswith(
-            _EXPECTED_DEV_TASKS_WARNING
+            validate.UNCOMMITTED_DEV_TASKS
         )
         if not expected:
             unexpected.append(f"warning: {w}")

@@ -22,12 +22,12 @@ sharp edges:
   -i`` footgun). The ``P4Changeset`` carries the parsed CL number.
 - **open_for_edit == ``p4 edit <path>``.** A real per-file checkout-for-edit
   (unlike git, where it is a no-op).
-- **add == ``p4 add <path>``.**
+- **add == ``p4 add [ -f ] <path>``.**
 - **move_into == ``p4 reopen -c <cl> <path>`` per exact path -- NEVER a
   wildcard, and VERIFIED.** A wildcard reopen (``p4 reopen -c <cl> <path>/...``)
   moves every opened file under the path, including files organized into other
   pending CLs, silently destroying CL organization that is recorded nowhere. A
-  path containing ``...`` or ``*`` is rejected outright. Beyond that, ``p4
+  path containing ``...`` is rejected outright. Beyond that, ``p4
   reopen`` exits 0 even when it did nothing (file not open for edit) or landed
   the file in the wrong CL, so the stdout diagnostic is parsed -- a move is
   accepted only on ``"reopened"``, ``"currently opened for edit; change
@@ -82,9 +82,33 @@ P4Runner = Callable[[List[str], Optional[str], Optional[str]], Tuple[int, str, s
 _FIELD_RE = re.compile(r"^[A-Za-z][A-Za-z0-9]*:")
 _CHANGE_CREATED_RE = re.compile(r"Change (\d+) created")
 
+# An unreachable p4 server hangs `subprocess.run` forever with no output, so
+# every real p4 call needs a finite bound. 60s is generous for a single p4
+# command against a healthy server while still failing a genuinely wedged one
+# inside a human-scale wait; overridable per the plugin-opinion razor (a fixed
+# timeout is a workflow opinion the consumer must be able to raise -- a large
+# CL's `p4 print` against a slow WAN link is a realistic case that would need
+# more).
+_DEFAULT_TIMEOUT_S = 60.0
+_TIMEOUT_ENV_VAR = "P4KIT_VCS_TIMEOUT_S"
+
+
+def _runner_timeout_s() -> float:
+    """Read the p4 subprocess timeout (seconds) from `P4KIT_VCS_TIMEOUT_S`.
+
+    Falls back to `_DEFAULT_TIMEOUT_S` when unset or unparseable.
+    """
+    raw = os.environ.get(_TIMEOUT_ENV_VAR)
+    if not raw:
+        return _DEFAULT_TIMEOUT_S
+    try:
+        return float(raw)
+    except ValueError:
+        return _DEFAULT_TIMEOUT_S
+
 
 class P4VcsError(RuntimeError):
-    """Raised when a p4 command fails non-recoverably (or a wildcard is refused)."""
+    """Raised when a p4 command fails non-recoverably (or ellipsis is refused)."""
 
 
 def _default_runner(
@@ -95,35 +119,70 @@ def _default_runner(
     Injected as the ``runner`` seam so a test can substitute a scripted stub;
     the real path spawns ``p4`` with UTF-8 pipes. Imported locally so the module
     loads without ``subprocess`` being touched when a runner is injected.
+
+    Bounded by a finite timeout (``_runner_timeout_s``, overridable via
+    ``P4KIT_VCS_TIMEOUT_S``) so an unreachable server cannot hang the caller
+    indefinitely. ``subprocess.TimeoutExpired`` is normalized into the same
+    ``(rc, out, err)`` failure shape every caller already handles through
+    :meth:`P4Vcs._p4` -- never raised past this function.
     """
     import subprocess  # noqa: PLC0415
 
-    proc = subprocess.run(
-        ["p4", *args],
-        input=input,
-        cwd=cwd,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-    )
+    timeout = _runner_timeout_s()
+    try:
+        proc = subprocess.run(
+            ["p4", *args],
+            input=input,
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        return (
+            1,
+            "",
+            f"p4 {' '.join(args)} timed out after {timeout}s "
+            f"(override with {_TIMEOUT_ENV_VAR})",
+        )
     return proc.returncode, proc.stdout or "", proc.stderr or ""
 
 
-def _reject_wildcard(path) -> str:
-    """Return ``str(path)`` unless it carries a p4 wildcard (``...`` or ``*``).
+_NOT_OPENED_RE = re.compile(r"not opened on this client", re.IGNORECASE)
 
-    The never-wildcard discipline: seam ops touch exactly the paths handed to
-    them, one at a time. A wildcard would let a single reopen/revert sweep in
-    files the caller never named -- the CL-organization-destroying bug this seam
-    was built to avoid.
+
+def _is_not_opened_failure(out: str, err: str) -> bool:
+    """True when a p4 `opened` failure means "legitimately nothing open" --
+    p4's own negative-result message -- rather than a real query failure.
+
+    Both `p4 opened <path>` (single file) and `p4 opened -c <cl>` (whole CL)
+    report this exact phrase on a non-zero exit when there is nothing to
+    report; any other non-zero exit is a genuine failure (bad workspace,
+    unreachable server, ...) and must not be read the same way.
+    """
+    return bool(_NOT_OPENED_RE.search(out) or _NOT_OPENED_RE.search(err))
+
+
+def _refuse_ellipsis(path) -> str:
+    """Return ``str(path)`` unless it carries p4's ellipsis wildcard.
+
+    The seam accepts literal filesystem names. Ellipsis has no literal encoding
+    and is refused so each operation addresses exactly one named file.
     """
     s = str(path)
-    if "..." in s or "*" in s:
+    if "..." in s:
         raise P4VcsError(
-            f"refusing wildcard path (never-wildcard discipline): {s!r}"
+            f"refusing ellipsis path (literal-name contract): {s!r}"
         )
     return s
+
+
+def _filespec(path) -> str:
+    """Return a literal p4 filespec with reserved characters encoded."""
+    s = _refuse_ellipsis(path)
+    return s.replace("%", "%25").replace("@", "%40").replace("#", "%23").replace("*", "%2A")
 
 
 def _tab_prefix(description: str) -> str:
@@ -223,6 +282,10 @@ class P4Changeset:
 class P4Vcs:
     """``VcsBackend`` over a Perforce client workspace.
 
+    Seam callers pass literal filesystem names, never glob patterns or
+    pre-encoded names. Existing-file operations encode reserved characters at
+    the p4 boundary; add passes the literal name and uses ``-f`` when needed.
+
     - ``cwd`` -- directory p4 commands run in (for ``.p4config`` discovery);
       ``None`` runs in the process cwd.
     - ``client`` / ``user`` -- values for the ``Client:`` / ``User:`` fields of a
@@ -253,11 +316,13 @@ class P4Vcs:
 
     def open_for_edit(self, path) -> None:
         """Open ``path`` for edit (``p4 edit <path>``)."""
-        self._p4("edit", _reject_wildcard(path))
+        self._p4("edit", _filespec(path))
 
     def add(self, path) -> None:
-        """Add ``path`` to the depot (``p4 add <path>``)."""
-        self._p4("add", _reject_wildcard(path))
+        """Add literal ``path`` to the depot, using ``-f`` when reserved."""
+        s = _refuse_ellipsis(path)
+        args = ["add", "-f", s] if any(char in s for char in "@#%*") else ["add", s]
+        self._p4(*args)
 
     def make_changeset(self, description: str) -> P4Changeset:
         """Create a fresh pending changelist and return its :class:`P4Changeset`.
@@ -306,7 +371,8 @@ class P4Vcs:
             raise P4VcsError("move_into called on a changeset with no CL number")
         cl = changeset.cl
         for path in paths:
-            p = _reject_wildcard(path)
+            literal = _refuse_ellipsis(path)
+            p = _filespec(path)
             rc, out, err = self._p4("reopen", "-c", cl, p, check=False)
             stdout = out or ""
             reopened = "reopened" in stdout
@@ -320,7 +386,7 @@ class P4Vcs:
                     f"p4 reopen did not move {p!r} into CL {cl} "
                     f"(exit {rc}): {reason}"
                 )
-            changeset._add_path(p)
+            changeset._add_path(literal)
 
     def finalize_description(
         self, changeset: P4Changeset, description: str
@@ -342,8 +408,8 @@ class P4Vcs:
         return changeset.cl
 
     def revert(self, path) -> None:
-        """Revert exactly ``path`` (``p4 revert <path>``). Never a wildcard."""
-        self._p4("revert", _reject_wildcard(path))
+        """Revert exactly literal ``path`` (``p4 revert <path>``)."""
+        self._p4("revert", _filespec(path))
 
     def delete_if_empty(self, changeset: P4Changeset) -> None:
         """Delete the pending CL (``p4 change -d <cl>``) when it moved no files."""
@@ -364,18 +430,33 @@ class P4Vcs:
         half stays the seam's :meth:`open_for_edit`): runs ``p4 -ztag opened
         <path>`` and reads the ``... change <value>`` field. Returns
         ``"default"`` for the default changelist, the numeric CL string for a
-        numbered CL, or ``None`` when the file is not open (``p4 opened`` exits
-        non-zero or returns no row). Never a wildcard.
+        numbered CL, or ``None`` when the file is legitimately not open
+        anywhere (``p4 opened`` exits non-zero with its own "not opened on
+        this client" message, or exits zero with no row). A non-zero exit for
+        any OTHER reason is a real query failure and raises
+        :class:`P4VcsError` rather than returning ``None`` -- see
+        :func:`_is_not_opened_failure`. Never a wildcard.
 
         This surfaces the discrepancy the seam's zero-trusting ``open_for_edit``
         cannot: a file already opened in ANOTHER pending CL is writable, but a
         later ``move_into`` must reopen it -- querying the owner first lets a
         caller warn before mutating on disk.
+
+        A non-zero exit is ``None`` ONLY when it is p4's own "not opened on
+        this client" negative result. Any other failure (bad workspace,
+        unreachable server, ...) raises :class:`P4VcsError` instead -- folding
+        every failure into the same ``None`` a legitimate "not open anywhere"
+        result returns would make the two indistinguishable to a caller.
         """
-        p = _reject_wildcard(path)
-        rc, out, _err = self._p4("-ztag", "opened", p, check=False)
+        p = _filespec(path)
+        rc, out, err = self._p4("-ztag", "opened", p, check=False)
         if rc != 0:
-            return None
+            if _is_not_opened_failure(out, err):
+                return None
+            raise P4VcsError(
+                f"p4 -ztag opened {p} failed (exit {rc}): "
+                f"{err.strip() or out.strip()}"
+            )
         for line in (out or "").splitlines():
             match = re.match(r"\.\.\.\s+change\s+(\S+)", line)
             if match:
@@ -394,17 +475,31 @@ class P4Vcs:
         returned :class:`P4ChangesetContents` against what it believes it
         finalized; a mismatch means the description claims files the CL does not
         contain (or vice-versa).
+
+        ``paths`` is empty both when the CL legitimately has nothing open
+        (p4's own "not opened on this client" result) and, deliberately NOT
+        the same case, when the query itself fails -- the latter raises
+        :class:`P4VcsError` instead of returning an empty list a caller could
+        mistake for "nothing open".
         """
         cl_str = str(cl)
         _rc, spec, _err = self._p4("change", "-o", cl_str)
         description = _extract_description_block(spec)
-        rc2, out2, _err2 = self._p4("-ztag", "opened", "-c", cl_str, check=False)
+        rc2, out2, err2 = self._p4("-ztag", "opened", "-c", cl_str, check=False)
         paths: List[str] = []
         if rc2 == 0:
             for line in (out2 or "").splitlines():
                 match = re.match(r"\.\.\.\s+clientFile\s+(.+)$", line)
                 if match:
                     paths.append(match.group(1).strip())
+        elif not _is_not_opened_failure(out2, err2):
+            # A real query failure must not collapse into the same empty
+            # `paths` a legitimately-empty CL returns -- see owning_changeset
+            # for the identical reasoning.
+            raise P4VcsError(
+                f"p4 -ztag opened -c {cl_str} failed (exit {rc2}): "
+                f"{err2.strip() or out2.strip()}"
+            )
         return P4ChangesetContents(cl=cl_str, description=description, paths=paths)
 
 

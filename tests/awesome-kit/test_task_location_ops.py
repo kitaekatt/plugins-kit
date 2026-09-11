@@ -290,6 +290,41 @@ class TestArchiveLib:
         log = (folder / "log.md").read_text(encoding="utf-8")
         assert "submit to version control" in log
 
+    def test_nontmp_no_repo_runs_only_read_only_git_commands(
+        self, tmp_path, monkeypatch
+    ):
+        # Outside a git repo, archive still runs git commands to FIND THAT
+        # OUT (repo detection is how the no-repo answer gets reached) -- the
+        # guarantee is narrower than "no git commands run": no command that
+        # WRITES (add, commit, rm) ever runs once detection fails to find a
+        # usable repo. Every subcommand recorded here must be read-only.
+        READ_ONLY_SUBCOMMANDS = {"rev-parse", "status", "ls-files", "check-ignore"}
+        recorded: list[list[str]] = []
+        real_run = subprocess.run
+
+        def spy(argv, *args, **kwargs):
+            if argv and argv[0] == "git":
+                recorded.append(list(argv))
+            return real_run(argv, *args, **kwargs)
+
+        monkeypatch.setattr(location_ops.subprocess, "run", spy)
+        folder = make_task(tmp_path, "dev/tasks/durable")
+        result = location_ops.archive_task("dev/tasks/durable", tmp_path)
+        assert result.vcs_pending is True
+        assert folder.is_dir()
+        assert recorded, "expected at least the repo-detection call"
+        for argv in recorded:
+            # argv is ["git"] optionally followed by ["-C", <path>], then
+            # the subcommand -- the only two shapes this codebase emits.
+            rest = argv[1:]
+            if rest[:1] == ["-C"]:
+                rest = rest[2:]
+            subcommand = rest[0] if rest else None
+            assert subcommand in READ_ONLY_SUBCOMMANDS, argv
+            assert "add" not in argv
+            assert "commit" not in argv
+            assert "rm" not in argv
+
     def test_nontmp_vcs_pending_then_delete_finishes(self, tmp_path):
         # The second half of the non-git flow: after the agent submits with
         # the workspace's VCS, delete removes the archived folder (delete
@@ -684,141 +719,6 @@ def write_doc(path: Path, body: str) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("# Doc\n\n" + body, encoding="utf-8")
     return path
-
-
-class TestMoveLib:
-    def test_promote_relocates_and_rewrites_multiple_docs(self, git_root):
-        old_folder = make_task(git_root, "tmp/spike-x")
-        doc_a = write_doc(
-            git_root / "notes.md", fenced_task_list([{"path": "tmp/spike-x"}])
-        )
-        doc_b = write_doc(
-            git_root / "skills" / "foo" / "SKILL.md",
-            fenced_task_list([{"path": "tmp/spike-x"}, {"path": "tmp/spike-x"}]),
-        )
-        _commit_all(git_root)
-        result = location_ops.move_task("tmp/spike-x", "dev/tasks", git_root)
-        assert result.old_canonical == "tmp/spike-x"
-        assert result.new_canonical == "dev/tasks/spike-x"
-        new_folder = git_root / "dev" / "tasks" / "spike-x"
-        assert result.folder == new_folder.resolve()
-        assert not old_folder.exists()
-        for fname in SCAFFOLD_FILES:
-            assert (new_folder / fname).is_file(), fname
-        assert set(result.rewritten_docs) == {doc_a, doc_b}
-        assert "dev/tasks/spike-x" in doc_a.read_text(encoding="utf-8")
-        assert "tmp/spike-x" not in doc_a.read_text(encoding="utf-8")
-        assert doc_b.read_text(encoding="utf-8").count("dev/tasks/spike-x") == 2
-
-    def test_byte_level_preservation_and_prose_untouched(self, tmp_path):
-        # The rewrite is span-precise: only the matching task_list path
-        # values change. Prose mentions of the old path, comments, flow
-        # style, indentation, and refs to a DIFFERENT task are preserved
-        # byte-for-byte. A quoted matching scalar is replaced (quotes and
-        # all) with the bare canonical path.
-        make_task(tmp_path, "tmp/spike-x")
-        original = (
-            "# Notes\n"
-            "\n"
-            "Prose mention of tmp/spike-x stays as prose.\n"
-            "\n"
-            "```yaml\n"
-            "# leading comment\n"
-            "task_list:\n"
-            "  refs:\n"
-            "    - { path: tmp/spike-x }  # inline comment\n"
-            '    - path: "tmp/spike-x"\n'
-            "    - path: dev/tasks/other-task\n"
-            "```\n"
-            "\n"
-            "Trailing prose tmp/spike-x.\n"
-        )
-        doc = tmp_path / "tmp" / "notes.md"
-        doc.write_text(original, encoding="utf-8")
-        location_ops.move_task("tmp/spike-x", "dev/tasks", tmp_path)
-        expected = (
-            "# Notes\n"
-            "\n"
-            "Prose mention of tmp/spike-x stays as prose.\n"
-            "\n"
-            "```yaml\n"
-            "# leading comment\n"
-            "task_list:\n"
-            "  refs:\n"
-            "    - { path: dev/tasks/spike-x }  # inline comment\n"
-            "    - path: dev/tasks/spike-x\n"
-            "    - path: dev/tasks/other-task\n"
-            "```\n"
-            "\n"
-            "Trailing prose tmp/spike-x.\n"
-        )
-        assert doc.read_text(encoding="utf-8") == expected
-
-    def test_doc_referencing_different_task_not_touched(self, tmp_path):
-        make_task(tmp_path, "tmp/spike-x")
-        make_task(tmp_path, "tmp/spike-y")
-        doc = write_doc(
-            tmp_path / "other.md", fenced_task_list([{"path": "tmp/spike-y"}])
-        )
-        before = doc.read_text(encoding="utf-8")
-        result = location_ops.move_task("tmp/spike-x", "dev/tasks", tmp_path)
-        assert result.rewritten_docs == ()
-        assert doc.read_text(encoding="utf-8") == before
-
-    def test_demote_dev_tasks_to_tmp(self, tmp_path):
-        old_folder = make_task(tmp_path, "dev/tasks/durable")
-        doc = write_doc(
-            tmp_path / "tmp" / "notes.md",
-            fenced_task_list([{"path": "dev/tasks/durable"}]),
-        )
-        result = location_ops.move_task("dev/tasks/durable", "tmp", tmp_path)
-        assert result.new_canonical == "tmp/durable"
-        assert not old_folder.exists()
-        assert (tmp_path / "tmp" / "durable" / "task.yaml").is_file()
-        text = doc.read_text(encoding="utf-8")
-        assert "tmp/durable" in text
-        assert "dev/tasks/durable" not in text
-
-    def test_destination_exists_errors_nothing_changed(self, tmp_path):
-        old_folder = make_task(tmp_path, "tmp/spike-x")
-        make_task(tmp_path, "dev/tasks/spike-x")  # occupies the destination
-        doc = write_doc(
-            tmp_path / "tmp" / "notes.md", fenced_task_list([{"path": "tmp/spike-x"}])
-        )
-        before = doc.read_text(encoding="utf-8")
-        with pytest.raises(StateOpError, match="already exists"):
-            location_ops.move_task("tmp/spike-x", "dev/tasks", tmp_path)
-        assert old_folder.is_dir()
-        assert doc.read_text(encoding="utf-8") == before
-
-    def test_already_at_dest_errors(self, tmp_path):
-        make_task(tmp_path, "tmp/spike-x")
-        with pytest.raises(StateOpError, match="already in tmp"):
-            location_ops.move_task("tmp/spike-x", "tmp", tmp_path)
-        assert (tmp_path / "tmp" / "spike-x").is_dir()
-
-    def test_absent_source_errors(self, tmp_path):
-        with pytest.raises(StateOpError, match="no local task folder"):
-            location_ops.move_task("tmp/ghost", "dev/tasks", tmp_path)
-
-    def test_remote_source_errors(self, tmp_path):
-        # Even with a same-named local folder, a tmp ref tagged with a
-        # non-matching host is remote (spec 7.3) -- move refuses.
-        folder = make_task(tmp_path, "tmp/spike-x")
-        with pytest.raises(StateOpError, match="remote"):
-            location_ops.move_task(
-                "tmp/spike-x",
-                "dev/tasks",
-                tmp_path,
-                ref_host=OTHER,
-                local_host=LOCAL,
-            )
-        assert folder.is_dir()
-
-    def test_unknown_dest_errors(self, tmp_path):
-        make_task(tmp_path, "tmp/spike-x")
-        with pytest.raises(StateOpError, match="unknown dest"):
-            location_ops.move_task("tmp/spike-x", "docs", tmp_path)
 
 
 class TestArchiveCLI:

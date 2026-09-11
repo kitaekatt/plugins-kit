@@ -7,7 +7,6 @@ import argparse
 from datetime import datetime, timezone
 import hashlib
 import json
-import os
 from pathlib import Path
 import re
 import shlex
@@ -16,6 +15,48 @@ import subprocess
 import sys
 import time
 from typing import Any, Sequence
+
+# Re-exec under awesome-kit's bootstrap-provisioned venv before importing
+# bootstrap_lib: a bare `python` / `uv run python` invocation builds a
+# different environment that has no such `.pth`. No-op when already there.
+# The guard is the vendored, stdlib-only bootstrap_guard next to this script.
+# See plugins/CLAUDE.md.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from bootstrap_guard import (  # noqa: E402
+    EXIT_BOOTSTRAP_MISSING,
+    reexec_under_plugin_venv,
+    require_bootstrap,
+)
+
+reexec_under_plugin_venv("awesome-kit")
+
+# Launching Codex is dispatch.py's entire job, so bootstrap_lib.codex -- "the
+# ONE sanctioned codex exec invocation" -- is a REQUIRED dependency, not an
+# optional DEGRADE: there is no fallback command to hand-roll if it is
+# unavailable (the hand-rolled fallback is exactly the bug this closes). The
+# module is a shared_lib_import already declared in this plugin's
+# bootstrap.json, so an ImportError here means bootstrap has not provisioned
+# this venv at all. "Absent" and "too old" are diagnosed separately: the
+# newest symbol this script calls -- build_codex_exec_argv -- first shipped
+# in bootstrap 0.79.0, alongside the module itself, so any bootstrap_lib
+# lacking it is that old or older.
+try:
+    import bootstrap_lib.codex as codex_lib  # noqa: E402
+except ImportError:
+    require_bootstrap(
+        "awesome-kit", feature="codex dispatch", missing="bootstrap_lib", force=True
+    )
+    raise  # pragma: no cover - require_bootstrap always exits the process
+
+if not callable(getattr(codex_lib, "build_codex_exec_argv", None)):
+    print(
+        "[awesome-kit] the plugins-kit:bootstrap plugin installed here predates "
+        "bootstrap_lib.codex.build_codex_exec_argv (first shipped in bootstrap "
+        "0.79.0), so codex dispatch cannot build its argv. Update with "
+        "`claude plugin update bootstrap`.",
+        file=sys.stderr,
+    )
+    sys.exit(EXIT_BOOTSTRAP_MISSING)
 
 
 DEFAULT_MODEL = "gpt-5.6-sol"
@@ -35,7 +76,11 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--brief", type=Path, help="file containing the unit brief")
     parser.add_argument("--model", default=DEFAULT_MODEL)
     parser.add_argument("--effort", default=DEFAULT_EFFORT)
-    parser.add_argument("--cwd", type=Path, help="absolute working directory for Codex")
+    parser.add_argument(
+        "--cwd",
+        type=Path,
+        help="absolute working directory for Codex; with --list, the cwd a dispatch used",
+    )
     parser.add_argument("--add-dir", action="append", default=[], metavar="DIR")
     parser.add_argument("--sandbox", choices=("read-only", "workspace-write"), default=DEFAULT_SANDBOX)
     parser.add_argument("--cache-dir", type=Path)
@@ -123,7 +168,7 @@ def _cache_key(
 
 def _cache_hit(
     cache_dir: Path, key: str, cwd: Path, add_dirs: Sequence[Path]
-) -> tuple[Path, Path] | None:
+) -> tuple[Path, Path, dict[str, Any]] | None:
     for entry in sorted(cache_dir.iterdir(), reverse=True):
         if not entry.is_dir() or entry.is_symlink():
             continue
@@ -142,7 +187,7 @@ def _cache_hit(
                 and meta.get("add_dirs") == [str(path) for path in sorted(add_dirs)]
                 and result.stat().st_size > 0
             ):
-                return entry, result
+                return entry, result, meta
         except (AttributeError, OSError, TypeError, ValueError):
             continue
     return None
@@ -165,26 +210,16 @@ def _argv(
     add_dirs: Sequence[Path],
     result: Path,
 ) -> list[str]:
-    argv = [
-        "codex",
-        "exec",
-        "-s",
-        sandbox,
-        "-c",
-        "sandbox_workspace_write.network_access=true",
-        "-m",
-        model,
-        "-c",
-        f"model_reasoning_effort={effort}",
-        "-C",
-        str(cwd),
-    ]
-    if os.name == "nt":
-        argv[4:4] = ["-c", 'windows.sandbox="unelevated"']
-    for add_dir in add_dirs:
-        argv.extend(("--add-dir", str(add_dir)))
-    argv.extend(("-o", str(result), "--skip-git-repo-check", "--color", "never", "-"))
-    return argv
+    """Build the codex argv through the shared builder -- see the module-level
+    comment on why this is REQUIRED rather than a fallback-capable import."""
+    return codex_lib.build_codex_exec_argv(
+        root=cwd,
+        model=model,
+        effort=effort,
+        output_file=result,
+        add_dirs=add_dirs,
+        sandbox=sandbox,
+    )
 
 
 def _validate_run_args(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
@@ -225,9 +260,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     if args.list:
-        if args.cwd is not None or args.brief is not None or args.label is not None:
-            parser.error("--list accepts --cache-dir and --ttl-days only")
-        cwd = Path.cwd().resolve()
+        if args.brief is not None or args.label is not None:
+            parser.error("--list accepts --cache-dir, --cwd and --ttl-days only")
+        cwd = _absolute(args.cwd) if args.cwd is not None else Path.cwd().resolve()
         cache_dir, _ = _cache_location(cwd, args.cache_dir)
         # --list is read-only: it never sweeps. Deletion happens only on a dispatch.
         _list_entries(cache_dir)
@@ -251,11 +286,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     if not args.no_cache:
         hit = _cache_hit(cache_dir, key, cwd, add_dirs)
         if hit is not None:
-            entry, result = hit
+            entry, result, hit_meta = hit
             print(f"CACHE HIT {entry}")
             print(f"SWEPT {swept} entries; skipped {skipped} (not an entry)", file=sys.stderr)
             print(result)
-            return 0
+            return int(hit_meta.get("exit_code") or 0)
 
     entry = _entry_path(cache_dir, args.label)
     result = entry / "result.md"

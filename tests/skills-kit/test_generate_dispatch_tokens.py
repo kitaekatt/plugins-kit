@@ -1,10 +1,10 @@
 """Pinning: every `/md-domain generate <token>` cited in a shipped skills-kit
 doc names an artifact the `generate` verb actually dispatches.
 
-md-domain/SKILL.md:569-574 is authoritative: `generate` takes `claude-md` or
-`human-html` and nothing else -- "generate a skill" routes to `author`. A doc
-that still shows `/md-domain generate skill` or `/md-domain generate
-project-doc` teaches a dispatch that does not exist.
+md-domain/SKILL.md is authoritative: `generate` takes `claude-md` and nothing
+else -- "generate a skill" routes to `author`. A doc that still shows
+`/md-domain generate skill` or `/md-domain generate project-doc` teaches a
+dispatch that does not exist.
 """
 
 import re

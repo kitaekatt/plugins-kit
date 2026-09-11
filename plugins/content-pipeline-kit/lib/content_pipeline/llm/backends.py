@@ -149,6 +149,7 @@ def _to_completion_options(opts: BackendOptions) -> Any:
         effort=opts.effort,
         allowed_tools=opts.allowed_tools,
         cwd=opts.cwd,
+        client_id=opts.client_id,
         log_prefix=opts.log_prefix,
         extras=opts.extras,
     )

@@ -110,15 +110,16 @@ capability_skill:
     - id: work
       keywords: [work on task, start task, dispatch]
       user_objective: "Work an explicitly named task and load its working context."
-      operation: task.py work <ref> [--root PATH]
+      operation: task.py work <ref> [--init] [--root PATH]
       steps:
         - n: 1
-          action: "Run the work verb. It validates first: ANY error OR warning blocks (exit non-zero, findings on stderr, initialization block not emitted). A remote ref (tmp + other host) cannot be worked locally. If no folder exists at the ref, work auto-inits it (promotion)."
+          action: "Run the work verb. It validates first: ANY error OR warning blocks (exit non-zero, findings on stderr, initialization block not emitted). A remote ref (tmp + other host) cannot be worked locally. If no folder exists at the ref, work ERRORS -- treat that as a mistyped path (run list) rather than a task to create; --init opts into scaffolding the folder and working it, and is for a ref you meant to promote."
         - n: 2
-          action: "On success the script prints ONE initialization block to stdout: a '== task init ... ==' header, a Skill(skill: \"<name>\") line for every skill the task needs (the always-required baseline -- currently awesome-kit:orchestrate -- followed by the task's own skills_to_invoke, deduped), an agent_hint: <type> line when set, and a closing '== then: dispatch ... ==' directive. AGENT BEHAVIOR: invoke EVERY emitted Skill(...) line via the Skill tool now, in the order printed, before any other tool use -- the emitted list is the whole required set, so there is nothing to remember from elsewhere. Then act on the closing directive: dispatch the work to background agents per orchestrate, honoring the agent_hint type when set. The script only emits these lines; acting on them is your job."
+          action: "On success the script prints ONE initialization block to stdout: a '== task init ... ==' header, a Skill(skill: \"<name>\") line for every skill the task needs (the always-required baseline the script emits, followed by the task's own skills_to_invoke, deduped), an agent_hint: <type> line when set, and a closing '== then: start ... ==' directive. AGENT BEHAVIOR: invoke EVERY emitted Skill(...) line via the Skill tool now, in the order printed, before any other tool use -- the emitted list is the whole required set, so there is nothing to remember from elsewhere. Then act on the closing directive: START the work in this turn, dispatched to background agents per orchestrate, honoring the agent_hint type when set. The script only emits these lines; acting on them is your job."
       gotchas:
         - "Do not skip the emitted Skill(...) invocations -- they are the task's self-documented working context (the self-documenting-task pattern), not decoration."
         - "The emitted list is the SINGLE source of the required-skill set (baseline plus task-declared, merged script-side) -- do not treat the baseline as advisory. orchestrate is emitted unconditionally, even for trivial work: it gates its own applicability at its step 1, which is cheaper than a condition you evaluate before obeying."
+        - "work is a START, not a checkpoint. Say the orientation line the folder's opening response protocol asks for and then begin the first concrete action in the SAME turn. Do not end the turn on an unblocked task waiting for the user to say go. Two things still stop the turn and neither is waived: a real blocker, and a decision the folder's Autonomy status has claimed for the user."
     - id: update
       keywords: [update task, edit fields, refresh folder, set status, set priority, rotation]
       user_objective: "Upsert a task and apply task.yaml field edits; refresh the folder."
@@ -206,7 +207,7 @@ capability_skill:
         - n: 1
           action: "Run the status verb. The script prints the SUBSTRATE only: classification, findings, the task.yaml fields, the document paths (CLAUDE.md / plan.md / log.md), and the parsed task_items menu."
         - n: 2
-          action: "AGENT BEHAVIOR: status is the system's ONE inference verb. Dispatch a BACKGROUND sub-agent (Task tool) to read the substrate's documents and produce the summary -- do NOT read plan.md/log.md and summarize inline in the main context. The point is main-context preservation; the sub-agent returns the short summary, you relay it. Summarization is workhorse-tier work per the orchestrate skill's model_selection (currently sonnet)."
+          action: "AGENT BEHAVIOR: status is the system's ONE inference verb. Dispatch a BACKGROUND sub-agent (Task tool) to read the substrate's documents and produce the summary -- do NOT read plan.md/log.md and summarize inline in the main context. The point is main-context preservation; the sub-agent returns the short summary, you relay it. Route the dispatch through orchestrate and use whatever model its rendered routing policy resolves for this work -- do not pick or assume one here."
       gotchas:
         - "Summarizing inline defeats the verb's reason for existing (context preservation). The script even prints a reminder note to this effect."
   gotchas:
@@ -248,7 +249,7 @@ capability_skill:
 references:
   - id: handoff_template
     path: references/handoff-template.md
-    keywords: [hand-off template, eight sections, CLAUDE.md template, plan rotation, log filter, fill in scaffold, task_items block, item states, promotion rule, priorities reference items, pre-contract conversion, convert old folder, no task_items block, document size budgets, line budget, oversized document, approaching budget, dominant section, session diary, 400 lines, log.md exempt, durable outputs, document outlives the task, where does this doc live, spec deleted by archive, extraction at authoring time]
+    keywords: [hand-off template, eight sections, CLAUDE.md template, plan rotation, log filter, fill in scaffold, task_items block, item states, promotion rule, priorities reference items, pre-contract conversion, convert old folder, no task_items block, opening response protocol, orientation line, autonomy status, document size budgets, line budget, oversized document, approaching budget, dominant section, session diary, 400 lines, log.md exempt, durable outputs, document outlives the task, where does this doc live, spec deleted by archive, extraction at authoring time]
     summary: "How to fill in and maintain a hand-off-type task folder: the eight-section CLAUDE.md contract (Immediate Priorities = references to item ids), plan.md's task_items block + rotation discipline (completion = removal; promotion rule), the enforced document size budgets (note at the healthy target, blocking warning at the ceiling; log.md exempt), the one-time pre-contract-folder conversion procedure, log.md filter, the durable-outputs rule (does this document belong in the folder at all -- declare at authoring time, archive verifies), anti-patterns, self-verify. Load when populating or updating a scaffolded folder, when validate emits a size finding, or when archive refuses on durable outputs."
   - id: example_claude_md
     path: references/example-claude-md.md
@@ -264,6 +265,6 @@ references:
     summary: "The full task-system design specification (implementation contract; code is authoritative on divergence). Load for semantics questions the capability records do not settle."
   - id: task_items_design
     path: design/task-items-design.md
-    keywords: [task items design, item vocabulary, work item, item states, no done state, no sub-task, priorities as references, mined evidence, homeassistant test case]
-    summary: "The task-items design proposal (ratified 2026-07-09): evidence from real task folders, the vocabulary decision (item, not sub-task/goal/deliverable), and the full contract rationale. Load for why-questions about items; the operating contract lives in handoff-template.md."
+    keywords: [task items design, item vocabulary, work item, item states, no done state, no sub-task, priorities as references, test case, converted task folder, evidence relocated]
+    summary: "The task-items design proposal (ratified 2026-07-09): the vocabulary decision (item, not sub-task/goal/deliverable) and the full contract rationale; the mined evidence and the worked conversion are recorded outside this document. Load for why-questions about items; the operating contract lives in handoff-template.md."
 ```

@@ -245,6 +245,7 @@ def test_d3_driver_produces_the_same_real_cache_key_as_the_untracked_path(tmp_pa
         cache_dir=cache_dir,
     )
     assert accepted == ["u0"]
+    assert tracked_backend.calls[0]["options"].client_id == "content-pipeline:run-1"
 
     # The response cache write is keyed by build_cache_key's own output --
     # read the actual on-disk key back out rather than re-deriving it, so

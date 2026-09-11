@@ -6,7 +6,11 @@ disqualifier the design enumerates (keyword flip, link change, heading rename,
 absolute paths over the changed lines only).
 """
 
-from bootstrap_lib.code_review import triviality
+from bootstrap_lib.code_review import mechanical, triviality
+from bootstrap_lib.code_review.triviality import (
+    mechanical_checks,
+    mechanical_findings,
+)
 
 
 def _hunk(header, *lines):
@@ -137,7 +141,7 @@ class TestMechanicalChecks:
         }
 
     def test_non_ascii_flagged(self):
-        diff = _hunk("@@ -1,1 +1,1 @@", "-plain", "+smärt quote")
+        diff = _hunk("@@ -1,1 +1,1 @@", "-plain", "+sm\u00e4rt quote")
         assert triviality.mechanical_checks(diff)["ascii_clean"] is False
 
     def test_windows_abs_path_flagged(self):
@@ -157,3 +161,159 @@ class TestMechanicalChecks:
             "+new body",
         )
         assert triviality.mechanical_checks(diff)["no_abs_paths"] is True
+
+
+# ---------------------------------------------------------------------------
+# mechanical_findings -- located, added-lines-only findings for a review lane
+# ---------------------------------------------------------------------------
+
+
+class TestMechanicalFindings:
+    """The finding form of the deterministic scan.
+
+    These pin the three differences from `mechanical_checks` that make the
+    output safe to hand to a reviewer rather than render as a disclosure line.
+    """
+
+    def test_reports_a_non_ascii_character_added(self):
+        diff = "@@ -1,1 +1,2 @@\n unchanged\n+an em dash \u2014 here\n"
+        findings = mechanical_findings(diff)
+        assert [f["check"] for f in findings] == ["non_ascii"]
+        assert "U+2014" in findings[0]["detail"]
+
+    def test_does_not_report_a_non_ascii_character_that_was_REMOVED(self):
+        """A change deleting a stray em dash introduces nothing.
+
+        `mechanical_checks` scans removed lines too, which is right for a
+        "what we checked" line and wrong for a finding -- it would report the
+        fix as the defect. Revert the added-lines-only scan in
+        `mechanical_findings` and this goes red.
+        """
+        diff = "@@ -1,2 +1,1 @@\n unchanged\n-an em dash \u2014 here\n"
+        assert mechanical_findings(diff) == []
+        # The aggregate form still sees it; the two forms differ deliberately.
+        assert mechanical_checks(diff)["ascii_clean"] is False
+
+    def test_reports_an_absolute_path_added(self):
+        diff = "@@ -1,1 +1,2 @@\n unchanged\n+see /Users/someone/thing for more\n"
+        findings = mechanical_findings(diff)
+        assert [f["check"] for f in findings] == ["abs_path"]
+
+    def test_locates_each_finding_at_its_post_image_line(self):
+        """A boolean makes the lane re-derive WHERE, which is the inference
+        this mechanism removes. Line numbers are post-image, and a removed
+        line consumes none."""
+        diff = (
+            "@@ -10,3 +10,4 @@\n"
+            " context\n"
+            "-removed line\n"
+            "+first added \u2014 here\n"
+            "+second added \u2014 here\n"
+            " trailing\n"
+        )
+        findings = mechanical_findings(diff)
+        assert [f["line"] for f in findings] == [11, 12]
+
+    def test_reports_the_codepoint_rather_than_asserting_a_violation(self):
+        """Detection is the script's; adjudication is the reviewer's.
+
+        This repo permits the Box Drawing block inside a diagram and forbids
+        it as punctuation -- a distinction no scan can make. The finding must
+        therefore name the character, not call it a violation.
+        """
+        diff = "@@ -1,1 +1,2 @@\n unchanged\n+\u2500\u2500 a diagram rule\n"
+        findings = mechanical_findings(diff)
+        assert findings and findings[0]["check"] == "non_ascii"
+        assert "U+2500" in findings[0]["detail"]
+        detail = findings[0]["detail"].lower()
+        assert "violation" not in detail and "forbidden" not in detail
+
+    def test_empty_and_unparseable_diffs_yield_no_findings(self):
+        assert mechanical_findings("") == []
+        assert mechanical_findings("not a diff at all\n") == []
+
+
+class TestMechanicalRegistry:
+    def test_registry_contract_and_snapshot_preconditions(self):
+        entries = {
+            check.check_id: (check.phrase, check.required_inputs)
+            for check in mechanical.REGISTRY
+        }
+        assert entries["non_ascii"] == (
+            "non-ASCII characters",
+            frozenset({"added_lines"}),
+        )
+        assert entries["abs_path"] == (
+            "absolute paths",
+            frozenset({"added_lines"}),
+        )
+        assert mechanical.LEGACY_CHECK_IDS == ("non_ascii", "abs_path")
+        diff = _hunk("@@ -2,1 +2,1 @@", "-old", "+new")
+        snapshot = mechanical.build_snapshot(
+            "config/example.json", diff, pre_image_text="before\nold\nafter\n"
+        )
+        assert snapshot.post_image_text == "before\nnew\nafter"
+        scan = mechanical.scan_file("asset.bin", "Binary files differ\n")
+        assert scan == {"file": "asset.bin", "checks_run": [], "findings": []}
+
+    def test_structured_parse_failure_is_added_line_only(self):
+        diff = _hunk("@@ -1,1 +1,1 @@", '-{"ok": 1}', '+{"ok": }')
+        scan = mechanical.scan_file("config/data.json", diff, pre_image_text='{"ok": 1}\n')
+        assert "structured_parse" in scan["checks_run"]
+        assert [(f["check"], f["line"]) for f in scan["findings"]] == [("structured_parse", 1)]
+
+    def test_duplicate_keys_preserve_later_key_location(self):
+        diff = _hunk("@@ -1,1 +1,1 @@", '-{"a": 1}', '+{"a": 1, "a": 2}')
+        scan = mechanical.scan_file("config/data.json", diff, pre_image_text='{"a": 1}\n')
+        assert [(f["check"], f["line"]) for f in scan["findings"]] == [("duplicate_keys", 1)]
+
+    def test_csv_row_width_uses_header(self):
+        diff = _hunk("@@ -1,2 +1,2 @@", "-a,b", "+a,b", "-1,2", "+1,2,3")
+        scan = mechanical.scan_file("data/rows.csv", diff, pre_image_text="a,b\n1,2\n")
+        assert [(f["check"], f["line"]) for f in scan["findings"]] == [("column_counts", 2)]
+
+    def test_a_reused_key_name_is_not_a_finding_on_an_unrelated_added_line(self):
+        """A pairs hook says WHICH key repeated, never where, so the position
+        had to be recovered by grepping the file for that key name. That cannot
+        tell a genuine repeat inside one object from the same name used
+        legitimately in a SIBLING object -- the common shape in real JSON.
+
+        Here the only true duplicate is pre-existing on line 2 and is not
+        reportable, while line 4 uses the same name once and IS added. The grep
+        located occurrences at lines 2 and 4, so line 4 became a confident
+        finding about a line with nothing wrong on it. The lane is told to
+        trust the scan, which is exactly what makes a false mechanical finding
+        worse than none."""
+        pre = '[\n{"id": 1, "id": 2},\n{"z": 0},\n{"z": 1}\n]\n'
+        diff = (
+            '@@ -1,5 +1,5 @@\n [\n {"id": 1, "id": 2},\n {"z": 0},\n'
+            '-{"z": 1}\n+{"id": 9}\n ]\n'
+        )
+        scan = mechanical.scan_file("x.json", diff, pre_image_text=pre)
+        assert scan["findings"] == []
+
+    def test_a_genuine_duplicate_on_an_added_line_is_still_reported(self):
+        """The companion to the test above: declining the false positive must
+        not have been bought by declining everything."""
+        pre = '{\n"a": 1\n}\n'
+        diff = '@@ -1,3 +1,4 @@\n {\n "a": 1\n+,"a": 2\n }\n'
+        scan = mechanical.scan_file("y.json", diff, pre_image_text=pre)
+        assert [(f["check"], f["line"]) for f in scan["findings"]] == [
+            ("duplicate_keys", 3)
+        ]
+
+    def test_csv_locates_by_physical_line_not_row_ordinal(self):
+        """A quoted field may contain newlines, after which a row's ordinal is
+        short of its physical position -- so a finding lands on the wrong line,
+        or on a line that merely happens to be in the added set."""
+        pre = 'a,b\n"x\ny",2\n1,2\n'
+        diff = '@@ -1,3 +1,3 @@\n a,b\n "x\n y",2\n-1,2\n+1,2,3\n'
+        scan = mechanical.scan_file("d.csv", diff, pre_image_text=pre)
+        assert [(f["check"], f["line"]) for f in scan["findings"]] == [
+            ("column_counts", 4)
+        ]
+
+    def test_templated_yaml_declines_all_structured_checks(self):
+        diff = _hunk("@@ -1,1 +1,1 @@", "-name: old", "+name: {{ value }}")
+        scan = mechanical.scan_file("config/data.yaml", diff, pre_image_text="name: old\n")
+        assert scan["checks_run"] == ["non_ascii", "abs_path"]

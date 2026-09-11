@@ -16,7 +16,6 @@ here. Chunking policy lives in chunking.py; CLAUDE.md collection and
 submit-gate parsing live in claude_mds.py -- this module composes them.
 """
 
-import fnmatch
 import hashlib
 import json
 import re
@@ -42,8 +41,11 @@ from bootstrap_lib.code_review.machine_emitted_paths import (
     declared_generated_rules,
     match_declared_path,
 )
+from bootstrap_lib.code_review.mechanical import REGISTRY, resolve_checks, scan_file
+from bootstrap_lib.code_review._globs import _matches_one_glob, matches_claim
 from bootstrap_lib.code_review.triviality import (
     mechanical_checks,
+    mechanical_findings,
     triviality_profile,
 )
 
@@ -59,66 +61,6 @@ from bootstrap_lib.code_review.triviality import (
 # lives here (shared) so a kit front-half and the back-half agree on exactly
 # which files are claimed. Front-halves use it to decide which pre-images to
 # materialize; assemble_bundle uses it to do the exclusion + routing.
-
-
-def _matches_one_glob(norm: str, base: str, gnorm: str) -> bool:
-    """Match one posix-normalized pattern against a normalized identifier.
-
-    A `**/` prefix means "at ANY depth, including the root". For a single-segment
-    tail (`**/CLAUDE.md`) that is a basename compare -- fnmatch's `*` alone would
-    not match a bare-root `CLAUDE.md` against `*/CLAUDE.md`. For a multi-segment
-    tail (`**/skills/*/references/*.md`) a basename compare is meaningless, so the
-    tail is also tried ROOTED, which is what makes `**/` mean "including the root"
-    for those too. Any pattern without the prefix is an ordinary fnmatch against
-    the whole identifier.
-    """
-    if gnorm.startswith("**/"):
-        tail = gnorm[3:]
-        if "/" in tail:
-            if fnmatch.fnmatch(norm, tail):
-                return True
-        elif fnmatch.fnmatch(base, tail):
-            return True
-    return fnmatch.fnmatch(norm, gnorm)
-
-
-def matches_claim(identifier: str, claim_globs: list[str]) -> bool:
-    """True if `identifier` is claimed by `claim_globs`.
-
-    `identifier` is the kit's chunk-map key (git repo-relative path, p4 depot
-    path). A pattern prefixed with `!` is an EXCLUSION; exclusions are evaluated
-    FIRST and are absolute, so a caller can claim a broad shape while carving out
-    a subset -- e.g. `["**/*.md", "!**/skills/*/references/*.md"]` claims every
-    markdown file EXCEPT a skill's reference docs.
-
-    The carve-out is not cosmetic. A claimed file is pulled out of the generic
-    reviewer fan-out on the promise that a specialist reviews it instead; when no
-    specialist actually reads that shape of file, claiming it removes the only
-    review it had. Without negation the caller's only options are claim-everything
-    (which strands those files) or drop the catch-all (which strands the files the
-    specialist genuinely owns) -- neither expresses the real intent.
-
-    A list of only exclusions claims nothing, which is the honest reading: no
-    positive pattern was offered.
-    """
-    if not claim_globs:
-        return False
-    norm = identifier.replace("\\", "/")
-    base = norm.rsplit("/", 1)[-1]
-
-    positives: list[str] = []
-    for g in claim_globs:
-        gnorm = g.replace("\\", "/")
-        if gnorm.startswith("!"):
-            # An exclusion wins outright -- no positive pattern can re-claim the
-            # file. Order-independent by design: a caller listing patterns in a
-            # config should not have to reason about precedence.
-            if _matches_one_glob(norm, base, gnorm[1:]):
-                return False
-        else:
-            positives.append(gnorm)
-
-    return any(_matches_one_glob(norm, base, g) for g in positives)
 
 
 def canonical_local(local: Optional[str]) -> Optional[str]:
@@ -182,10 +124,31 @@ def annotate_triviality(entry: dict, section_text: str) -> None:
     entry["trivial_reasons"] = profile["reasons"]
     if profile["trivial"]:
         entry["trivial_checks"] = mechanical_checks(section_text)
+    # Located findings for the lane that WILL review this file. Computed
+    # regardless of `trivial`, because being skipped was never a reason to
+    # scan and being reviewed was never a reason not to: the scan answers its
+    # own questions, and the reviewer's remaining scope is what changes.
+    entry["mechanical_findings"] = mechanical_findings(section_text)
+
+
+def _review_pre_image_text(entry: dict) -> Optional[str]:
+    """Read the materialized review pre-image, never the live file."""
+    if entry.get("pre_image_is_empty"):
+        return ""
+    pre_path = entry.get("pre_image")
+    if not pre_path:
+        return None
+    try:
+        return Path(pre_path).read_text(encoding="utf-8")
+    except (OSError, UnicodeError):
+        return None
 
 
 def run_vcs(
-    executable: str, args: list[str], cwd: Optional[Path] = None
+    executable: str,
+    args: list[str],
+    cwd: Optional[Path] = None,
+    timeout: float = 60.0,
 ) -> tuple[int, str, str]:
     """Run a VCS command, return (returncode, stdout, stderr).
 
@@ -193,14 +156,31 @@ def run_vcs(
     (CJK, emoji) in diffs would abort the subprocess reader on Windows,
     whose default text decoder is the system ANSI codepage (cp1252 on
     en-US/en-GB). None stdout/stderr coalesce to ''.
+
+    `timeout` is a bounded, finite default -- an unreachable server hangs
+    `subprocess.run` forever with nothing passed, so every caller is bounded
+    whether or not it names its own value. A caller that wants a different
+    bound (e.g. a kit resolving its own environment-variable override) passes
+    `timeout` explicitly; this function exposes only the parameter, never an
+    environment variable of its own. `subprocess.TimeoutExpired` is caught and
+    normalized into the same `(rc, out, err)` failure shape every other
+    failure already takes -- never raised past this function.
     """
-    proc = subprocess.run(
-        [executable, *args],
-        capture_output=True,
-        encoding="utf-8",
-        errors="replace",
-        cwd=str(cwd) if cwd else None,
-    )
+    try:
+        proc = subprocess.run(
+            [executable, *args],
+            capture_output=True,
+            encoding="utf-8",
+            errors="replace",
+            cwd=str(cwd) if cwd else None,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        return (
+            1,
+            "",
+            f"{executable} {' '.join(args)} timed out after {timeout}s",
+        )
     return proc.returncode, proc.stdout or "", proc.stderr or ""
 
 
@@ -338,15 +318,31 @@ def assemble_bundle(
     the pre-rename "generated_axis" / "generated_signature" spellings with
     identical values (see the compat aliases below).
 
-    Each changed_files entry is the input dict minus "identifier", plus
-    "chunk_index" (int or None when absent from the diff) and
-    "claude_mds" (nearest-ancestor-first absolute paths). Each claimed_files
-    entry is the input dict verbatim (identifier retained), carrying whatever
-    the front-half attached (local, status/action, pre_image), PLUS the
-    pure-mechanical triviality profile: "trivial" (bool), "trivial_reasons"
-    (machine-readable disqualifier codes, [] when trivial) and -- only when
-    trivial -- "trivial_checks" ({"ascii_clean", "no_abs_paths"} over the
-    changed lines). See bootstrap_lib.code_review.triviality.
+    Each changed_files entry is the input dict minus internal snapshot fields
+    and "identifier", plus
+    "chunk_index" (int or None when absent from the diff), "claude_mds"
+    (nearest-ancestor-first absolute paths) and "mechanical_findings". Each
+    claimed_files entry is the input dict verbatim (identifier retained),
+    carrying whatever the front-half attached (local, status/action,
+    pre_image), PLUS the pure-mechanical triviality profile: "trivial" (bool),
+    "trivial_reasons" (machine-readable disqualifier codes, [] when trivial),
+    "mechanical_findings", and -- only when trivial -- "trivial_checks"
+    ({"ascii_clean", "no_abs_paths"} over the changed lines).
+
+    "mechanical_findings" is a list of {"check", "line", "detail"} dicts over
+    the file's ADDED lines, and each diff_chunks entry carries the same list
+    for its own files with a "file" key added. It is computed for every file a
+    reviewer will read -- claimed and generic alike, trivial or not -- because
+    the scan answers its own questions independently of whether an agent also
+    runs. What being reviewed changes is who consumes the result, not whether
+    it is computed. See bootstrap_lib.code_review.triviality.
+
+    Each diff_chunks entry also carries "mechanical_scan", a version 2 object
+    with one record per file: {file, checks_run, findings}. Coverage is local to
+    that file. An empty checks_run means no check met its preconditions, while
+    a non-empty checks_run plus empty findings means those checks ran cleanly.
+    Seam B, for repository-wide and changed-file-set checks, is deliberately
+    not implemented by this file-local scan.
     """
     if review_generated is not None:
         # Deprecated spelling. Honour it, but never silently pick a winner when
@@ -367,6 +363,11 @@ def assemble_bundle(
     review_machine_emitted = bool(review_machine_emitted)
 
     claim_globs = claim_globs or []
+    if workspace_root is None:
+        # No project root means low-level callers retain the code registry only.
+        checks = REGISTRY
+    else:
+        checks = resolve_checks(workspace_root)
     bundle_dir.mkdir(parents=True, exist_ok=True)
 
     claimed_idents = {
@@ -446,6 +447,7 @@ def assemble_bundle(
     claimed_files: list[dict] = []
     machine_emitted_files: list[dict] = []
     unchunked_files: list[dict] = []
+    scans_by_ident: dict[str, dict[str, object]] = {}
     unique: list[str] = []
     seen: set[str] = set()
     all_locals: list[str] = []
@@ -474,10 +476,13 @@ def assemble_bundle(
             if local:
                 entry["local"] = canonical_local(local)
             entry["claude_mds"] = claude_mds
-            # Pure-mechanical triviality profile (+ mechanical checks when
-            # trivial), so the skill can skip the audit lane for a typo-sized
-            # change and report an honest what-was-checked line instead.
+            # Pure-mechanical triviality profile (+ the aggregate check line
+            # when trivial), so the skill can skip the audit lane for a
+            # typo-sized change and report an honest what-was-checked line
+            # instead -- plus located `mechanical_findings` for the lane that
+            # reviews a NON-trivial claimed file.
             annotate_triviality(entry, id_to_text.get(f["identifier"], ""))
+            entry.pop("pre_image_is_empty", None)
             claimed_files.append(entry)
             continue
         if f["identifier"] in machine_emitted_sigs:
@@ -486,7 +491,11 @@ def assemble_bundle(
             # NOT review. Size is reported because "how much review was skipped"
             # is the question a reader asks next; it is never why the file was
             # skipped.
-            entry = dict(f)
+            entry = {
+                k: v
+                for k, v in f.items()
+                if k not in {"pre_image", "pre_image_is_empty", "action"}
+            }
             if local:
                 entry["local"] = canonical_local(local)
             axis, label = machine_emitted_sigs[f["identifier"]]
@@ -501,11 +510,31 @@ def assemble_bundle(
             entry["size_bytes"] = size
             machine_emitted_files.append(entry)
             continue
-        out = {k: v for k, v in f.items() if k != "identifier"}
+        out = {
+            k: v
+            for k, v in f.items()
+            if k not in {"identifier", "pre_image", "pre_image_is_empty", "action"}
+        }
         if local:
             out["local"] = canonical_local(local)
         out["chunk_index"] = id_to_chunk.get(f["identifier"])
         out["claude_mds"] = claude_mds
+        # The deterministic scan reaches GENERIC chunk files too -- a .yaml or
+        # .csv row, not only a claimed .md. This is the half that was missing:
+        # the scanner was reachable solely through the claimed-file path, so
+        # the file types whose defects it catches best never met it. Note this
+        # deliberately does NOT claim those files: claiming implies a
+        # subject-lens audit owns them, and a claim no lane can audit returns
+        # NOT-AUDITED, which a caller misreads as a pass.
+        out["mechanical_findings"] = mechanical_findings(
+            id_to_text.get(f["identifier"], "")
+        )
+        scans_by_ident[f["identifier"]] = scan_file(
+            f["identifier"],
+            id_to_text.get(f["identifier"], ""),
+            pre_image_text=_review_pre_image_text(f),
+            checks=checks,
+        )
         if out["chunk_index"] is None:
             unchunked_files.append(
                 {"path": f["identifier"], "reason": "no_diff_section"}
@@ -521,11 +550,35 @@ def assemble_bundle(
             file=sys.stderr,
         )
 
+    # Roll the per-file findings up onto the chunk each file belongs to, so a
+    # lane can be handed exactly the findings for the diff it is reading
+    # without walking `changed_files` and re-deriving the membership the
+    # pipeline already computed.
+    findings_by_ident = {
+        f["identifier"]: mechanical_findings(id_to_text.get(f["identifier"], ""))
+        for f in files
+        if f["identifier"] not in claimed_idents
+        and f["identifier"] not in machine_emitted_sigs
+    }
+    for entry in diff_chunks:
+        chunk_findings: list[dict] = []
+        for ident in entry["files"]:
+            for finding in findings_by_ident.get(ident, []):
+                chunk_findings.append({"file": ident, **finding})
+        entry["mechanical_findings"] = chunk_findings
+        entry["mechanical_scan"] = {
+            "schema_version": 2,
+            "files": [scans_by_ident[ident] for ident in entry["files"]],
+        }
+
     submit_gates = collect_submit_gates(unique, all_locals, workspace_root)
 
     result = {
         "bundle_dir": str(bundle_dir),
         "diff_chunks": diff_chunks,
+        "mechanical_check_phrases": {
+            check.check_id: check.phrase for check in checks
+        },
         "changed_files": changed_files,
         "unique_claude_mds": unique,
         "submit_gates": submit_gates,

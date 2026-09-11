@@ -219,7 +219,9 @@ registry from this plugin, so keys are set up once and consumed everywhere.
   the measured NInfer argument sets for Qwen3.6 and Qwen3.8, plus a `qwen38l`
   llama.cpp profile for the same model as a comparable second backend. Claude
   calls it through `${CLAUDE_PLUGIN_ROOT}`; `qwen36-server`, `qwen38-server`,
-  and `qwen38l-server` are thin PATH adapters for interactive shells.
+  and `qwen38l-server` are thin PATH adapters for interactive shells. Use
+  `qwen-switch start qwen36|qwen38|qwen38l` to replace the resident server and
+  wait for its matching model id, or `qwen-switch status` to inspect it.
 
 ## API
 

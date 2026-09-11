@@ -175,6 +175,37 @@ class TestResolveConfig:
             og.resolve_config(layered.project_root)
 
 
+class TestMalformedLayerFailsLoud:
+    """A malformed layer must not silently erase valid policy.
+
+    Before the fix: a scalar under `backends:` in a higher-precedence layer
+    replaced the shipped backend LIST outright via deep_merge's plain-scalar
+    branch, and active() then iterated the scalar character by character
+    (every character fails isinstance(x, dict), so the record list read back
+    as empty) -- rendering succeeded with no active backends and no degraded
+    marker. schema_version was not validated at all.
+    """
+
+    def test_wrong_type_under_a_record_list_key_fails_loudly(self, layered):
+        layered("shipped", {"backends": [{"id": "codex"}]})
+        layered("user", {"backends": "not-a-list"})
+        with pytest.raises(ValueError, match=r"user.*backends.*list"):
+            og.resolve_config(layered.project_root)
+
+    def test_unsupported_schema_version_fails_loudly(self, layered):
+        layered("shipped", {"schema_version": 3})
+        layered("user", {"schema_version": 99})
+        with pytest.raises(ValueError, match=r"user.*schema_version.*99"):
+            og.resolve_config(layered.project_root)
+
+    def test_a_valid_partial_override_still_merges(self, layered):
+        """The fix must not tighten a legitimate partial override."""
+        layered("shipped", {"backends": [{"id": "codex", "label": "Codex"}]})
+        layered("user", {"backends": [{"id": "codex", "label": "Codex (renamed)"}]})
+        config, _ = og.resolve_config(layered.project_root)
+        assert config["backends"] == [{"id": "codex", "label": "Codex (renamed)"}]
+
+
 def shipped():
     return yaml.safe_load(og.DEFAULTS_PATH.read_text(encoding="utf-8"))
 
@@ -652,26 +683,48 @@ class TestConsultSeats:
             "unclassified: untyped\n\n"
         )
 
-    def test_self_with_library_absent_is_silent_but_explain_discloses_it(
+    def test_self_with_library_absent_is_disclosed_in_the_degraded_render(
         self, layered, monkeypatch, capsys
     ):
         monkeypatch.setitem(sys.modules, "llm_scripting_kit", None)
         monkeypatch.setattr(og, "discover_model_definitions", lambda _root: ({}, []))
         config, provenance = self._config(layered)
-        assert "## Consult seats" not in og.render(config, provenance, self_ref="opus")
+        rendered = og.render(config, provenance, self_ref="opus")
+        # The Consult seats SECTION still does not render -- there is no seat
+        # data to show -- but the render must not be silent about why.
+        assert "## Consult seats" not in rendered
+        assert "**Degraded render.**" in rendered
+        assert "consult seats unavailable" in rendered
+        assert "llm_scripting_kit is absent" in rendered
+        assert "claude plugin install llm-scripting-kit@plugins-kit" in rendered
+
         assert og.main(["--self", "opus", "--explain", "--project-root", str(layered.project_root)]) == 0
         explained = capsys.readouterr().out
         assert "seats  skipped" in explained
         assert "llm_scripting_kit is absent" in explained
         assert "claude plugin install llm-scripting-kit@plugins-kit" in explained
 
-    def test_self_with_old_library_is_silent_but_explain_discloses_the_frontier(
+    def test_self_with_old_library_is_disclosed_in_the_degraded_render(
         self, layered, monkeypatch, capsys
     ):
+        """Formerly test_self_with_old_library_is_silent_but_explain_discloses_the_frontier.
+
+        Before the fix a too-old library made the Consult seats section
+        vanish from `render()` with nothing said, indistinguishable from a
+        render where no seat qualified -- pinned here (a hit before the fix
+        reverts): render() must disclose the same diagnosis --explain
+        always carried, not only --explain.
+        """
         monkeypatch.setitem(sys.modules, "llm_scripting_kit", ModuleType("llm_scripting_kit"))
         monkeypatch.setattr(og, "discover_model_definitions", lambda _root: ({}, []))
         config, provenance = self._config(layered)
-        assert "## Consult seats" not in og.render(config, provenance, self_ref="opus")
+        rendered = og.render(config, provenance, self_ref="opus")
+        assert "## Consult seats" not in rendered
+        assert "**Degraded render.**" in rendered
+        assert "discover_seats" in rendered
+        assert "0.28.0" in rendered
+        assert "claude plugin update llm-scripting-kit@plugins-kit" in rendered
+
         assert og.main(["--self", "opus", "--explain", "--project-root", str(layered.project_root)]) == 0
         explained = capsys.readouterr().out
         assert "seats  skipped" in explained
@@ -1862,6 +1915,96 @@ class TestRenderedCodexCommandKeepsItsSilentFailureFlags:
             "the rendered codex command dropped --add-dir; the scratchpad is "
             "outside the writable root, so a write there fails silently"
         )
+
+
+class TestAddDirsProbeDiagnosesAStaleLlmScriptingKit:
+    """A too-old llm-scripting-kit lacks build_argv's `add_dirs` keyword.
+
+    A bare try/except Exception around the whole call would mean the
+    fallback note was `TypeError: build_argv() got an unexpected keyword
+    argument 'add_dirs'` -- true, but naming neither the owning plugin nor
+    the remedy, and indistinguishable from an adapter bug. The probe must
+    check the keyword BEFORE the call and name llm-scripting-kit, the floor
+    (0.10.0, the first published version carrying add_dirs), and the update
+    command.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _shared_libs_on_path(self, monkeypatch):
+        repo = Path(__file__).resolve().parents[2]
+        for lib in (repo / "plugins" / "llm-scripting-kit" / "lib", repo / "plugins" / "bootstrap"):
+            monkeypatch.syspath_prepend(str(lib))
+
+    def test_probe_names_the_owner_and_the_floor_not_a_raw_typeerror(self, monkeypatch):
+        import llm_scripting_kit as model_kit
+
+        class _PreAddDirsCodexAdapter:
+            """Stands in for a CodexAdapter published before add_dirs existed."""
+
+            def __init__(self, argv_prefix=None):
+                self.argv_prefix = argv_prefix
+
+            def build_argv(self, entry, root, *, prompt, output_file=None):
+                return ["codex", "exec", "-C", str(root), "-o", str(output_file), "-"]
+
+        monkeypatch.setattr(model_kit, "resolve_harness_adapter", lambda entry: _PreAddDirsCodexAdapter())
+        notes: list = []
+        rendered = og.adapter_command_text_provider(
+            {"id": "codex", "command": "codex exec ... -"},
+            model_entries={
+                "sol": {
+                    "id": "sol",
+                    "kind": "harness",
+                    "harness": "codex",
+                    "model": "gpt-5.6-sol",
+                    "effort": "high",
+                }
+            },
+            notes=notes,
+        )
+        assert rendered == "codex exec ... -"
+        assert len(notes) == 1
+        note = notes[0]
+        assert "llm-scripting-kit" in note or "llm_scripting_kit" in note
+        assert "0.10.0" in note
+        assert "update" in note.lower()
+        assert "TypeError" not in note
+        assert "unexpected keyword" not in note
+
+
+class TestCodexDispatchDocMatchesTheShippedCommand:
+    """The asset_dependencies invariant binds `command:` to the ARGV line only.
+
+    codex-dispatch.md's worked example additionally carries a stdin redirect
+    and a `> log 2>&1` stream redirect that an argv list cannot express, so
+    the invariant can never claim the command matches the WHOLE worked
+    example -- only opencode-dispatch.md's split shape (an argv-only line,
+    then "complete it at launch with" the redirects) makes it true.
+    """
+
+    _REF_PATH = (
+        Path(__file__).resolve().parents[2]
+        / "plugins" / "awesome-kit" / "skills" / "orchestrate"
+        / "references" / "codex-dispatch.md"
+    )
+
+    def test_argv_only_line_matches_the_shipped_backend_command(self):
+        backends = {b["id"]: b for b in shipped()["backends"]}
+        shipped_command = " ".join(backends["codex"]["command"].split())
+
+        text = self._REF_PATH.read_text(encoding="utf-8")
+        match = re.search(
+            r"backend record's one-line command is:\n\n(.+?)\n\n",
+            text,
+            re.DOTALL,
+        )
+        assert match, "codex-dispatch.md must carry an argv-only worked-example line"
+        doc_command = " ".join(match.group(1).replace("\\", " ").split())
+        assert doc_command == shipped_command
+
+    def test_doc_names_its_command_source(self):
+        text = self._REF_PATH.read_text(encoding="utf-8")
+        assert "Command source: `llm_scripting_kit.harness_adapters.CodexAdapter`" in text
 
 
 # --------------------------------------------------------------------------

@@ -20,6 +20,7 @@ import yaml
 
 from bootstrap_guard import _REEXEC_GUARD_ENV
 from task_system import init as init_mod
+from task_system import validate as validate_mod
 from task_system.init import InitError, derive_stub_and_title, init_task
 from task_system.validate import ValidationResult, validate_ref
 
@@ -160,6 +161,30 @@ class TestInitTmp:
         data = yaml.safe_load((folder / "task.yaml").read_text(encoding="utf-8"))
         assert data["task"]["title"] == desc
         assert validate_ref(f"tmp/{folder.name}", tmp_path).clean
+
+
+class TestExpectedWarningIsProducersConstant:
+    def test_init_holds_no_copy_of_the_warning_literal(self):
+        # The contract is that the wording lives in exactly ONE place. An
+        # identity assertion between two reads of the same module attribute
+        # cannot fail and so pins nothing; the checkable property is that
+        # init's SOURCE carries no copy of the literal to drift.
+        source = Path(init_mod.__file__).read_text(encoding="utf-8")
+        assert validate_mod.UNCOMMITTED_DEV_TASKS not in source
+
+    def test_producer_wording_change_is_still_recognized(self, git_root, monkeypatch):
+        # Reword the producer's message (as an editorial pass would) and
+        # confirm init still classifies it as expected -- because init's
+        # check is built from the constant, not a hardcoded prefix.
+        monkeypatch.setattr(
+            validate_mod, "UNCOMMITTED_DEV_TASKS", "unsaved dev/tasks folder"
+        )
+        folder = init_task("reworded-warning", git_root, dest="dev/tasks")
+        result = validate_ref("dev/tasks/reworded-warning", git_root)
+        assert result.errors == []
+        assert len(result.warnings) == 1
+        assert result.warnings[0].startswith("unsaved dev/tasks folder")
+        assert folder.is_dir()
 
 
 class TestInitDevTasks:

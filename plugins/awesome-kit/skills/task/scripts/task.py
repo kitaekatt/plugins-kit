@@ -40,14 +40,16 @@ Read-op conventions (Step 3):
   (archived / orphaned / remote) -- matching ``show``.
 
 State-op conventions (Step 4):
-- ``work <ref>`` exits non-zero when validate blocks (ANY error or warning),
-  the ref is remote, or auto-init fails -- findings to stderr. On pass it
+- ``work <ref>`` exits non-zero when no folder exists at the ref (a mistyped
+  path must fail, not scaffold a task -- ``--init`` opts into the explicit
+  promotion), when validate blocks (ANY error or warning), when the ref is
+  remote, or when an opted-in auto-init fails -- findings to stderr. On pass it
   prints to stdout a single
   initialization block: a ``== task init ... ==`` header, one
   ``Skill(skill: "<name>")`` line per merged skill
   (``state_ops.BASELINE_SKILLS`` then the task's own ``skills_to_invoke``,
   deduped), an ``agent_hint: <name>`` dispatch hint line when present, and
-  a closing ``== then: dispatch ... ==`` directive (the skill layer acts on
+  a closing ``== then: start ... ==`` directive (the skill layer acts on
   these; the script only emits them).
 - ``update <ref>`` applies the explicit ref. Prints the
   re-validation classification to stdout and findings to stderr; exits 0 iff
@@ -123,6 +125,7 @@ reexec_under_plugin_venv("awesome-kit")
 
 try:
     from task_system import location_ops  # noqa: E402
+    from task_system import reference_rewrite  # noqa: E402
     from task_system import resolve  # noqa: E402
     from task_system import state_ops  # noqa: E402
     from task_system.discovery import (  # noqa: E402
@@ -341,22 +344,29 @@ def _emit_work(result) -> None:
     cross-referencing prose for a requirement the script did not print --
     and the closing directive is what turns a loaded orchestrate skill into
     an actual dispatch (the observed miss was invoking the task's own
-    skills and then implementing inline anyway)."""
+    skills and then implementing inline anyway). It also says to START:
+    the second observed miss was orienting correctly and then ending the
+    turn on an unblocked task, which costs the user a round trip to say
+    "go". It names the two cases that still stop the turn -- a blocker, and
+    a decision the task folder's CLAUDE.md claims for the user -- so it
+    removes a dead checkpoint without removing a real one."""
     print("== task init -- invoke each of these now, one Skill call each ==")
     for skill in result.skills_to_invoke:
         print(f'Skill(skill: "{skill}")')
     if result.agent_hint is not None:
         print(f"agent_hint: {result.agent_hint}")
     print(
-        "== then: dispatch the work per orchestrate -- "
-        "do not implement inline in the main context =="
+        "== then: start the work now, dispatched per orchestrate -- "
+        "do not implement inline in the main context; end the turn for the "
+        "user when the task is blocked or its CLAUDE.md claims the "
+        "decision =="
     )
 
 
 def _cmd_work(args: argparse.Namespace) -> int:
     root = (args.root if args.root is not None else Path.cwd()).resolve()
     try:
-        result = state_ops.work(args.ref, root)
+        result = state_ops.work(args.ref, root, allow_init=args.init)
     except StateOpError as exc:
         _print_state_op_error(exc)
         return 1
@@ -470,7 +480,7 @@ def _cmd_delete(args: argparse.Namespace) -> int:
 def _cmd_move(args: argparse.Namespace) -> int:
     root = (args.root if args.root is not None else Path.cwd()).resolve()
     try:
-        result = location_ops.move_task(
+        result = reference_rewrite.move_task(
             args.ref, args.dest, root
         )
     except StateOpError as exc:
@@ -679,10 +689,19 @@ def main(argv: list[str] | None = None) -> int:
         )
         return p
 
-    add_state_op_parser(
+    p_work = add_state_op_parser(
         "work",
-        "Prepare the task for work (auto-init when the folder is absent; "
+        "Prepare an EXISTING task for work (a missing folder is an error; "
         "gated by validate -- errors AND warnings block).",
+    )
+    p_work.add_argument(
+        "--init",
+        action="store_true",
+        help=(
+            "Scaffold the task folder when the ref has none, then work it "
+            "(explicit promotion). Without this flag a missing folder is an "
+            "error, so a mistyped path fails instead of creating a task."
+        ),
     )
     p_update = add_state_op_parser(
         "update",

@@ -35,8 +35,12 @@ and probes the shared module. The boundary is enforced by
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Mapping, Sequence
+
+from bootstrap_lib.code_review.mechanical import LEGACY_CHECK_IDS, check_phrase
 
 
 # --------------------------------------------------------------------------
@@ -131,12 +135,19 @@ ISSUE_ARRAY_SCHEMA: dict[str, Any] = {
             "reason": {"type": "string", "enum": ["bug", "claude_md"]},
             "description": {"type": "string", "minLength": 1},
             "citation": {"type": "string"},
+            "citation_verification": {
+                "type": "string",
+                "enum": ["verified", "unverifiable", "unchecked"],
+            },
         },
     },
 }
 
 _REQUIRED_ISSUE_FIELDS = ("file", "lines", "reason", "description")
-_ALLOWED_ISSUE_FIELDS = _REQUIRED_ISSUE_FIELDS + ("citation",)
+_ALLOWED_ISSUE_FIELDS = _REQUIRED_ISSUE_FIELDS + (
+    "citation",
+    "citation_verification",
+)
 _ALLOWED_REASONS = ("bug", "claude_md")
 
 
@@ -164,7 +175,12 @@ def _strip_code_fence(text: str) -> str:
     return "\n".join(body).strip()
 
 
-def parse_issue_array(text: str) -> list[dict[str, Any]]:
+def parse_issue_array(
+    text: str,
+    *,
+    lane: str | None = None,
+    claude_mds_by_file: Mapping[str, Sequence[str]] | None = None,
+) -> list[dict[str, Any]]:
     """Parse and validate a reviewer lane's response.
 
     Raises ``LaneOutputError`` with a reason a human can act on. An empty
@@ -189,8 +205,36 @@ def parse_issue_array(text: str) -> list[dict[str, Any]]:
         )
     issues: list[dict[str, Any]] = []
     for index, item in enumerate(value):
-        issues.append(_validate_issue(item, index))
+        issue = _validate_issue(item, index)
+        if lane == "reviewer_a_claude_md_compliance":
+            issue["citation_verification"] = _citation_verification(
+                issue, claude_mds_by_file
+            )
+        issues.append(issue)
     return issues
+
+
+def _citation_verification(
+    issue: Mapping[str, Any],
+    claude_mds_by_file: Mapping[str, Sequence[str]] | None,
+) -> str:
+    """Verify a reviewer_a citation without changing or suppressing its issue."""
+    chain = (claude_mds_by_file or {}).get(str(issue["file"]), ())
+    if not chain:
+        return "unchecked"
+    citation = issue.get("citation", "")
+    if not citation:
+        return "unverifiable"
+    normalized_citation = re.sub(r"\s+", " ", citation).strip()
+    for path in chain:
+        try:
+            governing_text = Path(path).read_text(encoding="utf-8")
+        except (OSError, UnicodeError):
+            continue
+        normalized_rule = re.sub(r"\s+", " ", governing_text).strip()
+        if normalized_citation in normalized_rule:
+            return "verified"
+    return "unverifiable"
 
 
 def _validate_issue(item: Any, index: int) -> dict[str, Any]:
@@ -225,7 +269,7 @@ def _validate_issue(item: Any, index: int) -> dict[str, Any]:
 # Bumped whenever any prompt text below changes, so a recorded lane result says
 # which wording produced it. A comparison across prompt versions is not a
 # like-for-like measurement, and without this the difference is invisible.
-PROMPT_VERSION = "3"
+PROMPT_VERSION = "5"
 
 
 # The false-positive guardrails, stated once. These are the same rules the
@@ -252,6 +296,42 @@ Never flag any of these:
 If you are not certain an issue is real, do not flag it. False positives erode
 trust: an empty array is a perfectly good answer and is much better than a
 speculative finding."""
+
+
+# Pre-computed deterministic findings, stated once for the lanes that receive
+# them. The point of the block is the DIVISION it draws: the script owns
+# detection (it reads every added byte, every time), the reviewer owns
+# adjudication (whether a project rule actually forbids this instance). A lane
+# told only "non-ASCII: present" would have to re-scan to find where, which is
+# the inference this mechanism exists to remove.
+#
+# It lives in the USER message, not in a reviewer's system prompt, and that
+# placement is load-bearing. The text asserts that a scan section is present
+# and that the lane may therefore stop looking -- an assertion only the CALLER
+# can make good on. The two dispatch paths do not adopt the scan in lockstep
+# (the Agent path is driven by the generated SKILL.md, the endpoint path by
+# llm_scripting_kit.review_lane), so a system prompt carrying this text would
+# be FALSE for any caller that had not yet started passing findings, and would
+# license a lane to skip a check nothing had run. Travelling with the findings
+# makes the claim true whenever it is made and absent whenever it is not.
+MECHANICAL_PREAMBLE = """\
+Already checked mechanically. Deterministic checks have ALREADY run where their
+preconditions were met. Coverage and results are listed per file below under
+"Mechanical scan". A check listed for one file says nothing about another file.
+
+What this means for you:
+- For a file/check pair listed under "Checks run", do not run that check again.
+  Re-deriving its result wastes your attention and cannot improve on it.
+- Do not report a hit for a listed file/check pair unless the scan lists that
+  hit. This restriction does not apply to a check omitted for that file.
+- The scan detects; it does not decide. Each listed hit is a LOCATION, not a
+  verdict. Whether it violates a rule is yours to judge from the governing
+  standards, exactly as with any other finding -- a project may permit a
+  character class in some contexts and forbid it in others, and the scan
+  cannot read the rule. Report a listed hit only when a rule you can quote
+  forbids it, and stay silent otherwise.
+- "Checks run: none" explicitly means no mechanical coverage for that file.
+  An empty findings list with named checks means those checks ran cleanly."""
 
 
 OUTPUT_INSTRUCTION = """\
@@ -381,6 +461,78 @@ LANE_PROMPTS: dict[str, LanePrompt] = {
 }
 
 
+def _mechanical_file_records(
+    value: Mapping[str, Any] | Sequence[Mapping[str, Any]],
+    files: Sequence[str],
+) -> list[Mapping[str, Any]]:
+    """Normalize version 2 scans and legacy finding lists to file records."""
+    if isinstance(value, Mapping):
+        records = value.get("files", [])
+        return list(records) if isinstance(records, Sequence) else []
+
+    rows = list(value)
+    if rows and all("checks_run" in row and "findings" in row for row in rows):
+        return rows
+
+    by_file: dict[str, list[Mapping[str, Any]]] = {
+        file: [] for file in files
+    }
+    for row in rows:
+        by_file.setdefault(str(row.get("file", "?")), []).append(row)
+    if not by_file:
+        by_file["this chunk"] = []
+    return [
+        {
+            "file": file,
+            "checks_run": list(LEGACY_CHECK_IDS),
+            "findings": file_findings,
+        }
+        for file, file_findings in by_file.items()
+    ]
+
+
+def format_mechanical_findings(
+    findings: Mapping[str, Any] | Sequence[Mapping[str, Any]],
+    *,
+    files: Sequence[str] = (),
+) -> str:
+    """Render deterministic findings with per-file, derived coverage."""
+    records = sorted(
+        _mechanical_file_records(findings, files),
+        key=lambda record: str(record.get("file", "")),
+    )
+    lines = ["Mechanical scan (added lines only):"]
+    for record in records:
+        file = str(record.get("file", "?"))
+        checks_run = [str(check) for check in record.get("checks_run", [])]
+        rows = sorted(
+            record.get("findings", []),
+            key=lambda finding: (
+                int(finding.get("line", 0)),
+                str(finding.get("check", "")),
+            ),
+        )
+        lines.append(f"- File: {file}")
+        if checks_run:
+            coverage = ", ".join(
+                f"{check} ({check_phrase(check)})" for check in checks_run
+            )
+            lines.append(f"  Checks run: {coverage}")
+        else:
+            lines.append("  Checks run: none (no mechanical coverage for this file)")
+        if rows:
+            lines.append("  Findings:")
+            lines.extend(
+                "  - "
+                f"{file}:{row.get('line', '?')} [{row.get('check', '?')}] "
+                f"{row.get('detail', '')}"
+                for row in rows
+            )
+        else:
+            lines.append("  Findings: none for the checks listed above")
+    return MECHANICAL_PREAMBLE + "\n\n" + "\n".join(lines)
+
+
 def build_user_message(
     lane: str,
     *,
@@ -388,6 +540,7 @@ def build_user_message(
     files: Sequence[str] = (),
     description: str = "",
     claimed_files: Sequence[str] = (),
+    mechanical_findings: Mapping[str, Any] | Sequence[Mapping[str, Any]] | None = None,
 ) -> str:
     """Assemble the user message for a lane.
 
@@ -396,6 +549,11 @@ def build_user_message(
     is what stops a lane reporting a missing update that is in fact present in
     a file it was never shown -- the diff it receives is otherwise silent about
     their existence, which reads as their absence.
+
+    ``mechanical_findings`` keeps its compatibility name and accepts either a
+    version 2 mechanical_scan object/file-record sequence or the legacy flat
+    finding sequence. Passing ``None`` omits the section. An empty legacy
+    sequence still means the two legacy checks ran cleanly.
 
     The diff is INLINED rather than referenced by path. The diff-only lane is a
     plain completion with no file access at all, so a path would name something
@@ -417,6 +575,8 @@ def build_user_message(
             "(paths only -- their diffs are deliberately not shown here):\n"
             + "\n".join(f"- {f}" for f in claimed_files)
         )
+    if mechanical_findings is not None:
+        parts.append(format_mechanical_findings(mechanical_findings, files=files))
     parts.append("Diff:\n" + diff_text)
     return "\n\n".join(parts)
 
@@ -431,12 +591,14 @@ __all__ = [
     "LANE_PROMPTS",
     "LaneOutputError",
     "LanePrompt",
+    "MECHANICAL_PREAMBLE",
     "OUTPUT_INSTRUCTION",
     "PROMPT_VERSION",
     "REVIEWER_A_SYSTEM",
     "REVIEWER_B_SYSTEM",
     "REVIEWER_C_SYSTEM",
     "build_user_message",
+    "format_mechanical_findings",
     "is_agent_alias",
     "parse_issue_array",
 ]

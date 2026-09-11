@@ -70,6 +70,56 @@ class TestShippedDefaultsPreserveAgentDispatch:
 
 
 class TestParseIssueArray:
+    def test_verifies_reviewer_a_citation_against_governing_chain(self, tmp_path: Path) -> None:
+        claude_md = tmp_path / "CLAUDE.md"
+        claude_md.write_text("Use pathlib.Path for file paths.\n", encoding="utf-8")
+        text = json.dumps([{
+            "file": "src/a.py",
+            "lines": "4",
+            "reason": "claude_md",
+            "description": "bad path",
+            "citation": "Use pathlib.Path for\nfile paths.",
+        }])
+
+        issue = lp.parse_issue_array(
+            text,
+            lane="reviewer_a_claude_md_compliance",
+            claude_mds_by_file={"src/a.py": [str(claude_md)]},
+        )[0]
+
+        assert issue["citation_verification"] == "verified"
+
+    def test_unverifiable_citation_is_retained(self, tmp_path: Path) -> None:
+        claude_md = tmp_path / "CLAUDE.md"
+        claude_md.write_text("Use pathlib.Path for file paths.\n", encoding="utf-8")
+        text = json.dumps([{
+            "file": "src/a.py", "lines": "4", "reason": "claude_md",
+            "description": "bad path", "citation": "Invented rule",
+        }])
+
+        issue = lp.parse_issue_array(
+            text,
+            lane="reviewer_a_claude_md_compliance",
+            claude_mds_by_file={"src/a.py": [str(claude_md)]},
+        )[0]
+
+        assert issue["citation_verification"] == "unverifiable"
+        assert issue["citation"] == "Invented rule"
+
+    def test_empty_governing_chain_is_unchecked(self) -> None:
+        text = json.dumps([{
+            "file": "a.py", "lines": "4", "reason": "claude_md",
+            "description": "bad path", "citation": "Any rule",
+        }])
+
+        issue = lp.parse_issue_array(
+            text,
+            lane="reviewer_a_claude_md_compliance",
+            claude_mds_by_file={"a.py": []},
+        )[0]
+
+        assert issue["citation_verification"] == "unchecked"
+
     def test_accepts_a_minimal_issue(self) -> None:
         text = json.dumps(
             [{"file": "a.py", "lines": "4", "reason": "bug", "description": "boom"}]
@@ -294,3 +344,102 @@ class TestPromptContent:
         """It is emitted into SKILL.md as a block scalar; it must read back."""
         document = yaml.safe_dump({"canonical_prompt": lp.REVIEWER_B_SYSTEM})
         assert yaml.safe_load(document)["canonical_prompt"] == lp.REVIEWER_B_SYSTEM
+
+
+# ---------------------------------------------------------------------------
+# Pre-computed mechanical findings in the lane's user message
+# ---------------------------------------------------------------------------
+
+
+class TestMechanicalFindingsInPrompt:
+    _HIT = {
+        "file": "config/rows.yaml",
+        "line": 11,
+        "check": "non_ascii",
+        "detail": "U+2014 in: a row",
+    }
+
+    def test_no_system_prompt_asserts_a_scan_section(self):
+        """The claim "a scan already ran, stop looking" is only true for a
+        caller that passes findings, and the two dispatch paths do not adopt
+        the scan in lockstep. A system prompt carrying it would be FALSE for
+        any caller that had not started passing them, and would license a lane
+        to skip a check nothing ran. Move the preamble into a system prompt
+        and this goes red.
+        """
+        for name in (
+            "REVIEWER_A_SYSTEM",
+            "REVIEWER_B_SYSTEM",
+            "REVIEWER_C_SYSTEM",
+        ):
+            assert "Already checked mechanically" not in getattr(lp, name), name
+
+    def test_a_caller_passing_nothing_makes_no_claim(self):
+        msg = lp.build_user_message(
+            "reviewer_b_diff_only_bugs", diff_text="@@ -1 +1 @@\n+x"
+        )
+        assert "Already checked mechanically" not in msg
+        assert "Mechanical scan" not in msg
+
+    def test_an_empty_scan_is_stated_rather_than_omitted(self):
+        """Absent and silent must differ. A lane that cannot tell a clean scan
+        from no scan has to re-scan to be safe, which is the duplicated work
+        this removes."""
+        msg = lp.build_user_message(
+            "reviewer_b_diff_only_bugs", diff_text="d", mechanical_findings=[]
+        )
+        assert "Already checked mechanically" in msg
+        assert "non_ascii (non-ASCII characters)" in msg
+        assert "abs_path (absolute paths)" in msg
+        assert "Findings: none for the checks listed above" in msg
+
+    def test_findings_are_rendered_with_file_line_and_check(self):
+        msg = lp.build_user_message(
+            "reviewer_a_claude_md_compliance",
+            diff_text="d",
+            mechanical_findings=[self._HIT],
+        )
+        assert "- config/rows.yaml:11 [non_ascii] U+2014 in: a row" in msg
+
+    def test_findings_are_sorted_by_file_then_line(self):
+        msgs = lp.format_mechanical_findings(
+            [
+                {"file": "b.yaml", "line": 2, "check": "abs_path", "detail": "x"},
+                {"file": "a.yaml", "line": 9, "check": "non_ascii", "detail": "y"},
+                {"file": "a.yaml", "line": 3, "check": "non_ascii", "detail": "z"},
+            ]
+        )
+        # Parse only the rows BELOW the scan header -- the preamble above it
+        # is a bulleted list too, and would otherwise be read as findings.
+        body = msgs.split("Mechanical scan (added lines only):", 1)[1]
+        order = [line.split()[1] for line in body.splitlines() if line.startswith("  - ")]
+        assert order == ["a.yaml:3", "a.yaml:9", "b.yaml:2"]
+
+    def test_v2_coverage_is_derived_and_scoped_per_file(self):
+        msg = lp.format_mechanical_findings(
+            {
+                "schema_version": 2,
+                "files": [
+                    {
+                        "file": "a.yaml",
+                        "checks_run": ["non_ascii"],
+                        "findings": [],
+                    },
+                    {"file": "b.jsonc", "checks_run": [], "findings": []},
+                ],
+            }
+        )
+        assert "Checks run: non_ascii (non-ASCII characters)" in msg
+        assert "abs_path (absolute paths)" not in msg
+        assert "File: b.jsonc\n  Checks run: none (no mechanical coverage" in msg
+        assert "file/check pair" in msg
+
+    def test_the_preamble_tells_the_lane_the_scan_does_not_adjudicate(self):
+        """Detection is the script's and adjudication the reviewer's. Without
+        this the lane reports every hit as a violation, which trades a
+        probabilistic answer for a confidently wrong one -- this repo permits
+        box-drawing characters inside a diagram."""
+        text = lp.MECHANICAL_PREAMBLE
+        assert "detects; it does not decide" in text
+        assert 'file/check pair listed under "Checks run"' in text
+        assert "restriction does not apply to a check omitted for that file" in text

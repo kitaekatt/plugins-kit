@@ -59,11 +59,18 @@ unconfigurable opinion whose test passes is a finding.
   rather than configured because a second VCS backend would be carried without being
   exercised: the maintainers track tasks in git, so a p4 path would ship untested and its
   first real failure would be on a consumer's machine. The degradation is deliberate and
-  bounded, not silent -- outside a git repo the scripts run NO VCS commands, record the
-  final state, keep the folder (`vcs_pending`), and hand submission to the agent. A
-  Perforce team therefore gets a working task system whose retirement step is manual, and
-  should either accept that or drive submission themselves; there is no half-working git
-  path to be surprised by.
+  bounded, not silent -- the scripts run read-only git commands (repo detection, status,
+  ignore checks) to work out what state a folder is in even outside a git repo or before
+  the repo question is settled, but no git command that WRITES (add, commit) ever runs
+  once detection fails to find a usable repo. Outside a git repo, archive records the
+  final state, keeps the folder (`vcs_pending`), and hands submission to the agent. Where
+  git IS present but configured to ignore the folder, archive records the final state and
+  either parks it (fully git-ignored) or keeps it in place (partially git-ignored, some
+  files force-added) -- both `vcs_ignored` outcomes. In both, the folder holds the only
+  copy of everything git ignores; in the partial case git still holds the force-added
+  files, which is exactly why that folder is kept in place rather than parked. A Perforce team therefore gets a working
+  task system whose retirement step is manual, and should either accept that or drive
+  submission themselves; there is no half-working git path to be surprised by.
 
 - **job-kit selects deterministically from the caller's stated preference order.** No
   scoring, no endpoint aliases, no learned or adaptive routing: a job names an ordered
@@ -188,6 +195,21 @@ unconfigurable opinion whose test passes is a finding.
   disappearing mid-run, which strands that work with no signal a caller can act on. A
   verdict that only ever improves within a session is a guarantee; one that can flip either
   way is a race.
+
+- **A shipped mechanical review check cannot be disabled.** The layered
+  `mechanical_checks.yaml` config is ADDITIVE ONLY: a user or project layer may
+  introduce new pattern checks, and a duplicate id at any layer is a hard
+  resolve-time error rather than an override. A team that runs `non_ascii` or
+  `abs_path` against a codebase where neither rule applies pays prompt space for
+  two findings-free checks every review, and their only remedy is to ignore the
+  coverage line -- so this is a stance, not a good default. We refuse the
+  disable seam because the lane is told WHICH checks ran so it can stop looking
+  for those things itself: a disabled check leaves the reviewer instructed to
+  skip a scan that never happened, which converts a merely noisy default into a
+  silent coverage hole. Redefinition is refused for the same reason, since
+  restating a shipped id with a pattern that matches nothing disables it by
+  another name. A team that wants different rules ADDS them; the shipped set is
+  a floor.
 
 - **Code review renders to chat and is never persisted.** git-kit and p4-kit scope
   themselves to a conversational review; a team needing PR/Swarm comments or a CI artifact
@@ -363,10 +385,16 @@ does not need one.
 `bootstrap_lib/codex.py` is stdlib-only because `bootstrap_lib` is imported from
 contexts where no third-party dependency is guaranteed to exist (SessionStart
 hooks, a plugin whose venv has not been provisioned yet), so nothing here may
-import outside the stdlib. `orchestrate` deliberately does NOT consume it.
-orchestrate's `detect_backend` stays stdlib-only and generic on purpose: coupling a policy
-renderer to a codex-specific module would cost a manifest change, a version bump
-and a venv re-exec guard to dedupe three lines.
+import outside the stdlib. `orchestrate` consumes it at exactly one seam: the
+thing that LAUNCHES codex (`scripts/dispatch.py`) hard-imports
+`build_codex_exec_argv` behind the re-exec guard, because launcher resolution
+(`codex.cmd` via `cmd /c`) and the cmd-metacharacter refusal are the
+injection-and-Windows protections and must not be re-implemented; the
+awesome-kit manifest carries the matching `requires_bootstrap` floor. The
+POLICY RENDERER does not: `orchestration_guidance.py`'s `detect_backend` stays
+stdlib-only and generic over every backend, duplicating `resolve_cli` (three
+lines, trusted config argv, no caller-supplied path) rather than coupling a
+renderer to a codex-specific module. Change both copies together.
 
 The venv-scoping above is the ordinary consequence of a per-venv install rather
 than fragility -- a `.pth` written into one environment no more appears in
@@ -456,8 +484,8 @@ safe with nothing to remember:
 os.environ.setdefault("_BOOTSTRAP_GUARD_VENV_REEXEC", "1")
 ```
 
-Current setters: `tests/awesome-kit`, `tests/git-kit`, `tests/p4-kit`,
-`tests/unreal-kit`. A dir whose tests import a re-execing script and which does
+Current setters: `tests/awesome-kit`, `tests/git-kit`, `tests/job-kit`,
+`tests/p4-kit`, `tests/unreal-kit`. A dir whose tests import a re-execing script and which does
 NOT set this is a latent false green, and the failure hides itself: in a
 full-suite run an earlier conftest (alphabetically, `tests/awesome-kit`) sets
 the var first, so the dir looks healthy and only breaks when run ALONE -- i.e.
@@ -477,7 +505,8 @@ to the script that imports them (e.g. `plugins/p4-kit/scripts/bootstrap_guard.py
 location. `tests/bootstrap/test_bootstrap_guard.py` asserts every copy matches
 the canonical, and the guard must never `import bootstrap_lib`. Current vendored
 copies: `git-kit/scripts`, `p4-kit/scripts`, `skills-kit/scripts`,
-`unreal-kit/lib`, `hue-kit/scripts`, `awesome-kit/skills/task/scripts`,
+`unreal-kit/lib`, `hue-kit/scripts`, `job-kit/lib`,
+`awesome-kit/skills/task/scripts`,
 `awesome-kit/skills/orchestrate/scripts`.
 
 **The test globs `plugins/**/bootstrap_guard.py`, so it is the authority on that

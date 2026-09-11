@@ -8,7 +8,9 @@ runs in one process.
 """
 
 import json
+import os
 import subprocess
+import sys
 from pathlib import Path
 from unittest.mock import patch
 
@@ -96,6 +98,116 @@ class TestRunGit:
             pr.run_git(["status"], cwd=tmp_path)
         assert captured.get("cwd") == str(tmp_path)
 
+    def test_timeout_reads_gitkit_vcs_timeout_s_env_var(self, monkeypatch):
+        monkeypatch.setenv("GITKIT_VCS_TIMEOUT_S", "5")
+        captured: dict = {}
+
+        def fake_run(cmd, **kwargs):
+            captured.update(kwargs)
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+        with patch.object(subprocess, "run", side_effect=fake_run):
+            pr.run_git(["status"])
+
+        assert captured.get("timeout") == 5.0
+
+    def test_timeout_falls_back_to_the_default_when_env_var_is_garbage(
+        self, monkeypatch
+    ):
+        monkeypatch.setenv("GITKIT_VCS_TIMEOUT_S", "not-a-number")
+        captured: dict = {}
+
+        def fake_run(cmd, **kwargs):
+            captured.update(kwargs)
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+        with patch.object(subprocess, "run", side_effect=fake_run):
+            pr.run_git(["status"])
+
+        assert captured.get("timeout") == 60.0
+
+    def test_timeout_falls_back_to_the_default_when_env_var_is_unset(
+        self, monkeypatch
+    ):
+        monkeypatch.delenv("GITKIT_VCS_TIMEOUT_S", raising=False)
+        captured: dict = {}
+
+        def fake_run(cmd, **kwargs):
+            captured.update(kwargs)
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+        with patch.object(subprocess, "run", side_effect=fake_run):
+            pr.run_git(["status"])
+
+        assert captured.get("timeout") == 60.0
+
+
+class TestBootstrapDependencyDiagnostics:
+    @staticmethod
+    def _run_prepare(env: dict[str, str]) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [sys.executable, "-S", str(Path(pr.__file__))],
+            capture_output=True,
+            text=True,
+            env=env,
+            check=False,
+        )
+
+    def test_absent_bootstrap_reports_install_remedy(self, tmp_path):
+        env = dict(os.environ)
+        env["_BOOTSTRAP_GUARD_VENV_REEXEC"] = "1"
+        env["PYTHONPATH"] = str(tmp_path)
+
+        completed = self._run_prepare(env)
+
+        assert completed.stderr == (
+            "[git-kit] the 'plugins-kit:bootstrap' plugin has not provisioned "
+            "git-kit's code review (missing: bootstrap_lib). Install/enable the "
+            "bootstrap plugin and start a new session so it can build this "
+            "plugin's dependencies, then retry.\n"
+        )
+
+    def test_manifest_requires_bootstrap_0103_api_floor(self):
+        manifest = json.loads(
+            Path("plugins/git-kit/bootstrap.json").read_text(encoding="utf-8")
+        )
+
+        assert manifest["requires_bootstrap"] == "0.103.0"
+
+    def test_bootstrap_without_run_vcs_timeout_reports_update_remedy(self, tmp_path):
+        bootstrap_package = tmp_path / "bootstrap_lib"
+        code_review_package = bootstrap_package / "code_review"
+        code_review_package.mkdir(parents=True)
+        (bootstrap_package / "__init__.py").write_text("", encoding="utf-8")
+        (code_review_package / "__init__.py").write_text("", encoding="utf-8")
+        (bootstrap_package / "path_repair.py").write_text(
+            "def repair_path() -> None:\n"
+            "    return None\n",
+            encoding="utf-8",
+        )
+        (code_review_package / "ledger.py").write_text("", encoding="utf-8")
+        (code_review_package / "pipeline.py").write_text(
+            "assemble_bundle = emit_bundle = matches_claim = None\n"
+            "preimage_relpath = split_sections = None\n"
+            "def run_vcs(executable: str, args: list[str], cwd: object = None) "
+            "-> tuple[int, str, str]:\n"
+            "    return 0, '', ''\n",
+            encoding="utf-8",
+        )
+        env = dict(os.environ)
+        env["_BOOTSTRAP_GUARD_VENV_REEXEC"] = "1"
+        env["PYTHONPATH"] = str(tmp_path)
+
+        completed = self._run_prepare(env)
+
+        assert completed.stderr == (
+            "[git-kit] the installed 'plugins-kit:bootstrap' plugin is too old "
+            "or stale for git-kit's code review (requires bootstrap >= 0.103.0; "
+            "missing: bootstrap_lib.code_review.pipeline.run_vcs(timeout=...), "
+            "bootstrap_lib.code_review.mechanical). "
+            "Run `claude plugin update bootstrap@plugins-kit`. Then start a new "
+            "session and retry.\n"
+        )
 
 # ---------------------------------------------------------------------------
 # detect_default_range -- G2: auto-detect on main/master without upstream
@@ -1247,6 +1359,25 @@ class TestBuildBundleClaims:
 
         assert "claimed_files" not in bundle
         assert [f["path"] for f in bundle["changed_files"]] == ["CLAUDE.md"]
+
+    def test_pre_image_materialization_follows_the_check_registry(
+        self, git_repo, tmp_path, monkeypatch
+    ):
+        """A pre-image costs one `git show` PER CHANGED FILE, so an unclaimed
+        file gets one only when a registered mechanical check would read the
+        post-image. Both directions are pinned: asserting only the current
+        answer would pass whichever way the gate was wired."""
+        git_repo.commit_file("CLAUDE.md", "base\n", "base")
+        git_repo.commit_file("CLAUDE.md", "changed\n", "change")
+
+        monkeypatch.setattr(pr, "requires_pre_image", lambda: False)
+        pr.build_bundle("HEAD~1..HEAD", tmp_path / "off")
+        assert not (tmp_path / "off" / pr.preimage_relpath("CLAUDE.md")).exists()
+
+        monkeypatch.setattr(pr, "requires_pre_image", lambda: True)
+        pr.build_bundle("HEAD~1..HEAD", tmp_path / "on")
+        snapshot = tmp_path / "on" / pr.preimage_relpath("CLAUDE.md")
+        assert snapshot.read_text(encoding="utf-8") == "base\n"
 
     def test_main_with_claim_emits_claimed_files(self, git_repo, tmp_path, monkeypatch, capsys):
         git_repo.commit_file("CLAUDE.md", "base\n", "base")

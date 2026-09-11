@@ -50,10 +50,11 @@ PATTERN_DOC = PurePosixPath(
 # artifact" rule ALONE.
 #
 # The rule's premise -- "we never check in generated artifacts" -- is true of
-# project-derived data and false of these ten. They are rendered by
+# project-derived data and false of these. They are rendered by
 # scripts/gen_code_review_skills.py from one canonical template so the git and
 # p4 code-review skills cannot drift apart, and they are tracked deliberately
-# because a skill has to be readable on disk in a consumer's plugin cache. A
+# because a skill -- and each reviewer-lane agent it dispatches to -- has to be
+# readable on disk in a consumer's plugin cache. A
 # drift check (that script's --check mode, pinned by
 # tests/bootstrap/code_review/test_skill_drift.py) is what keeps them honest,
 # not the absence of a banner.
@@ -69,6 +70,12 @@ PATTERN_DOC = PurePosixPath(
 # not silently widen to cover a generated file someone adds later, which is the
 # case this rule is for. Every OTHER rule -- size, local terms, bootstrap write
 # targets -- still applies to these paths.
+# The effort levels are spelled out rather than imported from
+# bootstrap_lib.code_review.review_profiles: this hook must run on an
+# unprovisioned clone, and an import that resolves the worktree is the failure
+# mode the detector comment above describes. test_exempt_paths_match_the
+# _generator_targets compares this set against the generator's own targets(),
+# so a level added there without a line here is caught at test time.
 GENERATED_ARTIFACT_EXEMPT_PATHS = frozenset(
     {
         f"plugins/{kit}-kit/skills/{kit}-code-review/{leaf}"
@@ -80,6 +87,11 @@ GENERATED_ARTIFACT_EXEMPT_PATHS = frozenset(
             "references/declined-ledger.md",
             "references/configuration.md",
         )
+    }
+    | {
+        f"plugins/{kit}-kit/agents/review-lane-{effort}.md"
+        for kit in ("git", "p4")
+        for effort in ("low", "medium", "high", "xhigh", "max")
     }
 )
 

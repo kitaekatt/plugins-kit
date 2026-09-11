@@ -12,7 +12,7 @@ primary frame.
 This is the shared spine: every `md-domain` lane (the artifact audits, reached via
 `/md-domain audit skill|claude-md|project-doc|references`; the authoring lanes,
 reached via `/md-domain author skill|claude-md|project-doc`; and the generation
-lanes, reached via `/md-domain generate claude-md|human-html`) defers to it. `content-authoring`
+lane, reached via `/md-domain generate claude-md`) defers to it. `content-authoring`
 (`authoring-patterns/content-authoring.md` in this skill's references) is the companion that answers the orthogonal
 question -- *how* a fact should be shaped (YAML vs prose vs frontmatter) -- not where it lives.
 

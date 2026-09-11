@@ -7,8 +7,8 @@ the shared back-half drifted by accident -- a fix landed in one kit's SKILL.md
 and never reached the other (findings G6/G7 of the 2026-06-09 architecture
 review).
 
-Both SKILL.md files AND both references/submit-gates.md files are now rendered
-from ONE template + a per-VCS substitution table in
+Both SKILL.md files, their shared references, and all effort agents are rendered
+from shared templates plus per-VCS substitutions in
 scripts/gen_code_review_skills.py. This test asserts the committed files are
 byte-identical to what the generator renders, so the two kits cannot drift: a
 hand-edit to either rendered file fails the byte-identity check, and a template
@@ -17,8 +17,8 @@ tests/skills-kit/test_workflow_js_drift.py.
 
 To change either skill: edit the template/fragments in
 scripts/gen_code_review_skills.py, run
-`uv run python scripts/gen_code_review_skills.py`, and commit all four rendered
-files together.
+`uv run python scripts/gen_code_review_skills.py`, and commit every rendered file
+together.
 
 Lives in tests/bootstrap/code_review/ because the invariant is the shared
 review-pipeline contract embodied by bootstrap_lib/code_review -- neither kit
@@ -67,6 +67,18 @@ class TestDispatchRulePresent:
             assert "If lanes <= 6" in body
             assert "If lanes > 6" in body
             assert "Workflow tool" in body
+
+
+class TestMechanicalScanContract:
+    def test_both_skills_read_per_file_phrases_from_the_bundle(self):
+        for vcs in ("git", "p4"):
+            body = gen.render_skill(vcs)
+            assert "diff_chunks[i].mechanical_scan" in body
+            assert "derive the covered-check list from THAT record" in body
+            assert "bundle.mechanical_check_phrases" in body
+            assert "non_ascii` = non-ASCII characters" not in body
+            assert "no mechanical coverage for this file" in body
+            assert "covers exactly those two checks" not in body
 
 
 class TestMdDomainContributorPresent:
@@ -510,3 +522,67 @@ class TestRenderedSkillDoesNotClaimDiskFreeOperation:
             # just that "something" is written
             assert "bundle_dir" in body or "bundle.bundle_dir" in body
             assert "ledger" in body.lower()
+
+
+class TestStaleOpenRenderedOnP4Only:
+    """p4-kit surfaces bundle.stale_open (a CL that already owns a depot path
+    reconcile flags: opened for edit then deleted locally, or opened for
+    delete then recreated) beside bundle.unresolved under one not-submittable
+    heading. git-kit has no open-action concept -- git tracks index state, not
+    a per-file open action -- so the rendered git skill must not carry any of
+    this."""
+
+    def test_p4_skill_renders_the_stale_open_section(self):
+        # Assert on strings the RENDER BLOCK alone carries. "stale_open" by
+        # itself is not one of them -- the step-2 expected-key list and the
+        # step-9 checklist line both name the key, so that substring stays
+        # present when the render block is deleted and would pin nothing.
+        body = gen.render_skill("p4")
+        assert "## CL is not in a submittable state -- fix before review" in body
+        assert "`p4 reconcile <path>` flips the CL's open action" in body
+        assert "`p4 revert <path>` discards the CL's" in body
+        assert "bundle.stale_open` is non-empty, list each entry's depot" in body
+
+    def test_git_skill_has_none_of_it(self):
+        body = gen.render_skill("git")
+        assert "stale_open" not in body
+        assert "## CL is not in a submittable state -- fix before review" not in body
+        assert "p4 reconcile <path>" not in body
+
+
+class TestP4ClaimProbeSubstitution:
+    """The p4 claim probe overrides the shared probe's single-invocation
+    wording, because a foreign-client CL refuses `--claim` and the skill then
+    runs prepare a second time without it. The two texts must not agree.
+
+    A byte-identity check between artifact and generator cannot protect this:
+    regenerating moves both sides together, so a substitution that stopped
+    matching its source would leave the generator, the rendered file and that
+    check all consistent, and the p4 skill would carry an instruction its own
+    on_failure block contradicts."""
+
+    def test_p4_probe_drops_the_single_invocation_wording(self):
+        assert gen.P4_CLAIM_PROBE != gen.CLAIM_PROBE
+        assert "only ONCE" not in gen.P4_CLAIM_PROBE
+        assert "Do NOT run prepare" not in gen.P4_CLAIM_PROBE
+
+    def test_substitute_refuses_a_source_it_cannot_find(self):
+        with pytest.raises(ValueError, match="substitution source not found"):
+            gen._substitute("some text", "absent needle", "replacement")
+
+    def test_only_the_p4_skill_carries_the_fallback_wording(self):
+        fallback = "once unless the foreign-client fallback below applies"
+        assert fallback in gen.render_skill("p4")
+        assert fallback not in gen.render_skill("git")
+
+
+class TestP4PendingChangeLookup:
+    """The picker asks p4 for the effective user's pending changes."""
+
+    def test_uses_the_effective_user_directly(self):
+        body = gen.P4_SKILL.read_text(encoding="utf-8")
+        assert 'input: "p4 changes --me -s pending -m 20"' in body
+
+    def test_does_not_derive_the_user_from_configured_variables(self):
+        body = gen.P4_SKILL.read_text(encoding="utf-8")
+        assert "p4 set -q P4USER" not in body

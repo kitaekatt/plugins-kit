@@ -225,3 +225,76 @@ def test_qwen38l_context_is_not_driven_by_the_ninfer_override(tmp_path: Path) ->
     )
     assert override.returncode == 0
     assert "-c 131072" in override.stdout
+
+
+def _switch_env(tmp_path: Path) -> dict[str, str]:
+    tools = tmp_path / "tools"
+    tools.mkdir()
+    pid_file = tmp_path / "server.pid"
+    server = tmp_path / "ninfer-serve"
+    artifact = tmp_path / "model.ninfer"
+    server.write_text(
+        "#!/bin/sh\n"
+        f"echo $$ > '{pid_file}'\n"
+        "while :; do sleep 1; done\n",
+        encoding="utf-8",
+    )
+    server.chmod(0o755)
+    artifact.touch()
+    (tools / "lsof").write_text(
+        "#!/bin/sh\n"
+        f"if test -f '{pid_file}'; then cat '{pid_file}'; fi\n",
+        encoding="utf-8",
+    )
+    (tools / "ps").write_text(
+        "#!/bin/sh\n"
+        "case \"$*\" in\n"
+        "  *comm=*) echo ninfer-serve ;;\n"
+        "  *args=*) echo 'ninfer-serve model.ninfer --model-id qwen3.6-35b-a3b' ;;\n"
+        "esac\n",
+        encoding="utf-8",
+    )
+    (tools / "curl").write_text(
+        "#!/bin/sh\n"
+        "echo '{\"data\":[{\"id\":\"qwen3.6-35b-a3b\"}]}'\n",
+        encoding="utf-8",
+    )
+    for tool in tools.iterdir():
+        tool.chmod(0o755)
+    return {
+        "PATH": f"{tools}:{os.environ['PATH']}",
+        "NINFER_SERVE": str(server),
+        "QWEN36_ARTIFACT": str(artifact),
+        "QWEN_SWITCH_TIMEOUT": "5",
+        "HOME": str(tmp_path),
+    }
+
+
+def test_qwen_switch_starts_existing_profile_and_waits_for_matching_model(tmp_path: Path) -> None:
+    env = _switch_env(tmp_path)
+    result = subprocess.run(
+        ["bash", str(PLUGIN / "bin" / "qwen-switch"), "start", "qwen36"],
+        text=True,
+        capture_output=True,
+        check=False,
+        env={**os.environ, **env},
+    )
+    assert result.returncode == 0
+    assert "qwen36 is ready" in result.stdout
+    pid_file = tmp_path / "server.pid"
+    assert pid_file.exists()
+    if pid_file.exists():
+        subprocess.run(["kill", "-KILL", pid_file.read_text().strip()], check=False)
+
+
+def test_qwen_switch_status_is_clear_when_no_server_listens(tmp_path: Path) -> None:
+    env = _switch_env(tmp_path)
+    result = subprocess.run(
+        ["bash", str(PLUGIN / "bin" / "qwen-switch"), "status"],
+        text=True,
+        capture_output=True,
+        check=False,
+        env={**os.environ, **env},
+    )
+    assert result.returncode == 0
+    assert result.stdout.strip() == "no managed Qwen server is listening on the configured ports"

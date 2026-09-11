@@ -139,6 +139,32 @@ def test_claimed_file_falls_through_to_main_when_probe_symbol_is_absent(
     assert "too old" not in stderr
 
 
+def test_mechanical_finding_probe_refuses_old_owner(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    import argparse
+
+    package = types.ModuleType("llm_scripting_kit")
+    package.__path__ = []
+    review_lane = types.ModuleType("llm_scripting_kit.review_lane")
+
+    def old_parse(argv):
+        parser = argparse.ArgumentParser()
+        parser.add_argument("--lane", required=True)
+        parser.add_argument("--model", required=True)
+        parser.add_argument("--chunk", required=True)
+        return parser.parse_args(argv)
+
+    review_lane._parse_args = old_parse
+    review_lane.main = lambda: 42
+    monkeypatch.setitem(sys.modules, "llm_scripting_kit.review_lane", review_lane)
+    monkeypatch.setattr(sys, "argv", [str(_SCRIPT), "--mechanical-scan-ran"])
+
+    code = _run_wrapper(monkeypatch, package, review_lane)
+    assert code != 0
+    assert "mechanical scan finding support" in capsys.readouterr().err
+
+
 def test_wrapper_passes_through_to_shared_main(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
