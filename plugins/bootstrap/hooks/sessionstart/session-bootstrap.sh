@@ -247,13 +247,19 @@ if [ -f "$_COOLDOWN_FILE" ] && [ ! -f "$_ALERT_FILE" ] \
     fi
 fi
 
-if [ "$RUN_KIND" = "full" ]; then
+if [ "$RUN_KIND" = "full" ] && [ -z "$FLAG_CONSOLE" ]; then
     printf '%s' "$HOOK_START_EPOCH" > "$_COOLDOWN_FILE"
 
     # Prune stale per-session markers (and rescue locks) on real passes only --
     # session ids are never reused, so week-old markers are dead weight.
     find "$PLUGIN_DATA/sessions" -type f -mtime +7 -delete 2>/dev/null || true
 fi
+# A --console run is exempt from the cooldown in BOTH directions. It is never
+# throttled by the stamp (the gate above leaves RUN_KIND=full for it), and it
+# does not WRITE the stamp either: an explicit `bootstrap run` from a terminal
+# is not the session-start schedule, and letting it advance that schedule means
+# a manual run silently eats the next session's pass. Bypassing a throttle
+# while still arming it for someone else is half a bypass.
 ENGINE_FLAGS+=(--run-kind "$RUN_KIND")
 
 # --- Emit hook JSON immediately (fire-and-forget) ---

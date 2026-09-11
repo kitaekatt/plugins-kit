@@ -61,8 +61,12 @@ bootstrap run      # the same, plus start a pass when none is running
 A pass is single-instance, so neither form ever starts a second one: when a
 pass is already in flight, both say so and stream it to your terminal until
 it finishes, rather than launching an engine that would only stand down on
-the lock and print nothing. `run` needs no cooldown reset -- it is already a
-full pass.
+the lock and print nothing. A pass that `run` starts is itself streamed the
+same way.
+
+`bootstrap run` needs no cooldown reset, and does not consume one either: it
+is never throttled by the per-project cooldown and never advances it, so a
+manual run cannot eat the next session's pass.
 
 With more than one marketplace installed, `bootstrap` reports on all of them
 and `bootstrap run` asks you to set `BOOTSTRAP_MARKETPLACE` rather than guess

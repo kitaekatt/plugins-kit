@@ -122,7 +122,7 @@ reference_skill:
         session. Bare, it reports whether a pass is running and, when one IS, stays
         attached and streams it to completion. `bootstrap run` does the same and also
         STARTS a pass when none is running. Neither ever starts a second one.
-      keywords: [bootstrap command, bootstrap CLI, bootstrap run, is bootstrap running, is a pass running, from the terminal, without starting Claude, tail the pass, attach to running pass, engine lock, events.watch, live output, ~/.local/bin lever, BOOTSTRAP_MARKETPLACE, bootstrap --json]
+      keywords: [bootstrap command, bootstrap CLI, bootstrap run, is bootstrap running, is a pass running, from the terminal, without starting Claude, tail the pass, attach to running pass, engine lock, events.watch, live output, ~/.local/bin lever, BOOTSTRAP_MARKETPLACE, bootstrap --json, BOOTSTRAP_PLUGIN_ROOT, dev checkout, worktree, point bootstrap at a checkout, cooldown stamp]
       detail: |
         Installed alongside bootstrap-reset-cooldown and env-reset-cooldown by
         session-bootstrap.sh, re-copied every session so it tracks the cached plugin
@@ -143,21 +143,37 @@ reference_skill:
         try-acquire-then-release, which would clear a stale lock and could make a
         genuine launcher stand down.
 
-        Attaching drops `events.watch` in the data dir, which switches the pass
+        A pass it LAUNCHES is streamed too, not only one it attaches to: the console
+        engine prints its verdict and its failures to stdout and nothing else, so a
+        clean three-minute pass otherwise showed a few lines of shell preamble and
+        exited -- indistinguishable, from a terminal, from bootstrap doing nothing.
+        The launch path skips the verdict record when tailing, because the child is
+        already printing that to the same terminal.
+
+        Either path drops `events.watch` in the data dir, which switches the pass
         recorder from its normal buffered write (two writes per pass) to a throttled
         flush while a reader is present, and removes it on the way out. That marker is
         the only reason a tail shows anything mid-pass.
 
-        `bootstrap run` needs no cooldown reset: `--console` reads no hook stdin, so the
-        Layer-1 session guard never engages, and both skip gates exempt it from the
-        always-lane downgrade. It IS "converge now".
+        `bootstrap run` is exempt from the cooldown in BOTH directions, so it needs no
+        reset: `--console` reads no hook stdin (the Layer-1 session guard never
+        engages) and both skip gates exempt it from the always-lane downgrade, AND it
+        does not WRITE the cooldown stamp -- a manual run is not the session-start
+        schedule, and advancing that schedule would let it silently eat the next
+        session's pass. It IS "converge now".
+
+        BOOTSTRAP_PLUGIN_ROOT outranks discovery when set, which is the only way to
+        point the command at a tree that is not the installed one (a dev checkout, a
+        worktree). Without that precedence the command launches the installed engine
+        while naming the requested root -- a fix under test never runs and the run
+        looks like it did.
       gotchas:
         - The bare command BLOCKS whenever a pass is running -- that is the intended
           behavior, not a hang. `--json` is the form that always returns immediately,
           and it is what a script or a hook should call.
         - The BARE command exits 0 whether or not a pass was running -- both are
           correct answers to the question asked -- so read `--json`, never `$?`, to
-          learn which. `bootstrap run` is different and its `$?` IS meaningful: when
+          learn which. `bootstrap run` is different and its `$?` IS meaningful -- when
           it starts a pass it exits with the engine's own code, and 2 when it refuses
           on an ambiguous marketplace.
         - With more than one marketplace holding a bootstrap data dir, the bare command

@@ -117,6 +117,15 @@ def find_plugin_root(marketplace: str, fallback: str = "") -> str:
     provision with a version the session is not using. The clone is the
     fallback for a machine that has the marketplace but no cached install yet.
     """
+    # An explicit BOOTSTRAP_PLUGIN_ROOT outranks discovery. It is the only way
+    # to point this command at a tree that is not the installed one -- a dev
+    # checkout, a worktree -- and a resolver that quietly preferred the cache
+    # would run the installed engine while reporting the requested root's
+    # basename, which is worse than not honouring the variable at all.
+    override = os.environ.get("BOOTSTRAP_PLUGIN_ROOT")
+    if override and _is_plugin_root(override):
+        return override
+
     home = os.path.expanduser("~")
     cache = os.path.join(home, ".claude", "plugins", "cache", marketplace, "bootstrap")
     best = None
@@ -280,8 +289,60 @@ def cmd_run(args) -> int:
     # the failure this whole file exists to avoid.
     print("Running a full bootstrap pass (%s)." % os.path.basename(plugin_root))
     sys.stdout.flush()
-    completed = subprocess.run(["bash", wrapper, "--console"] + args.forward)
-    return completed.returncode
+
+    # Tail the pass we LAUNCH, not only one we attach to. The console engine
+    # prints its verdict and its failures to stdout and nothing else, so a
+    # clean three-minute pass showed five lines of shell preamble and then
+    # exited -- which from the terminal is indistinguishable from bootstrap
+    # having done nothing. The event stream is where the per-check detail
+    # lives, and streaming it is the whole reason this command blocks.
+    rc = _stream_until_exit(
+        data_dir,
+        lambda: subprocess.Popen(["bash", wrapper, "--console"] + args.forward))
+
+    # The up-front lock check is not the last word: between it and the
+    # engine's own acquire, another launcher (a SessionStart, the harvest, the
+    # mid-session relaunch) can win the lock, and the engine then stands down
+    # without running the pass. A pass holding the lock now means that
+    # happened, so do what the up-front check would have done rather than
+    # exiting on a false all-clear.
+    if holder(data_dir) is not None:
+        print("\nAnother bootstrap pass took the lock first; "
+              "attaching to it instead.")
+        return follow(data_dir)
+    return rc
+
+
+def _stream_until_exit(data_dir: str, launch) -> int:
+    """Start the pass via ``launch()``, printing its records as they land.
+
+    The child inherits stdout, so its own verdict still prints; the tail here
+    carries the per-check lines that never reach console stdout. `emit`
+    records are skipped -- that IS the verdict the child prints, and showing
+    it twice is worse than not showing it here at all.
+
+    The marker and the start offset are both established BEFORE the child
+    exists: a record written between launching and attaching would otherwise
+    fall in front of the offset and never print, and the recorder needs the
+    marker in place to flush its very first records rather than its second
+    second's worth.
+    """
+    events = os.path.join(data_dir, EVENTS_FILENAME)
+    watch = os.path.join(data_dir, WATCH_FILENAME)
+    offset = _size(events)
+    with _watching(watch):
+        proc = launch()
+        while proc.poll() is None:
+            offset = _drain(events, offset, verdict=False)
+            time.sleep(POLL_INTERVAL)
+        # The recorder's atexit flush lands after the process is reaped, so
+        # drain past the exit rather than truncating the pass's last records.
+        deadline = time.monotonic() + FINAL_GRACE_SECONDS
+        while time.monotonic() < deadline:
+            offset = _drain(events, offset, verdict=False)
+            time.sleep(POLL_INTERVAL)
+        _drain(events, offset, verdict=False)
+    return proc.returncode
 
 
 # --------------------------------------------------------------------------
@@ -381,7 +442,7 @@ def _size(path: str) -> int:
         return 0
 
 
-def _drain(path: str, offset: int) -> int:
+def _drain(path: str, offset: int, verdict: bool = True) -> int:
     """Print records appended since ``offset``; return the new offset.
 
     A file that SHRANK was rotated mid-tail (records.py keeps one previous
@@ -413,21 +474,27 @@ def _drain(path: str, offset: int) -> int:
     for raw in raw_lines:
         line = raw.decode("utf-8", errors="replace").strip()
         if line:
-            rendered = _render(line)
+            rendered = _render(line, verdict=verdict)
             if rendered:
                 print(rendered)
     sys.stdout.flush()
     return consumed
 
 
-def _render(line: str):
-    """One event line -> one human line, or None to skip it."""
+def _render(line: str, verdict: bool = True):
+    """One event line -> one human line, or None to skip it.
+
+    ``verdict=False`` suppresses the pass verdict, for the caller whose child
+    process is already printing that same verdict to the same terminal.
+    """
     try:
         rec = json.loads(line)
     except ValueError:
         return None
     if rec.get("kind") == "emit":
         # The pass's verdict, as the user would have seen it at a prompt.
+        if not verdict:
+            return None
         message = rec.get("system_message")
         return "\n%s" % message if message else None
     text = rec.get("text")
