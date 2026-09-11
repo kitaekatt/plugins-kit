@@ -8,7 +8,9 @@ be registered here.
 
 from __future__ import annotations
 
+import sys
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Callable, TypedDict
 
 from ._diff import (
@@ -50,6 +52,7 @@ class MechanicalCheck:
     required_inputs: frozenset[str]
     precondition: Callable[[MechanicalSnapshot], bool]
     scan: Callable[[MechanicalSnapshot], tuple[MechanicalFinding, ...]]
+    source_layer: str = "code registry"
 
 
 def build_snapshot(
@@ -106,10 +109,11 @@ def _has_required_input(snapshot: MechanicalSnapshot, name: str) -> bool:
 def _run_checks(
     snapshot: MechanicalSnapshot,
     checks: tuple[MechanicalCheck, ...],
-) -> tuple[list[str], list[MechanicalFinding]]:
+) -> tuple[list[str], list[MechanicalFinding], list[str]]:
     """Run eligible checks and return coverage plus located findings."""
     checks_run: list[str] = []
     findings: list[MechanicalFinding] = []
+    diagnostics: list[str] = []
     order = {check.check_id: index for index, check in enumerate(checks)}
     for check in checks:
         if not all(
@@ -119,10 +123,26 @@ def _run_checks(
             continue
         if not check.precondition(snapshot):
             continue
+        try:
+            check_findings = check.scan(snapshot)
+        except TimeoutError as exc:
+            # A timeout is an EXECUTION FAILURE, not an unmet precondition.
+            # Both omit the check from checks_run, but a declining precondition
+            # is normal and a pattern that hangs is a broken config the user
+            # has to be told about -- so this also reaches stderr, where the
+            # front halves already put their notes. Keeping it only in the
+            # returned record would leave nobody reading it.
+            message = (
+                f"mechanical check {check.check_id!r} timed out for file "
+                f"{snapshot.file!r} (source layer: {check.source_layer}): {exc}"
+            )
+            diagnostics.append(message)
+            print(message, file=sys.stderr)
+            continue
         checks_run.append(check.check_id)
-        findings.extend(check.scan(snapshot))
+        findings.extend(check_findings)
     findings.sort(key=lambda finding: (finding["line"], order[finding["check"]]))
-    return checks_run, findings
+    return checks_run, findings, diagnostics
 
 
 # One module plus one entry here is the complete registration surface for a
@@ -179,6 +199,7 @@ def scan_file(
     diff_section_text: str,
     *,
     pre_image_text: str | None = None,
+    checks: tuple[MechanicalCheck, ...] | None = None,
 ) -> dict[str, object]:
     """Dispatch every eligible Seam A check for one reviewed file."""
     snapshot = build_snapshot(
@@ -186,8 +207,11 @@ def scan_file(
         diff_section_text,
         pre_image_text=pre_image_text,
     )
-    checks_run, findings = _run_checks(snapshot, REGISTRY)
-    return {"file": file, "checks_run": checks_run, "findings": findings}
+    checks_run, findings, diagnostics = _run_checks(snapshot, REGISTRY if checks is None else checks)
+    result: dict[str, object] = {"file": file, "checks_run": checks_run, "findings": findings}
+    if diagnostics:
+        result["diagnostics"] = diagnostics
+    return result
 
 
 def mechanical_findings(diff_section_text: str) -> list[MechanicalFinding]:
@@ -199,7 +223,7 @@ def mechanical_findings(diff_section_text: str) -> list[MechanicalFinding]:
     """
     snapshot = build_snapshot("", diff_section_text)
     legacy_checks = tuple(_CHECKS_BY_ID[check_id] for check_id in LEGACY_CHECK_IDS)
-    _, findings = _run_checks(snapshot, legacy_checks)
+    _, findings, _ = _run_checks(snapshot, legacy_checks)
     return findings
 
 
@@ -229,6 +253,13 @@ def check_phrase(check_id: str) -> str:
     return check.phrase if check is not None else check_id
 
 
+def resolve_checks(project_root: str | Path, home: str | Path | None = None) -> tuple[MechanicalCheck, ...]:
+    """Return code-registered checks followed by additive config checks."""
+    from bootstrap_lib.code_review.mechanical_config import build_check, resolve_config
+
+    return REGISTRY + tuple(build_check(record, project_root) for record in resolve_config(project_root, home=home))
+
+
 __all__ = [
     "LEGACY_CHECK_IDS",
     "MechanicalCheck",
@@ -239,5 +270,6 @@ __all__ = [
     "check_phrase",
     "mechanical_findings",
     "requires_pre_image",
+    "resolve_checks",
     "scan_file",
 ]

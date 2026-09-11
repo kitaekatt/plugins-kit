@@ -196,6 +196,21 @@ unconfigurable opinion whose test passes is a finding.
   verdict that only ever improves within a session is a guarantee; one that can flip either
   way is a race.
 
+- **A shipped mechanical review check cannot be disabled.** The layered
+  `mechanical_checks.yaml` config is ADDITIVE ONLY: a user or project layer may
+  introduce new pattern checks, and a duplicate id at any layer is a hard
+  resolve-time error rather than an override. A team that runs `non_ascii` or
+  `abs_path` against a codebase where neither rule applies pays prompt space for
+  two findings-free checks every review, and their only remedy is to ignore the
+  coverage line -- so this is a stance, not a good default. We refuse the
+  disable seam because the lane is told WHICH checks ran so it can stop looking
+  for those things itself: a disabled check leaves the reviewer instructed to
+  skip a scan that never happened, which converts a merely noisy default into a
+  silent coverage hole. Redefinition is refused for the same reason, since
+  restating a shipped id with a pattern that matches nothing disables it by
+  another name. A team that wants different rules ADDS them; the shipped set is
+  a floor.
+
 - **Code review renders to chat and is never persisted.** git-kit and p4-kit scope
   themselves to a conversational review; a team needing PR/Swarm comments or a CI artifact
   wants a different tool, and both SKILL.md scope blocks say so rather than assuming it
