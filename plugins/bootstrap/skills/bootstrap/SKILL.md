@@ -143,30 +143,13 @@ reference_skill:
         try-acquire-then-release, which would clear a stale lock and could make a
         genuine launcher stand down.
 
-        A pass it LAUNCHES is streamed too, not only one it attaches to: the console
-        engine prints its verdict and its failures to stdout and nothing else, so a
-        clean three-minute pass otherwise showed a few lines of shell preamble and
-        exited -- indistinguishable, from a terminal, from bootstrap doing nothing.
-        The launch path skips the verdict record when tailing, because the child is
-        already printing that to the same terminal.
-
-        Either path drops `events.watch` in the data dir, which switches the pass
-        recorder from its normal buffered write (two writes per pass) to a throttled
-        flush while a reader is present, and removes it on the way out. That marker is
-        the only reason a tail shows anything mid-pass.
-
         `bootstrap run` is exempt from the cooldown in BOTH directions, so it needs no
-        reset: `--console` reads no hook stdin (the Layer-1 session guard never
-        engages) and both skip gates exempt it from the always-lane downgrade, AND it
-        does not WRITE the cooldown stamp -- a manual run is not the session-start
-        schedule, and advancing that schedule would let it silently eat the next
-        session's pass. It IS "converge now".
+        reset -- it is neither throttled by the stamp nor writes it, because a manual
+        run is not the session-start schedule. It IS "converge now".
 
-        BOOTSTRAP_PLUGIN_ROOT outranks discovery when set, which is the only way to
-        point the command at a tree that is not the installed one (a dev checkout, a
-        worktree). Without that precedence the command launches the installed engine
-        while naming the requested root -- a fix under test never runs and the run
-        looks like it did.
+        Full command reference -- streaming and the events.watch marker, exit codes,
+        marketplace scoping, BOOTSTRAP_PLUGIN_ROOT, how the lever reaches a machine,
+        and troubleshooting: references/bootstrap-cli.md.
       gotchas:
         - The bare command BLOCKS whenever a pass is running -- that is the intended
           behavior, not a hang. `--json` is the form that always returns immediately,
@@ -442,6 +425,14 @@ reference_skill:
       keywords: [conditions, categories, remediation table]
       fact_ids: [condition_categories]
   references:
+    - id: bootstrap_cli
+      path: references/bootstrap-cli.md
+      keywords: [bootstrap command, bootstrap CLI, bootstrap run, bootstrap --json, is a pass running, run bootstrap from a terminal, without starting Claude, tail a pass, attach to a running pass, stream the pass, events.watch, blocks, exit codes, BOOTSTRAP_MARKETPLACE, BOOTSTRAP_PLUGIN_ROOT, dev checkout, worktree, ~/.local/bin lever, command not found, cooldown exempt]
+      summary: >-
+        The `bootstrap` PATH command -- both verbs and --json, why neither ever starts a
+        second pass, how an attached and a launched pass are streamed, the cooldown
+        exemption in both directions, exit codes, marketplace scoping, pointing it at a
+        non-installed tree, how the lever reaches a machine, and troubleshooting.
     - id: engine_internals
       path: references/engine-internals.md
       keywords: [engine, internals, processing order, self-setup, manifest phase, script phase, messaging protocol, execution flow, throttling, first run, clean install, phases, design principles, shared library, hybrid model, agent_skills_link, agent skills link, codex skills, .agents, .agents/skills, agents directory]
