@@ -815,11 +815,13 @@ def build_cache_key(
     ``user``, ``temperature``, ``max_tokens``, ``effort``, ``allowed_tools``,
     ``extras`` (canonicalized -- sorted keys, via
     ``freshness.hashing.content_hash``), ``cwd``, plus ``cache_salt`` and
-    ``user_cache_prefix`` when set. ``timeout_s`` is the one
-    :class:`BackendOptions` field deliberately EXCLUDED: it caps how long the
-    caller waits, and does not change what the provider is asked or what it
-    answers, so two calls differing only in their deadline must collapse to
-    one cache entry.
+    ``user_cache_prefix`` when set. Two :class:`BackendOptions` fields are
+    deliberately EXCLUDED, for the same reason: neither changes what the
+    provider is asked or what it answers. ``timeout_s`` caps how long the
+    caller waits, so two calls differing only in their deadline must collapse
+    to one cache entry. ``client_id`` is access-log attribution the front door
+    reads; hashing it would give every run a distinct key and turn the response
+    cache into a permanent miss.
 
     Byte-identical requests collapse to one digest regardless of dict
     ordering at the call site (``freshness.hashing.content_hash`` canonicalizes

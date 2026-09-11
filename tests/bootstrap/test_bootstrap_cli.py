@@ -1,0 +1,357 @@
+"""The `bootstrap` CLI lever (plugins/bootstrap/scripts/bootstrap_cli.py).
+
+Two contracts, and they are the reason this lever exists at all:
+
+1. Asking "is a pass running?" must be READ-ONLY. A status probe that
+   acquired the lock -- even briefly -- would clear a stale one and could make
+   a genuine launcher stand down, so the probe reads the lock and never
+   touches it.
+2. `run` must never start a SECOND pass alongside a running one. It attaches
+   to the one in flight and streams it to completion instead.
+"""
+
+import importlib.util
+import json
+import os
+import sys
+import threading
+import time
+
+import pytest
+
+from bootstrap_lib import proc_lock
+from bootstrap_lib.records import EVENTS_FILENAME, WATCH_FILENAME, PassRecorder
+
+SCRIPTS = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+    "plugins", "bootstrap", "scripts",
+)
+
+
+def _load_cli():
+    """Load the lever by path -- its dir is deliberately not on pythonpath."""
+    spec = importlib.util.spec_from_file_location(
+        "bootstrap_cli", os.path.join(SCRIPTS, "bootstrap_cli.py"))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+cli = _load_cli()
+
+
+# --------------------------------------------------------------------------
+# lock_holder: the read-only probe
+# --------------------------------------------------------------------------
+
+class TestLockHolder:
+
+    def test_no_lock_file_reads_as_not_running(self, tmp_path):
+        assert proc_lock.lock_holder(str(tmp_path)) is None
+
+    def test_live_holder_is_reported_without_disturbing_the_lock(self, tmp_path):
+        data_dir = str(tmp_path)
+        with proc_lock.engine_lock(data_dir) as acquired:
+            assert acquired
+            info = proc_lock.lock_holder(data_dir)
+            assert info is not None
+            assert info["pid"] == os.getpid()
+            # The probe must leave the lock exactly as it found it: a second
+            # launcher still has to stand down afterwards.
+            with proc_lock.engine_lock(data_dir) as second:
+                assert second is False
+            assert proc_lock.lock_holder(data_dir)["pid"] == os.getpid()
+
+    def test_dead_holder_reads_as_not_running(self, tmp_path):
+        lock = tmp_path / proc_lock.LOCK_FILENAME
+        lock.write_text("%d\n%f\n" % (0x7FFFFFFF, time.time()))
+        # A PID that cannot be alive must not wedge the CLI into reporting a
+        # phantom pass -- the same staleness rule _try_acquire applies.
+        assert proc_lock.lock_holder(str(tmp_path)) is None
+
+    def test_live_pid_with_aged_lock_reads_as_not_running(self, tmp_path):
+        """PID reuse: a recycled number must not wedge the report forever."""
+        lock = tmp_path / proc_lock.LOCK_FILENAME
+        stamp = time.time() - (proc_lock._STALE_AGE_SECONDS + 60)
+        lock.write_text("%d\n%f\n" % (os.getpid(), stamp))
+        os.utime(str(lock), (stamp, stamp))
+        assert proc_lock.lock_holder(str(tmp_path)) is None
+
+    def test_polling_the_lock_does_not_wedge_its_release(self, tmp_path):
+        """A reader must never prevent the holder from releasing.
+
+        On Windows an open handle makes the holder's release rename fail with
+        a sharing violation. Giving up there leaves an ownerless lock file on
+        disk, which is honored until the six-hour stale ceiling -- every
+        bootstrap pass on the machine stands down until then. Observed
+        directly: a tail polling lock_holder several times a second wedged the
+        very pass it was watching.
+        """
+        data_dir = str(tmp_path)
+        stop = threading.Event()
+
+        def poll():
+            while not stop.is_set():
+                proc_lock.lock_holder(data_dir)
+
+        reader = threading.Thread(target=poll)
+        reader.start()
+        try:
+            for _ in range(40):
+                with proc_lock.engine_lock(data_dir) as acquired:
+                    assert acquired
+                assert proc_lock.lock_holder(data_dir) is None, (
+                    "the lock survived its holder while a reader was polling"
+                )
+        finally:
+            stop.set()
+            reader.join()
+
+    def test_unparseable_lock_is_in_flight_then_stale(self, tmp_path):
+        lock = tmp_path / proc_lock.LOCK_FILENAME
+        lock.write_text("")
+        info = proc_lock.lock_holder(str(tmp_path))
+        assert info is not None and info["pid"] is None  # mid-claim
+        aged = time.time() - (proc_lock._EMPTY_LOCK_GRACE_SECONDS + 5)
+        os.utime(str(lock), (aged, aged))
+        assert proc_lock.lock_holder(str(tmp_path)) is None
+
+
+# --------------------------------------------------------------------------
+# status
+# --------------------------------------------------------------------------
+
+class TestStatus:
+
+    @pytest.fixture
+    def data_root(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("CLAUDE_BOOTSTRAP_DATA_ROOT", str(tmp_path))
+        monkeypatch.delenv("BOOTSTRAP_MARKETPLACE", raising=False)
+        (tmp_path / "mkt-a" / "bootstrap").mkdir(parents=True)
+        return tmp_path
+
+    def test_reports_idle(self, data_root, capsys):
+        assert cli.cmd_status(_args(json=False)) == 0
+        assert "no bootstrap pass is running" in capsys.readouterr().out
+
+    def test_reports_running(self, data_root, capsys):
+        with proc_lock.engine_lock(str(data_root / "mkt-a" / "bootstrap")):
+            assert cli.cmd_status(_args(json=False)) == 0
+        out = capsys.readouterr().out
+        assert "RUNNING" in out and str(os.getpid()) in out
+
+    def test_json_is_machine_readable(self, data_root, capsys):
+        assert cli.cmd_status(_args(json=True)) == 0
+        payload = json.loads(capsys.readouterr().out)
+        assert payload == [{"marketplace": "mkt-a", "running": False}]
+
+    def test_idle_still_exits_zero(self, data_root, capsys):
+        """Both answers are correct answers; neither is an error."""
+        assert cli.cmd_status(_args(json=True)) == 0
+        capsys.readouterr()
+
+    def test_every_marketplace_is_reported(self, data_root, capsys):
+        (data_root / "mkt-b" / "bootstrap").mkdir(parents=True)
+        cli.cmd_status(_args(json=True))
+        payload = json.loads(capsys.readouterr().out)
+        assert {r["marketplace"] for r in payload} == {"mkt-a", "mkt-b"}
+
+
+# --------------------------------------------------------------------------
+# run
+# --------------------------------------------------------------------------
+
+class TestRun:
+
+    def test_attaches_instead_of_starting_a_second_pass(
+            self, tmp_path, monkeypatch, capsys):
+        monkeypatch.setenv("CLAUDE_BOOTSTRAP_DATA_ROOT", str(tmp_path))
+        monkeypatch.setenv("BOOTSTRAP_MARKETPLACE", "mkt-a")
+        data_dir = tmp_path / "mkt-a" / "bootstrap"
+        data_dir.mkdir(parents=True)
+
+        launched = []
+        monkeypatch.setattr(cli.subprocess, "run",
+                            lambda *a, **k: launched.append(a))
+        monkeypatch.setattr(cli, "follow", lambda d: 7)
+
+        with proc_lock.engine_lock(str(data_dir)):
+            rc = cli.cmd_run(_args(plugin_root="", forward=[]))
+
+        assert rc == 7, "run must return the follow result, not launch a pass"
+        assert launched == [], "a second engine must never be spawned"
+        assert "already running" in capsys.readouterr().out
+
+    def test_engine_flags_pass_through(self, monkeypatch, capsys):
+        """`bootstrap run --verbose` is the spelling the help advertises.
+
+        Neither nargs="*" nor argparse.REMAINDER carries a LEADING dash-token
+        into a subparser's first positional, so this exact invocation once
+        died with "unrecognized arguments: --verbose".
+        """
+        monkeypatch.setattr(cli, "marketplaces", lambda: ["mkt-a"])
+        monkeypatch.setattr(cli, "holder", lambda d: None)
+        monkeypatch.setattr(cli, "find_plugin_root", lambda m, f="": "/plug")
+        seen = {}
+
+        def fake_run(cmd, **kw):
+            seen["cmd"] = cmd
+            return type("R", (), {"returncode": 0})()
+
+        monkeypatch.setattr(cli.subprocess, "run", fake_run)
+        assert cli.main(["run", "--verbose"]) == 0
+        capsys.readouterr()
+        assert seen["cmd"][-2:] == ["--console", "--verbose"]
+
+    def test_unknown_flag_without_run_is_still_an_error(self, capsys):
+        with pytest.raises(SystemExit):
+            cli.main(["--nonsense"])
+        assert "unrecognized" in capsys.readouterr().err
+
+    def test_refuses_to_guess_between_marketplaces(
+            self, tmp_path, monkeypatch, capsys):
+        monkeypatch.setenv("CLAUDE_BOOTSTRAP_DATA_ROOT", str(tmp_path))
+        monkeypatch.delenv("BOOTSTRAP_MARKETPLACE", raising=False)
+        for name in ("mkt-a", "mkt-b"):
+            (tmp_path / name / "bootstrap").mkdir(parents=True)
+        assert cli.cmd_run(_args(plugin_root="", forward=[])) == 2
+        assert "BOOTSTRAP_MARKETPLACE" in capsys.readouterr().err
+
+
+# --------------------------------------------------------------------------
+# follow / rendering
+# --------------------------------------------------------------------------
+
+class TestFollow:
+
+    def test_streams_a_running_pass_until_its_lock_clears(
+            self, tmp_path, monkeypatch, capsys):
+        monkeypatch.setattr(cli, "FINAL_GRACE_SECONDS", 0.2)
+        monkeypatch.setattr(cli, "POLL_INTERVAL", 0.02)
+        data_dir = str(tmp_path)
+        events = tmp_path / EVENTS_FILENAME
+        # Output that predates the attach belongs to an earlier pass and must
+        # not be replayed.
+        events.write_text(_event(seq=0, text="from a previous pass") + "\n")
+
+        released = threading.Event()
+
+        holding = threading.Event()
+        watch = tmp_path / WATCH_FILENAME
+
+        def hold():
+            with proc_lock.engine_lock(data_dir):
+                holding.set()
+                # The watch marker is follow()'s attach, observably: it writes
+                # it before recording its start offset. Waiting on it (rather
+                # than on a sleep sized for an idle machine) is what makes the
+                # assertion below about STREAMING and not about a replay of
+                # the file's existing tail.
+                _poll_until(watch.exists)
+                with open(str(events), "a") as f:
+                    f.write(_event(seq=1, text="uv: ok") + "\n")
+                    f.flush()
+            released.set()
+
+        worker = threading.Thread(target=hold)
+        worker.start()
+        assert holding.wait(10.0), "worker never acquired the lock"
+        assert cli.follow(data_dir) == 0
+        worker.join()
+        assert released.is_set()
+
+        out = capsys.readouterr().out
+        assert "uv: ok" in out
+        assert "from a previous pass" not in out
+        assert "finished" in out
+
+    def test_watch_marker_is_removed_afterwards(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(cli, "FINAL_GRACE_SECONDS", 0.0)
+        monkeypatch.setattr(cli, "POLL_INTERVAL", 0.01)
+        cli.follow(str(tmp_path))
+        # Left behind, it would make every future pass flush per second for a
+        # reader who has gone.
+        assert not (tmp_path / WATCH_FILENAME).exists()
+
+    def test_partial_final_line_is_not_printed_twice(self, tmp_path, capsys):
+        events = tmp_path / EVENTS_FILENAME
+        complete = _event(seq=1, text="first")
+        events.write_text(complete + "\n" + '{"seq": 2, "te')
+        offset = cli._drain(str(events), 0)
+        assert "first" in capsys.readouterr().out
+        with open(str(events), "a") as f:
+            f.write('xt": "second", "kind": "check"}\n')
+        cli._drain(str(events), offset)
+        out = capsys.readouterr().out
+        assert "second" in out
+        assert "first" not in out
+
+    def test_rotation_mid_tail_restarts_rather_than_going_silent(
+            self, tmp_path, capsys):
+        events = tmp_path / EVENTS_FILENAME
+        events.write_text(_event(seq=1, text="before rotation") + "\n")
+        offset = cli._drain(str(events), 0)
+        capsys.readouterr()
+        events.write_text(_event(seq=1, text="after rotation") + "\n")
+        cli._drain(str(events), offset)
+        assert "after rotation" in capsys.readouterr().out
+
+    def test_emit_records_render_as_the_verdict(self):
+        rendered = cli._render(json.dumps(
+            {"kind": "emit", "system_message": "bootstrap complete"}))
+        assert "bootstrap complete" in rendered
+
+    def test_unparseable_line_is_skipped(self):
+        assert cli._render("not json at all") is None
+
+
+# --------------------------------------------------------------------------
+# the recorder's watched-flush, which is what makes a tail live at all
+# --------------------------------------------------------------------------
+
+class TestWatchedFlush:
+
+    def test_unwatched_pass_still_writes_only_at_exit(self, tmp_path):
+        recorder = PassRecorder(str(tmp_path), autoflush=False)
+        for i in range(50):
+            recorder.record_entry("ok", "entry %d" % i)
+        assert not (tmp_path / EVENTS_FILENAME).exists()
+
+    def test_watched_pass_flushes_as_it_goes(self, tmp_path):
+        recorder = PassRecorder(str(tmp_path), autoflush=False)
+        (tmp_path / WATCH_FILENAME).write_text("1")
+        recorder.record_entry("ok", "visible mid-pass")
+        assert (tmp_path / EVENTS_FILENAME).exists()
+
+    def test_flushes_are_throttled(self, tmp_path):
+        recorder = PassRecorder(str(tmp_path), autoflush=False)
+        (tmp_path / WATCH_FILENAME).write_text("1")
+        recorder.record_entry("ok", "first")
+        size = (tmp_path / EVENTS_FILENAME).stat().st_size
+        for i in range(20):
+            recorder.record_entry("ok", "burst %d" % i)
+        assert (tmp_path / EVENTS_FILENAME).stat().st_size == size
+
+
+# --------------------------------------------------------------------------
+
+def _poll_until(predicate, timeout=10.0):
+    """Wait on a causal observable, never on a duration."""
+    deadline = time.monotonic() + timeout
+    while not predicate():
+        assert time.monotonic() < deadline, "condition never became true"
+        time.sleep(0.005)
+
+
+def _args(**kw):
+    kw.setdefault("json", False)
+    kw.setdefault("plugin_root", "")
+    kw.setdefault("forward", [])
+    return type("Args", (), kw)()
+
+
+def _event(seq, text):
+    return json.dumps({
+        "pass": "p1", "seq": seq, "ts": "2026-09-11T17:00:0%dZ" % (seq % 10),
+        "kind": "check", "sev": "ok", "section": "tools", "text": text,
+    })

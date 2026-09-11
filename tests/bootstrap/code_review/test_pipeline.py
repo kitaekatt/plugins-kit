@@ -1273,6 +1273,16 @@ class TestMechanicalFindingsReachReviewedFiles:
         entry = core["claimed_files"][0]
         assert entry["trivial"] is False, "fixture must be non-trivial"
         assert entry["mechanical_findings"], "a reviewed file got no scan"
+        assert entry["mechanical_scan"] == {
+            "schema_version": 2,
+            "files": [
+                {
+                    "file": "docs/x.md",
+                    "checks_run": ["non_ascii", "abs_path"],
+                    "findings": entry["mechanical_findings"],
+                }
+            ],
+        }
 
     def test_machine_emitted_files_are_not_scanned(self, tmp_path):
         """No agent reviews a generated artifact, so nothing consumes a scan

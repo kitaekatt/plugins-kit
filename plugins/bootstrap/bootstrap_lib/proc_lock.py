@@ -121,6 +121,12 @@ _EMPTY_LOCK_GRACE_SECONDS = 1.0
 # exceeds any plausible legitimate single pass.
 _STALE_AGE_SECONDS = 6 * 3600
 
+#: Attempts _remove_if_owned makes to rename the lock aside before giving up.
+#: Bounded, never unbounded: a release that cannot complete must not become a
+#: hang. With the jittered backoff below this spans roughly a quarter second,
+#: far longer than any reader holds the file open.
+_RELEASE_RETRY_ATTEMPTS = 25
+
 
 def _try_acquire(lock_path: str) -> bool:
     pid = os.getpid()
@@ -198,10 +204,23 @@ def _remove_if_owned(lock_path: str, pid: Optional[int]) -> None:
     if owner != pid:
         return
     stale_path = f"{lock_path}.stale-{uuid.uuid4()}"
-    try:
-        os.replace(lock_path, stale_path)
-    except OSError:
-        return
+    # RETRIED, because on Windows this rename fails with a sharing violation
+    # whenever anyone has the lock file open for reading -- and something does,
+    # routinely: lock_holder() polls it several times a second while a tail is
+    # attached to a running pass. Giving up on the first failure leaves the
+    # holder's lock file on disk after the holder exits, and a lock nobody owns
+    # is honored until _STALE_AGE_SECONDS expires: every bootstrap pass on the
+    # machine stands down for six hours. Observed directly, not theorized.
+    # A reader's open is measured in microseconds, so the window closes well
+    # inside this budget.
+    for attempt in range(_RELEASE_RETRY_ATTEMPTS):
+        try:
+            os.replace(lock_path, stale_path)
+            break
+        except OSError:
+            if attempt == _RELEASE_RETRY_ATTEMPTS - 1:
+                return
+            time.sleep(random.uniform(0.002, 0.02))
     if _read_lock_pid(stale_path) != pid:
         try:
             os.replace(stale_path, lock_path)
@@ -212,6 +231,65 @@ def _remove_if_owned(lock_path: str, pid: Optional[int]) -> None:
         os.remove(stale_path)
     except OSError:
         pass
+
+
+def lock_holder(data_dir: str) -> Optional[dict]:
+    """Describe the engine pass currently holding the lock, or ``None``.
+
+    A READ-ONLY query, for callers that need to answer "is a pass running
+    right now?" without attempting to acquire (the `bootstrap` CLI lever).
+    Deliberately NOT expressed as a try-acquire-then-release: acquiring would
+    clear a stale lock and momentarily hold the mutex, so a mere status probe
+    could make a real launcher stand down.
+
+    Applies exactly the staleness rules `_try_acquire` applies, so the answer
+    here and the decision there can never disagree: a dead PID, or a
+    live-looking PID whose lock has aged past ``_STALE_AGE_SECONDS`` (PID
+    reuse), reads as "not running". An unparseable lock younger than the
+    in-flight grace window reads as running with ``pid`` None -- some process
+    is mid-claim.
+
+    Returns a dict with ``pid`` (int or None), ``age`` (seconds since the lock
+    file's mtime, float or None) and ``started`` (the holder's recorded epoch,
+    float or None).
+    """
+    lock_path = os.path.join(data_dir, LOCK_FILENAME)
+    age = _lock_age_seconds(lock_path)
+    if age is None:
+        return None  # no lock file at all
+    # ONE open for both fields, not two. A caller polling this in a loop (the
+    # `bootstrap` lever's tail does, several times a second) races the holder's
+    # own release: on Windows an open handle makes the holder's os.replace fail
+    # with a sharing violation, and _remove_if_owned's retry is what stops that
+    # from wedging the lock. Halving the open rate halves how often that retry
+    # has to save us.
+    pid, started = _read_lock_state(lock_path)
+    if pid is None:
+        if age < _EMPTY_LOCK_GRACE_SECONDS:
+            return {"pid": None, "age": age, "started": None}
+        return None  # crashed between open() and payload write
+    if not _pid_alive(pid) or age >= _STALE_AGE_SECONDS:
+        return None
+    return {"pid": pid, "age": age, "started": started}
+
+
+def _read_lock_state(lock_path: str):
+    """(pid, started) from the lock's two lines; either may be None."""
+    try:
+        with open(lock_path, "r") as f:
+            first = f.readline().strip()
+            second = f.readline().strip()
+    except OSError:
+        return None, None
+    try:
+        pid = int(first)
+    except ValueError:
+        return None, None
+    try:
+        started = float(second)
+    except ValueError:
+        started = None
+    return pid, started
 
 
 def release_lock(data_dir: str) -> None:

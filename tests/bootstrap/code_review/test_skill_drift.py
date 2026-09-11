@@ -80,6 +80,28 @@ class TestMechanicalScanContract:
             assert "no mechanical coverage for this file" in body
             assert "covers exactly those two checks" not in body
 
+    def test_both_skills_transport_claimed_scan_to_md_domain(self):
+        for vcs in ("git", "p4"):
+            body = gen.render_skill(vcs)
+            ref = gen.render_md_domain_review(vcs)
+            for rendered in (body, ref):
+                assert "mechanicalScan" in rendered
+                assert "mechanicalCheckPhrases" in rendered
+                assert "bundle.mechanical_check_phrases" in rendered
+            assert "mechanical_scan.files[0]" in body
+            assert "does not" in ref and "audit the file" in ref
+
+
+class TestCitationVerificationDispatch:
+    def test_both_skills_parse_native_lanes_and_pass_bundle_to_endpoints(self):
+        for vcs in ("git", "p4"):
+            body = gen.render_skill(vcs)
+            assert "--bundle <bundle.bundle_dir>/bundle.json" in body
+            assert "Parse every NATIVE Agent lane's returned array" in body
+            assert "scripts/parse_review_lane.py" in body
+            assert "verifies each citation" in body
+            assert "Endpoint envelopes already contain output from the same shared parser" in body
+
 
 class TestMdDomainContributorPresent:
     """The subject-lens md-domain wiring must reach BOTH skills verbatim."""

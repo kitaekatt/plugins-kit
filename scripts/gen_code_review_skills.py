@@ -197,8 +197,9 @@ MODEL_KIND = """\
             @LANE_TOOL@ instead of launching an Agent for it, passing `--lane <reviewer
             name>`, `--model <the value>`, `--chunk <absolute chunk diff path>`, one
             `--file` per repo-relative path in that chunk, `--description <the change
-            description>`, and `--project-root <bundle.project_root>` when the bundle has
-            one. For reviewer_a and reviewer_b ONLY, also pass `--mechanical-scan-ran` and
+            description>`, `--bundle <bundle.bundle_dir>/bundle.json`, and `--project-root
+            <bundle.project_root>` when the bundle has one. For reviewer_a and reviewer_b
+            ONLY, also pass `--mechanical-scan-ran` and
             one `--mechanical-finding '<JSON object>'` per entry in
             `diff_chunks[i].mechanical_scan.files`; pass no finding flags to reviewer_c.
             The scan flag is required even when the list is empty, because an empty scan
@@ -298,7 +299,10 @@ MD_DOMAIN_LAUNCH = """\
             and, per claimed
             file, `preImagePath` = its `pre_image` from the bundle (null for an add), with the per-lane
             `files[]` fields (CLAUDE.md: role / dimension / parentPath / ancestorClaudeMdPaths; SKILL.md
-            and skill reference: ancestorClaudeMdPaths; project-doc: ancestorClaudeMdPaths) resolved from each claimed file's
+            and skill reference: ancestorClaudeMdPaths; project-doc: ancestorClaudeMdPaths), plus
+            `mechanicalScan` = the claimed entry's sole `mechanical_scan.files[0]` record. Pass
+            `mechanicalCheckPhrases` = `bundle.mechanical_check_phrases` once at the top level of
+            EVERY Workflow args object. Resolve the remaining fields from each claimed file's
             `claude_mds` per references/md-domain-review.md. Resolve the skills-kit plugin root and
             venvPython defensively per that reference. On a skills-kit version skew (a detect lane
             entry point, `discover_claude_md.classify_dimension`, or a documented args contract
@@ -335,6 +339,8 @@ MD_DOMAIN_REPORT = """\
               was verified mechanically (the change is typo-sized -- <= 5 changed lines; Markdown structure
               unchanged; no link/path/anchor reference changed; no meaning-bearing keyword touched; no
               YAML/front-matter touched) plus its `trivial_checks` results (`ascii_clean`, `no_abs_paths`),
+              then render its `mechanical_scan` coverage, findings, and diagnostics using
+              `bundle.mechanical_check_phrases` (a diagnostic leaves that check uncovered),
               then state plainly that the full audit was SKIPPED because the change is mechanical. NEVER
               call this DIFF-CLEAN and NEVER present it as an audit result; write NOTHING to the ledger for
               a skipped file. If the author or user asks for the full review, run the md-domain pass on these
@@ -676,6 +682,16 @@ technique_skill:
             claimed file exists, the md-domain pass above still runs on it even with zero
             diff_chunks), skip the reviewer fan-out and jump to step 9 with zero code-review
             issues.
+
+            Parse every NATIVE Agent lane's returned array before treating it as candidate
+            issues. Write that lane's raw response verbatim to a distinct temporary file under
+            `bundle.bundle_dir`, then run `@PARSE_TOOL@ --lane <reviewer name> --response
+            <that file> --bundle <bundle.bundle_dir>/bundle.json`. Replace the raw array with
+            the parser's stdout array. The executable parser validates every lane and, for
+            reviewer_a, verifies each citation against the reported file's governing CLAUDE.md
+            chain. Endpoint envelopes already contain output from the same shared parser. A
+            non-zero parser exit is a FAILED lane under the existing failure rule; never pass
+            its unparsed issues to validators.
           tool: Agent (per the model-kind rule, a lane whose model is an endpoint id runs as a Bash call to @LANE_TOOL@ instead)
           expected: JSON arrays of candidate issues from each launched reviewer (one array per (reviewer, chunk) lane), plus a recorded failure for any lane that exited non-zero.
         - n: 7
@@ -1458,6 +1474,7 @@ _SHARED = {
         for line in lane_prompts.REVIEWER_C_SYSTEM.splitlines()
     ),
     "LANE_TOOL": "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/run_review_lane.py",
+    "PARSE_TOOL": "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/parse_review_lane.py",
     "MD_DOMAIN_LAUNCH": MD_DOMAIN_LAUNCH,
     "MD_DOMAIN_REPORT": MD_DOMAIN_REPORT,
     "GENERATED_REPORT": GENERATED_REPORT,
@@ -1496,7 +1513,8 @@ _SKILL_TOKEN_ORDER = [
     "STEP1", "STEP2", "STEP3", "STEP9_TAIL", "STEP10",
     "CHECKLIST", "GOTCHAS", "NARRATION_TEMPLATES", "NARRATION_VARIABLES",
     "DIFF_OR_CL", "RANGE_OR_CL", "FILEPATHS", "CHANGE_DESC", "ISSUE_PATH",
-    "SG_DESC", "OUTPUT_FORMAT", "PREPARE_TOOL", "RENDER_TOOL", "LANE_TOOL", "LEDGER_RECORD_N", "BASELINE_DESC", "KIT",
+    "SG_DESC", "OUTPUT_FORMAT", "PREPARE_TOOL", "RENDER_TOOL", "LANE_TOOL",
+    "PARSE_TOOL", "LEDGER_RECORD_N", "BASELINE_DESC", "KIT",
     # glyph tokens last -- they appear inside already-substituted blocks too,
     # but those blocks embed the literal glyph (via f-strings), so the only
     # remaining @X@/@CHK@/@CRS@ markers are in the template body.
@@ -1710,16 +1728,16 @@ Route by basename first; the ONE path-shape rule is the skill-reference case in 
 
 1. **`audit_claude_md` lane** -- one call for every claimed file whose basename is `CLAUDE.md`.
    `scriptPath = <root>/skills/md-domain/workflow/claude-md-detect.js`, `args` =
-   `{ files: [...], review: true, refs: { criteria: <root>/skills/md-domain/references/standards/claude-md-standards.md, codeDirFilter: <root>/skills/md-domain/references/standards/claude-md-standards.md, densityCriteria: <root>/skills/md-domain/references/standards/claude-md-standards.md, pluginRoot: <root>, venvPython: <venvPython> } }` (one standards doc backs all three refs -- the code-directory dimension and the density lens are sections of it).
+   `{ files: [...], mechanicalCheckPhrases: bundle.mechanical_check_phrases, review: true, refs: { criteria: <root>/skills/md-domain/references/standards/claude-md-standards.md, codeDirFilter: <root>/skills/md-domain/references/standards/claude-md-standards.md, densityCriteria: <root>/skills/md-domain/references/standards/claude-md-standards.md, pluginRoot: <root>, venvPython: <venvPython> } }` (one standards doc backs all three refs -- the code-directory dimension and the density lens are sections of it).
 2. **`audit_skill` lane** -- one call for every claimed file that is EITHER (a) named `SKILL.md`
    OR (b) inside a `*/skills/<name>/references/` folder (only if any). Those are the `skill`
    artifact's two subject shapes and they share one lane and one Workflow call; the lane picks the
    criteria set per file from the path.
    `scriptPath = <root>/skills/md-domain/workflow/skill-detect.js`, `args` =
-   `{ files: [...], review: true, refs: { pluginRoot: <root>, venvPython: <venvPython> } }`.
+   `{ files: [...], mechanicalCheckPhrases: bundle.mechanical_check_phrases, review: true, refs: { pluginRoot: <root>, venvPython: <venvPython> } }`.
 3. **`audit_project_doc` lane** -- one call for every OTHER claimed `.md` file (generic docs; only if any).
    `scriptPath = <root>/skills/md-domain/workflow/project-doc-detect.js`, `args` =
-   `{ files: [...], review: true, refs: { criteria: <root>/skills/md-domain/references/standards/project-doc-standards.md, pluginRoot: <root> } }`.
+   `{ files: [...], mechanicalCheckPhrases: bundle.mechanical_check_phrases, review: true, refs: { criteria: <root>/skills/md-domain/references/standards/project-doc-standards.md, pluginRoot: <root> } }`.
 
 `args` may be passed as an object or a JSON string; all `refs` paths must be ABSOLUTE (the
 Workflow runs from the session cwd, not the skill dir). `review: true` forces the model pin and
@@ -1743,6 +1761,14 @@ Derive, per claimed file:
   belt-and-braces guard against any residual drive-letter casing skew.
 - `preImagePath` = the entry's `pre_image` (pass `null` through unchanged -- an add is fully
   attributable).
+- `mechanicalScan` = the entry's `mechanical_scan.files[0]` record. The wrapper has exactly one
+  record for this claimed file. Do not flatten it or infer coverage from findings: an empty
+  `checks_run` is uncovered, while non-empty `checks_run` with no findings is a clean scan.
+
+Pass `mechanicalCheckPhrases` = `bundle.mechanical_check_phrases` once at the top level of each
+Workflow call. Each lane renders ids through this map and falls back to the bare id when a newer
+producer supplies an unknown check. The scan answers only its mechanical questions; it does not
+audit the file, satisfy the specialist lane, or change a NOT-AUDITED verdict.
 
 For a **CLAUDE.md** file (`audit_claude_md` lane `files[]`):
 - `path` = `local`.
@@ -1782,7 +1808,8 @@ For a **generic project doc** (any other claimed `.md`; `audit_project_doc` lane
 
 ## Consuming the result
 
-Each Workflow returns `{ perFile, totals, review }`. `perFile[i]` carries `verdict`
+Each Workflow returns `{ perFile, totals, review }`. `perFile[i]` retains the input
+`mechanicalScan` record and carries `verdict`
 (`DIFF-CLEAN` = the change introduced no failure; `NON-COMPLIANT`; or `NOT-AUDITED` = the lane
 DECLINED the file as outside its criteria and read nothing -- `totals.notAudited` counts these apart
 from `totals.diffClean`), and `findings[]` each with

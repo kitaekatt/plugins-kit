@@ -4,6 +4,7 @@ import pytest
 
 from bootstrap_lib.code_review import mechanical
 from bootstrap_lib.code_review import mechanical_config as config
+from bootstrap_lib.code_review import pipeline
 from bootstrap_lib.code_review.pipeline import assemble_bundle
 
 
@@ -91,6 +92,84 @@ def test_pipeline_resolves_once_and_publishes_config_phrase(tmp_path, monkeypatc
     )
     assert bundle["mechanical_check_phrases"]["todo"] == "todo markers"
     assert "todo" in bundle["diff_chunks"][0]["mechanical_scan"]["files"][0]["checks_run"]
+
+
+def test_pipeline_applies_effective_checks_to_claimed_files(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "DEFAULTS_PATH", tmp_path / "defaults.yaml")
+    _write(
+        config.DEFAULTS_PATH,
+        "checks:\n"
+        "  - id: todo\n"
+        "    phrase: todo markers\n"
+        "    pattern: 'TODO'\n"
+        "    applies_to: ['docs/*.md']\n",
+    )
+    diff = "diff --git a/docs/x.md b/docs/x.md\n@@ -0,0 +1 @@\n+TODO now\n"
+    bundle = assemble_bundle(
+        "", [{"identifier": "docs/x.md", "text": diff}],
+        [{"identifier": "docs/x.md", "local": None}], tmp_path / "bundle", 10000,
+        tmp_path, claim_globs=["**/*.md"],
+    )
+    scan = bundle["claimed_files"][0]["mechanical_scan"]
+    assert scan["schema_version"] == 2
+    assert len(scan["files"]) == 1
+    assert scan["files"][0]["file"] == "docs/x.md"
+    assert "todo" in scan["files"][0]["checks_run"]
+    assert scan["files"][0]["findings"][-1]["check"] == "todo"
+
+
+def test_claimed_scan_diagnostic_leaves_failed_check_uncovered(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "DEFAULTS_PATH", tmp_path / "defaults.yaml")
+    _write(config.DEFAULTS_PATH, _record("slow", r"(a+)+$"))
+    diff = (
+        "diff --git a/src/x.py b/src/x.py\n@@ -0,0 +1 @@\n+"
+        + "a" * 1000
+        + "!\n"
+    )
+    bundle = assemble_bundle(
+        "", [{"identifier": "src/x.py", "text": diff}],
+        [{"identifier": "src/x.py", "local": None}], tmp_path / "bundle", 10000,
+        tmp_path, claim_globs=["**/*.py"],
+    )
+    record = bundle["claimed_files"][0]["mechanical_scan"]["files"][0]
+    assert "slow" not in record["checks_run"]
+    assert not [row for row in record["findings"] if row["check"] == "slow"]
+    assert "slow" in record["diagnostics"][0]
+
+
+def test_pipeline_resolves_once_for_claimed_and_generic_files(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "DEFAULTS_PATH", tmp_path / "defaults.yaml")
+    _write(
+        config.DEFAULTS_PATH,
+        "checks:\n"
+        "  - id: todo\n"
+        "    phrase: todo markers\n"
+        "    pattern: 'TODO'\n"
+        "    applies_to: ['**/*']\n",
+    )
+    real_resolve = pipeline.resolve_checks
+    calls = 0
+
+    def counting_resolve(root):
+        nonlocal calls
+        calls += 1
+        return real_resolve(root)
+
+    monkeypatch.setattr(pipeline, "resolve_checks", counting_resolve)
+    sections = [
+        {"identifier": path, "text": f"@@ -0,0 +1 @@\n+TODO in {path}\n"}
+        for path in ("docs/x.md", "src/y.py")
+    ]
+    bundle = pipeline.assemble_bundle(
+        "", sections,
+        [{"identifier": row["identifier"], "local": None} for row in sections],
+        tmp_path / "bundle", 10000, tmp_path, claim_globs=["**/*.md"],
+    )
+    assert calls == 1
+    claimed = bundle["claimed_files"][0]["mechanical_scan"]["files"][0]
+    generic = bundle["diff_chunks"][0]["mechanical_scan"]["files"][0]
+    assert "todo" in claimed["checks_run"]
+    assert "todo" in generic["checks_run"]
 
 
 def test_config_check_declares_no_snapshot_input(tmp_path, monkeypatch):

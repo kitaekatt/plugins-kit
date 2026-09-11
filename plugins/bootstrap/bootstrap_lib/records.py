@@ -48,6 +48,20 @@ MAX_EVENTS_BYTES = 2 * 1024 * 1024
 #: larger than anything worth reading in full, and it says so when it bites.
 MAX_DETAIL_CHARS = 64 * 1024
 
+#: Presence of this file in the data dir means somebody is TAILING the event
+#: stream right now (`bootstrap run` attaching to an already-running pass), so
+#: the recorder flushes as it goes instead of only at exit. Absent -- the
+#: normal case -- nothing changes and a pass still costs two writes. A marker
+#: rather than a config knob precisely so the extra writes are paid only while
+#: a human is actually reading, and stop the moment they are not.
+WATCH_FILENAME = "events.watch"
+
+#: Never flush more often than this while watched, and never stat the marker
+#: more often either. A pass records hundreds of entries in bursts; without a
+#: floor a watcher would turn each one into its own write. One second is well
+#: under the latency anyone reading a tail can perceive.
+WATCH_POLL_INTERVAL = 1.0
+
 #: Keys whose values are masked before anything reaches disk. Bootstrap's
 #: condition categories include "user config: API keys", and failure messages
 #: embed observed values verbatim (env_var mismatches quote both the current and
@@ -140,6 +154,10 @@ class PassRecorder:
         self._buf = []
         self._seq = 0
         self.enabled = True
+        # Poll for a tailer immediately on the first record rather than one
+        # interval in: a watcher that attached before the pass started should
+        # see its opening lines, not miss the first second of them.
+        self._last_watch_poll = float("-inf")
         # The engine has many early-return paths (unsupported platform, lock
         # stand-down, transient-retry deferral) and a containment wrapper that
         # swallows crashes. Registering the flush at exit means the record
@@ -194,6 +212,25 @@ class PassRecorder:
                 if value is not None:
                     rec[key] = redact(value, _key=key)
             self._buf.append(rec)
+        except Exception:
+            pass
+        self._flush_if_watched()
+
+    def _flush_if_watched(self):
+        """Flush mid-pass, but only while a tailer is attached. Never raises.
+
+        Both the marker stat and the flush are behind the same one-second
+        throttle, so an unwatched pass pays one ``os.path.exists`` per second
+        and nothing else -- the buffered two-writes-per-pass discipline this
+        class was built around is unchanged when nobody is reading.
+        """
+        try:
+            now = time.monotonic()
+            if now - self._last_watch_poll < WATCH_POLL_INTERVAL:
+                return
+            self._last_watch_poll = now
+            if os.path.exists(os.path.join(self.data_dir, WATCH_FILENAME)):
+                self.flush()
         except Exception:
             pass
 

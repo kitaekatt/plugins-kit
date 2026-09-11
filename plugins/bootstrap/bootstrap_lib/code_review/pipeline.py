@@ -338,8 +338,10 @@ def assemble_bundle(
     it is computed. See bootstrap_lib.code_review.triviality.
 
     Each diff_chunks entry also carries "mechanical_scan", a version 2 object
-    with one record per file: {file, checks_run, findings}. Coverage is local to
-    that file. An empty checks_run means no check met its preconditions, while
+    with one record per file: {file, checks_run, findings}. Each claimed_files
+    entry carries the same object with exactly its own one-file record, so the
+    specialist receives the full effective registry scan too. Coverage is local
+    to that file. An empty checks_run means no check met its preconditions, while
     a non-empty checks_run plus empty findings means those checks ran cleanly.
     Seam B, for repository-wide and changed-file-set checks, is deliberately
     not implemented by this file-local scan.
@@ -482,6 +484,17 @@ def assemble_bundle(
             # instead -- plus located `mechanical_findings` for the lane that
             # reviews a NON-trivial claimed file.
             annotate_triviality(entry, id_to_text.get(f["identifier"], ""))
+            entry["mechanical_scan"] = {
+                "schema_version": 2,
+                "files": [
+                    scan_file(
+                        f["identifier"],
+                        id_to_text.get(f["identifier"], ""),
+                        pre_image_text=_review_pre_image_text(f),
+                        checks=checks,
+                    )
+                ],
+            }
             entry.pop("pre_image_is_empty", None)
             claimed_files.append(entry)
             continue

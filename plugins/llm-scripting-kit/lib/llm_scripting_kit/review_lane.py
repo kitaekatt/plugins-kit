@@ -31,6 +31,7 @@ from bootstrap_lib.code_review.lane_prompts import (
     is_agent_alias,
     parse_issue_array,
 )
+from bootstrap_lib.code_review.lane_output import claude_mds_by_file, load_bundle
 from llm_scripting_kit.completion import (
     BackendOptions,
     HaltError,
@@ -249,7 +250,8 @@ def run_lane(
     files: Sequence[str] = (),
     description: str = "",
     claimed_files: Sequence[str] = (),
-    mechanical_findings: Sequence[dict[str, Any]] | None = None,
+    mechanical_findings: Mapping[str, Any] | Sequence[Mapping[str, Any]] | None = None,
+    mechanical_check_phrases: Mapping[str, str] | None = None,
     claude_mds_by_file: Mapping[str, Sequence[str]] | None = None,
     project_root: Optional[str] = None,
     max_output_tokens: int = DEFAULT_MAX_OUTPUT_TOKENS,
@@ -280,6 +282,7 @@ def run_lane(
         description=description,
         claimed_files=claimed_files,
         mechanical_findings=mechanical_findings,
+        mechanical_check_phrases=mechanical_check_phrases,
     )
 
     window = _endpoint_context_window(selection.endpoint, project_root)
@@ -434,6 +437,11 @@ def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
     )
     parser.add_argument("--project-root", default=None)
     parser.add_argument(
+        "--bundle",
+        type=Path,
+        help="prepared bundle.json carrying each file's governing CLAUDE.md chain",
+    )
+    parser.add_argument(
         "--max-output-tokens", type=int, default=DEFAULT_MAX_OUTPUT_TOKENS
     )
     parser.add_argument(
@@ -454,6 +462,29 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"lane {args.lane}: cannot read chunk {args.chunk}: {exc}", file=sys.stderr)
         return EXIT_USAGE
     try:
+        bundle = load_bundle(args.bundle) if args.bundle else None
+        governing_chains = (
+            claude_mds_by_file(bundle) if bundle is not None else None
+        )
+        mechanical_check_phrases = (
+            bundle.get("mechanical_check_phrases")
+            if bundle is not None
+            else None
+        )
+        if mechanical_check_phrases is not None and (
+            not isinstance(mechanical_check_phrases, Mapping)
+            or not all(
+                isinstance(check_id, str) and isinstance(phrase, str)
+                for check_id, phrase in mechanical_check_phrases.items()
+            )
+        ):
+            raise ValueError(
+                "bundle.mechanical_check_phrases must be an object of string pairs"
+            )
+    except ValueError as exc:
+        print(f"lane {args.lane}: {exc}", file=sys.stderr)
+        return EXIT_USAGE
+    try:
         result = run_lane(
             lane=args.lane,
             model=args.model,
@@ -462,6 +493,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             description=args.description,
             claimed_files=args.claimed_files,
             mechanical_findings=args.mechanical_findings,
+            mechanical_check_phrases=mechanical_check_phrases,
+            claude_mds_by_file=governing_chains,
             project_root=args.project_root,
             max_output_tokens=args.max_output_tokens,
             timeout_s=args.timeout_s,
