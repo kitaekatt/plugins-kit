@@ -250,7 +250,8 @@ def run_lane(
     files: Sequence[str] = (),
     description: str = "",
     claimed_files: Sequence[str] = (),
-    mechanical_findings: Sequence[dict[str, Any]] | None = None,
+    mechanical_findings: Mapping[str, Any] | Sequence[Mapping[str, Any]] | None = None,
+    mechanical_check_phrases: Mapping[str, str] | None = None,
     claude_mds_by_file: Mapping[str, Sequence[str]] | None = None,
     project_root: Optional[str] = None,
     max_output_tokens: int = DEFAULT_MAX_OUTPUT_TOKENS,
@@ -281,6 +282,7 @@ def run_lane(
         description=description,
         claimed_files=claimed_files,
         mechanical_findings=mechanical_findings,
+        mechanical_check_phrases=mechanical_check_phrases,
     )
 
     window = _endpoint_context_window(selection.endpoint, project_root)
@@ -460,9 +462,25 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"lane {args.lane}: cannot read chunk {args.chunk}: {exc}", file=sys.stderr)
         return EXIT_USAGE
     try:
+        bundle = load_bundle(args.bundle) if args.bundle else None
         governing_chains = (
-            claude_mds_by_file(load_bundle(args.bundle)) if args.bundle else None
+            claude_mds_by_file(bundle) if bundle is not None else None
         )
+        mechanical_check_phrases = (
+            bundle.get("mechanical_check_phrases")
+            if bundle is not None
+            else None
+        )
+        if mechanical_check_phrases is not None and (
+            not isinstance(mechanical_check_phrases, Mapping)
+            or not all(
+                isinstance(check_id, str) and isinstance(phrase, str)
+                for check_id, phrase in mechanical_check_phrases.items()
+            )
+        ):
+            raise ValueError(
+                "bundle.mechanical_check_phrases must be an object of string pairs"
+            )
     except ValueError as exc:
         print(f"lane {args.lane}: {exc}", file=sys.stderr)
         return EXIT_USAGE
@@ -475,6 +493,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             description=args.description,
             claimed_files=args.claimed_files,
             mechanical_findings=args.mechanical_findings,
+            mechanical_check_phrases=mechanical_check_phrases,
             claude_mds_by_file=governing_chains,
             project_root=args.project_root,
             max_output_tokens=args.max_output_tokens,

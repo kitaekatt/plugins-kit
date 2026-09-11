@@ -434,6 +434,27 @@ class TestMechanicalFindingsInPrompt:
         assert "File: b.jsonc\n  Checks run: none (no mechanical coverage" in msg
         assert "file/check pair" in msg
 
+    def test_bundle_phrase_map_overrides_registry_and_falls_back_to_bare_id(self):
+        msg = lp.format_mechanical_findings(
+            {
+                "schema_version": 2,
+                "files": [{
+                    "file": "a.yaml",
+                    "checks_run": ["non_ascii", "configured_check", "unknown_check"],
+                    "findings": [],
+                }],
+            },
+            mechanical_check_phrases={
+                "non_ascii": "bundle phrase",
+                "configured_check": "configured check phrase",
+            },
+        )
+
+        assert "non_ascii (bundle phrase)" in msg
+        assert "configured_check (configured check phrase)" in msg
+        assert "unknown_check" in msg
+        assert "unknown_check (" not in msg
+
     def test_the_preamble_tells_the_lane_the_scan_does_not_adjudicate(self):
         """Detection is the script's and adjudication the reviewer's. Without
         this the lane reports every hit as a violation, which trades a

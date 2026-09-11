@@ -177,7 +177,25 @@ class TestRunLane:
         finding = {"file": "a.py", "line": 4, "check": "abs_path", "detail": "absolute path"}
         lr.run_lane(lane=LANE, model="my-endpoint", diff_text="d", mechanical_findings=[finding])
         assert "Mechanical scan (added lines only)" in seam.selection.backend.calls[0]["user"]
+        assert "abs_path (absolute paths)" in seam.selection.backend.calls[0]["user"]
         assert "a.py:4 [abs_path] absolute path" in seam.selection.backend.calls[0]["user"]
+
+    def test_reviewer_c_still_receives_no_mechanical_section(self, seam) -> None:
+        seam.selection = FakeSelection(
+            endpoint="my-endpoint",
+            kind="harness",
+            backend=FakeBackend([FakeResponse("[]")]),
+            model="m",
+        )
+
+        lr.run_lane(
+            lane="reviewer_c_introduced_code",
+            model="my-endpoint",
+            diff_text="d",
+            mechanical_check_phrases={"configured_check": "configured check phrase"},
+        )
+
+        assert "Mechanical scan" not in seam.selection.backend.calls[0]["user"]
 
     def test_returns_issues_and_an_audit_envelope(self, seam) -> None:
         seam.selection = _transport([FakeResponse(ONE_ISSUE)])
@@ -401,6 +419,57 @@ class TestCli:
         assert code == lr.EXIT_OK
         issues = json.loads(capsys.readouterr().out)["issues"]
         assert issues[0]["citation_verification"] == "verified"
+
+    @pytest.mark.parametrize(
+        ("lane", "kind"),
+        [
+            ("reviewer_a_claude_md_compliance", "harness"),
+            ("reviewer_b_diff_only_bugs", "transport"),
+        ],
+    )
+    def test_endpoint_prompt_uses_bundle_mechanical_check_phrases(
+        self, seam, tmp_path, capsys, lane: str, kind: str
+    ) -> None:
+        chunk = tmp_path / "c.diff"
+        chunk.write_text("diff --git a/config/a.yaml b/config/a.yaml", encoding="utf-8")
+        bundle = tmp_path / "bundle.json"
+        bundle.write_text(
+            json.dumps({
+                "changed_files": [],
+                "mechanical_check_phrases": {
+                    "configured_check": "configured check phrase",
+                },
+            }),
+            encoding="utf-8",
+        )
+        seam.selection = FakeSelection(
+            endpoint="my-endpoint",
+            kind=kind,
+            backend=FakeBackend([FakeResponse("[]")]),
+            model="m",
+        )
+        scan = {
+            "file": "config/a.yaml",
+            "checks_run": ["configured_check", "newer_unknown_check"],
+            "findings": [],
+        }
+
+        code = lr.main([
+            "--lane", lane,
+            "--model", "my-endpoint",
+            "--chunk", str(chunk),
+            "--file", "config/a.yaml",
+            "--mechanical-scan-ran",
+            "--mechanical-finding", json.dumps(scan),
+            "--bundle", str(bundle),
+        ])
+
+        assert code == lr.EXIT_OK
+        capsys.readouterr()
+        prompt = seam.selection.backend.calls[0]["user"]
+        assert "configured_check (configured check phrase)" in prompt
+        assert "newer_unknown_check" in prompt
+        assert "newer_unknown_check (" not in prompt
 
     def test_a_config_error_exits_two(self, seam, tmp_path, capsys) -> None:
         chunk = tmp_path / "c.diff"

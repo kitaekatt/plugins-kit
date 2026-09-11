@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import contextlib
 import importlib
+import inspect
 import io
 import re
 import sys
@@ -130,6 +131,8 @@ _MECHANICAL_FINDINGS_MIN_VERSION = "0.40.0"
 
 _BUNDLE_MIN_VERSION = "0.42.0"
 
+_BUNDLE_PHRASE_MAP_MIN_VERSION = "0.43.0"
+
 
 def _supports_claimed_file() -> bool | None:
     """True/False if the probe ran and observed an answer; None if it could
@@ -200,6 +203,18 @@ def _supports_bundle() -> bool | None:
     return True
 
 
+def _supports_bundle_phrase_map() -> bool | None:
+    """Return whether run_lane accepts the bundle's mechanical phrase map."""
+    run_lane = getattr(_review_lane, "run_lane", None)
+    if not callable(run_lane):
+        return None
+    try:
+        parameters = inspect.signature(run_lane).parameters
+    except (TypeError, ValueError):
+        return None
+    return "mechanical_check_phrases" in parameters
+
+
 if __name__ == "__main__":
     if "--claimed-file" in sys.argv[1:] and _supports_claimed_file() is False:
         _refuse_too_old(
@@ -221,5 +236,18 @@ if __name__ == "__main__":
             "review_lane._parse_args does not accept --bundle",
             min_version=_BUNDLE_MIN_VERSION,
             capability="prepared review bundle support",
+        )
+    if (
+        "--bundle" in sys.argv[1:]
+        and (
+            "--mechanical-finding" in sys.argv[1:]
+            or "--mechanical-scan-ran" in sys.argv[1:]
+        )
+        and _supports_bundle_phrase_map() is False
+    ):
+        _refuse_too_old(
+            "review_lane.run_lane does not accept mechanical_check_phrases",
+            min_version=_BUNDLE_PHRASE_MAP_MIN_VERSION,
+            capability="bundle mechanical check phrase support",
         )
     sys.exit(_main())

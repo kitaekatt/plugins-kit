@@ -1,5 +1,5 @@
 {
-  "requires_bootstrap": "0.105.0",
+  "requires_bootstrap": "0.107.0",
   "$comment": "The venv exists for the CLI, not for the library: models.resolve_endpoint() reads layered config through bootstrap_lib + PyYAML, and OpenAI-compatible completion commands require the OpenAI SDK. The standalone Python carries only .pth links and no third-party packages. bootstrap_lib is linked in because config_resolve lives there.",
   "shared_libs": [
     { "name": "llm_scripting_kit", "src": "lib" }
