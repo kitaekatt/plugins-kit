@@ -1,0 +1,20 @@
+# Additive mechanical pattern checks. This shipped layer is intentionally empty.
+#
+# checks: a list of records. Each record has:
+#   id: [a-z0-9_]+, unique across shipped, user, and project layers
+#   phrase: non-blank human noun phrase used in the review lane prompt
+#   pattern: a regular expression (matched against each added line)
+#   applies_to: one or more project-relative POSITIVE globs; entries beginning
+#               with ! exclude paths, but a list with only exclusions is invalid
+#   detail: optional format string using only {match}, {line}, {file}, {text}
+#           (no conversions or format specifiers); default is {match!r} in: {text}
+#
+# Layers are additive-only. A higher layer may add ids, but cannot redefine or
+# subtract an id from a lower layer. Paths are normalized to project-relative
+# POSIX form before matching. P4 depot identifiers are normalized by removing
+# the leading //depot/<client-project>/ components first.
+#
+# Each regex match has an explicit timeout in milliseconds. A timeout is a
+# configuration error at scan time: findings are discarded and coverage is not
+# reported for that check.
+checks: []

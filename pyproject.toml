@@ -8,6 +8,7 @@ dev = [
     "pytest>=8.0",
     "pytest-xdist>=3.5",
     "pyyaml",
+    "regex",
     "websocket-client>=1.6",
     "fastapi>=0.110",
     "httpx>=0.27",
