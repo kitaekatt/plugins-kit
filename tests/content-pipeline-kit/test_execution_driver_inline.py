@@ -245,7 +245,6 @@ def test_d3_driver_produces_the_same_real_cache_key_as_the_untracked_path(tmp_pa
         cache_dir=cache_dir,
     )
     assert accepted == ["u0"]
-    assert tracked_backend.calls[0]["options"].client_id == "content-pipeline:run-1"
 
     # The response cache write is keyed by build_cache_key's own output --
     # read the actual on-disk key back out rather than re-deriving it, so
@@ -336,3 +335,49 @@ def test_run_wave_per_unit_declared_cost_derives_a_different_lease_per_unit(tmp_
     assert 426 - 2 <= seen["slow"] - before <= 426 + 2
     # fast: 10.0 * 2.0 = 20.0 -- floored at the 300.0 default (max(...) floor).
     assert 300 - 2 <= seen["fast"] - before <= 300 + 2
+
+
+# -- access-log attribution -------------------------------------------------------
+
+
+def _run_one_unit(tmp_path, backend, **submit_kwargs):
+    """Drive one unit through run_wave and return the options the backend saw."""
+    store = _seeded_store(tmp_path, unit_ids=("u0",))
+    wave = _wave(store, ["u0"])
+    adapter = RunAdapter(
+        system_for=lambda wu: "system prompt",
+        user_for=lambda wu: "user prompt",
+        parse_fn=lambda text: text,
+        validators=[],
+    )
+    accepted = run_wave(
+        store,
+        "run-1",
+        wave,
+        adapter,
+        backend=backend,
+        model="test-model",
+        cache_dir=tmp_path / "cache",
+        **submit_kwargs,
+    )
+    assert accepted == ["u0"]
+    return backend.calls[0]["options"]
+
+
+def test_driver_names_the_run_in_the_front_door_access_log(tmp_path):
+    # Without this the front door logs `cli.py@host:pid` and a run cannot be
+    # traced back from the access log.
+    options = _run_one_unit(tmp_path, MockBackend(responses=["GENERATED-TEXT"]))
+    assert options.client_id == "content-pipeline:run-1"
+
+
+def test_driver_does_not_overwrite_a_caller_supplied_client_id(tmp_path):
+    # The run-derived id is a DEFAULT. A caller that set its own is being more
+    # specific than this driver can be, and clobbering it erases the
+    # attribution they asked for.
+    options = _run_one_unit(
+        tmp_path,
+        MockBackend(responses=["GENERATED-TEXT"]),
+        options=BackendOptions(client_id="caller-chose-this"),
+    )
+    assert options.client_id == "caller-chose-this"

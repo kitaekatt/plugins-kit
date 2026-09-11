@@ -216,10 +216,16 @@ def run_wave(
             "the `backend` path requires both `adapter.parse_fn` and `adapter.user_for`"
         )
     if backend is not None:
+        # Name this run in the front door's access log, but only as a DEFAULT:
+        # a caller that set its own client_id is being more specific than we
+        # can be, and overriding it would erase the attribution it wanted.
         options = submit_kwargs.get("options") or BackendOptions()
-        submit_kwargs["options"] = replace(
-            options, client_id=f"content-pipeline:{run_id}"
-        )
+        if not options.client_id:
+            submit_kwargs["options"] = replace(
+                options, client_id=f"content-pipeline:{run_id}"
+            )
+        else:
+            submit_kwargs["options"] = options
 
     accepted: List[str] = []
     for unit in wave:
