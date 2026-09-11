@@ -1,6 +1,6 @@
 [project]
 name = "p4-kit"
-version = "0.50.0"
+version = "0.51.0"
 description = "Host-side dependencies for p4-kit plugin (importable package: p4kit_vcs)"
 requires-python = ">=3.12,!=3.14.*"
 
@@ -9,7 +9,14 @@ requires-python = ">=3.12,!=3.14.*"
 # PyYAML is needed because the review pipeline resolves a project's declared
 # plugin-write paths through bootstrap_lib.config_resolve, which reads the
 # project's config layer to honour a plugin_data_dir relocation.
-dependencies = ["pyyaml"]
+# markdown-it-py is needed for the same reason: the review pipeline
+# reaches bootstrap_lib.code_review.mechanical_repository, which parses
+# Markdown. The shared-lib .pth links bootstrap_lib's CODE into this venv
+# but installs none of bootstrap's own dependencies, so every runtime dep
+# of the shared-lib code paths this plugin actually calls has to be
+# declared here. Without it the lane fails at import with a bare
+# "No module named 'markdown_it'" that reads as a stale-plugin error.
+dependencies = ["pyyaml", "markdown-it-py"]
 
 # OPTIONAL, and deliberately not a hard dependency. A review lane reaches an
 # llm-scripting-kit endpoint only when the user configures a non-Agent `model`
