@@ -6,6 +6,8 @@ the launch -- the rendered policy carries the summary; this carries the detail.
 
 Rendered policy: `scripts/orchestration_guidance.py`. Backend record and the
 one-line command: `defaults/orchestration.yaml`, `backends[id: codex]`.
+Command source: `llm_scripting_kit.harness_adapters.CodexAdapter`. The
+adapter builds argv only. The launch adds the stream redirects shown below.
 
 ## When a harness is warranted at all
 
@@ -46,7 +48,13 @@ backgrounded Bash call does not persist.
 
 ## The one invocation
 
-There is one sanctioned way to launch a unit. Use it as written.
+The backend record's one-line command is:
+
+  codex exec -s workspace-write -c 'windows.sandbox="unelevated"' -c 'sandbox_workspace_write.network_access=true' -C <ABSOLUTE root> --add-dir <ABSOLUTE session scratchpad> --skip-git-repo-check --color never -o <ABSOLUTE result file> -
+
+That argv is the whole of what the adapter builds -- the YAML `command:`
+slot is an ARGV TEMPLATE, and a `-c`/flag list has no way to express a shell
+redirect. Complete it at launch with stdin and stream capture:
 
   codex exec -s workspace-write \
     -c 'windows.sandbox="unelevated"' \
@@ -295,8 +303,13 @@ directory handle, prefixed
 `CACHE HIT ` when served from cache; the finished run then prints the
 `result.md` path. A matching brief, model, effort, sandbox, absolute cwd, and
 sorted absolute add-dirs reuses a non-empty result; `--no-cache` forces a new
-run. A hit is judged by `result.md` alone; the recorded exit code is
-informational. Entries are swept after the configured TTL, which defaults to
-seven days. After a restart, `--list` prints one line per entry containing its
-timestamp, label, model, exit code, result size, absolute entry directory, and
-absolute `result.md` path, so either handle can be recovered from the listing.
+run. A hit is judged by `result.md` alone -- codex exits 0 on silent failure,
+so the -o file, not the exit code, decides whether a cached run counts as a
+hit -- but the recorded exit code IS replayed as the cache hit's return
+value, so a failed dispatch cannot come back as a successful-looking replay.
+Entries are swept after the configured TTL, which defaults to seven days.
+`--list` accepts `--cwd` to resolve the same cache dir a dispatch from that
+directory used (its own cwd otherwise). After a restart, `--list` prints one
+line per entry containing its timestamp, label, model, exit code, result
+size, absolute entry directory, and absolute `result.md` path, so either
+handle can be recovered from the listing.

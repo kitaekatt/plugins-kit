@@ -6,7 +6,17 @@ import json
 import os
 from pathlib import Path
 import shlex
+import sys
 import time
+
+# bootstrap_lib is a shared library linked onto awesome-kit's provisioned venv
+# via a .pth file; a bare pytest run has no such link, so the repo checkout's
+# copy is put on sys.path directly, mirroring test_orchestration_guidance.py's
+# TestRenderedCodexCommandKeepsItsSilentFailureFlags fixture.
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+_BOOTSTRAP_DIR = str(_REPO_ROOT / "plugins" / "bootstrap")
+if _BOOTSTRAP_DIR not in sys.path:
+    sys.path.insert(0, _BOOTSTRAP_DIR)
 
 import dispatch
 
@@ -141,6 +151,7 @@ def test_sweep_removes_old_entries_keeps_new_and_excludes_current(tmp_path, monk
 def test_print_only_emits_exact_codex_argv_without_launch(tmp_path, monkeypatch, capsys):
     brief = _brief(tmp_path)
     cache = tmp_path / "cache"
+    monkeypatch.setattr(dispatch.codex_lib, "resolve_cli", lambda name: ("codex",))
     monkeypatch.setattr(dispatch.subprocess, "run", lambda *a, **k: (_ for _ in ()).throw(AssertionError()))
     assert dispatch.main(_run_args(tmp_path, brief, cache, "--add-dir", str(tmp_path), "--print-only")) == 0
     output = capsys.readouterr().out.splitlines()
@@ -157,7 +168,8 @@ def test_print_only_emits_exact_codex_argv_without_launch(tmp_path, monkeypatch,
 
 
 def test_print_only_adds_windows_sandbox_config(tmp_path, monkeypatch):
-    monkeypatch.setattr(dispatch.os, "name", "nt")
+    monkeypatch.setattr(dispatch.codex_lib, "resolve_cli", lambda name: ("codex",))
+    monkeypatch.setattr(dispatch.codex_lib.os, "name", "nt")
     argv_line = shlex.join(
         dispatch._argv(
             model="gpt-5.6-sol",
@@ -174,7 +186,8 @@ def test_print_only_adds_windows_sandbox_config(tmp_path, monkeypatch):
 def test_print_only_omits_windows_sandbox_config_on_posix(tmp_path, monkeypatch, capsys):
     brief = _brief(tmp_path)
     cache = tmp_path / "cache"
-    monkeypatch.setattr(dispatch.os, "name", "posix")
+    monkeypatch.setattr(dispatch.codex_lib, "resolve_cli", lambda name: ("codex",))
+    monkeypatch.setattr(dispatch.codex_lib.os, "name", "posix")
     assert dispatch.main(_run_args(tmp_path, brief, cache, "--print-only")) == 0
     argv_line = capsys.readouterr().out.splitlines()[1]
     assert "windows.sandbox" not in argv_line
@@ -234,3 +247,77 @@ def test_cache_hit_rejects_context_mismatch_in_metadata(tmp_path):
     )
     (entry / "result.md").write_text("result", encoding="utf-8")
     assert dispatch._cache_hit(cache, key, tmp_path, []) is None
+
+
+def test_windows_cmd_launcher_argv_begins_with_cmd_slash_c(tmp_path, monkeypatch):
+    """dispatch.py must consume the shared bootstrap_lib.codex builder.
+
+    A resolved codex.cmd launcher (an npm/scoop install) is not directly
+    executable by CreateProcess, so the shared builder wraps it in `cmd /c`.
+    A hand-rolled argv starting with the bare string "codex" cannot express
+    this at all -- this pins that dispatch renders through the shared
+    resolver rather than its own copy.
+    """
+    resolved_cmd = str(tmp_path / "codex.cmd")
+    monkeypatch.setattr(dispatch.codex_lib, "resolve_cli", lambda name: ("cmd", "/c", resolved_cmd))
+    argv = dispatch._argv(
+        model="gpt-5.6-sol",
+        effort="high",
+        sandbox="workspace-write",
+        cwd=tmp_path,
+        add_dirs=[],
+        result=tmp_path / "result.md",
+    )
+    assert argv[:3] == ["cmd", "/c", resolved_cmd]
+
+
+def test_dispatch_no_longer_hardcodes_a_bare_codex_argv_head():
+    """The hand-rolled second implementation is gone, argv head and all."""
+    source = Path(dispatch.__file__).read_text(encoding="utf-8")
+    assert '"codex",' not in source
+    assert "'codex',\n" not in source
+
+
+def test_cache_hit_replays_the_recorded_nonzero_exit_code(tmp_path, monkeypatch, capsys):
+    """A hit is judged by the -o file (codex exits 0 on silent failure -- see
+    the comment in _cache_hit, which this test must not require changing),
+    but the RETURN VALUE must replay the recorded status. Before the fix, a
+    failed dispatch (exit 3) replayed as a successful cache hit (exit 0).
+    """
+    brief = _brief(tmp_path)
+    cache = tmp_path / "cache"
+
+    def fake_run(argv, **kwargs):
+        Path(argv[argv.index("-o") + 1]).write_text("partial result\n", encoding="utf-8")
+        return dispatch.subprocess.CompletedProcess(argv, 3)
+
+    monkeypatch.setattr(dispatch.subprocess, "run", fake_run)
+    assert dispatch.main(_run_args(tmp_path, brief, cache)) == 3
+    capsys.readouterr()
+
+    assert dispatch.main(_run_args(tmp_path, brief, cache)) == 3
+    assert "CACHE HIT" in capsys.readouterr().out
+
+
+def test_list_accepts_cwd_and_finds_what_a_dispatch_from_that_cwd_cached(tmp_path, monkeypatch, capsys):
+    """--list accepts --cwd. Without it, a listing run from anywhere but
+    the dispatch's own cwd cannot see that dispatch's entries.
+    """
+    brief = _brief(tmp_path)
+    project = tmp_path / "project"
+    (project / "tmp").mkdir(parents=True)
+
+    def fake_run(argv, **kwargs):
+        Path(argv[argv.index("-o") + 1]).write_text("result\n", encoding="utf-8")
+        return dispatch.subprocess.CompletedProcess(argv, 0)
+
+    monkeypatch.setattr(dispatch.subprocess, "run", fake_run)
+    assert dispatch.main(["--label", "unit", "--brief", str(brief), "--cwd", str(project)]) == 0
+    capsys.readouterr()
+
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+    assert dispatch.main(["--list", "--cwd", str(project)]) == 0
+    lines = capsys.readouterr().out.strip().splitlines()
+    assert len(lines) == 1
