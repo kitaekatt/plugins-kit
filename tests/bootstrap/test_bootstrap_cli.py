@@ -134,11 +134,45 @@ class TestStatus:
         assert cli.cmd_status(_args(json=False)) == 0
         assert "no bootstrap pass is running" in capsys.readouterr().out
 
-    def test_reports_running(self, data_root, capsys):
+    def test_reports_running_and_then_waits_for_it(
+            self, data_root, monkeypatch, capsys):
+        """The bare command BLOCKS on a running pass -- the whole point.
+
+        Answering "yes, one is running" and exiting leaves the asker to poll
+        by hand, and strands them a second before the pass they care about
+        finishes.
+        """
+        followed = []
+        monkeypatch.setattr(cli, "follow", lambda d: followed.append(d) or 0)
         with proc_lock.engine_lock(str(data_root / "mkt-a" / "bootstrap")):
             assert cli.cmd_status(_args(json=False)) == 0
         out = capsys.readouterr().out
         assert "RUNNING" in out and str(os.getpid()) in out
+        assert followed == [str(data_root / "mkt-a" / "bootstrap")]
+
+    def test_idle_does_not_block(self, data_root, monkeypatch, capsys):
+        monkeypatch.setattr(cli, "follow", lambda d: pytest.fail(
+            "nothing is running; there is nothing to wait for"))
+        assert cli.cmd_status(_args(json=False)) == 0
+        capsys.readouterr()
+
+    def test_json_never_blocks(self, data_root, monkeypatch, capsys):
+        """The scripting form must return even while a pass is in flight."""
+        monkeypatch.setattr(cli, "follow", lambda d: pytest.fail(
+            "--json is the non-blocking probe"))
+        with proc_lock.engine_lock(str(data_root / "mkt-a" / "bootstrap")):
+            assert cli.cmd_status(_args(json=True)) == 0
+        assert json.loads(capsys.readouterr().out)[0]["running"] is True
+
+    def test_several_running_marketplaces_are_not_interleaved(
+            self, data_root, monkeypatch, capsys):
+        (data_root / "mkt-b" / "bootstrap").mkdir(parents=True)
+        monkeypatch.setattr(cli, "follow", lambda d: pytest.fail(
+            "two engines' lines would be attributed to the wrong one"))
+        with proc_lock.engine_lock(str(data_root / "mkt-a" / "bootstrap")):
+            with proc_lock.engine_lock(str(data_root / "mkt-b" / "bootstrap")):
+                assert cli.cmd_status(_args(json=False)) == 0
+        assert "BOOTSTRAP_MARKETPLACE" in capsys.readouterr().out
 
     def test_json_is_machine_readable(self, data_root, capsys):
         assert cli.cmd_status(_args(json=True)) == 0

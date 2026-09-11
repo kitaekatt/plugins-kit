@@ -2,11 +2,11 @@
 # bootstrap -- report on, or run, the bootstrap provisioning pass
 #
 # Usage:
-#   bootstrap                 report whether a bootstrap pass is running
-#   bootstrap --json          the same answer, machine-readable
-#   bootstrap run             run a full pass now, synchronously, on stdout;
-#                             if one is ALREADY running, attach to that pass
-#                             and stream it until it finishes, then exit
+#   bootstrap                 report whether a bootstrap pass is running; if
+#                             one IS, stay attached and stream it until it
+#                             finishes, then exit
+#   bootstrap --json          report only, never blocking (the scripting form)
+#   bootstrap run             the same, plus START a pass when none is running
 #   bootstrap run --verbose   extra flags are passed through to the engine
 #   bootstrap -h | --help     show this help
 #

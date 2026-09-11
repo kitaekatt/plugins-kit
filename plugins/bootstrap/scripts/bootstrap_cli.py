@@ -4,11 +4,13 @@
 Two verbs, and the whole point of both is that a bootstrap pass is a
 SINGLE-INSTANCE thing (bootstrap_lib.proc_lock):
 
-    bootstrap        Is a pass running right now? Read-only, says so, exits.
-    bootstrap run    Run a full pass -- unless one is already running, in
-                     which case attach to THAT pass and stream it until it
-                     finishes, rather than starting a second one that would
-                     immediately stand down on the lock.
+    bootstrap        Is a pass running right now? Says so -- and if one IS,
+                     stays attached and streams it until it finishes.
+                     `--json` is the non-blocking scripting form.
+    bootstrap run    The same, plus START a full pass when none is running.
+                     It never starts a SECOND one: a pass already in flight
+                     is attached to, not raced, because a second engine would
+                     only stand down on the lock and print nothing.
 
 Why the status probe is not "try to acquire and release": acquiring clears a
 stale lock and holds the mutex for an instant, so a mere status check could
@@ -177,20 +179,44 @@ def describe(marketplace: str) -> dict:
 
 
 def cmd_status(args) -> int:
+    """Report, and -- when a pass IS running -- stay attached until it ends.
+
+    The bare command does not merely answer the question and leave: if
+    something is running, waiting for it is what the asker almost always
+    wanted next, and an answer that scrolls away a second before the pass
+    finishes is the least useful moment to stop. So it blocks and streams,
+    exactly like `run` does when it finds a pass already in flight.
+
+    `--json` is the exception and stays non-blocking: it is the scripting
+    surface, and a machine-readable probe that hangs for the minutes a full
+    pass takes is not one.
+    """
     reports = [describe(m) for m in marketplaces()]
     if args.json:
         print(json.dumps(reports, indent=2))
-    else:
-        for r in reports:
-            if not r["running"]:
-                print("%s: no bootstrap pass is running" % r["marketplace"])
-            elif r["pid"] is None:
-                print("%s: a bootstrap pass is starting (claiming the lock)"
-                      % r["marketplace"])
-            else:
-                print("%s: a bootstrap pass is RUNNING (pid %s, %s elapsed)"
-                      % (r["marketplace"], r["pid"], _duration(r["elapsed_seconds"])))
-    # Exit 0 whether or not a pass is running: "is one running" is a question
+        return 0
+
+    for r in reports:
+        if not r["running"]:
+            print("%s: no bootstrap pass is running" % r["marketplace"])
+        elif r["pid"] is None:
+            print("%s: a bootstrap pass is starting (claiming the lock); "
+                  "waiting for it" % r["marketplace"])
+        else:
+            print("%s: a bootstrap pass is RUNNING (pid %s, %s elapsed); "
+                  "waiting for it"
+                  % (r["marketplace"], r["pid"], _duration(r["elapsed_seconds"])))
+
+    running = [r for r in reports if r["running"]]
+    if len(running) == 1:
+        return follow(plugin_data_dir(running[0]["marketplace"]))
+    if len(running) > 1:
+        # Two passes at once is possible only across marketplaces, each with
+        # its own lock. Tailing them interleaved would attribute lines to the
+        # wrong engine, so say which and let the caller name one.
+        print("\nMore than one marketplace has a pass running; "
+              "set BOOTSTRAP_MARKETPLACE=<name> to follow one.")
+    # Exit 0 whether or not a pass was running: "is one running" is a question
     # with two correct answers, and a non-zero code for one of them would read
     # as an error to every caller that checks `set -e` or `$?`. Scripts that
     # need the answer machine-readably use --json.
