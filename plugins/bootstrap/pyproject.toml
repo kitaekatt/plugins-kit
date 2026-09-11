@@ -1,6 +1,6 @@
 [project]
 name = "bootstrap"
-version = "0.109.0"
+version = "0.110.0"
 requires-python = ">=3.12,!=3.14.*"
 dependencies = ["markdown-it-py", "pyyaml", "regex"]
 

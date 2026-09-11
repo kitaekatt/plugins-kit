@@ -197,6 +197,18 @@ class TestStatus:
 
 class TestRun:
 
+    @pytest.fixture(autouse=True)
+    def no_real_data_root(self, tmp_path_factory, monkeypatch):
+        """Belt and braces for the leak the fixture above describes.
+
+        Every test in this class gets a redirected data root by default, so
+        forgetting one cannot write into the developer's real
+        ~/.claude/plugins/data. A test that wants its own still sets it.
+        """
+        monkeypatch.setenv(
+            "CLAUDE_BOOTSTRAP_DATA_ROOT",
+            str(tmp_path_factory.mktemp("default-data-root")))
+
     def test_attaches_instead_of_starting_a_second_pass(
             self, tmp_path, monkeypatch, capsys):
         monkeypatch.setenv("CLAUDE_BOOTSTRAP_DATA_ROOT", str(tmp_path))
@@ -216,13 +228,18 @@ class TestRun:
         assert launched == [], "a second engine must never be spawned"
         assert "already running" in capsys.readouterr().out
 
-    def test_engine_flags_pass_through(self, monkeypatch, capsys):
+    def test_engine_flags_pass_through(self, tmp_path, monkeypatch, capsys):
         """`bootstrap run --verbose` is the spelling the help advertises.
 
         Neither nargs="*" nor argparse.REMAINDER carries a LEADING dash-token
         into a subparser's first positional, so this exact invocation once
         died with "unrecognized arguments: --verbose".
         """
+        # REDIRECT THE DATA ROOT, always. `run` now creates the watch marker
+        # (and its parent directory) rather than only reading, so a test that
+        # names a marketplace without redirecting the root writes into the
+        # developer's real ~/.claude/plugins/data.
+        monkeypatch.setenv("CLAUDE_BOOTSTRAP_DATA_ROOT", str(tmp_path))
         monkeypatch.setattr(cli, "marketplaces", lambda: ["mkt-a"])
         monkeypatch.setattr(cli, "holder", lambda d: None)
         monkeypatch.setattr(cli, "find_plugin_root", lambda m, f="": "/plug")
@@ -230,9 +247,11 @@ class TestRun:
 
         def fake_run(cmd, **kw):
             seen["cmd"] = cmd
-            return type("R", (), {"returncode": 0})()
+            return _ExitedProcess()
 
-        monkeypatch.setattr(cli.subprocess, "run", fake_run)
+        monkeypatch.setattr(cli.subprocess, "Popen", fake_run)
+        monkeypatch.setattr(cli, "FINAL_GRACE_SECONDS", 0.0)
+        monkeypatch.setattr(cli, "POLL_INTERVAL", 0.0)
         assert cli.main(["run", "--verbose"]) == 0
         capsys.readouterr()
         assert seen["cmd"][-2:] == ["--console", "--verbose"]
@@ -241,6 +260,74 @@ class TestRun:
         with pytest.raises(SystemExit):
             cli.main(["--nonsense"])
         assert "unrecognized" in capsys.readouterr().err
+
+    def test_losing_the_lock_race_attaches_instead_of_exiting_silently(
+            self, tmp_path, monkeypatch, capsys):
+        """The up-front lock check is not the last word.
+
+        Another launcher can take the lock between that check and the engine's
+        own acquire; the engine then stands down having printed nothing, and
+        `bootstrap run` used to return 0 in a second with no output -- from the
+        terminal, indistinguishable from bootstrap doing nothing at all.
+        """
+        monkeypatch.setenv("CLAUDE_BOOTSTRAP_DATA_ROOT", str(tmp_path))
+        monkeypatch.setenv("BOOTSTRAP_MARKETPLACE", "mkt-a")
+        data_dir = tmp_path / "mkt-a" / "bootstrap"
+        data_dir.mkdir(parents=True)
+        monkeypatch.setattr(cli, "find_plugin_root", lambda m, f="": "/plug")
+        monkeypatch.setattr(cli, "follow", lambda d: 9)
+
+        monkeypatch.setattr(cli, "FINAL_GRACE_SECONDS", 0.0)
+        monkeypatch.setattr(cli, "POLL_INTERVAL", 0.0)
+
+        def racing_engine(cmd, **kw):
+            # Stand in for the launcher that won: it holds the lock by the
+            # time the engine we launched has given up.
+            racing_engine.lock = proc_lock.engine_lock(str(data_dir))
+            assert racing_engine.lock.__enter__() is True
+            return _ExitedProcess()
+
+        monkeypatch.setattr(cli.subprocess, "Popen", racing_engine)
+        try:
+            assert cli.cmd_run(_args(plugin_root="", forward=[])) == 9
+        finally:
+            racing_engine.lock.__exit__(None, None, None)
+        assert "took the lock first" in capsys.readouterr().out
+
+    def test_streams_the_pass_it_launched(
+            self, tmp_path, monkeypatch, capsys):
+        """A launched pass must stream too, not only an attached one.
+
+        The console engine prints its verdict and its failures and nothing
+        else, so a clean three-minute pass showed five lines of shell preamble
+        and exited -- indistinguishable, from the terminal, from bootstrap
+        having done nothing.
+        """
+        monkeypatch.setenv("CLAUDE_BOOTSTRAP_DATA_ROOT", str(tmp_path))
+        monkeypatch.setenv("BOOTSTRAP_MARKETPLACE", "mkt-a")
+        data_dir = tmp_path / "mkt-a" / "bootstrap"
+        data_dir.mkdir(parents=True)
+        events = data_dir / EVENTS_FILENAME
+        events.write_text(_event(seq=0, text="from an earlier pass") + "\n")
+        monkeypatch.setattr(cli, "find_plugin_root", lambda m, f="": "/plug")
+        monkeypatch.setattr(cli, "FINAL_GRACE_SECONDS", 0.0)
+        monkeypatch.setattr(cli, "POLL_INTERVAL", 0.0)
+
+        def engine_that_records(cmd, **kw):
+            with open(str(events), "a") as f:
+                f.write(_event(seq=1, text="uv: ok") + "\n")
+                f.write(json.dumps({"kind": "emit", "pass": "p1",
+                                    "system_message": "the verdict"}) + "\n")
+            return _ExitedProcess()
+
+        monkeypatch.setattr(cli.subprocess, "Popen", engine_that_records)
+        assert cli.cmd_run(_args(plugin_root="", forward=[])) == 0
+        out = capsys.readouterr().out
+        assert "uv: ok" in out
+        assert "from an earlier pass" not in out
+        # The child prints the verdict to this same terminal; printing it
+        # again from the event stream would double it.
+        assert "the verdict" not in out
 
     def test_refuses_to_guess_between_marketplaces(
             self, tmp_path, monkeypatch, capsys):
@@ -255,6 +342,43 @@ class TestRun:
 # --------------------------------------------------------------------------
 # follow / rendering
 # --------------------------------------------------------------------------
+
+class TestPluginRootResolution:
+
+    def test_explicit_override_outranks_the_installed_cache(
+            self, tmp_path, monkeypatch):
+        """Otherwise `run` silently launches the installed engine.
+
+        Observed: with BOOTSTRAP_PLUGIN_ROOT pointing at a dev checkout, the
+        pass ran the cached version's wrapper while reporting the dev tree's
+        name -- so a fix under test never executed and the run looked like it
+        had.
+        """
+        root = tmp_path / "devtree"
+        (root / "hooks" / "sessionstart").mkdir(parents=True)
+        (root / "hooks" / "sessionstart" / "session-bootstrap.sh").write_text("")
+        monkeypatch.setenv("BOOTSTRAP_PLUGIN_ROOT", str(root))
+        assert cli.find_plugin_root("plugins-kit") == str(root)
+
+    def test_a_bogus_override_falls_back_to_discovery(
+            self, tmp_path, monkeypatch):
+        """An override naming no plugin tree must not disable resolution."""
+        bogus = tmp_path / "nope"
+        monkeypatch.setenv("BOOTSTRAP_PLUGIN_ROOT", str(bogus))
+        fallback = tmp_path / "fallback"
+        (fallback / "hooks" / "sessionstart").mkdir(parents=True)
+        (fallback / "hooks" / "sessionstart" / "session-bootstrap.sh").write_text("")
+        # Resolution continues: whatever comes back is a real plugin tree
+        # (this machine's installed cache, or the supplied fallback), never
+        # the path that does not exist.
+        resolved = cli.find_plugin_root("plugins-kit", str(fallback))
+        assert resolved != str(bogus)
+        assert cli._is_plugin_root(resolved)
+
+    def test_versions_sort_numerically(self):
+        """0.98.1 must not outrank 0.104.0 -- that runs a superseded engine."""
+        assert cli._version_key("0.104.0") > cli._version_key("0.98.1")
+
 
 class TestFollow:
 
@@ -368,6 +492,15 @@ class TestWatchedFlush:
 
 
 # --------------------------------------------------------------------------
+
+class _ExitedProcess:
+    """A Popen stand-in that has already exited cleanly."""
+
+    returncode = 0
+
+    def poll(self):
+        return 0
+
 
 def _poll_until(predicate, timeout=10.0):
     """Wait on a causal observable, never on a duration."""
