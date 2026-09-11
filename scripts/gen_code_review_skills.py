@@ -197,8 +197,9 @@ MODEL_KIND = """\
             @LANE_TOOL@ instead of launching an Agent for it, passing `--lane <reviewer
             name>`, `--model <the value>`, `--chunk <absolute chunk diff path>`, one
             `--file` per repo-relative path in that chunk, `--description <the change
-            description>`, and `--project-root <bundle.project_root>` when the bundle has
-            one. For reviewer_a and reviewer_b ONLY, also pass `--mechanical-scan-ran` and
+            description>`, `--bundle <bundle.bundle_dir>/bundle.json`, and `--project-root
+            <bundle.project_root>` when the bundle has one. For reviewer_a and reviewer_b
+            ONLY, also pass `--mechanical-scan-ran` and
             one `--mechanical-finding '<JSON object>'` per entry in
             `diff_chunks[i].mechanical_scan.files`; pass no finding flags to reviewer_c.
             The scan flag is required even when the list is empty, because an empty scan
@@ -676,6 +677,16 @@ technique_skill:
             claimed file exists, the md-domain pass above still runs on it even with zero
             diff_chunks), skip the reviewer fan-out and jump to step 9 with zero code-review
             issues.
+
+            Parse every NATIVE Agent lane's returned array before treating it as candidate
+            issues. Write that lane's raw response verbatim to a distinct temporary file under
+            `bundle.bundle_dir`, then run `@PARSE_TOOL@ --lane <reviewer name> --response
+            <that file> --bundle <bundle.bundle_dir>/bundle.json`. Replace the raw array with
+            the parser's stdout array. The executable parser validates every lane and, for
+            reviewer_a, verifies each citation against the reported file's governing CLAUDE.md
+            chain. Endpoint envelopes already contain output from the same shared parser. A
+            non-zero parser exit is a FAILED lane under the existing failure rule; never pass
+            its unparsed issues to validators.
           tool: Agent (per the model-kind rule, a lane whose model is an endpoint id runs as a Bash call to @LANE_TOOL@ instead)
           expected: JSON arrays of candidate issues from each launched reviewer (one array per (reviewer, chunk) lane), plus a recorded failure for any lane that exited non-zero.
         - n: 7
@@ -1458,6 +1469,7 @@ _SHARED = {
         for line in lane_prompts.REVIEWER_C_SYSTEM.splitlines()
     ),
     "LANE_TOOL": "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/run_review_lane.py",
+    "PARSE_TOOL": "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/parse_review_lane.py",
     "MD_DOMAIN_LAUNCH": MD_DOMAIN_LAUNCH,
     "MD_DOMAIN_REPORT": MD_DOMAIN_REPORT,
     "GENERATED_REPORT": GENERATED_REPORT,
@@ -1496,7 +1508,8 @@ _SKILL_TOKEN_ORDER = [
     "STEP1", "STEP2", "STEP3", "STEP9_TAIL", "STEP10",
     "CHECKLIST", "GOTCHAS", "NARRATION_TEMPLATES", "NARRATION_VARIABLES",
     "DIFF_OR_CL", "RANGE_OR_CL", "FILEPATHS", "CHANGE_DESC", "ISSUE_PATH",
-    "SG_DESC", "OUTPUT_FORMAT", "PREPARE_TOOL", "RENDER_TOOL", "LANE_TOOL", "LEDGER_RECORD_N", "BASELINE_DESC", "KIT",
+    "SG_DESC", "OUTPUT_FORMAT", "PREPARE_TOOL", "RENDER_TOOL", "LANE_TOOL",
+    "PARSE_TOOL", "LEDGER_RECORD_N", "BASELINE_DESC", "KIT",
     # glyph tokens last -- they appear inside already-substituted blocks too,
     # but those blocks embed the literal glyph (via f-strings), so the only
     # remaining @X@/@CHK@/@CRS@ markers are in the template body.

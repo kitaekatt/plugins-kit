@@ -370,6 +370,38 @@ class TestCli:
         assert code == lr.EXIT_OK
         assert json.loads(capsys.readouterr().out)["issues"][0]["file"] == "a.py"
 
+    def test_reviewer_a_verifies_citation_from_bundle(self, seam, tmp_path, capsys) -> None:
+        chunk = tmp_path / "c.diff"
+        chunk.write_text("diff --git a/src/a.py b/src/a.py", encoding="utf-8")
+        claude_md = tmp_path / "CLAUDE.md"
+        claude_md.write_text("Use pathlib.Path for file paths.\n", encoding="utf-8")
+        bundle = tmp_path / "bundle.json"
+        bundle.write_text(json.dumps({"changed_files": [{
+            "path": "src/a.py", "claude_mds": [str(claude_md)]
+        }]}), encoding="utf-8")
+        seam.selection = FakeSelection(
+            endpoint="my-endpoint",
+            kind="harness",
+            backend=FakeBackend([FakeResponse(json.dumps([{
+                "file": "src/a.py", "lines": "4", "reason": "claude_md",
+                "description": "bad path",
+                "citation": "Use pathlib.Path for file paths.",
+            }]))]),
+            model="m",
+        )
+
+        code = lr.main([
+            "--lane", "reviewer_a_claude_md_compliance",
+            "--model", "my-endpoint",
+            "--chunk", str(chunk),
+            "--file", "src/a.py",
+            "--bundle", str(bundle),
+        ])
+
+        assert code == lr.EXIT_OK
+        issues = json.loads(capsys.readouterr().out)["issues"]
+        assert issues[0]["citation_verification"] == "verified"
+
     def test_a_config_error_exits_two(self, seam, tmp_path, capsys) -> None:
         chunk = tmp_path / "c.diff"
         chunk.write_text("d", encoding="utf-8")

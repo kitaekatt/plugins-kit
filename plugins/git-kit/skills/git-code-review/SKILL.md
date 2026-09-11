@@ -175,8 +175,9 @@ technique_skill:
             python3 ${CLAUDE_PLUGIN_ROOT}/scripts/run_review_lane.py instead of launching an Agent for it, passing `--lane <reviewer
             name>`, `--model <the value>`, `--chunk <absolute chunk diff path>`, one
             `--file` per repo-relative path in that chunk, `--description <the change
-            description>`, and `--project-root <bundle.project_root>` when the bundle has
-            one. For reviewer_a and reviewer_b ONLY, also pass `--mechanical-scan-ran` and
+            description>`, `--bundle <bundle.bundle_dir>/bundle.json`, and `--project-root
+            <bundle.project_root>` when the bundle has one. For reviewer_a and reviewer_b
+            ONLY, also pass `--mechanical-scan-ran` and
             one `--mechanical-finding '<JSON object>'` per entry in
             `diff_chunks[i].mechanical_scan.files`; pass no finding flags to reviewer_c.
             The scan flag is required even when the list is empty, because an empty scan
@@ -288,6 +289,16 @@ technique_skill:
             claimed file exists, the md-domain pass above still runs on it even with zero
             diff_chunks), skip the reviewer fan-out and jump to step 9 with zero code-review
             issues.
+
+            Parse every NATIVE Agent lane's returned array before treating it as candidate
+            issues. Write that lane's raw response verbatim to a distinct temporary file under
+            `bundle.bundle_dir`, then run `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/parse_review_lane.py --lane <reviewer name> --response
+            <that file> --bundle <bundle.bundle_dir>/bundle.json`. Replace the raw array with
+            the parser's stdout array. The executable parser validates every lane and, for
+            reviewer_a, verifies each citation against the reported file's governing CLAUDE.md
+            chain. Endpoint envelopes already contain output from the same shared parser. A
+            non-zero parser exit is a FAILED lane under the existing failure rule; never pass
+            its unparsed issues to validators.
           tool: Agent (per the model-kind rule, a lane whose model is an endpoint id runs as a Bash call to python3 ${CLAUDE_PLUGIN_ROOT}/scripts/run_review_lane.py instead)
           expected: JSON arrays of candidate issues from each launched reviewer (one array per (reviewer, chunk) lane), plus a recorded failure for any lane that exited non-zero.
         - n: 7

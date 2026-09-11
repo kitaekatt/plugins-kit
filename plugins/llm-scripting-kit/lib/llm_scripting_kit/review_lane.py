@@ -31,6 +31,7 @@ from bootstrap_lib.code_review.lane_prompts import (
     is_agent_alias,
     parse_issue_array,
 )
+from bootstrap_lib.code_review.lane_output import claude_mds_by_file, load_bundle
 from llm_scripting_kit.completion import (
     BackendOptions,
     HaltError,
@@ -434,6 +435,11 @@ def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
     )
     parser.add_argument("--project-root", default=None)
     parser.add_argument(
+        "--bundle",
+        type=Path,
+        help="prepared bundle.json carrying each file's governing CLAUDE.md chain",
+    )
+    parser.add_argument(
         "--max-output-tokens", type=int, default=DEFAULT_MAX_OUTPUT_TOKENS
     )
     parser.add_argument(
@@ -454,6 +460,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"lane {args.lane}: cannot read chunk {args.chunk}: {exc}", file=sys.stderr)
         return EXIT_USAGE
     try:
+        governing_chains = (
+            claude_mds_by_file(load_bundle(args.bundle)) if args.bundle else None
+        )
+    except ValueError as exc:
+        print(f"lane {args.lane}: {exc}", file=sys.stderr)
+        return EXIT_USAGE
+    try:
         result = run_lane(
             lane=args.lane,
             model=args.model,
@@ -462,6 +475,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             description=args.description,
             claimed_files=args.claimed_files,
             mechanical_findings=args.mechanical_findings,
+            claude_mds_by_file=governing_chains,
             project_root=args.project_root,
             max_output_tokens=args.max_output_tokens,
             timeout_s=args.timeout_s,

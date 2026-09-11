@@ -17,7 +17,12 @@ same reason test_skill_drift.py does: the invariant is the shared review
 contract, and neither kit owns it.
 """
 
+import argparse
 import ast
+import json
+import runpy
+import sys
+import types
 from pathlib import Path
 
 import pytest
@@ -25,6 +30,10 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[2]
 COPIES = [
     REPO_ROOT / "plugins" / kit / "scripts" / "run_review_lane.py"
+    for kit in ("git-kit", "p4-kit")
+]
+PARSER_COPIES = [
+    REPO_ROOT / "plugins" / kit / "scripts" / "parse_review_lane.py"
     for kit in ("git-kit", "p4-kit")
 ]
 
@@ -41,6 +50,42 @@ class TestWrapperCopiesMatch:
                 f"{path} drifted from {COPIES[0]} -- the runner wrappers must "
                 f"stay byte-identical; update both sides together"
             )
+
+    def test_consumers_require_the_parser_owner_version(self) -> None:
+        for kit in ("git-kit", "p4-kit", "llm-scripting-kit"):
+            manifest = json.loads(
+                (REPO_ROOT / "plugins" / kit / "bootstrap.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            assert manifest["requires_bootstrap"] == "0.105.0"
+
+    def test_parser_copies_are_byte_identical(self) -> None:
+        first, *rest = [path.read_bytes() for path in PARSER_COPIES]
+        for path, body in zip(PARSER_COPIES[1:], rest):
+            assert body == first, (
+                f"{path} drifted from {PARSER_COPIES[0]} -- the parser wrappers "
+                "must stay byte-identical; update both sides together"
+            )
+
+    @pytest.mark.parametrize("path", PARSER_COPIES, ids=lambda p: p.parts[-3])
+    def test_parser_copy_dispatches_to_shared_main(
+        self, path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        bootstrap_guard = types.ModuleType("bootstrap_guard")
+        bootstrap_guard.reexec_under_plugin_venv = lambda _plugin: None
+        bootstrap_guard.require_bootstrap = lambda *_args, **_kwargs: None
+        lane_output = types.ModuleType("bootstrap_lib.code_review.lane_output")
+        lane_output.main = lambda: 17
+        monkeypatch.setitem(sys.modules, "bootstrap_guard", bootstrap_guard)
+        monkeypatch.setitem(
+            sys.modules, "bootstrap_lib.code_review.lane_output", lane_output
+        )
+
+        with pytest.raises(SystemExit) as excinfo:
+            runpy.run_path(str(path), run_name="__main__")
+
+        assert excinfo.value.code == 17
 
 
 class TestCopiesStayIdentical:
@@ -65,6 +110,43 @@ class TestCopiesStayIdentical:
         """`parents[1].name` must actually be the owning plugin directory."""
         assert path.parent.name == "scripts"
         assert path.parent.parent.name in {"git-kit", "p4-kit"}
+
+    def test_bundle_probe_refuses_an_old_owner(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        package = types.ModuleType("llm_scripting_kit")
+        package.__path__ = []
+        review_lane = types.ModuleType("llm_scripting_kit.review_lane")
+
+        def old_parse(argv):
+            parser = argparse.ArgumentParser()
+            parser.add_argument("--lane", required=True)
+            parser.add_argument("--model", required=True)
+            parser.add_argument("--chunk", required=True)
+            return parser.parse_args(argv)
+
+        review_lane._parse_args = old_parse
+        review_lane.main = lambda: 42
+        bootstrap_guard = types.ModuleType("bootstrap_guard")
+        bootstrap_guard.reexec_under_plugin_venv = lambda _plugin: None
+        bootstrap_guard.require_bootstrap = lambda *_args, **_kwargs: None
+        monkeypatch.setitem(sys.modules, "bootstrap_guard", bootstrap_guard)
+        monkeypatch.setitem(sys.modules, "llm_scripting_kit", package)
+        monkeypatch.setitem(sys.modules, "llm_scripting_kit.review_lane", review_lane)
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [str(COPIES[0]), "--bundle", "bundle.json"],
+        )
+        monkeypatch.syspath_prepend(str(COPIES[0].parent))
+
+        with pytest.raises(SystemExit) as excinfo:
+            runpy.run_path(str(COPIES[0]), run_name="__main__")
+
+        assert excinfo.value.code != 0
+        stderr = capsys.readouterr().err
+        assert "prepared review bundle support" in stderr
+        assert "0.42.0" in stderr
 
 
 class TestNoSeamImportLeakedIntoBootstrapLib:

@@ -167,12 +167,12 @@ class TestBootstrapDependencyDiagnostics:
             "plugin's dependencies, then retry.\n"
         )
 
-    def test_manifest_requires_bootstrap_0103_api_floor(self):
+    def test_manifest_requires_bootstrap_0105_api_floor(self):
         manifest = json.loads(
             Path("plugins/git-kit/bootstrap.json").read_text(encoding="utf-8")
         )
 
-        assert manifest["requires_bootstrap"] == "0.103.0"
+        assert manifest["requires_bootstrap"] == "0.105.0"
 
     def test_bootstrap_without_run_vcs_timeout_reports_update_remedy(self, tmp_path):
         bootstrap_package = tmp_path / "bootstrap_lib"
