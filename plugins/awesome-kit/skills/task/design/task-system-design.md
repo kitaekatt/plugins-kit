@@ -308,7 +308,7 @@ inference exception.
 | Verb | Kind | Semantics |
 |---|---|---|
 | `init` | script | Create the folder + scaffolding for a new task, seeded from current request context. Establishes identity (path), location (§7.4), and type. **Its output is always a valid `active` task — `init` cannot produce an `invalid` one.** |
-| `work <ref>` | script | Work the explicitly named task. **Auto-runs `init` if the folder doesn't exist yet** (promotion). Emits one initialization block — the baseline skills merged with the task's `skills_to_invoke`, plus `agent_hint` and the dispatch directive (§7.1). **Gated by `validate`** (§9). |
+| `work <ref>` | script | Work the explicitly named task. **Errors if the folder doesn't exist** (a mistyped path must not scaffold a task); `--init` opts into the promotion. Emits one initialization block -- the baseline skills merged with the task's `skills_to_invoke`, plus `agent_hint` and the dispatch directive (section 7.1). **Gated by `validate`** (section 9). |
 | `update <ref>` | script | Upsert: `init` if absent, otherwise refresh the folder's state. Appends one dated entry to `log.md` and writes `task.yaml` field edits (`status`, `priority`, `description`, `depends_on`, `blocked_by`, ...). **The script never rewrites `plan.md`; rotation is the agent's hand-off discipline.** **Re-runs `validate`, classifying the task `active` / `invalid` / `remote`** (section 9). |
 | `close <ref>` | script | Mark `status: closed`; **keeps** the folder (reopen-able). Acts on an `active` task. |
 | `reopen <ref>` | script | Reverse a terminal state back to `active`. **Allowed only if the folder still exists** -- incl. an `archived` folder parked at `<location>/archived-tasks/<stub>` under either root, which is **restored** to `<location>/<stub>` first. A task with no folder (and nothing parked) cannot be reopened -- it is gone. |
@@ -332,12 +332,13 @@ inference exception.
   Invariant: **output is always a valid `active` task** — if scaffolding can't validate, `init` fails
   (it never leaves an `invalid` task). Writes: the folder. Output: the path.
 - **`work <ref>`** — *work explicitly named task.*
-  Pre: resolve `<ref>`; if **no folder**, auto-`init` at that path (promotion). Run `validate`; **any
+  Pre: resolve `<ref>`; if **no folder**, ERROR unless `--init` was passed, in which case auto-`init`
+  at that path (promotion). Run `validate`; **any
   error OR warning BLOCKS** (exit non-zero, print findings). A **remote** task cannot be worked locally
   (error). Steps: emit **one initialization block** — a header line, then the
   merged skill set (`state_ops.BASELINE_SKILLS`, then the task's `skills_to_invoke`, order-preserving
   and deduped) as `Skill(...)` calls, then `agent_hint` if present, then the closing dispatch
-  directive. Writes the folder if auto-init.
+  directive. Writes the folder only on an opted-in auto-init.
   **Why merged script-side:** adherence tracks what the script emits, not what prose requires. Before
   this, `orchestrate` lived only in the skill's prose while the task's own skills were emitted lines —
   producing the predictable partial failure (invoke the declared skills, skip orchestrate, implement

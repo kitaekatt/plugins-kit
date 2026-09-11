@@ -3,7 +3,7 @@
   "diagram_type": "sequence",
   "meta": {
     "title": "work Operation Sequence",
-    "subtitle": "work <ref>: resolve by path, classify ref, auto-init if safe, validate gate, emit instructions",
+    "subtitle": "work <ref>: resolve by path, classify ref, auto-init only with --init, validate gate, emit instructions",
     "output": "task-work-sequence.html",
     "viewBox": [760, 740]
   },
@@ -50,7 +50,7 @@
       "items": [
         "work resolves the reference by path (the id)",
         "validate classifies the ref before local reads or initialization",
-        "A remote ref is rejected before auto-init; only a non-remote absent ref is promoted"
+        "An absent folder errors unless --init was passed; a remote ref is rejected before any auto-init"
       ]
     },
     {

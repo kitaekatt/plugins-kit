@@ -150,8 +150,15 @@ class TestWorkLib:
                 local_host=LOCAL,
             )
 
+    def test_missing_folder_errors_and_creates_nothing(self, tmp_path):
+        # A mistyped path must fail rather than scaffold an empty task the
+        # session then "works".
+        with pytest.raises(StateOpError, match="no task folder at"):
+            state_ops.work("tmp/fresh-spike", tmp_path)
+        assert not (tmp_path / "tmp" / "fresh-spike").exists()
+
     def test_auto_init_promotion_at_tmp_path(self, tmp_path):
-        result = state_ops.work("tmp/fresh-spike", tmp_path)
+        result = state_ops.work("tmp/fresh-spike", tmp_path, allow_init=True)
         assert result.initialized is True
         folder = tmp_path / "tmp" / "fresh-spike"
         for fname in SCAFFOLD_FILES:
@@ -174,7 +181,7 @@ class TestWorkLib:
             capture_output=True,
         )
         with pytest.raises(StateOpError) as exc_info:
-            state_ops.work("dev/tasks/durable", tmp_path)
+            state_ops.work("dev/tasks/durable", tmp_path, allow_init=True)
         assert any("uncommitted" in w for w in exc_info.value.warnings)
         folder = tmp_path / "dev" / "tasks" / "durable"
         for fname in SCAFFOLD_FILES:
@@ -183,7 +190,9 @@ class TestWorkLib:
     def test_dev_tasks_promotion_outside_git_succeeds(self, tmp_path):
         # Outside any git repo the script cannot verify VCS state (no git
         # dependency): validate emits only an advisory note, so promotion
-        result = state_ops.work("dev/tasks/durable", tmp_path)
+        result = state_ops.work(
+            "dev/tasks/durable", tmp_path, allow_init=True
+        )
         assert result.initialized is True
         folder = tmp_path / "dev" / "tasks" / "durable"
 
@@ -191,7 +200,7 @@ class TestWorkLib:
         # init would rewrite "UPPER" to "upper" -- promotion refuses rather
         # than creating a folder at a different path than the ref named.
         with pytest.raises(StateOpError, match="auto-init"):
-            state_ops.work("tmp/UPPER", tmp_path)
+            state_ops.work("tmp/UPPER", tmp_path, allow_init=True)
         assert not (tmp_path / "tmp" / "UPPER").exists()
         assert not (tmp_path / "tmp" / "upper").exists()
 
@@ -391,8 +400,10 @@ class TestWorkCLI:
             'Skill(skill: "home-domain")',
             'Skill(skill: "md-read")',
             "agent_hint: backend-developer",
-            "== then: dispatch the work per orchestrate -- "
-            "do not implement inline in the main context ==",
+            "== then: start the work now, dispatched per orchestrate -- "
+            "do not implement inline in the main context; end the turn for "
+            "the user when the task is blocked or its CLAUDE.md claims the "
+            "decision ==",
         ]
     def test_error_finding_exits_nonzero_findings_on_stderr(self, tmp_path):
         make_task(tmp_path, "tmp/a", status="bogus")
@@ -411,10 +422,22 @@ class TestWorkCLI:
         )
         assert proc.returncode != 0
         assert "warning:" in proc.stderr
+    def test_missing_folder_exits_nonzero_and_creates_nothing(
+        self, tmp_path
+    ):
+        proc = run_cli(
+            ["work", "tmp/fresh-spike", "--root", str(tmp_path)],
+            tmp_path,
+        )
+        assert proc.returncode != 0
+        assert "no task folder at" in proc.stderr
+        assert not (tmp_path / "tmp" / "fresh-spike").exists()
+
     def test_auto_init_promotion(self, tmp_path):
         proc = run_cli(
             [
                 "work",
+                "--init",
                 "tmp/fresh-spike",
                 "--root",
                 str(tmp_path),
