@@ -1,6 +1,6 @@
 [project]
 name = "git-kit"
-version = "0.33.0"
+version = "0.35.1"
 description = "Host-side dependencies for git-kit plugin"
 requires-python = ">=3.12,!=3.14.*"
 
@@ -14,9 +14,9 @@ requires-python = ">=3.12,!=3.14.*"
 # Markdown. The shared-lib .pth links bootstrap_lib's CODE into this venv
 # but installs none of bootstrap's own dependencies, so every runtime dep
 # of the shared-lib code paths this plugin actually calls has to be
-# declared here. Without it the lane fails at import with a bare
-# "No module named 'markdown_it'" that reads as a stale-plugin error.
-dependencies = ["pyyaml", "markdown-it-py"]
+# declared here. regex is loaded when bundle assembly resolves configured
+# mechanical pattern checks, after the pipeline itself has imported.
+dependencies = ["pyyaml", "markdown-it-py", "regex"]
 
 # OPTIONAL, and deliberately not a hard dependency. A review lane reaches an
 # llm-scripting-kit endpoint only when the user configures a non-Agent `model`

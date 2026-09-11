@@ -197,19 +197,16 @@ unconfigurable opinion whose test passes is a finding.
   way is a race.
 
 - **A shipped mechanical review check cannot be disabled.** The layered
-  `mechanical_checks.yaml` config is ADDITIVE ONLY: a user or project layer may
-  introduce new pattern checks, and a duplicate id at any layer is a hard
-  resolve-time error rather than an override. A team that runs `non_ascii` or
-  `abs_path` against a codebase where neither rule applies pays prompt space for
-  two findings-free checks every review, and their only remedy is to ignore the
-  coverage line -- so this is a stance, not a good default. We refuse the
-  disable seam because the lane is told WHICH checks ran so it can stop looking
-  for those things itself: a disabled check leaves the reviewer instructed to
-  skip a scan that never happened, which converts a merely noisy default into a
-  silent coverage hole. Redefinition is refused for the same reason, since
-  restating a shipped id with a pattern that matches nothing disables it by
-  another name. A team that wants different rules ADDS them; the shipped set is
-  a floor.
+  `mechanical_checks.yaml` configuration adds pattern checks. Duplicate IDs
+  across the default registry and configuration are errors. The shared default
+  remains a floor for deterministic review coverage. Teams that need a smaller
+  default set cannot remove checks through configuration.
+
+  Personal conventions earn a different boundary. `non_ascii` and `abs_path`
+  are optional user selections, with private definitions retained for older
+  consumers. Current lanes receive only the effective coverage for each file.
+  The rollout-safe selector and its exact schema are documented in
+  [Personal check configuration](../docs/reference/code-review-mechanical-surface.md#personal-check-configuration).
 
 - **Code review renders to chat and is never persisted.** git-kit and p4-kit scope
   themselves to a conversational review; a team needing PR/Swarm comments or a CI artifact

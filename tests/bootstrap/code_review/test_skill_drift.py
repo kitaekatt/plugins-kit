@@ -70,6 +70,15 @@ class TestDispatchRulePresent:
 
 
 class TestMechanicalScanContract:
+    def test_both_native_skills_require_contract_two_and_allow_masked_errors(self):
+        for vcs in ("git", "p4"):
+            body = gen.render_skill(vcs)
+            assert "Require `bundle.mechanical_contract == 2`" in body
+            assert "Preserve each record's `mechanical_contract: 2`" in body
+            assert "Later errors hidden by the first diagnostic remain reviewer scope" in body
+            assert "hidden errors remain reviewer scope and may be reported" in body
+            assert "nor report a hit the scan" not in body
+
     def test_both_skills_read_per_file_phrases_from_the_bundle(self):
         for vcs in ("git", "p4"):
             body = gen.render_skill(vcs)
@@ -105,6 +114,46 @@ class TestCitationVerificationDispatch:
 
 class TestMdDomainContributorPresent:
     """The subject-lens md-domain wiring must reach BOTH skills verbatim."""
+
+    @pytest.mark.parametrize("vcs", ["git", "p4"])
+    def test_transport_failure_keeps_the_existing_specialist_lanes(self, vcs: str) -> None:
+        """Unavailable Workflow must not strand files already claimed for audit.
+
+        This checks the invocation instructions, independently of generated-file
+        byte identity: changing the generator and outputs together must still
+        preserve the manual route and its original lane contract.
+        """
+        body = gen.render_skill(vcs)
+        ref = gen.render_md_domain_review(vcs)
+        assert "Manual detect invocation" in body
+        manual = ref.split("## Manual detect invocation", 1)[1].split("\n## ", 1)[0]
+        manual = " ".join(manual.split())
+        ref = " ".join(ref.split())
+        for clause in (
+            "Use this route when the Workflow tool is unavailable (including inside a subagent) "
+            "or rejects the installed script path.",
+            f"invoke Agent with `subagent_type: {vcs}-kit:review-lane-high` and `model: opus`.",
+            "The Agent tool has no effort argument; the subtype's `effort: high` frontmatter binds effort.",
+            "Set `prompt` to the installed script's instantiated `lanePrompt` plus its exact installed "
+            "`FILE_FINDINGS_SCHEMA`, with an instruction to return only one JSON object matching that schema.",
+            "Parse each Agent response as JSON and validate it against the installed `FILE_FINDINGS_SCHEMA` "
+            "before running the reducer. Require one schema-valid result for every requested file.",
+            "Missing or invalid results mean REVIEW INCOMPLETE; never substitute empty findings or DIFF-CLEAN.",
+            "Apply the same installed script's review reducer and totals calculation, preserving attribution "
+            "filtering, SERIOUS retention, and NOT-AUDITED handling.",
+            "Return the same `{ perFile, totals, review }` envelope.",
+            "Transport failure never authorizes a generic-review fallback or a change to the lane's model, "
+            "effort, schema, or criteria. Keep the claimed files assigned to their existing specialist lanes.",
+            "If Agent is unavailable, its subtype or model pin cannot be honored, or any result is missing "
+            "or invalid, report `REVIEW INCOMPLETE: <file> - <invocation or validation failure>` for each "
+            "affected file. Incomplete coverage cannot satisfy a submit gate.",
+        ):
+            assert clause in manual
+        assert (
+            "Transport failure is not skills-kit version skew. Keep the current bundle and claims. "
+            "Do not rerun prepare_review.py for a transport failure."
+        ) in ref
+        assert "never from within a reviewer subagent" not in body
 
     def test_both_skills_carry_probe_and_fallback(self):
         for vcs in ("git", "p4"):

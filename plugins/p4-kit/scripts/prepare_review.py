@@ -237,10 +237,11 @@ reexec_under_plugin_venv("p4-kit")
 # under that venv the import below just works -- no path discovery. The try/except
 # below remains as a safety net for the installed-but-not-yet-provisioned window.
 
-_MIN_BOOTSTRAP_VERSION = "0.108.0"
+_MIN_BOOTSTRAP_VERSION = "0.113.0"
 _BOOTSTRAP_FRONTIER = (
     "bootstrap_lib.code_review.pipeline.run_vcs(timeout=...), "
-    "bootstrap_lib.code_review.mechanical_repository"
+    "bootstrap_lib.code_review.mechanical_repository, "
+    "bootstrap_lib.code_review.pipeline.assemble_bundle(mechanical_contract=...)"
 )
 
 
@@ -270,18 +271,23 @@ except ModuleNotFoundError as exc:
         require_bootstrap(
             "p4-kit", feature="code review", missing="bootstrap_lib", force=True
         )
-    _exit_bootstrap_too_old()
-except ImportError:
-    _exit_bootstrap_too_old()
+    if exc.name and exc.name.startswith("bootstrap_lib."):
+        _exit_bootstrap_too_old()
+    raise
+except ImportError as exc:
+    if exc.name == "bootstrap_lib" or (exc.name and exc.name.startswith("bootstrap_lib.")):
+        _exit_bootstrap_too_old()
+    raise
 
 # `run_vcs(timeout=...)` is the frontier API. Importing its module cannot prove
 # that the linked bootstrap copy accepts the keyword, so inspect the signature
 # before any review path can call it.
 try:
     run_vcs_parameters = inspect.signature(review_pipeline.run_vcs).parameters
+    bundle_parameters = inspect.signature(review_pipeline.assemble_bundle).parameters
 except (AttributeError, TypeError, ValueError):
     _exit_bootstrap_too_old()
-if "timeout" not in run_vcs_parameters:
+if "timeout" not in run_vcs_parameters or "mechanical_contract" not in bundle_parameters:
     _exit_bootstrap_too_old()
 
 # Repair PATH before any subprocess fan-out. On Windows, a bloated
@@ -2003,6 +2009,7 @@ def build_bundle(
         snapshot_seed=snapshot_seed,
         path_effects=tuple(path_effects),
         snapshot_reader=(P4SnapshotReader(workspace_root) if seam_b_supported else None),
+        mechanical_contract=2,
     )
     if seam_b_supported:
         final_fingerprint = fetch_shelf_fingerprint(cl)
@@ -2132,6 +2139,7 @@ def build_bundle(
         "ledger_baseline": ledger_baseline,
         "ledger_hits": ledger_hits,
         "mechanical_check_phrases": core["mechanical_check_phrases"],
+        "mechanical_contract": core["mechanical_contract"],
     }
     if core.get("snapshot_identity") is not None:
         bundle["snapshot_identity"] = core["snapshot_identity"]

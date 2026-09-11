@@ -13,6 +13,8 @@ How it works (pure static analysis -- no network, no venv build):
   2. For each plugin, start from its shipped .py files and follow imports through
      first-party PACKAGES (the plugin's own packages and any first-party lib it
      imports, incl. shared libs in OTHER plugins), collecting third-party leaves.
+     Foreign functions follow selected imports and local references; unrelated
+     lazy function bodies do not become consumer dependencies.
      A plugin's own single-file modules don't need following -- they are already
      in its own scanned file set, so their direct third-party imports are caught.
   3. Classify each imported top-level name: stdlib / runtime-provided -> ignore;
@@ -34,6 +36,8 @@ import re
 import sys
 from pathlib import Path
 
+import pytest
+
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _PLUGINS = _REPO_ROOT / "plugins"
 
@@ -41,6 +45,7 @@ _SKIP_DIRS = {".venv", "site-packages", "__pycache__", "node_modules", "stubs"}
 
 # import name -> distribution name, where they differ.
 _IMPORT_TO_DIST = {
+    "markdown_it": "markdown-it-py",
     "yaml": "pyyaml",
     "websocket": "websocket-client",
 }
@@ -176,19 +181,68 @@ def _imports_in(tree):
             yield ("from", node.module, node.level or 0, [a.name for a in node.names], g)
 
 
+def _reachable_tree(tree: ast.Module, names: set[str] | None) -> ast.Module:
+    """Follow selected foreign symbols and their local references.
+
+    Module-level statements always execute. Function/class bodies are needed
+    only when imported or referenced by reachable code. A module import (None)
+    remains conservative because callers can use any of its attributes.
+    """
+    if names is None or "*" in names:
+        return tree
+    definitions = {
+        node.name: node for node in tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+    }
+    body = [node for node in tree.body if node not in definitions.values()]
+    pending = set(names)
+    # Defaults, annotations, bases and decorators execute during definition.
+    for node in definitions.values():
+        if isinstance(node, ast.ClassDef):
+            body.extend(node.bases)
+            body.extend(node.keywords)
+            body.extend(_reachable_tree(ast.Module(body=node.body, type_ignores=[]), set()).body)
+        else:
+            body.append(node.args)
+            if node.returns is not None:
+                body.append(node.returns)
+        body.extend(node.decorator_list)
+    visited = set()
+    while True:
+        pending.update(
+            node.id for root in body for node in ast.walk(root)
+            if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load)
+        )
+        selected = (pending & definitions.keys()) - visited
+        if not selected:
+            break
+        body.extend(definitions[name] for name in selected)
+        visited.update(selected)
+    return ast.Module(body=body, type_ignores=[])
+
+
 def _required_third_party(plugin_root):
     """Walk the plugin's first-party import closure; return required dist names."""
     required = set()
     plugin_root_resolved = plugin_root.resolve()
-    worklist = list(_py_files(plugin_root))
-    visited = set(p.resolve() for p in worklist)
+    own_files = list(_py_files(plugin_root))
+    worklist = list(own_files)
+    selected_names: dict[Path, set[str] | None] = {
+        p.resolve(): None for p in own_files
+    }
 
-    def _enqueue(files):
-        for f in files:
+    def _enqueue(files: list[Path], names: set[str] | None = None) -> None:
+        for index, f in enumerate(files):
             r = f.resolve()
-            if r not in visited:
-                visited.add(r)
+            selected = names if index == len(files) - 1 else set()
+            if r not in selected_names:
+                selected_names[r] = selected
                 worklist.append(f)
+            elif selected_names[r] is not None:
+                previous = selected_names[r]
+                if selected is None or not selected.issubset(previous):
+                    selected_names[r] = None if selected is None else previous | selected
+                    worklist.append(f)
 
     while worklist:
         f = worklist.pop()
@@ -196,6 +250,7 @@ def _required_third_party(plugin_root):
             tree = ast.parse(f.read_text(encoding="utf-8"))
         except (SyntaxError, OSError):
             continue
+        tree = _reachable_tree(tree, selected_names[f.resolve()])
         sibling_dir = f.parent
         is_own = f.resolve().is_relative_to(plugin_root_resolved)
         for kind, mod, level, names, guarded in _imports_in(tree):
@@ -208,18 +263,18 @@ def _required_third_party(plugin_root):
                 # AND each name as a possible submodule (from .sub import deeper).
                 dotted_targets = []
                 if mod:
-                    dotted_targets.append(mod)
-                    dotted_targets += [mod + "." + nm for nm in names]
+                    dotted_targets.append((mod, set(names)))
+                    dotted_targets += [(mod + "." + nm, None) for nm in names]
                 else:
-                    dotted_targets += list(names)
-                for dotted in dotted_targets:
+                    dotted_targets += [(nm, None) for nm in names]
+                for dotted, selected in dotted_targets:
                     target = pkg / Path(*dotted.split("."))
                     cand = []
                     if target.with_suffix(".py").exists():
                         cand.append(target.with_suffix(".py"))
                     if (target / "__init__.py").exists():
                         cand.append(target / "__init__.py")
-                    _enqueue(cand)
+                    _enqueue(cand, selected)
                 continue
 
             if mod is None:
@@ -229,10 +284,12 @@ def _required_third_party(plugin_root):
                 continue
             fp = _resolve_first_party(mod, sibling_dir)
             if fp:
-                _enqueue(fp)
+                _enqueue(fp, set(names) if kind == "from" else None)
                 if kind == "from":
                     for nm in names:
-                        _enqueue(_resolve_first_party(mod + "." + nm, sibling_dir))
+                        submodule = _resolve_first_party(mod + "." + nm, sibling_dir)
+                        if submodule and submodule[-1] not in fp:
+                            _enqueue(submodule)
                 continue
             if top in _FIRST_PARTY_NAMES:
                 continue  # first-party single-file module; its deps caught in its own plugin
@@ -318,3 +375,63 @@ def test_first_party_map_is_sane():
     # Sanity guard so a refactor that breaks package discovery is caught.
     assert "bootstrap_lib" in _FIRST_PARTY
     assert "llm_scripting_kit" in _FIRST_PARTY
+
+
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    [
+        ("from shared.mechanical import check_phrase\n", set()),
+        ("from shared.mechanical import resolve_checks\n", {"regex"}),
+        ("from shared.mechanical import assemble_bundle\n", {"regex"}),
+        ("import shared.mechanical\n", {"regex"}),
+        (
+            "from shared.mechanical import check_phrase\n"
+            "from shared.mechanical import assemble_bundle\n",
+            {"regex"},
+        ),
+    ],
+)
+def test_foreign_imports_follow_selected_symbols(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    source: str, expected: set[str],
+) -> None:
+    shared = tmp_path / "provider" / "shared"
+    shared.mkdir(parents=True)
+    (shared / "__init__.py").write_text("", encoding="utf-8")
+    (shared / "mechanical.py").write_text(
+        "def check_phrase():\n    return 'checked'\n"
+        "def resolve_checks():\n"
+        "    from .config import build_check\n    return build_check()\n"
+        "def assemble_bundle():\n    return resolve_checks()\n",
+        encoding="utf-8",
+    )
+    (shared / "config.py").write_text(
+        "def build_check():\n    import regex\n    return regex.compile('x')\n",
+        encoding="utf-8",
+    )
+    consumer = tmp_path / "consumer"
+    consumer.mkdir()
+    (consumer / "main.py").write_text(source, encoding="utf-8")
+    monkeypatch.setattr(sys.modules[__name__], "_REPO_ROOT", tmp_path)
+    monkeypatch.setattr(sys.modules[__name__], "_FIRST_PARTY", {"shared": shared})
+    monkeypatch.setattr(sys.modules[__name__], "_FIRST_PARTY_NAMES", {"shared"})
+
+    assert _required_third_party(consumer) == expected
+
+
+def test_review_consumers_require_regex_but_prompt_consumer_does_not() -> None:
+    for plugin in ("git-kit", "p4-kit"):
+        required = _required_third_party(_PLUGINS / plugin)
+        assert {"regex", "markdown-it-py"} <= required
+    assert "regex" not in _required_third_party(_PLUGINS / "llm-scripting-kit")
+
+
+def test_foreign_definition_time_code_remains_reachable() -> None:
+    tree = ast.parse(
+        "def load_default():\n    import yaml\n    return None\n"
+        "def unused(value=load_default()):\n    import regex\n"
+        "class Unused:\n    import markdown_it\n"
+        "    def method(self):\n        import openai\n"
+    )
+    imports = {item[1] for item in _imports_in(_reachable_tree(tree, set()))}
+    assert imports == {"yaml", "markdown_it"}

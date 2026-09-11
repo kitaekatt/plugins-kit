@@ -5,6 +5,7 @@ import pytest
 from bootstrap_lib.code_review import mechanical
 from bootstrap_lib.code_review import mechanical_config as config
 from bootstrap_lib.code_review import pipeline
+from bootstrap_lib.code_review.lane_prompts import build_user_message
 from bootstrap_lib.code_review.pipeline import assemble_bundle
 
 
@@ -20,6 +21,155 @@ def _record(check_id: str = "todo", pattern: str = "TODO") -> str:
     pattern: '{pattern}'
     applies_to: ['src/*.py']
 """
+
+
+def test_defaults_exclude_personal_conventions_but_legacy_facade_keeps_them(tmp_path: Path) -> None:
+    diff = "@@ -0,0 +1 @@\n+example \u2014 /opt/app/data\n"
+    checks = mechanical.resolve_checks(tmp_path)
+    assert {check.check_id for check in checks} == {
+        "structured_parse", "duplicate_keys", "column_counts",
+    }
+    assert mechanical.scan_file("example.txt", diff)["checks_run"] == []
+    assert mechanical.scan_file("example.txt", diff, checks=checks)["findings"] == []
+    assert {finding["check"] for finding in mechanical.mechanical_findings(diff)} == {
+        "non_ascii", "abs_path",
+    }
+
+
+@pytest.mark.parametrize("text", [
+    "plain text", "example \u2014 text", "\u2500 diagram", "\u00e9\u4e2d",
+    r"C:\work\file", "D:/work/file", "/opt/app/file", "use '/opt/app/file'",
+    "use `/opt/app/file`", "relative/file", "https://example.com/file",
+    "/single-component", "example \u2014 /opt/app/file and C:/work/file",
+    "a" * 10001 + " \u2014 /opt/app/file",
+    "a" * 10001 + " \u2500 C:/work/file",
+])
+def test_user_conventions_detect_same_lines_as_legacy(
+    tmp_path: Path, personal_conventions: Path, text: str,
+) -> None:
+    diff = f"@@ -1,1 +1,1 @@\n-old \u2014 /opt/old/file\n+{text}\n"
+    checks = mechanical.resolve_checks(tmp_path)
+    personal = [check for check in checks if check.check_id in mechanical.LEGACY_CHECK_IDS]
+    assert [check.check_id for check in personal] == ["non_ascii", "abs_path"]
+    assert all(check.source_layer == str(personal_conventions) for check in personal)
+    result = mechanical.scan_file("docs/example.txt", diff, checks=checks)
+    assert result["checks_run"] == ["non_ascii", "abs_path"]
+    assert result["findings"] == mechanical.mechanical_findings(diff)
+
+
+def test_builtin_details_preserve_codepoint_and_windows_match_priority(
+    tmp_path: Path, personal_conventions: Path,
+) -> None:
+    diff = "@@ -0,0 +1 @@\n+\u2500 /opt/app/file C:/work/file\n"
+    scan = mechanical.scan_file("example.md", diff, checks=mechanical.resolve_checks(tmp_path))
+    assert scan["findings"] == [
+        {"check": "non_ascii", "line": 1,
+         "detail": "U+2500 ('\u2500') in: \u2500 /opt/app/file C:/work/file"},
+        {"check": "abs_path", "line": 1,
+         "detail": "'C:/' in: \u2500 /opt/app/file C:/work/file"},
+    ]
+
+
+def test_builtin_finds_both_hits_after_ten_thousand_characters(
+    tmp_path: Path, personal_conventions: Path,
+) -> None:
+    diff = "@@ -0,0 +1 @@\n+" + "x" * 10001 + " \u2014 /opt/app/file\n"
+    scan = mechanical.scan_file("example.md", diff, checks=mechanical.resolve_checks(tmp_path))
+    assert scan["findings"] == [
+        {"check": "non_ascii", "line": 1,
+         "detail": "U+2014 ('\u2014') in: " + "x" * 120},
+        {"check": "abs_path", "line": 1,
+         "detail": "'/opt/' in: " + "x" * 120},
+    ]
+
+
+@pytest.mark.parametrize("selection", ["[]", "[abs_path]", "[abs_path, non_ascii]"])
+def test_builtin_selection_is_ordered_and_additive(
+    tmp_path: Path, personal_conventions: Path, selection: str,
+) -> None:
+    import yaml
+
+    personal_conventions.write_text(f"checks: {selection}\n", encoding="utf-8")
+    _write(tmp_path / ".claude/mechanical_checks.yaml", _record())
+    checks = mechanical.resolve_checks(tmp_path)
+    assert [check.check_id for check in checks] == (
+        [check.check_id for check in mechanical.REGISTRY] + yaml.safe_load(selection) + ["todo"]
+    )
+
+
+@pytest.mark.parametrize("yaml_text", [
+    "checks: [non_ascii, non_ascii]\n", "checks: [structured_parse]\n",
+    "checks: [unknown]\n", "checks: [null]\n", "checks: [{id: abs_path}]\n",
+    "checks: abs_path\n", "checks: []\nextra: true\n", "{}\n", "\n",
+])
+def test_builtin_selection_rejects_invalid_schema(
+    tmp_path: Path, personal_conventions: Path, yaml_text: str,
+) -> None:
+    personal_conventions.write_text(yaml_text, encoding="utf-8")
+    with pytest.raises(config.MechanicalConfigError, match="mechanical_builtin_checks.yaml"):
+        mechanical.resolve_checks(tmp_path)
+
+
+@pytest.mark.parametrize("layer", ["shipped", "user", "project"])
+def test_builtin_id_cannot_be_redefined_by_any_pattern_layer(
+    tmp_path: Path, personal_conventions: Path, monkeypatch: pytest.MonkeyPatch, layer: str,
+) -> None:
+    monkeypatch.setattr(config, "DEFAULTS_PATH", tmp_path / "defaults.yaml")
+    _write(config.DEFAULTS_PATH, "checks: []\n")
+    paths = dict(config.layer_paths(tmp_path))
+    _write(paths[layer], _record("non_ascii"))
+    with pytest.raises(config.MechanicalConfigError, match="duplicate id") as error:
+        mechanical.resolve_checks(tmp_path)
+    assert str(personal_conventions) in str(error.value)
+    assert str(paths[layer]) in str(error.value)
+
+
+def test_default_registry_id_cannot_be_redefined_by_pattern_config(tmp_path: Path) -> None:
+    _write(tmp_path / ".claude/mechanical_checks.yaml", _record("structured_parse"))
+    with pytest.raises(config.MechanicalConfigError, match="duplicate id"):
+        mechanical.resolve_checks(tmp_path)
+
+
+def test_legacy_pattern_loader_ignores_builtin_selector(
+    tmp_path: Path, personal_conventions: Path,
+) -> None:
+    # Older versions call only this existing generic loader, so the selector
+    # cannot collide with their still-shipped personal checks.
+    assert config.resolve_config(tmp_path) == ()
+    assert not personal_conventions.with_name(config.CONFIG_NAME).exists()
+
+
+@pytest.mark.parametrize("configured", [False, True])
+@pytest.mark.parametrize("claimed", [False, True])
+def test_personal_conventions_reach_lanes_only_when_configured(
+    tmp_path: Path, request: pytest.FixtureRequest, configured: bool, claimed: bool,
+) -> None:
+    if configured:
+        request.getfixturevalue("personal_conventions")
+    diff = "@@ -0,0 +1 @@\n+example \u2014 /opt/app/file\n"
+    bundle = assemble_bundle(
+        "", [{"identifier": "docs/example.md", "text": diff}],
+        [{"identifier": "docs/example.md", "local": None}], tmp_path / "bundle",
+        10000, tmp_path, claim_globs=["**/*.md"] if claimed else [],
+    )
+    entry = bundle["claimed_files" if claimed else "diff_chunks"][0]
+    scan = entry["mechanical_scan"]
+    assert scan["files"][0]["checks_run"] == (
+        ["non_ascii", "abs_path"] if configured else []
+    )
+    assert len(scan["files"][0]["findings"]) == (2 if configured else 0)
+    if claimed:
+        # The claimed-file transport is consumed by md-domain, whose criteria
+        # are distinct from generic reviewer A/B prompts.
+        return
+    for lane in ("reviewer_a_claude_md_compliance", "reviewer_b_diff_only_bugs"):
+        message = build_user_message(
+            lane, diff_text=diff, mechanical_findings=scan,
+            mechanical_check_phrases=bundle["mechanical_check_phrases"],
+        )
+        assert ("non_ascii (non-ASCII characters)" in message) is configured
+        assert ("abs_path (absolute paths)" in message) is configured
+        assert "do not run that check again" in message
 
 
 def test_layers_are_additive_in_precedence_order(tmp_path, monkeypatch):

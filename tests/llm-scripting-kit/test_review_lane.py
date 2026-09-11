@@ -180,6 +180,20 @@ class TestRunLane:
         assert "abs_path (absolute paths)" in seam.selection.backend.calls[0]["user"]
         assert "a.py:4 [abs_path] absolute path" in seam.selection.backend.calls[0]["user"]
 
+    def test_contract_two_keeps_first_diagnostic_scope_through_endpoint(self, seam) -> None:
+        seam.selection = _transport([FakeResponse("[]")])
+        record = {
+            "file": "a.py", "mechanical_contract": 2,
+            "checks_run": ["python_syntax"],
+            "findings": [{"check": "python_syntax", "line": 2, "detail": "first compiler diagnostic"}],
+        }
+        lr.run_lane(lane=LANE, model="my-endpoint", diff_text="d", mechanical_findings=[record])
+        message = seam.selection.backend.calls[0]["user"]
+        assert "Mechanical scan:" in message
+        assert "Mechanical scan (added lines only)" not in message
+        assert "hidden by the first diagnostic remain reviewer scope and may be reported" in message
+        assert "a.py:2 [python_syntax] first compiler diagnostic" in message
+
     def test_reviewer_c_still_receives_no_mechanical_section(self, seam) -> None:
         seam.selection = FakeSelection(
             endpoint="my-endpoint",

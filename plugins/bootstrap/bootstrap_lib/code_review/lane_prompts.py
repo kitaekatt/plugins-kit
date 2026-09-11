@@ -269,7 +269,7 @@ def _validate_issue(item: Any, index: int) -> dict[str, Any]:
 # Bumped whenever any prompt text below changes, so a recorded lane result says
 # which wording produced it. A comparison across prompt versions is not a
 # like-for-like measurement, and without this the difference is invisible.
-PROMPT_VERSION = "6"
+PROMPT_VERSION = "8"
 
 
 # The false-positive guardrails, stated once. These are the same rules the
@@ -320,16 +320,45 @@ preconditions were met. Coverage and results are listed per file below under
 "Mechanical scan". A check listed for one file says nothing about another file.
 
 What this means for you:
+- For a file/check pair listed under "Checks run", use its supplied answer
+  only for that check's explicitly declared covered question. Do not repeat
+  that covered question. Coverage does not remove other questions from scope.
+- For a check that enumerates hits within its declared scope, report only the
+  listed hits in that scope. This restriction does not apply to a check omitted for that file.
+  First-diagnostic syntax checks do not enumerate all errors: later errors
+  hidden by the first diagnostic remain reviewer scope and may be reported
+  when your existing criteria establish them.
+- The scan detects; it does not decide. Each listed hit is a LOCATION, not a
+  verdict. Judge whether the diff introduced a reportable issue within your
+  assigned scope. A standards finding still requires a quotable governing
+  rule; a bug finding requires the lane's bug criteria.
+- python_syntax answers whether the whole post-image compiles under the
+  nearest snapshot .python-version, using the matching CPython minor grammar.
+  It supplies the first compiler diagnostic, including on unchanged lines.
+  Do not repeat that compilation question. It does not enumerate later errors
+  hidden by the first diagnostic, check types or imports, or decide causation.
+- structured_parse likewise answers whole-post-image parsing and supplies the
+  first parser diagnostic, including on unchanged lines or at EOF. It does not
+  enumerate later errors hidden by that diagnostic or decide causation.
+  Other shipped checks retain their added-line scope.
+- "Checks run: none" explicitly means no mechanical coverage for that file.
+  An empty findings list with named checks means those checks ran cleanly."""
+
+
+LEGACY_MECHANICAL_PREAMBLE = """\
+Already checked mechanically. Deterministic checks have ALREADY run where their
+preconditions were met. Coverage and results are listed per file below under
+"Mechanical scan". A check listed for one file says nothing about another file.
+
+What this means for you:
 - For a file/check pair listed under "Checks run", do not run that check again.
-  Re-deriving its result wastes your attention and cannot improve on it.
 - Do not report a hit for a listed file/check pair unless the scan lists that
   hit. This restriction does not apply to a check omitted for that file.
 - The scan detects; it does not decide. Each listed hit is a LOCATION, not a
-  verdict. Whether it violates a rule is yours to judge from the governing
-  standards, exactly as with any other finding -- a project may permit a
-  character class in some contexts and forbid it in others, and the scan
-  cannot read the rule. Report a listed hit only when a rule you can quote
-  forbids it, and stay silent otherwise.
+  verdict. Report a standards finding only when a quotable governing rule
+  forbids the instance. Stay within your assigned lane's scope.
+- This legacy contract covers added-line detections only; it supplies no
+  whole-post-image syntax or compilation answer.
 - "Checks run: none" explicitly means no mechanical coverage for that file.
   An empty findings list with named checks means those checks ran cleanly."""
 
@@ -508,7 +537,11 @@ def format_mechanical_findings(
         _mechanical_file_records(findings, files),
         key=lambda record: str(record.get("file", "")),
     )
-    lines = ["Mechanical scan (added lines only):"]
+    contracts = {record.get("mechanical_contract", 1) for record in records}
+    if not contracts <= {1, 2} or len(contracts) > 1:
+        raise ValueError("incompatible mechanical scan contracts")
+    current_contract = contracts == {2}
+    lines = ["Mechanical scan:" if current_contract else "Mechanical scan (added lines only):"]
     for record in records:
         file = str(record.get("file", "?"))
         checks_run = [str(check) for check in record.get("checks_run", [])]
@@ -526,7 +559,11 @@ def format_mechanical_findings(
                 phrase = (
                     mechanical_check_phrases.get(check)
                     if mechanical_check_phrases is not None
-                    else check_phrase(check)
+                    else (
+                        "structured-data parse failures"
+                        if not current_contract and check == "structured_parse"
+                        else check_phrase(check)
+                    )
                 )
                 coverage_parts.append(
                     f"{check} ({phrase})" if phrase and phrase != check else check
@@ -545,7 +582,10 @@ def format_mechanical_findings(
             )
         else:
             lines.append("  Findings: none for the checks listed above")
-    return MECHANICAL_PREAMBLE + "\n\n" + "\n".join(lines)
+        for diagnostic in record.get("diagnostics", []):
+            lines.append(f"  Unavailable coverage: {diagnostic}")
+    preamble = MECHANICAL_PREAMBLE if current_contract else LEGACY_MECHANICAL_PREAMBLE
+    return preamble + "\n\n" + "\n".join(lines)
 
 
 def build_user_message(

@@ -59,8 +59,8 @@ for the full review overrides the gate.
 
 ## Resolve the skills-kit plugin root and venvPython (defensively)
 
-md-domain's detect lanes are native Workflow scripts; the code-review skill (running in the main
-session) invokes them via the Workflow tool. Locate the INSTALLED skills-kit plugin:
+md-domain's detect lanes are native Workflow scripts. Use the Workflow tool when callable;
+otherwise use "Manual detect invocation" below. Locate the INSTALLED skills-kit plugin:
 
 - Plugin root (`<root>`): resolve via the REGISTRY first, falling back to a cache scan only
   when the registry is empty or unreadable. Read `~/.claude/plugins/installed_plugins.json`;
@@ -120,6 +120,9 @@ a subject shape this skill claims. Check the tiers in order and take the FIRST t
 
 These are the only sanctioned second prepare invocations.
 
+Transport failure is not skills-kit version skew. Keep the current bundle and claims.
+Do not rerun prepare_review.py for a transport failure. Use the manual invocation below.
+
 ## The Workflow calls (three-way by basename, then by path)
 
 At most three, in the SAME message that launches the reviewer fan-out (or the reviewer Workflow).
@@ -141,6 +144,37 @@ Route by basename first; the ONE path-shape rule is the skill-reference case in 
 `args` may be passed as an object or a JSON string; all `refs` paths must be ABSOLUTE (the
 Workflow runs from the session cwd, not the skill dir). `review: true` forces the model pin and
 per-file diff attribution; keep it true.
+
+## Manual detect invocation
+
+Use this route when the Workflow tool is unavailable (including inside a subagent) or
+rejects the installed script path. Run the existing detect script's audit through the Agent tool.
+The installed script remains the source of the prompt and result contract.
+
+1. Read the applicable existing detect script in full. Build the same args described above and
+   below, including `review: true`, each file's `preImagePath` and `mechanicalScan`, and the
+   top-level `mechanicalCheckPhrases`. Resolve every referenced file against the installed root.
+2. For each file, invoke Agent with `subagent_type: p4-kit:review-lane-high` and `model: opus`.
+   The Agent tool has no effort argument; the subtype's `effort: high` frontmatter binds effort.
+   Set `prompt` to the installed script's instantiated `lanePrompt` plus its exact installed
+   `FILE_FINDINGS_SCHEMA`, with an instruction to return only one JSON object matching that schema.
+   Preserve all prompt instructions, standards, ancestor context, and attribution input.
+   Confirm the installed script still specifies `model: 'opus'` and `effort: 'high'` before dispatch;
+   a different pin requires a matching Agent transport or the incomplete terminal below.
+3. Parse each Agent response as JSON and validate it against the installed `FILE_FINDINGS_SCHEMA`
+   before running the reducer. Require one schema-valid result for every requested file.
+   Missing or invalid results mean REVIEW INCOMPLETE; never substitute empty findings or DIFF-CLEAN.
+   For valid results, retain the input path and mechanical scan as the script does. Apply the same
+   installed script's review reducer and totals calculation, preserving attribution filtering,
+   SERIOUS retention, and NOT-AUDITED handling. Return the same `{ perFile, totals, review }` envelope.
+
+Transport failure never authorizes a generic-review fallback or a change to the lane's model,
+effort, schema, or criteria. Keep the claimed files assigned to their existing specialist lanes.
+
+Use the native Workflow result for any lane group that already completed; invoke only outstanding
+groups manually. If Agent is unavailable, its subtype or model pin cannot be honored, or any result
+is missing or invalid, report `REVIEW INCOMPLETE: <file> - <invocation or validation failure>` for
+each affected file. Incomplete coverage cannot satisfy a submit gate.
 
 ## Building `files[]` from `bundle.claimed_files`
 

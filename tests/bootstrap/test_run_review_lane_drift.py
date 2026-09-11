@@ -53,8 +53,8 @@ class TestWrapperCopiesMatch:
 
     def test_consumers_require_the_parser_owner_version(self) -> None:
         expected = {
-            "git-kit": "0.106.0",
-            "p4-kit": "0.106.0",
+            "git-kit": "0.113.0",
+            "p4-kit": "0.113.0",
             "llm-scripting-kit": "0.107.0",
         }
         for kit, floor in expected.items():

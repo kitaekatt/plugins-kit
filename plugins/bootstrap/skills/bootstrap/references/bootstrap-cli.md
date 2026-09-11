@@ -12,13 +12,20 @@ bootstrap                 report whether a pass is running; if one IS, stay
 bootstrap --json          report only, never blocking -- the scripting form
 bootstrap run             the same, and START a pass when none is running
 bootstrap run --verbose   trailing flags pass through to the engine
+bootstrap reset           clear this project's cooldown so the NEXT session
+                          start runs a real pass
+bootstrap reset --all     every project (--status lists, --project <dir> names
+                          one, --clear-alerts; --help for the full set)
 bootstrap -h | --help     usage
 ```
 
-In their handling of a pass that is already running, the two verbs differ in
-exactly one clause: `run` also launches when nothing is. Neither ever starts a
-SECOND pass. They do diverge elsewhere -- on an ambiguous marketplace, and in
-their exit codes; both are below.
+In their handling of a pass that is already running, `bootstrap` and
+`bootstrap run` differ in exactly one clause: `run` also launches when nothing
+is. Neither ever starts a SECOND pass. They do diverge elsewhere -- on an
+ambiguous marketplace, and in their exit codes; both are below.
+
+`reset` runs no pass at all; it clears the throttle and leaves. See "The
+cooldown" below for when that is the verb you want and when `run` is.
 
 ## Why neither form starts a second pass
 
@@ -72,6 +79,20 @@ explicit run from a terminal is not the session-start schedule, and advancing
 that schedule would let a manual run silently consume the next session's pass.
 Bypassing a throttle while still arming it for someone else is half a bypass.
 
+`bootstrap reset` is for the case `run` does not cover: a change that has to
+converge through a genuine SessionStart rather than a console pass -- and, on a
+wedged machine, the only sanctioned way to make bootstrap run again, since
+forcing a pass by hand destroys the state that explains the wedge. It clears the
+per-project stamp and the session-id guard together, so the next session start
+is a real pass.
+
+The verb owns no logic of its own: it delegates to `bootstrap-reset-cooldown`,
+which is the single place that knows how a stamp is keyed (the logical `$PWD`,
+hashed exactly as the hook hashes it) and which files go with it. Every flag,
+`--help` included, passes straight through, and the lever's exit code is
+returned unchanged. Both names stay on PATH; `bootstrap reset` exists so the
+command you already have is enough.
+
 ## Exit codes
 
 | Form | Code |
@@ -80,6 +101,7 @@ Bypassing a throttle while still arming it for someone else is half a bypass.
 | `bootstrap run`, pass started | the engine's own exit code |
 | `bootstrap run`, attached to someone else's pass | 0 |
 | `bootstrap run`, ambiguous marketplace or no plugin tree | 2 |
+| `bootstrap reset` | whatever `bootstrap-reset-cooldown` returned; 2 when no plugin tree was found |
 
 Read `--json` to learn whether a pass was running. Never `$?` for the bare form.
 
@@ -95,6 +117,10 @@ when exactly one is running -- tailing two engines at once would attribute lines
 to the wrong one. `run` REFUSES rather than guess, because launching the wrong
 engine provisions the wrong machine state silently. `BOOTSTRAP_MARKETPLACE`
 names one.
+
+`reset` is the exception: it acts on EVERY marketplace found, because clearing
+a throttle that was not set costs nothing and a stamp left behind on a second
+marketplace is exactly the silent skip the verb exists to remove.
 
 ## Pointing it at a different tree
 
@@ -129,7 +155,8 @@ then hands off to `bootstrap_cli.py`, which holds the behavior. The shim never
 installs Python -- a status probe must not be able to trigger a multi-megabyte
 download -- so on a machine whose first pass has not run, `bootstrap run` works
 (the pass installs Python as its first act) and the status form reports that it
-cannot read the lock.
+cannot read the lock. `bootstrap reset` also works there, routed straight to the
+pure-bash lever rather than reporting a Python problem it does not have.
 
 ## Troubleshooting
 

@@ -167,12 +167,35 @@ class TestBootstrapDependencyDiagnostics:
             "plugin's dependencies, then retry.\n"
         )
 
-    def test_manifest_requires_bootstrap_0108_api_floor(self):
+    def test_manifest_requires_bootstrap_0113_contract_floor(self):
         manifest = json.loads(
             Path("plugins/git-kit/bootstrap.json").read_text(encoding="utf-8")
         )
 
-        assert manifest["requires_bootstrap"] == "0.108.0"
+        assert manifest["requires_bootstrap"] == "0.113.0"
+
+    @pytest.mark.parametrize(("error", "bootstrap_failure"), [
+        ("ModuleNotFoundError(\"No module named 'markdown_it'\", name='markdown_it')", False),
+        ("ImportError('broken third-party package', name='yaml')", False),
+        ("ImportError('unclassified import failure')", False),
+        ("ImportError('missing shared symbol', name='bootstrap_lib.code_review.pipeline')", True),
+    ])
+    def test_import_failure_diagnostics(
+        self, tmp_path: Path, error: str, bootstrap_failure: bool,
+    ) -> None:
+        package = tmp_path / "bootstrap_lib" / "code_review"
+        package.mkdir(parents=True)
+        (package.parent / "__init__.py").write_text("", encoding="utf-8")
+        (package / "__init__.py").write_text("", encoding="utf-8")
+        (package / "pipeline.py").write_text(f"raise {error}\n", encoding="utf-8")
+        env = dict(os.environ, _BOOTSTRAP_GUARD_VENV_REEXEC="1", PYTHONPATH=str(tmp_path))
+
+        completed = self._run_prepare(env)
+
+        assert completed.returncode != 0
+        assert ("Traceback" in completed.stderr) is not bootstrap_failure
+        assert ("stale for" in completed.stderr) is bootstrap_failure
+        assert ("claude plugin update" in completed.stderr) is bootstrap_failure
 
     def test_bootstrap_without_run_vcs_timeout_reports_update_remedy(self, tmp_path):
         bootstrap_package = tmp_path / "bootstrap_lib"
@@ -202,9 +225,10 @@ class TestBootstrapDependencyDiagnostics:
 
         assert completed.stderr == (
             "[git-kit] the installed 'plugins-kit:bootstrap' plugin is too old "
-            "or stale for git-kit's code review (requires bootstrap >= 0.108.0; "
+            "or stale for git-kit's code review (requires bootstrap >= 0.113.0; "
             "missing: bootstrap_lib.code_review.pipeline.run_vcs(timeout=...), "
-            "bootstrap_lib.code_review.mechanical_repository). "
+            "bootstrap_lib.code_review.mechanical_repository, "
+            "bootstrap_lib.code_review.pipeline.assemble_bundle(mechanical_contract=...)). "
             "Run `claude plugin update bootstrap@plugins-kit`. Then start a new "
             "session and retry.\n"
         )
@@ -1339,6 +1363,7 @@ class TestBuildBundleClaims:
         )
 
         # CLAUDE.md is claimed, app.py stays in the generic review.
+        assert bundle["mechanical_contract"] == 2
         assert [f["path"] for f in bundle["changed_files"]] == ["src/app.py"]
         assert len(bundle["claimed_files"]) == 1
         claimed = bundle["claimed_files"][0]
@@ -1348,6 +1373,7 @@ class TestBuildBundleClaims:
         assert claimed["claude_mds"]  # nearest-first chain, includes self
         scan = claimed["mechanical_scan"]
         assert scan["schema_version"] == 2
+        assert scan["files"][0]["mechanical_contract"] == 2
         assert [record["file"] for record in scan["files"]] == ["CLAUDE.md"]
         assert scan["files"][0]["checks_run"]
         # The claimed file's diff is not in any chunk.

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """bootstrap -- the command-line face of the bootstrap engine.
 
-Two verbs, and the whole point of both is that a bootstrap pass is a
+Three verbs. The point of the first two is that a bootstrap pass is a
 SINGLE-INSTANCE thing (bootstrap_lib.proc_lock):
 
     bootstrap        Is a pass running right now? Says so -- and if one IS,
@@ -11,6 +11,10 @@ SINGLE-INSTANCE thing (bootstrap_lib.proc_lock):
                      It never starts a SECOND one: a pass already in flight
                      is attached to, not raced, because a second engine would
                      only stand down on the lock and print nothing.
+    bootstrap reset  Clear the cooldown stamp so the NEXT session start runs a
+                     real pass. Not a pass itself -- it is the lever for the
+                     one case `run` does not cover, a layered bootstrap.json
+                     edit that must converge through a genuine SessionStart.
 
 Why the status probe is not "try to acquire and release": acquiring clears a
 stale lock and holds the mutex for an instant, so a mere status check could
@@ -346,6 +350,53 @@ def _stream_until_exit(data_dir: str, launch) -> int:
 
 
 # --------------------------------------------------------------------------
+# reset
+# --------------------------------------------------------------------------
+
+def cmd_reset(args) -> int:
+    """Clear the cooldown, by DELEGATING to bootstrap-reset-cooldown.sh.
+
+    Re-implementing the reset here would be a second answer to "which stamp
+    files are a cooldown": the shell lever hashes $PWD exactly as
+    session-bootstrap.sh does, sweeps every marketplace data dir, and clears
+    the session-id guard alongside the stamp. Two implementations of that
+    would agree until one of those three rules moved.
+
+    So this verb exists for discoverability -- a user who has `bootstrap`
+    on PATH should not have to know a second command name -- and every flag
+    (`--all`, `--status`, `--project`, `--clear-alerts`, `--force`) is passed
+    straight through, `--help` included.
+    """
+    script = find_reset_script(args.plugin_root)
+    if not script:
+        sys.stderr.write(
+            "bootstrap reset: no bootstrap plugin tree found under %s.\n"
+            % os.path.join(os.path.expanduser("~"), ".claude", "plugins"))
+        return 2
+    # `bash <path>`, not a direct exec: a cached or cloned plugin copy can
+    # arrive without its mode bits, the same reason `run` spells it this way.
+    return subprocess.call(["bash", script] + args.forward)
+
+
+def find_reset_script(fallback: str = "") -> str:
+    """Path to bootstrap-reset-cooldown.sh in whichever plugin tree is found.
+
+    Tries every marketplace rather than marketplaces()[0]: the reset lever
+    itself acts on all of them (or on BOOTSTRAP_MARKETPLACE), so the only
+    question here is where a COPY of the script lives, and the first tree that
+    has one will do.
+    """
+    for marketplace in marketplaces():
+        plugin_root = find_plugin_root(marketplace, fallback)
+        if not plugin_root:
+            continue
+        script = os.path.join(plugin_root, "scripts", "bootstrap-reset-cooldown.sh")
+        if os.path.isfile(script):
+            return script
+    return ""
+
+
+# --------------------------------------------------------------------------
 # follow
 # --------------------------------------------------------------------------
 
@@ -512,7 +563,7 @@ def _render(line: str, verdict: bool = True):
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(
         prog="bootstrap",
-        description="Report on, or run, the bootstrap provisioning pass.")
+        description="Report on, run, or reset the bootstrap provisioning pass.")
     parser.add_argument("--plugin-root", default="",
                         help=argparse.SUPPRESS)  # supplied by the shim
     parser.add_argument("--json", action="store_true",
@@ -521,6 +572,13 @@ def main(argv=None) -> int:
     sub.add_parser("run",
                    help="run a pass, or attach to the running one; trailing "
                         "flags (e.g. --verbose) pass through to the engine")
+    # add_help=False so `bootstrap reset --help` reaches the lever this verb
+    # delegates to and prints ITS flags, rather than argparse printing a
+    # subcommand help that lists none of them.
+    sub.add_parser("reset", add_help=False,
+                   help="clear the cooldown so the next session start runs a "
+                        "real pass; trailing flags (e.g. --all, --status) "
+                        "pass through to bootstrap-reset-cooldown")
 
     # parse_known_args, and NO positional to collect the pass-through flags.
     # Neither nargs="*" nor argparse.REMAINDER works for them: a plain list
@@ -529,11 +587,11 @@ def main(argv=None) -> int:
     # (CPython bpo-17050), so `bootstrap run --verbose` -- the spelling the
     # help text advertises -- died with "unrecognized arguments: --verbose".
     args, extra = parser.parse_known_args(argv)
-    if args.command == "run":
+    if args.command in ("run", "reset"):
         args.forward = extra
-        return cmd_run(args)
-    # Only `run` forwards anything, so an unknown flag anywhere else is still
-    # an error rather than something silently swallowed.
+        return cmd_run(args) if args.command == "run" else cmd_reset(args)
+    # Only `run` and `reset` forward anything, so an unknown flag anywhere
+    # else is still an error rather than something silently swallowed.
     if extra:
         parser.error("unrecognized arguments: %s" % " ".join(extra))
     return cmd_status(args)

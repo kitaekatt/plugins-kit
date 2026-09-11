@@ -199,12 +199,35 @@ class TestBootstrapDependencyDiagnostics:
             "plugin's dependencies, then retry.\n"
         )
 
-    def test_manifest_requires_bootstrap_0108_api_floor(self):
+    def test_manifest_requires_bootstrap_0113_contract_floor(self):
         manifest = json.loads(
             Path("plugins/p4-kit/bootstrap.json").read_text(encoding="utf-8")
         )
 
-        assert manifest["requires_bootstrap"] == "0.108.0"
+        assert manifest["requires_bootstrap"] == "0.113.0"
+
+    @pytest.mark.parametrize(("error", "bootstrap_failure"), [
+        ("ModuleNotFoundError(\"No module named 'markdown_it'\", name='markdown_it')", False),
+        ("ImportError('broken third-party package', name='yaml')", False),
+        ("ImportError('unclassified import failure')", False),
+        ("ImportError('missing shared symbol', name='bootstrap_lib.code_review.pipeline')", True),
+    ])
+    def test_import_failure_diagnostics(
+        self, tmp_path: Path, error: str, bootstrap_failure: bool,
+    ) -> None:
+        package = tmp_path / "bootstrap_lib" / "code_review"
+        package.mkdir(parents=True)
+        (package.parent / "__init__.py").write_text("", encoding="utf-8")
+        (package / "__init__.py").write_text("", encoding="utf-8")
+        (package / "pipeline.py").write_text(f"raise {error}\n", encoding="utf-8")
+        env = dict(os.environ, _BOOTSTRAP_GUARD_VENV_REEXEC="1", PYTHONPATH=str(tmp_path))
+
+        completed = self._run_prepare(env)
+
+        assert completed.returncode != 0
+        assert ("Traceback" in completed.stderr) is not bootstrap_failure
+        assert ("stale for" in completed.stderr) is bootstrap_failure
+        assert ("claude plugin update" in completed.stderr) is bootstrap_failure
 
     def test_bootstrap_without_run_vcs_timeout_reports_update_remedy(self, tmp_path):
         bootstrap_package = tmp_path / "bootstrap_lib"
@@ -234,9 +257,10 @@ class TestBootstrapDependencyDiagnostics:
 
         assert completed.stderr == (
             "[p4-kit] the installed 'plugins-kit:bootstrap' plugin is too old "
-            "or stale for p4-kit's code review (requires bootstrap >= 0.108.0; "
+            "or stale for p4-kit's code review (requires bootstrap >= 0.113.0; "
             "missing: bootstrap_lib.code_review.pipeline.run_vcs(timeout=...), "
-            "bootstrap_lib.code_review.mechanical_repository). "
+            "bootstrap_lib.code_review.mechanical_repository, "
+            "bootstrap_lib.code_review.pipeline.assemble_bundle(mechanical_contract=...)). "
             "Run `claude plugin update bootstrap@plugins-kit`. Then start a new "
             "session and retry.\n"
         )
@@ -3232,7 +3256,10 @@ class TestBuildBundleClaims:
             "+int x = 1;\n"
         )
 
-    def test_claimed_claude_md_excluded_and_preimage_materialized(self, tmp_path):
+    def test_claimed_claude_md_excluded_and_preimage_materialized(self, tmp_path, monkeypatch):
+        from bootstrap_lib.code_review import mechanical_config
+
+        monkeypatch.setattr(mechanical_config, "_home_path", lambda _: tmp_path / "home")
         ws = tmp_path / "ws"
         src = ws / "src"
         src.mkdir(parents=True)
@@ -3292,7 +3319,7 @@ class TestBuildBundleClaims:
         assert [record["file"] for record in scan["files"]] == [
             "//depot/src/CLAUDE.md"
         ]
-        assert scan["files"][0]["checks_run"]
+        assert scan["files"][0]["checks_run"] == []
         # Claimed file's diff excluded from chunks; generic file present.
         diff = _concat_diff_from_chunks(bundle)
         assert "//depot/src/foo.cpp" in diff
@@ -4263,5 +4290,7 @@ def test_pending_shelf_race_retries_complete_capture_once(tmp_path):
     assert fingerprints.call_count == 4
     assert describes.call_count == 2
     assert bundle["snapshot_identity"].startswith("p4:client:")
+    assert bundle["mechanical_contract"] == 2
     record = bundle["diff_chunks"][0]["mechanical_scan"]["files"][0]
+    assert record["mechanical_contract"] == 2
     assert "local_link_targets" in record["checks_run"]

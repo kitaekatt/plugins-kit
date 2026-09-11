@@ -287,9 +287,9 @@ MD_DOMAIN_LAUNCH = """\
             Subject-lens md-domain pass -- run ONLY when at least one NON-TRIVIAL claimed file exists (per
             the triviality gate above); skip this entire paragraph otherwise. In the SAME message that
             launches the reviewer subagents (or the reviewer Workflow, per the dispatch rule above), ALSO
-            invoke the Workflow tool with md-domain's headless detect lanes for the NON-TRIVIAL claimed
+            run md-domain's headless detect lanes for the NON-TRIVIAL claimed
             files, routed THREE ways by basename (plus one path-shape rule) -- at
-            most THREE Workflow calls total: (a) every claimed file named `CLAUDE.md` -> the
+            most THREE lane groups total: (a) every claimed file named `CLAUDE.md` -> the
             `audit_claude_md` lane's `skills/md-domain/workflow/claude-md-detect.js`; (b) every claimed
             file named `SKILL.md` OR sitting inside a `*/skills/<name>/references/` folder -> the
             `audit_skill` lane's `skills/md-domain/workflow/skill-detect.js`
@@ -302,9 +302,13 @@ MD_DOMAIN_LAUNCH = """\
             and skill reference: ancestorClaudeMdPaths; project-doc: ancestorClaudeMdPaths), plus
             `mechanicalScan` = the claimed entry's sole `mechanical_scan.files[0]` record. Pass
             `mechanicalCheckPhrases` = `bundle.mechanical_check_phrases` once at the top level of
-            EVERY Workflow args object. Resolve the remaining fields from each claimed file's
+            EVERY lane args object. Resolve the remaining fields from each claimed file's
             `claude_mds` per references/md-domain-review.md. Resolve the skills-kit plugin root and
-            venvPython defensively per that reference. On a skills-kit version skew (a detect lane
+            venvPython defensively per that reference. Use the Workflow tool when callable; when it
+            is unavailable or rejects the installed script path, use that reference's
+            "Manual detect invocation" with the SAME installed lanes and args. Transport failure
+            does not make md-domain absent and does not release its claimed files. On a skills-kit
+            version skew (a detect lane
             entry point, `discover_claude_md.classify_dimension`, or a documented args contract
             missing, OR an installed `audit_skill` lane that predates the skill-REFERENCE subject),
             do NOT guess -- re-run prepare_review.py
@@ -316,14 +320,14 @@ MD_DOMAIN_LAUNCH = """\
             installed `references/standards/skill-standards.md` -- because an older lane ships the
             same entry point and args contract and would otherwise decline the file silently. Those
             are the only sanctioned second prepare invocations.
-            Then proceed with the normal fan-out. When the pass runs, the md-domain Workflow(s) execute in
+            Then proceed with the normal fan-out. When the pass runs, the md-domain lanes execute in
             PARALLEL with the reviewer fan-out; keep each `{perFile, totals, review}` for step 9's labeled
             section."""
 
 # Inserted into step 9's action, right after the unresolved-work section.
 MD_DOMAIN_REPORT = """\
             - When the md-domain subject-lens pass ran (bundle.claimed_files was non-empty and the
-              Workflow did NOT fall back), render its results as a distinct, clearly LABELED section
+              detect pass did NOT fall back), render its results as a distinct, clearly LABELED section
               titled `## md-domain (subject-lens) findings`, kept SEPARATE from the code-review issue
               list -- never merge the two. For each file in the md-domain `perFile` result, show its
               verdict (DIFF-CLEAN, NON-COMPLIANT, or NOT-AUDITED -- the last is a DECLINE, not a
@@ -361,7 +365,7 @@ MD_DOMAIN_GOTCHAS = """
         - A `NOT-AUDITED` verdict from a lane is NOT a pass. It means the lane declined the file as outside its criteria and read nothing. Render it as its own line, never fold it into the clean count, and never let it satisfy a submit gate -- treat it like the `## Mechanical checks (audit skipped)` section: an honest "not reviewed", not a result. Seeing one on a claimed file means the claim routing sent a file somewhere that cannot audit it; report that rather than accepting the verdict.
         - When skills-kit md-domain is absent the whole mechanism degrades silently: no `--claim`, no claimed_files, no md-domain section -- the md files get thin generic data_only coverage. Note the degradation in one line; do not treat it as an error.
         - The triviality gate is pure-mechanical and decided by prepare_review (per-claimed-file `trivial` / `trivial_reasons`); the skill never re-judges it. A TRIVIAL claimed file is reported via the mechanical-checks line and is NEVER sent to a detect lane or written to the ledger. When EVERY claimed file is trivial and there are no generic diff chunks, the whole audit is skipped -- render the `## Mechanical checks (audit skipped)` section, never a DIFF-CLEAN verdict, and never present the skip as an audit. A user or author asking for the full review overrides the gate.
-        - The Workflow tool is unavailable inside subagents. Launch the md-domain detect-lane Workflow from the MAIN session (the same message that fans out the reviewers), never from within a reviewer subagent."""
+        - Workflow availability is a transport check, separate from md-domain availability. Prefer a main-session Workflow; if the tool is unavailable or rejects the installed script path, use "Manual detect invocation" in references/md-domain-review.md. Keep the claimed files with their existing specialist lanes. If neither invocation can complete, report the affected files as review incomplete; never present missing lane output as a clean audit."""
 
 
 # ===========================================================================
@@ -534,6 +538,8 @@ LAUNCH_NARRATION = """\
 # Appended into both step-2 actions (shared) so the launch line is emitted right
 # after prepare returns, before the step-6 fan-out. Plain text, no @tokens@.
 LAUNCH_EMIT = """\
+            Require `bundle.mechanical_contract == 2` before consuming mechanical results.
+            If absent or different, report an incompatible prepare producer and stop this review.
             After prepare returns, emit the launch rationale line ONCE (see narration.launch_message):
             select the row from the file-type mix of the changed + claimed files, or the md_trivial row
             when the step-6 triviality gate will fire. This is the single launch message -- do not repeat it."""
@@ -661,20 +667,36 @@ technique_skill:
             Mechanical scan results -- reviewer_a and reviewer_b ONLY. Each chunk carries
             `diff_chunks[i].mechanical_scan`, shaped as `{schema_version: 2, files:
             [{file, checks_run, findings}]}`. Render its coverage and findings under
-            "Mechanical scan (added lines only)", one file at a time. For each file,
+            "Mechanical scan", one file at a time. For each file,
             derive the covered-check list from THAT record's `checks_run`; render each id
             with its human phrase from `bundle.mechanical_check_phrases`. If an id
             is absent from that map, render the bare id; this is the
             forward-compatible case, not an error. Render each finding as
             `- <file>:<line> [<check>] <detail>`. An empty `checks_run` means no mechanical coverage for this file.
+            Render each record's diagnostics as unavailable coverage, preserving the text
+            without assigning a source line. A compiler diagnostic with line 0 is unlocated.
             Named checks with an empty findings list mean those
             checks ran cleanly. These states are different and neither may be omitted.
-            Tell the lane that for each listed file/check pair the scan has ALREADY run,
-            so it must neither re-run that check for that file nor report a hit the scan
-            did not list. A check omitted for one file remains reviewer scope for that
+            Preserve each record's `mechanical_contract: 2` marker in endpoint arguments.
+            Tell the lane to use each file/check answer only for its explicitly declared
+            covered question and not to repeat that question. An unlisted-hit restriction
+            applies only where a check enumerates hits within its declared scope.
+            A check omitted for one file remains reviewer scope for that
             file, regardless of another file's coverage. State explicitly that the scan
-            DETECTS but does not DECIDE: a listed hit is a location, and whether a
-            quotable rule forbids that instance is still the lane's judgment. Omit the
+            DETECTS but does not DECIDE: a listed hit is a location. The lane judges
+            whether the diff introduced a reportable issue within its assigned scope;
+            standards findings require a quotable rule, and bugs require its bug criteria.
+            For `python_syntax`, the covered question is whole-post-image compilation
+            under the nearest snapshot `.python-version`, using the matching CPython
+            minor grammar. The result is success or the first compiler diagnostic,
+            including on unchanged lines. Do not repeat that compilation question.
+            Later errors hidden by the first diagnostic remain reviewer scope and may
+            be reported when the existing bug criteria establish them. Types, imports,
+            and causation are not covered. `structured_parse` likewise covers whole-post-image parsing
+            and its first diagnostic, including on unchanged lines or at EOF; later
+            hidden errors remain reviewer scope and may be reported; causation is not
+            covered. Other shipped checks retain their
+            added-line scope. Omit the
             section ENTIRELY only for reviewer_c, which is not assigned mechanical checks.
             Reviewers not listed in the selected profile are
             NOT launched. If bundle.diff_chunks is empty (@RANGE_OR_CL@ has no diff content) and
@@ -1660,8 +1682,8 @@ for the full review overrides the gate.
 
 ## Resolve the skills-kit plugin root and venvPython (defensively)
 
-md-domain's detect lanes are native Workflow scripts; the code-review skill (running in the main
-session) invokes them via the Workflow tool. Locate the INSTALLED skills-kit plugin:
+md-domain's detect lanes are native Workflow scripts. Use the Workflow tool when callable;
+otherwise use "Manual detect invocation" below. Locate the INSTALLED skills-kit plugin:
 
 - Plugin root (`<root>`): resolve via the REGISTRY first, falling back to a cache scan only
   when the registry is empty or unreadable. Read `~/.claude/plugins/installed_plugins.json`;
@@ -1721,6 +1743,9 @@ a subject shape this skill claims. Check the tiers in order and take the FIRST t
 
 These are the only sanctioned second prepare invocations.
 
+Transport failure is not skills-kit version skew. Keep the current bundle and claims.
+Do not rerun prepare_review.py for a transport failure. Use the manual invocation below.
+
 ## The Workflow calls (three-way by basename, then by path)
 
 At most three, in the SAME message that launches the reviewer fan-out (or the reviewer Workflow).
@@ -1742,6 +1767,37 @@ Route by basename first; the ONE path-shape rule is the skill-reference case in 
 `args` may be passed as an object or a JSON string; all `refs` paths must be ABSOLUTE (the
 Workflow runs from the session cwd, not the skill dir). `review: true` forces the model pin and
 per-file diff attribution; keep it true.
+
+## Manual detect invocation
+
+Use this route when the Workflow tool is unavailable (including inside a subagent) or
+rejects the installed script path. Run the existing detect script's audit through the Agent tool.
+The installed script remains the source of the prompt and result contract.
+
+1. Read the applicable existing detect script in full. Build the same args described above and
+   below, including `review: true`, each file's `preImagePath` and `mechanicalScan`, and the
+   top-level `mechanicalCheckPhrases`. Resolve every referenced file against the installed root.
+2. For each file, invoke Agent with `subagent_type: @KIT@:review-lane-high` and `model: opus`.
+   The Agent tool has no effort argument; the subtype's `effort: high` frontmatter binds effort.
+   Set `prompt` to the installed script's instantiated `lanePrompt` plus its exact installed
+   `FILE_FINDINGS_SCHEMA`, with an instruction to return only one JSON object matching that schema.
+   Preserve all prompt instructions, standards, ancestor context, and attribution input.
+   Confirm the installed script still specifies `model: 'opus'` and `effort: 'high'` before dispatch;
+   a different pin requires a matching Agent transport or the incomplete terminal below.
+3. Parse each Agent response as JSON and validate it against the installed `FILE_FINDINGS_SCHEMA`
+   before running the reducer. Require one schema-valid result for every requested file.
+   Missing or invalid results mean REVIEW INCOMPLETE; never substitute empty findings or DIFF-CLEAN.
+   For valid results, retain the input path and mechanical scan as the script does. Apply the same
+   installed script's review reducer and totals calculation, preserving attribution filtering,
+   SERIOUS retention, and NOT-AUDITED handling. Return the same `{ perFile, totals, review }` envelope.
+
+Transport failure never authorizes a generic-review fallback or a change to the lane's model,
+effort, schema, or criteria. Keep the claimed files assigned to their existing specialist lanes.
+
+Use the native Workflow result for any lane group that already completed; invoke only outstanding
+groups manually. If Agent is unavailable, its subtype or model pin cannot be honored, or any result
+is missing or invalid, report `REVIEW INCOMPLETE: <file> - <invocation or validation failure>` for
+each affected file. Incomplete coverage cannot satisfy a submit gate.
 
 ## Building `files[]` from `bundle.claimed_files`
 
@@ -1835,10 +1891,12 @@ review -- from breaking the review.
 MD_DOMAIN_REVIEW_FRAGMENTS = {
     "git": {
         "SKILL_NAME": "git-code-review",
+        "KIT": "git-kit",
         "PREIMAGE_ORIGIN": "`git show <range-base>:<path>`",
     },
     "p4": {
         "SKILL_NAME": "p4-code-review",
+        "KIT": "p4-kit",
         "PREIMAGE_ORIGIN": "`p4 print -q -o <dest> //depot/path#have`",
     },
 }
@@ -1979,6 +2037,34 @@ bootstrap_lib's shipped defaults (reproduced below) and is resolved per review b
 `bootstrap_lib.code_review.review_profiles`, invoked through this plugin's venv entry point:
 
     @RENDER_TOOL@ --project-root <project root>
+
+## Mechanical syntax coverage
+
+These skills and prepare scripts use mechanical contract 2. Prepare requests it
+explicitly from bootstrap. The bundle and each file record carry the version;
+native dispatch requires it, and endpoint dispatch preserves the record marker.
+Older callers omit this capability and receive contract 1: added-line structured
+parsing and no Python syntax check. A version bump alone does not opt callers in.
+
+`python_syntax` uses the nearest ancestor `.python-version` in the frozen review
+snapshot. It accepts one numeric CPython version, such as `3.12` or `3.12.9`.
+The available parser must match its major and minor version. Missing, ambiguous,
+unreadable, or unsupported mappings leave this check uncovered. A nearer mapping
+always takes precedence, including when its content cannot be read.
+
+The check compiles each authored `.py` post-image in memory without executing
+code, importing modules, or running project commands. Coverage means compilation
+succeeded or the first compiler diagnostic was supplied. The diagnostic may be
+on an unchanged line. Reviewers judge whether the diff introduced a reportable bug.
+Errors hidden by the first diagnostic remain reviewer scope and may be reported
+when the existing criteria establish them. Imports and types also remain outside
+this check. The unlisted-hit restriction applies only to the covered question,
+not to all syntax errors in the file.
+
+`structured_parse` also covers the whole post-image and its first parser diagnostic.
+An unlocatable diagnostic leaves coverage unavailable. Other shipped checks retain
+their added-line scope. Both reviewer dispatch paths receive the covered question
+with instructions not to repeat it. These results do not select or suppress lanes.
 
 ## Layers
 
