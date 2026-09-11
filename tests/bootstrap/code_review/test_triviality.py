@@ -251,7 +251,7 @@ class TestMechanicalRegistry:
         scan = mechanical.scan_file("asset.bin", "Binary files differ\n")
         assert scan == {"file": "asset.bin", "checks_run": [], "findings": []}
 
-    def test_structured_parse_failure_is_added_line_only(self):
+    def test_structured_parse_failure_is_located(self):
         diff = _hunk("@@ -1,1 +1,1 @@", '-{"ok": 1}', '+{"ok": }')
         scan = mechanical.scan_file("config/data.json", diff, pre_image_text='{"ok": 1}\n')
         assert "structured_parse" in scan["checks_run"]

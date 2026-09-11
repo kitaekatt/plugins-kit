@@ -167,12 +167,12 @@ class TestBootstrapDependencyDiagnostics:
             "plugin's dependencies, then retry.\n"
         )
 
-    def test_manifest_requires_bootstrap_0108_api_floor(self):
+    def test_manifest_requires_bootstrap_0113_contract_floor(self):
         manifest = json.loads(
             Path("plugins/git-kit/bootstrap.json").read_text(encoding="utf-8")
         )
 
-        assert manifest["requires_bootstrap"] == "0.108.0"
+        assert manifest["requires_bootstrap"] == "0.113.0"
 
     @pytest.mark.parametrize(("error", "bootstrap_failure"), [
         ("ModuleNotFoundError(\"No module named 'markdown_it'\", name='markdown_it')", False),
@@ -225,9 +225,10 @@ class TestBootstrapDependencyDiagnostics:
 
         assert completed.stderr == (
             "[git-kit] the installed 'plugins-kit:bootstrap' plugin is too old "
-            "or stale for git-kit's code review (requires bootstrap >= 0.108.0; "
+            "or stale for git-kit's code review (requires bootstrap >= 0.113.0; "
             "missing: bootstrap_lib.code_review.pipeline.run_vcs(timeout=...), "
-            "bootstrap_lib.code_review.mechanical_repository). "
+            "bootstrap_lib.code_review.mechanical_repository, "
+            "bootstrap_lib.code_review.pipeline.assemble_bundle(mechanical_contract=...)). "
             "Run `claude plugin update bootstrap@plugins-kit`. Then start a new "
             "session and retry.\n"
         )
@@ -1362,6 +1363,7 @@ class TestBuildBundleClaims:
         )
 
         # CLAUDE.md is claimed, app.py stays in the generic review.
+        assert bundle["mechanical_contract"] == 2
         assert [f["path"] for f in bundle["changed_files"]] == ["src/app.py"]
         assert len(bundle["claimed_files"]) == 1
         claimed = bundle["claimed_files"][0]
@@ -1371,6 +1373,7 @@ class TestBuildBundleClaims:
         assert claimed["claude_mds"]  # nearest-first chain, includes self
         scan = claimed["mechanical_scan"]
         assert scan["schema_version"] == 2
+        assert scan["files"][0]["mechanical_contract"] == 2
         assert [record["file"] for record in scan["files"]] == ["CLAUDE.md"]
         assert scan["files"][0]["checks_run"]
         # The claimed file's diff is not in any chunk.

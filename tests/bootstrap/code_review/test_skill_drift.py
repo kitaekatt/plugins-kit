@@ -70,6 +70,15 @@ class TestDispatchRulePresent:
 
 
 class TestMechanicalScanContract:
+    def test_both_native_skills_require_contract_two_and_allow_masked_errors(self):
+        for vcs in ("git", "p4"):
+            body = gen.render_skill(vcs)
+            assert "Require `bundle.mechanical_contract == 2`" in body
+            assert "Preserve each record's `mechanical_contract: 2`" in body
+            assert "Later errors hidden by the first diagnostic remain reviewer scope" in body
+            assert "hidden errors remain reviewer scope and may be reported" in body
+            assert "nor report a hit the scan" not in body
+
     def test_both_skills_read_per_file_phrases_from_the_bundle(self):
         for vcs in ("git", "p4"):
             body = gen.render_skill(vcs)

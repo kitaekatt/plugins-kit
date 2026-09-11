@@ -5,7 +5,8 @@ genuinely need a model. Written to bound how far the deterministic scan in
 `bootstrap_lib.code_review` should extend.
 
 The default file-local registry implements `structured_parse`, `duplicate_keys`,
-and `column_counts`. The repository registry implements `local_link_targets`.
+and `column_counts`. The repository registry implements `local_link_targets`
+and `python_syntax`.
 `non_ascii` and `abs_path` are personal conventions. They run in current scans
 only when the user selects them. Private definitions, legacy bundle fields,
 and triviality results retain compatibility with older consumers.
@@ -15,6 +16,71 @@ and admission: each check must replace existing reviewer work and deliver its
 answer to that reviewer. The reviewer must receive instructions not to repeat
 the covered question. Build execution and new reviewer responsibilities are
 outside this task.
+
+## Admitted syntax replacement
+
+`REVIEWER_B_SYSTEM` in `bootstrap_lib/code_review/lane_prompts.py` asks for
+"syntax and type errors, missing imports, unresolved references". For data,
+it also asks for "schema or column-count violations". These are existing
+questions; this work does not add reviewer responsibilities.
+
+| Candidate | Snapshot proof | Disposition and delivery |
+|---|---|---|
+| CPython syntax | The nearest ancestor `.python-version` explicitly selects one numeric CPython version. This repository already supplies `3.12`. A matching CPython minor parser compiles the complete authored `.py` post-image in memory. | Admitted as `python_syntax`. The answer is successful compilation or its first diagnostic. Reviewer B receives the per-file result and instructions not to repeat that question through native and endpoint dispatch. |
+| Structured-data syntax | The existing JSON, YAML, and TOML parsers can reject the complete reconstructed post-image. | Corrected `structured_parse`: report the first diagnostic even on an unchanged or EOF line. Missing diagnostic locations leave coverage unavailable. |
+| Mapped schemas | The marketplace has a `$schema` URL, but its remote schema is not pinned in the reviewed snapshot. No mapping to an available snapshot schema was found. Output schemas define lane responses, not reviewed data. | Rejected: an unavailable schema or schema guess cannot answer the existing question at full recall. No schema configuration or reviewer duty was added. |
+| Literal project-local imports | No explicit source-root and authoritative resolution rules were found in the current review configuration or inputs. Package metadata and literal spelling do not establish runtime resolution. | Rejected: dynamic path changes, generated modules, conditional imports, and exports prevent a complete resolver claim. No import-check configuration or reviewer duty was added. |
+
+The Python collector declares every ancestor `.python-version` query before
+evaluation. The frozen view supplies mapping content; same-change additions,
+edits, and deletions take precedence over the base snapshot. A nearer file
+always wins. An unreadable or unsupported nearer mapping blocks coverage;
+the check does not fall back to an older ancestor mapping.
+
+Accepted mappings contain one `3.MINOR` or `3.MINOR.PATCH` value. The parser
+must be CPython with the same major and minor version. Missing mappings,
+other implementations, multiple versions, aliases, unavailable grammars,
+missing post-images, and resource failures leave coverage unavailable.
+The check accepts authored `.py` sources within existing snapshot size limits.
+It performs no execution, imports, checkout materialization, or project commands.
+Compilation receives the reconstructed source as UTF-8 bytes. Thus CPython
+processes a UTF-8 BOM and PEP 263 encoding declarations. Some encoding errors
+have compiler line 0. Those errors remain explicit uncovered diagnostics;
+the check does not invent a source location.
+
+For both syntax checks, coverage answers one question: does the complete
+post-image parse or compile, and what is the first diagnostic if it fails?
+It does not enumerate errors hidden by that first diagnostic. Those later
+errors remain reviewer scope and may be reported under the existing criteria.
+The unlisted-hit prohibition applies only to a check's declared covered question,
+not to all syntax errors. Diagnostic
+locations can be unchanged lines or EOF. Reviewers decide introduction and
+reportability under their existing criteria. A standards finding requires a
+quotable rule; a bug finding requires the lane's bug criteria.
+
+`MECHANICAL_PREAMBLE` and the generated native dispatch instructions define
+these exact coverage boundaries. Their scan header no longer says all checks
+cover added lines. Other shipped checks retain their existing added-line scope.
+No result selects or suppresses a reviewer lane.
+
+### Mechanical producer and consumer contract
+
+`assemble_bundle` defaults to mechanical contract 1 for existing consumers.
+That path retains added-line `structured_parse` results and excludes
+`python_syntax`. Its phrase map and unmarked records retain legacy semantics.
+Old Git and P4 callers can therefore use newer bootstrap safely.
+
+Current Git and P4 prepare scripts explicitly request `mechanical_contract=2`.
+The producer marks the bundle and each file record with contract 2. Generated
+native skills require that bundle version before consuming results. Endpoint
+dispatch preserves each record marker, so the shared formatter selects matching
+coverage instructions. Unknown or mixed record contracts are refused.
+
+Contract 2 permits whole-post-image parsing and compilation results, limited
+to the first diagnostic. Its prompts leave later masked errors in reviewer
+scope. Native and endpoint rendering preserve unlocated diagnostic text as
+unavailable coverage. Bootstrap version floors ensure the opt-in API exists;
+the explicit capability argument, not the version bump, changes result semantics.
 
 ### Personal check configuration
 

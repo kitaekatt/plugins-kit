@@ -534,6 +534,8 @@ LAUNCH_NARRATION = """\
 # Appended into both step-2 actions (shared) so the launch line is emitted right
 # after prepare returns, before the step-6 fan-out. Plain text, no @tokens@.
 LAUNCH_EMIT = """\
+            Require `bundle.mechanical_contract == 2` before consuming mechanical results.
+            If absent or different, report an incompatible prepare producer and stop this review.
             After prepare returns, emit the launch rationale line ONCE (see narration.launch_message):
             select the row from the file-type mix of the changed + claimed files, or the md_trivial row
             when the step-6 triviality gate will fire. This is the single launch message -- do not repeat it."""
@@ -661,20 +663,36 @@ technique_skill:
             Mechanical scan results -- reviewer_a and reviewer_b ONLY. Each chunk carries
             `diff_chunks[i].mechanical_scan`, shaped as `{schema_version: 2, files:
             [{file, checks_run, findings}]}`. Render its coverage and findings under
-            "Mechanical scan (added lines only)", one file at a time. For each file,
+            "Mechanical scan", one file at a time. For each file,
             derive the covered-check list from THAT record's `checks_run`; render each id
             with its human phrase from `bundle.mechanical_check_phrases`. If an id
             is absent from that map, render the bare id; this is the
             forward-compatible case, not an error. Render each finding as
             `- <file>:<line> [<check>] <detail>`. An empty `checks_run` means no mechanical coverage for this file.
+            Render each record's diagnostics as unavailable coverage, preserving the text
+            without assigning a source line. A compiler diagnostic with line 0 is unlocated.
             Named checks with an empty findings list mean those
             checks ran cleanly. These states are different and neither may be omitted.
-            Tell the lane that for each listed file/check pair the scan has ALREADY run,
-            so it must neither re-run that check for that file nor report a hit the scan
-            did not list. A check omitted for one file remains reviewer scope for that
+            Preserve each record's `mechanical_contract: 2` marker in endpoint arguments.
+            Tell the lane to use each file/check answer only for its explicitly declared
+            covered question and not to repeat that question. An unlisted-hit restriction
+            applies only where a check enumerates hits within its declared scope.
+            A check omitted for one file remains reviewer scope for that
             file, regardless of another file's coverage. State explicitly that the scan
-            DETECTS but does not DECIDE: a listed hit is a location, and whether a
-            quotable rule forbids that instance is still the lane's judgment. Omit the
+            DETECTS but does not DECIDE: a listed hit is a location. The lane judges
+            whether the diff introduced a reportable issue within its assigned scope;
+            standards findings require a quotable rule, and bugs require its bug criteria.
+            For `python_syntax`, the covered question is whole-post-image compilation
+            under the nearest snapshot `.python-version`, using the matching CPython
+            minor grammar. The result is success or the first compiler diagnostic,
+            including on unchanged lines. Do not repeat that compilation question.
+            Later errors hidden by the first diagnostic remain reviewer scope and may
+            be reported when the existing bug criteria establish them. Types, imports,
+            and causation are not covered. `structured_parse` likewise covers whole-post-image parsing
+            and its first diagnostic, including on unchanged lines or at EOF; later
+            hidden errors remain reviewer scope and may be reported; causation is not
+            covered. Other shipped checks retain their
+            added-line scope. Omit the
             section ENTIRELY only for reviewer_c, which is not assigned mechanical checks.
             Reviewers not listed in the selected profile are
             NOT launched. If bundle.diff_chunks is empty (@RANGE_OR_CL@ has no diff content) and
@@ -1979,6 +1997,34 @@ bootstrap_lib's shipped defaults (reproduced below) and is resolved per review b
 `bootstrap_lib.code_review.review_profiles`, invoked through this plugin's venv entry point:
 
     @RENDER_TOOL@ --project-root <project root>
+
+## Mechanical syntax coverage
+
+These skills and prepare scripts use mechanical contract 2. Prepare requests it
+explicitly from bootstrap. The bundle and each file record carry the version;
+native dispatch requires it, and endpoint dispatch preserves the record marker.
+Older callers omit this capability and receive contract 1: added-line structured
+parsing and no Python syntax check. A version bump alone does not opt callers in.
+
+`python_syntax` uses the nearest ancestor `.python-version` in the frozen review
+snapshot. It accepts one numeric CPython version, such as `3.12` or `3.12.9`.
+The available parser must match its major and minor version. Missing, ambiguous,
+unreadable, or unsupported mappings leave this check uncovered. A nearer mapping
+always takes precedence, including when its content cannot be read.
+
+The check compiles each authored `.py` post-image in memory without executing
+code, importing modules, or running project commands. Coverage means compilation
+succeeded or the first compiler diagnostic was supplied. The diagnostic may be
+on an unchanged line. Reviewers judge whether the diff introduced a reportable bug.
+Errors hidden by the first diagnostic remain reviewer scope and may be reported
+when the existing criteria establish them. Imports and types also remain outside
+this check. The unlisted-hit restriction applies only to the covered question,
+not to all syntax errors in the file.
+
+`structured_parse` also covers the whole post-image and its first parser diagnostic.
+An unlocatable diagnostic leaves coverage unavailable. Other shipped checks retain
+their added-line scope. Both reviewer dispatch paths receive the covered question
+with instructions not to repeat it. These results do not select or suppress lanes.
 
 ## Layers
 

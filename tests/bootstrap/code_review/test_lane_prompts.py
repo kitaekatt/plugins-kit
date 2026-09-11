@@ -464,3 +464,17 @@ class TestMechanicalFindingsInPrompt:
         assert "detects; it does not decide" in text
         assert 'file/check pair listed under "Checks run"' in text
         assert "restriction does not apply to a check omitted for that file" in text
+
+    def test_legacy_structured_phrase_never_claims_whole_image_coverage(self):
+        text = lp.format_mechanical_findings([
+            {"file": "data.json", "checks_run": ["structured_parse"], "findings": []},
+        ])
+        assert "structured_parse (structured-data parse failures)" in text
+        assert "(whole post-image; first parser diagnostic)" not in text
+
+    def test_mixed_contracts_are_rejected(self):
+        with pytest.raises(ValueError, match="incompatible mechanical scan contracts"):
+            lp.format_mechanical_findings([
+                {"file": "old.py", "checks_run": [], "findings": []},
+                {"file": "new.py", "mechanical_contract": 2, "checks_run": [], "findings": []},
+            ])

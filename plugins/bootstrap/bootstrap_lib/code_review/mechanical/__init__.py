@@ -31,6 +31,10 @@ class MechanicalFinding(TypedDict):
     detail: str
 
 
+class MechanicalCheckUnavailable(ValueError):
+    """A check cannot answer its declared question from the available inputs."""
+
+
 @dataclass(frozen=True)
 class MechanicalSnapshot:
     """Immutable inputs derived from one file in the reviewed snapshot."""
@@ -125,6 +129,9 @@ def _run_checks(
             continue
         try:
             check_findings = check.scan(snapshot)
+        except MechanicalCheckUnavailable as exc:
+            diagnostics.append(f"mechanical check {check.check_id!r} unavailable: {exc}")
+            continue
         except TimeoutError as exc:
             # A timeout is an EXECUTION FAILURE, not an unmet precondition.
             # Both omit the check from checks_run, but a declining precondition
@@ -172,7 +179,7 @@ _LEGACY_CHECKS: tuple[MechanicalCheck, ...] = (
 REGISTRY: tuple[MechanicalCheck, ...] = (
     MechanicalCheck(
         check_id="structured_parse",
-        phrase="structured-data parse failures",
+        phrase="structured-data parse failures (whole post-image; first parser diagnostic)",
         required_inputs=frozenset({"file", "post_image_text"}),
         precondition=structured_parse.precondition,
         scan=structured_parse.scan,
@@ -282,6 +289,7 @@ def resolve_checks(project_root: str | Path, home: str | Path | None = None) -> 
 __all__ = [
     "LEGACY_CHECK_IDS",
     "MechanicalCheck",
+    "MechanicalCheckUnavailable",
     "MechanicalFinding",
     "MechanicalSnapshot",
     "REGISTRY",

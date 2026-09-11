@@ -31,7 +31,7 @@ def precondition(snapshot: MechanicalSnapshot) -> bool:
 
 
 def scan(snapshot: MechanicalSnapshot) -> tuple[MechanicalFinding, ...]:
-    """Return a parse diagnostic only when its line was added."""
+    """Report the first post-image parse failure; reviewers judge introduction."""
     assert snapshot.post_image_text is not None
     kind = _kind(snapshot.file)
     try:
@@ -45,7 +45,24 @@ def scan(snapshot: MechanicalSnapshot) -> tuple[MechanicalFinding, ...]:
         line = getattr(error, "lineno", None)
         if line is None and getattr(error, "problem_mark", None) is not None:
             line = error.problem_mark.line + 1
-        if snapshot.added_lines is None or line not in {n for n, _ in snapshot.added_lines}:
-            return ()
+        if line is None and isinstance(error, tomllib.TOMLDecodeError):
+            # Python 3.12/3.13 expose location only in the exception text.
+            match = re.search(r"\(at line (\d+), column \d+\)$", str(error))
+            if match:
+                line = int(match.group(1))
+            elif str(error).endswith("(at end of document)"):
+                line = snapshot.post_image_text.count("\n") + 1
+        if line is None and isinstance(getattr(error, "position", None), int):
+            line = snapshot.post_image_text[:error.position].count("\n") + 1
+        if not isinstance(line, int) or line < 1:
+            from . import MechanicalCheckUnavailable
+
+            raise MechanicalCheckUnavailable(f"{kind} parser supplied no usable location: {error}") from error
         return ({"check": "structured_parse", "line": line, "detail": f"{kind} parser diagnostic: {error}"},)
     return ()
+
+
+def scan_added_lines(snapshot: MechanicalSnapshot) -> tuple[MechanicalFinding, ...]:
+    """Retain added-line result semantics for pre-contract-2 consumers."""
+    added = {line for line, _ in snapshot.added_lines or ()}
+    return tuple(finding for finding in scan(snapshot) if finding["line"] in added)

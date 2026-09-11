@@ -274,8 +274,9 @@ def scan_repository(
 
 
 from .local_link_targets import CHECK as LOCAL_LINK_TARGETS_CHECK  # noqa: E402
+from .python_syntax import CHECK as PYTHON_SYNTAX_CHECK  # noqa: E402
 
-REGISTRY: tuple[RepositoryCheck, ...] = (LOCAL_LINK_TARGETS_CHECK,)
+REGISTRY: tuple[RepositoryCheck, ...] = (LOCAL_LINK_TARGETS_CHECK, PYTHON_SYNTAX_CHECK)
 
 __all__ = [
     "CheckOutcome",
@@ -285,6 +286,7 @@ __all__ = [
     "MAX_TARGETS",
     "MAX_TARGET_CONTENT_BYTES",
     "PathEffect",
+    "PYTHON_SYNTAX_CHECK",
     "REGISTRY",
     "ReadResult",
     "RepositoryCheck",

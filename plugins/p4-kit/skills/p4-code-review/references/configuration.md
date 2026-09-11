@@ -10,6 +10,34 @@ bootstrap_lib's shipped defaults (reproduced below) and is resolved per review b
 
     python3 ${CLAUDE_PLUGIN_ROOT}/scripts/render_review_profiles.py --project-root <project root>
 
+## Mechanical syntax coverage
+
+These skills and prepare scripts use mechanical contract 2. Prepare requests it
+explicitly from bootstrap. The bundle and each file record carry the version;
+native dispatch requires it, and endpoint dispatch preserves the record marker.
+Older callers omit this capability and receive contract 1: added-line structured
+parsing and no Python syntax check. A version bump alone does not opt callers in.
+
+`python_syntax` uses the nearest ancestor `.python-version` in the frozen review
+snapshot. It accepts one numeric CPython version, such as `3.12` or `3.12.9`.
+The available parser must match its major and minor version. Missing, ambiguous,
+unreadable, or unsupported mappings leave this check uncovered. A nearer mapping
+always takes precedence, including when its content cannot be read.
+
+The check compiles each authored `.py` post-image in memory without executing
+code, importing modules, or running project commands. Coverage means compilation
+succeeded or the first compiler diagnostic was supplied. The diagnostic may be
+on an unchanged line. Reviewers judge whether the diff introduced a reportable bug.
+Errors hidden by the first diagnostic remain reviewer scope and may be reported
+when the existing criteria establish them. Imports and types also remain outside
+this check. The unlisted-hit restriction applies only to the covered question,
+not to all syntax errors in the file.
+
+`structured_parse` also covers the whole post-image and its first parser diagnostic.
+An unlocatable diagnostic leaves coverage unavailable. Other shipped checks retain
+their added-line scope. Both reviewer dispatch paths receive the covered question
+with instructions not to repeat it. These results do not select or suppress lanes.
+
 ## Layers
 
 Three layers are merged from lowest to highest precedence:

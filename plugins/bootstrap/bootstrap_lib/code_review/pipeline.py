@@ -47,6 +47,7 @@ from bootstrap_lib.code_review.mechanical import (
     resolve_checks,
     scan_file,
 )
+from bootstrap_lib.code_review.mechanical import structured_parse
 from bootstrap_lib.code_review.mechanical_repository import (
     PathEffect,
     REGISTRY as REPOSITORY_REGISTRY,
@@ -249,6 +250,7 @@ def assemble_bundle(
     snapshot_seed: Optional[str] = None,
     path_effects: Optional[tuple[PathEffect, ...]] = None,
     snapshot_reader: Optional[SnapshotReader] = None,
+    mechanical_contract: int = 1,
 ) -> dict:
     """Chunk the diff to disk and build the VCS-neutral bundle core.
 
@@ -290,6 +292,9 @@ def assemble_bundle(
                     accepted so a consumer predating the rename keeps working.
                     Passing both with DIFFERENT values raises TypeError rather
                     than guessing which one the caller meant.
+        mechanical_contract: Consumer capability. Default 1 retains added-line
+                    structured parsing and excludes Python syntax. Version 2
+                    permits whole-post-image first-diagnostic syntax results.
 
     Returns the shared bundle fields:
         {"bundle_dir", "diff_chunks", "changed_files",
@@ -343,22 +348,27 @@ def assemble_bundle(
     "mechanical_findings", and -- only when trivial -- "trivial_checks"
     ({"ascii_clean", "no_abs_paths"} over the changed lines).
 
-    "mechanical_findings" is a list of {"check", "line", "detail"} dicts over
-    the file's ADDED lines, and each diff_chunks entry carries the same list
+    "mechanical_findings" is the legacy list of {"check", "line", "detail"}
+    dicts over the file's ADDED lines. Each diff_chunks entry carries that list
     for its own files with a "file" key added. It is computed for every file a
     reviewer will read -- claimed and generic alike, trivial or not -- because
     the scan answers its own questions independently of whether an agent also
     runs. What being reviewed changes is who consumes the result, not whether
     it is computed. See bootstrap_lib.code_review.triviality.
 
-    Each diff_chunks entry also carries "mechanical_scan", a version 2 object
-    with one record per file: {file, checks_run, findings}. Each claimed_files
-    entry carries the same object with exactly its own one-file record, so the
-    specialist receives the full effective registry scan too. Coverage is local
-    to that file. An empty checks_run means no check met its preconditions, while
-    a non-empty checks_run plus empty findings means those checks ran cleanly.
-    Seam B, for repository-wide and changed-file-set checks, is deliberately
-    not implemented by this file-local scan.
+    Each diff_chunks entry also carries "mechanical_scan", shaped as
+    {schema_version: 2, files: [{file, checks_run, findings, diagnostics?}]}.
+    Each claimed_files entry carries the same object with its one-file record.
+    These records merge file-local and repository-snapshot check results.
+    With mechanical contract 2, the bundle and every file record additionally
+    carry mechanical_contract: 2. Schema version and consumer contract are
+    separate: contract 1 retains unmarked records and added-line semantics.
+    Contract 2 syntax findings can locate the first diagnostic on unchanged
+    lines or at EOF. Unlocated diagnostics leave the check uncovered.
+    Coverage applies only to each file/check's declared question. Empty
+    checks_run means no coverage; named checks with empty findings mean those
+    covered questions ran cleanly. A first syntax diagnostic does not enumerate
+    later errors hidden by it; those remain reviewer scope.
     """
     if review_generated is not None:
         # Deprecated spelling. Honour it, but never silently pick a winner when
@@ -378,12 +388,24 @@ def assemble_bundle(
             review_machine_emitted = review_generated
     review_machine_emitted = bool(review_machine_emitted)
 
+    if type(mechanical_contract) is not int or mechanical_contract not in {1, 2}:
+        raise ValueError(f"unsupported mechanical consumer contract: {mechanical_contract!r}")
     claim_globs = claim_globs or []
     if workspace_root is None:
         # No project root means low-level callers retain the code registry only.
         checks = REGISTRY
     else:
         checks = resolve_checks(workspace_root)
+    repository_checks = REPOSITORY_REGISTRY
+    if mechanical_contract == 1:
+        from dataclasses import replace
+
+        checks = tuple(
+            replace(check, scan=structured_parse.scan_added_lines, phrase="structured-data parse failures")
+            if check.check_id == "structured_parse" else check
+            for check in checks
+        )
+        repository_checks = tuple(check for check in REPOSITORY_REGISTRY if check.check_id != "python_syntax")
     bundle_dir.mkdir(parents=True, exist_ok=True)
 
     claimed_idents = {
@@ -466,6 +488,7 @@ def assemble_bundle(
             snapshot_seed=snapshot_seed,
             path_effects=effective_effects,
             reader=snapshot_reader,
+            checks=repository_checks,
         )
 
     def merged_scan(file: dict) -> dict[str, object]:
@@ -476,6 +499,8 @@ def assemble_bundle(
             pre_image_text=_review_pre_image_text(file),
             checks=checks,
         )
+        if mechanical_contract == 2:
+            local_scan["mechanical_contract"] = 2
         repository_scan = repository_scans.get(ident)
         if repository_scan is None:
             return local_scan
@@ -642,13 +667,15 @@ def assemble_bundle(
         "bundle_dir": str(bundle_dir),
         "diff_chunks": diff_chunks,
         "mechanical_check_phrases": {
-            check.check_id: check.phrase for check in (*checks, *REPOSITORY_REGISTRY)
+            check.check_id: check.phrase for check in (*checks, *repository_checks)
         },
         "changed_files": changed_files,
         "unique_claude_mds": unique,
         "submit_gates": submit_gates,
         "unchunked_files": unchunked_files,
     }
+    if mechanical_contract == 2:
+        result["mechanical_contract"] = 2
     if snapshot_identity is not None:
         result["snapshot_identity"] = snapshot_identity
     if claim_globs:

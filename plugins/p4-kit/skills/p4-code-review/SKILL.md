@@ -65,6 +65,8 @@ technique_skill:
             thin generic data_only coverage), noting the degradation in one line. A second prepare invocation is
             reserved for the foreign-client claim refusal below.
             Then run prepare_review.py to fetch the diff (with shelved fallback; auto-shelves a pending CL with no existing shelf so the diff is fetchable), partition the diff into chunked .diff fragments on disk, map ancestor CLAUDE.md files for each changed file, detect unreconciled and default-changelist files in the directories the CL touches, detect unresolved merges in the CL, and scan ancestor CLAUDE.md files for submit-gate reminders that apply to this CL.
+            Require `bundle.mechanical_contract == 2` before consuming mechanical results.
+            If absent or different, report an incompatible prepare producer and stop this review.
             After prepare returns, emit the launch rationale line ONCE (see narration.launch_message):
             select the row from the file-type mix of the changed + claimed files, or the md_trivial row
             when the step-6 triviality gate will fire. This is the single launch message -- do not repeat it.
@@ -261,20 +263,36 @@ technique_skill:
             Mechanical scan results -- reviewer_a and reviewer_b ONLY. Each chunk carries
             `diff_chunks[i].mechanical_scan`, shaped as `{schema_version: 2, files:
             [{file, checks_run, findings}]}`. Render its coverage and findings under
-            "Mechanical scan (added lines only)", one file at a time. For each file,
+            "Mechanical scan", one file at a time. For each file,
             derive the covered-check list from THAT record's `checks_run`; render each id
             with its human phrase from `bundle.mechanical_check_phrases`. If an id
             is absent from that map, render the bare id; this is the
             forward-compatible case, not an error. Render each finding as
             `- <file>:<line> [<check>] <detail>`. An empty `checks_run` means no mechanical coverage for this file.
+            Render each record's diagnostics as unavailable coverage, preserving the text
+            without assigning a source line. A compiler diagnostic with line 0 is unlocated.
             Named checks with an empty findings list mean those
             checks ran cleanly. These states are different and neither may be omitted.
-            Tell the lane that for each listed file/check pair the scan has ALREADY run,
-            so it must neither re-run that check for that file nor report a hit the scan
-            did not list. A check omitted for one file remains reviewer scope for that
+            Preserve each record's `mechanical_contract: 2` marker in endpoint arguments.
+            Tell the lane to use each file/check answer only for its explicitly declared
+            covered question and not to repeat that question. An unlisted-hit restriction
+            applies only where a check enumerates hits within its declared scope.
+            A check omitted for one file remains reviewer scope for that
             file, regardless of another file's coverage. State explicitly that the scan
-            DETECTS but does not DECIDE: a listed hit is a location, and whether a
-            quotable rule forbids that instance is still the lane's judgment. Omit the
+            DETECTS but does not DECIDE: a listed hit is a location. The lane judges
+            whether the diff introduced a reportable issue within its assigned scope;
+            standards findings require a quotable rule, and bugs require its bug criteria.
+            For `python_syntax`, the covered question is whole-post-image compilation
+            under the nearest snapshot `.python-version`, using the matching CPython
+            minor grammar. The result is success or the first compiler diagnostic,
+            including on unchanged lines. Do not repeat that compilation question.
+            Later errors hidden by the first diagnostic remain reviewer scope and may
+            be reported when the existing bug criteria establish them. Types, imports,
+            and causation are not covered. `structured_parse` likewise covers whole-post-image parsing
+            and its first diagnostic, including on unchanged lines or at EOF; later
+            hidden errors remain reviewer scope and may be reported; causation is not
+            covered. Other shipped checks retain their
+            added-line scope. Omit the
             section ENTIRELY only for reviewer_c, which is not assigned mechanical checks.
             Reviewers not listed in the selected profile are
             NOT launched. If bundle.diff_chunks is empty (CL has no diff content) and

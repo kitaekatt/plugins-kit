@@ -199,12 +199,12 @@ class TestBootstrapDependencyDiagnostics:
             "plugin's dependencies, then retry.\n"
         )
 
-    def test_manifest_requires_bootstrap_0108_api_floor(self):
+    def test_manifest_requires_bootstrap_0113_contract_floor(self):
         manifest = json.loads(
             Path("plugins/p4-kit/bootstrap.json").read_text(encoding="utf-8")
         )
 
-        assert manifest["requires_bootstrap"] == "0.108.0"
+        assert manifest["requires_bootstrap"] == "0.113.0"
 
     @pytest.mark.parametrize(("error", "bootstrap_failure"), [
         ("ModuleNotFoundError(\"No module named 'markdown_it'\", name='markdown_it')", False),
@@ -257,9 +257,10 @@ class TestBootstrapDependencyDiagnostics:
 
         assert completed.stderr == (
             "[p4-kit] the installed 'plugins-kit:bootstrap' plugin is too old "
-            "or stale for p4-kit's code review (requires bootstrap >= 0.108.0; "
+            "or stale for p4-kit's code review (requires bootstrap >= 0.113.0; "
             "missing: bootstrap_lib.code_review.pipeline.run_vcs(timeout=...), "
-            "bootstrap_lib.code_review.mechanical_repository). "
+            "bootstrap_lib.code_review.mechanical_repository, "
+            "bootstrap_lib.code_review.pipeline.assemble_bundle(mechanical_contract=...)). "
             "Run `claude plugin update bootstrap@plugins-kit`. Then start a new "
             "session and retry.\n"
         )
@@ -4289,5 +4290,7 @@ def test_pending_shelf_race_retries_complete_capture_once(tmp_path):
     assert fingerprints.call_count == 4
     assert describes.call_count == 2
     assert bundle["snapshot_identity"].startswith("p4:client:")
+    assert bundle["mechanical_contract"] == 2
     record = bundle["diff_chunks"][0]["mechanical_scan"]["files"][0]
+    assert record["mechanical_contract"] == 2
     assert "local_link_targets" in record["checks_run"]
