@@ -182,8 +182,9 @@ template-vs-additional; the consistent eight `##` shape is the contract.
     before acting. At minimum `plan.md`. Add `log.md` only if the next agent
     needs prior rationale to act on turn 1; otherwise leave it on-demand.
   - **`### Opening response protocol`** -- the `orientation moment` for
-    session resume. What the agent says after reading the required docs,
-    before tool use. Example template (project-specific text varies):
+    session resume. What the agent says, as it opens the turn, after
+    reading the required docs. Example template (project-specific text
+    varies):
     > "Invoked: <skills, as emitted by `task work`>. Read plan.md (+ any
     > other required reads). Current goal: <restated in own words>.
     > Starting with: <first concrete action>, dispatched to <sub-agent /
@@ -194,6 +195,15 @@ template-vs-additional; the consistent eight `##` shape is the contract.
     the first turn, rather than surfacing at end of session as "I invoked
     the task skills but implemented everything inline." Stating the dispatch
     decision out loud is also what forces it to BE a decision.
+
+    Write this section so it cannot read as a checkpoint: the agent says
+    the line and then STARTS the first concrete action in the same turn.
+    "Unclear / blocked on: none" means proceed, not "awaiting go-ahead" --
+    an opening protocol that ends the turn on an unblocked task costs the
+    user a round trip to say "go" and is the observed failure this wording
+    exists to prevent. Write it so the two real checkpoints survive: a
+    named blocker, and a decision this folder's Autonomy status has CLAIMED
+    for the user. Those still end the turn; nothing else does.
   - **`### Communication protocol`** -- default to `/verbose-updates`'s
     three-part end-of-turn template (see framework). Note project-specific
     overrides here (audit-log shape, domain terminology, what NOT to say).

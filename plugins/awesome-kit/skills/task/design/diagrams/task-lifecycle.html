@@ -170,9 +170,9 @@
         <!-- init -> active -->
         <line x1="228" y1="150" x2="320" y2="278" class="a-emphasis" stroke-width="1.6" marker-end="url(#arrowhead-emphasis)"/>
         <text x="246" y="216" class="t-backend" font-size="8">yields valid</text>
-        <!-- work -> active (auto-init) -->
+        <!-- work --init -> active (auto-init) -->
         <line x1="108" y1="150" x2="290" y2="284" class="a-dashed" stroke-width="1.3" marker-end="url(#arrowhead-dashed)"/>
-        <text x="120" y="205" class="t-database" font-size="8">auto-init</text>
+        <text x="120" y="205" class="t-database" font-size="8">auto-init (--init)</text>
         <!-- update -> active (refresh) -->
         <line x1="340" y1="150" x2="356" y2="278" class="a-dashed" stroke-width="1.3" marker-end="url(#arrowhead-dashed)"/>
         <text x="362" y="214" class="t-database" font-size="8">refresh</text>
@@ -284,7 +284,7 @@
         <ul>
           <li>&bull; Each operation shows the state it acts on and the state it produces.</li>
           <li>&bull; An Abstract task must go through init to become Active &mdash; the only way in.</li>
-          <li>&bull; work auto-inits; update refreshes + re-validates.</li>
+          <li>&bull; work --init inits; update refreshes + re-validates.</li>
           <li>&bull; reopen (left of close) returns to Active only while the folder still exists.</li>
         </ul>
       </div>

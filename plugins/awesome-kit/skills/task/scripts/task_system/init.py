@@ -146,10 +146,16 @@ list) -- never by listing it here.
 ### Opening response protocol
 
 After invoking the always-invoke skills AND reading the required docs above,
-BEFORE any tool use, end the first turn with:
+open the first turn with:
 
 > "Read plan.md. Current goal: <restated in own words>. Starting with:
 > <first concrete action>. Unclear / blocked on: <issue, or 'none'>."
+
+Then START the first concrete action in the SAME turn. That line is an
+orientation announcement, not a request for confirmation: "Unclear /
+blocked on: none" means proceed. End the turn there when the clause names
+a real blocker, or when the Autonomy status section below claims the next
+decision for the user -- those checkpoints stand.
 
 ### Communication protocol
 

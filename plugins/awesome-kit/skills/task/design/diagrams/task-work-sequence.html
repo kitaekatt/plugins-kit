@@ -443,7 +443,7 @@
         <div class="pulse-dot"></div>
         <h1>work Operation Sequence</h1>
       </div>
-      <p class="subtitle">work &lt;ref&gt;: resolve by path, classify ref, auto-init if safe, validate gate, emit instructions</p>
+      <p class="subtitle">work &lt;ref&gt;: resolve by path, classify ref, auto-init only with --init, validate gate, emit instructions</p>
     </div>
 
     <!-- Main Diagram -->
@@ -608,7 +608,7 @@
         <ul>
           <li>&bull; work resolves the reference by path (the id)</li>
           <li>&bull; validate classifies the ref before local reads or initialization</li>
-          <li>&bull; A remote ref is rejected before auto-init; only a non-remote absent ref is promoted</li>
+          <li>&bull; An absent folder errors unless --init was passed; a remote ref is rejected before any auto-init</li>
         </ul>
       </div>
 

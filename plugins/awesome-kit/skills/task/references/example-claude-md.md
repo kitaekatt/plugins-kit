@@ -94,11 +94,13 @@ On-demand siblings (do NOT pre-read; load only when relevant):
 
 ### Opening response protocol
 
-After invoking the always-invoke skills AND reading the required docs above, BEFORE any tool use, end the first turn with:
+After invoking the always-invoke skills AND reading the required docs above, open the first turn with:
 
 > "Invoked: <the skills `task work` emitted>. Read plan.md and log.md. Current goal: <restated in own words>. Prerequisites verified: <state of dependencies>. Starting with: <first concrete action>, dispatched to <sub-agent type / inline, with the reason>. Unclear / blocked on: <issue, or 'none'>."
 
 The `Invoked:` and `dispatched to` clauses are not filler -- they surface a skipped initialization or an un-dispatched build in turn 1, instead of at end of session.
+
+Then START the first concrete action in the SAME turn -- the line announces the orientation, it does not ask for a go-ahead. When "Unclear / blocked on" reads "none", begin the work; end the turn there when the clause names a real blocker, or when a decision below is claimed for the user (this example's open question is one of those).
 
 AND surface the question described under "Open questions for the user" above. User explicitly wants you to explain the trade-off and let them decide -- do NOT proceed past Step 1 of plan.md until they pick.
 

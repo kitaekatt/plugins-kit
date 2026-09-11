@@ -12,14 +12,22 @@ Readings chosen in Step 4 (flagged in the implementation report):
   findings only (errors AND warnings both block) plus the remote error; a
   finding-free task whose stored status is ``closed``/``blocked``/``archived``
   can be worked without ``reopen`` (spec 7.1 names no status pre for work).
+- **work does NOT create a folder unless asked.** A ref with no folder is an
+  error: the overwhelmingly common cause is a mistyped path, and silently
+  scaffolding an empty task there starts a session on work that does not
+  exist. Promotion is still available, but only as an explicit opt-in
+  (``allow_init=True``; ``work --init`` on the CLI). ``update`` keeps its
+  unconditional upsert -- it is the write verb, and its ref comes from an
+  edit the caller is already making.
 - **Auto-init promotion requires a verbatim-safe stub.** init derives folder
   names; a ref whose stub would be REWRITTEN by that derivation (e.g.
   ``tmp/UPPER``) cannot be auto-initialized at the requested path -- error,
   never a folder at a different path than the ref named.
-- **A blocked work after auto-init keeps the initialized folder.** Promotion
-  ran a real ``init`` (a verb with its own contract); the validate gate then
-  blocks the operation. E.g. ``work dev/tasks/x`` on a fresh path inits the
-  folder, then blocks on the expected uncommitted-dev/tasks warning.
+- **A blocked work after an opted-in auto-init keeps the initialized
+  folder.** Promotion ran a real ``init`` (a verb with its own contract);
+  the validate gate then blocks the operation. E.g. ``work --init
+  dev/tasks/x`` on a fresh path inits the folder, then blocks on the
+  expected uncommitted-dev/tasks warning.
 - **update is a write op; validate reports.** Field edits persist even when
   the re-validation has findings (the CLI exit code reflects findings; the
   write is not rolled back). Bad values (e.g. an out-of-vocabulary status)
@@ -48,7 +56,8 @@ Readings chosen in Step 4 (flagged in the implementation report):
   for any verb that must read-modify-write it (no recovery; fix forward).
 - **Remote guard scope.** ``work`` and ``update`` take ``ref_host`` and
   refuse a remote ref (spec 7.3) -- they are the verbs that would otherwise
-  CREATE a local folder (auto-init/upsert) for a task living elsewhere.
+  CREATE a local folder (opted-in promotion / upsert) for a task living
+  elsewhere.
   ``close``/``reopen`` require an existing local folder and the CLI has no
   host flag, so they take no ``ref_host`` in v1.
 """
@@ -104,7 +113,7 @@ class WorkResult:
 
     canonical: str
     folder: Path  # absolute
-    initialized: bool  # auto-init promotion happened
+    initialized: bool  # opted-in auto-init promotion happened
     skills_to_invoke: tuple[str, ...]
     agent_hint: str | None
 
@@ -214,10 +223,12 @@ def work(
     *,
     ref_host: str | None = None,
     local_host: str | None = None,
+    allow_init: bool = False,
 ) -> WorkResult:
-    """``work <ref>`` (spec 7.1): auto-init when the folder is absent
-    (promotion), gate on validate (ANY error or warning blocks; remote
-    errors), then surface the task's ``skills_to_invoke`` / ``agent_hint``.
+    """``work <ref>`` (spec 7.1): require an existing folder (a missing one
+    is an error -- pass ``allow_init=True`` for the explicit promotion),
+    gate on validate (ANY error or warning blocks; remote errors), then
+    surface the task's ``skills_to_invoke`` / ``agent_hint``.
     Raises StateOpError on any block."""
     resolved = _resolve(ref, project_root)
     result = validate_ref(
@@ -231,6 +242,13 @@ def work(
     folder = resolved.folder(project_root)
     initialized = False
     if not folder.is_dir():
+        if not allow_init:
+            raise StateOpError(
+                f"no task folder at {resolved.canonical} -- check the path "
+                "(`task.py list` shows the known tasks). To create a task "
+                "there, run `task.py init`, or `task.py work --init "
+                f"{resolved.canonical}` to scaffold and work it in one step."
+            )
         _auto_init(resolved, project_root)
         initialized = True
         result = validate_ref(
