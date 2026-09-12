@@ -148,5 +148,5 @@ anti_patterns:
       was never tested by anyone but its author.
     alternative: >-
       Put the counter-argument to the seat that ruled -- follow-up channel, or a relaunch
-      with the argument in the brief -- and take what comes back (step 7).
+      with the argument in the brief -- and take what comes back.
 ```
