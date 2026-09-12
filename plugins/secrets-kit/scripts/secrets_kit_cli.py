@@ -89,7 +89,10 @@ def _ensure_clone(config: Config, *, sync: bool = False) -> Path:
     clone = paths["clone"]
     if not repo_mod.is_clone(clone):
         print(f"cloning {config.repo} ...")
-        repo_mod.clone(config.repo, clone)
+        if sync:
+            repo_mod._clone_for_authoring(config.repo, clone)
+        else:
+            repo_mod.clone(config.repo, clone)
         return clone
     if sync:
         print("syncing with the remote ...")
@@ -199,19 +202,15 @@ def cmd_init(args: argparse.Namespace) -> int:
     try:
         clone = _ensure_guarded(config)
     except SecretsError as e:
-        # A clone that diverged from an already-seeded remote is the signature
-        # of a failed earlier seed, and the generic "diverged" advice would
-        # leave the user resolving git rather than told what they actually
-        # need. Name the real next step; the divergence is a consequence, not
-        # the problem.
+        # Cached identity evidence gives useful unlock advice without proving
+        # why the gate failed or whether any local history is disposable.
         clone = paths_for(DATA_DIR)["clone"]
         if repo_mod.is_clone(clone) and repo_mod.remote_has(clone, "identity.age"):
             return _fail(
-                f"{e}\n\n"
-                "Note what the remote already holds: an identity.age. This "
-                "repo IS seeded -- the local commit(s) above are a seed "
-                "attempt that never published, and discarding them loses "
-                "nothing. What this machine needs is not another seed but "
+                f"{e.message}\n\n"
+                "The cached remote-tracking view contains identity.age. "
+                "It does not establish why this gate failed. To use that "
+                "fleet identity, this machine needs "
                 f"`{cli_command('unlock --new-terminal')}`."
             )
         raise

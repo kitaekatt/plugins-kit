@@ -158,7 +158,8 @@ def _git(args: List[str], *, cwd: Optional[Path], timeout: int) -> Tuple[int, st
         return (124, f"git {' '.join(args)} timed out after {timeout}s")
     except OSError as e:
         return (127, f"could not run git: {e}")
-    return (proc.returncode, proc.stdout.decode("utf-8", "replace").strip())
+    # Git terminates records with newlines; other whitespace can be ref data.
+    return (proc.returncode, proc.stdout.decode("utf-8", "replace").rstrip("\r\n"))
 
 
 def is_clone(path: Path) -> bool:
@@ -564,22 +565,237 @@ def rollback_to(
 
 
 def _ahead_behind(clone_dir: Path) -> Optional[Tuple[int, int]]:
-    """(commits we have that the remote does not, and vice versa), or None."""
-    code, _ = _git(["rev-parse", "--verify", "--quiet", "@{u}"], cwd=clone_dir, timeout=FETCH_TIMEOUT)
-    if code != 0:
-        return None
+    """Validated (ahead, behind) counts; unavailable comparisons refuse."""
+    code, output = _git(["rev-parse", "--verify", "--quiet", "@{u}"], cwd=clone_dir, timeout=FETCH_TIMEOUT)
+    if code != 0 or not _object_id(output):
+        raise _view_error("rev-parse @{u}", code, "upstream comparison unavailable or malformed")
     code, output = _git(
         ["rev-list", "--left-right", "--count", "HEAD...@{u}"],
         cwd=clone_dir,
         timeout=FETCH_TIMEOUT,
     )
     if code != 0:
-        return None
+        raise _view_error("rev-list HEAD...@{u}", code, "comparison unavailable")
     try:
         ahead, behind = (int(n) for n in output.split())
     except ValueError:
-        return None
+        raise _view_error("rev-list HEAD...@{u}", code, "malformed counts")
+    if ahead < 0 or behind < 0:
+        raise _view_error("rev-list HEAD...@{u}", code, "negative counts")
     return (ahead, behind)
+
+
+_PROOF_PREFIX = "refs/secrets-kit/remote-proof/"
+_PROOF_MAPPING = "+refs/*:" + _PROOF_PREFIX + "*"
+_HEADS_MAPPING = "+refs/heads/*:refs/remotes/origin/*"
+_INVENTORY_ARGS = ["for-each-ref", "--format=%(refname)%09%(objectname)"]
+
+
+def _object_id(value: str) -> bool:
+    return re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", value) is not None
+
+
+def _view_error(query: str, code: int, reason: str) -> SecretsError:
+    return SecretsError(
+        f"could not establish the authoring view: git {query} "
+        f"(status {code}; {reason})",
+        "Authoring stopped before value changes. Resolve the repository state "
+        "or local query failure, then re-run.",
+    )
+
+
+def _committed_head(clone_dir: Path) -> bool:
+    code, output = _git(
+        ["rev-parse", "--verify", "--quiet", "HEAD^{commit}"],
+        cwd=clone_dir, timeout=QUERY_TIMEOUT,
+    )
+    if code == 0 and _object_id(output):
+        return True
+    if code == 1 and not output:
+        return False
+    raise _view_error("rev-parse HEAD^{commit}", code, "HEAD unavailable or malformed")
+
+
+def _ref_inventory(clone_dir: Path) -> List[Tuple[str, str]]:
+    code, output = _git(_INVENTORY_ARGS, cwd=clone_dir, timeout=QUERY_TIMEOUT)
+    if code != 0:
+        raise _view_error("for-each-ref", code, "ref inventory unavailable")
+    rows = []
+    for line in output.split("\n") if output else []:
+        fields = line.split("\t")
+        if len(fields) != 2:
+            raise _view_error("for-each-ref", code, "malformed ref inventory")
+        name, oid = fields
+        if (
+            not name.startswith("refs/") or not _object_id(oid)
+            or re.search(r"[\x00-\x20\x7f~^:?*\[\\]", name)
+            or any(part in name for part in ("..", "@{", "//"))
+            or name.endswith((".", "/", ".lock"))
+            or any(part.startswith(".") for part in name.split("/"))
+        ):
+            raise _view_error("for-each-ref", code, "malformed ref inventory")
+        rows.append((name, oid))
+    return rows
+
+
+def _require_unborn_branch(clone_dir: Path) -> None:
+    code, output = _git(["symbolic-ref", "--quiet", "HEAD"], cwd=clone_dir, timeout=QUERY_TIMEOUT)
+    if code != 0 or not output.startswith("refs/heads/") or "\n" in output:
+        raise _view_error("symbolic-ref HEAD", code, "unborn branch unavailable or malformed")
+    code, checked = _git(["check-ref-format", output], cwd=clone_dir, timeout=QUERY_TIMEOUT)
+    if code != 0 or checked:
+        raise _view_error("check-ref-format", code, "invalid unborn branch")
+
+
+def _cleanup_proof_refs(clone_dir: Path, rows: List[Tuple[str, str]]) -> None:
+    for name, oid in rows:
+        if not name.startswith(_PROOF_PREFIX):
+            continue
+        code, _ = _git(
+            ["update-ref", "--no-deref", "-d", name, oid],
+            cwd=clone_dir, timeout=LOCAL_WRITE_TIMEOUT,
+        )
+        if code != 0:
+            raise _view_error("update-ref", code, "proof-ref cleanup incomplete; residual refs require inspection")
+
+
+def _fetch_values(clone_dir: Path, *, local: bool) -> List[str]:
+    args = ["config"] + (["--local"] if local else []) + ["--get-all", "remote.origin.fetch"]
+    code, output = _git(args, cwd=clone_dir, timeout=QUERY_TIMEOUT)
+    if code == 1 and not output:
+        return []
+    if code != 0:
+        raise _view_error("config remote.origin.fetch", code, "fetch mapping unavailable")
+    return output.splitlines()
+
+
+def _remove_proof_mapping(clone_dir: Path, values: Optional[List[str]]) -> None:
+    if values is None:
+        values = _fetch_values(clone_dir, local=True)
+    count = values.count(_PROOF_MAPPING)
+    if not count:
+        return
+    if count != 1:
+        raise _view_error("config remote.origin.fetch", 0, "temporary mapping ownership uncertain; no config removed")
+    retained = [value for value in values if value != _PROOF_MAPPING]
+    code, _ = _git(
+        ["config", "--local", "--unset-all", "remote.origin.fetch",
+         "^[+]refs/[*]:refs/secrets-kit/remote-proof/[*]$"],
+        cwd=clone_dir, timeout=LOCAL_WRITE_TIMEOUT,
+    )
+    if code != 0 or _fetch_values(clone_dir, local=True) != retained:
+        raise _view_error("config remote.origin.fetch", code, "temporary mapping cleanup incomplete")
+
+
+def _cleanup_view_error(primary: Optional[SecretsError], errors: List[SecretsError]) -> SecretsError:
+    first = primary.message if primary else "authoring view cleanup failed"
+    return SecretsError(first + "\nProof cleanup incomplete: " + "; ".join(error.message for error in errors))
+
+
+def _fetch_unborn(clone_dir: Path) -> None:
+    _require_unborn_branch(clone_dir)
+    if _ref_inventory(clone_dir):
+        raise _view_error("for-each-ref", 0, "unborn local inventory is not empty; birth refused")
+    rows = None
+    attempted = False
+    primary = None
+    errors = []
+    try:
+        code, _ = _git(
+            ["fetch", "--quiet", "--prune", "origin", _PROOF_MAPPING],
+            cwd=clone_dir, timeout=FETCH_TIMEOUT,
+        )
+        if code != 0:
+            raise _view_error("fetch origin", code, "full advertised-ref fetch failed")
+        attempted = True
+        rows = _ref_inventory(clone_dir)
+        if rows:
+            raise _view_error("for-each-ref", 0, "advertised repository is not empty; birth refused")
+    except SecretsError as error:
+        primary = error
+    finally:
+        if rows is None and not attempted:
+            try:
+                rows = _ref_inventory(clone_dir)
+            except SecretsError as error:
+                errors.append(error)
+        if rows is not None:
+            try:
+                _cleanup_proof_refs(clone_dir, rows)
+            except SecretsError as error:
+                errors.append(error)
+        else:
+            errors.append(_view_error("for-each-ref", 0, "proof inventory unknown; no refs deleted"))
+        if errors:
+            raise _cleanup_view_error(primary, errors)
+    if primary:
+        raise primary
+
+
+def _clone_for_authoring(repo_url: str, dest: Path) -> None:
+    """Validate the initial authoring view in one full-coverage clone."""
+    try:
+        dest.lstat()
+    except FileNotFoundError:
+        pass
+    except OSError as error:
+        raise SecretsError(f"could not inspect authoring clone destination {dest}: {error}") from error
+    else:
+        raise SecretsError(f"authoring clone destination already exists: {dest}")
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    rows = None
+    attempted = False
+    local_values = None
+    primary = None
+    errors = []
+    try:
+        code, _ = _git(
+            ["clone", "--quiet", "--no-local", "--origin", "origin", "--template=",
+             "--config", "remote.origin.fetch=" + _PROOF_MAPPING, repo_url, str(dest)],
+            cwd=None, timeout=CLONE_TIMEOUT,
+        )
+        if code != 0:
+            raise _view_error("clone", code, "initial authoring clone failed")
+        effective = _fetch_values(dest, local=False)
+        local_values = _fetch_values(dest, local=True)
+        if sorted(effective) != sorted([_HEADS_MAPPING, _PROOF_MAPPING]) or local_values.count(_PROOF_MAPPING) != 1:
+            raise _view_error("config remote.origin.fetch", 0, "initial advertised-ref coverage unknown")
+        attempted = True
+        rows = _ref_inventory(dest)
+        if _committed_head(dest):
+            counts = _ahead_behind(dest)
+            if counts != (0, 0):
+                raise _view_error("rev-list HEAD...@{u}", 0, "initial clone is not level with its upstream")
+        else:
+            _require_unborn_branch(dest)
+            if rows:
+                raise _view_error("for-each-ref", 0, "advertised repository is not empty; birth refused")
+    except SecretsError as error:
+        primary = error
+    finally:
+        if is_clone(dest):
+            if rows is None and not attempted:
+                try:
+                    rows = _ref_inventory(dest)
+                except SecretsError as error:
+                    errors.append(error)
+            try:
+                _remove_proof_mapping(dest, local_values)
+            except SecretsError as error:
+                errors.append(error)
+            if rows is not None:
+                try:
+                    _cleanup_proof_refs(dest, rows)
+                except SecretsError as error:
+                    errors.append(error)
+            else:
+                errors.append(_view_error("for-each-ref", 0, "proof inventory unknown; no refs deleted"))
+        elif dest.exists():
+            errors.append(_view_error("clone", 0, "partial clone is not readable; no speculative cleanup"))
+        if errors:
+            raise _cleanup_view_error(primary, errors)
+    if primary:
+        raise primary
 
 
 def remote_has(clone_dir: Path, rel_path: str) -> bool:
@@ -608,6 +824,9 @@ def sync(clone_dir: Path) -> None:
     clone reported as empty generates a second fleet identity and orphans
     every blob encrypted to the first.
     """
+    if not _committed_head(clone_dir):
+        _fetch_unborn(clone_dir)
+        return
     code, output = _git(["fetch", "--quiet", "--prune"], cwd=clone_dir, timeout=FETCH_TIMEOUT)
     if code != 0:
         raise SecretsError(
@@ -619,7 +838,7 @@ def sync(clone_dir: Path) -> None:
 
     counts = _ahead_behind(clone_dir)
     if counts is None:
-        return
+        raise _view_error("rev-list HEAD...@{u}", 0, "comparison unknown")
     ahead, behind = counts
     if behind and not ahead:
         code, output = _git(
