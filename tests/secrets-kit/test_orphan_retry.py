@@ -118,7 +118,7 @@ def test_actual_success_or_confirmed_absence_forgets_only_owned_row(fleet, monke
         target.unlink()
     calls = _unlink_boundary(monkeypatch, target)
     first = convergence.converge(fleet.config_path, fleet.data_dir)
-    assert len(calls) == 1 and first.failures == [] and first.removed == (0 if absent else 1)
+    assert len(calls) == (0 if absent else 1) and first.failures == [] and first.removed == (0 if absent else 1)
     assert State.load(state_path).rows.keys() == {'ha-token'} and not target.exists()
     calls.clear()
     second = convergence.converge(fleet.config_path, fleet.data_dir)
@@ -150,12 +150,17 @@ def test_actual_failed_orphan_keeps_complete_sanitized_row_with_bad_comparison(f
     _unselect(fleet, 'manifest')
     trace = _three_pass_trace(fleet, monkeypatch, target, state_path, fault='permission')
     assert len(trace['first'].failures) == 1 and trace['firstRow'] == old
-    assert trace['secondAttempts'] == 1 and trace['second'].removed == 1 and trace['secondRow'] is None
-    assert trace['thirdAttempts'] == 0 and trace['third'].failures == [] and not trace['thirdExists']
+    if field == 'dest_sha256':
+        assert trace['firstAttempts'] == trace['secondAttempts'] == trace['thirdAttempts'] == 0
+        assert len(trace['second'].failures) == len(trace['third'].failures) == 1
+        assert trace['secondRow'] == trace['thirdRow'] == old and trace['thirdExists']
+    else:
+        assert trace['secondAttempts'] == 1 and trace['second'].removed == 1 and trace['secondRow'] is None
+        assert trace['thirdAttempts'] == 0 and trace['third'].failures == [] and not trace['thirdExists']
 
 
 @pytest.mark.parametrize('damage', ['missing', None, True, 'nul'])
-def test_actual_unusable_destination_forgets_without_guessed_unlink(fleet, monkeypatch, damage):
+def test_actual_unusable_destination_retains_evidence_without_guessed_unlink(fleet, monkeypatch, damage):
     target, state_path = _seed_retirement(fleet)
     state = State.load(state_path)
     if damage == 'missing':
@@ -168,8 +173,8 @@ def test_actual_unusable_destination_forgets_without_guessed_unlink(fleet, monke
     sentinel.write_bytes(b'unrelated bytes')
     calls = _unlink_boundary(monkeypatch, target, fault='permission')
     result = convergence.converge(fleet.config_path, fleet.data_dir)
-    assert calls == [] and result.failures == [] and result.removed == 0
-    assert State.load(state_path).rows.keys() == {'ha-token'}
+    assert calls == [] and len(result.failures) == 1 and result.removed == 0
+    assert State.load(state_path).rows.keys() == {'ha-token', 'rolfing'}
     assert target.read_bytes() == b'rolfing-value\n' and sentinel.read_bytes() == b'unrelated bytes'
 
 

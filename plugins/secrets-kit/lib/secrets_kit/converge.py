@@ -273,10 +273,32 @@ def converge(
     # --- entries ----------------------------------------------------------
     state = State.load(paths["state"])
     selected_names = {entry.name for entry in selected}
-
+    planned = []
+    slots = {}
+    cleanup_safe = True
     for entry in selected:
         try:
-            _converge_entry(entry, paths, variables, state, result)
+            dest = entry.dest(variables)
+            slot = _ownership_slot(dest)
+        except SecretsError as error:
+            result.failures.append(_entry_failure(entry, error))
+            cleanup_safe = False
+            continue
+        planned.append((entry, dest, slot))
+        slots.setdefault(slot, []).append(entry.name)
+
+    for entry, dest, slot in planned:
+        owners = slots[slot]
+        if len(owners) > 1:
+            result.failures.append(Failure(
+                FAILURE_ENTRY,
+                user_msg=f"secrets-kit destination collision at {slot}: {', '.join(owners)}.",
+                agent_msg=(f"Destination collision at {slot}: {', '.join(owners)}. "
+                           "Assign distinct destinations before retrying; no conflicting entry was written."),
+            ))
+            continue
+        try:
+            _converge_entry(entry, paths, variables, state, result, dest=dest)
         except SecretsError as e:
             result.failures.append(_entry_failure(entry, e))
         except OSError as e:
@@ -288,41 +310,92 @@ def converge(
                 _entry_failure(entry, SecretsError(f"{type(e).__name__}: {e}"))
             )
 
-    # --- orphans ----------------------------------------------------------
-    # An entry removed upstream, or dropped from this machine's profiles, must
-    # stop existing here too -- otherwise "remove a secret" is a no-op on every
-    # machine that already had it, which is the opposite of what it means.
-    for name in [n for n in state.rows if n not in selected_names]:
-        row = state.get(name)
-        dest_raw = row.get("dest")
-        if dest_raw:
-            try:
-                Path(dest_raw).unlink()
-                result.removed += 1
-            except FileNotFoundError:
-                pass
-            except OSError as error:
-                result.failures.append(
-                    Failure(
-                        FAILURE_ENTRY,
-                        user_msg=(
-                            f"secrets-kit could not remove the local copy of "
-                            f"'{name}' at {dest_raw}."
-                        ),
-                        agent_msg=(
-                            f"Removal of '{name}' at {dest_raw} was not confirmed: "
-                            f"{type(error).__name__}: {error}\n"
-                            "Ownership was retained for another cleanup attempt "
-                            "on a later convergence pass. Diagnose and fix the "
-                            "filesystem error."
-                        ),
-                    )
-                )
-                continue
-        state.forget(name)
+    # Unknown selected destinations cannot authorize removal anywhere. Every
+    # known desired slot stays reserved even if its materialization failed.
+    if cleanup_safe:
+        _retire_orphans(state, selected_names, set(slots), result)
 
     state.save()
     return result
+
+
+def _ownership_slot(dest: Path) -> Path:
+    """Verified ancestor identity with an ordinary leaf left unresolved."""
+    try:
+        return repo_mod._normalize_dest(dest, require_resolution=True)
+    except (OSError, RuntimeError) as error:
+        raise SecretsError(
+            f"could not resolve destination ownership for {dest}: "
+            f"{type(error).__name__}: {error}"
+        ) from error
+
+
+def _retirement_failure(names: List[str], dest: Any, reason: str) -> Failure:
+    owners = ", ".join(names)
+    return Failure(
+        FAILURE_ENTRY,
+        user_msg=f"secrets-kit could not remove the local copy of '{owners}' at {dest}.",
+        agent_msg=(
+            f"Removal of '{owners}' at {dest} was not confirmed: {reason}\n"
+            "Ownership was retained for another cleanup attempt on a later "
+            "convergence pass. Diagnose the filesystem or ownership record; "
+            "restore the recorded materialization or correct its ownership "
+            "before retrying. Changed or substituted local files are retained."
+        ),
+    )
+
+
+def _retire_orphans(state: State, selected_names: set, reserved: set, result: Result) -> None:
+    candidates = {}
+    for name in state.rows:
+        if name in selected_names:
+            continue
+        row = state.get(name)
+        dest_raw = row.get("dest")
+        if not dest_raw:
+            result.failures.append(_retirement_failure([name], "unknown destination", "missing usable destination evidence"))
+            continue
+        try:
+            slot = _ownership_slot(Path(dest_raw))
+        except SecretsError as error:
+            result.failures.append(_retirement_failure([name], dest_raw, str(error)))
+            continue
+        if slot in reserved:
+            continue
+        candidates.setdefault(slot, []).append((name, row))
+
+    for slot, claims in candidates.items():
+        names = [name for name, _ in claims]
+        hashes = {row.get("dest_sha256") for _, row in claims}
+        if None in hashes or len(hashes) != 1:
+            result.failures.append(_retirement_failure(names, slot, "missing or ambiguous plaintext-hash ownership evidence"))
+            continue
+        try:
+            leaf_mode = os.lstat(slot).st_mode
+        except FileNotFoundError:
+            for name in names:
+                state.forget(name)
+            continue
+        except OSError as error:
+            result.failures.append(_retirement_failure(names, slot, f"{type(error).__name__}: {error}"))
+            continue
+        if not stat.S_ISREG(leaf_mode):
+            result.failures.append(_retirement_failure(names, slot, "substituted leaf is not a regular owned file"))
+            continue
+        current_hash = sha256_file(slot)
+        if current_hash is None or current_hash not in hashes:
+            result.failures.append(_retirement_failure(names, slot, "owned file is unreadable or its plaintext hash changed"))
+            continue
+        try:
+            slot.unlink()
+            result.removed += 1
+        except FileNotFoundError:
+            pass
+        except OSError as error:
+            result.failures.append(_retirement_failure(names, slot, f"{type(error).__name__}: {error}"))
+            continue
+        for name in names:
+            state.forget(name)
 
 
 def _converge_entry(
@@ -331,8 +404,11 @@ def _converge_entry(
     variables: dict,
     state: State,
     result: Result,
+    *,
+    dest: Optional[Path] = None,
 ) -> None:
-    dest = entry.dest(variables)
+    if dest is None:
+        dest = entry.dest(variables)
     blob_path = paths["clone"] / entry.blob
     blob_sha = sha256_file(blob_path)
     if blob_sha is None:

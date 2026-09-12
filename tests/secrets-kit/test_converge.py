@@ -734,12 +734,13 @@ class TestCacheRecoveryPublic:
         data['entries']['bad-orphan'] = row
         path.write_text(json.dumps(data), encoding='utf-8')
         result = _run(fleet)
-        assert result.failures == [] and result.notes == []
+        assert len(result.failures) == 1 and result.notes == []
+        assert 'bad-orphan' in result.failures[0].agent_msg and 'evidence' in result.failures[0].agent_msg
         assert result.removed == 1
         assert not (fleet.dest_root / 'rolfing.txt').exists()
         assert protected.read_bytes() == b'protected unrelated dummy bytes'
         assert (fleet.dest_root / 'ha-token.txt').read_bytes() == b'token-value\n'
-        assert set(State.load(path).rows) == {'ha-token'}
+        assert set(State.load(path).rows) == {'ha-token', 'bad-orphan'}
 
     @pytest.mark.parametrize('damage', ['blob_sha256', 'dest_sha256', 'mode', 'dest-only'])
     def test_usable_orphan_destination_survives_bad_or_missing_comparison_fields(self, fleet, damage):
@@ -754,9 +755,14 @@ class TestCacheRecoveryPublic:
         loaded = State.load(path).get('ha-token')
         assert loaded['dest'] == str(fleet.dest_root / 'ha-token.txt')
         result = _run(fleet)
-        assert result.failures == [] and result.notes == []
-        assert result.removed == 1
-        assert not (fleet.dest_root / 'ha-token.txt').exists()
+        if damage in ['dest_sha256', 'dest-only']:
+            assert len(result.failures) == 1 and result.removed == 0
+            assert (fleet.dest_root / 'ha-token.txt').read_bytes() == b'token-value\n'
+            assert State.load(path).get('ha-token') == loaded
+        else:
+            assert result.failures == [] and result.notes == []
+            assert result.removed == 1
+            assert not (fleet.dest_root / 'ha-token.txt').exists()
 
     @pytest.mark.parametrize('field', ['blob_sha256', 'dest_sha256'])
     @pytest.mark.parametrize('value', [None, 0, [], 'NOT-A-HEX-DIGEST'])
@@ -799,10 +805,10 @@ class TestCacheRecoveryPublic:
         assert result.ok == 1 and result.written == 0 and counts['decrypt'] == 0
         _cache_selection(fleet, [])
         result = _run(fleet)
-        assert result.failures == [] and result.notes == []
+        assert len(result.failures) == 1 and result.notes == []
         assert result.removed == 0
         assert (fleet.dest_root / 'ha-token.txt').read_bytes() == b'token-value\n'
-        assert State.load(path).rows == {}
+        assert 'ha-token' in State.load(path).rows and 'dest' not in State.load(path).get('ha-token')
 
     @pytest.mark.parametrize('ledger', ['usable', 'missing', 'invalid-json', 'invalid-utf8', 'missing-dest'])
     def test_lost_unselected_ownership_leaves_old_file_without_discovery(self, fleet, ledger):
@@ -816,7 +822,7 @@ class TestCacheRecoveryPublic:
             data['entries']['ha-token'].pop('dest')
             path.write_text(json.dumps(data), encoding='utf-8')
         result = _run(fleet)
-        assert result.failures == [] and result.notes == []
+        assert len(result.failures) == (1 if ledger == 'missing-dest' else 0) and result.notes == []
         assert result.removed == (1 if ledger == 'usable' else 0)
         assert (fleet.dest_root / 'ha-token.txt').exists() == (ledger != 'usable')
 

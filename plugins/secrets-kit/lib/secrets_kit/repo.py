@@ -339,7 +339,7 @@ def gitignore_line_for(dest: Path, toplevel: Path) -> Optional[str]:
     return "/" + rel
 
 
-def _normalize(path: Path) -> Path:
+def _normalize(path: Path, *, require_resolution: bool = False) -> Path:
     """Absolute, ``~``-expanded, and symlink-resolved.
 
     Resolution matters on macOS, where ``/tmp`` is a symlink to ``/private/tmp``
@@ -350,15 +350,17 @@ def _normalize(path: Path) -> Path:
     try:
         return expanded.resolve()
     except OSError:  # pragma: no cover - resolve is non-strict on 3.6+
+        if require_resolution:
+            raise
         return Path(os.path.abspath(str(expanded)))
 
 
-def _normalize_dest(path: Path) -> Path:
+def _normalize_dest(path: Path, *, require_resolution: bool = False) -> Path:
     """Resolve destination ancestors while preserving an ordinary leaf slot."""
     expanded = Path(os.path.expanduser(str(path)))
     if not expanded.name or expanded.name == "..":
-        return _normalize(expanded)
-    return _normalize(expanded.parent) / expanded.name
+        return _normalize(expanded, require_resolution=require_resolution)
+    return _normalize(expanded.parent, require_resolution=require_resolution) / expanded.name
 
 
 def _nearest_existing_dir(start: Path) -> Optional[Path]:

@@ -370,8 +370,14 @@ def test_actual_recorded_slot_cleanup_preserves_referent(fleet, monkeypatch, lin
     raw['machines']['testbox']['profiles'] = []
     fleet.config_path.write_text(json.dumps(raw), encoding='utf-8')
     result = convergence.converge(fleet.config_path, fleet.data_dir)
-    assert first.failures == [] and result.failures == [] and result.removed == 1
-    assert not target.exists() and not target.is_symlink() and State.load(state_path).rows == {}
+    assert first.failures == []
+    if link_before_cleanup:
+        assert len(result.failures) == 1 and result.removed == 0
+        assert target.is_symlink() and State.load(state_path).get('ha-token')['dest'] == str(target)
+        assert 'substituted' in result.failures[0].agent_msg
+    else:
+        assert result.failures == [] and result.removed == 1
+        assert not target.exists() and not target.is_symlink() and State.load(state_path).rows == {}
     assert referent.read_bytes() == b'token-value\n'
 
 
