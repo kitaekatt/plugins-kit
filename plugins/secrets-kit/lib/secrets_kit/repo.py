@@ -263,7 +263,7 @@ def dest_exposure(dest: Path) -> DestExposure:
     machine, not a fault. It reports ``DEST_UNDETERMINED`` and lets the caller
     choose.
     """
-    dest = _normalize(dest)
+    dest = _normalize_dest(dest)
 
     # git has to run somewhere that exists, and the dest file itself normally
     # does not yet. Walk up to the nearest existing ancestor DIRECTORY rather
@@ -326,7 +326,7 @@ def gitignore_line_for(dest: Path, toplevel: Path) -> Optional[str]:
     remediation text, so it is written with forward slashes on every platform
     -- git's ignore syntax has no other separator.
     """
-    dest = _normalize(dest)
+    dest = _normalize_dest(dest)
     toplevel = _normalize(toplevel)
     try:
         rel = os.path.relpath(str(dest), str(toplevel))
@@ -351,6 +351,14 @@ def _normalize(path: Path) -> Path:
         return expanded.resolve()
     except OSError:  # pragma: no cover - resolve is non-strict on 3.6+
         return Path(os.path.abspath(str(expanded)))
+
+
+def _normalize_dest(path: Path) -> Path:
+    """Resolve destination ancestors while preserving an ordinary leaf slot."""
+    expanded = Path(os.path.expanduser(str(path)))
+    if not expanded.name or expanded.name == "..":
+        return _normalize(expanded)
+    return _normalize(expanded.parent) / expanded.name
 
 
 def _nearest_existing_dir(start: Path) -> Optional[Path]:

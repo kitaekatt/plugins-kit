@@ -12,6 +12,7 @@ later as a file move rather than a rewrite.
 """
 
 import os
+import stat
 from pathlib import Path
 from typing import Any, IO, List, Optional
 
@@ -342,7 +343,15 @@ def _converge_entry(
         )
 
     row = state.get(entry.name)
-    dest_sha = sha256_file(dest)
+    try:
+        leaf_is_link = stat.S_ISLNK(os.lstat(dest).st_mode)
+    except FileNotFoundError:
+        leaf_is_link = False
+    except OSError as error:
+        raise SecretsError(
+            f"lstat failed on {dest}: {type(error).__name__}: {error}"
+        ) from error
+    dest_sha = None if leaf_is_link else sha256_file(dest)
     recorded_mode = row.get("mode")
 
     unchanged = (

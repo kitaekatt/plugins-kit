@@ -143,13 +143,21 @@ def _private_output(
 ) -> bool:
     """Protect an exclusive sibling before bytes and publish explicit success.
 
-    The caller's existing parent policy remains. Only this allocation is owned
+    The caller's parent policy remains. Resolve it for physical sibling
+    allocation; resolution errors stop before allocation or production.
+    Publication keeps the original destination spelling. Only this allocation is owned
     for cleanup; failure preserves the final slot. Text producers retain UTF-8
     and default newline handling. This does not add power-loss recovery or
     custody against concurrent substitutions in an untrusted parent.
     """
     dest.parent.mkdir(parents=True, exist_ok=True)
-    fd, name = tempfile.mkstemp(prefix=dest.name + ".", dir=dest.parent)
+    try:
+        allocation_dir = dest.parent.resolve()
+    except (OSError, RuntimeError) as error:
+        raise SecretsError(
+            f"could not resolve output parent {dest.parent}: {type(error).__name__}: {error}"
+        ) from error
+    fd, name = tempfile.mkstemp(prefix=dest.name + ".", dir=allocation_dir)
     temporary = Path(name)
     owned = True
     try:
