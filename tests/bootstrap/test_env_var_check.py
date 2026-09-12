@@ -10,6 +10,7 @@ from unittest.mock import patch
 
 import pytest
 
+from bootstrap_lib import session_env
 from bootstrap_lib.engine import _process_manifest
 from bootstrap_lib.env_var_check import (
     check_env_var,
@@ -19,6 +20,14 @@ from bootstrap_lib.env_var_check import (
     set_env_var,
 )
 from test_support.fake_winreg import FakeWinreg
+
+
+@pytest.fixture(autouse=True)
+def _clean_session_env_buffer():
+    """session_env buffers across calls, so no test may inherit another's."""
+    session_env.reset()
+    yield
+    session_env.reset()
 
 
 @pytest.fixture
@@ -157,13 +166,21 @@ class TestWindowsRegistry:
 
 
 class TestExportEnvVar:
-    def test_sets_process_env_and_appends_env_file(self, tmp_path, monkeypatch):
+    """export_env_var buffers; session_env.flush writes the block once a pass.
+
+    So these tests flush explicitly. The engine does it in a finally around the
+    whole pass -- see session_env for why the block is never appended to per
+    variable.
+    """
+
+    def test_sets_process_env_and_writes_env_file(self, tmp_path, monkeypatch):
         env_file = tmp_path / "claude-env"
         monkeypatch.setenv("CLAUDE_ENV_FILE", str(env_file))
         with patch.dict(os.environ):
             exported = export_env_var("BOOTSTRAP_TEST_EV", "/some/dir")
             assert exported == "BOOTSTRAP_TEST_EV"
             assert os.environ["BOOTSTRAP_TEST_EV"] == "/some/dir"
+        session_env.flush()
         assert "export BOOTSTRAP_TEST_EV=/some/dir\n" in env_file.read_text()
 
     def test_no_env_file_still_sets_process_env(self, monkeypatch):
@@ -178,6 +195,7 @@ class TestExportEnvVar:
         monkeypatch.setenv("CLAUDE_ENV_FILE", str(env_file))
         with patch.dict(os.environ):
             export_env_var("BOOTSTRAP_TEST_EV", "/some dir/x")
+        session_env.flush()
         assert "export BOOTSTRAP_TEST_EV='/some dir/x'\n" in env_file.read_text()
 
     def test_shell_quoted_rc_value_round_trips(self, isolated_home):
@@ -227,6 +245,7 @@ class TestPluginRootEnvVarName:
                 plugin_root_env_var_name("hue-kit"), install_path)
             assert exported == "HUE_KIT_ROOT"
             assert os.environ["HUE_KIT_ROOT"] == install_path
+        session_env.flush()
         assert f"export HUE_KIT_ROOT={shlex.quote(install_path)}\n" \
             in env_file.read_text()
 
@@ -301,6 +320,7 @@ class TestEnvVarsPhase:
 
         with patch.dict(os.environ):
             failures, _action, ok_entries = self._run(manifest, tmp_path)
+        session_env.flush()
 
         assert failures == []
         # The product shlex-quotes the env-file value (intentional -- the
