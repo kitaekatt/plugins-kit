@@ -82,9 +82,6 @@ def _init_repo(path: Path) -> Path:
     return path
 
 
-_QUERY_VERBS = ("rev-parse", "check-ignore")
-
-
 def _no_git(monkeypatch):
     """Make the exposure queries look like git is not installed.
 
@@ -95,7 +92,9 @@ def _no_git(monkeypatch):
     real = repo_mod._git
 
     def fake(args, **kwargs):
-        if args and args[0] in _QUERY_VERBS:
+        if args == ["rev-parse", "--is-inside-work-tree"] or (
+            args and args[0] == "check-ignore"
+        ):
             return (127, "could not run git: [Errno 2]")
         return real(args, **kwargs)
 
@@ -176,7 +175,7 @@ def _stub_is_inside_work_tree(monkeypatch, code, output):
     real = repo_mod._git
 
     def fake(args, **kwargs):
-        if args[:2] == ["rev-parse", "--is-inside-work-tree"]:
+        if args == ["rev-parse", "--is-inside-work-tree"]:
             return (code, output)
         return real(args, **kwargs)
 

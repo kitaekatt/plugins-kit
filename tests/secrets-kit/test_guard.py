@@ -6,7 +6,10 @@ confidence. So these tests drive the REAL shell hook through REAL `git commit`
 in a temp repo, rather than asserting on its source text.
 """
 
+import importlib.util
+import json
 import os
+import stat
 import shlex
 import shutil
 import subprocess
@@ -16,7 +19,7 @@ from pathlib import Path
 import pytest
 from sk_testlib import copy_git_tree
 
-from secrets_kit import SecretsError, guard
+from secrets_kit import SecretsError, guard, repo as repo_mod
 
 pytestmark = pytest.mark.skipif(
     shutil.which("git") is None, reason="git required"
@@ -24,6 +27,7 @@ pytestmark = pytest.mark.skipif(
 
 _ARMORED = "-----BEGIN AGE ENCRYPTED FILE-----\nZmFrZQo=\n-----END AGE ENCRYPTED FILE-----\n"
 _BINARY_HEADER = "age-encryption.org/v1\n-> X25519 abc\nfake\n"
+_EFFECTIVE_ARGS = ["rev-parse", "--is-inside-work-tree", "--git-path", "hooks/pre-commit"]
 
 
 def _git(repo, *args, check=True):
@@ -41,13 +45,16 @@ def _git(repo, *args, check=True):
 
 
 def _build_guarded_repo(path: Path) -> None:
-    _git(path, "init", "--quiet")
-    _git(path, "config", "user.email", "t@example.com")
-    _git(path, "config", "user.name", "T")
-    # Hooks must be allowed to run; some environments set core.hooksPath.
-    _git(path, "config", "--unset-all", "core.hooksPath", check=False)
-    (path / "blobs").mkdir()
-    guard.install(path)
+    # Session setup must not consult a real global/system hook configuration.
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setenv("GIT_CONFIG_GLOBAL", os.devnull)
+        patch.setenv("GIT_CONFIG_SYSTEM", os.devnull)
+        _git(path, "init", "--quiet")
+        _git(path, "config", "user.email", "t@example.com")
+        _git(path, "config", "user.name", "T")
+        _git(path, "config", "--unset-all", "core.hooksPath", check=False)
+        (path / "blobs").mkdir()
+        guard.install(path)
 
 
 @pytest.fixture(scope="session")
@@ -56,12 +63,14 @@ def _guarded_repo_template(git_template):
 
 
 @pytest.fixture
-def repo(tmp_path, _guarded_repo_template):
+def repo(tmp_path, monkeypatch, _guarded_repo_template):
     """A guarded, committable git repo standing in for fleet-secrets.
 
     A private copy of a per-process template (see `sk_testlib`) -- a real git
     repo with the real hook installed, which this test alone commits into.
     """
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", os.devnull)
+    monkeypatch.setenv("GIT_CONFIG_SYSTEM", os.devnull)
     return copy_git_tree(_guarded_repo_template, tmp_path / "fleet-secrets")
 
 
@@ -79,9 +88,9 @@ def _commit(repo, *paths, message="t"):
 
 # --- installation ---------------------------------------------------------
 
-def test_install_places_an_executable_hook(tmp_path):
-    path = tmp_path / "r"
-    (path / ".git" / "hooks").mkdir(parents=True)
+def test_install_places_an_executable_hook(repo):
+    path = repo
+    (path / ".git" / "hooks" / "pre-commit").unlink()
     changed, reason = guard.install(path)
     hook = path / ".git" / "hooks" / "pre-commit"
     assert changed and "installed" in reason
@@ -90,29 +99,27 @@ def test_install_places_an_executable_hook(tmp_path):
         assert os.access(hook, os.X_OK)
 
 
-def test_install_is_idempotent(tmp_path):
-    path = tmp_path / "r"
-    (path / ".git" / "hooks").mkdir(parents=True)
+def test_install_is_idempotent(repo):
+    path = repo
     guard.install(path)
     changed, reason = guard.install(path)
     assert changed is False
     assert reason == "current"
 
 
-def test_install_creates_the_hooks_dir_if_absent(tmp_path):
+def test_install_creates_the_hooks_dir_if_absent(repo):
     """A clone missing .git/hooks must not silently end up unguarded."""
-    path = tmp_path / "r"
-    (path / ".git").mkdir(parents=True)
+    path = repo
+    shutil.rmtree(path / ".git" / "hooks")
     changed, _ = guard.install(path)
     assert changed
     assert guard.is_guarded(path)
 
 
-def test_a_foreign_hook_is_not_clobbered(tmp_path):
+def test_a_foreign_hook_is_not_clobbered(repo):
     """Overwriting a hand-written hook without asking is its own kind of damage."""
-    path = tmp_path / "r"
+    path = repo
     hooks = path / ".git" / "hooks"
-    hooks.mkdir(parents=True)
     (hooks / "pre-commit").write_text("#!/bin/sh\necho mine\n", encoding="utf-8")
 
     changed, reason = guard.install(path)
@@ -121,10 +128,9 @@ def test_a_foreign_hook_is_not_clobbered(tmp_path):
     assert "echo mine" in (hooks / "pre-commit").read_text()
 
 
-def test_an_older_guard_is_upgraded(tmp_path):
-    path = tmp_path / "r"
+def test_an_older_guard_is_upgraded(repo):
+    path = repo
     hooks = path / ".git" / "hooks"
-    hooks.mkdir(parents=True)
     (hooks / "pre-commit").write_text(
         "#!/bin/sh\n# secrets-kit-guard-version: 0\nexit 0\n", encoding="utf-8"
     )
@@ -132,11 +138,10 @@ def test_an_older_guard_is_upgraded(tmp_path):
     assert changed and "installed" in reason
 
 
-def test_require_guard_refuses_when_a_foreign_hook_blocks_installation(tmp_path):
+def test_require_guard_refuses_when_a_foreign_hook_blocks_installation(repo):
     """Writing to an unguarded secrets repo must fail rather than proceed."""
-    path = tmp_path / "r"
+    path = repo
     hooks = path / ".git" / "hooks"
-    hooks.mkdir(parents=True)
     (hooks / "pre-commit").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
 
     with pytest.raises(SecretsError, match="no pre-commit guard"):
@@ -455,10 +460,9 @@ def test_filename_data_is_not_evaluated_as_shell_commands(repo):
     assert _git(repo, "show", f"HEAD:{path}").stdout == _ARMORED
 
 
-def test_a_prior_v1_guard_is_refreshed_to_the_canonical_hook(tmp_path):
-    path = tmp_path / "r"
+def test_a_prior_v1_guard_is_refreshed_to_the_canonical_hook(repo):
+    path = repo
     hooks = path / ".git" / "hooks"
-    hooks.mkdir(parents=True)
     target = hooks / "pre-commit"
     target.write_text("#!/bin/sh\n# secrets-kit-guard-version: 1\nexit 0\n", encoding="utf-8")
     changed, reason = guard.install(path)
@@ -628,3 +632,258 @@ def test_unique_status_cleanup_preserves_existing_plugin_data_and_peers(repo, tm
     assert sorted(path.name for path in status_home.iterdir()) == [".guard-status.peer", "identity.txt"]
     assert (peer / "sentinel").read_text() == "keep"
     assert (status_home / "identity.txt").read_text() == "dummy identity sentinel"
+
+
+# --- effective Git hook precondition --------------------------------------
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX executable bits required")
+def test_current_guard_execute_permission_is_repaired_before_real_commit(repo):
+    hook = repo / ".git" / "hooks" / "pre-commit"
+    before = hook.read_bytes()
+    hook.chmod(hook.stat().st_mode & ~(stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH))
+    note = guard.require_guard(repo)
+    (repo / "dummy.txt").write_text("dummy plaintext", encoding="utf-8")
+    proc = _commit(repo, "dummy.txt")
+    assert proc.returncode != 0, f"unguarded prerequisite allowed a real commit: {proc.stdout}"
+    assert "REFUSED" in proc.stdout
+    assert os.access(hook, os.X_OK)
+    assert hook.read_bytes() == before
+    assert "executable" in note
+
+
+@pytest.mark.parametrize("location", [
+    "local", "global", "leading-space",
+    pytest.param("leading-tab", marks=pytest.mark.skipif(os.name == "nt", reason="tab directory is POSIX-only")),
+    pytest.param("trailing-space", marks=pytest.mark.skipif(os.name == "nt", reason="trailing space directory is POSIX-only")),
+    pytest.param("newline", marks=pytest.mark.skipif(os.name == "nt", reason="LF directory is POSIX-only")),
+])
+def test_alternate_effective_target_refuses_before_real_plaintext_commit(repo, tmp_path, monkeypatch, location):
+    hook = repo / ".git" / "hooks" / "pre-commit"
+    before = hook.read_bytes()
+    alternate = repo / ".git" / ("hooks " if location == "trailing-space" else "hooks\n" if location == "newline" else "other-hooks")
+    if location in ["leading-space", "leading-tab"]:
+        alternate = repo / (" .git" if location == "leading-space" else "\t.git") / "hooks"
+    alternate.mkdir(parents=True)
+    if location == "global":
+        config = tmp_path / "controlled-global.config"
+        _git(repo, "config", "--file", str(config), "core.hooksPath", str(alternate))
+        monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(config))
+    else:
+        configured = (
+            " .git/hooks" if location == "leading-space" else
+            "\t.git/hooks" if location == "leading-tab" else str(alternate)
+        )
+        _git(repo, "config", "core.hooksPath", configured)
+    real = repo_mod._git
+    calls = []
+    def record(args, **kwargs):
+        calls.append((args, kwargs))
+        return real(args, **kwargs)
+    monkeypatch.setattr(repo_mod, "_git", record)
+    try:
+        guard.require_guard(repo)
+    except SecretsError as exc:
+        assert "effective pre-commit" in str(exc)
+        assert "core.hooksPath" in str(exc)
+    else:
+        (repo / "dummy.txt").write_text("dummy plaintext", encoding="utf-8")
+        proc = _commit(repo, "dummy.txt")
+        pytest.fail(f"prerequisite accepted alternate target; real plaintext commit status={proc.returncode}: {proc.stdout}")
+    assert calls == [(_EFFECTIVE_ARGS, {"cwd": repo, "timeout": repo_mod.QUERY_TIMEOUT})]
+    assert hook.read_bytes() == before
+    assert list(alternate.iterdir()) == []
+    assert _git(repo, "rev-parse", "--verify", "HEAD", check=False).returncode != 0
+
+
+@pytest.mark.parametrize("force", [False, True])
+def test_alternate_foreign_hook_is_never_overwritten_even_with_force(repo, force):
+    alternate = repo / ".git" / "shared-hooks"
+    alternate.mkdir()
+    target = alternate / "pre-commit"
+    target.write_text("#!/bin/sh\necho foreign\n", encoding="utf-8")
+    before = target.read_bytes()
+    _git(repo, "config", "core.hooksPath", str(alternate))
+    with pytest.raises(SecretsError, match="effective pre-commit"):
+        guard.install(repo, force=force)
+    assert target.read_bytes() == before
+
+
+def test_force_replaces_foreign_hook_only_in_the_ordinary_local_scope(repo):
+    target = repo / ".git" / "hooks" / "pre-commit"
+    target.write_text("#!/bin/sh\necho foreign\n", encoding="utf-8")
+    changed, reason = guard.install(repo, force=True)
+    assert changed, reason
+    assert target.read_bytes() == guard.canonical_hook_path().read_bytes()
+    (repo / "blobs" / "positive.age").write_text(_ARMORED, encoding="utf-8")
+    proc = _commit(repo, "blobs/positive.age")
+    assert proc.returncode == 0, proc.stdout
+
+
+@pytest.mark.parametrize("entry", ["require_guard", "install", "is_guarded"])
+def test_guard_entrypoint_uses_one_bounded_real_effective_target_query(repo, monkeypatch, entry):
+    real = repo_mod._git
+    calls = []
+    def record(args, **kwargs):
+        calls.append((args, kwargs))
+        return real(args, **kwargs)
+    monkeypatch.setattr(repo_mod, "_git", record)
+    result = getattr(guard, entry)(repo)
+    assert result is not False
+    assert calls == [(_EFFECTIVE_ARGS, {"cwd": repo, "timeout": repo_mod.QUERY_TIMEOUT})]
+
+
+@pytest.mark.parametrize("response", [
+    (124, "query timed out"), (127, "git unavailable"), (0, ""),
+    (0, "warning\n.git/hooks/pre-commit"),
+    (0, "false\n.git/hooks/pre-commit"), (0, "true\n"),
+    (0, "true\n.git/hooks/pre-commit\nextra"),
+    (0, "true\n.git/hooks/pre-commit\r"),
+    (0, "true\n.git/hooks/pre-commit\x00"),
+    (0, "true\n.git/hoo\ufffdks/pre-commit"),
+    (1, "true\n.git/hooks/pre-commit"),
+    (0, "true"), (0, "--unknown-flag\ntrue\n.git/hooks/pre-commit"),
+])
+def test_effective_target_query_failure_cannot_certify_or_modify_a_hook(repo, monkeypatch, response):
+    target = repo / ".git" / "hooks" / "pre-commit"
+    before = target.read_bytes()
+    calls = []
+    def failed_query(args, **kwargs):
+        calls.append((args, kwargs))
+        return response
+    monkeypatch.setattr(repo_mod, "_git", failed_query)
+    expected = (_EFFECTIVE_ARGS, {"cwd": repo, "timeout": repo_mod.QUERY_TIMEOUT})
+    with pytest.raises(SecretsError, match="effective pre-commit"):
+        guard.require_guard(repo)
+    assert calls == [expected]
+    assert guard.is_guarded(repo) is False
+    assert calls == [expected] * 2
+    with pytest.raises(SecretsError, match="effective pre-commit"):
+        guard.install(repo, force=True)
+    assert calls == [expected] * 3
+    assert target.read_bytes() == before
+
+
+@pytest.mark.parametrize("command", ["init", "add", "add-update", "remove", "rotate-identity"])
+def test_inline_authoring_refuses_effective_target_before_named_effects(repo, tmp_path, monkeypatch, capsys, command):
+    cli_path = Path(__file__).resolve().parents[2] / "plugins" / "secrets-kit" / "scripts" / "secrets_kit_cli.py"
+    # The real CLI inserts its lib path; keep that change local to this test.
+    monkeypatch.setattr(sys, "path", sys.path.copy())
+    spec = importlib.util.spec_from_file_location("guard_test_inline_cli", cli_path)
+    cli = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(cli)
+    data = tmp_path / "inline-data"
+    data.mkdir()
+    clone = copy_git_tree(repo, data / "repo")
+    alternate = tmp_path / "alternate-empty"
+    alternate.mkdir()
+    _git(clone, "config", "core.hooksPath", str(alternate))
+    config = tmp_path / "inline-secrets.json"
+    config.write_text(json.dumps({"repo": str(tmp_path / "unused-remote.git"), "machines": {"testbox": {"profiles": []}}}), encoding="utf-8")
+    monkeypatch.setattr(cli, "CONFIG_PATH", config)
+    monkeypatch.setattr(cli, "DATA_DIR", data)
+    monkeypatch.setattr("secrets_kit.manifest.resolve_host", lambda: ["testbox"])
+    monkeypatch.setattr(repo_mod, "sync", lambda clone: None)
+    monkeypatch.setattr(repo_mod, "remote_has", lambda clone, name: False)
+    destination = tmp_path / "plain-destination"
+    destination.mkdir()
+    manifest = clone / "manifest.json"
+    manifest.write_text(json.dumps({"version": 1, "recipient": "age1dummy", "profiles": {"home": ["existing"]}, "entries": {"existing": {"blob": "blobs/existing.age", "dest": str(destination / "existing"), "mode": "0600"}}}), encoding="utf-8")
+    blob = clone / "blobs" / "existing.age"
+    blob.write_text(_ARMORED, encoding="utf-8")
+    identity = data / "identity.txt"
+    identity.write_text("dummy cached identity", encoding="utf-8")
+    source = tmp_path / "new-token.txt"
+    source.write_text("dummy input", encoding="utf-8")
+    named = [manifest, blob, identity, clone / "identity.age", clone / "blobs" / "new-token.txt.age", clone / ".gitignore"]
+    preimages = {path: path.read_bytes() if path.exists() else None for path in named}
+    effects = []
+    def effect(name):
+        def fail(*args, **kwargs):
+            effects.append(name)
+            raise SecretsError(f"EFFECT BOUNDARY: {name}")
+        return fail
+    for name in ["keygen", "wrap_identity", "encrypt_to_recipient", "decrypt_with_identity"]:
+        monkeypatch.setattr(cli.agefile, name, effect(name))
+    monkeypatch.setattr(repo_mod, "commit_and_push", effect("commit_and_push"))
+    argv = [command]
+    if command in ["add", "add-update"]:
+        argv = ["add", "existing" if command == "add-update" else "new", "--file", str(source), "--dest", str(destination / "new")]
+        if command == "add-update":
+            argv.append("--update")
+    elif command == "remove":
+        argv.append("existing")
+    code = cli.main(argv)
+    output = capsys.readouterr()
+    assert code == 1
+    assert "effective pre-commit" in output.err, f"missing guard refusal; effects={effects}; diagnostic={output.err}"
+    assert effects == []
+    assert {path: path.read_bytes() if path.exists() else None for path in named} == preimages
+    assert list(alternate.iterdir()) == []
+
+
+@pytest.mark.skipif(os.name == "nt", reason="native Windows link behavior remains unverified")
+@pytest.mark.parametrize("form", ["leaf-current", "leaf-old-force", "dangling-leaf", "hooks-empty", "hooks-current", "hooks-foreign", "git-directory", "hard-link"])
+def test_static_redirected_hook_slot_refuses_without_changing_outside_preimages(repo, tmp_path, monkeypatch, form):
+    hooks = repo / ".git" / "hooks"
+    target = hooks / "pre-commit"
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    external = outside / "pre-commit"
+    external.write_text("#!/bin/sh\n# secrets-kit-guard-version: 2\nexit 0\n", encoding="utf-8")
+    external.chmod(0o600)
+    if form == "leaf-old-force":
+        external.write_text("#!/bin/sh\n# secrets-kit-guard-version: 1\nexit 0\n", encoding="utf-8")
+    elif form == "hooks-foreign":
+        external.write_text("#!/bin/sh\necho foreign\n", encoding="utf-8")
+    if form.startswith("leaf") or form == "dangling-leaf":
+        target.unlink()
+        target.symlink_to(external if form != "dangling-leaf" else outside / "missing")
+    elif form.startswith("hooks"):
+        shutil.rmtree(hooks)
+        if form == "hooks-empty":
+            external.unlink()
+        hooks.symlink_to(outside, target_is_directory=True)
+    elif form == "git-directory":
+        relocated = outside / "git-dir"
+        shutil.move(repo / ".git", relocated)
+        (repo / ".git").symlink_to(relocated, target_is_directory=True)
+    else:
+        target.unlink()
+        os.link(external, target)
+    def snapshot():
+        return {str(path.relative_to(outside)): (path.read_bytes(), stat.S_IMODE(path.stat().st_mode)) for path in outside.rglob("*") if path.is_file()}
+    before = snapshot()
+    real = repo_mod._git
+    calls = []
+    def record(args, **kwargs):
+        calls.append((args, kwargs))
+        return real(args, **kwargs)
+    monkeypatch.setattr(repo_mod, "_git", record)
+    with pytest.raises(SecretsError, match="effective pre-commit.*ownership"):
+        if form == "leaf-old-force":
+            guard.install(repo, force=True)
+        else:
+            guard.require_guard(repo)
+    assert snapshot() == before
+    assert guard.is_guarded(repo) is False
+    assert calls == []
+    if form.startswith("leaf") or form == "dangling-leaf":
+        assert target.is_symlink()
+    elif form.startswith("hooks"):
+        assert hooks.is_symlink()
+    elif form == "git-directory":
+        assert (repo / ".git").is_symlink()
+    else:
+        assert target.stat().st_ino == external.stat().st_ino
+
+
+@pytest.mark.skipif(os.name == "nt", reason="native Windows symlink behavior remains unverified")
+def test_clone_root_alias_and_equivalent_local_hook_config_remain_supported(repo, tmp_path):
+    alias = tmp_path / "clone-alias"
+    alias.symlink_to(repo, target_is_directory=True)
+    _git(repo, "config", "core.hooksPath", str(repo / ".git" / "hooks" / "."))
+    assert guard.require_guard(alias) == ""
+    assert guard.is_guarded(alias)
+    (repo / "blobs" / "alias.age").write_text(_ARMORED, encoding="utf-8")
+    proc = _commit(repo, "blobs/alias.age")
+    assert proc.returncode == 0, proc.stdout
