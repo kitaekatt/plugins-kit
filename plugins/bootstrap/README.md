@@ -55,19 +55,23 @@ so a pass can be inspected or driven from any terminal without starting Claude.
 ```bash
 bootstrap          # is a pass running? if so, wait for it and stream it
 bootstrap --json   # report only, never blocking (the scripting form)
-bootstrap run      # the same, plus start a pass when none is running
+bootstrap run      # apply only user/project bootstrap.json and bootstrap.local.json
 bootstrap reset    # clear this project's cooldown (--all, --status, --project)
 ```
 
-A pass is single-instance, so neither form ever starts a second one: when a
-pass is already in flight, both say so and stream it to your terminal until
-it finishes, rather than launching an engine that would only stand down on
-the lock and print nothing. A pass that `run` starts is itself streamed the
-same way.
+`bootstrap run` applies four layers: user, user-local, working-directory project,
+and project-local. It prints each candidate path, skips missing files, and uses
+the shared merge rules. There is no parent-directory search. It processes no
+installed plugin manifests, legacy user manifest, or env.json personalization.
+Plugin and marketplace entries explicitly declared in the four layers still run.
 
-`bootstrap run` needs no cooldown reset, and does not consume one either: it
-is never throttled by the per-project cooldown and never advances it, so a
-manual run cannot eat the next session's pass.
+A running pass makes `bootstrap run` refuse with exit code 2, because attaching
+could inherit a different manifest scope. Bare `bootstrap` still follows a
+running pass. A launched terminal run streams its own checks and actions.
+
+`bootstrap run` needs no cooldown reset and does not consume one: it leaves
+Claude's session schedule and plugin lifecycle stamps unchanged. Claude's
+automatic lifecycle retains its full plugin-provisioning scope.
 
 `bootstrap reset` is the other half: it runs no pass, it clears the cooldown
 stamp and the session-id guard so the NEXT session start is a real pass. That
