@@ -151,27 +151,22 @@ def tool_env_var_name(name):
 
 
 def export_tool_env_vars(data_dir):
-    """Append BOOTSTRAP_BIN_<TOOL> exports to $CLAUDE_ENV_FILE.
+    """Record BOOTSTRAP_BIN_<TOOL> exports in the pass's $CLAUDE_ENV_FILE block.
 
     Mirrors export_venv_env_var: no-op when CLAUDE_ENV_FILE is unset or
     when the recorded path no longer exists on disk (consumers fail fast
     on unset vars rather than silently invoking a stale path). Returns
     the list of exported var names for diagnostics.
+
+    Buffered by session_env, which deduplicates the block and writes it once
+    at the end of the pass.
     """
-    import shlex
-    env_file = os.environ.get("CLAUDE_ENV_FILE")
-    if not env_file:
-        return []
+    from . import session_env
     exported = []
     for name, path in all_paths(data_dir).items():
         if not os.path.isfile(path):
             continue
-        var = tool_env_var_name(name)
-        line = f"export {var}={shlex.quote(path)}\n"
-        try:
-            with open(env_file, "a", encoding="utf-8") as f:
-                f.write(line)
+        var = session_env.record(tool_env_var_name(name), path)
+        if var is not None:
             exported.append(var)
-        except OSError:
-            continue
     return exported

@@ -4,12 +4,12 @@ import ast
 import hashlib
 import os
 import re
-import shlex
 import shutil
 import subprocess
 from pathlib import Path
 from typing import List, Optional, Sequence, Tuple
 
+from . import session_env
 from .result import Result
 
 
@@ -41,7 +41,11 @@ def venv_env_var_name(plugin_name: str) -> str:
 
 
 def export_venv_env_var(plugin_name: str, plugin_data_dir: str) -> Optional[str]:
-    """Append an export line to ``$CLAUDE_ENV_FILE`` for this plugin's venv.
+    """Record this plugin's venv python in the pass's ``$CLAUDE_ENV_FILE`` block.
+
+    Buffered by ``session_env``, which deduplicates the block and writes it once
+    at the end of the pass. See that module for why appending per variable is
+    not safe.
 
     No-ops (returning ``None``) when any of these hold:
         - ``CLAUDE_ENV_FILE`` is unset or empty
@@ -59,23 +63,12 @@ def export_venv_env_var(plugin_name: str, plugin_data_dir: str) -> Optional[str]
     Returns:
         The exported env var name, or ``None`` if nothing was written.
     """
-    env_file = os.environ.get("CLAUDE_ENV_FILE")
-    if not env_file:
-        return None
-
     venv_path = os.path.join(plugin_data_dir, ".venv")
     python_bin = _find_python(venv_path)
     if not python_bin:
         return None
 
-    var_name = venv_env_var_name(plugin_name)
-    line = f"export {var_name}={shlex.quote(python_bin)}\n"
-    try:
-        with open(env_file, "a") as f:
-            f.write(line)
-    except OSError:
-        return None
-    return var_name
+    return session_env.record(venv_env_var_name(plugin_name), python_bin)
 
 
 _FINDER_IMPORT_RE = re.compile(r"\bimport\s+(__editable___[A-Za-z0-9_]+_finder)\b")

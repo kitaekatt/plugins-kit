@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 import pytest
 
+from bootstrap_lib import session_env
 from bootstrap_lib.venv_check import (
     check_venv,
     ensure_venv,
@@ -19,6 +20,14 @@ from bootstrap_lib.venv_check import (
     _project_content_hash,
     _venv_sync_stamp_path,
 )
+
+
+@pytest.fixture(autouse=True)
+def _clean_session_env_buffer():
+    """session_env buffers across calls, so no test may inherit another's."""
+    session_env.reset()
+    yield
+    session_env.reset()
 
 
 def _site_packages(venv_dir):
@@ -524,6 +533,7 @@ class TestExportVenvEnvVar:
         venv_dir = self._make_venv(data_dir)
 
         var_name = export_venv_env_var("unreal-kit", data_dir)
+        session_env.flush()
 
         assert var_name == "UNREAL_KIT_VENV"
         contents = env_file.read_text()
@@ -545,6 +555,7 @@ class TestExportVenvEnvVar:
         self._make_venv(data_dir)
 
         export_venv_env_var("plugins-kit", data_dir)
+        session_env.flush()
 
         contents = env_file.read_text()
         assert "export EXISTING=1" in contents
@@ -563,6 +574,7 @@ class TestExportVenvEnvVar:
 
         assert export_venv_env_var("alpha", data_a) == "ALPHA_VENV"
         assert export_venv_env_var("beta-kit", data_b) == "BETA_KIT_VENV"
+        session_env.flush()
 
         contents = env_file.read_text()
         assert "export ALPHA_VENV=" in contents
@@ -579,6 +591,7 @@ class TestExportVenvEnvVar:
         self._make_venv(str(data_dir))
 
         export_venv_env_var("space-plugin", str(data_dir))
+        session_env.flush()
 
         line = env_file.read_text().strip()
         # shlex.quote wraps in single quotes when spaces are present

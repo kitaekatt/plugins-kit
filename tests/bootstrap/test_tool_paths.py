@@ -7,7 +7,15 @@ from unittest.mock import patch
 
 import pytest
 
-from bootstrap_lib import tool_paths
+from bootstrap_lib import session_env, tool_paths
+
+
+@pytest.fixture(autouse=True)
+def _clean_session_env_buffer():
+    """session_env buffers across calls, so no test may inherit another's."""
+    session_env.reset()
+    yield
+    session_env.reset()
 
 
 def _bootstrap_dir(tmp_path):
@@ -145,6 +153,9 @@ class TestExportToolEnvVars:
 
         exported = tool_paths.export_tool_env_vars(d)
         assert exported == ["BOOTSTRAP_BIN_GIT"]
+        # export_tool_env_vars buffers; session_env writes the block once a
+        # pass (the engine flushes in a finally around the whole pass).
+        session_env.flush()
         content = env_file.read_text()
         assert "export BOOTSTRAP_BIN_GIT=" in content
         assert str(fake_git) in content

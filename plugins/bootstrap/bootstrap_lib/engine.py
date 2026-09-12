@@ -287,7 +287,18 @@ def _lock_holder_pid(data_dir):
 
 def _run_with_containment(lock_args: tuple) -> None:
     try:
-        _main()
+        try:
+            _main()
+        finally:
+            # The pass's $CLAUDE_ENV_FILE block is written here, once, however
+            # the pass ends -- a phase that raises must not cost the session the
+            # exports the phases before it already earned. See session_env for
+            # why the block is never appended to per variable.
+            try:
+                from .session_env import flush as _flush_session_env
+                _flush_session_env()
+            except Exception:
+                pass  # never let the env block mask a real failure
     except (SystemExit, KeyboardInterrupt):
         raise
     except Exception as exc:

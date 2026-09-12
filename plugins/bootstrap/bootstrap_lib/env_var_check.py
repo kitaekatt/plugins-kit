@@ -27,6 +27,7 @@ import re
 import shlex
 from typing import List, Optional, Tuple
 
+from . import session_env
 from .result import Result
 
 
@@ -85,11 +86,12 @@ def _rc_files(current_os: str) -> List[str]:
 
 
 def export_env_var(name: str, value: str) -> Optional[str]:
-    """Export into the live engine process and append to ``$CLAUDE_ENV_FILE``.
+    """Export into the live engine process and into the ``$CLAUDE_ENV_FILE`` block.
 
-    The process export always happens. The env-file append no-ops (returning
-    ``None``) when ``CLAUDE_ENV_FILE`` is unset/empty or unwritable -- same
-    contract as venv_check.export_venv_env_var.
+    The process export always happens. The env-file part no-ops (returning
+    ``None``) when ``CLAUDE_ENV_FILE`` is unset/empty -- same contract as
+    venv_check.export_venv_env_var. The line is buffered by ``session_env``,
+    which deduplicates the block and writes it once at the end of the pass.
 
     Returns:
         The exported variable name when the env-file line was written,
@@ -99,16 +101,7 @@ def export_env_var(name: str, value: str) -> Optional[str]:
         return None
     os.environ[name] = value
 
-    env_file = os.environ.get("CLAUDE_ENV_FILE")
-    if not env_file:
-        return None
-    line = f"export {name}={shlex.quote(value)}\n"
-    try:
-        with open(env_file, "a") as f:
-            f.write(line)
-    except OSError:
-        return None
-    return name
+    return session_env.record(name, value)
 
 
 def check_env_var(name: str, value: str, current_os: str) -> Result:
