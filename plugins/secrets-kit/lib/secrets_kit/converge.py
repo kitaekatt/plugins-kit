@@ -298,8 +298,26 @@ def converge(
             try:
                 Path(dest_raw).unlink()
                 result.removed += 1
-            except OSError:
+            except FileNotFoundError:
                 pass
+            except OSError as error:
+                result.failures.append(
+                    Failure(
+                        FAILURE_ENTRY,
+                        user_msg=(
+                            f"secrets-kit could not remove the local copy of "
+                            f"'{name}' at {dest_raw}."
+                        ),
+                        agent_msg=(
+                            f"Removal of '{name}' at {dest_raw} was not confirmed: "
+                            f"{type(error).__name__}: {error}\n"
+                            "Ownership was retained for another cleanup attempt "
+                            "on a later convergence pass. Diagnose and fix the "
+                            "filesystem error."
+                        ),
+                    )
+                )
+                continue
         state.forget(name)
 
     state.save()
