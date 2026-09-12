@@ -18,7 +18,7 @@ from typing import Any, IO, List, Optional
 from . import DecryptError, SecretsError, cli_command
 from .agefile import age_available, decrypt_with_identity
 from .manifest import Config, Entry, Manifest
-from .perms import _private_output, tighten, tighten_dir
+from .perms import _private_output, _repair_mode_drift, tighten, tighten_dir
 from . import repo as repo_mod
 from .state import State, sha256_bytes, sha256_file
 
@@ -346,9 +346,12 @@ def _converge_entry(
         return
 
     if unchanged:
-        # Cheap repair path: content is right, only the mode drifted.
         if recorded_mode != format(entry.mode, "04o"):
             tighten(dest, entry.mode)
+            repaired = True
+        else:
+            repaired = _repair_mode_drift(dest, entry.mode)
+        if repaired:
             state.record(
                 entry.name,
                 blob_sha=blob_sha,

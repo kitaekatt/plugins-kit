@@ -9,6 +9,7 @@ ACL is not a partial success.
 """
 
 import os
+import stat
 import subprocess
 import sys
 import tempfile
@@ -53,6 +54,26 @@ def tighten(path: Path, mode: int) -> None:
         return
 
     _icacls(path, "F")
+
+
+
+def _repair_mode_drift(path: Path, mode: int) -> bool:
+    """Repair observed POSIX mode drift; reapply Windows ACL without observing it.
+
+    False on Windows reports no observed repair, not effective ACL acceptance.
+    The existing exact-0644 public-file no-op remains in tighten.
+    """
+    if IS_WINDOWS:
+        tighten(path, mode)
+        return False
+    try:
+        actual = stat.S_IMODE(path.stat().st_mode)
+    except OSError as error:
+        raise SecretsError(f"could not inspect permissions on {path}: {error}")
+    if actual == stat.S_IMODE(mode):
+        return False
+    tighten(path, mode)
+    return True
 
 
 def _icacls(path: Path, rights: str) -> None:
