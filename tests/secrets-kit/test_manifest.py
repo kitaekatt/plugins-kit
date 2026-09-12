@@ -242,3 +242,18 @@ def test_expand_refuses_a_reference_cycle_rather_than_spinning():
 
 def test_expand_leaves_a_lone_dollar_alone():
     assert expand("/tmp/cost$", {}, where="t") == "/tmp/cost$"
+
+
+def test_explicit_false_consent_round_trips_without_serializing_a_waiver(tmp_path):
+    m = _manifest(
+        tmp_path,
+        profiles={},
+        entries={
+            "one": {"blob": "b.age", "dest": "~/x", "allow_tracked_dest": False}
+        },
+    )
+    assert m.entries["one"].allow_tracked_dest is False
+    serialized = json.loads(m.dump())
+    assert "allow_tracked_dest" not in serialized["entries"]["one"]
+    again = Manifest(tmp_path / "manifest.json", serialized)
+    assert again.entries["one"].allow_tracked_dest is False

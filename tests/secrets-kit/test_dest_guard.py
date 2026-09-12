@@ -24,7 +24,7 @@ import pytest
 from sk_testlib import copy_git_tree
 
 from secrets_kit import repo as repo_mod
-from secrets_kit.converge import FAILURE_DEST, converge
+from secrets_kit.converge import FAILURE_CONFIG, FAILURE_DEST, converge
 from secrets_kit.manifest import Manifest
 from secrets_kit.repo import (
     DEST_EXPOSED,
@@ -1044,3 +1044,68 @@ class TestConvergeRecheck:
         result = converge(fleet.config_path, fleet.data_dir)
         assert result.failures == []
         assert (fleet.dest_root / "ha-token.txt").exists()
+
+
+class TestPersistedExposureConsent:
+    @pytest.mark.parametrize("value", [
+        None, 0, 1, 0.0, 1.0, "", "false", [], [True], {}, {"ok": True},
+    ])
+    def test_invalid_json_consent_is_configuration_failure_before_materialization(
+        self, fleet, monkeypatch, value
+    ):
+        _make_dest_tree_a_repo(fleet, ignored=False)
+        _rewrite_manifest(fleet, allow_tracked_dest=value)
+        fleet.unlock()
+        declaration = fleet.manifest_path.read_bytes()
+        destination = fleet.dest_root / "ha-token.txt"
+        state = fleet.data_dir / "state.json"
+        queries = []
+        real = repo_mod._git
+        def record(args, **kwargs):
+            queries.append(args)
+            return real(args, **kwargs)
+        monkeypatch.setattr(repo_mod, "_git", record)
+
+        result = converge(fleet.config_path, fleet.data_dir)
+
+        assert [failure.key for failure in result.failures] == [FAILURE_CONFIG], (
+            f"invalid consent {value!r}: destination_exists={destination.exists()}, "
+            f"state_exists={state.exists()}, written={result.written}"
+        )
+        diagnostic = result.failures[0].agent_msg
+        assert "ha-token" in diagnostic
+        assert "allow_tracked_dest" in diagnostic
+        assert "boolean" in diagnostic
+        assert result.written == 0
+        assert not destination.exists()
+        assert not state.exists()
+        assert fleet.manifest_path.read_bytes() == declaration
+        assert queries == []
+
+    def test_explicit_false_keeps_exposure_refusal_and_no_ownership(self, fleet):
+        _make_dest_tree_a_repo(fleet, ignored=False)
+        _rewrite_manifest(fleet, allow_tracked_dest=False)
+        fleet.unlock()
+
+        result = converge(fleet.config_path, fleet.data_dir)
+
+        assert [failure.key for failure in result.failures] == [FAILURE_DEST]
+        assert result.written == 0
+        assert not (fleet.dest_root / "ha-token.txt").exists()
+        assert json.loads((fleet.data_dir / "state.json").read_text())["entries"] == {}
+
+    def test_invalid_consent_preserves_existing_destination_and_state_bytes(self, fleet):
+        _make_dest_tree_a_repo(fleet, ignored=False)
+        _rewrite_manifest(fleet, allow_tracked_dest="false")
+        fleet.unlock()
+        destination = fleet.dest_root / "ha-token.txt"
+        destination.write_bytes(b"existing dummy bytes")
+        state = fleet.data_dir / "state.json"
+        state.write_text('{"entries": {}}\n', encoding="utf-8")
+        before = (destination.read_bytes(), state.read_bytes())
+
+        result = converge(fleet.config_path, fleet.data_dir)
+
+        assert [failure.key for failure in result.failures] == [FAILURE_CONFIG]
+        assert result.written == 0
+        assert (destination.read_bytes(), state.read_bytes()) == before

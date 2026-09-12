@@ -154,7 +154,12 @@ class Entry:
         # The other inherent gap: the predicate answers about the INNERMOST
         # working tree, so a dest inside a submodule is judged against the
         # submodule's ignore rules, not the superproject's.
-        self.allow_tracked_dest: bool = bool(data.get("allow_tracked_dest", False))
+        consent = data.get("allow_tracked_dest", False)
+        if type(consent) is not bool:
+            raise SecretsError(
+                f"manifest entry '{name}': allow_tracked_dest must be a JSON boolean if present"
+            )
+        self.allow_tracked_dest: bool = consent
         if not self.blob:
             raise SecretsError(f"manifest entry '{name}' declares no 'blob'")
         if not self.dest_spec:
