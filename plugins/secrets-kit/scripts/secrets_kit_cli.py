@@ -433,6 +433,22 @@ def _refuse_exposed_dest(
     )
 
 
+def _require_exclusive_blob(manifest: Manifest, clone: Path, name: str, blob: str) -> None:
+    """Refuse mutation of the target blob while another entry owns its path."""
+    target = os.path.normcase(os.path.normpath(os.fspath(clone / blob)))
+    for owner, entry in manifest.entries.items():
+        if owner == name:
+            continue
+        owned = os.path.normcase(os.path.normpath(os.fspath(clone / entry.blob)))
+        if owned == target:
+            raise SecretsError(
+                f"cannot modify entry '{name}': blob '{blob}' is also owned "
+                f"by entry '{owner}'",
+                "This operation would change another entry's ciphertext. "
+                "Use a uniquely named source when adding a different secret.",
+            )
+
+
 def cmd_add(args: argparse.Namespace) -> int:
     """Encrypt a file into the repo. Public-key op -- no passphrase needed."""
     config = _require_config()
@@ -452,6 +468,9 @@ def cmd_add(args: argparse.Namespace) -> int:
         )
     if not exists and not args.dest:
         return _fail("--dest is required when adding a new entry")
+
+    blob_rel = manifest.entries[args.name].blob if exists else f"blobs/{source.name}.age"
+    _require_exclusive_blob(manifest, clone, args.name, blob_rel)
 
     plaintext = source.read_bytes()
     if args.newline == "lf" and b"\r\n" in plaintext:
@@ -490,10 +509,6 @@ def cmd_add(args: argparse.Namespace) -> int:
     )
     if refusal is not None:
         return refusal
-
-    blob_rel = f"blobs/{source.name}.age"
-    if exists:
-        blob_rel = manifest.entries[args.name].blob
 
     agefile.encrypt_to_recipient(manifest.recipient, plaintext, clone / blob_rel)
 
@@ -540,8 +555,11 @@ def cmd_remove(args: argparse.Namespace) -> int:
     if args.name not in manifest.entries:
         return _fail(f"no entry named '{args.name}'")
 
+    blob_rel = manifest.entries[args.name].blob
+    _require_exclusive_blob(manifest, clone, args.name, blob_rel)
+
     raw = json.loads(manifest.dump())
-    blob_rel = raw["entries"].pop(args.name)["blob"]
+    raw["entries"].pop(args.name)
     for profile, names in raw["profiles"].items():
         raw["profiles"][profile] = [n for n in names if n != args.name]
 
