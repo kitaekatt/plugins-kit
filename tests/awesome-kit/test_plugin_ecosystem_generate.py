@@ -2,16 +2,16 @@
 
 generate.py is imported by file path so the test does not depend on the plugin
 being on sys.path. The same pattern is used by the pdf-kit converter tests.
-Covered here: the minimal YAML
-reader (the single parser shared by poster.yaml and SKILL.md frontmatter),
-normalize_state, the compute_state 5-level precedence, and collect_plugins'
-phantom-install filtering. HTML rendering and the browser-open path are not
-unit-tested.
+Covered here: the minimal YAML reader shared by poster.yaml and SKILL.md
+frontmatter, state precedence, inventory resolution, inline script data, and
+public rendering. Main-path tests use temporary state and disable browser open.
 """
 
 import importlib.util
 import json
+import re
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -29,6 +29,202 @@ def _load_module():
 
 
 generate = _load_module()
+
+
+def _embedded_data(rendered: str) -> dict[str, Any]:
+    match = re.search(r"const data = (.+);\n", rendered)
+    assert match is not None, "poster must contain its serialized data"
+    return json.loads(match.group(1))
+
+
+class TestInlineScriptData:
+    @pytest.mark.parametrize("public", [False, True])
+    @pytest.mark.parametrize("field", [
+        ("plugins", 0, "marketplace"),
+        ("plugins", 0, "name"),
+        ("plugins", 0, "version"),
+        ("plugins", 0, "description"),
+        ("plugins", 0, "razor"),
+        ("plugins", 0, "state"),
+        ("plugins", 0, "skills", 0, "name"),
+        ("plugins", 0, "skills", 0, "description"),
+        ("plugins", 0, "skills", 0, "type"),
+        ("plugins", 0, "skills", 0, "author"),
+        ("marketplace_order", 0),
+        ("marketplace_subtitles", "mkt"),
+        ("marketplace_urls", "mkt"),
+    ])
+    def test_metadata_cannot_close_the_script_and_roundtrips(
+        self, public: bool, field: tuple[str | int, ...],
+    ) -> None:
+        payload: dict[str, Any] = {
+            "plugins": [{
+                "marketplace": "mkt", "name": "plug", "version": "1.0.0",
+                "description": "desc", "razor": "razor", "state": "on",
+                "skills": [{
+                    "name": "skill", "description": "desc", "type": "viewer",
+                    "author": "author",
+                }],
+            }],
+            "marketplace_order": ["mkt"],
+            "marketplace_subtitles": {"mkt": "subtitle"},
+            "marketplace_urls": {"mkt": "https://example.test"},
+        }
+        parent: Any = payload
+        for part in field[:-1]:
+            parent = parent[part]
+        parent[field[-1]] = '</sCrIpT><script>globalThis.POSTER_PROBE=1</script><!--'
+        rendered = generate.render_html(
+            "Title", "Tagline", payload["plugins"], payload["marketplace_order"],
+            payload["marketplace_subtitles"], payload["marketplace_urls"],
+            public=public,
+        )
+        match = re.search(r"const data = (.+);\n", rendered)
+        assert match is not None
+        assert "</script" not in match.group(1).lower()
+        assert _embedded_data(rendered) == payload
+
+
+class TestInventoryMain:
+    def _setup(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+        *, missing_registry: bool = False,
+    ) -> tuple[Path, Path, Path, Path]:
+        home = tmp_path / "home" / ".claude"
+        marketplace = home / "plugins" / "marketplaces" / "mkt" / ".claude-plugin"
+        marketplace.mkdir(parents=True)
+        (marketplace / "poster.yaml").write_text("subtitle: Test marketplace\n", encoding="utf-8")
+        (marketplace / "marketplace.json").write_text(json.dumps({
+            "plugins": [{"name": name} for name in ("kept", "stale", "disabled", "registered")],
+        }), encoding="utf-8")
+        if not missing_registry:
+            (home / "plugins" / "installed_plugins.json").write_text(
+                json.dumps({"version": 2, "plugins": {}}), encoding="utf-8")
+        project = tmp_path / "project"
+        (project / ".claude").mkdir(parents=True)
+        config = tmp_path / "poster-config.yaml"
+        config.write_text("title: Test poster\n", encoding="utf-8")
+        output = tmp_path / "output.html"
+        monkeypatch.setattr(generate, "home_claude", lambda: home)
+        return home, project, config, output
+
+    def _cache_plugin(self, home: Path, name: str, version: str = "1.0.0") -> Path:
+        root = home / "plugins" / "cache" / "mkt" / name / version
+        (root / ".claude-plugin").mkdir(parents=True)
+        (root / ".claude-plugin" / "plugin.json").write_text(
+            json.dumps({"name": name, "description": f"{name} at {version}"}), encoding="utf-8")
+        return root
+
+    def _run(
+        self, project: Path, config: Path, output: Path, *flags: str,
+    ) -> dict[str, Any]:
+        result = generate.main([
+            "--project", str(project), "--config", str(config),
+            "--output", str(output), "--no-open", *flags,
+        ])
+        assert result == 0
+        return _embedded_data(output.read_text(encoding="utf-8"))
+
+    def test_only_final_enabled_refs_are_synthesized(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        home, project, config, output = self._setup(tmp_path, monkeypatch)
+        for name in ("kept", "stale", "disabled"):
+            self._cache_plugin(home, name)
+        (home / "settings.json").write_text(json.dumps({
+            "enabledPlugins": {"kept@mkt": False, "disabled@mkt": True},
+        }), encoding="utf-8")
+        (project / ".claude" / "settings.json").write_text(json.dumps({
+            "enabledPlugins": {"kept@mkt": False, "disabled@mkt": True},
+        }), encoding="utf-8")
+        (project / ".claude" / "settings.local.json").write_text(json.dumps({
+            "enabledPlugins": {"kept@mkt": True, "disabled@mkt": False},
+        }), encoding="utf-8")
+        plugins = self._run(project, config, output)["plugins"]
+        assert [plugin["name"] for plugin in plugins] == ["kept"]
+
+    def test_absent_registry_still_renders_enabled_cache(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        home, project, config, output = self._setup(
+            tmp_path, monkeypatch, missing_registry=True)
+        self._cache_plugin(home, "kept")
+        (home / "settings.json").write_text(json.dumps({
+            "enabledPlugins": {"kept@mkt": True},
+        }), encoding="utf-8")
+        assert [plugin["name"] for plugin in self._run(project, config, output)["plugins"]] == ["kept"]
+
+    def test_absent_registry_preserves_valid_empty_poster(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        _, project, config, output = self._setup(
+            tmp_path, monkeypatch, missing_registry=True)
+        assert self._run(project, config, output)["plugins"] == []
+
+    def test_defaults_uses_live_inventory_and_declared_badges(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        home, project, config, output = self._setup(tmp_path, monkeypatch)
+        self._cache_plugin(home, "kept")
+        self._cache_plugin(home, "stale")
+        (home / "settings.json").write_text(json.dumps({
+            "enabledPlugins": {"kept@mkt": True},
+        }), encoding="utf-8")
+        (project / ".claude" / "bootstrap.json").write_text(json.dumps({
+            "plugins": [{"ref": "mkt:kept", "enabled": False}],
+        }), encoding="utf-8")
+        plugins = self._run(project, config, output, "--defaults")["plugins"]
+        assert [(plugin["name"], plugin["state"]) for plugin in plugins] == [("kept", "off")]
+
+    def test_public_preserves_registered_source_tree_plugins(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        home, project, config, output = self._setup(tmp_path, monkeypatch)
+        source = tmp_path / "source-plugin"
+        (source / ".claude-plugin").mkdir(parents=True)
+        (source / ".claude-plugin" / "plugin.json").write_text(
+            json.dumps({"name": "registered", "description": "source tree"}), encoding="utf-8")
+        (home / "plugins" / "installed_plugins.json").write_text(json.dumps({
+            "plugins": {"registered@mkt": [{"installPath": str(source), "version": "2.0.0"}]},
+        }), encoding="utf-8")
+        (home / "settings.json").write_text(json.dumps({
+            "enabledPlugins": {"registered@mkt": False},
+        }), encoding="utf-8")
+        self._cache_plugin(home, "stale")
+        (project / ".claude" / "bootstrap.json").write_text(json.dumps({
+            "plugins": [{"ref": "mkt:registered", "install": "manual"}],
+        }), encoding="utf-8")
+        plugins = self._run(project, config, output, "--public")["plugins"]
+        assert [(plugin["name"], plugin["description"]) for plugin in plugins] == [
+            ("registered", "source tree")]
+        assert all("state" not in plugin for plugin in plugins)
+
+
+class TestRegistryRecordSelection:
+    @pytest.mark.parametrize("records, expected", [
+        ([{"version": "9.0.0", "projectPath": "/project"}, {"version": "0.1.0"}], "0.1.0"),
+        ([{"version": "0.9.0"}, {"version": "0.10.0"}], "0.10.0"),
+        ([{"version": "deadbeef99"}, {"version": "1.0.0"}], "1.0.0"),
+        ({"version": "1.0.0"}, "1.0.0"),
+        ([None, "junk", {"version": "1.0.0"}], "1.0.0"),
+        ([None, "junk"], None),
+    ])
+    def test_collect_uses_authoritative_record(
+        self, tmp_path: Path, records: Any, expected: str | None,
+    ) -> None:
+        root = tmp_path / "install"
+        (root / ".claude-plugin").mkdir(parents=True)
+        (root / ".claude-plugin" / "plugin.json").write_text(
+            json.dumps({"name": "plug"}), encoding="utf-8")
+        for record in records if isinstance(records, list) else [records]:
+            if isinstance(record, dict):
+                record["installPath"] = str(root)
+        plugins = generate.collect_plugins(
+            {"plugins": {"plug@mkt": records}},
+            {"mkt": {"poster": {}, "plugin_names": {"plug"}}},
+            {}, {}, {}, {},
+        )
+        assert [plugin["version"] for plugin in plugins] == ([] if expected is None else [expected])
 
 
 class TestParseYaml:
@@ -196,9 +392,9 @@ class TestCollectPluginsPhantomFiltering:
 
 class TestMergeCacheFallback:
     """Registry-v2 fallback: with installed_plugins.json at {"plugins": {}}
-    (newer Claude Code), the poster rendered empty. merge_cache_fallback
-    synthesizes entries from ~/.claude/plugins/cache/<mkt>/<plugin>/<version>/;
-    registry entries keep precedence."""
+    merge_cache_fallback synthesizes enabled entries from
+    ~/.claude/plugins/cache/<mkt>/<plugin>/<version>/; registry entries keep
+    precedence."""
 
     def _home(self, tmp_path, monkeypatch, cache=None):
         home = tmp_path / "home" / ".claude"
@@ -211,7 +407,7 @@ class TestMergeCacheFallback:
 
     def test_empty_registry_synthesizes_from_cache(self, tmp_path, monkeypatch):
         home = self._home(tmp_path, monkeypatch, cache={"pluga@mkt": ["1.2.0"]})
-        merged = generate.merge_cache_fallback({"version": 2, "plugins": {}})
+        merged = generate.merge_cache_fallback({"version": 2, "plugins": {}}, {"pluga@mkt"})
         entry = merged["plugins"]["pluga@mkt"][0]
         assert entry["version"] == "1.2.0"
         assert entry["installPath"] == str(home / "plugins" / "cache" / "mkt" / "pluga" / "1.2.0")
@@ -219,17 +415,17 @@ class TestMergeCacheFallback:
     def test_registry_entry_takes_precedence(self, tmp_path, monkeypatch):
         self._home(tmp_path, monkeypatch, cache={"pluga@mkt": ["9.9.9"]})
         installed = {"plugins": {"pluga@mkt": [{"installPath": "/x", "version": "1.0.0"}]}}
-        merged = generate.merge_cache_fallback(installed)
+        merged = generate.merge_cache_fallback(installed, {"pluga@mkt"})
         assert merged["plugins"]["pluga@mkt"][0]["version"] == "1.0.0"
 
     def test_highest_version_wins_numerically(self, tmp_path, monkeypatch):
         self._home(tmp_path, monkeypatch, cache={"pluga@mkt": ["0.9.0", "0.10.0"]})
-        merged = generate.merge_cache_fallback({"plugins": {}})
+        merged = generate.merge_cache_fallback({"plugins": {}}, {"pluga@mkt"})
         assert merged["plugins"]["pluga@mkt"][0]["version"] == "0.10.0"
 
     def test_no_cache_dir_is_noop(self, tmp_path, monkeypatch):
         self._home(tmp_path, monkeypatch)
-        merged = generate.merge_cache_fallback({"plugins": {}})
+        merged = generate.merge_cache_fallback({"plugins": {}}, {"pluga@mkt"})
         assert merged["plugins"] == {}
 
 

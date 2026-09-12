@@ -16,7 +16,7 @@ This skill operationalizes the **plugin_ecosystem** viewer-kind under the shared
 In framework terms, plugin-ecosystem is:
 
 - **Subject:** `marketplace` composition; **subject_type:** corpus (every installed marketplace under `~/.claude/plugins/marketplaces/`).
-- **Compositions traversed:** `marketplace ⊃ plugin ⊃ skill` (stops at skill-name).
+- **Compositions traversed:** `marketplace -> plugin -> skill` (stops at skill-name).
 - **Primitives consumed:** `marketplace_manifest` (gate), `plugin_manifest` (card data), `skill_md` frontmatter (skill list), plus per-level `poster.yaml` overrides.
 - **Discovery gate:** a marketplace participates only if it ships `.claude-plugin/poster.yaml`.
 - **Layered personalization:** four `poster.yaml` layers (operator / marketplace / plugin / skill -- see "Data Model" below).
