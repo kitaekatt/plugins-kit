@@ -49,19 +49,32 @@ class State:
     def load(cls, path: Path) -> "State":
         """A missing or corrupt state file is not an error.
 
-        It is only a cache of what we believe we already wrote; losing it costs
-        one round of re-decryption and nothing else. Treating a parse failure
-        as fatal would turn a trivial recoverable condition into a blocked
-        machine.
+        Selected entries can take the normal materialization path when cached
+        comparisons are lost. Losing destination records can leave unselected
+        files behind: their ownership cannot be reconstructed from this cache.
+        Recovery itself is silent; independent materialization errors remain.
         """
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
             return cls(path, {})
         rows = data.get("entries") if isinstance(data, dict) else None
         if not isinstance(rows, dict):
             return cls(path, {})
-        return cls(path, rows)
+        usable_rows = {}
+        for name, row in rows.items():
+            if not isinstance(row, dict):
+                continue
+            usable = dict(row)
+            dest = usable.get("dest")
+            if not isinstance(dest, str) or not dest or "\x00" in dest:
+                usable.pop("dest", None)
+            for field in ("blob_sha256", "dest_sha256", "mode"):
+                value = usable.get(field)
+                if not isinstance(value, str) or not value:
+                    usable.pop(field, None)
+            usable_rows[name] = usable
+        return cls(path, usable_rows)
 
     def get(self, name: str) -> Dict[str, Any]:
         row = self.rows.get(name)

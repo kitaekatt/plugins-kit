@@ -330,7 +330,7 @@ def test_state_file_is_not_world_readable(fleet):
 
 
 def test_corrupt_state_recovers_instead_of_blocking(fleet):
-    """state.json is a cache; losing it costs a re-decrypt, never a blocked machine."""
+    """Corrupt cache alone permits selected materialization; lost orphan paths remain lost."""
     fleet.unlock()
     _run(fleet)
     paths_for(fleet.data_dir)["state"].write_text("{ not json", encoding="utf-8")
@@ -645,3 +645,203 @@ def test_actual_remove_main_refuses_malformed_global_config_before_authoring(fle
     assert 'secrets.json' in output and 'repo' in output and 'string' in output
     assert effects == []
     assert {path: path.read_bytes() for path in before} == before
+
+
+# Cache fixtures come from actual materialization, including ownership records.
+def _seed_cache_state(fleet, *, both=False):
+    if both:
+        config = json.loads(fleet.config_path.read_text())
+        config['machines']['testbox']['profiles'] = ['home-admin', 'rolfing']
+        fleet.config_path.write_text(json.dumps(config), encoding='utf-8')
+    fleet.unlock()
+    result = _run(fleet)
+    assert result.failures == []
+    path = paths_for(fleet.data_dir)['state']
+    return path, json.loads(path.read_text())
+
+
+def _cache_selection(fleet, profiles):
+    config = json.loads(fleet.config_path.read_text())
+    config['machines']['testbox']['profiles'] = profiles
+    fleet.config_path.write_text(json.dumps(config), encoding='utf-8')
+
+
+def _observe_cache_work(monkeypatch):
+    from secrets_kit import converge as subject
+    counts = {'decrypt': 0, 'tighten': 0}
+    for name, key in [('decrypt_with_identity', 'decrypt'), ('tighten', 'tighten')]:
+        real = getattr(subject, name)
+        def record(*args, _real=real, _key=key, **kwargs):
+            counts[_key] += 1
+            return _real(*args, **kwargs)
+        monkeypatch.setattr(subject, name, record)
+    return counts
+
+
+class TestCacheRecoveryPublic:
+    @pytest.mark.parametrize('damage', ['invalid-utf8', 'invalid-json', 'missing'])
+    def test_unreadable_cache_takes_normal_selected_materialization(self, fleet, monkeypatch, damage):
+        path, _ = _seed_cache_state(fleet)
+        if damage == 'missing':
+            path.unlink()
+        else:
+            path.write_bytes(b'\xff' if damage == 'invalid-utf8' else b'{ bad')
+        counts = _observe_cache_work(monkeypatch)
+        result = _run(fleet)
+        assert result.failures == [] and result.notes == []
+        assert result.written == 1
+        assert counts['decrypt'] == 1
+        assert (fleet.dest_root / 'ha-token.txt').read_bytes() == b'token-value\n'
+        row = State.load(path).get('ha-token')
+        assert row['dest'] == str(fleet.dest_root / 'ha-token.txt')
+        assert isinstance(row['blob_sha256'], str) and row['blob_sha256']
+        assert isinstance(row['dest_sha256'], str) and row['dest_sha256']
+
+    @pytest.mark.parametrize('data', [None, False, 0, 'bad', [], {}, {'entries': None}, {'entries': False}, {'entries': 0}, {'entries': ''}, {'entries': []}, {'entries': {}}])
+    def test_empty_or_wrong_cache_envelope_is_an_existing_recovery_control(self, fleet, monkeypatch, data):
+        path, _ = _seed_cache_state(fleet)
+        path.write_text(json.dumps(data), encoding='utf-8')
+        counts = _observe_cache_work(monkeypatch)
+        result = _run(fleet)
+        assert result.failures == [] and result.notes == []
+        assert result.written == 1 and counts['decrypt'] == 1
+        assert (fleet.dest_root / 'ha-token.txt').read_bytes() == b'token-value\n'
+        assert State.load(path).get('ha-token')['dest'].endswith('ha-token.txt')
+
+    @pytest.mark.parametrize('bad_row', [None, False, 0, '', []])
+    def test_mixed_nonobject_rows_preserve_the_usable_selected_fastpath(self, fleet, monkeypatch, bad_row):
+        path, data = _seed_cache_state(fleet)
+        data['entries']['bad-orphan'] = bad_row
+        path.write_text(json.dumps(data), encoding='utf-8')
+        counts = _observe_cache_work(monkeypatch)
+        result = _run(fleet)
+        assert result.failures == [] and result.notes == []
+        assert result.ok == 1 and result.written == 0 and counts['decrypt'] == 0
+        assert set(State.load(path).rows) == {'ha-token'}
+        assert (fleet.dest_root / 'ha-token.txt').read_bytes() == b'token-value\n'
+
+    @pytest.mark.parametrize('value', [True, 7, ['bad'], {'path': 'bad'}, 'nul-prefix', None, False, 0, '', [], {}, 'absent'])
+    def test_bad_orphan_dest_never_invents_an_unlink_but_good_ownership_removes(self, fleet, value):
+        path, data = _seed_cache_state(fleet, both=True)
+        _cache_selection(fleet, ['home-admin'])
+        protected = fleet.tmp / 'protected-prefix.txt'
+        protected.write_bytes(b'protected unrelated dummy bytes')
+        row = dict(data['entries']['rolfing'])
+        if value == 'absent':
+            row.pop('dest')
+        else:
+            row['dest'] = str(protected) + '\x00tail' if value == 'nul-prefix' else value
+        data['entries']['bad-orphan'] = row
+        path.write_text(json.dumps(data), encoding='utf-8')
+        result = _run(fleet)
+        assert result.failures == [] and result.notes == []
+        assert result.removed == 1
+        assert not (fleet.dest_root / 'rolfing.txt').exists()
+        assert protected.read_bytes() == b'protected unrelated dummy bytes'
+        assert (fleet.dest_root / 'ha-token.txt').read_bytes() == b'token-value\n'
+        assert set(State.load(path).rows) == {'ha-token'}
+
+    @pytest.mark.parametrize('damage', ['blob_sha256', 'dest_sha256', 'mode', 'dest-only'])
+    def test_usable_orphan_destination_survives_bad_or_missing_comparison_fields(self, fleet, damage):
+        path, data = _seed_cache_state(fleet)
+        _cache_selection(fleet, [])
+        row = data['entries']['ha-token']
+        if damage == 'dest-only':
+            data['entries']['ha-token'] = {'dest': row['dest']}
+        else:
+            row[damage] = {'bad': True}
+        path.write_text(json.dumps(data), encoding='utf-8')
+        loaded = State.load(path).get('ha-token')
+        assert loaded['dest'] == str(fleet.dest_root / 'ha-token.txt')
+        result = _run(fleet)
+        assert result.failures == [] and result.notes == []
+        assert result.removed == 1
+        assert not (fleet.dest_root / 'ha-token.txt').exists()
+
+    @pytest.mark.parametrize('field', ['blob_sha256', 'dest_sha256'])
+    @pytest.mark.parametrize('value', [None, 0, [], 'NOT-A-HEX-DIGEST'])
+    def test_bad_selected_comparison_field_takes_existing_content_miss(self, fleet, monkeypatch, field, value):
+        path, data = _seed_cache_state(fleet)
+        data['entries']['ha-token'][field] = value
+        path.write_text(json.dumps(data), encoding='utf-8')
+        counts = _observe_cache_work(monkeypatch)
+        result = _run(fleet)
+        assert result.failures == [] and result.notes == []
+        assert result.written == 1 and counts['decrypt'] == 1
+        assert (fleet.dest_root / 'ha-token.txt').read_bytes() == b'token-value\n'
+        assert State.load(path).get('ha-token')['dest'] == str(fleet.dest_root / 'ha-token.txt')
+
+    @pytest.mark.parametrize('mode', [0, True, None, '', [], {}])
+    def test_bad_cached_mode_with_matching_hashes_keeps_no_decrypt_repair(self, fleet, monkeypatch, mode):
+        path, data = _seed_cache_state(fleet)
+        data['entries']['ha-token']['mode'] = mode
+        path.write_text(json.dumps(data), encoding='utf-8')
+        counts = _observe_cache_work(monkeypatch)
+        result = _run(fleet)
+        assert result.failures == [] and result.notes == []
+        assert result.written == 1
+        assert counts == {'decrypt': 0, 'tighten': 1}
+        row = State.load(path).get('ha-token')
+        assert row['mode'] == '0600' and row['dest'] == str(fleet.dest_root / 'ha-token.txt')
+
+    @pytest.mark.parametrize('dest', ['missing', True, 'nul'])
+    def test_legacy_or_bad_dest_retains_hash_fastpath_without_backfilling_old_ownership(self, fleet, monkeypatch, dest):
+        path, data = _seed_cache_state(fleet)
+        row = data['entries']['ha-token']
+        if dest == 'missing':
+            row.pop('dest')
+        else:
+            row['dest'] = True if dest is True else str(fleet.dest_root / 'ha-token.txt') + '\x00tail'
+        path.write_text(json.dumps(data), encoding='utf-8')
+        counts = _observe_cache_work(monkeypatch)
+        result = _run(fleet)
+        assert result.failures == [] and result.notes == []
+        assert result.ok == 1 and result.written == 0 and counts['decrypt'] == 0
+        _cache_selection(fleet, [])
+        result = _run(fleet)
+        assert result.failures == [] and result.notes == []
+        assert result.removed == 0
+        assert (fleet.dest_root / 'ha-token.txt').read_bytes() == b'token-value\n'
+        assert State.load(path).rows == {}
+
+    @pytest.mark.parametrize('ledger', ['usable', 'missing', 'invalid-json', 'invalid-utf8', 'missing-dest'])
+    def test_lost_unselected_ownership_leaves_old_file_without_discovery(self, fleet, ledger):
+        path, data = _seed_cache_state(fleet)
+        _cache_selection(fleet, [])
+        if ledger == 'missing':
+            path.unlink()
+        elif ledger in ['invalid-json', 'invalid-utf8']:
+            path.write_bytes(b'{ bad' if ledger == 'invalid-json' else b'\xff')
+        elif ledger == 'missing-dest':
+            data['entries']['ha-token'].pop('dest')
+            path.write_text(json.dumps(data), encoding='utf-8')
+        result = _run(fleet)
+        assert result.failures == [] and result.notes == []
+        assert result.removed == (1 if ledger == 'usable' else 0)
+        assert (fleet.dest_root / 'ha-token.txt').exists() == (ledger != 'usable')
+
+    def test_unused_metadata_does_not_invalidate_hits_or_deletion_ownership(self, fleet, monkeypatch):
+        path, data = _seed_cache_state(fleet)
+        row = data['entries']['ha-token']
+        row.update(written_at={'not': 'a timestamp'}, unused={'nested': [False, None]})
+        path.write_text(json.dumps(data), encoding='utf-8')
+        counts = _observe_cache_work(monkeypatch)
+        result = _run(fleet)
+        assert result.failures == [] and result.notes == []
+        assert result.ok == 1 and counts['decrypt'] == 0
+        assert State.load(path).get('ha-token') == row
+        _cache_selection(fleet, [])
+        result = _run(fleet)
+        assert result.removed == 1 and result.failures == []
+
+    def test_loader_preserves_exact_independent_fields_without_path_or_digest_grammar(self, fleet):
+        path, data = _seed_cache_state(fleet)
+        row = data['entries']['ha-token']
+        row.update(dest=' relative \u79d8 path ', blob_sha256='UPPER-NONHEX', mode='NOT-OCTAL', dest_sha256=7, written_at=[])
+        path.write_text(json.dumps(data), encoding='utf-8')
+        loaded = State.load(path).get('ha-token')
+        assert loaded['dest'] == row['dest']
+        assert loaded['blob_sha256'] == 'UPPER-NONHEX'
+        assert loaded['mode'] == 'NOT-OCTAL'
+        assert loaded['written_at'] == []
+        assert 'dest_sha256' not in loaded
