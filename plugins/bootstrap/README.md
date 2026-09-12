@@ -56,6 +56,7 @@ so a pass can be inspected or driven from any terminal without starting Claude.
 bootstrap          # is a pass running? if so, wait for it and stream it
 bootstrap --json   # report only, never blocking (the scripting form)
 bootstrap run      # the same, plus start a pass when none is running
+bootstrap reset    # clear this project's cooldown (--all, --status, --project)
 ```
 
 A pass is single-instance, so neither form ever starts a second one: when a
@@ -67,6 +68,13 @@ same way.
 `bootstrap run` needs no cooldown reset, and does not consume one either: it
 is never throttled by the per-project cooldown and never advances it, so a
 manual run cannot eat the next session's pass.
+
+`bootstrap reset` is the other half: it runs no pass, it clears the cooldown
+stamp and the session-id guard so the NEXT session start is a real pass. That
+is what a layered `bootstrap.json` edit needs, and it is the right move on a
+machine where bootstrap seems to be doing nothing. It is the same lever as the
+`bootstrap-reset-cooldown` command, which keeps its own name on PATH; all of
+its flags, `--help` included, pass straight through.
 
 With more than one marketplace installed, `bootstrap` reports on all of them
 and `bootstrap run` asks you to set `BOOTSTRAP_MARKETPLACE` rather than guess

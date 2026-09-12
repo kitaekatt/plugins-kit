@@ -10,6 +10,7 @@ Two contracts, and they are the reason this lever exists at all:
    to the one in flight and streams it to completion instead.
 """
 
+import hashlib
 import importlib.util
 import json
 import os
@@ -522,3 +523,79 @@ def _event(seq, text):
         "pass": "p1", "seq": seq, "ts": "2026-09-11T17:00:0%dZ" % (seq % 10),
         "kind": "check", "sev": "ok", "section": "tools", "text": text,
     })
+
+
+# --------------------------------------------------------------------------
+# reset
+# --------------------------------------------------------------------------
+
+class TestReset:
+    """`bootstrap reset` -- the cooldown lever, reachable from the CLI.
+
+    The verb OWNS no reset logic: it delegates to bootstrap-reset-cooldown.sh,
+    which is the single place that knows how a cooldown stamp is keyed and
+    which files go with it. So what is worth pinning is that the delegation
+    happens, that flags survive it, and that the end-to-end effect is a stamp
+    that is gone.
+    """
+
+    @pytest.fixture
+    def plugin_root(self):
+        # The repo's own bootstrap tree -- find_plugin_root accepts it via the
+        # fallback the shim normally supplies.
+        return os.path.dirname(SCRIPTS)
+
+    def test_removes_the_cooldown_stamp(self, tmp_path, monkeypatch, plugin_root):
+        """End to end, through the real shell lever, on a redirected data root."""
+        project = tmp_path / "proj"
+        project.mkdir()
+        cooldowns = tmp_path / "data" / "mkt-a" / "bootstrap" / "cooldowns"
+        cooldowns.mkdir(parents=True)
+        key = hashlib.sha1(str(project).encode()).hexdigest()
+        stamp = cooldowns / ("last_run_epoch.%s" % key)
+        stamp.write_text("123\n")
+
+        monkeypatch.setenv("CLAUDE_BOOTSTRAP_DATA_ROOT", str(tmp_path / "data"))
+        monkeypatch.delenv("BOOTSTRAP_MARKETPLACE", raising=False)
+        rc = cli.main(["--plugin-root", plugin_root,
+                       "reset", "--project", str(project)])
+
+        assert rc == 0
+        assert not stamp.exists(), "the cooldown stamp must be gone"
+
+    def test_flags_pass_through(self, tmp_path, monkeypatch):
+        """`--all`, `--status` and friends belong to the lever, not to argparse."""
+        monkeypatch.setattr(cli, "find_reset_script", lambda f="": "/plug/reset.sh")
+        seen = {}
+
+        def fake_call(cmd, **kw):
+            seen["cmd"] = cmd
+            return 0
+
+        monkeypatch.setattr(cli.subprocess, "call", fake_call)
+        assert cli.main(["reset", "--all", "--clear-alerts"]) == 0
+        assert seen["cmd"] == ["bash", "/plug/reset.sh", "--all", "--clear-alerts"]
+
+    def test_help_reaches_the_lever_rather_than_argparse(self, monkeypatch):
+        """The advertised flags live in the delegate's help, so -h must reach it."""
+        monkeypatch.setattr(cli, "find_reset_script", lambda f="": "/plug/reset.sh")
+        seen = {}
+
+        def fake_call(cmd, **kw):
+            seen["cmd"] = cmd
+            return 0
+
+        monkeypatch.setattr(cli.subprocess, "call", fake_call)
+        assert cli.main(["reset", "--help"]) == 0
+        assert seen["cmd"][-1] == "--help"
+
+    def test_no_plugin_tree_is_an_error_not_a_silent_success(
+            self, tmp_path, monkeypatch, capsys):
+        monkeypatch.setattr(cli, "find_reset_script", lambda f="": "")
+        assert cli.main(["reset"]) == 2
+        assert "no bootstrap plugin tree" in capsys.readouterr().err
+
+    def test_exit_code_is_the_levers_own(self, monkeypatch):
+        monkeypatch.setattr(cli, "find_reset_script", lambda f="": "/plug/reset.sh")
+        monkeypatch.setattr(cli.subprocess, "call", lambda cmd, **kw: 2)
+        assert cli.main(["reset", "--project", "/nope"]) == 2
