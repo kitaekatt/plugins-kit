@@ -13,12 +13,12 @@ later as a file move rather than a rewrite.
 
 import os
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, IO, List, Optional
 
 from . import DecryptError, SecretsError, cli_command
 from .agefile import age_available, decrypt_with_identity
 from .manifest import Config, Entry, Manifest
-from .perms import open_private, tighten, tighten_dir
+from .perms import _private_output, tighten, tighten_dir
 from . import repo as repo_mod
 from .state import State, sha256_bytes, sha256_file
 
@@ -557,28 +557,12 @@ def _undetermined_note(entry: Entry, dest: Path, exposure) -> str:
 
 
 def _atomic_write(dest: Path, data: bytes, mode: int) -> None:
-    """Write ``data`` to ``dest`` with no window at a loose mode and no torn file.
+    """Publish binary content through the protected exclusive-sibling owner."""
+    def produce(stream: IO[Any]) -> bool:
+        stream.write(data)
+        return True
 
-    Order matters and is the point: create the temp file in the SAME directory
-    already at its final mode, write, fsync, tighten (Windows ACL), then
-    rename. A crash at any point leaves either the old file or nothing -- never
-    a half-written credential, and never plaintext at the default umask.
-    """
-    tmp = dest.with_name(f"{dest.name}.tmp-{os.getpid()}")
-    fd = open_private(tmp, mode)
-    try:
-        with os.fdopen(fd, "wb") as fh:
-            fh.write(data)
-            fh.flush()
-            os.fsync(fh.fileno())
-        tighten(tmp, mode)
-        os.replace(tmp, dest)
-    finally:
-        if tmp.exists():
-            try:
-                tmp.unlink()
-            except OSError:
-                pass
+    _private_output(dest, mode, produce)
 
 
 def _entry_failure(entry: Entry, error: SecretsError) -> Failure:

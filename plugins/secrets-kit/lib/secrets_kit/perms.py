@@ -11,6 +11,8 @@ ACL is not a partial success.
 import os
 import subprocess
 import sys
+import tempfile
+from typing import Any, Callable, IO
 from pathlib import Path
 
 from . import SecretsError
@@ -115,12 +117,49 @@ def tighten_dir(path: Path) -> None:
     _icacls(path, "(OI)(CI)F")
 
 
-def open_private(path: Path, mode: int) -> int:
-    """Create ``path`` for writing at ``mode`` BEFORE any content exists.
+def _private_output(
+    dest: Path, mode: int, produce: Callable[[IO[Any]], bool], *, text: bool = False
+) -> bool:
+    """Protect an exclusive sibling before bytes and publish explicit success.
 
-    The ordering is the whole point: creating the file at its final (tight)
-    mode and then writing into it means decrypted material is never visible at
-    a looser mode, not even for the microseconds between write and chmod.
+    The caller's existing parent policy remains. Only this allocation is owned
+    for cleanup; failure preserves the final slot. Text producers retain UTF-8
+    and default newline handling. This does not add power-loss recovery or
+    custody against concurrent substitutions in an untrusted parent.
     """
-    path.parent.mkdir(parents=True, exist_ok=True)
-    return os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, mode)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    fd, name = tempfile.mkstemp(prefix=dest.name + ".", dir=dest.parent)
+    temporary = Path(name)
+    owned = True
+    try:
+        tighten(temporary, mode)
+        stream = os.fdopen(fd, "w", encoding="utf-8") if text else os.fdopen(fd, "wb")
+        fd = None
+        try:
+            success = produce(stream)
+            if type(success) is not bool:
+                raise TypeError("private output producer must return an explicit boolean")
+            if success:
+                stream.flush()
+                os.fsync(stream.fileno())
+        finally:
+            stream.close()
+        if success:
+            os.replace(temporary, dest)
+            owned = False
+        return success
+    finally:
+        try:
+            if fd is not None:
+                os.close(fd)
+        finally:
+            if owned:
+                primary = sys.exc_info()[1]
+                try:
+                    temporary.unlink()
+                except FileNotFoundError:
+                    pass
+                except OSError as error:
+                    raise SecretsError(
+                        f"could not remove temporary output {temporary}: {error}"
+                    ) from (primary if primary is not None else error)

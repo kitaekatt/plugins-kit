@@ -14,12 +14,11 @@ of high-entropy material is not a meaningful oracle.
 
 import hashlib
 import json
-import os
 import time
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, IO, Optional
 
-from .perms import open_private
+from .perms import _private_output
 
 
 def sha256_bytes(data: bytes) -> str:
@@ -108,17 +107,8 @@ class State:
         treatment as the material it describes.
         """
         payload = json.dumps({"version": 1, "entries": self.rows}, indent=2) + "\n"
-        tmp = self.path.with_name(self.path.name + f".tmp-{os.getpid()}")
-        fd = open_private(tmp, 0o600)
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as fh:
-                fh.write(payload)
-                fh.flush()
-                os.fsync(fh.fileno())
-            os.replace(tmp, self.path)
-        finally:
-            if tmp.exists():
-                try:
-                    tmp.unlink()
-                except OSError:
-                    pass
+        def produce(stream: IO[Any]) -> bool:
+            stream.write(payload)
+            return True
+
+        _private_output(self.path, 0o600, produce, text=True)

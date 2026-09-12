@@ -16,7 +16,7 @@ import json
 import os
 import sys
 from pathlib import Path
-from typing import Optional
+from typing import Any, IO, Optional
 
 _PLUGIN_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_PLUGIN_ROOT / "lib"))
@@ -27,7 +27,7 @@ from secrets_kit import guard  # noqa: E402
 from secrets_kit import repo as repo_mod  # noqa: E402
 from secrets_kit.converge import converge, paths_for  # noqa: E402
 from secrets_kit.manifest import Config, Manifest, resolve_dest  # noqa: E402
-from secrets_kit.perms import tighten, tighten_dir  # noqa: E402
+from secrets_kit.perms import _private_output, tighten_dir  # noqa: E402
 from secrets_kit.terminal import relaunch_self  # noqa: E402
 
 CONFIG_PATH = Path.home() / ".claude" / "secrets.json"
@@ -155,15 +155,8 @@ def cmd_unlock(args: argparse.Namespace) -> int:
     print("Enter your fleet secrets passphrase (input is hidden).")
     code = agefile.unwrap_identity(wrapped, paths["identity"])
     if code != 0:
-        # Leave nothing half-written: a truncated identity file would make the
-        # next pass fail with a confusing decrypt error instead of "locked".
-        try:
-            paths["identity"].unlink()
-        except OSError:
-            pass
-        return _fail("incorrect passphrase (or age failed); nothing was written")
+        return _fail("incorrect passphrase (or age failed); identity cache was not replaced")
 
-    tighten(paths["identity"], 0o600)
     print(
         "unlocked. Secrets will materialize on the next bootstrap pass -- "
         "restart Claude Code, or just continue: the failing check re-runs "
@@ -305,10 +298,11 @@ def cmd_init(args: argparse.Namespace) -> int:
     # only AFTER the push, so this file can never name a key the fleet lacks.
     paths = paths_for(DATA_DIR)
     tighten_dir(DATA_DIR)
-    fd = os.open(str(paths["identity"]), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w", encoding="utf-8") as fh:
-        fh.write(identity_text)
-    tighten(paths["identity"], 0o600)
+    def produce_cache(stream: IO[Any]) -> bool:
+        stream.write(identity_text)
+        return True
+
+    _private_output(paths["identity"], 0o600, produce_cache, text=True)
 
     print(f"\nseeded. recipient = {recipient}")
     print(f"Add secrets with: {cli_command('add')} <name> --file <path> --dest <dest>")
@@ -627,10 +621,11 @@ def cmd_rotate_identity(args: argparse.Namespace) -> int:
     raw["recipient"] = recipient
     manifest_path.write_text(Manifest(manifest_path, raw).dump(), encoding="utf-8")
 
-    fd = os.open(str(paths["identity"]), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w", encoding="utf-8") as fh:
-        fh.write(identity_text)
-    tighten(paths["identity"], 0o600)
+    def produce_cache(stream: IO[Any]) -> bool:
+        stream.write(identity_text)
+        return True
+
+    _private_output(paths["identity"], 0o600, produce_cache, text=True)
 
     repo_mod.commit_and_push(clone, "rotate: fleet identity", touched)
     print(
