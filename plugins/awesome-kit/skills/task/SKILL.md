@@ -197,6 +197,7 @@ capability_skill:
       operation: task.py items <ref> [--state S] [--priority P] [--root PATH]
       gotchas:
         - "Contract: requires an explicit ref and reads plan.md's task_items unit; one parseable line per item -- 'id  state  priority  title' (absent priority '-') -- sorted by priority then block order; --state/--priority filter (states: available | in-flight | blocked-user | deferred). Exit 0 even when empty; block findings go to stderr as notes (validate is the gate that reports them as findings)."
+        - "An unresolvable ref or a missing local task directory exits non-zero with a reason (archived, orphaned, or remote refs may have no directory readable locally)."
         - "This answers 'what else can I work on in this task?' -- item-level, within one task. For the task-level question ('what tasks are open here?') use list. A pre-contract folder (no task_items block yet) prints a note pointing at the one-time conversion (handoff-template.md 'Converting a pre-contract folder')."
         - "AGENT BEHAVIOR: item edits are plan.md edits -- there are no item CLI flags. Add/remove/re-state items by editing the block directly during the update rotation, per references/handoff-template.md (completion = REMOVAL from the block; the block is the only place open work may live)."
     - id: status
@@ -207,7 +208,7 @@ capability_skill:
         - n: 1
           action: "Run the status verb. The script prints the SUBSTRATE only: classification, findings, the task.yaml fields, the document paths (CLAUDE.md / plan.md / log.md), and the parsed task_items menu."
         - n: 2
-          action: "AGENT BEHAVIOR: status is the system's ONE inference verb. Dispatch a BACKGROUND sub-agent (Task tool) to read the substrate's documents and produce the summary -- do NOT read plan.md/log.md and summarize inline in the main context. The point is main-context preservation; the sub-agent returns the short summary, you relay it. Route the dispatch through orchestrate and use whatever model its rendered routing policy resolves for this work -- do not pick or assume one here."
+          action: "AGENT BEHAVIOR: status is the system's ONE inference verb. Dispatch a BACKGROUND sub-agent (Task tool) to read the substrate's documents and produce the summary -- do NOT read plan.md/log.md and summarize inline in the main context. Lead the summary with the parsed open-item menu from the substrate, without re-parsing it. The point is main-context preservation; the sub-agent returns the short summary, you relay it. Route the dispatch through orchestrate and use whatever model its rendered routing policy resolves for this work -- do not pick or assume one here."
       gotchas:
         - "Summarizing inline defeats the verb's reason for existing (context preservation). The script even prints a reminder note to this effect."
   gotchas:

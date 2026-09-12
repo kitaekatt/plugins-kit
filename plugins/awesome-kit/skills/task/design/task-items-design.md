@@ -31,16 +31,10 @@ plugin).
 
 ## 2. The design in one breath
 
-One new typed unit -- **`task_items:`**, a flat list embedded in `plan.md` --
-is the single home for a task's open work. Item state lives there and only
-there. CLAUDE.md's Immediate Priorities section becomes references to item
-ids (never restated content, never restated state) -- priority is a field on
-the item, not a separate structure. One new script verb -- **`items <ref>`**
--- parses the block and prints the menu. `validate` gains checks for the
-block. Completion is removal: a done item leaves the block at the rotation
-pass and the existing record-keeping (plan.md Accomplished line + log.md
-detail) is unchanged. No per-item folders, no per-item verbs, no stored
-master list -- the document IS the registry, exactly like `task_list`.
+The design makes a task's open-work menu enumerable without parallel
+bookkeeping. For operating behavior, invoke `/task`; block authoring is
+defined in [handoff-template.md](../references/handoff-template.md),
+"The `task_items` block (the open-item menu)."
 
 ## 3. Vocabulary
 
@@ -85,63 +79,39 @@ concept used by one skill lives in that skill.
 
 ## 4. The `task_items` typed unit
 
-A fenced YAML block in `plan.md`, at the top of the Forward overview section.
-Same mechanics as `task_list`: a top-level key with a registered schema,
-extracted by `skills_kit_lib.document_walker.iter_yaml_blocks`, validated by
-`skills_kit_lib.schema_engine`, schema dict living in awesome-kit
-(`schemas.py`, CCP). The root key is `task_items` (not bare `items`) because
-discovery recognizes typed units by root key, and a naked `items:` root is
-too generic to claim without false positives; prose still just says "item".
+For block authoring, state meanings, completion, and ordering, see
+[handoff-template.md](../references/handoff-template.md), "The `task_items`
+block (the open-item menu)" and "In-flight triage." The validating field
+contract is documented in the module contract of
+[task_items.py](../scripts/task_system/task_items.py) and
+[TASK_ITEMS_SCHEMA](../scripts/task_system/schemas.py).
 
-```yaml
-task_items:
-  items:
-    - id: nano-swipe-controls          # required; unique within the task; kebab-case
-      title: "Nano swipe-gesture controls"   # required; one line
-      state: in-flight                 # required; see vocabulary below
-      priority: P1                     # optional; same pattern as task.priority
-      note: "resume: gesture mapping half-wired, see log 2026-07-09"  # optional; one line
-```
+The design chose `task_items` as the root because typed-unit discovery
+recognizes root keys; a generic `items` root would invite false positives.
+It reused the `task_list` mechanics: fenced-YAML extraction by
+`skills_kit_lib.document_walker.iter_yaml_blocks`, validation by
+`skills_kit_lib.schema_engine`, and a schema owned by awesome-kit.
 
-**Field contract:**
+The state model promoted existing triage rather than introducing an item
+lifecycle. The shipped legacy design context motivating that promotion was:
 
-| Field | Type | Required | Rule |
-|---|---|---|---|
-| `id` | string | yes | Unique within the task. Kebab-case (`^[a-z0-9][a-z0-9-]*$`). The handle CLAUDE.md, prose, and the user reference. |
-| `title` | string | yes | One-line human title. Non-empty. |
-| `state` | enum | yes | `available` / `in-flight` / `blocked-user` / `deferred`. |
-| `priority` | string | no | Same pattern as the task type's priority (`^P[1-3]$` for hand-off). NOT a new scale -- one priority vocabulary system-wide. |
-| `note` | string | no | One line of state context (what it is blocked on, why deferred, where to resume). Detail beyond one line belongs in a plan.md section keyed by the id. |
+- "not started", "RECORDED ONLY", queued forward steps
+- "RESUME POINT", "paused mid-Phase-1", "in progress"
+- "NEEDS FROM CHRISTINA", "husband-gated", "AWAITS USER GO-SIGNAL", hands-on physical work
+- "DO NOT WORK ON YET", "deliberately deferred", "buy only WHEN..."
 
-**State vocabulary** -- four states, mapping one-to-one onto the in-flight
-triage buckets the hand-off template already prescribes (promotion of
-convention to contract, not invention):
+Deliberate omissions and their reasons:
 
-| State | Triage bucket (handoff-template.md) | Mined prose it replaces |
-|---|---|---|
-| `available` | Queued -- ready to start | "not started", "RECORDED ONLY", queued forward steps |
-| `in-flight` | (the work under way) | "RESUME POINT", "paused mid-Phase-1", "in progress" |
-| `blocked-user` | Blocked on user decision | "NEEDS FROM CHRISTINA", "husband-gated", "AWAITS USER GO-SIGNAL", hands-on physical work |
-| `deferred` | (parked deliberately) | "DO NOT WORK ON YET", "deliberately deferred", "buy only WHEN..." |
-
-Deliberate omissions:
-
-- **No `done` state.** Completion is REMOVAL from the block at the rotation
-  pass; plan.md's Accomplished section keeps the one-line record and log.md
-  the detail, as the rotation discipline prescribes. The mined accretion anti-pattern (checkbox
-  lists and forward overviews padded with `DONE <date>` items that also
-  appear in Accomplished -- three copies of one completion fact) is
-  structurally prevented: the block enumerates open work only, a moving
-  window like the rest of plan.md.
-- **No `blocked-on-item` state / no `after:` field.** The triage discipline
-  already rules that work blocked on a prior step is listed as that step's
-  continuation, not as a standalone item. A soft ordering note ("after
-  nano-swipe-controls") fits in `note:`. Adding dependency edges would be
-  lifecycle machinery the granularity does not want (and `depends_on` /
-  `blocked_by` at the task level already exist for real dependencies).
-- **List order is meaningful**: within equal `priority` (and among items with
-  no priority), earlier = sooner. Priority + order replaces any separate
-  ranking structure.
+- The design omitted `done`: checkbox lists and forward overviews padded
+  with `DONE <date>` items that also appear in Accomplished accumulate
+  three copies of one completion fact. The open-work window avoids that
+  accretion.
+- It omitted `blocked-on-item` and `after:` because prior-step continuations
+  already handle this granularity. Item dependency edges would introduce
+  lifecycle machinery, while task-level `depends_on` / `blocked_by` already
+  serve work needing real dependencies.
+- It rejected a separate ranking structure because priority and document
+  order already supply the ranking.
 
 ## 5. Placement: plan.md, and the amended invariant
 
@@ -172,97 +142,43 @@ enforces singularity.
 
 ## 6. Priorities reference items (the CLAUDE.md contract change)
 
-CLAUDE.md's `## Immediate Priorities` section is redefined from a content
-list to a **reference view**:
+For the Immediate Priorities authoring contract, see
+[handoff-template.md](../references/handoff-template.md), "Section semantics."
 
-- When it names work, it names it by item id (backticked: `nano-swipe-controls`),
-  optionally with one clause of framing. It never restates an item's title
-  text at length and NEVER restates its state -- state has exactly one home.
-- Prose remains for genuinely non-item content: open questions for the user
-  (the existing `### Open questions for the user` subsection), standing
-  warnings, the seam-test facts assigned to that section.
-- The section may open with the standing line: "Live menu: `task items`
-  (plan.md `task_items` is the source of truth)."
-
-This is the "priorities reference sub-units of work" guidance made concrete,
-and it kills the flagship drift by construction: a priority that is a pointer
-cannot disagree with the item it points at. It is the same cure the system
-already applies to task references ("references never carry status").
-
-No new data structure is introduced for the priority view -- ids in prose are
-enough, following the task-reference convention of ids in prose. (A typed `item_refs`
-unit was considered and rejected: more data types for no query the `items`
-verb does not already answer.)
+Item pointers apply the same drift prevention as inert task references:
+a pointer cannot disagree with the item it points at. The design rejected
+a typed `item_refs` unit because prose ids supplied the view and the `items`
+verb already answered the needed query; another type added no query value.
 
 ## 7. plan.md contract changes (handoff-template.md)
 
-- **Forward overview opens with the `task_items` block** -- the index of open
-  work. Per-item actionable detail follows as prose sections keyed by id
-  (`### nano-swipe-controls -- <title>`), with the existing next-1-3-steps
-  depth rule: detailed for the top items, one line (or just the block entry)
-  for the rest.
-- **The `GOAL:` convention retires.** A recorded goal becomes an item
-  (`available` or `deferred`) plus, when the spec content warrants it, a
-  detail section keyed by its id. The mined GOAL headings' parenthetical
-  states map onto the state vocabulary.
-- **Rotation additions** (the update passes):
-  - Completed item -> remove from the block; one line in Accomplished; detail
-    to log.md. (Unchanged discipline, now with a crisper trigger.)
-  - **Promotion rule: the block is the only place open work may live.** Any
-    open item surfaced mid-session in log prose or CLAUDE.md banners --
-    `(OPEN)` tags, watch-lists, carry-forwards -- is either promoted
-    into the block (usually `blocked-user` or `deferred`, with a `note:`) or
-    deliberately discarded, at the same rotation pass. This is the fix for
-    the lose-able-log-item failure (worked examples:
-    docs/planning/awesome-kit-task-system/task-items-evidence.md --
-    maintainer-only, in the plugins-kit repository, not shipped with this
-    plugin).
-  - The stale-state pass now includes: does every CLAUDE.md id reference
-    still resolve to a block item? (Cheap to check by eye; also validated,
-    section 9.)
+For Forward overview detail, pre-contract conversion, completion rotation,
+promotion, and stale-reference checks, see
+[handoff-template.md](../references/handoff-template.md), "`plan.md` -- the
+plan," "Converting a pre-contract folder (one-time)," and "Rotation discipline
+(the update passes)."
 
-`task init`'s plan.md scaffold gains an empty `task_items: {items: []}` block
-so every new task starts under the contract.
+Retiring `GOAL:` blocks removed a competing state carrier. Promotion at
+rotation prevented work recorded only in log prose or CLAUDE.md banners
+from disappearing from the next session's menu. The worked examples for
+that loss-prevention rationale remain recorded in
+`docs/planning/awesome-kit-task-system/task-items-evidence.md`
+(maintainer-only, in the plugins-kit repository; not shipped with this
+plugin).
+
+The implemented empty-block scaffold is in
+[init.py](../scripts/task_system/init.py), `_PLAN_MD_TEMPLATE`.
 
 ## 8. The `items` verb
 
-The 13th verb. Script-driven, no inference -- the enumeration the friction
-report asked for:
+For the `items` invocation, output, filtering, and failure behavior, invoke
+`/task items`; its capability contract is in [SKILL.md](../SKILL.md), `items`.
+Status summary behavior is owned by the `status` capability there.
 
-```
-task items <ref> [--state S] [--priority P] [--root PATH]
-```
-
-- Resolves the ref (same rules as `show`), reads plan.md, extracts the
-  `task_items` unit, prints one parseable line per item, sorted by priority
-  then block order:
-
-  ```
-  nano-swipe-controls    in-flight     P1  Nano swipe-gesture controls
-  camera-voice-casting   blocked-user  -   Voice-driven camera casting
-  hue-scene-automation   available     -   Hue scene automation
-  ...
-  ```
-
-- `--state` / `--priority` filter (mirrors `list`). Absent fields print `-`.
-  Exit 0 even when empty; notes (malformed block, etc.) to stderr, matching
-  `list` conventions.
-- Non-zero with a reason when the ref is unresolvable or the folder is not
-  locally readable (archived / orphaned / remote) -- matching `show`.
-- **Ref is required** -- the caller names the task explicitly for an
-  unambiguous item query.
-
-`status` (the inference verb) adds the parsed items to its printed substrate,
-so the background summarizer sees the menu without re-parsing -- its summary
-can and should lead with it. `list` is unchanged (task-level enumeration).
-
-Dispatch vocabulary: the SKILL.md capability entry's keywords route "items",
-"task items", "work items", "open items", "goals", "priorities", and
-what-next phrasings ("what can I work on", "what's available on this task")
-to this verb.
-
-Answering the original friction in vocabulary and mechanism: "what other
-work is available on this task?" -> `task items` -> the menu with states.
+The design added mechanical enumeration because determining available work
+should not require an agent to infer a menu from three documents. Including
+that parsed menu in status supplied the summarizer with the same substrate:
+"what other work is available on this task?" reaches one mechanical menu.
 
 ## 9. Validation additions
 

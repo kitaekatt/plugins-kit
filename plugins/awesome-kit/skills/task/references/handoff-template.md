@@ -287,6 +287,10 @@ task_items:
       note: "resume: see log 2026-07-09"   # optional one-liner
 ```
 
+Use a non-empty, one-line `title`. An optional `note` is one line of state
+context: what blocks the item, why it is deferred, or where to resume. Put
+longer detail in the plan.md section keyed by the item id.
+
 The four states are the in-flight triage buckets (below) promoted to
 contract: `available` (queued, ready to start), `in-flight` (under way,
 including paused mid-step), `blocked-user` (needs a user decision or the
