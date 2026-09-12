@@ -18,6 +18,7 @@ import time
 from pathlib import Path
 from typing import Any, Dict, IO, Optional
 
+from . import SecretsError
 from .perms import _private_output
 
 
@@ -40,9 +41,14 @@ def sha256_file(path: Path) -> Optional[str]:
 class State:
     """Read/modify/write of state.json, always atomically."""
 
-    def __init__(self, path: Path, rows: Dict[str, Dict[str, Any]]) -> None:
+    def __init__(
+        self, path: Path, rows: Dict[str, Dict[str, Any]], *,
+        pending_retirements: Any = None, pending_present: bool = False,
+    ) -> None:
         self.path = path
         self.rows = rows
+        self.pending_retirements = pending_retirements
+        self.pending_present = pending_present
 
     @classmethod
     def load(cls, path: Path) -> "State":
@@ -57,9 +63,15 @@ class State:
             data = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, UnicodeDecodeError, json.JSONDecodeError):
             return cls(path, {})
-        rows = data.get("entries") if isinstance(data, dict) else None
-        if not isinstance(rows, dict):
+        if isinstance(data, dict) and "version" in data:
+            version = data["version"]
+            if type(version) is not int or version != 1:
+                raise SecretsError(f"unsupported ownership state version at {path}; preserve the ledger and use its supported reader")
+        if not isinstance(data, dict):
             return cls(path, {})
+        rows = data.get("entries")
+        if not isinstance(rows, dict):
+            rows = {}
         usable_rows = {}
         for name, row in rows.items():
             if not isinstance(row, dict):
@@ -73,7 +85,36 @@ class State:
                 if not isinstance(value, str) or not value:
                     usable.pop(field, None)
             usable_rows[name] = usable
-        return cls(path, usable_rows)
+        return cls(path, usable_rows,
+                   pending_retirements=data.get("pending_retirements"),
+                   pending_present="pending_retirements" in data)
+
+    def pending_problem(self) -> Optional[str]:
+        """An unknown pending format stays opaque across otherwise valid saves."""
+        if not self.pending_present:
+            return None
+        field = self.pending_retirements
+        if not isinstance(field, dict):
+            return "pending retirement storage is not an object"
+        version = field.get("version")
+        if type(version) is not int or version != 1:
+            return "pending retirement storage has an unsupported version"
+        if not isinstance(field.get("items"), list):
+            return "pending retirement items are not a list"
+        return None
+
+    def pending_items(self) -> list:
+        if not self.pending_present or self.pending_problem():
+            return []
+        return self.pending_retirements["items"]
+
+    def append_retirement(self, item: dict) -> None:
+        if self.pending_problem():
+            raise SecretsError("cannot preserve displaced ownership in opaque pending retirement storage")
+        if not self.pending_present:
+            self.pending_retirements = {"version": 1, "items": []}
+            self.pending_present = True
+        self.pending_retirements["items"].append(item)
 
     def get(self, name: str) -> Dict[str, Any]:
         row = self.rows.get(name)
@@ -106,7 +147,10 @@ class State:
         is still a map of where the credentials are, so it gets the same
         treatment as the material it describes.
         """
-        payload = json.dumps({"version": 1, "entries": self.rows}, indent=2) + "\n"
+        envelope = {"version": 1, "entries": self.rows}
+        if self.pending_present:
+            envelope["pending_retirements"] = self.pending_retirements
+        payload = json.dumps(envelope, indent=2) + "\n"
         def produce(stream: IO[Any]) -> bool:
             stream.write(payload)
             return True

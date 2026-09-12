@@ -271,15 +271,24 @@ def converge(
         return result
 
     # --- entries ----------------------------------------------------------
-    state = State.load(paths["state"])
+    try:
+        state = State.load(paths["state"])
+    except SecretsError as error:
+        result.failures.append(_state_failure(paths["state"], error))
+        return result
     selected_names = {entry.name for entry in selected}
     planned = []
     slots = {}
     cleanup_safe = True
+    ownership_cache = {}
+    pending_problem = state.pending_problem()
+    if pending_problem:
+        result.failures.append(_state_failure(paths["state"], SecretsError(pending_problem)))
+        cleanup_safe = False
     for entry in selected:
         try:
             dest = entry.dest(variables)
-            slot = _ownership_slot(dest)
+            slot = _cached_ownership_slot(dest, ownership_cache)
         except SecretsError as error:
             result.failures.append(_entry_failure(entry, error))
             cleanup_safe = False
@@ -287,6 +296,25 @@ def converge(
         planned.append((entry, dest, slot))
         slots.setdefault(slot, []).append(entry.name)
 
+    prior_slots = {}
+    for name, row in state.rows.items():
+        if row.get("dest"):
+            try:
+                prior_slots[name] = _cached_ownership_slot(Path(row["dest"]), ownership_cache)
+            except SecretsError as error:
+                prior_slots[name] = error
+    pending_keys = set()
+    for item in state.pending_items():
+        if not isinstance(item, dict) or not _usable_ownership_path(item.get("dest")):
+            continue
+        try:
+            item_slot = _cached_ownership_slot(Path(item["dest"]), ownership_cache)
+        except SecretsError:
+            continue
+        if isinstance(item.get("dest_sha256"), str) and item["dest_sha256"]:
+            pending_keys.add((item_slot, item["dest_sha256"]))
+    published = {}
+    checkpoint_needed = False
     for entry, dest, slot in planned:
         owners = slots[slot]
         if len(owners) > 1:
@@ -297,8 +325,32 @@ def converge(
                            "Assign distinct destinations before retrying; no conflicting entry was written."),
             ))
             continue
+        prior = dict(state.get(entry.name))
+        prior_slot = prior_slots.get(entry.name)
+        if isinstance(prior_slot, SecretsError):
+            result.failures.append(_entry_failure(entry, prior_slot))
+            continue
+        moving = prior_slot is not None and prior_slot != slot
+        if moving and pending_problem:
+            result.failures.append(_entry_failure(entry, SecretsError(
+                f"cannot move {prior.get('dest')} to {dest}: pending retirement "
+                "storage is unusable; preserve the prior ownership and repair its supported format"
+            )))
+            continue
         try:
-            _converge_entry(entry, paths, variables, state, result, dest=dest)
+            did_publish = _converge_entry(entry, paths, variables, state, result,
+                                        dest=dest, force_materialization=moving)
+            if did_publish:
+                published[slot] = (entry.name, state.get(entry.name)["dest_sha256"])
+                if moving:
+                    old_hash = prior.get("dest_sha256")
+                    key = (prior_slot, old_hash)
+                    if key not in pending_keys:
+                        item = dict(prior, owner=entry.name, dest=str(prior_slot))
+                        state.append_retirement(item)
+                        if isinstance(old_hash, str) and old_hash:
+                            pending_keys.add(key)
+                    checkpoint_needed = True
         except SecretsError as e:
             result.failures.append(_entry_failure(entry, e))
         except OSError as e:
@@ -310,13 +362,81 @@ def converge(
                 _entry_failure(entry, SecretsError(f"{type(e).__name__}: {e}"))
             )
 
+    # Actual publication supports transfer; cache observation does not. A
+    # failed mover can lose its prior slot only to an explicit successful
+    # selected publication, with ownership retained by that successful owner.
+    for name in list(state.rows):
+        prior_slot = prior_slots.get(name)
+        if not isinstance(prior_slot, Path) or prior_slot not in published:
+            continue
+        successor, _ = published[prior_slot]
+        row = state.get(name)
+        if (name != successor and _usable_ownership_path(row.get("dest"))
+                and isinstance(row.get("dest_sha256"), str) and row["dest_sha256"]):
+            # A moved name's current row belongs to its new slot, so it must
+            # not be forgotten merely because its former slot was handed over.
+            current_slot = _cached_ownership_slot(Path(row["dest"]), ownership_cache)
+            if current_slot == prior_slot:
+                state.forget(name)
+                checkpoint_needed = True
+    for item in state.pending_items():
+        if not isinstance(item, dict) or not _usable_ownership_path(item.get("dest")):
+            continue
+        try:
+            item_slot = _cached_ownership_slot(Path(item["dest"]), ownership_cache)
+        except SecretsError:
+            continue
+        if item_slot in published and isinstance(item.get("dest_sha256"), str) and item["dest_sha256"]:
+            new_hash = published[item_slot][1]
+            if item["dest_sha256"] != new_hash:
+                item["dest_sha256"] = new_hash
+                checkpoint_needed = True
+    if checkpoint_needed and not _save_state(state, result):
+        return result
     # Unknown selected destinations cannot authorize removal anywhere. Every
     # known desired slot stays reserved even if its materialization failed.
     if cleanup_safe:
-        _retire_orphans(state, selected_names, set(slots), result)
+        _retire_orphans(state, selected_names, set(slots), result, ownership_cache)
 
-    state.save()
+    _save_state(state, result)
     return result
+
+
+def _state_failure(path: Path, error: Exception) -> Failure:
+    return Failure(
+        FAILURE_CONFIG,
+        user_msg=f"secrets-kit could not reconcile ownership state at {path}.",
+        agent_msg=(f"Ownership state at {path}: {type(error).__name__}: {error}. "
+                   "Preserve the ledger; repair its supported format or filesystem "
+                   "access before retrying further destructive cleanup. Already "
+                   "confirmed removals can be reconciled as absent on retry."),
+    )
+
+
+def _save_state(state: State, result: Result) -> bool:
+    try:
+        state.save()
+    except (SecretsError, OSError) as error:
+        result.failures.append(_state_failure(state.path, error))
+        return False
+    return True
+
+
+def _usable_ownership_path(value: Any) -> bool:
+    return isinstance(value, str) and bool(value) and "\x00" not in value
+
+
+def _cached_ownership_slot(dest: Path, cache: dict) -> Path:
+    if dest not in cache:
+        try:
+            cache[dest] = _ownership_slot(dest)
+        except SecretsError as error:
+            cache[dest] = error
+    value = cache[dest]
+    if isinstance(value, SecretsError):
+        raise value
+    cache.setdefault(value, value)
+    return value
 
 
 def _ownership_slot(dest: Path) -> Path:
@@ -345,8 +465,10 @@ def _retirement_failure(names: List[str], dest: Any, reason: str) -> Failure:
     )
 
 
-def _retire_orphans(state: State, selected_names: set, reserved: set, result: Result) -> None:
+def _retire_orphans(state: State, selected_names: set, reserved: set, result: Result,
+                    ownership_cache: dict) -> None:
     candidates = {}
+    pending_cleared = set()
     for name in state.rows:
         if name in selected_names:
             continue
@@ -356,25 +478,53 @@ def _retire_orphans(state: State, selected_names: set, reserved: set, result: Re
             result.failures.append(_retirement_failure([name], "unknown destination", "missing usable destination evidence"))
             continue
         try:
-            slot = _ownership_slot(Path(dest_raw))
+            slot = _cached_ownership_slot(Path(dest_raw), ownership_cache)
         except SecretsError as error:
             result.failures.append(_retirement_failure([name], dest_raw, str(error)))
             continue
         if slot in reserved:
             continue
-        candidates.setdefault(slot, []).append((name, row))
+        candidates.setdefault(slot, []).append((name, row, None))
+    for index, item in enumerate(state.pending_items()):
+        if not isinstance(item, dict):
+            result.failures.append(_retirement_failure(["pending retirement"], "unknown destination", "malformed ownership record"))
+            continue
+        owner = item.get("owner")
+        name = owner if isinstance(owner, str) and owner else "pending retirement"
+        dest_raw = item.get("dest")
+        if not isinstance(owner, str) or not owner:
+            result.failures.append(_retirement_failure([name], dest_raw or "unknown destination", "missing diagnostic owner evidence"))
+            continue
+        if not _usable_ownership_path(dest_raw):
+            result.failures.append(_retirement_failure([name], "unknown destination", "missing usable destination evidence"))
+            continue
+        try:
+            slot = _cached_ownership_slot(Path(dest_raw), ownership_cache)
+        except SecretsError as error:
+            result.failures.append(_retirement_failure([name], dest_raw, str(error)))
+            continue
+        if slot in reserved:
+            continue
+        candidates.setdefault(slot, []).append((name, item, index))
+
+    def clear_claims(claims: list) -> None:
+        for name, _, pending_index in claims:
+            if pending_index is None:
+                state.forget(name)
+            else:
+                pending_cleared.add(pending_index)
 
     for slot, claims in candidates.items():
-        names = [name for name, _ in claims]
-        hashes = {row.get("dest_sha256") for _, row in claims}
+        names = list(dict.fromkeys(name for name, _, _ in claims))
+        hashes = {value if isinstance(value, str) and value else None
+                  for _, row, _ in claims for value in [row.get("dest_sha256")]}
         if None in hashes or len(hashes) != 1:
             result.failures.append(_retirement_failure(names, slot, "missing or ambiguous plaintext-hash ownership evidence"))
             continue
         try:
             leaf_mode = os.lstat(slot).st_mode
         except FileNotFoundError:
-            for name in names:
-                state.forget(name)
+            clear_claims(claims)
             continue
         except OSError as error:
             result.failures.append(_retirement_failure(names, slot, f"{type(error).__name__}: {error}"))
@@ -394,8 +544,10 @@ def _retire_orphans(state: State, selected_names: set, reserved: set, result: Re
         except OSError as error:
             result.failures.append(_retirement_failure(names, slot, f"{type(error).__name__}: {error}"))
             continue
-        for name in names:
-            state.forget(name)
+        clear_claims(claims)
+    if pending_cleared:
+        state.pending_retirements["items"] = [item for index, item in enumerate(state.pending_items())
+                                              if index not in pending_cleared]
 
 
 def _converge_entry(
@@ -406,7 +558,8 @@ def _converge_entry(
     result: Result,
     *,
     dest: Optional[Path] = None,
-) -> None:
+    force_materialization: bool = False,
+) -> bool:
     if dest is None:
         dest = entry.dest(variables)
     blob_path = paths["clone"] / entry.blob
@@ -431,7 +584,8 @@ def _converge_entry(
     recorded_mode = row.get("mode")
 
     unchanged = (
-        row.get("blob_sha256") == blob_sha
+        not force_materialization
+        and row.get("blob_sha256") == blob_sha
         and dest_sha is not None
         and dest_sha == row.get("dest_sha256")
     )
@@ -446,7 +600,7 @@ def _converge_entry(
     # visible cannot be undone. (Cost is bounded: the override skips the check
     # outright, and a dest in no repo costs one `rev-parse`.)
     if not _dest_is_writable_here(entry, dest, result, already_present=dest_sha is not None):
-        return
+        return False
 
     if unchanged:
         if recorded_mode != format(entry.mode, "04o"):
@@ -455,17 +609,22 @@ def _converge_entry(
         else:
             repaired = _repair_mode_drift(dest, entry.mode)
         if repaired:
-            state.record(
-                entry.name,
-                blob_sha=blob_sha,
-                dest_sha=dest_sha,
-                mode=entry.mode,
-                dest=str(dest),
-            )
+            if row.get("dest"):
+                state.record(
+                    entry.name,
+                    blob_sha=blob_sha,
+                    dest_sha=dest_sha,
+                    mode=entry.mode,
+                    dest=str(dest),
+                )
+            else:
+                # A legacy cache hit plus permission repair does not prove
+                # that this entry published the observed matching file.
+                row["mode"] = format(entry.mode, "04o")
             result.written += 1
-            return
+            return False
         result.ok += 1
-        return
+        return False
 
     if not dest.parent.is_dir():
         raise SecretsError(
@@ -497,6 +656,7 @@ def _converge_entry(
         dest=str(dest),
     )
     result.written += 1
+    return True
 
 
 def _dest_is_writable_here(

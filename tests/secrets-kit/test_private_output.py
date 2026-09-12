@@ -504,8 +504,10 @@ def test_actual_converge_selective_writer_fault_preserves_prior_record(fleet, mo
     monkeypatch.setattr(convergence, 'tighten', tightening)
     monkeypatch.setattr(os, 'replace', replacing)
     if which == 'state':
-        with pytest.raises((SecretsError, OSError), match='dummy .* fault'):
-            convergence.converge(fleet.config_path, fleet.data_dir)
+        result = convergence.converge(fleet.config_path, fleet.data_dir)
+        assert len(result.failures) == 1 and result.failures[0].key == 'secrets_config'
+        assert result.failures[0].ask_reason is None and result.written == 1
+        assert 'dummy' in result.failures[0].agent_msg and str(state_path) in result.failures[0].agent_msg
         assert state_path.read_bytes() == previous_state
         assert target.read_bytes() == b'changed dummy\n'
     else:
