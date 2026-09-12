@@ -845,3 +845,73 @@ class TestCacheRecoveryPublic:
         assert loaded['mode'] == 'NOT-OCTAL'
         assert loaded['written_at'] == []
         assert 'dest_sha256' not in loaded
+
+
+@pytest.mark.parametrize('spelling', ['$A', '${A}'])
+@pytest.mark.parametrize('preexisting', [False, True])
+def test_stalled_destination_refuses_before_wrong_dummy_write(fleet, monkeypatch, spelling, preexisting):
+    from secrets_kit import converge as subject, repo as repo_mod
+    from secrets_kit.converge import FAILURE_ENTRY
+    parent = fleet.tmp / 'stalled destination'
+    parent.mkdir()
+    placeholder = parent / spelling
+    before = b'controlled placeholder bytes' if preexisting else None
+    if preexisting:
+        placeholder.write_bytes(before)
+    assert not repo_mod.dest_exposure(placeholder).exposed
+    manifest = json.loads(fleet.manifest_path.read_text())
+    manifest['entries']['ha-token']['dest'] = str(placeholder)
+    fleet.manifest_path.write_text(json.dumps(manifest), encoding='utf-8')
+    config = json.loads(fleet.config_path.read_text())
+    config['vars']['A'] = spelling
+    fleet.config_path.write_text(json.dumps(config), encoding='utf-8')
+    fleet.unlock()
+    calls = []
+    for name in ['decrypt_with_identity', '_atomic_write']:
+        real = getattr(subject, name)
+        def observe(*args, _real=real, _name=name, **kwargs):
+            calls.append(_name)
+            return _real(*args, **kwargs)
+        monkeypatch.setattr(subject, name, observe)
+    result = _run(fleet)
+    observed = {'written': result.written, 'calls': calls,
+                'placeholder_bytes': placeholder.read_bytes() if placeholder.exists() else None}
+    assert observed == {'written': 0, 'calls': [], 'placeholder_bytes': before}
+    assert len(result.failures) == 1
+    failure = result.failures[0]
+    assert failure.key == FAILURE_ENTRY and failure.ask_reason is None
+    assert 'ha-token' in failure.agent_msg and 'stall' in failure.agent_msg.lower()
+    assert State.load(paths_for(fleet.data_dir)['state']).get('ha-token') == {}
+
+
+def test_stalled_entry_does_not_block_another_selected_entry(fleet):
+    from secrets_kit.converge import FAILURE_ENTRY
+    parent = fleet.tmp / 'stalled alongside healthy'
+    parent.mkdir()
+    placeholder = parent / '$A'
+    manifest = json.loads(fleet.manifest_path.read_text())
+    manifest['entries']['ha-token']['dest'] = str(placeholder)
+    fleet.manifest_path.write_text(json.dumps(manifest), encoding='utf-8')
+    config = json.loads(fleet.config_path.read_text())
+    config['vars']['A'] = '$A'
+    config['machines']['testbox']['profiles'] = ['home-admin', 'rolfing']
+    fleet.config_path.write_text(json.dumps(config), encoding='utf-8')
+    fleet.unlock()
+    result = _run(fleet)
+    assert result.written == 1 and not placeholder.exists()
+    assert (fleet.dest_root / 'rolfing.txt').read_bytes() == b'rolfing-value\n'
+    assert len(result.failures) == 1 and result.failures[0].key == FAILURE_ENTRY
+    assert result.failures[0].ask_reason is None and 'ha-token' in result.failures[0].agent_msg
+    assert set(State.load(paths_for(fleet.data_dir)['state']).rows) == {'rolfing'}
+
+
+def test_public_convergence_keeps_valid_nested_variable_destinations(fleet):
+    config = json.loads(fleet.config_path.read_text())
+    config['vars']['BANK'] = '$PARENT/bank'
+    config['vars']['PARENT'] = str(fleet.tmp)
+    fleet.config_path.write_text(json.dumps(config), encoding='utf-8')
+    fleet.unlock()
+    result = _run(fleet)
+    assert result.failures == [] and result.written == 1
+    assert (fleet.dest_root / 'ha-token.txt').read_bytes() == b'token-value\n'
+    assert State.load(paths_for(fleet.data_dir)['state']).get('ha-token')['dest'] == str(fleet.dest_root / 'ha-token.txt')

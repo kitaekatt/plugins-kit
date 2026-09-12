@@ -287,9 +287,16 @@ def expand(value: str, variables: Dict[str, str], *, where: str) -> str:
 
     current = value
     for _ in range(_MAX_EXPANSION_PASSES):
-        expanded = _VAR_PATTERN.sub(_sub, current)
-        if expanded == current:
+        expanded, matches = _VAR_PATTERN.subn(_sub, current)
+        if matches == 0:
             return os.path.expanduser(expanded)
+        if expanded == current:
+            raise SecretsError(
+                f"{where}: variable expansion stalled with a recognized "
+                f"placeholder ('{current}')",
+                "A variable refers to itself, directly or through another. "
+                "Break the cycle in secrets.json vars.",
+            )
         current = expanded
 
     raise SecretsError(

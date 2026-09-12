@@ -312,3 +312,81 @@ def test_existing_mode_and_newline_representations_are_not_redefined(tmp_path, m
     m = _manifest(tmp_path, profiles={}, entries={'one': {'blob': 'b.age', 'dest': '~/x', 'mode': mode, 'newline': newline}})
     assert m.entries['one'].mode == (int(mode, 8) if isinstance(mode, str) else mode)
     assert m.entries['one'].newline == newline
+
+
+@pytest.mark.parametrize('value,variables', [
+    ('$A', {'A': '$A'}),
+    ('${A}', {'A': '${A}'}),
+    ('${A}', {'A': '$A'}),
+    ('$A', {'A': '${A}'}),
+    ('$A', {'A': '$B', 'B': '$B'}),
+    ('${A}', {'A': '${B}', 'B': '${B}'}),
+])
+def test_matched_stall_is_named_and_never_reaches_home_expansion(monkeypatch, value, variables):
+    def forbidden_home(value):
+        raise AssertionError('stalled variables reached final home expansion')
+    monkeypatch.setattr('secrets_kit.manifest.os.path.expanduser', forbidden_home)
+    with pytest.raises(SecretsError) as caught:
+        expand(value, variables, where="entry 'stalled'")
+    assert "entry 'stalled'" in caught.value.message
+    assert 'stall' in caught.value.message.lower()
+    assert '10 passes' not in caught.value.message
+    assert 'cycle' in caught.value.remedy.lower() and 'vars' in caught.value.remedy
+
+
+@pytest.mark.parametrize('spelling', ['$A', '${A}'])
+def test_loaded_entry_refuses_a_stalled_destination(tmp_path, spelling):
+    m = _manifest(tmp_path, profiles={}, entries={
+        'stalled': {'blob': 'dummy.age', 'dest': str(tmp_path / spelling)},
+    })
+    with pytest.raises(SecretsError, match="entry 'stalled'.*stall"):
+        m.entries['stalled'].dest({'A': spelling})
+
+
+@pytest.mark.parametrize('value', ['plain', '', '$', 'cost$', '${A', '${}', '$1', '${A:-x}', '$\u79d8'])
+def test_nonmatching_dollar_forms_remain_literal(value):
+    assert expand(value, {}, where='literal') == value
+
+
+@pytest.mark.parametrize('value,expected', [('$$A', 'final'), ('$A-b', 'resolved-b'), ('\\$A', '\\resolved')])
+def test_existing_textual_regex_semantics_have_no_new_escape_rule(value, expected):
+    assert expand(value, {'A': 'resolved', 'resolved': 'final'}, where='textual') == expected
+
+
+@pytest.mark.parametrize('declared,environment,expected', [
+    ({'A': ''}, 'environment', '/suffix'),
+    ({}, '', '/suffix'),
+    ({'A': 'declared'}, 'environment', 'declared/suffix'),
+    ({}, 'environment', 'environment/suffix'),
+])
+def test_present_declared_and_environment_values_keep_empty_string_precedence(monkeypatch, declared, environment, expected):
+    monkeypatch.setenv('A', environment)
+    assert expand('${A}/suffix', declared, where='precedence') == expected
+
+
+@pytest.mark.parametrize('changing_passes', [9, 10])
+def test_existing_pass_budget_includes_literal_confirmation(changing_passes):
+    variables = {f'A{i}': f'$A{i+1}' for i in range(changing_passes - 1)}
+    variables[f'A{changing_passes - 1}'] = 'literal'
+    if changing_passes == 9:
+        assert expand('$A0', variables, where='budget') == 'literal'
+    else:
+        with pytest.raises(SecretsError, match='budget.*did not settle after 10 passes'):
+            expand('$A0', variables, where='budget')
+
+
+def test_home_expansion_is_final_and_its_dollar_output_is_not_reexpanded(monkeypatch):
+    inputs = []
+    def final_home(value):
+        inputs.append(value)
+        return '/dummy-home/$AFTER_HOME'
+    monkeypatch.setattr('secrets_kit.manifest.os.path.expanduser', final_home)
+    assert expand('$ROOT/$LEAF', {'ROOT': '~', 'LEAF': 'leaf'}, where='ordering') == '/dummy-home/$AFTER_HOME'
+    assert inputs == ['~/leaf']
+
+
+def test_loaded_entry_accepts_a_valid_nested_destination(tmp_path):
+    m = _manifest(tmp_path, profiles={}, entries={
+        'nested': {'blob': 'dummy.age', 'dest': '${ROOT}/$LEAF'},
+    })
+    assert m.entries['nested'].dest({'ROOT': '$PARENT', 'PARENT': str(tmp_path), 'LEAF': 'leaf'}) == tmp_path / 'leaf'
