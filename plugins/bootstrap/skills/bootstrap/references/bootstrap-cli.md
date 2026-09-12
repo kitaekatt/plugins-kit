@@ -1,177 +1,96 @@
 # The `bootstrap` command
 
-A PATH command for inspecting and driving a bootstrap provisioning pass from a
-terminal, without starting Claude. It ships with this plugin and installs
-itself; nothing about it is per-machine setup.
+A PATH command for inspecting Claude bootstrap passes and applying user/project
+requirements from a terminal.
+
+## Terminal run scope
+
+`bootstrap run` merges and applies only these four files, in ascending priority:
+
+1. `~/.claude/bootstrap.json`
+2. `~/.claude/bootstrap.local.json`
+3. `<working-directory>/.claude/bootstrap.json`
+4. `<working-directory>/.claude/bootstrap.local.json`
+
+Missing files are skipped. Later conflicting values win under shared manifest
+merge rules. A parse error stops provisioning so a broken override cannot allow
+lower-priority requirements to run unexpectedly.
+
+The project directory is the exact working directory, with no parent or Git-root
+search. From `/`, the project candidates are `/.claude/bootstrap.json` and
+`/.claude/bootstrap.local.json`; user requirements still apply.
+
+The command prints the engine tree and each candidate manifest's presence, then
+streams checks and actions through the shared recorder. It uses the shared
+manifest handlers directly, without installed plugin manifest discovery, the
+legacy `user-bootstrap.json`, env.json personalization, self-provisioning, or
+implicit project setup. Project operations such as `project_venv`, `project_npm`,
+and `agent_skills_link` run when declared in the merged layers.
+
+A `plugins` or `marketplaces` entry authored in one of these four files still
+installs or updates what it explicitly declares. Installing a plugin does not
+add that plugin's own manifest to this terminal run. Claude's automatic lifecycle
+retains its full plugin-provisioning scope.
 
 ## Invocation
 
-```
-bootstrap                 report whether a pass is running; if one IS, stay
-                          attached and stream it until it finishes
-bootstrap --json          report only, never blocking -- the scripting form
-bootstrap run             the same, and START a pass when none is running
-bootstrap run --verbose   trailing flags pass through to the engine
-bootstrap reset           clear this project's cooldown so the NEXT session
-                          start runs a real pass
-bootstrap reset --all     every project (--status lists, --project <dir> names
-                          one, --clear-alerts; --help for the full set)
-bootstrap -h | --help     usage
+```bash
+bootstrap                 # report; follow a running lifecycle pass to completion
+bootstrap --json          # non-blocking machine-readable status
+bootstrap run             # apply the four user/project layers
+bootstrap run --verbose   # accepted for console compatibility
+bootstrap reset           # clear this project's next-session throttle
+bootstrap reset --all     # all projects; --status and --project also supported
+bootstrap --help
 ```
 
-In their handling of a pass that is already running, `bootstrap` and
-`bootstrap run` differ in exactly one clause: `run` also launches when nothing
-is. Neither ever starts a SECOND pass. They do diverge elsewhere -- on an
-ambiguous marketplace, and in their exit codes; both are below.
+## Running passes and exit codes
 
-`reset` runs no pass at all; it clears the throttle and leaves. See "The
-cooldown" below for when that is the verb you want and when `run` is.
+The terminal runner uses the shared single-instance lock. If another pass is
+running, `bootstrap run` refuses with exit code 2 and asks you to retry after it
+finishes. It never attaches to that pass: its manifests or project may differ.
+The runner also checks the lock atomically to cover a race after the initial
+probe. Refusal does not alter lifecycle cooldowns or version stamps.
 
-## Why neither form starts a second pass
+Bare `bootstrap` retains its status-and-follow behavior. `bootstrap --json`
+always returns immediately. The status probe reads the lock without acquiring
+or clearing it.
 
-A pass is single-instance, guarded by `proc_lock.engine_lock`. An engine
-launched beside a live one acquires nothing, stands down, and prints nothing --
-so a naive `run` during a pass would look, from the terminal, exactly like
-bootstrap doing nothing at all.
-
-Both forms therefore read the lock FIRST and attach when it is held. The read is
-`proc_lock.lock_holder`, a pure query: never try-acquire-then-release, because
-acquiring clears a stale lock and holds the mutex for an instant, so a status
-probe could make a genuine launcher stand down. It applies the identical
-staleness rules the acquisition applies, so the two can never disagree.
-
-`run` re-checks after its child exits, too. Between the up-front check and the
-engine's own acquire, another launcher (a SessionStart, the harvest, the
-mid-session relaunch) can win the lock; a pass holding it afterwards means that
-happened, and `run` attaches rather than exiting on a false all-clear.
-
-## Streaming
-
-Both an ATTACHED pass and a LAUNCHED one are streamed. The console engine prints
-its verdict and its failures to stdout and nothing else, so a clean pass that
-takes minutes otherwise showed a few lines of shell preamble and exited. The
-per-check detail lives in the event stream, and streaming it is the whole reason
-this command blocks.
-
-Either path drops `events.watch` in the plugin's data directory. That marker
-switches the pass recorder from its normal buffered write -- two file writes per
-pass -- to a flush throttled at one second, for as long as a reader is attached,
-and the marker is removed on the way out (on the normal path, on an exception,
-and on the Ctrl-C that is the likeliest way a tail ends). Without it there is
-nothing to tail mid-pass.
-
-Two consequences worth knowing:
-
-- A tail attaches at the CURRENT end of the stream, so records a pass emitted
-  before you attached are not replayed. `bootstrap.log` holds the completed
-  record.
-- The LAUNCH path suppresses the verdict record while tailing, because the child
-  process is already printing that verdict to the same terminal.
-
-## The cooldown
-
-`bootstrap run` is exempt in BOTH directions and needs no reset first.
-
-It is never throttled BY the per-project cooldown: `--console` reads no hook
-stdin, so the session-id guard never engages, and both skip gates exempt it from
-the always-lane downgrade. It also does not WRITE the cooldown stamp -- an
-explicit run from a terminal is not the session-start schedule, and advancing
-that schedule would let a manual run silently consume the next session's pass.
-Bypassing a throttle while still arming it for someone else is half a bypass.
-
-`bootstrap reset` is for the case `run` does not cover: a change that has to
-converge through a genuine SessionStart rather than a console pass -- and, on a
-wedged machine, the only sanctioned way to make bootstrap run again, since
-forcing a pass by hand destroys the state that explains the wedge. It clears the
-per-project stamp and the session-id guard together, so the next session start
-is a real pass.
-
-The verb owns no logic of its own: it delegates to `bootstrap-reset-cooldown`,
-which is the single place that knows how a stamp is keyed (the logical `$PWD`,
-hashed exactly as the hook hashes it) and which files go with it. Every flag,
-`--help` included, passes straight through, and the lever's exit code is
-returned unchanged. Both names stay on PATH; `bootstrap reset` exists so the
-command you already have is enough.
-
-## Exit codes
-
-| Form | Code |
+| Form | Exit code |
 |---|---|
-| bare `bootstrap` | always 0 -- "running" and "not running" are both correct answers to the question asked |
-| `bootstrap run`, pass started | the engine's own exit code |
-| `bootstrap run`, attached to someone else's pass | 0 |
-| `bootstrap run`, ambiguous marketplace or no plugin tree | 2 |
-| `bootstrap reset` | whatever `bootstrap-reset-cooldown` returned; 2 when no plugin tree was found |
+| Bare `bootstrap` | 0 whether idle or running |
+| `bootstrap run` | 0 on success; 1 on manifest/provisioning failure |
+| `bootstrap run`, busy or ambiguous marketplace | 2 |
+| `bootstrap run`, missing plugin tree | 2 |
+| `bootstrap reset` | The delegated reset script's exit code |
 
-Read `--json` to learn whether a pass was running. Never `$?` for the bare form.
+## Cooldowns and records
 
-## Marketplace scoping
+`bootstrap run` neither consumes nor advances the SessionStart cooldown. It also
+leaves plugin lifecycle version stamps and env.json state unchanged.
+`bootstrap reset` delegates to `bootstrap-reset-cooldown` to clear the cooldown
+and session guard for the next genuine Claude session.
 
-The command acts on the marketplace that has a bootstrap data directory under
-`${CLAUDE_BOOTSTRAP_DATA_ROOT:-~/.claude/plugins/data}`. It does not assume
-`plugins-kit`: installed into `~/.local/bin` as a copy, it cannot derive its own
-marketplace from its path.
+The CLI creates an `events.watch` marker while tailing and removes it afterwards.
+The recorder retains console events in `bootstrap_events.jsonl`. Bare status
+attaches at the current end of the event stream without replaying older output.
 
-With more than one, the bare command reports on all of them and follows one only
-when exactly one is running -- tailing two engines at once would attribute lines
-to the wrong one. `run` REFUSES rather than guess, because launching the wrong
-engine provisions the wrong machine state silently. `BOOTSTRAP_MARKETPLACE`
-names one.
+## Engine and data discovery
 
-`reset` is the exception: it acts on EVERY marketplace found, because clearing
-a throttle that was not set costs nothing and a stamp left behind on a second
-marketplace is exactly the silent skip the verb exists to remove.
+`BOOTSTRAP_PLUGIN_ROOT` selects an explicit engine tree. Otherwise discovery
+prefers the highest cached bootstrap version, with the marketplace clone as
+fallback. Version components sort numerically.
 
-## Pointing it at a different tree
+Data directories are discovered under
+`${CLAUDE_BOOTSTRAP_DATA_ROOT:-~/.claude/plugins/data}`. With multiple marketplaces,
+`run` requires `BOOTSTRAP_MARKETPLACE` to choose its engine/data context. This
+selection does not add plugin manifests to the four-layer run. Bare status can
+report all marketplaces. Reset acts on all marketplaces unless scoped by the
+environment.
 
-`BOOTSTRAP_PLUGIN_ROOT` outranks discovery when set. It is the only way to run a
-tree that is not the installed one -- a dev checkout, a worktree. Without that
-precedence the command launches the INSTALLED engine while naming the requested
-root, so a fix under test never runs and the run looks like it did.
-
-Unset, resolution prefers the highest installed cache version, because that is
-the code Claude Code actually loads; the marketplace clone is the fallback for a
-machine with no cached install yet. Version directories sort numerically per
-component, since lexical order puts `0.98.1` above `0.104.0` and would run a
-superseded engine.
-
-## How it reaches a machine
-
-Nothing is installed by hand, and no per-machine configuration is involved.
-
-1. `scripts/bootstrap.sh` and `scripts/bootstrap_cli.py` ship in this plugin.
-2. The SessionStart hook copies them to `~/.local/bin/bootstrap` every session,
-   alongside `bootstrap-reset-cooldown` and `env-reset-cooldown`. Unix gets a
-   symlink so plugin updates flow automatically; Windows gets a copy, because
-   symlinks there need elevation. Re-installed every session, so the lever
-   tracks the cached plugin version and returns if deleted.
-3. `~/.local/bin` is already on PATH because bootstrap puts it there -- it is
-   where the engine installs `uv`, `gh`, standalone Python, and the `claude` CLI
-   itself. The directory is declared in the plugin's own default config, and the
-   engine persists it to the Windows user PATH (registry) and to shell rc files.
-
-`bootstrap.sh` is a thin shim: it resolves the plugin tree and an interpreter,
-then hands off to `bootstrap_cli.py`, which holds the behavior. The shim never
-installs Python -- a status probe must not be able to trigger a multi-megabyte
-download -- so on a machine whose first pass has not run, `bootstrap run` works
-(the pass installs Python as its first act) and the status form reports that it
-cannot read the lock. `bootstrap reset` also works there, routed straight to the
-pure-bash lever rather than reporting a Python problem it does not have.
-
-## Troubleshooting
-
-**`command not found` right after a first pass.** The PATH entry is persisted to
-the registry or the rc files, but a shell that was already open does not have
-it. Open a new terminal.
-
-**It blocks.** That is the intended behavior whenever a pass is running, not a
-hang. `--json` is the form that always returns immediately, and is what a script
-or a hook should call.
-
-**It printed a few lines and exited.** With nothing running, that is the whole
-report. With something running it should have attached -- check the data
-directory for a lock file whose recorded PID is alive.
-
-**A left-behind `events.watch`.** Harmless but not free: every later pass flushes
-once a second for a reader who has gone. Deleting the file restores the buffered
-write.
+The SessionStart hook installs the shell shim into `~/.local/bin/bootstrap`.
+The shim resolves an existing interpreter and delegates to `bootstrap_cli.py`.
+Terminal execution goes through `bootstrap_run.py`, which presents the shared
+`bootstrap_lib.layered_bootstrap` capability. Without Python, let Claude's normal
+lifecycle provision it first. Reset remains available without Python through
+its shell delegate.

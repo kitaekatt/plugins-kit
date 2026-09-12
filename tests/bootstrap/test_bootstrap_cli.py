@@ -6,8 +6,8 @@ Two contracts, and they are the reason this lever exists at all:
    acquired the lock -- even briefly -- would clear a stale one and could make
    a genuine launcher stand down, so the probe reads the lock and never
    touches it.
-2. `run` must never start a SECOND pass alongside a running one. It attaches
-   to the one in flight and streams it to completion instead.
+2. `run` applies only user/project layers. It must refuse a running pass,
+   whose manifest scope may include plugins or another project.
 """
 
 import hashlib
@@ -210,7 +210,7 @@ class TestRun:
             "CLAUDE_BOOTSTRAP_DATA_ROOT",
             str(tmp_path_factory.mktemp("default-data-root")))
 
-    def test_attaches_instead_of_starting_a_second_pass(
+    def test_refuses_instead_of_attaching_to_a_different_scope(
             self, tmp_path, monkeypatch, capsys):
         monkeypatch.setenv("CLAUDE_BOOTSTRAP_DATA_ROOT", str(tmp_path))
         monkeypatch.setenv("BOOTSTRAP_MARKETPLACE", "mkt-a")
@@ -218,16 +218,16 @@ class TestRun:
         data_dir.mkdir(parents=True)
 
         launched = []
-        monkeypatch.setattr(cli.subprocess, "run",
+        monkeypatch.setattr(cli.subprocess, "Popen",
                             lambda *a, **k: launched.append(a))
-        monkeypatch.setattr(cli, "follow", lambda d: 7)
+        monkeypatch.setattr(cli, "follow", lambda d: pytest.fail("attached"))
 
         with proc_lock.engine_lock(str(data_dir)):
             rc = cli.cmd_run(_args(plugin_root="", forward=[]))
 
-        assert rc == 7, "run must return the follow result, not launch a pass"
+        assert rc == 2
         assert launched == [], "a second engine must never be spawned"
-        assert "already running" in capsys.readouterr().out
+        assert "already running" in capsys.readouterr().err
 
     def test_engine_flags_pass_through(self, tmp_path, monkeypatch, capsys):
         """`bootstrap run --verbose` is the spelling the help advertises.
@@ -256,27 +256,28 @@ class TestRun:
         assert cli.main(["run", "--verbose"]) == 0
         capsys.readouterr()
         assert seen["cmd"][-2:] == ["--console", "--verbose"]
+        assert seen["cmd"][0] == sys.executable
+        assert seen["cmd"][1] == "/plug/scripts/bootstrap_run.py"
+        assert seen["cmd"][seen["cmd"].index("--project-dir") + 1] == os.getcwd()
 
     def test_unknown_flag_without_run_is_still_an_error(self, capsys):
         with pytest.raises(SystemExit):
             cli.main(["--nonsense"])
         assert "unrecognized" in capsys.readouterr().err
 
-    def test_losing_the_lock_race_attaches_instead_of_exiting_silently(
+    def test_losing_the_lock_race_returns_runner_refusal(
             self, tmp_path, monkeypatch, capsys):
         """The up-front lock check is not the last word.
 
-        Another launcher can take the lock between that check and the engine's
-        own acquire; the engine then stands down having printed nothing, and
-        `bootstrap run` used to return 0 in a second with no output -- from the
-        terminal, indistinguishable from bootstrap doing nothing at all.
+        Another launcher can take the lock after the up-front check. The
+        runner's refusal must be returned; no wider pass may be attached.
         """
         monkeypatch.setenv("CLAUDE_BOOTSTRAP_DATA_ROOT", str(tmp_path))
         monkeypatch.setenv("BOOTSTRAP_MARKETPLACE", "mkt-a")
         data_dir = tmp_path / "mkt-a" / "bootstrap"
         data_dir.mkdir(parents=True)
         monkeypatch.setattr(cli, "find_plugin_root", lambda m, f="": "/plug")
-        monkeypatch.setattr(cli, "follow", lambda d: 9)
+        monkeypatch.setattr(cli, "follow", lambda d: pytest.fail("attached"))
 
         monkeypatch.setattr(cli, "FINAL_GRACE_SECONDS", 0.0)
         monkeypatch.setattr(cli, "POLL_INTERVAL", 0.0)
@@ -286,14 +287,16 @@ class TestRun:
             # time the engine we launched has given up.
             racing_engine.lock = proc_lock.engine_lock(str(data_dir))
             assert racing_engine.lock.__enter__() is True
-            return _ExitedProcess()
+            process = _ExitedProcess()
+            process.returncode = 2
+            return process
 
         monkeypatch.setattr(cli.subprocess, "Popen", racing_engine)
         try:
-            assert cli.cmd_run(_args(plugin_root="", forward=[])) == 9
+            assert cli.cmd_run(_args(plugin_root="", forward=[])) == 2
         finally:
             racing_engine.lock.__exit__(None, None, None)
-        assert "took the lock first" in capsys.readouterr().out
+        capsys.readouterr()
 
     def test_streams_the_pass_it_launched(
             self, tmp_path, monkeypatch, capsys):

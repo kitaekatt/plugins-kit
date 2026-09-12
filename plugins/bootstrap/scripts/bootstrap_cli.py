@@ -7,10 +7,9 @@ SINGLE-INSTANCE thing (bootstrap_lib.proc_lock):
     bootstrap        Is a pass running right now? Says so -- and if one IS,
                      stays attached and streams it until it finishes.
                      `--json` is the non-blocking scripting form.
-    bootstrap run    The same, plus START a full pass when none is running.
-                     It never starts a SECOND one: a pass already in flight
-                     is attached to, not raced, because a second engine would
-                     only stand down on the lock and print nothing.
+    bootstrap run    Apply only the four user/project manifest layers.
+                     Refuse while another pass is running; attaching could
+                     inherit that pass's broader or different project scope.
     bootstrap reset  Clear the cooldown stamp so the NEXT session start runs a
                      real pass. Not a pass itself -- it is the lever for the
                      one case `run` does not cover, a layered bootstrap.json
@@ -35,6 +34,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+from pathlib import Path
 import signal
 import subprocess
 import sys
@@ -262,14 +262,10 @@ def cmd_run(args) -> int:
     data_dir = plugin_data_dir(marketplace)
     info = holder(data_dir)
     if info is not None:
-        pid = info.get("pid")
-        if pid is None:
-            print("A bootstrap pass is starting; attaching to it.")
-        else:
-            print("A bootstrap pass is already running (pid %s, %s elapsed); "
-                  "attaching to it rather than starting a second one."
-                  % (pid, _duration(info.get("age"))))
-        return follow(data_dir)
+        sys.stderr.write(
+            "bootstrap run: another pass is already running; retry after it finishes.\n"
+            "It is not attached because its manifest scope may be different.\n")
+        return 2
 
     plugin_root = find_plugin_root(marketplace, args.plugin_root)
     if not plugin_root:
@@ -280,41 +276,19 @@ def cmd_run(args) -> int:
             % (marketplace, marketplace, marketplace))
         return 2
 
-    wrapper = os.path.join(plugin_root, "hooks", "sessionstart",
-                           "session-bootstrap.sh")
-    # --console is a full pass by construction: it reads no hook stdin (so the
-    # Layer-1 session guard never engages) and both skip gates exempt it from
-    # the always-lane downgrade. So there is nothing to reset first -- this is
-    # already "converge now", synchronously, on stdout.
-    #
-    # `bash <path>` rather than executing the wrapper directly: a cached or
-    # cloned plugin copy can arrive without its mode bits (a Windows clone, an
-    # archive extraction), and a lever that works only on some checkouts is
-    # the failure this whole file exists to avoid.
-    print("Running a full bootstrap pass (%s)." % os.path.basename(plugin_root))
+    runner = Path(plugin_root) / "scripts" / "bootstrap_run.py"
+    print("Bootstrap engine: %s" % plugin_root)
     sys.stdout.flush()
-
-    # Tail the pass we LAUNCH, not only one we attach to. The console engine
-    # prints its verdict and its failures to stdout and nothing else, so a
-    # clean three-minute pass showed five lines of shell preamble and then
-    # exited -- which from the terminal is indistinguishable from bootstrap
-    # having done nothing. The event stream is where the per-check detail
-    # lives, and streaming it is the whole reason this command blocks.
-    rc = _stream_until_exit(
+    # Launch the shared layered runner directly. The SessionStart wrapper
+    # provisions Python and plugins before dispatching its full engine pass;
+    # none of that is part of a terminal user/project manifest run.
+    return _stream_until_exit(
         data_dir,
-        lambda: subprocess.Popen(["bash", wrapper, "--console"] + args.forward))
-
-    # The up-front lock check is not the last word: between it and the
-    # engine's own acquire, another launcher (a SessionStart, the harvest, the
-    # mid-session relaunch) can win the lock, and the engine then stands down
-    # without running the pass. A pass holding the lock now means that
-    # happened, so do what the up-front check would have done rather than
-    # exiting on a false all-clear.
-    if holder(data_dir) is not None:
-        print("\nAnother bootstrap pass took the lock first; "
-              "attaching to it instead.")
-        return follow(data_dir)
-    return rc
+        lambda: subprocess.Popen([
+            sys.executable, str(runner), "--plugin-root", plugin_root,
+            "--data-dir", data_dir, "--project-dir", str(Path.cwd()),
+            "--console",
+        ] + args.forward))
 
 
 def _stream_until_exit(data_dir: str, launch) -> int:
@@ -563,15 +537,15 @@ def _render(line: str, verdict: bool = True):
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(
         prog="bootstrap",
-        description="Report on, run, or reset the bootstrap provisioning pass.")
+        description="Inspect lifecycle passes, run user/project manifests, or reset cooldowns.")
     parser.add_argument("--plugin-root", default="",
                         help=argparse.SUPPRESS)  # supplied by the shim
     parser.add_argument("--json", action="store_true",
                         help="machine-readable status")
     sub = parser.add_subparsers(dest="command")
     sub.add_parser("run",
-                   help="run a pass, or attach to the running one; trailing "
-                        "flags (e.g. --verbose) pass through to the engine")
+                   help="apply the four user/project bootstrap manifest layers; "
+                        "refuse while another pass is running")
     # add_help=False so `bootstrap reset --help` reaches the lever this verb
     # delegates to and prints ITS flags, rather than argparse printing a
     # subcommand help that lists none of them.

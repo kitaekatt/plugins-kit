@@ -93,13 +93,12 @@ reference_skill:
         1. Download/activation (new plugin files onto disk) -- `claude plugin
            marketplace update <mkt>` + `claude plugin update`. No restart.
         2. Provisioning (bootstrap applying the manifest -- ini writes, venvs, PATH,
-           config merges) -- run `bootstrap run` (the PATH lever; see
-           bootstrap_cli_lever). No restart. The long form, for when a specific
-           plugin tree has to be named: `hooks/sessionstart/session-bootstrap.sh
-           --console`, invoked from that tree. Neither needs a cooldown reset --
-           `--console` is exempt from both skip gates. When a change must converge
-           through a genuine SessionStart instead, `bootstrap reset` clears the
-           throttle (the same lever as bootstrap-reset-cooldown).
+           config merges) -- bootstrap run applies user/project declarations
+           only (see bootstrap_cli_lever). Installed plugins' own requirements
+           are handled by Claude's normal lifecycle. A healthy-machine full
+           console pass uses hooks/sessionstart/session-bootstrap.sh --console
+           in Claude's supported runtime, exempt from both skip gates.
+           bootstrap reset clears the throttle for a genuine SessionStart.
         3. Code loading (new hooks/skills REGISTERING in the current session) -- the
            only residue a manual run cannot converge; this is what /reload-plugins or a
            restart is for.
@@ -120,66 +119,50 @@ reference_skill:
           never a remediation step for layers 1-2.
     - id: bootstrap_cli_lever
       summary: >-
-        `bootstrap` is a fleet-wide PATH command, installed into ~/.local/bin every
-        session. Bare, it reports whether a pass is running and, when one IS, stays
-        attached and streams it to completion. `bootstrap run` does the same and also
-        STARTS a pass when none is running. Neither ever starts a second one.
-        `bootstrap reset` clears the cooldown, delegating to bootstrap-reset-cooldown.
-      keywords: [bootstrap command, bootstrap CLI, bootstrap run, bootstrap reset, clear the cooldown from the cli, reset the cooldown, is bootstrap running, is a pass running, from the terminal, without starting Claude, tail the pass, attach to running pass, engine lock, events.watch, live output, ~/.local/bin lever, BOOTSTRAP_MARKETPLACE, bootstrap --json, BOOTSTRAP_PLUGIN_ROOT, dev checkout, worktree, point bootstrap at a checkout, cooldown stamp]
+        bootstrap run applies only the four user/project bootstrap.json and
+        bootstrap.local.json layers. Bare bootstrap reports and follows running
+        lifecycle passes; --json is non-blocking. bootstrap reset clears the
+        next-session throttle through bootstrap-reset-cooldown.
+      keywords: [bootstrap CLI, bootstrap run, user manifests, project manifests, working directory, manifest scope, bootstrap reset, running pass, BOOTSTRAP_MARKETPLACE, BOOTSTRAP_PLUGIN_ROOT]
       detail: |
-        Installed alongside bootstrap-reset-cooldown and env-reset-cooldown by
-        session-bootstrap.sh, re-copied every session so it tracks the cached plugin
-        version. Implementation: `scripts/bootstrap.sh` (a shim that finds the highest
-        installed cache version and an interpreter) -> `scripts/bootstrap_cli.py`.
+        Terminal run scope, lowest to highest priority:
+        1. ~/.claude/bootstrap.json
+        2. ~/.claude/bootstrap.local.json
+        3. <working-directory>/.claude/bootstrap.json
+        4. <working-directory>/.claude/bootstrap.local.json
+        Missing files are skipped; later conflicts win under shared merge rules.
+        A parse error stops provisioning. The working directory is used exactly,
+        with no parent or Git-root search. The CLI prints all four candidate paths.
 
-          bootstrap             reports; BLOCKS on a running pass and streams it to the end
-          bootstrap --json      report only, never blocking -- the scripting form
-          bootstrap run         the same, and starts a pass when none is running;
-                                exits with the engine's code when it started one
-          bootstrap run --verbose   trailing flags pass through to the engine
-          bootstrap reset       clears this project's cooldown stamp and the session-id
-                                guard, so the NEXT session start runs a real pass
-          bootstrap reset --all     every project (--status, --project <dir>,
-                                --clear-alerts and --help all pass through)
+        The runner composes shared manifest handlers without plugin discovery,
+        legacy user-bootstrap.json, env.json personalization, self-provisioning,
+        or implicit project setup. Explicit plugins/marketplaces declarations in
+        the four layers still install or update their declared entries; installed
+        plugins' own manifests are not added to this run. Claude's automatic
+        lifecycle retains its full plugin-provisioning scope.
 
-        Why `bootstrap` and `bootstrap run` differ only in that one clause: a pass is single-instance
-        (proc_lock.engine_lock), so a second engine launched next to a live one would
-        only stand down on the lock and print nothing. BOTH forms therefore check the
-        lock FIRST and attach when it is held; `run` adds "and launch one if it is
-        not". The lock check is `proc_lock.lock_holder`, a read-only query -- never
-        try-acquire-then-release, which would clear a stale lock and could make a
-        genuine launcher stand down.
+        run refuses with exit code 2 while another pass holds the shared lock;
+        it never attaches to a pass with a potentially different scope. Success
+        is 0; manifest/provisioning failure is 1. It leaves session cooldowns,
+        plugin lifecycle version stamps, and env.json state unchanged.
+        Bare status still follows a running pass; --json never blocks.
 
-        `bootstrap run` is exempt from the cooldown in BOTH directions, so it needs no
-        reset -- it is neither throttled by the stamp nor writes it, because a manual
-        run is not the session-start schedule. It IS "converge now".
+        Execution: scripts/bootstrap.sh -> scripts/bootstrap_cli.py ->
+        scripts/bootstrap_run.py -> bootstrap_lib.layered_bootstrap.
+        BOOTSTRAP_PLUGIN_ROOT selects the engine tree; otherwise the highest
+        cached bootstrap version is preferred, then the marketplace clone.
+        Multiple bootstrap data marketplaces require BOOTSTRAP_MARKETPLACE.
+        These engine/data choices do not broaden the four-layer manifest scope.
+        The CLI needs an existing Python; Claude's normal lifecycle provisions it.
 
-        `bootstrap reset` is therefore NOT a smaller `run` -- it runs no pass. It is
-        for what `run` cannot do: make the NEXT SessionStart a real pass, which is the
-        only sanctioned way to get bootstrap running again on a wedged machine, and
-        what a layered bootstrap.json edit needs. It owns no logic of its own; every
-        flag and the exit code belong to bootstrap-reset-cooldown, which stays on PATH
-        under its own name.
-
-        Full command reference -- streaming and the events.watch marker, exit codes,
-        marketplace scoping, BOOTSTRAP_PLUGIN_ROOT, how the lever reaches a machine,
-        and troubleshooting: references/bootstrap-cli.md.
+        Full command reference: references/bootstrap-cli.md.
       gotchas:
-        - The bare command BLOCKS whenever a pass is running -- that is the intended
-          behavior, not a hang. `--json` is the form that always returns immediately,
-          and it is what a script or a hook should call.
-        - The BARE command exits 0 whether or not a pass was running -- both are
-          correct answers to the question asked -- so read `--json`, never `$?`, to
-          learn which. `bootstrap run` is different and its `$?` IS meaningful -- when
-          it starts a pass it exits with the engine's own code, and 2 when it refuses
-          on an ambiguous marketplace.
-        - With more than one marketplace holding a bootstrap data dir, the bare command
-          reports on all of them and follows one only when exactly one is running;
-          `run` REFUSES rather than guess which engine to launch. Set
-          BOOTSTRAP_MARKETPLACE. Running the wrong one provisions the wrong machine state silently.
-        - Attaching tails from the CURRENT end of the event stream, so records a pass
-          already emitted before you attached are not replayed. Read bootstrap.log for
-          the completed record of a pass.
+        - Run from the repository root to include its project manifests; running
+          from src/ checks src/.claude instead.
+        - Bare bootstrap follows another pass, while bootstrap run refuses it.
+          Retry run after that pass finishes.
+        - bootstrap run does not provision installed plugins' own requirements.
+          Use Claude's normal lifecycle for full plugin provisioning.
     - id: cooldown_reset_request
       summary: >-
         A request about the cooldown ITSELF asks only for the skip stamps to be deleted -- it
@@ -443,10 +426,9 @@ reference_skill:
       path: references/bootstrap-cli.md
       keywords: [bootstrap command, bootstrap CLI, bootstrap run, bootstrap --json, is a pass running, run bootstrap from a terminal, without starting Claude, tail a pass, attach to a running pass, stream the pass, events.watch, blocks, exit codes, BOOTSTRAP_MARKETPLACE, BOOTSTRAP_PLUGIN_ROOT, dev checkout, worktree, ~/.local/bin lever, command not found, cooldown exempt]
       summary: >-
-        The `bootstrap` PATH command -- both verbs and --json, why neither ever starts a
-        second pass, how an attached and a launched pass are streamed, the cooldown
-        exemption in both directions, exit codes, marketplace scoping, pointing it at a
-        non-installed tree, how the lever reaches a machine, and troubleshooting.
+        The bootstrap PATH command -- four-layer run scope, busy-pass refusal,
+        status following, cooldown behavior, exit codes, engine/data discovery,
+        and runtime prerequisites.
     - id: engine_internals
       path: references/engine-internals.md
       keywords: [engine, internals, processing order, self-setup, manifest phase, script phase, messaging protocol, execution flow, throttling, first run, clean install, phases, design principles, shared library, hybrid model, agent_skills_link, agent skills link, codex skills, .agents, .agents/skills, agents directory]

@@ -1,6 +1,7 @@
 """PATH entry verification and persistent remediation."""
 
 import os
+import re
 import sys
 from typing import Tuple
 
@@ -49,6 +50,17 @@ def _home_relative_path(path: str, home: str) -> str | None:
     if path_fwd == home_fwd or path_fwd.startswith(home_fwd + "/"):
         return "$HOME" + path_fwd[len(home_fwd):]
     return None
+
+
+def _shell_path(path: str) -> str:
+    """Convert a native Windows path to a Git Bash path for rc files."""
+    if not (sys.platform == "win32" or "MSYSTEM" in os.environ):
+        return path
+    normalized = path.replace("\\", "/")
+    drive_match = re.match(r"^([A-Za-z]):/(.*)$", normalized)
+    if drive_match:
+        return f"/{drive_match.group(1).lower()}/{drive_match.group(2)}"
+    return normalized
 
 
 def check_path_entry(path_entry: str) -> Result:
@@ -110,7 +122,7 @@ def add_path_to_shell_config(path_entry: str) -> Tuple[bool, str]:
     if home_form is not None:
         path_expr = f'"{home_form}:$PATH"'
     else:
-        path_expr = f'"{expanded}:$PATH"'
+        path_expr = f'"{_shell_path(expanded)}:$PATH"'
     export_line = f'export PATH={path_expr}'
 
     # Determine RC files by platform
@@ -124,7 +136,8 @@ def add_path_to_shell_config(path_entry: str) -> Tuple[bool, str]:
     # so the idempotency check matches regardless of whether a previous run
     # wrote backslashes (native Windows Python) or forward slashes (MSYS/Cygwin
     # Python). Without this, every run appends a fresh duplicate line.
-    expanded_fwd = expanded.replace("\\", "/")
+    expanded_fwd = _shell_path(expanded)
+    legacy_spellings = {expanded, expanded.replace("\\", "/"), expanded_fwd}
     home_form = _home_relative_path(expanded, home) or expanded_fwd
 
     written = []
@@ -132,7 +145,9 @@ def add_path_to_shell_config(path_entry: str) -> Tuple[bool, str]:
         try:
             if os.path.exists(rc_file):
                 content_fwd = open(rc_file).read().replace("\\", "/")
-                if home_form in content_fwd or expanded_fwd in content_fwd:
+                if home_form in content_fwd or any(
+                    spelling in content_fwd for spelling in legacy_spellings
+                ):
                     durable = True
                     continue
             with open(rc_file, "a") as f:
@@ -146,7 +161,7 @@ def add_path_to_shell_config(path_entry: str) -> Tuple[bool, str]:
     parts = []
     if written:
         parts.append(f"added to {', '.join(written)}")
-    if registry_msg and registry_ok:
+    if registry_msg and registry_ok and not os.environ.get("BOOTSTRAP_SKIP_REGISTRY"):
         parts.append(registry_msg)
     if parts:
         if failures:
