@@ -72,7 +72,7 @@ Automate this rather than typing it: plugins-kit builds its `index.html` from `s
 uv run python "${CLAUDE_PLUGIN_ROOT}/skills/plugin-ecosystem/scripts/generate.py"
 ```
 
-The script is stdlib-only; `uv run python` is the repo-standard cross-platform invocation (resolves a working interpreter on macOS, Windows, and Linux).
+The script uses only the Python standard library.
 
 Optional flags:
 - `--project PATH` -- project root (defaults to cwd). Determines which `bootstrap.json` and `settings.json` are read for live state.

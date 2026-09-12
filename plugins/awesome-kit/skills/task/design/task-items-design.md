@@ -128,7 +128,7 @@ Deliberate omissions:
 
 - **No `done` state.** Completion is REMOVAL from the block at the rotation
   pass; plan.md's Accomplished section keeps the one-line record and log.md
-  the detail, exactly as today. The mined accretion anti-pattern (checkbox
+  the detail, as the rotation discipline prescribes. The mined accretion anti-pattern (checkbox
   lists and forward overviews padded with `DONE <date>` items that also
   appear in Accomplished -- three copies of one completion fact) is
   structurally prevented: the block enumerates open work only, a moving
@@ -180,7 +180,7 @@ list to a **reference view**:
   text at length and NEVER restates its state -- state has exactly one home.
 - Prose remains for genuinely non-item content: open questions for the user
   (the existing `### Open questions for the user` subsection), standing
-  warnings, the seam-test facts that belong there today.
+  warnings, the seam-test facts assigned to that section.
 - The section may open with the standing line: "Live menu: `task items`
   (plan.md `task_items` is the source of truth)."
 
@@ -190,7 +190,7 @@ cannot disagree with the item it points at. It is the same cure the system
 already applies to task references ("references never carry status").
 
 No new data structure is introduced for the priority view -- ids in prose are
-enough, the same way task ids appear in prose today. (A typed `item_refs`
+enough, following the task-reference convention of ids in prose. (A typed `item_refs`
 unit was considered and rejected: more data types for no query the `items`
 verb does not already answer.)
 
@@ -210,7 +210,7 @@ verb does not already answer.)
     to log.md. (Unchanged discipline, now with a crisper trigger.)
   - **Promotion rule: the block is the only place open work may live.** Any
     open item surfaced mid-session in log prose or CLAUDE.md banners --
-    today's `(OPEN)` tags, watch-lists, carry-forwards -- is either promoted
+    `(OPEN)` tags, watch-lists, carry-forwards -- is either promoted
     into the block (usually `blocked-user` or `deferred`, with a `note:`) or
     deliberately discarded, at the same rotation pass. This is the fix for
     the lose-able-log-item failure (worked examples:
