@@ -6,13 +6,17 @@
 #                             one IS, stay attached and stream it until it
 #                             finishes, then exit
 #   bootstrap --json          report only, never blocking (the scripting form)
-#   bootstrap run             the same, plus START a pass when none is running
-#   bootstrap run --verbose   extra flags are passed through to the engine
+#   bootstrap run             apply user/project bootstrap.json and
+#                             bootstrap.local.json only; no plugin discovery
+#   bootstrap run --verbose   accepted for console compatibility
 #   bootstrap reset           clear this project's cooldown so the next session
 #                             start runs a real pass
 #   bootstrap reset --all     clear every project's cooldown (--status to list,
 #                             --project <dir>, --clear-alerts; --help for all)
 #   bootstrap -h | --help     show this help
+#
+# Project layers use the exact working directory; no parent search.
+# run refuses while another pass is running, rather than attaching to it.
 #
 # Scoping: acts on the single marketplace that has a bootstrap data dir under
 # ${CLAUDE_BOOTSTRAP_DATA_ROOT:-~/.claude/plugins/data}. Set
@@ -32,7 +36,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 case "${1:-}" in
     -h|--help)
-        sed -n '2,27p' "$0" | sed 's/^# \{0,1\}//'
+        sed -n '2,/^set -uo pipefail/p' "$0" | sed '$d; s/^# \{0,1\}//'
         exit 0
         ;;
 esac
@@ -80,13 +84,11 @@ if [ -z "$PLUGIN_ROOT" ]; then
     exit 2
 fi
 
-WRAPPER="$PLUGIN_ROOT/hooks/sessionstart/session-bootstrap.sh"
-
 # --- Resolve an interpreter ---
 # Same locations session-bootstrap.sh uses, in the same order, but this lever
 # NEVER installs Python: a status probe must not be able to trigger a
 # multi-megabyte download, and for `run` the wrapper below does the install
-# itself as part of the pass it was going to run anyway.
+# is owned by Claude's normal lifecycle.
 OS="$(uname -s)"
 PYTHON=""
 if [[ "$OS" == MINGW* ]] || [[ "$OS" == MSYS* ]]; then
@@ -97,23 +99,13 @@ else
 fi
 for _c in "${_CANDIDATES[@]}" "$(command -v python3 2>/dev/null)" "$(command -v python 2>/dev/null)"; do
     [ -n "$_c" ] && [ -x "$_c" ] || continue
-    if "$_c" -c "import sys; sys.exit(0 if sys.version_info[0] >= 3 else 1)" 2>/dev/null; then
+    if "$_c" -c "import sys; sys.exit(0 if sys.version_info >= (3, 12) and sys.version_info[:2] != (3, 14) else 1)" 2>/dev/null; then
         PYTHON="$_c"
         break
     fi
 done
 
 if [ -z "$PYTHON" ]; then
-    # No interpreter yet (a machine whose first pass has not run). `run` still
-    # works: the wrapper installs standalone Python as its first act. Status
-    # genuinely cannot be answered without one -- and on such a machine the
-    # answer is almost certainly "nothing is running" anyway, so say what is
-    # actually known rather than guessing it.
-    if [ "${1:-}" = "run" ]; then
-        shift
-        echo "bootstrap: no Python yet; the pass will install one first."
-        exec bash "$WRAPPER" --console "$@"
-    fi
     # `reset` needs no interpreter either -- it delegates to a pure-bash lever
     # -- so route it here rather than reporting a Python problem it does not
     # have. (The normal path still goes through bootstrap_cli.py, so there is
@@ -122,8 +114,8 @@ if [ -z "$PYTHON" ]; then
         shift
         exec bash "$PLUGIN_ROOT/scripts/bootstrap-reset-cooldown.sh" "$@"
     fi
-    echo "bootstrap: no Python 3 found, so the engine lock cannot be read." >&2
-    echo "Run 'bootstrap run' -- the pass installs a standalone Python first." >&2
+    echo "bootstrap: no compatible Python found (requires >=3.12, excluding 3.14)." >&2
+    echo "Let Claude's normal bootstrap lifecycle provision Python first." >&2
     exit 2
 fi
 
