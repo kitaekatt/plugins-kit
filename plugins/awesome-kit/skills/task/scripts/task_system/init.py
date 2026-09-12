@@ -7,7 +7,7 @@ exist -- else error telling the user to use ``update``. Steps: scaffold the
 type's files (CLAUDE.md + plan.md + log.md + task.yaml for hand-off), seed
 ``task.yaml`` (``_schema_version: "1"``, ``type``, ``title``,
 ``status: active``), seed the markdown files from the hand-off template
-(SKILL.md's eight-``##``-section CLAUDE.md contract, with placeholder/seeded
+(SKILL.md's seven-``##``-section CLAUDE.md contract, with placeholder/seeded
 content), then run ``validate``.
 
 Invariant (spec 7.1): **the output is always a valid ``active`` task.** If the
@@ -88,7 +88,7 @@ def derive_stub_and_title(stub_or_desc: str) -> tuple[str, str]:
 
 
 # --- hand-off scaffolding templates ----------------------------------------
-# The CLAUDE.md scaffold reuses the hand-off template: the eight ## sections
+# The CLAUDE.md scaffold reuses the hand-off template: the seven ## sections
 # (with their required ### subsections) under a single `# Project Overview`,
 # per the task skill's references/handoff-template.md and the worked
 # example at references/example-claude-md.md. Placeholders use the example's

@@ -79,12 +79,12 @@ Auto-loaded every session. This is the agent's first 60 seconds of
 orientation. Everything they need in those 60 seconds goes here; everything
 else gets indexed and lives elsewhere.
 
-### Required template (eight `##` sections under a single `# Project Overview`)
+### Required template (seven `##` sections under a single `# Project Overview`)
 
-The eight `##` sections below are template-required. Project-specific `###`
+The seven `##` sections below are template-required. Project-specific `###`
 subsections (or `####` deeper) are additional -- include them where the work
 needs them. The produced CLAUDE.md does NOT need to annotate
-template-vs-additional; the consistent eight `##` shape is the contract.
+template-vs-additional; the consistent seven `##` shape is the contract.
 
 ```
 # Project Overview
@@ -477,7 +477,7 @@ fixes. Establish which case you are in *before* moving anything.
 ## Rotation discipline (the update passes)
 
 The plan should always answer "where are we now and what's coming." On every
-substantive update of an existing folder, run three passes:
+substantive update of an existing folder, run four passes:
 
 - **Rotation pass.** Step completed -> move its detailed instructions from
   plan.md to log.md (plan keeps one line: "Step N: done [link]") AND remove
@@ -561,8 +561,7 @@ Read CLAUDE.md and plan.md as if you were the next agent. Verify:
   name? If not, `## Project vocabulary` is missing the decoder.
 
 This self-verify, and the baton below, belong to a hand-off turn ONLY -- one
-the user opened with `/task hand-off <ref>` (the task skill's `hand_off`
-capability). Do not run them, or offer to, on your own initiative: a stopping
+the user opened with `/task hand-off <ref>`. Do not run them, or offer to, on your own initiative: a stopping
 point that looks like a session boundary is not a hand-off, and the user
 decides when a session ends. In that turn, end with the `hand-off baton` (see
 framework). For a task folder the baton is a two-line
@@ -591,6 +590,6 @@ absolute, so the baton works across machines.
   look-alikes).
 - **No absolute paths** in the artifacts -- use project-root-relative paths
   so they work across machines.
-- **Fit the work to the template.** The eight `##` sections cover most
+- **Fit the work to the template.** The seven `##` sections cover most
   hand-offs. Resist adding more required sections to suit a specific work
   shape; let `###` subsections fill them with what the work needs.
