@@ -257,7 +257,9 @@ class TestRun:
         capsys.readouterr()
         assert seen["cmd"][-2:] == ["--console", "--verbose"]
         assert seen["cmd"][0] == sys.executable
-        assert seen["cmd"][1] == "/plug/scripts/bootstrap_run.py"
+        assert os.path.normpath(seen["cmd"][1]) == os.path.normpath(
+            "/plug/scripts/bootstrap_run.py"
+        )
         assert seen["cmd"][seen["cmd"].index("--project-dir") + 1] == os.getcwd()
 
     def test_unknown_flag_without_run_is_still_an_error(self, capsys):
