@@ -74,6 +74,17 @@ def paths_for(data_dir: Path) -> dict:
     }
 
 
+def _declaration_failure(error: SecretsError) -> Failure:
+    return Failure(
+        FAILURE_CONFIG,
+        user_msg=f"secrets-kit declaration problem: {error}",
+        agent_msg=(
+            f"The secrets manifest or secrets.json is invalid.\n{error}\n"
+            "Manifest edits are unattended-safe; fix the file and the next pass converges."
+        ),
+    )
+
+
 def converge(
     config_path: Path,
     data_dir: Path,
@@ -84,40 +95,47 @@ def converge(
     """Run one full pass. Never raises for expected conditions."""
     result = Result()
 
-    config = Config.load(config_path)
-    if config is None:
-        result.skipped_reason = "not configured"
-        return result
+    try:
+        config = Config.load(config_path)
+        if config is None:
+            result.skipped_reason = "not configured"
+            return result
 
-    machine_key = config.machine_key()
-    if machine_key is None:
-        result.skipped_reason = "no profiles for this host"
-        return result
+        machine_key = config.machine_key()
+        if machine_key is None:
+            result.skipped_reason = "no profiles for this host"
+            return result
 
-    # Cross-check against the engine's machines registry when we were given
-    # one. secrets.json must not become a second machine list -- env.json owns
-    # that, and a name that exists in only one of them is a typo with
-    # consequences, not a new machine.
-    if known_machines and machine_key not in known_machines:
-        result.failures.append(
-            Failure(
-                FAILURE_CONFIG,
-                user_msg=(
-                    f"secrets-kit: this machine is listed in secrets.json as "
-                    f"'{machine_key}' but that name is not in the env.json "
-                    f"machines registry."
-                ),
-                agent_msg=(
-                    f"secrets.json machine key '{machine_key}' is absent from "
-                    f"env.json's machines registry ({', '.join(sorted(known_machines))}). "
-                    f"The registry is the single machine list; secrets.json "
-                    f"references it. Confirm the machine's identity with the "
-                    f"user, then align the two -- do not add a machine to "
-                    f"secrets.json that the registry does not know."
-                ),
-                ask_reason="info",
+        # Cross-check against the engine's machines registry when we were given
+        # one. secrets.json must not become a second machine list -- env.json owns
+        # that, and a name that exists in only one of them is a typo with
+        # consequences, not a new machine.
+        if known_machines and machine_key not in known_machines:
+            result.failures.append(
+                Failure(
+                    FAILURE_CONFIG,
+                    user_msg=(
+                        f"secrets-kit: this machine is listed in secrets.json as "
+                        f"'{machine_key}' but that name is not in the env.json "
+                        f"machines registry."
+                    ),
+                    agent_msg=(
+                        f"secrets.json machine key '{machine_key}' is absent from "
+                        f"env.json's machines registry ({', '.join(sorted(known_machines))}). "
+                        f"The registry is the single machine list; secrets.json "
+                        f"references it. Confirm the machine's identity with the "
+                        f"user, then align the two -- do not add a machine to "
+                        f"secrets.json that the registry does not know."
+                    ),
+                    ask_reason="info",
+                )
             )
-        )
+            return result
+
+        variables = config.vars_for(machine_key)
+        profiles = config.profiles_for(machine_key)
+    except SecretsError as error:
+        result.failures.append(_declaration_failure(error))
         return result
 
     paths = paths_for(data_dir)
@@ -204,20 +222,9 @@ def converge(
     # --- manifest ---------------------------------------------------------
     try:
         manifest = Manifest.load(paths["clone"] / "manifest.json")
-        variables = config.vars_for(machine_key)
-        selected = manifest.select(config.profiles_for(machine_key))
-    except SecretsError as e:
-        result.failures.append(
-            Failure(
-                FAILURE_CONFIG,
-                user_msg="secrets-kit found a problem in the secrets manifest.",
-                agent_msg=(
-                    f"The secrets manifest or secrets.json is invalid.\n{e}\n"
-                    f"Manifest edits are unattended-safe; fix the file and the "
-                    f"next pass converges."
-                ),
-            )
-        )
+        selected = manifest.select(profiles)
+    except SecretsError as error:
+        result.failures.append(_declaration_failure(error))
         return result
 
     # --- identity ---------------------------------------------------------

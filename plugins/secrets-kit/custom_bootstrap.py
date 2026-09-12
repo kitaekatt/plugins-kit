@@ -76,7 +76,9 @@ def _known_machines() -> Optional[List[str]]:
     """
     try:
         data = json.loads(ENV_PATH.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    if not isinstance(data, dict):
         return None
     machines = data.get("machines")
     if not isinstance(machines, dict) or not machines:

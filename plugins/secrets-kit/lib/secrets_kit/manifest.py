@@ -51,6 +51,8 @@ def resolve_host() -> List[str]:
 def _read_json(path: Path, what: str) -> Dict[str, Any]:
     try:
         raw = path.read_text(encoding="utf-8")
+    except UnicodeDecodeError as e:
+        raise SecretsError(f"{what} at {path} is not valid UTF-8: {e}") from e
     except OSError as e:
         raise SecretsError(f"cannot read {what} at {path}: {e}")
     try:
@@ -65,14 +67,34 @@ def _read_json(path: Path, what: str) -> Dict[str, Any]:
     return data
 
 
+def _object_or_empty(value: Any, *, where: str) -> Dict[str, Any]:
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise SecretsError(f"{where} must be a JSON object or null")
+    return dict(value)
+
+
+def _string_variables(value: Any, *, where: str) -> Dict[str, str]:
+    variables = _object_or_empty(value, where=where)
+    for name, variable in variables.items():
+        if not isinstance(variable, str):
+            raise SecretsError(f"{where}.{name} must be a string")
+    return variables
+
+
 class Config:
     """The machine-facing half: repo URL, variables, and this host's profiles."""
 
     def __init__(self, path: Path, data: Dict[str, Any]) -> None:
         self.path = path
+        if not isinstance(data, dict):
+            raise SecretsError(f"secrets.json at {path} must be a JSON object")
         self.repo: str = data.get("repo", "")
-        self.vars: Dict[str, str] = dict(data.get("vars") or {})
-        self.machines: Dict[str, Any] = dict(data.get("machines") or {})
+        if not isinstance(self.repo, str):
+            raise SecretsError(f"{path}: repo must be a nonempty string")
+        self.vars = _string_variables(data.get("vars"), where=f"{path}: vars")
+        self.machines = _object_or_empty(data.get("machines"), where=f"{path}: machines")
         if not self.repo:
             raise SecretsError(
                 f"{path} declares no 'repo'",
@@ -102,14 +124,21 @@ class Config:
                 return candidate
         return None
 
+    def _machine_row(self, machine_key: str) -> Dict[str, Any]:
+        return _object_or_empty(
+            self.machines.get(machine_key), where=f"{self.path}: machines.{machine_key}"
+        )
+
     def profiles_for(self, machine_key: str) -> List[str]:
-        entry = self.machines.get(machine_key) or {}
-        profiles = entry.get("profiles") or []
-        if not isinstance(profiles, list):
+        entry = self._machine_row(machine_key)
+        profiles = entry.get("profiles")
+        if profiles is None:
+            return []
+        if not isinstance(profiles, list) or any(not isinstance(p, str) for p in profiles):
             raise SecretsError(
-                f"{self.path}: machines.{machine_key}.profiles must be a list"
+                f"{self.path}: machines.{machine_key}.profiles must be a list of string names or null"
             )
-        return [str(p) for p in profiles]
+        return list(profiles)
 
     def vars_for(self, machine_key: str) -> Dict[str, str]:
         """Global vars overlaid with this machine's vars.
@@ -119,8 +148,10 @@ class Config:
         block rather than in the shared manifest.
         """
         merged = dict(self.vars)
-        entry = self.machines.get(machine_key) or {}
-        merged.update(entry.get("vars") or {})
+        entry = self._machine_row(machine_key)
+        merged.update(_string_variables(
+            entry.get("vars"), where=f"{self.path}: machines.{machine_key}.vars"
+        ))
         return merged
 
 
@@ -129,7 +160,11 @@ class Entry:
 
     def __init__(self, name: str, data: Dict[str, Any]) -> None:
         self.name = name
+        if not isinstance(data, dict):
+            raise SecretsError(f"manifest entry '{name}' must be a JSON object")
         self.blob: str = data.get("blob", "")
+        if not isinstance(self.blob, str):
+            raise SecretsError(f"manifest entry '{name}': blob must be a nonempty string")
         self.dest_spec: Any = data.get("dest", "")
         self.mode: int = _parse_mode(name, data.get("mode", "0600"))
         self.newline: Optional[str] = data.get("newline")
@@ -162,8 +197,7 @@ class Entry:
         self.allow_tracked_dest: bool = consent
         if not self.blob:
             raise SecretsError(f"manifest entry '{name}' declares no 'blob'")
-        if not self.dest_spec:
-            raise SecretsError(f"manifest entry '{name}' declares no 'dest'")
+        _validate_dest(name, self.dest_spec)
         if self.newline not in (None, "lf"):
             raise SecretsError(
                 f"manifest entry '{name}': newline must be 'lf' if present"
@@ -172,6 +206,18 @@ class Entry:
     def dest(self, variables: Dict[str, str]) -> Path:
         """Resolve the destination path for this machine."""
         return resolve_dest(self.name, self.dest_spec, variables)
+
+
+def _validate_dest(name: str, dest_spec: Any) -> None:
+    if not isinstance(dest_spec, (str, dict)):
+        raise SecretsError(f"manifest entry '{name}': dest must be a string or per-OS object")
+    if not dest_spec:
+        raise SecretsError(f"manifest entry '{name}' declares no 'dest'")
+    if isinstance(dest_spec, dict):
+        for branch in ("default", "windows"):
+            value = dest_spec.get(branch)
+            if value is not None and not isinstance(value, str):
+                raise SecretsError(f"manifest entry '{name}': dest.{branch} must be a string or null")
 
 
 def resolve_dest(name: str, dest_spec: Any, variables: Dict[str, str]) -> Path:
@@ -186,6 +232,7 @@ def resolve_dest(name: str, dest_spec: Any, variables: Dict[str, str]) -> Path:
     ``dest_spec`` may be a plain string or a per-OS object; the object form
     exists only for the rare path no single variable can express.
     """
+    _validate_dest(name, dest_spec)
     if isinstance(dest_spec, dict):
         key = "windows" if os.name == "nt" else "default"
         raw = dest_spec.get(key) or dest_spec.get("default")
@@ -196,7 +243,7 @@ def resolve_dest(name: str, dest_spec: Any, variables: Dict[str, str]) -> Path:
             )
     else:
         raw = dest_spec
-    return Path(expand(str(raw), variables, where=f"entry '{name}'"))
+    return Path(expand(raw, variables, where=f"entry '{name}'"))
 
 
 def _parse_mode(name: str, raw: Any) -> int:
@@ -258,15 +305,20 @@ class Manifest:
 
     def __init__(self, path: Path, data: Dict[str, Any]) -> None:
         self.path = path
+        if not isinstance(data, dict):
+            raise SecretsError(f"manifest.json at {path} must be a JSON object")
         self.version = data.get("version", 1)
         self.recipient: str = data.get("recipient", "")
-        self.profiles: Dict[str, List[str]] = dict(data.get("profiles") or {})
-        raw_entries = data.get("entries") or {}
-        if not isinstance(raw_entries, dict):
-            raise SecretsError(f"{path}: 'entries' must be an object")
-        self.entries: Dict[str, Entry] = {
-            name: Entry(name, value) for name, value in raw_entries.items()
-        }
+        if not isinstance(self.recipient, str):
+            raise SecretsError(f"{path}: recipient must be a nonempty string")
+        self.profiles = _object_or_empty(data.get("profiles"), where=f"{path}: profiles")
+        raw_entries = _object_or_empty(data.get("entries"), where=f"{path}: entries")
+        self.entries: Dict[str, Entry] = {}
+        for name, value in raw_entries.items():
+            try:
+                self.entries[name] = Entry(name, value)
+            except SecretsError as error:
+                raise SecretsError(f"{path}: {error}") from error
         if not self.recipient:
             raise SecretsError(
                 f"{path} declares no 'recipient'",
@@ -284,6 +336,8 @@ class Manifest:
                     f"entry names"
                 )
             for name in names:
+                if not isinstance(name, str):
+                    raise SecretsError(f"{self.path}: profile '{profile}' must name entries with strings")
                 if name not in self.entries:
                     raise SecretsError(
                         f"{self.path}: profile '{profile}' names unknown "

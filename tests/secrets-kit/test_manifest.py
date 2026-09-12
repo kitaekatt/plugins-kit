@@ -257,3 +257,58 @@ def test_explicit_false_consent_round_trips_without_serializing_a_waiver(tmp_pat
     assert "allow_tracked_dest" not in serialized["entries"]["one"]
     again = Manifest(tmp_path / "manifest.json", serialized)
     assert again.entries["one"].allow_tracked_dest is False
+
+
+@pytest.mark.parametrize('repo', ['local.git', 'git@example.com:a/b.git', 'https://example.invalid/a.git', ' '])
+def test_required_repo_strings_are_preserved_without_new_transport_grammar(tmp_path, repo):
+    config = Config(tmp_path / 'secrets.json', {'repo': repo})
+    assert config.repo == repo
+
+
+@pytest.mark.parametrize('value', [None, {}])
+def test_optional_object_null_and_empty_defaults_remain_compatible(tmp_path, value):
+    config = Config(tmp_path / 'secrets.json', {'repo': 'local.git', 'vars': value, 'machines': value})
+    manifest = Manifest(tmp_path / 'manifest.json', {'recipient': 'key', 'profiles': value, 'entries': value})
+    assert config.vars == config.machines == {}
+    assert manifest.profiles == manifest.entries == {}
+    assert Manifest(tmp_path / 'manifest.json', json.loads(manifest.dump())).entries == {}
+
+
+@pytest.mark.parametrize('value', [None, {}])
+def test_lazy_machine_rows_and_nullable_current_maps_keep_defaults(tmp_path, value):
+    config = Config(tmp_path / 'secrets.json', {
+        'repo': 'local.git', 'vars': {'EMPTY': ''},
+        'machines': {'active': {'profiles': None, 'vars': value}, 'unused': ['invalid'], 'null-row': None},
+    })
+    assert config.profiles_for('active') == []
+    assert config.vars_for('active') == {'EMPTY': ''}
+    assert config.profiles_for('null-row') == []
+    with pytest.raises(SecretsError, match='unused'):
+        config.profiles_for('unused')
+
+
+@pytest.mark.parametrize('windows', [None, '', 'WINDOWS-VALUE'])
+@pytest.mark.parametrize('platform', ['posix', 'nt'])
+def test_per_os_string_null_empty_fallback_selection_without_global_platform_mutation(tmp_path, monkeypatch, windows, platform):
+    import os
+    from types import SimpleNamespace
+    from secrets_kit import manifest as subject
+    proxy = SimpleNamespace(name=platform, environ=os.environ, path=os.path)
+    monkeypatch.setattr(subject, 'os', proxy)
+    spec = {'default': 'DEFAULT-VALUE', 'windows': windows, 'ignored': []}
+    m = _manifest(tmp_path, profiles={}, entries={'one': {'blob': 'b.age', 'dest': spec}})
+    expected = windows if platform == 'nt' and windows else 'DEFAULT-VALUE'
+    assert str(m.entries['one'].dest({})) == expected
+    assert json.loads(m.dump())['entries']['one']['dest'] == spec
+
+
+def test_windows_only_destination_loads_before_current_host_resolution(tmp_path):
+    _manifest(tmp_path, profiles={}, entries={'one': {'blob': 'b.age', 'dest': {'windows': '${NOT_EXPANDED_DURING_LOAD}/x'}}})
+
+
+@pytest.mark.parametrize('mode', [0o640, '0640', True])
+@pytest.mark.parametrize('newline', [None, 'lf'])
+def test_existing_mode_and_newline_representations_are_not_redefined(tmp_path, mode, newline):
+    m = _manifest(tmp_path, profiles={}, entries={'one': {'blob': 'b.age', 'dest': '~/x', 'mode': mode, 'newline': newline}})
+    assert m.entries['one'].mode == (int(mode, 8) if isinstance(mode, str) else mode)
+    assert m.entries['one'].newline == newline

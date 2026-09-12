@@ -423,3 +423,225 @@ def test_unseeded_check_precedes_the_identity_check(fleet):
     result = _run(fleet)
     assert result.skipped_reason == "repo not seeded yet"
     assert "init" in result.failures[0].agent_msg
+
+
+# Declaration acceptance precedes every materialization/removal effect.
+def _set_declaration_field(data, path, value):
+    row = data
+    for key in path[:-1]:
+        row = row[key]
+    row[path[-1]] = value
+
+
+def _owned_declaration_preimages(fleet):
+    destination = fleet.dest_root / "ha-token.txt"
+    destination.write_bytes(b"existing dummy destination")
+    orphan = fleet.tmp / "owned-orphan.txt"
+    orphan.write_bytes(b"existing dummy orphan")
+    state_path = fleet.data_dir / "state.json"
+    state = State(state_path, {})
+    state.record("owned-orphan", blob_sha="dummy", dest_sha="dummy", mode=0o600, dest=str(orphan))
+    state.save()
+    return {path: path.read_bytes() for path in [destination, orphan, state_path]}
+
+
+_CONFIG_SHAPES = [
+    *((('repo',), value, 'repo') for value in [False, ['local'], {'url': 'local'}]),
+    *((('vars',), value, 'vars') for value in [False, 0, '', [], [['BANK', 'x']]]),
+    *((('machines',), value, 'machines') for value in [False, 0, '', [], [['testbox', {}]]]),
+    *((('vars', 'BANK'), value, 'vars.BANK') for value in [None, 1, False, [], {}]),
+    *((('machines', 'testbox'), value, 'machines.testbox') for value in [False, 0, '', [], 'bad']),
+    *((('machines', 'testbox', 'profiles'), value, 'profiles') for value in [False, 0, '', {}, [1], [[]], [{}]]),
+    *((('machines', 'testbox', 'vars'), value, 'vars') for value in [False, 0, '', [], [['BANK', 'x']]]),
+    *((('machines', 'testbox', 'vars', 'BANK'), value, 'vars.BANK') for value in [None, 1, False, [], {}]),
+]
+
+
+@pytest.mark.parametrize('path,value,field', _CONFIG_SHAPES)
+def test_malformed_current_config_is_classified_before_local_preparation(fleet, monkeypatch, path, value, field):
+    from secrets_kit import converge as subject
+    config = json.loads(fleet.config_path.read_text())
+    config['machines']['testbox']['vars'] = {'BANK': str(fleet.tmp / 'bank')}
+    _set_declaration_field(config, path, value)
+    fleet.config_path.write_text(json.dumps(config), encoding='utf-8')
+    before = _owned_declaration_preimages(fleet)
+    effects = []
+    def forbidden(*args, **kwargs):
+        effects.append('local preparation')
+        raise AssertionError('malformed config reached local preparation')
+    monkeypatch.setattr(subject, 'tighten_dir', forbidden)
+    monkeypatch.setattr(subject.repo_mod, 'clone', forbidden)
+    monkeypatch.setattr(subject.repo_mod, 'refresh', forbidden)
+
+    result = _run(fleet)
+
+    assert [failure.key for failure in result.failures] == [FAILURE_CONFIG]
+    failure = result.failures[0]
+    assert failure.ask_reason is None
+    assert 'secrets.json' in failure.user_msg
+    assert field in failure.user_msg
+    assert field in failure.agent_msg
+    assert result.written == result.removed == 0
+    assert {path: path.read_bytes() for path in before} == before
+    assert effects == []
+
+
+@pytest.mark.parametrize('raw,diagnosis', [(b'\xff', 'UTF-8'), (b'{ bad', 'JSON'), (b'null', 'object'), (b'[]', 'object')])
+@pytest.mark.parametrize('declaration', ['config', 'manifest'])
+def test_encoded_or_top_level_declaration_failure_is_public_and_preserves_owned_files(fleet, raw, diagnosis, declaration):
+    before = _owned_declaration_preimages(fleet)
+    path = fleet.config_path if declaration == 'config' else fleet.manifest_path
+    path.write_bytes(raw)
+
+    result = _run(fleet)
+
+    assert [failure.key for failure in result.failures] == [FAILURE_CONFIG]
+    assert path.name in result.failures[0].user_msg
+    assert diagnosis in result.failures[0].user_msg
+    assert result.failures[0].ask_reason is None
+    assert {path: path.read_bytes() for path in before} == before
+
+
+_MANIFEST_SHAPES = [
+    *((('recipient',), value, 'recipient') for value in [True, ['key'], {'key': 'x'}]),
+    *((('profiles',), value, 'profiles') for value in [False, 0, '', [], [['home-admin', ['ha-token']]]]),
+    *((('entries',), value, 'entries') for value in [False, 0, '', [], [['ha-token', {}]]]),
+    *((('entries', 'ha-token'), value, 'ha-token') for value in [None, False, 0, '', []]),
+    *((('entries', 'ha-token', 'blob'), value, 'blob') for value in [True, ['blob'], {'blob': 'x'}]),
+    *((('profiles', 'home-admin'), value, 'home-admin') for value in [None, False, {}, [1], [[]], [{}]]),
+    *((('entries', 'ha-token', 'dest'), value, 'dest') for value in [True, 1, ['path']]),
+    *((('entries', 'ha-token', 'dest', branch), value, 'dest.' + branch) for branch in ['default', 'windows'] for value in [False, 0, [], {}]),
+    (('entries', 'z-later-invalid'), {'blob': ['bad'], 'dest': '~/unused'}, 'z-later-invalid'),
+]
+
+
+@pytest.mark.parametrize('path,value,field', _MANIFEST_SHAPES)
+def test_whole_manifest_shape_is_classified_before_crypto_or_ownership_effects(fleet, monkeypatch, path, value, field):
+    from secrets_kit import converge as subject
+    fleet.unlock()
+    manifest = json.loads(fleet.manifest_path.read_text())
+    if len(path) == 4 and path[2] == 'dest':
+        spec = manifest['entries']['ha-token']['dest']
+        manifest['entries']['ha-token']['dest'] = {'default': spec, 'windows': spec}
+    _set_declaration_field(manifest, path, value)
+    fleet.manifest_path.write_text(json.dumps(manifest), encoding='utf-8')
+    before = _owned_declaration_preimages(fleet)
+    crypto = []
+    real = subject.decrypt_with_identity
+    def record(*args, **kwargs):
+        crypto.append('decrypt')
+        return real(*args, **kwargs)
+    monkeypatch.setattr(subject, 'decrypt_with_identity', record)
+
+    result = _run(fleet)
+
+    assert [failure.key for failure in result.failures] == [FAILURE_CONFIG], (
+        f'accepted malformed {field}: written={result.written}, removed={result.removed}, crypto={crypto}'
+    )
+    failure = result.failures[0]
+    assert failure.ask_reason is None
+    assert 'manifest.json' in failure.user_msg
+    assert field in failure.user_msg
+    assert field in failure.agent_msg
+    assert result.written == result.removed == 0
+    assert crypto == []
+    assert {path: path.read_bytes() for path in before} == before
+
+
+@pytest.mark.parametrize('row', [None, {}, {'profiles': None}, {'profiles': []}])
+def test_listed_empty_or_null_machine_keeps_zero_selection_and_owned_orphan_removal(fleet, row):
+    fleet.unlock()
+    _run(fleet)
+    config = json.loads(fleet.config_path.read_text())
+    config['machines']['testbox'] = row
+    fleet.config_path.write_text(json.dumps(config), encoding='utf-8')
+    result = _run(fleet)
+    assert result.failures == []
+    assert result.skipped_reason is None
+    assert result.removed == 1
+    assert not (fleet.dest_root / 'ha-token.txt').exists()
+
+
+@pytest.mark.parametrize('listed', [False, True])
+def test_unused_malformed_machine_row_is_not_eagerly_consumed(fleet, monkeypatch, listed):
+    fleet.unlock()
+    config = json.loads(fleet.config_path.read_text())
+    config['machines']['unused'] = ['malformed unused row']
+    fleet.config_path.write_text(json.dumps(config), encoding='utf-8')
+    if not listed:
+        monkeypatch.setattr('secrets_kit.manifest.resolve_host', lambda: ['stranger'])
+        fleet.manifest_path.write_bytes(b'not read on an unlisted host')
+    result = _run(fleet)
+    assert result.failures == []
+    if listed:
+        assert (fleet.dest_root / 'ha-token.txt').read_bytes() == b'token-value\n'
+    else:
+        assert result.skipped_reason == 'no profiles for this host'
+        assert not (fleet.data_dir / 'state.json').exists()
+
+
+def test_unselected_destination_expansion_stays_deferred(fleet):
+    fleet.unlock()
+    manifest = json.loads(fleet.manifest_path.read_text())
+    manifest['entries']['rolfing']['dest'] = '${UNUSED_UNRESOLVABLE_VARIABLE}/x'
+    fleet.manifest_path.write_text(json.dumps(manifest), encoding='utf-8')
+    result = _run(fleet)
+    assert result.failures == []
+    assert result.written == 1
+
+
+def test_unrelated_runtime_error_is_not_classified_as_a_declaration(fleet, monkeypatch):
+    from secrets_kit import converge as subject
+    def broken(path):
+        raise RuntimeError('unrelated programming defect')
+    monkeypatch.setattr(subject.Config, 'load', broken)
+    with pytest.raises(RuntimeError, match='unrelated programming defect'):
+        _run(fleet)
+
+
+@pytest.mark.parametrize('declaration', ['config', 'manifest'])
+def test_actual_status_main_prints_the_specific_declaration_failure(fleet, monkeypatch, capsys, declaration):
+    import importlib.util
+    monkeypatch.setattr(sys, 'path', sys.path.copy())
+    cli_path = Path(__file__).resolve().parents[2] / 'plugins/secrets-kit/scripts/secrets_kit_cli.py'
+    spec = importlib.util.spec_from_file_location('shape_status_cli', cli_path)
+    cli = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(cli)
+    monkeypatch.setattr(cli, 'CONFIG_PATH', fleet.config_path)
+    monkeypatch.setattr(cli, 'DATA_DIR', fleet.data_dir)
+    path = fleet.config_path if declaration == 'config' else fleet.manifest_path
+    path.write_bytes(b'\xff')
+    before = _owned_declaration_preimages(fleet)
+    assert cli.main(['status']) == 1
+    output = capsys.readouterr().out
+    assert FAILURE_CONFIG in output
+    assert path.name in output and 'UTF-8' in output
+    assert {path: path.read_bytes() for path in before} == before
+
+
+def test_actual_remove_main_refuses_malformed_global_config_before_authoring(fleet, monkeypatch, capsys):
+    import importlib.util
+    from secrets_kit import guard, repo as repo_mod
+    monkeypatch.setattr(sys, 'path', sys.path.copy())
+    cli_path = Path(__file__).resolve().parents[2] / 'plugins/secrets-kit/scripts/secrets_kit_cli.py'
+    spec = importlib.util.spec_from_file_location('shape_remove_cli', cli_path)
+    cli = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(cli)
+    monkeypatch.setattr(cli, 'CONFIG_PATH', fleet.config_path)
+    monkeypatch.setattr(cli, 'DATA_DIR', fleet.data_dir)
+    config = json.loads(fleet.config_path.read_text())
+    config['repo'] = ['bad repo type']
+    fleet.config_path.write_text(json.dumps(config), encoding='utf-8')
+    before = _owned_declaration_preimages(fleet)
+    effects = []
+    def forbidden(*args, **kwargs):
+        effects.append('authoring')
+        raise AssertionError('malformed global config reached authoring')
+    monkeypatch.setattr(repo_mod, 'clone', forbidden)
+    monkeypatch.setattr(repo_mod, 'sync', forbidden)
+    monkeypatch.setattr(guard, 'require_guard', forbidden)
+    assert cli.main(['remove', 'dummy']) == 1
+    output = capsys.readouterr().err
+    assert 'secrets.json' in output and 'repo' in output and 'string' in output
+    assert effects == []
+    assert {path: path.read_bytes() for path in before} == before
