@@ -740,6 +740,14 @@ PATH, so you don't have to declare a separate `path_entries` entry, and a tool
 that's present-but-unreachable becomes reachable without any "restart your shell"
 instruction (per dependency-philosophy.md principle 4).
 
+For both `path_entries` and tool-to-PATH linkage, `add_path_to_shell_config`
+writes new Windows shell RC declarations in Git Bash form: forward slashes
+and `/<lowercase-drive-letter>/...`, with the PATH expression double-quoted
+so spaces stay within one entry. Paths under the home directory retain
+`$HOME` form. Windows User PATH registry writes retain native Windows paths.
+Existing declarations, including legacy Windows spellings, are left in place;
+this writer change does not repair entries already present in shell RC files.
+
 ### Install exit codes are advisory
 
 After running a tool's `install` command, the engine **re-checks regardless of

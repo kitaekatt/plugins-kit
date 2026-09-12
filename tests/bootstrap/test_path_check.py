@@ -1,6 +1,8 @@
 """Tests for bootstrap lib/path_check.py."""
 
 import os
+import shutil
+import subprocess
 import sys
 from unittest.mock import patch
 
@@ -10,6 +12,7 @@ from bootstrap_lib.path_check import (
     _add_path_to_windows_registry,
     _home,
     _path_diagnostic,
+    add_path_to_shell_config,
     check_path_entry,
 )
 from test_support.fake_winreg import FakeWinreg
@@ -312,7 +315,10 @@ class TestAddPathToShellConfigIdempotency:
 
         assert ok is True
         content = (home / ".bashrc").read_text()
-        assert f'export PATH="{sibling}:$PATH"' in content
+        expected = str(sibling).replace("\\", "/")
+        if len(expected) >= 2 and expected[1] == ":":
+            expected = f"/{expected[0].lower()}{expected[2:]}"
+        assert f'export PATH="{expected}:$PATH"' in content
         assert "$HOMEby" not in content
 
     def test_idempotent_with_forward_slash_form_already_present(self, tmp_path, monkeypatch):
@@ -345,3 +351,80 @@ class TestAddPathToShellConfigIdempotency:
             add_path_to_shell_config("~/.local/share/node")
 
         assert bashrc.read_text().count("export PATH=") == 1
+
+    def test_windows_drive_path_is_git_bash_usable(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.setenv("BOOTSTRAP_SKIP_REGISTRY", "1")
+        monkeypatch.setattr("bootstrap_lib.path_check.sys.platform", "win32")
+
+        ok, _message = add_path_to_shell_config(r"C:\Program Files\Tools\bin")
+
+        assert ok is True
+        line = (tmp_path / ".bashrc").read_text()
+        assert 'export PATH="/c/Program Files/Tools/bin:$PATH"' in line
+
+    def test_nonhome_windows_export_is_one_real_git_bash_path_entry(
+        self, tmp_path, monkeypatch
+    ):
+        if os.name != "nt":
+            pytest.skip("Git Bash probe requires native Windows")
+        bash_path = shutil.which("bash.exe")
+        if not bash_path:
+            candidates = [
+                r"C:\Program Files\Git\usr\bin\bash.exe",
+                r"C:\Program Files\Git\bin\bash.exe",
+            ]
+            bash_path = next((path for path in candidates if os.path.exists(path)), None)
+        if not bash_path:
+            pytest.skip("Git Bash is unavailable")
+        monkeypatch.setenv("HOME", str(tmp_path / "home"))
+        (tmp_path / "home").mkdir()
+        monkeypatch.setenv("BOOTSTRAP_SKIP_REGISTRY", "1")
+        monkeypatch.setattr("bootstrap_lib.path_check.sys.platform", "win32")
+        usable_dir = tmp_path / "bin dir"
+        usable_dir.mkdir()
+
+        ok, _message = add_path_to_shell_config(str(usable_dir).replace("/", "\\"))
+
+        assert ok is True
+        line = (tmp_path / "home" / ".bashrc").read_text().split(
+            "export PATH=", 1
+        )[1].splitlines()[0]
+        result = subprocess.run(
+            [bash_path, "--noprofile", "--norc", "-c",
+             f"export PATH={line}; test -d \"${{PATH%%:*}}\""],
+            capture_output=True, text=True,
+            env={"HOME": str(tmp_path / "home"), "PATH": "/usr/bin"},
+        )
+        assert result.returncode == 0
+
+    @pytest.mark.parametrize("legacy", [r"D:\Tools\bin", "D:/Tools/bin"])
+    def test_legacy_nonhome_drive_declaration_is_idempotent(
+        self, tmp_path, monkeypatch, legacy
+    ):
+        home = tmp_path / "home"
+        home.mkdir()
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.setenv("BOOTSTRAP_SKIP_REGISTRY", "1")
+        monkeypatch.setattr("bootstrap_lib.path_check.sys.platform", "win32")
+        (home / ".bashrc").write_text(
+            f'export PATH="{legacy}:$PATH"\n'
+        )
+
+        ok, _message = add_path_to_shell_config(legacy)
+
+        assert ok is True
+        assert (home / ".bashrc").read_text().count("export PATH=") == 1
+
+    def test_repeated_nonhome_windows_write_is_idempotent(self, tmp_path, monkeypatch):
+        home = tmp_path / "home"
+        home.mkdir()
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.setenv("BOOTSTRAP_SKIP_REGISTRY", "1")
+        monkeypatch.setattr("bootstrap_lib.path_check.sys.platform", "win32")
+
+        for _ in range(3):
+            ok, _message = add_path_to_shell_config(r"D:\Tools With Spaces\bin")
+            assert ok is True
+
+        assert (home / ".bashrc").read_text().count("export PATH=") == 1
