@@ -467,15 +467,10 @@ def cmd_add(args: argparse.Namespace) -> int:
     _require_exclusive_blob(manifest, clone, args.name, blob_rel)
 
     plaintext = source.read_bytes()
-    if args.newline == "lf" and b"\r\n" in plaintext:
-        return _fail(
-            f"{source} contains CRLF but --newline lf was requested. "
-            "Convert it first; seeding a CRLF ssh key or token breaks the "
-            "consumer in ways that are painful to diagnose later."
-        )
-
     stored_spec = manifest.entries[args.name].dest_spec if exists else None
     dest_spec = args.dest or stored_spec
+    mode = args.mode if args.mode is not None else (manifest.entries[args.name].mode if exists else "0600")
+    newline = args.newline if args.newline is not None else (manifest.entries[args.name].newline if exists else None)
 
     # Consent is per-DESTINATION, never per-entry-forever. A stored override
     # carries forward only while the destination is unchanged -- otherwise
@@ -492,29 +487,15 @@ def cmd_add(args: argparse.Namespace) -> int:
         exists and not dest_unchanged and manifest.entries[args.name].allow_tracked_dest
     )
 
-    # Before anything is encrypted or committed: refusing after the blob landed
-    # in the repo would leave the ciphertext behind for a value we declined.
-    refusal = _refuse_exposed_dest(
-        config,
-        args.name,
-        dest_spec,
-        allow_tracked_dest,
-        consent_dropped=consent_dropped,
-    )
-    if refusal is not None:
-        return refusal
-
-    agefile.encrypt_to_recipient(manifest.recipient, plaintext, clone / blob_rel)
-
     entry_data = {
         "blob": blob_rel,
         "dest": dest_spec,
-        "mode": args.mode,
+        "mode": mode,
     }
     if allow_tracked_dest:
         entry_data["allow_tracked_dest"] = True
-    if args.newline:
-        entry_data["newline"] = args.newline
+    if newline is not None:
+        entry_data["newline"] = newline
     if args.doc:
         entry_data["doc"] = args.doc
     elif exists and manifest.entries[args.name].doc:
@@ -529,6 +510,26 @@ def cmd_add(args: argparse.Namespace) -> int:
             raw["profiles"][profile].sort()
 
     rewritten = Manifest(manifest_path, raw)
+    if rewritten.entries[args.name].newline == "lf" and b"\r\n" in plaintext:
+        requirement = "inherited newline lf is required" if args.newline is None else "--newline lf was requested"
+        return _fail(
+            f"{source} contains CRLF but {requirement}. "
+            "Convert it first; seeding a CRLF ssh key or token breaks the "
+            "consumer in ways that are painful to diagnose later."
+        )
+
+    # Validate the complete declaration and exposure before writing ciphertext.
+    refusal = _refuse_exposed_dest(
+        config,
+        args.name,
+        dest_spec,
+        allow_tracked_dest,
+        consent_dropped=consent_dropped,
+    )
+    if refusal is not None:
+        return refusal
+
+    agefile.encrypt_to_recipient(manifest.recipient, plaintext, clone / blob_rel)
     manifest_path.write_text(rewritten.dump(), encoding="utf-8")
 
     verb = "rotate" if exists else "add"
@@ -670,7 +671,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("name")
     p.add_argument("--file", required=True, help="plaintext source path")
     p.add_argument("--dest", help="materialization target (supports ${VAR} and ~)")
-    p.add_argument("--mode", default="0600", help="POSIX mode, default 0600")
+    p.add_argument("--mode", default=None, help="POSIX mode; inherits on updates, defaults to 0600 for new entries")
     p.add_argument("--newline", choices=["lf"], help="assert LF line endings")
     p.add_argument("--doc", help="pointer into the secrets inventory")
     p.add_argument("--profile", action="append", help="add to this profile (repeatable)")
