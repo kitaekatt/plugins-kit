@@ -28,6 +28,7 @@ from secrets_kit import repo as repo_mod  # noqa: E402
 from secrets_kit.converge import converge, paths_for  # noqa: E402
 from secrets_kit.manifest import Config, Manifest, resolve_dest  # noqa: E402
 from secrets_kit.perms import _private_output, tighten_dir  # noqa: E402
+from secrets_kit.operation_lock import operation_lock  # noqa: E402
 from secrets_kit.terminal import relaunch_self  # noqa: E402
 
 CONFIG_PATH = Path.home() / ".claude" / "secrets.json"
@@ -84,8 +85,9 @@ def _require_config() -> Config:
     return config
 
 
-def _ensure_clone(config: Config, *, sync: bool = False) -> Path:
-    paths = paths_for(DATA_DIR)
+def _ensure_clone(config: Config, *, data_dir: Path, sync: bool = False) -> Path:
+    """Use canonical data paths under caller-held operation ownership."""
+    paths = paths_for(data_dir)
     clone = paths["clone"]
     if not repo_mod.is_clone(clone):
         print(f"cloning {config.repo} ...")
@@ -101,8 +103,10 @@ def _ensure_clone(config: Config, *, sync: bool = False) -> Path:
     return clone
 
 
-def _ensure_guarded(config: Config) -> Path:
-    """Sync, clone if needed, then guarantee the pre-commit guard before any write.
+def _ensure_guarded(config: Config, *, data_dir: Path) -> Path:
+    """Sync and guard under caller-held whole-operation ownership.
+
+    Nested repo/key/state/publication helpers never acquire recursively.
 
     Every authoring verb goes through here rather than ``_ensure_clone``. Two
     things have to be true before we let git record anything permanently, and
@@ -115,7 +119,7 @@ def _ensure_guarded(config: Config) -> Path:
     - The pre-commit guard must exist. It lives in ``.git/hooks``, which is
       untracked, so it has to be re-established locally every time.
     """
-    clone = _ensure_clone(config, sync=True)
+    clone = _ensure_clone(config, data_dir=data_dir, sync=True)
     note = guard.require_guard(clone)
     if note:
         print(f"pre-commit guard: {note}")
@@ -132,41 +136,42 @@ def cmd_unlock(args: argparse.Namespace) -> int:
     if handed_off is not None:
         return handed_off
     config = _require_config()
-    clone = _ensure_clone(config)
-    # Best-effort, unlike the authoring verbs: unlock only READS the repo, so a
-    # stale clone that already holds identity.age is perfectly unlockable
-    # offline. But a clone last fetched before the repo was seeded would
-    # otherwise report "never seeded" at the one moment the user is trying to
-    # act on the seeding that already happened.
-    if repo_mod.is_clone(clone):
-        try:
-            repo_mod.sync(clone)
-        except SecretsError as e:
-            print(f"note: could not sync the secrets clone ({e.message}); "
-                  f"continuing on the existing checkout")
+    with operation_lock(DATA_DIR) as data_dir:
+        clone = _ensure_clone(config, data_dir=data_dir)
+        # Best-effort, unlike the authoring verbs: unlock only READS the repo, so a
+        # stale clone that already holds identity.age is perfectly unlockable
+        # offline. But a clone last fetched before the repo was seeded would
+        # otherwise report "never seeded" at the one moment the user is trying to
+        # act on the seeding that already happened.
+        if repo_mod.is_clone(clone):
+            try:
+                repo_mod.sync(clone)
+            except SecretsError as e:
+                print(f"note: could not sync the secrets clone ({e.message}); "
+                      f"continuing on the existing checkout")
 
-    wrapped = clone / "identity.age"
-    if not wrapped.is_file():
-        return _fail(
-            f"no identity.age in the secrets repo ({wrapped}). "
-            f"Has the repo been seeded yet? Run `{cli_command('init')}` on "
-            f"the machine holding the plaintext."
+        wrapped = clone / "identity.age"
+        if not wrapped.is_file():
+            return _fail(
+                f"no identity.age in the secrets repo ({wrapped}). "
+                f"Has the repo been seeded yet? Run `{cli_command('init')}` on "
+                f"the machine holding the plaintext."
+            )
+
+        paths = paths_for(data_dir)
+        tighten_dir(data_dir)
+
+        print("Enter your fleet secrets passphrase (input is hidden).")
+        code = agefile.unwrap_identity(wrapped, paths["identity"])
+        if code != 0:
+            return _fail("incorrect passphrase (or age failed); identity cache was not replaced")
+
+        print(
+            "unlocked. Secrets will materialize on the next bootstrap pass -- "
+            "restart Claude Code, or just continue: the failing check re-runs "
+            "every session."
         )
-
-    paths = paths_for(DATA_DIR)
-    tighten_dir(DATA_DIR)
-
-    print("Enter your fleet secrets passphrase (input is hidden).")
-    code = agefile.unwrap_identity(wrapped, paths["identity"])
-    if code != 0:
-        return _fail("incorrect passphrase (or age failed); identity cache was not replaced")
-
-    print(
-        "unlocked. Secrets will materialize on the next bootstrap pass -- "
-        "restart Claude Code, or just continue: the failing check re-runs "
-        "every session."
-    )
-    return 0
+        return 0
 
 
 # --------------------------------------------------------------------------
@@ -200,115 +205,116 @@ def cmd_init(args: argparse.Namespace) -> int:
     if handed_off is not None:
         return handed_off
     config = _require_config()
-    try:
-        clone = _ensure_guarded(config)
-    except repo_mod.RepoBindingError:
-        raise
-    except SecretsError as e:
-        # Cached identity evidence gives useful unlock advice without proving
-        # why the gate failed or whether any local history is disposable.
-        clone = paths_for(DATA_DIR)["clone"]
-        if repo_mod.is_clone(clone) and repo_mod.remote_has(clone, "identity.age"):
-            return _fail(
-                f"{e.message}\n\n"
-                "The cached remote-tracking view contains identity.age. "
-                "It does not establish why this gate failed. To use that "
-                "fleet identity, this machine needs "
-                f"`{cli_command('unlock --new-terminal')}`."
-            )
-        raise
-
-    manifest_path = clone / "manifest.json"
-    wrapped = clone / "identity.age"
-
-    # Ask the REMOTE, not the checkout. Seeding is the one irreversible act
-    # here -- a second identity orphans every blob encrypted to the first --
-    # and the checkout can only tell us what was true at the last fetch. The
-    # local file is checked too, for the case where the branch has no upstream.
-    if not args.force and (repo_mod.remote_has(clone, "identity.age") or wrapped.exists()):
-        return _fail(
-            "this repo is already seeded -- identity.age exists. Re-running "
-            "init would generate a SECOND fleet identity and orphan every "
-            "existing blob (they are encrypted to the first one's public "
-            "key).\n"
-            f"To use the existing fleet identity on this machine, run "
-            f"`{cli_command('unlock --new-terminal')}`.\n"
-            "To change the passphrase or key while keeping the blobs readable, "
-            "use `rotate-identity`. Pass --force only if you really mean to "
-            "abandon the existing secrets and start over."
-        )
-
-    # Everything from here to the push is one transaction. A partial seed is
-    # the worst outcome available: this machine would cache an identity the
-    # fleet has never heard of, and every later decrypt would fail with an
-    # error pointing at the wrong thing.
-    before = repo_mod.head_sha(clone)
-
-    print("Generating the fleet age identity ...")
-    identity_text, recipient = agefile.keygen()
-
-    print(
-        "\nChoose a strong passphrase for the fleet identity. You will type it "
-        "twice now, and once on each machine you unlock -- nowhere else. "
-        "Escrow it in your password manager: after seeding it is the only "
-        "remote path back into these secrets."
-    )
-    code = agefile.wrap_identity(identity_text, wrapped)
-    if code != 0:
+    with operation_lock(DATA_DIR) as data_dir:
         try:
-            wrapped.unlink()
-        except OSError:
-            pass
-        return _fail("age failed to wrap the identity; nothing was written")
+            clone = _ensure_guarded(config, data_dir=data_dir)
+        except repo_mod.RepoBindingError:
+            raise
+        except SecretsError as e:
+            # Cached identity evidence gives useful unlock advice without proving
+            # why the gate failed or whether any local history is disposable.
+            clone = paths_for(data_dir)["clone"]
+            if repo_mod.is_clone(clone) and repo_mod.remote_has(clone, "identity.age"):
+                return _fail(
+                    f"{e.message}\n\n"
+                    "The cached remote-tracking view contains identity.age. "
+                    "It does not establish why this gate failed. To use that "
+                    "fleet identity, this machine needs "
+                    f"`{cli_command('unlock --new-terminal')}`."
+                )
+            raise
 
-    manifest = Manifest(
-        manifest_path,
-        {"version": 1, "recipient": recipient, "profiles": {}, "entries": {}},
-    )
-    manifest_path.write_text(manifest.dump(), encoding="utf-8")
+        manifest_path = clone / "manifest.json"
+        wrapped = clone / "identity.age"
 
-    # Deny-by-default .gitignore, layered under the pre-commit guard. The guard
-    # stops a deliberate `git add`; this stops a careless `git add -A` from
-    # staging a stray plaintext file at all. Two independent nets, because the
-    # thing they prevent cannot be undone.
-    wrote_ignore = guard.ensure_gitignore(clone)
+        # Ask the REMOTE, not the checkout. Seeding is the one irreversible act
+        # here -- a second identity orphans every blob encrypted to the first --
+        # and the checkout can only tell us what was true at the last fetch. The
+        # local file is checked too, for the case where the branch has no upstream.
+        if not args.force and (repo_mod.remote_has(clone, "identity.age") or wrapped.exists()):
+            return _fail(
+                "this repo is already seeded -- identity.age exists. Re-running "
+                "init would generate a SECOND fleet identity and orphan every "
+                "existing blob (they are encrypted to the first one's public "
+                "key).\n"
+                f"To use the existing fleet identity on this machine, run "
+                f"`{cli_command('unlock --new-terminal')}`.\n"
+                "To change the passphrase or key while keeping the blobs readable, "
+                "use `rotate-identity`. Pass --force only if you really mean to "
+                "abandon the existing secrets and start over."
+            )
 
-    seeded_paths = ["identity.age", "manifest.json"]
-    if wrote_ignore:
-        seeded_paths.append(".gitignore")
-    try:
-        repo_mod.commit_and_push(
-            clone, "seed: fleet identity + empty manifest", seeded_paths
+        # Everything from here to the push is one transaction. A partial seed is
+        # the worst outcome available: this machine would cache an identity the
+        # fleet has never heard of, and every later decrypt would fail with an
+        # error pointing at the wrong thing.
+        before = repo_mod.head_sha(clone)
+
+        print("Generating the fleet age identity ...")
+        identity_text, recipient = agefile.keygen()
+
+        print(
+            "\nChoose a strong passphrase for the fleet identity. You will type it "
+            "twice now, and once on each machine you unlock -- nowhere else. "
+            "Escrow it in your password manager: after seeding it is the only "
+            "remote path back into these secrets."
         )
-    except SecretsError as e:
-        # Publishing is what MAKES the seed real. If it did not land, unwind
-        # rather than leaving a local-only fleet identity behind: the next run
-        # would find identity.age in the checkout, conclude the repo is seeded,
-        # and refuse -- pointing the user at an identity no other machine can
-        # ever obtain.
-        repo_mod.rollback_to(clone, before, created=seeded_paths)
-        return _fail(
-            f"{e}\n"
-            "Nothing was published and nothing was kept: the generated "
-            "identity has been discarded and this machine is unchanged. The "
-            "passphrase you just chose applies to nothing -- re-run init once "
-            "the repo state above is resolved and choose one again."
+        code = agefile.wrap_identity(identity_text, wrapped)
+        if code != 0:
+            try:
+                wrapped.unlink()
+            except OSError:
+                pass
+            return _fail("age failed to wrap the identity; nothing was written")
+
+        manifest = Manifest(
+            manifest_path,
+            {"version": 1, "recipient": recipient, "profiles": {}, "entries": {}},
         )
+        manifest_path.write_text(manifest.dump(), encoding="utf-8")
 
-    # Cache the unlocked identity locally so the seeding machine does not have
-    # to unlock itself immediately after creating the key it just held. Written
-    # only AFTER the push, so this file can never name a key the fleet lacks.
-    paths = paths_for(DATA_DIR)
-    tighten_dir(DATA_DIR)
-    def produce_cache(stream: IO[Any]) -> bool:
-        stream.write(identity_text)
-        return True
+        # Deny-by-default .gitignore, layered under the pre-commit guard. The guard
+        # stops a deliberate `git add`; this stops a careless `git add -A` from
+        # staging a stray plaintext file at all. Two independent nets, because the
+        # thing they prevent cannot be undone.
+        wrote_ignore = guard.ensure_gitignore(clone)
 
-    _private_output(paths["identity"], 0o600, produce_cache, text=True)
+        seeded_paths = ["identity.age", "manifest.json"]
+        if wrote_ignore:
+            seeded_paths.append(".gitignore")
+        try:
+            repo_mod.commit_and_push(
+                clone, "seed: fleet identity + empty manifest", seeded_paths
+            )
+        except SecretsError as e:
+            # Publishing is what MAKES the seed real. If it did not land, unwind
+            # rather than leaving a local-only fleet identity behind: the next run
+            # would find identity.age in the checkout, conclude the repo is seeded,
+            # and refuse -- pointing the user at an identity no other machine can
+            # ever obtain.
+            repo_mod.rollback_to(clone, before, created=seeded_paths)
+            return _fail(
+                f"{e}\n"
+                "Nothing was published and nothing was kept: the generated "
+                "identity has been discarded and this machine is unchanged. The "
+                "passphrase you just chose applies to nothing -- re-run init once "
+                "the repo state above is resolved and choose one again."
+            )
 
-    print(f"\nseeded. recipient = {recipient}")
-    print(f"Add secrets with: {cli_command('add')} <name> --file <path> --dest <dest>")
-    return 0
+        # Cache the unlocked identity locally so the seeding machine does not have
+        # to unlock itself immediately after creating the key it just held. Written
+        # only AFTER the push, so this file can never name a key the fleet lacks.
+        paths = paths_for(data_dir)
+        tighten_dir(data_dir)
+        def produce_cache(stream: IO[Any]) -> bool:
+            stream.write(identity_text)
+            return True
+
+        _private_output(paths["identity"], 0o600, produce_cache, text=True)
+
+        print(f"\nseeded. recipient = {recipient}")
+        print(f"Add secrets with: {cli_command('add')} <name> --file <path> --dest <dest>")
+        return 0
 
 
 # --------------------------------------------------------------------------
@@ -448,132 +454,134 @@ def _require_exclusive_blob(manifest: Manifest, clone: Path, name: str, blob: st
 def cmd_add(args: argparse.Namespace) -> int:
     """Encrypt a file into the repo. Public-key op -- no passphrase needed."""
     config = _require_config()
-    clone = _ensure_guarded(config)
-    manifest_path = clone / "manifest.json"
-    manifest = Manifest.load(manifest_path)
+    with operation_lock(DATA_DIR) as data_dir:
+        clone = _ensure_guarded(config, data_dir=data_dir)
+        manifest_path = clone / "manifest.json"
+        manifest = Manifest.load(manifest_path)
 
-    source = Path(args.file).expanduser()
-    if not source.is_file():
-        return _fail(f"no such file: {source}")
+        source = Path(args.file).expanduser()
+        if not source.is_file():
+            return _fail(f"no such file: {source}")
 
-    exists = args.name in manifest.entries
-    if exists and not args.update:
-        return _fail(
-            f"entry '{args.name}' already exists. Pass --update to rotate its "
-            "value (this is the rotation path), or pick another name."
-        )
-    if not exists and not args.dest:
-        return _fail("--dest is required when adding a new entry")
+        exists = args.name in manifest.entries
+        if exists and not args.update:
+            return _fail(
+                f"entry '{args.name}' already exists. Pass --update to rotate its "
+                "value (this is the rotation path), or pick another name."
+            )
+        if not exists and not args.dest:
+            return _fail("--dest is required when adding a new entry")
 
-    blob_rel = manifest.entries[args.name].blob if exists else f"blobs/{source.name}.age"
-    _require_exclusive_blob(manifest, clone, args.name, blob_rel)
+        blob_rel = manifest.entries[args.name].blob if exists else f"blobs/{source.name}.age"
+        _require_exclusive_blob(manifest, clone, args.name, blob_rel)
 
-    plaintext = source.read_bytes()
-    stored_spec = manifest.entries[args.name].dest_spec if exists else None
-    dest_spec = args.dest or stored_spec
-    mode = args.mode if args.mode is not None else (manifest.entries[args.name].mode if exists else "0600")
-    newline = args.newline if args.newline is not None else (manifest.entries[args.name].newline if exists else None)
+        plaintext = source.read_bytes()
+        stored_spec = manifest.entries[args.name].dest_spec if exists else None
+        dest_spec = args.dest or stored_spec
+        mode = args.mode if args.mode is not None else (manifest.entries[args.name].mode if exists else "0600")
+        newline = args.newline if args.newline is not None else (manifest.entries[args.name].newline if exists else None)
 
-    # Consent is per-DESTINATION, never per-entry-forever. A stored override
-    # carries forward only while the destination is unchanged -- otherwise
-    # `add <name> --update --dest B` would inherit consent granted for dest A,
-    # skip the check on B, AND re-persist the override so convergence honours
-    # it too: a rotation could silently relocate a credential into a different
-    # unignored working tree with nothing ever looking at it.
-    dest_unchanged = not args.dest or args.dest == stored_spec
-    inherited = bool(exists and dest_unchanged and manifest.entries[args.name].allow_tracked_dest)
-    allow_tracked_dest = bool(args.allow_tracked_dest) or inherited
-    # True when we are deliberately NOT honouring a stored override, so the
-    # refusal can explain a rejection the user will not expect.
-    consent_dropped = bool(
-        exists and not dest_unchanged and manifest.entries[args.name].allow_tracked_dest
-    )
-
-    entry_data = {
-        "blob": blob_rel,
-        "dest": dest_spec,
-        "mode": mode,
-    }
-    if allow_tracked_dest:
-        entry_data["allow_tracked_dest"] = True
-    if newline is not None:
-        entry_data["newline"] = newline
-    if args.doc:
-        entry_data["doc"] = args.doc
-    elif exists and manifest.entries[args.name].doc:
-        entry_data["doc"] = manifest.entries[args.name].doc
-
-    raw = json.loads(manifest.dump())
-    raw["entries"][args.name] = entry_data
-    for profile in args.profile or []:
-        raw["profiles"].setdefault(profile, [])
-        if args.name not in raw["profiles"][profile]:
-            raw["profiles"][profile].append(args.name)
-            raw["profiles"][profile].sort()
-
-    rewritten = Manifest(manifest_path, raw)
-    if rewritten.entries[args.name].newline == "lf" and b"\r\n" in plaintext:
-        requirement = "inherited newline lf is required" if args.newline is None else "--newline lf was requested"
-        return _fail(
-            f"{source} contains CRLF but {requirement}. "
-            "Convert it first; seeding a CRLF ssh key or token breaks the "
-            "consumer in ways that are painful to diagnose later."
+        # Consent is per-DESTINATION, never per-entry-forever. A stored override
+        # carries forward only while the destination is unchanged -- otherwise
+        # `add <name> --update --dest B` would inherit consent granted for dest A,
+        # skip the check on B, AND re-persist the override so convergence honours
+        # it too: a rotation could silently relocate a credential into a different
+        # unignored working tree with nothing ever looking at it.
+        dest_unchanged = not args.dest or args.dest == stored_spec
+        inherited = bool(exists and dest_unchanged and manifest.entries[args.name].allow_tracked_dest)
+        allow_tracked_dest = bool(args.allow_tracked_dest) or inherited
+        # True when we are deliberately NOT honouring a stored override, so the
+        # refusal can explain a rejection the user will not expect.
+        consent_dropped = bool(
+            exists and not dest_unchanged and manifest.entries[args.name].allow_tracked_dest
         )
 
-    # Validate the complete declaration and exposure before writing ciphertext.
-    refusal = _refuse_exposed_dest(
-        config,
-        args.name,
-        dest_spec,
-        allow_tracked_dest,
-        consent_dropped=consent_dropped,
-    )
-    if refusal is not None:
-        return refusal
+        entry_data = {
+            "blob": blob_rel,
+            "dest": dest_spec,
+            "mode": mode,
+        }
+        if allow_tracked_dest:
+            entry_data["allow_tracked_dest"] = True
+        if newline is not None:
+            entry_data["newline"] = newline
+        if args.doc:
+            entry_data["doc"] = args.doc
+        elif exists and manifest.entries[args.name].doc:
+            entry_data["doc"] = manifest.entries[args.name].doc
 
-    agefile.encrypt_to_recipient(manifest.recipient, plaintext, clone / blob_rel)
-    manifest_path.write_text(rewritten.dump(), encoding="utf-8")
+        raw = json.loads(manifest.dump())
+        raw["entries"][args.name] = entry_data
+        for profile in args.profile or []:
+            raw["profiles"].setdefault(profile, [])
+            if args.name not in raw["profiles"][profile]:
+                raw["profiles"][profile].append(args.name)
+                raw["profiles"][profile].sort()
 
-    verb = "rotate" if exists else "add"
-    repo_mod.commit_and_push(
-        clone, f"{verb}: {args.name}", [blob_rel, "manifest.json"]
-    )
-    print(f"{'rotated' if exists else 'added'} '{args.name}' -> {blob_rel}")
-    return 0
+        rewritten = Manifest(manifest_path, raw)
+        if rewritten.entries[args.name].newline == "lf" and b"\r\n" in plaintext:
+            requirement = "inherited newline lf is required" if args.newline is None else "--newline lf was requested"
+            return _fail(
+                f"{source} contains CRLF but {requirement}. "
+                "Convert it first; seeding a CRLF ssh key or token breaks the "
+                "consumer in ways that are painful to diagnose later."
+            )
+
+        # Validate the complete declaration and exposure before writing ciphertext.
+        refusal = _refuse_exposed_dest(
+            config,
+            args.name,
+            dest_spec,
+            allow_tracked_dest,
+            consent_dropped=consent_dropped,
+        )
+        if refusal is not None:
+            return refusal
+
+        agefile.encrypt_to_recipient(manifest.recipient, plaintext, clone / blob_rel)
+        manifest_path.write_text(rewritten.dump(), encoding="utf-8")
+
+        verb = "rotate" if exists else "add"
+        repo_mod.commit_and_push(
+            clone, f"{verb}: {args.name}", [blob_rel, "manifest.json"]
+        )
+        print(f"{'rotated' if exists else 'added'} '{args.name}' -> {blob_rel}")
+        return 0
 
 
 def cmd_remove(args: argparse.Namespace) -> int:
     """Drop an entry. Every machine deletes its copy on the next pass."""
     config = _require_config()
-    clone = _ensure_guarded(config)
-    manifest_path = clone / "manifest.json"
-    manifest = Manifest.load(manifest_path)
+    with operation_lock(DATA_DIR) as data_dir:
+        clone = _ensure_guarded(config, data_dir=data_dir)
+        manifest_path = clone / "manifest.json"
+        manifest = Manifest.load(manifest_path)
 
-    if args.name not in manifest.entries:
-        return _fail(f"no entry named '{args.name}'")
+        if args.name not in manifest.entries:
+            return _fail(f"no entry named '{args.name}'")
 
-    blob_rel = manifest.entries[args.name].blob
-    _require_exclusive_blob(manifest, clone, args.name, blob_rel)
+        blob_rel = manifest.entries[args.name].blob
+        _require_exclusive_blob(manifest, clone, args.name, blob_rel)
 
-    raw = json.loads(manifest.dump())
-    raw["entries"].pop(args.name)
-    for profile, names in raw["profiles"].items():
-        raw["profiles"][profile] = [n for n in names if n != args.name]
+        raw = json.loads(manifest.dump())
+        raw["entries"].pop(args.name)
+        for profile, names in raw["profiles"].items():
+            raw["profiles"][profile] = [n for n in names if n != args.name]
 
-    rewritten = Manifest(manifest_path, raw)
-    manifest_path.write_text(rewritten.dump(), encoding="utf-8")
-    try:
-        (clone / blob_rel).unlink()
-    except OSError:
-        pass
+        rewritten = Manifest(manifest_path, raw)
+        manifest_path.write_text(rewritten.dump(), encoding="utf-8")
+        try:
+            (clone / blob_rel).unlink()
+        except OSError:
+            pass
 
-    repo_mod.commit_and_push(clone, f"remove: {args.name}", [blob_rel, "manifest.json"])
-    print(
-        f"removed '{args.name}'. Note the ciphertext remains in git history "
-        "forever -- if the VALUE was sensitive and is now exposed, rotate the "
-        "underlying credential; deleting the blob is not revocation."
-    )
-    return 0
+        repo_mod.commit_and_push(clone, f"remove: {args.name}", [blob_rel, "manifest.json"])
+        print(
+            f"removed '{args.name}'. Note the ciphertext remains in git history "
+            "forever -- if the VALUE was sensitive and is now exposed, rotate the "
+            "underlying credential; deleting the blob is not revocation."
+        )
+        return 0
 
 
 # --------------------------------------------------------------------------
@@ -586,59 +594,60 @@ def cmd_rotate_identity(args: argparse.Namespace) -> int:
     if handed_off is not None:
         return handed_off
     config = _require_config()
-    clone = _ensure_guarded(config)
-    manifest_path = clone / "manifest.json"
-    manifest = Manifest.load(manifest_path)
-    paths = paths_for(DATA_DIR)
+    with operation_lock(DATA_DIR) as data_dir:
+        clone = _ensure_guarded(config, data_dir=data_dir)
+        manifest_path = clone / "manifest.json"
+        manifest = Manifest.load(manifest_path)
+        paths = paths_for(data_dir)
 
-    if not paths["identity"].is_file():
-        return _fail(
-            f"this machine is locked; run `{cli_command('unlock')}` first. "
-            "Rotation re-encrypts every blob, so it has to be able to read "
-            "them."
+        if not paths["identity"].is_file():
+            return _fail(
+                f"this machine is locked; run `{cli_command('unlock')}` first. "
+                "Rotation re-encrypts every blob, so it has to be able to read "
+                "them."
+            )
+
+        print("Decrypting every blob with the current identity ...")
+        plaintexts = {}
+        for name, entry in manifest.entries.items():
+            plaintexts[name] = agefile.decrypt_with_identity(
+                paths["identity"], clone / entry.blob
+            )
+
+        print("Generating the replacement identity ...")
+        identity_text, recipient = agefile.keygen()
+        print(
+            "\nChoose the passphrase for the NEW identity (it may be the same one "
+            "or a different one). Every other machine will need to unlock again."
         )
+        code = agefile.wrap_identity(identity_text, clone / "identity.age")
+        if code != 0:
+            return _fail("age failed to wrap the new identity; nothing was changed")
 
-    print("Decrypting every blob with the current identity ...")
-    plaintexts = {}
-    for name, entry in manifest.entries.items():
-        plaintexts[name] = agefile.decrypt_with_identity(
-            paths["identity"], clone / entry.blob
+        touched = ["identity.age", "manifest.json"]
+        for name, entry in manifest.entries.items():
+            agefile.encrypt_to_recipient(recipient, plaintexts[name], clone / entry.blob)
+            touched.append(entry.blob)
+
+        raw = json.loads(manifest.dump())
+        raw["recipient"] = recipient
+        manifest_path.write_text(Manifest(manifest_path, raw).dump(), encoding="utf-8")
+
+        def produce_cache(stream: IO[Any]) -> bool:
+            stream.write(identity_text)
+            return True
+
+        _private_output(paths["identity"], 0o600, produce_cache, text=True)
+
+        repo_mod.commit_and_push(clone, "rotate: fleet identity", touched)
+        print(
+            "\nidentity rotated. Other machines will report a decrypt failure "
+            f"once and need `! {cli_command('unlock')}` again.\n"
+            "REMEMBER: this stops the old identity reading FUTURE blobs. It does "
+            "not un-read the past. If a machine was lost, rotate the underlying "
+            "credentials too -- that is the real revocation."
         )
-
-    print("Generating the replacement identity ...")
-    identity_text, recipient = agefile.keygen()
-    print(
-        "\nChoose the passphrase for the NEW identity (it may be the same one "
-        "or a different one). Every other machine will need to unlock again."
-    )
-    code = agefile.wrap_identity(identity_text, clone / "identity.age")
-    if code != 0:
-        return _fail("age failed to wrap the new identity; nothing was changed")
-
-    touched = ["identity.age", "manifest.json"]
-    for name, entry in manifest.entries.items():
-        agefile.encrypt_to_recipient(recipient, plaintexts[name], clone / entry.blob)
-        touched.append(entry.blob)
-
-    raw = json.loads(manifest.dump())
-    raw["recipient"] = recipient
-    manifest_path.write_text(Manifest(manifest_path, raw).dump(), encoding="utf-8")
-
-    def produce_cache(stream: IO[Any]) -> bool:
-        stream.write(identity_text)
-        return True
-
-    _private_output(paths["identity"], 0o600, produce_cache, text=True)
-
-    repo_mod.commit_and_push(clone, "rotate: fleet identity", touched)
-    print(
-        "\nidentity rotated. Other machines will report a decrypt failure "
-        f"once and need `! {cli_command('unlock')}` again.\n"
-        "REMEMBER: this stops the old identity reading FUTURE blobs. It does "
-        "not un-read the past. If a machine was lost, rotate the underlying "
-        "credentials too -- that is the real revocation."
-    )
-    return 0
+        return 0
 
 
 def _add_new_terminal_flag(p: argparse.ArgumentParser) -> None:
@@ -703,7 +712,8 @@ def main(argv=None) -> int:
     try:
         return args.func(args)
     except SecretsError as e:
-        return _fail(str(e))
+        release_error = getattr(e, "operation_lock_release_error", None)
+        return _fail(f"{e}\n{release_error}" if release_error else str(e))
 
 
 if __name__ == "__main__":

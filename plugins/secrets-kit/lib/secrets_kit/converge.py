@@ -22,6 +22,7 @@ from .manifest import Config, Entry, Manifest
 from .perms import _private_output, _repair_mode_drift, tighten, tighten_dir
 from . import repo as repo_mod
 from .state import State, sha256_bytes, sha256_file
+from .operation_lock import OperationLockError, operation_lock
 
 # Names the bootstrap failure records use. Stable strings: the engine dedupes
 # and re-reports on them every session until they clear.
@@ -29,6 +30,7 @@ FAILURE_LOCKED = "secrets_locked"
 FAILURE_CONFIG = "secrets_config"
 FAILURE_ENTRY = "secrets_entry"
 FAILURE_DEST = "secrets_dest"
+FAILURE_OPERATION_LOCK = "secrets_operation_lock"
 
 
 class Failure:
@@ -139,6 +141,27 @@ def converge(
         result.failures.append(_declaration_failure(error))
         return result
 
+    try:
+        with operation_lock(data_dir) as canonical:
+            result = _converge_locked(config, canonical, variables=variables,
+                                      profiles=profiles, force_refresh=force_refresh)
+    except OperationLockError as error:
+        result.failures.append(Failure(
+            FAILURE_OPERATION_LOCK,
+            user_msg=f"secrets-kit: {error}",
+            agent_msg=f"The secrets operation guard failed.\n{error}",
+        ))
+    return result
+
+
+def _converge_locked(config: Config, data_dir: Path, *, variables: dict,
+                     profiles: List[str], force_refresh: bool) -> Result:
+    """Consume and retire under caller-held whole-operation ownership.
+
+    All nested repo/key/state/value/publication helpers share this interval
+    and never acquire recursively. Paths use the acquired physical identity.
+    """
+    result = Result()
     paths = paths_for(data_dir)
     if repo_mod.is_clone(paths["clone"]):
         try:

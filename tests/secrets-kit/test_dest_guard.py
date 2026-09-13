@@ -1158,7 +1158,8 @@ def _blob_main_add(adding, name, source, *, update=False):
 
 
 def _seed_shared_blob_owners(adding, *, alias='ordinary'):
-    clone = adding.cli._ensure_guarded(adding.cli._require_config())
+    with adding.cli.operation_lock(adding.data_dir) as data_dir:
+        clone = adding.cli._ensure_guarded(adding.cli._require_config(), data_dir=data_dir)
     shared = 'blobs/shared.txt.age'
     (clone / 'blobs').mkdir(exist_ok=True)
     (clone / shared).write_bytes(_armored(b'age1testrecipient', b'published shared dummy\n'))
