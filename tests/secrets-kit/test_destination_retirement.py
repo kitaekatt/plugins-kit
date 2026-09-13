@@ -296,6 +296,7 @@ from secrets_kit.state import State
 assert Path(c.__file__).resolve().parent==root/'plugins/secrets-kit/lib/secrets_kit'
 m.resolve_host=lambda:['testbox'];c.repo_mod.refresh=lambda *a,**k:None
 c.repo_mod.is_clone=lambda p:Path(p).is_dir()
+c.repo_mod.require_repo_binding=lambda clone_dir,declared_repo:None
 def decrypt(identity,blob):
     payload=Path(blob).read_bytes();assert payload.startswith(b'AGE-FAKE:')
     return payload.partition(b'\\n')[2]

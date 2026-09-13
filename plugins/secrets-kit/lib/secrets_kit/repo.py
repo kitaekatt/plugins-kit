@@ -12,7 +12,7 @@ import re
 import subprocess
 import time
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from . import SecretsError
 
@@ -135,7 +135,7 @@ _INDEXED_CONFIG_RE = re.compile(r"\AGIT_CONFIG_(?:KEY|VALUE)_\d+\Z")
 # variable to either family just because it starts with GIT_.
 
 
-def _git(args: List[str], *, cwd: Optional[Path], timeout: int) -> Tuple[int, str]:
+def _git_environment() -> Dict[str, str]:
     env = dict(os.environ)
     for name in _RELOCATING_ENV + _INJECTING_ENV:
         env.pop(name, None)
@@ -145,6 +145,11 @@ def _git(args: List[str], *, cwd: Optional[Path], timeout: int) -> Tuple[int, st
     # it would hang the hook rather than fail it.
     env["GIT_TERMINAL_PROMPT"] = "0"
     env.setdefault("GIT_SSH_COMMAND", "ssh -oBatchMode=yes")
+    return env
+
+
+def _git(args: List[str], *, cwd: Optional[Path], timeout: int) -> Tuple[int, str]:
+    env = _git_environment()
     try:
         proc = subprocess.run(
             ["git"] + args,
@@ -160,6 +165,67 @@ def _git(args: List[str], *, cwd: Optional[Path], timeout: int) -> Tuple[int, st
         return (127, f"could not run git: {e}")
     # Git terminates records with newlines; other whitespace can be ref data.
     return (proc.returncode, proc.stdout.decode("utf-8", "replace").rstrip("\r\n"))
+
+
+class RepoBindingError(SecretsError):
+    """A retained clone cannot be used under the current declaration."""
+
+
+_BINDING_RECONCILIATION = (
+    "Inspect secrets.json and the clone's local origin privately. Restore the "
+    "intended exact declaration if it changed accidentally. Otherwise preserve "
+    "the existing clone, identity cache and ownership state while resolving the "
+    "intended repository before a separately planned migration. For a local "
+    "query failure, restore Git/config access and retry."
+)
+
+
+def _binding_unavailable(reason: str) -> RepoBindingError:
+    return RepoBindingError(
+        f"could not establish repository binding: {reason}. Repository use stopped.",
+        _BINDING_RECONCILIATION,
+    )
+
+
+def require_repo_binding(clone_dir: Path, declared_repo: str) -> None:
+    """Require one exact directly recorded local origin before clone reuse."""
+    try:
+        declared_repo.encode("utf-8", "strict")
+    except UnicodeEncodeError:
+        raise _binding_unavailable("declaration is not representable as UTF-8") from None
+    try:
+        proc = subprocess.run(
+            ["git", "config", "--local", "--no-includes", "--null", "--get-all", "remote.origin.url"],
+            cwd=str(clone_dir),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=QUERY_TIMEOUT,
+            env=_git_environment(),
+        )
+    except subprocess.TimeoutExpired:
+        raise _binding_unavailable(f"local origin query timed out after {QUERY_TIMEOUT}s") from None
+    except OSError as error:
+        raise _binding_unavailable(f"could not execute local Git (errno {error.errno})") from None
+    if proc.returncode == 1 and not proc.stdout and not proc.stderr:
+        raise _binding_unavailable("local origin is missing")
+    if proc.returncode != 0:
+        raise _binding_unavailable(f"local origin query returned status {proc.returncode}")
+    if proc.stderr:
+        raise _binding_unavailable("local origin query reported diagnostic output")
+    records = proc.stdout.split(b"\0")
+    if len(records) != 2 or records[-1] or not records[0]:
+        reason = "multiple local origin records" if len(records) > 2 else "malformed local origin response"
+        raise _binding_unavailable(reason)
+    try:
+        recorded = records[0].decode("utf-8", "strict")
+    except UnicodeDecodeError:
+        raise _binding_unavailable("local origin is not valid UTF-8") from None
+    if recorded != declared_repo:
+        raise RepoBindingError(
+            "repository binding mismatch: secrets.json repo differs from the "
+            "existing clone's recorded origin. Repository use stopped.",
+            _BINDING_RECONCILIATION,
+        )
 
 
 def is_clone(path: Path) -> bool:

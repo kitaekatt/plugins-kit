@@ -265,7 +265,7 @@ def _network_observer(monkeypatch):
 
 def _birth_consumer(adding, root, remote):
     data = root / 'consumer data'
-    repository.clone(str(remote), data / 'repo')
+    repository.clone(json.loads(adding.config_path.read_text())['repo'], data / 'repo')
     (data / 'identity.txt').write_bytes(b'dummy consumer identity\n');(data / 'identity.txt').chmod(0o600)
     result = convergence.converge(adding.config_path, data)
     return {'written': result.written, 'failures': len(result.failures), 'manifestPresent': (data / 'repo/manifest.json').is_file()}

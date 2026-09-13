@@ -94,6 +94,7 @@ def _ensure_clone(config: Config, *, sync: bool = False) -> Path:
         else:
             repo_mod.clone(config.repo, clone)
         return clone
+    repo_mod.require_repo_binding(clone, config.repo)
     if sync:
         print("syncing with the remote ...")
         repo_mod.sync(clone)
@@ -201,6 +202,8 @@ def cmd_init(args: argparse.Namespace) -> int:
     config = _require_config()
     try:
         clone = _ensure_guarded(config)
+    except repo_mod.RepoBindingError:
+        raise
     except SecretsError as e:
         # Cached identity evidence gives useful unlock advice without proving
         # why the gate failed or whether any local history is disposable.

@@ -140,6 +140,16 @@ def converge(
         return result
 
     paths = paths_for(data_dir)
+    if repo_mod.is_clone(paths["clone"]):
+        try:
+            repo_mod.require_repo_binding(paths["clone"], config.repo)
+        except repo_mod.RepoBindingError as error:
+            result.failures.append(Failure(
+                FAILURE_CONFIG,
+                user_msg=f"secrets-kit: {error}",
+                agent_msg=f"Repository use refused before refresh or consumption.\n{error}",
+            ))
+            return result
     tighten_dir(data_dir)
 
     # --- repo -------------------------------------------------------------

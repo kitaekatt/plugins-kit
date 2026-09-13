@@ -777,6 +777,7 @@ def test_inline_authoring_refuses_effective_target_before_named_effects(repo, tm
     alternate = tmp_path / "alternate-empty"
     alternate.mkdir()
     _git(clone, "config", "core.hooksPath", str(alternate))
+    _git(clone, "config", "remote.origin.url", str(tmp_path / "unused-remote.git"))
     config = tmp_path / "inline-secrets.json"
     config.write_text(json.dumps({"repo": str(tmp_path / "unused-remote.git"), "machines": {"testbox": {"profiles": []}}}), encoding="utf-8")
     monkeypatch.setattr(cli, "CONFIG_PATH", config)

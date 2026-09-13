@@ -104,6 +104,10 @@ def no_network(monkeypatch):
     monkeypatch.setattr(
         converge_mod.repo_mod, "is_clone", lambda path: Path(path).is_dir()
     )
+    # These unit fixtures are plain directories with no recorded Git origin.
+    monkeypatch.setattr(
+        repo_mod, "require_repo_binding", lambda clone_dir, declared_repo: None
+    )
     return repo_mod
 
 
