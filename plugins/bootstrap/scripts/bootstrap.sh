@@ -13,6 +13,10 @@
 #                             start runs a real pass
 #   bootstrap reset --all     clear every project's cooldown (--status to list,
 #                             --project <dir>, --clear-alerts; --help for all)
+#   bootstrap install-hook    administrator lever: write the ensure-bootstrap
+#                             SessionStart hook into the project in the working
+#                             directory, with this bootstrap's version as the
+#                             minimum (see references/fleet-management.md)
 #   bootstrap -h | --help     show this help
 #
 # Project layers use the exact working directory; no parent search.
