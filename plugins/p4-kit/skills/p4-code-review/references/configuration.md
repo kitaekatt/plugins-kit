@@ -8,7 +8,7 @@ GUIDANCE and RATIONALE prose that helps pick a profile; the EXECUTABLE table liv
 bootstrap_lib's shipped defaults (reproduced below) and is resolved per review by
 `bootstrap_lib.code_review.review_profiles`, invoked through this plugin's venv entry point:
 
-    python3 ${CLAUDE_PLUGIN_ROOT}/scripts/render_review_profiles.py --project-root <project root>
+    uv run --no-project python ${CLAUDE_PLUGIN_ROOT}/scripts/render_review_profiles.py --project-root <project root>
 
 ## Mechanical syntax coverage
 
@@ -168,7 +168,7 @@ things, and which one it is decides how that lane is dispatched:
 | Value | Dispatch |
 |---|---|
 | `sonnet`, `opus`, `haiku`, `fable` | an Agent subagent (the default) |
-| anything else | an llm-scripting-kit endpoint id, run through `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/run_review_lane.py` |
+| anything else | an llm-scripting-kit endpoint id, run through `uv run --no-project python ${CLAUDE_PLUGIN_ROOT}/scripts/run_review_lane.py` |
 
 Every model the shipped table can resolve to is an Agent alias, so a review with no user or
 project override dispatches every lane as an Agent subagent -- unless a `peer:` entry resolves
@@ -204,7 +204,25 @@ endpoint rather than produce a reviewer that hallucinates context it cannot fetc
 
 ### When an endpoint lane fails
 
-It is reported as a failed lane and the review renders without it, with that lane's coverage
+**Pre-dispatch launch-correction rule (all reviewer lanes).** Correct a local invocation
+error and retry the same intended lane only with positive evidence that no reviewer process
+or Agent started and no provider request was sent. Eligible examples are CLI argument/JSON
+quoting errors and an Agent alias sent to the endpoint runner, when diagnostics or the
+launcher's verified control flow establish rejection before dispatch. Preserve the same
+resolved model, effort, chunk, files, and review criteria; correcting the launcher to the
+mechanism required by that model is not model substitution. Retain the original stderr and
+no-dispatch evidence for the review's launch-correction report. A non-zero exit alone is not
+that evidence; uncertain dispatch state is treated as a failed lane, not a retry opportunity.
+
+Provider/auth/quota/network failures, timeouts, and invalid reviewer output are not eligible
+launch corrections, even if a provider rejected the request before inference. Permission or
+sharing denials require the normal approval flow and are not eligible launch corrections.
+Unsupported lane/model configurations remain errors to report; this exception does not
+authorize changing the resolved profile, bypassing capability gates, or retrying to obtain
+a preferred verdict. If the invocation cannot be corrected within these bounds, report
+the failure and missing coverage.
+
+An actual lane failure is reported and the review renders without it, with that lane's coverage
 marked missing in a `## Lane failures` section. There is deliberately no fallback to an Agent:
 a silent fallback would hand back a review you read as having run on the model you configured,
 which is a false claim about what actually reviewed your change. Causes are the endpoint being
@@ -270,7 +288,7 @@ For a `peer:<name>` entry the renderer asks llm-scripting-kit
 (`llm_scripting_kit.seats.discover_seats`) for the seats around `<name>`, takes the first
 reachable `BESIDE` seat, and writes that seat's endpoint id into the lane's `model` in the
 table it prints. Nothing downstream changes: the value is an endpoint id, so the lane
-dispatches through `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/run_review_lane.py` under the ordinary model-kind rule, and the agent-loop
+dispatches through `uv run --no-project python ${CLAUDE_PLUGIN_ROOT}/scripts/run_review_lane.py` under the ordinary model-kind rule, and the agent-loop
 constraint above still applies -- a `BESIDE` seat is always a harness endpoint, which is what
 this lane needs.
 
@@ -310,7 +328,7 @@ not ask for.
 
 Those states are still told apart, in a diagnostic channel rather than in the review:
 
-    python3 ${CLAUDE_PLUGIN_ROOT}/scripts/render_review_profiles.py --project-root <project root> --explain-peer-seats
+    uv run --no-project python ${CLAUDE_PLUGIN_ROOT}/scripts/render_review_profiles.py --project-root <project root> --explain-peer-seats
 
 prints, on stderr, whether the plugin is absent (with the `claude plugin install` command) or
 present but predating `llm_scripting_kit.seats.discover_seats`, which first shipped in
@@ -344,7 +362,7 @@ probed for. To keep the peer preference on a different tier, state the list you 
 
 ## Inspecting the resolved table
 
-    python3 ${CLAUDE_PLUGIN_ROOT}/scripts/render_review_profiles.py --project-root <project root>
+    uv run --no-project python ${CLAUDE_PLUGIN_ROOT}/scripts/render_review_profiles.py --project-root <project root>
 
 prints the merged `profiles` table as YAML, then a `---` separator, then which layers were
 applied and (for any absent override) the path that would create it. This is the same

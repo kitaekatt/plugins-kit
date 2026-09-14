@@ -41,8 +41,13 @@ bootstrap run             # apply the four user/project layers
 bootstrap run --verbose   # accepted for console compatibility
 bootstrap reset           # clear this project's next-session throttle
 bootstrap reset --all     # all projects; --status and --project also supported
+bootstrap install-hook    # administrator: write the ensure-bootstrap hook here
 bootstrap --help
 ```
+
+`bootstrap install-hook` writes the project SessionStart hook that installs or
+updates bootstrap on machines that lack it. It is documented, with its
+opt-out, in fleet-management.md.
 
 ## Running passes and exit codes
 

@@ -48,7 +48,10 @@ plugins-kit:bootstrap and start a new session" and STOP.
      when workflow-kit is dev-only (no own venv), use the bootstrap standalone python.
 4. **Run it.** Pass the compiled path as `scriptPath` and the args object as `args`
    to the native Workflow tool. This is the opt-in boundary. (The compiled script
-   normalizes `args` itself -- this runtime delivers it as a JSON string.)
+   normalizes `args` itself -- this runtime delivers it as a JSON string.) If the
+   tool rejects the `scriptPath` (it can reject a path it did not return itself), Read
+   the compiled script and pass its full text as `script` instead; do not retry a
+   respelled path.
 5. **Relay the result** to the user in readable form (the tool result is not
    shown to them directly).
 

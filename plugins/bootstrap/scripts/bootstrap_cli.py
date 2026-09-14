@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """bootstrap -- the command-line face of the bootstrap engine.
 
-Three verbs. The point of the first two is that a bootstrap pass is a
-SINGLE-INSTANCE thing (bootstrap_lib.proc_lock):
+Four verbs. The point of the first two is that a bootstrap pass is a
+SINGLE-INSTANCE thing (bootstrap_lib.proc_lock). The fourth,
+`bootstrap install-hook`, is an administrator lever that writes the
+ensure-bootstrap SessionStart hook into a project (install_bootstrap_hook.py):
 
     bootstrap        Is a pass running right now? Says so -- and if one IS,
                      stays attached and streams it until it finishes.
@@ -533,6 +535,26 @@ def _render(line: str, verdict: bool = True):
 
 
 # --------------------------------------------------------------------------
+# install-hook
+# --------------------------------------------------------------------------
+
+def cmd_install_hook(args) -> int:
+    """Write the ensure-bootstrap hook into the project at the working directory.
+
+    The shim's --plugin-root is the highest installed bootstrap, so its version
+    is the administrator's current one; a direct run falls back to this file's
+    own plugin tree.
+    """
+    import importlib.util
+    here = os.path.dirname(os.path.abspath(__file__))
+    spec = importlib.util.spec_from_file_location(
+        "install_bootstrap_hook", os.path.join(here, "install_bootstrap_hook.py"))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.main(args.plugin_root or os.path.dirname(here))
+
+
+# --------------------------------------------------------------------------
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(
@@ -560,7 +582,16 @@ def main(argv=None) -> int:
     # FIRST positional does not capture a LEADING option-like token either
     # (CPython bpo-17050), so `bootstrap run --verbose` -- the spelling the
     # help text advertises -- died with "unrecognized arguments: --verbose".
+    sub.add_parser("install-hook",
+                   help="write the ensure-bootstrap SessionStart hook into the "
+                        "project in the working directory, with this "
+                        "bootstrap's version as the minimum")
+
     args, extra = parser.parse_known_args(argv)
+    if args.command == "install-hook":
+        if extra:
+            parser.error("unrecognized arguments: %s" % " ".join(extra))
+        return cmd_install_hook(args)
     if args.command in ("run", "reset"):
         args.forward = extra
         return cmd_run(args) if args.command == "run" else cmd_reset(args)

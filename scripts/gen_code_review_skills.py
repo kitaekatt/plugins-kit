@@ -6,7 +6,7 @@ agent_assumptions, issue_format, submit_gates.rendering, narration note). Only
 the VCS front-half differs: target identity (git range-auto-detect vs p4 CL),
 fold-in mechanics (git add/commit vs p4 reconcile), the unresolved-work wording
 (merge conflicts vs pending resolves), a p4-only step 10 (auto-shelf cleanup)
-plus its python3 launch gotcha, and the output header line.
+plus its launch gotcha, and the output header line.
 
 Historically the shared back-half drifted by accident -- a fix landed in one
 kit's SKILL.md and never reached the other (findings G6/G7 of the 2026-06-09
@@ -207,10 +207,12 @@ MODEL_KIND = """\
             issues, in the same shape an Agent lane returns.
             Endpoint lanes and Agent lanes go out in the SAME message as one another; mixing
             the two dispatch mechanisms in one fan-out is normal and expected.
-            A NON-ZERO exit is a FAILED lane, never an empty result: do NOT retry it, do NOT
-            silently substitute an Agent, and do NOT treat its absence as "no issues found".
-            Keep its stderr line, report the lane as failed in step 9, and mark its coverage
-            missing. Only the lanes the runner supports may carry an endpoint id; it refuses
+            A NON-ZERO exit is never an empty result. Before marking a lane failed,
+            apply the pre-dispatch launch-correction rule in references/configuration.md.
+            Other non-zero exits are FAILED lanes: do NOT retry them, silently substitute
+            an Agent, or treat absent output as "no issues found". Keep the stderr line,
+            report the failure in step 9, and mark coverage missing.
+            Only the lanes the runner supports may carry an endpoint id; it refuses
             the rest by name and exits 2, which is a configuration error for the user to fix,
             not something to work around.
 
@@ -487,7 +489,7 @@ PROFILE_GOTCHAS = """
         - See references/configuration.md for the layer precedence, merge rules (profiles/reviewers merge by id/name; validator_models and other mappings deep-merge; `disabled: true` removes a record; plain lists like `data_only_extensions` replace), the shipped default table, what a `model` value may name, which lanes may take an endpoint id, what happens when an endpoint lane fails, and how a reviewer's ordered `model` priority list resolves a `peer:` entry (plus the `--explain-peer-seats` diagnostic).
         - A `model` value is NOT always an Agent-tool model. The four aliases `sonnet`, `opus`, `haiku` and `fable` name the Agent tool; every other value is an llm-scripting-kit endpoint id and that lane runs through @LANE_TOOL@ instead (step 6's model-kind rule). Every `model` in the RESOLVED table is a single string -- the renderer has already picked one entry out of any priority list the configuration stated -- so this rule needs no extra case.
         - A reviewer's configured `model` may be an ORDERED PRIORITY LIST rather than a single name, and an entry spelled `peer:<name>` asks the renderer to run that lane on a reachable PEER endpoint -- same tier as `<name>`, different model family -- when llm-scripting-kit is installed and current. The renderer evaluates the list and prints one resolved model, so the table you read already carries the chosen value, and the lane dispatches through @LANE_TOOL@ under the ordinary step-6 model-kind rule. Do not probe for a peer yourself, and do not treat a resolved peer endpoint as an override the user forgot to make.
-        - An endpoint lane that fails is a FAILED lane. There is no fallback to an Agent, by design: silently substituting one produces a review the user reads as having run on the model they configured, which is a false claim about the change's coverage. Report it and mark the coverage missing.
+        - Apply references/configuration.md's pre-dispatch launch-correction rule before classifying a failed invocation. An actual failed endpoint lane has no Agent fallback: report it and mark coverage missing rather than claiming review by the configured model.
         - A reviewer record may carry an `effort` (`low`, `medium`, `high`, `xhigh`, `max`) beside its `model`. It selects the DISPATCH TARGET, not a parameter: the Agent tool has no effort argument, so an effort-carrying lane goes to the `@KIT@:review-lane-<effort>` agent, whose frontmatter sets it. A lane with no `effort` keeps `general-purpose` and inherits this session's effort. Do not attempt to pass effort as an Agent argument, and do not read a lane's effort off the agent's page -- the RESOLVED table is the authority.
         - Effort and model are independent and BOTH are honoured: the profile's `model` goes at the CALL SITE, where it overrides whatever the effort agent's own frontmatter would imply. Never move a lane to a different model to obtain an effort level, and never move it to a different effort to obtain a model."""
 
@@ -732,8 +734,11 @@ technique_skill:
         - n: 9
           action: |
             Render the markdown review.
-            - When any lane FAILED (an endpoint-dispatched reviewer that exited non-zero in
-              step 6, or a lane refused as a configuration error), prepend a `## Lane failures`
+            - Report each corrected launch's original stderr, no-dispatch evidence,
+              correction, and final outcome in a `## Launch corrections` section.
+              Only a completed, schema-valid reviewer result restores that lane's coverage.
+            - When any lane FAILED (including an unsuccessful launch correction
+              or a lane refused as a configuration error), prepend a `## Lane failures`
               section naming each failed lane, the model it was configured with, and the
               runner's stderr reason. State plainly which files that lane would have covered
               and that they did NOT receive its review. This section is not decoration: the
@@ -1019,7 +1024,7 @@ GIT_STEP2 = """\
 __CLAIM_PROBE__
             Then run prepare_review.py to fetch the diff, partition it into chunked .diff fragments on disk, enumerate changed files via `git diff --name-status`, map ancestor CLAUDE.md files for each, detect untracked-or-unstaged files in the directories the diff touches, detect unresolved merge conflicts, and scan ancestor CLAUDE.md files for submit-gate reminders that apply to this range.
 __LAUNCH_EMIT__
-          tool: python3 ${CLAUDE_PLUGIN_ROOT}/scripts/prepare_review.py
+          tool: uv run --no-project python ${CLAUDE_PLUGIN_ROOT}/scripts/prepare_review.py
           input: "<range or argument from step 1>  (append `--claim '**/*.md'` when md-domain is available, per the claim probe)"
           expected: |
             JSON with vcs, range, head_sha, branch, description, project_root, bundle_dir, diff_chunks, changed_files, unique_claude_mds, untracked_or_unstaged, merge_conflicts, submit_gates, change_id, ledger_baseline, ledger_hits, -- only when --claim was passed -- claimed_files, and -- only when a changed file was detected as machine-emitted -- machine_emitted_files (each entry carries identifier, local, size_bytes, and the axis that matched -- machine_emitted_axis `content` or `declared_path` plus the naming machine_emitted_signature; such files are excluded from diff_chunks and changed_files, and `--review-machine-emitted` turns that exclusion off). The raw diff text is NOT inline -- it lives in per-chunk files at `<bundle_dir>/<diff_chunks[i].path>` (paths are relative to bundle_dir). Each `changed_files` entry carries `chunk_index` pointing to the chunk that contains its diff.
@@ -1063,14 +1068,14 @@ P4_STEP2 = """\
 __CLAIM_PROBE__
             Then run prepare_review.py to fetch the diff (with shelved fallback; auto-shelves a pending CL with no existing shelf so the diff is fetchable), partition the diff into chunked .diff fragments on disk, map ancestor CLAUDE.md files for each changed file, detect unreconciled and default-changelist files in the directories the CL touches, detect unresolved merges in the CL, and scan ancestor CLAUDE.md files for submit-gate reminders that apply to this CL.
 __LAUNCH_EMIT__
-          tool: python3 ${CLAUDE_PLUGIN_ROOT}/scripts/prepare_review.py
+          tool: uv run --no-project python ${CLAUDE_PLUGIN_ROOT}/scripts/prepare_review.py
           input: "<CL>  (append `--claim '**/*.md'` when md-domain is available, per the claim probe)"
           expected: |
             JSON with cl, description, project_root, bundle_dir, diff_chunks, changed_files, unique_claude_mds, unreconciled, default_open, stale_open, shelf_drift, unresolved, hygiene_incomplete, submit_gates, auto_shelved, shelf_fingerprint, change_id, ledger_baseline, ledger_hits, -- only when the CL belongs to a different client -- foreign_change, -- only when --claim was passed -- claimed_files, and -- only when a changed file was detected as machine-emitted -- machine_emitted_files (each entry carries identifier, local, size_bytes, and the axis that matched -- machine_emitted_axis `content` or `declared_path` plus the naming machine_emitted_signature; such files are excluded from diff_chunks and changed_files, and `--review-machine-emitted` turns that exclusion off). The raw diff text is NOT inline -- it lives in per-chunk files at `<bundle_dir>/<diff_chunks[i].path>` (paths are relative to bundle_dir). Each `changed_files` entry carries `chunk_index` pointing to the chunk that contains its diff. `auto_shelved=true` means prepare_review created the shelf and step 10 must clean it up.
           on_failure: |
             If prepare reports that the CL belongs to a foreign client, re-run once without `--claim` and use that bundle. State that md-domain subject-lens review is unavailable because claim pre-images depend on the author's client workspace.
             For any other failure, surface the stderr message to the user and stop. No retry.
-            Launch note: ALWAYS invoke with an explicit `python3` interpreter (as shown in `tool:`), never as a bare path. Bare `${CLAUDE_PLUGIN_ROOT}/scripts/prepare_review.py <CL>` lets bash try to run the file as a shell script -- it has no shebang line in older checkouts and the exec bit does not survive on Windows checkouts, so bash parses the Python as sh and exits 2. The script self-relocates under the p4-kit venv via reexec, so any python3 launcher is sufficient. And NEVER pipe the invocation (`... | tail`, `... | head`): a pipe makes `$?` the last pipeline stage's status, not the script's, which silently masks a launch failure as success.""".replace(
+            Launch note: ALWAYS invoke through `uv run --no-project python` (as shown in `tool:`), never as a bare path and never as bare `python3` -- `python3` can be absent from PATH on Windows, and `--no-project` keeps uv from syncing the project directory's own environment. Bare `${CLAUDE_PLUGIN_ROOT}/scripts/prepare_review.py <CL>` lets bash try to run the file as a shell script -- it has no shebang line in older checkouts and the exec bit does not survive on Windows checkouts, so bash parses the Python as sh and exits 2. The script self-relocates under the p4-kit venv via reexec, so any interpreter uv resolves is sufficient. And NEVER pipe the invocation (`... | tail`, `... | head`): a pipe makes `$?` the last pipeline stage's status, not the script's, which silently masks a launch failure as success.""".replace(
     "__CLAIM_PROBE__", P4_CLAIM_PROBE
 ).replace(
     "__LAUNCH_EMIT__", LAUNCH_EMIT
@@ -1147,7 +1152,7 @@ P4_STEP10 = """\
 
             Skip this step entirely when `bundle.auto_shelved` is false (we did
             not create the shelf and must not touch it).
-          tool: python3 ${CLAUDE_PLUGIN_ROOT}/scripts/prepare_review.py
+          tool: uv run --no-project python ${CLAUDE_PLUGIN_ROOT}/scripts/prepare_review.py
           input: "--cleanup <bundle.bundle_dir>"
 """
 
@@ -1437,7 +1442,7 @@ FRAGMENTS = {
         "ISSUE_PATH": "<repo-relative or absolute path>",
         "SG_DESC": GIT_SG_DESC,
         "OUTPUT_FORMAT": GIT_OUTPUT_FORMAT,
-        "PREPARE_TOOL": "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/prepare_review.py",
+        "PREPARE_TOOL": "uv run --no-project python ${CLAUDE_PLUGIN_ROOT}/scripts/prepare_review.py",
         "LEDGER_RECORD_N": "10",
         "BASELINE_DESC": "the range base SHA advances -- origin/main moves, or HEAD changes for a working-tree review",
     },
@@ -1469,7 +1474,7 @@ FRAGMENTS = {
         "ISSUE_PATH": "<depot or local path>",
         "SG_DESC": P4_SG_DESC,
         "OUTPUT_FORMAT": P4_OUTPUT_FORMAT,
-        "PREPARE_TOOL": "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/prepare_review.py",
+        "PREPARE_TOOL": "uv run --no-project python ${CLAUDE_PLUGIN_ROOT}/scripts/prepare_review.py",
         "LEDGER_RECORD_N": "11",
         "BASELINE_DESC": "the CL is reshelved, its content edited, or its revisions move",
     },
@@ -1495,8 +1500,8 @@ _SHARED = {
         ("        " + line).rstrip()
         for line in lane_prompts.REVIEWER_C_SYSTEM.splitlines()
     ),
-    "LANE_TOOL": "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/run_review_lane.py",
-    "PARSE_TOOL": "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/parse_review_lane.py",
+    "LANE_TOOL": "uv run --no-project python ${CLAUDE_PLUGIN_ROOT}/scripts/run_review_lane.py",
+    "PARSE_TOOL": "uv run --no-project python ${CLAUDE_PLUGIN_ROOT}/scripts/parse_review_lane.py",
     "MD_DOMAIN_LAUNCH": MD_DOMAIN_LAUNCH,
     "MD_DOMAIN_REPORT": MD_DOMAIN_REPORT,
     "GENERATED_REPORT": GENERATED_REPORT,
@@ -1507,9 +1512,9 @@ _SHARED = {
     # launch gotcha (missing shebang / lost exec bit on Windows checkouts making
     # a bare path parse as sh) is the same hazard PREPARE_TOOL guards against
     # for BOTH kits (git's prepare_review.py ships mode 100644 with no shebang
-    # and exits 126 on a bare-path launch), so both use the explicit python3
-    # launcher here too.
-    "RENDER_TOOL": "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/render_review_profiles.py",
+    # and exits 126 on a bare-path launch), so both use the explicit
+    # `uv run --no-project python` launcher here too.
+    "RENDER_TOOL": "uv run --no-project python ${CLAUDE_PLUGIN_ROOT}/scripts/render_review_profiles.py",
     "X": X,
     "CHK": CHK,
     "CRS": CRS,
@@ -1995,7 +2000,7 @@ DECLINED_LEDGER_FRAGMENTS = {
         "SKILL_NAME": "git-code-review",
         "CHANGE_ID_LEDGER": "the diff range spec (e.g. `origin/main..HEAD`)",
         "BASELINE_LEDGER": "the range base SHA (`git rev-parse <base>`)",
-        "PREPARE_TOOL": "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/prepare_review.py",
+        "PREPARE_TOOL": "uv run --no-project python ${CLAUDE_PLUGIN_ROOT}/scripts/prepare_review.py",
         "LEDGER_STORE": "~/.claude/plugins/data/plugins-kit/git-kit/reviews/ledger.json",
     },
     "p4": {
@@ -2005,7 +2010,7 @@ DECLINED_LEDGER_FRAGMENTS = {
             "a hash over the CL's shelf fingerprint (content) plus its per-file "
             "(rev, action) map (identity)"
         ),
-        "PREPARE_TOOL": "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/prepare_review.py",
+        "PREPARE_TOOL": "uv run --no-project python ${CLAUDE_PLUGIN_ROOT}/scripts/prepare_review.py",
         "LEDGER_STORE": "~/.claude/plugins/data/plugins-kit/p4-kit/reviews/ledger.json",
     },
 }
@@ -2232,7 +2237,25 @@ endpoint rather than produce a reviewer that hallucinates context it cannot fetc
 
 ### When an endpoint lane fails
 
-It is reported as a failed lane and the review renders without it, with that lane's coverage
+**Pre-dispatch launch-correction rule (all reviewer lanes).** Correct a local invocation
+error and retry the same intended lane only with positive evidence that no reviewer process
+or Agent started and no provider request was sent. Eligible examples are CLI argument/JSON
+quoting errors and an Agent alias sent to the endpoint runner, when diagnostics or the
+launcher's verified control flow establish rejection before dispatch. Preserve the same
+resolved model, effort, chunk, files, and review criteria; correcting the launcher to the
+mechanism required by that model is not model substitution. Retain the original stderr and
+no-dispatch evidence for the review's launch-correction report. A non-zero exit alone is not
+that evidence; uncertain dispatch state is treated as a failed lane, not a retry opportunity.
+
+Provider/auth/quota/network failures, timeouts, and invalid reviewer output are not eligible
+launch corrections, even if a provider rejected the request before inference. Permission or
+sharing denials require the normal approval flow and are not eligible launch corrections.
+Unsupported lane/model configurations remain errors to report; this exception does not
+authorize changing the resolved profile, bypassing capability gates, or retrying to obtain
+a preferred verdict. If the invocation cannot be corrected within these bounds, report
+the failure and missing coverage.
+
+An actual lane failure is reported and the review renders without it, with that lane's coverage
 marked missing in a `## Lane failures` section. There is deliberately no fallback to an Agent:
 a silent fallback would hand back a review you read as having run on the model you configured,
 which is a false claim about what actually reviewed your change. Causes are the endpoint being
@@ -2386,14 +2409,14 @@ CONFIGURATION_FRAGMENTS = {
     "git": {
         "SKILL_NAME": "git-code-review",
         "KIT": "git-kit",
-        "RENDER_TOOL": "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/render_review_profiles.py",
-        "LANE_TOOL": "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/run_review_lane.py",
+        "RENDER_TOOL": "uv run --no-project python ${CLAUDE_PLUGIN_ROOT}/scripts/render_review_profiles.py",
+        "LANE_TOOL": "uv run --no-project python ${CLAUDE_PLUGIN_ROOT}/scripts/run_review_lane.py",
     },
     "p4": {
         "SKILL_NAME": "p4-code-review",
         "KIT": "p4-kit",
-        "RENDER_TOOL": "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/render_review_profiles.py",
-        "LANE_TOOL": "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/run_review_lane.py",
+        "RENDER_TOOL": "uv run --no-project python ${CLAUDE_PLUGIN_ROOT}/scripts/render_review_profiles.py",
+        "LANE_TOOL": "uv run --no-project python ${CLAUDE_PLUGIN_ROOT}/scripts/run_review_lane.py",
     },
 }
 
