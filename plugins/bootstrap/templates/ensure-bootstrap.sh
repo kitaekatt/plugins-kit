@@ -76,16 +76,23 @@ version_ge() {
     return 0
 }
 
-# Normalize a path for comparison: backslashes to slashes, MSYS /d/ to d:/,
-# lower-case (Windows paths are case-insensitive), no trailing slash.
+# Normalize a path for comparison: backslashes to slashes, MSYS /d/ to D:/,
+# an upper-case drive letter, no trailing slash. The rest of the path stays
+# case-sensitive because Claude Code matches projectPath that way: a record
+# for D:\Dev\x does not apply to a session in D:\dev\x.
 norm_path() {
-    local p
+    local p drive
     p="$(printf '%s' "$1" | tr '\\' '/' | tr -s '/')"
     case "$p" in
         /[a-zA-Z]/*) p="${p:1:1}:${p:2}" ;;
         /[a-zA-Z]) p="${p:1:1}:" ;;
     esac
-    p="$(printf '%s' "$p" | tr '[:upper:]' '[:lower:]')"
+    case "$p" in
+        [a-zA-Z]:*)
+            drive="$(printf '%s' "${p:0:1}" | tr '[:lower:]' '[:upper:]')"
+            p="$drive${p:1}"
+            ;;
+    esac
     p="${p%/}"
     printf '%s' "$p"
 }

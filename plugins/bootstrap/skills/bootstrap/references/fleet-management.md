@@ -43,7 +43,10 @@ At every session start the hook does this:
 2. **Detect.** Read `claude plugin list --json` and find the
    `bootstrap@plugins-kit` record that applies to this project: a `local`
    record for this project, else a `project` record for this project, else a
-   `user` record. If its version is at or above the minimum, do nothing.
+   `user` record. A record's project path must match this project exactly
+   apart from slash direction and drive-letter case, because Claude Code
+   treats paths that differ only in case as different projects. If its
+   version is at or above the minimum, do nothing.
 3. **Remediate.**
    - If the `plugins-kit` marketplace is missing, add it from
      `https://github.com/kitaekatt/plugins-kit.git`.
