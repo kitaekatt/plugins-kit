@@ -106,6 +106,21 @@ def merge_settings(settings: dict) -> dict:
     return settings
 
 
+def _read_bytes(path: str) -> bytes:
+    with open(path, "rb") as fh:
+        return fh.read()
+
+
+def _match_line_endings(body: bytes, existing) -> bytes:
+    """Return LF-terminated ``body`` with CRLF endings when ``existing`` uses CRLF.
+
+    A new file (``existing`` None) keeps LF.
+    """
+    if existing is not None and b"\r\n" in existing:
+        return body.replace(b"\r\n", b"\n").replace(b"\n", b"\r\n")
+    return body
+
+
 def _require_writable(path: str) -> None:
     if os.path.exists(path) and not os.access(path, os.W_OK):
         raise InstallError(
@@ -127,24 +142,26 @@ def install(project_dir: str, plugin_root: str) -> dict:
     settings_path = os.path.join(claude_dir, "settings.json")
 
     settings = {}
-    settings_text = ""
+    old_settings = None
     if os.path.exists(settings_path):
         try:
-            with open(settings_path, encoding="utf-8") as fh:
-                settings_text = fh.read()
-            settings = json.loads(settings_text)
+            old_settings = _read_bytes(settings_path)
+            settings = json.loads(old_settings.decode("utf-8"))
         except (OSError, ValueError) as exc:
             raise InstallError("cannot parse %s: %s" % (settings_path, exc))
         if not isinstance(settings, dict):
             raise InstallError("%s is not a JSON object" % settings_path)
-    new_text = json.dumps(merge_settings(settings), indent=2, ensure_ascii=False) + "\n"
+    settings_body = (json.dumps(merge_settings(settings), indent=2, ensure_ascii=False)
+                     + "\n").encode("utf-8")
 
-    old_hook = None
-    if os.path.exists(hook_path):
-        with open(hook_path, "rb") as fh:
-            old_hook = fh.read()
+    old_hook = _read_bytes(hook_path) if os.path.exists(hook_path) else None
+    # Keep each existing file's line endings. A Perforce client with LineEnd
+    # local checks text files out with CRLF on Windows, and rewriting them with
+    # LF makes every line show as changed.
+    hook_body = _match_line_endings(hook_body, old_hook)
+    settings_body = _match_line_endings(settings_body, old_settings)
     hook_changed = old_hook != hook_body
-    settings_changed = new_text != settings_text
+    settings_changed = old_settings != settings_body
 
     # Check both targets before writing either, so a refusal leaves no half-install.
     if hook_changed:
@@ -157,8 +174,8 @@ def install(project_dir: str, plugin_root: str) -> dict:
         with open(hook_path, "wb") as fh:
             fh.write(hook_body)
     if settings_changed:
-        with open(settings_path, "w", encoding="utf-8", newline="\n") as fh:
-            fh.write(new_text)
+        with open(settings_path, "wb") as fh:
+            fh.write(settings_body)
 
     return {
         "min_version": version,
