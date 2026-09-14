@@ -283,7 +283,9 @@ class TestGeneratedHook:
 
     def test_old_project_record_is_updated_at_its_scope(self, tmp_path):
         h = HookHarness(tmp_path)
-        project_path = str(h.project).replace("/", "\\").upper()
+        # Separator style and drive-letter case do not matter; see the next test.
+        raw = str(h.project).replace("/", "\\")
+        project_path = raw[0].swapcase() + raw[1:]
         h.set_plugins(
             [_record("1.5.0", "user"), _record("1.1.9", "project", project_path),
              _record("0.1.0", "project", "C:\\elsewhere")],
@@ -297,6 +299,19 @@ class TestGeneratedHook:
             "plugin list --json",
         ]
         assert "updated bootstrap@plugins-kit 1.2.1" in json.loads(proc.stdout)["systemMessage"]
+
+    def test_record_for_a_differently_cased_path_does_not_count(self, tmp_path):
+        # Claude Code treats D:\Dev\x and D:\dev\x as different projects, so a
+        # record under the other spelling is not an install for this session.
+        h = HookHarness(tmp_path)
+        raw = str(h.project)
+        other_case = raw[:-4] + raw[-4:].swapcase()
+        assert other_case != raw
+        h.set_plugins([_record("0.1.0", "local", other_case)],
+                      after=[_record("1.2.0", "user")])
+        proc, calls = h.run()
+        assert "plugin install bootstrap@plugins-kit --scope user" in calls
+        assert not any(c.startswith("plugin update") for c in calls)
 
     def test_other_projects_records_do_not_count(self, tmp_path):
         h = HookHarness(tmp_path)
