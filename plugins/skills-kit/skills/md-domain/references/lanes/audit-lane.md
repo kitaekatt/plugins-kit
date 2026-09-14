@@ -138,7 +138,8 @@ per-run overhead.
 
 - **ONE file (non-review)** -- audit inline in the main loop.
 - **TWO OR MORE files, or ANY count in review mode** -- call the Workflow tool
-  with `scriptPath ${CLAUDE_PLUGIN_ROOT}/skills/md-domain/workflow/<artifact>-detect.js`
+  with the script `${CLAUDE_PLUGIN_ROOT}/skills/md-domain/workflow/<artifact>-detect.js`
+  (passed as described in "Passing a lane script to the Workflow tool" below)
   and `args = { files:[{path, ...artifact signals, ancestorClaudeMdPaths, standardsPaths, preImagePath}], disabledCriteria, review, refs }`.
   One lane per file; returns `{ perFile, totals, review }`.
 
@@ -152,6 +153,15 @@ per-run overhead.
   takes `standardsDoc` (references-standards.md) and `taxonomyDoc`
   (`../references-finding-taxonomy.md` -- the A-K detection signals and
   remediation defaults; standardsDoc is the fallback when absent).
+
+**Passing a lane script to the Workflow tool.** Read the installed script and
+pass its full text VERBATIM as `script`. Do not pass the installed path as
+`scriptPath`: the tool rejects a path it did not return itself -- observed for
+the plugin-cache path and for a copy Read into the working directory, even
+though its error text says a readable working-directory file is accepted.
+Every Workflow result names a saved script file; a later call in the same
+session may pass that returned path as `scriptPath`. A rejected `scriptPath`
+is not fixed by respelling the path -- switch to `script`.
 
 **REVIEW MODE OVERRIDE: the threshold is 1.** Always use the Workflow path, even
 for a single file. A review-mode verdict gates a submit, so it must not depend on
@@ -355,8 +365,9 @@ IMPROVE/SPECIAL = per decision; SERIOUS never auto-applied; drop skips). Choose
 mode by how many FILES carry remediation work.
 
 - **ONE file** -- apply inline with Edit.
-- **TWO OR MORE files** -- call the Workflow tool with
-  `scriptPath ${CLAUDE_PLUGIN_ROOT}/skills/md-domain/workflow/<artifact>-remediate.js`
+- **TWO OR MORE files** -- call the Workflow tool with the script
+  `${CLAUDE_PLUGIN_ROOT}/skills/md-domain/workflow/<artifact>-remediate.js`
+  (passed as in "Passing a lane script to the Workflow tool", Step 2)
   and `args = { perFile:[{path, remediations:[{criterion, taxonomy, bucket, line, instruction, decision}]}] }`.
   One lane per file (disjoint files never conflict).
 
