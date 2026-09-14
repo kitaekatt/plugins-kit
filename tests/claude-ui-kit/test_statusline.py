@@ -349,11 +349,9 @@ class TestRateLimitSnapshot:
         return json.dumps(body)
 
     def _run(self, tmp_path, payload, extra_env=None):
-        # SNAP_DIR is derived from BASH_SOURCE in production (so it follows
-        # the plugin that is actually running); these tests run the repo's
-        # own statusline.sh directly rather than from an installed layout, so
-        # STATUSLINE_SNAP_DIR pins the snapshot to the fake HOME the way an
-        # installed copy under that HOME would resolve on its own.
+        # The default snapshot path is the canonical consumer location under
+        # HOME. These tests exercise STATUSLINE_SNAP_DIR explicitly and keep
+        # writes inside the fake home.
         home = tmp_path / "home"
         home.mkdir()
         snap_dir = home / ".claude" / self.SNAPSHOT.parent
@@ -426,21 +424,13 @@ class TestRateLimitSnapshot:
 
 
 @pytest.mark.skipif(not _HAS_TOOLS, reason="bash + jq required")
-class TestSnapDirFollowsRunningPlugin:
-    """SNAP_DIR hardcoded the marketplace segment "plugins-kit" while
-    SEGMENTS_DIR derived its location from ${BASH_SOURCE[0]}. Deriving
-    SNAP_DIR the same way means the snapshot lands beside the plugin that is
-    actually running, under whatever marketplace name installed it -- not a
-    literal "plugins-kit" that happens to not match a fork or a differently
-    named marketplace.
-    """
+class TestCanonicalSnapshotPath:
+    """The writer uses the consumer's canonical path across install locations."""
 
-    def test_snapshot_lands_beside_the_running_script_not_a_hardcoded_marketplace(
+    def test_foreign_marketplace_install_writes_the_canonical_consumer_snapshot(
         self, tmp_path
     ):
-        # Lay out a fake install under a marketplace name that is NOT
-        # "plugins-kit", mirroring the real <data_root>/<marketplace>/<plugin>
-        # shape SEGMENTS_DIR already derives from BASH_SOURCE.
+        # Run a real script copy from a different marketplace's install.
         home = tmp_path / "home"
         installed_script = (
             home / ".claude" / "plugins" / "data" / "othermarket"
@@ -450,13 +440,19 @@ class TestSnapDirFollowsRunningPlugin:
         installed_script.write_bytes(_STATUSLINE.read_bytes())
         installed_script.chmod(0o755)
 
+        rate_limits = {
+            "five_hour": {"used_percentage": 10.0, "resets_at": 1800000000},
+            "seven_day": {"used_percentage": 42.5, "resets_at": 1800000001},
+        }
         payload = json.dumps({
             "model": {"display_name": "TestModel", "id": "m-1"},
             "cwd": str(tmp_path / "myproj"),
-            "rate_limits": {"five_hour": {"used_percentage": 10.0}},
+            "rate_limits": rate_limits,
         })
         env = dict(os.environ)
         env.pop("BOOTSTRAP_BIN_JQ", None)
+        env.pop("STATUSLINE_SNAP_DIR", None)
+        env.pop("STATUSLINE_RATE_LIMIT_SNAPSHOT", None)
         env["HOME"] = str(home)
         if _TIMEOUT_SHIM is not None:
             env["BOOTSTRAP_BIN_TIMEOUT"] = _TIMEOUT_SHIM
@@ -466,20 +462,19 @@ class TestSnapDirFollowsRunningPlugin:
             encoding="utf-8", errors="replace")
 
         assert result.returncode == 0, result.stderr
+        assert "myproj" in result.stdout
         expected_snapshot = (
-            home / ".claude" / "plugins" / "data" / "othermarket"
-            / "claude-ui-kit" / "rate-limits.json"
-        )
-        assert expected_snapshot.exists(), (
-            "snapshot must land in the data dir of the plugin that is "
-            "actually running (derived from BASH_SOURCE), not a hardcoded "
-            "'plugins-kit' segment"
-        )
-        wrong_snapshot = (
             home / ".claude" / "plugins" / "data" / "plugins-kit"
             / "claude-ui-kit" / "rate-limits.json"
         )
-        assert not wrong_snapshot.exists()
+        assert expected_snapshot.exists(), (
+            "snapshot must land at the canonical path read by consumers"
+        )
+        data = json.loads(expected_snapshot.read_text(encoding="utf-8"))
+        assert data["rate_limits"] == rate_limits
+        assert isinstance(data["captured_at"], int)
+        script_relative_snapshot = installed_script.parent.parent / "rate-limits.json"
+        assert not script_relative_snapshot.exists()
 
 
 class TestNoTimeoutBinaryIsVisible:

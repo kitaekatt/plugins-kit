@@ -5,6 +5,9 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+import pytest
+import yaml
+
 _MANIFEST = (
     Path(__file__).resolve().parents[2]
     / "plugins"
@@ -41,16 +44,41 @@ def test_awesome_kit_description_matches_remaining_skills() -> None:
     # routine bump while proving nothing about that.
     assert manifest["version"].count(".") == 2
     assert "html-pdf" not in description
-    assert all(
-        skill_name in description
-        for skill_name in (
-            "plugin-ecosystem",
-            "task",
-            "orchestrate",
-            "recap",
-            "verbose-updates",
-        )
-    )
+    skills_dir = Path(__file__).resolve().parents[2] / "plugins" / "awesome-kit" / "skills"
+    skill_files = sorted(skills_dir.glob("*/SKILL.md"))
+    assert skill_files
+    for skill_md in skill_files:
+        frontmatter = yaml.safe_load(skill_md.read_text(encoding="utf-8").split("---", 2)[1])
+        assert frontmatter["name"] in description, skill_md
+
+
+def test_description_guard_rejects_missing_debug_context(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manifest = _read_json(_PLUGIN_MANIFEST)
+    manifest["description"] = manifest["description"].replace("debug-context, ", "")
+    copied_manifest = tmp_path / "plugin.json"
+    copied_manifest.write_text(json.dumps(manifest), encoding="utf-8")
+    monkeypatch.setattr(__import__(__name__), "_PLUGIN_MANIFEST", copied_manifest)
+    with pytest.raises(AssertionError):
+        test_awesome_kit_description_matches_remaining_skills()
+
+
+def test_shipped_skill_md_is_ascii() -> None:
+    skills_dir = Path(__file__).resolve().parents[2] / "plugins" / "awesome-kit" / "skills"
+    skill_files = sorted(skills_dir.glob("*/SKILL.md"))
+    assert skill_files
+    for skill_md in skill_files:
+        skill_md.read_bytes().decode("ascii")
+
+
+def test_readme_defers_to_the_landing_page_recipe() -> None:
+    plugin_root = Path(__file__).resolve().parents[2] / "plugins" / "awesome-kit"
+    readme = (plugin_root / "README.md").read_text(encoding="utf-8")
+    assert "--marketplace plugins-kit --output ./index.html" not in readme
+    assert "skills/plugin-ecosystem/SKILL.md#generating-a-marketplaces-landing-page" in readme
+    skill = (plugin_root / "skills" / "plugin-ecosystem" / "SKILL.md").read_text(encoding="utf-8")
+    assert "### Generating a marketplace's landing page" in skill
 
 
 def test_no_private_paths_in_shipped_files() -> None:

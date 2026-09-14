@@ -13,13 +13,13 @@ unlocked identity, encrypt a new blob to the public key) needs no passphrase
 at all, so the pass never wants a terminal.
 """
 
-import os
 import shutil
 import subprocess
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Any, IO, List, Optional, Tuple
 
 from . import DecryptError, SecretsError
+from .perms import _private_output
 
 # age is fast (scrypt work is only on the passphrase paths, which are
 # interactive and unbounded by this). A generous ceiling on the non-interactive
@@ -141,29 +141,32 @@ def wrap_identity(identity_text: str, out_path: Path) -> int:
 
 
 def unwrap_identity(wrapped_path: Path, out_path: Path) -> int:
-    """Decrypt a passphrase-wrapped identity to ``out_path`` (INTERACTIVE).
+    """Inherit age's terminal and publish its protected stdout only on zero.
 
-    Returns age's exit code; a non-zero code is almost always a wrong
-    passphrase, which the caller reports as such. The output file is created
-    0600 BEFORE any plaintext reaches it (see :func:`write_private`), because
-    a private key briefly sitting at the default umask is exactly the kind of
-    window that never shows up in testing.
+    A completed nonzero child preserves any prior cache and returns its exact
+    integer status. Protection and publication faults are private-file errors,
+    rather than a wrong-passphrase status. No interactive deadline is added.
     """
     if not wrapped_path.is_file():
         raise SecretsError(f"no wrapped identity at {wrapped_path}")
     age = _resolve("age")
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    fd = os.open(str(out_path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    try:
-        with os.fdopen(fd, "wb") as fh:
-            proc = subprocess.Popen(
-                [age, "-d", str(wrapped_path)],
-                stdout=fh,
-            )
+    code = 0
+
+    def produce(stream: IO[Any]) -> bool:
+        nonlocal code
+        try:
+            proc = subprocess.Popen([age, "-d", str(wrapped_path)], stdout=stream)
             proc.communicate()
-            return proc.returncode
-    except OSError as e:
-        raise SecretsError(f"could not run age: {e}", _INSTALL_HINT)
+        except OSError as error:
+            raise SecretsError(f"could not run age: {error}", _INSTALL_HINT)
+        code = proc.returncode
+        return code == 0
+
+    try:
+        _private_output(out_path, 0o600, produce)
+    except OSError as error:
+        raise SecretsError(f"could not write private identity cache at {out_path}: {error}")
+    return code
 
 
 def encrypt_to_recipient(recipient: str, plaintext: bytes, out_path: Path) -> None:

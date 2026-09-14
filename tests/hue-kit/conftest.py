@@ -52,17 +52,26 @@ def hue_cli():
     module scope, so importing it in-process would try to re-exec the test
     runner under the plugin venv. Stub the module out first -- same technique
     conftest already uses for requests/urllib3, and for the same reason: the
-    function under test is pure process-plumbing and needs none of it.
+    function under test is pure process-plumbing and needs none of it. Restore
+    the prior guard immediately after loading; the CLI retains its bound stubs.
     """
     _install_bridge_io_stubs()
     guard = types.ModuleType("bootstrap_guard")
     guard.require_bootstrap = lambda *a, **k: None
     guard.reexec_under_plugin_venv = lambda *a, **k: None
     guard.data_dir = lambda *a, **k: Path("/nonexistent")
+    missing = object()
+    previous_guard = sys.modules.get("bootstrap_guard", missing)
     sys.modules["bootstrap_guard"] = guard
-    path = _SCRIPTS / "hue_kit_cli.py"
-    spec = importlib.util.spec_from_file_location("hue_kit_cli_undertest", path)
-    module = importlib.util.module_from_spec(spec)
-    sys.modules["hue_kit_cli_undertest"] = module
-    spec.loader.exec_module(module)
+    try:
+        path = _SCRIPTS / "hue_kit_cli.py"
+        spec = importlib.util.spec_from_file_location("hue_kit_cli_undertest", path)
+        module = importlib.util.module_from_spec(spec)
+        sys.modules["hue_kit_cli_undertest"] = module
+        spec.loader.exec_module(module)
+    finally:
+        if previous_guard is missing:
+            sys.modules.pop("bootstrap_guard", None)
+        else:
+            sys.modules["bootstrap_guard"] = previous_guard
     return module

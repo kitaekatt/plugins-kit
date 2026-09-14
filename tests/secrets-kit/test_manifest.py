@@ -242,3 +242,151 @@ def test_expand_refuses_a_reference_cycle_rather_than_spinning():
 
 def test_expand_leaves_a_lone_dollar_alone():
     assert expand("/tmp/cost$", {}, where="t") == "/tmp/cost$"
+
+
+def test_explicit_false_consent_round_trips_without_serializing_a_waiver(tmp_path):
+    m = _manifest(
+        tmp_path,
+        profiles={},
+        entries={
+            "one": {"blob": "b.age", "dest": "~/x", "allow_tracked_dest": False}
+        },
+    )
+    assert m.entries["one"].allow_tracked_dest is False
+    serialized = json.loads(m.dump())
+    assert "allow_tracked_dest" not in serialized["entries"]["one"]
+    again = Manifest(tmp_path / "manifest.json", serialized)
+    assert again.entries["one"].allow_tracked_dest is False
+
+
+@pytest.mark.parametrize('repo', ['local.git', 'git@example.com:a/b.git', 'https://example.invalid/a.git', ' '])
+def test_required_repo_strings_are_preserved_without_new_transport_grammar(tmp_path, repo):
+    config = Config(tmp_path / 'secrets.json', {'repo': repo})
+    assert config.repo == repo
+
+
+@pytest.mark.parametrize('value', [None, {}])
+def test_optional_object_null_and_empty_defaults_remain_compatible(tmp_path, value):
+    config = Config(tmp_path / 'secrets.json', {'repo': 'local.git', 'vars': value, 'machines': value})
+    manifest = Manifest(tmp_path / 'manifest.json', {'recipient': 'key', 'profiles': value, 'entries': value})
+    assert config.vars == config.machines == {}
+    assert manifest.profiles == manifest.entries == {}
+    assert Manifest(tmp_path / 'manifest.json', json.loads(manifest.dump())).entries == {}
+
+
+@pytest.mark.parametrize('value', [None, {}])
+def test_lazy_machine_rows_and_nullable_current_maps_keep_defaults(tmp_path, value):
+    config = Config(tmp_path / 'secrets.json', {
+        'repo': 'local.git', 'vars': {'EMPTY': ''},
+        'machines': {'active': {'profiles': None, 'vars': value}, 'unused': ['invalid'], 'null-row': None},
+    })
+    assert config.profiles_for('active') == []
+    assert config.vars_for('active') == {'EMPTY': ''}
+    assert config.profiles_for('null-row') == []
+    with pytest.raises(SecretsError, match='unused'):
+        config.profiles_for('unused')
+
+
+@pytest.mark.parametrize('windows', [None, '', 'WINDOWS-VALUE'])
+@pytest.mark.parametrize('platform', ['posix', 'nt'])
+def test_per_os_string_null_empty_fallback_selection_without_global_platform_mutation(tmp_path, monkeypatch, windows, platform):
+    import os
+    from types import SimpleNamespace
+    from secrets_kit import manifest as subject
+    proxy = SimpleNamespace(name=platform, environ=os.environ, path=os.path)
+    monkeypatch.setattr(subject, 'os', proxy)
+    spec = {'default': 'DEFAULT-VALUE', 'windows': windows, 'ignored': []}
+    m = _manifest(tmp_path, profiles={}, entries={'one': {'blob': 'b.age', 'dest': spec}})
+    expected = windows if platform == 'nt' and windows else 'DEFAULT-VALUE'
+    assert str(m.entries['one'].dest({})) == expected
+    assert json.loads(m.dump())['entries']['one']['dest'] == spec
+
+
+def test_windows_only_destination_loads_before_current_host_resolution(tmp_path):
+    _manifest(tmp_path, profiles={}, entries={'one': {'blob': 'b.age', 'dest': {'windows': '${NOT_EXPANDED_DURING_LOAD}/x'}}})
+
+
+@pytest.mark.parametrize('mode', [0o640, '0640', True])
+@pytest.mark.parametrize('newline', [None, 'lf'])
+def test_existing_mode_and_newline_representations_are_not_redefined(tmp_path, mode, newline):
+    m = _manifest(tmp_path, profiles={}, entries={'one': {'blob': 'b.age', 'dest': '~/x', 'mode': mode, 'newline': newline}})
+    assert m.entries['one'].mode == (int(mode, 8) if isinstance(mode, str) else mode)
+    assert m.entries['one'].newline == newline
+
+
+@pytest.mark.parametrize('value,variables', [
+    ('$A', {'A': '$A'}),
+    ('${A}', {'A': '${A}'}),
+    ('${A}', {'A': '$A'}),
+    ('$A', {'A': '${A}'}),
+    ('$A', {'A': '$B', 'B': '$B'}),
+    ('${A}', {'A': '${B}', 'B': '${B}'}),
+])
+def test_matched_stall_is_named_and_never_reaches_home_expansion(monkeypatch, value, variables):
+    def forbidden_home(value):
+        raise AssertionError('stalled variables reached final home expansion')
+    monkeypatch.setattr('secrets_kit.manifest.os.path.expanduser', forbidden_home)
+    with pytest.raises(SecretsError) as caught:
+        expand(value, variables, where="entry 'stalled'")
+    assert "entry 'stalled'" in caught.value.message
+    assert 'stall' in caught.value.message.lower()
+    assert '10 passes' not in caught.value.message
+    assert 'cycle' in caught.value.remedy.lower() and 'vars' in caught.value.remedy
+
+
+@pytest.mark.parametrize('spelling', ['$A', '${A}'])
+def test_loaded_entry_refuses_a_stalled_destination(tmp_path, spelling):
+    m = _manifest(tmp_path, profiles={}, entries={
+        'stalled': {'blob': 'dummy.age', 'dest': str(tmp_path / spelling)},
+    })
+    with pytest.raises(SecretsError, match="entry 'stalled'.*stall"):
+        m.entries['stalled'].dest({'A': spelling})
+
+
+@pytest.mark.parametrize('value', ['plain', '', '$', 'cost$', '${A', '${}', '$1', '${A:-x}', '$\u79d8'])
+def test_nonmatching_dollar_forms_remain_literal(value):
+    assert expand(value, {}, where='literal') == value
+
+
+@pytest.mark.parametrize('value,expected', [('$$A', 'final'), ('$A-b', 'resolved-b'), ('\\$A', '\\resolved')])
+def test_existing_textual_regex_semantics_have_no_new_escape_rule(value, expected):
+    assert expand(value, {'A': 'resolved', 'resolved': 'final'}, where='textual') == expected
+
+
+@pytest.mark.parametrize('declared,environment,expected', [
+    ({'A': ''}, 'environment', '/suffix'),
+    ({}, '', '/suffix'),
+    ({'A': 'declared'}, 'environment', 'declared/suffix'),
+    ({}, 'environment', 'environment/suffix'),
+])
+def test_present_declared_and_environment_values_keep_empty_string_precedence(monkeypatch, declared, environment, expected):
+    monkeypatch.setenv('A', environment)
+    assert expand('${A}/suffix', declared, where='precedence') == expected
+
+
+@pytest.mark.parametrize('changing_passes', [9, 10])
+def test_existing_pass_budget_includes_literal_confirmation(changing_passes):
+    variables = {f'A{i}': f'$A{i+1}' for i in range(changing_passes - 1)}
+    variables[f'A{changing_passes - 1}'] = 'literal'
+    if changing_passes == 9:
+        assert expand('$A0', variables, where='budget') == 'literal'
+    else:
+        with pytest.raises(SecretsError, match='budget.*did not settle after 10 passes'):
+            expand('$A0', variables, where='budget')
+
+
+def test_home_expansion_is_final_and_its_dollar_output_is_not_reexpanded(monkeypatch):
+    inputs = []
+    def final_home(value):
+        inputs.append(value)
+        return '/dummy-home/$AFTER_HOME'
+    monkeypatch.setattr('secrets_kit.manifest.os.path.expanduser', final_home)
+    assert expand('$ROOT/$LEAF', {'ROOT': '~', 'LEAF': 'leaf'}, where='ordering') == '/dummy-home/$AFTER_HOME'
+    assert inputs == ['~/leaf']
+
+
+def test_loaded_entry_accepts_a_valid_nested_destination(tmp_path):
+    m = _manifest(tmp_path, profiles={}, entries={
+        'nested': {'blob': 'dummy.age', 'dest': '${ROOT}/$LEAF'},
+    })
+    assert m.entries['nested'].dest({'ROOT': '$PARENT', 'PARENT': str(tmp_path), 'LEAF': 'leaf'}) == tmp_path / 'leaf'

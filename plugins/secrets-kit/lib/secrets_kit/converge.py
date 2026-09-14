@@ -12,15 +12,17 @@ later as a file move rather than a rewrite.
 """
 
 import os
+import stat
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, IO, List, Optional
 
 from . import DecryptError, SecretsError, cli_command
 from .agefile import age_available, decrypt_with_identity
 from .manifest import Config, Entry, Manifest
-from .perms import open_private, tighten, tighten_dir
+from .perms import _private_output, _repair_mode_drift, tighten, tighten_dir
 from . import repo as repo_mod
 from .state import State, sha256_bytes, sha256_file
+from .operation_lock import OperationLockError, operation_lock
 
 # Names the bootstrap failure records use. Stable strings: the engine dedupes
 # and re-reports on them every session until they clear.
@@ -28,6 +30,7 @@ FAILURE_LOCKED = "secrets_locked"
 FAILURE_CONFIG = "secrets_config"
 FAILURE_ENTRY = "secrets_entry"
 FAILURE_DEST = "secrets_dest"
+FAILURE_OPERATION_LOCK = "secrets_operation_lock"
 
 
 class Failure:
@@ -74,6 +77,17 @@ def paths_for(data_dir: Path) -> dict:
     }
 
 
+def _declaration_failure(error: SecretsError) -> Failure:
+    return Failure(
+        FAILURE_CONFIG,
+        user_msg=f"secrets-kit declaration problem: {error}",
+        agent_msg=(
+            f"The secrets manifest or secrets.json is invalid.\n{error}\n"
+            "Manifest edits are unattended-safe; fix the file and the next pass converges."
+        ),
+    )
+
+
 def converge(
     config_path: Path,
     data_dir: Path,
@@ -84,43 +98,81 @@ def converge(
     """Run one full pass. Never raises for expected conditions."""
     result = Result()
 
-    config = Config.load(config_path)
-    if config is None:
-        result.skipped_reason = "not configured"
-        return result
+    try:
+        config = Config.load(config_path)
+        if config is None:
+            result.skipped_reason = "not configured"
+            return result
 
-    machine_key = config.machine_key()
-    if machine_key is None:
-        result.skipped_reason = "no profiles for this host"
-        return result
+        machine_key = config.machine_key()
+        if machine_key is None:
+            result.skipped_reason = "no profiles for this host"
+            return result
 
-    # Cross-check against the engine's machines registry when we were given
-    # one. secrets.json must not become a second machine list -- env.json owns
-    # that, and a name that exists in only one of them is a typo with
-    # consequences, not a new machine.
-    if known_machines and machine_key not in known_machines:
-        result.failures.append(
-            Failure(
-                FAILURE_CONFIG,
-                user_msg=(
-                    f"secrets-kit: this machine is listed in secrets.json as "
-                    f"'{machine_key}' but that name is not in the env.json "
-                    f"machines registry."
-                ),
-                agent_msg=(
-                    f"secrets.json machine key '{machine_key}' is absent from "
-                    f"env.json's machines registry ({', '.join(sorted(known_machines))}). "
-                    f"The registry is the single machine list; secrets.json "
-                    f"references it. Confirm the machine's identity with the "
-                    f"user, then align the two -- do not add a machine to "
-                    f"secrets.json that the registry does not know."
-                ),
-                ask_reason="info",
+        # Cross-check against the engine's machines registry when we were given
+        # one. secrets.json must not become a second machine list -- env.json owns
+        # that, and a name that exists in only one of them is a typo with
+        # consequences, not a new machine.
+        if known_machines and machine_key not in known_machines:
+            result.failures.append(
+                Failure(
+                    FAILURE_CONFIG,
+                    user_msg=(
+                        f"secrets-kit: this machine is listed in secrets.json as "
+                        f"'{machine_key}' but that name is not in the env.json "
+                        f"machines registry."
+                    ),
+                    agent_msg=(
+                        f"secrets.json machine key '{machine_key}' is absent from "
+                        f"env.json's machines registry ({', '.join(sorted(known_machines))}). "
+                        f"The registry is the single machine list; secrets.json "
+                        f"references it. Confirm the machine's identity with the "
+                        f"user, then align the two -- do not add a machine to "
+                        f"secrets.json that the registry does not know."
+                    ),
+                    ask_reason="info",
+                )
             )
-        )
+            return result
+
+        variables = config.vars_for(machine_key)
+        profiles = config.profiles_for(machine_key)
+    except SecretsError as error:
+        result.failures.append(_declaration_failure(error))
         return result
 
+    try:
+        with operation_lock(data_dir) as canonical:
+            result = _converge_locked(config, canonical, variables=variables,
+                                      profiles=profiles, force_refresh=force_refresh)
+    except OperationLockError as error:
+        result.failures.append(Failure(
+            FAILURE_OPERATION_LOCK,
+            user_msg=f"secrets-kit: {error}",
+            agent_msg=f"The secrets operation guard failed.\n{error}",
+        ))
+    return result
+
+
+def _converge_locked(config: Config, data_dir: Path, *, variables: dict,
+                     profiles: List[str], force_refresh: bool) -> Result:
+    """Consume and retire under caller-held whole-operation ownership.
+
+    All nested repo/key/state/value/publication helpers share this interval
+    and never acquire recursively. Paths use the acquired physical identity.
+    """
+    result = Result()
     paths = paths_for(data_dir)
+    if repo_mod.is_clone(paths["clone"]):
+        try:
+            repo_mod.require_repo_binding(paths["clone"], config.repo)
+        except repo_mod.RepoBindingError as error:
+            result.failures.append(Failure(
+                FAILURE_CONFIG,
+                user_msg=f"secrets-kit: {error}",
+                agent_msg=f"Repository use refused before refresh or consumption.\n{error}",
+            ))
+            return result
     tighten_dir(data_dir)
 
     # --- repo -------------------------------------------------------------
@@ -204,20 +256,9 @@ def converge(
     # --- manifest ---------------------------------------------------------
     try:
         manifest = Manifest.load(paths["clone"] / "manifest.json")
-        variables = config.vars_for(machine_key)
-        selected = manifest.select(config.profiles_for(machine_key))
-    except SecretsError as e:
-        result.failures.append(
-            Failure(
-                FAILURE_CONFIG,
-                user_msg="secrets-kit found a problem in the secrets manifest.",
-                agent_msg=(
-                    f"The secrets manifest or secrets.json is invalid.\n{e}\n"
-                    f"Manifest edits are unattended-safe; fix the file and the "
-                    f"next pass converges."
-                ),
-            )
-        )
+        selected = manifest.select(profiles)
+    except SecretsError as error:
+        result.failures.append(_declaration_failure(error))
         return result
 
     # --- identity ---------------------------------------------------------
@@ -263,12 +304,86 @@ def converge(
         return result
 
     # --- entries ----------------------------------------------------------
-    state = State.load(paths["state"])
+    try:
+        state = State.load(paths["state"])
+    except SecretsError as error:
+        result.failures.append(_state_failure(paths["state"], error))
+        return result
     selected_names = {entry.name for entry in selected}
-
+    planned = []
+    slots = {}
+    cleanup_safe = True
+    ownership_cache = {}
+    pending_problem = state.pending_problem()
+    if pending_problem:
+        result.failures.append(_state_failure(paths["state"], SecretsError(pending_problem)))
+        cleanup_safe = False
     for entry in selected:
         try:
-            _converge_entry(entry, paths, variables, state, result)
+            dest = entry.dest(variables)
+            slot = _cached_ownership_slot(dest, ownership_cache)
+        except SecretsError as error:
+            result.failures.append(_entry_failure(entry, error))
+            cleanup_safe = False
+            continue
+        planned.append((entry, dest, slot))
+        slots.setdefault(slot, []).append(entry.name)
+
+    prior_slots = {}
+    for name, row in state.rows.items():
+        if row.get("dest"):
+            try:
+                prior_slots[name] = _cached_ownership_slot(Path(row["dest"]), ownership_cache)
+            except SecretsError as error:
+                prior_slots[name] = error
+    pending_keys = set()
+    for item in state.pending_items():
+        if not isinstance(item, dict) or not _usable_ownership_path(item.get("dest")):
+            continue
+        try:
+            item_slot = _cached_ownership_slot(Path(item["dest"]), ownership_cache)
+        except SecretsError:
+            continue
+        if isinstance(item.get("dest_sha256"), str) and item["dest_sha256"]:
+            pending_keys.add((item_slot, item["dest_sha256"]))
+    published = {}
+    checkpoint_needed = False
+    for entry, dest, slot in planned:
+        owners = slots[slot]
+        if len(owners) > 1:
+            result.failures.append(Failure(
+                FAILURE_ENTRY,
+                user_msg=f"secrets-kit destination collision at {slot}: {', '.join(owners)}.",
+                agent_msg=(f"Destination collision at {slot}: {', '.join(owners)}. "
+                           "Assign distinct destinations before retrying; no conflicting entry was written."),
+            ))
+            continue
+        prior = dict(state.get(entry.name))
+        prior_slot = prior_slots.get(entry.name)
+        if isinstance(prior_slot, SecretsError):
+            result.failures.append(_entry_failure(entry, prior_slot))
+            continue
+        moving = prior_slot is not None and prior_slot != slot
+        if moving and pending_problem:
+            result.failures.append(_entry_failure(entry, SecretsError(
+                f"cannot move {prior.get('dest')} to {dest}: pending retirement "
+                "storage is unusable; preserve the prior ownership and repair its supported format"
+            )))
+            continue
+        try:
+            did_publish = _converge_entry(entry, paths, variables, state, result,
+                                        dest=dest, force_materialization=moving)
+            if did_publish:
+                published[slot] = (entry.name, state.get(entry.name)["dest_sha256"])
+                if moving:
+                    old_hash = prior.get("dest_sha256")
+                    key = (prior_slot, old_hash)
+                    if key not in pending_keys:
+                        item = dict(prior, owner=entry.name, dest=str(prior_slot))
+                        state.append_retirement(item)
+                        if isinstance(old_hash, str) and old_hash:
+                            pending_keys.add(key)
+                    checkpoint_needed = True
         except SecretsError as e:
             result.failures.append(_entry_failure(entry, e))
         except OSError as e:
@@ -280,23 +395,192 @@ def converge(
                 _entry_failure(entry, SecretsError(f"{type(e).__name__}: {e}"))
             )
 
-    # --- orphans ----------------------------------------------------------
-    # An entry removed upstream, or dropped from this machine's profiles, must
-    # stop existing here too -- otherwise "remove a secret" is a no-op on every
-    # machine that already had it, which is the opposite of what it means.
-    for name in [n for n in state.rows if n not in selected_names]:
+    # Actual publication supports transfer; cache observation does not. A
+    # failed mover can lose its prior slot only to an explicit successful
+    # selected publication, with ownership retained by that successful owner.
+    for name in list(state.rows):
+        prior_slot = prior_slots.get(name)
+        if not isinstance(prior_slot, Path) or prior_slot not in published:
+            continue
+        successor, _ = published[prior_slot]
+        row = state.get(name)
+        if (name != successor and _usable_ownership_path(row.get("dest"))
+                and isinstance(row.get("dest_sha256"), str) and row["dest_sha256"]):
+            # A moved name's current row belongs to its new slot, so it must
+            # not be forgotten merely because its former slot was handed over.
+            current_slot = _cached_ownership_slot(Path(row["dest"]), ownership_cache)
+            if current_slot == prior_slot:
+                state.forget(name)
+                checkpoint_needed = True
+    for item in state.pending_items():
+        if not isinstance(item, dict) or not _usable_ownership_path(item.get("dest")):
+            continue
+        try:
+            item_slot = _cached_ownership_slot(Path(item["dest"]), ownership_cache)
+        except SecretsError:
+            continue
+        if item_slot in published and isinstance(item.get("dest_sha256"), str) and item["dest_sha256"]:
+            new_hash = published[item_slot][1]
+            if item["dest_sha256"] != new_hash:
+                item["dest_sha256"] = new_hash
+                checkpoint_needed = True
+    if checkpoint_needed and not _save_state(state, result):
+        return result
+    # Unknown selected destinations cannot authorize removal anywhere. Every
+    # known desired slot stays reserved even if its materialization failed.
+    if cleanup_safe:
+        _retire_orphans(state, selected_names, set(slots), result, ownership_cache)
+
+    _save_state(state, result)
+    return result
+
+
+def _state_failure(path: Path, error: Exception) -> Failure:
+    return Failure(
+        FAILURE_CONFIG,
+        user_msg=f"secrets-kit could not reconcile ownership state at {path}.",
+        agent_msg=(f"Ownership state at {path}: {type(error).__name__}: {error}. "
+                   "Preserve the ledger; repair its supported format or filesystem "
+                   "access before retrying further destructive cleanup. Already "
+                   "confirmed removals can be reconciled as absent on retry."),
+    )
+
+
+def _save_state(state: State, result: Result) -> bool:
+    try:
+        state.save()
+    except (SecretsError, OSError) as error:
+        result.failures.append(_state_failure(state.path, error))
+        return False
+    return True
+
+
+def _usable_ownership_path(value: Any) -> bool:
+    return isinstance(value, str) and bool(value) and "\x00" not in value
+
+
+def _cached_ownership_slot(dest: Path, cache: dict) -> Path:
+    if dest not in cache:
+        try:
+            cache[dest] = _ownership_slot(dest)
+        except SecretsError as error:
+            cache[dest] = error
+    value = cache[dest]
+    if isinstance(value, SecretsError):
+        raise value
+    cache.setdefault(value, value)
+    return value
+
+
+def _ownership_slot(dest: Path) -> Path:
+    """Verified ancestor identity with an ordinary leaf left unresolved."""
+    try:
+        return repo_mod._normalize_dest(dest, require_resolution=True)
+    except (OSError, RuntimeError) as error:
+        raise SecretsError(
+            f"could not resolve destination ownership for {dest}: "
+            f"{type(error).__name__}: {error}"
+        ) from error
+
+
+def _retirement_failure(names: List[str], dest: Any, reason: str) -> Failure:
+    owners = ", ".join(names)
+    return Failure(
+        FAILURE_ENTRY,
+        user_msg=f"secrets-kit could not remove the local copy of '{owners}' at {dest}.",
+        agent_msg=(
+            f"Removal of '{owners}' at {dest} was not confirmed: {reason}\n"
+            "Ownership was retained for another cleanup attempt on a later "
+            "convergence pass. Diagnose the filesystem or ownership record; "
+            "restore the recorded materialization or correct its ownership "
+            "before retrying. Changed or substituted local files are retained."
+        ),
+    )
+
+
+def _retire_orphans(state: State, selected_names: set, reserved: set, result: Result,
+                    ownership_cache: dict) -> None:
+    candidates = {}
+    pending_cleared = set()
+    for name in state.rows:
+        if name in selected_names:
+            continue
         row = state.get(name)
         dest_raw = row.get("dest")
-        if dest_raw:
-            try:
-                Path(dest_raw).unlink()
-                result.removed += 1
-            except OSError:
-                pass
-        state.forget(name)
+        if not dest_raw:
+            result.failures.append(_retirement_failure([name], "unknown destination", "missing usable destination evidence"))
+            continue
+        try:
+            slot = _cached_ownership_slot(Path(dest_raw), ownership_cache)
+        except SecretsError as error:
+            result.failures.append(_retirement_failure([name], dest_raw, str(error)))
+            continue
+        if slot in reserved:
+            continue
+        candidates.setdefault(slot, []).append((name, row, None))
+    for index, item in enumerate(state.pending_items()):
+        if not isinstance(item, dict):
+            result.failures.append(_retirement_failure(["pending retirement"], "unknown destination", "malformed ownership record"))
+            continue
+        owner = item.get("owner")
+        name = owner if isinstance(owner, str) and owner else "pending retirement"
+        dest_raw = item.get("dest")
+        if not isinstance(owner, str) or not owner:
+            result.failures.append(_retirement_failure([name], dest_raw or "unknown destination", "missing diagnostic owner evidence"))
+            continue
+        if not _usable_ownership_path(dest_raw):
+            result.failures.append(_retirement_failure([name], "unknown destination", "missing usable destination evidence"))
+            continue
+        try:
+            slot = _cached_ownership_slot(Path(dest_raw), ownership_cache)
+        except SecretsError as error:
+            result.failures.append(_retirement_failure([name], dest_raw, str(error)))
+            continue
+        if slot in reserved:
+            continue
+        candidates.setdefault(slot, []).append((name, item, index))
 
-    state.save()
-    return result
+    def clear_claims(claims: list) -> None:
+        for name, _, pending_index in claims:
+            if pending_index is None:
+                state.forget(name)
+            else:
+                pending_cleared.add(pending_index)
+
+    for slot, claims in candidates.items():
+        names = list(dict.fromkeys(name for name, _, _ in claims))
+        hashes = {value if isinstance(value, str) and value else None
+                  for _, row, _ in claims for value in [row.get("dest_sha256")]}
+        if None in hashes or len(hashes) != 1:
+            result.failures.append(_retirement_failure(names, slot, "missing or ambiguous plaintext-hash ownership evidence"))
+            continue
+        try:
+            leaf_mode = os.lstat(slot).st_mode
+        except FileNotFoundError:
+            clear_claims(claims)
+            continue
+        except OSError as error:
+            result.failures.append(_retirement_failure(names, slot, f"{type(error).__name__}: {error}"))
+            continue
+        if not stat.S_ISREG(leaf_mode):
+            result.failures.append(_retirement_failure(names, slot, "substituted leaf is not a regular owned file"))
+            continue
+        current_hash = sha256_file(slot)
+        if current_hash is None or current_hash not in hashes:
+            result.failures.append(_retirement_failure(names, slot, "owned file is unreadable or its plaintext hash changed"))
+            continue
+        try:
+            slot.unlink()
+            result.removed += 1
+        except FileNotFoundError:
+            pass
+        except OSError as error:
+            result.failures.append(_retirement_failure(names, slot, f"{type(error).__name__}: {error}"))
+            continue
+        clear_claims(claims)
+    if pending_cleared:
+        state.pending_retirements["items"] = [item for index, item in enumerate(state.pending_items())
+                                              if index not in pending_cleared]
 
 
 def _converge_entry(
@@ -305,8 +589,12 @@ def _converge_entry(
     variables: dict,
     state: State,
     result: Result,
-) -> None:
-    dest = entry.dest(variables)
+    *,
+    dest: Optional[Path] = None,
+    force_materialization: bool = False,
+) -> bool:
+    if dest is None:
+        dest = entry.dest(variables)
     blob_path = paths["clone"] / entry.blob
     blob_sha = sha256_file(blob_path)
     if blob_sha is None:
@@ -317,11 +605,20 @@ def _converge_entry(
         )
 
     row = state.get(entry.name)
-    dest_sha = sha256_file(dest)
+    try:
+        leaf_is_link = stat.S_ISLNK(os.lstat(dest).st_mode)
+    except FileNotFoundError:
+        leaf_is_link = False
+    except OSError as error:
+        raise SecretsError(
+            f"lstat failed on {dest}: {type(error).__name__}: {error}"
+        ) from error
+    dest_sha = None if leaf_is_link else sha256_file(dest)
     recorded_mode = row.get("mode")
 
     unchanged = (
-        row.get("blob_sha256") == blob_sha
+        not force_materialization
+        and row.get("blob_sha256") == blob_sha
         and dest_sha is not None
         and dest_sha == row.get("dest_sha256")
     )
@@ -336,23 +633,31 @@ def _converge_entry(
     # visible cannot be undone. (Cost is bounded: the override skips the check
     # outright, and a dest in no repo costs one `rev-parse`.)
     if not _dest_is_writable_here(entry, dest, result, already_present=dest_sha is not None):
-        return
+        return False
 
     if unchanged:
-        # Cheap repair path: content is right, only the mode drifted.
         if recorded_mode != format(entry.mode, "04o"):
             tighten(dest, entry.mode)
-            state.record(
-                entry.name,
-                blob_sha=blob_sha,
-                dest_sha=dest_sha,
-                mode=entry.mode,
-                dest=str(dest),
-            )
+            repaired = True
+        else:
+            repaired = _repair_mode_drift(dest, entry.mode)
+        if repaired:
+            if row.get("dest"):
+                state.record(
+                    entry.name,
+                    blob_sha=blob_sha,
+                    dest_sha=dest_sha,
+                    mode=entry.mode,
+                    dest=str(dest),
+                )
+            else:
+                # A legacy cache hit plus permission repair does not prove
+                # that this entry published the observed matching file.
+                row["mode"] = format(entry.mode, "04o")
             result.written += 1
-            return
+            return False
         result.ok += 1
-        return
+        return False
 
     if not dest.parent.is_dir():
         raise SecretsError(
@@ -384,6 +689,7 @@ def _converge_entry(
         dest=str(dest),
     )
     result.written += 1
+    return True
 
 
 def _dest_is_writable_here(
@@ -550,28 +856,12 @@ def _undetermined_note(entry: Entry, dest: Path, exposure) -> str:
 
 
 def _atomic_write(dest: Path, data: bytes, mode: int) -> None:
-    """Write ``data`` to ``dest`` with no window at a loose mode and no torn file.
+    """Publish binary content through the protected exclusive-sibling owner."""
+    def produce(stream: IO[Any]) -> bool:
+        stream.write(data)
+        return True
 
-    Order matters and is the point: create the temp file in the SAME directory
-    already at its final mode, write, fsync, tighten (Windows ACL), then
-    rename. A crash at any point leaves either the old file or nothing -- never
-    a half-written credential, and never plaintext at the default umask.
-    """
-    tmp = dest.with_name(f"{dest.name}.tmp-{os.getpid()}")
-    fd = open_private(tmp, mode)
-    try:
-        with os.fdopen(fd, "wb") as fh:
-            fh.write(data)
-            fh.flush()
-            os.fsync(fh.fileno())
-        tighten(tmp, mode)
-        os.replace(tmp, dest)
-    finally:
-        if tmp.exists():
-            try:
-                tmp.unlink()
-            except OSError:
-                pass
+    _private_output(dest, mode, produce)
 
 
 def _entry_failure(entry: Entry, error: SecretsError) -> Failure:

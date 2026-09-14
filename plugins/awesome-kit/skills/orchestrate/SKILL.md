@@ -54,7 +54,7 @@ technique_skill:
       - reviewer fan-out internal to an invoked review skill (N reviewers over one artifact) -- that skill's `SKILL.md` owns its reviewer roster and lane arithmetic; orchestrate still owns and routes the plan-checkpoint cross-check as a separate unit
 
   policy:
-    keywords: [model choice, model routing, backend, codex, custom orchestrator, usage limit, capacity, rate limit, configurable, override, pool, consult seat, independent seat, who to ask, --self, UP, BESIDE]
+    keywords: [model choice, model routing, backend, codex, opencode, custom orchestrator, usage limit, capacity, rate limit, configurable, override, pool, consult seat, independent seat, who to ask, --self, UP, BESIDE]
     render: |
       Use the plugin venv's Python explicitly -- not `uv run python`, which resolves the
       venv from the cwd and misses this plugin's dependencies when run from another project

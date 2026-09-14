@@ -14,6 +14,7 @@ exists to prevent.
 import argparse
 import importlib.util
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -24,7 +25,7 @@ import pytest
 from sk_testlib import copy_git_tree
 
 from secrets_kit import repo as repo_mod
-from secrets_kit.converge import FAILURE_DEST, converge
+from secrets_kit.converge import FAILURE_CONFIG, FAILURE_DEST, converge
 from secrets_kit.manifest import Manifest
 from secrets_kit.repo import (
     DEST_EXPOSED,
@@ -82,9 +83,6 @@ def _init_repo(path: Path) -> Path:
     return path
 
 
-_QUERY_VERBS = ("rev-parse", "check-ignore")
-
-
 def _no_git(monkeypatch):
     """Make the exposure queries look like git is not installed.
 
@@ -95,7 +93,9 @@ def _no_git(monkeypatch):
     real = repo_mod._git
 
     def fake(args, **kwargs):
-        if args and args[0] in _QUERY_VERBS:
+        if args == ["rev-parse", "--is-inside-work-tree"] or (
+            args and args[0] == "check-ignore"
+        ):
             return (127, "could not run git: [Errno 2]")
         return real(args, **kwargs)
 
@@ -176,7 +176,7 @@ def _stub_is_inside_work_tree(monkeypatch, code, output):
     real = repo_mod._git
 
     def fake(args, **kwargs):
-        if args[:2] == ["rev-parse", "--is-inside-work-tree"]:
+        if args == ["rev-parse", "--is-inside-work-tree"]:
             return (code, output)
         return real(args, **kwargs)
 
@@ -1045,3 +1045,287 @@ class TestConvergeRecheck:
         result = converge(fleet.config_path, fleet.data_dir)
         assert result.failures == []
         assert (fleet.dest_root / "ha-token.txt").exists()
+
+
+class TestPersistedExposureConsent:
+    @pytest.mark.parametrize("value", [
+        None, 0, 1, 0.0, 1.0, "", "false", [], [True], {}, {"ok": True},
+    ])
+    def test_invalid_json_consent_is_configuration_failure_before_materialization(
+        self, fleet, monkeypatch, value
+    ):
+        _make_dest_tree_a_repo(fleet, ignored=False)
+        _rewrite_manifest(fleet, allow_tracked_dest=value)
+        fleet.unlock()
+        declaration = fleet.manifest_path.read_bytes()
+        destination = fleet.dest_root / "ha-token.txt"
+        state = fleet.data_dir / "state.json"
+        queries = []
+        real = repo_mod._git
+        def record(args, **kwargs):
+            queries.append(args)
+            return real(args, **kwargs)
+        monkeypatch.setattr(repo_mod, "_git", record)
+
+        result = converge(fleet.config_path, fleet.data_dir)
+
+        assert [failure.key for failure in result.failures] == [FAILURE_CONFIG], (
+            f"invalid consent {value!r}: destination_exists={destination.exists()}, "
+            f"state_exists={state.exists()}, written={result.written}"
+        )
+        diagnostic = result.failures[0].agent_msg
+        assert "ha-token" in diagnostic
+        assert "allow_tracked_dest" in diagnostic
+        assert "boolean" in diagnostic
+        assert result.written == 0
+        assert not destination.exists()
+        assert not state.exists()
+        assert fleet.manifest_path.read_bytes() == declaration
+        assert queries == []
+
+    def test_explicit_false_keeps_exposure_refusal_and_no_ownership(self, fleet):
+        _make_dest_tree_a_repo(fleet, ignored=False)
+        _rewrite_manifest(fleet, allow_tracked_dest=False)
+        fleet.unlock()
+
+        result = converge(fleet.config_path, fleet.data_dir)
+
+        assert [failure.key for failure in result.failures] == [FAILURE_DEST]
+        assert result.written == 0
+        assert not (fleet.dest_root / "ha-token.txt").exists()
+        assert json.loads((fleet.data_dir / "state.json").read_text())["entries"] == {}
+
+    def test_invalid_consent_preserves_existing_destination_and_state_bytes(self, fleet):
+        _make_dest_tree_a_repo(fleet, ignored=False)
+        _rewrite_manifest(fleet, allow_tracked_dest="false")
+        fleet.unlock()
+        destination = fleet.dest_root / "ha-token.txt"
+        destination.write_bytes(b"existing dummy bytes")
+        state = fleet.data_dir / "state.json"
+        state.write_text('{"entries": {}}\n', encoding="utf-8")
+        before = (destination.read_bytes(), state.read_bytes())
+
+        result = converge(fleet.config_path, fleet.data_dir)
+
+        assert [failure.key for failure in result.failures] == [FAILURE_CONFIG]
+        assert result.written == 0
+        assert (destination.read_bytes(), state.read_bytes()) == before
+
+
+def _blob_git_output(cwd, *args):
+    return subprocess.run(
+        ['git', *args], cwd=cwd, check=True, stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    ).stdout
+
+
+def _published_blob_objects(adding):
+    remote = adding.clone.parent.parent / 'remote.git'
+    paths = _blob_git_output(remote, 'ls-tree', '-r', '--name-only', 'refs/heads/main')
+    return {
+        path: _blob_git_output(remote, 'show', 'refs/heads/main:' + path)
+        for path in paths.decode().splitlines()
+    }
+
+
+def _blob_authoring_snapshot(adding):
+    remote = adding.clone.parent.parent / 'remote.git'
+    return {
+        'manifest': adding.manifest_path.read_bytes(),
+        'blobs': {path.relative_to(adding.clone).as_posix(): path.read_bytes()
+                  for path in (adding.clone / 'blobs').rglob('*') if path.is_file()},
+        'head': _blob_git_output(adding.clone, 'rev-parse', 'HEAD'),
+        'index': _blob_git_output(adding.clone, 'ls-files', '--stage'),
+        'remote_ref': _blob_git_output(remote, 'rev-parse', 'refs/heads/main'),
+        'remote_objects': _published_blob_objects(adding),
+    }
+
+
+def _blob_source(adding, directory, basename, value):
+    source = adding.plain.parent / directory / basename
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_bytes(value)
+    return source
+
+
+def _blob_main_add(adding, name, source, *, update=False):
+    args = ['add', name, '--file', str(source), '--profile', 'home']
+    if update:
+        args.append('--update')
+    else:
+        args += ['--dest', '${PLAIN}/' + name + '.txt']
+    return adding.cli.main(args)
+
+
+def _seed_shared_blob_owners(adding, *, alias='ordinary'):
+    with adding.cli.operation_lock(adding.data_dir) as data_dir:
+        clone = adding.cli._ensure_guarded(adding.cli._require_config(), data_dir=data_dir)
+    shared = 'blobs/shared.txt.age'
+    (clone / 'blobs').mkdir(exist_ok=True)
+    (clone / shared).write_bytes(_armored(b'age1testrecipient', b'published shared dummy\n'))
+    aliases = {
+        'ordinary': shared,
+        'dot': './blobs/shared.txt.age',
+        'separator': 'blobs//shared.txt.age',
+        'parent': 'blobs/../blobs/shared.txt.age',
+        'absolute': str(clone / shared),
+    }
+    raw = json.loads(adding.manifest_path.read_text())
+    raw['profiles'] = {'home': ['alpha', 'beta']}
+    raw['entries'] = {
+        name: {'blob': shared if name == 'alpha' else aliases[alias],
+               'dest': '${PLAIN}/' + name + '.txt', 'mode': '0600'}
+        for name in ['alpha', 'beta']
+    }
+    adding.manifest_path.write_text(json.dumps(raw), encoding='utf-8')
+    repo_mod.commit_and_push(clone, 'fixture: shared owners', [shared, 'manifest.json'])
+
+
+def _observe_blob_mutations(adding, monkeypatch):
+    from secrets_kit import agefile
+    effects = []
+    for subject, name in [(agefile, 'encrypt_to_recipient'), (repo_mod, 'commit_and_push')]:
+        real = getattr(subject, name)
+        def observe(*args, _real=real, _name=name, **kwargs):
+            effects.append(_name)
+            return _real(*args, **kwargs)
+        monkeypatch.setattr(subject, name, observe)
+    real_unlink = Path.unlink
+    def unlink(path, *args, **kwargs):
+        candidate = os.path.normpath(str(path))
+        if candidate.startswith(os.path.normpath(str(adding.clone / 'blobs')) + os.sep):
+            effects.append('blob_unlink')
+        return real_unlink(path, *args, **kwargs)
+    monkeypatch.setattr(Path, 'unlink', unlink)
+    return effects
+
+
+def _converge_published_blob_state(adding, monkeypatch):
+    """Consume a fresh real clone without rewriting its published manifest."""
+    from secrets_kit import converge as subject
+    peer = adding.plain.parent / 'published consumer data'
+    peer.mkdir()
+    remote = adding.clone.parent.parent / 'remote.git'
+    _git(peer, 'clone', '--quiet', str(remote), str(peer / 'repo'))
+    (peer / 'identity.txt').write_text('dummy unlocked identity', encoding='utf-8')
+    config = json.loads(adding.config_path.read_text())
+    config['machines']['testbox']['profiles'] = ['home']
+    config_path = peer / 'consumer config.json'
+    config_path.write_text(json.dumps(config), encoding='utf-8')
+    def decrypt(identity, blob):
+        data = Path(blob).read_bytes()
+        assert data.startswith(b'-----BEGIN AGE ENCRYPTED FILE-----\n')
+        assert data.endswith(_ARMOR_END)
+        return data.split(b'\n', 2)[2][:-len(_ARMOR_END)]
+    monkeypatch.setattr(subject, 'decrypt_with_identity', decrypt)
+    result = subject.converge(config_path, peer)
+    values = {name: (adding.plain / (name + '.txt')).read_bytes()
+              for name in ['alpha', 'beta', 'unique']
+              if (adding.plain / (name + '.txt')).is_file()}
+    return result, values
+
+
+class TestBlobOwnershipPublic:
+    def test_same_basename_add_refuses_and_preserves_original_published_value(self, adding, monkeypatch, capsys):
+        left = _blob_source(adding, 'left', 'token.txt', b'original alpha dummy\n')
+        right = _blob_source(adding, 'right', 'token.txt', b'different beta dummy\n')
+        assert _blob_main_add(adding, 'alpha', left) == 0
+        before = _blob_authoring_snapshot(adding)
+        effects = _observe_blob_mutations(adding, monkeypatch)
+        capsys.readouterr()
+        code = _blob_main_add(adding, 'beta', right)
+        error = capsys.readouterr().err
+        after = _blob_authoring_snapshot(adding)
+        result, values = _converge_published_blob_state(adding, monkeypatch)
+        observed = {'code': code, 'authoring_unchanged': after == before,
+                    'effects': effects, 'values': values,
+                    'convergence_failures': len(result.failures)}
+        assert observed == {'code': 1, 'authoring_unchanged': True, 'effects': [],
+                            'values': {'alpha': b'original alpha dummy\n'},
+                            'convergence_failures': 0}
+        assert all(text in error for text in ['alpha', 'beta', 'blobs/token.txt.age', 'blob'])
+
+    @pytest.mark.parametrize('operation', ['add', 'update', 'remove'])
+    def test_existing_shared_blob_refuses_target_mutation_and_keeps_survivor(self, adding, monkeypatch, capsys, operation):
+        _seed_shared_blob_owners(adding)
+        source = _blob_source(adding, 'incoming', 'shared.txt' if operation == 'add' else 'different.txt', b'new dummy value\n')
+        before = _blob_authoring_snapshot(adding)
+        effects = _observe_blob_mutations(adding, monkeypatch)
+        capsys.readouterr()
+        if operation == 'remove':
+            code = adding.cli.main(['remove', 'alpha'])
+        else:
+            code = _blob_main_add(adding, 'gamma' if operation == 'add' else 'alpha', source, update=operation == 'update')
+        error = capsys.readouterr().err
+        after = _blob_authoring_snapshot(adding)
+        result, values = _converge_published_blob_state(adding, monkeypatch)
+        observed = {'code': code, 'authoring_unchanged': after == before,
+                    'effects': effects, 'beta': values.get('beta'),
+                    'convergence_failures': len(result.failures)}
+        assert observed == {'code': 1, 'authoring_unchanged': True, 'effects': [],
+                            'beta': b'published shared dummy\n', 'convergence_failures': 0}
+        requested = 'gamma' if operation == 'add' else 'alpha'
+        owner = 'alpha' if operation == 'add' else 'beta'
+        assert all(text in error for text in [requested, owner, 'blobs/shared.txt.age', 'blob'])
+
+    @pytest.mark.parametrize('alias', ['dot', 'separator', 'parent', 'absolute'])
+    def test_lexical_other_owner_alias_refuses_stored_blob_update(self, adding, monkeypatch, capsys, alias):
+        _seed_shared_blob_owners(adding, alias=alias)
+        source = _blob_source(adding, 'incoming', 'unrelated-basename.txt', b'new dummy\n')
+        before = _blob_authoring_snapshot(adding)
+        effects = _observe_blob_mutations(adding, monkeypatch)
+        capsys.readouterr()
+        code = _blob_main_add(adding, 'alpha', source, update=True)
+        error = capsys.readouterr().err
+        after = _blob_authoring_snapshot(adding)
+        assert {'code': code, 'unchanged': after == before, 'effects': effects} == {
+            'code': 1, 'unchanged': True, 'effects': [],
+        }
+        assert all(text in error for text in ['alpha', 'beta', 'blobs/shared.txt.age'])
+
+    @pytest.mark.parametrize('operation', ['add', 'update', 'remove'])
+    def test_unrelated_existing_shared_owners_allow_unique_target_operations(self, adding, monkeypatch, operation):
+        _seed_shared_blob_owners(adding)
+        source = _blob_source(adding, 'unique source', 'unique.txt', b'unique dummy\n')
+        if operation != 'add':
+            assert _blob_main_add(adding, 'unique', source) == 0
+        before = _published_blob_objects(adding)
+        owners = json.loads(before['manifest.json'])['entries']
+        if operation == 'remove':
+            code = adding.cli.main(['remove', 'unique'])
+        else:
+            if operation == 'update':
+                source = _blob_source(adding, 'replacement', 'another.txt', b'updated unique dummy\n')
+            code = _blob_main_add(adding, 'unique', source, update=operation == 'update')
+        assert code == 0
+        after = _published_blob_objects(adding)
+        entries = json.loads(after['manifest.json'])['entries']
+        assert after['blobs/shared.txt.age'] == before['blobs/shared.txt.age']
+        assert {name: entries[name] for name in ['alpha', 'beta']} == {name: owners[name] for name in ['alpha', 'beta']}
+        assert ('unique' in entries) == (operation != 'remove')
+        result, values = _converge_published_blob_state(adding, monkeypatch)
+        assert result.failures == []
+        assert values['alpha'] == values['beta'] == b'published shared dummy\n'
+        if operation != 'remove':
+            assert values['unique'] == (b'updated unique dummy\n' if operation == 'update' else b'unique dummy\n')
+
+    def test_distinct_add_stored_blob_update_and_unique_remove_preserve_other_published_value(self, adding, monkeypatch):
+        alpha = _blob_source(adding, 'sources', 'alpha.txt', b'alpha dummy\n')
+        beta = _blob_source(adding, 'sources', 'beta.txt', b'beta dummy\n')
+        assert _blob_main_add(adding, 'alpha', alpha) == 0
+        assert _blob_main_add(adding, 'beta', beta) == 0
+        before = _published_blob_objects(adding)
+        beta_row = json.loads(before['manifest.json'])['entries']['beta']
+        replacement = _blob_source(adding, 'new source', 'other.txt', b'changed alpha dummy\n')
+        assert _blob_main_add(adding, 'alpha', replacement, update=True) == 0
+        updated = _published_blob_objects(adding)
+        assert json.loads(updated['manifest.json'])['entries']['alpha']['blob'] == 'blobs/alpha.txt.age'
+        assert 'blobs/other.txt.age' not in updated
+        assert updated['blobs/beta.txt.age'] == before['blobs/beta.txt.age']
+        assert adding.cli.main(['remove', 'alpha']) == 0
+        after = _published_blob_objects(adding)
+        assert 'blobs/alpha.txt.age' not in after
+        assert after['blobs/beta.txt.age'] == before['blobs/beta.txt.age']
+        assert json.loads(after['manifest.json'])['entries'] == {'beta': beta_row}
+        result, values = _converge_published_blob_state(adding, monkeypatch)
+        assert result.failures == [] and values == {'beta': b'beta dummy\n'}

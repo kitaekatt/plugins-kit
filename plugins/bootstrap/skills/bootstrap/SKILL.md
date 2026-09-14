@@ -422,6 +422,14 @@ reference_skill:
       keywords: [conditions, categories, remediation table]
       fact_ids: [condition_categories]
   references:
+    - id: fleet_management
+      path: references/fleet-management.md
+      keywords: [fleet management, fleet installation, install bootstrap on every machine, fresh clone, enabledPlugins not installing, project plugins not installed, install consent, ensure-bootstrap, install-hook, bootstrap install-hook, SessionStart hook, minimum bootstrap version, raise the minimum version, administrator, opt out of bootstrap, delete bootstrap.json]
+      summary: >-
+        How an administrator gets bootstrap onto every machine, given that project
+        enabledPlugins do not install plugins -- the ensure-bootstrap SessionStart hook,
+        `bootstrap install-hook`, raising the minimum version, and the
+        delete-bootstrap.json opt-out.
     - id: bootstrap_cli
       path: references/bootstrap-cli.md
       keywords: [bootstrap command, bootstrap CLI, bootstrap run, bootstrap --json, is a pass running, run bootstrap from a terminal, without starting Claude, tail a pass, attach to a running pass, stream the pass, events.watch, blocks, exit codes, BOOTSTRAP_MARKETPLACE, BOOTSTRAP_PLUGIN_ROOT, dev checkout, worktree, ~/.local/bin lever, command not found, cooldown exempt]

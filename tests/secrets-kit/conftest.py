@@ -25,6 +25,16 @@ if str(_LIB) not in sys.path:
     sys.path.insert(0, str(_LIB))
 
 
+@pytest.fixture(autouse=True)
+def isolated_user_home(tmp_path, monkeypatch):
+    """Keep every real hook caller inside this test's temporary user home."""
+    home = tmp_path / "user home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    return home
+
+
 @pytest.fixture(scope="session")
 def git_template(tmp_path_factory):
     """Build an expensive git tree once per process; return its path.
@@ -93,6 +103,10 @@ def no_network(monkeypatch):
     monkeypatch.setattr(converge_mod.repo_mod, "refresh", lambda *a, **k: None)
     monkeypatch.setattr(
         converge_mod.repo_mod, "is_clone", lambda path: Path(path).is_dir()
+    )
+    # These unit fixtures are plain directories with no recorded Git origin.
+    monkeypatch.setattr(
+        repo_mod, "require_repo_binding", lambda clone_dir, declared_repo: None
     )
     return repo_mod
 

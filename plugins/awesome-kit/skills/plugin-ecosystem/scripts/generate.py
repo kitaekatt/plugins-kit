@@ -92,26 +92,48 @@ def home_claude() -> Path:
 def load_installed() -> dict:
     p = home_claude() / "plugins" / "installed_plugins.json"
     if not p.exists():
-        sys.exit(f"installed_plugins.json not found at {p}")
+        return {"plugins": {}}
     return json.loads(p.read_text(encoding="utf-8"))
 
 
-def _version_key(version: str):
+def _version_key(version: str) -> tuple[int, tuple[int, ...], str]:
     """Tolerant ordering key for cache version-dir names: numeric dot-parts
     compare numerically ("0.10.0" > "0.9.0"); non-numeric names (git-SHA cache
     keys) sort below any numeric version and tie-break lexically."""
-    parts = re.findall(r"\d+", version)
-    return (1 if parts else 0, tuple(int(p) for p in parts), version)
+    if re.fullmatch(r"\d+(?:\.\d+)*", version):
+        return (1, tuple(int(part) for part in version.split(".")), version)
+    return (0, (), version)
 
 
-def merge_cache_fallback(installed: dict) -> dict:
-    """Registry-v2 fallback: newer Claude Code keeps installed_plugins.json at
+def _pick_registry_record(entry: object) -> dict | None:
+    """Mirror bootstrap_lib.plugin_resolve.pick_registry_record's pure policy.
+
+    Prefer records without projectPath, then the newest numeric version. Keep
+    this generator stdlib-only so it also runs against source-tree registries
+    without a provisioned plugin venv.
+    """
+    if isinstance(entry, dict):
+        return entry
+    if not isinstance(entry, list):
+        return None
+    records = [record for record in entry if isinstance(record, dict)]
+    if not records:
+        return None
+    return max(records, key=lambda record: (
+        0 if record.get("projectPath") else 1,
+        _version_key(str(record.get("version", "") or "")),
+    ))
+
+
+def merge_cache_fallback(installed: dict, enabled_refs: set[str] | None = None) -> dict:
+    """Registry-v2 fallback: Claude Code keeps installed_plugins.json at
     {"version": 2, "plugins": {}} for marketplace installs -- the code lives in
     ~/.claude/plugins/cache/<marketplace>/<plugin>/<version>/. Without this the
-    poster renders EMPTY on such machines. Synthesize an entry for every cached
-    plugin the registry does not record, picking the highest version dir (the
-    code Claude Code actually loads). Registry entries keep precedence, and
-    collect_plugins' marketplace.json filter still drops phantoms."""
+    poster renders EMPTY on such machines. Synthesize entries only for enabled
+    cached plugins the registry does not record, picking the highest version
+    dir. Missing enablement leaves cache discovery off. Registry entries keep
+    precedence, including disabled source-tree entries used for landing pages,
+    and collect_plugins' marketplace.json filter still drops phantoms."""
     plugins = dict(installed.get("plugins", {}))
     cache_root = home_claude() / "plugins" / "cache"
     if cache_root.is_dir():
@@ -122,6 +144,8 @@ def merge_cache_fallback(installed: dict) -> dict:
                 if not plugin_dir.is_dir():
                     continue
                 key = f"{plugin_dir.name}@{mkt_dir.name}"
+                if not enabled_refs or key not in enabled_refs:
+                    continue
                 if plugins.get(key):
                     continue
                 versions = [d for d in plugin_dir.iterdir() if d.is_dir()]
@@ -350,9 +374,9 @@ def collect_plugins(installed: dict, marketplaces: dict, settings_enabled: dict,
             continue  # marketplace did not opt in
         if plugin_name not in marketplaces[marketplace]["plugin_names"]:
             continue  # phantom install: removed from marketplace.json upstream
-        if not entries:
+        entry = _pick_registry_record(entries)
+        if entry is None:
             continue
-        entry = entries[0]
         install_path = Path(entry["installPath"])
         meta = load_json(install_path / ".claude-plugin" / "plugin.json")
 
@@ -832,7 +856,9 @@ def render_html(title: str, tagline: str, plugins: list[dict],
         "marketplace_subtitles": marketplace_subtitles,
         "marketplace_urls": marketplace_urls,
     }
-    js = JS.replace("__DATA__", json.dumps(data))
+    # HTML parses closing script tags before JavaScript parses its strings.
+    serialized = json.dumps(data).replace("<", "\\u003c")
+    js = JS.replace("__DATA__", serialized)
     css = CSS + PUBLIC_CSS if public else CSS
     n = len(marketplace_order)
     if n <= 1:
@@ -937,13 +963,15 @@ def main(argv: list[str]) -> int:
 
     bootstrap = load_json(project_root / ".claude" / "bootstrap.json")
     bs_index = index_bootstrap_plugins(bootstrap)
-    settings_enabled = {} if args.defaults else merged_enabled_plugins(project_root)
+    live_settings = merged_enabled_plugins(project_root)
+    settings_enabled = {} if args.defaults else live_settings
+    enabled_refs = {ref for ref, enabled in live_settings.items() if enabled}
 
     marketplace_states = {
         m: (meta["poster"].get("states") or {}) for m, meta in marketplaces.items()
     }
 
-    installed = merge_cache_fallback(load_installed())
+    installed = merge_cache_fallback(load_installed(), enabled_refs)
     plugins = collect_plugins(installed, marketplaces, settings_enabled, bs_index, overrides,
                               marketplace_states, defaults_mode=args.defaults)
 

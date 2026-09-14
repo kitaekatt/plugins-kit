@@ -1161,7 +1161,7 @@ def test_concurrent_unreachable_failures_are_one_probe(
     )
 
     assert snapshot.jobs[-1].state is JobState.ACCEPTED
-    assert snapshot.attempts[-1].job_id == "later"
+    assert sum(attempt.job_id == "later" for attempt in snapshot.attempts) == 1
     assert JobStore(tmp_path / "concurrent-probe.sqlite3").halted_endpoints(
         snapshot.run.id
     ) == frozenset()

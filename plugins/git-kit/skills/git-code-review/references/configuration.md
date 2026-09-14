@@ -204,7 +204,25 @@ endpoint rather than produce a reviewer that hallucinates context it cannot fetc
 
 ### When an endpoint lane fails
 
-It is reported as a failed lane and the review renders without it, with that lane's coverage
+**Pre-dispatch launch-correction rule (all reviewer lanes).** Correct a local invocation
+error and retry the same intended lane only with positive evidence that no reviewer process
+or Agent started and no provider request was sent. Eligible examples are CLI argument/JSON
+quoting errors and an Agent alias sent to the endpoint runner, when diagnostics or the
+launcher's verified control flow establish rejection before dispatch. Preserve the same
+resolved model, effort, chunk, files, and review criteria; correcting the launcher to the
+mechanism required by that model is not model substitution. Retain the original stderr and
+no-dispatch evidence for the review's launch-correction report. A non-zero exit alone is not
+that evidence; uncertain dispatch state is treated as a failed lane, not a retry opportunity.
+
+Provider/auth/quota/network failures, timeouts, and invalid reviewer output are not eligible
+launch corrections, even if a provider rejected the request before inference. Permission or
+sharing denials require the normal approval flow and are not eligible launch corrections.
+Unsupported lane/model configurations remain errors to report; this exception does not
+authorize changing the resolved profile, bypassing capability gates, or retrying to obtain
+a preferred verdict. If the invocation cannot be corrected within these bounds, report
+the failure and missing coverage.
+
+An actual lane failure is reported and the review renders without it, with that lane's coverage
 marked missing in a `## Lane failures` section. There is deliberately no fallback to an Agent:
 a silent fallback would hand back a review you read as having run on the model you configured,
 which is a false claim about what actually reviewed your change. Causes are the endpoint being

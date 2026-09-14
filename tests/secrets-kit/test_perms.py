@@ -163,16 +163,15 @@ def test_tighten_chmods_to_mode(tmp_path):
     assert (target.stat().st_mode & 0o777) == 0o600
 
 
-def test_open_private_creates_at_final_mode(tmp_path):
-    """Decrypted material must never exist at a looser mode, even briefly."""
+def test_private_output_creates_protected_content(tmp_path):
+    """The shared owner protects the stream and final content."""
     target = tmp_path / "nested" / "secret.txt"
 
-    fd = perms.open_private(target, 0o600)
-    try:
-        os.write(fd, b"s3cret\n")
-    finally:
-        os.close(fd)
+    def produce(stream):
+        stream.write(b"dummy private bytes\n")
+        return True
 
-    assert target.read_text() == "s3cret\n"
+    assert perms._private_output(target, 0o600, produce) is True
+    assert target.read_bytes() == b"dummy private bytes\n"
     if not IS_WINDOWS:
         assert (target.stat().st_mode & 0o777) == 0o600

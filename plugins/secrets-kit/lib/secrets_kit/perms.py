@@ -9,8 +9,11 @@ ACL is not a partial success.
 """
 
 import os
+import stat
 import subprocess
 import sys
+import tempfile
+from typing import Any, Callable, IO
 from pathlib import Path
 
 from . import SecretsError
@@ -51,6 +54,26 @@ def tighten(path: Path, mode: int) -> None:
         return
 
     _icacls(path, "F")
+
+
+
+def _repair_mode_drift(path: Path, mode: int) -> bool:
+    """Repair observed POSIX mode drift; reapply Windows ACL without observing it.
+
+    False on Windows reports no observed repair, not effective ACL acceptance.
+    The existing exact-0644 public-file no-op remains in tighten.
+    """
+    if IS_WINDOWS:
+        tighten(path, mode)
+        return False
+    try:
+        actual = stat.S_IMODE(path.stat().st_mode)
+    except OSError as error:
+        raise SecretsError(f"could not inspect permissions on {path}: {error}")
+    if actual == stat.S_IMODE(mode):
+        return False
+    tighten(path, mode)
+    return True
 
 
 def _icacls(path: Path, rights: str) -> None:
@@ -115,12 +138,57 @@ def tighten_dir(path: Path) -> None:
     _icacls(path, "(OI)(CI)F")
 
 
-def open_private(path: Path, mode: int) -> int:
-    """Create ``path`` for writing at ``mode`` BEFORE any content exists.
+def _private_output(
+    dest: Path, mode: int, produce: Callable[[IO[Any]], bool], *, text: bool = False
+) -> bool:
+    """Protect an exclusive sibling before bytes and publish explicit success.
 
-    The ordering is the whole point: creating the file at its final (tight)
-    mode and then writing into it means decrypted material is never visible at
-    a looser mode, not even for the microseconds between write and chmod.
+    The caller's parent policy remains. Resolve it for physical sibling
+    allocation; resolution errors stop before allocation or production.
+    Publication keeps the original destination spelling. Only this allocation is owned
+    for cleanup; failure preserves the final slot. Text producers retain UTF-8
+    and default newline handling. This does not add power-loss recovery or
+    custody against concurrent substitutions in an untrusted parent.
     """
-    path.parent.mkdir(parents=True, exist_ok=True)
-    return os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, mode)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        allocation_dir = dest.parent.resolve()
+    except (OSError, RuntimeError) as error:
+        raise SecretsError(
+            f"could not resolve output parent {dest.parent}: {type(error).__name__}: {error}"
+        ) from error
+    fd, name = tempfile.mkstemp(prefix=dest.name + ".", dir=allocation_dir)
+    temporary = Path(name)
+    owned = True
+    try:
+        tighten(temporary, mode)
+        stream = os.fdopen(fd, "w", encoding="utf-8") if text else os.fdopen(fd, "wb")
+        fd = None
+        try:
+            success = produce(stream)
+            if type(success) is not bool:
+                raise TypeError("private output producer must return an explicit boolean")
+            if success:
+                stream.flush()
+                os.fsync(stream.fileno())
+        finally:
+            stream.close()
+        if success:
+            os.replace(temporary, dest)
+            owned = False
+        return success
+    finally:
+        try:
+            if fd is not None:
+                os.close(fd)
+        finally:
+            if owned:
+                primary = sys.exc_info()[1]
+                try:
+                    temporary.unlink()
+                except FileNotFoundError:
+                    pass
+                except OSError as error:
+                    raise SecretsError(
+                        f"could not remove temporary output {temporary}: {error}"
+                    ) from (primary if primary is not None else error)

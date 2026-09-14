@@ -19,11 +19,12 @@ a specific way of silently regressing:
     improvising. An invented predicate reproduces the hazard sweep two
     adversarial reviews rejected -- and it would look like it was working.
 
-These are text-level assertions because the lane is a Workflow script (top-level
-`return`, `agent()` / `parallel()` injected at run time), so it cannot be
-imported and executed here.
+Workflow lane assertions are text-level because the script uses top-level
+`return` and runtime-injected `agent()` / `parallel()`. The Python generator's
+ownership guard loads its actual remediation registry and targets.
 """
 
+import importlib.util
 import re
 from pathlib import Path
 
@@ -70,9 +71,26 @@ class TestArtifactsExist:
         assert not (MD_DOMAIN / "workflow" / "coverage-remediate.js").exists()
 
     def test_generator_does_not_own_a_coverage_lane(self):
-        """gen_workflow_js.py assumes per-file edits + applied/skipped/failed."""
-        gen = REPO_ROOT / "plugins" / "skills-kit" / "scripts" / "gen_workflow_js.py"
-        assert "coverage" not in gen.read_text(encoding="utf-8").lower()
+        """Mechanical coverage prose does not register a remediation lane."""
+        path = REPO_ROOT / "plugins" / "skills-kit" / "scripts" / "gen_workflow_js.py"
+        spec = importlib.util.spec_from_file_location("coverage_contract_generator", path)
+        assert spec is not None and spec.loader is not None
+        generator = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(generator)
+
+        # main() checks and writes the targets derived from REMEDIATE_FRAGMENTS.
+        targets = generator.remediate_targets()
+        assert "coverage_code_subtree" not in generator.REMEDIATE_FRAGMENTS
+        assert "coverage_code_subtree" not in targets
+        assert all(target.name != "coverage-remediate.js" for target in targets.values())
+        expected = {
+            "audit_claude_md": MD_DOMAIN / "workflow" / "claude-md-remediate.js",
+            "audit_skill": MD_DOMAIN / "workflow" / "skill-remediate.js",
+            "audit_references": MD_DOMAIN / "workflow" / "references-remediate.js",
+            "audit_project_doc": MD_DOMAIN / "workflow" / "project-doc-remediate.js",
+        }
+        assert set(generator.REMEDIATE_FRAGMENTS) == set(expected)
+        assert targets == expected
 
 
 class TestVerdictVocabulary:

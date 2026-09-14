@@ -136,3 +136,42 @@ def test_adapter_uses_only_the_documented_ctx_surface(module, fleet, monkeypatch
     fleet.unlock()
 
     module.bootstrap(StrictCtx(fleet.data_dir))
+
+
+@pytest.mark.parametrize('raw', [
+    b'\xff', b'{ bad', b'null', b'[]', b'false', b'1', b'"text"',
+    b'{}', b'{"machines": null}', b'{"machines": false}',
+    b'{"machines": 0}', b'{"machines": ""}', b'{"machines": []}',
+    b'{"machines": {}}', b'{"machines": {"testbox": ["metadata is ignored"]}}',
+])
+def test_optional_env_shape_or_decoding_does_not_bypass_actual_materialization(module, fleet, monkeypatch, raw):
+    env = fleet.tmp / 'optional-env.json'
+    env.write_bytes(raw)
+    monkeypatch.setattr(module, 'CONFIG_PATH', fleet.config_path)
+    monkeypatch.setattr(module, 'ENV_PATH', env)
+    fleet.unlock()
+    ctx = FakeCtx(fleet.data_dir)
+    module.bootstrap(ctx)
+    assert ctx.failures == []
+    assert (fleet.dest_root / 'ha-token.txt').read_bytes() == b'token-value\n'
+    assert ctx.oks == ['secrets: 0 ok, 1 written, 0 failed']
+
+
+def test_malformed_optional_env_still_forwards_actual_secrets_declaration_failure(module, fleet, monkeypatch):
+    env = fleet.tmp / 'optional-env.json'
+    env.write_bytes(b'null')
+    config = json.loads(fleet.config_path.read_text())
+    config['repo'] = ['bad type']
+    fleet.config_path.write_text(json.dumps(config), encoding='utf-8')
+    monkeypatch.setattr(module, 'CONFIG_PATH', fleet.config_path)
+    monkeypatch.setattr(module, 'ENV_PATH', env)
+    ctx = FakeCtx(fleet.data_dir)
+    module.bootstrap(ctx)
+    assert len(ctx.failures) == 1
+    key, detail = ctx.failures[0]
+    assert key == 'secrets_config'
+    assert 'secrets.json' in detail['user_msg'] and 'repo' in detail['user_msg']
+    assert 'ask_reason' not in detail
+    assert not (fleet.dest_root / 'ha-token.txt').exists()
+    assert not (fleet.data_dir / 'state.json').exists()
+    assert ctx.oks == []
