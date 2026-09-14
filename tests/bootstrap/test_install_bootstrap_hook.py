@@ -116,6 +116,31 @@ class TestGenerator:
         text = (project / ".claude" / "settings.json").read_text(encoding="utf-8")
         assert "caf\u00e9" in text
 
+    def test_crlf_files_keep_crlf_and_rerun_is_a_no_op(self, tmp_path):
+        project = _project(tmp_path)
+        settings_path = project / ".claude" / "settings.json"
+        settings_path.write_bytes(b'{\r\n  "hooks": {}\r\n}\r\n')
+        gen.install(str(project), str(PLUGIN_ROOT))
+
+        hook_path = project / ".claude" / "hooks" / gen.HOOK_FILENAME
+        settings_bytes = settings_path.read_bytes()
+        assert b"\r\n" in settings_bytes
+        assert b"\n" not in settings_bytes.replace(b"\r\n", b"")
+        # A fresh hook file is LF; simulate a Perforce CRLF checkout of it.
+        assert b"\r\n" not in hook_path.read_bytes()
+        hook_path.write_bytes(hook_path.read_bytes().replace(b"\n", b"\r\n"))
+
+        second = gen.install(str(project), str(PLUGIN_ROOT))
+        assert not second["hook_changed"] and not second["settings_changed"]
+        assert settings_path.read_bytes() == settings_bytes
+
+    def test_lf_settings_stay_lf(self, tmp_path):
+        project = _project(tmp_path)
+        settings_path = project / ".claude" / "settings.json"
+        settings_path.write_bytes(b'{\n  "hooks": {}\n}\n')
+        gen.install(str(project), str(PLUGIN_ROOT))
+        assert b"\r\n" not in settings_path.read_bytes()
+
     def test_refuses_project_without_bootstrap_json(self, tmp_path):
         project = _project(tmp_path, bootstrap_json=False)
         with pytest.raises(gen.InstallError, match="bootstrap.json"):
