@@ -240,7 +240,7 @@ def _unlock(fd: int) -> None:
 
 
 @contextmanager
-def operation_lock(data_dir: Path) -> Iterator[Path]:
+def _own_data(data_dir: Path, *, check_recovery: bool) -> Iterator[Path]:
     """Yield canonical paths under one non-reentrant operation ownership unit."""
     fd = None
     acquired = False
@@ -273,6 +273,9 @@ def operation_lock(data_dir: Path) -> Iterator[Path]:
             raise
         except (OSError, ImportError) as error:
             raise _setup_error(data_dir, f"guard setup failed ({type(error).__name__}, errno {getattr(error, 'errno', None)})") from error
+        if check_recovery:
+            from .authoring import require_no_recovery
+            require_no_recovery(canonical)
         yield canonical
     finally:
         primary = sys.exc_info()[1]
@@ -292,3 +295,17 @@ def operation_lock(data_dir: Path) -> Iterator[Path]:
                 add_note = getattr(primary, "add_note", None)
                 if callable(add_note):add_note(str(release_error))
             else:raise release_error
+
+
+@contextmanager
+def operation_lock(data_dir: Path) -> Iterator[Path]:
+    """Acquire ownership and refuse pending recovery before protected work."""
+    with _own_data(data_dir, check_recovery=True) as canonical:
+        yield canonical
+
+
+@contextmanager
+def _recovery_operation_lock(data_dir: Path) -> Iterator[Path]:
+    """Private inspection uses the same owner without entering ordinary work."""
+    with _own_data(data_dir, check_recovery=False) as canonical:
+        yield canonical

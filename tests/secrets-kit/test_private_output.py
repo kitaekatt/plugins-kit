@@ -155,14 +155,15 @@ def test_real_authoring_cache_protects_before_text_and_retains_order(seeding, mo
         assert seeding.cli.main(['init']) == 0
         seeding.identity.write_text('old dummy identity', encoding='utf-8')
     events = _observe_private_bytes(monkeypatch, [seeding.identity], windows=windows)
-    real_publish = seeding.cli.repo_mod.commit_and_push
+    publisher = '_publish_owned' if operation == 'init' else 'commit_and_push'
+    real_publish = getattr(seeding.cli.repo_mod, publisher)
     ordering = []
 
     def publish(*args, **kwargs):
         ordering.append(('publish', seeding.identity.read_bytes() if seeding.identity.exists() else None))
         return real_publish(*args, **kwargs)
 
-    monkeypatch.setattr(seeding.cli.repo_mod, 'commit_and_push', publish)
+    monkeypatch.setattr(seeding.cli.repo_mod, publisher, publish)
     assert seeding.cli.main([operation]) == 0
     _assert_protected_before_bytes(events, seeding.identity, text=True, windows=windows)
     assert seeding.identity.read_text() == 'AGE-SECRET-KEY-NEW'
@@ -526,7 +527,8 @@ def test_actual_authoring_cache_fault_preserves_old_cache_and_prior_effect_order
         assert seeding.cli.main(['init']) == 0
     seeding.identity.write_bytes(b'old dummy cache')
     publications = []
-    real_publish = seeding.cli.repo_mod.commit_and_push
+    publisher = '_publish_owned' if operation == 'init' else 'commit_and_push'
+    real_publish = getattr(seeding.cli.repo_mod, publisher)
     real_tighten = perms.tighten
     real_replace = os.replace
 
@@ -544,7 +546,7 @@ def test_actual_authoring_cache_fault_preserves_old_cache_and_prior_effect_order
             raise OSError('dummy cache replace fault')
         return real_replace(source, destination)
 
-    monkeypatch.setattr(seeding.cli.repo_mod, 'commit_and_push', publish)
+    monkeypatch.setattr(seeding.cli.repo_mod, publisher, publish)
     monkeypatch.setattr(perms, 'tighten', tightening)
     if hasattr(seeding.cli, 'tighten'):
         monkeypatch.setattr(seeding.cli, 'tighten', tightening)

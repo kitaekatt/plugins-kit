@@ -11,6 +11,7 @@ import os
 import re
 import subprocess
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -193,6 +194,17 @@ def require_repo_binding(clone_dir: Path, declared_repo: str) -> None:
         declared_repo.encode("utf-8", "strict")
     except UnicodeEncodeError:
         raise _binding_unavailable("declaration is not representable as UTF-8") from None
+    recorded = _recorded_origin(clone_dir)
+    if recorded != declared_repo:
+        raise RepoBindingError(
+            "repository binding mismatch: secrets.json repo differs from the "
+            "existing clone's recorded origin. Repository use stopped.",
+            _BINDING_RECONCILIATION,
+        )
+
+
+def _recorded_origin(clone_dir: Path) -> str:
+    """Read one directly recorded origin without including it in diagnostics."""
     try:
         proc = subprocess.run(
             ["git", "config", "--local", "--no-includes", "--null", "--get-all", "remote.origin.url"],
@@ -220,12 +232,7 @@ def require_repo_binding(clone_dir: Path, declared_repo: str) -> None:
         recorded = records[0].decode("utf-8", "strict")
     except UnicodeDecodeError:
         raise _binding_unavailable("local origin is not valid UTF-8") from None
-    if recorded != declared_repo:
-        raise RepoBindingError(
-            "repository binding mismatch: secrets.json repo differs from the "
-            "existing clone's recorded origin. Repository use stopped.",
-            _BINDING_RECONCILIATION,
-        )
+    return recorded
 
 
 def is_clone(path: Path) -> bool:
@@ -970,3 +977,138 @@ def commit_and_push(clone_dir: Path, message: str, paths: List[str]) -> None:
         "@{u}..HEAD` shows what is unpushed -- and either resolve it there or "
         "`git reset --hard @{u}` and re-run the verb.",
     )
+
+
+@dataclass(frozen=True)
+class PublicationEvidence:
+    """An observation about one exact commit and branch, never a retry policy."""
+
+    outcome: str
+    reason: str
+    commit_oid: str
+    target_ref: str
+
+
+def _owned_git(clone_dir: Path, args: List[str], *, timeout: int = QUERY_TIMEOUT,
+               payload: Optional[bytes] = None, index: Optional[Path] = None) -> subprocess.CompletedProcess:
+    """Separate raw records from diagnostics; an owned private index is explicit."""
+    environment = _git_environment()
+    environment["GIT_OPTIONAL_LOCKS"] = "0"
+    if index is not None:
+        environment["GIT_INDEX_FILE"] = str(index)
+    creation_policy = {"umask": 0o077} if os.name != "nt" else {}
+    return subprocess.run(["git"] + args, cwd=str(clone_dir), env=environment,
+                          input=payload, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                          timeout=timeout, **creation_policy)
+
+
+def _owned_query(clone_dir: Path, args: List[str], *, index: Optional[Path] = None) -> bytes:
+    try:
+        result = _owned_git(clone_dir, args, index=index)
+    except (OSError, subprocess.TimeoutExpired):
+        raise SecretsError("owned authoring Git query unavailable") from None
+    if result.returncode != 0 or result.stderr:
+        raise SecretsError(f"owned authoring Git query failed (status {result.returncode})")
+    return result.stdout
+
+
+def _owned_oid(clone_dir: Path, expression: str) -> str:
+    value = _owned_query(clone_dir, ["rev-parse", "--verify", expression]).decode("ascii").rstrip("\n")
+    if not _object_id(value):
+        raise SecretsError("owned authoring Git query returned an invalid object ID")
+    return value
+
+
+def _commit_owned(clone_dir: Path, message: str, paths: List[str], *,
+                  expected_parent: Optional[str], expected_tree: str) -> str:
+    """Stage only the prepared footprint and validate actual commit state."""
+    code, _ = _git(["add", "--"] + paths, cwd=clone_dir, timeout=LOCAL_WRITE_TIMEOUT)
+    if code != 0:
+        raise SecretsError(f"owned git add failed (status {code})")
+    if _owned_query(clone_dir, ["write-tree"]).decode("ascii").rstrip("\n") != expected_tree:
+        raise SecretsError("owned staged tree differs from prepared tree")
+    code, _ = _git(["commit", "-m", message], cwd=clone_dir, timeout=LOCAL_WRITE_TIMEOUT)
+    try:
+        commit = _owned_oid(clone_dir, "HEAD")
+        tree = _owned_oid(clone_dir, "HEAD^{tree}")
+        parents = _owned_query(clone_dir, ["rev-list", "--parents", "-n", "1", commit]).decode("ascii").split()
+    except (SecretsError, UnicodeError):
+        raise SecretsError(f"owned commit could not be verified (status {code})") from None
+    if tree != expected_tree or parents != [commit] + ([expected_parent] if expected_parent else []):
+        raise SecretsError(f"owned commit differs from prepared parent/tree (status {code})")
+    return commit
+
+
+def _publication_ref(commit_oid: str) -> str:
+    return "refs/secrets-kit/publication/" + commit_oid
+
+
+def _require_direct_ref(clone_dir: Path, name: str) -> None:
+    result = _owned_git(clone_dir, ["symbolic-ref", "--quiet", name])
+    if result.returncode != 1 or result.stdout or result.stderr:
+        raise SecretsError("owned authoring ref is symbolic or unavailable")
+
+
+def _prove_publication(clone_dir: Path, *, commit_oid: str, target_ref: str,
+                       declared_repo: str) -> PublicationEvidence:
+    """One fresh fetch can prove reachability; non-ancestry proves no rejection."""
+    evidence = lambda outcome, reason: PublicationEvidence(outcome, reason, commit_oid, target_ref)
+    proof = _publication_ref(commit_oid)
+    placeholder = _owned_oid(clone_dir, commit_oid + "^{tree}")
+    allocated = False
+    observed = placeholder
+    answer = evidence("uncertain", "fresh proof unavailable")
+    try:
+        require_repo_binding(clone_dir, declared_repo)
+        _require_direct_ref(clone_dir, proof)
+        create = _owned_git(clone_dir, ["update-ref", "--no-deref", proof, placeholder, "0" * len(placeholder)])
+        if create.returncode != 0:
+            return evidence("uncertain", "publication proof ref is not exclusively available")
+        allocated = True
+        result = _owned_git(clone_dir, ["fetch", "--quiet", "--no-tags", "--no-write-fetch-head",
+                                        declared_repo, "+" + target_ref + ":" + proof], timeout=FETCH_TIMEOUT)
+        if result.returncode == 0:
+            observed = _owned_oid(clone_dir, proof)
+            kind = _owned_query(clone_dir, ["cat-file", "-t", observed])
+            if kind == b"commit\n":
+                ancestry = _owned_git(clone_dir, ["merge-base", "--is-ancestor", commit_oid, observed])
+                if observed == commit_oid or ancestry.returncode == 0 and not ancestry.stdout and not ancestry.stderr:
+                    answer = evidence("confirmed", "fresh branch reachability")
+                else:
+                    answer = evidence("uncertain", "fresh branch does not prove reachability")
+    except (OSError, subprocess.TimeoutExpired, SecretsError, UnicodeError, KeyboardInterrupt):
+        answer = evidence("uncertain", "fresh proof unavailable")
+    finally:
+        if allocated:
+            try:
+                observed = _owned_oid(clone_dir, proof)
+                _require_direct_ref(clone_dir, proof)
+                cleanup = _owned_git(clone_dir, ["update-ref", "--no-deref", "-d", proof, observed])
+                if cleanup.returncode != 0:
+                    answer = evidence(answer.outcome, "publication proof cleanup incomplete")
+            except (OSError, subprocess.TimeoutExpired, SecretsError, UnicodeError):
+                answer = evidence(answer.outcome, "publication proof cleanup incomplete")
+    return answer
+
+
+def _publish_owned(clone_dir: Path, *, commit_oid: str, target_ref: str,
+                   declared_repo: str) -> PublicationEvidence:
+    """One nonforced exact-ref push, followed by at most one fresh positive proof."""
+    require_repo_binding(clone_dir, declared_repo)
+    receipt = None
+    try:
+        result = _owned_git(clone_dir, ["push", "--porcelain", "--no-follow-tags", declared_repo,
+                                        commit_oid + ":" + target_ref], timeout=CLONE_TIMEOUT)
+        lines = result.stdout.decode("utf-8", "strict").splitlines()
+        rows = [line.split("\t") for line in lines if "\t" in line]
+        complete = len(rows) == 1 and len(rows[0]) == 3 and lines[-1:] == ["Done"]
+        if complete and rows[0][1] == commit_oid + ":" + target_ref:
+            flag, _, summary = rows[0]
+            if result.returncode == 0 and flag in (" ", "*", "="):
+                receipt = PublicationEvidence("confirmed", "complete exact-ref push receipt", commit_oid, target_ref)
+            elif result.returncode == 1 and flag == "!" and summary.startswith(("[rejected]", "[remote rejected]")):
+                receipt = PublicationEvidence("definitely_rejected", "complete exact-ref rejection", commit_oid, target_ref)
+    except (OSError, subprocess.TimeoutExpired, UnicodeError, KeyboardInterrupt):
+        pass
+    return receipt or _prove_publication(clone_dir, commit_oid=commit_oid,
+                                         target_ref=target_ref, declared_repo=declared_repo)

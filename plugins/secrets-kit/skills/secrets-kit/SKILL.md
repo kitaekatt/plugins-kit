@@ -200,7 +200,9 @@ technique_skill:
       gotchas:
         - "Run ONCE per fleet. `init` on an already-seeded repo refuses, because every existing blob is encrypted to the OLD public key and would be orphaned. Use rotate-identity instead."
         - "It asks the REMOTE whether the repo is seeded, not the local checkout -- a clone that has not fetched since before someone else seeded would otherwise report 'never seeded'. If init says already seeded, believe it over the session-pass message that sent you here, and run `unlock --new-terminal` instead."
-        - "All-or-nothing: if the seed cannot be pushed, the generated identity is discarded and the machine is left untouched. The passphrase the user chose then applies to nothing -- they choose a fresh one on the retry. Never hand-push a rolled-back seed."
+        - "Seed publishes one exact commit without automatic rebase or a second push. Before submission or after a validated rejection, it restores its owned entry checkout and index and preserves the existing identity cache. A lost push report can still mean publication succeeded."
+        - "Uncertain publication or incomplete cache finalization retains encrypted recovery evidence and blocks ordinary operations. Preserve the wrapped proposed key, clone, cache and recovery marker for private inspection; never discard a possibly published key or hand-push a pending seed. Checkout restoration requires proved-absent publication and validated ownership."
+        - "These recovery checks cover seed and force-seed. Other authoring verbs require their own recovery acceptance."
         - "This is the one sanctioned exception to pull-not-push: it must run on the machine holding the plaintext. Every step afterwards is a pull."
     - id: add_rotate
       keywords: [add secret, new credential, rotate, update value, changed token]
@@ -314,13 +316,13 @@ technique_skill:
       keywords: [push rejected, fetch first, diverged, force push, merge the secrets repo, resolve and push]
       why_it_seems_right: "It is the reflex for any git repo, and the rejection looks like ordinary branch drift."
       why_it_is_wrong: "In THIS repo a rejected push usually means the remote already holds something the local clone never saw -- most often an identity.age seeded elsewhere. Forcing or merging past that replaces the fleet's key with a second one, orphaning every blob encrypted to the first. The rejection is the safety net, not the problem."
-      alternative: "Read what the remote has (`git -C <clone> log --oneline HEAD..@{u}`). An unpushed commit in this clone is always a failed authoring attempt, so `git reset --hard @{u}` and re-run the verb -- which will then tell you the repo is already seeded and send you to `unlock`."
+      alternative: "Preserve the clone, cache, wrapped proposed key and recovery marker for private inspection while publication or recovery remains unresolved. Do not push, merge, reset or delete recovery artifacts to make the attempt go through. Local upstream tracking information cannot prove publication absent; checkout restoration requires proved-absent publication and validated ownership."
     - id: asking_for_the_passphrase
       name: Offering to set the passphrase for the user
       keywords: [paste the passphrase, i will set it, transcript, convenience]
       why_it_seems_right: "It is the same shape as the API-key flow, which does offer a paste-it-here option."
       why_it_is_wrong: "An API key is one revocable service credential; this is the master key to every credential in the fleet. The transcript is a file on disk, so pasting it there is permanent exposure of the root of trust."
-      alternative: "Relay `! secrets-kit unlock`. There is no second option, deliberately."
+      alternative: "Follow passphrase_verbs_need_new_terminal and cli_is_not_on_path: ask for consent, resolve the shim and run unlock with --new-terminal. The user enters the passphrase only in that terminal window, never in chat."
 ```
 
 ## The pre-commit guard

@@ -24,6 +24,7 @@ sys.path.insert(0, str(_PLUGIN_ROOT / "lib"))
 from secrets_kit import SecretsError, cli_command  # noqa: E402
 from secrets_kit import agefile  # noqa: E402
 from secrets_kit import guard  # noqa: E402
+from secrets_kit.authoring import AuthoringRecoveryError, _prepare_seed  # noqa: E402
 from secrets_kit import repo as repo_mod  # noqa: E402
 from secrets_kit.converge import converge, paths_for  # noqa: E402
 from secrets_kit.manifest import Config, Manifest, resolve_dest  # noqa: E402
@@ -108,7 +109,8 @@ def _ensure_guarded(config: Config, *, data_dir: Path) -> Path:
 
     Nested repo/key/state/publication helpers never acquire recursively.
 
-    Every authoring verb goes through here rather than ``_ensure_clone``. Two
+    Add, remove and rotation use this helper. Seed records its recovery
+    baseline before synchronizing. Two
     things have to be true before we let git record anything permanently, and
     neither is inheritable:
 
@@ -206,111 +208,53 @@ def cmd_init(args: argparse.Namespace) -> int:
         return handed_off
     config = _require_config()
     with operation_lock(DATA_DIR) as data_dir:
+        clone = paths_for(data_dir)["clone"]
         try:
-            clone = _ensure_guarded(config, data_dir=data_dir)
-        except repo_mod.RepoBindingError:
+            operation = _prepare_seed(data_dir, clone, config.repo, force=args.force)
+        except (repo_mod.RepoBindingError, AuthoringRecoveryError):
             raise
-        except SecretsError as e:
-            # Cached identity evidence gives useful unlock advice without proving
-            # why the gate failed or whether any local history is disposable.
-            clone = paths_for(data_dir)["clone"]
-            if repo_mod.is_clone(clone) and repo_mod.remote_has(clone, "identity.age"):
-                return _fail(
-                    f"{e.message}\n\n"
-                    "The cached remote-tracking view contains identity.age. "
-                    "It does not establish why this gate failed. To use that "
-                    "fleet identity, this machine needs "
-                    f"`{cli_command('unlock --new-terminal')}`."
+        except SecretsError as error:
+            details = str(error)
+            recovery = getattr(error, "authoring_recovery_error", None)
+            if recovery:
+                details += f"\n{recovery}"
+            elif repo_mod.is_clone(clone) and repo_mod.remote_has(clone, "identity.age"):
+                details += (
+                    "\nThe cached remote-tracking view contains identity.age; it "
+                    "does not prove why admission failed or that local history is "
+                    f"disposable. To use that identity, run `{cli_command('unlock --new-terminal')}`."
                 )
-            raise
-
-        manifest_path = clone / "manifest.json"
-        wrapped = clone / "identity.age"
-
-        # Ask the REMOTE, not the checkout. Seeding is the one irreversible act
-        # here -- a second identity orphans every blob encrypted to the first --
-        # and the checkout can only tell us what was true at the last fetch. The
-        # local file is checked too, for the case where the branch has no upstream.
-        if not args.force and (repo_mod.remote_has(clone, "identity.age") or wrapped.exists()):
-            return _fail(
-                "this repo is already seeded -- identity.age exists. Re-running "
-                "init would generate a SECOND fleet identity and orphan every "
-                "existing blob (they are encrypted to the first one's public "
-                "key).\n"
-                f"To use the existing fleet identity on this machine, run "
-                f"`{cli_command('unlock --new-terminal')}`.\n"
-                "To change the passphrase or key while keeping the blobs readable, "
-                "use `rotate-identity`. Pass --force only if you really mean to "
-                "abandon the existing secrets and start over."
-            )
-
-        # Everything from here to the push is one transaction. A partial seed is
-        # the worst outcome available: this machine would cache an identity the
-        # fleet has never heard of, and every later decrypt would fail with an
-        # error pointing at the wrong thing.
-        before = repo_mod.head_sha(clone)
-
-        print("Generating the fleet age identity ...")
-        identity_text, recipient = agefile.keygen()
-
-        print(
-            "\nChoose a strong passphrase for the fleet identity. You will type it "
-            "twice now, and once on each machine you unlock -- nowhere else. "
-            "Escrow it in your password manager: after seeding it is the only "
-            "remote path back into these secrets."
-        )
-        code = agefile.wrap_identity(identity_text, wrapped)
-        if code != 0:
-            try:
-                wrapped.unlink()
-            except OSError:
-                pass
-            return _fail("age failed to wrap the identity; nothing was written")
-
-        manifest = Manifest(
-            manifest_path,
-            {"version": 1, "recipient": recipient, "profiles": {}, "entries": {}},
-        )
-        manifest_path.write_text(manifest.dump(), encoding="utf-8")
-
-        # Deny-by-default .gitignore, layered under the pre-commit guard. The guard
-        # stops a deliberate `git add`; this stops a careless `git add -A` from
-        # staging a stray plaintext file at all. Two independent nets, because the
-        # thing they prevent cannot be undone.
-        wrote_ignore = guard.ensure_gitignore(clone)
-
-        seeded_paths = ["identity.age", "manifest.json"]
-        if wrote_ignore:
-            seeded_paths.append(".gitignore")
+            return _fail(details)
         try:
-            repo_mod.commit_and_push(
-                clone, "seed: fleet identity + empty manifest", seeded_paths
-            )
-        except SecretsError as e:
-            # Publishing is what MAKES the seed real. If it did not land, unwind
-            # rather than leaving a local-only fleet identity behind: the next run
-            # would find identity.age in the checkout, conclude the repo is seeded,
-            # and refuse -- pointing the user at an identity no other machine can
-            # ever obtain.
-            repo_mod.rollback_to(clone, before, created=seeded_paths)
-            return _fail(
-                f"{e}\n"
-                "Nothing was published and nothing was kept: the generated "
-                "identity has been discarded and this machine is unchanged. The "
-                "passphrase you just chose applies to nothing -- re-run init once "
-                "the repo state above is resolved and choose one again."
-            )
-
-        # Cache the unlocked identity locally so the seeding machine does not have
-        # to unlock itself immediately after creating the key it just held. Written
-        # only AFTER the push, so this file can never name a key the fleet lacks.
-        paths = paths_for(data_dir)
-        tighten_dir(data_dir)
-        def produce_cache(stream: IO[Any]) -> bool:
-            stream.write(identity_text)
-            return True
-
-        _private_output(paths["identity"], 0o600, produce_cache, text=True)
+            if not args.force and (repo_mod.remote_has(clone, "identity.age") or (clone / "identity.age").exists()):
+                error = SecretsError(
+                    "this repo is already seeded -- identity.age exists. Re-running init "
+                    "would abandon the existing fleet identity. To use it, run "
+                    f"`{cli_command('unlock --new-terminal')}`. Use rotate-identity to "
+                    "keep the existing secrets. Pass --force only to abandon them."
+                )
+                operation.failure(error)
+                recovery = getattr(error, "authoring_recovery_error", None)
+                return _fail(f"{error}\n{recovery}" if recovery else str(error))
+            print("Generating and passphrase-wrapping the fleet age identity ...")
+            print("Choose a strong passphrase and save it in your password manager or other secure escrow.\n"
+                  "Enter it in age's hidden-input prompt; do not put it in an agent transcript.")
+            identity_text, recipient, code = operation.prepare()
+            if code != 0:
+                raise SecretsError("age failed to wrap the identity; seed was not submitted")
+            try:
+                operation.apply_and_publish(identity_text)
+            except SecretsError as primary:
+                phase = operation.record["phase"]
+                operation.failure(primary)
+                recovery = getattr(primary, "authoring_recovery_error", None)
+                details = f"{primary}\n{recovery}" if recovery else str(primary)
+                if phase == "definitely_rejected" and not recovery:
+                    details += "\nOwned entry state restored; the generated identity was discarded."
+                return _fail(details)
+        except BaseException as primary:
+            operation.failure(primary)
+            raise
 
         print(f"\nseeded. recipient = {recipient}")
         print(f"Add secrets with: {cli_command('add')} <name> --file <path> --dest <dest>")
@@ -713,7 +657,9 @@ def main(argv=None) -> int:
         return args.func(args)
     except SecretsError as e:
         release_error = getattr(e, "operation_lock_release_error", None)
-        return _fail(f"{e}\n{release_error}" if release_error else str(e))
+        recovery_error = getattr(e, "authoring_recovery_error", None)
+        details = [str(e)] + [str(error) for error in (recovery_error, release_error) if error]
+        return _fail("\n".join(details))
 
 
 if __name__ == "__main__":

@@ -23,6 +23,7 @@ from .perms import _private_output, _repair_mode_drift, tighten, tighten_dir
 from . import repo as repo_mod
 from .state import State, sha256_bytes, sha256_file
 from .operation_lock import OperationLockError, operation_lock
+from .authoring import AuthoringRecoveryError
 
 # Names the bootstrap failure records use. Stable strings: the engine dedupes
 # and re-reports on them every session until they clear.
@@ -31,6 +32,7 @@ FAILURE_CONFIG = "secrets_config"
 FAILURE_ENTRY = "secrets_entry"
 FAILURE_DEST = "secrets_dest"
 FAILURE_OPERATION_LOCK = "secrets_operation_lock"
+FAILURE_AUTHORING_RECOVERY = "secrets_authoring_recovery"
 
 
 class Failure:
@@ -145,6 +147,14 @@ def converge(
         with operation_lock(data_dir) as canonical:
             result = _converge_locked(config, canonical, variables=variables,
                                       profiles=profiles, force_refresh=force_refresh)
+    except AuthoringRecoveryError as error:
+        release = getattr(error, "operation_lock_release_error", None)
+        detail = f"{error}\n{release}" if release else str(error)
+        result.failures.append(Failure(
+            FAILURE_AUTHORING_RECOVERY,
+            user_msg=f"secrets-kit: {detail}",
+            agent_msg=f"Secrets authoring recovery requires private inspection.\n{detail}",
+        ))
     except OperationLockError as error:
         result.failures.append(Failure(
             FAILURE_OPERATION_LOCK,

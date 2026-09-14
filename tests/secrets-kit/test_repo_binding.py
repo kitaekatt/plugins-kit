@@ -403,7 +403,7 @@ def test_empty_profile_selection_stays_active_and_retires_owned_orphan(adding, m
     assert not (adding.plain / 'ha-token.txt').exists()
 
 
-def test_initial_authoring_clone_adds_no_binding_query(adding, monkeypatch):
+def test_initial_authoring_clone_checks_binding_once_before_publication(adding, monkeypatch):
     from test_sync_view import _birth_consumer, _birth_environment
     root, remote, data, calls = _birth_environment(adding, monkeypatch, 'empty', 'file-url', False)
     actual = repository.subprocess.run
@@ -416,7 +416,7 @@ def test_initial_authoring_clone_adds_no_binding_query(adding, monkeypatch):
     code = adding.cli.main(['init'])
     author_queries = list(queries)
     consumer = _birth_consumer(adding, root, remote)
-    assert code == 0 and author_queries == [] and consumer['failures'] == 0
+    assert code == 0 and author_queries == [BIND_QUERY] and consumer['failures'] == 0
 
 
 def test_binding_query_preserves_shared_git_environment_guards(adding, monkeypatch):
