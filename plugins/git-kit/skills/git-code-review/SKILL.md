@@ -187,10 +187,12 @@ technique_skill:
             issues, in the same shape an Agent lane returns.
             Endpoint lanes and Agent lanes go out in the SAME message as one another; mixing
             the two dispatch mechanisms in one fan-out is normal and expected.
-            A NON-ZERO exit is a FAILED lane, never an empty result: do NOT retry it, do NOT
-            silently substitute an Agent, and do NOT treat its absence as "no issues found".
-            Keep its stderr line, report the lane as failed in step 9, and mark its coverage
-            missing. Only the lanes the runner supports may carry an endpoint id; it refuses
+            A NON-ZERO exit is never an empty result. Before marking a lane failed,
+            apply the pre-dispatch launch-correction rule in references/configuration.md.
+            Other non-zero exits are FAILED lanes: do NOT retry them, silently substitute
+            an Agent, or treat absent output as "no issues found". Keep the stderr line,
+            report the failure in step 9, and mark coverage missing.
+            Only the lanes the runner supports may carry an endpoint id; it refuses
             the rest by name and exits 2, which is a configuration error for the user to fix,
             not something to work around.
 
@@ -342,8 +344,11 @@ technique_skill:
         - n: 9
           action: |
             Render the markdown review.
-            - When any lane FAILED (an endpoint-dispatched reviewer that exited non-zero in
-              step 6, or a lane refused as a configuration error), prepend a `## Lane failures`
+            - Report each corrected launch's original stderr, no-dispatch evidence,
+              correction, and final outcome in a `## Launch corrections` section.
+              Only a completed, schema-valid reviewer result restores that lane's coverage.
+            - When any lane FAILED (including an unsuccessful launch correction
+              or a lane refused as a configuration error), prepend a `## Lane failures`
               section naming each failed lane, the model it was configured with, and the
               runner's stderr reason. State plainly which files that lane would have covered
               and that they did NOT receive its review. This section is not decoration: the
@@ -496,7 +501,7 @@ technique_skill:
         - See references/configuration.md for the layer precedence, merge rules (profiles/reviewers merge by id/name; validator_models and other mappings deep-merge; `disabled: true` removes a record; plain lists like `data_only_extensions` replace), the shipped default table, what a `model` value may name, which lanes may take an endpoint id, what happens when an endpoint lane fails, and how a reviewer's ordered `model` priority list resolves a `peer:` entry (plus the `--explain-peer-seats` diagnostic).
         - A `model` value is NOT always an Agent-tool model. The four aliases `sonnet`, `opus`, `haiku` and `fable` name the Agent tool; every other value is an llm-scripting-kit endpoint id and that lane runs through python3 ${CLAUDE_PLUGIN_ROOT}/scripts/run_review_lane.py instead (step 6's model-kind rule). Every `model` in the RESOLVED table is a single string -- the renderer has already picked one entry out of any priority list the configuration stated -- so this rule needs no extra case.
         - A reviewer's configured `model` may be an ORDERED PRIORITY LIST rather than a single name, and an entry spelled `peer:<name>` asks the renderer to run that lane on a reachable PEER endpoint -- same tier as `<name>`, different model family -- when llm-scripting-kit is installed and current. The renderer evaluates the list and prints one resolved model, so the table you read already carries the chosen value, and the lane dispatches through python3 ${CLAUDE_PLUGIN_ROOT}/scripts/run_review_lane.py under the ordinary step-6 model-kind rule. Do not probe for a peer yourself, and do not treat a resolved peer endpoint as an override the user forgot to make.
-        - An endpoint lane that fails is a FAILED lane. There is no fallback to an Agent, by design: silently substituting one produces a review the user reads as having run on the model they configured, which is a false claim about the change's coverage. Report it and mark the coverage missing.
+        - Apply references/configuration.md's pre-dispatch launch-correction rule before classifying a failed invocation. An actual failed endpoint lane has no Agent fallback: report it and mark coverage missing rather than claiming review by the configured model.
         - A reviewer record may carry an `effort` (`low`, `medium`, `high`, `xhigh`, `max`) beside its `model`. It selects the DISPATCH TARGET, not a parameter: the Agent tool has no effort argument, so an effort-carrying lane goes to the `git-kit:review-lane-<effort>` agent, whose frontmatter sets it. A lane with no `effort` keeps `general-purpose` and inherits this session's effort. Do not attempt to pass effort as an Agent argument, and do not read a lane's effort off the agent's page -- the RESOLVED table is the authority.
         - Effort and model are independent and BOTH are honoured: the profile's `model` goes at the CALL SITE, where it overrides whatever the effort agent's own frontmatter would imply. Never move a lane to a different model to obtain an effort level, and never move it to a different effort to obtain a model.
   narration:
