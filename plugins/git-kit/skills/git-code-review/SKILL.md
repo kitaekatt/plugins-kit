@@ -84,7 +84,7 @@ technique_skill:
             After prepare returns, emit the launch rationale line ONCE (see narration.launch_message):
             select the row from the file-type mix of the changed + claimed files, or the md_trivial row
             when the step-6 triviality gate will fire. This is the single launch message -- do not repeat it.
-          tool: python3 ${CLAUDE_PLUGIN_ROOT}/scripts/prepare_review.py
+          tool: uv run --no-project python ${CLAUDE_PLUGIN_ROOT}/scripts/prepare_review.py
           input: "<range or argument from step 1>  (append `--claim '**/*.md'` when md-domain is available, per the claim probe)"
           expected: |
             JSON with vcs, range, head_sha, branch, description, project_root, bundle_dir, diff_chunks, changed_files, unique_claude_mds, untracked_or_unstaged, merge_conflicts, submit_gates, change_id, ledger_baseline, ledger_hits, -- only when --claim was passed -- claimed_files, and -- only when a changed file was detected as machine-emitted -- machine_emitted_files (each entry carries identifier, local, size_bytes, and the axis that matched -- machine_emitted_axis `content` or `declared_path` plus the naming machine_emitted_signature; such files are excluded from diff_chunks and changed_files, and `--review-machine-emitted` turns that exclusion off). The raw diff text is NOT inline -- it lives in per-chunk files at `<bundle_dir>/<diff_chunks[i].path>` (paths are relative to bundle_dir). Each `changed_files` entry carries `chunk_index` pointing to the chunk that contains its diff.
@@ -102,7 +102,7 @@ technique_skill:
           action: |
             Read every CLAUDE.md path in unique_claude_mds. Subagents do not need to re-read.
             Also resolve the EXECUTABLE review-profile table -- profile ids, reviewer rosters,
-            per-reviewer models, and validator_models -- by running python3 ${CLAUDE_PLUGIN_ROOT}/scripts/render_review_profiles.py with
+            per-reviewer models, and validator_models -- by running uv run --no-project python ${CLAUDE_PLUGIN_ROOT}/scripts/render_review_profiles.py with
             `--project-root <bundle.project_root>` (omit the flag when bundle.project_root is
             unset; the resolver then falls back to the process cwd). NEVER merge the
             review-profile config layers (shipped / user / project) yourself -- the renderer is
@@ -122,7 +122,7 @@ technique_skill:
             that second case runs the next entry silently and is reported only by
             `--explain-peer-seats`. Either way the resolved table states the model each lane
             actually runs.
-          tool: Read + python3 ${CLAUDE_PLUGIN_ROOT}/scripts/render_review_profiles.py
+          tool: Read + uv run --no-project python ${CLAUDE_PLUGIN_ROOT}/scripts/render_review_profiles.py
         - n: 5
           action: |
             If bundle.submit_gates is non-empty, DISCHARGE each gate yourself. Do NOT ask the
@@ -174,7 +174,7 @@ technique_skill:
             Agent subagent (the default path; the shipped table is
             all aliases, so an unconfigured review behaves identically to before). Any other
             value is an endpoint id: run that lane as a parallel Bash call to
-            python3 ${CLAUDE_PLUGIN_ROOT}/scripts/run_review_lane.py instead of launching an Agent for it, passing `--lane <reviewer
+            uv run --no-project python ${CLAUDE_PLUGIN_ROOT}/scripts/run_review_lane.py instead of launching an Agent for it, passing `--lane <reviewer
             name>`, `--model <the value>`, `--chunk <absolute chunk diff path>`, one
             `--file` per repo-relative path in that chunk, `--description <the change
             description>`, `--bundle <bundle.bundle_dir>/bundle.json`, and `--project-root
@@ -319,14 +319,14 @@ technique_skill:
 
             Parse every NATIVE Agent lane's returned array before treating it as candidate
             issues. Write that lane's raw response verbatim to a distinct temporary file under
-            `bundle.bundle_dir`, then run `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/parse_review_lane.py --lane <reviewer name> --response
+            `bundle.bundle_dir`, then run `uv run --no-project python ${CLAUDE_PLUGIN_ROOT}/scripts/parse_review_lane.py --lane <reviewer name> --response
             <that file> --bundle <bundle.bundle_dir>/bundle.json`. Replace the raw array with
             the parser's stdout array. The executable parser validates every lane and, for
             reviewer_a, verifies each citation against the reported file's governing CLAUDE.md
             chain. Endpoint envelopes already contain output from the same shared parser. A
             non-zero parser exit is a FAILED lane under the existing failure rule; never pass
             its unparsed issues to validators.
-          tool: Agent (per the model-kind rule, a lane whose model is an endpoint id runs as a Bash call to python3 ${CLAUDE_PLUGIN_ROOT}/scripts/run_review_lane.py instead)
+          tool: Agent (per the model-kind rule, a lane whose model is an endpoint id runs as a Bash call to uv run --no-project python ${CLAUDE_PLUGIN_ROOT}/scripts/run_review_lane.py instead)
           expected: JSON arrays of candidate issues from each launched reviewer (one array per (reviewer, chunk) lane), plus a recorded failure for any lane that exited non-zero.
         - n: 7
           action: |
@@ -445,7 +445,7 @@ technique_skill:
             normalized anchor (never line numbers or exact wording) and NEVER records a SERIOUS
             md-domain finding (those always re-surface). Do NOT hand-edit the ledger JSON -- always go
             through --ledger-record so keying stays deterministic.
-          tool: python3 ${CLAUDE_PLUGIN_ROOT}/scripts/prepare_review.py
+          tool: uv run --no-project python ${CLAUDE_PLUGIN_ROOT}/scripts/prepare_review.py
           input: "--ledger-record <bundle.bundle_dir>/declined.json"
       checklist:
         - Diff range resolved (auto-detected from workspace state OR explicit user arg) and surfaced in the step-1 narration line
@@ -496,11 +496,11 @@ technique_skill:
         - The `--review-machine-emitted` flag is the override and it is the AUTHOR's call, never an inference. Pass it only when the user or the author explicitly asks for the machine-emitted files to be reviewed.
         - The declined-findings ledger is advisory memory, not a gate. A collapsed finding is one the author already declined for THIS change at THIS baseline; when the baseline moves (the range base SHA advances -- origin/main moves, or HEAD changes for a working-tree review) the entry goes stale and the finding re-surfaces on its own. Never let a ledger hit suppress a SERIOUS md-domain finding.
         - Record declined findings ONLY through `prepare_review.py --ledger-record <json>`. Never hand-edit ledger.json -- the key normalization (criterion/reason + taxonomy + normalized anchor) must be computed deterministically, not typed.
-        - The `review_profiles` block above is SELECTION GUIDANCE AND RATIONALE ONLY. It carries no reviewer roster, model, or validator_models -- that executable table is resolved per review by python3 ${CLAUDE_PLUGIN_ROOT}/scripts/render_review_profiles.py (step 4), which merges the shipped bootstrap_lib defaults with any `~/.claude/config/review_profiles.yaml` (user) or `<project_root>/.claude/review_profiles.yaml` (project) override. Never merge those layers yourself and never hand-edit the resolved output.
+        - The `review_profiles` block above is SELECTION GUIDANCE AND RATIONALE ONLY. It carries no reviewer roster, model, or validator_models -- that executable table is resolved per review by uv run --no-project python ${CLAUDE_PLUGIN_ROOT}/scripts/render_review_profiles.py (step 4), which merges the shipped bootstrap_lib defaults with any `~/.claude/config/review_profiles.yaml` (user) or `<project_root>/.claude/review_profiles.yaml` (project) override. Never merge those layers yourself and never hand-edit the resolved output.
         - The `profile` in steps 6-7 is always an entry from that RESOLVED table, never the guidance block. Match the guidance prose to decide which profile id fits the change, then read `reviewers` and `validator_models` off the resolved entry with that id.
         - See references/configuration.md for the layer precedence, merge rules (profiles/reviewers merge by id/name; validator_models and other mappings deep-merge; `disabled: true` removes a record; plain lists like `data_only_extensions` replace), the shipped default table, what a `model` value may name, which lanes may take an endpoint id, what happens when an endpoint lane fails, and how a reviewer's ordered `model` priority list resolves a `peer:` entry (plus the `--explain-peer-seats` diagnostic).
-        - A `model` value is NOT always an Agent-tool model. The four aliases `sonnet`, `opus`, `haiku` and `fable` name the Agent tool; every other value is an llm-scripting-kit endpoint id and that lane runs through python3 ${CLAUDE_PLUGIN_ROOT}/scripts/run_review_lane.py instead (step 6's model-kind rule). Every `model` in the RESOLVED table is a single string -- the renderer has already picked one entry out of any priority list the configuration stated -- so this rule needs no extra case.
-        - A reviewer's configured `model` may be an ORDERED PRIORITY LIST rather than a single name, and an entry spelled `peer:<name>` asks the renderer to run that lane on a reachable PEER endpoint -- same tier as `<name>`, different model family -- when llm-scripting-kit is installed and current. The renderer evaluates the list and prints one resolved model, so the table you read already carries the chosen value, and the lane dispatches through python3 ${CLAUDE_PLUGIN_ROOT}/scripts/run_review_lane.py under the ordinary step-6 model-kind rule. Do not probe for a peer yourself, and do not treat a resolved peer endpoint as an override the user forgot to make.
+        - A `model` value is NOT always an Agent-tool model. The four aliases `sonnet`, `opus`, `haiku` and `fable` name the Agent tool; every other value is an llm-scripting-kit endpoint id and that lane runs through uv run --no-project python ${CLAUDE_PLUGIN_ROOT}/scripts/run_review_lane.py instead (step 6's model-kind rule). Every `model` in the RESOLVED table is a single string -- the renderer has already picked one entry out of any priority list the configuration stated -- so this rule needs no extra case.
+        - A reviewer's configured `model` may be an ORDERED PRIORITY LIST rather than a single name, and an entry spelled `peer:<name>` asks the renderer to run that lane on a reachable PEER endpoint -- same tier as `<name>`, different model family -- when llm-scripting-kit is installed and current. The renderer evaluates the list and prints one resolved model, so the table you read already carries the chosen value, and the lane dispatches through uv run --no-project python ${CLAUDE_PLUGIN_ROOT}/scripts/run_review_lane.py under the ordinary step-6 model-kind rule. Do not probe for a peer yourself, and do not treat a resolved peer endpoint as an override the user forgot to make.
         - Apply references/configuration.md's pre-dispatch launch-correction rule before classifying a failed invocation. An actual failed endpoint lane has no Agent fallback: report it and mark coverage missing rather than claiming review by the configured model.
         - A reviewer record may carry an `effort` (`low`, `medium`, `high`, `xhigh`, `max`) beside its `model`. It selects the DISPATCH TARGET, not a parameter: the Agent tool has no effort argument, so an effort-carrying lane goes to the `git-kit:review-lane-<effort>` agent, whose frontmatter sets it. A lane with no `effort` keeps `general-purpose` and inherits this session's effort. Do not attempt to pass effort as an Agent argument, and do not read a lane's effort off the agent's page -- the RESOLVED table is the authority.
         - Effort and model are independent and BOTH are honoured: the profile's `model` goes at the CALL SITE, where it overrides whatever the effort agent's own frontmatter would imply. Never move a lane to a different model to obtain an effort level, and never move it to a different effort to obtain a model.
@@ -589,7 +589,7 @@ technique_skill:
       of `bundle.changed_files`. Default to `code` when uncertain.
       The EXECUTABLE table -- profile ids, reviewer rosters, per-reviewer models, and
       validator_models -- is NOT inline here. It is resolved at review time by step 4
-      (python3 ${CLAUDE_PLUGIN_ROOT}/scripts/render_review_profiles.py), which merges the shipped bootstrap_lib defaults with any user/project
+      (uv run --no-project python ${CLAUDE_PLUGIN_ROOT}/scripts/render_review_profiles.py), which merges the shipped bootstrap_lib defaults with any user/project
       override. Never merge those layers by hand. See references/configuration.md for the full
       layer/merge/override contract and the shipped default table.
     profiles:

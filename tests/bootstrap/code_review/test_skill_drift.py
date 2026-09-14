@@ -286,18 +286,20 @@ class TestDeclinedLedgerPresent:
     def test_record_step_uses_correct_launch_prefix(self):
         # prepare_review.py ships mode 100644 with no shebang, so a bare-path
         # launch exits 126 (permission denied) -- BOTH kits must launch it via
-        # an explicit python3 interpreter, at every prepare and ledger-record
-        # site. There is no bare-path form left to assert for either kit.
+        # `uv run --no-project python`, at every prepare and ledger-record
+        # site. Bare `python3` is not used either: it can be absent from PATH
+        # on Windows. There is no bare-path form left to assert for either kit.
         p4 = gen.render_skill("p4")
         git = gen.render_skill("git")
         for body in (p4, git):
-            assert "tool: python3 ${CLAUDE_PLUGIN_ROOT}/scripts/prepare_review.py" in body
+            assert "tool: uv run --no-project python ${CLAUDE_PLUGIN_ROOT}/scripts/prepare_review.py" in body
             assert "tool: ${CLAUDE_PLUGIN_ROOT}/scripts/prepare_review.py" not in body
+            assert "python3 ${CLAUDE_PLUGIN_ROOT}" not in body
         # ledger-record site (@PREPARE_TOOL@ token, shared LEDGER_RECORD_STEP body)
         p4_ledger = gen.render_declined_ledger("p4")
         git_ledger = gen.render_declined_ledger("git")
         for ledger in (p4_ledger, git_ledger):
-            assert "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/prepare_review.py --ledger-record" in ledger
+            assert "uv run --no-project python ${CLAUDE_PLUGIN_ROOT}/scripts/prepare_review.py --ledger-record" in ledger
 
     def test_both_ledger_references_render(self):
         git_ref = gen.render_declined_ledger("git")
@@ -438,7 +440,7 @@ class TestVcsSeamsRendered:
         assert "- n: 10" in body               # p4-only auto-shelf cleanup step
         assert "- n: 11" in body               # p4 ledger-record step (after cleanup)
         assert "auto-created shelf" in body     # p4-only cleanup step content
-        assert "python3` interpreter" in body  # p4-only launch gotcha
+        assert "invoke through `uv run --no-project python`" in body  # p4-only launch gotcha
         assert "Branch: <branch>" not in body  # no git output header
 
 
