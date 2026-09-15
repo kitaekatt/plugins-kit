@@ -716,8 +716,15 @@ def _apply_p4_exclusion(root):
     return "added", "P4 exclusion added to %s" % ignore_path
 
 
-def _apply_git_file_exclusion(root, rule):
-    """Exclude a generated file from Git when ``root`` is a Git repository."""
+def _apply_git_file_exclusion(root, rule, header=_P4_GIT_EXCLUDE_HEADER):
+    """Exclude a generated file from Git when ``root`` is a Git repository.
+
+    ``rule`` is matched and check-ignored RELATIVE TO ``root``. ``header`` is
+    the comment line written above the rule in ``info/exclude``; it defaults to
+    the Perforce-ignore-file wording this module's own caller needs, so another
+    bootstrap check reusing this helper names what IT generates instead of
+    leaving a misleading comment in the user's repository.
+    """
     try:
         proc = _run_git(root, ["rev-parse", "--show-toplevel"])
     except (OSError, subprocess.SubprocessError):
@@ -756,7 +763,7 @@ def _apply_git_file_exclusion(root, rule):
         with open(exclude_path, "a", encoding="utf-8") as f:
             if existing and not existing.endswith("\n"):
                 f.write("\n")
-            f.write("%s\n%s\n" % (_P4_GIT_EXCLUDE_HEADER, rule))
+            f.write("%s\n%s\n" % (header, rule))
     except OSError as exc:
         return "error", "could not write %s: %s" % (exclude_path, exc)
 

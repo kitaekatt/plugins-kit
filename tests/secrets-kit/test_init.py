@@ -3,8 +3,9 @@
 1. It decides "is this repo already seeded?" from the REMOTE, so a machine
    whose clone predates someone else's seed cannot generate a second fleet
    identity and orphan every blob encrypted to the first.
-2. It is all-or-nothing. If the seed cannot be published, nothing is kept --
-   in particular no local identity naming a key the fleet has never seen.
+2. Before submission or after validated rejection, seed restores owned entry
+   state and preserves the cache. Uncertain publication retains encrypted
+   recovery evidence and refuses ordinary operations.
 
 Both are regressions from a real incident: a clone that had not fetched since
 before the repo was seeded reported "never seeded", init generated a second
@@ -190,9 +191,8 @@ def test_refuses_when_the_remote_is_already_seeded(seeding, capsys):
 def test_diverged_clone_over_a_seeded_remote_points_at_unlock(seeding, capsys):
     """The incident's aftermath: a local seed that never published.
 
-    Reporting only the git divergence would leave the user resolving branches.
-    The actionable fact is that the remote is seeded, so the local commit is
-    worthless and what this machine needs is `unlock`.
+    Cached remote identity evidence supports qualified unlock advice without
+    proving that local history is disposable. Divergence still refuses seed.
     """
     seeding.seed_remotely()
     (seeding.clone / "identity.age").write_text("ours", encoding="utf-8")
@@ -207,7 +207,7 @@ def test_diverged_clone_over_a_seeded_remote_points_at_unlock(seeding, capsys):
     assert not seeding.identity.exists()
 
 
-def test_rolls_back_when_the_seed_cannot_be_published(seeding, capsys, monkeypatch):
+def test_rolls_back_when_the_seed_cannot_be_published(seeding, capsys):
     """A seed that did not publish must leave no trace, above all no identity.
 
     Keeping it would be worse than failing: the next run would see
@@ -215,14 +215,10 @@ def test_rolls_back_when_the_seed_cannot_be_published(seeding, capsys, monkeypat
     unlock a key no other machine can ever produce.
     """
     from secrets_kit import repo as repo_mod
-    from secrets_kit import SecretsError
-
     before = repo_mod.head_sha(seeding.clone)
-
-    def refuse(*a, **k):
-        raise SecretsError("git push failed: rejected")
-
-    monkeypatch.setattr(repo_mod, "commit_and_push", refuse)
+    hook = seeding.remote / "hooks" / "pre-receive"
+    hook.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+    hook.chmod(0o700)
 
     assert seeding.cli.cmd_init(seeding.args) == 1
 

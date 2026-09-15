@@ -36,6 +36,35 @@ On exit 0, stdout is parsed as JSON. Exit 2 = blocking error (stderr fed to Clau
 
 > **plugins-kit note — bootstrap background mode.** The bootstrap engine writes output to a pending file, which the UserPromptSubmit hook reads and re-emits as its own stdout. Stop hooks do not support `hookSpecificOutput`, so UserPromptSubmit is used to inject `additionalContext` for Claude. (This wrinkle is also summarized inline in the root `CLAUDE.md`.)
 
+## Session environment: telling an attended session from an unattended one
+
+A hook process, and every child it spawns, inherits the session's environment. Two variables
+answer "is a human at the prompt", and only one of them is usable:
+
+| Session | `CLAUDE_CODE_SESSION_ATTENDED` | `CLAUDE_CODE_ENTRYPOINT` |
+|---|---|---|
+| interactive `claude` | `1` | `cli` |
+| `claude -p "..."` | `0` | `sdk-cli` |
+| `claude --bg "..."` | `0` | `cli` |
+
+Measured on Claude Code 2.1.273 (macOS) with scratch SessionStart and UserPromptSubmit hooks, run
+with every inherited `CLAUDE_*` variable stripped so the child could not copy the parent's values.
+The hooks saw exactly the variables a Bash-tool child sees.
+
+**Gate on `CLAUDE_CODE_SESSION_ATTENDED == "1"` and nothing else, failing closed** on unset, `0`,
+or any other value. `CLAUDE_CODE_ENTRYPOINT` stays `cli` for a background session, so an
+entrypoint-based check treats an unattended session as attended and fires a prompt nobody can
+answer. The binary computes the attended value from an internal predicate when it spawns a
+session rather than copying it in, and it recognizes many entrypoint values besides these
+(`sdk-ts`, `sdk-py`, `claude-vscode`, `remote`, `local-agent`, `github-action`, ...), which is the
+second reason not to enumerate them.
+
+`CLAUDE_CODE_SESSION_ID` carries the session id and is what a per-session marker file should be
+keyed on: the Python bootstrap engine takes no session-id argument, so the environment is the only
+place it can read one.
+
+bootstrap's profile prompt is the consumer of both (`bootstrap_lib/profiles.py::should_prompt`).
+
 ## Plugin Cache and Registry Layout
 
 Claude Code stores plugin data under `~/.claude/plugins/`:

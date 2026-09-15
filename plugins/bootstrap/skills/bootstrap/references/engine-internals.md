@@ -134,6 +134,84 @@ separate `bootstrap-stuck-fix` plugin (`scripts/repair_registry.py`), which has
 no prior version to be wedged on. See the delivery-path rule in the repo
 CLAUDE.md and the `update_lifecycle` fact in the bootstrap SKILL.md.
 
+### Step 3c2: bootstrap profile resolution
+
+Resolution and application happen together, at LOAD time, before Step 3c
+ever runs: `bootstrap_lib.engine._load_layered_manifests_ex` calls
+`bootstrap_lib.profiles.resolve_layers` while building the merged manifest --
+the function both the SessionStart lifecycle and `bootstrap run` call to load
+the four layered manifests. The manifest Step 3c's `_process_manifest` then
+processes already has the selected profile's chain overlaid onto it, so a
+profile can add or change `project_venv`/`project_npm` before Step 3d
+processes either section. `_load_layered_manifests` is a thin wrapper over
+`_load_layered_manifests_ex` that discards the profile state, kept so its
+existing callers and tests need no change.
+
+What runs here, immediately after Step 3c processes that already-resolved
+manifest, is the REPORTING: turning the `ProfileState` `_load_layered_manifests_ex`
+already computed into this pass's log entries and failures (see
+`_report_profile_state` below).
+
+`_load_layered_manifests_ex` keeps each layer's path and kind (rather than
+merging them itself, as the old `_load_layered_manifests` did) so
+`resolve_layers` can find and validate a `profile` selection and tell which
+file it came from. It returns `(effective_manifest, parse_errors,
+ProfileState)`; `profiles`/`profile` are stripped from `effective_manifest`
+for every `ProfileState.status`, so nothing downstream -- including the
+per-plugin phase -- can observe or act on them a second time.
+
+`_report_profile_state` turns the resolved `ProfileState` into this pass's
+log entries and failures: each declaration error becomes both an `action`
+entry and a `profile_invalid` failure (deliberately without
+`persist_across_sessions` -- an alert file bypasses both skip gates and would
+force a full pass every session fleet-wide until a hand-authored manifest is
+fixed); each warning (a `profile` key ignored outside the two local layers,
+or a selected name that is not declared) becomes a visible `action` entry;
+and an applied chain becomes one verbose-only `ok` entry. `bootstrap run`
+(`layered_bootstrap.run_layered_bootstrap`) reports the same state through its
+own `actions`/`checks`/`failures` lists and additionally prints `profile:
+none selected -- run 'bootstrap profile'` for `unselected`/`unknown` -- it
+never prompts, since there is no session to ask in.
+
+**Prompt gating.** A promptable status (`unselected` or `unknown`) may cause
+the SessionStart lifecycle to ask the user which profile to use, gated by
+`bootstrap_lib.profiles.should_prompt` on three things -- two read from the
+process environment, one from the marker directory on disk:
+`CLAUDE_CODE_SESSION_ATTENDED` must equal the string `"1"`
+(an interactive session; `--bg` and `-p` sessions report `"0"`, and an older
+Claude Code that never set the variable at all is a fourth, distinct case --
+see below), `CLAUDE_CODE_SESSION_ID` must be present and non-empty, and no
+marker for that session id (or a directory-wide marker younger than 10
+minutes, guarding two sessions starting together against a double prompt)
+may already exist under `<data_dir>/profile_prompts/`. `_profile_prompt_directive`
+is the pure query wrapping `should_prompt` plus `profiles.prompt_directive`
+(which embeds the AskUserQuestion payload as JSON and the exact `bootstrap.sh
+profile set <name>` commands to run on each answer); `_emit_pass_results`
+(Step 8) is the one caller that, having actually emitted a response carrying
+the directive, calls `profiles.mark_prompted` to write the marker --
+deliberately AFTER emission, so a crash between resolving and emitting never
+marks a prompt the user never saw. Markers older than 7 days
+(`MARKER_TTL_SECONDS`) are pruned on every `mark_prompted` call, bounding the
+directory without a separate sweep. When `CLAUDE_CODE_SESSION_ATTENDED` is
+absent from the environment entirely (rather than present and `"0"`),
+`_profile_attended_note` adds one quiet (verbose-only) log entry noting the
+prompt was skipped for that reason, scoped to the promptable statuses only --
+a project that never declared profiles is not noted every session for a
+signal that was never going to matter to it.
+
+**Documented limitation: a later pass in the same session can lose an
+unread directive.** The profile-prompt text rides in `additionalContext`
+alongside the rest of a pass's response, and every `emit_*` path writes
+`bootstrap_display.pending` with `_write_atomic` -- a plain overwrite, not the
+absent-only write some other pending-file producers use. If a second pass
+completes in the same session before the first pass's pending file has been
+read by a prompt (for example, two projects bootstrapping close together, or
+a manually triggered `bootstrap run` racing the background lifecycle pass),
+the second pass's `bootstrap_display.pending` replaces the first's, and an
+unread profile-prompt directive is lost along with it. The 10-minute
+directory-wide guard in `should_prompt` bounds how often this can recur for
+the same session, but does not prevent the loss on the pass it happens to.
+
 ### Step 3d3: `agent_skills_link` — Codex skill discovery link
 
 Runs once per pass, right after the layered `project_venv`/`project_npm`

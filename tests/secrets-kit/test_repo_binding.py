@@ -367,8 +367,12 @@ def test_single_complete_origin_value_preserves_legitimate_data(adding, monkeypa
     raw = json.loads(adding.config_path.read_text());raw['repo'] = value
     adding.config_path.write_text(json.dumps(raw))
     observed = _origin_reply(monkeypatch, adding, stdout=value.encode() + b'\0')
+    def publish(clone_dir, *, commit_oid, target_ref, declared_repo, binding_checked=False):
+        assert declared_repo == value and binding_checked is True
+        return repository.PublicationEvidence('confirmed', 'dummy controlled publication', commit_oid, target_ref)
+    monkeypatch.setattr(repository, '_publish_owned', publish)
     code, unused = _operation(adding, 'remove')
-    assert code == 0 and len(observed) == 1
+    assert code == 0 and len(observed) == 2
 
 
 def test_unrepresentable_declaration_is_comparison_inability(adding, monkeypatch, capsys):
@@ -403,7 +407,7 @@ def test_empty_profile_selection_stays_active_and_retires_owned_orphan(adding, m
     assert not (adding.plain / 'ha-token.txt').exists()
 
 
-def test_initial_authoring_clone_adds_no_binding_query(adding, monkeypatch):
+def test_initial_authoring_clone_checks_binding_once_before_publication(adding, monkeypatch):
     from test_sync_view import _birth_consumer, _birth_environment
     root, remote, data, calls = _birth_environment(adding, monkeypatch, 'empty', 'file-url', False)
     actual = repository.subprocess.run
@@ -416,7 +420,7 @@ def test_initial_authoring_clone_adds_no_binding_query(adding, monkeypatch):
     code = adding.cli.main(['init'])
     author_queries = list(queries)
     consumer = _birth_consumer(adding, root, remote)
-    assert code == 0 and author_queries == [] and consumer['failures'] == 0
+    assert code == 0 and author_queries == [BIND_QUERY] and consumer['failures'] == 0
 
 
 def test_binding_query_preserves_shared_git_environment_guards(adding, monkeypatch):

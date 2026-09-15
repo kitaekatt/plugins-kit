@@ -70,6 +70,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # only honored under the exact name records.py stats for. A second literal here
 # would keep working right up until one end was renamed.
 from bootstrap_lib.records import EVENTS_FILENAME, WATCH_FILENAME  # noqa: E402
+from bootstrap_lib import profiles as bootstrap_profiles  # noqa: E402
 
 
 # --------------------------------------------------------------------------
@@ -286,11 +287,24 @@ def cmd_run(args) -> int:
     # none of that is part of a terminal user/project manifest run.
     return _stream_until_exit(
         data_dir,
-        lambda: subprocess.Popen([
-            sys.executable, str(runner), "--plugin-root", plugin_root,
-            "--data-dir", data_dir, "--project-dir", str(Path.cwd()),
-            "--console",
-        ] + args.forward))
+        lambda: subprocess.Popen(_run_cmd(
+            runner, plugin_root, data_dir, Path.cwd(), args.forward)))
+
+
+def _run_cmd(runner, plugin_root, data_dir, project_dir, forward=()):
+    """The bootstrap_run.py argv, shared by `run` and `profile set`.
+
+    `profile set` passes its OWN resolved `project_dir` here rather than
+    `Path.cwd()` -- `cmd_run` converges the working directory unconditionally
+    (see the module docstring's F14 note), and a profile selection has to
+    converge the project it was written for, not wherever the shell happens
+    to be sitting.
+    """
+    return [
+        sys.executable, str(runner), "--plugin-root", plugin_root,
+        "--data-dir", data_dir, "--project-dir", str(project_dir),
+        "--console",
+    ] + list(forward)
 
 
 def _stream_until_exit(data_dir: str, launch) -> int:
@@ -535,6 +549,259 @@ def _render(line: str, verdict: bool = True):
 
 
 # --------------------------------------------------------------------------
+# profile
+# --------------------------------------------------------------------------
+
+class ProfileEngineMissing(RuntimeError):
+    """The installed bootstrap engine does not provide profile resolution."""
+
+
+def _load_profile_state(project_dir):
+    """Resolve the four layered manifests plus their profile state.
+
+    Calls ``bootstrap_lib.engine._load_layered_manifests_ex`` directly -- the
+    engine's own resolver, so the CLI and a live bootstrap pass can never
+    disagree about what is selected. Deliberately called with NO ``data_dir``:
+    a profile command resolves the same effective manifest a terminal
+    ``bootstrap run`` would, and ``layered_bootstrap.py`` calls this same
+    function with no ``data_dir`` for exactly that reason -- a terminal run
+    excludes the deprecated ``<data_dir>/user-bootstrap.json`` legacy layer.
+
+    Raises :class:`ProfileEngineMissing` -- never silently re-derives the
+    layer list -- when the installed bootstrap plugin predates this helper.
+    """
+    try:
+        from bootstrap_lib.engine import _load_layered_manifests_ex
+    except ImportError as exc:
+        raise ProfileEngineMissing(
+            "bootstrap profile requires bootstrap_lib.engine."
+            "_load_layered_manifests_ex (added in bootstrap 0.118.0); the "
+            "installed bootstrap plugin predates it -- update it and retry."
+        ) from exc
+    return _load_layered_manifests_ex(project_dir)
+
+
+def _user_local_profile_path():
+    home = os.environ.get("HOME") or os.path.expanduser("~")
+    return os.path.join(home, ".claude", "bootstrap.local.json")
+
+
+def _project_local_profile_path(project_dir):
+    return os.path.join(str(project_dir), ".claude", "bootstrap.local.json")
+
+
+def _profile_context(args):
+    """Resolve ``(data_dir, plugin_root, project_dir)`` for a profile command.
+
+    Refuses the same way ``cmd_run`` does when more than one marketplace has a
+    bootstrap data dir and none is named: a profile write must not silently
+    land beside the wrong marketplace's engine.
+    """
+    mkts = marketplaces()
+    if len(mkts) > 1 and not os.environ.get("BOOTSTRAP_MARKETPLACE"):
+        sys.stderr.write(
+            "bootstrap profile: more than one marketplace has a bootstrap data dir "
+            "(%s).\nSet BOOTSTRAP_MARKETPLACE=<name> to choose one.\n" % ", ".join(mkts))
+        return None
+    marketplace = mkts[0]
+    data_dir = plugin_data_dir(marketplace)
+    plugin_root = find_plugin_root(marketplace, args.plugin_root)
+    project_dir = Path(args.project_dir) if getattr(args, "project_dir", None) else Path.cwd()
+    return data_dir, plugin_root, project_dir
+
+
+def _profile_state_json(state):
+    mode = "switch" if state.selected else "first_run"
+    return {
+        "status": state.status,
+        "selected": state.selected,
+        "source": state.source,
+        "chain": list(state.chain),
+        "available": [
+            {"name": info.name, "description": info.description, "extends": list(info.extends)}
+            for info in state.available
+        ],
+        "warnings": list(state.warnings),
+        "errors": list(state.errors),
+        "write_target": state.write_target,
+        # Overflow (>MAX_PROFILE_OPTIONS profiles): the question then names no
+        # profile and offers only TYPED_CHOICE_LABEL, so the agent needs the
+        # full listing to print beforehand and a flag telling it to expect the
+        # typed-choice shape rather than one-option-per-profile. Both are
+        # "" / False under no_profiles, same as `question` being null there.
+        "profile_listing": bootstrap_profiles.render_profile_listing(state),
+        "needs_typed_choice": bootstrap_profiles.needs_typed_choice(state),
+        "question": bootstrap_profiles.build_question(state, mode),
+    }
+
+
+def _print_profile_status(state):
+    print("status: %s" % state.status)
+    if state.status == "no_profiles":
+        print("no profiles are declared in any layered bootstrap.json")
+        return
+    if state.selected:
+        print("selected: %s (from %s)" % (state.selected, state.source or "?"))
+    else:
+        print("selected: none chosen yet")
+    if state.chain:
+        print("applied chain: %s" % " -> ".join(state.chain))
+    # Rendered through the same helper the agent-facing prompt directive
+    # embeds (bootstrap_profiles.render_profile_listing), so this terminal
+    # output and that prompt cannot drift into two spellings of the same
+    # list. The 2-space indent is added here only for terminal readability --
+    # the helper itself returns unindented lines for embedding as-is.
+    listing = bootstrap_profiles.render_profile_listing(state)
+    if listing:
+        print("available profiles:")
+        for line in listing.split("\n"):
+            print("  %s" % line)
+    else:
+        print("available profiles: (none declared)")
+    for warning in state.warnings:
+        print("warning: %s" % warning)
+    for error in state.errors:
+        print("error: %s" % error)
+    print("write target: %s" % state.write_target)
+
+
+def cmd_profile(args) -> int:
+    if getattr(args, "profile_command", None) == "set":
+        return cmd_profile_set(args)
+    if getattr(args, "profile_command", None) == "clear":
+        return cmd_profile_clear(args)
+    return cmd_profile_status(args)
+
+
+def cmd_profile_status(args) -> int:
+    resolved = _profile_context(args)
+    if resolved is None:
+        return 2
+    _data_dir, _plugin_root, project_dir = resolved
+    try:
+        _manifest, _parse_errors, state = _load_profile_state(project_dir)
+    except ProfileEngineMissing as exc:
+        sys.stderr.write("%s\n" % exc)
+        return 1
+
+    if args.json:
+        print(json.dumps(_profile_state_json(state), indent=2, sort_keys=True))
+        return 0
+
+    _print_profile_status(state)
+    return 0
+
+
+def cmd_profile_set(args) -> int:
+    resolved = _profile_context(args)
+    if resolved is None:
+        return 2
+    data_dir, plugin_root, project_dir = resolved
+
+    # Lock check FIRST, before any read used to validate or any write: a pass
+    # holding the lock may be about to rewrite the very local file this
+    # command would write to (F11), so nothing is written while one is live.
+    info = holder(data_dir)
+    if info is not None:
+        sys.stderr.write(
+            "bootstrap profile set: a bootstrap pass is running (pid %s); "
+            "nothing was written. Retry after it finishes.\n" % info.get("pid"))
+        return 2
+
+    try:
+        _manifest, _parse_errors, state = _load_profile_state(project_dir)
+    except ProfileEngineMissing as exc:
+        sys.stderr.write("bootstrap profile set: %s\n" % exc)
+        return 1
+
+    name = args.name
+    if name != bootstrap_profiles.NONE_SELECTION:
+        declared = {p.name for p in state.available}
+        if state.status == "invalid" or name not in declared:
+            sys.stderr.write(
+                "bootstrap profile set: '%s' is not a declared profile "
+                "(available: %s).\n" % (name, ", ".join(sorted(declared)) or "none"))
+            return 1
+
+    if args.user:
+        target_path = _user_local_profile_path()
+    elif args.project:
+        target_path = _project_local_profile_path(project_dir)
+    else:
+        target_path = state.write_target
+
+    try:
+        bootstrap_profiles.write_selection(target_path, name)
+    except bootstrap_profiles.ProfileWriteError as exc:
+        sys.stderr.write("bootstrap profile set: %s\n" % exc)
+        return 1
+
+    if target_path == _project_local_profile_path(project_dir):
+        try:
+            detail = bootstrap_profiles.ensure_vcs_excluded(project_dir)
+        except bootstrap_profiles.ProfileWriteError as exc:
+            sys.stderr.write("bootstrap profile set: warning: %s\n" % exc)
+        else:
+            if detail:
+                print("git: %s" % detail)
+
+    print("profile selection written to %s" % target_path)
+
+    if not plugin_root:
+        sys.stderr.write(
+            "bootstrap profile set: selection written, but no bootstrap plugin tree "
+            "was found to converge it; run 'bootstrap run' manually.\n")
+        return 1
+
+    runner = Path(plugin_root) / "scripts" / "bootstrap_run.py"
+    print("Bootstrap engine: %s" % plugin_root)
+    sys.stdout.flush()
+    # An EXPLICIT project_dir, not Path.cwd() -- cmd_run's converge always
+    # targets the working directory (F14), which is wrong here when
+    # --project-dir named a different project than the shell is sitting in.
+    return _stream_until_exit(
+        data_dir,
+        lambda: subprocess.Popen(_run_cmd(runner, plugin_root, data_dir, project_dir)))
+
+
+def cmd_profile_clear(args) -> int:
+    resolved = _profile_context(args)
+    if resolved is None:
+        return 2
+    data_dir, _plugin_root, project_dir = resolved
+
+    info = holder(data_dir)
+    if info is not None:
+        sys.stderr.write(
+            "bootstrap profile clear: a bootstrap pass is running (pid %s); "
+            "nothing was written. Retry after it finishes.\n" % info.get("pid"))
+        return 2
+
+    if args.user:
+        target_path = _user_local_profile_path()
+    elif args.project:
+        target_path = _project_local_profile_path(project_dir)
+    else:
+        try:
+            _manifest, _parse_errors, state = _load_profile_state(project_dir)
+        except ProfileEngineMissing as exc:
+            sys.stderr.write("bootstrap profile clear: %s\n" % exc)
+            return 1
+        target_path = state.write_target
+
+    try:
+        bootstrap_profiles.write_selection(target_path, None)
+    except bootstrap_profiles.ProfileWriteError as exc:
+        sys.stderr.write("bootstrap profile clear: %s\n" % exc)
+        return 1
+
+    print("profile selection removed from %s" % target_path)
+    print("bootstrap asks again on the next bootstrap pass (a skipped cooldown "
+          "may defer that to a later session).")
+    return 0
+
+
+# --------------------------------------------------------------------------
 # install-hook
 # --------------------------------------------------------------------------
 
@@ -587,6 +854,57 @@ def main(argv=None) -> int:
                         "project in the working directory, with this "
                         "bootstrap's version as the minimum")
 
+    profile_parser = sub.add_parser(
+        "profile",
+        help="show the bootstrap profile selection, or switch it with "
+             "'set <name|none>' / 'clear'")
+    # SUPPRESS here too: `--json` is declared on BOTH this parser and the root
+    # `parser` above (for the unrelated bare `bootstrap --json` status
+    # probe), so `bootstrap --json profile ...` has the identical
+    # before-the-subcommand discard bug `--project-dir` had. A plain
+    # `default=False` would silently turn a preceding `--json` back off.
+    profile_parser.add_argument("--json", action="store_true",
+                                 default=argparse.SUPPRESS,
+                                 help="machine-readable status, plus the "
+                                      "AskUserQuestion payload for a switch")
+    profile_parser.add_argument("--project-dir", default=None,
+                                 help="project directory (default: the "
+                                      "working directory)")
+    # `default=argparse.SUPPRESS` on every subparser copy below, not
+    # `default=None`: argparse parses a subparser into the SAME namespace but
+    # then applies the subparser's OWN defaults, so a subparser-level
+    # `default=None` unconditionally overwrites whatever the parent parser
+    # (this parser, or `parser` above) already parsed for the same dest --
+    # silently discarding `--project-dir` (or `--json`) when given BEFORE the
+    # subcommand instead of after it. SUPPRESS means "only touch this dest if
+    # the flag is actually present here", which lets the value set by an
+    # outer parser survive. See _profile_context's getattr(..., None) below,
+    # which already tolerates the attribute being absent entirely.
+    profile_sub = profile_parser.add_subparsers(dest="profile_command")
+
+    set_parser = profile_sub.add_parser(
+        "set", help="select a profile (or 'none' for the base manifest)")
+    set_parser.add_argument("name", help="a declared profile name, or 'none'")
+    set_target = set_parser.add_mutually_exclusive_group()
+    set_target.add_argument("--user", action="store_true",
+                             help="write to ~/.claude/bootstrap.local.json")
+    set_target.add_argument("--project", action="store_true",
+                             help="write to <project>/.claude/bootstrap.local.json")
+    set_parser.add_argument("--project-dir", default=argparse.SUPPRESS,
+                             help="project directory (default: the working "
+                                  "directory)")
+
+    clear_parser = profile_sub.add_parser(
+        "clear", help="remove the profile selection")
+    clear_target = clear_parser.add_mutually_exclusive_group()
+    clear_target.add_argument("--user", action="store_true",
+                               help="clear from ~/.claude/bootstrap.local.json")
+    clear_target.add_argument("--project", action="store_true",
+                               help="clear from <project>/.claude/bootstrap.local.json")
+    clear_parser.add_argument("--project-dir", default=argparse.SUPPRESS,
+                               help="project directory (default: the working "
+                                    "directory)")
+
     args, extra = parser.parse_known_args(argv)
     if args.command == "install-hook":
         if extra:
@@ -595,6 +913,10 @@ def main(argv=None) -> int:
     if args.command in ("run", "reset"):
         args.forward = extra
         return cmd_run(args) if args.command == "run" else cmd_reset(args)
+    if args.command == "profile":
+        if extra:
+            parser.error("unrecognized arguments: %s" % " ".join(extra))
+        return cmd_profile(args)
     # Only `run` and `reset` forward anything, so an unknown flag anywhere
     # else is still an error rather than something silently swallowed.
     if extra:

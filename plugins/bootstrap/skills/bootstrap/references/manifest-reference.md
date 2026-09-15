@@ -438,6 +438,100 @@ manifest (below) has **no** `env_vars` section, and no `env.json` section
 touches PATH. This keeps a variable present on every pass where `bootstrap.json`
 runs, including passes where the env gate skips `env.json` entirely.
 
+## `profiles` / `profile` -- Named Manifest Bundles
+
+`profiles` (an object, keyed by profile name) declares named bundles of manifest
+content; `profile` (a string) selects one of them. Together they let a team ship
+several manifest shapes -- an "engineer" profile with a heavier toolchain, a
+"designer" profile without it -- from the same set of layered files, with each
+machine choosing which one applies.
+
+```json
+{
+  "profiles": {
+    "engineer": {
+      "description": "Full toolchain for engine and tools work.",
+      "tools": [{"name": "node"}]
+    },
+    "designer": {
+      "description": "Content tools only.",
+      "extends": ["base_tools"]
+    },
+    "base_tools": {
+      "tools": [{"name": "git"}]
+    }
+  }
+}
+```
+
+**Where `profiles` may be declared.** Any of the four layered `bootstrap.json` /
+`bootstrap.local.json` files. Entries deep-merge across layers by profile name,
+the same generic object deep-merge every other object-valued section gets -- a higher-priority layer can
+add fields to, or override fields of, a profile a lower layer already declared.
+
+**Profile name.** `^[a-z0-9][a-z0-9_-]{0,31}$` -- lower-case letters, digits,
+`-` or `_`, 1-32 characters. `none` is reserved (it means "the base manifest,
+no profile") and cannot name a profile.
+
+**A profile entry's fields:**
+
+| Field | Type | Meaning |
+|---|---|---|
+| `extends` | list of strings | Parent profile names, applied before this one |
+| `description` | string | Shown to the user when a profile choice is offered |
+| anything else | any manifest section | Overlaid onto the base manifest when this profile is applied |
+
+A profile body may not itself declare `profiles` or `profile` -- profiles do
+not nest, and a body that tries is a validation error.
+
+**Applying a profile.** The selected profile's `extends` chain is linearized
+depth-first, parents before the child, each name appearing once even when
+reached through more than one path (a diamond is applied once, not twice).
+Each member of the chain is then overlaid onto the merged base manifest, in
+chain order, using the identical merge semantics the four layers use (see
+Merge Semantics below) -- arrays union by identity key, objects deep-merge,
+scalars override. `profiles` and `profile` are stripped from the effective
+manifest regardless of outcome, so no later phase can see or act on them
+directly.
+
+**Where `profile` is honored.** Only in the two `bootstrap.local.json` files --
+`~/.claude/bootstrap.local.json` (user) and
+`<project>/.claude/bootstrap.local.json` (project, wins over user) -- because a
+selection is a per-machine choice. A `profile` key in `~/.claude/bootstrap.json`
+or `<project>/.claude/bootstrap.json` is ignored, with a visible warning naming
+the file that carried it: a committed, checked-in manifest must never decide a
+per-checkout choice. The reserved value `"none"` selects the base manifest
+explicitly and is never re-prompted.
+
+**Validation errors** (any one of these makes the whole `profiles` declaration
+unusable -- the base manifest still provisions, nothing from `profiles` is
+applied, and the error is reported):
+
+- an invalid profile name (does not match the name pattern, or is `none`)
+- a profile body that is not an object
+- a profile body that declares `profiles` or `profile`
+- `extends` that is not a list of strings
+- `extends` naming a profile that is not declared
+- `extends` naming the profile itself
+- an inheritance cycle among `extends` (reported as the path around it)
+- `profiles` present but not an object
+
+**The six resolution statuses**: `no_profiles`, `unselected`, `none`, `selected`, `unknown`,
+`invalid`. `no_profiles` applies whenever the merged `profiles` object is
+empty, regardless of what `profile` says -- a project that never adopted
+profiles is never warned about, prompted about, or failed for a stale
+`profile` key left in someone's local file.
+
+**Where the selection is written.** A new selection (via `bootstrap profile
+set`, see bootstrap-cli.md) is written beside the highest layer that declares
+`profiles`: if any project layer (`<project>/.claude/bootstrap.json` or its
+local sibling) declares `profiles`, the selection is written to
+`<project>/.claude/bootstrap.local.json`; otherwise it is written to
+`~/.claude/bootstrap.local.json`. A project-local write is also excluded from
+Git (an `info/exclude` rule, the same mechanism `agent_skills_link` uses for
+its own generated link), because it is a per-machine choice like every other
+`bootstrap.local.json` value.
+
 ## Variable Expansion
 
 Variable references are expanded by the engine from plugin context and config:
