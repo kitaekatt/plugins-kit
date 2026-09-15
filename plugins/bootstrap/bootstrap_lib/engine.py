@@ -888,7 +888,8 @@ def _main():
             "Migrate to ~/.claude/bootstrap.json (still processed this session)."
         )
 
-    layered_manifest, layered_parse_errors = _load_layered_manifests(args.project_dir, data_dir)
+    layered_manifest, layered_parse_errors, profile_state = _load_layered_manifests_ex(
+        args.project_dir, data_dir)
     for pe in layered_parse_errors:
         _append_detail(
             bootstrap_action_entries,
@@ -930,6 +931,14 @@ def _main():
         bootstrap_quiet_entries.extend(_reprefix(e, "config: ") for e in quiet_entries)
         if failures:
             all_failures.extend(failures)
+
+    # Step 3c2: Surface the resolved bootstrap profile (errors, warnings, an
+    # applied chain, and the attended-signal note) into this pass's entries
+    # and failures -- see _report_profile_state's docstring for why the note
+    # is folded in HERE rather than computed later at Step 8.
+    all_failures.extend(_report_profile_state(
+        profile_state, bootstrap_action_entries, bootstrap_ok_entries,
+        bootstrap_quiet_entries))
 
     # Step 3d: Process project_venv from layered manifest (needs --project-dir)
     project_venv_def = layered_manifest.get("project_venv") if layered_manifest else None
@@ -1295,47 +1304,21 @@ def _main():
     from . import tool_paths as _tool_paths
     _tool_paths.export_tool_env_vars(None)
 
-    # Step 8: Emit results
-    output_file = os.path.join(data_dir, "bootstrap_display.pending") if args.background else None
-    persistent_alert_path = os.path.join(data_dir, "bootstrap_alert.json")
-    has_persistent = any(f.get("persist_across_sessions") for f in all_failures)
-    persistent_output_file = persistent_alert_path if (args.background and has_persistent) else None
-
-    if all_failures:
-        emit_failure_response(
-            all_failures, current_os, display_content,
-            label=bootstrap_label, output_file=output_file,
-            persistent_output_file=persistent_output_file,
-            recorder=recorder,
-        )
-        # Clear this project's cooldown stamp so the next SessionStart re-runs
-        # bootstrap instead of silently throttling. The shell hook stamps the
-        # cooldown optimistically before invoking the engine; on failure we
-        # roll that back so out-of-band fixes (user runs winget themselves,
-        # restarts their IDE, edits config) are picked up on the next session
-        # rather than waiting out the throttle window.
-        _clear_project_cooldown(data_dir, args.project_dir)
-    else:
-        if display_content:
-            emit_success_response(
-                display_content, label=bootstrap_label, output_file=output_file,
-                recorder=recorder,
-            )
-        # else: nothing to show — silent exit (no file written in background mode)
-
-        # Re-stamp the cooldown after a clean pass. Bootstrap itself may have
-        # rewritten installed_plugins.json during the pass (plugin installs,
-        # ensure_registry_scope); the shell's registry-mtime bypass compares
-        # those files against the stamp written BEFORE the engine ran, so
-        # bootstrap-authored writes would re-arm a full pass on EVERY session.
-        # Refreshing the stamp keeps it newer than our own writes while leaving
-        # the bypass armed for genuine Claude-Code-authored registry changes
-        # (which land after this pass finishes).
-        _restamp_project_cooldown(data_dir, args.project_dir)
+    # Step 8: Emit results, threading the profile prompt through.
+    _emit_pass_results(
+        all_failures=all_failures, current_os=current_os,
+        display_content=display_content, bootstrap_label=bootstrap_label,
+        data_dir=data_dir, args=args, recorder=recorder,
+        profile_state=profile_state, plugin_root=plugin_root,
+    )
 
     # Clean up stale persistent alert file when no persistent failures remain.
     # This is what makes the alert disappear once the user fixes the underlying
-    # issue and the engine confirms the fix on a subsequent run.
+    # issue and the engine confirms the fix on a subsequent run. Recomputed
+    # (rather than returned from _emit_pass_results) because it is a pure
+    # function of all_failures/data_dir with no side effect of its own.
+    persistent_alert_path = os.path.join(data_dir, "bootstrap_alert.json")
+    has_persistent = any(f.get("persist_across_sessions") for f in all_failures)
     if not has_persistent:
         try:
             os.remove(persistent_alert_path)
@@ -2252,6 +2235,10 @@ def _load_enabled_refs(project_dir=None):
 def _load_layered_manifests(project_dir, data_dir=None):
     """Load and merge bootstrap manifests from user and project layers.
 
+    Thin wrapper over :func:`_load_layered_manifests_ex`, kept so existing
+    callers (and their tests) that only need the effective manifest and its
+    parse errors -- not the profile selection state -- stay unchanged.
+
     Priority (highest wins):
         4. <project>/.claude/bootstrap.local.json
         3. <project>/.claude/bootstrap.json
@@ -2263,55 +2250,264 @@ def _load_layered_manifests(project_dir, data_dir=None):
     {"path": <path>, "error": <message>} dicts for any layer that failed to load.
     Layers that fail to parse are skipped (the merge continues with the rest).
     """
-    from .manifest_merge import merge_manifests
+    manifest, parse_errors, _profile_state = _load_layered_manifests_ex(project_dir, data_dir)
+    return manifest, parse_errors
 
-    # Collect candidate paths in priority order (lowest first)
-    candidates = []
 
-    # Legacy user-bootstrap.json (lowest priority — deprecated)
-    if data_dir:
-        legacy = os.path.join(data_dir, "user-bootstrap.json")
-        candidates.append(legacy)
+def _read_manifest_layer(path, parse_errors):
+    """Parse one manifest layer file already known to exist.
 
-    # User-level (HOME is preferred, USERPROFILE is the Windows fallback)
+    Returns the parsed dict, or ``None`` with a ``parse_errors`` entry
+    appended when the file is unreadable, is not valid JSON, or does not
+    decode to a JSON object -- the three failure shapes bootstrap has always
+    distinguished for a layered manifest.
+    """
+    try:
+        with open(path, "r") as f:
+            layer = json.load(f)
+    except json.JSONDecodeError as e:
+        parse_errors.append({"path": path, "error": f"JSON parse error: {e}"})
+        return None
+    except OSError as e:
+        parse_errors.append({"path": path, "error": f"read error: {e}"})
+        return None
+    if not isinstance(layer, dict):
+        # Syntactically valid JSON that decodes to a non-mapping (a bare
+        # `[]` or `null`) -- same failure family as a parse error, since
+        # merge_manifests(dict, non-dict) would misbehave the same way
+        # `.get()` on a non-mapping manifest does in _bootstrap_single_plugin.
+        parse_errors.append({
+            "path": path,
+            "error": f"manifest is not a JSON object (top level is {type(layer).__name__})",
+        })
+        return None
+    return layer
+
+
+def _load_layered_manifests_ex(project_dir, data_dir=None):
+    """Load, merge, and apply the selected bootstrap profile over the layers.
+
+    Builds the same candidate layers ``_load_layered_manifests`` has always
+    used, but keeps each layer's PATH and KIND (rather than merging them
+    itself) so ``bootstrap_lib.profiles.resolve_layers`` can find and
+    validate a ``profile`` selection. A layer that EXISTS but fails to parse
+    is passed to ``resolve_layers`` as ``None`` -- profiles.py's rule 5 uses
+    that to mark the profile state ``invalid`` when the unparseable layer
+    could have held the selection -- while still producing the same
+    ``parse_errors`` entry a plain load has always reported. A layer that
+    does not exist at all is left out of the list entirely, matching the
+    original skip-if-absent behavior.
+
+    Returns ``(effective_manifest, parse_errors, ProfileState)``. ``profiles``
+    and ``profile`` are stripped from ``effective_manifest`` in every
+    ``ProfileState`` status (see ``resolve_layers``).
+    """
+    from . import profiles as _profiles
+
+    # HOME is preferred, USERPROFILE is the Windows fallback.
     home = os.environ.get("HOME") or os.path.expanduser("~")
     claude_home = os.path.join(home, ".claude")
-    candidates.append(os.path.join(claude_home, "bootstrap.json"))
-    candidates.append(os.path.join(claude_home, "bootstrap.local.json"))
 
-    # Project-level
-    if project_dir:
-        project_claude = os.path.join(project_dir, ".claude")
-        candidates.append(os.path.join(project_claude, "bootstrap.json"))
-        candidates.append(os.path.join(project_claude, "bootstrap.local.json"))
-
-    merged = {}
+    layers = []
     parse_errors = []
-    for path in candidates:
-        if not os.path.isfile(path):
-            continue
-        try:
-            with open(path, "r") as f:
-                layer = json.load(f)
-        except json.JSONDecodeError as e:
-            parse_errors.append({"path": path, "error": f"JSON parse error: {e}"})
-            continue
-        except OSError as e:
-            parse_errors.append({"path": path, "error": f"read error: {e}"})
-            continue
-        if not isinstance(layer, dict):
-            # Syntactically valid JSON that decodes to a non-mapping (a bare
-            # `[]` or `null`) -- same failure family as a parse error, since
-            # merge_manifests(dict, non-dict) would misbehave the same way
-            # `.get()` on a non-mapping manifest does in _bootstrap_single_plugin.
-            parse_errors.append({
-                "path": path,
-                "error": f"manifest is not a JSON object (top level is {type(layer).__name__})",
-            })
-            continue
-        merged = merge_manifests(merged, layer)
 
-    return merged, parse_errors
+    def _add_layer(path, kind):
+        if not os.path.isfile(path):
+            return
+        layers.append((path, kind, _read_manifest_layer(path, parse_errors)))
+
+    # Legacy user-bootstrap.json (lowest priority -- deprecated).
+    if data_dir:
+        _add_layer(os.path.join(data_dir, "user-bootstrap.json"), "legacy")
+
+    _add_layer(os.path.join(claude_home, "bootstrap.json"), "user")
+    _add_layer(os.path.join(claude_home, "bootstrap.local.json"), "user_local")
+
+    if project_dir:
+        project_claude = os.path.join(str(project_dir), ".claude")
+        _add_layer(os.path.join(project_claude, "bootstrap.json"), "project")
+        _add_layer(os.path.join(project_claude, "bootstrap.local.json"), "project_local")
+
+    effective, profile_state = _profiles.resolve_layers(
+        layers,
+        project_dir=str(project_dir) if project_dir else None,
+        home=home,
+    )
+    return effective, parse_errors, profile_state
+
+
+def _profile_prompt_directive(profile_state, marker_dir, run_cmd, env=None):
+    """The additionalContext text for a profile prompt this pass may emit.
+
+    "" when there is nothing to ask (profiles.should_prompt is the single
+    gate: a promptable status, an attended session with a session id, and no
+    guard marker -- see its docstring for the full rule). A pure query: the
+    caller still owns calling profiles.mark_prompted once a response
+    carrying this text is actually emitted, never before.
+    """
+    from . import profiles as _profiles
+    if env is None:
+        env = os.environ
+    if not _profiles.should_prompt(profile_state, env, marker_dir):
+        return ""
+    return _profiles.prompt_directive(profile_state, run_cmd)
+
+
+def _profile_attended_note(profile_state, env):
+    """Text for a quiet log entry when an older Claude Code sent no attended
+    signal at all during an otherwise promptable profile status, or None.
+
+    Scoped to PROMPTABLE_STATUSES: a project with no profiles (or one already
+    resolved) never would have prompted regardless of the attended signal, so
+    noting the signal's absence there would be noise on every session rather
+    than an explanation for a skipped prompt.
+    """
+    from . import profiles as _profiles
+    if profile_state.status not in _profiles.PROMPTABLE_STATUSES:
+        return None
+    if not _profiles.attended_signal_missing(env):
+        return None
+    return (
+        "profile: CLAUDE_CODE_SESSION_ATTENDED was not set at all (older "
+        "Claude Code) -- the profile prompt was skipped this pass"
+    )
+
+
+def _report_profile_state(profile_state, action_entries, ok_entries,
+                          quiet_entries, env=None):
+    """Turn a resolved ProfileState into log entries plus this pass's
+    profile-related failures.
+
+    ``profile_state.errors`` covers a bad ``profiles`` declaration (a bad
+    name, an unknown/self/cyclic ``extends``) -- NOT a JSON parse error, which
+    the caller's own parse_errors loop already reports as a manifest_parse
+    failure; reporting both here would be the same defect twice. Deliberately
+    WITHOUT ``persist_across_sessions`` (F12: an alert file bypasses both skip
+    gates and would force a full pass every session fleet-wide until a
+    hand-authored manifest is fixed). ``profile_state.warnings`` become
+    visible action entries. An applied chain gets one ok entry (verbose-only,
+    like every other ok entry).
+
+    The attended-signal note (see ``_profile_attended_note``) is appended to
+    ``quiet_entries`` HERE, at the same call site as the rest of the profile
+    state, rather than later at Step 8. ``bootstrap.log`` is built from
+    ``bootstrap_quiet_entries`` at Step 6 and the display sections at Step 7 --
+    both run before Step 8 -- so an append that late is recorded into the pass
+    record (a RecordingList mirrors every append regardless of timing) but
+    never reaches the log block a maintainer actually reads.
+
+    Returns the list of failure dicts for the caller to extend
+    ``all_failures`` with.
+    """
+    failures = []
+    for perr in profile_state.errors:
+        _append_detail(
+            action_entries, f"profile: {perr}",
+            display="profile: invalid declaration",
+        )
+        failures.append({
+            "type": "profile_invalid",
+            "message": perr,
+            "agent_msg": (
+                f"A declared bootstrap profile is invalid: {perr}. Fix the "
+                "'profiles' object in the bootstrap.json (or "
+                "bootstrap.local.json) that declares it, then ask the user "
+                "to type 'fix-all' to re-run bootstrap."
+            ),
+            "plugin": "bootstrap",
+        })
+    for pwarn in profile_state.warnings:
+        _append_detail(
+            action_entries, f"profile: {pwarn}",
+            display="profile: selection ignored",
+        )
+    if profile_state.status == "selected":
+        _append_detail(
+            ok_entries,
+            "profile: applied '%s' (chain: %s)" % (
+                profile_state.selected, " -> ".join(profile_state.chain)),
+            display="profile: applied",
+        )
+    attended_note = _profile_attended_note(profile_state, os.environ if env is None else env)
+    if attended_note:
+        _append_detail(
+            quiet_entries, attended_note,
+            display="profile: attended signal missing",
+        )
+    return failures
+
+
+def _emit_pass_results(*, all_failures, current_os, display_content,
+                       bootstrap_label, data_dir, args, recorder,
+                       profile_state, plugin_root):
+    """Step 8: emit this pass's result, threading the profile prompt through.
+
+    Computes the profile-prompt directive once (see
+    ``_profile_prompt_directive``) so every branch below -- failure, success,
+    or an otherwise silent pass -- can carry it, then calls
+    ``profiles.mark_prompted`` exactly once, and only AFTER the response
+    carrying it was actually emitted: marking first and crashing before
+    emitting would lose the prompt for the rest of the guard window with no
+    response having carried it. The directive never reaches
+    ``persistent_output_file`` -- see ``emit_failure_response``'s docstring.
+    """
+    output_file = os.path.join(data_dir, "bootstrap_display.pending") if args.background else None
+    persistent_alert_path = os.path.join(data_dir, "bootstrap_alert.json")
+    has_persistent = any(f.get("persist_across_sessions") for f in all_failures)
+    persistent_output_file = persistent_alert_path if (args.background and has_persistent) else None
+
+    profile_marker_dir = os.path.join(data_dir, "profile_prompts")
+    profile_run_cmd = os.path.join(plugin_root, "scripts", "bootstrap.sh")
+    extra_context = _profile_prompt_directive(
+        profile_state, profile_marker_dir, profile_run_cmd)
+
+    if all_failures:
+        emit_failure_response(
+            all_failures, current_os, display_content,
+            label=bootstrap_label, output_file=output_file,
+            persistent_output_file=persistent_output_file,
+            recorder=recorder,
+            extra_context=extra_context,
+        )
+        # Clear this project's cooldown stamp so the next SessionStart re-runs
+        # bootstrap instead of silently throttling. The shell hook stamps the
+        # cooldown optimistically before invoking the engine; on failure we
+        # roll that back so out-of-band fixes (user runs winget themselves,
+        # restarts their IDE, edits config) are picked up on the next session
+        # rather than waiting out the throttle window.
+        _clear_project_cooldown(data_dir, args.project_dir)
+    else:
+        if display_content:
+            emit_success_response(
+                display_content, label=bootstrap_label, output_file=output_file,
+                recorder=recorder,
+                extra_context=extra_context,
+            )
+        elif extra_context:
+            # An otherwise silent pass still carries a profile prompt: emit a
+            # success-shaped response with the directive as additionalContext
+            # only (see emit_success_response) rather than staying silent and
+            # losing the prompt for this session.
+            emit_success_response(
+                "", label=bootstrap_label, output_file=output_file,
+                recorder=recorder,
+                extra_context=extra_context,
+            )
+        # else: nothing to show -- silent exit (no file written in background mode)
+
+        # Re-stamp the cooldown after a clean pass. Bootstrap itself may have
+        # rewritten installed_plugins.json during the pass (plugin installs,
+        # ensure_registry_scope); the shell's registry-mtime bypass compares
+        # those files against the stamp written BEFORE the engine ran, so
+        # bootstrap-authored writes would re-arm a full pass on EVERY session.
+        # Refreshing the stamp keeps it newer than our own writes while leaving
+        # the bypass armed for genuine Claude-Code-authored registry changes
+        # (which land after this pass finishes).
+        _restamp_project_cooldown(data_dir, args.project_dir)
+
+    if extra_context:
+        from . import profiles as _profiles
+        _profiles.mark_prompted(os.environ, profile_marker_dir)
 
 
 def _activate_bootstrap_venv(data_dir):
@@ -7172,7 +7368,7 @@ def _join_user_msg(*parts):
 
 
 def emit_success_response(log_content, label="bootstrap", output_file=None,
-                          recorder=None):
+                          recorder=None, extra_context=""):
     """Emit hook JSON showing bootstrap log to user and agent.
 
     Reload/restart notices ride inside ``log_content`` as ordinary display
@@ -7180,6 +7376,15 @@ def emit_success_response(log_content, label="bootstrap", output_file=None,
     when to restart after a plugin update is the user's call, and an
     "ACTION REQUIRED -- surface this now" preamble made the session's Claude
     treat a routine update notice as urgent. See plugin-reload-lifecycle.md.
+
+    ``extra_context``, when given, is appended verbatim to
+    ``additionalContext`` only -- never to ``systemMessage``. It carries
+    content meant for Claude alone (currently the profile-prompt directive),
+    so an otherwise silent pass (``log_content == ""``) with a non-empty
+    ``extra_context`` still emits: additionalContext carries the directive,
+    and no ``systemMessage`` key is added (``_user_visible_log("")`` is
+    empty). This function is never called with a persistent_output_file, so
+    ``extra_context`` never reaches one.
     """
     if output_file:
         # Background mode: consumed by UserPromptSubmit hook.
@@ -7188,6 +7393,8 @@ def emit_success_response(log_content, label="bootstrap", output_file=None,
         # blocks, and a pass whose ONLY content was log-only shows the user
         # nothing at all rather than an empty header.
         body = f"{label} -> bootstrap complete:\n{log_content}"
+        if extra_context:
+            body = f"{body}\n\n{extra_context}"
         user_log = _user_visible_log(log_content)
         response = {
             "continue": True,
@@ -7207,13 +7414,16 @@ def emit_success_response(log_content, label="bootstrap", output_file=None,
         # the transport differ) -- see engine-internals.md's "Non-background
         # output ... has the same channel split and differs only in
         # hookEventName".
+        body = f"{label} -> bootstrap complete:\n{log_content}"
+        if extra_context:
+            body = f"{body}\n\n{extra_context}"
         user_log = _user_visible_log(log_content)
         response = {
             "continue": True,
             "suppressOutput": False,
             "hookSpecificOutput": {
                 "hookEventName": "SessionStart",
-                "additionalContext": f"{label} -> bootstrap complete:\n{log_content}",
+                "additionalContext": body,
             },
         }
         if user_log:
@@ -7694,7 +7904,7 @@ def _emit_unsupported_platform(message, data_dir, args, recorder=None):
 
 
 def _emit_focused(failure, label, output_file, persistent_output_file,
-                  recorder=None, log_content=None):
+                  recorder=None, log_content=None, extra_context=""):
     """Emit ONE failure's own messages as the whole response.
 
     Used when every failure shares a single remediation, so the numbered list
@@ -7712,6 +7922,11 @@ def _emit_focused(failure, label, output_file, persistent_output_file,
     threads them: a pass that both installs a plugin and queues an elevation
     aggregate must not lose the "restart to load it" notice just because it
     took the focused path.
+
+    ``extra_context`` (the profile-prompt directive) is appended to
+    ``additionalContext`` AFTER the persistent copy is written, so it never
+    reaches ``persistent_output_file`` -- a directive that must be re-asked
+    every session must not be baked into the file re-primed across sessions.
     """
     user_msg = failure.get("user_msg", failure.get("message", ""))
     agent_msg = failure.get("agent_msg", failure.get("message", ""))
@@ -7730,20 +7945,29 @@ def _emit_focused(failure, label, output_file, persistent_output_file,
         },
     }
     if output_file:
-        _write_atomic(output_file, json.dumps(response))
         if persistent_output_file:
             _write_atomic(persistent_output_file, json.dumps(response))
+        if extra_context:
+            response["hookSpecificOutput"]["additionalContext"] += f"\n\n{extra_context}"
+        _write_atomic(output_file, json.dumps(response))
     else:
+        if extra_context:
+            response["hookSpecificOutput"]["additionalContext"] += f"\n\n{extra_context}"
         print(json.dumps(response))
     _record_emit(recorder, "focused", response)
 
 
-def emit_failure_response(failures, current_os, log_content, label="bootstrap", output_file=None, persistent_output_file=None, recorder=None):
+def emit_failure_response(failures, current_os, log_content, label="bootstrap", output_file=None, persistent_output_file=None, recorder=None, extra_context=""):
     """Emit hook JSON with fix-all directives to stdout or file.
 
     If persistent_output_file is provided AND any failure is marked
     `persist_across_sessions`, the same JSON is also written to that path so
     subsequent sessions can re-prime bootstrap_display.pending from it.
+
+    ``extra_context`` (the profile-prompt directive) is appended to
+    ``additionalContext`` only, and only AFTER any persistent copy is
+    written, so it never survives into ``persistent_output_file`` -- see
+    ``_emit_focused`` for why that ordering matters.
     """
     agent_lines = [f"{label} -> Setup issues found. Fix in order:\n"]
 
@@ -7911,7 +8135,8 @@ def emit_failure_response(failures, current_os, log_content, label="bootstrap", 
 
     if focus is not None:
         _emit_focused(focus, label, output_file, persistent_output_file,
-                      recorder=recorder, log_content=log_content)
+                      recorder=recorder, log_content=log_content,
+                      extra_context=extra_context)
         return
 
     # General path: mixed failures.
@@ -7954,9 +8179,11 @@ def emit_failure_response(failures, current_os, log_content, label="bootstrap", 
                 "additionalContext": f"{label} -> bootstrap complete:\n{log_content}\n\n{agent_msg}",
             },
         }
-        _write_atomic(output_file, json.dumps(response))
         if persistent_output_file:
             _write_atomic(persistent_output_file, json.dumps(response))
+        if extra_context:
+            response["hookSpecificOutput"]["additionalContext"] += f"\n\n{extra_context}"
+        _write_atomic(output_file, json.dumps(response))
     else:
         # SessionStart hook: supports hookSpecificOutput with hookEventName.
         # Same body as the background branch above (only hookEventName and
@@ -7976,6 +8203,8 @@ def emit_failure_response(failures, current_os, log_content, label="bootstrap", 
                 "additionalContext": f"{label} -> bootstrap complete:\n{log_content}\n\n{agent_msg}",
             },
         }
+        if extra_context:
+            response["hookSpecificOutput"]["additionalContext"] += f"\n\n{extra_context}"
         print(json.dumps(response))
     _record_emit(recorder, "pending" if output_file else "stdout", response)
 

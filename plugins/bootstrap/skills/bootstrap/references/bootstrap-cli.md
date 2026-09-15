@@ -80,6 +80,65 @@ The CLI creates an `events.watch` marker while tailing and removes it afterwards
 The recorder retains console events in `bootstrap_events.jsonl`. Bare status
 attaches at the current end of the event stream without replaying older output.
 
+## The `profile` subcommands
+
+```bash
+bootstrap profile                    # show status, selection, chain, available
+bootstrap profile --json             # same, plus an AskUserQuestion `question`
+bootstrap profile --project-dir P    # resolve against project P, not the cwd
+bootstrap profile set <name|none>    # select a profile, or "none" for base only
+bootstrap profile set <name> --user     # write to ~/.claude/bootstrap.local.json
+bootstrap profile set <name> --project  # write to <project>/.claude/bootstrap.local.json
+bootstrap profile clear              # remove the selection
+bootstrap profile clear --user       # clear from the user-local file specifically
+bootstrap profile clear --project    # clear from the project-local file specifically
+```
+
+All three resolve state through the same engine function
+(`bootstrap_lib.engine._load_layered_manifests_ex`) a live bootstrap pass uses,
+so the CLI and the engine can never disagree about what is selected. `--json`
+on the bare form adds a `question` field -- the AskUserQuestion payload for the
+current status, `null` when the project declares no profiles at all -- so a
+caller can go straight from `bootstrap profile --json` to asking the user with
+no separate lookup.
+
+**`bootstrap profile` (status).** Reports `status`, the current `selected`
+name and its `source` file, the applied `chain`, every `available` profile
+with its `description` and `extends`, any `warnings` or `errors`, and the
+`write_target` a `set` with no `--user`/`--project` flag would use. Exit 0
+always -- a status report is not itself an error, even under `invalid` or
+`unknown`.
+
+**`bootstrap profile set <name|none>`.** Refuses immediately, before reading
+or writing anything, when a bootstrap pass currently holds the engine lock
+(exit 2) -- a running pass may be about to rewrite the very local file this
+command would write to. Otherwise: a named profile must be declared (exit 1,
+nothing written, if it is not -- `none` is always accepted, even when the
+current `profiles` declaration is `invalid`); the selection is written
+atomically to the resolved target (every other key in that file is
+preserved); a project-local write is additionally excluded from Git; and the
+command then launches a bootstrap pass against the same project to converge
+the new selection, streaming its output the same way `bootstrap run` does.
+Without `--user`/`--project`, the target is the state's own `write_target`
+(see manifest-reference.md). If no bootstrap plugin tree can be found to run
+the converging pass, the selection is still written and reported, but the
+command exits 1 and says to run `bootstrap run` manually.
+
+**`bootstrap profile clear`.** Same lock refusal (exit 2) as `set`. Removes
+the `profile` key from the resolved target file (or does nothing, exit 0, if
+the file does not declare one) and does **not** converge -- it prints that
+bootstrap asks again on the next bootstrap pass, which a skipped cooldown may
+defer to a later session.
+
+| Form | Exit code |
+|---|---|
+| `bootstrap profile` / `--json` | 0 |
+| `bootstrap profile set`, wrote and converged | 0 |
+| `bootstrap profile set`, unknown name, or write/converge failure | 1 |
+| `bootstrap profile set`/`clear`, a pass holds the lock | 2 |
+| `bootstrap profile set`/`clear`, ambiguous marketplace | 2 |
+| `bootstrap profile clear`, wrote (or nothing to remove) | 0 |
+
 ## Engine and data discovery
 
 `BOOTSTRAP_PLUGIN_ROOT` selects an explicit engine tree. Otherwise discovery

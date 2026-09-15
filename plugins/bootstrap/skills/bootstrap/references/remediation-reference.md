@@ -23,7 +23,7 @@ Every issue bootstrap surfaces resolves to **exactly one of two outcomes** -- th
   - **`action`** -- a physical or out-of-band act only the user can perform: press a device's button (e.g. a Hue bridge link button), restart the IDE, install a GUI app that has no unattended installer.
   - **`info`** -- a value only the user holds: an API key or secret, which machine in the fleet this is.
 
-  The `AskUserQuestion` prompt is always a single question with exactly two options, "Do nothing" leading (an absent-minded Enter changes nothing; bootstrap re-checks next session) and "Fix" second. Claude acts only on "Fix", and never re-prompts.
+  For these three reasons the `AskUserQuestion` prompt is a single question with exactly two options, "Do nothing" leading (an absent-minded Enter changes nothing; bootstrap re-checks next session) and "Fix" second. Claude acts only on "Fix", and never re-prompts.
 
 **How the outcome is decided:** `engine._ask_reason(failure)` returns `elevation` / `action` / `info` (-> ASK) or `None` (-> AUTO). An explicit `ask_reason` on the failure wins -- that is how a check or a plugin `custom_bootstrap` (via `ctx.add_failure(..., ask_reason="action")`) declares it needs the user. Otherwise the reason is derived from signals the engine already records (`install_state == "needs_elevation"`, `type in {python_stub, elevation_script}`, `manual_install`, `bootstrap_outdated`, `config`, ...). **Anything not marked is AUTO.**
 
@@ -35,6 +35,23 @@ Every issue bootstrap surfaces resolves to **exactly one of two outcomes** -- th
 - **Scope guard: a `json`/`ini` fix whose target is outside `~/.claude` ASKs.** These types' write target comes from the manifest and can point anywhere, including a shared or VCS-tracked project file. `engine._path_in_user_scope(_write_target(failure))` gates them: in-user-scope targets stay AUTO, out-of-scope targets ASK. This is the guard against the incident's actual harm -- an unattended edit to a Perforce-controlled shared file.
 
   The line the guard enforces is **shared vs. personal**, not literally *inside `~/.claude`*. `path` (shell-rc / PATH) edits write to `~/.bashrc` / `~/.zshrc` -- outside `~/.claude`, yet still AUTO -- because a personal dotfile is single-user, and bootstrap's PATH edit is idempotent (it checks for the entry first) and reversible (remove the line). Personal-scope, converging, credential-free clears the bar; only *shared / VCS-tracked / system* state must ASK. `pypi` and `sync_to_data` write to the plugin data dir under `~/.claude` by construction, so they never trip the guard. The `json`/`ini` gate exists precisely because those two are the AUTO types whose target the manifest can aim at an arbitrary -- possibly shared -- path.
+
+**A third ASK shape: the profile prompt.** The two-option "Do nothing" /
+"Fix" contract above covers a remediation the engine already knows how to
+carry out. Choosing a bootstrap profile is not that -- there is no single
+"Fix" action, there are N declared profiles plus the choice to defer -- so it
+surfaces with its own shape rather than being forced into the two-option one.
+It still sits on the same ladder, at the same worst rung (an `AskUserQuestion`
+the user must respond to), and it is gated the same way every ASK case is
+gated toward the cheaper end of the ladder: bootstrap only asks in an attended
+session (there is no one to answer in `--bg` or `-p`), and at most once per
+session. The options lead with a defer choice -- "Not now" on first offer,
+"Keep current" when switching an existing selection -- ahead of up to three
+named profiles, so an absent-minded response changes nothing and bootstrap
+asks again on a later pass rather than treating silence as a decision. Full
+mechanics (the env-var gate, the per-session marker, the directive text):
+[engine-internals.md](./engine-internals.md#step-3c2-bootstrap-profile-resolution)
+and the `profiles`/`profile` schema in [manifest-reference.md](./manifest-reference.md).
 
 **Authoring a `custom_bootstrap` failure:** if the fix is runnable without the user, give it a remediation and leave it AUTO. If it needs the user, set `ask_reason` to the matching category and a friendly `user_msg` (the plain-language line the user sees, e.g. "hue-kit wants to pair with your Hue bridge") plus an `agent_msg` describing the post-consent steps.
 

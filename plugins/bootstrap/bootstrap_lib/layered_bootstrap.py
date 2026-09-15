@@ -19,6 +19,11 @@ class LayeredBootstrapResult:
     checks: list[str] = field(default_factory=list)
     details: list[str] = field(default_factory=list)
     failures: list[dict[str, Any]] = field(default_factory=list)
+    #: The resolved bootstrap profile for this run, or None before it has
+    #: been computed (only when a manifest parse error short-circuits before
+    #: profile resolution can run -- resolve_layers is called even then, so
+    #: in practice this is only None if the caller never assigns it).
+    profile_status: str | None = None
 
 
 def run_layered_bootstrap(
@@ -36,14 +41,40 @@ def run_layered_bootstrap(
     )
     # No data_dir: the loader's deprecated user-bootstrap.json candidate is
     # deliberately excluded from a terminal run.
-    manifest, errors = engine._load_layered_manifests(str(project_dir))
+    manifest, errors, profile_state = engine._load_layered_manifests_ex(str(project_dir))
     for error in errors:
         result.failures.append({"type": "manifest_parse", **error,
                                 "message": error["error"]})
         result.actions.append(f"{error['path']}: PARSE FAILED - {error['error']}")
     # A broken override must not allow lower-priority requirements to run.
+    # Leaves profile_status at its default (None): a parse error keeps this
+    # early return exactly as it was before profiles existed, rather than
+    # reporting "unselected" over a manifest that never fully loaded.
     if errors:
         return result
+
+    result.profile_status = profile_state.status
+    # `bootstrap run` never prompts (there is no session to ask in): it only
+    # surfaces what resolve_layers already decided. state.errors is a bad
+    # `profiles` declaration (not a JSON parse error, handled above) and is a
+    # failure here too, same as the SessionStart lifecycle.
+    for perr in profile_state.errors:
+        result.failures.append({
+            "type": "profile_invalid",
+            "message": perr,
+            "agent_msg": f"A declared bootstrap profile is invalid: {perr}.",
+            "plugin": "bootstrap",
+        })
+        result.actions.append(f"profile: {perr}")
+    for pwarn in profile_state.warnings:
+        result.actions.append(f"profile: {pwarn}")
+    if profile_state.status == "selected":
+        result.checks.append(
+            "profile: applied '%s' (chain: %s)" % (
+                profile_state.selected, " -> ".join(profile_state.chain)))
+    elif profile_state.status in ("unselected", "unknown"):
+        result.actions.append(
+            "profile: none selected -- run 'bootstrap profile'")
 
     # Reuse provisioned YAML/config dependencies; this only adds existing
     # site-packages paths and performs no runtime installation or repair.

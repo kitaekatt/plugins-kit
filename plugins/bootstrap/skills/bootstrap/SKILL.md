@@ -402,6 +402,51 @@ reference_skill:
           (tilde-anchored), not plugin-rooted paths like the bootstrap.json `script` phase.
           A check that cannot run (timeout/no shell) is a persistent failure and the fix is
           never attempted; the re-check is authoritative with no trust exceptions.
+    - id: profiles
+      summary: >-
+        A profile is a named bundle of manifest content under a `profiles` object;
+        `profile` selects one, honored only from the two bootstrap.local.json layers.
+      keywords: [profile, profiles, bootstrap profile, engineer profile, designer profile, extends, profile inheritance, profile chain, profile selection, no_profiles, unselected, none profile, unknown profile, invalid profile, profile prompt, AskUserQuestion profile, switch profile, bootstrap profile set, bootstrap profile clear, attended session, once per session, profile status]
+      detail: |
+        `profiles` (an object keyed by profile name) may be declared in any of the
+        four layered bootstrap.json files and deep-merges across them like every
+        other section. Each entry may declare `extends` (a list of parent profile
+        names), a `description`, and any ordinary manifest section as its body; a
+        profile's body is overlaid onto the merged base manifest with the same merge
+        rules the layers themselves use. `extends` composes profiles: a child's
+        parents are applied first, in a fixed linearization, so a shared ancestor
+        reached through more than one path is applied exactly once.
+
+        `profile` (a string) SELECTS one declared profile, and is honored only when
+        it appears in ~/.claude/bootstrap.local.json or
+        <project>/.claude/bootstrap.local.json (project wins over user) -- both
+        per-machine files, because the selection is a per-machine choice. A
+        `profile` key in ~/.claude/bootstrap.json or
+        <project>/.claude/bootstrap.json is ignored, with a visible warning naming
+        the file: a committed manifest must never decide a per-checkout choice.
+
+        Six statuses describe the resolution: `no_profiles` (nothing declared
+        anywhere -- inert, never warned or prompted, whatever `profile` says),
+        `unselected` (profiles exist, none chosen), `none` (the base manifest was
+        chosen explicitly, via `profile: "none"`), `selected` (a declared profile,
+        plus everything it extends, is applied), `unknown` (the selected name is
+        not declared -- base manifest only, with a warning), and `invalid` (a
+        `profiles` declaration error, or an unparseable local layer that could have
+        held the selection -- base manifest only).
+
+        Bootstrap asks which profile to use only in an ATTENDED session (an
+        interactive session, not `--bg` or `-p`), and at most once per session --
+        the AskUserQuestion prompt lists "Not now" first, so doing nothing changes
+        nothing and bootstrap asks again on a later pass. Switching a profile, at
+        any time, changes only what a FUTURE bootstrap pass provisions; it never
+        uninstalls or removes anything a previous profile set up.
+      gotchas:
+        - A `profiles` declaration error (a bad name, a self/unknown/cyclic
+          `extends`) must be fixed in the manifest that declares it, but never
+          blocks the base manifest from provisioning.
+        - Switching profiles is additive going forward, not a reset -- tools, PATH
+          entries, and config a previous profile added stay in place even after a
+          different profile (or `none`) is selected.
     - id: merge_semantics
       summary: Layered configs merge by identity key for arrays, deep-merge for objects, override for scalars.
       keywords: [merge semantics, union, identity key, deep merge, path entries, scalar override]
@@ -416,8 +461,8 @@ reference_skill:
       keywords: [engine, session start, processing order, messages, remediation flow, update, harvest, restart, claude --resume, reset the cooldown, bootstrap command, is a pass running, run from the terminal]
       fact_ids: [message_outcomes, update_lifecycle, manual_convergence, bootstrap_cli_lever, cooldown_reset_request, remediation_phases]
     - name: config_files
-      keywords: [bootstrap.json, env.json, manifest, layers, merge, override, pin, auto-update, autoUpdate, plugin not updating, machines registry, env gate, personalization, install manual, opt-in plugin, action-triggered install]
-      fact_ids: [config_layers, env_manifest, marketplace_pinning, plugin_autoupdate_propagation, action_triggered_install, merge_semantics]
+      keywords: [bootstrap.json, env.json, manifest, layers, merge, override, pin, auto-update, autoUpdate, plugin not updating, machines registry, env gate, personalization, install manual, opt-in plugin, action-triggered install, profile, profiles, extends, profile selection]
+      fact_ids: [config_layers, env_manifest, marketplace_pinning, plugin_autoupdate_propagation, action_triggered_install, merge_semantics, profiles]
     - name: catalogues
       keywords: [conditions, categories, remediation table]
       fact_ids: [condition_categories]
@@ -432,23 +477,24 @@ reference_skill:
         delete-bootstrap.json opt-out.
     - id: bootstrap_cli
       path: references/bootstrap-cli.md
-      keywords: [bootstrap command, bootstrap CLI, bootstrap run, bootstrap --json, is a pass running, run bootstrap from a terminal, without starting Claude, tail a pass, attach to a running pass, stream the pass, events.watch, blocks, exit codes, BOOTSTRAP_MARKETPLACE, BOOTSTRAP_PLUGIN_ROOT, dev checkout, worktree, ~/.local/bin lever, command not found, cooldown exempt]
+      keywords: [bootstrap command, bootstrap CLI, bootstrap run, bootstrap --json, is a pass running, run bootstrap from a terminal, without starting Claude, tail a pass, attach to a running pass, stream the pass, events.watch, blocks, exit codes, BOOTSTRAP_MARKETPLACE, BOOTSTRAP_PLUGIN_ROOT, dev checkout, worktree, ~/.local/bin lever, command not found, cooldown exempt, bootstrap profile, profile set, profile clear, profile status]
       summary: >-
         The bootstrap PATH command -- four-layer run scope, busy-pass refusal,
         status following, cooldown behavior, exit codes, engine/data discovery,
-        and runtime prerequisites.
+        runtime prerequisites, and the `profile` / `profile set` / `profile clear`
+        subcommands.
     - id: engine_internals
       path: references/engine-internals.md
-      keywords: [engine, internals, processing order, self-setup, manifest phase, script phase, messaging protocol, execution flow, throttling, first run, clean install, phases, design principles, shared library, hybrid model, agent_skills_link, agent skills link, codex skills, .agents, .agents/skills, agents directory]
-      summary: Engine internals deep-dive.
+      keywords: [engine, internals, processing order, self-setup, manifest phase, script phase, messaging protocol, execution flow, throttling, first run, clean install, phases, design principles, shared library, hybrid model, agent_skills_link, agent skills link, codex skills, .agents, .agents/skills, agents directory, profile resolution, profile prompt gating, profile_prompts marker directory, CLAUDE_CODE_SESSION_ATTENDED, CLAUDE_CODE_SESSION_ID]
+      summary: Engine internals deep-dive, including where profile resolution sits in the pass and how the profile prompt is gated.
     - id: manifest_reference
       path: references/manifest-reference.md
-      keywords: [bootstrap.json, env.json, manifest, schema, fields, variable expansion, layered config, merge semantics, identity keys, example, marketplace pin, pin field, unpin workflow, machines registry, env gate, env_checks, symlinks, shell_rc, macos_defaults, macos_hotkeys, login_items, personalization, agent_skills_link, codex, .agents/skills]
-      summary: bootstrap.json manifest field reference (incl. the marketplace pin field, the unpin workflow, and the agent_skills_link Codex-discovery opt-out) PLUS the sibling env.json personalization manifest (machines registry, env gate, the five declarative features, and the env_checks contract).
+      keywords: [bootstrap.json, env.json, manifest, schema, fields, variable expansion, layered config, merge semantics, identity keys, example, marketplace pin, pin field, unpin workflow, machines registry, env gate, env_checks, symlinks, shell_rc, macos_defaults, macos_hotkeys, login_items, personalization, agent_skills_link, codex, .agents/skills, profile, profiles, extends, profile inheritance]
+      summary: bootstrap.json manifest field reference (incl. the marketplace pin field, the unpin workflow, the agent_skills_link Codex-discovery opt-out, and the `profiles`/`profile` schema) PLUS the sibling env.json personalization manifest (machines registry, env gate, the five declarative features, and the env_checks contract).
     - id: remediation_reference
       path: references/remediation-reference.md
-      keywords: [condition, remediation, check method, tool missing, venv broken, marketplace, plugin scope, fix-all, blocking, manual operation, pinned wrong commit, pin removed, unresolvable pin, agent_skills_link, agent skills link, codex, .agents, symlink, junction, p4ignore, info/exclude]
-      summary: Per-condition remediation reference (incl. the marketplace pin conditions and the agent_skills_link Git/P4/Windows-junction failure modes).
+      keywords: [condition, remediation, check method, tool missing, venv broken, marketplace, plugin scope, fix-all, blocking, manual operation, pinned wrong commit, pin removed, unresolvable pin, agent_skills_link, agent skills link, codex, .agents, symlink, junction, p4ignore, info/exclude, profile prompt, ASK rung]
+      summary: Per-condition remediation reference (incl. the marketplace pin conditions, the agent_skills_link Git/P4/Windows-junction failure modes, and where the profile prompt sits on the UX ladder).
     - id: deferred_requirements_ref
       path: references/deferred-requirements.md
       keywords: [deferred requirement, add_deferred_requirement, defer until needed, escalate vs defer, no fix-all, session-start nag, API key prompt, optional precondition, deferred_requirements.json, point of need, ask late, custom_bootstrap author guide]
@@ -494,3 +540,24 @@ reference_skill:
         install), and the cross-cutting rule that no mode supports version
         declaration.
 ```
+
+## Invoked with the argument `profile`
+
+When this skill is invoked with the argument `profile`, the user wants to choose
+or switch the project's bootstrap profile:
+
+1. Run `bash "<plugin root>/scripts/bootstrap.sh" profile --json` from the
+   project root. `<plugin root>` is this skill's plugin install path
+   (`${CLAUDE_PLUGIN_ROOT}`).
+2. If the result's `question` field is `null`, the project declares no
+   profiles at all -- tell the user so and stop; there is nothing to choose.
+3. Otherwise, put the `question` object to the user with the AskUserQuestion
+   tool exactly as given (its `header`, `options`, and `multiSelect` fields).
+4. If the user picks a named profile, run
+   `bash "<plugin root>/scripts/bootstrap.sh" profile set <name>` from the
+   project root. If the user picks "Keep current" or "Not now", run nothing.
+   Typing `none` (or choosing an "Other" entry of `none`) is a valid pick and
+   selects the base manifest explicitly; run `profile set none`.
+5. Report the command's outcome to the user, including its exit code if it
+   was non-zero -- `profile set` also converges the machine by running a
+   bootstrap pass, so its output covers both the write and that pass.
