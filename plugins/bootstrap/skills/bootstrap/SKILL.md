@@ -21,6 +21,7 @@ reference_skill:
       - env.json personalization schema, machine registry, and the env gate
       - remediable condition categories
       - configuration-file layering
+      - profiles: named manifest bundles, their selection, and the selection prompt
       - the auto-remediate / fix-all flow
     excludes:
       - non-bootstrap plugin debugging
