@@ -52,6 +52,14 @@ TWO_PROFILES = {
     }
 }
 INVALID_PROFILES = {"profiles": {"engineer": {"extends": ["ghost"]}}}
+FOUR_PROFILES = {
+    "profiles": {
+        "engineer": {"description": "Engineering tools."},
+        "designer": {"description": "Design tools."},
+        "writer": {"description": "Writing tools."},
+        "ops": {"description": "Ops tools.", "extends": ["engineer"]},
+    }
+}
 
 
 @pytest.fixture
@@ -165,6 +173,64 @@ class TestStatus:
         assert rc == 0
         payload = json.loads(capsys.readouterr().out)
         assert payload["question"]["options"][0]["label"] == "Keep current"
+
+    # -- overflow fields: profile_listing / needs_typed_choice --------------
+
+    def test_overflow_fields_under_no_profiles(self, env, capsys):
+        rc = cli.main(["profile", "--json", "--project-dir", str(env.project)])
+        assert rc == 0
+        payload = json.loads(capsys.readouterr().out)
+        assert payload["profile_listing"] == ""
+        assert payload["needs_typed_choice"] is False
+        assert payload["question"] is None
+
+    def test_overflow_fields_at_or_under_the_threshold(self, env, capsys):
+        _write_json(project_manifest(env), TWO_PROFILES)
+        rc = cli.main(["profile", "--json", "--project-dir", str(env.project)])
+        assert rc == 0
+        payload = json.loads(capsys.readouterr().out)
+        assert payload["needs_typed_choice"] is False
+        assert "engineer" in payload["profile_listing"]
+        assert "designer" in payload["profile_listing"]
+        # Below the threshold, the question still names each profile.
+        labels = [opt["label"] for opt in payload["question"]["options"]]
+        assert "engineer" in labels and "designer" in labels
+
+    def test_overflow_fields_past_the_threshold(self, env, capsys):
+        _write_json(project_manifest(env), FOUR_PROFILES)
+        rc = cli.main(["profile", "--json", "--project-dir", str(env.project)])
+        assert rc == 0
+        payload = json.loads(capsys.readouterr().out)
+        assert payload["needs_typed_choice"] is True
+        listing = payload["profile_listing"]
+        for name in ("engineer", "designer", "writer", "ops"):
+            assert name in listing
+        assert "ops (extends engineer)" in listing
+        # Past the threshold the question names no profile directly -- only
+        # the lead option and the typed-choice label.
+        labels = [opt["label"] for opt in payload["question"]["options"]]
+        assert labels == ["Not now", bootstrap_profiles.TYPED_CHOICE_LABEL]
+
+    def test_human_output_uses_the_shared_listing_helper(self, env, monkeypatch, capsys):
+        """Pins the reuse, not just the resulting text.
+
+        A future edit that inlines its own rendering again -- rather than
+        calling `render_profile_listing` -- must show up here, not just agree
+        with the JSON path by coincidence.
+        """
+        _write_json(project_manifest(env), ONE_PROFILE)
+        calls = []
+        real = bootstrap_profiles.render_profile_listing
+
+        def spy(state):
+            calls.append(state.status)
+            return real(state)
+
+        monkeypatch.setattr(cli.bootstrap_profiles, "render_profile_listing", spy)
+        rc = cli.main(["profile", "--project-dir", str(env.project)])
+        assert rc == 0
+        assert calls == ["unselected"]
+        assert "engineer" in capsys.readouterr().out
 
 
 # --------------------------------------------------------------------------

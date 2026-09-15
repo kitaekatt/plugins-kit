@@ -46,9 +46,12 @@ the user must respond to), and it is gated the same way every ASK case is
 gated toward the cheaper end of the ladder: bootstrap only asks in an attended
 session (there is no one to answer in `--bg` or `-p`), and at most once per
 session. The options lead with a defer choice -- "Not now" on first offer,
-"Keep current" when switching an existing selection -- ahead of up to three
-named profiles, so an absent-minded response changes nothing and bootstrap
-asks again on a later pass rather than treating silence as a decision. Full
+"Keep current" when switching an existing selection -- so an absent-minded
+response changes nothing and bootstrap asks again on a later pass rather than
+treating silence as a decision. With three or fewer declared profiles, one
+named option follows the lead choice per profile; with more than three, the
+question names none of them and offers a single typed-choice option instead,
+after the full list has been printed to the user as plain text. Full
 mechanics (the env-var gate, the per-session marker, the directive text):
 [engine-internals.md](./engine-internals.md#step-3c2-bootstrap-profile-resolution)
 and the `profiles`/`profile` schema in [manifest-reference.md](./manifest-reference.md).

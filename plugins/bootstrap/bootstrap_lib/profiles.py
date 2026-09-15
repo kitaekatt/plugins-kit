@@ -61,10 +61,17 @@ PROFILE_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}$")
 PROMPTABLE_STATUSES = ("unselected", "unknown")
 
 #: AskUserQuestion shows a small option set; one slot is spent on the leading
-#: defer/keep option, so at most three profiles are offered directly and the
-#: rest are named in the question text (D10).
+#: defer/keep option, so at most three profiles are offered directly. Past that
+#: the options collapse to the lead plus one "type the name" option and the
+#: profiles are printed to the user as an ordinary chat list instead (D10) --
+#: a list the agent prints reads better than a name crammed into an option
+#: label, and it can carry each profile's parents and description in full.
 MAX_PROFILE_OPTIONS = 3
 QUESTION_HEADER = "Profile"
+
+#: Label of the option that sends the user to Other when the profiles do not
+#: fit as options.
+TYPED_CHOICE_LABEL = "Type a profile name"
 
 #: Descriptions are sanitized before they reach a question. The cap is a hard
 #: truncation with no ellipsis: an ellipsis is decoration that costs three of
@@ -463,12 +470,58 @@ def sanitize_description(text, limit=DESCRIPTION_MAX):
     return " ".join("".join(chars).split())[:limit]
 
 
+def needs_typed_choice(state):
+    """True when there are too many profiles to offer one option each.
+
+    The threshold is read off ``available`` rather than off the options a
+    particular mode would show, so the user meets the same shape of question
+    whether they are choosing for the first time or switching.
+    """
+    return (
+        state.status != "no_profiles"
+        and len(state.available) > MAX_PROFILE_OPTIONS
+    )
+
+
+def render_profile_listing(state):
+    """Every available profile as plain text, one per line.
+
+    Shape, with both optional parts present::
+
+        engineer (extends base, tools) -- Engineering machine setup.
+
+    The name is always present; ``(extends ...)`` appears only when the profile
+    declares parents, and the description only when it has one -- sanitized
+    exactly as an option description is, because it reaches the user through
+    the same untrusted route.
+
+    Returns ``""`` when nothing is declared. Two callers need this listing --
+    the prompt directive embeds it for the agent to print, and the CLI's
+    ``--json`` payload carries it -- so it is rendered once, here.
+    """
+    lines = []
+    for info in state.available:
+        line = info.name
+        if info.extends:
+            line += " (extends %s)" % ", ".join(info.extends)
+        description = sanitize_description(info.description)
+        if description:
+            line += " -- %s" % description
+        lines.append(line)
+    return "\n".join(lines)
+
+
 def build_question(state, mode="first_run"):
     """The AskUserQuestion payload for a profile choice, or None.
 
     ``None`` under ``no_profiles``: there is nothing to ask. ``mode`` is
     ``first_run`` (lead option defers) or ``switch`` (lead option keeps the
     current selection).
+
+    Past :data:`MAX_PROFILE_OPTIONS` profiles the payload carries exactly two
+    options -- the lead one and :data:`TYPED_CHOICE_LABEL` -- and names no
+    profile in the question text; the full list is printed to the user
+    beforehand (see :func:`render_profile_listing`).
     """
     if state.status == "no_profiles":
         return None
@@ -486,21 +539,37 @@ def build_question(state, mode="first_run"):
         }
         candidates = list(state.available)
 
-    shown = candidates[:MAX_PROFILE_OPTIONS]
+    typed_choice = needs_typed_choice(state)
     options = [lead]
-    for info in shown:
+    if typed_choice:
         options.append({
-            "label": info.name,
-            "description": sanitize_description(info.description)
-            or "Apply the '%s' profile." % info.name,
+            "label": TYPED_CHOICE_LABEL,
+            "description": _typed_choice_description(candidates, state),
         })
+    else:
+        for info in candidates[:MAX_PROFILE_OPTIONS]:
+            options.append({
+                "label": info.name,
+                "description": sanitize_description(info.description)
+                or "Apply the '%s' profile." % info.name,
+            })
 
     return {
-        "question": _question_text(state, mode, candidates, shown),
+        "question": _question_text(mode, typed_choice),
         "header": QUESTION_HEADER,
         "multiSelect": False,
         "options": options,
     }
+
+
+def _typed_choice_description(candidates, state):
+    """Point the user at Other, with a real profile name as the example."""
+    pool = candidates or list(state.available)
+    example = pool[0].name if pool else NONE_SELECTION
+    return (
+        "Pick Other and type a name from the list, for example '%s', or "
+        "'%s' for the base manifest." % (example, NONE_SELECTION)
+    )
 
 
 def _keep_current_description(state):
@@ -511,7 +580,7 @@ def _keep_current_description(state):
     return "Leave the selection as it is."
 
 
-def _question_text(state, mode, candidates, shown):
+def _question_text(mode, typed_choice):
     if mode == "switch":
         lines = ["Which bootstrap profile should this project use?"]
     else:
@@ -519,10 +588,10 @@ def _question_text(state, mode, candidates, shown):
             "This project declares bootstrap profiles. Which one should "
             "bootstrap apply?"
         ]
-    if len(candidates) > len(shown):
-        lines.append(
-            "All profiles: %s." % ", ".join(info.name for info in candidates)
-        )
+    if typed_choice:
+        # No enumeration here: the profiles were printed above, in full, with
+        # room for their parents and descriptions.
+        lines.append("The available profiles are listed above.")
     lines.append(
         "Type a profile name, or 'none' for the base manifest with no profile, "
         "into Other."
@@ -541,20 +610,28 @@ def prompt_directive(state, run_cmd):
     question = build_question(state, "first_run")
     if question is None:
         return ""
+    listing_step = ""
+    if needs_typed_choice(state):
+        listing_step = (
+            " More profiles are declared than fit as options, so print this "
+            "list to the user first, as an ordinary chat message with one "
+            "profile per line:\n%s\n" % render_profile_listing(state)
+        )
     return (
         "Bootstrap found profile definitions for this project and no profile is "
-        "selected. Ask the user with the AskUserQuestion tool, using exactly "
+        "selected.%s Ask the user with the AskUserQuestion tool, using exactly "
         "this question: %s\n"
-        'If the user picks a profile name, run `bash "%s" profile set <name>` '
-        "FROM THE PROJECT ROOT (the manifests bootstrap reads are resolved from "
-        "the working directory). If the user asks for the base manifest, run "
+        'If the user picks or types a profile name, run `bash "%s" profile set '
+        "<name>` FROM THE PROJECT ROOT (the manifests bootstrap reads are "
+        "resolved from the working directory). If the user asks for the base "
+        "manifest, run "
         '`bash "%s" profile set none`, which records that choice and stops this '
         'prompt. On "Not now", do nothing further and do not ask again this '
         "session; bootstrap asks again on a later pass. Tell the user they can "
         "change the selection at any time with /bootstrap profile -- switching "
         "changes what bootstrap provisions from the next pass on and uninstalls "
         "nothing."
-        % (json.dumps(question, sort_keys=True), run_cmd, run_cmd)
+        % (listing_step, json.dumps(question, sort_keys=True), run_cmd, run_cmd)
     )
 
 

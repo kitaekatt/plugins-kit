@@ -624,6 +624,13 @@ def _profile_state_json(state):
         "warnings": list(state.warnings),
         "errors": list(state.errors),
         "write_target": state.write_target,
+        # Overflow (>MAX_PROFILE_OPTIONS profiles): the question then names no
+        # profile and offers only TYPED_CHOICE_LABEL, so the agent needs the
+        # full listing to print beforehand and a flag telling it to expect the
+        # typed-choice shape rather than one-option-per-profile. Both are
+        # "" / False under no_profiles, same as `question` being null there.
+        "profile_listing": bootstrap_profiles.render_profile_listing(state),
+        "needs_typed_choice": bootstrap_profiles.needs_typed_choice(state),
         "question": bootstrap_profiles.build_question(state, mode),
     }
 
@@ -639,12 +646,16 @@ def _print_profile_status(state):
         print("selected: none chosen yet")
     if state.chain:
         print("applied chain: %s" % " -> ".join(state.chain))
-    if state.available:
+    # Rendered through the same helper the agent-facing prompt directive
+    # embeds (bootstrap_profiles.render_profile_listing), so this terminal
+    # output and that prompt cannot drift into two spellings of the same
+    # list. The 2-space indent is added here only for terminal readability --
+    # the helper itself returns unindented lines for embedding as-is.
+    listing = bootstrap_profiles.render_profile_listing(state)
+    if listing:
         print("available profiles:")
-        for info in state.available:
-            extends = (" extends %s" % ", ".join(info.extends)) if info.extends else ""
-            description = (" -- %s" % info.description) if info.description else ""
-            print("  %s%s%s" % (info.name, extends, description))
+        for line in listing.split("\n"):
+            print("  %s" % line)
     else:
         print("available profiles: (none declared)")
     for warning in state.warnings:

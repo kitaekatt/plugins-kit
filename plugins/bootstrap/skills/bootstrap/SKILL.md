@@ -406,7 +406,7 @@ reference_skill:
       summary: >-
         A profile is a named bundle of manifest content under a `profiles` object;
         `profile` selects one, honored only from the two bootstrap.local.json layers.
-      keywords: [profile, profiles, bootstrap profile, engineer profile, designer profile, extends, profile inheritance, profile chain, profile selection, no_profiles, unselected, none profile, unknown profile, invalid profile, profile prompt, AskUserQuestion profile, switch profile, bootstrap profile set, bootstrap profile clear, attended session, once per session, profile status]
+      keywords: [profile, profiles, bootstrap profile, engineer profile, designer profile, extends, profile inheritance, profile chain, profile selection, no_profiles, unselected, none profile, unknown profile, invalid profile, profile prompt, AskUserQuestion profile, switch profile, bootstrap profile set, bootstrap profile clear, attended session, once per session, profile status, needs_typed_choice, profile_listing, typed choice, too many profiles]
       detail: |
         `profiles` (an object keyed by profile name) may be declared in any of the
         four layered bootstrap.json files and deep-merges across them like every
@@ -437,9 +437,12 @@ reference_skill:
         Bootstrap asks which profile to use only in an ATTENDED session (an
         interactive session, not `--bg` or `-p`), and at most once per session --
         the AskUserQuestion prompt lists "Not now" first, so doing nothing changes
-        nothing and bootstrap asks again on a later pass. Switching a profile, at
-        any time, changes only what a FUTURE bootstrap pass provisions; it never
-        uninstalls or removes anything a previous profile set up.
+        nothing and bootstrap asks again on a later pass. With more than three
+        declared profiles, the question names none of them and instead offers a
+        typed-choice option; the full list is printed to the user beforehand.
+        Switching a profile, at any time, changes only what a FUTURE bootstrap
+        pass provisions; it never uninstalls or removes anything a previous
+        profile set up.
       gotchas:
         - A `profiles` declaration error (a bad name, a self/unknown/cyclic
           `extends`) must be fixed in the manifest that declares it, but never
@@ -493,7 +496,7 @@ reference_skill:
       summary: bootstrap.json manifest field reference (incl. the marketplace pin field, the unpin workflow, the agent_skills_link Codex-discovery opt-out, and the `profiles`/`profile` schema) PLUS the sibling env.json personalization manifest (machines registry, env gate, the five declarative features, and the env_checks contract).
     - id: remediation_reference
       path: references/remediation-reference.md
-      keywords: [condition, remediation, check method, tool missing, venv broken, marketplace, plugin scope, fix-all, blocking, manual operation, pinned wrong commit, pin removed, unresolvable pin, agent_skills_link, agent skills link, codex, .agents, symlink, junction, p4ignore, info/exclude, profile prompt, ASK rung]
+      keywords: [condition, remediation, check method, tool missing, venv broken, marketplace, plugin scope, fix-all, blocking, manual operation, pinned wrong commit, pin removed, unresolvable pin, agent_skills_link, agent skills link, codex, .agents, symlink, junction, p4ignore, info/exclude, profile prompt, ASK rung, typed choice, profile listing, too many profiles]
       summary: Per-condition remediation reference (incl. the marketplace pin conditions, the agent_skills_link Git/P4/Windows-junction failure modes, and where the profile prompt sits on the UX ladder).
     - id: deferred_requirements_ref
       path: references/deferred-requirements.md
@@ -551,13 +554,17 @@ or switch the project's bootstrap profile:
    (`${CLAUDE_PLUGIN_ROOT}`).
 2. If the result's `question` field is `null`, the project declares no
    profiles at all -- tell the user so and stop; there is nothing to choose.
-3. Otherwise, put the `question` object to the user with the AskUserQuestion
-   tool exactly as given (its `header`, `options`, and `multiSelect` fields).
-4. If the user picks a named profile, run
-   `bash "<plugin root>/scripts/bootstrap.sh" profile set <name>` from the
-   project root. If the user picks "Keep current" or "Not now", run nothing.
-   Typing `none` (or choosing an "Other" entry of `none`) is a valid pick and
-   selects the base manifest explicitly; run `profile set none`.
+3. If `needs_typed_choice` is `true`, first print `profile_listing` to the
+   user as an ordinary chat message, one profile per line, exactly as given
+   -- there are too many profiles to offer one option each, so the question
+   itself names none of them. Then, in both cases, put the `question` object
+   to the user with the AskUserQuestion tool exactly as given (its `header`,
+   `options`, and `multiSelect` fields).
+4. If the user picks (or, under `needs_typed_choice`, types) a profile name,
+   run `bash "<plugin root>/scripts/bootstrap.sh" profile set <name>` from
+   the project root. If the user picks "Keep current" or "Not now", run
+   nothing. Typing `none` is a valid answer either way and selects the base
+   manifest explicitly; run `profile set none`.
 5. Report the command's outcome to the user, including its exit code if it
    was non-zero -- `profile set` also converges the machine by running a
    bootstrap pass, so its output covers both the write and that pass.
