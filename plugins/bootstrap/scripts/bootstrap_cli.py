@@ -858,12 +858,28 @@ def main(argv=None) -> int:
         "profile",
         help="show the bootstrap profile selection, or switch it with "
              "'set <name|none>' / 'clear'")
+    # SUPPRESS here too: `--json` is declared on BOTH this parser and the root
+    # `parser` above (for the unrelated bare `bootstrap --json` status
+    # probe), so `bootstrap --json profile ...` has the identical
+    # before-the-subcommand discard bug `--project-dir` had. A plain
+    # `default=False` would silently turn a preceding `--json` back off.
     profile_parser.add_argument("--json", action="store_true",
+                                 default=argparse.SUPPRESS,
                                  help="machine-readable status, plus the "
                                       "AskUserQuestion payload for a switch")
     profile_parser.add_argument("--project-dir", default=None,
                                  help="project directory (default: the "
                                       "working directory)")
+    # `default=argparse.SUPPRESS` on every subparser copy below, not
+    # `default=None`: argparse parses a subparser into the SAME namespace but
+    # then applies the subparser's OWN defaults, so a subparser-level
+    # `default=None` unconditionally overwrites whatever the parent parser
+    # (this parser, or `parser` above) already parsed for the same dest --
+    # silently discarding `--project-dir` (or `--json`) when given BEFORE the
+    # subcommand instead of after it. SUPPRESS means "only touch this dest if
+    # the flag is actually present here", which lets the value set by an
+    # outer parser survive. See _profile_context's getattr(..., None) below,
+    # which already tolerates the attribute being absent entirely.
     profile_sub = profile_parser.add_subparsers(dest="profile_command")
 
     set_parser = profile_sub.add_parser(
@@ -874,7 +890,7 @@ def main(argv=None) -> int:
                              help="write to ~/.claude/bootstrap.local.json")
     set_target.add_argument("--project", action="store_true",
                              help="write to <project>/.claude/bootstrap.local.json")
-    set_parser.add_argument("--project-dir", default=None,
+    set_parser.add_argument("--project-dir", default=argparse.SUPPRESS,
                              help="project directory (default: the working "
                                   "directory)")
 
@@ -885,7 +901,7 @@ def main(argv=None) -> int:
                                help="clear from ~/.claude/bootstrap.local.json")
     clear_target.add_argument("--project", action="store_true",
                                help="clear from <project>/.claude/bootstrap.local.json")
-    clear_parser.add_argument("--project-dir", default=None,
+    clear_parser.add_argument("--project-dir", default=argparse.SUPPRESS,
                                help="project directory (default: the working "
                                     "directory)")
 

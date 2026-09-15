@@ -559,8 +559,9 @@ or switch the project's bootstrap profile:
    user as an ordinary chat message, one profile per line, exactly as given
    -- there are too many profiles to offer one option each, so the question
    itself names none of them. Then, in both cases, put the `question` object
-   to the user with the AskUserQuestion tool exactly as given (its `header`,
-   `options`, and `multiSelect` fields).
+   to the user with the AskUserQuestion tool exactly as given (its `question`,
+   `header`, `options`, and `multiSelect` fields -- `question` holds the
+   question text itself).
 4. If the user picks (or, under `needs_typed_choice`, types) a profile name,
    run `bash "<plugin root>/scripts/bootstrap.sh" profile set <name>` from
    the project root. If the user picks "Keep current" or "Not now", run

@@ -495,10 +495,10 @@ manifest regardless of outcome, so no later phase can see or act on them
 directly.
 
 **Where `profile` is honored.** Only in the two `bootstrap.local.json` files --
-~/.claude/bootstrap.local.json (user) and
-<project>/.claude/bootstrap.local.json (project, wins over user) -- because a
-selection is a per-machine choice. A `profile` key in ~/.claude/bootstrap.json
-or <project>/.claude/bootstrap.json is ignored, with a visible warning naming
+`~/.claude/bootstrap.local.json` (user) and
+`<project>/.claude/bootstrap.local.json` (project, wins over user) -- because a
+selection is a per-machine choice. A `profile` key in `~/.claude/bootstrap.json`
+or `<project>/.claude/bootstrap.json` is ignored, with a visible warning naming
 the file that carried it: a committed, checked-in manifest must never decide a
 per-checkout choice. The reserved value `"none"` selects the base manifest
 explicitly and is never re-prompted.
@@ -527,7 +527,7 @@ set`, see bootstrap-cli.md) is written beside the highest layer that declares
 `profiles`: if any project layer (`<project>/.claude/bootstrap.json` or its
 local sibling) declares `profiles`, the selection is written to
 `<project>/.claude/bootstrap.local.json`; otherwise it is written to
-~/.claude/bootstrap.local.json. A project-local write is also excluded from
+`~/.claude/bootstrap.local.json`. A project-local write is also excluded from
 Git (an `info/exclude` rule, the same mechanism `agent_skills_link` uses for
 its own generated link), because it is a per-machine choice like every other
 `bootstrap.local.json` value.

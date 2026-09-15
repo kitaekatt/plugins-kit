@@ -418,6 +418,26 @@ class TestSet:
         cmd = seen["cmd"]
         assert cmd[cmd.index("--project-dir") + 1] == str(env.project)
 
+    def test_project_dir_before_set_is_honored_not_discarded(self, env, capsys):
+        """--project-dir given BEFORE `set` must not be silently dropped.
+
+        argparse parses a subparser into the SAME namespace but then applies
+        the subparser's own defaults; a subparser-level `default=None` on
+        `--project-dir` unconditionally overwrote whatever the outer
+        `profile` parser had already parsed for that dest, so
+        `profile --project-dir X set foo` silently fell back to Path.cwd()
+        while `profile set foo --project-dir X` worked. Both spellings are
+        advertised by the help text, so both must resolve to X.
+        """
+        _write_json(project_manifest(env), ONE_PROFILE)
+        rc = cli.main([
+            "profile", "--project-dir", str(env.project), "set", "engineer",
+        ])
+        assert rc == 1  # env's fixture stubs find_plugin_root to "" -- converge fails
+        assert "no bootstrap plugin tree" in capsys.readouterr().err
+        # The write itself must have landed in env.project, not Path.cwd().
+        assert json.loads(project_local(env).read_text())["profile"] == "engineer"
+
     def test_no_plugin_tree_reports_written_but_not_converged(self, env, capsys):
         _write_json(project_manifest(env), ONE_PROFILE)
         rc = cli.main([
@@ -462,6 +482,18 @@ class TestClear:
         assert "profile" not in written
         assert written["tools"] == [{"name": "uv"}]
         assert "next bootstrap pass" in capsys.readouterr().out
+
+    def test_project_dir_before_clear_is_honored_not_discarded(self, env, capsys):
+        """Same discard bug as `set`, driven through `clear` instead."""
+        target = project_local(env)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(json.dumps({"profile": "engineer"}, indent=2) + "\n")
+
+        rc = cli.main([
+            "profile", "--project-dir", str(env.project), "clear", "--project",
+        ])
+        assert rc == 0
+        assert "profile" not in json.loads(target.read_text())
 
     def test_clear_with_no_existing_file_is_a_no_op_success(self, env, capsys):
         rc = cli.main([
