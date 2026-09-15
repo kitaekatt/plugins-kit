@@ -3,7 +3,7 @@ _schema_version: 1
 name: secrets-kit
 author: christina
 skill-type: technique-skill
-description: Use when unlocking a machine for fleet secrets, seeding a secrets repo, adding/rotating/removing a fleet credential, or diagnosing why secrets did not materialize. Do NOT use for per-project API keys (see openrouter-account).
+description: Use when unlocking, seeding, adding, rotating, removing, or diagnosing fleet secrets. Do NOT use for per-project API keys.
 ---
 
 # secrets-kit
@@ -137,10 +137,11 @@ technique_skill:
         Real revocation is rotating the underlying credential itself (the HA
         token, the UniFi password) per the fleet's secrets inventory. Say so
         plainly rather than implying the crypto handled it.
-  capabilities:
+  techniques:
     - id: unlock
+      name: Unlock a machine for fleet secrets
       keywords: [unlock, locked, new machine, secrets_locked, passphrase, materialize]
-      user_objective: "Let this machine receive fleet secrets for the first time."
+      goal: "Let this machine receive fleet secrets for the first time."
       operation: "secrets-kit unlock --new-terminal   (YOU run this, after asking)"
       steps:
         - n: 1
@@ -163,16 +164,24 @@ technique_skill:
         - "A wrong passphrase writes nothing and leaves the machine locked -- they can just retry."
         - "This is once per machine, not once per session. A machine asking repeatedly means the identity file is not persisting; check the data dir's permissions."
     - id: status
+      name: Check what this machine holds
       keywords: [status, what did i get, diagnose, nothing materialized, check secrets]
-      user_objective: "See what this machine holds and what it is waiting on."
+      goal: "See what this machine holds and what it is waiting on."
       operation: "secrets-kit status [--refresh]"
+      steps:
+        - n: 1
+          action: >-
+            Run `secrets-kit status` -- no passphrase, no terminal needed.
+            Read the printed result: entries materialized, entries pending,
+            and any failures (each failure names the secret and the reason).
       gotchas:
         - "Safe to run yourself -- no passphrase, no terminal needed. This is the first thing to run when a secret is unexpectedly absent."
         - "`--refresh` bypasses the 6h fetch cooldown. Use it after someone rotates a secret and you want it NOW."
         - "Exit 1 means there are failures, which are printed. 'not configured' means no secrets.json exists -- an expected state, not a fault."
     - id: seed
+      name: Seed a brand-new secrets repo
       keywords: [seed, init, new repo, first time, birth event, create fleet-secrets]
-      user_objective: "Create the fleet identity and manifest in a brand-new secrets repo."
+      goal: "Create the fleet identity and manifest in a brand-new secrets repo."
       operation: "secrets-kit init --new-terminal   (YOU run this, after asking)"
       steps:
         - n: 1
@@ -205,12 +214,27 @@ technique_skill:
         - "These recovery checks cover seed, force-seed, add/update, remove and whole-identity rotation."
         - "This is the one sanctioned exception to pull-not-push: it must run on the machine holding the plaintext. Every step afterwards is a pull."
     - id: add_rotate
+      name: Add or rotate a fleet credential
       keywords: [add secret, new credential, rotate, update value, changed token]
-      user_objective: "Put a credential into the fleet, or change its value."
+      goal: "Put a credential into the fleet, or change its value."
       operation: >-
         secrets-kit add <name> --file <path> --dest '${VAR}/rel/path'
         [--mode 0600] [--newline lf] [--profile <p>] [--doc <pointer>]
         [--update] [--allow-tracked-dest]
+      steps:
+        - n: 1
+          action: >-
+            Run `secrets-kit add <name> --file <path> --dest '${VAR}/rel/path'`
+            (add `--update` to rotate an existing name's value). No
+            passphrase, no terminal -- this is public-key encryption and is
+            agent-runnable.
+        - n: 2
+          action: >-
+            Read the result: success writes the encrypted blob and updates
+            the manifest; a refused destination prints the exact fix (see
+            the destinations reference below for the full guard procedure).
+            Every other machine converges on its own next session -- there
+            is nothing further to run there.
       gotchas:
         - "AGENT-RUNNABLE: public-key encryption, no passphrase, no terminal. This is the routine path."
         - "Add/update require a clean admitted checkout and prepare outputs privately before one exact publication, without automatic rebase or a second push. Unsubmitted work or validated rejection restores the owned entry state. Uncertainty retains recovery and blocks ordinary operations: preserve clone, cache and recovery evidence for private reconciliation. Add/update never rewrite the identity cache."
@@ -222,73 +246,50 @@ technique_skill:
         - "Every other machine converges on its next session. There is nothing to run there."
 
     - id: choosing_a_dest
-      keywords: [dest, destination, where does this go, collection directory, --allow-tracked-dest, tracked working tree, gitignore, materialize path]
-      user_objective: "Decide where a new entry's dest should point, and understand the tracked-tree guard."
-      operation: "n/a -- policy, applied when choosing --dest for add_rotate"
+      name: Choose a --dest, or diagnose a destination write, for an entry
+      keywords: [dest, destination, where does this go, collection directory, --allow-tracked-dest, tracked working tree, gitignore, materialize path, atomic write, fsync, temp file, write failed, permission, mode]
+      goal: "Decide where a new entry's dest should point, and diagnose a destination-write failure, without loading the full procedure for routine work."
+      operation: "n/a -- policy, applied when choosing --dest for add_rotate, or when a materialized write needs diagnosis"
       steps:
         - n: 1
           action: >-
-            Default: materialize at the path the consumer already reads. It
-            removes a copy step and a second working copy that can drift from
-            the fleet-managed one. Only fall back to a per-repo collection
-            directory (then teach the consumer that path, via a copy step,
-            symlink, or config option) when the consumer cannot accept an
-            arbitrary path -- e.g. a build tool reading a fixed filename
-            adjacent to its input.
+            Default: materialize at the path the consumer already reads.
+            Only fall back to a per-repo collection directory (then teach
+            the consumer that path, via a copy step, symlink, or config
+            option) when the consumer cannot accept an arbitrary path --
+            e.g. a build tool reading a fixed filename adjacent to its
+            input. If the resolved dest falls inside a git working tree,
+            `add` refuses unless the path is gitignored -- a hard failure,
+            not a warning. For choosing between the two, the full override
+            scope, per-machine resolution, convergence check ordering, and
+            exposure remediation, load `references/destinations.md`.
         - n: 2
           action: >-
-            If the resolved dest falls inside a git working tree, `add`
-            refuses unless the path is gitignored, and prints the exact
-            `.gitignore` line that would fix it. This is a hard failure, not
-            a warning. Where the check cannot be run -- git unavailable, or
-            a dest naming a variable this machine does not resolve (a
-            legitimate cross-machine or per-OS entry) -- `add` notes the
-            skip and proceeds; convergence checks it on each machine.
-            Convergence separates the two causes: git being unavailable is
-            systemic and reported plainly, while git being present and
-            answering unreadably is reported as an ANOMALY naming the
-            secret, the dest, and git's raw output -- the guard did not run
-            and the destination needs checking by hand.
-        - n: 3
-          action: >-
-            For the intentional case (the dest belongs inside a tracked
-            repo and will stay ignored there, e.g. a per-repo secrets
-            directory covered by a pattern), pass `--allow-tracked-dest`.
-            The override is persisted, so it is not re-typed on every
-            `--update`. It is scoped to the entry AND the destination it
-            was granted for, not to the entry alone: an `--update` that
-            moves the entry to a different `--dest` does NOT inherit it,
-            the check runs against the new path, and granting consent
-            there means passing `--allow-tracked-dest` again.
-        - n: 4
-          action: >-
-            Convergence re-runs the same check on every session, honouring
-            a persisted `--allow-tracked-dest`, and runs it BEFORE the
-            unchanged-content fast path so an exposed entry is reported
-            every pass rather than going quiet once it has settled. If the
-            dest is inside a work tree and unignored it is recorded as a
-            failure and surfaced; other entries still converge normally.
-            Two cases, with different remediation: a pending write is
-            WITHHELD, while a dest already materialized is reported and
-            left alone -- nothing is rewritten or deleted, because the
-            plaintext is already on disk and removing a file the user may
-            depend on is not secrets-kit's call. The already-materialized
-            message also names the `git rm --cached` to untrack it, and
-            says that a value ever committed must be rotated: deleting it
-            from the tree is not revocation.
+            If a write to an already-chosen dest fails, or its resulting
+            mode or permissions look wrong, do not assume corruption or a
+            bug before reading the write protocol: load
+            `references/destinations.md` for the exact write sequence, its
+            implementation pointer, and its documented limits.
       gotchas:
-        - "The convergence re-check is not redundant with the add-time check: add-time can only validate the authoring machine's variable resolution, and a dest can be per-OS or per-machine, so it may be ignored where it was added and land tracked on a machine that resolves the variable differently. It also catches a .gitignore that changes after the entry was created."
-        - "This mirrors the secrets repo's own posture: an allowlist pre-commit hook plus a deny-by-default .gitignore, because a plaintext credential pushed once survives in the object store, in every clone, and in any fork or backup taken meanwhile -- rewriting history does not fix it. A consumer repo has the same irreversible outcome; this guard is its first net."
+        - "This guard is the essential invariant even without loading the reference: an unignored tracked dest is refused at add-time, not merely warned about."
+        - "Destination-write invariant, also true without loading the reference: the destination's mode is established before any plaintext touches disk, via a same-directory temporary file that is fsynced then atomically renamed into place -- so a partially written file is never visible at the final path. This is not a power-loss guarantee and it does not defend against a concurrent substitution in an untrusted parent directory."
     - id: remove
+      name: Remove a fleet credential
       keywords: [remove secret, delete credential, stop distributing]
-      user_objective: "Stop distributing a credential; delete it everywhere."
+      goal: "Stop distributing a credential; delete it everywhere."
       operation: "secrets-kit remove <name>"
+      steps:
+        - n: 1
+          action: >-
+            Run `secrets-kit remove <name>`. Machines delete their local
+            copy on the next pass (the orphan sweep) -- removal genuinely
+            propagates, it is not just a manifest edit.
       gotchas:
-        - "Machines delete their local copy on the next pass (the orphan sweep). Removal genuinely propagates -- it is not just a manifest edit."
         - "The ciphertext remains in git history forever. If the VALUE is now considered exposed, rotate the underlying credential; see the deleting_a_blob_is_not_revocation invariant."
     - id: rotate_identity
+      name: Rotate the fleet identity
       keywords: [rotate identity, lost machine, stolen laptop, revoke, new passphrase, compromised]
-      user_objective: "Replace the fleet keypair and re-encrypt every blob."
+      goal: "Replace the fleet keypair and re-encrypt every blob."
       operation: "secrets-kit rotate-identity --new-terminal   (YOU run this, after asking)"
       steps:
         - n: 1
@@ -297,10 +298,14 @@ technique_skill:
             re-encrypt it. Verify with `secrets-kit status` first.
         - n: 2
           action: >-
+            Ask the user for consent, then run
+            `secrets-kit rotate-identity --new-terminal` yourself.
+        - n: 3
+          action: >-
             After it completes, every OTHER machine hits one decrypt failure and
             needs `secrets-kit unlock --new-terminal` again. Tell the user that
             up front so the wave of asks is expected rather than alarming.
-        - n: 3
+        - n: 4
           action: >-
             Also remove the lost machine's SSH key from the git host, so it
             cannot fetch new ciphertext at all.
@@ -330,6 +335,21 @@ technique_skill:
       alternative: "Follow passphrase_verbs_need_new_terminal and cli_is_not_on_path: ask for consent, resolve the shim and run unlock with --new-terminal. The user enters the passphrase only in that terminal window, never in chat."
 ```
 
+```yaml
+references:
+  - id: destinations
+    path: references/destinations.md
+    keywords: [dest, destination, --dest, --allow-tracked-dest, tracked working tree, gitignore, materialize path, collection directory, exposure remediation, atomic write, fsync, temp file, write protocol]
+    summary: >-
+      Full --dest selection procedure -- default vs. collection-directory
+      fallback, the tracked-working-tree guard and its --allow-tracked-dest
+      override and scope, per-machine variable resolution, convergence
+      check ordering, and exposure remediation for an already-materialized
+      dest -- plus the destination-write protocol (mode-before-write,
+      same-directory temp file, fsync, atomic replace), its implementation
+      pointer, and its documented limits.
+```
+
 ## The pre-commit guard
 
 Every authoring verb calls `guard.require_guard()` before it writes: it installs
@@ -338,6 +358,10 @@ version) and **refuses to proceed if the clone ends up unguarded**. There is no
 "remember to set this up" step, because `.git/hooks` is untracked -- the guard
 cannot ship inside the secrets repo and so has to be established locally on
 every machine, every time.
+
+The hook is **copied, not sourced**, because the plugin's cache path is
+version-keyed and moves on every version bump -- a sourced hook would point at
+a directory that stops existing the moment the plugin updates.
 
 It is an **allowlist**: only `manifest.json`, `identity.age`, `blobs/*.age`, and
 `README.md` / `.gitignore` / `.gitattributes` may be committed, blobs and the

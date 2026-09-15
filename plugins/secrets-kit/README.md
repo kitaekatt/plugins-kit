@@ -37,14 +37,13 @@ ever.
 ## Usage
 
 The CLI is **not on PATH** -- it ships as a shim inside the plugin's
-version-keyed install directory. Resolve it before using any command below:
+version-keyed install directory, and the passphrase verbs (`unlock`, `init`,
+`rotate-identity`) need a real terminal. Resolving the shim and driving those
+verbs is the skill's job, not README's: see
+[`skills/secrets-kit/SKILL.md`](skills/secrets-kit/SKILL.md) ("Resolving the
+CLI" and "The passphrase verbs").
 
-```bash
-SK=$(ls -d ~/.claude/plugins/cache/plugins-kit/secrets-kit/*/bin/secrets-kit | tail -1)
-```
-
-Then `$SK <verb>`. The commands are written as `secrets-kit <verb>` for
-readability; substitute the resolved path.
+Once resolved, the everyday commands read as:
 
 ```bash
 secrets-kit status                  # what this machine holds / waits on (safe, no passphrase)
@@ -53,47 +52,17 @@ secrets-kit add ha-token --file secrets/ha-token.txt \
 secrets-kit remove ha-token         # every machine deletes its copy next pass
 ```
 
-### Choosing a destination
+### Destinations
 
-Default: materialize at the path the consumer already reads. It removes the
-copy step and the second working copy that drifts from source. Fall back to
-a per-repo collection directory, with the consumer taught that path (a copy
-step, a symlink, or a config option), only when the consumer cannot accept
-an arbitrary path -- e.g. a build tool reading a fixed filename adjacent to
-its input.
-
-If the resolved dest falls inside a git working tree, `add` refuses unless
-the path is gitignored, printing the exact `.gitignore` line that would fix
-it; `--allow-tracked-dest` overrides this for the intentional case and the
-override is persisted -- scoped to the entry and the destination it was
-granted for, so moving the entry to a different `--dest` does not inherit it.
-Convergence re-checks the same condition
-every session (add-time can only validate the authoring machine's variable
-resolution, and a dest can be per-OS or per-machine, so it may be ignored
-where it was added and tracked where it lands), ahead of its unchanged-content
-fast path so an exposed entry is reported every pass instead of going quiet
-once it has settled. A pending write is withheld rather than writing plaintext
-into tracked history; a dest already materialized is reported and left alone,
-with the `git rm --cached` to untrack it and a reminder that a value ever
-committed must be rotated, since deleting it from the tree is not revocation.
-This mirrors the secrets repo's own two-net posture (an allowlist pre-commit
-hook plus a deny-by-default `.gitignore`): a plaintext credential pushed
-once survives in the object store, in every clone, and in any fork or
-backup taken meanwhile, and a consumer repo has the same irreversible
-outcome.
-
-Interactive -- `age` prompts on the terminal itself, so these need a tty. Pass
-`--new-terminal` and the CLI spawns a window for the prompt and returns
-immediately; the passphrase is typed there and never reaches a transcript,
-which is what lets an agent drive these without ever seeing it:
-
-```bash
-secrets-kit unlock --new-terminal           # once per machine
-secrets-kit init --new-terminal             # once per fleet, on the machine holding the plaintext
-secrets-kit rotate-identity --new-terminal  # new keypair + re-encrypt everything
-```
-
-Drop the flag when you are already at a terminal and want the prompt inline.
+Default: materialize at the path the consumer already reads, falling back to
+a per-repo collection directory only when the consumer cannot accept an
+arbitrary path. A `--dest` that lands inside a git working tree and is **not
+gitignored** is refused, with `--allow-tracked-dest` for the intentional
+case. The full selection procedure, the override's scope, per-machine
+resolution, convergence check ordering, exposure remediation, and the
+write protocol that actually puts plaintext on disk (with its documented
+limits) are owned by the skill: see
+[`skills/secrets-kit/references/destinations.md`](skills/secrets-kit/references/destinations.md).
 
 Seed, add/update and remove preserve recovery evidence when publication or
 finalization is unresolved. Follow the [skill's authoring recovery guidance](skills/secrets-kit/SKILL.md#technique)
@@ -116,19 +85,19 @@ did:
 - **Never blocks a session.** An offline machine converges on a stale clone; a
   failed fetch is a log line. Only a missing identity raises an ask, and it is
   the one thing a human can actually resolve.
-- **Atomic writes at the final mode.** The temp file is created in the
-  destination directory already at 0600 (owner-only ACL on Windows), written,
-  fsynced, then renamed -- so decrypted material never exists at a loose mode
-  and a crash leaves either the old file or nothing.
+- **Atomic writes at the destination's mode**, never a looser one in
+  between. Mechanics, the implementation pointer, and the documented limits
+  (no power-loss recovery, no defense against a concurrent substitution in
+  an untrusted parent, Windows ACL accepted-not-verified) are owned by
+  [`skills/secrets-kit/references/destinations.md`](skills/secrets-kit/references/destinations.md).
 - **Two outcomes only.** Every failure is AUTO (an agent can fix it now) or ASK
   (only the user can supply it). There is no warning tier; a warning about a
   credential is a failure nobody acted on.
-- **An allowlist pre-commit guard, installed automatically.** Authoring verbs
-  install `.git/hooks/pre-commit` into the clone and refuse to write to an
-  unguarded repo. Only the manifest, the wrapped identity, and age-ciphertext
-  blobs may be committed; the guard reads the index rather than the worktree,
-  and rejects an unwrapped `AGE-SECRET-KEY-` anywhere. It is copied, not
-  sourced, because the plugin's cache path moves on every version bump.
+- **An allowlist pre-commit guard, installed automatically.** Only the
+  manifest, the wrapped identity, and age-ciphertext blobs may be committed.
+  Mechanics and why the hook is copied rather than sourced are owned by
+  [`skills/secrets-kit/SKILL.md`](skills/secrets-kit/SKILL.md) ("The
+  pre-commit guard").
 - **Written against the bootstrap service-provider seam** from day one
   (`service` block in `bootstrap.json`, `bootstrap(ctx)` entry point touching
   only the documented ctx surface, all logic in `lib/secrets_kit/`), so folding
