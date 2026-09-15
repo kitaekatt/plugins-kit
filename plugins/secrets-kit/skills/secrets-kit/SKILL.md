@@ -202,7 +202,7 @@ technique_skill:
         - "It asks the REMOTE whether the repo is seeded, not the local checkout -- a clone that has not fetched since before someone else seeded would otherwise report 'never seeded'. If init says already seeded, believe it over the session-pass message that sent you here, and run `unlock --new-terminal` instead."
         - "Seed publishes one exact commit without automatic rebase or a second push. Before submission or after a validated rejection, it restores its owned entry checkout and index and preserves the existing identity cache. A lost push report can still mean publication succeeded."
         - "Uncertain publication or incomplete cache finalization retains encrypted recovery evidence and blocks ordinary operations. Preserve the wrapped proposed key, clone, cache and recovery marker for private inspection; never discard a possibly published key or hand-push a pending seed. Checkout restoration requires proved-absent publication and validated ownership."
-        - "These recovery checks cover seed, force-seed, add/update and remove. Whole-identity rotation requires its own recovery acceptance."
+        - "These recovery checks cover seed, force-seed, add/update, remove and whole-identity rotation."
         - "This is the one sanctioned exception to pull-not-push: it must run on the machine holding the plaintext. Every step afterwards is a pull."
     - id: add_rotate
       keywords: [add secret, new credential, rotate, update value, changed token]
@@ -306,6 +306,9 @@ technique_skill:
             cannot fetch new ciphertext at all.
       gotchas:
         - "This stops the old identity reading FUTURE blobs. It does not un-read the past. For a lost machine, ALSO rotate the underlying credentials -- that is the real revocation, because the plaintext was already on that box."
+        - "Rotation publishes one exact commit with no automatic rebase and no second push, and caches the new identity only after that publication is established. A rejection -- including a remote that moved while rotation was preparing -- restores the checkout and leaves the existing cache readable."
+        - "An unproved publication retains encrypted recovery evidence and blocks ordinary operations, exactly as seed and entry authoring do. That block is protective: the local blobs are already re-encrypted to the new recipient, so re-running rotation would work against ciphertext the cached identity can no longer open. Preserve the recovery directory, clone and cache for private inspection."
+        - "Every entry must occupy its reserved blobs/<name>.age slot. Rotation refuses a manifest naming any other layout BEFORE it generates a key, because it re-encrypts whatever the manifest names."
   anti_patterns:
     - id: hand_copying_secrets
       name: Copying secret files between machines by hand

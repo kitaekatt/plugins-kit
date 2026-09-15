@@ -50,10 +50,14 @@ unconfigurable opinion whose test passes is a finding.
   wants manual control should not enable the plugin -- partial adoption produces a machine
   whose bootstrap is permanently wrong.
 - **secrets-kit reserves one direct `blobs/<entry-or-source>.age` slot per entry.**
-  Authoring is what enforces it: `secrets_kit.authoring._selected_entry_blob` refuses a
-  nested, absolute, backslash, non-`.age` or non-`blobs/` selection before any encryption
-  or publication. The two downstream readers are looser and do NOT establish the shape --
-  the repo-side hook allowlist matches a `blobs/*.age` shell pattern, whose `*` spans `/`
+  Authoring is what enforces it, at both of its entry points and through one predicate
+  (`secrets_kit.authoring._canonical_blob`): `_selected_entry_blob` refuses a nested,
+  absolute, backslash, non-`.age` or non-`blobs/` selection for add/update/remove, and
+  `_rotation_blobs` applies that same predicate to the whole manifest before rotation
+  generates a key, because a slot the recovery record cannot express is one an interrupted
+  rotation could not restore. Both refuse before any encryption or publication. The two
+  downstream readers are looser and do NOT establish the shape -- the repo-side hook
+  allowlist matches a `blobs/*.age` shell pattern, whose `*` spans `/`
   and so accepts a nested path, and `manifest.py::Entry` requires only a blob string.
   Authoring is therefore the single place the canonical shape is decided, which is what
   keeps those two from diverging. The rejected shapes and the refusal boundary are
@@ -99,7 +103,7 @@ unconfigurable opinion whose test passes is a finding.
   run declares tools an endpoint must not be able to use, an endpoint whose advertisement
   says it would silently drop that control is not selected at all. A team could reasonably
   prefer best-effort -- run on the endpoint anyway and accept the floor was not applied --
-  and their only remedy today is to drop the floor from the job file entirely, which is
+  and their only remedy is to drop the floor from the job file entirely, which is
   exactly the outcome we refuse to make easy. A floor that is sometimes not applied is not
   a floor, and an unattended run is the case where nobody is present to notice the
   difference. The alternative for that team is to state the narrower endpoint preference

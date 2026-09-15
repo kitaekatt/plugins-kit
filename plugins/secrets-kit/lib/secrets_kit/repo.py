@@ -37,10 +37,10 @@ QUERY_TIMEOUT = 10
 # interchangeable while machines were idle. Observed failing: `git commit ...
 # timed out after 15s` under parallel test load (2026-08-09).
 #
-# Safe to be generous HERE specifically because commit_and_push runs on the
-# explicit authoring verbs (seed / add / rotate), never in the SessionStart
-# pass. refresh() keeps the short budget on purpose -- that is the path the
-# module's "never block a session on connectivity" rule is about.
+# Safe to be generous HERE specifically because the local writes it bounds run
+# on the explicit authoring verbs (seed / add / rotate), never in the
+# SessionStart pass. refresh() keeps the short budget on purpose -- that is the
+# path the module's "never block a session on connectivity" rule is about.
 LOCAL_WRITE_TIMEOUT = 120
 
 # How often to talk to the remote at all. A rotated secret converges on the

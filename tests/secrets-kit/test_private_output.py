@@ -151,23 +151,31 @@ def test_actual_converge_protects_destination_and_state_then_skips_crypto(fleet,
 @pytest.mark.parametrize('operation', ['init', 'rotate-identity'])
 @pytest.mark.parametrize('windows', [False, True])
 def test_real_authoring_cache_protects_before_text_and_retains_order(seeding, monkeypatch, operation, windows):
+    """Both identity-writing verbs publish first and cache the identity after.
+
+    Rotation is held to the same order as seeding: the cache names the key
+    this machine decrypts with, so replacing it before the publication that
+    justifies it is what leaves a machine reading a fleet that never rotated.
+    """
     if operation == 'rotate-identity':
         assert seeding.cli.main(['init']) == 0
         seeding.identity.write_text('old dummy identity', encoding='utf-8')
+        # A fixed keygen re-derives the seeded manifest byte for byte, so the
+        # rotation would have nothing to publish and prove nothing here.
+        monkeypatch.setattr(agefile, 'keygen', lambda: ('AGE-SECRET-KEY-ROTATED', 'age1rotatedrecipient'))
     events = _observe_private_bytes(monkeypatch, [seeding.identity], windows=windows)
-    publisher = '_publish_owned' if operation == 'init' else 'commit_and_push'
-    real_publish = getattr(seeding.cli.repo_mod, publisher)
+    real_publish = seeding.cli.repo_mod._publish_owned
     ordering = []
 
     def publish(*args, **kwargs):
         ordering.append(('publish', seeding.identity.read_bytes() if seeding.identity.exists() else None))
         return real_publish(*args, **kwargs)
 
-    monkeypatch.setattr(seeding.cli.repo_mod, publisher, publish)
+    monkeypatch.setattr(seeding.cli.repo_mod, '_publish_owned', publish)
     assert seeding.cli.main([operation]) == 0
     _assert_protected_before_bytes(events, seeding.identity, text=True, windows=windows)
-    assert seeding.identity.read_text() == 'AGE-SECRET-KEY-NEW'
-    assert ordering == [('publish', None if operation == 'init' else b'AGE-SECRET-KEY-NEW')]
+    assert seeding.identity.read_text() == ('AGE-SECRET-KEY-NEW' if operation == 'init' else 'AGE-SECRET-KEY-ROTATED')
+    assert ordering == [('publish', None if operation == 'init' else b'old dummy identity')]
 
 
 def _dummy_unwrap(monkeypatch, code=0, *, spawn_error=False, output=b'dummy unwrapped identity\n'):
@@ -525,10 +533,10 @@ def test_actual_converge_selective_writer_fault_preserves_prior_record(fleet, mo
 def test_actual_authoring_cache_fault_preserves_old_cache_and_prior_effect_order(seeding, monkeypatch, operation, fault):
     if operation == 'rotate-identity':
         assert seeding.cli.main(['init']) == 0
+        monkeypatch.setattr(agefile, 'keygen', lambda: ('AGE-SECRET-KEY-ROTATED', 'age1rotatedrecipient'))
     seeding.identity.write_bytes(b'old dummy cache')
     publications = []
-    publisher = '_publish_owned' if operation == 'init' else 'commit_and_push'
-    real_publish = getattr(seeding.cli.repo_mod, publisher)
+    real_publish = seeding.cli.repo_mod._publish_owned
     real_tighten = perms.tighten
     real_replace = os.replace
 
@@ -546,7 +554,7 @@ def test_actual_authoring_cache_fault_preserves_old_cache_and_prior_effect_order
             raise OSError('dummy cache replace fault')
         return real_replace(source, destination)
 
-    monkeypatch.setattr(seeding.cli.repo_mod, publisher, publish)
+    monkeypatch.setattr(seeding.cli.repo_mod, '_publish_owned', publish)
     monkeypatch.setattr(perms, 'tighten', tightening)
     if hasattr(seeding.cli, 'tighten'):
         monkeypatch.setattr(seeding.cli, 'tighten', tightening)
@@ -557,7 +565,8 @@ def test_actual_authoring_cache_fault_preserves_old_cache_and_prior_effect_order
         with pytest.raises(OSError, match='dummy cache replace fault'):
             seeding.cli.main([operation])
     assert seeding.identity.read_bytes() == b'old dummy cache'
-    assert len(publications) == (1 if operation == 'init' else 0)
+    # Both verbs finalize the cache AFTER a publication, so both published.
+    assert len(publications) == 1
     assert not [path for path in seeding.identity.parent.iterdir() if path.name.startswith(seeding.identity.name + '.')]
     # Earlier encrypted checkout changes / seed publication are not rolled back.
     assert (seeding.clone / 'identity.age').is_file()

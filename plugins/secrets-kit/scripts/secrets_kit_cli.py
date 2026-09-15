@@ -16,7 +16,7 @@ import json
 import os
 import sys
 from pathlib import Path
-from typing import Any, IO, Optional
+from typing import Optional
 
 _PLUGIN_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_PLUGIN_ROOT / "lib"))
@@ -24,11 +24,17 @@ sys.path.insert(0, str(_PLUGIN_ROOT / "lib"))
 from secrets_kit import SecretsError, cli_command  # noqa: E402
 from secrets_kit import agefile  # noqa: E402
 from secrets_kit import guard  # noqa: E402
-from secrets_kit.authoring import AuthoringOperation, AuthoringRecoveryError, _prepare_entry, _prepare_seed  # noqa: E402
+from secrets_kit.authoring import (  # noqa: E402
+    AuthoringOperation,
+    AuthoringRecoveryError,
+    _prepare_entry,
+    _prepare_rotation,
+    _prepare_seed,
+)
 from secrets_kit import repo as repo_mod  # noqa: E402
 from secrets_kit.converge import converge, paths_for  # noqa: E402
 from secrets_kit.manifest import Config, Manifest, resolve_dest  # noqa: E402
-from secrets_kit.perms import _private_output, tighten_dir  # noqa: E402
+from secrets_kit.perms import tighten_dir  # noqa: E402
 from secrets_kit.operation_lock import operation_lock  # noqa: E402
 from secrets_kit.terminal import relaunch_self  # noqa: E402
 
@@ -109,10 +115,10 @@ def _ensure_guarded(config: Config, *, data_dir: Path) -> Path:
 
     Nested repo/key/state/publication helpers never acquire recursively.
 
-    Rotation uses this helper. Seed and entry operations record their recovery
-    baselines before synchronizing. Two
-    things have to be true before we let git record anything permanently, and
-    neither is inheritable:
+    Every authoring verb records its recovery baseline before synchronizing,
+    so each prepares its own operation rather than calling this. Two things
+    have to be true before we let git record anything permanently, and neither
+    is inheritable:
 
     - The clone must be level with the remote. The session pass fetches at most
       once every few hours, so the working tree an authoring verb would read
@@ -554,57 +560,66 @@ def _remove_entry(args: argparse.Namespace, operation: AuthoringOperation) -> in
 # --------------------------------------------------------------------------
 
 def cmd_rotate_identity(args: argparse.Namespace) -> int:
-    """New keypair + re-encrypt every blob. Needs this machine to be unlocked."""
+    """New keypair + re-encrypt every blob. Needs this machine to be unlocked.
+
+    Rotation replaces the root of trust, so it runs under the same authoring
+    operation as seeding and entry authoring: the complete replacement epoch
+    is prepared privately, published as ONE exact-ref push whose outcome is
+    proved, and only then cached. A rejection restores the checkout; an
+    unproved outcome retains recovery evidence instead of guessing.
+    """
     handed_off = _handoff_to_terminal(args)
     if handed_off is not None:
         return handed_off
     config = _require_config()
     with operation_lock(DATA_DIR) as data_dir:
-        clone = _ensure_guarded(config, data_dir=data_dir)
-        manifest_path = clone / "manifest.json"
-        manifest = Manifest.load(manifest_path)
         paths = paths_for(data_dir)
+        operation = _prepare_rotation(data_dir, paths["clone"], config.repo)
+        try:
+            # After admission, deliberately: rotation validates the repository
+            # it would publish to on the same terms every other authoring verb
+            # does, so an unsupported clone is reported as one rather than
+            # hidden behind a local precondition.
+            if not paths["identity"].is_file():
+                raise SecretsError(
+                    f"this machine is locked; run `{cli_command('unlock')}` first. "
+                    "Rotation re-encrypts every blob, so it has to be able to read "
+                    "them."
+                )
+            manifest_path = operation.clone / "manifest.json"
+            manifest = Manifest.load(manifest_path)
 
-        if not paths["identity"].is_file():
-            return _fail(
-                f"this machine is locked; run `{cli_command('unlock')}` first. "
-                "Rotation re-encrypts every blob, so it has to be able to read "
-                "them."
+            print("Generating the replacement identity ...")
+            identity_text, recipient = agefile.keygen()
+            raw = json.loads(manifest.dump())
+            raw["recipient"] = recipient
+            rewritten = Manifest(manifest_path, raw)
+
+            print("Re-encrypting every blob to the replacement recipient ...")
+            print(
+                "\nWhen age prompts, choose the passphrase for the NEW identity (it "
+                "may be the same one or a different one). Every other machine will "
+                "need to unlock again."
             )
-
-        print("Decrypting every blob with the current identity ...")
-        plaintexts = {}
-        for name, entry in manifest.entries.items():
-            plaintexts[name] = agefile.decrypt_with_identity(
-                paths["identity"], clone / entry.blob
+            code = operation.prepare_rotation(
+                identity_text, recipient, rewritten.dump().encode("utf-8")
             )
-
-        print("Generating the replacement identity ...")
-        identity_text, recipient = agefile.keygen()
-        print(
-            "\nChoose the passphrase for the NEW identity (it may be the same one "
-            "or a different one). Every other machine will need to unlock again."
-        )
-        code = agefile.wrap_identity(identity_text, clone / "identity.age")
-        if code != 0:
-            return _fail("age failed to wrap the new identity; nothing was changed")
-
-        touched = ["identity.age", "manifest.json"]
-        for name, entry in manifest.entries.items():
-            agefile.encrypt_to_recipient(recipient, plaintexts[name], clone / entry.blob)
-            touched.append(entry.blob)
-
-        raw = json.loads(manifest.dump())
-        raw["recipient"] = recipient
-        manifest_path.write_text(Manifest(manifest_path, raw).dump(), encoding="utf-8")
-
-        def produce_cache(stream: IO[Any]) -> bool:
-            stream.write(identity_text)
-            return True
-
-        _private_output(paths["identity"], 0o600, produce_cache, text=True)
-
-        repo_mod.commit_and_push(clone, "rotate: fleet identity", touched)
+            if code != 0:
+                raise SecretsError(
+                    "age failed to wrap the new identity; nothing was published"
+                )
+            operation.apply_rotation(identity_text)
+        except SecretsError as primary:
+            phase = operation.record["phase"]
+            operation.failure(primary)
+            recovery = getattr(primary, "authoring_recovery_error", None)
+            details = f"{primary}\n{recovery}" if recovery else str(primary)
+            if phase == "definitely_rejected" and not recovery:
+                details += "\nOwned rotation state restored; the generated identity was discarded."
+            return _fail(details)
+        except BaseException as primary:
+            operation.failure(primary)
+            raise
         print(
             "\nidentity rotated. Other machines will report a decrypt failure "
             f"once and need `! {cli_command('unlock')}` again.\n"

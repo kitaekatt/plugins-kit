@@ -16,13 +16,14 @@ import subprocess
 import sys
 from typing import Any, Optional
 
-from . import SecretsError
+from . import SecretsError, cli_command
 from . import agefile, guard, repo
 from .manifest import Manifest
 from .perms import _private_output, tighten, tighten_dir
 
 RECOVERY_DIRECTORY = "authoring-recovery"
 _SEED_PATHS = ("identity.age", "manifest.json", ".gitignore")
+_ROTATION_PATHS = ("identity.age", "manifest.json")
 _REMEDY = (
     "Ordinary secrets operations are stopped. Preserve the recovery directory, "
     "clone and identity cache. Inspect and reconcile this operation privately "
@@ -188,6 +189,24 @@ def _eligible(name: str) -> bool:
     return name in _SEED_PATHS or name.startswith("blobs/") and name.endswith(".age") and len(Path(name).parts) == 2
 
 
+def _proposed_names(record: dict) -> set:
+    """The proposed-output artifacts this OPERATION is allowed to retain."""
+    if record["operation"] == "seed":
+        return {"proposed-identity", "proposed-ignore"}
+    if record["operation"] == "rotate":
+        return {"proposed-identity"} | {"proposed-blob-" + str(index)
+                                        for index in range(len(record["rotation_blobs"]))}
+    return set() if record["operation"] == "remove" else {"proposed-blob"}
+
+
+_PUBLICATION_REASONS = {
+    "fresh proof unavailable", "publication proof ref is not exclusively available",
+    "fresh branch reachability", "fresh branch does not prove reachability",
+    "publication proof cleanup incomplete", "complete exact-ref push receipt", "complete exact-ref rejection",
+    "binding refused before push invocation",
+}
+
+
 @dataclass
 class AuthoringOperation:
     data_dir: Path
@@ -220,7 +239,7 @@ class AuthoringOperation:
     def mark(self, phase: str, **updates: Any) -> None:
         self._custody()
         proposed = dict(self.record, phase=phase, **updates)
-        if self.record["version"] == 2:
+        if self._exact_receipts:
             names = {path.name for path in self.directory.iterdir()} - {"marker.json"}
             if names != set(self.record["artifacts"]):
                 raise _recovery_error("recovery directory contains unreceipted material")
@@ -240,12 +259,47 @@ class AuthoringOperation:
         artifacts[name] = _file_state(self.directory / name)
         self._persist(dict(self.record, artifacts=artifacts))
 
-    def _entry_cache_compatible(self) -> bool:
-        return _file_state(self.data_dir / "identity.txt") == self.record["entry_cache"]
+    @property
+    def _exact_receipts(self) -> bool:
+        """Version 1 re-derives its receipts; later records receipt exactly."""
+        return self.record["version"] != 1
 
-    def _require_entry_cache(self) -> None:
-        if self.record["version"] == 2 and not self._entry_cache_compatible():
-            raise _recovery_error("identity cache changed during entry authoring")
+    def _published(self) -> bool:
+        return self.record["phase"] in ("confirmed", "finalizing") or (
+            self.record["phase"] == "cleaning" and self.record.get("cleanup_outcome") == "confirmed")
+
+    def _entry_cache_compatible(self) -> bool:
+        return _file_state(self.data_dir / "identity.txt") == self.record.get("entry_cache")
+
+    def _cache_digest_compatible(self) -> bool:
+        cache = self.data_dir / "identity.txt"
+        return _file_state(cache) is not None and _digest(cache.read_bytes()) == self.record.get("cache_digest")
+
+    def _cache_compatible(self) -> bool:
+        """Report the cache against the field this record proposes or retains."""
+        if "cache_digest" in self.record:
+            return self._cache_digest_compatible()
+        return "entry_cache" in self.record and self._entry_cache_compatible()
+
+    def _require_cache(self) -> None:
+        """Require the cache this PHASE expects, over fields and not versions.
+
+        A retained cache must hold while publication is still being
+        established. A record that proposes a replacement identity must hold
+        that replacement once its publication is established; one that
+        proposes none keeps the retained expectation throughout. An
+        established publication whose cache is still the retained one is never
+        rewritten automatically -- it is reported for private reconciliation.
+        """
+        if self._published() and "cache_digest" in self.record:
+            if not self._cache_digest_compatible():
+                raise _recovery_error(
+                    "publication confirmed; cache not finalized"
+                    if "entry_cache" in self.record and self._entry_cache_compatible()
+                    else "publication confirmed; existing cache is not compatible")
+            return
+        if "entry_cache" in self.record and not self._entry_cache_compatible():
+            raise _recovery_error("identity cache changed during authoring")
 
     def refuse(self) -> int:
         """Finalize a return-only validation refusal without inventing a primary."""
@@ -286,7 +340,7 @@ class AuthoringOperation:
             _write(self.directory / stored, (self.clone / name).read_bytes())
             state = dict(state, stored=stored)
         self.record["preimages"][name] = state
-        if state is not None and self.record["version"] == 2:
+        if state is not None and self._exact_receipts:
             self._remember_artifact(state["stored"])
 
     def prepare(self) -> tuple[str, str, int]:
@@ -321,6 +375,87 @@ class AuthoringOperation:
         self.mark("prepared", expected_tree=tree, cache_digest=_digest(cache_bytes))
         return identity, recipient, 0
 
+    def _receiving_slot(self, stored: str) -> Path:
+        """Allocate an owned empty private artifact and record its identity."""
+        path = self.directory / stored
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        os.close(fd)
+        tighten(path, 0o600)
+        receiving = _private(path)
+        self.record["receiving_identities"][stored] = [receiving.st_dev, receiving.st_ino]
+        _directory_sync(self.directory)
+        self._remember_artifact(stored)
+        return path
+
+    def _durable_artifact(self, stored: str, *, require_content: bool = True) -> dict:
+        """Verify an owned producer wrote its own slot, then make it durable."""
+        path = self.directory / stored
+        actual = _private(path)
+        if [actual.st_dev, actual.st_ino] != self.record["receiving_identities"][stored]:
+            raise _recovery_error("a proposed encrypted slot changed under its producer")
+        if require_content and not actual.st_size:
+            raise SecretsError("age produced no encrypted output")
+        with path.open("rb") as stream:os.fsync(stream.fileno())
+        _directory_sync(self.directory)
+        self._remember_artifact(stored)
+        return dict(_file_state(path), stored=stored)
+
+    def _salvage_artifact(self, primary: BaseException, stored: str) -> None:
+        """Receipt a failed producer's own slot, or diagnose the custody gap."""
+        try:
+            self._durable_artifact(stored, require_content=False)
+        except BaseException:
+            primary.authoring_recovery_error = _recovery_error(
+                "failed encryption artifact custody or durability is incomplete")
+            if hasattr(primary, "add_note"):primary.add_note(str(primary.authoring_recovery_error))
+
+    def prepare_rotation(self, identity: str, recipient: str, manifest_bytes: bytes) -> int:
+        """Produce the complete replacement epoch before replacing repo files.
+
+        Only bytes that will be committed verbatim reach the recovery
+        directory. Each entry is decrypted and re-encrypted one at a time
+        through age's own pipes, so no entry plaintext -- and nothing derived
+        from one -- is ever written beside the proposed ciphertext.
+        """
+        self._custody()
+        self._require_cache()
+        outputs = {}
+        for index, name in enumerate(self.record["rotation_blobs"]):
+            stored = "proposed-blob-" + str(index)
+            path = self._receiving_slot(stored)
+            try:
+                agefile.encrypt_to_recipient(recipient, agefile.decrypt_with_identity(
+                    self.data_dir / "identity.txt", self.clone / name), path)
+            except BaseException as primary:
+                self._salvage_artifact(primary, stored)
+                raise
+            outputs[name] = self._durable_artifact(stored)
+        wrapped = self._receiving_slot("proposed-identity")
+        try:
+            code = agefile.wrap_identity(identity, wrapped)
+        except BaseException as primary:
+            self._salvage_artifact(primary, "proposed-identity")
+            raise
+        if code != 0:
+            self._durable_artifact("proposed-identity", require_content=False)
+            return code
+        outputs["identity.age"] = self._durable_artifact("proposed-identity")
+        _write(self.directory / "proposed-manifest", manifest_bytes)
+        self._remember_artifact("proposed-manifest")
+        outputs["manifest.json"] = dict(_file_state(self.directory / "proposed-manifest"), stored="proposed-manifest")
+        authored = ["identity.age", "manifest.json"] + list(self.record["rotation_blobs"])
+        self.record["outputs"] = {name: outputs[name] for name in authored}
+        tree = self._prepare_tree()
+        if tree == repo._owned_oid(self.clone, self.record["synced_head"] + "^{tree}"):
+            raise SecretsError(
+                "rotation refused: the replacement epoch is identical to the published one",
+                "A fresh identity always changes the manifest recipient, so this "
+                "means the generated keypair is not fresh. Nothing was published.")
+        cache_bytes = identity.replace("\n", os.linesep).encode("utf-8")
+        self.mark("prepared", expected_tree=tree, authored_paths=authored,
+                  cache_digest=_digest(cache_bytes))
+        return 0
+
     def _prepare_tree(self) -> str:
         private_index = self.directory / "prepared-index"
         algorithm = repo._owned_query(self.clone, ["rev-parse", "--show-object-format"]).decode("ascii").rstrip("\n")
@@ -328,7 +463,7 @@ class AuthoringOperation:
             raise SecretsError("seed Git object format is unsupported")
         header = b"DIRC\x00\x00\x00\x02\x00\x00\x00\x00"
         _write(private_index, header + hashlib.new(algorithm, header).digest())
-        if self.record["version"] == 2:
+        if self._exact_receipts:
             self._remember_artifact("prepared-index")
         repo._owned_query(self.clone, ["read-tree", self.record["synced_head"]] if self.record["synced_head"] else ["read-tree", "--empty"], index=private_index)
         tighten(private_index, 0o600)
@@ -345,14 +480,14 @@ class AuthoringOperation:
         tree = repo._owned_query(self.clone, ["write-tree"], index=private_index).decode("ascii").rstrip("\n")
         with private_index.open("rb") as stream:os.fsync(stream.fileno())
         _directory_sync(self.directory)
-        if self.record["version"] == 2:
+        if self._exact_receipts:
             self._remember_artifact("prepared-index")
         return tree
 
     def prepare_entry(self, manifest_bytes: bytes, recipient: str, plaintext: Optional[bytes]) -> None:
         """Prepare an exact manifest and encrypted write or explicit deletion."""
         self._custody()
-        self._require_entry_cache()
+        self._require_cache()
         name = self.record["selected_blob"]
         if not name:
             raise SecretsError("entry authoring has no supported selected blob")
@@ -403,14 +538,14 @@ class AuthoringOperation:
 
     def apply_entry(self, message: str) -> None:
         self._custody()
-        self._require_entry_cache()
+        self._require_cache()
         if self.record["expected_tree"] == repo._owned_oid(self.clone, self.record["synced_head"] + "^{tree}"):
             self._verify_synchronized()
             self.mark("unchanged")
             self.cleanup()
             return
         self._publish_outputs(message)
-        self._require_entry_cache()
+        self._require_cache()
         self.cleanup()
 
     def _verify_synchronized(self) -> None:
@@ -419,7 +554,7 @@ class AuthoringOperation:
         for name, expected in self.record["synced_files"].items():
             if _file_state(self.clone / name) != expected:
                 raise _recovery_error("authoring footprint changed after preparation")
-        if self.record["version"] == 2:
+        if self._exact_receipts:
             if _file_state(self.clone / ".git/index") != self.record["synced_index"]:
                 raise _recovery_error("synchronized index changed before authoring")
             _admit(self.clone, self.declared_repo)
@@ -430,6 +565,14 @@ class AuthoringOperation:
         short = self.record["branch"][11:]
         repo._owned_query(self.clone, ["config", f"branch.{short}.remote", "origin"])
         repo._owned_query(self.clone, ["config", f"branch.{short}.merge", self.record["branch"]])
+        self._finalize_cache(identity)
+
+    def apply_rotation(self, identity: str) -> None:
+        """Publish the replacement epoch before the cache that reads it."""
+        self._publish_outputs("rotate: fleet identity")
+        self._finalize_cache(identity)
+
+    def _finalize_cache(self, identity: str) -> None:
         def produce(stream: Any) -> bool:
             stream.write(identity)
             return True
@@ -442,10 +585,10 @@ class AuthoringOperation:
 
     def _publish_outputs(self, message: str) -> None:
         self._custody()
-        self._require_entry_cache()
+        self._require_cache()
         self._verify_synchronized()
         self.mark("applying")
-        if self.record["version"] == 2 and self.record["operation"] != "remove" and not (self.clone / "blobs").exists():
+        if self.record["operation"] in ("add", "update") and not (self.clone / "blobs").exists():
             (self.clone / "blobs").mkdir(mode=0o700)
             parent = _ordinary(self.clone / "blobs", directory=True)
             if self.record["entry_blob_parent"] is None:
@@ -489,9 +632,9 @@ class AuthoringOperation:
             raise
         self.mark(evidence.outcome, publication_reason=evidence.reason)
         if evidence.outcome == "definitely_rejected":
-            raise SecretsError("seed publication was definitely rejected")
+            raise SecretsError("publication was definitely rejected")
         if evidence.outcome != "confirmed":
-            raise _recovery_error("seed publication outcome is uncertain")
+            raise _recovery_error("publication outcome is uncertain")
         self.mark("finalizing")
         if evidence.reason == "publication proof cleanup incomplete":
             raise _recovery_error("publication confirmed; proof cleanup incomplete")
@@ -499,7 +642,7 @@ class AuthoringOperation:
     def restore(self) -> None:
         """Restore enumerated owned effects using branch CAS and exact index bytes."""
         self._custody()
-        self._require_entry_cache()
+        self._require_cache()
         if self.record["phase"] == "capturing":
             raise _recovery_error("durable entry capture is incomplete")
         if self.record["phase"] in ("publishing", "uncertain", "confirmed", "finalizing", "cleaning", "unchanged"):
@@ -607,12 +750,9 @@ class AuthoringOperation:
 
     def cleanup(self) -> None:
         self._custody()
-        self._require_entry_cache()
+        self._require_cache()
         allowed = {"marker.json", "entry-index", "prepared-index", "proposed-manifest"}
-        if self.record["version"] == 1:
-            allowed.update({"proposed-identity", "proposed-ignore"})
-        elif self.record["operation"] != "remove":
-            allowed.add("proposed-blob")
+        allowed.update(_proposed_names(self.record))
         allowed.update(state["stored"] for state in self.record["preimages"].values() if state)
         paths = list(self.directory.iterdir())
         if any(path.name not in allowed for path in paths):
@@ -662,12 +802,47 @@ class AuthoringOperation:
             if hasattr(primary, "add_note"):primary.add_note(str(diagnostic))
 
 
+def _canonical_blob(blob: str) -> bool:
+    """The one reserved direct blobs/<leaf>.age slot, spelled exactly."""
+    return blob.startswith("blobs/") and _eligible(blob) and "\\" not in blob and blob == Path(blob).as_posix()
+
+
 def _selected_entry_blob(manifest: Manifest, name: str, source_name: Optional[str]) -> Optional[str]:
     """Select a supported literal slot from an entry or new-source basename."""
     blob = manifest.entries[name].blob if name in manifest.entries else ("blobs/" + source_name + ".age" if source_name is not None else None)
-    if blob is not None and (not blob.startswith("blobs/") or not _eligible(blob) or "\\" in blob or blob != Path(blob).as_posix()):
+    if blob is not None and not _canonical_blob(blob):
         raise SecretsError("entry authoring requires a canonical direct blobs/*.age slot")
     return blob
+
+
+def _rotation_blobs(manifest: Manifest) -> list[str]:
+    """Every encrypted entry slot a rotation re-encrypts, refusing others.
+
+    Rotation rewrites whatever the manifest names, so it requires the same
+    canonical slot that entry authoring enforces on the way in. A slot the
+    recovery record cannot express is one an interrupted rotation could not
+    restore, and the repository-side guard would refuse its commit anyway --
+    after the passphrase prompt and after the checkout had been rewritten.
+    """
+    selected = set()
+    for name, entry in manifest.entries.items():
+        if not _canonical_blob(entry.blob):
+            raise SecretsError(
+                f"rotation requires a canonical direct blobs/*.age slot; entry '{name}' names another layout",
+                f"Re-add that entry with `{cli_command('add')} {name} --file <plaintext> --update` so its "
+                "ciphertext occupies the reserved slot, then rotate. Nothing was changed.")
+        selected.add(entry.blob)
+    return sorted(selected)
+
+
+def _capture_rotation_blobs(operation: AuthoringOperation, manifest: Manifest) -> list[str]:
+    selected = _rotation_blobs(manifest)
+    for name in selected:
+        state = _file_state(operation.clone / name)
+        if state is not None and repo._owned_git(operation.clone, ["ls-files", "--error-unmatch", "--", name]).returncode != 0:
+            raise SecretsError("rotation refused: unowned material occupies a selected blob")
+        operation.capture(name)
+    return selected
 
 
 def _capture_entry_selection(operation: AuthoringOperation, manifest: Manifest, name: str,
@@ -691,8 +866,13 @@ def _prepare_entry(data_dir: Path, clone_dir: Path, declared_repo: str, *, name:
                               entry_name=name, source_name=source_name)
 
 
+def _prepare_rotation(data_dir: Path, clone_dir: Path, declared_repo: str) -> AuthoringOperation:
+    return _prepare_operation(data_dir, clone_dir, declared_repo, force=False, rotate=True)
+
+
 def _prepare_operation(data_dir: Path, clone_dir: Path, declared_repo: str, *, force: bool,
-                       entry_name: Optional[str] = None, source_name: Optional[str] = None) -> AuthoringOperation:
+                       entry_name: Optional[str] = None, source_name: Optional[str] = None,
+                       rotate: bool = False) -> AuthoringOperation:
     """Caller holds the physical owner; snapshot entry state before sync."""
     created = not repo.is_clone(clone_dir)
     if created:
@@ -709,6 +889,10 @@ def _prepare_operation(data_dir: Path, clone_dir: Path, declared_repo: str, *, f
         if selected is not None and _file_state(clone_dir / selected) is not None and repo._owned_git(clone_dir, ["ls-files", "--error-unmatch", "--", selected]).returncode != 0:
             raise SecretsError("entry authoring refused: unowned material occupies the selected blob")
         parent = _ordinary(clone_dir / "blobs", directory=True) if (clone_dir / "blobs").exists() else None
+    if rotate:
+        manifest = Manifest.load(clone_dir / "manifest.json")
+        _rotation_blobs(manifest)
+    if entry_name is not None or rotate:
         entry_cache = _file_state(data_dir / "identity.txt")
     directory = data_dir / RECOVERY_DIRECTORY
     directory.mkdir(mode=0o700)
@@ -725,14 +909,21 @@ def _prepare_operation(data_dir: Path, clone_dir: Path, declared_repo: str, *, f
                           entry_cache=entry_cache, selected_blob=None,
                           entry_blob_parent=[parent.st_dev, parent.st_ino] if parent else None, created_blob_parent=None)
             record.pop("force")
+        elif rotate:
+            record.update(version=3, operation="rotate", entry_cache=entry_cache,
+                          rotation_blobs=[], receiving_identities={})
+            record.pop("force")
         operation = AuthoringOperation(data_dir, clone_dir, declared_repo, record, (info.st_dev, info.st_ino))
         operation.mark("capturing")
         if index:
             _write(directory / "entry-index", (clone_dir / ".git/index").read_bytes())
-            if entry_name is not None:operation._remember_artifact("entry-index")
-        for name in _SEED_PATHS if entry_name is None else ("manifest.json",):operation.capture(name)
+            if operation._exact_receipts:operation._remember_artifact("entry-index")
+        for name in ("manifest.json",) if entry_name is not None else _ROTATION_PATHS if rotate else _SEED_PATHS:
+            operation.capture(name)
         if entry_name is not None:
             operation.record["selected_blob"] = _capture_entry_selection(operation, manifest, entry_name, source_name)
+        elif rotate:
+            operation.record["rotation_blobs"] = _capture_rotation_blobs(operation, manifest)
         operation.mark("admitted")
         if not created and entry is None:
             repo._fetch_unborn(clone_dir)
@@ -746,9 +937,12 @@ def _prepare_operation(data_dir: Path, clone_dir: Path, declared_repo: str, *, f
                 raise SecretsError(f"seed refused: local history is {state}; no local commit is treated as disposable")
             if counts[1]:
                 target = repo._owned_oid(clone_dir, "@{u}")
-                if entry_name is not None:
+                if entry_name is not None or rotate:
                     payload = repo._owned_query(clone_dir, ["show", target + ":manifest.json"])
                     incoming_manifest = Manifest(clone_dir / "manifest.json", json.loads(payload))
+                if rotate:
+                    operation.record["rotation_blobs"] = _capture_rotation_blobs(operation, incoming_manifest)
+                elif entry_name is not None:
                     operation.record["selected_blob"] = _capture_entry_selection(operation, incoming_manifest, entry_name, source_name)
                     operation.record["operation"] = "remove" if source_name is None else "update" if entry_name in incoming_manifest.entries else "add"
                 names = repo._owned_query(clone_dir, ["diff", "--name-only", "-z", entry, target]).split(b"\0")
@@ -778,12 +972,18 @@ def _prepare_operation(data_dir: Path, clone_dir: Path, declared_repo: str, *, f
         _admit(clone_dir, declared_repo)
         guard.require_guard(clone_dir)
         _admit(clone_dir, declared_repo)
-        if entry_name is not None:
+        if entry_name is not None or rotate:
             manifest = Manifest.load(clone_dir / "manifest.json")
-            if _selected_entry_blob(manifest, entry_name, source_name) != operation.record["selected_blob"]:
+            if rotate:
+                if _rotation_blobs(manifest) != operation.record["rotation_blobs"]:
+                    raise _recovery_error("synchronized rotation footprint changed after preimage capture")
+                for name in operation.record["rotation_blobs"]:
+                    if _file_state(clone_dir / name) is None:
+                        raise SecretsError(f"rotation refused: the synchronized checkout has no {name}")
+            elif _selected_entry_blob(manifest, entry_name, source_name) != operation.record["selected_blob"]:
                 raise _recovery_error("synchronized entry selection changed after preimage capture")
             operation.record["synced_index"] = _file_state(clone_dir / ".git/index")
-            operation._require_entry_cache()
+            operation._require_cache()
         operation.mark("synchronized", synced_files={name: _file_state(clone_dir / name) for name in operation.record["preimages"]})
         return operation
     except BaseException as primary:
@@ -802,6 +1002,10 @@ def _valid_file_receipt(state: Any, *, stored: bool = False) -> bool:
             and all(c in "0123456789abcdef" for c in state["digest"])
             and type(state["mode"]) is int and 0 <= state["mode"] <= 0o7777
             and (not stored or isinstance(state["stored"], str)))
+
+
+def _valid_digest(value: Any) -> bool:
+    return isinstance(value, str) and len(value) == 64 and all(c in "0123456789abcdef" for c in value)
 
 
 def _valid_physical_identity(value: Any) -> bool:
@@ -838,7 +1042,7 @@ def _load_entry_operation(data_dir: Path, info: os.stat_result, marker: os.stat_
     if "commit_oid" in record:
         if not repo._object_id(record["commit_oid"]) or record.get("proof_ref") != repo._publication_ref(record["commit_oid"]) or not repo._object_id(record.get("expected_tree")):raise ValueError
     elif "proof_ref" in record:raise ValueError
-    if not isinstance(record["declared_repo_digest"], str) or len(record["declared_repo_digest"]) != 64 or any(c not in "0123456789abcdef" for c in record["declared_repo_digest"]):raise ValueError
+    if not _valid_digest(record["declared_repo_digest"]):raise ValueError
     selected = record["selected_blob"]
     if selected is not None and (not isinstance(selected, str) or not selected.startswith("blobs/") or not _eligible(selected) or "\\" in selected or selected != Path(selected).as_posix()):raise ValueError
     clone = data_dir / "repo"
@@ -874,12 +1078,7 @@ def _load_entry_operation(data_dir: Path, info: os.stat_result, marker: os.stat_
     synchronized = advanced or record["phase"] == "synchronized" or record["phase"] == "cleaning" and record["cleanup_outcome"] in {"confirmed", "unchanged"}
     if synchronized:
         if "synced_files" not in record or "synced_index" not in record or not _valid_file_receipt(record["synced_index"]):raise ValueError
-    if "publication_reason" in record and record["publication_reason"] not in {
-        "fresh proof unavailable", "publication proof ref is not exclusively available",
-        "fresh branch reachability", "fresh branch does not prove reachability",
-        "publication proof cleanup incomplete", "complete exact-ref push receipt", "complete exact-ref rejection",
-        "binding refused before push invocation",
-    }:raise ValueError
+    if "publication_reason" in record and record["publication_reason"] not in _PUBLICATION_REASONS:raise ValueError
     allowed = {"entry-index", "prepared-index", "proposed-manifest"} | stored_names
     if record["operation"] != "remove":allowed.add("proposed-blob")
     if set(record["artifacts"]) - allowed or any(not _valid_file_receipt(state) or state is None for state in record["artifacts"].values()):raise ValueError
@@ -917,6 +1116,105 @@ def _load_entry_operation(data_dir: Path, info: os.stat_result, marker: os.stat_
     return AuthoringOperation(data_dir, clone, declared_repo, record, (info.st_dev, info.st_ino), (marker.st_dev, marker.st_ino))
 
 
+def _load_rotation_operation(data_dir: Path, info: os.stat_result, marker: os.stat_result,
+                             record: dict) -> AuthoringOperation:
+    """Accept only the finite version-3 rotation record, never weaken others."""
+    required = {"version", "operation", "phase", "clone_identity", "git_identity", "branch", "declared_repo_digest",
+                "entry_head", "synced_head", "index", "preimages", "outputs", "artifacts", "directory_identity",
+                "marker_identity", "entry_cache", "rotation_blobs", "receiving_identities"}
+    optional = {"synced_files", "synced_index", "expected_tree", "authored_paths", "cache_digest",
+                "commit_oid", "proof_ref", "publication_reason", "cleanup_outcome", "cleanup_remaining", "cleanup_next"}
+    if not required.issubset(record) or set(record) - required - optional:
+        raise ValueError
+    if type(record["version"]) is not int or record["version"] != 3 or record["operation"] != "rotate":
+        raise ValueError
+    if record["phase"] not in {"admitted", "syncing", "synchronized", "prepared", "applying", "publishing", "unsubmitted", "uncertain", "definitely_rejected", "confirmed", "finalizing", "restored", "cleaning"}:
+        raise ValueError
+    for key in ("clone_identity", "git_identity", "directory_identity", "marker_identity"):
+        if not _valid_physical_identity(record[key]):raise ValueError
+    if record["directory_identity"] != [info.st_dev, info.st_ino] or record["marker_identity"] != [marker.st_dev, marker.st_ino]:
+        raise ValueError
+    for key in ("entry_head", "synced_head"):
+        if not repo._object_id(record[key]):raise ValueError
+    for key in ("index", "entry_cache"):
+        if not _valid_file_receipt(record[key]):raise ValueError
+    if "synced_index" in record and not _valid_file_receipt(record["synced_index"]):raise ValueError
+    if "cache_digest" in record and not _valid_digest(record["cache_digest"]):raise ValueError
+    if "commit_oid" in record:
+        if not repo._object_id(record["commit_oid"]) or record.get("proof_ref") != repo._publication_ref(record["commit_oid"]) or not repo._object_id(record.get("expected_tree")):raise ValueError
+    elif "proof_ref" in record:raise ValueError
+    if not _valid_digest(record["declared_repo_digest"]):raise ValueError
+    blobs = record["rotation_blobs"]
+    if not isinstance(blobs, list) or sorted(set(blobs)) != blobs:raise ValueError
+    for name in blobs:
+        if not isinstance(name, str) or not _canonical_blob(name):raise ValueError
+    clone = data_dir / "repo"
+    for path, key in [(clone, "clone_identity"), (clone / ".git", "git_identity")]:
+        physical = _ordinary(path, directory=True)
+        if record[key] != [physical.st_dev, physical.st_ino]:raise ValueError
+    declared_repo = repo._recorded_origin(clone)
+    if _digest(declared_repo.encode("utf-8")) != record["declared_repo_digest"]:raise ValueError
+    if not isinstance(record["preimages"], dict) or not {"manifest.json", "identity.age"}.issubset(record["preimages"]):raise ValueError
+    stored_names = set()
+    for name, state in record["preimages"].items():
+        if not isinstance(name, str) or not _eligible(name):raise ValueError
+        if state is None:continue
+        if not _valid_file_receipt(state, stored=True):raise ValueError
+        stored = state["stored"]
+        if not stored.startswith("preimage-") or not stored[9:].isdigit() or stored in stored_names:raise ValueError
+        stored_names.add(stored)
+    if any(name not in record["preimages"] for name in blobs):raise ValueError
+    for key in ("outputs", "artifacts", "receiving_identities"):
+        if not isinstance(record[key], dict):raise ValueError
+    proposed = {"identity.age": "proposed-identity", "manifest.json": "proposed-manifest"}
+    proposed.update({name: "proposed-blob-" + str(index) for index, name in enumerate(blobs)})
+    if record["outputs"]:
+        if set(record["outputs"]) != set(proposed):raise ValueError
+        for name, state in record["outputs"].items():
+            if not _valid_file_receipt(state, stored=True) or state["stored"] != proposed[name]:raise ValueError
+    advanced = record["phase"] in {"prepared", "applying", "publishing", "unsubmitted", "uncertain", "definitely_rejected", "confirmed", "finalizing"}
+    confirmed_cleaning = record["phase"] == "cleaning" and record["cleanup_outcome"] == "confirmed"
+    if advanced or confirmed_cleaning:
+        if not record["outputs"] or record.get("authored_paths") != ["identity.age", "manifest.json"] + blobs:raise ValueError
+        if not repo._object_id(record.get("expected_tree")) or "cache_digest" not in record:raise ValueError
+    if "synced_files" in record:
+        if not isinstance(record["synced_files"], dict) or set(record["synced_files"]) != set(record["preimages"]):raise ValueError
+        if not all(_valid_file_receipt(state) for state in record["synced_files"].values()):raise ValueError
+    if advanced or confirmed_cleaning or record["phase"] == "synchronized":
+        if "synced_files" not in record or "synced_index" not in record or not _valid_file_receipt(record["synced_index"]):raise ValueError
+    if "publication_reason" in record and record["publication_reason"] not in _PUBLICATION_REASONS:raise ValueError
+    allowed = {"entry-index", "prepared-index", "proposed-manifest"} | stored_names | _proposed_names(record)
+    if set(record["artifacts"]) - allowed or any(not _valid_file_receipt(state) or state is None for state in record["artifacts"].values()):raise ValueError
+    actual_names = {path.name for path in (data_dir / RECOVERY_DIRECTORY).iterdir()} - {"marker.json"}
+    expected_names = set(record["artifacts"])
+    if record["phase"] == "cleaning":
+        remaining = record["cleanup_remaining"]
+        if record["cleanup_outcome"] not in {"confirmed", "restored"} or not isinstance(remaining, list) or len(remaining) != len(set(remaining)) or set(remaining) != expected_names:raise ValueError
+        next_name = record["cleanup_next"]
+        if next_name is not None:
+            if next_name not in expected_names:raise ValueError
+            if next_name not in actual_names:expected_names.remove(next_name)
+    if actual_names != expected_names:raise ValueError
+    for name in actual_names:
+        path = data_dir / RECOVERY_DIRECTORY / name
+        _private(path)
+        if _file_state(path) != record["artifacts"][name]:raise ValueError
+    for stored, identity in record["receiving_identities"].items():
+        if stored not in _proposed_names(record) or not _valid_physical_identity(identity):raise ValueError
+        if stored in actual_names:
+            physical = _private(data_dir / RECOVERY_DIRECTORY / stored)
+            if identity != [physical.st_dev, physical.st_ino]:raise ValueError
+    if _branch(clone) != record["branch"]:raise ValueError
+    if record["phase"] in {"publishing", "uncertain", "confirmed", "finalizing"} or confirmed_cleaning:
+        commit = record["commit_oid"]
+        if not repo._object_id(commit) or record["proof_ref"] != repo._publication_ref(commit) or _head(clone) != commit or repo._owned_oid(clone, "HEAD^{tree}") != record["expected_tree"]:raise ValueError
+        _admit(clone, declared_repo)
+        for name, state in record["outputs"].items():
+            if _file_state(clone / name) != {"digest": state["digest"], "mode": 0o644}:raise ValueError
+    repo.require_repo_binding(clone, declared_repo)
+    return AuthoringOperation(data_dir, clone, declared_repo, record, (info.st_dev, info.st_ino), (marker.st_dev, marker.st_ino))
+
+
 def _load_operation(data_dir: Path) -> AuthoringOperation:
     directory = data_dir / RECOVERY_DIRECTORY
     info = _private(directory, directory=True)
@@ -925,6 +1223,8 @@ def _load_operation(data_dir: Path) -> AuthoringOperation:
         record = json.loads((directory / "marker.json").read_bytes())
         if isinstance(record, dict) and record.get("version") == 2:
             return _load_entry_operation(data_dir, info, marker, record)
+        if isinstance(record, dict) and record.get("version") == 3:
+            return _load_rotation_operation(data_dir, info, marker, record)
         required = {"version", "operation", "phase", "clone_identity", "git_identity", "branch", "declared_repo_digest", "entry_head", "synced_head", "index", "preimages", "outputs", "artifacts", "directory_identity", "marker_identity"}
         if not isinstance(record, dict) or not required.issubset(record) or record["version"] != 1 or record["operation"] != "seed":
             raise ValueError
@@ -991,8 +1291,7 @@ def _inspect_recovery(data_dir: Path) -> dict:
                 "path_integrity": "matched", "attempted_commit": record.get("commit_oid"),
                 "publication_evidence": record.get("publication_reason", "not observed"),
                 "publication_attempted": record["phase"] in ("publishing", "uncertain", "confirmed", "finalizing") or record.get("cleanup_outcome") == "confirmed",
-                "cache_compatible": operation._entry_cache_compatible() if record["version"] == 2 else bool(record.get("cache_digest")) and _file_state(canonical / "identity.txt") is not None and
-                _digest((canonical / "identity.txt").read_bytes()) == record["cache_digest"]}
+                "cache_compatible": operation._cache_compatible()}
 
 
 def _reconcile_recovery(data_dir: Path) -> dict:
@@ -1001,7 +1300,7 @@ def _reconcile_recovery(data_dir: Path) -> dict:
     with _recovery_operation_lock(data_dir) as canonical:
         operation = _load_operation(canonical)
         record = operation.record
-        operation._require_entry_cache()
+        operation._require_cache()
         if record["phase"] == "unchanged" or record["phase"] == "cleaning" and record["cleanup_outcome"] == "unchanged":
             operation._verify_synchronized()
             operation.cleanup()
@@ -1029,9 +1328,9 @@ def _reconcile_recovery(data_dir: Path) -> dict:
             if evidence.outcome != "confirmed":raise _recovery_error("fresh proof leaves publication uncertain")
             operation.mark("confirmed", publication_reason=evidence.reason)
         if operation.record["phase"] in ("confirmed", "finalizing", "cleaning"):
-            cache = canonical / "identity.txt"
-            if record["version"] == 1 and (_file_state(cache) is None or _digest(cache.read_bytes()) != record.get("cache_digest")):
-                raise _recovery_error("publication confirmed; existing cache is not compatible")
+            # A confirmed publication whose cache was never finalized is
+            # reported, never rewritten here: only unlock may replace it.
+            operation._require_cache()
             operation.cleanup()
             return {"outcome": "confirmed", "recovery": "cleared"}
         operation.restore()
