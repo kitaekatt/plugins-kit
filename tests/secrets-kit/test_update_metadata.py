@@ -55,7 +55,7 @@ def _snapshot(adding, blob):
 
 def _observe(adding, monkeypatch):
     calls = {'encrypt': [], 'commit': [], 'sourceRead': []}
-    encrypt, commit, read = agefile.encrypt_to_recipient, repository.commit_and_push, Path.read_bytes
+    encrypt, commit, read = agefile.encrypt_to_recipient, repository._commit_owned, Path.read_bytes
     def encrypting(recipient, plaintext, destination):
         calls['encrypt'].append(str(destination));return encrypt(recipient, plaintext, destination)
     def committing(*args, **kwargs):
@@ -65,7 +65,7 @@ def _observe(adding, monkeypatch):
             calls['sourceRead'].append(str(path))
         return read(path)
     monkeypatch.setattr(agefile, 'encrypt_to_recipient', encrypting)
-    monkeypatch.setattr(repository, 'commit_and_push', committing)
+    monkeypatch.setattr(repository, '_commit_owned', committing)
     monkeypatch.setattr(Path, 'read_bytes', reading)
     return calls
 

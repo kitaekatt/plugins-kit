@@ -95,8 +95,8 @@ secrets-kit rotate-identity --new-terminal  # new keypair + re-encrypt everythin
 
 Drop the flag when you are already at a terminal and want the prompt inline.
 
-Seed preserves encrypted recovery evidence when publication or finalization
-is unresolved. Follow the [skill's seed recovery guidance](skills/secrets-kit/SKILL.md#technique)
+Seed, add/update and remove preserve recovery evidence when publication or
+finalization is unresolved. Follow the [skill's authoring recovery guidance](skills/secrets-kit/SKILL.md#technique)
 for publication limits, restoration conditions and preservation obligations.
 
 ## What it does not do

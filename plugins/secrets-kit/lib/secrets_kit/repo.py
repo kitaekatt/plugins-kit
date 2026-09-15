@@ -151,6 +151,11 @@ def _git_environment() -> Dict[str, str]:
 
 def _git(args: List[str], *, cwd: Optional[Path], timeout: int) -> Tuple[int, str]:
     env = _git_environment()
+    if args and args[0] == "add":
+        # Authoring passes file names, including ordinary glob characters.
+        for name in ("GIT_GLOB_PATHSPECS", "GIT_NOGLOB_PATHSPECS", "GIT_ICASE_PATHSPECS"):
+            env.pop(name, None)
+        env["GIT_LITERAL_PATHSPECS"] = "1"
     try:
         proc = subprocess.run(
             ["git"] + args,
@@ -994,6 +999,9 @@ def _owned_git(clone_dir: Path, args: List[str], *, timeout: int = QUERY_TIMEOUT
     """Separate raw records from diagnostics; an owned private index is explicit."""
     environment = _git_environment()
     environment["GIT_OPTIONAL_LOCKS"] = "0"
+    for name in ("GIT_GLOB_PATHSPECS", "GIT_NOGLOB_PATHSPECS", "GIT_ICASE_PATHSPECS"):
+        environment.pop(name, None)
+    environment["GIT_LITERAL_PATHSPECS"] = "1"
     if index is not None:
         environment["GIT_INDEX_FILE"] = str(index)
     creation_policy = {"umask": 0o077} if os.name != "nt" else {}
@@ -1092,9 +1100,10 @@ def _prove_publication(clone_dir: Path, *, commit_oid: str, target_ref: str,
 
 
 def _publish_owned(clone_dir: Path, *, commit_oid: str, target_ref: str,
-                   declared_repo: str) -> PublicationEvidence:
+                   declared_repo: str, binding_checked: bool = False) -> PublicationEvidence:
     """One nonforced exact-ref push, followed by at most one fresh positive proof."""
-    require_repo_binding(clone_dir, declared_repo)
+    if not binding_checked:
+        require_repo_binding(clone_dir, declared_repo)
     receipt = None
     try:
         result = _owned_git(clone_dir, ["push", "--porcelain", "--no-follow-tags", declared_repo,

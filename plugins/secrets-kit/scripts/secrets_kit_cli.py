@@ -24,7 +24,7 @@ sys.path.insert(0, str(_PLUGIN_ROOT / "lib"))
 from secrets_kit import SecretsError, cli_command  # noqa: E402
 from secrets_kit import agefile  # noqa: E402
 from secrets_kit import guard  # noqa: E402
-from secrets_kit.authoring import AuthoringRecoveryError, _prepare_seed  # noqa: E402
+from secrets_kit.authoring import AuthoringOperation, AuthoringRecoveryError, _prepare_entry, _prepare_seed  # noqa: E402
 from secrets_kit import repo as repo_mod  # noqa: E402
 from secrets_kit.converge import converge, paths_for  # noqa: E402
 from secrets_kit.manifest import Config, Manifest, resolve_dest  # noqa: E402
@@ -109,8 +109,8 @@ def _ensure_guarded(config: Config, *, data_dir: Path) -> Path:
 
     Nested repo/key/state/publication helpers never acquire recursively.
 
-    Add, remove and rotation use this helper. Seed records its recovery
-    baseline before synchronizing. Two
+    Rotation uses this helper. Seed and entry operations record their recovery
+    baselines before synchronizing. Two
     things have to be true before we let git record anything permanently, and
     neither is inheritable:
 
@@ -399,22 +399,32 @@ def cmd_add(args: argparse.Namespace) -> int:
     """Encrypt a file into the repo. Public-key op -- no passphrase needed."""
     config = _require_config()
     with operation_lock(DATA_DIR) as data_dir:
-        clone = _ensure_guarded(config, data_dir=data_dir)
+        operation = _prepare_entry(data_dir, paths_for(data_dir)["clone"], config.repo,
+                                   name=args.name, source_name=Path(args.file).expanduser().name)
+        return _add_entry(args, config, operation)
+
+
+def _add_entry(args: argparse.Namespace, config: Config, operation: AuthoringOperation) -> int:
+    clone = operation.clone
+    try:
         manifest_path = clone / "manifest.json"
         manifest = Manifest.load(manifest_path)
 
         source = Path(args.file).expanduser()
         if not source.is_file():
-            return _fail(f"no such file: {source}")
+            _fail(f"no such file: {source}")
+            return operation.refuse()
 
         exists = args.name in manifest.entries
         if exists and not args.update:
-            return _fail(
+            _fail(
                 f"entry '{args.name}' already exists. Pass --update to rotate its "
                 "value (this is the rotation path), or pick another name."
             )
+            return operation.refuse()
         if not exists and not args.dest:
-            return _fail("--dest is required when adding a new entry")
+            _fail("--dest is required when adding a new entry")
+            return operation.refuse()
 
         blob_rel = manifest.entries[args.name].blob if exists else f"blobs/{source.name}.age"
         _require_exclusive_blob(manifest, clone, args.name, blob_rel)
@@ -465,11 +475,12 @@ def cmd_add(args: argparse.Namespace) -> int:
         rewritten = Manifest(manifest_path, raw)
         if rewritten.entries[args.name].newline == "lf" and b"\r\n" in plaintext:
             requirement = "inherited newline lf is required" if args.newline is None else "--newline lf was requested"
-            return _fail(
+            _fail(
                 f"{source} contains CRLF but {requirement}. "
                 "Convert it first; seeding a CRLF ssh key or token breaks the "
                 "consumer in ways that are painful to diagnose later."
             )
+            return operation.refuse()
 
         # Validate the complete declaration and exposure before writing ciphertext.
         refusal = _refuse_exposed_dest(
@@ -480,29 +491,39 @@ def cmd_add(args: argparse.Namespace) -> int:
             consent_dropped=consent_dropped,
         )
         if refusal is not None:
-            return refusal
+            return operation.refuse()
 
-        agefile.encrypt_to_recipient(manifest.recipient, plaintext, clone / blob_rel)
-        manifest_path.write_text(rewritten.dump(), encoding="utf-8")
+        if operation.record["selected_blob"] != blob_rel:
+            raise AuthoringRecoveryError("entry selection differs from its captured footprint")
+        operation.prepare_entry(rewritten.dump().encode("utf-8"), manifest.recipient, plaintext)
 
         verb = "rotate" if exists else "add"
-        repo_mod.commit_and_push(
-            clone, f"{verb}: {args.name}", [blob_rel, "manifest.json"]
-        )
+        operation.apply_entry(f"{verb}: {args.name}")
         print(f"{'rotated' if exists else 'added'} '{args.name}' -> {blob_rel}")
         return 0
+    except BaseException as primary:
+        operation.failure(primary)
+        raise
 
 
 def cmd_remove(args: argparse.Namespace) -> int:
     """Drop an entry. Every machine deletes its copy on the next pass."""
     config = _require_config()
     with operation_lock(DATA_DIR) as data_dir:
-        clone = _ensure_guarded(config, data_dir=data_dir)
+        operation = _prepare_entry(data_dir, paths_for(data_dir)["clone"], config.repo,
+                                   name=args.name, source_name=None)
+        return _remove_entry(args, operation)
+
+
+def _remove_entry(args: argparse.Namespace, operation: AuthoringOperation) -> int:
+    clone = operation.clone
+    try:
         manifest_path = clone / "manifest.json"
         manifest = Manifest.load(manifest_path)
 
         if args.name not in manifest.entries:
-            return _fail(f"no entry named '{args.name}'")
+            _fail(f"no entry named '{args.name}'")
+            return operation.refuse()
 
         blob_rel = manifest.entries[args.name].blob
         _require_exclusive_blob(manifest, clone, args.name, blob_rel)
@@ -513,19 +534,19 @@ def cmd_remove(args: argparse.Namespace) -> int:
             raw["profiles"][profile] = [n for n in names if n != args.name]
 
         rewritten = Manifest(manifest_path, raw)
-        manifest_path.write_text(rewritten.dump(), encoding="utf-8")
-        try:
-            (clone / blob_rel).unlink()
-        except OSError:
-            pass
-
-        repo_mod.commit_and_push(clone, f"remove: {args.name}", [blob_rel, "manifest.json"])
+        if operation.record["selected_blob"] != blob_rel:
+            raise AuthoringRecoveryError("entry selection differs from its captured footprint")
+        operation.prepare_entry(rewritten.dump().encode("utf-8"), manifest.recipient, None)
+        operation.apply_entry(f"remove: {args.name}")
         print(
             f"removed '{args.name}'. Note the ciphertext remains in git history "
             "forever -- if the VALUE was sensitive and is now exposed, rotate the "
             "underlying credential; deleting the blob is not revocation."
         )
         return 0
+    except BaseException as primary:
+        operation.failure(primary)
+        raise
 
 
 # --------------------------------------------------------------------------

@@ -367,8 +367,12 @@ def test_single_complete_origin_value_preserves_legitimate_data(adding, monkeypa
     raw = json.loads(adding.config_path.read_text());raw['repo'] = value
     adding.config_path.write_text(json.dumps(raw))
     observed = _origin_reply(monkeypatch, adding, stdout=value.encode() + b'\0')
+    def publish(clone_dir, *, commit_oid, target_ref, declared_repo, binding_checked=False):
+        assert declared_repo == value and binding_checked is True
+        return repository.PublicationEvidence('confirmed', 'dummy controlled publication', commit_oid, target_ref)
+    monkeypatch.setattr(repository, '_publish_owned', publish)
     code, unused = _operation(adding, 'remove')
-    assert code == 0 and len(observed) == 1
+    assert code == 0 and len(observed) == 2
 
 
 def test_unrepresentable_declaration_is_comparison_inability(adding, monkeypatch, capsys):

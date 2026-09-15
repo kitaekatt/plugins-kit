@@ -202,7 +202,7 @@ technique_skill:
         - "It asks the REMOTE whether the repo is seeded, not the local checkout -- a clone that has not fetched since before someone else seeded would otherwise report 'never seeded'. If init says already seeded, believe it over the session-pass message that sent you here, and run `unlock --new-terminal` instead."
         - "Seed publishes one exact commit without automatic rebase or a second push. Before submission or after a validated rejection, it restores its owned entry checkout and index and preserves the existing identity cache. A lost push report can still mean publication succeeded."
         - "Uncertain publication or incomplete cache finalization retains encrypted recovery evidence and blocks ordinary operations. Preserve the wrapped proposed key, clone, cache and recovery marker for private inspection; never discard a possibly published key or hand-push a pending seed. Checkout restoration requires proved-absent publication and validated ownership."
-        - "These recovery checks cover seed and force-seed. Other authoring verbs require their own recovery acceptance."
+        - "These recovery checks cover seed, force-seed, add/update and remove. Whole-identity rotation requires its own recovery acceptance."
         - "This is the one sanctioned exception to pull-not-push: it must run on the machine holding the plaintext. Every step afterwards is a pull."
     - id: add_rotate
       keywords: [add secret, new credential, rotate, update value, changed token]
@@ -213,6 +213,8 @@ technique_skill:
         [--update] [--allow-tracked-dest]
       gotchas:
         - "AGENT-RUNNABLE: public-key encryption, no passphrase, no terminal. This is the routine path."
+        - "Add/update require a clean admitted checkout and prepare outputs privately before one exact publication, without automatic rebase or a second push. Unsubmitted work or validated rejection restores the owned entry state. Uncertainty retains recovery and blocks ordinary operations: preserve clone, cache and recovery evidence for private reconciliation. Add/update never rewrite the identity cache."
+        - "Entry authoring uses the fixed direct `blobs/<entry-or-source>.age` slot required by the secrets-repo hook allowlist; there is no alternate layout setting. Nested, absolute, backslash, non-`.age`, and non-`blobs/` selections are refused before encryption or publication, so changing the slot requires a reviewed hook and manifest contract change."
         - "`--update` is the rotation path (keeps the blob filename and dest). Adding a name that exists without --update refuses, so a typo cannot silently clobber a different secret."
         - "`--newline lf` ASSERTS the plaintext has no CRLF and fails if it does. Use it for ssh keys and tokens: a CRLF-seeded key breaks the consumer in ways that are miserable to diagnose later."
         - "`--dest` supports ${VAR} and ~. Variables resolve from secrets.json (machine block first, then global, then the environment). An unresolvable variable is a hard failure, never a literal path."

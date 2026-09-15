@@ -49,6 +49,17 @@ unconfigurable opinion whose test passes is a finding.
   there is no supported path for a consumer to hand-install into a plugin venv. A team that
   wants manual control should not enable the plugin -- partial adoption produces a machine
   whose bootstrap is permanently wrong.
+- **secrets-kit reserves one direct `blobs/<entry-or-source>.age` slot per entry.**
+  Authoring is what enforces it: `secrets_kit.authoring._selected_entry_blob` refuses a
+  nested, absolute, backslash, non-`.age` or non-`blobs/` selection before any encryption
+  or publication. The two downstream readers are looser and do NOT establish the shape --
+  the repo-side hook allowlist matches a `blobs/*.age` shell pattern, whose `*` spans `/`
+  and so accepts a nested path, and `manifest.py::Entry` requires only a blob string.
+  Authoring is therefore the single place the canonical shape is decided, which is what
+  keeps those two from diverging. The rejected shapes and the refusal boundary are
+  documented in `secrets-kit/skills/secrets-kit/SKILL.md`. A consumer that needs another
+  layout must use a separate repository contract or fork the plugin; there is no supported
+  layout override to leave half-configured.
 - **skills-kit's Architectural rule tier is not configurable.** The type contracts are what
   make an audit comparable across projects; a project that disables them is not running the
   same audit. Optional-tier rules and thresholds ARE configurable, and

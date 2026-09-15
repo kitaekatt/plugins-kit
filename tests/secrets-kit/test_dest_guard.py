@@ -779,6 +779,7 @@ class TestAddWhenTheCheckCannotRun:
             "windows": "${ONLY_ON_THIS_BOX}/x.txt",
         }
         adding.manifest_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        repo_mod.commit_and_push(adding.clone, "fixture: published per-os destination", ["manifest.json"])
 
         assert adding.cli.cmd_add(adding.args(update=True)) == 0
 
