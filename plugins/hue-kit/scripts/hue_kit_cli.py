@@ -248,19 +248,32 @@ def _resolve_key_file() -> None:
         os.environ["HUE_KEY_FILE"] = str(PAIRED_KEY_FILE)
 
 
+def _workfile_path(workdir: Path, name: str, env_var: str) -> Path:
+    """Resolve ONE working file's path once: env_var if set (absolutized),
+    else <workdir>/<name> (absolutized). The single resolution rule for
+    scene-groups.yaml / scene-designs.yaml -- used for existence checks,
+    write targets, and (via _scene_layers_env) the child's env, so every
+    caller agrees on where the file lives. A user-set relative override must
+    keep meaning "relative to where I ran from", so it is resolved against
+    the invocation cwd before anything below may chdir."""
+    override = os.environ.get(env_var, "").strip()
+    if override:
+        return Path(override).resolve()
+    return (workdir / name).resolve()
+
+
 def _scene_layers_env(workdir: Path) -> dict:
     """Resolve the bridge + key and point scene-layers.py at the working dir's
     YAML. Shared by the exec and subprocess runners below."""
     os.environ["HUE_BRIDGE_IP"] = _resolve_bridge_ip()
     _resolve_key_file()
     env = os.environ
-    env.setdefault("HUE_GROUPS_FILE", str(workdir / "scene-groups.yaml"))
-    env.setdefault("HUE_DESIGNS_FILE", str(workdir / "scene-designs.yaml"))
-    # A user-set relative path must keep meaning "relative to where I ran from",
-    # so absolutize before any chdir.
-    for var in ("HUE_GROUPS_FILE", "HUE_DESIGNS_FILE", "HUE_KEY_FILE"):
-        if env.get(var):
-            env[var] = str(Path(env[var]).resolve())
+    env["HUE_GROUPS_FILE"] = str(_workfile_path(workdir, "scene-groups.yaml",
+                                                "HUE_GROUPS_FILE"))
+    env["HUE_DESIGNS_FILE"] = str(_workfile_path(workdir, "scene-designs.yaml",
+                                                 "HUE_DESIGNS_FILE"))
+    if env.get("HUE_KEY_FILE"):
+        env["HUE_KEY_FILE"] = str(Path(env["HUE_KEY_FILE"]).resolve())
     workdir.mkdir(parents=True, exist_ok=True)
     return env
 
@@ -477,8 +490,8 @@ def _cmd_start(args) -> int:
     except Exception:
         pass
     workdir = Path(args.dir).resolve()
-    groups_f = workdir / "scene-groups.yaml"
-    designs_f = workdir / "scene-designs.yaml"
+    groups_f = _workfile_path(workdir, "scene-groups.yaml", "HUE_GROUPS_FILE")
+    designs_f = _workfile_path(workdir, "scene-designs.yaml", "HUE_DESIGNS_FILE")
     report_f = workdir / "index.html"
     fp_f = workdir / "bridge-fingerprint.txt"
 
@@ -691,16 +704,20 @@ def main(argv: list[str] | None = None) -> int:
         return _run_scene_layers([], workdir)
     if args.cmd == "groups":
         # User paths resolve against the invocation cwd before _run_scene_layers
-        # changes the POSIX cwd or launches the child with this cwd.
-        out = str(Path(args.path).resolve()) if args.path else str(workdir / "scene-groups.yaml")
+        # changes the POSIX cwd or launches the child with this cwd. With no
+        # explicit path, fall back to the one resolution rule (HUE_GROUPS_FILE
+        # override, else <dir>/scene-groups.yaml) so this write target agrees
+        # with everything else that reads/writes the registry.
+        out = str(Path(args.path).resolve()) if args.path else \
+            str(_workfile_path(workdir, "scene-groups.yaml", "HUE_GROUPS_FILE"))
         return _run_scene_layers(["--export-groups", out], workdir)
     if args.cmd == "export":
         # Re-baseline the shape fingerprint alongside the design: export IS the
         # pull, so afterwards the local files reflect the bridge as it is now.
         # Without this a shape change stays reported forever -- the user fixes
         # it the only way they can, and `start` keeps insisting it is broken.
-        rc, _ = _call_scene_layers(
-            ["--export-designs", str(workdir / "scene-designs.yaml")], workdir)
+        designs_f = _workfile_path(workdir, "scene-designs.yaml", "HUE_DESIGNS_FILE")
+        rc, _ = _call_scene_layers(["--export-designs", str(designs_f)], workdir)
         if rc == 0:
             frc, fp = _call_scene_layers(["--fingerprint"], workdir, capture=True)
             if frc == 0 and (fp or "").strip():

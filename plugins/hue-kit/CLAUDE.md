@@ -60,8 +60,8 @@ the `os.execve` runner the single-verb commands use -- exec never returns.
 
 The user provides the bridge connection (README "Point it at your bridge"):
 `HUE_BRIDGE_IP` and either `HUE_APP_KEY` or `HUE_KEY_FILE`. Never commit a user's
-key. If `HUE_APP_KEY` is unset the tool falls back to `HUE_KEY_FILE` then
-`secrets/hue-bridge-key.txt`.
+key. If `HUE_APP_KEY` is unset the tool falls back to `HUE_KEY_FILE` then the
+paired key `hue-kit pair` writes to the plugin data directory.
 
 ## The default entry point: `hue-kit start`
 

@@ -99,7 +99,17 @@ import yaml
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-KEY_FILE = Path("secrets/hue-bridge-key.txt")
+# Load the vendored bootstrap-presence guard next to this script (same
+# pattern as hue_kit_cli.py) -- only data_dir() is needed here, to locate the
+# paired-key file `hue-kit pair` writes.
+sys.path.insert(0, str(SCRIPT_DIR))
+from bootstrap_guard import data_dir  # noqa: E402
+
+# Where `hue-kit pair` stores the minted application key. Mirrors
+# hue_kit_cli.py's PAIRED_KEY_FILE constant exactly (same data_dir("hue-kit")
+# call) -- duplicated rather than imported, since the two scripts do not
+# import each other.
+PAIRED_KEY_FILE = data_dir("hue-kit") / "app-key.txt"
 
 # --validate-design's distinct exit code for "ran cleanly and found a real
 # discrepancy" -- separate from 1 (a generic error: a malformed registry, an
@@ -112,14 +122,17 @@ EXIT_DISCREPANCY = 4
 
 
 def _cfg_file(name, env_var):
-    """Resolve a config YAML across layouts: an env override, else the source
-    repo's ../references/<name>, else <name> next to this script (flat/pastebin
-    layout)."""
+    """Resolve a config YAML's path: env_var if set (absolutized), else
+    <cwd>/<name> (absolutized) -- never derived from this script's own
+    location (__file__). Under the CLI the child's cwd IS the working
+    directory (hue_kit_cli.py's _run_scene_layers chdir's, _call_scene_layers
+    passes cwd=workdir) and HUE_GROUPS_FILE/HUE_DESIGNS_FILE are always set
+    by _scene_layers_env, so this agrees with the CLI's own resolution
+    (_workfile_path) without needing to know about it."""
     override = os.environ.get(env_var)
     if override:
-        return Path(override).expanduser()
-    ref = SCRIPT_DIR.parent / "references" / name
-    return ref if ref.exists() else SCRIPT_DIR / name
+        return Path(override).expanduser().resolve()
+    return (Path.cwd() / name).resolve()
 
 
 GROUPS_YAML = _cfg_file("scene-groups.yaml", "HUE_GROUPS_FILE")
@@ -144,17 +157,19 @@ smg = _load_analyzer()
 # ========================================================================
 def bridge_session() -> requests.Session:
     """A CLIP v2 session. The application key comes from (in order) the
-    HUE_APP_KEY env var, the HUE_KEY_FILE env var's path, or the default
-    secrets/hue-bridge-key.txt -- so it runs on any bridge (see README)."""
+    HUE_APP_KEY env var, the HUE_KEY_FILE env var's path, or the paired key
+    file `hue-kit pair` writes (PAIRED_KEY_FILE) -- so it runs on any bridge
+    (see README)."""
     key = os.environ.get("HUE_APP_KEY")
     if not key:
-        kf = Path(os.environ.get("HUE_KEY_FILE", str(KEY_FILE))).expanduser()
+        env_key_file = os.environ.get("HUE_KEY_FILE")
+        kf = Path(env_key_file).expanduser().resolve() if env_key_file \
+            else PAIRED_KEY_FILE
         if not kf.exists():
             raise SystemExit(
-                "error: no Hue application key -- set HUE_APP_KEY, or put the "
-                f"key in {kf} (set HUE_KEY_FILE to change the path). Create one "
-                "by pressing the bridge link button then POSTing to the bridge; "
-                "see the README.")
+                "error: no Hue application key -- set HUE_APP_KEY, set "
+                f"HUE_KEY_FILE to a key file, or run `hue-kit pair` to mint "
+                f"one (looked for {kf}).")
         key = kf.read_text().strip()
     session = requests.Session()
     session.headers["hue-application-key"] = key
@@ -1162,10 +1177,10 @@ def main() -> int:
                     help="solve an offline scene-cells.json instead of the bridge")
     ap.add_argument("--json", action="store_true",
                     help="emit machine-readable result instead of the report")
-    ap.add_argument("--html", metavar="PATH", nargs="?",
-                    const="tmp/scene-layers.html",
-                    help="render a browsable HTML report (default "
-                    "tmp/scene-layers.html) and exit")
+    ap.add_argument("--html", metavar="PATH",
+                    help="render a browsable HTML report to PATH and exit "
+                    "(standalone use requires PATH -- the CLI always passes "
+                    "one)")
     ap.add_argument("--out", metavar="PATH", help="write output to PATH")
     ap.add_argument("--export-cells", metavar="PATH",
                     help="write the live per-scene cells to PATH and exit (no solve)")
@@ -1173,10 +1188,11 @@ def main() -> int:
                     help="generate a STARTER scene-groups.yaml (certified-minimum "
                     "family, placeholder names) to PATH or stdout, then exit -- "
                     "the bootstrap for a new bridge; rename, then --export-designs")
-    ap.add_argument("--export-designs", metavar="PATH", nargs="?",
-                    const=str(DESIGNS_YAML),
-                    help="materialise the layered scene-designs.yaml (default "
-                    f"{DESIGNS_YAML}) from live colours + scene-groups.yaml, then exit")
+    ap.add_argument("--export-designs", metavar="PATH",
+                    help="materialise the layered scene-designs.yaml to PATH "
+                    "from live colours + scene-groups.yaml, then exit "
+                    "(standalone use requires PATH -- the CLI always passes "
+                    "one)")
     ap.add_argument("--fingerprint", action="store_true",
                     help="print a stable hash of the bridge's SHAPE (lights, "
                     "zone membership, scene set) and exit -- structural change "
