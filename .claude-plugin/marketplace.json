@@ -124,7 +124,7 @@
     {
       "name": "llm-scripting-kit",
       "description": "LLM access for scripts and pipelines: credentials, endpoint/model resolution, local Qwen server profiles, and one completion seam over HTTP, Claude, Codex, and OpenCode.",
-      "version": "0.43.0",
+      "version": "0.44.1",
       "author": {
         "name": "Christina"
       },
@@ -176,7 +176,7 @@
     {
       "name": "secrets-kit",
       "description": "Fleet secrets provisioning: materialize age-encrypted credentials from a private repo onto each machine, declaratively. One passphrase-protected identity per fleet, unlocked once per machine; blobs encrypt to the public key so adding or rotating a secret never needs the passphrase. Session-start convergence + CLI.",
-      "version": "0.8.27",
+      "version": "0.8.30",
       "author": {
         "name": "Christina"
       },

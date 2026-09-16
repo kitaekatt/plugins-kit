@@ -383,7 +383,7 @@ meanwhile. Rewriting history does not fix it -- rotating the credential does.
 
 | Thing | Path | Notes |
 |---|---|---|
-| Machine declaration | `~/.claude/secrets.json` | Private, tracked in claude-settings. Repo URL, vars, machines -> profiles. |
+| Machine declaration | `~/.claude/secrets.json` | Private. Repo URL, vars, machines -> profiles. |
 | Secrets repo clone | `<data_dir>/repo` | Fetched at most once per 6h unless `--refresh`. |
 | Unlocked identity | `<data_dir>/identity.txt` | 0600 / owner-only ACL. Never in a git tree. Never expires. |
 | Convergence state | `<data_dir>/state.json` | Blob + plaintext hashes per entry. A cache; safe to delete. |
@@ -400,7 +400,8 @@ mode: any interrupted pass simply converges the remainder next session.
 
 ## secrets.json machine keys reference env.json
 
-They must match the `machines` registry in `env.json`, which stays the single
-machine list. secrets-kit cross-checks and raises an ASK on a mismatch rather
-than guessing -- a machine name that exists in only one of the two files is a
-typo with consequences, not a new machine.
+They must match the `machines` registry in `env.json` (`~/.claude/env.json`, a
+dict keyed by machine name). secrets-kit cross-checks and raises an ASK on a
+mismatch rather than guessing -- a machine name that exists in only one of the
+two files is a typo with consequences, not a new machine. When env.json is
+absent, unreadable, or has no machines entries, the cross-check is skipped.

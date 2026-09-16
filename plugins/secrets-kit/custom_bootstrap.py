@@ -30,6 +30,21 @@ from secrets_kit.converge import converge  # noqa: E402
 CONFIG_PATH = Path.home() / ".claude" / "secrets.json"
 ENV_PATH = Path.home() / ".claude" / "env.json"
 
+# ``converge()``'s skipped_reason values that mean deliberate opt-out rather
+# than a problem, and so belong on the verbose-only channel:
+#   "not configured" -- the third-party default (Config.load's docstring: "a
+#     plugin nobody has declared anything for should produce no noise").
+#   "no profiles for this host" -- Config.machine_key()'s docstring: "subsetting
+#     by omission is how a machine opts out of holding secrets it has no
+#     business holding."
+# Every other skipped_reason (e.g. "age not installed", "repo not seeded yet",
+# "locked") stays on the always-shown channel until it earns the same
+# classification -- an unclassified skip must not go quiet.
+_QUIET_SKIP_REASONS = frozenset({
+    "not configured",
+    "no profiles for this host",
+})
+
 
 def bootstrap(ctx: Any) -> None:
     """Converge this machine's secrets, or explain why it cannot."""
@@ -54,9 +69,13 @@ def bootstrap(ctx: Any) -> None:
         ctx.add_failure(failure.key, **kwargs)
 
     if result.skipped_reason and not result.failures:
-        # "not configured" is the third-party default and must stay quiet:
-        # a plugin nobody has declared anything for should produce no noise.
-        ctx.log(result.summary())
+        if result.skipped_reason in _QUIET_SKIP_REASONS:
+            # Expected inactive state -- see _QUIET_SKIP_REASONS above. The
+            # verbose-only channel, not the always-shown one: a plugin
+            # deliberately unused on this machine should produce no noise.
+            ctx.log_ok(result.summary())
+        else:
+            ctx.log(result.summary())
         return
 
     if result.failures:

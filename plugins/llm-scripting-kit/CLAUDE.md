@@ -133,6 +133,16 @@ the same rule reachability applies one axis over ("I could not check" is never
 emitted by the server for some accounts only, so failing closed would make
 fable permanently unreachable on every machine whose payload omits it.
 
+**An exhausted codex account reports no window at all**, so the window rule
+alone would read it as `no-data` and keep the seat. `read_codex_pool` treats
+null `primary` AND `secondary` plus `credits.has_credits: false` (not
+unlimited) as OUT OF QUOTA. `has_credits: false` alone is not the signal: a
+healthy plan account reports it on every reading, because it describes
+purchased extra credits. The verdict ends at the `usage_limit_exceeded`
+error's "try again at" time, or 5 hours after the reading when that text is
+absent. Without the bound, a dropped seat launches no new codex session, so a
+stale reading would never be replaced.
+
 **A verdict is pinned for the session** (`CLAUDE_CODE_SESSION_ID`); the stance
 and its rationale are the register entry in `plugins/CLAUDE.md`.
 
@@ -344,9 +354,9 @@ claude_md:
       - usage pacing (`conserve_usage`), its declared pools, its fail-open rule,
         and the de-prioritize / disable split its two thresholds produce
       - the per-transport rules the Codex and OpenCode backends carry
-      - the front door: the `frontdoor` verb and launcher, the transport-only
+      - "the front door: the `frontdoor` verb and launcher, the transport-only
         `routing:` keys, fill-then-spill ordering, the single-worker constraint
-        and `--check`
+        and `--check`"
     excludes:
       - codex dispatch mechanics (orchestrate's codex-dispatch.md)
       - codex dispatch mechanics and endpoint compatibility (awesome-kit's

@@ -87,6 +87,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 from dataclasses import dataclass
 from datetime import datetime
@@ -170,6 +171,27 @@ _CODEX_TAIL_BYTES = 512 * 1024
 """How much of a codex rollout's tail to scan for the last ``rate_limits``.
 A rollout grows without bound and the newest reading is at the end, so the
 whole file is never read. Generous enough to span many events."""
+
+_CODEX_EXHAUSTION_LATCH_SECONDS = 5 * _HOUR
+"""How long an exhausted reading with no parseable reset time is trusted.
+
+Codex's own principal window (`primary`) is five hours, so this is not an
+arbitrary guess: it is the longest a real exhaustion could plausibly persist
+without codex itself emitting a fresh, informative rate_limits event.
+Exhaustion dropping a codex seat from routing means no new codex session gets
+launched from here, so without a bound a stale exhausted reading -- one whose
+`usage_limit_exceeded` text was missing or unparseable -- would latch the seat
+out of selection forever, past any real reset. See the `usage_limit_exceeded`
+reset-text parse in `read_codex_pool`, which this bound only backstops."""
+
+_RESET_TEXT_RE = re.compile(
+    r"try again at\s+([A-Za-z]{3,9})\s+(\d{1,2})(?:st|nd|rd|th)?,\s*(\d{4})\s+"
+    r"(\d{1,2}):(\d{2})\s*(AM|PM)",
+    re.IGNORECASE,
+)
+"""Matches the `usage_limit_exceeded` error text's reset clause, e.g.
+``"...or try again at Sep 19th, 2026 3:34 PM."`` codex's own local time,
+un-zoned -- see :func:`_parse_reset_text`."""
 
 
 @dataclass(frozen=True)
@@ -473,8 +495,27 @@ def _newest_codex_rollout(sessions_dir: Path) -> Optional[Path]:
     return max(rollouts, key=lambda p: p.stat().st_mtime)
 
 
-def _last_codex_rate_limits(path: Path) -> Optional[Mapping[str, Any]]:
-    """Scan a rollout's tail for the most recent ``rate_limits`` object."""
+@dataclass(frozen=True)
+class _CodexRateLimitReading:
+    """The most recent ``rate_limits`` event in a rollout's tail, plus any
+    ``usage_limit_exceeded`` error text that followed it (before any LATER
+    ``rate_limits`` event superseded it), and the reading event's own
+    timestamp -- used only when that error text carries no parseable reset
+    time, to bound how long the reading is trusted (see
+    :data:`_CODEX_EXHAUSTION_LATCH_SECONDS`)."""
+
+    limits: Mapping[str, Any]
+    event_epoch: Optional[int]
+    reset_message: Optional[str]
+
+
+def _last_codex_rate_limits(path: Path) -> Optional[_CodexRateLimitReading]:
+    """Scan a rollout's tail for the most recent ``rate_limits`` object.
+
+    Events are read strictly in file order, so a ``usage_limit_exceeded``
+    error is attributed to the reading it follows only while no later
+    ``rate_limits`` event has superseded that reading in the meantime.
+    """
     try:
         with path.open("rb") as handle:
             handle.seek(0, os.SEEK_END)
@@ -483,9 +524,10 @@ def _last_codex_rate_limits(path: Path) -> Optional[Mapping[str, Any]]:
             tail = handle.read().decode("utf-8", errors="replace")
     except OSError:
         return None
-    found: Optional[Mapping[str, Any]] = None
+    found: Optional[Tuple[Mapping[str, Any], Optional[int]]] = None
+    reset_message: Optional[str] = None
     for line in tail.splitlines():
-        if '"rate_limits"' not in line:
+        if '"rate_limits"' not in line and "usage_limit_exceeded" not in line:
             continue
         try:
             event = json.loads(line)
@@ -493,8 +535,18 @@ def _last_codex_rate_limits(path: Path) -> Optional[Mapping[str, Any]]:
             continue
         limits = _find_rate_limits(event)
         if limits is not None:
-            found = limits
-    return found
+            found = (limits, _epoch(event.get("timestamp")))
+            reset_message = None
+            continue
+        if found is not None:
+            message = _find_usage_limit_message(event)
+            if message is not None:
+                reset_message = message
+    if found is None:
+        return None
+    return _CodexRateLimitReading(
+        limits=found[0], event_epoch=found[1], reset_message=reset_message
+    )
 
 
 def _find_rate_limits(node: Any, depth: int = 0) -> Optional[Mapping[str, Any]]:
@@ -518,6 +570,59 @@ def _find_rate_limits(node: Any, depth: int = 0) -> Optional[Mapping[str, Any]]:
     return None
 
 
+def _find_usage_limit_message(node: Any, depth: int = 0) -> Optional[str]:
+    """Locate a ``codex_error_info: "usage_limit_exceeded"`` error's message.
+
+    Searched the same defensively-nested way as :func:`_find_rate_limits`,
+    including through lists -- the ``task_complete`` event nests its ``error``
+    one level under ``payload``, and a future codex release is free to nest it
+    differently or wrap it in a list.
+    """
+    if depth > 6:
+        return None
+    if isinstance(node, Mapping):
+        if node.get("codex_error_info") == "usage_limit_exceeded":
+            message = node.get("message")
+            return message if isinstance(message, str) else ""
+        for value in node.values():
+            found = _find_usage_limit_message(value, depth + 1)
+            if found is not None:
+                return found
+        return None
+    if isinstance(node, list):
+        for item in node:
+            found = _find_usage_limit_message(item, depth + 1)
+            if found is not None:
+                return found
+    return None
+
+
+def _parse_reset_text(message: str) -> Optional[int]:
+    """Parse a ``usage_limit_exceeded`` message's ``"try again at ..."``
+    clause into an epoch, interpreted as codex's LOCAL time (the message
+    carries no timezone, so this reads it the same way a human would: as the
+    machine's own local clock).
+    """
+    if not isinstance(message, str):
+        return None
+    match = _RESET_TEXT_RE.search(message)
+    if not match:
+        return None
+    month_name, day, year, hour, minute, ampm = match.groups()
+    try:
+        month_num = time.strptime(month_name[:3], "%b").tm_mon
+    except ValueError:
+        return None
+    hour_i = int(hour) % 12
+    if ampm.upper() == "PM":
+        hour_i += 12
+    try:
+        moment = datetime(int(year), month_num, int(day), hour_i, int(minute))
+    except ValueError:
+        return None
+    return int(time.mktime(moment.timetuple()))
+
+
 def read_codex_pool(
     spec: ConserveSpec, *, now: Optional[float] = None, sessions_dir: Optional[Path] = None
 ) -> Budget:
@@ -534,12 +639,83 @@ def read_codex_pool(
             status=STATUS_NO_DATA, pool=spec.pool,
             detail=f"no codex session rollout under {root}",
         )
-    limits = _last_codex_rate_limits(rollout)
-    if limits is None:
+    reading = _last_codex_rate_limits(rollout)
+    if reading is None:
         return Budget(
             status=STATUS_NO_DATA, pool=spec.pool,
             detail=f"no 'rate_limits' event in the tail of {rollout.name}",
         )
+    limits = reading.limits
+    # A recognised exhaustion shape: BOTH windows are null (no `primary` and
+    # no `secondary` mapping -- a payload carrying a `primary` window is never
+    # treated as exhausted here, whatever `credits` says) AND the account's
+    # own `credits` block reports none left. `credits.has_credits: false`
+    # ALONE is not exhaustion -- it also appears on every HEALTHY reading from
+    # this same plan (39 of 60 sampled rollouts, 2026-09-13..09-15, `primary`
+    # present, `has_credits: false`): that field describes purchased EXTRA
+    # credits, which this plan never has whether or not it is spent. Checked
+    # BEFORE the window lookup below, because a genuinely exhausted account
+    # reports no window at all -- the ordinary lookup would read that as
+    # no-data forever, never as spent. Fails CLOSED: only an explicit
+    # `has_credits: false` paired with `unlimited` not True, on a reading with
+    # no window at all, is treated as exhaustion.
+    credits = limits.get("credits")
+    primary_present = isinstance(limits.get("primary"), Mapping)
+    secondary_present = isinstance(limits.get("secondary"), Mapping)
+    if not primary_present and not secondary_present and isinstance(credits, Mapping):
+        has_credits = credits.get("has_credits")
+        unlimited = credits.get("unlimited")
+        if has_credits is False and unlimited is not True:
+            reset_at = _parse_reset_text(reading.reset_message)
+            if reset_at is not None:
+                if moment >= reset_at:
+                    return Budget(
+                        status=STATUS_NO_DATA, pool=spec.pool,
+                        detail=(
+                            f"codex usage-limit window already reset at {reset_at} "
+                            "(parsed from the 'try again at' error text)"
+                        ),
+                    )
+                return Budget(
+                    status=STATUS_OUT_OF_QUOTA, pool=spec.pool,
+                    detail=(
+                        "codex account reports no credits remaining; resets at "
+                        f"{reset_at} (parsed from the 'try again at' error text)"
+                    ),
+                    remaining=0.0,
+                    resets_at=reset_at,
+                )
+            # No parseable reset time -- latch out-of-quota only while the
+            # exhausted reading is recent (see
+            # _CODEX_EXHAUSTION_LATCH_SECONDS), falling back to the rollout
+            # file's mtime when the event itself carries no usable timestamp.
+            event_epoch = reading.event_epoch
+            if event_epoch is None:
+                try:
+                    event_epoch = int(rollout.stat().st_mtime)
+                except OSError:
+                    event_epoch = None
+            if event_epoch is not None and moment - event_epoch < _CODEX_EXHAUSTION_LATCH_SECONDS:
+                return Budget(
+                    status=STATUS_OUT_OF_QUOTA, pool=spec.pool,
+                    detail=(
+                        "codex account reports no credits remaining; no parseable "
+                        "reset time, latched out-of-quota while the reading is "
+                        f"under {_CODEX_EXHAUSTION_LATCH_SECONDS // _HOUR}h old"
+                    ),
+                    remaining=0.0,
+                    # The latch end is the reset a pinned session honours;
+                    # without it the verdict would hold for the whole session.
+                    resets_at=int(event_epoch + _CODEX_EXHAUSTION_LATCH_SECONDS),
+                )
+            return Budget(
+                status=STATUS_NO_DATA, pool=spec.pool,
+                detail=(
+                    "codex exhaustion reading carries no parseable reset time and "
+                    f"is older than the {_CODEX_EXHAUSTION_LATCH_SECONDS // _HOUR}h "
+                    "latch; treating as stale rather than assuming it still holds"
+                ),
+            )
     # Codex names its windows `primary` and `secondary`; `seven_day` is this
     # module's harness-neutral default, so it resolves to the principal window
     # rather than failing on a name codex has never emitted.
