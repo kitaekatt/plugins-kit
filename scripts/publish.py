@@ -18,18 +18,28 @@ publish -- it is a state where users see something other than what you meant:
 Contract: you commit your code and the version bump on `dev`; this script owns
 everything derived from them and every git step after them.
 
-Why a script rather than a checklist -- three footguns it removes:
+Why a script rather than a checklist -- the footguns it removes:
 
-  - dev-tree.py flips every installPath at your working copy so the page renders
-    what you are ABOUT to publish. If the regen throws in between, the tree stays
-    flipped and your next Claude session silently loads plugins from the working
-    copy instead of the cache. Here the restore is a `finally`, not a discipline,
-    and the post-verify checks it landed even if the finally misfired.
+  - generate.py's default job is to describe the MACHINE it runs on: it reads
+    ~/.claude/plugins/installed_plugins.json (falling back to the plugin
+    cache) for which plugins are installed, and ~/.claude/settings.json for
+    which are enabled. Publishing needs the opposite -- a page that describes
+    THIS REPO at this release, identically on any maintainer's machine -- so
+    this script writes a synthetic registry naming each plugin dir's own
+    plugin.json version and passes it via generate.py's --registry flag,
+    which also turns off the cache fallback. The plugin inventory therefore
+    never comes from ~/.claude, and nothing under it is written. (generate.py
+    still reads settings and installed marketplace posters there; --public
+    and --marketplace keep both out of the output.)
   - The merge is only USUALLY a fast-forward. When dev carries commits for a
     dev-only (published: false) plugin, a fast-forward would publish them, so
-    the release is a PROJECTION instead: in a temporary worktree, master's next
-    commit takes dev's tree with the dev-only plugins' own files held at the
-    content master already has. dev is untouched and keeps the excluded work.
+    the release is a PROJECTION instead: computed with a temporary Git index
+    and plumbing commands only (read-tree, checkout-index, write-tree,
+    commit-tree) -- never a working tree, and never a branch checkout in the
+    shared project folder -- master's next commit takes dev's tree with the
+    dev-only plugins' own files held at the content master already has. dev
+    is untouched and keeps the excluded work; this process's HEAD and branch
+    never move either.
     `published: false` already recorded the decision that the plugin does not
     ship, so honouring it is not the script guessing -- what it must never do
     is decide that a plugin's status has changed.
@@ -76,8 +86,8 @@ A PARTIAL release (`--only <plugin>`, repeatable) is the same projection with
 a larger hold-back set: every published plugin NOT named is held at master's
 content exactly as a dev-only plugin is, so master receives one plugin's release
 while the rest of dev stays unpublished. The derived artifacts are regenerated
-INSIDE the projection worktree, from the tree master is about to hold, so
-master's marketplace.json lists the held-back plugins at the versions master
+from the projected tree held in a temporary Git index, so master's
+marketplace.json lists the held-back plugins at the versions master
 actually carries. Nothing on dev is regenerated or committed: the dirty gate
 admits uncommitted work inside held-back plugins, and a dev-side regen would
 read those working-tree manifests while commit_derived would sweep another
@@ -102,6 +112,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -132,7 +143,6 @@ PAGE_TITLE = "plugins-kit marketplace"
 
 GENERATE_PY = (PLUGINS_DIR / "awesome-kit" / "skills" / "plugin-ecosystem"
                / "scripts" / "generate.py")
-DEV_TREE_PY = REPO_ROOT / "scripts" / "dev-tree.py"
 REGEN_MARKETPLACE_PY = REPO_ROOT / "scripts" / "regen_marketplace.py"
 
 
@@ -142,16 +152,34 @@ class PublishError(Exception):
 
 # --- shell -----------------------------------------------------------------
 
-def git(*args: str, check: bool = True) -> str:
-    """Run a git command in the repo and return stripped stdout."""
+def git(*args: str, check: bool = True, env: dict[str, str] | None = None) -> str:
+    """Run a git command in the repo and return stripped stdout.
+
+    `env`, when given, is a full subprocess environment (see `_index_env`) for
+    a call that must read or write a TEMPORARY index rather than this repo's
+    real one. Omitted, the call inherits the process environment and touches
+    whatever index HEAD normally does.
+    """
     result = subprocess.run(
         ["git", *args], cwd=REPO_ROOT,
-        capture_output=True, text=True,
+        capture_output=True, text=True, env=env,
     )
     if check and result.returncode != 0:
         raise PublishError(
             f"git {' '.join(args)} failed:\n{result.stderr.strip()}")
     return result.stdout.strip()
+
+
+def _index_env(index_path: Path) -> dict[str, str]:
+    """A subprocess environment with GIT_INDEX_FILE pointed at an absolute
+    temporary index, inheriting everything else from this process.
+
+    Never a bare {"GIT_INDEX_FILE": ...}: git -- and its own process spawn on
+    Windows -- needs the rest of the process environment to run at all.
+    """
+    env = dict(os.environ)
+    env["GIT_INDEX_FILE"] = str(index_path.resolve())
+    return env
 
 
 def run(cmd: list[str], what: str) -> None:
@@ -383,10 +411,12 @@ def _master_holds_discardable_state(path: str, master_base: str, master: str,
     release that ships a revert wedges every later publish of the same plugin.
 
     Known limit, stated because the guard has no way to see past it: if dev
-    reverts and an INFRA SYNC -- a hand commit carrying dev content, recording
-    no trailer -- brings that revert to master, master's own move is backwards
-    with nothing to mark it as dev-sourced, and this refuses. That direction is
-    the safe one: the operator is shown a path both branches moved backwards on.
+    reverts and a hand commit like the infra syncs in master's history (made
+    before the projection release, 53645fd2) -- carrying dev content,
+    recording no trailer -- brings that revert to master, master's own move is
+    backwards with nothing to mark it as dev-sourced, and this refuses. That
+    direction is the safe one: the operator is shown a path both branches
+    moved backwards on.
     """
     order = _dev_introduction_order(path)
     current = order.get(master_blob)
@@ -424,16 +454,17 @@ def range_base() -> str:
 
     The trailer is searched for down master's history, not read off its TIP.
     Master legitimately carries commits that are not projections -- an
-    infra-drift sync, a reconcile (both are documented operations in
-    docs/reference/publish-reconcile.md) -- and none of them records a boundary
-    because none of them is a release. Reading only the tip therefore loses the
-    boundary the moment anyone lands one, and the loss is silent: the fallback
-    below is the ANCIENT merge base, against which every file the last release
-    shipped looks like a master-side change, so `_master_only_paths` reports a
-    reconcile that does not exist and refuses a routine publish. The walk is
-    bounded because a master that never carried a projection has no boundary to
-    find and should reach the fallback quickly rather than scan its whole
-    history.
+    infra-drift sync, a reconcile (hand commits in master's history made
+    before the projection release, 53645fd2; see
+    docs/reference/publish-reconcile.md for that history) -- and none of them
+    records a boundary because none of them is a release. Reading only the tip
+    therefore loses the boundary the moment anyone lands one, and the loss is
+    silent: the fallback below is the ANCIENT merge base, against which every
+    file the last release shipped looks like a master-side change, so
+    `_master_only_paths` reports a reconcile that does not exist and refuses a
+    routine publish. The walk is bounded because a master that never carried a
+    projection has no boundary to find and should reach the fallback quickly
+    rather than scan its whole history.
 
     Falls back to `origin/master` when no trailer is found within that window,
     or when the ones found name objects this clone lacks or commits that are
@@ -977,18 +1008,47 @@ def _require_bump_for_changed_plugins(held_back: set[str] | None = None) -> None
 
 # --- derived artifacts -----------------------------------------------------
 
-def regenerate(root: Path | None = None) -> bool:
-    """Regenerate marketplace.json and index.html. True if anything changed.
+def _write_registry(plugin_dirs: dict[str, Path], out_path: Path) -> None:
+    """Write a registry-v2-shaped JSON naming each plugin dir's own manifest version.
 
-    index.html renders the versions and skill roster read from the installPaths,
-    so dev-tree must point them at THIS working copy for the page to show what
-    is about to be published. Restoring is a finally: leaving the tree flipped
-    silently loads plugins from the working copy in the next session.
+    Shared by the bare publish (plugin_dirs = this working copy's plugins/<name>,
+    called from regenerate()) and a --only projection (plugin_dirs = a scratch
+    checkout's plugins/<name>, called from _regenerate_derived_in()), so
+    generate.py's --registry flag always describes a plugin's OWN manifest
+    rather than ~/.claude/plugins/installed_plugins.json or the plugin cache.
+    One entry per plugin dir that has a plugin.json; a dir without one (or with
+    an unreadable one) contributes no entry, same as it never having existed.
+    """
+    plugins: dict[str, list[dict]] = {}
+    for name, install_path in sorted(plugin_dirs.items()):
+        manifest = install_path / ".claude-plugin" / "plugin.json"
+        try:
+            version = json.loads(manifest.read_text(encoding="utf-8")).get("version", "")
+        except (OSError, json.JSONDecodeError):
+            continue
+        plugins[f"{name}@{MARKETPLACE_NAME}"] = [{
+            "scope": "user",
+            "installPath": str(install_path),
+            "version": version,
+        }]
+    out_path.write_text(
+        json.dumps({"version": 2, "plugins": plugins}, indent=2) + "\n",
+        encoding="utf-8")
+
+
+def regenerate() -> bool:
+    """Regenerate marketplace.json and index.html from this working copy. True
+    if anything changed.
 
     generate.py's default job is to describe the MACHINE it runs on -- every
-    input it reads is local state. Publishing needs the opposite: a page that
-    describes this repo at this release and comes out identical on any
-    maintainer's machine. Every flag below redirects one of those inputs at the
+    input it reads is local state (~/.claude/plugins/installed_plugins.json,
+    falling back to ~/.claude/plugins/cache, plus ~/.claude/settings.json).
+    Publishing needs the opposite: a page that describes this repo at this
+    release and comes out identical on any maintainer's machine. --registry is
+    what closes that gap for the plugin inventory: it points generate.py at a
+    synthetic registry this function writes with _write_registry, naming each
+    plugin dir's own plugin.json version, so the page never reads or depends
+    on ~/.claude state. Every other flag below redirects one more input at the
     working copy, and each is load-bearing rather than decorative:
 
     --marketplace scopes the page to this marketplace. Without it the page
@@ -1013,45 +1073,31 @@ def regenerate(root: Path | None = None) -> bool:
     --config supplies the page copy from the repo instead of the maintainer's
     ~/.claude/.local-data/awesome-kit/plugin-ecosystem-poster.yaml.
 
-    `root` selects WHICH checkout is described. Default: this working copy.
-    A partial release passes the projection worktree instead, so the page and
-    listing describe the tree master is about to hold -- with the held-back
-    plugins at master's versions -- rather than dev. Every script is then the
-    worktree's own copy, because each resolves its repo root from its own file
-    location (dev-tree.py flips installPaths at ITS repo, which is what makes
-    the generator read the worktree's manifests).
+    Always describes THIS working copy (dev). A partial release (--only) does
+    not call this function at all -- it regenerates against a projected tree
+    held in a temporary Git index instead, in _regenerate_derived_in.
     """
-    if root is None:
-        regen_py, dev_tree_py, generate_py = REGEN_MARKETPLACE_PY, DEV_TREE_PY, GENERATE_PY
-        marketplace_json, poster_yaml = MARKETPLACE_JSON, POSTER_YAML
-        index_page_yaml, index_html = INDEX_PAGE_YAML, INDEX_HTML
-    else:
-        regen_py = root / REGEN_MARKETPLACE_PY.relative_to(REPO_ROOT)
-        dev_tree_py = root / DEV_TREE_PY.relative_to(REPO_ROOT)
-        generate_py = root / GENERATE_PY.relative_to(REPO_ROOT)
-        marketplace_json = root / MARKETPLACE_JSON.relative_to(REPO_ROOT)
-        poster_yaml = root / POSTER_YAML.relative_to(REPO_ROOT)
-        index_page_yaml = root / INDEX_PAGE_YAML.relative_to(REPO_ROOT)
-        index_html = root / INDEX_HTML.relative_to(REPO_ROOT)
+    run([sys.executable, str(REGEN_MARKETPLACE_PY)], "marketplace.json regen")
 
-    run([sys.executable, str(regen_py)], "marketplace.json regen")
-
-    run([sys.executable, str(dev_tree_py), "dev"], "dev-tree dev")
+    registry_dir = Path(tempfile.mkdtemp(prefix="publish-registry-"))
     try:
-        run([sys.executable, str(generate_py),
+        registry_path = registry_dir / "registry.json"
+        plugin_dirs = {d.name: d for d in sorted(PLUGINS_DIR.iterdir())
+                       if (d / ".claude-plugin" / "plugin.json").is_file()}
+        _write_registry(plugin_dirs, registry_path)
+        run([sys.executable, str(GENERATE_PY),
+             "--registry", str(registry_path),
              "--marketplace", MARKETPLACE_NAME,
-             "--marketplace-json", f"{MARKETPLACE_NAME}={marketplace_json}",
-             "--poster", f"{MARKETPLACE_NAME}={poster_yaml}",
-             "--config", str(index_page_yaml),
+             "--marketplace-json", f"{MARKETPLACE_NAME}={MARKETPLACE_JSON}",
+             "--poster", f"{MARKETPLACE_NAME}={POSTER_YAML}",
+             "--config", str(INDEX_PAGE_YAML),
              "--title", PAGE_TITLE,
-             "--output", str(index_html),
+             "--output", str(INDEX_HTML),
              "--public",
              "--no-open"], "index.html regen")
     finally:
-        run([sys.executable, str(dev_tree_py), "normal"], "dev-tree normal")
+        shutil.rmtree(registry_dir, ignore_errors=True)
 
-    if root is not None:
-        return _rc_in(root, "diff", "--quiet", "--", *sorted(GENERATED_PATHS)) != 0
     return bool(git("status", "--porcelain"))
 
 
@@ -1081,18 +1127,6 @@ def commit_derived(bumps: list[str]) -> None:
 
 # --- publish + verify ------------------------------------------------------
 
-def _in_worktree(workdir, *args: str) -> str:
-    """Run git inside the projection worktree, surfacing failures verbatim."""
-    result = subprocess.run(["git", "-C", str(workdir), *args],
-                            capture_output=True, text=True)
-    if result.returncode != 0:
-        raise PublishError(
-            f"projecting the release onto {MASTER_BRANCH} failed at "
-            f"`git {' '.join(args)}`:\n"
-            + ((result.stderr or result.stdout).strip() or "(no output)"))
-    return result.stdout.strip()
-
-
 def _master_is_ancestor_of_dev() -> bool:
     return _rc("merge-base", "--is-ancestor",
                f"{REMOTE}/{MASTER_BRANCH}", DEV_BRANCH) == 0
@@ -1109,10 +1143,10 @@ def _fast_forward_is_safe() -> bool:
     to be asked of the manifests, not of the range.
 
     Deliberately asks whether a dev-only plugin EXISTS rather than whether
-    _held_back_paths finds files for it. The two agree in every real case -- a
-    declared plugin always has at least its own manifest on disk -- but
-    _held_back_paths lists trees with check=False, so a failing ls-tree
-    returns empty and would be indistinguishable from "nothing to hold back".
+    _publish_projection would find any files to hold back for it. The two
+    agree in every real case -- a declared plugin always has at least its own
+    manifest on disk -- but a failing git call inside the projection could in
+    principle read as "nothing found" and therefore "nothing to hold back".
     This guard protects a push to a public master, so it must not have a
     branch on which a git failure reads as safe.
 
@@ -1123,33 +1157,6 @@ def _fast_forward_is_safe() -> bool:
     appears to mean.
     """
     return not any(not is_published(m) for m in local_plugins().values())
-
-
-def _held_back_paths(dev_only: set[str]) -> tuple[list[str], list[str]]:
-    """The dev-only files to hold at master's content: (on master, dev-only new).
-
-    The UNION of both trees, because the two halves need opposite treatment. A
-    file master already carries is restored to master's version -- the plugin
-    stays exactly where it was published. A file that exists only on dev has
-    never shipped and must be removed from the projected tree entirely; taking
-    dev's tree wholesale and forgetting this half is how unshipped work leaks.
-    """
-    if not dev_only:
-        return [], []
-    master = f"{REMOTE}/{MASTER_BRANCH}"
-    prefixes = [f"{top}/{name}/" for name in sorted(dev_only)
-                for top in ("plugins", "tests")]
-    on_master, dev_new, seen = [], [], set()
-    for ref in (master, DEV_BRANCH):
-        listing = git("ls-tree", "-r", "--name-only", "-z", ref, "--", *prefixes,
-                      check=False)
-        for path in listing.split("\0"):
-            path = path.strip()
-            if not path or path in seen:
-                continue
-            seen.add(path)
-            (on_master if blob_at(master, path) else dev_new).append(path)
-    return sorted(on_master), sorted(dev_new)
 
 
 def _projection_message(shipping: list[str], excluded: dict[str, set[str]],
@@ -1195,19 +1202,140 @@ def _commit_touches(sha: str, plugins: set[str]) -> bool:
     return any(f.startswith(prefixes) for f in _commit_files(sha))
 
 
-def _regenerate_derived_in(workdir: Path) -> None:
-    """Rebuild the derived artifacts from the projected tree and stage them.
+def _hash_object(text: str) -> str:
+    """Write `text` as a blob into the object store and return its sha.
+
+    Object writes are not index-scoped, so this needs no GIT_INDEX_FILE --
+    only the repo's object database, which every temporary index shares with
+    the real one.
+    """
+    # Bytes, not text=True: a text-mode stdin on Windows rewrites "\n" as
+    # "\r\n", and `hash-object --stdin` stores what it receives unfiltered, so
+    # a release built there would commit CRLF artifacts.
+    result = subprocess.run(
+        ["git", "hash-object", "-w", "--stdin"], cwd=REPO_ROOT,
+        input=text.encode("utf-8"), capture_output=True)
+    if result.returncode != 0:
+        raise PublishError(
+            f"git hash-object failed:\n{result.stderr.decode(errors='replace').strip()}")
+    return result.stdout.decode().strip()
+
+
+def _checkout_index_into(env: dict[str, str], scratch: Path, paths: list[str]) -> None:
+    """Extract `paths` from the index named by `env` into `scratch`, by prefix.
+
+    `git checkout-index` takes literal paths (fed via -z --stdin), not globs --
+    the caller resolves globs to literal paths with `git ls-files` first.
+    """
+    scratch.mkdir(parents=True, exist_ok=True)
+    result = subprocess.run(
+        ["git", "checkout-index", f"--prefix={scratch}{os.sep}", "-z", "--stdin"],
+        cwd=REPO_ROOT, env=env, input=("\0".join(paths) + "\0").encode("utf-8"),
+        capture_output=True)
+    if result.returncode != 0:
+        raise PublishError(
+            "git checkout-index failed:\n"
+            + result.stderr.decode(errors="replace").strip())
+
+
+def _regenerate_derived_in(env: dict[str, str]) -> dict[str, str]:
+    """Rebuild the derived artifacts from the tree held in `env`'s temporary
+    index. Returns {repo-relative path: new text} for the caller to hash into
+    blobs and stage in that same index -- nothing here touches this project
+    folder's working tree, its real marketplace.json/index.html, or any file
+    outside a scratch directory removed before returning.
 
     A module-level seam so the tests, whose fixture repo has no generator, can
     stand in a stub for it.
+
+    marketplace.json comes straight from regen_marketplace.regenerate(), which
+    already knows how to read a Git index when told to (from_index=True). Its
+    _gitindex helpers read GIT_INDEX_FILE from the process environment rather
+    than taking one as an argument, so this is the one place that mutates
+    os.environ, and only for the duration of that one call.
+
+    index.html cannot be produced the same way, because generate.py reads
+    ordinary files (plugin.json, poster.yaml, SKILL.md) rather than a Git
+    index. So the files it needs are extracted from the SAME temporary index
+    into a scratch directory with `git checkout-index`, alongside a synthetic
+    registry (_write_registry) that points generate.py's --registry flag at
+    that scratch checkout instead of ~/.claude state. generate.py itself runs
+    from THIS working copy (GENERATE_PY), not from the scratch checkout --
+    under --only with awesome-kit itself held back, that means dev's copy of
+    the generator renders master's projected page. That is intended: every
+    other held-back plugin's data is already read from master's own content
+    (regen_marketplace.regenerate(from_index=True) reads the projected tree,
+    and the scratch checkout is extracted from that same tree), only the
+    generator CODE is dev's, the same as any other tool this script runs.
     """
-    if regenerate(root=workdir):
-        _in_worktree(workdir, "add", "--", *sorted(GENERATED_PATHS))
+    regen_module = _load_rule_module("regen_marketplace.py")
+    index_file = env["GIT_INDEX_FILE"]
+    previous = os.environ.get("GIT_INDEX_FILE")
+    os.environ["GIT_INDEX_FILE"] = index_file
+    try:
+        marketplace_data = regen_module.regenerate(from_index=True)
+    finally:
+        if previous is None:
+            os.environ.pop("GIT_INDEX_FILE", None)
+        else:
+            os.environ["GIT_INDEX_FILE"] = previous
+    marketplace_text = regen_module._serialize(marketplace_data)
+
+    scratch = Path(tempfile.mkdtemp(prefix="publish-scratch-"))
+    try:
+        pathspecs = [
+            "plugins/*/.claude-plugin/plugin.json",
+            "plugins/*/poster.yaml",
+            "plugins/*/skills/*/SKILL.md",
+            ".claude-plugin/poster.yaml",
+            ".claude-plugin/index-page.yaml",
+        ]
+        listed = git("ls-files", "-z", "--", *pathspecs, env=env)
+        paths = [p for p in listed.split("\0") if p]
+        if paths:
+            _checkout_index_into(env, scratch, paths)
+
+        marketplace_scratch = scratch / ".claude-plugin" / "marketplace.json"
+        marketplace_scratch.parent.mkdir(parents=True, exist_ok=True)
+        marketplace_scratch.write_text(marketplace_text, encoding="utf-8")
+
+        plugin_dirs = {
+            manifest.parent.parent.name: manifest.parent.parent
+            for manifest in scratch.glob("plugins/*/.claude-plugin/plugin.json")
+        }
+        registry_path = scratch / "registry.json"
+        _write_registry(plugin_dirs, registry_path)
+
+        index_scratch = scratch / "index.html"
+        run([sys.executable, str(GENERATE_PY),
+             "--registry", str(registry_path),
+             "--marketplace", MARKETPLACE_NAME,
+             "--marketplace-json", f"{MARKETPLACE_NAME}={marketplace_scratch}",
+             "--poster", f"{MARKETPLACE_NAME}={scratch / '.claude-plugin' / 'poster.yaml'}",
+             "--config", str(scratch / ".claude-plugin" / "index-page.yaml"),
+             "--title", PAGE_TITLE,
+             "--output", str(index_scratch),
+             "--public",
+             "--no-open"], "index.html regen (--only)")
+        index_text_out = index_scratch.read_text(encoding="utf-8")
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
+
+    return {
+        MARKETPLACE_JSON.relative_to(REPO_ROOT).as_posix(): marketplace_text,
+        INDEX_HTML.relative_to(REPO_ROOT).as_posix(): index_text_out,
+    }
 
 
 def _publish_projection(excluded: dict[str, set[str]],
                         only: set[str] | None = None) -> None:
     """Land one commit on master whose tree is dev's, minus the dev-only plugins.
+
+    Computed with a TEMPORARY GIT INDEX and plumbing commands only (read-tree,
+    rm --cached, checkout-index, write-tree, commit-tree) -- never a working
+    tree, and never a branch checkout in this shared project folder. This
+    process's HEAD, branch, and working files are untouched throughout, so
+    nothing here can collide with another session's work in the same tree.
 
     This is the whole filtered release. It cannot conflict, because nothing is
     being merged: the tree is computed, not negotiated. It is idempotent, so
@@ -1231,49 +1359,51 @@ def _publish_projection(excluded: dict[str, set[str]],
             "commits that cannot ship.")
 
     dev_sha = git("rev-parse", DEV_BRANCH)
-    on_master, dev_new = _held_back_paths(held)
+    master = f"{REMOTE}/{MASTER_BRANCH}"
 
-    workdir = Path(tempfile.mkdtemp(prefix="publish-master-"))
+    tmp_dir = Path(tempfile.mkdtemp(prefix="publish-index-"))
     try:
-        git("worktree", "add", "--detach", str(workdir), f"{REMOTE}/{MASTER_BRANCH}")
-        try:
-            # Index and worktree := dev's tree, then put the dev-only plugins
-            # back the way master had them.
-            _in_worktree(workdir, "read-tree", "--reset", "-u", DEV_BRANCH)
-            if on_master:
-                _in_worktree(workdir, "checkout", f"{REMOTE}/{MASTER_BRANCH}",
-                             "--", *on_master)
-            if dev_new:
-                _in_worktree(workdir, "rm", "-q", "-f", "--ignore-unmatch",
-                             "--", *dev_new)
-            if only:
-                _regenerate_derived_in(workdir)
+        env = _index_env(tmp_dir / "index")
+        # Index := dev's tree, then put the held-back plugins back the way
+        # master had them -- by PREFIX, never by passing per-file lists as
+        # argv: under --only those lists cover most of the repo and would
+        # exceed the Windows command-line limit.
+        git("read-tree", DEV_BRANCH, env=env)
+        for name in sorted(held):
+            for top in ("plugins", "tests"):
+                prefix = f"{top}/{name}/"
+                git("rm", "--cached", "-r", "-q", "--ignore-unmatch",
+                    "--", prefix, env=env)
+                if blob_at(master, f"{top}/{name}"):
+                    git("read-tree", f"--prefix={prefix}",
+                        f"{master}:{top}/{name}", env=env)
 
-            if _rc_in(workdir, "diff", "--cached", "--quiet", "HEAD") == 0:
-                print(f"  {MASTER_BRANCH} already carries this content -- "
-                      f"nothing to push")
-                return
+        if only:
+            blobs = _regenerate_derived_in(env)
+            for path, text in blobs.items():
+                sha = _hash_object(text)
+                git("update-index", "--add", "--cacheinfo",
+                    f"100644,{sha},{path}", env=env)
 
-            # --no-verify: the pre-commit gates already ran against dev, and
-            # this tree is a computed artifact rather than an authored change.
-            _in_worktree(workdir, "commit", "--no-verify", "-q", "-m",
-                         _projection_message(shipping, excluded, dev_sha, only))
-            _in_worktree(workdir, "push", REMOTE,
-                         f"HEAD:refs/heads/{MASTER_BRANCH}")
-            print(f"  projected {len(shipping)} commit(s) onto {MASTER_BRANCH}"
-                  + (f"; held back {len(excluded)} dev-only commit(s)"
-                     if excluded else "")
-                  + (f"; held back {', '.join(sorted(held_back_for(only)))}"
-                     if only and held_back_for(only) else ""))
-        finally:
-            git("worktree", "remove", "--force", str(workdir), check=False)
+        tree = git("write-tree", env=env)
+        if tree == git("rev-parse", f"{master}^{{tree}}"):
+            print(f"  {MASTER_BRANCH} already carries this content -- "
+                  f"nothing to push")
+            return
+
+        message_file = tmp_dir / "message.txt"
+        message_file.write_text(
+            _projection_message(shipping, excluded, dev_sha, only),
+            encoding="utf-8")
+        commit_sha = git("commit-tree", tree, "-p", master, "-F", str(message_file))
+        git("push", REMOTE, f"{commit_sha}:refs/heads/{MASTER_BRANCH}")
+        print(f"  projected {len(shipping)} commit(s) onto {MASTER_BRANCH}"
+              + (f"; held back {len(excluded)} dev-only commit(s)"
+                 if excluded else "")
+              + (f"; held back {', '.join(sorted(held_back_for(only)))}"
+                 if only and held_back_for(only) else ""))
     finally:
-        shutil.rmtree(workdir, ignore_errors=True)
-
-
-def _rc_in(workdir, *args: str) -> int:
-    return subprocess.run(["git", "-C", str(workdir), *args],
-                          capture_output=True, text=True).returncode
+        shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
 def push_and_merge(excluded: dict[str, set[str]] | None = None,
@@ -1287,25 +1417,23 @@ def push_and_merge(excluded: dict[str, set[str]] | None = None,
     happened not to touch. Otherwise project (see _publish_projection): master
     gets dev's tree with the dev-only plugins held back, and dev is untouched.
 
-    The worktree in the projection path is not a stylistic choice. The
-    fast-forward path checks master out in THIS tree, which is shared with
-    other agent sessions -- their commits would land on whatever branch the
-    tree is on. That risk is tolerable for the seconds a fast-forward takes;
-    anything that can stop partway is a different matter, so the projection
-    never moves this tree.
+    Neither path ever changes what branch is checked out in this shared
+    project folder, which matters because the tree is shared with other agent
+    sessions -- a `git checkout` here would move where THEIR commits land, not
+    just ours. The fast-forward path pushes the local `dev` branch straight
+    onto the remote `master` ref (`git push origin dev:refs/heads/master`),
+    which git itself refuses unless that is a fast-forward, so there is no
+    local branch switch for anything to land on. The projection path (see
+    _publish_projection) computes master's next tree in a temporary Git index
+    and likewise never touches this tree's HEAD, branch, or working files.
     """
     git("push", REMOTE, DEV_BRANCH)
     print(f"  pushed {DEV_BRANCH}")
 
     if (not excluded and not only and _master_is_ancestor_of_dev()
             and _fast_forward_is_safe()):
-        git("checkout", MASTER_BRANCH)
-        try:
-            git("merge", "--ff-only", DEV_BRANCH)
-            git("push", REMOTE, MASTER_BRANCH)
-            print(f"  fast-forwarded and pushed {MASTER_BRANCH}")
-        finally:
-            git("checkout", DEV_BRANCH)
+        git("push", REMOTE, f"{DEV_BRANCH}:refs/heads/{MASTER_BRANCH}")
+        print(f"  fast-forwarded and pushed {MASTER_BRANCH}")
         return
 
     _publish_projection(excluded or {}, only)
@@ -1435,16 +1563,6 @@ def verify(only: set[str] | None = None) -> list[str]:
         elif f'"name": "{name}", "version": "{version}"' not in index_text:
             problems.append(f"{where}index.html does not show {name} {version}")
 
-    # The dev-tree restore is the failure that bites silently later: a flipped
-    # tree makes the next session load plugins from this working copy.
-    status = subprocess.run(
-        [sys.executable, str(DEV_TREE_PY), "status"],
-        cwd=REPO_ROOT, capture_output=True, text=True).stdout
-    if "installPaths @ dev : 0" not in status:
-        problems.append(
-            "dev-tree is NOT restored to normal -- installPaths still point at "
-            f"this working copy. Run: python {DEV_TREE_PY.name} normal\n{status}")
-
     return problems
 
 
@@ -1571,7 +1689,6 @@ def main(argv: list[str]) -> int:
                 "  origin/master carries every shippable commit; "
                 "dev-only work held back"))
     print("  marketplace.json, index.html, and plugin.json agree")
-    print("  dev-tree restored to normal")
     print("\npublished. Users with autoUpdate get it next session start.")
     return 0
 

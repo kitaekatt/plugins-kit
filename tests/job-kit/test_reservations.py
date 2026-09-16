@@ -14,19 +14,25 @@ from pathlib import Path
 
 from llm_scripting_kit.completion import BackendSelection, Capabilities, LLMResponse
 
-from job_kit.model import Acceptance, Attempt, Contract, Job, JobState, Prompt
+from job_kit.model import Acceptance, Attempt, Contract, Job, JobState, Prompt, WorkspaceSpec
 from job_kit.store import JobStore
 from job_kit.workspace import WorkspaceManager, gc_workspaces
 
 
 def _job(directory: Path, *, max_attempts: int = 2) -> Job:
-    """Build a job suitable for direct reservation tests."""
+    """Build a job suitable for direct reservation tests.
+
+    Isolation is requested explicitly so the worktree-dependent reservation
+    and crash-boundary tests in this module keep exercising it now that
+    job-kit's own default is opt-in.
+    """
     return Job(
         id="job",
         prompt=Prompt(user="run"),
         endpoint_preference=("fake",),
         directory=directory,
         max_attempts=max_attempts,
+        workspace=WorkspaceSpec(isolate=True),
         contract=Contract(command=("true",), directory=directory),
     )
 
@@ -282,7 +288,7 @@ def test_sigkill_at_each_boundary(tmp_path: Path) -> None:
         from pathlib import Path
 
         from llm_scripting_kit.completion import BackendSelection, Capabilities, LLMResponse
-        from job_kit.model import Contract, Job, Prompt
+        from job_kit.model import Contract, Job, Prompt, WorkspaceSpec
         from job_kit.run import run_jobs
         from job_kit.store import JobStore
         import job_kit.workspace as workspace_module
@@ -351,6 +357,7 @@ def test_sigkill_at_each_boundary(tmp_path: Path) -> None:
         job = Job(
             id="job", prompt=Prompt(user="run"), endpoint_preference=("fake",),
             directory=repository, max_attempts=2,
+            workspace=WorkspaceSpec(isolate=True),
             contract=Contract(command=("true",), directory=repository),
         )
         run_jobs(

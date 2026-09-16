@@ -926,7 +926,15 @@ def remote_has(clone_dir: Path, rel_path: str) -> bool:
 
 
 def sync(clone_dir: Path) -> None:
-    """Bring the clone level with the remote. Raises rather than proceeding stale.
+    """Bring the clone level with the remote, or raise rather than proceed stale.
+
+    An unborn clone is fetched via :func:`_fetch_unborn`. A fetch failure, an
+    unknown comparison, or a diverged clone (ahead and behind at once) all
+    raise. A clone that is only behind is fast-forwarded (a failed
+    fast-forward also raises). A clone that is only ahead is returned as-is:
+    this function has no branch for that state, and the authoring verbs
+    refuse it themselves (`authoring._prepare_operation`'s "no local commit
+    is treated as disposable" check) rather than sync rejecting it here.
 
     The counterpart to :func:`refresh`, and deliberately its opposite in both
     respects: no cooldown, and a failure is fatal instead of a note. Reading a

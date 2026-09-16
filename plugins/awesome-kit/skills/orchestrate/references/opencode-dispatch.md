@@ -99,18 +99,18 @@ network boundary. Explicit user-configured denies can still refuse tools.
 `--dir` supplies context. It does not create a boundary.
 
 Control workspace edits at the join. Require a clean tree at dispatch. Inspect
-the diff on return. Give each concurrent writer its own worktree. Brief only
-effects already authorized for the unit.
+the diff on return. Brief only effects already authorized for the unit.
 
 ## Monitoring
 
 If live progress matters, tail `log.txt` once after launch. Use the harness's
 monitoring facility after that. Do not poll the result path or sleep.
 
-## Parallel isolation
+## Concurrent writers
 
-Give every parallel writer a separate git worktree and pass its absolute path
-to `--dir`. Read-only units can share a tree.
+`--dir` takes an absolute path. Concurrent units given the same `--dir` write
+into one tree and see each other's in-progress edits; state each unit's file
+ownership in its brief.
 
 OpenCode itself documents no concurrency limit. A locally hosted model entry
 can point to a hand-started server that SERIALIZES concurrent requests. Obey
@@ -121,7 +121,7 @@ falls through to the next model. That fallback is intended behaviour.
 
 When the background launch completes, read `result.md` once. Keep `log.txt` out
 of the orchestrating context unless a specific claim needs diagnosis. Judge
-write-work by both the result and the worktree diff.
+write-work by both the result and the diff of the tree it wrote to.
 
 ## Custom providers: model entries own the specifics
 

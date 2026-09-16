@@ -67,8 +67,10 @@ key. If `HUE_APP_KEY` is unset the tool falls back to `HUE_KEY_FILE` then
 
 **Run this first for any opening request that does not already name an
 operation** -- including a bare skill invocation. It replaces hand-running the
-setup chain, and it decides between three states rather than making you infer
-them. It prints `hue-kit-verdict: <state>` as its last line; branch on that.
+setup chain, and it decides among eight verdict states rather than making you
+infer them (the domain skill's `default_flow.verdicts` is the full list with a
+`do:` for each). It prints `hue-kit-verdict: <state>` as its last line; branch
+on that.
 
 - `first-run` -- nothing existed, so it built `scene-groups.yaml` +
   `scene-designs.yaml`, rendered `index.html`, and opened it. This is the ONLY
@@ -84,6 +86,10 @@ them. It prints `hue-kit-verdict: <state>` as its last line; branch on that.
   sync: a diff cannot distinguish "the bridge moved" from "the YAML holds
   unapplied edits", and pulling vs pushing destroys opposite work. `hue-kit
   start --accept` re-baselines a reviewed shape change without touching YAML.
+- `validate-failed` -- the comparison itself failed; fix the diagnostic, do
+  not treat it as drift to sync (see the domain skill).
+- `bridge-unreachable`, `setup-failed`, `render-failed`, `accepted` -- see the
+  domain skill for each.
 
 `bridge-fingerprint.txt` in the working dir stores the bridge's shape (lights,
 zone membership, scene names). `export` re-baselines it -- that is what closes
