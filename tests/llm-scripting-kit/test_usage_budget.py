@@ -466,6 +466,35 @@ def test_codex_exhausted_with_no_error_message_is_no_data_once_stale(tmp_path):
     assert budget.status == STATUS_NO_DATA
 
 
+def test_codex_latched_exhaustion_expires_within_a_pinned_session(tmp_path, monkeypatch):
+    # A pinned verdict is recomputed only once its resets_at has passed, so a
+    # latched verdict must carry one or it holds for the whole session.
+    sessions = tmp_path / "sessions"
+    sessions.mkdir()
+    _rollout(
+        sessions,
+        {
+            "primary": None,
+            "secondary": None,
+            "credits": {"has_credits": False, "unlimited": False, "balance": "0"},
+        },
+        timestamp=NOW - 3600,
+    )
+    monkeypatch.setattr(usage_budget, "CODEX_SESSIONS_DIR", sessions)
+    cache = tmp_path / "verdicts.json"
+    env = {"CLAUDE_CODE_SESSION_ID": "s1"}
+    spec = ConserveSpec(pool="seven_day")
+    first = usage_budget.pinned_evaluate(
+        "sol", spec, "codex", now=NOW, cache_path=cache, environ=env
+    )
+    later = usage_budget.pinned_evaluate(
+        "sol", spec, "codex", now=NOW + 5 * 3600, cache_path=cache, environ=env
+    )
+    assert first.status == STATUS_OUT_OF_QUOTA
+    assert first.resets_at == NOW - 3600 + 5 * 3600
+    assert later.status == STATUS_NO_DATA
+
+
 def test_codex_unlimited_credits_is_not_treated_as_exhausted(tmp_path):
     # has_credits: false paired with unlimited: true must not fail closed --
     # unlimited plans can report has_credits false while still able to serve.
