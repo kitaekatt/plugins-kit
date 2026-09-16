@@ -84,7 +84,7 @@ attaches at the current end of the event stream without replaying older output.
 
 ```bash
 bootstrap profile                    # show status, selection, chain, available
-bootstrap profile --json             # same, plus an AskUserQuestion `question`
+bootstrap profile --json             # same, plus `question`/`profile_listing`/`needs_typed_choice`
 bootstrap profile --project-dir P    # resolve against project P, not the cwd
 bootstrap profile set <name|none>    # select a profile, or "none" for base only
 bootstrap profile set <name> --user     # write to ~/.claude/bootstrap.local.json
@@ -97,17 +97,26 @@ bootstrap profile clear --project    # clear from the project-local file specifi
 All three resolve state through the same engine function
 (`bootstrap_lib.engine._load_layered_manifests_ex`) a live bootstrap pass uses,
 so the CLI and the engine can never disagree about what is selected. `--json`
-on the bare form adds a `question` field -- the AskUserQuestion payload for the
-current status, `null` when the project declares no profiles at all -- so a
-caller can go straight from `bootstrap profile --json` to asking the user with
-no separate lookup.
+on the bare form adds three fields the human form does not need: `question` --
+the AskUserQuestion payload for the current status, `null` when the project
+declares no profiles at all; `profile_listing` -- every available profile as
+plain text, one per line (`""` under `no_profiles`); and `needs_typed_choice`
+-- `true` when more than three profiles are declared, `false` otherwise
+(always `false` under `no_profiles`). A caller can go straight from
+`bootstrap profile --json` to asking the user with no separate lookup: print
+`profile_listing` first when `needs_typed_choice` is `true` (the question
+then names no profile and offers a typed-choice option instead), then ask
+with `question` either way.
 
 **`bootstrap profile` (status).** Reports `status`, the current `selected`
 name and its `source` file, the applied `chain`, every `available` profile
 with its `description` and `extends`, any `warnings` or `errors`, and the
-`write_target` a `set` with no `--user`/`--project` flag would use. Exit 0
-always -- a status report is not itself an error, even under `invalid` or
-`unknown`.
+`write_target` a `set` with no `--user`/`--project` flag would use. The human
+form renders `available` through the same `render_profile_listing` helper the
+`--json` form's `profile_listing` field carries (indented two spaces for
+terminal readability; the helper itself returns unindented lines), so the two
+outputs cannot drift into two spellings of the same list. Exit 0 always -- a
+status report is not itself an error, even under `invalid` or `unknown`.
 
 **`bootstrap profile set <name|none>`.** Refuses immediately, before reading
 or writing anything, when a bootstrap pass currently holds the engine lock

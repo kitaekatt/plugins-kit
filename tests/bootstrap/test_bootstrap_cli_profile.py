@@ -52,6 +52,14 @@ TWO_PROFILES = {
     }
 }
 INVALID_PROFILES = {"profiles": {"engineer": {"extends": ["ghost"]}}}
+FOUR_PROFILES = {
+    "profiles": {
+        "engineer": {"description": "Engineering tools."},
+        "designer": {"description": "Design tools."},
+        "writer": {"description": "Writing tools."},
+        "ops": {"description": "Ops tools.", "extends": ["engineer"]},
+    }
+}
 
 
 @pytest.fixture
@@ -165,6 +173,64 @@ class TestStatus:
         assert rc == 0
         payload = json.loads(capsys.readouterr().out)
         assert payload["question"]["options"][0]["label"] == "Keep current"
+
+    # -- overflow fields: profile_listing / needs_typed_choice --------------
+
+    def test_overflow_fields_under_no_profiles(self, env, capsys):
+        rc = cli.main(["profile", "--json", "--project-dir", str(env.project)])
+        assert rc == 0
+        payload = json.loads(capsys.readouterr().out)
+        assert payload["profile_listing"] == ""
+        assert payload["needs_typed_choice"] is False
+        assert payload["question"] is None
+
+    def test_overflow_fields_at_or_under_the_threshold(self, env, capsys):
+        _write_json(project_manifest(env), TWO_PROFILES)
+        rc = cli.main(["profile", "--json", "--project-dir", str(env.project)])
+        assert rc == 0
+        payload = json.loads(capsys.readouterr().out)
+        assert payload["needs_typed_choice"] is False
+        assert "engineer" in payload["profile_listing"]
+        assert "designer" in payload["profile_listing"]
+        # Below the threshold, the question still names each profile.
+        labels = [opt["label"] for opt in payload["question"]["options"]]
+        assert "engineer" in labels and "designer" in labels
+
+    def test_overflow_fields_past_the_threshold(self, env, capsys):
+        _write_json(project_manifest(env), FOUR_PROFILES)
+        rc = cli.main(["profile", "--json", "--project-dir", str(env.project)])
+        assert rc == 0
+        payload = json.loads(capsys.readouterr().out)
+        assert payload["needs_typed_choice"] is True
+        listing = payload["profile_listing"]
+        for name in ("engineer", "designer", "writer", "ops"):
+            assert name in listing
+        assert "ops (extends engineer)" in listing
+        # Past the threshold the question names no profile directly -- only
+        # the lead option and the typed-choice label.
+        labels = [opt["label"] for opt in payload["question"]["options"]]
+        assert labels == ["Not now", bootstrap_profiles.TYPED_CHOICE_LABEL]
+
+    def test_human_output_uses_the_shared_listing_helper(self, env, monkeypatch, capsys):
+        """Pins the reuse, not just the resulting text.
+
+        A future edit that inlines its own rendering again -- rather than
+        calling `render_profile_listing` -- must show up here, not just agree
+        with the JSON path by coincidence.
+        """
+        _write_json(project_manifest(env), ONE_PROFILE)
+        calls = []
+        real = bootstrap_profiles.render_profile_listing
+
+        def spy(state):
+            calls.append(state.status)
+            return real(state)
+
+        monkeypatch.setattr(cli.bootstrap_profiles, "render_profile_listing", spy)
+        rc = cli.main(["profile", "--project-dir", str(env.project)])
+        assert rc == 0
+        assert calls == ["unselected"]
+        assert "engineer" in capsys.readouterr().out
 
 
 # --------------------------------------------------------------------------
@@ -352,6 +418,26 @@ class TestSet:
         cmd = seen["cmd"]
         assert cmd[cmd.index("--project-dir") + 1] == str(env.project)
 
+    def test_project_dir_before_set_is_honored_not_discarded(self, env, capsys):
+        """--project-dir given BEFORE `set` must not be silently dropped.
+
+        argparse parses a subparser into the SAME namespace but then applies
+        the subparser's own defaults; a subparser-level `default=None` on
+        `--project-dir` unconditionally overwrote whatever the outer
+        `profile` parser had already parsed for that dest, so
+        `profile --project-dir X set foo` silently fell back to Path.cwd()
+        while `profile set foo --project-dir X` worked. Both spellings are
+        advertised by the help text, so both must resolve to X.
+        """
+        _write_json(project_manifest(env), ONE_PROFILE)
+        rc = cli.main([
+            "profile", "--project-dir", str(env.project), "set", "engineer",
+        ])
+        assert rc == 1  # env's fixture stubs find_plugin_root to "" -- converge fails
+        assert "no bootstrap plugin tree" in capsys.readouterr().err
+        # The write itself must have landed in env.project, not Path.cwd().
+        assert json.loads(project_local(env).read_text())["profile"] == "engineer"
+
     def test_no_plugin_tree_reports_written_but_not_converged(self, env, capsys):
         _write_json(project_manifest(env), ONE_PROFILE)
         rc = cli.main([
@@ -396,6 +482,18 @@ class TestClear:
         assert "profile" not in written
         assert written["tools"] == [{"name": "uv"}]
         assert "next bootstrap pass" in capsys.readouterr().out
+
+    def test_project_dir_before_clear_is_honored_not_discarded(self, env, capsys):
+        """Same discard bug as `set`, driven through `clear` instead."""
+        target = project_local(env)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(json.dumps({"profile": "engineer"}, indent=2) + "\n")
+
+        rc = cli.main([
+            "profile", "--project-dir", str(env.project), "clear", "--project",
+        ])
+        assert rc == 0
+        assert "profile" not in json.loads(target.read_text())
 
     def test_clear_with_no_existing_file_is_a_no_op_success(self, env, capsys):
         rc = cli.main([

@@ -326,12 +326,18 @@ class TestEffectiveManifest:
 # ---------------------------------------------------------------------------
 
 
-def _state_with(names, status="unselected", selected=None):
+FIVE = ["alpha", "bravo", "charlie", "delta", "echo"]
+
+
+def _state_with(names, status="unselected", selected=None, extends=None):
     return profiles.ProfileState(
         status=status,
         selected=selected,
-        available=tuple(profiles.ProfileInfo(name=n, description="The %s set." % n)
-                        for n in names),
+        available=tuple(profiles.ProfileInfo(
+            name=n,
+            description="The %s set." % n,
+            extends=tuple((extends or {}).get(n, ())),
+        ) for n in names),
     )
 
 
@@ -352,17 +358,94 @@ class TestBuildQuestion:
         assert [o["label"] for o in question["options"]] == ["Keep current", "b"]
         assert "'a'" in question["options"][0]["description"]
 
-    def test_more_than_three_profiles_names_them_all_in_the_text(self):
-        state = _state_with(["a", "b", "c", "d", "e"])
+    def test_three_profiles_stay_on_the_option_per_profile_path(self):
+        state = _state_with(FIVE[:3])
+        assert profiles.needs_typed_choice(state) is False
         question = profiles.build_question(state, "first_run")
-        assert [o["label"] for o in question["options"]] == ["Not now", "a", "b", "c"]
-        for name in ("a", "b", "c", "d", "e"):
-            assert name in question["question"]
-        assert "Other" in question["question"]
+        assert [o["label"] for o in question["options"]] == [
+            "Not now", "alpha", "bravo", "charlie"]
 
     def test_none_is_always_reachable_through_other(self):
         question = profiles.build_question(_state_with(["a"]), "first_run")
         assert "'none'" in question["question"]
+
+
+class TestOverflowQuestion:
+    def test_more_than_three_profiles_give_exactly_two_options(self):
+        state = _state_with(FIVE)
+        assert profiles.needs_typed_choice(state) is True
+        question = profiles.build_question(state, "first_run")
+        assert [o["label"] for o in question["options"]] == [
+            "Not now", profiles.TYPED_CHOICE_LABEL]
+
+    def test_switch_mode_keeps_its_own_lead_option(self):
+        state = _state_with(FIVE, status="selected", selected="alpha")
+        question = profiles.build_question(state, "switch")
+        assert [o["label"] for o in question["options"]] == [
+            "Keep current", profiles.TYPED_CHOICE_LABEL]
+        assert "'alpha'" in question["options"][0]["description"]
+
+    def test_the_question_text_does_not_enumerate_the_profiles(self):
+        question = profiles.build_question(_state_with(FIVE), "first_run")
+        for name in FIVE:
+            assert name not in question["question"]
+        assert "listed above" in question["question"]
+        assert "Other" in question["question"]
+
+    def test_the_typed_option_names_a_real_profile_and_keeps_none_reachable(self):
+        question = profiles.build_question(_state_with(FIVE), "first_run")
+        description = question["options"][1]["description"]
+        assert "'alpha'" in description
+        assert "'none'" in description
+        assert "Other" in description
+
+    def test_the_switch_example_is_never_the_current_selection(self):
+        state = _state_with(FIVE, status="selected", selected="alpha")
+        question = profiles.build_question(state, "switch")
+        assert "'bravo'" in question["options"][1]["description"]
+
+
+class TestRenderProfileListing:
+    def test_one_line_per_profile_with_extends_and_description(self):
+        state = _state_with(FIVE, extends={"charlie": ["alpha", "bravo"]})
+        listing = profiles.render_profile_listing(state)
+        lines = listing.split("\n")
+        assert len(lines) == len(FIVE)
+        assert lines[0] == "alpha -- The alpha set."
+        assert lines[2] == "charlie (extends alpha, bravo) -- The charlie set."
+
+    def test_a_bare_profile_is_just_its_name(self):
+        state = profiles.ProfileState(
+            status="unselected",
+            available=(profiles.ProfileInfo(name="plain"),),
+        )
+        assert profiles.render_profile_listing(state) == "plain"
+
+    def test_descriptions_are_sanitized_like_option_descriptions(self):
+        state = profiles.ProfileState(
+            status="unselected",
+            available=(profiles.ProfileInfo(
+                name="fancy", description="caf\u00e9\nbuild " + "x" * 200),),
+        )
+        line = profiles.render_profile_listing(state)
+        assert "\n" not in line
+        assert line.startswith("fancy -- caf build ")
+        assert len(line) == len("fancy -- ") + profiles.DESCRIPTION_MAX
+
+    def test_it_is_empty_when_nothing_is_declared(self):
+        assert profiles.render_profile_listing(
+            profiles.ProfileState(status="no_profiles")) == ""
+
+
+class TestNeedsTypedChoice:
+    @pytest.mark.parametrize("count,expected", [(0, False), (3, False), (4, True)])
+    def test_the_threshold(self, count, expected):
+        state = _state_with(FIVE[:count])
+        assert profiles.needs_typed_choice(state) is expected
+
+    def test_no_profiles_never_needs_one(self):
+        assert profiles.needs_typed_choice(
+            profiles.ProfileState(status="no_profiles")) is False
 
 
 class TestSanitizeDescription:
@@ -400,6 +483,18 @@ class TestPromptDirective:
     def test_it_is_empty_under_no_profiles(self):
         state = profiles.ProfileState(status="no_profiles")
         assert profiles.prompt_directive(state, "/root/bootstrap.sh") == ""
+
+    def test_overflow_embeds_the_listing_and_the_print_instruction(self):
+        state = _state_with(FIVE, extends={"delta": ["alpha"]})
+        directive = profiles.prompt_directive(state, "/root/bootstrap.sh")
+        assert profiles.render_profile_listing(state) in directive
+        assert "print this list to the user first" in directive
+        assert "one profile per line" in directive
+
+    def test_three_profiles_carry_no_listing_step(self):
+        state = _state_with(FIVE[:3])
+        directive = profiles.prompt_directive(state, "/root/bootstrap.sh")
+        assert "print this list" not in directive
 
 
 # ---------------------------------------------------------------------------

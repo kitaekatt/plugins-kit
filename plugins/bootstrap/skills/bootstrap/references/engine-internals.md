@@ -136,15 +136,21 @@ CLAUDE.md and the `update_lifecycle` fact in the bootstrap SKILL.md.
 
 ### Step 3c2: bootstrap profile resolution
 
-Runs immediately after the layered manifest is processed (Step 3c) and before
-`project_venv`/`project_npm`, so a profile can add or change either section
-before they run. Resolution and application happen together, in
-`bootstrap_lib.profiles.resolve_layers`, called from
-`bootstrap_lib.engine._load_layered_manifests_ex` -- the function both the
-SessionStart lifecycle and `bootstrap run` call to load the four layered
-manifests. `_load_layered_manifests` is a thin
-wrapper over `_load_layered_manifests_ex` that discards the profile state,
-kept so its existing callers and tests need no change.
+Resolution and application happen together, at LOAD time, before Step 3c
+ever runs: `bootstrap_lib.engine._load_layered_manifests_ex` calls
+`bootstrap_lib.profiles.resolve_layers` while building the merged manifest --
+the function both the SessionStart lifecycle and `bootstrap run` call to load
+the four layered manifests. The manifest Step 3c's `_process_manifest` then
+processes already has the selected profile's chain overlaid onto it, so a
+profile can add or change `project_venv`/`project_npm` before Step 3d
+processes either section. `_load_layered_manifests` is a thin wrapper over
+`_load_layered_manifests_ex` that discards the profile state, kept so its
+existing callers and tests need no change.
+
+What runs here, immediately after Step 3c processes that already-resolved
+manifest, is the REPORTING: turning the `ProfileState` `_load_layered_manifests_ex`
+already computed into this pass's log entries and failures (see
+`_report_profile_state` below).
 
 `_load_layered_manifests_ex` keeps each layer's path and kind (rather than
 merging them itself, as the old `_load_layered_manifests` did) so
