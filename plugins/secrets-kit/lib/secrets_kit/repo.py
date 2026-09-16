@@ -11,6 +11,7 @@ import os
 import re
 import subprocess
 import time
+import urllib.parse
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -149,6 +150,28 @@ def _git_environment() -> Dict[str, str]:
     env["GIT_TERMINAL_PROMPT"] = "0"
     env.setdefault("GIT_SSH_COMMAND", "ssh -oBatchMode=yes")
     return env
+
+
+def display_url(url: str) -> str:
+    """A repository URL for display: scheme, host, port and path, no userinfo.
+
+    This is the one place secrets-kit removes credentials from a URL for
+    display. It strips ``user[:pass]@`` from the authority of a URL that
+    carries an explicit scheme (``https://``, ``ssh://``, ...) and leaves
+    everything else -- scheme, host, port, path -- intact, so the message
+    still says which repository was meant.
+
+    An scp-like SSH form (``git@host:path``) has no scheme, so ``urlsplit``
+    reports it as a bare path rather than parsing an authority; that shape
+    carries no password (the leading token is an SSH username, never a
+    credential) and git's own syntax depends on the ``@``, so it is returned
+    unchanged rather than mangled.
+    """
+    parts = urllib.parse.urlsplit(url)
+    if not parts.scheme or "@" not in parts.netloc:
+        return url
+    host_and_port = parts.netloc.rsplit("@", 1)[-1]
+    return urllib.parse.urlunsplit(parts._replace(netloc=host_and_port))
 
 
 def _git(args: List[str], *, cwd: Optional[Path], timeout: int) -> Tuple[int, str]:
@@ -554,14 +577,24 @@ def _toplevel(cwd: Path, dest: Path) -> Optional[Path]:
 
 
 def clone(repo_url: str, dest: Path) -> None:
-    """Clone the secrets repo. Raises on failure -- with no clone there is nothing to do."""
+    """Clone the secrets repo. Raises on failure -- with no clone there is nothing to do.
+
+    ``repo_url`` reaches the ``git clone`` subprocess exactly as given, userinfo
+    included -- ``_git`` itself is unaware of URLs and does no sanitizing.
+    This is the one caller that passes a URL to git, so it sanitizes for
+    display itself: every occurrence of ``repo_url`` in the returned
+    ``output`` is replaced with :func:`display_url` before the message is
+    built. That also covers the timeout case, because ``_git``'s timeout
+    message joins ``args``, which contains ``repo_url`` verbatim.
+    """
     dest.parent.mkdir(parents=True, exist_ok=True)
     code, output = _git(
         ["clone", "--quiet", repo_url, str(dest)], cwd=None, timeout=CLONE_TIMEOUT
     )
     if code != 0:
+        output = output.replace(repo_url, display_url(repo_url))
         raise SecretsError(
-            f"could not clone {repo_url}: {output}",
+            f"could not clone {display_url(repo_url)}: {output}",
             "Check that this machine's SSH key can read the repo "
             "(`ssh -T git@github.com`) and that the URL in secrets.json is "
             "correct. The same credential that clones your other private "

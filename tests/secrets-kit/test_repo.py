@@ -358,3 +358,100 @@ class TestRollback:
 
         assert not (fleet_git.author / "identity.age").exists()
         assert repo_mod.head_sha(fleet_git.author) == before
+
+
+class TestDisplayUrl:
+    """I18 / SK-SOL-15: the repository-diagnostic display helper."""
+
+    def test_removes_userinfo_and_keeps_scheme_host_port_path(self):
+        sanitized = repo_mod.display_url(
+            "https://fixture-user:fixture-token@example.invalid:8443/acct/fleet-secrets.git"
+        )
+        assert sanitized == "https://example.invalid:8443/acct/fleet-secrets.git"
+        assert "fixture-user" not in sanitized and "fixture-token" not in sanitized
+
+    def test_leaves_an_scp_like_ssh_form_unchanged(self):
+        # No password in this form -- the leading token is an SSH username,
+        # and the "@" is part of git's own syntax, not a credential separator.
+        url = "git@example.com:acct/fleet-secrets.git"
+        assert repo_mod.display_url(url) == url
+
+    def test_leaves_a_url_with_no_userinfo_unchanged(self):
+        url = "https://example.invalid/acct/fleet-secrets.git"
+        assert repo_mod.display_url(url) == url
+
+    def test_removes_a_bare_username_with_no_password_too(self):
+        # The contract is "removes URL userinfo", not "removes only a password".
+        sanitized = repo_mod.display_url("ssh://fixture-user@example.invalid/acct/fleet-secrets.git")
+        assert sanitized == "ssh://example.invalid/acct/fleet-secrets.git"
+
+
+class TestCredentialSafeCloneDiagnostics:
+    """I18 / SK-SOL-15: a userinfo credential in the repo URL must never reach
+
+    a rendered success note, error, or deadline message, while the subprocess
+    that actually runs git keeps receiving the original URL untouched.
+    """
+
+    URL = "https://fixture-user:fixture-token@example.invalid/acct/fleet-secrets.git"
+
+    def test_clone_failure_message_is_sanitized_but_the_subprocess_gets_the_original_url(
+        self, monkeypatch, tmp_path
+    ):
+        captured = {}
+
+        def fake_run(argv, **kwargs):
+            captured["argv"] = argv
+            return subprocess.CompletedProcess(
+                argv, 128, b"fatal: could not read from remote repository\n", b""
+            )
+
+        monkeypatch.setattr(repo_mod.subprocess, "run", fake_run)
+        with pytest.raises(SecretsError) as excinfo:
+            repo_mod.clone(self.URL, tmp_path / "clone")
+        message = str(excinfo.value)
+        assert "fixture-user" not in message and "fixture-token" not in message
+        assert "example.invalid/acct/fleet-secrets.git" in message
+        assert self.URL in captured["argv"]
+
+    def test_clone_timeout_message_is_sanitized_but_the_subprocess_gets_the_original_url(
+        self, monkeypatch, tmp_path
+    ):
+        captured = {}
+
+        def fake_run(argv, **kwargs):
+            captured["argv"] = argv
+            raise subprocess.TimeoutExpired(argv, kwargs.get("timeout"))
+
+        monkeypatch.setattr(repo_mod.subprocess, "run", fake_run)
+        with pytest.raises(SecretsError) as excinfo:
+            repo_mod.clone(self.URL, tmp_path / "clone")
+        message = str(excinfo.value)
+        assert "fixture-user" not in message and "fixture-token" not in message
+        assert "timed out after" in message
+        assert self.URL in captured["argv"]
+
+    def test_clone_error_echoing_the_known_url_in_gits_own_output_is_also_sanitized(
+        self, monkeypatch, tmp_path
+    ):
+        def fake_run(argv, **kwargs):
+            stderr = ("remote: repository " + self.URL + " not found\n").encode()
+            return subprocess.CompletedProcess(argv, 128, stderr, b"")
+
+        monkeypatch.setattr(repo_mod.subprocess, "run", fake_run)
+        with pytest.raises(SecretsError) as excinfo:
+            repo_mod.clone(self.URL, tmp_path / "clone")
+        message = str(excinfo.value)
+        assert "fixture-token" not in message
+        assert message.count("example.invalid/acct/fleet-secrets.git") == 2
+
+    def test_clone_success_reaches_the_subprocess_with_the_original_url(self, monkeypatch, tmp_path):
+        captured = {}
+
+        def fake_run(argv, **kwargs):
+            captured["argv"] = argv
+            return subprocess.CompletedProcess(argv, 0, b"", b"")
+
+        monkeypatch.setattr(repo_mod.subprocess, "run", fake_run)
+        repo_mod.clone(self.URL, tmp_path / "clone")
+        assert self.URL in captured["argv"]
