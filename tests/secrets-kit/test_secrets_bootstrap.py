@@ -14,6 +14,9 @@ from pathlib import Path
 
 import pytest
 
+import bootstrap_lib.engine as engine
+from secrets_kit.converge import Failure, Result
+
 _PLUGIN = Path(__file__).resolve().parents[2] / "plugins" / "secrets-kit"
 
 
@@ -47,17 +50,105 @@ class FakeCtx:
         self.oks.append(message)
 
 
-def test_unconfigured_machine_logs_once_and_adds_no_failure(module, tmp_path, monkeypatch):
-    """Installing the plugin without declaring anything must be silent."""
+def _real_ctx(data_dir):
+    """Build the REAL provider context (bootstrap_lib.engine._ScriptContext).
+
+    Its ``log`` and ``log_ok`` write into separate lists this helper returns
+    directly, so a test can assert against the same always-shown vs
+    verbose-only channels the engine itself uses -- not a fake's paraphrase
+    of that contract.
+    """
+    log_entries = []
+    ok_entries = []
+    ctx = engine._ScriptContext(
+        config={},
+        data_dir=str(data_dir),
+        plugin_root=str(data_dir),
+        log_entries=log_entries,
+        ok_entries=ok_entries,
+        prefix="",
+        plugin_name="secrets-kit",
+    )
+    return ctx, log_entries, ok_entries
+
+
+def _stub_result(*, skipped_reason=None, failures=None, notes=None):
+    result = Result()
+    result.skipped_reason = skipped_reason
+    result.failures = failures or []
+    result.notes = notes or []
+    return result
+
+
+def test_unconfigured_machine_logs_verbose_only_and_adds_no_failure(module, tmp_path, monkeypatch):
+    """Nothing declared is the third-party default: quiet on the always-shown
+    action channel; a verbose-only ok note is allowed."""
     monkeypatch.setattr(module, "CONFIG_PATH", tmp_path / "absent.json")
     monkeypatch.setattr(module, "ENV_PATH", tmp_path / "absent-env.json")
-    ctx = FakeCtx(tmp_path / "data")
+    ctx, log_entries, ok_entries = _real_ctx(tmp_path / "data")
 
     module.bootstrap(ctx)
 
     assert ctx.failures == []
-    assert ctx.oks == []
-    assert ctx.logs == ["secrets: not configured"]
+    assert log_entries == []
+    assert ok_entries == ["secrets: not configured"]
+
+
+def test_no_profiles_for_this_host_is_also_quiet(module, tmp_path, monkeypatch):
+    """A machine deliberately left out of every profile is opt-out, not a
+    problem: manifest.py's Config.machine_key() docstring calls an unlisted
+    machine 'not an error' -- 'subsetting by omission is how a machine opts
+    out of holding secrets it has no business holding.'"""
+    monkeypatch.setattr(
+        module, "converge",
+        lambda *a, **k: _stub_result(skipped_reason="no profiles for this host"),
+    )
+    ctx, log_entries, ok_entries = _real_ctx(tmp_path / "data")
+
+    module.bootstrap(ctx)
+
+    assert ctx.failures == []
+    assert log_entries == []
+    assert ok_entries == ["secrets: no profiles for this host"]
+
+
+def test_performed_work_stays_on_the_visible_channel(module, tmp_path, monkeypatch):
+    """A note is real action the user should see, even in the otherwise-quiet
+    steady state -- unaffected by the quiet-skip classification above."""
+    monkeypatch.setattr(
+        module, "converge",
+        lambda *a, **k: _stub_result(
+            notes=["cloned git@example.com:acct/fleet-secrets.git"],
+        ),
+    )
+    ctx, log_entries, ok_entries = _real_ctx(tmp_path / "data")
+
+    module.bootstrap(ctx)
+
+    assert ctx.failures == []
+    assert log_entries == ["secrets: cloned git@example.com:acct/fleet-secrets.git"]
+
+
+def test_real_failure_stays_on_the_visible_channel(module, tmp_path, monkeypatch):
+    """A failure's summary line must stay on the always-shown channel, not
+    fall into the verbose-only one alongside its failure record."""
+    failure = Failure("secrets_locked", user_msg="u", agent_msg="a", ask_reason="info")
+    monkeypatch.setattr(
+        module, "converge",
+        lambda *a, **k: _stub_result(
+            skipped_reason="locked (awaiting one-time unlock)",
+            failures=[failure],
+        ),
+    )
+    ctx, log_entries, ok_entries = _real_ctx(tmp_path / "data")
+
+    module.bootstrap(ctx)
+
+    assert len(ctx.failures) == 1
+    assert ctx.failures[0]["type"] == "secrets_locked"
+    assert ctx.failures[0]["ask_reason"] == "info"
+    assert log_entries
+    assert ok_entries == []
 
 
 def test_locked_machine_forwards_the_ask_reason(module, fleet, monkeypatch):
