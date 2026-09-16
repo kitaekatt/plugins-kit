@@ -451,6 +451,60 @@ reference_skill:
         - Switching profiles is additive going forward, not a reset -- tools, PATH
           entries, and config a previous profile added stay in place even after a
           different profile (or `none`) is selected.
+    - id: python_interpreter
+      summary: >-
+        Invoke Python through BOOTSTRAP_PYTHON / BOOTSTRAP_PROJECT_PYTHON, never bare
+        python/python3/py -- the engine exports both every pass, the SessionStart hook
+        writes both into every Claude session before any skip gate, and shell
+        integration keeps BOOTSTRAP_PROJECT_PYTHON current per directory in a terminal.
+      keywords: [python, python3, py, interpreter, which python, BOOTSTRAP_PYTHON, BOOTSTRAP_PROJECT_PYTHON, project venv, python not found, command not found, not recognized, Store stub, uv run python, terminal, PowerShell, cmd, shell hook, project_python, skill preload]
+      detail: |
+        Two names, one contract:
+        - `BOOTSTRAP_PYTHON` -- the bootstrap-owned interpreter (the deterministic
+          standalone install bootstrap provisions for itself).
+        - `BOOTSTRAP_PROJECT_PYTHON` -- the current project's own interpreter: a
+          `.venv` found by walking up from the working directory, or an active
+          `$VIRTUAL_ENV`, falling through to `BOOTSTRAP_PYTHON` when neither is
+          found. A project can opt OUT of this detection with
+          `"project_python": false`, in which case this name is not set at all
+          for that project.
+        Call sites: project code uses the nested, defaulting form
+        `"${BOOTSTRAP_PROJECT_PYTHON:-${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}}"`;
+        bootstrap's own code and stdlib-only glue use the forced form
+        `"${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}"`. Both fail loudly with
+        that message on an engine older than 0.120.0, rather than silently falling
+        through to a stranger's `python` on PATH.
+        Both names are set every engine pass (pass start, then manifest-aware once
+        the layered manifest loads, then verified and recorded per project) and
+        every Claude session (the SessionStart hook writes whichever names are
+        still absent, before any skip gate, so a throttled or resumed session still
+        gets correct values without waiting for a full pass). Persisted shells
+        (bash/zsh rc files, the Windows registry) carry `BOOTSTRAP_PYTHON`; a
+        per-directory shell hook keeps `BOOTSTRAP_PROJECT_PYTHON` current in a
+        terminal. Both are opt-outable per machine via the layered `interpreter_env`
+        key (`persist`, `shell_hook`; default `true`); a project can opt out of
+        project-interpreter detection entirely with the project-layer `project_python`
+        key (`false` is the only accepted value).
+        Full visibility table across every surface (engine, CLI, fix queue, Claude
+        sessions, every terminal kind, hooks, CI), per-shell copy-paste forms, the
+        PowerShell existing-profile-only rule, and documented gaps (zsh on Linux,
+        pwsh off Windows, mid-session `cd`): references/python-interpreter.md.
+      gotchas:
+        - A bare `python`/`python3`/`py` in a shipped plugin manifest's `tools[].check`
+          /`install` is flagged by a displayed action entry naming this fact; the same
+          in a layered or env.json manifest is a log-only entry until the command actually
+          fails, when a failure hint names this fact.
+        - There is no `${python}` manifest variable. `tools[].check`/`install` and
+          `env_checks[].check`/`fix` are opaque shell strings handed to `bash -c`
+          unsubstituted -- manifest variable expansion never reaches them.
+        - "`uv run python` is a different mechanism (an interpreter CHOICE made by
+          the `uv` package manager) and is not a substitute for either variable in
+          shipped code; see the root CLAUDE.md for where `uv run [--extra dev] python`
+          still applies to plugins-kit's own maintainer commands."
+        - "A skill `!` preload command cannot use either variable: Claude Code
+          refuses a preload that contains a shell expansion. A preload launches
+          Python as `uv run --no-project python \"${CLAUDE_PLUGIN_ROOT}/...\"`
+          (references/python-interpreter.md, \"Skill preload commands\")."
     - id: merge_semantics
       summary: Layered configs merge by identity key for arrays, deep-merge for objects, override for scalars.
       keywords: [merge semantics, union, identity key, deep merge, path entries, scalar override]
@@ -465,8 +519,8 @@ reference_skill:
       keywords: [engine, session start, processing order, messages, remediation flow, update, harvest, restart, claude --resume, reset the cooldown, bootstrap command, is a pass running, run from the terminal]
       fact_ids: [message_outcomes, update_lifecycle, manual_convergence, bootstrap_cli_lever, cooldown_reset_request, remediation_phases]
     - name: config_files
-      keywords: [bootstrap.json, env.json, manifest, layers, merge, override, pin, auto-update, autoUpdate, plugin not updating, machines registry, env gate, personalization, install manual, opt-in plugin, action-triggered install, profile, profiles, extends, profile selection]
-      fact_ids: [config_layers, env_manifest, marketplace_pinning, plugin_autoupdate_propagation, action_triggered_install, merge_semantics, profiles]
+      keywords: [bootstrap.json, env.json, manifest, layers, merge, override, pin, auto-update, autoUpdate, plugin not updating, machines registry, env gate, personalization, install manual, opt-in plugin, action-triggered install, profile, profiles, extends, profile selection, python, interpreter, BOOTSTRAP_PYTHON, BOOTSTRAP_PROJECT_PYTHON]
+      fact_ids: [config_layers, env_manifest, marketplace_pinning, plugin_autoupdate_propagation, action_triggered_install, merge_semantics, profiles, python_interpreter]
     - name: catalogues
       keywords: [conditions, categories, remediation table]
       fact_ids: [condition_categories]
@@ -506,6 +560,14 @@ reference_skill:
         The deferred-requirement pattern -- detect early, ask late. The escalate-vs-defer rule,
         the ctx.add_deferred_requirement API and its on-disk record, how point-of-need code
         consumes it, and the plugin-author wiring steps.
+    - id: python_interpreter_ref
+      path: references/python-interpreter.md
+      keywords: [python, python3, py, interpreter, which python, BOOTSTRAP_PYTHON, BOOTSTRAP_PROJECT_PYTHON, project venv, python not found, command not found, not recognized, Store stub, uv run python, terminal, PowerShell, cmd, shell hook, project_python, interpreter_env, default vs forced]
+      summary: >-
+        The Python interpreter variables contract -- the visibility table across every
+        surface, per-shell copy-paste forms, the `project_python` opt-out, the
+        `interpreter_env` opt-outs, the PowerShell existing-profile-only rule, and the
+        documented gaps.
     - id: durable_project_data_ref
       path: references/durable-project-data.md
       keywords: [durable project data, plugin data dir, plugin_data_dir, .plugin-data, .local-data, tracked generated artifact, version control, project VCS, explicit refresh, size, churn, where should my plugin write, write path, scratch directory, user-scoped data, BASH_SOURCE, __file__, beside the script, wrote into the source tree, file contract path, audit write paths]

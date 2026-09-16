@@ -44,7 +44,7 @@ technique_skill:
       steps:
         - n: 1
           action: Invoke ${CLAUDE_PLUGIN_ROOT}/scripts/cache_report.py with $ARGUMENTS.
-          tool: uv run --no-project python
+          tool: '"${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}"'
           expected: stdout containing the cache hit-rate, token usage, and (if --detailed) per-request breakdown.
           on_failure: If the script is missing at ${CLAUDE_PLUGIN_ROOT}/scripts/cache_report.py, surface the error to the user verbatim. Do not improvise the script path.
         - n: 2
@@ -65,8 +65,8 @@ Display the report output below verbatim. Do not summarize, paraphrase, or omit 
 
 ---
 
-To see all sessions: run `uv run --no-project python "${CLAUDE_PLUGIN_ROOT}/scripts/cache_report.py" --all`
+To see all sessions: run `"${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${CLAUDE_PLUGIN_ROOT}/scripts/cache_report.py" --all`
 
-To see a specific session: run `uv run --no-project python "${CLAUDE_PLUGIN_ROOT}/scripts/cache_report.py" SESSION_ID`
+To see a specific session: run `"${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${CLAUDE_PLUGIN_ROOT}/scripts/cache_report.py" SESSION_ID`
 
-To include per-request breakdown: run `uv run --no-project python "${CLAUDE_PLUGIN_ROOT}/scripts/cache_report.py" --detailed`
+To include per-request breakdown: run `"${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${CLAUDE_PLUGIN_ROOT}/scripts/cache_report.py" --detailed`

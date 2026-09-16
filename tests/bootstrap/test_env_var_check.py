@@ -448,3 +448,109 @@ def test_fake_winreg_delete_value_is_observable_through_query():
         pass
     else:
         raise AssertionError("deleted value still readable")
+
+
+# --- unset_env_var / is_env_var_persisted (interface-v3) ---
+
+from bootstrap_lib import env_var_check as _evc  # noqa: E402
+
+
+class TestUnsetUnix:
+    def test_set_then_unset_restores_the_file(self, isolated_home):
+        rc = isolated_home / ".bashrc"
+        original = "# my shell config\nalias ll='ls -l'\n"
+        rc.write_text(original)
+        set_env_var("BOOTSTRAP_PYTHON", "/h/.local/bin/python3", "ubuntu")
+        assert _evc.is_env_var_persisted("BOOTSTRAP_PYTHON", "ubuntu") is True
+
+        ok, msg = _evc.unset_env_var("BOOTSTRAP_PYTHON", "ubuntu")
+
+        assert ok is True
+        assert msg == "removed BOOTSTRAP_PYTHON from .bashrc"
+        assert rc.read_text() == original
+        assert _evc.is_env_var_persisted("BOOTSTRAP_PYTHON", "ubuntu") is False
+
+    def test_keeps_a_comment_that_is_not_directly_above(self, isolated_home):
+        rc = isolated_home / ".bashrc"
+        rc.write_text(
+            "# Added by bootstrap\n"
+            "export PATH=\"$HOME/.local/bin:$PATH\"\n"
+            "export BOOTSTRAP_PYTHON=/x\n"
+            "alias ll='ls -l'\n"
+        )
+        ok, _ = _evc.unset_env_var("BOOTSTRAP_PYTHON", "ubuntu")
+        assert ok is True
+        assert rc.read_text() == (
+            "# Added by bootstrap\n"
+            "export PATH=\"$HOME/.local/bin:$PATH\"\n"
+            "alias ll='ls -l'\n"
+        )
+
+    def test_comment_above_blank_lines_is_removed(self, isolated_home):
+        rc = isolated_home / ".bashrc"
+        rc.write_text("a=1\n# Added by bootstrap\n\nexport BOOTSTRAP_PYTHON=/x\nb=2\n")
+        _evc.unset_env_var("BOOTSTRAP_PYTHON", "ubuntu")
+        assert rc.read_text() == "a=1\n\nb=2\n"
+
+    def test_absent_is_a_noop_without_rewrite(self, isolated_home):
+        rc = isolated_home / ".bashrc"
+        rc.write_text("export OTHER=1\n")
+        before = rc.stat().st_mtime_ns
+        ok, msg = _evc.unset_env_var("BOOTSTRAP_PYTHON", "ubuntu")
+        assert ok is True
+        assert "not persisted" in msg
+        assert rc.stat().st_mtime_ns == before
+        assert rc.read_text() == "export OTHER=1\n"
+
+    def test_missing_rc_file_is_a_noop(self, isolated_home):
+        ok, msg = _evc.unset_env_var("BOOTSTRAP_PYTHON", "ubuntu")
+        assert ok is True
+        assert "not persisted" in msg
+        assert not (isolated_home / ".bashrc").exists()
+
+    def test_macos_removes_from_both_files(self, isolated_home):
+        set_env_var("BOOTSTRAP_PYTHON", "/Users/u/.local/bin/python3", "macos")
+        ok, msg = _evc.unset_env_var("BOOTSTRAP_PYTHON", "macos")
+        assert ok is True
+        assert msg == "removed BOOTSTRAP_PYTHON from .zshrc, .bashrc"
+        for rc_name in (".zshrc", ".bashrc"):
+            assert "BOOTSTRAP_PYTHON" not in (isolated_home / rc_name).read_text()
+
+    def test_invalid_name_is_refused(self, isolated_home):
+        ok, _ = _evc.unset_env_var("BAD NAME", "ubuntu")
+        assert ok is False
+        assert _evc.is_env_var_persisted("BAD NAME", "ubuntu") is False
+
+
+class TestUnsetWindows:
+    def test_deletes_value_and_broadcasts(self, fake_winreg, monkeypatch):
+        broadcasts = []
+        monkeypatch.setattr("bootstrap_lib.path_check._broadcast_environment_change",
+                            lambda: broadcasts.append(1))
+        set_env_var("BOOTSTRAP_PYTHON", "C:/py/python.exe", "windows")
+        assert _evc.is_env_var_persisted("BOOTSTRAP_PYTHON", "windows") is True
+        broadcasts.clear()
+
+        ok, msg = _evc.unset_env_var("BOOTSTRAP_PYTHON", "windows")
+
+        assert ok is True
+        assert "removed BOOTSTRAP_PYTHON" in msg
+        assert "BOOTSTRAP_PYTHON" not in fake_winreg.store
+        assert broadcasts == [1]
+        assert _evc.is_env_var_persisted("BOOTSTRAP_PYTHON", "windows") is False
+
+    def test_absent_value_is_a_noop(self, fake_winreg, monkeypatch):
+        monkeypatch.setattr("bootstrap_lib.path_check._broadcast_environment_change",
+                            lambda: (_ for _ in ()).throw(AssertionError("no broadcast")))
+        ok, msg = _evc.unset_env_var("BOOTSTRAP_PYTHON", "windows")
+        assert ok is True
+        assert "nothing to remove" in msg
+
+    def test_skip_registry_flag_short_circuits(self, fake_winreg, monkeypatch):
+        fake_winreg.store["BOOTSTRAP_PYTHON"] = "C:/py/python.exe"
+        monkeypatch.setenv("BOOTSTRAP_SKIP_REGISTRY", "1")
+        assert _evc.is_env_var_persisted("BOOTSTRAP_PYTHON", "windows") is False
+        ok, msg = _evc.unset_env_var("BOOTSTRAP_PYTHON", "windows")
+        assert ok is True
+        assert "BOOTSTRAP_SKIP_REGISTRY" in msg
+        assert fake_winreg.store["BOOTSTRAP_PYTHON"] == "C:/py/python.exe"

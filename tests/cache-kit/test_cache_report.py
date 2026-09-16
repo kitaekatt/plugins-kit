@@ -226,13 +226,37 @@ def test_missing_config_dir_is_clean_error(tmp_path):
     assert "Traceback" not in result.stderr
 
 
-def test_skill_docs_use_no_project_and_current_session():
+PRELOAD = ('!`uv run --no-project python "${CLAUDE_PLUGIN_ROOT}/scripts/cache_report.py" '
+           '--session "${CLAUDE_SESSION_ID}" $ARGUMENTS`')
+
+
+def test_skill_docs_preload_uses_uv_and_agent_commands_use_bootstrap_python():
+    """The `!` preload that renders the report cannot name BOOTSTRAP_PYTHON:
+    Claude Code refuses a preload command containing a shell expansion
+    ("Contains expansion"), so the preload keeps `uv run --no-project python`
+    with only Claude-Code-substituted names. The commands an agent runs
+    itself use the guarded interpreter variable (python-interpreter.md,
+    "Skill preload commands").
+
+    Revert that turns this RED: put `"${BOOTSTRAP_PYTHON:?...}"` back into the
+    preload line (the preload assertions fail), or return the agent-run lines
+    to `uv run --no-project python` (the variable-form count fails).
+    """
+    from bootstrap_lib.interpreter_env import PLUGIN_CALL_SITE_EXPR as expr
+
     skill = (_ROOT / "plugins/cache-kit/skills/cache-report/SKILL.md").read_text()
     readme = (_ROOT / "plugins/cache-kit/README.md").read_text()
 
-    assert "--no-project" in skill
-    assert "${CLAUDE_SESSION_ID}" in skill
-    assert "uv run python" not in skill
+    preloads = [line for line in skill.splitlines() if line.startswith("!`")]
+    assert preloads == [PRELOAD]
+    assert "${BOOTSTRAP_" not in preloads[0]
+    agent_lines = [line for line in skill.splitlines()
+                   if line.startswith("To ") and "cache_report.py" in line]
+    assert len(agent_lines) == 3
+    for line in agent_lines:
+        assert f'run `{expr} "${{CLAUDE_PLUGIN_ROOT}}/scripts/cache_report.py"' in line, line
+    assert f"tool: '{expr}'" in skill
+    assert skill.count("uv run") == 1
     assert "uv run python" not in readme
     assert "cost" not in skill.lower() or "costs are not reported" in skill.lower()
     # The --all/--detailed exclusivity must live where agents read it, not only in README.

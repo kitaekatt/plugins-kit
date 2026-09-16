@@ -191,6 +191,16 @@ class TestStatus:
         payload = json.loads(capsys.readouterr().out)
         assert {r["marketplace"] for r in payload} == {"mkt-a", "mkt-b"}
 
+    def test_prints_the_running_interpreter(self, data_root, capsys):
+        """D3, discoverability channel 7: `bootstrap status` names the
+        interpreter THIS lever runs under, so an author reading its output can
+        tell which Python answered "no bootstrap pass is running"."""
+        assert cli.cmd_status(_args(json=False)) == 0
+        out = capsys.readouterr().out
+        expected = (sys.executable.replace("\\", "/")
+                    if os.name == "nt" else sys.executable)
+        assert ("BOOTSTRAP_PYTHON=%s" % expected) in out
+
 
 # --------------------------------------------------------------------------
 # run
@@ -604,3 +614,120 @@ class TestReset:
         monkeypatch.setattr(cli, "find_reset_script", lambda f="": "/plug/reset.sh")
         monkeypatch.setattr(cli.subprocess, "call", lambda cmd, **kw: 2)
         assert cli.main(["reset", "--project", "/nope"]) == 2
+
+
+# --------------------------------------------------------------------------
+# BOOTSTRAP_PROJECT_PYTHON: `status`'s new line and the `python` subcommand
+#
+# _resolve_project_python is a stdlib-only inline of interpreter_env's
+# normative resolution rule (interface-v3.md section 1), steps 2 ($VIRTUAL_ENV)
+# and 4 (walk-up to a project .venv) plus the step-5 fallback. Every test here
+# isolates HOME so the walk-up's "stop at $HOME" boundary and the step-5
+# standalone-path fallback can never read or touch the real machine's home.
+# --------------------------------------------------------------------------
+
+class TestProjectPython:
+
+    @pytest.fixture(autouse=True)
+    def isolated_home(self, tmp_path_factory, monkeypatch):
+        home = tmp_path_factory.mktemp("home")
+        monkeypatch.setenv("HOME", str(home))
+        if os.name == "nt":
+            # Windows expanduser("~") consults USERPROFILE, not HOME; the
+            # inlined _cli_home falls back to expanduser when HOME does not
+            # name an existing dir, so both must be redirected together.
+            monkeypatch.setenv("USERPROFILE", str(home))
+        monkeypatch.delenv("VIRTUAL_ENV", raising=False)
+        monkeypatch.delenv("UV_PROJECT_ENVIRONMENT", raising=False)
+        monkeypatch.delenv("BOOTSTRAP_PYTHON", raising=False)
+        return home
+
+    @staticmethod
+    def _make_venv(dir_path):
+        """A minimal real-enough venv: pyvenv.cfg plus one interpreter file."""
+        dir_path.mkdir(parents=True, exist_ok=True)
+        (dir_path / "pyvenv.cfg").write_text("home = /usr\n")
+        if os.name == "nt":
+            interp = dir_path / "Scripts" / "python.exe"
+        else:
+            interp = dir_path / "bin" / "python"
+        interp.parent.mkdir(parents=True, exist_ok=True)
+        interp.write_text("#!/bin/sh\n")
+        if os.name != "nt":
+            interp.chmod(0o755)
+        return interp
+
+    def _expected(self, path):
+        return cli._cli_shell_path(str(path), os.name == "nt")
+
+    # T5d: status prints the project value for a temp cwd with a .venv, and
+    # falls back without one.
+    # Revert that turns this RED: delete the added
+    #   print("BOOTSTRAP_PROJECT_PYTHON=%s" % _resolve_project_python()[0])
+    # line from cmd_status -- both tests below then fail on a missing
+    # substring (confirmed: restored afterward).
+    def test_status_prints_the_project_venv_for_the_cwd(
+            self, tmp_path, monkeypatch, capsys):
+        project = tmp_path / "proj"
+        interp = self._make_venv(project / ".venv")
+        monkeypatch.chdir(project)
+        monkeypatch.setenv("CLAUDE_BOOTSTRAP_DATA_ROOT", str(tmp_path / "data"))
+        monkeypatch.delenv("BOOTSTRAP_MARKETPLACE", raising=False)
+        assert cli.cmd_status(_args(json=False)) == 0
+        out = capsys.readouterr().out
+        assert ("BOOTSTRAP_PROJECT_PYTHON=%s" % self._expected(interp)) in out
+
+    def test_status_falls_back_to_the_engine_without_a_venv(
+            self, tmp_path, monkeypatch, capsys):
+        project = tmp_path / "proj"
+        project.mkdir()
+        monkeypatch.chdir(project)
+        monkeypatch.setenv("CLAUDE_BOOTSTRAP_DATA_ROOT", str(tmp_path / "data"))
+        monkeypatch.delenv("BOOTSTRAP_MARKETPLACE", raising=False)
+        monkeypatch.setenv("BOOTSTRAP_PYTHON", "/engine/python")
+        assert cli.cmd_status(_args(json=False)) == 0
+        out = capsys.readouterr().out
+        assert "BOOTSTRAP_PROJECT_PYTHON=/engine/python" in out
+
+    # T5e: `bootstrap python` prints the project default.
+    # Revert that turns this RED: in cmd_python, change the non-engine branch
+    # to `print(_bootstrap_python_value())` (same as --engine) -- the test
+    # then sees the running interpreter instead of the project .venv path and
+    # fails (confirmed: restored afterward).
+    def test_python_subcommand_prints_the_project_default(
+            self, tmp_path, monkeypatch, capsys):
+        project = tmp_path / "proj"
+        interp = self._make_venv(project / ".venv")
+        monkeypatch.chdir(project)
+        assert cli.main(["python"]) == 0
+        assert capsys.readouterr().out.strip() == self._expected(interp)
+
+    # T5f: `bootstrap python --engine` prints the engine interpreter.
+    # Revert that turns this RED: in cmd_python, change `if args.engine:` to
+    # always take the `_resolve_project_python()[0]` branch -- the test then
+    # sees the project .venv path instead of sys.executable and fails
+    # (confirmed: restored afterward).
+    def test_engine_flag_prints_the_running_interpreter(
+            self, tmp_path, monkeypatch, capsys):
+        project = tmp_path / "proj"
+        self._make_venv(project / ".venv")  # present, but --engine bypasses it
+        monkeypatch.chdir(project)
+        assert cli.main(["python", "--engine"]) == 0
+        expected = (sys.executable.replace("\\", "/")
+                    if os.name == "nt" else sys.executable)
+        assert capsys.readouterr().out.strip() == expected
+
+    # VIRTUAL_ENV precedence: step 2 beats step 4 even when both qualify.
+    # Revert that turns this RED: in _resolve_project_python, delete the
+    # `if virtual_env:` block (step 2) so resolution falls straight to the
+    # walk-up -- the test then gets the project's own .venv instead of the
+    # activated one and fails (confirmed: restored afterward).
+    def test_virtual_env_outranks_the_walked_up_venv(
+            self, tmp_path, monkeypatch, capsys):
+        project = tmp_path / "proj"
+        self._make_venv(project / ".venv")
+        activated = self._make_venv(tmp_path / "activated")
+        monkeypatch.chdir(project)
+        monkeypatch.setenv("VIRTUAL_ENV", str(tmp_path / "activated"))
+        assert cli.main(["python"]) == 0
+        assert capsys.readouterr().out.strip() == self._expected(activated)

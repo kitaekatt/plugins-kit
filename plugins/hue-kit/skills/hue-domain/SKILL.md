@@ -354,18 +354,18 @@ domain_skill:
         The verb CLI over the layered scene tool. NOTE `--dir` is a top-level
         option and must precede the VERB (argparse rejects it after). Invocation:
         bin/hue-kit(.cmd) is a shim for when it is on PATH, but do NOT assume it
-        is -- nothing puts a plugin's bin/ on PATH. The portable form uses the
-        env vars bootstrap exports:
-        `"$HUE_KIT_VENV" "$HUE_KIT_ROOT/scripts/hue_kit_cli.py" <verb>`
-        (HUE_KIT_ROOT needs bootstrap >= the release that added <PLUGIN>_ROOT;
-        see the bootstrap skill's manifest-reference). The CLI re-execs under the
-        plugin's bootstrap-provisioned venv either way. Working files
-        (scene-groups.yaml / scene-designs.yaml / index.html) default to the
-        plugin data dir (~/.claude/plugins/data/plugins-kit/hue-kit),
-        regardless of cwd.
+        is -- nothing puts a plugin's bin/ on PATH. The portable form launches
+        the script under the bootstrap interpreter, which every
+        bootstrap-managed session exports (/bootstrap fact python_interpreter):
+        `"${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${CLAUDE_PLUGIN_ROOT}/scripts/hue_kit_cli.py" <verb>`
+        The CLI re-execs under the plugin's bootstrap-provisioned venv either
+        way. Working files (scene-groups.yaml / scene-designs.yaml /
+        index.html) default to the plugin data dir
+        (~/.claude/plugins/data/plugins-kit/hue-kit), regardless of cwd.
     - name: scene-layers.py
-      command: python scripts/scene-layers.py [--html|--export-designs|--validate-design|--apply ...]
+      command: '"${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${CLAUDE_PLUGIN_ROOT}/scripts/scene-layers.py" [--html|--export-designs|--validate-design|--apply ...]'
       description: >-
+        Re-execs under the plugin venv when launched directly.
         The layered solver + bi-directional sync the CLI wraps. Read-only against
         the bridge except --apply --yes. See references/scene-layers.md.
     - name: scene-meta-groups.py

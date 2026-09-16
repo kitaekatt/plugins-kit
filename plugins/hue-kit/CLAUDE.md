@@ -33,8 +33,10 @@ home's natural structure.
   PATH (this doc claimed it did, and the hue-domain SKILL.md repeated it -- both
   corrected 2026-08-05 after a consumer could not find the command). The
   portable invocation is
-  `"$HUE_KIT_VENV" "$HUE_KIT_ROOT/scripts/hue_kit_cli.py" <verb>`, using the env
-  vars bootstrap exports per plugin.
+  `"${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${CLAUDE_PLUGIN_ROOT}/scripts/hue_kit_cli.py" <verb>`:
+  every bootstrap-managed session exports `BOOTSTRAP_PYTHON`, while the
+  per-plugin `HUE_KIT_VENV` is absent from a throttled session. The CLI and
+  `scene-layers.py` both re-exec under the plugin venv.
 - `examples/scene-groups.yaml`, `examples/scene-designs.yaml`, `examples/index.html`
   -- the author's home (42 lights, 12 scenes). **Example data**; a user
   regenerates their own or overwrites via `hue-kit init`. The rendered report is
@@ -45,7 +47,7 @@ home's natural structure.
 ## The CLI
 
 `hue-kit <verb>` (from PATH), or
-`python3 ${CLAUDE_PLUGIN_ROOT}/scripts/hue_kit_cli.py <verb>`. Working files
+`"${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${CLAUDE_PLUGIN_ROOT}/scripts/hue_kit_cli.py" <verb>`. Working files
 (`scene-groups.yaml`, `scene-designs.yaml`, `index.html`) default to the plugin
 data dir (`~/.claude/plugins/data/plugins-kit/hue-kit`) -- one source of truth
 regardless of invocation cwd; pass `--dir PATH` to relocate. Verbs map to

@@ -67,6 +67,14 @@ if [[ "$_OS" == MINGW* ]] || [[ "$_OS" == MSYS* ]]; then
 else
     _BOOT_PY="${HOME}/.local/bin/python3"
 fi
+# BOOTSTRAP_PYTHON is accepted only as a fallback for the deterministic path
+# above, and only when it resolves inside the standalone install directory --
+# never a bare PATH lookup, which is how the Windows Store stub gets picked up.
+if [ ! -x "$_BOOT_PY" ] && [ -n "${BOOTSTRAP_PYTHON:-}" ] && [ -x "$BOOTSTRAP_PYTHON" ]; then
+    case "$(cd "$(dirname "$BOOTSTRAP_PYTHON")" 2>/dev/null && pwd -P)" in
+        "$(cd "${HOME}/.local/share/python-standalone" 2>/dev/null && pwd -P)"/*) _BOOT_PY="$BOOTSTRAP_PYTHON" ;;
+    esac
+fi
 [ -x "$_BOOT_PY" ] || _BOOT_PY="$(command -v python3 2>/dev/null || true)"
 _run_harvest() {
     [ -n "$_BOOT_PY" ] && [ -f "$PLUGIN_ROOT/bootstrap_lib/harvest.py" ] || return 0

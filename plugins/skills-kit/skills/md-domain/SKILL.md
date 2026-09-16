@@ -704,33 +704,33 @@ domain_skill:
     - id: audit
       keywords: [audit, contract check, validate skill, run audit, schema validation]
       description: Run deterministic contract checks against a SKILL.md or CLAUDE.md (generation-time and audit-time validation).
-      operation: python -m skills_kit_lib.audit <path>
+      operation: '"${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${CLAUDE_PLUGIN_ROOT}/scripts/skills_kit_tool.py" audit <path>'
       tool: skills_kit_lib/audit.py
       scope_axes: [single-skill]
       reference_section: skill-domain/scripts.md (audit)
     - id: classify
       keywords: [classify, infer type, type detection, mixed-type detection, suggest type]
       description: Infer a SKILL.md's type from content shape and YAML root.
-      operation: python -m skills_kit_lib.classify <path>
+      operation: '"${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${CLAUDE_PLUGIN_ROOT}/scripts/skills_kit_tool.py" classify <path>'
       tool: skills_kit_lib/classify.py
       scope_axes: [single-skill]
       reference_section: skill-domain/scripts.md (classify)
     - id: tag
       keywords: [tag, write skill-type, frontmatter tagging, idempotent skill-type write]
       description: Write a skill-type value into a SKILL.md's frontmatter idempotently.
-      operation: python -m skills_kit_lib.tag <path> <skill-type>
+      operation: '"${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${CLAUDE_PLUGIN_ROOT}/scripts/skills_kit_tool.py" tag <path> <skill-type>'
       tool: skills_kit_lib/tag.py
       scope_axes: [single-skill]
       reference_section: skill-domain/scripts.md (tag)
   tools:
     - name: audit
-      command: python -m skills_kit_lib.audit
-      description: YAML-first schema validator with markdown-heuristic fallback for legacy skills. Run from the plugin root (the -m form needs skills_kit_lib importable; see skill-domain/scripts.md).
+      command: '"${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${CLAUDE_PLUGIN_ROOT}/scripts/skills_kit_tool.py" audit'
+      description: YAML-first schema validator with markdown-heuristic fallback for legacy skills. Runs from any directory -- the launcher re-execs under the plugin venv (pyyaml) and runs skills_kit_lib.<command>; relative paths resolve against the caller's directory (see skill-domain/scripts.md).
     - name: classify
-      command: python -m skills_kit_lib.classify
+      command: '"${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${CLAUDE_PLUGIN_ROOT}/scripts/skills_kit_tool.py" classify'
       description: Type inference across the canonical skill types.
     - name: tag
-      command: python -m skills_kit_lib.tag
+      command: '"${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${CLAUDE_PLUGIN_ROOT}/scripts/skills_kit_tool.py" tag'
       description: Idempotent frontmatter tagger; refuses to invent or overwrite without --force.
 ```
 

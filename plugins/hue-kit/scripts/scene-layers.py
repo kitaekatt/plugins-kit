@@ -92,6 +92,15 @@ from collections import Counter
 from datetime import datetime
 from pathlib import Path
 
+if __name__ == "__main__":
+    # Launched directly (e.g. `"$BOOTSTRAP_PYTHON" scripts/scene-layers.py`):
+    # re-exec under the plugin's bootstrap-provisioned venv, where requests,
+    # urllib3 and pyyaml live. A no-op under that venv, which is how
+    # hue_kit_cli.py runs this file; skipped when the file is imported.
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from bootstrap_guard import reexec_under_plugin_venv
+    reexec_under_plugin_venv("hue-kit")
+
 import requests
 import urllib3
 import yaml

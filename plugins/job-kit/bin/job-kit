@@ -27,13 +27,23 @@ fi
 
 if [ -x "$VENV_PY" ]; then
     PY="$VENV_PY"
-elif command -v python3 >/dev/null 2>&1; then
-    PY="python3"
-elif command -v python >/dev/null 2>&1; then
-    PY="python"
 else
-    echo "job-kit: no Python interpreter found" >&2
-    exit 1
+    PY=""
+    if [ -n "${BOOTSTRAP_PYTHON:-}" ] && [ -x "$BOOTSTRAP_PYTHON" ]; then
+        case "$(cd "$(dirname "$BOOTSTRAP_PYTHON")" 2>/dev/null && pwd -P)" in
+            "$(cd "${HOME}/.local/share/python-standalone" 2>/dev/null && pwd -P)"/*) PY="$BOOTSTRAP_PYTHON" ;;
+        esac
+    fi
+    if [ -z "$PY" ]; then
+        if command -v python3 >/dev/null 2>&1; then
+            PY="python3"
+        elif command -v python >/dev/null 2>&1; then
+            PY="python"
+        else
+            echo "job-kit: no Python interpreter found" >&2
+            exit 1
+        fi
+    fi
 fi
 
 exec "$PY" "$ENTRYPOINT" "$@"

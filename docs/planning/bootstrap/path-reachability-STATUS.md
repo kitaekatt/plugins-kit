@@ -14,15 +14,15 @@ The batch (PATH-reachability + shared-libs + skills-kit cohesion) is committed t
 `origin/dev` @ `0e266be` and smoke-tested green via `claude-dev`. Master is still at
 `origin/master @ 14380f8` — nothing has reached consumers. Remaining work, in order:
 
-0. **Confirm dev-tree restored.** `python scripts/dev-tree.py status` must say
+0. **Confirm dev-tree restored.** `uv run python scripts/dev-tree.py status` must say
    normal/cache. If it says DEV-TREE (a `claude-dev` exit trap was skipped), run
-   `python scripts/dev-tree.py normal`. (Everyday `claude` loads from cache only in
+   `uv run python scripts/dev-tree.py normal`. (Everyday `claude` loads from cache only in
    normal mode.)
 
 1. **Wait for the cohesion agent.** They wanted to do more skills-kit work before
    publish (not started as of 2026-05-31). When done, get from them:
    (a) whether they re-bumped skills-kit (0.15.0 -> ?), so re-run
-   `python scripts/regen_marketplace.py` if so; (b) confirmation their tree is
+   `uv run python scripts/regen_marketplace.py` if so; (b) confirmation their tree is
    commit-ready + audits clean. Their new commits land on dev and get picked up by
    the master-assembly step naturally.
 
@@ -151,7 +151,7 @@ the MINE files above (use `git add -p` / explicit paths, never `git add .`).
    `installPath`, confirms the auto-link + no false failure.
 3. Publish flow (3 steps, only on user go-signal): version already bumped to
    0.13.0 in plugin.json + pyproject.toml. Need to: regen marketplace
-   (`python scripts/regen_marketplace.py` -- currently still shows 0.12.1 because
+   (`uv run python scripts/regen_marketplace.py` -- currently still shows 0.12.1 because
    the bump isn't committed/regenerated yet), push dev, merge to master.
 4. update06 (downstream consumer). bootstrap pyproject version bumped -> after
    publishing, bump update06's lockfile (`cd ~/Dev/update06/plugins/update &&

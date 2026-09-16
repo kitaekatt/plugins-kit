@@ -50,8 +50,26 @@ DETECTOR="$SCRIPT_DIR/detect-editor-stale.py"
 
 if [[ -f "$DETECTOR" ]]; then
     (
+        # Deterministic standalone path first; BOOTSTRAP_PYTHON accepted only
+        # as a fallback whose realpath is inside the standalone install
+        # directory; then whatever is on PATH. Resolved here (in the
+        # background) rather than in the foreground so this never touches the
+        # <30ms latency budget above.
+        _OS="$(uname -s 2>/dev/null || echo unknown)"
+        if [[ "$_OS" == MINGW* ]] || [[ "$_OS" == MSYS* ]] || [[ "$_OS" == CYGWIN* ]]; then
+            _DETECT_PY="${HOME}/.local/share/python-standalone/python/python.exe"
+        else
+            _DETECT_PY="${HOME}/.local/share/python-standalone/python/bin/python3"
+        fi
+        if [[ ! -x "$_DETECT_PY" ]] && [[ -n "${BOOTSTRAP_PYTHON:-}" ]] && [[ -x "$BOOTSTRAP_PYTHON" ]]; then
+            case "$(cd "$(dirname "$BOOTSTRAP_PYTHON")" 2>/dev/null && pwd -P)" in
+                "$(cd "${HOME}/.local/share/python-standalone" 2>/dev/null && pwd -P)"/*) _DETECT_PY="$BOOTSTRAP_PYTHON" ;;
+            esac
+        fi
+        [[ -x "$_DETECT_PY" ]] || _DETECT_PY="$(command -v python3 2>/dev/null || command -v python 2>/dev/null || true)"
+        [[ -n "$_DETECT_PY" ]] || exit 0
         printf '%s' "$INPUT" \
-        | uv run --no-project python "$DETECTOR" \
+        | "$_DETECT_PY" "$DETECTOR" \
             >/dev/null 2>&1 &
     ) &
 fi

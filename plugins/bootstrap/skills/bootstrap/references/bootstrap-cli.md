@@ -42,8 +42,42 @@ bootstrap run --verbose   # accepted for console compatibility
 bootstrap reset           # clear this project's next-session throttle
 bootstrap reset --all     # all projects; --status and --project also supported
 bootstrap install-hook    # administrator: write the ensure-bootstrap hook here
+bootstrap python          # print the project interpreter for the cwd
+bootstrap python --engine # print the interpreter this lever runs under
 bootstrap --help
 ```
+
+Bare `bootstrap` and `bootstrap --json` also print `BOOTSTRAP_PYTHON=<value>`
+and `BOOTSTRAP_PROJECT_PYTHON=<value>` for the current working directory,
+before any blocking follow of a running pass -- which interpreter this lever
+itself runs under, and which interpreter a project call from this directory
+would resolve to right now. For an opted-out project the second line reads
+`BOOTSTRAP_PROJECT_PYTHON is not set (...)`.
+
+## The `python` subcommand
+
+`bootstrap python` prints one path: the project interpreter for the current
+working directory, by the rule the terminal resolvers apply (see
+references/python-interpreter.md). Walking up from the directory, the first
+directory that either opts out (`"project_python": false` in its
+`.claude/bootstrap.json` or `bootstrap.local.json`; never read at the home
+directory, whose file is the user layer) or holds a venv decides. Then: no
+value for an opted-out project; else an activated `$VIRTUAL_ENV`; else that
+venv; else the bootstrap interpreter. For an opted-out project it prints an
+empty line and exits 1, so `"$(bootstrap python)"` never runs a guessed
+interpreter.
+
+It does **not** read the per-project record file the engine writes: the CLI
+cannot reproduce the SessionStart hook's project key from a native working
+directory, so this is a fresh resolution every time, not a cache lookup.
+`bootstrap python --engine` prints only the interpreter this lever runs
+under (the value `BOOTSTRAP_PYTHON` has inside a pass it launches), skipping
+project detection entirely.
+
+The resolver is `bootstrap_lib.interpreter_env` itself (`walk_opted_out` and
+`default_project_python`), imported rather than re-implemented;
+`bootstrap_lib` is stdlib-only, so the lever still runs before the engine's
+own dependencies exist.
 
 `bootstrap install-hook` writes the project SessionStart hook that installs or
 updates bootstrap on machines that lack it. It is documented, with its

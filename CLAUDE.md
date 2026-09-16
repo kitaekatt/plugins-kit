@@ -482,26 +482,69 @@ For a staged Git change, run `scripts/pre-commit-version-check.sh`; its existing
 
 **Anti-pattern: silent bootstrap operations.** Every bootstrap check must log its outcome -- `ok_entries` when passing (verbose-only), `action_entries` when remediating (always visible). Adding a check that creates files, clones repos, or writes config without emitting a log entry is a bug. See the "Every check must log its outcome" principle in [engine-internals.md](plugins/bootstrap/skills/bootstrap/references/engine-internals.md).
 
-**Always use `uv run python` in shell scripts** -- never bare `python` or `python3`. On Windows, the system PATH contains Microsoft Store stubs (`WindowsApps/python.exe`) that take precedence over any user PATH entry, causing bare `python`/`python3` to fail with "Permission denied" (exit 126) in Git Bash. On macOS, bare `python` often doesn't exist. Since bootstrap guarantees `uv` is available, `uv run python` is the standard way to invoke Python from any shell script in this project. It resolves the correct Python, activates the venv (giving access to installed packages), and works on all platforms.
+**`uv run [--extra dev] python` is for plugins-kit's own maintainer commands, run inside this checkout** -- never bare `python` or `python3`. This covers this repo's own `scripts/*.sh` and `scripts/*.py` entry points, and documented human commands (this file, CONTRIBUTING.md, `docs/**`). On Windows, the system PATH contains Microsoft Store stubs (`WindowsApps/python.exe`) that take precedence over any user PATH entry, causing bare `python`/`python3` to fail with "Permission denied" (exit 126) in Git Bash. On macOS, bare `python` often doesn't exist. Since bootstrap guarantees `uv` is available, `uv run python` is the standard way to invoke Python from a maintainer command in this project: it resolves the correct Python, syncs and activates THIS checkout's own venv (a `uv.lock` change is picked up immediately, not at the next bootstrap pass), and works on all platforms. A maintainer Python script spawning a same-environment child process uses `sys.executable`, not another `uv run python` (already true in `scripts/publish.py`).
+
+**This does not extend to `plugins/**`.** Code that ships to a consumer --
+a shipped plugin script, a hook, a manifest command, a skill example -- never
+uses `uv run python`. Run from a foreign working directory it creates or
+syncs a venv the caller never meant; see "Python interpreter variables"
+below for what those call sites use instead.
 
 **Scoped exception: Python CLI launcher shims.** `uv run python` resolves the
 venv from the CWD, so a launcher a user invokes from any directory -- the four
 Python-invoking `plugins/<name>/bin/` shims (hue-kit, job-kit,
 llm-scripting-kit, secrets-kit) and their `.cmd` twins -- would pick up the
 wrong environment, or none. Those shims resolve an absolute interpreter
-instead: the bootstrap-provisioned standalone Python or the plugin venv by its
-version-independent `~/.claude/plugins/data/<marketplace>/<plugin>/.venv/`
-path. POSIX shims fall back to `python3`, then `python`; `.cmd` shims fall back
-to `python.exe`. The absolute-path preference avoids the Windows Store stub
-when the preferred interpreter exists, but the PATH fallback can still resolve
-it. The `bin/qwen3*-server` scripts are outside this exception -- they invoke
+instead: the deterministic bootstrap-provisioned standalone Python path
+first; `BOOTSTRAP_PYTHON` next, but only when that deterministic file is
+absent and the variable's own realpath resolves inside the standalone
+directory (a stranger's `BOOTSTRAP_PYTHON` must never substitute for the file
+the shim was written to find); then the plugin venv by its version-independent
+`~/.claude/plugins/data/<marketplace>/<plugin>/.venv/` path. POSIX shims fall
+back to `python3`, then `python`; `.cmd` shims fall back to `python.exe`. The
+absolute-path preference avoids the Windows Store stub when the preferred
+interpreter exists, but the PATH fallback can still resolve it. The
+`bin/qwen3*-server` scripts are outside this exception -- they invoke
 `model-server.sh`, not Python.
 
-Outside these four launchers, deviations are limited to bootstrap or recovery
-code that cannot depend on `uv`, latency-critical hooks, diagnostics that
-intentionally probe a named interpreter, and stdlib-only checks required on an
-unprovisioned clone. Each deviation must state its reason at the call site. All
-other shell scripts use `uv run python`.
+Outside these two exceptions, every other FORCED call site -- bootstrap or
+recovery code that produces the interpreter itself, Claude Code hook scripts
+bootstrap ships, `bootstrap-stuck-fix`, and other levers -- uses the same
+deterministic-path-first chain: the deterministic standalone path, then
+`BOOTSTRAP_PYTHON` only when that file is absent and the variable's realpath
+resolves inside the standalone directory, then the existing PATH chain. Each
+such call site must state its reason. Exceptions to this standard are
+recorded in the repo guard's allowlist as `{path: (anchor_string, reason)}`,
+where `anchor_string` is text that already exists at the call site; the
+guard's staleness check asserts that text is still present. No new marker
+comments are added to shipped files for this purpose.
+
+## Python interpreter variables
+
+Every other Python call site -- shipped plugin scripts, hooks, manifest
+commands, skill examples, and any command documented for a CONSUMER project --
+invokes Python through two environment variables bootstrap exports, never
+bare `python`/`python3`/`py` and never `uv run python`:
+
+    # Project code -- prefers the project's own venv, falls back to bootstrap's:
+    "${BOOTSTRAP_PROJECT_PYTHON:-${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}}"
+
+    # Bootstrap/plugin machinery and stdlib-only glue -- always the bootstrap interpreter:
+    "${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}"
+
+Project calls DEFAULT to the project's own venv, then to the bootstrap
+interpreter, and are never forced past that. Bootstrap's own code -- the
+SessionStart hook, levers, hook scripts bootstrap ships -- is FORCED to run
+under the same interpreter every time, using the deterministic-path-first
+chain above instead of either variable form. The Debugging section's engine
+invocation below is an instance of the forced case:
+`"$BOOTSTRAP_PYTHON" plugins/bootstrap/engine/bootstrap_engine.py ...`, never
+`uv run python` -- the engine is bootstrap's own code.
+
+Contract, the full visibility table across every surface, per-shell
+copy-paste forms, and the opt-outs: the `/bootstrap` fact `python_interpreter`
+and `plugins/bootstrap/skills/bootstrap/references/python-interpreter.md`.
+Guard: `tests/repo-scripts/test_python_invocation_standard.py`.
 
 **Shell scripts must survive bash 3.2 and zsh.** `/bin/bash` on macOS is bash
 3.2 (no bash 4+ since the licence change, and none at all without Homebrew),
@@ -595,10 +638,12 @@ bash scripts/plugin-versions.sh
 # versions into the cache, and rewrites installed_plugins.json. Never point it at
 # a wedged machine before snapshotting its state -- see the hand-repair
 # anti-pattern in the Bootstrap section above.
-python plugins/bootstrap/engine/bootstrap_engine.py --plugin-root plugins/bootstrap --data-dir ~/.claude/plugins/data/bootstrap --console
+# The engine is bootstrap's own code (forced form), never `uv run python` --
+# see "Python interpreter variables" above.
+"$BOOTSTRAP_PYTHON" plugins/bootstrap/engine/bootstrap_engine.py --plugin-root plugins/bootstrap --data-dir ~/.claude/plugins/data/bootstrap --console
 
 # Verbose mode (show ok/cached entries too)
-python plugins/bootstrap/engine/bootstrap_engine.py --plugin-root plugins/bootstrap --data-dir ~/.claude/plugins/data/bootstrap --console --verbose
+"$BOOTSTRAP_PYTHON" plugins/bootstrap/engine/bootstrap_engine.py --plugin-root plugins/bootstrap --data-dir ~/.claude/plugins/data/bootstrap --console --verbose
 ```
 
 ## Task folders live in a private tasks repo, linked in at `dev/tasks`
@@ -796,8 +841,14 @@ claude_md:
       added: "2026-07-16"
     - id: host_python_via_plugin_venv
       keywords: [host-side python, plugin venv, uv run python, ModuleNotFoundError, foreign cwd, project root, pyyaml, skill examples]
-      summary: SKILL.md examples that invoke host-side Python must use the explicit plugin-venv path, not `uv run python`, when the documented cwd is the user's project root.
+      summary: SKILL.md examples that invoke host-side Python never use `uv run python`, which resolves the venv from the cwd. The default form launches the script under `"${BOOTSTRAP_PYTHON:?...}"` and lets it re-exec into its plugin venv; the explicit plugin-venv path below remains valid for a script without a re-exec guard.
       detail: |
+        Default form (insight bootstrap_python_interpreter_variables):
+          "${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${CLAUDE_PLUGIN_ROOT}/scripts/<script>.py"
+        where the script calls reexec_under_plugin_venv before any third-party
+        import. The rest of this entry is why `uv run python` fails from a
+        project root.
+
         `uv run python` resolves the venv from the cwd's pyproject.toml. When a skill instructs
         the user to run from a project root that has no matching pyproject.toml (e.g. an
         Unreal project root, where p4 picks up .p4config.txt), uv falls back to a bare
@@ -1202,6 +1253,62 @@ claude_md:
       origin: "2026-08-10 -- found while verifying that a published bootstrap_lib.codex resolved from the INSTALLED copy; llm-scripting-kit's own venv was resolving its superseded 0.6.1 cache dir. (A first reading blamed a second repo clone, because the recorded path spelled ~/.claude as D:\\Dev\\claude-settings; that is the same directory through the symlink, so compare paths with realpath before concluding the root moved.) RESOLVED 2026-08-21: two live bootstrap passes (bootstrap 0.86.0 -> 0.86.1, content-pipeline-kit 0.12.0 -> 0.13.0) each named the stale .pth and re-synced, both resulting .pth files were confirmed to point at the current version, and venv_check plus its tests were read to confirm both shapes are covered rather than only the two that happened to fire."
       added: "2026-08-10"
       updated: "2026-08-21"
+    - id: bootstrap_python_interpreter_variables
+      keywords: [BOOTSTRAP_PYTHON, BOOTSTRAP_PROJECT_PYTHON, python, python3, py, interpreter, bare python, uv run python, project_python, interpreter_env, python_interpreter, requires_bootstrap, python not found, default vs forced]
+      summary: Every Python call site outside plugins-kit's own maintainer commands invokes Python through `BOOTSTRAP_PYTHON` / `BOOTSTRAP_PROJECT_PYTHON`, never bare `python`/`python3`/`py` and never `uv run python` -- the engine exports both every pass, the SessionStart hook writes both into every Claude session before any skip gate, and shell integration keeps `BOOTSTRAP_PROJECT_PYTHON` current per directory in a terminal.
+      detail: |
+        Two names, two call-site forms. Project code (documented human commands
+        in a consumer project, a project's own scripts) uses the nested,
+        defaulting form:
+          "${BOOTSTRAP_PROJECT_PYTHON:-${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}}"
+        Bootstrap's own code and stdlib-only glue use the forced form:
+          "${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}"
+        Both fail loudly with that message on an engine older than 0.120.0
+        instead of silently falling through to a stranger's `python` on PATH.
+        DEFAULT VS FORCED is the boundary that decides which form applies:
+        project calls default to the project's own venv, then to the bootstrap
+        interpreter, and are never forced past that; bootstrap's own code (the
+        SessionStart hook, levers, hook scripts bootstrap ships) is forced to
+        run under the same interpreter every time, using a deterministic
+        standalone path first and the variable only as a further fallback (see
+        "Python interpreter variables" above for the exact chain).
+        Both names are exported every engine pass and written into every
+        Claude session by the SessionStart hook before any skip gate, so a
+        throttled or resumed session still has correct values without waiting
+        for a full pass. Persisted shells (bash/zsh rc files, the Windows
+        registry) carry `BOOTSTRAP_PYTHON`; a per-directory shell hook keeps
+        `BOOTSTRAP_PROJECT_PYTHON` current in bash/zsh and, only when a
+        PowerShell profile already exists (bootstrap never creates one), in
+        PowerShell too. `cmd.exe` gets the registry value only. Two named
+        gaps: zsh on Linux and login-only bash profiles are not covered by
+        bootstrap's rc-file writer (add the one line by hand), and pwsh off
+        Windows is not covered at all (profile writes are Windows-only).
+        A `bootstrap.json` `tools[].check`/`install` or an `env.json`
+        `env_checks[].check`/`fix` command that needs Python uses the forced
+        form -- there is no `${python}` manifest variable; these commands are
+        opaque shell strings handed to `bash -c` unsubstituted, so manifest
+        variable expansion never reaches them. A bare command word in a
+        shipped plugin manifest is a displayed lint action entry; the same in
+        a layered or env.json manifest is a log-only entry until the command
+        actually fails, when a failure hint names the fact.
+        Full contract, the visibility table across every surface, per-shell
+        forms, the `project_python` opt-out (`false` is the only accepted
+        value), and the `interpreter_env` opt-outs (`persist`, `shell_hook`;
+        both default `true`, user layers only): the `/bootstrap` fact
+        `python_interpreter` and
+        plugins/bootstrap/skills/bootstrap/references/python-interpreter.md.
+        Guard: tests/repo-scripts/test_python_invocation_standard.py.
+      gotchas:
+        - "`uv run python` is a different mechanism (an interpreter choice made
+          by the `uv` package manager) and is not a substitute for either
+          variable in shipped code -- see the `uv run [--extra dev] python`
+          paragraph above for where it still applies to plugins-kit's own
+          maintainer commands."
+        - A Bash tool call that `cd`s to a different project inside one Claude
+          session keeps the session's starting values; they are not
+          re-resolved per directory change inside a single session.
+      origin: "2026-09-16 -- BOOTSTRAP_PYTHON / BOOTSTRAP_PROJECT_PYTHON shipped for every Python call site, on every OS, superseding an engine-process-only draft that never landed on this file."
+      added: "2026-09-16"
   conventions:
     - rule: Commit and push to dev freely without asking; only a PUBLISH (dev -> master) needs the user. Do not coordinate around other agent sessions' concurrent work.
       keywords: [commit freely, push freely, no permission, dev branch, only publishes gated, other agents, concurrent sessions, shared tree, git commit -- paths]
