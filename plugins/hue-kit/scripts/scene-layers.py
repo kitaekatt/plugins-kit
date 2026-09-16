@@ -101,6 +101,15 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 SCRIPT_DIR = Path(__file__).resolve().parent
 KEY_FILE = Path("secrets/hue-bridge-key.txt")
 
+# --validate-design's distinct exit code for "ran cleanly and found a real
+# discrepancy" -- separate from 1 (a generic error: a malformed registry, an
+# unmatched --scene filter, ...), 2 (argparse usage error), and 3 (hue_kit_cli's
+# bootstrap-guard exit, which precedes this script and carries no verdict of
+# its own). hue_kit_cli.py mirrors this value as DISCREPANCY_EXIT_CODE (the two
+# scripts do not import each other); the exit-code table in
+# skills/hue-domain/references/scene-layers.md is the single documented copy.
+EXIT_DISCREPANCY = 4
+
 
 def _cfg_file(name, env_var):
     """Resolve a config YAML across layouts: an env override, else the source
@@ -941,16 +950,33 @@ def _unique_backup(scene_name):
 
 def _scene_pending(session, design, only):
     """Resolve every targeted scene up front (atomic). Returns
-    [(name, live, {rid: action})] with only beyond-tolerance rids pending."""
+    ([(name, live, {rid: action})], rid2name, missing) -- missing is the
+    subset of `only` (or of every design scene, if `only` is None) that has no
+    live scene on the bridge, in design order; only beyond-tolerance rids are
+    pending in a plan entry.
+
+    An `only` filter that names no scene in the design is refused loudly here
+    (a silent 0-scene plan used to report as 0 discrepancies -- a false
+    match): every requested name must appear in the design, whether or not it
+    turns out to be MISSING on the bridge."""
     registry, universe = _resolve_registry(session)
     rid2name, name2rids, scene_by_name = _bridge_maps(session)
+    design_names = {ds["name"] for ds in design.get("scenes") or []}
+    if only:
+        unmatched = sorted(set(only) - design_names)
+        if unmatched:
+            raise SystemExit(
+                f"error: --scene {unmatched!r} not in scene-designs.yaml -- "
+                "check spelling against the design file")
     plan = []
+    missing = []
     for ds in design.get("scenes") or []:
         if only and ds["name"] not in only:
             continue
         live = scene_by_name.get(ds["name"])
         if live is None:
             print(f"{ds['name']}: MISSING on bridge -- skipped", file=sys.stderr)
+            missing.append(ds["name"])
             continue
         targets = _bake_targets(ds["name"], ds.get("layers"), registry, universe)
         rid_targets = {}
@@ -963,7 +989,7 @@ def _scene_pending(session, design, only):
         pending = {rid: t for rid, t in rid_targets.items()
                    if _action_diff(rid2live.get(rid, {}), t) is not None}
         plan.append((ds["name"], live, pending))
-    return plan, rid2name
+    return plan, rid2name, missing
 
 
 def bridge_fingerprint(data: dict) -> str:
@@ -992,9 +1018,19 @@ def bridge_fingerprint(data: dict) -> str:
 
 
 def validate_design(session, design, only):
-    """Diff each designed scene against the live bridge (report only)."""
-    plan, rid2name = _scene_pending(session, design, only)
+    """Diff each designed scene against the live bridge (report only).
+
+    A design scene MISSING on the bridge counts as a discrepancy (it used to
+    be silently skipped, so a whole-scene deletion validated clean). Returns
+    EXIT_DISCREPANCY when total > 0, 0 when the bridge matches -- distinct
+    from a generic error (1), which always means validate_design did NOT
+    finish comparing (a malformed registry, an unmatched --scene filter,
+    ...), never that it compared and found a real diff."""
+    plan, rid2name, missing = _scene_pending(session, design, only)
     total = 0
+    for name in missing:
+        print(f"{name}: MISSING on bridge")
+        total += 1
     for name, live, pending in plan:
         if not pending:
             print(f"{name}: OK")
@@ -1008,13 +1044,13 @@ def validate_design(session, design, only):
                   f"{_action_diff(rid2live.get(rid, {}), tgt)}")
     print(f"\n{total} discrepancies total"
           + ("" if total else " -- bridge matches the design"))
-    return 1 if total else 0
+    return EXIT_DISCREPANCY if total else 0
 
 
 def apply_design(session, design, only, assume_yes):
     """Bake the layered design onto the bridge (dry-run unless assume_yes)."""
     BACKUP_DIR.mkdir(parents=True, exist_ok=True)
-    plan, rid2name = _scene_pending(session, design, only)
+    plan, rid2name, _missing = _scene_pending(session, design, only)
     if not any(p for _, _, p in plan):
         print("nothing to do -- bridge already matches the design")
         return 0

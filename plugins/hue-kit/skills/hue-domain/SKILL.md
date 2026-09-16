@@ -178,8 +178,8 @@ domain_skill:
       description: >-
         THE DEFAULT ENTRY POINT -- run this for a bare invocation, or any opening
         request that does not already name a specific operation. Detects which of
-        three states the user is in and reports a machine-readable
-        `hue-kit-verdict:` line. Read-only except on first run.
+        the eight verdict states applies (see default_flow) and reports a
+        machine-readable `hue-kit-verdict:` line. Read-only except on first run.
       operation: hue-kit start [--no-open] [--accept]
       tool: scripts/hue_kit_cli.py
       reference_section: scene-layers.md (Sync)
@@ -285,9 +285,10 @@ domain_skill:
       see their lights. Run `hue-kit start` and branch on its verdict.
     command: hue-kit start
     note: >-
-      The state detection is the script's job, not yours: it decides between the
-      three cases below and prints `hue-kit-verdict: <state>` as its last line.
-      Branch on that line; do not re-derive the state by inspecting files.
+      The state detection is the script's job, not yours: it decides among the
+      eight verdicts below and prints `hue-kit-verdict: <state>` as its last
+      line. Branch on that line; do not re-derive the state by inspecting
+      files.
     verdicts:
       - verdict: first-run
         meaning: Nothing existed yet; it built the registry + design, rendered the
@@ -298,18 +299,23 @@ domain_skill:
           rename in scene-groups.yaml whenever they like. Do NOT ask them to name
           the groups now, and do NOT propose names or tabulate the groups to help
           them decide -- see the naming guardrail in behavioral_guardrails.
+      - verdict: accepted
+        meaning: >-
+          `--accept` re-baselined the bridge's current shape as the reference.
+          No YAML was touched.
+        do: Tell the user the shape was accepted as the new baseline; nothing
+          else changed, no further action needed.
       - verdict: clean
         meaning: The bridge matches the local design; a report exists.
         do: >-
           Ask (AskUserQuestion) whether they want to view the report or change a
-          scene. To view, open the index.html path the command printed. This is
-          the ONLY verdict that asks -- the other two already have an obvious
-          next move.
+          scene. To view, open the index.html path the command printed.
       - verdict: changed
         meaning: >-
-          The bridge and the local YAML disagree -- in SHAPE (a light, zone, or
-          scene added/removed/renamed) or in COLOUR, both named in the output.
-          Nothing was written.
+          `validate-design` ran cleanly and found a real discrepancy (colour or
+          brightness), or the shape fingerprint shows a light/zone/scene was
+          added, removed, or renamed -- both named in the output. Nothing was
+          written.
         do: >-
           Surface WHAT differs, then ask which direction to sync -- the two are
           destructive in opposite directions and only the user knows which side
@@ -318,9 +324,29 @@ domain_skill:
           bridge, so dry-run it first and only then `--yes`. For a reviewed shape
           change they do not want mirrored locally, `hue-kit start --accept`
           re-baselines without touching the YAML.
+      - verdict: validate-failed
+        meaning: >-
+          The bridge diff did NOT finish comparing -- a malformed registry, an
+          unmatched scene filter, or another scene-layers error. Distinct from
+          `changed`: this means the comparison itself failed, not that it ran
+          and found a difference.
+        do: Show the diagnostic printed above the verdict line, and fix the
+          underlying problem (e.g. a registry typo) before retrying. Do not
+          treat this as drift to sync.
       - verdict: bridge-unreachable
         meaning: The bridge could not be read.
         do: Route to discover / pair; do not fall through to other verbs.
+      - verdict: setup-failed
+        meaning: A first-run step (building the registry, the design, or the
+          report) failed.
+        do: Show the diagnostic printed above the verdict line; do not retry
+          blindly. If it looks like a connectivity problem, route to discover /
+          pair.
+      - verdict: render-failed
+        meaning: The design already matched the bridge, but re-rendering a
+          missing report failed.
+        do: Show the diagnostic printed above the verdict line; the YAML is
+          fine, only the report step failed. Suggest retrying `hue-kit render`.
   tools:
     - name: hue-kit
       command: hue-kit [--dir PATH] <start|report|groups|export|render|validate|apply|init>

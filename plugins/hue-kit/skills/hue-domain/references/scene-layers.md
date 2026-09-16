@@ -46,8 +46,9 @@ Entry point -- `hue-kit start`:
 - The verb to reach for when no specific operation was named. On a first run it
   composes `groups` -> `export` -> `render` and opens the report; afterwards it
   reports whether the bridge still matches the local YAML. Prints
-  `hue-kit-verdict: first-run|clean|changed|accepted|bridge-unreachable` as its
-  last line.
+  `hue-kit-verdict: <state>` as its last line, one of `first-run`, `accepted`,
+  `clean`, `changed`, `validate-failed`, `bridge-unreachable`, `setup-failed`,
+  `render-failed`.
 - It writes without asking ONLY in the `first-run` case, where no local file
   exists to overwrite. On any difference it reports and stops: a diff cannot
   distinguish "the bridge moved" from "the YAML holds unapplied edits", and
@@ -76,7 +77,28 @@ Sync (over the two files above):
   bridge (report only, analyzer tolerances). `0 discrepancies` = match. Note it
   iterates the scenes in the DESIGN, so it sees colour drift on a known scene
   but NOT a light, zone, or scene that appeared on the bridge -- that is the
-  fingerprint's job (below), and the two together are what `start` checks.
+  fingerprint's job (below), and the two together are what `start` checks. A
+  design scene MISSING on the bridge counts as a discrepancy (it is not
+  silently skipped); an `--scene` filter naming nothing in the design is an
+  error, not a silent 0-scene "match".
+
+  **Exit codes** (`scene-layers.py` directly; the single documented copy of
+  this table):
+
+  | Code | Meaning |
+  |---|---|
+  | 0 | clean -- ran cleanly, no discrepancy (or the requested write succeeded) |
+  | 1 | a generic error -- did not finish (malformed registry, unmatched `--scene`, a raised `SystemExit`, ...) |
+  | 2 | argparse usage error |
+  | `EXIT_DISCREPANCY` (4) | `--validate-design` ran cleanly and found a real discrepancy -- never reused for a run that failed to compare |
+
+  `hue_kit_cli.py` (the `hue-kit` CLI) additionally reserves exit 3 for its own
+  bootstrap-guard check (`require_bootstrap`, run before any verb): a
+  provisioning failure, not a verdict from `scene-layers.py`, and it carries no
+  `hue-kit-verdict:` line. `hue_kit_cli.py` mirrors `EXIT_DISCREPANCY` as
+  `DISCREPANCY_EXIT_CODE` (the two scripts do not import each other) to map it
+  to the `changed` verdict; any other nonzero `--validate-design` exit maps to
+  `validate-failed`.
 - `bridge-fingerprint.txt` (`--fingerprint`) -- a hash of the bridge's SHAPE
   (light names, zone membership, scene names; no colours). `start` compares it to
   detect structural change; `export` re-baselines it, which is what clears a
