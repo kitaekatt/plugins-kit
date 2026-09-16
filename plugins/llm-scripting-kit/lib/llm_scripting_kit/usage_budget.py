@@ -704,6 +704,9 @@ def read_codex_pool(
                         f"under {_CODEX_EXHAUSTION_LATCH_SECONDS // _HOUR}h old"
                     ),
                     remaining=0.0,
+                    # The latch end is the reset a pinned session honours;
+                    # without it the verdict would hold for the whole session.
+                    resets_at=int(event_epoch + _CODEX_EXHAUSTION_LATCH_SECONDS),
                 )
             return Budget(
                 status=STATUS_NO_DATA, pool=spec.pool,
