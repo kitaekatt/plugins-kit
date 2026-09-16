@@ -69,12 +69,54 @@ The general test, and it is cheap: revert the fix, run the named test, and
 watch it FAIL. A test that stays green with the fix removed is not testing the
 fix. Do this before committing, not after a reviewer asks.
 
-## Why both shapes need a named revert-check
+### The fixture that carried neither thing it tested
 
-Neither shape is detectable by reading the test. Both read as reasonable
-assertions about real behaviour, and both pass. The only reliable signal is
-the counterfactual: remove the thing the check protects and confirm the check
-notices.
+A parametrized case can be vacuous while its siblings are sound, and the
+parametrization hides it. In the bootstrap profiles work (2026-09-15), one test
+asserted that the `profiles` and `profile` keys are stripped from the effective
+manifest in every resolution status. Removing the strip turned five of its six
+cases red and left the sixth green: that case's fixture declared neither key, so
+there was nothing to strip and the assertion held either way.
+
+Two things generalize. A revert-check must be read per CASE, not per test -- "the
+test went red" is satisfied by one case and says nothing about the others. And a
+fixture that omits the subject of the assertion is the specific shape to look
+for, because it reads as coverage of one more status while exercising nothing.
+The fix was to give that fixture the key, after which all six went red.
+
+## Shape 3: the test pins its own mock
+
+A hand-rolled fake standing in for a real subprocess or API can carry a
+catch-all branch that absorbs any input it was not written for. When a later
+change adds a new command or call the fake was not updated for, the catch-all
+swallows it silently, and an assertion written against the fake's output ends
+up describing what the fake DID rather than what the contract under test
+says.
+
+Worked example. Two tests named for a CLEAN scan result had been updated,
+alongside a fake command runner, to assert an incomplete result: the expected
+value named a subsystem the test was not about, because a catch-all branch in
+the fake absorbed a command the scan added later and returned nothing for it.
+The tests stayed green -- they were asserting the fake's silence, not the
+scanner's completeness. The tell is exactly that mismatch: an expected value
+that names something outside the test's own subject is a sign the fake, not
+the contract, produced it.
+
+The remedy is not to delete the catch-all outright. Converting it surfaces the
+fake's hidden commands ONE AT A TIME -- each newly-unhandled command fails the
+first test that exercises it, naming the gap instead of masking it. A blanket
+conversion (making every unmatched command an error at once) is wrong for the
+same reason a blanket rule usually is here: some tests legitimately depend on
+an unknown command failing, and turning every catch-all into an error changes
+their meaning along with the ones that needed the fix.
+
+## Why all three shapes need a named revert-check
+
+Shape 1 and Shape 2 are not detectable by reading the test, and shape 3 often
+is not either -- the fake looks complete until a new command exposes what it
+was never taught to answer. All three read as reasonable assertions about real
+behaviour, and all three pass. The only reliable signal is the counterfactual:
+remove the thing the check protects and confirm the check notices.
 
 That is why this repo's task-level communication protocol asks, when a fix is
 reported, which test would FAIL if the fix were reverted. Naming it forces the

@@ -15,7 +15,8 @@ review fan-out starts.
 
 A reviewer's ``model`` is one of those ordinary lists when it is not a bare
 string: an ordered priority list whose first resolving entry becomes the lane's
-model, replaced wholesale by any higher layer that states one. See the model
+model, replaced wholesale by any higher layer that states one. What is left of
+that list survives into the resolved table as ``model_fallbacks``. See the model
 priority notes below ``REVIEWER_FIELDS`` and ``apply_model_priority``.
 """
 
@@ -43,7 +44,9 @@ PROFILE_FIELDS = frozenset(
     {"id", "selection", "reviewers", "validator_models", "disabled"}
 )
 SELECTION_FIELDS = frozenset({"data_only_extensions"})
-REVIEWER_FIELDS = frozenset({"name", "model", "effort", "disabled"})
+REVIEWER_FIELDS = frozenset(
+    {"name", "model", "model_fallbacks", "effort", "disabled"}
+)
 REQUIRED_PROFILE_FIELDS = frozenset({"selection", "reviewers", "validator_models"})
 
 # --------------------------------------------------------------------------
@@ -95,6 +98,26 @@ EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max")
 # entry simply does not resolve and the next entry does, so the rendered table
 # states the model that will run and absence is silent. A resolved `peer:`
 # entry is never silent: it is disclosed on stderr, one line per lane.
+#
+# --------------------------------------------------------------------------
+# model_fallbacks: what is left of the list once one entry has been chosen
+# --------------------------------------------------------------------------
+#
+# Resolution answers "which model does this lane START on", and that is settled
+# here. Whether the model WORKS is only learned at dispatch, where an endpoint
+# can be out of credits, rate limited, or withdrawn -- none of which this
+# module can see. So the entries AFTER the chosen one are carried into the
+# resolved table rather than discarded: a caller whose dispatch fails already
+# holds the order the user asked for, instead of having to re-resolve the
+# configuration mid-review to learn what to try next. Whether it falls over is
+# the caller's decision; what it may fall over TO is this module's answer.
+#
+# The chain is resolved exactly as the chosen entry was. A later `peer:` entry
+# is carried as its endpoint id when a seat is reachable and OMITTED when it is
+# not -- an entry that cannot resolve now cannot run later either, and the
+# table is dispatched from verbatim, so a `peer:` token reaching a caller would
+# be dispatched as if it were an endpoint id. An empty chain is stated rather
+# than left out: "nothing left to try" is an answer.
 PEER_ENTRY_PREFIX = "peer:"
 PEER_SEATS_OWNER = "llm-scripting-kit"
 PEER_SEATS_MARKETPLACE = "plugins-kit"
@@ -260,6 +283,25 @@ def _validate_model(value: Any, source: Path | str, location: str) -> None:
             )
 
 
+def _validate_model_fallbacks(value: Any, source: Path | str, location: str) -> None:
+    """Validate a lane's fallback chain: a possibly-empty list of model names.
+
+    ``apply_model_priority`` derives this field, but the resolved table is
+    validated again on the way out and a caller may hand one back in, so the
+    shape is checked here rather than trusted. Empty is legal and carries a
+    claim of its own -- the lane has nothing left to try -- which is why the key
+    is kept rather than dropped when the list is empty.
+    """
+    if not isinstance(value, list):
+        _fail(
+            source,
+            location,
+            f"must be a list of strings, got {type(value).__name__}",
+        )
+    for index, entry in enumerate(value):
+        _validate_nonempty_string(entry, source, f"{location}[{index}]")
+
+
 def _validate_effort(value: Any, source: Path | str, location: str) -> None:
     """Validate a reviewer's effort against the fixed level menu.
 
@@ -347,6 +389,10 @@ def _validate_reviewer(
 
     if "model" in value:
         _validate_model(value["model"], source, f"{location}.model")
+    if "model_fallbacks" in value:
+        _validate_model_fallbacks(
+            value["model_fallbacks"], source, f"{location}.model_fallbacks"
+        )
     if "effort" in value:
         _validate_effort(value["effort"], source, f"{location}.effort")
     needs_model = (complete and not parent_disabled) or (existing is None and not parent_disabled)
@@ -809,9 +855,11 @@ def apply_model_priority(
 
     Entries are evaluated in order and the first that resolves wins: a plain
     name always resolves, a ``peer:<name>`` entry only when the owner reports a
-    reachable ``BESIDE`` seat. Returns the resolved table, the disclosure lines
-    a caller MUST surface, and diagnostic lines that stay out of the disclosure
-    channel.
+    reachable ``BESIDE`` seat. Each lane also gains ``model_fallbacks``, the
+    runnable remainder of its list, so a caller that finds the chosen model
+    unusable at dispatch can fail over without re-resolving the configuration.
+    Returns the resolved table, the disclosure lines a caller MUST surface, and
+    diagnostic lines that stay out of the disclosure channel.
 
     Nothing raised by the probe or the owner escapes: a lane that cannot
     discover a seat falls through to its next entry, which is what the list
@@ -841,17 +889,20 @@ def apply_model_priority(
         skipped: list[tuple[str, str]] = []
         chosen: str | None = None
         chosen_entry = ""
+        chosen_index = 0
 
-        for entry in entries:
+        for index, entry in enumerate(entries):
             if not entry.startswith(PEER_ENTRY_PREFIX):
                 chosen = entry
                 chosen_entry = entry
+                chosen_index = index
                 break
             target = entry[len(PEER_ENTRY_PREFIX):].strip()
             endpoint, reason = peers.resolve(target)
             if endpoint is not None:
                 chosen = endpoint
                 chosen_entry = entry
+                chosen_index = index
                 break
             skipped.append((entry, reason))
 
@@ -865,6 +916,23 @@ def apply_model_priority(
             )
 
         reviewer["model"] = chosen
+        # What the lane may fall over TO, in the order the user stated it. A
+        # skipped entry BEFORE the chosen one is already known not to resolve
+        # and is not revisited; an entry after it is resolved now, so a caller
+        # holding this table needs nothing from this module at dispatch time.
+        fallbacks: list[str] = []
+        for entry in entries[chosen_index + 1:]:
+            if not entry.startswith(PEER_ENTRY_PREFIX):
+                fallbacks.append(entry)
+                continue
+            endpoint, _reason = peers.resolve(entry[len(PEER_ENTRY_PREFIX):].strip())
+            # A skip here is silent on purpose: the disclosure channel reports
+            # what the lane RUNS on, and an unreachable seat the lane was never
+            # going to start on has not changed that.
+            if endpoint is not None:
+                fallbacks.append(endpoint)
+        reviewer["model_fallbacks"] = fallbacks
+
         if chosen_entry.startswith(PEER_ENTRY_PREFIX):
             disclosures.append(
                 f"model-priority: profile {profile_id!r} lane {lane!r} runs on "
@@ -922,9 +990,17 @@ def canonical_projection(value: Mapping[str, Any]) -> dict[str, Any]:
                     # `effort` is omitted when unset rather than projected as a
                     # null: absent means "inherit the session's effort", and a
                     # rendered `effort: null` would read as a stated level.
+                    # `model_fallbacks` takes the opposite treatment and is
+                    # rendered even when empty, because the agent reading this
+                    # table asks it a question -- what may this lane fall over
+                    # to -- and an absent key would leave "nothing" and "this
+                    # table does not say" spelled identically.
                     {
                         "name": reviewer["name"],
                         "model": _projected_model(profile, reviewer),
+                        "model_fallbacks": list(
+                            reviewer.get("model_fallbacks", ())
+                        ),
                         **(
                             {"effort": reviewer["effort"]}
                             if "effort" in reviewer

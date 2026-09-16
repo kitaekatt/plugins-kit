@@ -72,9 +72,10 @@ REFRESH_COOLDOWN_SECONDS = 6 * 60 * 60
 #
 # Scrubbed, and why each earns its place:
 #   GIT_DIR            - names the repo outright; the primary redirect.
-#                        REPRODUCED: diverts commit_and_push and sync.
+#                        REPRODUCED: diverts the owned commit/publish helpers
+#                        and sync.
 #   GIT_WORK_TREE      - repoints the working tree under any repo.
-#                        REPRODUCED: diverts commit_and_push.
+#                        REPRODUCED: diverts the owned commit/publish helpers.
 #   GIT_INDEX_FILE     - git SETS this for hooks and rebases, so a nested run
 #                        really can see one. REPRODUCED, and it is DESTRUCTIVE
 #                        rather than merely misdirecting: pointed at a path
@@ -114,10 +115,11 @@ _RELOCATING_ENV = (
 # fully scrubbed,
 #     GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=remote.origin.url \
 #     GIT_CONFIG_VALUE_0=<attacker>
-# makes `commit_and_push` publish the encrypted blobs to an attacker-controlled
-# remote and exit 0. GIT_CONFIG_PARAMETERS is the same hazard from the other
-# direction: git sets it ITSELF for subprocesses, so inheriting it is precisely
-# the nested-run case already accepted for GIT_INDEX_FILE.
+# makes the owned publish helper publish the encrypted blobs to an
+# attacker-controlled remote and exit 0. GIT_CONFIG_PARAMETERS is the same
+# hazard from the other direction: git sets it ITSELF for subprocesses, so
+# inheriting it is precisely the nested-run case already accepted for
+# GIT_INDEX_FILE.
 #
 # The indexed GIT_CONFIG_KEY_<n> / GIT_CONFIG_VALUE_<n> pairs cannot live in a
 # fixed tuple, so they are matched by pattern -- and ALL of them are removed,
@@ -936,52 +938,6 @@ def sync(clone_dir: Path) -> None:
             f"    git -C {clone_dir} reset --hard @{{u}}\n"
             "Then re-run the verb.",
         )
-
-
-def commit_and_push(clone_dir: Path, message: str, paths: List[str]) -> None:
-    """Record an authoring act (seed / add / rotate) and publish it.
-
-    Authoring is the ONLY direction that writes; every consuming machine
-    pulls. Push failures raise, because an unpushed secret is invisible to the
-    fleet and silently pretending otherwise is how drift starts.
-    """
-    code, output = _git(["add", "--"] + paths, cwd=clone_dir, timeout=LOCAL_WRITE_TIMEOUT)
-    if code != 0:
-        raise SecretsError(f"git add failed: {output}")
-
-    code, output = _git(["commit", "-m", message], cwd=clone_dir, timeout=LOCAL_WRITE_TIMEOUT)
-    if code != 0 and "nothing to commit" not in output:
-        raise SecretsError(f"git commit failed: {output}")
-
-    code, output = _git(["push", "--quiet"], cwd=clone_dir, timeout=CLONE_TIMEOUT)
-    if code == 0:
-        return
-
-    # Someone else pushed between our sync and our push. Rebasing our single
-    # commit onto theirs is the correct resolution when the two touched
-    # different files (two machines adding different secrets -- the normal
-    # case); when they touched the same ones, the rebase conflicts and we stop,
-    # because a merged manifest is not something to guess at.
-    _git(["fetch", "--quiet", "--prune"], cwd=clone_dir, timeout=FETCH_TIMEOUT)
-    code, rebase_output = _git(
-        ["rebase", "--quiet", "@{u}"], cwd=clone_dir, timeout=LOCAL_WRITE_TIMEOUT
-    )
-    if code == 0:
-        code, output = _git(["push", "--quiet"], cwd=clone_dir, timeout=CLONE_TIMEOUT)
-        if code == 0:
-            return
-    else:
-        _git(["rebase", "--abort"], cwd=clone_dir, timeout=LOCAL_WRITE_TIMEOUT)
-        output = f"{output}\nrebase onto the remote also failed: {rebase_output}"
-
-    raise SecretsError(
-        f"git push failed: {output}",
-        "The remote moved and this change could not be replayed on top of it "
-        "automatically. Nothing was published, so no other machine is "
-        f"affected. Inspect the clone at {clone_dir} -- `git log --oneline "
-        "@{u}..HEAD` shows what is unpushed -- and either resolve it there or "
-        "`git reset --hard @{u}` and re-run the verb.",
-    )
 
 
 @dataclass(frozen=True)

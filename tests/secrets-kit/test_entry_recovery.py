@@ -610,10 +610,10 @@ def test_entry_fast_forward_restoration_cas_failure_retains_then_resumes(
 def test_entry_unsupported_selected_path_refuses_before_journal_or_crypto(
     entry_subject: SimpleNamespace, monkeypatch: pytest.MonkeyPatch, selected: str, operation: str,
 ) -> None:
-    from secrets_kit import repo
+    from sk_publish import fixture_commit_and_push
     subject = entry_subject;manifest = subject.clone / 'manifest.json';raw = json.loads(manifest.read_bytes())
     raw['entries']['ha-token']['blob'] = selected;manifest.write_text(json.dumps(raw))
-    repo.commit_and_push(subject.clone, 'dummy unsupported selected baseline', ['manifest.json'])
+    fixture_commit_and_push(subject.clone, 'dummy unsupported selected baseline', ['manifest.json'])
     before = _snapshot(subject);subject.calls.clear()
     outcome = _invoke_entry(subject, operation)
     assert outcome['code'] == 1 and before == _snapshot(subject) and subject.calls == []

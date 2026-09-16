@@ -190,13 +190,17 @@ unconfigurable opinion whose test passes is a finding.
   cannot tell you which one caused a regression, and the config key would make that the
   cheapest thing to reach for. Widening the set further is a plugin change, not a line of
   YAML.
-- **A failed endpoint lane fails the review's coverage; it never falls back to an Agent.**
-  A team could reasonably prefer "finish the review anyway on the default model", and the
-  remedy we leave them is to drop the endpoint override. We refuse the fallback because the
-  rendered review looks identical either way: a silent substitution hands back a review the
-  reader believes ran on the model they configured, which is a false claim about what
-  examined their change rather than a degraded one. The lane is reported failed and its
-  files are marked uncovered, so the reader can re-run deliberately.
+- **A failed lane falls over only along the chain its own configuration named, and every
+  failover is disclosed.** A reviewer's `model` may be an ordered list; when the chosen
+  model fails at dispatch, the lane is re-dispatched on the next entry, and the rendered
+  review names the lane, the model that failed, and the model that actually produced the
+  review. A lane whose chain is exhausted is still a failed lane with its files marked
+  uncovered. What stays refused is the substitution nobody asked for: a lane configured
+  with a single model never silently acquires a second one, because the rendered review
+  looks identical either way and would then carry a false claim about what examined the
+  change. Disclosure is what separates the two -- a team that wants "finish the review
+  anyway" states the order it wants and can see, afterwards, which model each finding came
+  from.
 
 - **A `conserve_usage` verdict is pinned for the session and never re-evaluated
   downward.** llm-scripting-kit computes a paced endpoint's availability once per session
@@ -313,6 +317,22 @@ Applies to:
 The decision rule, the mechanics each branch requires, the three runtime states, and the
 reviewer checklist:
 [bootstrap/skills/plugin-dev/references/optional-plugin-dependencies.md](bootstrap/skills/plugin-dev/references/optional-plugin-dependencies.md).
+
+**Set the `requires_bootstrap` floor from the CALLS a plugin makes, not from the
+modules it imports.** `requires_bootstrap` in `bootstrap.json` pins the minimum
+bootstrap engine version a plugin needs. A keyword argument added to a shared
+function outranks every module in that function's file, and no import probe
+can see one: a module that has existed for versions can still gain a new
+required parameter, so a floor derived by checking which modules import cleanly
+passes its own check and then raises a bare `TypeError` at runtime on an older
+bootstrap that lacks the parameter. Both p4-kit and git-kit shipped this
+defect against `bootstrap.json`'s `requires_bootstrap`. The trap is that the
+paragraph above already tells you to probe the newest SYMBOL you use --
+importing that symbol successfully is exactly the reading that looks correct
+and is not enough, because the symbol existed before the call site needed one
+of its arguments. Set the floor to the version that shipped the CALL SHAPE the
+plugin actually uses (the required keyword, the changed return contract, the
+new positional slot), not the version that first exported the symbol.
 
 ### Published-plugin boundaries
 
@@ -433,7 +453,7 @@ Every plugin in this marketplace rides on **bootstrap** (venv, `bootstrap_lib`, 
    This is the canonical fix for "user installed the plugin without bootstrap." Official docs (source of truth -- fetch when in doubt): https://code.claude.com/docs/en/plugin-dependencies and the `dependencies` field in https://code.claude.com/docs/en/plugins-reference.
    - **Same-marketplace deps are bare strings.** Do NOT add a `"marketplace"` field for a dep in this marketplace -- that field is *only* for a **different** marketplace and triggers the `allowCrossMarketplaceDependenciesOn` allowlist (a same-marketplace value gets treated as cross-marketplace and can fail installs).
    - **Unversioned on purpose.** A version constraint (`{ "name": "bootstrap", "version": "~0.12" }`) resolves against `{plugin}--v{version}` git tags (`claude plugin tag --push`), which this repo does not use -- pinning would cause `no-matching-tag`. Bare = "whatever the marketplace provides."
-   - Declare it on **every** plugin **except** bootstrap itself -- whether or not the plugin ships a `bootstrap.json`. The edge is universal by design, so anything built on "bootstrap is present wherever a plugin is" holds without a per-plugin check; the fleet-wide user posture bootstrap owns ([docs/reference/first-run-experience.md](../docs/reference/first-run-experience.md)) is the load-bearing case. The former carve-out for `bootstrap.json`-less plugins is **retired** -- `agent-glue` was its only occupant when the carve-out was retired and declares the edge like everything else. Enforced at pre-commit by `scripts/check_bootstrap_dependency.py` (chained from `pre-commit-version-check.sh`; spec mirrored in `tests/repo-scripts/test_bootstrap_dependency.py`) and again, unbypassably, in `publish.py`'s preflight -- the hook can be skipped with `--no-verify`, a publish cannot.
+   - Declare it on **every** plugin **except** bootstrap itself -- whether or not the plugin ships a `bootstrap.json`. The edge is universal by design, so anything built on "bootstrap is present wherever a plugin is" holds without a per-plugin check; the fleet-wide user posture bootstrap owns ([docs/reference/first-run-experience.md](../docs/reference/first-run-experience.md)) is the load-bearing case. The former carve-out for `bootstrap.json`-less plugins is **retired** -- `agent-glue` was its only occupant when the carve-out was retired, and that plugin has since been pruned from the repo (294bb040). Enforced at pre-commit by `scripts/check_bootstrap_dependency.py` (chained from `pre-commit-version-check.sh`; spec mirrored in `tests/repo-scripts/test_bootstrap_dependency.py`) and again, unbypassably, in `publish.py`'s preflight -- the hook can be skipped with `--no-verify`, a publish cannot.
    - It belongs in **both** `plugin.json` and the generated marketplace entry; `scripts/regen_marketplace.py` propagates it automatically. A `dependencies` edit is a manifest change: it needs a version bump to reach consumers (same rule as any `plugin.json`/`bootstrap.json` edit).
 
 2. **Runtime guard (provision-time).** A declared dependency guarantees bootstrap is *installed*, not that it has *run* -- on first install bootstrap provisions each plugin's venv at the next SessionStart (and the cooldown can defer it). For that "installed-but-not-yet-provisioned" window, plugins that would otherwise crash with a raw `ModuleNotFoundError`/missing-interpreter error use the vendored **`bootstrap_guard.py`** (canonical: `plugins/bootstrap/bootstrap_lib/bootstrap_guard.py`). It is **stdlib-only** and **must never import `bootstrap_lib`** (that's the thing that may be missing); it detects absence via the per-plugin `~/.claude/plugins/data/<marketplace>/<plugin>/bootstrap.log` and exits with one actionable "install/enable plugins-kit:bootstrap" message instead of a raw traceback. It is **vendored** per plugin (copied next to the entry script, or into the plugin's `lib/` import path, and imported as a plain module), exactly like `path_repair.py`, with a drift test asserting copies match the canonical.
@@ -595,6 +615,28 @@ Others in the same class, none of which a Windows or Linux session will catch:
 `sed -i` (BSD requires an argument), `stat -c` vs `stat -f`, `date -d` vs
 `date -r`, `readlink -f`, `grep -P`, `mktemp` templates, and `base64 -w`.
 
+## A flag on both a parser and its subparser is discarded before the subcommand
+
+`argparse` parses a subcommand into the SAME namespace as its parent, then
+applies the SUBPARSER's own defaults. A flag declared on both therefore has its
+parent-parsed value overwritten whenever the subparser's default fires, so the
+flag works after the subcommand and is silently dropped before it:
+
+    bootstrap profile --project-dir /a/project set engineer   # project_dir -> None
+    bootstrap profile set engineer --project-dir /a/project   # project_dir -> '/a/project'
+
+Both spellings read as valid from the help text, and nothing reports the loss.
+In bootstrap 0.118.0 the first form resolved against the current working
+directory instead: it wrote the profile selection into whatever project the
+shell happened to be in and converged that one. The same file declared `--json`
+on the root parser and again on a subparser, with the same defect.
+
+Declare the flag once where it belongs, or give every subparser copy
+`default=argparse.SUPPRESS` so an absent flag leaves the outer value alone --
+readers of the value already need `getattr(args, "name", None)`, since SUPPRESS
+means the attribute can be absent. When adding a subparser to an existing CLI,
+grep the file for options declared more than once and check each one.
+
 ## A detached process must keep an error channel
 
 Session readiness is held by the hook's process exit AND stdout-pipe EOF, so a
@@ -617,9 +659,22 @@ Three rules follow:
 - Give the wrapper its own crash path, so a failure BEFORE the real program
   starts still reports.
 - Never return an unconditional success string from a fire-and-forget spawn.
-  secrets-kit's macOS launcher reported "opened a new Terminal window" for any
-  `osascript` that merely STARTED, catching only a spawn `OSError` -- so an
-  Automation-permission denial read as success (fixed in secrets-kit 0.8.3).
+  Wait, bounded, on the process that ACCEPTS the request -- `osascript`,
+  `cmd /c start`, the terminal emulator itself -- read its exit status, and
+  classify a spawn `OSError`, a nonzero exit and a deadline separately. The
+  success string then names what was confirmed, that the request was accepted,
+  and never a window or a prompt the parent cannot see. This is reachable on
+  every platform, because each one has such an accepting process; what differs
+  is only the mechanic. Running the acceptor to completion suits `osascript`
+  and `cmd /c start`, while `xterm -e` and its kin ARE the window and outlive
+  the prompt, so those need a bounded wait whose three outcomes are a nonzero
+  exit (failure), a zero exit (a client that forwarded to a server) and still
+  running at the deadline (accepted). secrets-kit's macOS launcher reported
+  "opened a new Terminal window" for any `osascript` that merely STARTED,
+  catching only a spawn `OSError`, so an Automation-permission denial read as
+  success (fixed for macOS in secrets-kit 0.8.3; its Windows and Linux
+  launchers return on a bare `Popen` and are open work, so read this rule as
+  describing the standard rather than the current state of all three).
 
 The general rule: **when success and failure are both silent they are
 indistinguishable, and the failure gets attributed to something else.**

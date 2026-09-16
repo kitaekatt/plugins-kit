@@ -11,9 +11,11 @@ profiles:
   reviewers:
   - name: reviewer_a_claude_md_compliance
     model: sonnet
+    model_fallbacks: []
     effort: low
   - name: reviewer_b_diff_only_bugs
     model: sonnet
+    model_fallbacks: []
   validator_models:
     bug: sonnet
     claude_md: sonnet
@@ -22,11 +24,14 @@ profiles:
   reviewers:
   - name: reviewer_a_claude_md_compliance
     model: sonnet
+    model_fallbacks: []
     effort: low
   - name: reviewer_b_diff_only_bugs
     model: opus
+    model_fallbacks: []
   - name: reviewer_c_introduced_code
     model: opus
+    model_fallbacks: []
   validator_models:
     bug: opus
     claude_md: sonnet
