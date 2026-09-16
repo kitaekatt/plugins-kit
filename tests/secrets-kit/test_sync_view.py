@@ -7,6 +7,8 @@ import sys
 
 import pytest
 
+from sk_publish import fixture_commit_and_push
+
 from secrets_kit import SecretsError, agefile
 from secrets_kit import converge as convergence
 from secrets_kit import repo as repository
@@ -92,7 +94,7 @@ def test_actual_ahead_only_checkout_remains_accepted(fleet_git):
 def _seed_author(adding):
     assert adding.cli.main(['add', 'ha-token', '--file', adding.source, '--dest', '${PLAIN}/ha-token.txt', '--profile', 'base']) == 0
     (adding.clone / 'identity.age').write_bytes(_armored(b'age1dummywrap', b'dummy wrapped identity\n'))
-    repository.commit_and_push(adding.clone, 'dummy wrapped identity', ['identity.age'])
+    fixture_commit_and_push(adding.clone, 'dummy wrapped identity', ['identity.age'])
     identity = adding.data_dir / 'identity.txt'
     identity.write_bytes(b'dummy cached old identity\n');identity.chmod(0o600)
     raw = json.loads(adding.config_path.read_text());raw['machines']['testbox']['profiles'] = ['base']
@@ -110,7 +112,7 @@ def _publish_other_metadata(adding):
     raw['entries']['ha-token']['mode'] = '0644'
     raw['entries']['ha-token']['doc'] = 'other-inventory.md'
     (other / 'manifest.json').write_text(json.dumps(raw))
-    repository.commit_and_push(other, 'dummy other entry metadata change', ['manifest.json'])
+    fixture_commit_and_push(other, 'dummy other entry metadata change', ['manifest.json'])
     return _git(other, 'rev-parse', 'HEAD')
 
 

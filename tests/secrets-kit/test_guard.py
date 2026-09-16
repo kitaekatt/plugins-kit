@@ -805,7 +805,8 @@ def test_inline_authoring_refuses_effective_target_before_named_effects(repo, tm
         return fail
     for name in ["keygen", "wrap_identity", "encrypt_to_recipient", "decrypt_with_identity"]:
         monkeypatch.setattr(cli.agefile, name, effect(name))
-    monkeypatch.setattr(repo_mod, "commit_and_push", effect("commit_and_push"))
+    monkeypatch.setattr(repo_mod, "_commit_owned", effect("_commit_owned"))
+    monkeypatch.setattr(repo_mod, "_publish_owned", effect("_publish_owned"))
     argv = [command]
     if command in ["add", "add-update"]:
         argv = ["add", "existing" if command == "add-update" else "new", "--file", str(source), "--dest", str(destination / "new")]

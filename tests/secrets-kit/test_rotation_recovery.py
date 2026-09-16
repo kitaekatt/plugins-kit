@@ -24,6 +24,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from sk_publish import fixture_commit_and_push
+
 from secrets_kit import DecryptError, SecretsError, agefile, authoring
 from secrets_kit import repo as repository
 from test_dest_guard import _armored, _templates, adding  # noqa: F401
@@ -90,7 +92,7 @@ def _concurrent_entry(adding: SimpleNamespace) -> str:
         'mode': '0600',
     }
     (other / 'manifest.json').write_text(json.dumps(raw, indent=2) + '\n', encoding='utf-8')
-    repository.commit_and_push(
+    fixture_commit_and_push(
         other, 'dummy concurrent entry', ['manifest.json', 'blobs/concurrent.age']
     )
     return _git(other, 'rev-parse', 'HEAD')
@@ -322,7 +324,7 @@ def test_actual_rotation_refuses_a_published_blob_outside_the_reserved_slot(
     raw = json.loads((other / 'manifest.json').read_text())
     raw['entries']['nested'] = {'blob': 'blobs/nested/deep.age', 'dest': '${PLAIN}/nested.txt', 'mode': '0600'}
     (other / 'manifest.json').write_text(json.dumps(raw, indent=2) + '\n', encoding='utf-8')
-    repository.commit_and_push(other, 'dummy nested layout', ['manifest.json', 'blobs/nested/deep.age'])
+    fixture_commit_and_push(other, 'dummy nested layout', ['manifest.json', 'blobs/nested/deep.age'])
     before = _author_snapshot(adding)
     calls = _dummy_crypto(adding, monkeypatch)
 

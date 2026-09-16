@@ -11,6 +11,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from sk_publish import fixture_commit_and_push
+
 from secrets_kit import agefile
 from secrets_kit import SecretsError
 from secrets_kit import converge as convergence
@@ -144,7 +146,7 @@ def _two_repositories(adding, monkeypatch):
     agefile.encrypt_to_recipient(raw['recipient'], b'dummy new fleet payload\n', producer / raw['entries']['ha-token']['blob'])
     (producer / 'identity.age').write_bytes(_armored(b'age1dummywrap', b'dummy new fleet wrapped identity\n'))
     (producer / 'manifest.json').write_text(json.dumps(raw))
-    repository.commit_and_push(producer, 'dummy distinct new fleet', ['manifest.json', 'identity.age', raw['entries']['ha-token']['blob']])
+    fixture_commit_and_push(producer, 'dummy distinct new fleet', ['manifest.json', 'identity.age', raw['entries']['ha-token']['blob']])
     (adding.plain / 'ha-token.txt').write_bytes(b'dummy user-edited destination\n')
     (adding.data_dir.parent / 'new-entry-source.txt').write_bytes(b'dummy new entry\n')
     calls.clear()

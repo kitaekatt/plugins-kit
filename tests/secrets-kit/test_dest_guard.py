@@ -22,6 +22,7 @@ from pathlib import Path
 
 import pytest
 
+from sk_publish import fixture_commit_and_push
 from sk_testlib import copy_git_tree
 
 from secrets_kit import repo as repo_mod
@@ -779,7 +780,7 @@ class TestAddWhenTheCheckCannotRun:
             "windows": "${ONLY_ON_THIS_BOX}/x.txt",
         }
         adding.manifest_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
-        repo_mod.commit_and_push(adding.clone, "fixture: published per-os destination", ["manifest.json"])
+        fixture_commit_and_push(adding.clone, "fixture: published per-os destination", ["manifest.json"])
 
         assert adding.cli.cmd_add(adding.args(update=True)) == 0
 
@@ -1179,13 +1180,13 @@ def _seed_shared_blob_owners(adding, *, alias='ordinary'):
         for name in ['alpha', 'beta']
     }
     adding.manifest_path.write_text(json.dumps(raw), encoding='utf-8')
-    repo_mod.commit_and_push(clone, 'fixture: shared owners', [shared, 'manifest.json'])
+    fixture_commit_and_push(clone, 'fixture: shared owners', [shared, 'manifest.json'])
 
 
 def _observe_blob_mutations(adding, monkeypatch):
     from secrets_kit import agefile
     effects = []
-    for subject, name in [(agefile, 'encrypt_to_recipient'), (repo_mod, 'commit_and_push')]:
+    for subject, name in [(agefile, 'encrypt_to_recipient'), (repo_mod, '_commit_owned')]:
         real = getattr(subject, name)
         def observe(*args, _real=real, _name=name, **kwargs):
             effects.append(_name)

@@ -13,6 +13,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from sk_publish import fixture_commit_and_push
+
 from secrets_kit import SecretsError, agefile, guard
 from secrets_kit import converge as convergence
 from secrets_kit import repo as repository
@@ -87,10 +89,11 @@ def _configure_subject(subject, force, monkeypatch):
             records.append({'module': name, 'path': path.relative_to(root).as_posix(), 'sha256': hashlib.sha256(path.read_bytes()).hexdigest()})
     for name in ['sk_testlib', 'test_init', 'test_dest_guard', 'test_sync_view', 'test_repo_binding']:
         assert Path(sys.modules[name].__file__).resolve() == root / 'tests/secrets-kit' / (name + '.py')
-    for function in [subject.cli.cmd_init, subject.cli.main, repository.sync, repository.commit_and_push]:
+    for function in [subject.cli.cmd_init, subject.cli.main, repository.sync]:
         assert Path(function.__code__.co_filename).resolve() in [root / 'plugins/secrets-kit/scripts/secrets_kit_cli.py', root / 'plugins/secrets-kit/lib/secrets_kit/repo.py']
+    assert not hasattr(repository, 'commit_and_push')
     for name in ['_commit_owned', '_publish_owned', '_prove_publication']:
-        if hasattr(repository, name):assert Path(getattr(repository, name).__code__.co_filename).resolve() == root / 'plugins/secrets-kit/lib/secrets_kit/repo.py'
+        assert Path(getattr(repository, name).__code__.co_filename).resolve() == root / 'plugins/secrets-kit/lib/secrets_kit/repo.py'
     closure = []
     for path in sorted((root / 'plugins/secrets-kit').rglob('*')):
         if path.is_file() and '__pycache__' not in path.parts and path.suffix != '.pyc':
@@ -265,7 +268,7 @@ def test_actual_seed_refuses_foreign_work_before_sync_or_crypto(seed_subject, mo
     subject = seed_subject;readme = subject.clone / 'README.md'
     if not readme.exists():
         readme.write_bytes(b'dummy foreign baseline\n')
-        repository.commit_and_push(subject.clone, 'dummy tracked baseline', ['README.md'])
+        fixture_commit_and_push(subject.clone, 'dummy tracked baseline', ['README.md'])
     baseline = _git(subject.clone, 'rev-parse', 'HEAD');original = readme.read_bytes()
     controlled = None
     if dirty in ['staged-change', 'unstaged-change']:

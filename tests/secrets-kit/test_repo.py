@@ -12,6 +12,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from sk_publish import owned_commit_and_push
 from sk_testlib import copy_git_tree
 
 from secrets_kit import SecretsError
@@ -132,36 +133,24 @@ class TestRemoteHas:
         assert repo_mod.remote_has(fleet_git.author, "identity.age") is False
 
 
-class TestCommitAndPush:
+class TestOwnedCommitAndPublish:
+    """The live publication path: `repo._commit_owned` + `repo._publish_owned`.
+
+    A concurrent remote push is a CAS rejection here, never an automatic
+    rebase -- the legacy `commit_and_push` pushed, fetched, rebased and
+    pushed again; that retry is retired along with the function, and its
+    replacement (one exact-ref push, a definite rejection restores, no
+    second push) is pinned against real git in
+    tests/secrets-kit/test_rotation_recovery.py
+    (test_actual_rotation_rejection_pushes_once_and_restores_owned_state).
+    """
+
     def test_publishes_a_change(self, fleet_git):
         (fleet_git.author / "manifest.json").write_text("{}", encoding="utf-8")
-        repo_mod.commit_and_push(fleet_git.author, "seed", ["manifest.json"])
+        owned_commit_and_push(fleet_git.author, "seed", ["manifest.json"])
 
         _git(fleet_git.other, "pull", "--quiet")
         assert (fleet_git.other / "manifest.json").is_file()
-
-    def test_rebases_over_an_unrelated_remote_commit(self, fleet_git):
-        """Two machines adding different secrets must not need manual repair."""
-        _commit(fleet_git.other, "blobs-theirs.age")
-        _git(fleet_git.other, "push", "--quiet")
-
-        (fleet_git.author / "blobs-ours.age").write_text("ours", encoding="utf-8")
-        repo_mod.commit_and_push(fleet_git.author, "add: ours", ["blobs-ours.age"])
-
-        _git(fleet_git.other, "pull", "--quiet")
-        assert (fleet_git.other / "blobs-ours.age").is_file()
-        assert (fleet_git.other / "blobs-theirs.age").is_file()
-
-    def test_raises_and_leaves_no_rebase_in_progress_on_conflict(self, fleet_git):
-        _commit(fleet_git.other, "manifest.json", "theirs")
-        _git(fleet_git.other, "push", "--quiet")
-
-        (fleet_git.author / "manifest.json").write_text("ours", encoding="utf-8")
-        with pytest.raises(SecretsError):
-            repo_mod.commit_and_push(fleet_git.author, "seed", ["manifest.json"])
-
-        assert not (fleet_git.author / ".git" / "rebase-merge").exists()
-        assert not (fleet_git.author / ".git" / "rebase-apply").exists()
 
 
 @contextlib.contextmanager
@@ -212,14 +201,14 @@ class TestInheritedGitEnvironment:
     dangerous here; they are scrubbed on family membership, at nil cost.
     """
 
-    def test_commit_and_push_still_reaches_the_secrets_remote(self, fleet_git, tmp_path):
+    def test_owned_commit_and_publish_still_reaches_the_secrets_remote(self, fleet_git, tmp_path):
         """The worst case: a write verb recording blobs into another repository."""
         decoy = tmp_path / "decoy"
         _git(tmp_path, "init", "--quiet", str(decoy))
 
         (fleet_git.author / "manifest.json").write_text("{}", encoding="utf-8")
         with _polluted_env(GIT_DIR=str(decoy / ".git")):
-            repo_mod.commit_and_push(fleet_git.author, "seed", ["manifest.json"])
+            owned_commit_and_push(fleet_git.author, "seed", ["manifest.json"])
 
         # It landed on the real remote, and the decoy recorded nothing.
         _git(fleet_git.other, "pull", "--quiet")
@@ -232,7 +221,7 @@ class TestInheritedGitEnvironment:
 
         (fleet_git.author / "manifest.json").write_text("{}", encoding="utf-8")
         with _polluted_env(GIT_WORK_TREE=str(decoy)):
-            repo_mod.commit_and_push(fleet_git.author, "seed", ["manifest.json"])
+            owned_commit_and_push(fleet_git.author, "seed", ["manifest.json"])
 
         _git(fleet_git.other, "pull", "--quiet")
         assert (fleet_git.other / "manifest.json").is_file()
@@ -254,7 +243,7 @@ class TestInheritedGitEnvironment:
         """
         (fleet_git.author / "manifest.json").write_text("{}", encoding="utf-8")
         with _polluted_env(GIT_INDEX_FILE=str(tmp_path / "foreign.index")):
-            repo_mod.commit_and_push(fleet_git.author, "seed", ["manifest.json"])
+            owned_commit_and_push(fleet_git.author, "seed", ["manifest.json"])
 
         _git(fleet_git.other, "pull", "--quiet")
         tree = _git(fleet_git.other, "ls-tree", "-r", "--name-only", "HEAD").split()
@@ -279,7 +268,7 @@ class TestInheritedGitEnvironment:
             GIT_CONFIG_KEY_0="remote.origin.url",
             GIT_CONFIG_VALUE_0=str(decoy),
         ):
-            repo_mod.commit_and_push(fleet_git.author, "seed", ["manifest.json"])
+            owned_commit_and_push(fleet_git.author, "seed", ["manifest.json"])
 
         _git(fleet_git.other, "pull", "--quiet")
         assert (fleet_git.other / "manifest.json").is_file()

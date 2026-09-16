@@ -8,6 +8,8 @@ import sys
 
 import pytest
 
+from sk_publish import fixture_commit_and_push
+
 from secrets_kit import agefile, perms
 from secrets_kit import converge as convergence
 from secrets_kit import repo as repository
@@ -42,7 +44,7 @@ def _seed(adding, *, mode='0644', newline='lf'):
     raw = json.loads(adding.manifest_path.read_text())
     raw['entries']['ha-token']['mode'] = mode
     adding.manifest_path.write_text(json.dumps(raw), encoding='utf-8')
-    repository.commit_and_push(adding.clone, 'dummy existing metadata', ['manifest.json'])
+    fixture_commit_and_push(adding.clone, 'dummy existing metadata', ['manifest.json'])
     return adding.clone / adding.entry().blob
 
 
