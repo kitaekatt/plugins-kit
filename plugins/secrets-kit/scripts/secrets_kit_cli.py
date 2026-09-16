@@ -97,7 +97,7 @@ def _ensure_clone(config: Config, *, data_dir: Path, sync: bool = False) -> Path
     paths = paths_for(data_dir)
     clone = paths["clone"]
     if not repo_mod.is_clone(clone):
-        print(f"cloning {config.repo} ...")
+        print(f"cloning {repo_mod.display_url(config.repo)} ...")
         if sync:
             repo_mod._clone_for_authoring(config.repo, clone)
         else:
