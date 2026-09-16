@@ -69,6 +69,21 @@ The general test, and it is cheap: revert the fix, run the named test, and
 watch it FAIL. A test that stays green with the fix removed is not testing the
 fix. Do this before committing, not after a reviewer asks.
 
+### The fixture that carried neither thing it tested
+
+A parametrized case can be vacuous while its siblings are sound, and the
+parametrization hides it. In the bootstrap profiles work (2026-09-15), one test
+asserted that the `profiles` and `profile` keys are stripped from the effective
+manifest in every resolution status. Removing the strip turned five of its six
+cases red and left the sixth green: that case's fixture declared neither key, so
+there was nothing to strip and the assertion held either way.
+
+Two things generalize. A revert-check must be read per CASE, not per test -- "the
+test went red" is satisfied by one case and says nothing about the others. And a
+fixture that omits the subject of the assertion is the specific shape to look
+for, because it reads as coverage of one more status while exercising nothing.
+The fix was to give that fixture the key, after which all six went red.
+
 ## Shape 3: the test pins its own mock
 
 A hand-rolled fake standing in for a real subprocess or API can carry a

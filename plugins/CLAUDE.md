@@ -611,6 +611,28 @@ Others in the same class, none of which a Windows or Linux session will catch:
 `sed -i` (BSD requires an argument), `stat -c` vs `stat -f`, `date -d` vs
 `date -r`, `readlink -f`, `grep -P`, `mktemp` templates, and `base64 -w`.
 
+## A flag on both a parser and its subparser is discarded before the subcommand
+
+`argparse` parses a subcommand into the SAME namespace as its parent, then
+applies the SUBPARSER's own defaults. A flag declared on both therefore has its
+parent-parsed value overwritten whenever the subparser's default fires, so the
+flag works after the subcommand and is silently dropped before it:
+
+    bootstrap profile --project-dir /a/project set engineer   # project_dir -> None
+    bootstrap profile set engineer --project-dir /a/project   # project_dir -> '/a/project'
+
+Both spellings read as valid from the help text, and nothing reports the loss.
+In bootstrap 0.118.0 the first form resolved against the current working
+directory instead: it wrote the profile selection into whatever project the
+shell happened to be in and converged that one. The same file declared `--json`
+on the root parser and again on a subparser, with the same defect.
+
+Declare the flag once where it belongs, or give every subparser copy
+`default=argparse.SUPPRESS` so an absent flag leaves the outer value alone --
+readers of the value already need `getattr(args, "name", None)`, since SUPPRESS
+means the attribute can be absent. When adding a subparser to an existing CLI,
+grep the file for options declared more than once and check each one.
+
 ## A detached process must keep an error channel
 
 Session readiness is held by the hook's process exit AND stdout-pipe EOF, so a
