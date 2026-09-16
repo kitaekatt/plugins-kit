@@ -117,6 +117,51 @@ def test_allow_marker_suppresses_a_quoted_phrase(repo):
     assert mod.collect_worktree() == []
 
 
+# --- worktree neutrality (WT) ---------------------------------------------- #
+
+@pytest.mark.parametrize("phrase", [
+    # The shipped orchestrate text this rule was written to remove.
+    "Give each parallel writer its own worktree via an absolute `-C`.",
+    "Isolate concurrent writers in separate worktrees.",
+    "use worktree isolation or sequence them.",
+    "`git worktree add -b wt/<unit> ../<repo>-<unit>-wt master` per writer",
+    # The opposite direction is a preference too.
+    "Never create worktrees for this; work in the main checkout.",
+    "Avoid using a worktree here.",
+])
+def test_worktree_preference_in_plugin_prose_is_flagged(repo, phrase):
+    mod = _load_module()
+    mod.REPO_ROOT = repo
+    _write(repo, "plugins/demo/SKILL.md", f"# demo\n\n{phrase}\n")
+    findings = mod.collect_worktree()
+    assert findings, phrase
+    assert all("[WT]" in f for f in findings), findings
+
+
+@pytest.mark.parametrize("fact", [
+    "The Agent tool accepts an `isolation: \"worktree\"` parameter.",
+    "Concurrent writers given the same `-C` write into one tree.",
+    "A failed attempt's worktree survives until garbage collection.",
+    "Per-attempt worktrees are opt-in via `workspace.isolate: true`.",
+])
+def test_worktree_capability_facts_are_not_flagged(repo, fact):
+    mod = _load_module()
+    mod.REPO_ROOT = repo
+    _write(repo, "plugins/demo/README.md", f"{fact}\n")
+    assert mod.collect_worktree() == []
+
+
+def test_worktree_rule_reads_prose_only(repo):
+    """Code docstrings describe worktree SUPPORT in the same words."""
+    mod = _load_module()
+    mod.REPO_ROOT = repo
+    _write(repo, "plugins/demo/workspace.py",
+           '"""Create one detached worktree; never consults the worktree."""\n')
+    _write(repo, "plugins/demo/flow.js",
+           "// No worktree isolation: lanes touch disjoint files.\n")
+    assert mod.collect_worktree() == []
+
+
 # --- staged mode ----------------------------------------------------------- #
 
 def test_staged_mode_skips_when_no_plugin_file_is_staged(repo):

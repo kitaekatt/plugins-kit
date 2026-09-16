@@ -169,7 +169,7 @@ uv run --extra dev pytest -n 12 -q      # full suite, ~3 min
 
 **Interpreter: the repo is pinned to Python 3.12** via a repo-root `.python-version`, so bare `uv run` / `uv venv` select 3.12 everywhere -- no `-p 3.12` needed. Nothing needs 3.14 (four plugins exclude it: `requires-python ">=3.12,!=3.14.*"`); it used to leak in only as uv's global default when no pin was present.
 
-The two formerly-documented "pre-existing failure" clusters (the `tests/skills-kit/` collection errors and the bootstrap `engine`/`venv` `CalledProcessError`s) were **fixed**, not version quirks -- both were test-only issues: skills-kit imported the pre-extraction `schemas`/`_shared` modules, and the bootstrap tests spawned WSL `bash` to `source` a Windows env file and didn't isolate `HOME`. **The suite is not unconditionally green, and "green" is host-dependent.** On an arm64 machine (Apple Silicon) five `tests/bootstrap/test_manifest_normalization.py` scoop tests failed for months while passing on every amd64 box, because they fake `current_os` but not `detect_arch()`, which reads the real CPU -- see the `suite_green_is_host_dependent` insight below. Establish a baseline on YOUR machine (run the suite at the merge-base in a `git worktree`) before calling a failure your regression.
+The two formerly-documented "pre-existing failure" clusters (the `tests/skills-kit/` collection errors and the bootstrap `engine`/`venv` `CalledProcessError`s) were **fixed**, not version quirks -- both were test-only issues: skills-kit imported the pre-extraction `schemas`/`_shared` modules, and the bootstrap tests spawned WSL `bash` to `source` a Windows env file and didn't isolate `HOME`. **The suite is not unconditionally green, and "green" is host-dependent.** On an arm64 machine (Apple Silicon) five `tests/bootstrap/test_manifest_normalization.py` scoop tests failed for months while passing on every amd64 box, because they fake `current_os` but not `detect_arch()`, which reads the real CPU -- see the `suite_green_is_host_dependent` insight below. Establish a baseline on YOUR machine before calling a failure your regression: first try undoing your own edits for a moment and re-running the failing test; when that cannot answer it, run the suite at the merge-base in a read-only worktree and remove it afterwards (see "Worktrees and scratch copies").
 
 **Local development** -- use `--plugin-dir` to test plugins from the working copy:
 
@@ -220,9 +220,9 @@ evidence of a publish that this repo's git graph will not show you.
 
 **`git log origin/master..origin/dev` is not a meaningful range here.** A release is a tree PROJECTION, so master's commits are not counterparts of dev's and master is not an ancestor of dev; that range counts every commit since the branches last shared a tip and grows without bound. The honest range is `uv run python scripts/publish.py --print-range-base`..dev, read from the `Published-From:` trailer that `range_base()` searches for down master's history.
 
-### dev -> master reconcile: conflict-resolution policy
+### dev -> master reconcile: master-only content
 
-For a full `dev`/`master` reconcile, resolve **toward dev** (master's divergent commits are prior publish artifacts dev supersedes) -- with one guard: back-port any master-only `+` lines in non-generated text to dev FIRST, then clobber. Full policy and mechanics: [docs/reference/publish-reconcile.md](docs/reference/publish-reconcile.md).
+A release projects dev's tree, so it never merges. When `publish.py` refuses because master holds content dev lacks, back-port the master-only `+` lines worth keeping to dev (on dev, in this folder), then publish normally. Full policy: [docs/reference/publish-reconcile.md](docs/reference/publish-reconcile.md).
 
 ### Pre-publish validation (default)
 
@@ -263,14 +263,39 @@ A worked incident where this stranded another session's commits:
 and `prepare_review.py` all take `<a>..<b>` / `<a>...<b>` and read history without
 touching the tree. Path scoping (`-- plugins/foo/`) narrows further. If commits are
 non-contiguous, review each one individually (`<sha>^..<sha>`) -- several small reviews
-beat one branch switch. When isolation genuinely requires a separate checkout, use
-`git worktree add` (a second directory, the shared tree untouched), never a branch
-switch in this one.
+beat one branch switch. A review never needs a second checkout; see "Worktrees and
+scratch copies" below for the narrow cases that do.
 
 **Publishing does not need a branch either.** `publish.py` owns the `dev` -> `master`
 flow. The one case that historically wanted a feature branch -- gotcha 1, cherry-picking
 past unrelated `dev` commits -- is a decision to ship alone with `--only`, not to solve by
 creating a branch yourself.
+
+### Worktrees and scratch copies
+
+The user's rule for this repo, and the reason worktrees are rare here:
+
+1. **All work happens in the project folder.** Edits, tests, commits, reviews and
+   publishes run in this checkout. Parallel writers share it, each owning separate
+   files stated in its brief; a writer's own check covers only its files, and the full
+   check runs at the join.
+2. **A worktree is only ever a READ-ONLY copy of the project at a specific commit**,
+   created when a task truly needs one (for example, running the suite at the merge-base
+   to learn whether a failure predates your change). Nobody edits project files in it;
+   tool caches such as `__pycache__` are fine. Work never moves into a worktree while
+   this folder sits idle.
+3. **A scratch directory may hold a SUBSET of the project** when a tool needs files in
+   a state the folder does not hold (`publish.py` extracts the ~50 generator inputs this
+   way). It holds tool inputs and outputs, never edits to project files.
+4. **Whoever creates a worktree or scratch directory removes it as soon as it is no
+   longer needed.** A script removes its own in a `finally`. This overrides the general
+   habit of leaving scratch behind.
+
+Before creating either, prefer the no-copy route: git reads any revision without a
+checkout (`git show`, `git diff`, `git log`), git plumbing builds commits without one
+(`publish.py`'s projection), and "did my change break this test?" is usually answered
+by undoing your own edits for a moment or by reading the diff. The harness is set to
+match in `.claude/settings.json` (`EnterWorktree` denied, `worktree.bgIsolation: none`).
 
 ### Committing and pushing to `dev` is unrestricted -- only PUBLISHES are gated
 
@@ -422,7 +447,7 @@ The one case that still warrants a narrower release is a **self-contained** chan
 
 (Earlier revisions told you to **stop** when the range held anything beyond your own commits, and to escalate the choice to the user. Both are retired: they made every release wait on a quiet tree, which a shared tree never is, and they asked the user to adjudicate readiness that the pushing session had already declared.)
 
-**Do NOT branch from master to route around this.** `git checkout -b` in this shared tree silently reparents whatever a concurrent session commits next -- the harm is documented under "Anti-pattern: creating a branch" above and in [docs/reference/shared-tree-git-discipline.md](docs/reference/shared-tree-git-discipline.md). If a genuinely separate checkout is required, use `git worktree add`, which leaves this tree's branch alone. (Earlier revisions of this section recommended `git checkout -b <feature> origin/master` and a squash-merged feature branch; both are retired.)
+**Do NOT branch from master to route around this.** `git checkout -b` in this shared tree silently reparents whatever a concurrent session commits next -- the harm is documented under "Anti-pattern: creating a branch" above and in [docs/reference/shared-tree-git-discipline.md](docs/reference/shared-tree-git-discipline.md). Nothing in a publish needs a second checkout: `publish.py` computes the release with git plumbing. (Earlier revisions of this section recommended `git checkout -b <feature> origin/master` and a squash-merged feature branch; both are retired.)
 
 `publish.py` still has a fast-forward shortcut for the case where master is an ancestor of dev, but it is gated on `_fast_forward_is_safe()` -- refused outright while any dev-only plugin exists, because a fast-forward moves dev's tree wholesale and would bypass the hold-back.
 
@@ -442,7 +467,7 @@ Read every line. If anything is unrelated to the feature, `git restore --staged 
 
 **Recovery: how to retract.** A bad publish on master is fixed forward, never with `push --force` to master. Push a follow-up commit that either (a) reverts the bad commit and patch-bumps the affected plugins past the burned version, or (b) re-implements correctly under a new version. Consumers with `autoUpdate: true` then refresh on their next session start. Never rewrite master history -- other machines have already fetched it.
 
-**Master drifts behind dev on non-plugin infra -- reconcile periodically.** The publish flow carries feature commits only, so master silently falls behind dev on repo infrastructure (gotchas, tests, tooling). Expected, not a bug; sync it from time to time with the infra-drift procedure in [docs/reference/publish-reconcile.md](docs/reference/publish-reconcile.md) (no version bumps, consumers unaffected).
+**Master carries repo infrastructure with every bare publish.** A release projects dev's whole tree (minus dev-only plugins), so gotchas, tests and tooling reach master alongside plugin work; there is no separate infra-drift sync. A `--only` release holds everything outside the named plugin at master's content, and the next bare publish carries it.
 
 **The cache keys on version** -- same version = same code; the cache never refreshes without a bump, and fresh installs between releases copy HEAD code under the old version string (**silent divergence**). Consequences: `plugin.json` and `marketplace.json` versions must move together (the regenerator + `scripts/pre-commit-version-check.sh` enforce this); **manifest edits count as code edits** (a `bootstrap.json` change without a bump is structurally invisible to consumers -- see the `manifest_changes_need_version_bump` insight below); never copy files directly into the plugin cache; and don't omit the version field hoping for rolling updates (Claude Code substitutes a git SHA that becomes a static cache key anyway).
 
@@ -660,8 +685,10 @@ claude_md:
         is green on the author's machine and red on half the fleet, and the failure looks like
         a defect in the feature rather than a gap in the mock.
         (2) DIAGNOSIS: never accept a tracked document's claim that the suite is green as
-        evidence about YOUR machine. Run the suite at the merge-base in a `git worktree add`
-        (never a branch switch -- the tree is shared) and diff the failure sets. That costs a
+        evidence about YOUR machine. First undo your own edits for a moment and re-run the
+        failing tests; when that cannot answer it, run the suite at the merge-base in a
+        read-only worktree (never a branch switch -- the tree is shared; remove the worktree
+        afterwards, per "Worktrees and scratch copies") and diff the failure sets. That costs a
         couple of minutes and is the only thing that distinguishes "I broke this" from "this
         was already red here". A standing green claim is the most misleading kind of stale
         documentation, because it converts someone else's pre-existing failure into your
@@ -755,9 +782,11 @@ claude_md:
         Engine-side fixes (rescue 0.46.0, cache-scan fallback 0.47.0) are owned by the bootstrap
         skill references (engine-internals.md, plugin-reload-lifecycle.md) -- consult those for
         mechanics. The REPO-specific residue to remember here:
-        - dev-tree.py must SYNTHESIZE entries for repo plugins the registry doesn't record;
-          that synthesis is how publish.py's index.html regen works on v2 machines (the 0.47.0
-          release briefly shipped an empty index.html before it existed).
+        - dev-tree.py must SYNTHESIZE entries for repo plugins the registry doesn't record,
+          or `claude-dev` mode loads nothing on a v2 machine. publish.py does not use
+          dev-tree.py: its index.html regen passes generate.py a synthetic `--registry` built
+          from the repo's own plugin.json files (the 0.47.0 release shipped an empty
+          index.html when the page was built from the machine registry).
         - awesome-kit's generate.py needed the same cache fallback (awesome-kit 0.10.0,
           merge_cache_fallback) or the poster renders empty.
         - Claude Code still WRITES enabledPlugins to the live ~/.claude/settings.json on
@@ -861,7 +890,8 @@ claude_md:
         genuine duplication was already deduplicated; that is too strong and misled a follow-up
         task into expecting to find nothing. Most of the YAML block is still not capability
         fact at all (unrestricted reads outside -C, silent HTTP-000
-        egress, the TUI dying when backgrounded, worktree advice, judging by the -o file);
+        egress, the TUI dying when backgrounded, where concurrent writers land, judging by
+        the -o file);
         references/codex-dispatch.md owns those.
         THE CONCRETE DAMAGE, which is why this is an insight and not a preference: the YAML
         asserts the effort menu low|medium|high|xhigh|max and the advertisement deliberately
@@ -1072,8 +1102,9 @@ claude_md:
         Scope reviews and diffs with a RANGE (`<a>..<b>`, `<sha>^..<sha>`) plus path
         filters; git log / git diff / prepare_review.py all read history without touching
         the tree. Non-contiguous commits: review each individually rather than assembling a
-        branch. If a separate checkout is genuinely required, `git worktree add` gives one
-        without moving this tree. Publishing needs no branch -- publish.py owns dev -> master,
+        branch. A review needs no second checkout at all; the rare task that does follows
+        "Worktrees and scratch copies" (a read-only worktree, removed afterwards). Publishing
+        needs no branch -- publish.py owns dev -> master,
         and unrelated dev commits in the range are shipped rather than escalated (gotcha 1);
         a self-contained change that must ship alone uses `publish.py --only <plugin>`.
         The rule and range-scoping alternative remain in "Anti-pattern: creating a branch, or
@@ -1182,9 +1213,12 @@ claude_md:
         readability, and use `git commit -F <msg> -- <paths>` when the index holds another
         session's staged work. See "Committing and pushing to dev is unrestricted" in
         Development Workflow.
-    - rule: Stay on dev -- never create a branch or run git checkout/switch in this working tree; scope reviews with a commit range, and use git worktree if a separate checkout is truly needed.
-      keywords: [branch, git checkout, git switch, shared working tree, concurrent session, scope a review, range, worktree]
+    - rule: Stay on dev -- never create a branch or run git checkout/switch in this working tree; scope reviews with a commit range.
+      keywords: [branch, git checkout, git switch, shared working tree, concurrent session, scope a review, range]
       why: The tree is shared with other agent sessions and the checked-out branch is global to it, so a switch silently redirects their commits onto your branch. See the never_create_or_switch_branches insight and the anti-pattern section in Development Workflow.
+    - rule: All work happens in the project folder. A worktree is only a read-only copy of the project at a specific commit, a scratch directory only holds a subset of the project for a tool, and whoever creates either removes it as soon as it is no longer needed.
+      keywords: [worktree, git worktree add, EnterWorktree, isolation, second checkout, scratch directory, parallel writers, read-only snapshot, cleanup, merge-base baseline]
+      why: The user's standing rule for this repo. Parallel writers share this folder with separate file ownership, and git reads or builds any revision without a checkout, so a second copy is rarely needed and never a place to do work. See "Worktrees and scratch copies" in Development Workflow.
     - rule: When a machine is wedged, snapshot its state before any repair, and ship the repair in bootstrap or bootstrap-stuck-fix rather than fixing the machine by hand.
       keywords: [wedged machine, snapshot first, hand repair, manual fix, anti-pattern, ship the repair]
       why: A hand-repair reaches one machine and destroys the evidence every other machine's fix depends on. See the never_hand_repair_a_wedge insight and the anti-pattern section in Bootstrap.

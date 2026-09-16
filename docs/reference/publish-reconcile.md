@@ -2,9 +2,9 @@
 
 The publish flow and its adjacent procedures, extracted from the root CLAUDE.md
 (2026-07-22 md-audit; publish mechanics added 2026-08-31). Read when: publishing
-a release, authoring a commit-scoped pre-commit check, doing a full dev/master
-reconcile, syncing master's infra drift, or previewing the marketplace landing
-page against dev work. The safe-publish gotchas, recovery procedure, and cache-version trap stay
+a release, authoring a commit-scoped pre-commit check, clearing a
+master-only-content refusal, or previewing the marketplace landing page against
+dev work. The safe-publish gotchas, recovery procedure, and cache-version trap stay
 in CLAUDE.md. `scripts/publish.py` remains the source of truth for the publish
 flow itself.
 
@@ -26,8 +26,8 @@ uv run python scripts/publish.py --check    # preflight only; no writes, no push
 and post-verification live in code so this document cannot drift from what
 actually runs. Read its module docstring for the mechanics. Do not hand-run the
 steps; the script exists because three of them are easy to get wrong in ways
-that fail silently (a half-restored dev-tree that makes a session load
-plugins from the working copy; a merge that publishes a dev-only plugin; an
+that fail silently (a page generated from the build machine's installed
+plugins instead of the repo; a merge that publishes a dev-only plugin; an
 `index.html` that lands outside the release commit).
 
 **Definition.** "Publish" means **all** of: version bump + regenerated
@@ -47,13 +47,18 @@ drift.
 `uv run python scripts/publish.py --only <plugin>` (repeatable) ships one
 published plugin and holds every other published plugin at master's content.
 It is the same projection as the dev-only hold-back with a larger hold-back
-set -- `_held_back_paths` receives the dev-only plugins plus every published
+set -- the projection holds back the dev-only plugins plus every published
 plugin not named -- so it cannot conflict and is idempotent for the same
 reasons. Three things differ from a bare publish, each on purpose:
 
-- **The derived artifacts are regenerated inside the projection worktree**,
-  by the worktree's own copies of `regen_marketplace.py`, `dev-tree.py` and the
-  poster generator, so master's `marketplace.json` and `index.html` describe
+- **The derived artifacts are regenerated from the projected tree**, which
+  lives only in the projection's temporary Git index.
+  `regen_marketplace.regenerate(from_index=True)` reads that index for
+  `marketplace.json`; for `index.html`, the ~50 generator inputs (each
+  plugin's `plugin.json`, `poster.yaml` and `SKILL.md` files, plus
+  `.claude-plugin/`'s page files) are extracted with `git checkout-index` into
+  a scratch directory that is removed afterwards, and `generate.py --registry`
+  reads them there. So master's `marketplace.json` and `index.html` describe
   the tree master is about to hold: the named plugins at their new versions,
   the held-back ones at the versions master still carries. Nothing on dev is
   regenerated or committed -- the dirty gate admits uncommitted work inside
@@ -79,10 +84,8 @@ Trying it: `--check --only <plugin>` is the dry run (preflight only, no
 writes). After a real run, the script's own `verifying:` step is the
 acceptance test -- it reads master's `marketplace.json` and `index.html`
 back and checks every published plugin against the version master's
-`plugin.json` carries, and it confirms the dev-tree flip the worktree regen
-performed was restored (`dev-tree.py status` must report no installPaths at
-dev). A run that prints `published.` passed both; nothing needs checking by
-hand.
+`plugin.json` carries. A run that prints `published.` passed; nothing needs
+checking by hand.
 
 What it deliberately does not do: check cross-plugin coupling. A plugin that
 consumes a shared library another plugin owns (`shared_lib_imports`, or a
@@ -126,10 +129,12 @@ Two facts are worth not rediscovering:
 **A dev-only plugin's FILES are held back unconditionally.** `_publish_projection`
 derives the dev-only set from the MANIFESTS (`local_plugins()` + `is_published`),
 not from the exclusion set, so the hold-back runs on every projection whether or
-not `--exclude-dev-only` was passed. `_held_back_paths` then treats the two
-halves oppositely: a path `master` already carries is restored to master's
-content, and a path only `dev` has is removed from the projected tree. Both
-halves of a plugin count -- `plugins/<name>/` and `tests/<name>/`.
+not `--exclude-dev-only` was passed. For each held-back plugin the projection
+removes its prefix from the temporary index and, where `master` carries that
+prefix, reads master's subtree back in (`git read-tree --prefix`). So a file
+`master` already carries is restored to master's content, and a file only
+`dev` has is absent from the projected tree. Both halves of a plugin count --
+`plugins/<name>/` and `tests/<name>/`.
 
 Read that consequence carefully, because it is the opposite of what "ships by
 default" suggests. A dev-only plugin's COMMITS are not excluded from the release
@@ -137,7 +142,7 @@ default" suggests. A dev-only plugin's COMMITS are not excluded from the release
 does NOT match `dev` for such a plugin, and a copy already on `master` is
 re-checked-out on every release -- it can only go stale, never forward. Removing
 it from `master` once is what makes the hold-back start deleting it instead,
-because `_held_back_paths` then sorts its paths into the removal half.
+because master then has no subtree to read back in.
 
 `--exclude-dev-only <plugin>` therefore does NOT control the file hold-back. It
 governs commit bookkeeping only: which commits land in `excluded` (hence the
@@ -153,133 +158,58 @@ commit is a judgment call. Split it, or drop the plugin from
 **What the script will NOT do:** decide that a plugin's `published` status has
 changed. That edit is yours.
 
-## dev -> master reconcile: conflict-resolution policy
+## dev -> master reconcile: master-only content
 
-A full `dev`/`master` reconcile (the "publish: reconcile master with dev"
-release) conflicts because both branches independently edit the same files
-(marketplace.json, plugin.json versions, CLAUDE.md, .gitignore, skills). `dev`
-is the source of truth for a reconcile -- master's divergent commits are
-publish/reconcile artifacts that `dev` supersedes. Resolve **toward dev**, with
-one guard that prevents silently dropping a master-only fix:
+A release is a PROJECTION: `publish.py` computes master's next tree from dev's
+committed tree (holding back dev-only plugins) with git plumbing, so it never
+merges and never conflicts. What remains of "reconciling" is the case
+`publish.py` refuses on purpose: master carries content dev lacks
+(`_require_no_master_only_content`, which names the paths). Landing dev's tree
+over it would silently drop that content, so the guard stops the publish
+instead.
 
+The remedy happens entirely in the project folder, on dev -- no merge, no
+second checkout, no branch switch:
+
+- For each path the refusal names, run `git diff dev origin/master -- <path>`
+  and read the `+` lines (content master has that dev LACKS).
 - **Generated / JSON files** (`marketplace.json`, every `plugin.json`,
-  `index.html`): clobber with dev unconditionally. `plugin.json` versions are
-  dev >= master by construction; `marketplace.json` is regenerated from them
-  anyway (`scripts/regen_marketplace.py` after the merge); `index.html` is a
-  post-publish regen.
+  `index.html`): nothing to keep -- dev's versions are >= master's by
+  construction, and the publish regenerates the derived files.
 - **Non-generated text** (`.gitignore`, `CLAUDE.md`, `*.md`, `*.py`, etc.):
-  first run `git diff dev origin/master -- <file>` and inspect the `+` lines
-  (content master has that dev LACKS). If any are important, **back-port them
-  to dev first** (commit on dev), then clobber with dev. If there are no
-  master-only lines, dev is a superset -- clobber with dev directly, no loss.
-  (In practice these conflicts are usually textual-only: dev already contains
-  master's content via a different commit, so the `+` set is empty and the
-  clobber is safe.)
-- **`published: false` plugins**: dev-only by design and filtered out of
-  `marketplace.json` by the regenerator, so their divergence never reaches
-  consumers -- take dev and move on; don't agonize over their conflicts. Read
-  the current set from the field rather than from memory; the field is the
-  load-bearing record and this list has gone stale before.
+  **back-port** any `+` lines worth keeping to dev and commit them there. If
+  there are none, dev is already a superset. (In practice most of these are
+  textual-only: dev carries master's content via a different commit.)
+- **`published: false` plugins**: their files are held back on every
+  projection, so their divergence never reaches consumers -- take dev and move
+  on. Read the current set from the field rather than from memory.
 
-Mechanics, in a **master worktree** -- never `git checkout master` in the shared
-dev tree, which silently redirects whatever a concurrent session commits next
-(root CLAUDE.md, "Anti-pattern: creating a branch"; the worked incident is
-`shared-tree-git-discipline.md`):
+Then run a normal `publish.py`. The back-port-then-project order is what makes
+"dev wins" safe rather than blind.
 
-```bash
-git worktree add ../plugins-kit-master origin/master
-cd ../plugins-kit-master
-git merge --no-commit --no-ff origin/dev
-```
+A hand merge is exactly how content goes wrong without a conflict: on
+2026-09-07 a merge-based reconcile left
+`plugins/llm-scripting-kit/lib/llm_scripting_kit/completion/capabilities.py`
+with the "canonical guarantee subjects" block landed twice and the `BYPASS`
+docstring stranded between the copies, because the file merged cleanly and was
+never inspected. A projection cannot do that: it takes dev's blobs rather than
+combining two sides.
 
-Resolve each conflict per the rules above (`git checkout --theirs <file>` takes
-dev while on master; `git rm` honors a dev-side delete), then
-`uv run python scripts/regen_marketplace.py`, run `pytest tests/bootstrap` +
-`regen_marketplace.py --check`, commit the merge, and push master. Remove the
-worktree when done (`git worktree remove ../plugins-kit-master`). The
-back-port-then-clobber rule is what makes the wholesale "dev wins" resolution
-safe rather than blind.
+## Master infra drift (retired procedure)
 
-**Before committing the merge, assert the resolved tree matches dev:
-`git diff --stat origin/dev` must be EMPTY.** Resolving every CONFLICT toward
-dev does not give you dev's tree, because the files git merged cleanly never
-became conflicts and were never resolved. A clean auto-merge can still be
-wrong: where master and dev each added the same block at slightly different
-offsets, git takes BOTH, and the result is a silently duplicated block with
-whatever sat between the two insertion points orphaned inside it. Nothing
-reports this -- there is no conflict marker, the merge exits 0, and the file
-looks plausible.
+Every bare publish projects dev's WHOLE tree, so repo infrastructure -- a
+CLAUDE.md gotcha, a test file, a `.gitignore` tweak, dev tooling -- reaches
+master with the next release, so no separate infra-drift sync exists. A
+`--only` release holds everything outside the named plugins at master's
+content, and the next bare publish carries it.
 
-Observed 2026-09-07 on
-`plugins/llm-scripting-kit/lib/llm_scripting_kit/completion/capabilities.py`:
-the "canonical guarantee subjects" block landed twice with the `BYPASS`
-docstring stranded between the copies. The conflict loop never touched the file
-because it never conflicted; only the diff against dev exposed it. When the
-diff is non-empty, inspect each file it names and take dev's copy
-(`git checkout origin/dev -- <file>`) unless that file is a genuine
-back-port from the guard above.
+Master's history contains hand-made sync and reconcile commits from before the
+projection release (`53645fd2`, 2026-08-27). `range_base()` in `scripts/publish.py` searches DOWN master's
+history for the most recent `Published-From:` trailer (bounded by
+`_RANGE_BASE_SEARCH_DEPTH`) rather than reading master's tip, so those
+untrailered commits do not hide the publish boundary.
 
-## Master infra-drift sync (periodic, no version bumps)
-
-A release projects dev's tree onto master, but the publish flow is SCOPED to
-feature work (plugin code + version bumps); it never carries not-tied-to-a-feature
-changes -- a CLAUDE.md gotcha, a test file, a `.gitignore` tweak, dev tooling.
-Master silently falls behind dev on repo infrastructure. This is expected (per-publish scoping causes it),
-not a bug -- reconcile it from time to time. Do it in a **master worktree** (`git worktree add <dir> origin/master` -- never
-`git checkout` in the shared dev tree, which redirects concurrent sessions' commits),
-against `origin/dev`'s committed state (never the live dev working tree),
-keeping dev-only plugins back:
-
-```bash
-# Derive the dev-only set from the field, reading ORIGIN/DEV -- never the
-# checked-out master tree, and never hardcode plugin names here. A dev-only
-# plugin that does not exist on master yet is absent from the master tree, so
-# deriving there yields an incomplete set and the filter below leaks that whole
-# plugin onto master.
-DEVONLY=$(git ls-tree -r --name-only origin/dev \
-  | grep 'plugins/.*/\.claude-plugin/plugin\.json' \
-  | while read -r f; do
-      git show "origin/dev:$f" | uv run python -c "
-import json,sys
-d = json.load(sys.stdin)
-print('$f'.split('/')[1] if d.get('published', True) is False else '')"
-    done | grep . | paste -sd'|' -)
-test -n "$DEVONLY" || { echo "refusing: empty DEVONLY"; exit 1; }
-
-git diff --name-only origin/master origin/dev \
-  | grep -vE "^(plugins|tests)/(${DEVONLY})/" \
-  | xargs git checkout origin/dev --
-```
-
-Then confirm no dev-only plugin content leaked
-(`git diff --cached --name-only`), run the brought tests, commit, push master.
-No version bumps, no `marketplace.json` change -- pure infra sync, so consumers
-are unaffected. Skip the master->dev merge-back when the dev tree is being
-actively edited: the content already matches on both branches, so the history
-merge can wait for a calm moment.
-
-**The sync commit SHOULD end with a `Published-From:` trailer naming the dev commit
-master's content now matches.** `range_base()` in `scripts/publish.py` SEARCHES
-DOWN master's history for that trailer (bounded by `_RANGE_BASE_SEARCH_DEPTH`)
-rather than reading master's tip, precisely so a non-release commit like this sync
-does not hide the boundary. Landing one untrailered commit is therefore survivable;
-landing more than the search depth is not, and the failure is silent:
-
-```
-Published-From: <full sha of the origin/dev commit you synced from>
-```
-
-Once the boundary is out of range, `range_base()` falls back to the merge base,
-against which every file
-the last release shipped looks like a master-side change -- so the next publish is
-refused by `_master_only_paths()` with a list of files whose only "master-only
-content" is an older version string. The trailer is a claim about content, so
-verify it rather than assuming: `git diff --name-only origin/master <sha> --`
-should list nothing outside the dev-only plugins. This is the one respect in which
-a hand-run sync has to imitate `publish.py`, which writes the trailer itself on
-every projection.
-
-## Landing-page preview (dev-tree regen by hand)
+## Landing-page preview
 
 The repo-root **`index.html`** is the marketplace's public landing page (the
 GitHub-Pages-style poster listing every plugin and its skills). It is generated,
@@ -292,36 +222,28 @@ Repo-side inputs for the page are all under `.claude-plugin/`:
 URL), and `index-page.yaml` (the page copy).
 
 At publish time the index.html regen is `publish.py`'s job -- never hand-run it
-there. The manual sequence exists for **previewing** the page against dev work:
+there. To **preview** the page against dev work, call the same function the
+publish calls, so the preview cannot drift from the shipped flag set:
 
 ```bash
-uv run python scripts/dev-tree.py dev        # installPaths -> this working copy
-python plugins/awesome-kit/skills/plugin-ecosystem/scripts/generate.py \
-  --marketplace plugins-kit --title "plugins-kit marketplace" \
-  --marketplace-json plugins-kit=.claude-plugin/marketplace.json \
-  --poster plugins-kit=.claude-plugin/poster.yaml \
-  --config .claude-plugin/index-page.yaml \
-  --output ./index.html --public --no-open
-uv run python scripts/dev-tree.py normal     # ALWAYS restore, even if the regen failed
-uv run python scripts/dev-tree.py status     # confirm: installPaths @ cache: <n>, not 0
+uv run python -c "import runpy; runpy.run_path('scripts/publish.py')['regenerate']()"
+git diff --stat -- index.html .claude-plugin/marketplace.json   # look, then:
+git restore index.html .claude-plugin/marketplace.json          # unless publishing them
 ```
 
-Keep this in step with `regenerate()` in `scripts/publish.py`, which is the
-source of truth for the flag set; a preview built with fewer flags is not
-previewing the page that will ship.
-
-The `claude-dev` helper performs the same `installPath` rewrite for a whole
-session rather than a single regen; `scripts/dev-tree.py` is what both use.
-
-**Always restore dev-tree mode.** Leaving it on silently repoints every plugin
-at the working copy for every session that starts while dev-tree mode remains
-enabled -- a footgun far worse than a stale page.
+`regenerate()` writes a synthetic registry naming each `plugins/<name>`
+directory with its own `plugin.json` version into a temporary directory,
+passes it as `generate.py --registry`, and removes it afterwards. Nothing under
+`~/.claude` is rewritten, so there is no mode to restore.
 
 **Every flag is load-bearing -- a regen without them produces a page worse
 than the published one, and `--marketplace` produces one that leaks.** The
 generator's default job is to describe the machine it runs on, not the public
-marketplace. Five flags redirect its inputs at the working copy:
-`--marketplace`, `--public`, `--marketplace-json`, `--poster`, and `--config`.
+marketplace. Six flags redirect its inputs at the repo:
+`--registry`, `--marketplace`, `--public`, `--marketplace-json`, `--poster`,
+and `--config`. `--registry` supplies the plugin inventory and versions from
+the repo's own manifests instead of `~/.claude/plugins/installed_plugins.json`
+and the plugin-cache fallback, which describe what THIS machine has installed.
 `--marketplace` is the one whose omission **leaks rather than misreports**:
 without `--marketplace plugins-kit`, the page carries every OTHER marketplace
 with a `poster.yaml` installed on the machine, including private marketplaces,
@@ -337,38 +259,26 @@ exists to catch plugins *removed* upstream; it misfires on ones *added*.
 `--poster` does the same for the marketplace's own `poster.yaml` (subtitle,
 URL), which the cached clone lags identically. `--config` takes the page copy
 from `.claude-plugin/index-page.yaml` instead of the per-machine
-plugin-ecosystem poster configuration. `publish.py` passes all five flags, and
+plugin-ecosystem poster configuration. `publish.py` passes all six flags, and
 its `verify()` re-parses the generated page to refuse a foreign marketplace or
 embedded machine state.
 
-**It crawls installPaths, not the working directory.** `generate.py` reads the
-installed-plugin registry and walks each plugin's **`installPath`**, filtered by
-`marketplace.json`. In a normal session those paths point at the **cache**,
-which only refetches from **master** -- so a plain regen before the merge
-reproduces the cache-derived page rather than the dev-tree page. **Registry v2
-caveat:** Claude Code's registry-v2
-format keeps that registry at `{"plugins": {}}`; awesome-kit 0.10.0 and above
-has `generate.py` fall back to scanning the cache layout for refs the registry
-does not record, so a normal-mode regen renders the machine's cached plugins
-rather than an empty page.
-
-**At publish time this is `publish.py`'s job -- do not hand-run it.** The script
-repoints `installPaths` at the working copy via `dev-tree.py`, which in
-awesome-kit 0.47.0 and above also **synthesizes** entries for repo plugins the
-registry does not record (the registry-v2 case). It regenerates, restores in a
-`finally`, and post-verifies that the restore landed. It also lands `index.html`
-*inside* the release commit, so `master` is never in a state where its page
-disagrees with its own `marketplace.json`. The manual sequence in
-"Landing-page preview" above is for **previewing** only.
+**At publish time this is `publish.py`'s job -- do not hand-run it.** A bare
+publish regenerates in the project folder and lands `index.html` *inside* the
+release commit, so `master` is never in a state where its page disagrees with
+its own `marketplace.json`. A `--only` publish regenerates from the projected
+tree instead (see "Partial release" above).
 
 **Preview vs publish -- same mechanism, different commit rule.** At publish
 time dev is the about-to-be master, so its page is the published page --
 commit it. Outside a publish, dev contains skills and versions not going out,
 so the page renders a marketplace that does not exist yet -- look at it, then
-`git restore index.html`. The rule is not "never commit a dev-tree page"; it is
-"only commit one whose content is being published in the same commit."
+restore it. The rule is not "never commit a dev page"; it is "only commit one
+whose content is being published in the same commit."
 
-**Equivalence note.** The dev-tree regen is byte-identical to the
-post-merge regen (verified 2026-07-15 on the bootstrap 0.40.0 release by
-generating both ways and diffing) -- the dev tree and the freshly-published
-cache are the same content; only the path differs.
+**Equivalence note.** The `--registry` regen of `origin/master`'s tree
+reproduces master's committed `marketplace.json` byte for byte, and its
+`index.html` differs only in the order of the embedded plugin array
+(alphabetical rather than registry order). The page sorts that array on load,
+so the rendered page is identical (verified 2026-09-16 when `--registry`
+replaced the `dev-tree.py` flip).

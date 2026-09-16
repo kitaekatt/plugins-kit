@@ -54,6 +54,7 @@ generate.py --marketplace plugins-kit \
             --marketplace-json plugins-kit=./.claude-plugin/marketplace.json \
             --poster plugins-kit=./.claude-plugin/poster.yaml \
             --config ./.claude-plugin/index-page.yaml \
+            --registry ./synthetic-registry.json \
             --title "plugins-kit marketplace" \
             --output ./index.html --public --no-open
 ```
@@ -63,6 +64,7 @@ generate.py --marketplace plugins-kit \
 - `--marketplace-json` points the phantom-install filter at the repo's listing; the cached copy lags the source by one publish, so a plugin added in this release would be filtered off its own release's page.
 - `--poster` reads the marketplace's subtitle and url from the repo for the same reason, and lets the page build on a machine that does not have the marketplace installed at all.
 - `--config` takes the title and tagline from a repo file instead of the operator's own poster config.
+- `--registry` points the plugin inventory at a file built from the repo's own `plugin.json` files, instead of `~/.claude/plugins/installed_plugins.json` and its cache fallback, so the page's plugin list and versions describe the repo rather than the build machine's install.
 
 Automate this rather than typing it: plugins-kit builds its `index.html` from `scripts/publish.py`, which passes all of the above and then re-parses the generated page to confirm no foreign marketplace or machine state got in.
 
@@ -83,6 +85,7 @@ Optional flags:
 - `--public` -- published-page variant: no state badges, page flows to its content height.
 - `--marketplace-json NAME=PATH` -- read NAME's plugin listing from PATH instead of the cached clone.
 - `--poster NAME=PATH` -- read NAME's `poster.yaml` from PATH instead of the cached clone, and treat NAME as opted in even with no clone installed.
+- `--registry PATH` -- read the plugin inventory from PATH instead of `~/.claude/plugins/installed_plugins.json`, and skip the `~/.claude/plugins/cache` fallback entirely. PATH has the same shape as `installed_plugins.json`.
 
 Stdlib only; the generated HTML is a single self-contained file.
 

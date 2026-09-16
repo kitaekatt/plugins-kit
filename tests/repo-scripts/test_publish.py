@@ -1259,22 +1259,43 @@ class TestRangeBase:
         assert publish.range_base() == "origin/master"
 
 
-class TestHeldBackPaths:
-    """The projection takes dev's tree, so every dev-only file needs putting
-    back -- and the two halves need opposite treatment."""
+class TestHeldBackContent:
+    """The projection takes dev's tree by prefix (git rm --cached + a
+    conditional git read-tree --prefix, both against a temporary index -- see
+    _publish_projection), so a held-back plugin's files need opposite
+    treatment depending on whether master already has them.
+    """
 
-    def test_splits_by_whether_master_has_the_file(self, repo):
+    def test_a_file_on_both_branches_is_restored_to_masters_own_content(self, repo):
+        """dev-kit's plugin.json exists on master from the initial commit;
+        putting it back must reproduce master's exact bytes, not dev's."""
+        manifest = "plugins/dev-kit/.claude-plugin/plugin.json"
+        masters_before = _git(repo, "show", f"origin/master:{manifest}")
+        # dev's copy must DIFFER, or "restored to master's" and "carried from
+        # dev" are indistinguishable and the assertion below cannot fail.
+        _write_manifest(repo, "dev-kit", "0.2.0", published=False)
+        (repo / "plugins" / "dev-kit" / "notes.md").write_text("dev-only\n")
+        _git(repo, "add", "-A")
+        _git(repo, "commit", "-qm", "dev-kit: notes and 0.2.0")
+        devs = _git(repo, "show", f"dev:{manifest}")
+        assert devs != masters_before
+        _bump(repo, "pub-kit", "1.1.0", "pub-kit 1.1.0")
+        excluded = publish.preflight()[1]
+
+        publish.push_and_merge(excluded)
+
+        assert _git(repo, "show", f"origin/master:{manifest}") == masters_before
+
+    def test_a_file_that_only_ever_existed_on_dev_is_removed_not_carried(self, repo):
         (repo / "plugins" / "dev-kit" / "new.py").write_text("unshipped\n")
         _git(repo, "add", "-A")
         _git(repo, "commit", "-qm", "dev-kit: new file")
+        _bump(repo, "pub-kit", "1.1.0", "pub-kit 1.1.0")
+        excluded = publish.preflight()[1]
 
-        on_master, dev_new = publish._held_back_paths({"dev-kit"})
+        publish.push_and_merge(excluded)
 
-        assert "plugins/dev-kit/.claude-plugin/plugin.json" in on_master
-        assert dev_new == ["plugins/dev-kit/new.py"]
-
-    def test_no_dev_only_plugins_holds_nothing_back(self, repo):
-        assert publish._held_back_paths(set()) == ([], [])
+        assert publish.blob_at("origin/master", "plugins/dev-kit/new.py") is None
 
 
 class TestFastForwardSafety:
@@ -1327,13 +1348,22 @@ class TestFastForwardSafety:
             "fast-forward path was taken -- it would ship dev-only files"
 
     def test_push_and_merge_still_fast_forwards_when_the_tree_is_safe(self, monkeypatch):
-        """The guard must not cost the fast-forward in the case it was for."""
+        """The guard must not cost the fast-forward in the case it was for.
+
+        The fast-forward is a single push of dev's tip onto the remote
+        master ref -- no local checkout, so nothing here can land another
+        session's commit on the wrong branch.
+        """
         calls = self._wire(monkeypatch, safe=True)
 
         publish.push_and_merge({})
 
         assert ("PROJECTED",) not in calls
-        assert ("merge", "--ff-only", publish.DEV_BRANCH) in calls
+        assert ("push", publish.REMOTE,
+                f"{publish.DEV_BRANCH}:refs/heads/{publish.MASTER_BRANCH}") in calls
+        assert not any(a[:1] == ("checkout",) for a in calls), \
+            "the fast-forward path must never check out a branch in this " \
+            "shared tree"
 
 
 class TestRepoInvariantGates:
@@ -1584,22 +1614,33 @@ class TestPartialRelease:
     def _stub_regen(monkeypatch):
         """The fixture has no generator; describe the projected tree the way
         regen_marketplace.py would -- one entry per published plugin at the
-        version its plugin.json holds in THAT tree."""
-        def fake(workdir: Path) -> None:
+        version its plugin.json holds in the TEMPORARY INDEX passed in `env`.
+
+        Matches the real _regenerate_derived_in's contract: takes the temp
+        index env, returns {repo-relative path: new text}, and touches
+        nothing outside that -- no workdir, no working tree.
+        """
+        def fake(env: dict) -> dict:
+            listing = publish.git("ls-files", "-z", "--",
+                                  "plugins/*/.claude-plugin/plugin.json", env=env)
             plugins = []
-            for manifest in sorted((workdir / "plugins").glob("*/.claude-plugin/plugin.json")):
-                data = json.loads(manifest.read_text())
+            for path in listing.split("\0"):
+                if not path:
+                    continue
+                data = json.loads(publish.git("show", f":{path}", env=env))
                 if data.get("published", True):
                     plugins.append({"name": data["name"], "version": data["version"]})
-            (workdir / ".claude-plugin" / "marketplace.json").write_text(
-                json.dumps({"plugins": plugins}, indent=2) + "\n")
+            plugins.sort(key=lambda p: p["name"])
+            marketplace_text = json.dumps({"plugins": plugins}, indent=2) + "\n"
             page = [dict(p, marketplace=publish.MARKETPLACE_NAME) for p in plugins]
-            (workdir / "index.html").write_text(
-                "const data = " + json.dumps(
-                    {"plugins": page, "marketplace_order": [publish.MARKETPLACE_NAME]})
+            index_text = ("const data = " + json.dumps(
+                {"plugins": page, "marketplace_order": [publish.MARKETPLACE_NAME]})
                 + ";\n")
-            publish._in_worktree(workdir, "add", "--",
-                                 ".claude-plugin/marketplace.json", "index.html")
+            return {
+                publish.MARKETPLACE_JSON.relative_to(publish.REPO_ROOT).as_posix():
+                    marketplace_text,
+                publish.INDEX_HTML.relative_to(publish.REPO_ROOT).as_posix(): index_text,
+            }
         monkeypatch.setattr(publish, "_regenerate_derived_in", fake)
 
     def _bump_both(self, repo: Path) -> None:
@@ -1643,12 +1684,12 @@ class TestPartialRelease:
         assert versions == {"other-kit": "1.0.0", "pub-kit": "1.1.0"}
 
         problems = publish.verify(only={"pub-kit"})
-        assert not [p for p in problems if "dev-tree" not in p], problems
+        assert not problems, problems
 
     def test_a_stale_master_listing_is_a_verify_failure(self, repo, monkeypatch):
         """The seam exists so the listing can be wrong; verify must notice."""
         self._bump_both(repo)
-        monkeypatch.setattr(publish, "_regenerate_derived_in", lambda workdir: None)
+        monkeypatch.setattr(publish, "_regenerate_derived_in", lambda env: {})
         _, excluded = publish.preflight(only={"pub-kit"})
         publish.push_and_merge(excluded, only={"pub-kit"})
 
@@ -1741,3 +1782,116 @@ class TestPartialRelease:
 
         with pytest.raises(publish.PublishError, match="working tree is dirty"):
             publish.preflight(only={"pub-kit"})
+
+
+class TestNoWorktreeMechanism:
+    """The whole point of the rewrite: a release is computed with a temporary
+    Git index and plumbing commands only. Neither release shape may create a
+    `git worktree`, and neither may check out a branch in this shared project
+    folder -- HEAD stays on `dev` throughout, for both paths.
+    """
+
+    def test_bare_projection_leaves_no_worktree_and_head_on_dev(self, repo):
+        (repo / "plugins" / "dev-kit" / "notes.md").write_text("dev-only\n")
+        _git(repo, "add", "-A")
+        _git(repo, "commit", "-qm", "dev-kit: notes")
+        _bump(repo, "pub-kit", "1.1.0", "pub-kit 1.1.0")
+        excluded = publish.preflight()[1]
+
+        publish.push_and_merge(excluded)
+
+        assert len(_git(repo, "worktree", "list").splitlines()) == 1
+        assert _git(repo, "rev-parse", "--abbrev-ref", "HEAD") == "dev"
+
+    def test_only_projection_leaves_no_worktree_and_head_on_dev(self, repo, monkeypatch):
+        TestPartialRelease._second_published_plugin(repo)
+        (repo / "plugins" / "pub-kit" / "engine.py").write_text("new\n")
+        _bump(repo, "pub-kit", "1.1.0", "pub-kit 1.1.0")
+        TestPartialRelease._stub_regen(monkeypatch)
+        _, excluded = publish.preflight(only={"pub-kit"})
+
+        publish.push_and_merge(excluded, only={"pub-kit"})
+
+        assert len(_git(repo, "worktree", "list").splitlines()) == 1
+        assert _git(repo, "rev-parse", "--abbrev-ref", "HEAD") == "dev"
+
+    def test_generated_blobs_keep_lf_line_endings(self, repo):
+        """A --only release hashes its regenerated artifacts through stdin.
+
+        A text-mode stdin on Windows rewrites "\\n" as "\\r\\n", and
+        `hash-object --stdin` stores what it receives, so the committed
+        marketplace.json/index.html would differ from a bare publish's.
+        """
+        sha = publish._hash_object('{\n  "plugins": []\n}\n')
+        raw = subprocess.run(["git", "-C", str(repo), "cat-file", "blob", sha],
+                             capture_output=True, check=True).stdout
+        assert raw == b'{\n  "plugins": []\n}\n'
+
+    def test_fast_forward_path_leaves_head_on_dev_and_matches_master(
+            self, repo, monkeypatch):
+        """The fast-forward path is a single `git push` of dev's tip onto the
+        remote master ref -- no local `git checkout`, so nothing here can land
+        another session's commit on the wrong branch. `_fast_forward_is_safe`
+        is stubbed True (this fixture always carries a dev-only plugin, so it
+        is genuinely False here); the push mechanics themselves are real.
+        """
+        _bump(repo, "pub-kit", "1.1.0", "pub-kit 1.1.0")
+        monkeypatch.setattr(publish, "_fast_forward_is_safe", lambda: True)
+
+        publish.push_and_merge({})
+
+        assert _git(repo, "rev-parse", "--abbrev-ref", "HEAD") == "dev"
+        assert len(_git(repo, "worktree", "list").splitlines()) == 1
+        _git(repo, "fetch", "-q", "origin")
+        assert _git(repo, "rev-parse", "origin/master") == _git(repo, "rev-parse", "origin/dev")
+
+    def test_temp_dirs_are_removed_even_when_regeneration_raises(self, repo, monkeypatch):
+        """Both the outer temp index dir (_publish_projection) and any scratch
+        dir a real _regenerate_derived_in would make must not survive a raise
+        partway through -- proven generically by recording every
+        tempfile.mkdtemp call this run makes and asserting none of them
+        outlive it.
+        """
+        TestPartialRelease._second_published_plugin(repo)
+        _bump(repo, "pub-kit", "1.1.0", "pub-kit 1.1.0")
+        made: list[Path] = []
+        real_mkdtemp = publish.tempfile.mkdtemp
+
+        def recording_mkdtemp(*a, **k):
+            p = real_mkdtemp(*a, **k)
+            made.append(Path(p))
+            return p
+
+        monkeypatch.setattr(publish.tempfile, "mkdtemp", recording_mkdtemp)
+        monkeypatch.setattr(
+            publish, "_regenerate_derived_in",
+            lambda env: (_ for _ in ()).throw(RuntimeError("boom")))
+        _, excluded = publish.preflight(only={"pub-kit"})
+
+        with pytest.raises(RuntimeError, match="boom"):
+            publish.push_and_merge(excluded, only={"pub-kit"})
+
+        assert made, "the projection never created a temp dir -- test is vacuous"
+        for p in made:
+            assert not p.exists(), f"{p} was not cleaned up"
+
+    def test_regenerate_never_invokes_dev_tree(self, repo, monkeypatch):
+        """regenerate() is the bare (non--only) path, run in the project
+        folder itself. It must never shell out to dev-tree.py -- the flip it
+        used to perform is replaced by a synthetic --registry file."""
+        calls: list[tuple[str, list[str]]] = []
+        monkeypatch.setattr(
+            publish, "run",
+            lambda cmd, what: calls.append((what, [str(c) for c in cmd])))
+        monkeypatch.setattr(publish, "git", lambda *a, **k: "")
+
+        publish.regenerate()
+
+        flat = [c for _what, cmd in calls for c in cmd]
+        assert not any("dev-tree" in c or "dev_tree" in c for c in flat), calls
+        whats = [what for what, _cmd in calls]
+        assert "marketplace.json regen" in whats
+        assert "index.html regen" in whats
+        # The registry flag is how the machine-describing default is
+        # redirected at the repo instead -- confirm it is actually passed.
+        assert any("--registry" in cmd for _what, cmd in calls)
