@@ -46,11 +46,33 @@ def age_available() -> bool:
     return bool(shutil.which("age")) and bool(shutil.which("age-keygen"))
 
 
+class _AgeNonzeroExit(SecretsError):
+    """age was found, spawned, and completed within the deadline, but exited
+    nonzero.
+
+    Distinct from every other :func:`_run` failure (missing binary, spawn
+    failure, caller deadline) so a caller that cares -- currently only
+    :func:`decrypt_with_identity` -- can re-type ONLY this one condition into
+    its own error. Not part of the public taxonomy: a caller that does not
+    care catches ``SecretsError``, which this still is, and every other
+    ``_run`` failure keeps that base type instead of this subclass.
+    """
+
+
 def _run(argv: List[str], *, stdin: Optional[bytes] = None) -> bytes:
     """Run a non-interactive age invocation and return stdout bytes.
 
-    Never used for the passphrase paths -- those inherit the terminal via
-    :func:`run_interactive` instead.
+    Never used for the passphrase paths -- those inherit the terminal by
+    running their own ``subprocess.Popen`` directly (see ``wrap_identity`` and
+    ``unwrap_identity``), because ``_run`` captures stdout and stderr, which
+    would swallow age's prompt.
+
+    Raises plain ``SecretsError`` for a missing binary (via ``_resolve``
+    before this is even called), a spawn failure, or a caller deadline; raises
+    the narrower ``_AgeNonzeroExit`` only when age itself ran to completion
+    and reported failure. Keeping those distinct is what lets
+    ``decrypt_with_identity`` re-type only a genuine decrypt failure into
+    ``DecryptError`` without also mislabeling a dependency fault.
     """
     try:
         proc = subprocess.run(
@@ -72,21 +94,8 @@ def _run(argv: List[str], *, stdin: Optional[bytes] = None) -> bytes:
 
     if proc.returncode != 0:
         detail = proc.stderr.decode("utf-8", "replace").strip()
-        raise SecretsError(f"{argv[0]} failed: {detail or 'no stderr'}")
+        raise _AgeNonzeroExit(f"{argv[0]} failed: {detail or 'no stderr'}")
     return proc.stdout
-
-
-def run_interactive(argv: List[str]) -> int:
-    """Run age with the terminal INHERITED so it can prompt for a passphrase.
-
-    Returns the exit code rather than raising: the callers (unlock, init) want
-    to say "incorrect passphrase, try again" rather than surface a traceback,
-    and a wrong passphrase is an ordinary outcome, not an error condition.
-    """
-    try:
-        return subprocess.call(argv)
-    except OSError as e:
-        raise SecretsError(f"could not run {argv[0]}: {e}", _INSTALL_HINT)
 
 
 def keygen() -> Tuple[str, str]:
@@ -194,14 +203,19 @@ def decrypt_with_identity(identity_path: Path, blob_path: Path) -> bytes:
         raise DecryptError(f"no unlocked identity at {identity_path}")
     if not blob_path.is_file():
         raise SecretsError(f"missing blob {blob_path}")
+    # _resolve("age") here raises plain SecretsError for a missing binary,
+    # deliberately outside the try below -- a dependency fault propagates
+    # as-is instead of being re-typed into a passphrase-remedy error.
+    age = _resolve("age")
     try:
-        return _run(
-            [_resolve("age"), "-d", "-i", str(identity_path), str(blob_path)]
-        )
-    except SecretsError as e:
-        # age exiting non-zero here means this identity cannot open this blob.
-        # Re-typed so the caller can offer "unlock again" instead of a generic
-        # "fix it" -- the two remedies have nothing in common.
+        return _run([age, "-d", "-i", str(identity_path), str(blob_path)])
+    except _AgeNonzeroExit as e:
+        # age was found, spawned, and completed nonzero: this identity cannot
+        # open this blob. Re-typed so the caller can offer "unlock again"
+        # instead of a generic "fix it" -- the two remedies have nothing in
+        # common. A spawn failure or a caller deadline is a different
+        # SecretsError subclass and is NOT caught here, so it propagates
+        # untouched instead of being mislabeled as an identity mismatch.
         raise DecryptError(
             f"cannot decrypt {blob_path.name} with the identity on this machine",
             e.remedy,
