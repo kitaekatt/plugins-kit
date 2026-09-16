@@ -260,15 +260,40 @@ def test_a_harness_with_no_usage_source_is_no_data():
 # --- codex ----------------------------------------------------------------
 
 
-def _rollout(tmp_path, limits, name="rollout.jsonl"):
+def _rollout(tmp_path, limits, name="rollout.jsonl", timestamp=None, error_message=None):
     path = tmp_path / name
-    path.write_text(
-        json.dumps({"type": "event_msg", "payload": {"type": "token_count"}})
-        + "\n"
-        + json.dumps({"type": "event_msg", "payload": {"type": "token_count", "rate_limits": limits}})
-        + "\n"
-    )
+    lines = [json.dumps({"type": "event_msg", "payload": {"type": "token_count"}})]
+    rate_limits_event = {"type": "event_msg", "payload": {"type": "token_count", "rate_limits": limits}}
+    if timestamp is not None:
+        rate_limits_event = {"timestamp": timestamp, **rate_limits_event}
+    lines.append(json.dumps(rate_limits_event))
+    if error_message is not None:
+        error_event = {
+            "type": "event_msg",
+            "payload": {
+                "type": "task_complete",
+                "error": {"message": error_message, "codex_error_info": "usage_limit_exceeded"},
+            },
+        }
+        if timestamp is not None:
+            error_event = {"timestamp": timestamp, **error_event}
+        lines.append(json.dumps(error_event))
+    path.write_text("\n".join(lines) + "\n")
     return path
+
+
+def _reset_epoch(month_abbr, day, year, hour, minute, ampm):
+    """Independently compute the epoch the module's own reset-text parser
+    should produce, so tests assert against the parsing RULE rather than a
+    hardcoded number tied to one timezone."""
+    import time as _time
+    from datetime import datetime as _datetime
+
+    month_num = _time.strptime(month_abbr, "%b").tm_mon
+    hour_i = hour % 12
+    if ampm.upper() == "PM":
+        hour_i += 12
+    return int(_time.mktime(_datetime(year, month_num, day, hour_i, minute).timetuple()))
 
 
 def test_codex_uses_the_window_minutes_it_reports(tmp_path):
@@ -328,6 +353,149 @@ def test_codex_window_without_a_length_is_no_data(tmp_path):
     _rollout(tmp_path, {"primary": {"used_percent": 80.0, "resets_at": NOW + WEEK // 2}})
     budget = usage_budget.read_codex_pool(
         ConserveSpec(pool="primary"), now=NOW, sessions_dir=tmp_path
+    )
+    assert budget.status == STATUS_NO_DATA
+
+
+def test_codex_healthy_reading_with_has_credits_false_is_not_out_of_quota(tmp_path):
+    # `credits.has_credits: false` ALONE is not exhaustion: 39 of 60 sampled
+    # live rollouts (2026-09-13T02:16Z..2026-09-15T17:55Z) carry this exact
+    # `credits` block -- {"has_credits": false, "unlimited": false,
+    # "balance": "0"} -- describing purchased EXTRA credits, which this plan
+    # never has, ALONGSIDE a perfectly normal `primary` window. A `primary`
+    # mapping being present must always go through the ordinary window logic,
+    # whatever `credits` says. This is the case an earlier (wrong) fix broke:
+    # it read `has_credits: false` alone as exhaustion and would have dropped
+    # a healthy codex seat permanently.
+    _rollout(
+        tmp_path,
+        {
+            "limit_id": "premium",
+            "primary": {"used_percent": 10.0, "window_minutes": 300, "resets_at": NOW + 150 * 60},
+            "secondary": None,
+            "credits": {"has_credits": False, "unlimited": False, "balance": "0"},
+        },
+    )
+    budget = usage_budget.read_codex_pool(
+        ConserveSpec(pool="seven_day"), now=NOW, sessions_dir=tmp_path
+    )
+    assert budget.status == STATUS_AVAILABLE
+    assert budget.usable is True
+
+
+def test_codex_exhausted_with_parseable_future_reset_is_out_of_quota(tmp_path):
+    # The real exhausted shape (observed live 2026-09-16, 21 of 60 sampled
+    # rollouts 2026-09-15T18:02Z..2026-09-16T16:22Z): both windows null, same
+    # credits block, and a sibling `task_complete` event's error text names
+    # when it resets.
+    reset_epoch = _reset_epoch("Jan", 20, 2027, 3, 34, "PM")
+    assert NOW < reset_epoch  # the test's own premise: reset is in the future
+    _rollout(
+        tmp_path,
+        {
+            "primary": None,
+            "secondary": None,
+            "credits": {"has_credits": False, "unlimited": False, "balance": "0"},
+        },
+        error_message=(
+            "You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage "
+            "to purchase more credits or try again at Jan 20th, 2027 3:34 PM."
+        ),
+    )
+    budget = usage_budget.read_codex_pool(
+        ConserveSpec(pool="seven_day"), now=NOW, sessions_dir=tmp_path
+    )
+    assert budget.status == STATUS_OUT_OF_QUOTA
+    assert budget.usable is False
+    assert budget.resets_at == reset_epoch
+
+
+def test_codex_exhausted_reading_is_no_data_once_its_parsed_reset_has_passed(tmp_path):
+    reset_epoch = _reset_epoch("Jan", 20, 2027, 3, 34, "PM")
+    _rollout(
+        tmp_path,
+        {
+            "primary": None,
+            "secondary": None,
+            "credits": {"has_credits": False, "unlimited": False, "balance": "0"},
+        },
+        error_message=(
+            "You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage "
+            "to purchase more credits or try again at Jan 20th, 2027 3:34 PM."
+        ),
+    )
+    budget = usage_budget.read_codex_pool(
+        ConserveSpec(pool="seven_day"), now=reset_epoch + 60, sessions_dir=tmp_path
+    )
+    assert budget.status == STATUS_NO_DATA
+
+
+def test_codex_exhausted_with_no_error_message_is_out_of_quota_while_recent(tmp_path):
+    # No parseable reset time -- latched out-of-quota only while the reading
+    # is recent (bounded by _CODEX_EXHAUSTION_LATCH_SECONDS, codex's own
+    # 5-hour primary window).
+    _rollout(
+        tmp_path,
+        {
+            "primary": None,
+            "secondary": None,
+            "credits": {"has_credits": False, "unlimited": False, "balance": "0"},
+        },
+        timestamp=NOW - 3600,  # 1h old: within the 5h latch
+    )
+    budget = usage_budget.read_codex_pool(
+        ConserveSpec(pool="seven_day"), now=NOW, sessions_dir=tmp_path
+    )
+    assert budget.status == STATUS_OUT_OF_QUOTA
+    assert budget.usable is False
+
+
+def test_codex_exhausted_with_no_error_message_is_no_data_once_stale(tmp_path):
+    _rollout(
+        tmp_path,
+        {
+            "primary": None,
+            "secondary": None,
+            "credits": {"has_credits": False, "unlimited": False, "balance": "0"},
+        },
+        timestamp=NOW - 6 * 3600,  # 6h old: past the 5h latch
+    )
+    budget = usage_budget.read_codex_pool(
+        ConserveSpec(pool="seven_day"), now=NOW, sessions_dir=tmp_path
+    )
+    assert budget.status == STATUS_NO_DATA
+
+
+def test_codex_unlimited_credits_is_not_treated_as_exhausted(tmp_path):
+    # has_credits: false paired with unlimited: true must not fail closed --
+    # unlimited plans can report has_credits false while still able to serve.
+    _rollout(
+        tmp_path,
+        {
+            "primary": None,
+            "secondary": None,
+            "credits": {"has_credits": False, "unlimited": True, "balance": "0"},
+        },
+    )
+    budget = usage_budget.read_codex_pool(
+        ConserveSpec(pool="seven_day"), now=NOW, sessions_dir=tmp_path
+    )
+    assert budget.status == STATUS_NO_DATA
+
+
+def test_codex_credits_with_credit_left_falls_through_to_window_logic(tmp_path):
+    # has_credits: true is not the exhaustion shape; unrecognised beyond that
+    # must fail closed to no-data rather than guessing.
+    _rollout(
+        tmp_path,
+        {
+            "primary": None,
+            "secondary": None,
+            "credits": {"has_credits": True, "unlimited": False, "balance": "500"},
+        },
+    )
+    budget = usage_budget.read_codex_pool(
+        ConserveSpec(pool="seven_day"), now=NOW, sessions_dir=tmp_path
     )
     assert budget.status == STATUS_NO_DATA
 
