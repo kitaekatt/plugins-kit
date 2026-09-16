@@ -189,7 +189,7 @@ def _converge_locked(config: Config, data_dir: Path, *, variables: dict,
     if not repo_mod.is_clone(paths["clone"]):
         try:
             repo_mod.clone(config.repo, paths["clone"])
-            result.notes.append(f"cloned {config.repo}")
+            result.notes.append(f"cloned {repo_mod.display_url(config.repo)}")
         except SecretsError as e:
             result.failures.append(
                 Failure(

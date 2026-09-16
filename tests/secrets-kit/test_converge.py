@@ -366,6 +366,50 @@ def test_cloned_but_unseeded_repo_says_run_init(fleet):
     assert "not a broken" in failure.agent_msg.lower()
 
 
+def test_clone_success_note_is_credential_safe(fleet, monkeypatch):
+    """I18 / SK-SOL-15: the 'cloned <url>' note must not carry URL userinfo.
+
+    The clone dir is removed so ``is_clone`` reports False and the module
+    takes its first-clone branch; ``repo_mod.clone`` is faked (no real git
+    call) but is asserted to receive the ORIGINAL credential-bearing URL,
+    matching the constraint that only the rendered note is sanitized.
+    """
+    import shutil
+
+    from secrets_kit import converge as converge_mod
+
+    # Snapshot the seeded repo content before deleting it, so the fake clone
+    # below can put back exactly what was there -- only the clone MECHANISM
+    # is faked, not the resulting repo state converge reads afterward.
+    manifest_text = fleet.manifest_path.read_text(encoding="utf-8")
+    blob_files = {p.name: p.read_bytes() for p in fleet.blobs.glob("*")}
+    shutil.rmtree(fleet.clone)
+
+    url = "https://fixture-user:fixture-token@example.invalid/acct/fleet-secrets.git"
+    config = json.loads(fleet.config_path.read_text(encoding="utf-8"))
+    config["repo"] = url
+    fleet.config_path.write_text(json.dumps(config), encoding="utf-8")
+
+    captured = {}
+
+    def fake_clone(repo_url, dest):
+        captured["repo_url"] = repo_url
+        (dest / "blobs").mkdir(parents=True)
+        (dest / "manifest.json").write_text(manifest_text, encoding="utf-8")
+        for name, data in blob_files.items():
+            (dest / "blobs" / name).write_bytes(data)
+
+    monkeypatch.setattr(converge_mod.repo_mod, "clone", fake_clone)
+    fleet.unlock()
+    result = _run(fleet)
+
+    assert captured["repo_url"] == url
+    assert any(note.startswith("cloned ") for note in result.notes)
+    note = next(note for note in result.notes if note.startswith("cloned "))
+    assert "fixture-user" not in note and "fixture-token" not in note
+    assert "example.invalid/acct/fleet-secrets.git" in note
+
+
 def test_cli_command_resolves_the_shim_that_actually_exists():
     """The rendered invocation must point at a real, runnable file.
 
