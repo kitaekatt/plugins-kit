@@ -2,6 +2,12 @@
   "permissions": {
     "allow": [
       "Bash(PLUGINS_KIT_SKIP_BUMP_CHECK=1 git commit *)"
+    ],
+    "deny": [
+      "EnterWorktree"
     ]
+  },
+  "worktree": {
+    "bgIsolation": "none"
   }
 }

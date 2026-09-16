@@ -40,6 +40,17 @@ What is deliberately NOT checked
   for. A pattern that flags the compliant form teaches people to disable the
   check.
 
+Worktree neutrality (WT)
+------------------------
+Plugins take no position on whether git worktrees are used
+(``plugins/CLAUDE.md``, "Plugins take no position on worktrees"). The WT group
+flags wording that tells an agent to use worktrees or to avoid them. It reads
+only prose files (``PROSE_SUFFIXES``): code docstrings describe worktree
+SUPPORT (job-kit's workspace module, git-kit's object reader) in the same
+words, and a pattern that flags a factual docstring would teach people to
+disable the check. Agent prompts embedded in code are therefore outside it and
+remain review work.
+
 Escape hatch: put ``agent-directive-ok`` on the same line. It is for text that
 QUOTES a banned phrase in order to prohibit it (the guard comments in
 ``engine.py``), never for text that means it.
@@ -109,6 +120,38 @@ BANNED = [
 ]
 
 
+PROSE_SUFFIXES = {".md", ".yaml", ".yml", ".txt"}
+
+# Worktree neutrality: applied to PROSE_SUFFIXES only (see module docstring).
+WORKTREE_BANNED = [
+    (
+        "WT",
+        re.compile(r"\b(?:give|use|put)\b[^.\n]{0,40}\bworktrees?\b", re.I),
+        "directs the agent toward worktrees; plugins state capabilities, not a preference",
+    ),
+    (
+        "WT",
+        re.compile(r"\b(?:own|separate) (?:git )?worktrees?\b", re.I),
+        "prescribes a worktree per unit; plugins state capabilities, not a preference",
+    ),
+    (
+        "WT",
+        re.compile(r"\bworktree isolation\b", re.I),
+        "prescribes worktree isolation; plugins state capabilities, not a preference",
+    ),
+    (
+        "WT",
+        re.compile(r"\bgit worktree add\b", re.I),
+        "a worktree recipe; plugins state capabilities, not a preference",
+    ),
+    (
+        "WT",
+        re.compile(r"\b(?:never|avoid|don't|do not)\b[^.\n]{0,40}\bworktrees?\b", re.I),
+        "steers the agent away from worktrees; plugins state capabilities, not a preference",
+    ),
+]
+
+
 def is_input(rel_path: str) -> bool:
     """True for a shipped plugin file this check reads."""
     return (
@@ -120,10 +163,13 @@ def is_input(rel_path: str) -> bool:
 def scan_text(rel_path: str, text: str) -> list[str]:
     """Findings in one file, as preformatted report lines."""
     out = []
+    rules = BANNED
+    if Path(rel_path).suffix.lower() in PROSE_SUFFIXES:
+        rules = BANNED + WORKTREE_BANNED
     for lineno, line in enumerate(text.splitlines(), 1):
         if ALLOW_MARKER in line:
             continue
-        for criterion, pattern, why in BANNED:
+        for criterion, pattern, why in rules:
             match = pattern.search(line)
             if match:
                 out.append(
@@ -197,6 +243,8 @@ def main() -> int:
         "These reach a consumer's session. State what is authorized and name the\n"
         "file backing it; never instruct Claude to withhold from the user or to\n"
         "move past them. See docs/reference/agent-directive-standards.md.\n"
+        "[WT] findings: state what a tool can do with worktrees, never whether to\n"
+        "use them. See plugins/CLAUDE.md, \"Plugins take no position on worktrees\".\n"
         f"If the text QUOTES the phrase to prohibit it, add {ALLOW_MARKER!r} to the line.",
         file=sys.stderr,
     )

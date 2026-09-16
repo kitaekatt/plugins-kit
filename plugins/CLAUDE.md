@@ -109,12 +109,13 @@ unconfigurable opinion whose test passes is a finding.
   difference. The alternative for that team is to state the narrower endpoint preference
   they actually mean.
 
-- **job-kit privileges git as the only workspace-isolation VCS.** Worktree-per-attempt
-  isolation is git-only, for the same reason as awesome-kit:task's entry: a second VCS
-  backend would ship untested and fail first on a consumer's machine. The degradation is
-  bounded and recorded, never silent -- a job whose directory is not a git repo runs with
-  cwd set to that directory and the attempt row says `workspace: none`. A Perforce team
-  gets a working runner whose isolation is manual, not a half-working git path.
+- **job-kit privileges git as the only workspace-isolation VCS.** Per-attempt worktrees,
+  which a job requests with `workspace.isolate: true`, are git-only, for the same reason as
+  awesome-kit:task's entry: a second VCS backend would ship untested and fail first on a
+  consumer's machine. The degradation is bounded and recorded, never silent -- a job that
+  requests isolation in a directory that is not a git repo runs with cwd set to that
+  directory and the attempt row says `workspace: none`. A Perforce team gets a working
+  runner whose isolation is manual, not a half-working git path.
 
 - **Above `max_parallel: 1`, job-kit forfeits ordering and offers nothing to get it
   back.** Jobs are submitted in declaration order and complete in any order; there is no
@@ -247,6 +248,30 @@ change is still cheap to reshape -- once an opinionated default is published, te
 built around it. One line per opinion discharges this, and "no opinions added by this change" is a valid and
 common answer. Criteria and audit procedure:
 [docs/reference/plugin-opinion-razor.md](../docs/reference/plugin-opinion-razor.md).
+
+### Plugins take no position on worktrees
+
+Whether a session works in git worktrees is the user's choice, set by their own
+instructions and harness settings. Installing these plugins leaves that choice where it
+was: a user who favours worktrees finds no fewer of them, and a user who avoids them finds
+no more.
+
+- Shipped text states what a tool can do with worktrees -- the Agent tool's `isolation`
+  parameter, the directory a CLI backend writes into -- and says nothing about whether to
+  reach for one. Direction either way, toward worktrees or away from them, is out of scope
+  for a plugin.
+- A plugin creates a worktree only when the user's job or configuration asks for one.
+  job-kit's per-attempt worktrees are opt-in (`workspace.isolate: true`).
+- This is not a razor opinion with a default. There is no default to configure and no
+  register entry, because the plugin holds no view.
+
+`scripts/check_agent_directives.py` (rule group `WT`, run by the pre-commit hook) flags the
+common directive phrasings in prose files under `plugins/`. It does not read code, so an
+agent prompt embedded in a `.py` or `.js` file is review work.
+
+**Submit gate:** For every line this change adds to shipped text or shipped behavior that concerns worktrees, confirm it states a capability or honours an explicit user request, and carries no direction toward or away from worktrees.
+Applies to:
+- plugins/
 
 ### Instructions we ship to Claude must be checkable
 

@@ -178,8 +178,20 @@ def _job(
     job_id: str,
     command: tuple[str, ...],
     workspace: Optional[WorkspaceSpec] = None,
+    *,
+    isolate: bool = True,
 ) -> Job:
-    """Build one job rooted at the supplied temporary repository."""
+    """Build one job rooted at the supplied temporary repository.
+
+    Isolation is requested explicitly by default (``isolate=True`` builds a
+    ``WorkspaceSpec(isolate=True)`` when no ``workspace`` is supplied), so the
+    worktree-dependent tests in this module keep exercising isolation now that
+    job-kit's own default is opt-in. Pass ``isolate=False`` for a job with no
+    workspace mapping at all, or pass ``workspace`` directly to control every
+    field.
+    """
+    if workspace is None and isolate:
+        workspace = WorkspaceSpec(isolate=True)
     return Job(
         id=job_id,
         prompt=Prompt(user=job_id),
@@ -218,7 +230,7 @@ def test_git_attempts_use_separate_worktrees_and_run_start_head(
                 repository,
                 "first",
                 _print_cwd_command(),
-                workspace=WorkspaceSpec(base_ref=head),
+                workspace=WorkspaceSpec(base_ref=head, isolate=True),
             ),
             _job(repository, "second", _print_cwd_command()),
         ],
@@ -327,6 +339,57 @@ def test_git_job_can_decline_isolation_with_a_distinct_reason(
     assert declined_attempt.workspace_reason != WORKSPACE_REASON_NONE
     assert declined_attempt.acceptance is not None
     assert declined_attempt.acceptance.directory == repository.resolve()
+
+
+def test_git_job_with_no_workspace_mapping_runs_in_place(tmp_path: Path) -> None:
+    """A job with no workspace mapping at all keeps its declared Git cwd."""
+    repository, _ = _git_repository(tmp_path / "repository")
+    snapshot = run_jobs(
+        [_job(repository, "no-mapping", _print_cwd_command(), isolate=False)],
+        tmp_path / "run.sqlite3",
+        run_id="no-mapping-run",
+        workspace_root=tmp_path / "workspaces",
+        capabilities_provider=_advertisement,
+        backend_factory=_factory_for(FakeBackend()),
+    )
+
+    attempt = snapshot.attempts[0]
+    assert snapshot.jobs[0].state is JobState.ACCEPTED
+    assert attempt.workspace is None
+    assert attempt.workspace_status == "none"
+    assert attempt.acceptance is not None
+    assert attempt.acceptance.directory == repository.resolve()
+    assert len(_git(repository, "worktree", "list").splitlines()) == 1
+
+
+def test_git_job_with_workspace_mapping_and_no_isolate_key_runs_in_place(
+    tmp_path: Path,
+) -> None:
+    """A workspace mapping that omits isolate still keeps the declared cwd."""
+    repository, _ = _git_repository(tmp_path / "repository")
+    snapshot = run_jobs(
+        [
+            _job(
+                repository,
+                "no-isolate-key",
+                _print_cwd_command(),
+                workspace=WorkspaceSpec(),
+            )
+        ],
+        tmp_path / "run.sqlite3",
+        run_id="no-isolate-key-run",
+        workspace_root=tmp_path / "workspaces",
+        capabilities_provider=_advertisement,
+        backend_factory=_factory_for(FakeBackend()),
+    )
+
+    attempt = snapshot.attempts[0]
+    assert snapshot.jobs[0].state is JobState.ACCEPTED
+    assert attempt.workspace is None
+    assert attempt.workspace_status == "none"
+    assert attempt.acceptance is not None
+    assert attempt.acceptance.directory == repository.resolve()
+    assert len(_git(repository, "worktree", "list").splitlines()) == 1
 
 
 def test_declared_repository_subdirectory_is_preserved_in_worktree(

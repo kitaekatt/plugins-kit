@@ -2,13 +2,18 @@
 """Generate a 16:9 HTML poster of the installed Claude Code plugin ecosystem.
 
 Reads:
-  ~/.claude/plugins/installed_plugins.json
+  ~/.claude/plugins/installed_plugins.json                              (or --registry PATH instead)
   <each plugin>/.claude-plugin/plugin.json
   <each plugin>/skills/*/SKILL.md                                      (YAML frontmatter)
   ~/.claude/plugins/marketplaces/<m>/.claude-plugin/poster.yaml         (per-marketplace opt-in)
   ~/.claude/settings.json + <project>/.claude/settings.json             (live enabledPlugins)
   <project>/.claude/bootstrap.json                                      (declared on/opt-in fallback)
   ~/.claude/.local-data/awesome-kit/plugin-ecosystem-poster.yaml        (title / tagline / state overrides)
+
+--registry PATH replaces the first line above and turns off the registry-v2
+cache fallback (merge_cache_fallback): the plugin inventory then comes only
+from PATH, shaped like installed_plugins.json, so the output does not depend
+on this machine's ~/.claude/plugins/cache either.
 
 Emits a single self-contained HTML file (default ~/.claude/plugin-ecosystem.html,
 regardless of where the skill is run from) and opens it in the browser unless
@@ -89,7 +94,15 @@ def home_claude() -> Path:
     return Path.home() / ".claude"
 
 
-def load_installed() -> dict:
+def load_installed(registry: Path | None = None) -> dict:
+    """The plugin registry: `registry` when given, else the home install.
+
+    `registry` is a path to a JSON file shaped like installed_plugins.json
+    (the same {"version": 2, "plugins": {"<name>@<marketplace>": [...]}}
+    shape). Passing one is how a caller describes a REPO rather than a
+    MACHINE -- see --registry in main()'s argparse help."""
+    if registry is not None:
+        return json.loads(registry.read_text(encoding="utf-8"))
     p = home_claude() / "plugins" / "installed_plugins.json"
     if not p.exists():
         return {"plugins": {}}
@@ -930,6 +943,16 @@ def main(argv: list[str]) -> int:
                          "when generating a marketplace's own landing page from its source tree, "
                          "so the page does not depend on the generating machine's install. "
                          "Used by publish.py.")
+    ap.add_argument("--registry", type=Path, default=None,
+                    help="Read the plugin inventory from PATH instead of "
+                         "~/.claude/plugins/installed_plugins.json, and skip the registry-v2 "
+                         "cache fallback (~/.claude/plugins/cache) entirely -- the inventory then "
+                         "comes only from PATH. PATH has the same shape as "
+                         "installed_plugins.json: {\"version\": 2, \"plugins\": "
+                         "{\"<name>@<marketplace>\": [{\"installPath\": <dir>, \"version\": "
+                         "<ver>, ...}]}}. Use when generating a marketplace's own landing page "
+                         "from its source tree, so the plugin inventory does not depend on the "
+                         "generating machine's install or cache. Used by publish.py.")
     args = ap.parse_args(argv)
 
     listing_overrides = _parse_name_path(args.marketplace_json, "--marketplace-json")
@@ -971,7 +994,9 @@ def main(argv: list[str]) -> int:
         m: (meta["poster"].get("states") or {}) for m, meta in marketplaces.items()
     }
 
-    installed = merge_cache_fallback(load_installed(), enabled_refs)
+    installed = load_installed(args.registry)
+    if args.registry is None:
+        installed = merge_cache_fallback(installed, enabled_refs)
     plugins = collect_plugins(installed, marketplaces, settings_enabled, bs_index, overrides,
                               marketplace_states, defaults_mode=args.defaults)
 

@@ -200,6 +200,91 @@ class TestInventoryMain:
         assert all("state" not in plugin for plugin in plugins)
 
 
+class TestRegistryFlag:
+    """--registry replaces ~/.claude/plugins/installed_plugins.json and turns
+    off the cache fallback -- the seam publish.py uses to describe a repo
+    (a synthetic registry naming each plugin dir's own manifest version)
+    instead of the generating machine's install state."""
+
+    def _setup(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Path, Path, Path]:
+        home = tmp_path / "home" / ".claude"
+        marketplace = home / "plugins" / "marketplaces" / "mkt" / ".claude-plugin"
+        marketplace.mkdir(parents=True)
+        (marketplace / "poster.yaml").write_text("subtitle: Test marketplace\n", encoding="utf-8")
+        (marketplace / "marketplace.json").write_text(json.dumps({
+            "plugins": [{"name": "fromregistry"}, {"name": "fromhome"}],
+        }), encoding="utf-8")
+        project = tmp_path / "project"
+        (project / ".claude").mkdir(parents=True)
+        config = tmp_path / "poster-config.yaml"
+        config.write_text("title: Test poster\n", encoding="utf-8")
+        output = tmp_path / "output.html"
+        monkeypatch.setattr(generate, "home_claude", lambda: home)
+        return home, project, config, output
+
+    def _plugin_dir(self, tmp_path: Path, name: str) -> Path:
+        root = tmp_path / name
+        (root / ".claude-plugin").mkdir(parents=True)
+        (root / ".claude-plugin" / "plugin.json").write_text(
+            json.dumps({"name": name, "description": f"{name} via registry"}), encoding="utf-8")
+        return root
+
+    def _run(self, project: Path, config: Path, output: Path, registry: Path) -> dict[str, Any]:
+        result = generate.main([
+            "--project", str(project), "--config", str(config),
+            "--output", str(output), "--no-open", "--registry", str(registry),
+        ])
+        assert result == 0
+        return _embedded_data(output.read_text(encoding="utf-8"))
+
+    def test_registry_is_read_instead_of_home_registry(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        home, project, config, output = self._setup(tmp_path, monkeypatch)
+        # The home registry names a DIFFERENT plugin, enabled -- it must not
+        # leak into a --registry run.
+        (home / "plugins" / "installed_plugins.json").write_text(json.dumps({
+            "version": 2,
+            "plugins": {"fromhome@mkt": [
+                {"installPath": str(self._plugin_dir(tmp_path, "fromhome")), "version": "9.9.9"}]},
+        }), encoding="utf-8")
+        (home / "settings.json").write_text(json.dumps({
+            "enabledPlugins": {"fromhome@mkt": True},
+        }), encoding="utf-8")
+        registry_plugin = self._plugin_dir(tmp_path, "fromregistry")
+        registry = tmp_path / "registry.json"
+        registry.write_text(json.dumps({
+            "version": 2,
+            "plugins": {"fromregistry@mkt": [
+                {"installPath": str(registry_plugin), "version": "1.2.3"}]},
+        }), encoding="utf-8")
+
+        data = self._run(project, config, output, registry)
+        assert [p["name"] for p in data["plugins"]] == ["fromregistry"]
+        assert [p["version"] for p in data["plugins"]] == ["1.2.3"]
+
+    def test_cache_fallback_not_consulted_when_registry_given(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Without --registry an absent installed_plugins.json still renders an
+        enabled cached plugin (test_absent_registry_still_renders_enabled_cache
+        in TestInventoryMain). With --registry, the cache must not be consulted
+        at all, even though nothing in the registry names the cached plugin."""
+        home, project, config, output = self._setup(tmp_path, monkeypatch)
+        cache_root = home / "plugins" / "cache" / "mkt" / "fromhome" / "1.0.0"
+        (cache_root / ".claude-plugin").mkdir(parents=True)
+        (cache_root / ".claude-plugin" / "plugin.json").write_text(
+            json.dumps({"name": "fromhome"}), encoding="utf-8")
+        (home / "settings.json").write_text(json.dumps({
+            "enabledPlugins": {"fromhome@mkt": True},
+        }), encoding="utf-8")
+        registry = tmp_path / "registry.json"
+        registry.write_text(json.dumps({"version": 2, "plugins": {}}), encoding="utf-8")
+
+        data = self._run(project, config, output, registry)
+        assert data["plugins"] == []
+
+
 class TestRegistryRecordSelection:
     @pytest.mark.parametrize("records, expected", [
         ([{"version": "9.0.0", "projectPath": "/project"}, {"version": "0.1.0"}], "0.1.0"),

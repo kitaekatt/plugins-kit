@@ -80,6 +80,14 @@ BRIDGE_IP_CACHE = data_dir("hue-kit") / "bridge-ip.txt"
 # index.html), so every verb sees the same files no matter the invocation cwd.
 DEFAULT_WORKDIR = data_dir("hue-kit")
 
+# scene-layers.py --validate-design's distinct exit code for "ran cleanly and
+# found a real discrepancy" -- must mirror scene-layers.py's EXIT_DISCREPANCY
+# (the two scripts do not import each other). Never 2 (argparse) or 3 (this
+# script's own bootstrap-guard exit, require_bootstrap in main() below). The
+# exit-code table in skills/hue-domain/references/scene-layers.md is the
+# single documented copy of this value.
+DISCREPANCY_EXIT_CODE = 4
+
 
 def _discover_via_cloud(timeout: int = 10) -> list[dict]:
     """Query discovery.meethue.com (returns LAN bridges by public-IP match).
@@ -294,12 +302,17 @@ def _call_scene_layers(flags: list[str], workdir: Path, *,
 
     `start` composes several scene-layers runs in one invocation, which the exec
     runner above cannot do -- it never returns. Returns (returncode, stdout);
-    stdout is None unless capture."""
+    stdout is None unless capture.
+
+    Only stdout is ever captured -- stderr always INHERITS this process's
+    stderr, so a captured run's diagnostics (an unmatched --scene, a
+    malformed registry, ...) reach the terminal/log immediately instead of
+    being captured into `proc.stderr` and then discarded."""
     import subprocess
     env = _scene_layers_env(workdir)
     argv = [sys.executable, str(SCENE_LAYERS), *flags]
-    proc = subprocess.run(argv, env=env, cwd=str(workdir),
-                          capture_output=capture, text=True)
+    proc = subprocess.run(argv, env=env, cwd=str(workdir), text=True,
+                          stdout=subprocess.PIPE if capture else None)
     return proc.returncode, (proc.stdout if capture else None)
 
 
@@ -427,20 +440,32 @@ def _open_report(path: Path) -> bool:
 def _cmd_start(args) -> int:
     """The default entry point: get the user to a current report in one command.
 
-    Three states, distinguished by what already exists and whether the bridge
-    still matches it:
+    Eight verdicts, distinguished by what already exists, whether the bridge
+    still matches it, and whether each step actually succeeded:
 
-      first-run  nothing here yet -> build the registry, materialise the design,
-                 render, open. Nothing exists to overwrite, so this is the one
-                 branch that writes without asking.
-      changed    the bridge no longer matches the local YAML -> report WHAT
-                 differs and stop. Deliberately does not auto-export: a diff is
-                 ambiguous between "the bridge changed" and "the user edited the
-                 YAML and has not applied it yet", and guessing wrong destroys
-                 whichever side was the real work. The caller asks which way to
-                 sync.
-      clean      bridge matches -> ensure a report exists; the caller offers to
-                 view it or to make changes.
+      first-run        nothing here yet -> build the registry, materialise the
+                        design, render, open. Nothing exists to overwrite, so
+                        this is the one branch that writes without asking.
+      accepted         --accept re-baselined the bridge's current shape as the
+                        reference without touching any YAML.
+      clean            bridge matches -> ensure a report exists; the caller
+                        offers to view it or to make changes.
+      changed          --validate-design ran cleanly and found a real
+                        discrepancy (colour/brightness), or the fingerprint
+                        shows the SHAPE moved -> report WHAT differs and stop.
+                        Deliberately does not auto-export: a diff is ambiguous
+                        between "the bridge changed" and "the user edited the
+                        YAML and has not applied it yet", and guessing wrong
+                        destroys whichever side was the real work. The caller
+                        asks which way to sync.
+      validate-failed  --validate-design did NOT finish comparing (a malformed
+                        registry, an unmatched --scene, ...) -- distinct from
+                        `changed`, which means it compared and found a diff.
+      bridge-unreachable  the bridge could not be read at all (a fingerprint
+                        read failed, or bridge/key resolution raised).
+      setup-failed     a first-run step (registry/design/report) failed.
+      render-failed    the design already matched (clean-equivalent) but
+                        re-rendering the missing report failed.
 
     The final `hue-kit-verdict: <state>` line is the machine-readable handoff."""
     # Our prints interleave with those of the scene-layers.py subprocesses, which
@@ -461,84 +486,109 @@ def _cmd_start(args) -> int:
         print(f"\nhue-kit-verdict: {state}")
         return rc
 
-    rc, fp_now = _call_scene_layers(["--fingerprint"], workdir, capture=True)
-    if rc != 0:
-        print("hue-kit: could not read the bridge -- run `hue-kit discover` / "
-              "`hue-kit pair` and check the connection.", file=sys.stderr)
-        return verdict("bridge-unreachable", 1)
-    fp_now = (fp_now or "").strip()
-
-    if args.accept:
-        # Re-baseline without touching the YAML. The escape hatch for a shape
-        # change the user has reviewed and does not want reflected locally --
-        # otherwise `start` would keep reporting it, since a shape change cannot
-        # be resolved by `apply` (that writes colours, it cannot create a light).
-        fp_f.write_text(fp_now + "\n")
-        print(f"Accepted the bridge's current shape as the reference "
-              f"({workdir / 'bridge-fingerprint.txt'}).")
-        return verdict("accepted")
-
-    # ---- first run: nothing local to lose, so build the whole chain ----------
-    if not groups_f.is_file() or not designs_f.is_file():
-        print("No working files yet -- setting up from your bridge.\n")
-        for label, flags in (
-                ("registry (scene-groups.yaml)", ["--export-groups", str(groups_f)]),
-                ("design (scene-designs.yaml)", ["--export-designs", str(designs_f)]),
-                ("report (index.html)", ["--html", str(report_f)])):
-            print(f"  building the {label} ...")
-            rc, _ = _call_scene_layers(flags, workdir)
-            if rc != 0:
-                print(f"hue-kit: failed while building the {label}.",
-                      file=sys.stderr)
-                return verdict("setup-failed", rc)
-        fp_f.write_text(fp_now + "\n")
-        opened = _open_report(report_f) if args.open else False
-        print(f"\nSet up in {workdir}")
-        print(f"Report: {report_f}"
-              + ("  (opened in your browser)" if opened else ""))
-        if args.open and not opened:
-            print("  (could not launch a browser -- open the path above manually)")
-        print("\nThe group names are placeholders (G1, G2, ...). They work as-is; "
-              "rename them in\nscene-groups.yaml whenever a better name suggests "
-              "itself.")
-        return verdict("first-run")
-
-    # ---- established: has anything moved since we last looked? --------------
-    fp_old = fp_f.read_text().strip() if fp_f.is_file() else ""
-    shape_changed = bool(fp_old) and fp_old != fp_now
-    if not fp_old:
-        # Working files predate fingerprinting (or it was deleted). Establish the
-        # baseline rather than crying "changed" on no evidence; the colour diff
-        # below still covers this run.
-        fp_f.write_text(fp_now + "\n")
-
-    print("Checking your bridge against the local design ...\n")
-    drift_rc, drift_out = _call_scene_layers(["--validate-design"], workdir,
-                                             capture=True)
-    print((drift_out or "").rstrip())
-    colours_changed = drift_rc != 0
-
-    if shape_changed or colours_changed:
-        print("\nYour bridge no longer matches the local design:")
-        if shape_changed:
-            print("  - the SHAPE changed (a light, zone, or scene was added, "
-                  "removed, or renamed)")
-        if colours_changed:
-            print("  - scene colours/brightness differ (see the per-light diff "
-                  "above)")
-        print("\nNot changing anything yet: a difference can mean the bridge "
-              "moved, OR that\nthe local YAML holds edits that were never "
-              "applied. Those need opposite fixes.")
-        return verdict("changed")
-
-    if not report_f.is_file():
-        print("Report missing -- re-rendering it.")
-        rc, _ = _call_scene_layers(["--html", str(report_f)], workdir)
+    try:
+        rc, fp_now = _call_scene_layers(["--fingerprint"], workdir, capture=True)
         if rc != 0:
-            return verdict("render-failed", rc)
+            print("hue-kit: could not read the bridge -- run `hue-kit discover` / "
+                  "`hue-kit pair` and check the connection.", file=sys.stderr)
+            return verdict("bridge-unreachable", 1)
+        fp_now = (fp_now or "").strip()
 
-    print(f"\nBridge matches the local design. Report: {report_f}")
-    return verdict("clean")
+        if args.accept:
+            # Re-baseline without touching the YAML. The escape hatch for a
+            # shape change the user has reviewed and does not want reflected
+            # locally -- otherwise `start` would keep reporting it, since a
+            # shape change cannot be resolved by `apply` (that writes colours,
+            # it cannot create a light).
+            fp_f.write_text(fp_now + "\n")
+            print(f"Accepted the bridge's current shape as the reference "
+                  f"({workdir / 'bridge-fingerprint.txt'}).")
+            return verdict("accepted")
+
+        # ---- first run: nothing local to lose, so build the whole chain ----
+        if not groups_f.is_file() or not designs_f.is_file():
+            print("No working files yet -- setting up from your bridge.\n")
+            for label, flags in (
+                    ("registry (scene-groups.yaml)", ["--export-groups", str(groups_f)]),
+                    ("design (scene-designs.yaml)", ["--export-designs", str(designs_f)]),
+                    ("report (index.html)", ["--html", str(report_f)])):
+                print(f"  building the {label} ...")
+                rc, _ = _call_scene_layers(flags, workdir)
+                if rc != 0:
+                    print(f"hue-kit: failed while building the {label}.",
+                          file=sys.stderr)
+                    return verdict("setup-failed", rc)
+            fp_f.write_text(fp_now + "\n")
+            opened = _open_report(report_f) if args.open else False
+            print(f"\nSet up in {workdir}")
+            print(f"Report: {report_f}"
+                  + ("  (opened in your browser)" if opened else ""))
+            if args.open and not opened:
+                print("  (could not launch a browser -- open the path above "
+                      "manually)")
+            print("\nThe group names are placeholders (G1, G2, ...). They work "
+                  "as-is; rename them in\nscene-groups.yaml whenever a better "
+                  "name suggests itself.")
+            return verdict("first-run")
+
+        # ---- established: has anything moved since we last looked? --------
+        fp_old = fp_f.read_text().strip() if fp_f.is_file() else ""
+        shape_changed = bool(fp_old) and fp_old != fp_now
+        if not fp_old:
+            # Working files predate fingerprinting (or it was deleted).
+            # Establish the baseline rather than crying "changed" on no
+            # evidence; the colour diff below still covers this run.
+            fp_f.write_text(fp_now + "\n")
+
+        print("Checking your bridge against the local design ...\n")
+        drift_rc, drift_out = _call_scene_layers(["--validate-design"], workdir,
+                                                 capture=True)
+        print((drift_out or "").rstrip())
+        if drift_rc == 0:
+            colours_changed = False
+        elif drift_rc == DISCREPANCY_EXIT_CODE:
+            colours_changed = True
+        else:
+            # Ran, but did not finish comparing (an unmatched --scene, a
+            # malformed registry, ...) -- report the failure, distinct from a
+            # completed comparison that found real drift.
+            print(f"hue-kit: could not validate the design against the bridge "
+                  f"(scene-layers exited {drift_rc}); see the diagnostic above.",
+                  file=sys.stderr)
+            return verdict("validate-failed", drift_rc)
+
+        if shape_changed or colours_changed:
+            print("\nYour bridge no longer matches the local design:")
+            if shape_changed:
+                print("  - the SHAPE changed (a light, zone, or scene was "
+                      "added, removed, or renamed)")
+            if colours_changed:
+                print("  - scene colours/brightness differ (see the per-light "
+                      "diff above)")
+            print("\nNot changing anything yet: a difference can mean the "
+                  "bridge moved, OR that\nthe local YAML holds edits that were "
+                  "never applied. Those need opposite fixes.")
+            return verdict("changed")
+
+        if not report_f.is_file():
+            print("Report missing -- re-rendering it.")
+            rc, _ = _call_scene_layers(["--html", str(report_f)], workdir)
+            if rc != 0:
+                return verdict("render-failed", rc)
+
+        print(f"\nBridge matches the local design. Report: {report_f}")
+        return verdict("clean")
+    except SystemExit as e:
+        # Bridge/key resolution (inside _scene_layers_env, reached from every
+        # _call_scene_layers above) raises SystemExit("hue-kit: ...") rather
+        # than returning a code -- without this it would escape _cmd_start (and
+        # main()) with no `hue-kit-verdict:` line at all. Any raise reachable
+        # from this function is a bridge-resolution failure; there is no other
+        # SystemExit source in this body.
+        msg = str(e)
+        if msg:
+            print(msg, file=sys.stderr)
+        return verdict("bridge-unreachable", 1)
 
 
 def _cmd_init(args) -> int:
@@ -582,9 +632,11 @@ def main(argv: list[str] | None = None) -> int:
                              "(for agents: confirm readiness first, then tell "
                              "the user to press the button)")
     p_start = sub.add_parser("start", help="Default entry point: set up on "
-                                           "first run, else check the bridge "
-                                           "for changes. Renders + opens the "
-                                           "report.")
+                                           "first run (renders + opens the "
+                                           "report); otherwise check the "
+                                           "bridge against the local design "
+                                           "and print a hue-kit-verdict: "
+                                           "state -- nothing else is written.")
     p_start.add_argument("--no-open", dest="open", action="store_false",
                          help="render the report but do not launch a browser")
     p_start.add_argument("--accept", action="store_true",
@@ -653,6 +705,11 @@ def main(argv: list[str] | None = None) -> int:
             frc, fp = _call_scene_layers(["--fingerprint"], workdir, capture=True)
             if frc == 0 and (fp or "").strip():
                 (workdir / "bridge-fingerprint.txt").write_text(fp.strip() + "\n")
+            else:
+                print("hue-kit: exported the design, but could not re-baseline "
+                      f"bridge-fingerprint.txt (scene-layers --fingerprint "
+                      f"exited {frc}) -- `start` may report a stale shape "
+                      "change until this is retried.", file=sys.stderr)
         return rc
     if args.cmd == "render":
         out = str(Path(args.path).resolve()) if args.path else str(workdir / "index.html")

@@ -68,20 +68,20 @@ def test_load_job_file_resolves_relative_job_paths(tmp_path: Path) -> None:
     assert job.contract.directory is None
 
 
-def test_workspace_isolate_option_defaults_true_and_round_trips_false(
+def test_workspace_isolate_option_defaults_false_and_round_trips_true(
     tmp_path: Path,
 ) -> None:
-    """The job-file workspace opt-out is a durable boolean setting."""
+    """The job-file workspace opt-in is a durable boolean setting."""
     default = WorkspaceSpec.from_value({"directory": "."}, base_dir=tmp_path)
-    declined = WorkspaceSpec.from_value(
-        {"directory": ".", "isolate": False}, base_dir=tmp_path
+    requested = WorkspaceSpec.from_value(
+        {"directory": ".", "isolate": True}, base_dir=tmp_path
     )
 
     assert default is not None
-    assert default.isolate is True
-    assert declined is not None
-    assert declined.isolate is False
-    assert declined.to_mapping()["isolate"] is False
+    assert default.isolate is False
+    assert requested is not None
+    assert requested.isolate is True
+    assert requested.to_mapping()["isolate"] is True
     with pytest.raises(ValueError, match="workspace isolate"):
         WorkspaceSpec.from_value({"isolate": "false"})
 
