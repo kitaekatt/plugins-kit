@@ -710,6 +710,134 @@ def test_a_user_list_replaces_the_shipped_list_element_for_element(
     ]
 
 
+def _with_model(tmp_path: Path, model: Any) -> dict[str, Any]:
+    """Resolve a table whose reviewer_c lane states exactly ``model``."""
+    return _resolved(
+        tmp_path,
+        user={
+            "profiles": [
+                {
+                    "id": "code",
+                    "reviewers": [
+                        {"name": "reviewer_c_introduced_code", "model": model}
+                    ],
+                }
+            ]
+        },
+    )
+
+
+def test_a_single_string_model_has_an_empty_fallback_chain(tmp_path: Path) -> None:
+    """One entry is a chain of one, and "nothing left" is stated, not absent."""
+    resolved, _disclosures, _diag = rp.apply_model_priority(
+        _with_model(tmp_path, "sonnet")
+    )
+
+    reviewer = _reviewer(resolved, "code", "reviewer_c_introduced_code")
+    assert reviewer["model"] == "sonnet"
+    assert reviewer["model_fallbacks"] == []
+
+
+def test_the_entries_after_the_chosen_one_become_the_fallback_chain(
+    tmp_path: Path,
+) -> None:
+    """`[luna, sonnet]` runs on luna and keeps sonnet for a failed dispatch."""
+    resolved, disclosures, _diag = rp.apply_model_priority(
+        _with_model(tmp_path, ["luna", "sonnet"])
+    )
+
+    reviewer = _reviewer(resolved, "code", "reviewer_c_introduced_code")
+    assert reviewer["model"] == "luna"
+    assert reviewer["model_fallbacks"] == ["sonnet"]
+    # A chain of plain names resolves without asking the owner anything, so
+    # there is nothing to disclose.
+    assert disclosures == []
+
+
+def test_an_unresolvable_peer_is_absent_from_the_fallback_chain(
+    tmp_path: Path,
+) -> None:
+    """An entry that cannot resolve now cannot run later either."""
+    resolved, disclosures, _diag = rp.apply_model_priority(
+        _with_model(tmp_path, ["peer:opus", "luna", "peer:opus", "sonnet"]),
+        discover=_discover(_FakeSeat("UP", "up-seat")),
+    )
+
+    reviewer = _reviewer(resolved, "code", "reviewer_c_introduced_code")
+    assert reviewer["model"] == "luna"
+    assert reviewer["model_fallbacks"] == ["sonnet"]
+    # The skip disclosure is the one the chosen entry already produced; a later
+    # entry dropping out does not change what the lane runs on.
+    assert len(disclosures) == 1
+    assert "skipped priority entry 'peer:opus'" in disclosures[0]
+    assert "runs on 'luna'" in disclosures[0]
+
+
+def test_a_resolved_peer_in_the_chain_is_carried_as_its_endpoint_id(
+    tmp_path: Path,
+) -> None:
+    """The chain is dispatched from, so no `peer:` token may survive into it."""
+    resolved, disclosures, _diag = rp.apply_model_priority(
+        _with_model(tmp_path, ["sonnet", "peer:opus", "luna"]),
+        discover=_discover(_FakeSeat("BESIDE", "beside-seat")),
+    )
+
+    reviewer = _reviewer(resolved, "code", "reviewer_c_introduced_code")
+    assert reviewer["model"] == "sonnet"
+    assert reviewer["model_fallbacks"] == ["beside-seat", "luna"]
+    # The lane runs on the model it always would have; the disclosure channel
+    # reports what RAN, so resolving a later entry adds no line.
+    assert disclosures == []
+
+
+def test_the_rendered_table_carries_the_fallback_chain(tmp_path: Path) -> None:
+    """The agent reading the table can see what the lane may fall over to."""
+    resolved, _disclosures, _diag = rp.apply_model_priority(
+        _with_model(tmp_path, ["luna", "sonnet"])
+    )
+    rendered = rp.render_projection(resolved)
+
+    assert "    model: luna\n    model_fallbacks:\n    - sonnet\n" in rendered
+    table = yaml.safe_load(rendered)
+    code = next(p for p in table["profiles"] if p["id"] == "code")
+    assert code["reviewers"][2] == {
+        "name": "reviewer_c_introduced_code",
+        "model": "luna",
+        "model_fallbacks": ["sonnet"],
+    }
+
+
+def test_a_resolved_table_carrying_a_chain_still_validates(tmp_path: Path) -> None:
+    """The derived field is a known field, not a typo the schema rejects."""
+    resolved, _disclosures, _diag = rp.apply_model_priority(
+        _with_model(tmp_path, ["luna", "sonnet"])
+    )
+
+    rp.validate_config(resolved)
+
+
+@pytest.mark.parametrize(
+    ("label", "fallbacks"),
+    [
+        ("non-list", "sonnet"),
+        ("non-string entry", ["sonnet", 7]),
+        ("empty entry", ["sonnet", "   "]),
+    ],
+)
+def test_an_invalid_model_fallbacks_is_rejected(
+    tmp_path: Path, label: str, fallbacks: Any
+) -> None:
+    resolved, _disclosures, _diag = rp.apply_model_priority(_shipped(tmp_path))
+    _reviewer(resolved, "code", "reviewer_c_introduced_code")[
+        "model_fallbacks"
+    ] = fallbacks
+
+    with pytest.raises(rp.ConfigError) as excinfo:
+        rp.validate_config(resolved)
+
+    assert ".model_fallbacks" in str(excinfo.value), label
+
+
 def test_a_leftover_peer_when_available_names_its_replacement(tmp_path: Path) -> None:
     with pytest.raises(rp.ConfigError) as excinfo:
         _resolved(
@@ -778,6 +906,7 @@ def test_no_owner_artifact_states_the_model_that_will_run(tmp_path: Path) -> Non
     assert code["reviewers"][2] == {
         "name": "reviewer_c_introduced_code",
         "model": "opus",
+        "model_fallbacks": [],
     }
 
 
@@ -790,9 +919,15 @@ def test_the_projection_only_ever_carries_a_resolved_string(tmp_path: Path) -> N
         for reviewer in profile["reviewers"]:
             # `effort` is optional and omitted when unset, so it is allowed but
             # never required; `model` must always be present and resolved.
-            assert set(reviewer) <= {"name", "model", "effort"}
-            assert {"name", "model"} <= set(reviewer)
+            assert set(reviewer) <= {"name", "model", "model_fallbacks", "effort"}
+            assert {"name", "model", "model_fallbacks"} <= set(reviewer)
             assert isinstance(reviewer["model"], str)
+            # The chain is dispatched from as well, so it carries resolved
+            # names only -- never a `peer:` entry the caller would send verbatim.
+            assert all(
+                isinstance(entry, str) and not entry.startswith(rp.PEER_ENTRY_PREFIX)
+                for entry in reviewer["model_fallbacks"]
+            )
             if "effort" in reviewer:
                 assert reviewer["effort"] in rp.EFFORT_LEVELS
 

@@ -222,9 +222,24 @@ authorize changing the resolved profile, bypassing capability gates, or retrying
 a preferred verdict. If the invocation cannot be corrected within these bounds, report
 the failure and missing coverage.
 
+**Disclosed failover.** A lane's resolved reviewer record may carry `model_fallbacks`: the
+ordered list of models still runnable for that lane after the chosen one (an unresolved `peer:`
+entry is already omitted; a resolved one appears as its endpoint id). When a non-zero exit is
+not explained by the launch-correction rule above and `model_fallbacks` is non-empty, the skill
+re-dispatches the SAME lane on the next entry -- by the dispatch mechanism that entry implies,
+an Agent alias launching an Agent and an endpoint id running through the lane runner -- and
+keeps walking the chain, trying each entry at most once, until one produces a schema-valid
+result or the chain is exhausted. This is never silent: the rendered review carries a
+`## Lane failovers` section naming the model that failed with the runner's stderr reason and the
+model that actually produced the review, and states once that these files were reviewed by a
+different model than the configuration's first choice. A lane with an EMPTY `model_fallbacks` --
+every validator, and a reviewer configured with no fallback -- has nothing to fail over to.
+
 An actual lane failure is reported and the review renders without it, with that lane's coverage
-marked missing in a `## Lane failures` section. There is deliberately no fallback to an Agent:
-a silent fallback would hand back a review you read as having run on the model you configured,
+marked missing in a `## Lane failures` section. This happens when a lane has no `model_fallbacks`
+to try, or when every entry in its chain has been tried and failed. There is deliberately no
+fallback beyond the configured chain to an unlisted Agent: a silent substitution outside what the
+configuration named would hand back a review you read as having run on a model you configured,
 which is a false claim about what actually reviewed your change. Causes are the endpoint being
 unreachable or halted, a chunk that does not fit its context window, or output that is not a
 valid issue array after one repair attempt -- the stderr line says which.
@@ -310,6 +325,20 @@ instead:
     'peer:opus' (no reachable BESIDE seat) and runs on 'opus'.
 
 so a reader is told the lane took a later entry rather than left to assume the first one ran.
+
+### The rest of the list becomes runtime failover
+
+Resolving `model` picks the FIRST entry that resolves and prints it as the lane's model in the
+resolved table; the entries after it are not discarded. They are carried into the same table's
+record as `model_fallbacks` -- an ordered list of the models still runnable for that lane after
+the chosen one (an unresolved `peer:` entry is already omitted; a resolved one appears as its
+endpoint id; an empty list means the chosen entry was the last one, or `model` was never a
+list). `model_fallbacks` is what the skill walks at REVIEW TIME when the chosen model's lane
+actually fails -- see "When an endpoint lane fails" above for the walk-the-chain mechanics and
+the `## Lane failovers` disclosure. Configuring an ordered list therefore does two things at
+once: it picks which model runs, and it names what the skill may fail over to if that one does
+not produce a result. Every failover is disclosed in the rendered review; there is never a
+silent substitution beyond what the list named.
 
 ### When no entry resolves
 

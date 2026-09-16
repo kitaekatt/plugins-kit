@@ -209,9 +209,23 @@ MODEL_KIND = """\
             the two dispatch mechanisms in one fan-out is normal and expected.
             A NON-ZERO exit is never an empty result. Before marking a lane failed,
             apply the pre-dispatch launch-correction rule in references/configuration.md.
-            Other non-zero exits are FAILED lanes: do NOT retry them, silently substitute
-            an Agent, or treat absent output as "no issues found". Keep the stderr line,
-            report the failure in step 9, and mark coverage missing.
+            A non-zero exit the launch-correction rule does not explain is FAILOVER-ELIGIBLE
+            when the resolved reviewer record's `model_fallbacks` is non-empty: re-dispatch
+            the SAME lane on the next entry in `model_fallbacks`, by the dispatch mechanism
+            that entry implies -- an Agent alias launches an Agent, an endpoint id runs
+            through @LANE_TOOL@ exactly as the model-kind rule above prescribes for that
+            value's kind. Walk the chain in order, trying each entry AT MOST ONCE, until one
+            produces a schema-valid result or the chain is exhausted; do not retry an entry
+            already tried and do not skip ahead. Every failover is disclosed in step 9's
+            `## Lane failovers` section -- never silent, and never presented as though the
+            first-choice model produced the review.
+            A lane with an EMPTY `model_fallbacks` -- every validator lane, and any reviewer
+            configured with no fallback -- behaves exactly as before: do NOT retry it,
+            silently substitute an Agent, or treat absent output as "no issues found". Keep
+            the stderr line, report the failure in step 9, and mark coverage missing.
+            A lane whose `model_fallbacks` chain is EXHAUSTED (every entry tried and failed)
+            is a FAILED lane the same way: report it in step 9, name every model tried, and
+            mark coverage missing -- never treat absent output as "no issues found".
             Only the lanes the runner supports may carry an endpoint id; it refuses
             the rest by name and exits 2, which is a configuration error for the user to fix,
             not something to work around.
@@ -744,8 +758,19 @@ technique_skill:
               and that they did NOT receive its review. This section is not decoration: the
               rest of the review looks identical whether a lane ran or not, so without it a
               partial review is indistinguishable from a complete one. Never describe a
-              failed lane's files as clean, and never re-run the lane on a different model to
-              paper over the gap -- report it and let the user decide.
+              failed lane's files as clean, and never re-run the lane on a model its own
+              configuration did not name -- a lane reaches this section only with an EMPTY
+              or EXHAUSTED `model_fallbacks`, so there is no entry left to try; report it
+              and let the user decide.
+            - When any lane FAILED OVER (a non-zero exit the launch-correction rule did not
+              explain was followed by a re-dispatch on a later `model_fallbacks` entry that
+              produced a schema-valid result), prepend a `## Lane failovers` section naming,
+              per failed-over lane: the lane, the model that failed and the runner's stderr
+              reason, and the model that actually produced the review. State once that these
+              files were reviewed by a different model than the configuration's first choice.
+              This is a disclosure, not a warning: the rendered review looks identical whether
+              the first entry or a later one ran, so the reader must never have to infer which
+              model actually reviewed their change.
             - When the step-4 renderer printed any `model-priority:` line on stderr,
               prepend a `## Model-priority substitutions` section carrying each line verbatim.
               Such a lane ran on a model chosen from a priority list rather than on a single
@@ -1167,6 +1192,7 @@ GIT_CHECKLIST = f"""\
         - Validators launched in parallel (single message, N Agent calls), models picked from the profile's validator_models
         - Filtered to confirmed-only
         - Launch rationale line emitted once (file-type-driven; md_trivial variant when the change is all-mechanical)
+        - A FAILED lane's non-empty `model_fallbacks` walked in order, at most once per entry, until a schema-valid result or an exhausted chain; every failover disclosed via the `## Lane failovers` section (lane, failed model + stderr reason, model that actually reviewed), never presented as the first-choice model's review; an exhausted chain still reports a `## Lane failures` entry with coverage missing
         - md-domain subject-lens pass launched for the NON-TRIVIAL bundle.claimed_files when skills-kit md-domain is available (or claimed files folded back into the generic review on version-skew fallback); skipped silently when md-domain is absent
         - Trivial claimed files (prepare's `trivial` flag) reported via the `## Mechanical checks (audit skipped)` section, never as an audit or DIFF-CLEAN; nothing written to the ledger for them; whole review skipped when every claimed file is trivial and there are no generic diff chunks
         - Machine-emitted artifacts (bundle.machine_emitted_files) reported via the `## Machine-emitted artifacts (not reviewed)` section, naming each file's exclusion axis (content banner or declared plugin-write path) and the rule that matched, never as an audit or DIFF-CLEAN; review of machine-emitted output belongs on the generator
@@ -1186,6 +1212,7 @@ P4_CHECKLIST = f"""\
         - Validators launched in parallel (single message, N Agent calls), models picked from the profile's validator_models
         - Filtered to confirmed-only
         - Launch rationale line emitted once (file-type-driven; md_trivial variant when the change is all-mechanical)
+        - A FAILED lane's non-empty `model_fallbacks` walked in order, at most once per entry, until a schema-valid result or an exhausted chain; every failover disclosed via the `## Lane failovers` section (lane, failed model + stderr reason, model that actually reviewed), never presented as the first-choice model's review; an exhausted chain still reports a `## Lane failures` entry with coverage missing
         - md-domain subject-lens pass launched for the NON-TRIVIAL bundle.claimed_files when skills-kit md-domain is available (or claimed files folded back into the generic review on version-skew fallback); skipped silently when md-domain is absent
         - Trivial claimed files (prepare's `trivial` flag) reported via the `## Mechanical checks (audit skipped)` section, never as an audit or DIFF-CLEAN; nothing written to the ledger for them; whole review skipped when every claimed file is trivial and there are no generic diff chunks
         - Machine-emitted artifacts (bundle.machine_emitted_files) reported via the `## Machine-emitted artifacts (not reviewed)` section, naming each file's exclusion axis (content banner or declared plugin-write path) and the rule that matched, never as an audit or DIFF-CLEAN; review of machine-emitted output belongs on the generator
@@ -2255,9 +2282,24 @@ authorize changing the resolved profile, bypassing capability gates, or retrying
 a preferred verdict. If the invocation cannot be corrected within these bounds, report
 the failure and missing coverage.
 
+**Disclosed failover.** A lane's resolved reviewer record may carry `model_fallbacks`: the
+ordered list of models still runnable for that lane after the chosen one (an unresolved `peer:`
+entry is already omitted; a resolved one appears as its endpoint id). When a non-zero exit is
+not explained by the launch-correction rule above and `model_fallbacks` is non-empty, the skill
+re-dispatches the SAME lane on the next entry -- by the dispatch mechanism that entry implies,
+an Agent alias launching an Agent and an endpoint id running through the lane runner -- and
+keeps walking the chain, trying each entry at most once, until one produces a schema-valid
+result or the chain is exhausted. This is never silent: the rendered review carries a
+`## Lane failovers` section naming the model that failed with the runner's stderr reason and the
+model that actually produced the review, and states once that these files were reviewed by a
+different model than the configuration's first choice. A lane with an EMPTY `model_fallbacks` --
+every validator, and a reviewer configured with no fallback -- has nothing to fail over to.
+
 An actual lane failure is reported and the review renders without it, with that lane's coverage
-marked missing in a `## Lane failures` section. There is deliberately no fallback to an Agent:
-a silent fallback would hand back a review you read as having run on the model you configured,
+marked missing in a `## Lane failures` section. This happens when a lane has no `model_fallbacks`
+to try, or when every entry in its chain has been tried and failed. There is deliberately no
+fallback beyond the configured chain to an unlisted Agent: a silent substitution outside what the
+configuration named would hand back a review you read as having run on a model you configured,
 which is a false claim about what actually reviewed your change. Causes are the endpoint being
 unreachable or halted, a chunk that does not fit its context window, or output that is not a
 valid issue array after one repair attempt -- the stderr line says which.
@@ -2343,6 +2385,20 @@ instead:
     'peer:opus' (no reachable BESIDE seat) and runs on 'opus'.
 
 so a reader is told the lane took a later entry rather than left to assume the first one ran.
+
+### The rest of the list becomes runtime failover
+
+Resolving `model` picks the FIRST entry that resolves and prints it as the lane's model in the
+resolved table; the entries after it are not discarded. They are carried into the same table's
+record as `model_fallbacks` -- an ordered list of the models still runnable for that lane after
+the chosen one (an unresolved `peer:` entry is already omitted; a resolved one appears as its
+endpoint id; an empty list means the chosen entry was the last one, or `model` was never a
+list). `model_fallbacks` is what the skill walks at REVIEW TIME when the chosen model's lane
+actually fails -- see "When an endpoint lane fails" above for the walk-the-chain mechanics and
+the `## Lane failovers` disclosure. Configuring an ordered list therefore does two things at
+once: it picks which model runs, and it names what the skill may fail over to if that one does
+not produce a result. Every failover is disclosed in the rendered review; there is never a
+silent substitution beyond what the list named.
 
 ### When no entry resolves
 

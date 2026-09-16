@@ -190,13 +190,17 @@ unconfigurable opinion whose test passes is a finding.
   cannot tell you which one caused a regression, and the config key would make that the
   cheapest thing to reach for. Widening the set further is a plugin change, not a line of
   YAML.
-- **A failed endpoint lane fails the review's coverage; it never falls back to an Agent.**
-  A team could reasonably prefer "finish the review anyway on the default model", and the
-  remedy we leave them is to drop the endpoint override. We refuse the fallback because the
-  rendered review looks identical either way: a silent substitution hands back a review the
-  reader believes ran on the model they configured, which is a false claim about what
-  examined their change rather than a degraded one. The lane is reported failed and its
-  files are marked uncovered, so the reader can re-run deliberately.
+- **A failed lane falls over only along the chain its own configuration named, and every
+  failover is disclosed.** A reviewer's `model` may be an ordered list; when the chosen
+  model fails at dispatch, the lane is re-dispatched on the next entry, and the rendered
+  review names the lane, the model that failed, and the model that actually produced the
+  review. A lane whose chain is exhausted is still a failed lane with its files marked
+  uncovered. What stays refused is the substitution nobody asked for: a lane configured
+  with a single model never silently acquires a second one, because the rendered review
+  looks identical either way and would then carry a false claim about what examined the
+  change. Disclosure is what separates the two -- a team that wants "finish the review
+  anyway" states the order it wants and can see, afterwards, which model each finding came
+  from.
 
 - **A `conserve_usage` verdict is pinned for the session and never re-evaluated
   downward.** llm-scripting-kit computes a paced endpoint's availability once per session
