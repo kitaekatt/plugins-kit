@@ -183,14 +183,14 @@ curl.exe HTTPS SEC_E_NO_CREDENTIALS.)
 Tail each log ONCE after launch. Use Monitor to stream output if you need live
 progress. Do not poll with sleep loops.
 
-## Parallel isolation
+## Concurrent writers
 
-`git worktree add -b wt/<unit> ../<repo>-<unit>-wt master` per parallel writer
-(the -b is required -- master is already checked out in the main copy), then
-point that unit's `-C` at the worktree's ABSOLUTE path. A fresh worktree
-contains only TRACKED files, so gitignored paths (a repo venv, a staged tmp/
-directory) will not be there: either give that unit the main tree, or tell it in
-the brief where those resources live.
+Writes land under `-C` and each `--add-dir`, so concurrent units given the same
+ABSOLUTE `-C` write into one tree and see each other's in-progress edits; state
+each unit's file ownership in its brief. A checkout other than the one a
+resource was created in contains only TRACKED files, so gitignored paths (a
+repo venv, a staged tmp/ directory) are absent there: name where those
+resources live in the brief.
 
 ## Collecting
 

@@ -71,11 +71,12 @@ jobs:
   its first unreachable result. A `--timeout` expiry is job-kit's own budget
   rather than evidence about the endpoint, so it is recorded as a retryable
   timeout and the endpoint stays eligible.
-- **Worktree-per-attempt isolation** for jobs in a git repository. A failed
-  attempt's worktree survives until garbage collection. Run `job-kit gc
-  <run-id> [--store PATH]` to reclaim it; a dirty worktree requires `--force`.
-  Set `workspace.isolate: false` for a job that must run in its declared
-  directory.
+- **Per-attempt worktrees are opt-in.** A job in a git repository that sets
+  `workspace.isolate: true` runs each attempt in a detached worktree at the
+  run's observed HEAD. A job without that setting runs in its declared
+  directory. A failed attempt's worktree survives until garbage collection.
+  `job-kit gc <run-id> [--store PATH]` reclaims it; a dirty worktree needs
+  `--force`.
 - **A tool deny floor.** The job-file-level `disallowed_tools` applies to every
   job in the run. Harness endpoints are agent sessions, not plain completions;
   the floor is how a run declares what they may not do.
@@ -96,7 +97,8 @@ carries: effort is a property of the ENDPOINT, so a job that needs more
 deliberation than its endpoint's default says so here, and leaving it unset
 emits exactly the argv an existing job file always did.
 
-`workspace` accepts `directory`, `base_ref` and `isolate`.
+`workspace` accepts `directory`, `base_ref` and `isolate`; `isolate` defaults
+to `false`.
 
 Every path-typed field -- `directory`, `contract.directory`,
 `workspace.directory`, `workspace_root` -- resolves relative to the job file's

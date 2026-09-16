@@ -292,7 +292,11 @@ None outstanding.
 | awesome-kit:task | git is the privileged, automated VCS | Registered as a deliberate stance in `plugins/CLAUDE.md`, with the rationale OP-5 requires and the bounded degradation a Perforce consumer actually gets. Not a seam. |
 | job-kit | selection is deterministic caller preference; no scoring, aliases, or learned routing | Registered in `plugins/CLAUDE.md`. Forecloses adaptive routing on purpose: an unattended run must be explainable from its inputs, and the user who wants judgment wants `awesome-kit:orchestrate`. Within a run job-kit only NARROWS the stated order (halted endpoints excluded), and the ledger records each exclusion. |
 | job-kit | a run-level deny floor is a selection requirement, not best-effort | Registered in `plugins/CLAUDE.md`. A team preferring best-effort application has only the remedy of dropping the floor, which is deliberate: a floor sometimes not applied is not a floor, and unattended is exactly the case where nobody notices. |
-| job-kit | git is the only workspace-isolation VCS | Registered in `plugins/CLAUDE.md`, same reasoning as awesome-kit:task. Bounded and recorded, never silent: a non-git directory runs in place with `workspace: none` on the attempt row. |
+| job-kit | git is the only workspace-isolation VCS | Registered in `plugins/CLAUDE.md`, same reasoning as awesome-kit:task. Isolation is opt-in (`workspace.isolate: true`). Bounded and recorded, never silent: a job requesting it in a non-git directory runs in place with `workspace: none` on the attempt row. |
+
+Worktree use is outside the razor entirely: plugins take no position on it, so it
+is neither a default nor a registered stance. The rule and its check live in
+`plugins/CLAUDE.md`, "Plugins take no position on worktrees".
 
 ### SEAMS BUILT -- verdict discharged
 

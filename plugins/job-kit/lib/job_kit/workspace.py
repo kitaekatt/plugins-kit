@@ -264,7 +264,7 @@ class WorkspaceManager:
         captured_base_ref: Optional[str] = None,
     ) -> _WorkspacePlan:
         """Capture one job's repository and run-start base-ref facts."""
-        if job.workspace is not None and not job.workspace.isolate:
+        if job.workspace is None or not job.workspace.isolate:
             return _WorkspacePlan(
                 repo_root=None,
                 base_ref=None,

@@ -20,8 +20,8 @@ accepts only when its command exits with code zero.
 
 The optional ``workspace`` mapping accepts ``directory``, ``base_ref`` and
 ``isolate``. ``base_ref`` defaults to the repository HEAD captured at run
-start. Isolation defaults to true; set ``isolate: false`` when a job must run
-in its declared directory.
+start. Isolation defaults to false; set ``isolate: true`` when a job should
+run each attempt in a detached worktree instead of its declared directory.
 
 The optional job ``options`` mapping accepts ``allowed_tools``,
 ``disallowed_tools``, ``effort``, ``system_prompt_mode``, ``max_tokens``,
@@ -262,7 +262,7 @@ class WorkspaceSpec:
 
     directory: Optional[Path] = None
     base_ref: Optional[str] = None
-    isolate: bool = True
+    isolate: bool = False
 
     def __post_init__(self) -> None:
         if self.directory is not None:
@@ -292,7 +292,7 @@ class WorkspaceSpec:
                 if base_ref_value is not None
                 else None
             )
-            isolate = value.get("isolate", True)
+            isolate = value.get("isolate", False)
             if not isinstance(isolate, bool):
                 raise ValueError("workspace isolate must be a boolean")
             return cls(directory=directory, base_ref=base_ref, isolate=isolate)

@@ -261,10 +261,13 @@ shape:
     text: >-
       Split implementation only when EVERY candidate leaf passes all four tests: (a) its
       interface is fixed before launch, not decided inside it; (b) it has exclusive file
-      ownership stated in the brief, plus backend isolation when writers share a checkout;
-      (c) its standalone brief states what `done`
+      ownership stated in the brief; (c) its standalone brief states what `done`
       looks like without requiring discovery inside the leaf; and (d) it runs a named cheap
-      objective check itself. At least two leaves must be runnable on the same dependency
+      objective check itself. Leaves that write to one checkout see each other's
+      in-progress edits, so a leaf's own check covers only the files it owns, and the full
+      check runs when the leaves are joined. Whether concurrent writers also get separate
+      checkouts is set by the user's own instructions and harness settings, not by this
+      policy. At least two leaves must be runnable on the same dependency
       frontier. One runnable leaf at a time is sequencing, not parallelism. The razor verdict
       is local to the frontier on which it was tested and expires when the runnable frontier
       changes; a completed unit can fix the interface that made leaves inadmissible. A unit
@@ -457,7 +460,7 @@ backends:
     detect:
       always: true
     capabilities:
-      isolation: 'built in -- pass isolation: "worktree"'
+      isolation: 'The Agent tool accepts an `isolation: "worktree"` parameter.'
       effort: Only dialable via Workflow's `agent()` `opts.effort`; else inherited.
       network: "yes"
       returns: >-
@@ -482,8 +485,8 @@ backends:
       isolation: >-
         WRITES only, and only while every flag below is present. READS are
         unrestricted -- a unit can read any file the user can, on any drive,
-        outside `-C`. Give each parallel writer its own worktree via an
-        absolute `-C`; read-only units may share a tree.
+        outside `-C`. Writes land under `-C` and each `--add-dir`, so
+        concurrent writers given the same `-C` write into one tree.
       effort: >-
         Model via `-m`, fully qualified. Effort via `-c
         model_reasoning_effort=<low|medium|high|xhigh|max>` -- a config key, not
@@ -575,7 +578,8 @@ backends:
         NONE. `--auto` bypasses permission prompts by auto-approving anything
         not explicitly denied. It adds no sandbox or write scope, and `--dir`
         does not confine reads or writes. Start from a clean tree. Inspect the
-        diff on return. Give each parallel writer its own worktree.
+        diff on return. Concurrent writers given the same `--dir` write into
+        one tree.
       effort: >-
         Model via `-m`, fully qualified. Provider-specific effort via
         `--variant <VALUE>` when the selected model exposes one. OpenCode has
@@ -630,8 +634,7 @@ backends:
         OpenCode adds NO SANDBOX OR WRITE SCOPE under `--auto`. Explicit
         user-configured denies can still refuse tools. Otherwise, workspace
         edits are controlled by REVIEW AT THE JOIN. Require a clean tree at
-        dispatch. Read the diff on return. Isolate concurrent writers in
-        separate worktrees.
+        dispatch. Read the diff on return.
       - >-
         A missing or empty `result.md` is a failed return regardless of the
         process exit code. The log is diagnostic evidence, not the answer.
