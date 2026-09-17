@@ -1324,6 +1324,9 @@ def main() -> int:
                     help="generate a STARTER scene-groups.yaml (certified-minimum "
                     "family, placeholder names) to PATH or stdout, then exit -- "
                     "the bootstrap for a new bridge; rename, then --export-designs")
+    ap.add_argument("--force", action="store_true",
+                    help="--export-groups: overwrite an existing PATH (this "
+                    "regenerates placeholder names and discards any you set)")
     ap.add_argument("--export-designs", metavar="PATH",
                     help="materialise the layered scene-designs.yaml to PATH "
                     "from live colours + scene-groups.yaml, then exit "
@@ -1404,11 +1407,20 @@ def main() -> int:
         return 0
 
     if args.export_groups:
+        dest = None if args.export_groups == "-" else Path(args.export_groups)
+        # Refuse before anything is computed: a regenerated registry has
+        # placeholder names, so overwriting an existing one silently drops
+        # every name a user chose. Checked before export_groups() runs and
+        # before the file is touched.
+        if dest is not None and dest.exists() and not args.force:
+            raise SystemExit(
+                f"error: {dest} already exists -- pass --force to overwrite "
+                "(this regenerates placeholder group names and discards any "
+                "you set)")
         text = export_groups(data)
-        if args.export_groups == "-":
+        if dest is None:
             sys.stdout.write(text)
         else:
-            dest = Path(args.export_groups)
             dest.parent.mkdir(parents=True, exist_ok=True)
             dest.write_text(text)
             print(f"wrote {dest}", file=sys.stderr)

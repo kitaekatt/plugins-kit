@@ -26,8 +26,20 @@ def _pin_bridge_env(monkeypatch):
     leaking into the rest of the suite. Function-scoped and autouse: it still
     covers tests that call hue_cli.__wrapped__() directly (bypassing pytest's
     fixture request), since autouse fixtures apply to every test collected in
-    this directory regardless of what it requests."""
+    this directory regardless of what it requests.
+
+    Also clears HUE_GROUPS_FILE, HUE_DESIGNS_FILE, HUE_KEY_FILE and
+    HUE_APP_KEY via monkeypatch.delenv. `_scene_layers_env` and
+    `_resolve_key_file` in hue_kit_cli.py write these straight into
+    os.environ rather than a copy, so a test that reaches either for real
+    leaves the value live for whatever test runs next. Deleting them here
+    through monkeypatch records each as absent and removes it again at
+    teardown, so a write from inside the code under test is undone after
+    every test regardless of which one performed it."""
     monkeypatch.setenv("HUE_BRIDGE_IP", "192.0.2.1")
+    for name in ("HUE_GROUPS_FILE", "HUE_DESIGNS_FILE", "HUE_KEY_FILE",
+                 "HUE_APP_KEY"):
+        monkeypatch.delenv(name, raising=False)
 
 
 @pytest.fixture(autouse=True, scope="package")

@@ -110,9 +110,10 @@ the loop after a shape change, so do not remove that coupling.
    colours + the registry. Verifies the family expresses AND bakes every scene.
 4. `hue-kit render` -- renders `index.html`.
 
-Never re-run `groups` over an existing registry to "refresh" it: it writes
-placeholder names and would destroy the user's renames. A changed group
-vocabulary is a conversation, not a regeneration.
+`groups` refuses to overwrite an existing `scene-groups.yaml` -- it writes
+placeholder names and would destroy the user's renames -- unless `--force` is
+given. A changed group vocabulary is a conversation, not a regeneration; do
+not pass `--force` to "refresh" a registry on the user's behalf.
 
 ## Making scene changes from a conversation
 

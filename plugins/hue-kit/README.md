@@ -94,6 +94,7 @@ hue-kit report            # read the bridge; print the minimal group family
                           #   + each scene as a layer stack (read-only)
 hue-kit groups            # write a starter scene-groups.yaml (placeholder
                           #   names G1..) -- then rename the groups meaningfully
+                          #   refuses if the file exists; pass --force to overwrite
 hue-kit export            # materialise scene-designs.yaml from your live scenes
 hue-kit render            # render index.html (config + source embedded)
 hue-kit validate          # diff your YAML vs the bridge, per light (read-only)

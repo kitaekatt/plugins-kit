@@ -662,6 +662,10 @@ def main(argv: list[str] | None = None) -> int:
                                              "(placeholder names to rename).")
     p_groups.add_argument("path", nargs="?",
                           help="output path (default: <dir>/scene-groups.yaml)")
+    p_groups.add_argument("--force", action="store_true",
+                          help="overwrite an existing registry (this "
+                               "regenerates placeholder names and discards "
+                               "any you set)")
     sub.add_parser("export", help="Write scene-designs.yaml from live scenes + "
                                   "the registry.")
     p_render = sub.add_parser("render", help="Render the HTML report.")
@@ -708,9 +712,20 @@ def main(argv: list[str] | None = None) -> int:
         # explicit path, fall back to the one resolution rule (HUE_GROUPS_FILE
         # override, else <dir>/scene-groups.yaml) so this write target agrees
         # with everything else that reads/writes the registry.
-        out = str(Path(args.path).resolve()) if args.path else \
-            str(_workfile_path(workdir, "scene-groups.yaml", "HUE_GROUPS_FILE"))
-        return _run_scene_layers(["--export-groups", out], workdir)
+        out_path = Path(args.path).resolve() if args.path else \
+            _workfile_path(workdir, "scene-groups.yaml", "HUE_GROUPS_FILE")
+        # Refuse before _run_scene_layers -- it execve()s and never returns on
+        # POSIX, so this is the only point that can still stop the write.
+        # scene-layers.py carries the same guard for a standalone invocation.
+        if out_path.exists() and not args.force:
+            print(f"hue-kit: {out_path} already exists -- pass --force to "
+                  "overwrite (this regenerates placeholder group names and "
+                  "discards any you set)", file=sys.stderr)
+            return 1
+        flags = ["--export-groups", str(out_path)]
+        if args.force:
+            flags.append("--force")
+        return _run_scene_layers(flags, workdir)
     if args.cmd == "export":
         # Re-baseline the shape fingerprint alongside the design: export IS the
         # pull, so afterwards the local files reflect the bridge as it is now.
