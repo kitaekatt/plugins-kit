@@ -250,9 +250,12 @@ def extract_from_bridge() -> dict:
 # Model: turn the data dict into solver scenes
 # ========================================================================
 def is_off_cell(cell) -> bool:
-    """A light ON at 0% brightness is visually dark -> treat as OFF, so it folds
-    into the default layer rather than inflating the cell count."""
-    return cell.get("mode") == "off" or cell.get("bri") in (0, 0.0)
+    """A cell is OFF exactly when its mode is "off". `mode` already carries
+    the one darkness rule (smg.is_dark, applied by smg.action_sig when the
+    cell's signature was built) -- including on-at-0%, which folds into the
+    default layer rather than inflating the cell count -- so no second test
+    is needed here."""
+    return cell.get("mode") == "off"
 
 
 def build_model(data: dict):
@@ -753,17 +756,21 @@ def _cell_cfg(cell):
     """(inline-yaml-config, hsl-comment) for a live colour cell dict.
     xy authoritative + a readable # hsl(...); ct: <mirek> = tunable white.
     A lit cell always has a colour (xy or ct); bri floors at 1 so a lit layer
-    is never written as on-at-0% (exact-0 cells fold to OFF via is_off_cell)."""
+    is never written as on-at-0% (exact-0 cells fold to OFF via is_off_cell).
+    bri keeps two decimal places rather than rounding to a whole percent --
+    the cluster this cell came from only guarantees each member within
+    BRI_TOL of the cluster's mean, so collapsing that mean to the nearest
+    integer could reintroduce drift a rounder emitted value would not have."""
     bri = cell.get("bri")
-    bri_i = max(1, int(round(bri))) if bri is not None else 100
+    bri_i = max(1.0, round(bri, 2)) if bri is not None else 100.0
     if cell.get("mode") == "ct":
         sig = smg.Sig("ct", bri=bri, mirek=cell["mirek"])
-        return f"ct: {int(round(cell['mirek']))}, bri: {bri_i}", \
+        return f"ct: {int(round(cell['mirek']))}, bri: {bri_i:g}", \
             smg.sig_color_label(sig)
     if cell.get("mode") == "xy":
         xy = cell["xy"]
         sig = smg.Sig("xy", bri=bri, x=xy[0], y=xy[1])
-        return f"xy: [{xy[0]:.4f}, {xy[1]:.4f}], bri: {bri_i}", \
+        return f"xy: [{xy[0]:.4f}, {xy[1]:.4f}], bri: {bri_i:g}", \
             smg.sig_color_label(sig)
     raise SystemExit(
         f"error: cannot export a lit cell with mode {cell.get('mode')!r} "
@@ -1040,20 +1047,18 @@ def _color_mode(act):
 
 
 def _effectively_off(action) -> bool:
-    """Is this action dark? True for on:false, for an absent action (a light the
-    scene never sets), AND for on:true at brightness 0.
-
-    That last case is the Hue app's own way of writing "off" for some scenes --
-    the bulb is nominally on but emits nothing. The analyzer already reads it as
-    off (a zero-brightness cell contributes no light, so such a scene reports as
-    all-OFF and exports to `layers: []`), so the diff has to agree. When it did
-    not, a scene holding these actions could never validate clean: export wrote
-    "off", validate compared against the raw on:true, and reported the same
-    discrepancies on every run no matter how many times it was applied."""
-    if not action.get("on", {}).get("on"):
-        return True
-    bri = action.get("dimming", {}).get("brightness")
-    return bri is not None and bri <= 0.0
+    """Is this action dark? Delegates to smg.is_dark -- the one darkness test,
+    also used by smg.action_sig -- so a raw bridge action and its analyzed
+    signature always agree on off. True for on:false, for an absent action (a
+    light the scene never sets), and for on:true at brightness 0 (the Hue
+    app's own way of writing "off" for some scenes: the bulb is nominally on
+    but emits nothing). The analyzer reads that last case as off too (a
+    zero-brightness cell contributes no light, so such a scene reports as
+    all-OFF and exports to `layers: []`), so the diff has to agree, or a scene
+    holding these actions could never validate clean: export writes "off",
+    validate compares against the raw on:true, and reports the same
+    discrepancy on every run no matter how many times it is applied."""
+    return smg.is_dark(action)
 
 
 def _action_diff(live, target):
@@ -1319,7 +1324,7 @@ def layered_view(session):
         lit, sig_by_cell = [], {}
         for c in res.clusters:
             fs = frozenset(c.lights)
-            if c.sig.mode == "off" or c.sig.bri in (0, 0.0):
+            if c.sig.mode == "off":
                 continue
             lit.append(fs)
             sig_by_cell[fs] = c.sig
