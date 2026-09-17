@@ -1,4 +1,4 @@
-"""One path resolution for the working files (I03, M04/M06).
+"""One path resolution for the working files.
 
 The CLI must honour HUE_GROUPS_FILE / HUE_DESIGNS_FILE for existence checks
 AND write targets (not just the child's env), and standalone scene-layers.py
@@ -20,8 +20,8 @@ _SCRIPTS = (Path(__file__).resolve().parent.parent.parent
 
 
 class TestCliWritesHonourEnvOverride:
-    """RED step 1: `export` / `groups` hardcoded <dir>/<name> for their write
-    target, ignoring an HUE_*_FILE override that reads already honoured."""
+    """`export` / `groups` must honour an HUE_*_FILE override for their
+    write target, not just <dir>/<name>, matching what reads already do."""
 
     def test_export_target_is_the_resolved_HUE_DESIGNS_FILE(
             self, hue_cli, tmp_path, monkeypatch):
@@ -58,9 +58,9 @@ class TestCliWritesHonourEnvOverride:
 
 
 class TestCmdStartFirstRunDetectionHonoursEnvOverride:
-    """RED step 2: `_cmd_start` checked <dir>/scene-groups.yaml /
-    <dir>/scene-designs.yaml directly, so an env-overridden pair that exists
-    ELSEWHERE read as first-run even though the working files are already
+    """`_cmd_start` must not check only <dir>/scene-groups.yaml /
+    <dir>/scene-designs.yaml directly -- an env-overridden pair that exists
+    ELSEWHERE must not read as first-run when the working files are already
     established."""
 
     def test_established_via_env_override_is_not_first_run(
@@ -100,8 +100,8 @@ class TestCmdStartFirstRunDetectionHonoursEnvOverride:
 
 
 class TestSceneLayersFreshDefaultsAreCwdBased:
-    """RED step 3: loaded fresh with no env override, GROUPS_YAML/DESIGNS_YAML
-    used to fall back to a path under this repo (../references/<name> or
+    """Loaded fresh with no env override, GROUPS_YAML/DESIGNS_YAML must not
+    fall back to a path under this repo (../references/<name> or
     <script-dir>/<name>) -- i.e. derived from __file__. They must resolve
     against the cwd instead, and standalone --export-designs (no PATH) must
     fail argparse usage (exit 2) rather than silently defaulting and reaching
@@ -152,10 +152,10 @@ class TestSceneLayersFreshDefaultsAreCwdBased:
 
 
 class TestBridgeSessionNoKeyNamesPairNotSecrets:
-    """RED step 4: with no HUE_APP_KEY, no HUE_KEY_FILE, and no paired key
-    file, the error used to point at secrets/hue-bridge-key.txt (a legacy,
-    cwd-relative fallback); it must instead name `hue-kit pair` and never
-    mention secrets/."""
+    """With no HUE_APP_KEY, no HUE_KEY_FILE, and no paired key file, the
+    error must not point at secrets/hue-bridge-key.txt (a cwd-relative
+    fallback); it must instead name `hue-kit pair` and never mention
+    secrets/."""
 
     def test_no_key_configured(self, scene_layers, tmp_path, monkeypatch):
         monkeypatch.delenv("HUE_APP_KEY", raising=False)
