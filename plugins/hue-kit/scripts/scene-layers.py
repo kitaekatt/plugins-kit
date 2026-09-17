@@ -362,6 +362,18 @@ def bake_ok(scene, layers):
 # ========================================================================
 # 2. Candidate pools
 # ========================================================================
+# MAX_ATOMS: cap on the atom count unions_of will enumerate over. unions_of
+# builds every non-empty union of the atom set, 2**MAX_ATOMS candidates, so
+# this bounds that enumeration to 2**20.
+MAX_ATOMS = 20
+
+# MAX_CELLS_PER_SCENE: cap on the cell count of any single scene.
+# cell_union_pool enumerates 2**len(cells) candidate unions for each scene it
+# processes, the same enumeration shape MAX_ATOMS bounds for unions_of, so it
+# reuses that bound (2**20) per scene.
+MAX_CELLS_PER_SCENE = MAX_ATOMS
+
+
 def atoms_of(scenes):
     """Common refinement of every scene's partition (cells + off)."""
     parts = frozenset({frozenset(s["off"]) for s in scenes if s["off"]})
@@ -378,7 +390,7 @@ def atoms_of(scenes):
 def unions_of(atoms):
     """All non-empty unions of the given atom sets (capped for safety)."""
     n = len(atoms)
-    if n > 20:
+    if n > MAX_ATOMS:
         raise RuntimeError(f"{n} atoms -> pool too large; refine input")
     pool = set()
     for r in range(1, n + 1):
@@ -423,7 +435,7 @@ def min_family(pool, scenes, seed_upper=None, tiebreak=True):
     skips the tie exploration (first minimum wins -- cheaper; use when only
     the minimum SIZE matters, e.g. the interpretability probe)."""
     pool = set(pool)
-    rel = {i: sorted(relevant(s, pool), key=lambda g: -len(g))
+    rel = {i: sorted(relevant(s, pool), key=lambda g: (-len(g), sorted(g)))
            for i, s in enumerate(scenes)}
 
     best = {"F": set(seed_upper) if seed_upper else None,
@@ -484,7 +496,7 @@ def slack_family(pool, scenes, k_max, seed):
     groups cannot game the objective; both components are monotone under
     group addition, so the partial (overlap, size) is an admissible bound."""
     pool = set(pool)
-    rel = {i: sorted(relevant(s, pool), key=lambda g: len(g))
+    rel = {i: sorted(relevant(s, pool), key=lambda g: (len(g), sorted(g)))
            for i, s in enumerate(scenes)}
 
     best = {"F": set(seed), "ov": pairwise_overlap(seed), "size": len(seed)}
@@ -558,9 +570,30 @@ def solve(scenes):
     equal to Fmin unless the budget buys strictly lower overlap.  layers are
     computed against Fsel.  Depends only on the scene partitions -- the
     universe U and named zones are the caller's concern (naming/reporting),
-    never the solve itself."""
+    never the solve itself.
+
+    Refuses BEFORE either candidate pool is enumerated: a scene over
+    MAX_CELLS_PER_SCENE cells would blow up cell_union_pool's per-scene
+    enumeration, and more than MAX_ATOMS atoms would blow up unions_of's
+    enumeration -- both checked here first, cheaply, rather than discovered
+    mid-enumeration."""
+    max_cells = max((len(s["cells"]) for s in scenes), default=0)
+    if max_cells > MAX_CELLS_PER_SCENE:
+        raise SystemExit(
+            f"error: a scene has {max_cells} colour cells, over the "
+            f"{MAX_CELLS_PER_SCENE}-cell solver cap (2**{max_cells} "
+            "candidate unions for that scene alone) -- split the scene into "
+            "fewer colour cells")
+    atoms = atoms_of(scenes)
+    n_atoms = len(atoms)
+    if n_atoms > MAX_ATOMS:
+        raise SystemExit(
+            f"error: {n_atoms} atoms (the common refinement of every "
+            f"scene's cells) is over the {MAX_ATOMS}-atom solver cap "
+            f"(2**{n_atoms} candidate unions) -- reduce distinct colour "
+            "cells or split the scene set")
     upper = min_family(cell_union_pool(scenes), scenes)
-    full_pool = unions_of(atoms_of(scenes))
+    full_pool = unions_of(atoms)
     Fmin = min_family(full_pool, scenes, seed_upper=upper)
     Fsel = slack_family(full_pool, scenes, len(Fmin) + SLACK, seed=Fmin)
     layers = {s["name"]: express(s, Fsel, want_layers=True) for s in scenes}
@@ -581,7 +614,7 @@ def report(U, zones, scenes):
     forced = {s["cells"][0] for s in scenes if len(s["cells"]) == 1}
     if forced:
         print("\nsingle-cell scenes force these exact groups:")
-        for g in sorted(forced, key=lambda g: -len(g)):
+        for g in sorted(forced, key=lambda g: (-len(g), sorted(g))):
             who = [s["name"] for s in scenes
                    if len(s["cells"]) == 1 and s["cells"][0] == g]
             print(f"    |{len(g):2d}|  {name(g):32s} <- {who}")
@@ -592,7 +625,7 @@ def report(U, zones, scenes):
         f" (certified minimum {len(Fmin)}; +{len(F) - len(Fmin)} for a " \
         "better-structured, lower-overlap family)"
     print(f"\n*** GLOBAL META-GROUP FAMILY:  |F| = {len(F)}{extra} ***")
-    for g in sorted(F, key=lambda g: -len(g)):
+    for g in sorted(F, key=lambda g: (-len(g), sorted(g))):
         print(f"    |{len(g):2d}|  {name(g)}")
 
     print("\n" + "=" * 72)
@@ -634,7 +667,7 @@ def json_result(U, zones, scenes):
         "n_lights": len(U),
         "k_min": len(Fmin),
         "family": [{"name": name(g), "lights": sorted(g), "size": len(g)}
-                   for g in sorted(F, key=lambda g: -len(g))],
+                   for g in sorted(F, key=lambda g: (-len(g), sorted(g)))],
         "scenes": {
             sname: [{"group": name(g), "lights": sorted(g),
                      "cell": sorted(c)} for g, c in ly]
@@ -742,8 +775,10 @@ def _cell_cfg(cell):
 def export_designs(data):
     """Build the layered scene-designs.yaml text from live cells + the
     registry. VERIFIES the registry family expresses AND bakes every scene
-    before emitting (fail loud) so the design file is always faithful.
-    Returns (yaml_text, n_groups, n_min, n_sel)."""
+    before emitting (fail loud) so the design file is always faithful. The
+    registry family is taken as given -- it does not solve for a minimum, so
+    a scene set over the solver's caps still exports as long as the registry
+    expresses it. Returns (yaml_text, n_groups)."""
     zone_lightsets = data["light_groups"]
     fam = load_group_registry(zone_lightsets, data["universe"])
     name_of = {g: n for n, g in fam}
@@ -753,7 +788,6 @@ def export_designs(data):
     F = {g for _, g in fam}
 
     _U, _zones, scenes = build_model(data)
-    Fmin, Fsel, _layers, _upper, _pool = solve(scenes)  # informational sizes
 
     color_by_cell = {}
     for s in data["scenes"]:
@@ -801,7 +835,7 @@ def export_designs(data):
                 line = f"{line.ljust(58)}  # {hsl}"
             out.append(line)
         out.append("")
-    return "\n".join(out).rstrip() + "\n", len(fam), len(Fmin), len(Fsel)
+    return "\n".join(out).rstrip() + "\n", len(fam)
 
 
 def _zone_token(zname):
@@ -840,7 +874,7 @@ def export_groups(data):
     the groups, then `--export-designs`."""
     U, zones, scenes = build_model(data)
     Fmin, F, _layers, _upper, _pool = solve(scenes)
-    fam = sorted(F, key=lambda g: -len(g))
+    fam = sorted(F, key=lambda g: (-len(g), sorted(g)))
     out = [
         "# Layered scene-group registry -- GENERATED by `scene-layers.py",
         "# --export-groups`. Certified minimum |F| = %d; this family has %d"
@@ -1427,16 +1461,12 @@ def main() -> int:
         return 0
 
     if args.export_designs:
-        text, n_groups, n_min, n_sel = export_designs(data)
+        text, n_groups = export_designs(data)
         dest = Path(args.export_designs)
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_text(text)
-        note = "" if n_groups <= n_sel else \
-            f"  WARNING: registry has {n_groups} groups but the solver " \
-            f"selects {n_sel} (certified minimum {n_min}) -- the family " \
-            "is larger than it needs to be"
         print(f"wrote {dest}  ({len(data.get('scenes', []))} scenes, "
-              f"{n_groups}-group vocabulary){note}")
+              f"{n_groups}-group vocabulary)")
         return 0
 
     if args.export_cells:
