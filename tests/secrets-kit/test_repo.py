@@ -361,7 +361,7 @@ class TestRollback:
 
 
 class TestDisplayUrl:
-    """I18 / SK-SOL-15: the repository-diagnostic display helper."""
+    """The repository-diagnostic display helper."""
 
     def test_removes_userinfo_and_keeps_scheme_host_port_path(self):
         sanitized = repo_mod.display_url(
@@ -387,7 +387,7 @@ class TestDisplayUrl:
 
 
 class TestCredentialSafeCloneDiagnostics:
-    """I18 / SK-SOL-15: a userinfo credential in the repo URL must never reach
+    """A userinfo credential in the repo URL must never reach
 
     a rendered success note, error, or deadline message, while the subprocess
     that actually runs git keeps receiving the original URL untouched.

@@ -1,12 +1,12 @@
 """Tests for secrets_kit.agefile -- the process boundary around the age CLI.
 
-Pins I16: decrypt_with_identity used to wrap its whole body -- including the
-PATH resolution -- in one ``except SecretsError`` that re-typed EVERY failure
-as ``DecryptError``. A missing binary, a spawn failure (OSError), or a caller
+Pins: decrypt_with_identity re-types ONLY a completed nonzero age exit as
+``DecryptError``. A missing binary, a spawn failure (OSError), or a caller
 deadline (subprocess.TimeoutExpired) are dependency/operation faults with
 nothing to do with the identity; only a completed nonzero age exit means the
-identity cannot open the blob. Re-typing the first three drove an "unlock
-again" passphrase-prompt remedy for faults a passphrase can never fix.
+identity cannot open the blob. Re-typing the other three would drive an
+"unlock again" passphrase-prompt remedy for faults a passphrase can never fix,
+so they propagate under their own exception types instead.
 
 No stderr-string heuristic is used anywhere here or in the source: the three
 dependency-fault categories are distinguished by which exception the process
@@ -164,9 +164,9 @@ def test_encrypt_to_recipient_nonzero_exit_is_plain_secrets_error(tmp_path, monk
 
 
 # ---------------------------------------------------------------------------
-# D03 / S02: the unused alternate interactive runner is gone, and the
-# operations that keep the terminal (wrap_identity, unwrap_identity) are
-# untouched, deliberately unbounded tty operations -- no timeout added.
+# The unused alternate interactive runner is gone, and the operations that
+# keep the terminal (wrap_identity, unwrap_identity) stay deliberately
+# unbounded tty operations -- no timeout added.
 # ---------------------------------------------------------------------------
 
 
