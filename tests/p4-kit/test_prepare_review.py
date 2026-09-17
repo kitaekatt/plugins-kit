@@ -199,12 +199,22 @@ class TestBootstrapDependencyDiagnostics:
             "plugin's dependencies, then retry.\n"
         )
 
-    def test_manifest_requires_bootstrap_0113_contract_floor(self):
+    def test_manifest_requires_bootstrap_covers_every_call_shape(self):
+        """The floor covers prepare_review.py's 0.113.0 shared-API contract
+        and the skill's guarded BOOTSTRAP_PYTHON launcher (the interpreter
+        contract's MIN_VERSION, 0.120.0), whichever is newer."""
+        from bootstrap_lib.interpreter_env import MIN_VERSION
+
         manifest = json.loads(
             Path("plugins/p4-kit/bootstrap.json").read_text(encoding="utf-8")
         )
 
-        assert manifest["requires_bootstrap"] == "0.113.0"
+        def version(text):
+            return tuple(int(part) for part in text.split("."))
+
+        floor = manifest["requires_bootstrap"]
+        assert floor == max("0.113.0", MIN_VERSION, key=version)
+        assert version(floor) >= version("0.113.0")
 
     @pytest.mark.parametrize(("error", "bootstrap_failure"), [
         ("ModuleNotFoundError(\"No module named 'markdown_it'\", name='markdown_it')", False),

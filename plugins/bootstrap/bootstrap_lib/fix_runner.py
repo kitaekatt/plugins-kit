@@ -164,6 +164,12 @@ def _child_env(bash: str) -> dict:
     # Runner._shell_argv restores it inside the elevation via `env HOME=`.
     if os.name == "nt":
         env["HOME"] = _msys_home(os.path.expanduser("~"))
+    # Mirrors bootstrap_lib.interpreter_env.begin_pass; inlined because this
+    # runner is stdlib-only and launched by path.
+    env.pop("BOOTSTRAP_PROJECT_PYTHON", None)
+    env["BOOTSTRAP_PYTHON"] = (
+        sys.executable.replace("\\", "/") if os.name == "nt" else sys.executable
+    )
     return env
 
 
@@ -443,12 +449,18 @@ class Runner:
         console's bash defaults $HOME to the msys /home/<user>, so the queued
         `~`/`$HOME` is repaired through the child environment in _child_env
         (Windows has no sudo hop to carry an `env HOME=` prefix).
+
+        BOOTSTRAP_PYTHON needs the same `env` treatment as HOME: sudo's
+        env_reset drops the child env (see _child_env) before `env` runs
+        inside the sudo'd process, so a queued command that reads
+        `$BOOTSTRAP_PYTHON` would otherwise find it unset under elevation.
         """
         argv = [self.bash, "-c", command]
         if elevated and not self._is_windows:
             # -n would fail outright with no TTY; the runner HAS a TTY (the user
             # started it), so an interactive password prompt is correct here.
-            argv = ["sudo", "env", f"HOME={self.home}"] + argv
+            argv = ["sudo", "env", f"HOME={self.home}",
+                    f"BOOTSTRAP_PYTHON={self.env['BOOTSTRAP_PYTHON']}"] + argv
         return argv
 
     def run_command(self, task):

@@ -27,7 +27,7 @@ The bootstrap engine has two distinct setup phases:
 
    **Registry-v2 fallback** (`plugin_resolve.discover_cache_plugins`, added 0.47.0): newer Claude Code keeps `installed_plugins.json` at `{"version": 2, "plugins": {}}` for marketplace installs — enablement lives in settings `enabledPlugins` and the code in `~/.claude/plugins/cache/<mkt>/<plugin>/<version>/`. Observed live 2026-07-16: after wiping `~/.claude/plugins`, all plugins re-synced and ran but the registry stayed empty, so the engine provisioned nothing but bootstrap itself. For any *enabled* ref the registry doesn't record, discovery synthesizes the entry from the cache (highest version dir = the code Claude Code loads); registry entries always take precedence. The enablement filter comes from `_load_enabled_refs` (settings `enabledPlugins` + registry); with no enablement source at all the fallback stays off — never provision blindly. The harvest has the same fallback (`harvest._cache_installed_bootstrap`) for reading bootstrap's installed version.
 
-   **Dev layout note**: When running the engine directly against the source tree (e.g. `python plugins/bootstrap/engine/bootstrap_engine.py --plugin-root plugins/bootstrap ...`), `plugins/installed_plugins.json` does not exist. `list_enabled_plugins()` returns `[], False` and sibling plugins (unreal-kit, p4-kit, ...) are not auto-discovered. This is expected and not part of any real dev workflow — the engine runs cleanly with no plugin output.
+   **Dev layout note**: When running the engine directly against the source tree (e.g. `"$BOOTSTRAP_PYTHON" plugins/bootstrap/engine/bootstrap_engine.py --plugin-root plugins/bootstrap ...` -- the engine is bootstrap's own code, so it is launched under the forced form, never `uv run python`; see references/python-interpreter.md), `plugins/installed_plugins.json` does not exist. `list_enabled_plugins()` returns `[], False` and sibling plugins (unreal-kit, p4-kit, ...) are not auto-discovered. This is expected and not part of any real dev workflow -- the engine runs cleanly with no plugin output.
 
 Discovery results are cached in `plugins/data/plugins-kit/bootstrap/config.json` under `bootstrap_cache` to avoid repeated filesystem scans — entries are added on first discovery and removed if `bootstrap.json` disappears (e.g. after a plugin update). Users can permanently opt out a plugin by adding its ref to `no_bootstrap` in that config file.
 
@@ -133,6 +133,44 @@ still need the
 separate `bootstrap-stuck-fix` plugin (`scripts/repair_registry.py`), which has
 no prior version to be wedged on. See the delivery-path rule in the repo
 CLAUDE.md and the `update_lifecycle` fact in the bootstrap SKILL.md.
+
+### Step 3c1: interpreter export, persistence, and shell integration
+
+Two environment variables, `BOOTSTRAP_PYTHON` and `BOOTSTRAP_PROJECT_PYTHON`,
+are exported at three points in a pass rather than one, because the correct
+value changes as more is learned: (1) immediately after the pass begins --
+`BOOTSTRAP_PYTHON` set to this process's own interpreter, and
+`BOOTSTRAP_PROJECT_PYTHON` to the normative resolution rule's answer with no
+manifest knowledge yet (a `--project-dir` is known, but not yet whether the
+project declares `project_venv` or opts out of detection via
+`project_python: false`); (2) here, at
+Step 3c1, immediately after the layered manifest loads and before
+`_process_manifest` runs, so that pass's `tools[].check`/`install` commands
+see the manifest-aware value; (3) after the `project_venv` step (3d)
+completes, the VERIFIED interpreter is exported and the per-project record
+under `<data_dir>/project_python/<key>` is written (or removed, if this pass
+resolved to the bootstrap interpreter for a project that previously had a
+record) -- the record is what lets a throttled session's SessionStart hook and
+the always lane answer correctly without loading the manifest themselves.
+
+Persistence and the shell hook are also decided here, from the layered
+`interpreter_env` key (`persist`, `shell_hook`; both default `true`, read
+from user layers only): `persist` runs `BOOTSTRAP_PYTHON` through the same
+`env_vars` machinery as any other persisted variable (rc files, the Windows
+registry), but only when the deterministic standalone interpreter exists and
+is executable -- a venv or fallback interpreter is never persisted
+machine-wide. The first successful persist on a machine displays one
+discoverability line; steady state is a verbose ok entry. `shell_hook` calls
+`shell_hook.ensure(...)`, which copies the shell templates into the data
+directory and adds (or, when disabled, removes) the rc line / PowerShell
+profile line that keeps `BOOTSTRAP_PROJECT_PYTHON` current per directory in a
+terminal -- see references/python-interpreter.md for what each does and does
+not cover. Both steps are skipped entirely, with a verbose note, under test
+isolation (`BOOTSTRAP_SKIP_SHELL_INTEGRATION`) or a redirected data root
+(`CLAUDE_BOOTSTRAP_DATA_ROOT`), and when the layered manifests themselves
+failed to parse -- a broken layer must never silently drop a user's opt-out.
+
+Full contract: references/python-interpreter.md.
 
 ### Step 3c2: bootstrap profile resolution
 

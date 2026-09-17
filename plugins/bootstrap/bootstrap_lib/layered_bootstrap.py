@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from . import engine
+from . import engine, interpreter_env
 from .records import PassRecorder, RecordingList
 
 
@@ -79,6 +79,30 @@ def run_layered_bootstrap(
     # Reuse provisioned YAML/config dependencies; this only adds existing
     # site-packages paths and performs no runtime installation or repair.
     engine._activate_bootstrap_venv(str(data_dir))
+    # This path never enters engine._main, so it resets the interpreter names
+    # itself, before any manifest command runs (see interpreter_env).
+    engine_python = interpreter_env.begin_pass()
+    result.checks.append(f"python: {interpreter_env.ENGINE_VAR}={engine_python}")
+    # The project default by the normative rule, WITHOUT the record: the
+    # record key is the hook's hash of Claude's cwd, which this terminal cwd
+    # cannot reproduce. No record write, no persistence, no shell hook here.
+    # A project whose PROJECT layer declares "project_python": false gets no
+    # project name; the key in a user layer is ignored (engine
+    # _project_python_opt_out).
+    project_python_source = None
+    if project_dir:
+        user_layers, project_layers = engine._interpreter_env_layers(
+            str(project_dir), profile_state)
+        opted_out = engine._project_python_opt_out(
+            user_layers, project_layers, result.details)
+        pp_value, project_python_source = interpreter_env.export_project_default(
+            str(project_dir),
+            subdir=engine._project_venv_subdir(str(project_dir), manifest),
+            opted_out=opted_out,
+            record_dir=None,
+        )
+        result.checks.append(
+            engine._project_python_entry(pp_value, project_python_source))
     if manifest:
         result.failures.extend(engine._process_manifest(
             manifest, current_os, str(data_dir), str(plugin_root),
@@ -94,6 +118,17 @@ def run_layered_bootstrap(
             result.actions.extend(actions)
             result.checks.extend(checks)
             result.failures.extend(failures)
+            if key == "project_venv" and not failures:
+                if project_python_source in engine._PROJECT_PYTHON_OUTRANKS_VENV:
+                    result.checks.append(
+                        engine._kept_over_venv_entry(project_python_source))
+                    continue
+                project_python = engine._export_project_python(
+                    manifest[key], str(project_dir))
+                if project_python:
+                    result.checks.append(
+                        f"project_venv: exported "
+                        f"{interpreter_env.PROJECT_VAR}={project_python} (process)")
     # SessionStart's default-on link operation is not an implicit CLI task.
     if "agent_skills_link" in manifest:
         actions, checks, failures = engine._run_agent_skills_link_check(

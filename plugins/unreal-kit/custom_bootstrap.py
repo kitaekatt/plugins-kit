@@ -46,6 +46,19 @@ def bootstrap(ctx: Any) -> None:
         return
 
     from bootstrap_lib.config_resolve import resolve_plugin_data_dir
+    from bootstrap_lib.interpreter_env import PLUGIN_CALL_SITE_EXPR
+
+    # refresh_unreal_stub.py re-execs into unreal-kit's own provisioned venv
+    # (bootstrap_guard.reexec_under_plugin_venv), so any interpreter that can
+    # reach it is sufficient -- but an agent typing this message verbatim has
+    # neither `uv` nor the plugin venv resolved for it. Route through the
+    # guarded $BOOTSTRAP_PYTHON expression bootstrap exports into every
+    # session instead of a bare `python` (see /bootstrap fact
+    # python_interpreter and python-interpreter.md).
+    refresh_stub_launcher = (
+        f"{PLUGIN_CALL_SITE_EXPR} ${{CLAUDE_PLUGIN_ROOT}}/scripts/"
+        "refresh_unreal_stub.py --project-root <project-root>"
+    )
 
     generated_stub = (
         Path(uproject).parent / "Intermediate" / "PythonStub" / "unreal.py"
@@ -91,12 +104,8 @@ def bootstrap(ctx: Any) -> None:
             "missing, start a new Claude Code session so bootstrap can download "
             "it. If project-specific API search is needed, enable Developer Mode, "
             "complete a full compile so Intermediate/PythonStub/unreal.py exists, "
-            "then run `python ${CLAUDE_PLUGIN_ROOT}/scripts/"
-            "refresh_unreal_stub.py --project-root <project-root>`."
+            f"then run `{refresh_stub_launcher}`."
         ),
-        satisfied_by=(
-            "python ${CLAUDE_PLUGIN_ROOT}/scripts/refresh_unreal_stub.py "
-            "--project-root <project-root>"
-        ),
+        satisfied_by=refresh_stub_launcher,
     )
     ctx.log_ok("stubs: durable enriched stub refresh deferred to explicit action")

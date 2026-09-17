@@ -293,6 +293,7 @@ None outstanding.
 | job-kit | selection is deterministic caller preference; no scoring, aliases, or learned routing | Registered in `plugins/CLAUDE.md`. Forecloses adaptive routing on purpose: an unattended run must be explainable from its inputs, and the user who wants judgment wants `awesome-kit:orchestrate`. Within a run job-kit only NARROWS the stated order (halted endpoints excluded), and the ledger records each exclusion. |
 | job-kit | a run-level deny floor is a selection requirement, not best-effort | Registered in `plugins/CLAUDE.md`. A team preferring best-effort application has only the remedy of dropping the floor, which is deliberate: a floor sometimes not applied is not a floor, and unattended is exactly the case where nobody notices. |
 | job-kit | git is the only workspace-isolation VCS | Registered in `plugins/CLAUDE.md`, same reasoning as awesome-kit:task. Isolation is opt-in (`workspace.isolate: true`). Bounded and recorded, never silent: a job requesting it in a non-git directory runs in place with `workspace: none` on the attempt row. |
+| bootstrap | a bare `python`/`python3`/`py` command word in a shipped plugin manifest's `tools[].check`/`install` is a displayed lint action entry naming the fact | Registered stance: plugin manifests must be multi-platform, since the target machine's PATH is unknown to the manifest author. The same command in a layered or project manifest -- the author's own machine -- is a log-only entry (never displayed) until the command actually fails; nothing nags a project that chose its own interpreter. Not a seam: the entry never fails the pass, and it names the fix (`BOOTSTRAP_PYTHON`/`BOOTSTRAP_PROJECT_PYTHON`) in its own text. |
 
 Worktree use is outside the razor entirely: plugins take no position on it, so it
 is neither a default nor a registered stance. The rule and its check live in
@@ -303,6 +304,8 @@ is neither a default nor a registered stance. The rule and its check live in
 | Plugin | Opinion | Seam, as built |
 |---|---|---|
 | git-kit, p4-kit | reviewer roster and model routing fixed in SKILL.md | Layered `review_profiles.yaml`. Shipped defaults and the resolver live in `bootstrap_lib.code_review`; precedence is shipped -> `~/.claude/config/review_profiles.yaml` -> `<project_root>/.claude/review_profiles.yaml`. Each plugin's `references/configuration.md` documents the keys and the shipped table (OP-4). The default is pinned byte-for-byte by `test_shipped_only_render_matches_pre_seam_bytes`. |
+| bootstrap | persist `BOOTSTRAP_PYTHON` to shell rc files and the Windows registry | Layered `interpreter_env.persist` (default `true`, user layers only). A power user who never wants a machine-wide Python variable written outside bootstrap's own process/session scope can turn persistence off; the process- and session-scoped exports are unaffected. |
+| bootstrap | install a per-directory `BOOTSTRAP_PROJECT_PYTHON` hook in shell rc files and PowerShell profiles | Layered `interpreter_env.shell_hook` (default `true`, user layers only). A user who does not want bootstrap editing their shell startup files at all -- distinct from the persist opinion above, since this one touches every new terminal's prompt -- can turn the hook off; `false` also removes a previously added line. |
 
 ### FAILS -- correctly hardcoded, do not open these
 

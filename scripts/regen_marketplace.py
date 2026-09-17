@@ -10,9 +10,9 @@ Existing plugin ordering in marketplace.json is preserved; new plugins (newly
 "published": true) are appended alphabetically.
 
 Usage:
-  python scripts/regen_marketplace.py                     # rewrite marketplace.json
-  python scripts/regen_marketplace.py --check             # working tree; exit non-zero on drift
-  python scripts/regen_marketplace.py --check --staged    # index-aware, for the pre-commit hook
+  uv run python scripts/regen_marketplace.py                     # rewrite marketplace.json
+  uv run python scripts/regen_marketplace.py --check             # working tree; exit non-zero on drift
+  uv run python scripts/regen_marketplace.py --check --staged    # index-aware, for the pre-commit hook
 """
 from __future__ import annotations
 
@@ -225,7 +225,7 @@ def main(argv: list[str]) -> int:
             where = "staged" if from_index else "working-tree"
             print(
                 f"marketplace.json is out of sync with its {where} plugin.json sources.\n"
-                "Run: python scripts/regen_marketplace.py",
+                "Run: uv run python scripts/regen_marketplace.py",
                 file=sys.stderr,
             )
             return 1

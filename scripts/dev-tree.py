@@ -16,9 +16,9 @@ Both modes are idempotent and back the original up to a `.dev-tree-backup`
 sidecar next to `installed_plugins.json`. Restore is always lossless.
 
 Usage:
-    python scripts/dev-tree.py dev       # switch to dev-tree mode
-    python scripts/dev-tree.py normal    # restore from backup
-    python scripts/dev-tree.py status    # report current mode
+    uv run python scripts/dev-tree.py dev       # switch to dev-tree mode
+    uv run python scripts/dev-tree.py normal    # restore from backup
+    uv run python scripts/dev-tree.py status    # report current mode
 """
 from __future__ import annotations
 
@@ -164,7 +164,7 @@ def cmd_dev() -> int:
     print()
     print("dev-tree mode ACTIVE.")
     print("  Next `claude` session loads plugin manifests + skills from this repo.")
-    print("  Restore with:  python scripts/dev-tree.py normal")
+    print("  Restore with:  uv run python scripts/dev-tree.py normal")
     return 0
 
 

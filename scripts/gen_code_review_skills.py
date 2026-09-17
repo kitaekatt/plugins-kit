@@ -52,6 +52,31 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "plugins" / "bootstrap"))
 from bootstrap_lib.code_review import lane_prompts  # noqa: E402
 from bootstrap_lib.code_review.review_profiles import EFFORT_LEVELS  # noqa: E402
+from bootstrap_lib.interpreter_env import PLUGIN_CALL_SITE_EXPR  # noqa: E402
+
+# The launcher form for a plugin script that re-execs into its own
+# bootstrap-provisioned venv (interface-v3 section 6): the guarded
+# `$BOOTSTRAP_PYTHON` expression, not `uv run --no-project python` -- an agent
+# running this from a skill has neither `uv` nor the plugin venv resolved for
+# it, and `$BOOTSTRAP_PYTHON` is exported into every bootstrap-managed session
+# (see /bootstrap fact python_interpreter and python-interpreter.md). Single
+# source for every prepare_review.py launch site rendered below.
+PREPARE_LAUNCHER = f"{PLUGIN_CALL_SITE_EXPR} ${{CLAUDE_PLUGIN_ROOT}}/scripts/prepare_review.py"
+# A YAML `tool:` scalar cannot start with a quoted segment (PLUGIN_CALL_SITE_EXPR's
+# own double quotes) and continue unquoted -- wrap the whole value in single
+# quotes so it parses as one scalar; YAML strips only the outer pair, so the
+# decoded value is still the exact bash command above. Markdown code blocks
+# (declined-ledger.md) use the raw, unwrapped PREPARE_LAUNCHER instead, since a
+# reader copy-pastes that straight into bash.
+PREPARE_LAUNCHER_YAML = "'" + PREPARE_LAUNCHER + "'"
+# The same launcher form for the three other review scripts; each re-execs into
+# its kit's plugin venv (reexec_under_plugin_venv via the vendored
+# bootstrap_guard), so bootstrap's own interpreter is enough to start them.
+# They are only ever rendered mid-line (prose, a table cell, a code block, or a
+# `tool:` value that starts with other text), so they need no YAML wrapping.
+LANE_LAUNCHER = f"{PLUGIN_CALL_SITE_EXPR} ${{CLAUDE_PLUGIN_ROOT}}/scripts/run_review_lane.py"
+PARSE_LAUNCHER = f"{PLUGIN_CALL_SITE_EXPR} ${{CLAUDE_PLUGIN_ROOT}}/scripts/parse_review_lane.py"
+RENDER_LAUNCHER = f"{PLUGIN_CALL_SITE_EXPR} ${{CLAUDE_PLUGIN_ROOT}}/scripts/render_review_profiles.py"
 GIT_SKILL = REPO_ROOT / "plugins/git-kit/skills/git-code-review/SKILL.md"
 P4_SKILL = REPO_ROOT / "plugins/p4-kit/skills/p4-code-review/SKILL.md"
 GIT_AGENTS = REPO_ROOT / "plugins/git-kit/agents"
@@ -1049,12 +1074,14 @@ GIT_STEP2 = """\
 __CLAIM_PROBE__
             Then run prepare_review.py to fetch the diff, partition it into chunked .diff fragments on disk, enumerate changed files via `git diff --name-status`, map ancestor CLAUDE.md files for each, detect untracked-or-unstaged files in the directories the diff touches, detect unresolved merge conflicts, and scan ancestor CLAUDE.md files for submit-gate reminders that apply to this range.
 __LAUNCH_EMIT__
-          tool: uv run --no-project python ${CLAUDE_PLUGIN_ROOT}/scripts/prepare_review.py
+          tool: __PREPARE_LAUNCHER__
           input: "<range or argument from step 1>  (append `--claim '**/*.md'` when md-domain is available, per the claim probe)"
           expected: |
             JSON with vcs, range, head_sha, branch, description, project_root, bundle_dir, diff_chunks, changed_files, unique_claude_mds, untracked_or_unstaged, merge_conflicts, submit_gates, change_id, ledger_baseline, ledger_hits, -- only when --claim was passed -- claimed_files, and -- only when a changed file was detected as machine-emitted -- machine_emitted_files (each entry carries identifier, local, size_bytes, and the axis that matched -- machine_emitted_axis `content` or `declared_path` plus the naming machine_emitted_signature; such files are excluded from diff_chunks and changed_files, and `--review-machine-emitted` turns that exclusion off). The raw diff text is NOT inline -- it lives in per-chunk files at `<bundle_dir>/<diff_chunks[i].path>` (paths are relative to bundle_dir). Each `changed_files` entry carries `chunk_index` pointing to the chunk that contains its diff.
           on_failure: Surface the stderr message to the user and stop. No retry.""".replace(
     "__CLAIM_PROBE__", CLAIM_PROBE
+).replace(
+    "__PREPARE_LAUNCHER__", PREPARE_LAUNCHER_YAML
 ).replace(
     "__LAUNCH_EMIT__", LAUNCH_EMIT
 )
@@ -1093,15 +1120,17 @@ P4_STEP2 = """\
 __CLAIM_PROBE__
             Then run prepare_review.py to fetch the diff (with shelved fallback; auto-shelves a pending CL with no existing shelf so the diff is fetchable), partition the diff into chunked .diff fragments on disk, map ancestor CLAUDE.md files for each changed file, detect unreconciled and default-changelist files in the directories the CL touches, detect unresolved merges in the CL, and scan ancestor CLAUDE.md files for submit-gate reminders that apply to this CL.
 __LAUNCH_EMIT__
-          tool: uv run --no-project python ${CLAUDE_PLUGIN_ROOT}/scripts/prepare_review.py
+          tool: __PREPARE_LAUNCHER__
           input: "<CL>  (append `--claim '**/*.md'` when md-domain is available, per the claim probe)"
           expected: |
             JSON with cl, description, project_root, bundle_dir, diff_chunks, changed_files, unique_claude_mds, unreconciled, default_open, stale_open, shelf_drift, unresolved, hygiene_incomplete, submit_gates, auto_shelved, shelf_fingerprint, change_id, ledger_baseline, ledger_hits, -- only when the CL belongs to a different client -- foreign_change, -- only when --claim was passed -- claimed_files, and -- only when a changed file was detected as machine-emitted -- machine_emitted_files (each entry carries identifier, local, size_bytes, and the axis that matched -- machine_emitted_axis `content` or `declared_path` plus the naming machine_emitted_signature; such files are excluded from diff_chunks and changed_files, and `--review-machine-emitted` turns that exclusion off). The raw diff text is NOT inline -- it lives in per-chunk files at `<bundle_dir>/<diff_chunks[i].path>` (paths are relative to bundle_dir). Each `changed_files` entry carries `chunk_index` pointing to the chunk that contains its diff. `auto_shelved=true` means prepare_review created the shelf and step 10 must clean it up.
           on_failure: |
             If prepare reports that the CL belongs to a foreign client, re-run once without `--claim` and use that bundle. State that md-domain subject-lens review is unavailable because claim pre-images depend on the author's client workspace.
             For any other failure, surface the stderr message to the user and stop. No retry.
-            Launch note: ALWAYS invoke through `uv run --no-project python` (as shown in `tool:`), never as a bare path and never as bare `python3` -- `python3` can be absent from PATH on Windows, and `--no-project` keeps uv from syncing the project directory's own environment. Bare `${CLAUDE_PLUGIN_ROOT}/scripts/prepare_review.py <CL>` lets bash try to run the file as a shell script -- it has no shebang line in older checkouts and the exec bit does not survive on Windows checkouts, so bash parses the Python as sh and exits 2. The script self-relocates under the p4-kit venv via reexec, so any interpreter uv resolves is sufficient. And NEVER pipe the invocation (`... | tail`, `... | head`): a pipe makes `$?` the last pipeline stage's status, not the script's, which silently masks a launch failure as success.""".replace(
+            Launch note: ALWAYS invoke through `$BOOTSTRAP_PYTHON` (the guarded expression shown in `tool:`), never as a bare path and never as bare `python`/`python3` -- a bare name is not guaranteed to resolve to any interpreter that can run this script, and `python3` in particular can be absent from PATH on Windows (see /bootstrap fact python_interpreter and python-interpreter.md). Bare `${CLAUDE_PLUGIN_ROOT}/scripts/prepare_review.py <CL>` lets bash try to run the file as a shell script -- it has no shebang line in older checkouts and the exec bit does not survive on Windows checkouts, so bash parses the Python as sh and exits 2. Passing the script as an argument to `$BOOTSTRAP_PYTHON` avoids that entirely: bash only launches the interpreter, never the file. The script self-relocates under the p4-kit venv via reexec, so bootstrap's own interpreter is sufficient. And NEVER pipe the invocation (`... | tail`, `... | head`): a pipe makes `$?` the last pipeline stage's status, not the script's, which silently masks a launch failure as success.""".replace(
     "__CLAIM_PROBE__", P4_CLAIM_PROBE
+).replace(
+    "__PREPARE_LAUNCHER__", PREPARE_LAUNCHER_YAML
 ).replace(
     "__LAUNCH_EMIT__", LAUNCH_EMIT
 )
@@ -1160,7 +1189,7 @@ P4_STEP9_TAIL = """\
 
 GIT_STEP10 = ""
 
-P4_STEP10 = """\
+P4_STEP10 = f"""\
         - n: 10
           action: |
             Run prepare_review.py --cleanup <bundle.bundle_dir> to delete the
@@ -1177,7 +1206,7 @@ P4_STEP10 = """\
 
             Skip this step entirely when `bundle.auto_shelved` is false (we did
             not create the shelf and must not touch it).
-          tool: uv run --no-project python ${CLAUDE_PLUGIN_ROOT}/scripts/prepare_review.py
+          tool: {PREPARE_LAUNCHER_YAML}
           input: "--cleanup <bundle.bundle_dir>"
 """
 
@@ -1469,7 +1498,7 @@ FRAGMENTS = {
         "ISSUE_PATH": "<repo-relative or absolute path>",
         "SG_DESC": GIT_SG_DESC,
         "OUTPUT_FORMAT": GIT_OUTPUT_FORMAT,
-        "PREPARE_TOOL": "uv run --no-project python ${CLAUDE_PLUGIN_ROOT}/scripts/prepare_review.py",
+        "PREPARE_TOOL": PREPARE_LAUNCHER_YAML,
         "LEDGER_RECORD_N": "10",
         "BASELINE_DESC": "the range base SHA advances -- origin/main moves, or HEAD changes for a working-tree review",
     },
@@ -1501,7 +1530,7 @@ FRAGMENTS = {
         "ISSUE_PATH": "<depot or local path>",
         "SG_DESC": P4_SG_DESC,
         "OUTPUT_FORMAT": P4_OUTPUT_FORMAT,
-        "PREPARE_TOOL": "uv run --no-project python ${CLAUDE_PLUGIN_ROOT}/scripts/prepare_review.py",
+        "PREPARE_TOOL": PREPARE_LAUNCHER_YAML,
         "LEDGER_RECORD_N": "11",
         "BASELINE_DESC": "the CL is reshelved, its content edited, or its revisions move",
     },
@@ -1527,8 +1556,8 @@ _SHARED = {
         ("        " + line).rstrip()
         for line in lane_prompts.REVIEWER_C_SYSTEM.splitlines()
     ),
-    "LANE_TOOL": "uv run --no-project python ${CLAUDE_PLUGIN_ROOT}/scripts/run_review_lane.py",
-    "PARSE_TOOL": "uv run --no-project python ${CLAUDE_PLUGIN_ROOT}/scripts/parse_review_lane.py",
+    "LANE_TOOL": LANE_LAUNCHER,
+    "PARSE_TOOL": PARSE_LAUNCHER,
     "MD_DOMAIN_LAUNCH": MD_DOMAIN_LAUNCH,
     "MD_DOMAIN_REPORT": MD_DOMAIN_REPORT,
     "GENERATED_REPORT": GENERATED_REPORT,
@@ -1539,9 +1568,9 @@ _SHARED = {
     # launch gotcha (missing shebang / lost exec bit on Windows checkouts making
     # a bare path parse as sh) is the same hazard PREPARE_TOOL guards against
     # for BOTH kits (git's prepare_review.py ships mode 100644 with no shebang
-    # and exits 126 on a bare-path launch), so both use the explicit
-    # `uv run --no-project python` launcher here too.
-    "RENDER_TOOL": "uv run --no-project python ${CLAUDE_PLUGIN_ROOT}/scripts/render_review_profiles.py",
+    # and exits 126 on a bare-path launch), so both launch it as an argument to
+    # the interpreter, exactly like PREPARE_TOOL.
+    "RENDER_TOOL": RENDER_LAUNCHER,
     "X": X,
     "CHK": CHK,
     "CRS": CRS,
@@ -2027,7 +2056,7 @@ DECLINED_LEDGER_FRAGMENTS = {
         "SKILL_NAME": "git-code-review",
         "CHANGE_ID_LEDGER": "the diff range spec (e.g. `origin/main..HEAD`)",
         "BASELINE_LEDGER": "the range base SHA (`git rev-parse <base>`)",
-        "PREPARE_TOOL": "uv run --no-project python ${CLAUDE_PLUGIN_ROOT}/scripts/prepare_review.py",
+        "PREPARE_TOOL": PREPARE_LAUNCHER,
         "LEDGER_STORE": "~/.claude/plugins/data/plugins-kit/git-kit/reviews/ledger.json",
     },
     "p4": {
@@ -2037,7 +2066,7 @@ DECLINED_LEDGER_FRAGMENTS = {
             "a hash over the CL's shelf fingerprint (content) plus its per-file "
             "(rev, action) map (identity)"
         ),
-        "PREPARE_TOOL": "uv run --no-project python ${CLAUDE_PLUGIN_ROOT}/scripts/prepare_review.py",
+        "PREPARE_TOOL": PREPARE_LAUNCHER,
         "LEDGER_STORE": "~/.claude/plugins/data/plugins-kit/p4-kit/reviews/ledger.json",
     },
 }
@@ -2465,14 +2494,14 @@ CONFIGURATION_FRAGMENTS = {
     "git": {
         "SKILL_NAME": "git-code-review",
         "KIT": "git-kit",
-        "RENDER_TOOL": "uv run --no-project python ${CLAUDE_PLUGIN_ROOT}/scripts/render_review_profiles.py",
-        "LANE_TOOL": "uv run --no-project python ${CLAUDE_PLUGIN_ROOT}/scripts/run_review_lane.py",
+        "RENDER_TOOL": RENDER_LAUNCHER,
+        "LANE_TOOL": LANE_LAUNCHER,
     },
     "p4": {
         "SKILL_NAME": "p4-code-review",
         "KIT": "p4-kit",
-        "RENDER_TOOL": "uv run --no-project python ${CLAUDE_PLUGIN_ROOT}/scripts/render_review_profiles.py",
-        "LANE_TOOL": "uv run --no-project python ${CLAUDE_PLUGIN_ROOT}/scripts/run_review_lane.py",
+        "RENDER_TOOL": RENDER_LAUNCHER,
+        "LANE_TOOL": LANE_LAUNCHER,
     },
 }
 

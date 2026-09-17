@@ -17,17 +17,17 @@ Reached through the `/md-domain audit skill` front door (the member's standalone
 /md-domain audit skill hierarchy -                # HTML printed to stdout
 ```
 
-Direct script invocation (under the plugin's uv venv):
+Direct script invocation (the script re-execs under the plugin's bootstrap-provisioned venv):
 
 ```
-uv run python "${CLAUDE_PLUGIN_ROOT}/skills/md-domain/scripts/report.py" \
+"${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${CLAUDE_PLUGIN_ROOT}/skills/md-domain/scripts/report.py" \
     [roster|hierarchy] [out|-] [--cwd <dir>]
 ```
 
 The HTML renderer (also runnable directly for dev iteration; supplies the backend for `/md-domain audit skill hierarchy`):
 
 ```
-uv run python "${CLAUDE_PLUGIN_ROOT}/skills/md-domain/scripts/skill_hierarchy_report.py" \
+"${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${CLAUDE_PLUGIN_ROOT}/skills/md-domain/scripts/skill_hierarchy_report.py" \
     [--project-root PATH] [--out PATH] [--installed-plugins PATH] [--user-skills PATH]
 ```
 

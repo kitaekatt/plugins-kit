@@ -223,6 +223,17 @@ def cmd_status(args) -> int:
                   "waiting for it"
                   % (r["marketplace"], r["pid"], _duration(r["elapsed_seconds"])))
 
+    # Printed before any blocking follow() below, so it is visible whether or
+    # not a pass is running: which interpreter THIS lever runs under, and
+    # which interpreter the CURRENT DIRECTORY's project would resolve to.
+    print("BOOTSTRAP_PYTHON=%s" % _bootstrap_python_value())
+    project_python = _resolve_project_python()[0]
+    if project_python is None:
+        print("BOOTSTRAP_PROJECT_PYTHON is not set "
+              "(this project declares project_python false)")
+    else:
+        print("BOOTSTRAP_PROJECT_PYTHON=%s" % project_python)
+
     running = [r for r in reports if r["running"]]
     if len(running) == 1:
         return follow(plugin_data_dir(running[0]["marketplace"]))
@@ -244,6 +255,73 @@ def _duration(seconds) -> str:
     if seconds < 60:
         return "%ds" % seconds
     return "%dm%02ds" % (seconds // 60, seconds % 60)
+
+
+def _bootstrap_python_value() -> str:
+    """The interpreter this lever runs under, in the manifest's variable form.
+
+    Mirrors bootstrap_lib.interpreter_env.begin_pass; inlined because this CLI
+    is stdlib-only, like every bootstrap lever.
+    """
+    return sys.executable.replace("\\", "/") if os.name == "nt" else sys.executable
+
+
+def _resolve_project_python(start_dir=None, env=None):
+    """The project interpreter for a working directory: ``(value, source)``.
+
+    IMPORTED, not re-spelled: bootstrap_lib.interpreter_env implements the
+    normative rule (``default_project_python``) and its terminal opt-out walk
+    (``walk_opted_out``), the same one shell/project-python.sh and
+    project-python.ps1 apply. bootstrap_lib is stdlib-only, like this lever.
+    A CLI invocation answers from the directory alone: no manifest load and no
+    per-project record (the record key is the SessionStart hook's hash of
+    Claude's cwd, which a terminal cwd cannot reproduce).
+
+    ``value`` is None, with source ``"opt_out"``, when the nearest decisive
+    directory declares ``"project_python": false``; otherwise ``source`` is one
+    of "virtual_env", "venv", "engine".
+    """
+    from bootstrap_lib import interpreter_env
+
+    if start_dir is None:
+        start_dir = os.getcwd()
+    if env is None:
+        env = os.environ
+    start_dir = str(start_dir)
+    if interpreter_env.walk_opted_out(start_dir, env=env):
+        return None, interpreter_env.OPT_OUT
+    return interpreter_env.default_project_python(start_dir, record_dir=None, env=env)
+
+
+def _cli_shell_path(path, windows) -> str:
+    """Forward-slash form on Windows; mirrors interpreter_env.shell_path."""
+    return path.replace("\\", "/") if windows else path
+
+
+# --------------------------------------------------------------------------
+# python
+# --------------------------------------------------------------------------
+
+def cmd_python(args) -> int:
+    """Print exactly one path: the project default, or this lever's own.
+
+    No label, unlike `status` -- the contract here is a single line meant to
+    be captured directly (``"$(bootstrap python)" script.py``). `--engine`
+    swaps to the interpreter this lever itself runs under, the same value
+    `status` shows as ``BOOTSTRAP_PYTHON=``.
+    """
+    if args.engine:
+        print(_bootstrap_python_value())
+        return 0
+    value = _resolve_project_python()[0]
+    if value is None:
+        # An opted-out project has no project interpreter: an empty line and
+        # status 1, as the shell resolver reports it, so "$(bootstrap python)"
+        # never runs a guessed interpreter.
+        print("")
+        return 1
+    print(value)
+    return 0
 
 
 # --------------------------------------------------------------------------
@@ -854,6 +932,19 @@ def main(argv=None) -> int:
                         "project in the working directory, with this "
                         "bootstrap's version as the minimum")
 
+    # --engine is declared ONLY here, never on `parser` above -- the
+    # discard-before-the-subcommand trap (plugins/CLAUDE.md, "A flag on both
+    # a parser and its subparser is discarded") applies only to a dest shared
+    # by both, which this is not.
+    python_parser = sub.add_parser(
+        "python",
+        help="print the project's Python interpreter for the working "
+             "directory; with --engine, print this lever's own interpreter "
+             "instead")
+    python_parser.add_argument("--engine", action="store_true",
+                               help="print this lever's own interpreter "
+                                    "instead of the project default")
+
     profile_parser = sub.add_parser(
         "profile",
         help="show the bootstrap profile selection, or switch it with "
@@ -917,6 +1008,10 @@ def main(argv=None) -> int:
         if extra:
             parser.error("unrecognized arguments: %s" % " ".join(extra))
         return cmd_profile(args)
+    if args.command == "python":
+        if extra:
+            parser.error("unrecognized arguments: %s" % " ".join(extra))
+        return cmd_python(args)
     # Only `run` and `reset` forward anything, so an unknown flag anywhere
     # else is still an error rather than something silently swallowed.
     if extra:

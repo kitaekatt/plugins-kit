@@ -520,10 +520,18 @@ discover` reporting `zeroconf` unprovisioned while it sat installed in that
 venv); fixed in bootstrap 0.86.3, pinned by
 `test_reexec_happens_when_venv_python_symlinks_to_the_running_base`.
 
-The SKILL.md-side companion (write the explicit venv path in skill examples
-rather than `uv run python`) is documented in the root CLAUDE.md insight
-`host_python_via_plugin_venv`. With the script-side re-exec in place, the
-SKILL.md guidance is a nicety, not a load-bearing requirement.
+The SKILL.md-side companion is in the root CLAUDE.md insight
+`host_python_via_plugin_venv`: launch the script under `"$BOOTSTRAP_PYTHON"`
+and let it re-exec; use the explicit venv path only for a script without a
+re-exec guard; never use `uv run python` outside a skill preload.
+
+**SKILL.md examples launch `"$BOOTSTRAP_PYTHON" ${CLAUDE_PLUGIN_ROOT}/scripts/<script>.py`**
+and rely on the script's `reexec_under_plugin_venv`. A skill `!` preload is
+the exception: Claude Code rejects shell expansion there, so a preload keeps
+`uv run --no-project python`. Details: root CLAUDE.md "Python interpreter
+variables" and `plugins/bootstrap/skills/bootstrap/references/python-interpreter.md`;
+manifest commands: `plugins/bootstrap/skills/bootstrap/references/manifest-reference.md`,
+"Python inside manifest commands".
 
 **Test gotcha: this same re-exec silently short-circuits pytest.** Importing
 `prepare_review.py` triggers `reexec_under_plugin_venv`, which on a machine with

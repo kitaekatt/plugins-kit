@@ -31,6 +31,43 @@ except ImportError:
         force=True,
     )
 
+# The newest bootstrap symbol this script uses. bootstrap_lib imported above,
+# so a failure here means an older bootstrap, not an absent one.
+_BOOTSTRAP_FRONTIER_VERSION = "0.120.0"
+_BOOTSTRAP_FRONTIER = "bootstrap_lib.interpreter_env.PLUGIN_CALL_SITE_EXPR"
+
+
+def _exit_bootstrap_too_old() -> None:
+    """Refuse the search when the linked bootstrap_lib predates the frontier."""
+    from bootstrap_guard import EXIT_BOOTSTRAP_MISSING
+
+    print(
+        "[unreal-kit] the installed 'plugins-kit:bootstrap' plugin is too old "
+        "for unreal-kit's Unreal API search (requires bootstrap >= "
+        f"{_BOOTSTRAP_FRONTIER_VERSION}, which ships {_BOOTSTRAP_FRONTIER}). "
+        "Run `claude plugin update bootstrap@plugins-kit`, then start a new "
+        "session and retry.",
+        file=sys.stderr,
+    )
+    sys.exit(EXIT_BOOTSTRAP_MISSING)
+
+
+try:
+    from bootstrap_lib.interpreter_env import PLUGIN_CALL_SITE_EXPR  # noqa: E402
+except ImportError:
+    _exit_bootstrap_too_old()
+
+# refresh_unreal_stub.py re-execs into unreal-kit's own provisioned venv, so
+# any interpreter that can reach it is sufficient -- but an agent typing this
+# message verbatim has neither `uv` nor the plugin venv resolved for it.
+# Route through the guarded $BOOTSTRAP_PYTHON expression bootstrap exports
+# into every session instead of a bare `python` (see /bootstrap fact
+# python_interpreter and python-interpreter.md).
+_REFRESH_STUB_LAUNCHER = (
+    f"{PLUGIN_CALL_SITE_EXPR} ${{CLAUDE_PLUGIN_ROOT}}/scripts/"
+    "refresh_unreal_stub.py --project-root <project-root>"
+)
+
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     """Parse command-line arguments."""
@@ -64,8 +101,7 @@ def main(argv: list[str] | None = None) -> int:
             print(
                 "Start a new Claude Code session to let bootstrap download the stock "
                 "stub. For an enriched stub, enable Developer Mode, complete a full "
-                "compile, then run `python ${CLAUDE_PLUGIN_ROOT}/scripts/"
-                "refresh_unreal_stub.py --project-root <project-root>`.",
+                f"compile, then run `{_REFRESH_STUB_LAUNCHER}`.",
                 file=sys.stderr,
             )
         return 2

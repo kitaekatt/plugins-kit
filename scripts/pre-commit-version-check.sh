@@ -34,13 +34,21 @@ REPO_ROOT="$(git rev-parse --show-toplevel)"
 # Interpreter resolution, split by what each check actually needs.
 #
 # The checks in this file are stdlib-only and run under a plain interpreter --
-# fast, with no venv sync, and usable on an unprovisioned clone.
+# fast, with no venv sync, and usable on an unprovisioned clone. The project
+# variable is preferred when set (it is the already-resolved answer for this
+# checkout); the deterministic .venv chain stays as the fallback for a shell
+# that never exported it, and PATH is the last resort.
 PLAIN_PYTHON=""
-for candidate in \
-    "$REPO_ROOT/.venv/bin/python" \
-    "$REPO_ROOT/.venv/Scripts/python.exe"; do
-    [ -x "$candidate" ] && { PLAIN_PYTHON="$candidate"; break; }
-done
+if [ -n "${BOOTSTRAP_PROJECT_PYTHON:-}" ] && [ -x "$BOOTSTRAP_PROJECT_PYTHON" ]; then
+    PLAIN_PYTHON="$BOOTSTRAP_PROJECT_PYTHON"
+fi
+if [ -z "$PLAIN_PYTHON" ]; then
+    for candidate in \
+        "$REPO_ROOT/.venv/bin/python" \
+        "$REPO_ROOT/.venv/Scripts/python.exe"; do
+        [ -x "$candidate" ] && { PLAIN_PYTHON="$candidate"; break; }
+    done
+fi
 if [ -z "$PLAIN_PYTHON" ]; then
     for candidate in python3 python py; do
         if command -v "$candidate" >/dev/null 2>&1; then

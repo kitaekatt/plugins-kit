@@ -32,7 +32,24 @@ from collections import OrderedDict
 from datetime import datetime
 from pathlib import Path
 
-from skills_kit_lib.corpus import (
+# skills_kit_lib lives at the plugin root; the vendored bootstrap_guard lives
+# in the plugin's own scripts/ dir (plugins/skills-kit/scripts/). Re-exec
+# under the plugin's provisioned venv before importing skills_kit_lib -- a
+# bare `python` or `uv run` invocation would otherwise miss the shared-lib
+# .pth and fail the import even though bootstrap provisioned the venv
+# correctly (plugins/CLAUDE.md: "Shared-lib scripts must re-exec under the
+# plugin venv").
+_PLUGIN_ROOT = Path(__file__).resolve().parents[3]
+if str(_PLUGIN_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PLUGIN_ROOT))
+if str(_PLUGIN_ROOT / "scripts") not in sys.path:
+    sys.path.insert(0, str(_PLUGIN_ROOT / "scripts"))
+
+from bootstrap_guard import reexec_under_plugin_venv  # noqa: E402
+
+reexec_under_plugin_venv("skills-kit")
+
+from skills_kit_lib.corpus import (  # noqa: E402
     PluginEntry,
     SkillCorpus,
     SkillRecord,

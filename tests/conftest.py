@@ -61,6 +61,55 @@ _XDIST_WORKER = os.environ.get("PYTEST_XDIST_WORKER")
 _GUARDS_ACTIVE = _XDIST_WORKER in (None, "gw0")
 
 
+def _real_documents_dirs():
+    """The developer's REAL Documents directories, resolved at import time.
+
+    Both the registry's ``User Shell Folders\\Personal`` (OneDrive-redirected
+    Documents live there) and the plain ``<home>/Documents`` are watched, for
+    the same reason _REAL_RC_FILES resolves home both ways.
+    """
+    dirs = set()
+    for h in {os.path.expanduser("~"), os.environ.get("HOME") or ""}:
+        if h and os.path.isdir(h):
+            dirs.add(os.path.join(h, "Documents"))
+    if sys.platform == "win32" and _real_winreg is not None:
+        try:
+            with _real_winreg.OpenKey(
+                _real_winreg.HKEY_CURRENT_USER,
+                r"Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders",
+            ) as key:
+                value, _type = _real_winreg.QueryValueEx(key, "Personal")
+                dirs.add(os.path.expandvars(value))
+        except OSError:
+            pass
+    return sorted(d for d in dirs if os.path.isdir(d))
+
+
+# PowerShell profiles bootstrap's shell integration may append to (existing
+# profiles only, by contract -- this guard is the backstop for that contract).
+_REAL_PS_PROFILES = sorted({
+    os.path.join(d, sub, "profile.ps1")
+    for d in _real_documents_dirs()
+    for sub in ("WindowsPowerShell", "PowerShell")
+})
+
+
+@pytest.fixture(autouse=True)
+def _skip_shell_integration(monkeypatch):
+    """Default-deny bootstrap's interpreter-name persistence and shell hooks.
+
+    Sets ``BOOTSTRAP_SKIP_SHELL_INTEGRATION=1`` (the exact name is
+    ``interpreter_env.ISOLATION_ENV``) for every test in every worker. The
+    engine's ``_process_interpreter_env`` and ``shell_hook.ensure`` honour it by
+    performing no rc-file, PowerShell-profile, or registry mutation and no
+    ``BOOTSTRAP_PYTHON`` persistence. An ENVIRONMENT variable rather than a
+    monkeypatched Python default, because engine subprocess tests inherit the
+    environment and inherit nothing that was monkeypatched in-process.
+    A test that exercises persistence opts in with ``monkeypatch.delenv``.
+    """
+    monkeypatch.setenv("BOOTSTRAP_SKIP_SHELL_INTEGRATION", "1")
+
+
 @pytest.fixture(autouse=True)
 def _skip_registry_writes(monkeypatch):
     """Default-deny the Windows registry writer for every test, in every worker.
@@ -71,6 +120,31 @@ def _skip_registry_writes(monkeypatch):
     merely detecting it.
     """
     monkeypatch.setenv("BOOTSTRAP_SKIP_REGISTRY", "1")
+
+
+_BOOTSTRAP_PYTHON_VARS = ("BOOTSTRAP_PYTHON", "BOOTSTRAP_PROJECT_PYTHON")
+
+
+@pytest.fixture(autouse=True)
+def _isolate_bootstrap_python_vars(monkeypatch):
+    """Start every test without the engine's interpreter names, and leak none.
+
+    engine._main and layered_bootstrap.run_layered_bootstrap export these into
+    os.environ (bootstrap_lib.interpreter_env). Tests drive both in-process, so
+    without this a value set by one test is inherited by every later test --
+    and by every engine subprocess they spawn.
+
+    The explicit pop after the yield is load-bearing: monkeypatch.delenv on a
+    name that is absent records nothing to undo, so a value a test sets would
+    otherwise survive teardown. This fixture tears down BEFORE monkeypatch
+    (it depends on it), so monkeypatch then restores any value the developer's
+    shell had exported.
+    """
+    for name in _BOOTSTRAP_PYTHON_VARS:
+        monkeypatch.delenv(name, raising=False)
+    yield
+    for name in _BOOTSTRAP_PYTHON_VARS:
+        os.environ.pop(name, None)
 
 
 @pytest.fixture(autouse=True)
@@ -129,14 +203,15 @@ def _guard_real_shell_rc():
     if not _GUARDS_ACTIVE:
         yield
         return
+    watched = _REAL_RC_FILES + _REAL_PS_PROFILES
     before = {}
-    for path in _REAL_RC_FILES:
+    for path in watched:
         try:
             before[path] = open(path, "rb").read()
         except OSError:
             before[path] = None
     yield
-    for path in _REAL_RC_FILES:
+    for path in watched:
         try:
             after = open(path, "rb").read()
         except OSError:
