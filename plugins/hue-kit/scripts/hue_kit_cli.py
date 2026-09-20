@@ -46,6 +46,10 @@ _HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(_HERE))
 from bootstrap_guard import (require_bootstrap, reexec_under_plugin_venv,  # noqa: E402
                              data_dir)
+try:
+    from bootstrap_guard import plugin_venv_python  # noqa: E402
+except ImportError:  # pragma: no cover - only an out-of-date vendored copy
+    plugin_venv_python = None
 
 reexec_under_plugin_venv("hue-kit")
 
@@ -368,8 +372,12 @@ def _cmd_pair(args) -> int:
     """Mint an application key: press the link button, POST generateclientkey,
     poll ~30s, store the key user-scoped. This is the app-authentication step."""
     import time
-    import requests
-    import urllib3
+    try:
+        import requests
+        import urllib3
+    except ImportError:
+        require_bootstrap("hue-kit", force=True, missing="requests")
+        raise  # pragma: no cover - require_bootstrap always exits the process
     urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
     ip = _resolve_bridge_ip()
@@ -701,6 +709,16 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_pair(args)
 
     workdir = Path(args.dir).resolve()
+
+    # Every remaining verb hands off to scene-layers.py, in place (exec) or as
+    # a subprocess. The bootstrap-log check above says the plugin was
+    # provisioned at least once; it says nothing about whether the venv built
+    # then is still there to run the child under. Confirm the interpreter
+    # exists first, so a missing venv is reported with the same message
+    # instead of the child dying partway through with a bare
+    # ModuleNotFoundError.
+    if plugin_venv_python is None or plugin_venv_python("hue-kit") is None:
+        require_bootstrap("hue-kit", feature="scene tooling", force=True)
 
     if args.cmd == "start":
         return _cmd_start(args)
