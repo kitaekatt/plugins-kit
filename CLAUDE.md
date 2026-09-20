@@ -226,18 +226,36 @@ A release projects dev's tree, so it never merges. When `publish.py` refuses bec
 
 ### Pre-publish validation (default)
 
-**Default gate: before any publish, smoke-test the dev working copy with `claudx`.** `claudx` (defined in `~/.bashrc`) launches a `claude` session loading every `plugins/<name>` dir via one `--plugin-dir` each, so the session runs each plugin's skills/hooks/engine **code** straight from disk -- no cache, no `installed_plugins.json` change, reverts on exit. Run it, exercise the changed surface (invoke the skill, trigger the hook, run the command), confirm it behaves, then publish.
+**Default gate: before any publish, smoke-test the dev working copy with `claudx`.** `claudx` is an alias for `claude-plugin-test` (defined in `~/.bashrc`), which runs [`scripts/claude_plugin_test.py`](scripts/claude_plugin_test.py). It launches a `claude` session with one `--plugin-dir` per plugin ENABLED for the project (`--all` loads the whole tree), so those plugins' skills, hooks and engine **code** load straight from disk, and it also makes the bootstrap engine read their **`bootstrap.json` from disk**. Run it, exercise the changed surface (invoke the skill, trigger the hook, run the command), confirm it behaves, then publish.
 
 ```bash
-claudx        # claude + --plugin-dir for every plugins-kit plugin (see ~/.bashrc)
+claudx                    # plugins enabled for this project: dev code AND dev manifests
+claudx --all              # every plugin in the tree, ignoring enablement
+claudx --fresh            # discard the dev data root first
+claudx --print            # show the command, launch nothing
+claudx -- -p "hello"      # pass args through to claude
 ```
 
-**Known blind spot -- manifest content.** Under `--plugin-dir`, the bootstrap engine still reads each plugin's `bootstrap.json` from its **cached** `installPath`, not from disk (insight `plugin_dir_doesnt_test_cross_plugin`). So `claudx` validates code paths but **not** new `bootstrap.json` content (added tools, `download:` recipes, `venv.check_imports`). When your change touches manifest content, escalate to **`claude-dev`** (also in `~/.bashrc`) -- it uses `scripts/dev-tree.py` to repoint installPaths at the dev tree, so the engine loads `bootstrap.json` from disk too, then auto-restores normal cache mode on exit.
+`--project-dir` selects the project whose scoped settings decide enablement (default: cwd); `--data-root` relocates the session's bootstrap data.
+
+**Enablement filtering is the false-pass trap.** A plugin not enabled for the cwd project is dropped with a `not enabled, skipping: <names>` note on stderr, and a run with nothing enabled exits `error: no enabled <marketplace> plugins for <dir>`. So smoke-testing a plugin that is disabled for the project you launched from produces a GREEN run in which your plugin was never loaded. Use `--all` whenever the plugin under test may not be enabled where you are standing, and read the skipping note before trusting a pass.
+
+**How it reaches manifest content.** Two mechanisms. A synthetic dev-layout `installed_plugins.json` is written into `plugins/` (gitignored), which only an engine running from this working copy discovers -- `_find_plugins_dir` walks up from its own plugin root, so the cached engine every other session runs walks up to the real registry instead. And `CLAUDE_BOOTSTRAP_DATA_ROOT` moves everything bootstrap owns -- venvs, `_shared_libs`, logs, stamps, cooldowns, config -- into a separate tree.
+
+**The containment is real but PARTIAL, and the launcher's own docstring overstates it.** `CLAUDE_BOOTSTRAP_DATA_ROOT` redirects what bootstrap OWNS; it does not redirect what bootstrap REACHES OUT TO. Three escapes are known, all observed on a 2026-09-20 run:
+
+- **The shared-lib link is the dangerous one.** `shared_lib.py`'s `link_shared_lib` registers `<pkg>.pth` pointing at `<shared_root>/<name>/` on the TARGET INTERPRETER. The shared root follows the data root; the interpreter does not. So a test session rewrites `~/.local/share/python-standalone/python/Lib/site-packages/bootstrap_lib.pth` -- the machine-wide standalone interpreter every plugin on the fleet imports through -- to point INTO the test's data root. Delete that data root and every such import breaks until the next ordinary bootstrap pass relinks it. Never delete a test data root without running an ordinary pass afterwards, and reset the cooldown so that pass is not skipped.
+- **Marketplace refresh hits the real clone.** Bootstrap's own `bootstrap.json` sets `"alwaysUpdate": true`, so `_phase_marketplaces` runs `git fetch` against the real `~/.claude/plugins/marketplaces/plugins-kit`. That fetch is also where a test session can hang on network I/O, leaving a stalled engine holding the lock.
+- **`session-bootstrap.sh` writes `~/.local/bin` and the Windows PATH registry**, regardless of the data root. `BOOTSTRAP_SKIP_SHELL_INTEGRATION=1` suppresses the rc-file and registry persistence but gates neither of the two escapes above.
+
+**What `claudx` still does not test**, by construction: anything whose output IS the machine. Package-manager tool installs, PATH / rc-file / registry writes, marketplace clone refreshes, `claude plugin install/update`, `env.json` personalization, and the version-bump -> cache -> auto-update delivery path. A green run means "my plugin works", never "my plugin ships correctly".
 
 | Change touches ... | Default validator |
 |---|---|
 | skills / hooks / commands / engine code | `claudx` |
-| `bootstrap.json` / manifest content | `claude-dev` (dev-tree mode) |
+| `bootstrap.json` / manifest content | `claudx` (it reads manifests from disk) |
+
+**`scripts/dev-tree.py` is the superseded path, and is not the one to reach for.** It repoints installPaths by rewriting the real `~/.claude/plugins/installed_plugins.json`, which is machine-global: every other session, running or subsequent, then sees the dev tree, and a crash before the restore leaves the machine that way silently. The `claude-dev` shell wrapper that used to drive it is gone, so the escalation the table once named does not exist; `claudx` covers both rows.
 
 **Bypassable at your discretion.** This is a default, not a hard gate. Trivial changes -- a version-only bump, a doc/CLAUDE.md edit, a single-file mechanical fix -- don't need a smoke session; skip it and say so. An unambiguous publish go-signal does not silently waive validation, but you may explicitly bypass when the change can't plausibly break a runtime surface.
 
@@ -828,7 +846,8 @@ claude_md:
         skill references (engine-internals.md, plugin-reload-lifecycle.md) -- consult those for
         mechanics. The REPO-specific residue to remember here:
         - dev-tree.py must SYNTHESIZE entries for repo plugins the registry doesn't record,
-          or `claude-dev` mode loads nothing on a v2 machine. publish.py does not use
+          or dev-tree mode loads nothing on a v2 machine (claudx's own synthetic registry
+          does the same job for the same reason). publish.py does not use
           dev-tree.py: its index.html regen passes generate.py a synthetic `--registry` built
           from the repo's own plugin.json files (the 0.47.0 release shipped an empty
           index.html when the page was built from the machine registry).
@@ -883,24 +902,34 @@ claude_md:
       origin: "Surfaced 2026-05-27 while smoke-testing the tool-resolution redesign via claudx (--plugin-dir all dev plugins). jq/gh never got download-recorded because the engine was reading the cached 0.10.14 bootstrap.json which had no download: block."
       added: "2026-05-27"
     - id: plugin_dir_doesnt_test_cross_plugin
-      keywords: [--plugin-dir, claudx, smoke test, cross-plugin, bootstrap testing, installPath, dev tree, cache, layered manifests]
-      summary: --plugin-dir overrides Claude Code's load of one plugin from disk, but the bootstrap engine's per-plugin iteration still reads OTHER plugins' bootstrap.json from their cached installPath.
+      keywords: [--plugin-dir, claudx, claude-plugin-test, claude_plugin_test.py, smoke test, cross-plugin, bootstrap testing, installPath, dev tree, cache, layered manifests, synthetic registry, CLAUDE_BOOTSTRAP_DATA_ROOT, dev-tree superseded]
+      summary: "BARE --plugin-dir still cannot exercise manifest content -- the engine's per-plugin loop reads each plugin's bootstrap.json from its cached installPath. The REMEDY changed: claudx runs scripts/claude_plugin_test.py, which closes the gap with a synthetic dev-layout registry plus a redirected data root, so it validates manifests without touching machine-global state."
       detail: |
-        Loading a plugin via `--plugin-dir <dev tree>` only overrides Claude Code's loading of
-        THAT plugin's hooks/skills. The bootstrap engine's per-plugin loop iterates
-        `installed_plugins.json` and reads each plugin's bootstrap.json from its cached
-        installPath. So when claudx loads every dev plugin via --plugin-dir, the engine
-        still sees each plugin's CACHED bootstrap.json -- not the dev-tree version.
-        Implication: --plugin-dir smoke tests can exercise the new engine code paths (the
-        engine binary is loaded from dev), but they cannot exercise new bootstrap.json content
-        for any plugin without first publishing that plugin. Workarounds: (a) bump versions
-        and publish to test for real; (b) use the `claude-dev` mode helper (`scripts/dev-tree.py`), which rewrites
-        installed_plugins.json to point installPaths at the dev tree -- that does exercise
-        new bootstrap.json content; (c) test new bootstrap.json content via layered manifests
-        in `~/.claude/bootstrap.json` or `<project>/.claude/bootstrap.json`, which DO go
-        through the engine without an installPath lookup.
+        THE UNDERLYING FACT IS UNCHANGED. `--plugin-dir <dev tree>` only overrides Claude
+        Code's loading of that plugin's hooks/skills. The bootstrap engine's per-plugin loop
+        iterates `installed_plugins.json` and reads each plugin's bootstrap.json from its
+        cached installPath, so a BARE --plugin-dir session exercises dev engine CODE against
+        PUBLISHED manifests.
+        WHAT CHANGED IS THE FIX. `claudx` is an alias for `claude-plugin-test`, which runs
+        `scripts/claude_plugin_test.py`. That launcher writes a synthetic dev-layout
+        `installed_plugins.json` into `plugins/`, discovered ONLY by an engine running from
+        this working copy (`_find_plugins_dir` walks up from its own plugin root), and sets
+        `CLAUDE_BOOTSTRAP_DATA_ROOT` to move venvs, `_shared_libs`, logs, stamps, cooldowns
+        and config into a separate tree. So claudx DOES exercise new bootstrap.json content,
+        and writes nothing another session reads.
+        DO NOT reach for `scripts/dev-tree.py`. It rewrites the REAL machine-global
+        `~/.claude/plugins/installed_plugins.json`, so every other session sees the dev tree
+        and a crash before the restore leaves the machine that way silently. It survives in
+        the tree; the `claude-dev` wrapper that drove it is gone.
+        Layered manifests in `~/.claude/bootstrap.json` or `<project>/.claude/bootstrap.json`
+        remain a third route -- they go through the engine with no installPath lookup at all.
+        LIMIT OF THE CONTAINMENT: session-bootstrap.sh installs levers into `~/.local/bin`
+        and writes the Windows PATH registry entries regardless of the data root, and the
+        launcher's own docstring excludes the version-bump -> cache -> auto-update delivery
+        path. A green claudx run means "my plugin works", never "my plugin ships correctly".
       origin: Surfaced 2026-05-27 -- the claudx smoke test couldn't validate jq's new download recipe because the engine kept reading the cached bootstrap.json.
       added: "2026-05-27"
+      updated: "2026-09-20"
     - id: code_review_cross_plugin_cohesion
       keywords: [code-review domain, git-code-review, p4-code-review, cross-plugin cohesion, bootstrap_lib.code_review, dec_13, domain not built, inter-plugin opportunity, surface not merge]
       summary: git-kit:git-code-review + p4-kit:p4-code-review are dec_13-justified doer-skills sharing one subject, but they are deliberately NOT merged into a domain -- the members live in different plugins, and plugin boundaries are hard boundaries for cohesion work. Recorded as an inter-plugin cohesion observation, not acted on.
