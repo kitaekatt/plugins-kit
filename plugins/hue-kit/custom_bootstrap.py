@@ -33,14 +33,18 @@ def bootstrap(ctx: Any) -> None:
         ctx.log_ok("hue-kit: application key configured")
         return
 
-    ctx.add_failure(
+    # DEFERRED, not a failure. Pairing needs a physical button press on a
+    # bridge, so a machine that cannot reach one -- or a developer who never
+    # invokes hue-kit -- can never satisfy it, and add_failure would prompt
+    # them at every session start forever. This is bootstrap's stated case
+    # for the deferred channel: a credential only SOME capability needs.
+    # The point-of-need code finds this in deferred_requirements.json and
+    # asks then, when the user has the context to decide.
+    ctx.add_deferred_requirement(
         "hue_bridge_pairing",
-        # ASK, not AUTO: pairing needs the user to physically press the bridge's
-        # link button -- a user action bootstrap cannot perform. The framework
-        # turns this into an AskUserQuestion prompt (see the bootstrap plugin's
-        # two-outcome contract, engine._ask_reason).
-        ask_reason="action",
-        user_msg="hue-kit wants to pair with your Hue bridge",
+        satisfied_by="hue-kit pair",
+        user_msg="hue-kit needs to pair with your Hue bridge before it can "
+                 "read or write scenes",
         agent_msg=(
             "hue-kit has no application key yet, so it needs to pair with the "
             "user's Hue bridge. Pairing needs a PHYSICAL button press, so this "
@@ -65,4 +69,6 @@ def bootstrap(ctx: Any) -> None:
             "existing key. If they do not use hue-kit, they can decline."
         ),
     )
-    ctx.log("hue-kit wants to pair with your Hue bridge")
+    # Verbose-only: the check logged its outcome, but an unmet DEFERRED
+    # requirement is not an action taken and must not be shown every session.
+    ctx.log_ok("hue-kit: no application key yet; pairing deferred to first use")

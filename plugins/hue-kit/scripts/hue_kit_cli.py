@@ -688,6 +688,23 @@ def _cmd_start(args) -> int:
 def _cmd_init(args) -> int:
     # The init positional wins if given; otherwise fall back to the shared --dir.
     dest = Path(args.init_dir or args.dir).resolve()
+    # REFUSED into the live working directory. These are the AUTHOR's registry
+    # and design -- their home's zones and scenes -- useful as a worked example
+    # and never as live data. Landing them in the working directory makes both
+    # YAML files exist, so `start` reads an established workdir, skips first
+    # run, and every verb then fails on zones no bridge has. Give it somewhere
+    # to read from instead.
+    if dest == Path(DEFAULT_WORKDIR).resolve():
+        print(f"hue-kit: refusing to write the bundled example into the live "
+              f"working directory ({dest}).\n"
+              f"  These examples are one author's home, not a starting point "
+              f"for yours: with both YAML files present `hue-kit start` treats "
+              f"the directory as already set up and every verb then fails on "
+              f"zones your bridge does not have.\n"
+              f"  Read them somewhere else -- `hue-kit init ~/hue-example` -- "
+              f"or build from your own bridge with `hue-kit start`.",
+              file=sys.stderr)
+        return 2
     dest.mkdir(parents=True, exist_ok=True)
     for name in EXAMPLE_FILES:
         src = EXAMPLES / name
