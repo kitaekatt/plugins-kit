@@ -193,6 +193,15 @@ technique_skill:
             hypotheses until evidence is cited. Marking is a classification performed at
             authoring time -- do not grade confidence numerically; the label is binary.
 
+            A USER'S RULING GOES IN VERBATIM. When a brief rests on a decision the user
+            made -- a constraint they set, a question they answered, a scope they fixed --
+            quote their words, and do not restate the ruling anywhere else in the brief. A
+            restatement is authored by you, so it carries your reading of it, and it runs
+            WIDE: it generalizes a specific answer into a principle they did not state. The
+            unit then halts on your sentence instead of reading the artifact, and that halt
+            reads as a defect in the work under review. Extract the ruling from wherever it
+            is recorded and carry it as a quoted block.
+
             EXCLUSIONS HAVE TWO PARTS. A prohibition imposed by the user, repository policy,
             or an authorization boundary is a constraint. The unit never crosses it. A claim
             that an excluded path, component, or artifact does not depend on the change is a
