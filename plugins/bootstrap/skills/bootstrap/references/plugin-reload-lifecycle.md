@@ -336,6 +336,33 @@ Under `~/.claude/plugins/data/<marketplace>/bootstrap/` unless noted:
   a bootstrap-mechanism fix can't use that same mechanism to adopt itself) or when
   bootstrap genuinely appears stuck.
 
+### A plugin skipped on a requires_bootstrap floor
+
+`requires_bootstrap` in a plugin's manifest names the minimum bootstrap engine
+version it needs. When the running engine is older, the engine's floor gate
+skips that plugin's manifest for the pass and logs a note naming the required
+version. The gate (`_requires_bootstrap_unmet` in `bootstrap_lib/engine.py`)
+holds no state of its own -- it reads the CURRENT running `engine_version`
+fresh on every pass, so there is no separate unwedging step: the very next
+pass that runs under a satisfying engine processes the plugin normally.
+
+Whether that next pass happens in THIS session is the same convergence
+question answered above, not a new one:
+
+- **Converges without a restart** when a satisfying bootstrap version is
+  already `installed` (published and fetched into the cache) but this
+  session's SessionStart pass ran an older engine. The harvest launches the
+  new engine on the next prompt via the SAME full pass every SessionStart
+  runs -- not one scoped to bootstrap alone -- so every plugin manifest,
+  including the one the old engine skipped, is reprocessed under the new,
+  satisfying `engine_version`. Cost: one extra prompt, not a restart.
+- **Does not converge on its own** when no version satisfying the floor has
+  been published and fetched yet, so `installed` itself has not advanced
+  past the floor. This is the "`installed` itself never advances" anomaly
+  below -- there is no engine run, harvested or otherwise, that could
+  satisfy the gate. A satisfying bootstrap version has to be published and
+  fetched before this plugin converges.
+
 ### Anomalies — stop, investigate, surface to the user
 
 These mean the normal flow did **not** happen. Raise them; do not report success:

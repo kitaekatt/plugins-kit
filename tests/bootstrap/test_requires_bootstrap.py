@@ -91,3 +91,27 @@ class TestRequiresBootstrapGuard:
             engine_version="0.1.0",
         )
         assert not any(f["type"] == "bootstrap_outdated" for f in all_failures)
+
+    def test_agent_msg_names_the_harvest_convergence_path(self, tmp_path):
+        # The common case needs no user action: a newer bootstrap that already
+        # satisfies the floor converges via the single-session harvest
+        # (bootstrap_lib/harvest.py, launched from the UserPromptSubmit hook)
+        # on this session's next prompt, with no restart. The message must say
+        # so, while staying actionable for the case where nothing is
+        # fetching a satisfying version (the fallback: restart / /plugin
+        # update) -- both must be present, not one traded for the other.
+        pi = _plugin(tmp_path, {"requires_bootstrap": "0.21.0",
+                                "tools": [{"name": "p4"}]})
+        all_failures, display, deferred = [], [], []
+        engine._bootstrap_single_plugin(
+            pi, "windows", _data_dir(tmp_path), all_failures,
+            False, display, deferred, SimpleNamespace(project_dir=None),
+            engine_version="0.20.0",
+        )
+        outdated = [f for f in all_failures if f["type"] == "bootstrap_outdated"][0]
+        assert "harvest" in outdated["agent_msg"]
+        assert "next prompt" in outdated["agent_msg"]
+        assert "/plugin update" in outdated["agent_msg"]
+        # Classification stays an unconditional ASK -- the fix is to the
+        # message text, never a guessed downgrade to a notice.
+        assert engine._ask_reason(outdated) == "action"

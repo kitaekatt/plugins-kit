@@ -1883,8 +1883,23 @@ def _bootstrap_single_plugin(
     # user to update bootstrap -- rather than misprocessing fields we don't grok.
     required_bootstrap = _requires_bootstrap_unmet(plugin_manifest, engine_version)
     if required_bootstrap:
+        # This gate is recomputed fresh every pass (no cache), against
+        # whichever engine_version is actually running. In the common case a
+        # newer bootstrap has already been published and installed, and the
+        # single-session harvest (bootstrap_lib/harvest.py, run from the
+        # UserPromptSubmit hook) launches it automatically on this session's
+        # next prompt -- see the bootstrap skill's update_lifecycle fact. The
+        # message below states that path AND the fallback for when it is NOT
+        # en route (no satisfying version published yet, or nothing fetching
+        # it) -- this call site has no cheap way to tell which case applies
+        # (it would need to read the plugin registry for bootstrap's own
+        # installed version, which is not part of this function's state), so
+        # the classification stays ask_reason="action" rather than being
+        # downgraded on a guess.
         msg = (f"skipped: requires bootstrap >= {required_bootstrap}, but bootstrap "
-               f"{engine_version} is running — update the bootstrap plugin")
+               f"{engine_version} is running -- if a satisfying bootstrap update is "
+               f"already installed, the single-session harvest applies it on this "
+               f"session's next prompt; otherwise update the bootstrap plugin")
         plugin_label, plugin_display_header = _plugin_headers(
             plugin_info, plugin_data_dir, data_dir, engine_version)
         deferred_plugin_logs.append((plugin_data_dir, plugin_label, [msg]))
@@ -1897,8 +1912,14 @@ def _bootstrap_single_plugin(
             "agent_msg": (
                 f"Plugin {plugin_info.name} requires the plugins-kit:bootstrap plugin to be "
                 f">= {required_bootstrap}, but {engine_version} is installed, so its setup was "
-                f"skipped. Update bootstrap (restart Claude / the IDE so the new SessionStart "
-                f"engine loads, or run `/plugin update`), then re-run."
+                f"skipped this pass. In the common case no restart is needed: if a bootstrap "
+                f"version satisfying the floor has already been published and installed, the "
+                f"single-session harvest (the UserPromptSubmit hook) launches it automatically "
+                f"on this session's next prompt, and this plugin converges within that same "
+                f"session -- continue working and re-run bootstrap afterward to confirm. If the "
+                f"floor is still unmet after that, no version satisfying it is available yet or "
+                f"nothing is fetching it: update bootstrap (restart Claude / the IDE so a "
+                f"fetched SessionStart engine loads, or run `/plugin update`), then re-run."
             ),
             "persist_across_sessions": True,
         })
@@ -3410,6 +3431,15 @@ def _normalize_tool_entry(tool_def, current_os):
          but not yet acted on (the elevation queue is a later step); any other
          bare string is exactly {"command": s, "elevated": false}.
 
+         install itself may ALSO be a bare string rather than a per-OS dict --
+         one command for every OS, the shape manifest_lint.py's
+         isinstance(install, str) branch already documents and lints. The only
+         downstream reader of `install` is _ToolEntryCtx, and it only ever
+         consults install.get(current_os) (scoop_pkg/brew_spec/apt_pkg/elevated
+         all key off the SAME os_spec); a top-level string is therefore
+         canonicalized under `current_os` alone, through the identical
+         skip-before-generic rule above.
+
       2. download.<os[-arch]>.scoop (the legacy, deprecated-but-read spelling) ->
          install.<os>.scoop (the canonical structured location). Only the entry
          _resolve_download_def would pick for THIS host is promoted, so per-arch
@@ -3430,13 +3460,24 @@ def _normalize_tool_entry(tool_def, current_os):
     #    generic string->command rule: it canonicalizes to {"skip": true},
     #    never to {"command": "skip"} (design-os-not-applicable.md ruling).
     install = {}
-    for os_key, val in tool_def.get("install", {}).items():
-        if val == "skip":
-            install[os_key] = {"skip": True}
-        elif isinstance(val, str):
-            install[os_key] = {"command": val, "elevated": False}
+    raw_install = tool_def.get("install", {})
+    if isinstance(raw_install, str):
+        # Bare-string install: no per-OS dict was declared at all, so there is
+        # no set of os_key/val pairs to walk -- apply the same skip-before-
+        # generic rule once, keyed to THIS host (the only key any downstream
+        # reader consults; see the docstring note above).
+        if raw_install == "skip":
+            install[current_os] = {"skip": True}
         else:
-            install[os_key] = val
+            install[current_os] = {"command": raw_install, "elevated": False}
+    else:
+        for os_key, val in raw_install.items():
+            if val == "skip":
+                install[os_key] = {"skip": True}
+            elif isinstance(val, str):
+                install[os_key] = {"command": val, "elevated": False}
+            else:
+                install[os_key] = val
 
     new_tool = dict(tool_def)
 
