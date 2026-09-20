@@ -149,6 +149,17 @@ technique_skill:
             compression profile -- does the result compress to a small conclusion?
             High-generation-cost / small-conclusion units are the ideal footprint delegations.
 
+            ORDER BY VALUE, NOT BY ARCHITECTURE. A decomposition comes out in
+            dependency order by default, which puts the foundation first and the
+            payoff last. Before briefing from it, ask which single unit most
+            directly delivers the goal and what it ACTUALLY depends on -- often
+            less than its position implies. Promote that unit. The check is cheap
+            and the payoff is asymmetric: a plan whose first increment delivers
+            the goal can be abandoned at any later point and still leave things
+            better, while one ordered by structure is all cost until the end.
+            State plainly what the promoted unit does NOT cover, so stopping
+            early is an informed choice rather than a surprise.
+
             A decision you would otherwise put to the user is a unit of the same kind: work is
             briefed from it, so it is a plan-checkpoint. Make the call first, then route the
             call -- not the question -- through the rendered tree by its own terms, exactly as
@@ -201,6 +212,15 @@ technique_skill:
             unit then halts on your sentence instead of reading the artifact, and that halt
             reads as a defect in the work under review. Extract the ruling from wherever it
             is recorded and carry it as a quoted block.
+
+            A MECHANICAL EDIT NAMES ITS FALSE POSITIVES. When a brief is a
+            find-and-replace in shape -- renumbering, renaming, migrating a call
+            site -- the pattern it matches will also match text that must NOT
+            change. Enumerate those in the brief as an explicit do-not-touch
+            list, quoting enough of each to identify it, and require the unit to
+            confirm them unchanged in its report. A blind pass corrupts them
+            silently, and the corruption reads as correct precisely because
+            every other instance moved.
 
             EXCLUSIONS HAVE TWO PARTS. A prohibition imposed by the user, repository policy,
             or an authorization boundary is a constraint. The unit never crosses it. A claim
