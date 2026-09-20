@@ -109,7 +109,17 @@ class TestSync:
         with pytest.raises(SecretsError) as excinfo:
             repo_mod.sync(fleet_git.author)
         assert "diverged" in str(excinfo.value)
-        assert "reset --hard" in str(excinfo.value)
+        # The diverged state must NOT hand out an unconditional destructive
+        # recipe: a rotation's identity or blob is generated once, so an
+        # unpushed commit can be its only copy (authoring._prepare_operation
+        # refuses the same state for that reason). Mirrors the norm pinned by
+        # test_sync_view.py::test_actual_init_error_advice_names_cached_
+        # evidence_without_disposable_history.
+        message = str(excinfo.value)
+        assert "reset --hard" not in message
+        assert "safe to throw away" not in message
+        assert "always a FAILED" not in message
+        assert "log --oneline" in message  # it still tells you how to LOOK
 
     def test_raises_when_the_remote_is_unreachable(self, fleet_git, tmp_path):
         _git(fleet_git.author, "remote", "set-url", "origin", str(tmp_path / "gone.git"))

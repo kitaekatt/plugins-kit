@@ -59,6 +59,7 @@ plugins-kit/                          # Marketplace root
 | `plugins/bootstrap/hooks/sessionstart/session-bootstrap.sh` | SessionStart hook (bash wrapper for engine) |
 | `plugins/bootstrap/bootstrap.json` | Bootstrap plugin's own manifest |
 | `plugins/bootstrap/skills/bootstrap/references/engine-internals.md` | Bootstrap engine internals |
+| `docs/reference/shared-lib-architecture.md` | Six findings about the `shared_libs` mechanism (standalone-broadcast collisions, verify-after-write, no revocation, no version marker, `sys.modules` staleness, a duplicated standalone-interpreter path), reviewed 2026-09-20; five open, verify-after-write fixed in bootstrap 0.123.0 |
 | `docs/planning/bootstrap/MILESTONES.md` | Development milestones and progress |
 | `docs/reference/adapters.md` | Current adapter guidance: model-task selection, corpus independence, admission, artifact contract, and task-skill ownership at the emitter |
 | `docs/reference/adapters-negative-results.md` | Closed adapter experiments, disqualified candidates, cost rejections, and explicitly unmeasured deferrals |
@@ -209,6 +210,24 @@ claude --plugin-dir ~/Dev/plugins-kit/plugins/my-plugin
 [docs/reference/publish-reconcile.md](docs/reference/publish-reconcile.md).
 
 Publishing is reversible-but-visible: nothing is destroyed, but it goes out to other machines. The bar is "user has expressed publish intent for this work," not "user has reconfirmed each git command." Treat unambiguous go-signals -- `go`, `ship it`, `publish`, `do it`, `close the loop`, `push` -- as authorizing the whole flow; run `publish.py` and let its preflight be the safety net. Confirm only when intent is genuinely ambiguous (partial work, no version bump in sight, unrelated WIP staged, or the user is mid-thought).
+
+**A publication hold on ONE plugin belongs here, not in a task folder.** A
+release ships the whole range, so every publish from `dev` carries every
+changed plugin; a hold that lives anywhere a publisher does not read binds
+nobody. Recorded because it was tested and failed: a secrets-kit hold was
+kept in a task folder through 2026-09-16 and four separate publishes
+(0.8.25, 0.8.26, 0.8.27-0.8.29, 0.8.30) carried the plugin to `master`
+anyway, each by a session that had no reason to open that folder and did
+nothing wrong. The hold was later accepted as overtaken rather than
+retracted.
+
+Two ways to hold a plugin back that actually work. `"published": false` in
+its `plugin.json` keeps its FILES off `master` on every projection, by a
+mechanism no publisher has to know about. Otherwise the hold goes in THIS
+file, in the section a publisher reads before running `publish.py`, naming
+the plugin and what would lift it. A note anywhere else is a record of an
+intention, not a gate.
+
 
 After publish:
 

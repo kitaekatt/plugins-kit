@@ -972,12 +972,18 @@ def sync(clone_dir: Path) -> None:
         raise SecretsError(
             f"the secrets clone has diverged from the remote "
             f"({ahead} local commit(s), {behind} remote commit(s))",
-            "An unpushed commit in this clone is always a FAILED earlier "
-            "authoring attempt -- every verb here pushes as it writes -- so "
-            "the local side is safe to throw away once you have looked at it:\n"
+            "An unpushed commit here is usually a failed earlier authoring "
+            "attempt -- every verb pushes as it writes -- but it is never "
+            "safe to discard unexamined: a rotation generates its identity "
+            "or blob exactly once, so if the push failed after the commit "
+            "and the recovery directory is gone, that commit is the ONLY "
+            "copy of that material. Look before you decide:\n"
             f"    git -C {clone_dir} log --oneline @{{u}}..HEAD\n"
-            f"    git -C {clone_dir} reset --hard @{{u}}\n"
-            "Then re-run the verb.",
+            f"    git -C {clone_dir} show --stat HEAD\n"
+            "Discard the local side only once you have confirmed every "
+            "change in it exists elsewhere -- already pushed under another "
+            "commit, or reproducible. Otherwise preserve the clone and "
+            "reconcile it the way an authoring-recovery state is handled.",
         )
 
 

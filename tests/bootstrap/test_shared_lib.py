@@ -239,6 +239,107 @@ class TestLink:
         assert r.status == "failed"
 
 
+class TestLinkRollback:
+    """Finding 2 of the shared-lib architecture review: a .pth whose import
+    verification fails must not be left in place, because the cache check at
+    the top of link_shared_lib (_read_text(pth) == desired) would match it on
+    every later call and report "cached" forever -- a link that never worked
+    would never be retried.
+
+    TestStandaloneBroadcastGate above is the pattern this class follows: a
+    control test establishes the behavior the fix must NOT disturb (here,
+    that a genuinely current link still short-circuits, and that a
+    successful link still writes), so the rollback tests cannot pass
+    vacuously.
+    """
+
+    def _linkable(self, tmp_path, monkeypatch):
+        """Publish mylib and stub purelib_of to a real, writable site dir."""
+        plugin_root = tmp_path / "plugin"
+        _make_pkg(str(plugin_root / "lib"), "mylib")
+        shared_root = str(tmp_path / "_shared_libs")
+        shared_lib.sync_shared_lib("mylib", "lib", str(plugin_root), shared_root)
+
+        site = tmp_path / "site"
+        site.mkdir()
+        monkeypatch.setattr(shared_lib, "purelib_of", lambda py: str(site))
+        return shared_root, site
+
+    def test_failed_verification_with_no_prior_pth_leaves_no_file(self, tmp_path, monkeypatch):
+        shared_root, site = self._linkable(tmp_path, monkeypatch)
+        monkeypatch.setattr(shared_lib, "_verify_import", lambda py, name: False)
+        pth = site / "mylib.pth"
+        assert not pth.exists()
+
+        r = shared_lib.link_shared_lib("mylib", sys.executable, shared_root)
+
+        assert r.status == "failed"
+        assert not pth.exists(), "a never-verified .pth must not be left on disk"
+
+    def test_failed_verification_with_prior_pth_restores_it_exactly(self, tmp_path, monkeypatch):
+        shared_root, site = self._linkable(tmp_path, monkeypatch)
+        pth = site / "mylib.pth"
+        prior_content = 'import sys; sys.path.insert(0, r"C:\\some\\other\\place")\n'
+        pth.write_text(prior_content, encoding="utf-8")
+
+        monkeypatch.setattr(shared_lib, "_verify_import", lambda py, name: False)
+        r = shared_lib.link_shared_lib("mylib", sys.executable, shared_root)
+
+        assert r.status == "failed"
+        assert pth.read_text(encoding="utf-8") == prior_content, (
+            "a failed verification must restore the exact prior .pth content"
+        )
+
+    def test_successful_link_still_writes_and_reports_linked(self, tmp_path, monkeypatch):
+        """Control: the rollback path must not fire, and the write must still
+        land, when verification succeeds -- otherwise the rollback tests above
+        could pass merely because link_shared_lib stopped writing at all."""
+        shared_root, site = self._linkable(tmp_path, monkeypatch)
+        monkeypatch.setattr(shared_lib, "_verify_import", lambda py, name: True)
+        pth = site / "mylib.pth"
+
+        r = shared_lib.link_shared_lib("mylib", sys.executable, shared_root)
+
+        assert r.status == "linked"
+        entry = os.path.join(shared_root, "mylib")
+        assert pth.read_text(encoding="utf-8").strip() == 'import sys; sys.path.insert(0, r"%s")' % entry
+
+    def test_cache_still_short_circuits_on_genuinely_current_link(self, tmp_path, monkeypatch):
+        """Control: a .pth that is ALREADY the desired content must still hit
+        the cache path (no write, no verify call) -- the rollback capture
+        (_read_raw before the write) must not have disturbed that check."""
+        shared_root, site = self._linkable(tmp_path, monkeypatch)
+        entry = os.path.join(shared_root, "mylib")
+        pth = site / "mylib.pth"
+        pth.write_text('import sys; sys.path.insert(0, r"%s")\n' % entry, encoding="utf-8")
+
+        verify_calls = []
+        monkeypatch.setattr(
+            shared_lib, "_verify_import",
+            lambda py, name: verify_calls.append((py, name)) or True,
+        )
+
+        r = shared_lib.link_shared_lib("mylib", sys.executable, shared_root)
+
+        assert r.status == "cached"
+        assert verify_calls == [], "cached path must not re-verify"
+
+    def test_rollback_failure_is_reported_in_the_message(self, tmp_path, monkeypatch):
+        """A rollback that itself fails must not be silent -- the failure
+        message must say so, distinct from an ordinary rollback."""
+        shared_root, site = self._linkable(tmp_path, monkeypatch)
+        monkeypatch.setattr(shared_lib, "_verify_import", lambda py, name: False)
+        monkeypatch.setattr(
+            shared_lib, "_rollback_pth",
+            lambda pth, prior_raw: "rollback FAILED (denied): remove it by hand",
+        )
+
+        r = shared_lib.link_shared_lib("mylib", sys.executable, shared_root)
+
+        assert r.status == "failed"
+        assert "rollback FAILED" in r.message
+
+
 # --- end-to-end with a real venv -----------------------------------------
 
 class TestRealVenv:

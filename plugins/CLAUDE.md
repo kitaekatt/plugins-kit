@@ -233,6 +233,17 @@ unconfigurable opinion whose test passes is a finding.
   wants a different tool, and both SKILL.md scope blocks say so rather than assuming it
   silently.
 
+- **hue-kit identifies a scene by name, whole-home.** Not room-qualified, not a
+  composite key. A stock bridge creates per-room scenes that share a name, so
+  this is a real constraint on the consumer's bridge and not merely internal:
+  hue-kit REFUSES a bridge holding two scenes with one name, naming both owners
+  and telling the user to rename one in the Hue app. The alternative -- a
+  room-qualified identity -- was considered and declined on 2026-09-20, because
+  it changes how every verb addresses a scene for a case a rename resolves.
+  Registered rather than made configurable: an identity scheme is not a
+  preference a team can hold two of at once, and a seam here would mean two
+  incompatible YAML dialects.
+
 An opinion that FAILS the test needs neither a register entry nor a seam -- it is simply a
 good default. Opinions that PASS and are still unconfigurable are findings, tracked with
 per-finding verdicts in the reference above; known examples are the task system's durability

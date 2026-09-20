@@ -114,6 +114,40 @@ class TestNormalizeInstallStrings:
     def test_non_dict_entry_returned_unchanged(self):
         assert engine._normalize_tool_entry("not-a-dict", "ubuntu") == "not-a-dict"
 
+    def test_bare_string_install_becomes_command_object_for_current_os(self):
+        # tools[].install may be a bare string instead of a per-OS dict -- one
+        # command for every OS. manifest_lint.py's isinstance(install, str)
+        # branch already lints this shape, so it is supported input, not a
+        # malformed manifest. Pre-fix, tool_def.get("install", {}).items() ran
+        # against the raw string and raised AttributeError: 'str' object has
+        # no attribute 'items', taking down the whole bootstrap pass.
+        out = engine._normalize_tool_entry(
+            {"name": "jq", "install": "apt-get install -y jq"}, "ubuntu",
+        )
+        assert out["install"]["ubuntu"] == {
+            "command": "apt-get install -y jq", "elevated": False,
+        }
+
+    def test_bare_string_manual_sentinel_preserved_as_command(self):
+        out = engine._normalize_tool_entry(
+            {"name": "p4", "install": "manual"}, "ubuntu",
+        )
+        assert out["install"]["ubuntu"] == {"command": "manual", "elevated": False}
+
+    def test_bare_string_skip_sentinel_becomes_skip_object(self):
+        # Same skip-before-generic ordering as the per-OS string case: "skip"
+        # canonicalizes to {"skip": true}, never {"command": "skip"}
+        # (design-os-not-applicable.md ruling).
+        out = engine._normalize_tool_entry(
+            {"name": "tmux", "install": "skip"}, "windows",
+        )
+        assert out["install"]["windows"] == {"skip": True}
+
+    def test_bare_string_input_not_mutated(self):
+        entry = {"name": "t", "install": "apt install t"}
+        engine._normalize_tool_entry(entry, "ubuntu")
+        assert entry["install"] == "apt install t"  # original intact
+
 
 class TestNormalizeScoop:
     def test_download_scoop_os_key_moves_to_install(self):

@@ -149,6 +149,17 @@ technique_skill:
             compression profile -- does the result compress to a small conclusion?
             High-generation-cost / small-conclusion units are the ideal footprint delegations.
 
+            ORDER BY VALUE, NOT BY ARCHITECTURE. A decomposition comes out in
+            dependency order by default, which puts the foundation first and the
+            payoff last. Before briefing from it, ask which single unit most
+            directly delivers the goal and what it ACTUALLY depends on -- often
+            less than its position implies. Promote that unit. The check is cheap
+            and the payoff is asymmetric: a plan whose first increment delivers
+            the goal can be abandoned at any later point and still leave things
+            better, while one ordered by structure is all cost until the end.
+            State plainly what the promoted unit does NOT cover, so stopping
+            early is an informed choice rather than a surprise.
+
             A decision you would otherwise put to the user is a unit of the same kind: work is
             briefed from it, so it is a plan-checkpoint. Make the call first, then route the
             call -- not the question -- through the rendered tree by its own terms, exactly as
@@ -193,6 +204,24 @@ technique_skill:
             hypotheses until evidence is cited. Marking is a classification performed at
             authoring time -- do not grade confidence numerically; the label is binary.
 
+            A USER'S RULING GOES IN VERBATIM. When a brief rests on a decision the user
+            made -- a constraint they set, a question they answered, a scope they fixed --
+            quote their words, and do not restate the ruling anywhere else in the brief. A
+            restatement is authored by you, so it carries your reading of it, and it runs
+            WIDE: it generalizes a specific answer into a principle they did not state. The
+            unit then halts on your sentence instead of reading the artifact, and that halt
+            reads as a defect in the work under review. Extract the ruling from wherever it
+            is recorded and carry it as a quoted block.
+
+            A MECHANICAL EDIT NAMES ITS FALSE POSITIVES. When a brief is a
+            find-and-replace in shape -- renumbering, renaming, migrating a call
+            site -- the pattern it matches will also match text that must NOT
+            change. Enumerate those in the brief as an explicit do-not-touch
+            list, quoting enough of each to identify it, and require the unit to
+            confirm them unchanged in its report. A blind pass corrupts them
+            silently, and the corruption reads as correct precisely because
+            every other instance moved.
+
             EXCLUSIONS HAVE TWO PARTS. A prohibition imposed by the user, repository policy,
             or an authorization boundary is a constraint. The unit never crosses it. A claim
             that an excluded path, component, or artifact does not depend on the change is a
@@ -205,6 +234,16 @@ technique_skill:
             and require the unit to check it before its first mutation. A dependency that
             crosses a protected boundary halts the unit and reports the conflict. It does not
             grant authority to edit the excluded area.
+
+            A UNIT'S AUTHORITY STOPS AT SIDE EFFECTS, NOT JUST AT FILES. File ownership above
+            settles which unit owns which path inside the work; it says nothing about what a
+            unit may create, modify, move, or delete anywhere else, and silence there is not
+            permission to reach beyond it. A unit touches nothing outside the checkout it
+            was given to work in and its own session scratchpad. An experiment against a HOME-relative path
+            exports `HOME` and `USERPROFILE` into a scratch directory first and verifies both
+            resolve there before it runs anything. `git stash` is refused: the stash ref is
+            shared with every worktree of the repository, so a stash one unit writes is
+            visible to, and poppable by, another running at the same time.
 
             A HYPOTHESIS MAY FUND AN INVESTIGATION, NEVER A CHANGE OR A DEPLOYMENT. To brief a
             mutation on a premise, promote it with evidence first, or split the unit: establish,
