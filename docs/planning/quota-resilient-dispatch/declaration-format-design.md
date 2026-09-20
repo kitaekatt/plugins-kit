@@ -4,10 +4,12 @@ Written 2026-09-16 for task `quota-resilient-dispatch`, item
 `design-declaration-format`; revised the same day after two independent
 reviews (opus primary; opencode/deepseek-pro cross-check) and again after
 the owner answered the design's questions (plan.md directions 9-12, verbatim
-in the task's `log.md`). Revised 2026-09-20 for directions 13-17 and the
-third cross-check. Maintainer material: it lives under `docs/` because
-nobody on a consumer machine needs it. Inputs: the task's `plan.md` (owner
-directions 1-17), `log.md`, `model-declarations.md` (the map; its site ids
+in the task's `log.md`). Revised 2026-09-20 twice: first for directions
+13-17 and the third cross-check, then re-cut value-first on the owner's
+ruling, promoting HALT_QUOTA to step 0. Maintainer material: it lives under
+`docs/` because nobody on a consumer machine needs it. Inputs: the task's
+`plan.md` (owner directions 1-17), `log.md`, `model-declarations.md` (the
+map; its site ids
 A1..R2 are used below), and `findings.md`. Where the map and findings.md
 disagree, the map wins. Line numbers cite the dev tree at commit 498cc21c.
 
@@ -74,7 +76,7 @@ layer is legitimate: the owner's `fable` and `opus` entries carry only
 
 **Prefixes go.** `agent:` (A1, O1) is redundant once `opus` means the entry
 and the caller kind picks the Agent tool; the renderer accepts it and
-rewrites it with a note until migration step 11. `peer:<id>` (B1, O2) goes by
+rewrites it with a note until migration step 12. `peer:<id>` (B1, O2) goes by
 direction 12; lists name ids directly. The shipped reviewer C default
 `[peer:opus, opus]` becomes `[sol, opus]` (sol is the shipped BESIDE seat of
 opus: tier 3, family openai). The cost, accepted by the owner: a machine
@@ -85,7 +87,7 @@ admission. The front-door group (L6, O4) is load balancing over identical
 models; a declaration names a group as ONE id (`qwen38`), and its in-group
 failover stays inside llm-scripting-kit. L1 `default`/`default_endpoint`,
 L4, and S6 model aliases under an endpoint are addressed in the migration
-(step 8).
+(step 9).
 
 ## Decision 2 -- Where the format is specified and validated
 
@@ -121,7 +123,7 @@ question, not a validation question.
 `$comment` in `plugins/content-pipeline-kit/bootstrap.json`). job-kit
 declares only `["llm_scripting_kit"]` in `shared_lib_imports`
 (`plugins/job-kit/bootstrap.json:15`) and skills-kit declares none, so
-migration step 0 adds `bootstrap_lib` to both manifests before any code
+migration step 1 adds `bootstrap_lib` to both manifests before any code
 imports it (version bump each, validated with `claude-dev` because it is
 manifest content). Posture: REQUIRED (bootstrap is already a declared
 dependency of every plugin). The lazy-import alternative was not taken:
@@ -161,11 +163,11 @@ every routing plugin can drive a core id, which the harness gives for free
 such as `[sol]` stays legal; when codex is out, the runtime floor applies.
 The remedy is the owner's list, not a validator rule.
 
-Every migration step is checked against the sentence: steps 1, 6, 7 add no
+Every migration step is checked against the sentence: steps 2, 7, 8 add no
 llm-scripting-kit import (bootstrap, skills-kit, workflow-kit route Claude
 ids through the harness; workflow-kit's openrouter node already REFUSEs
-without it); steps 2, 5, 8, 9 are plugins that already depend on it; steps
-3 and 4 keep their DEGRADE / REFUSE postures.
+without it); steps 3, 6, 9, 10 are plugins that already depend on it; steps
+4 and 5 keep their DEGRADE / REFUSE postures.
 
 ## Decision 4 -- The one API, owned by llm-scripting-kit
 
@@ -278,11 +280,11 @@ Bringing the other provider-choosing paths under it:
   passes the row's chosen entry. Posture: REFUSE -- absent llm-scripting-kit
   it exits naming the owner plugin, as it already does for a too-old
   `bootstrap_lib.codex`. (REQUIRED would need an `install: auto` edge in
-  awesome-kit's manifest, which step 3 does not add.)
+  awesome-kit's manifest, which step 4 does not add.)
 - content-pipeline-kit (C1, R-m): `CONTENT_PIPELINE_LLM_BACKEND` (provider
   KIND), `..._MODEL` (vendor id) and `..._ENDPOINT` (registry id) are replaced
   by one `CONTENT_PIPELINE_LLM_MODELS` declaration resolved by `run`. The old
-  envs are honoured until step 11 and mapped to the shipped entry of that
+  envs are honoured until step 12 and mapped to the shipped entry of that
   harness (or the named registry entry) with a deprecation line. `route()`
   keeps its `mock` seam untouched. Posture stays REQUIRED at the manifest.
 - The front door (L6, O4) keeps its own HTTP failover inside
@@ -472,8 +474,8 @@ a mid-session codex reset in the other direction.
   (`run`, job-kit) and D5 (the one ordering rule, replacing 0.56.0's
   reordering). Resolves former Q2.
 - **Direction 11 -- the name is "pace".** Applied throughout. Resolves Q3.
-- **Direction 12 -- drop `peer:`.** Applied in D1 and migration steps 1 and
-  11. Resolves Q4.
+- **Direction 12 -- drop `peer:`.** Applied in D1 and migration steps 2 and
+  12. Resolves Q4.
 
 - **Direction 13 -- An unknown id is SILENTLY SKIPPED** (2026-09-20;
   supersedes the "invalid id is a loud error" clause of 9). A declaration is
@@ -537,50 +539,60 @@ writing is re-run only after its workspace is reset or replaced.
 `tests/llm-scripting-kit` pins the rule and trigger text that `describe`
 emits and the ordering rule against the owner's example. A second risk is
 the `haiku` entry and the `agent:` rewrite landing in different releases;
-the order below keeps the registry step first.
+the order below puts the registry step at 3, ahead of the `agent:` rewrite
+at step 4.
 
 ## Migration table
+
+The table is ordered value-first. Step 0 is HALT_QUOTA because it depends on
+nothing else in the plan and alone stops unattended runs dead-ending on a spent
+pool, using `run.py:604-611` and the existing same-job halt exclusion. Every
+step from 3 on leaves the system better than it found it and is independently
+publishable; steps 1 and 2 are the only foundation steps with no standalone
+value, and step 12 is pure cleanup. Step 0 does not fix in-session re-selection
+for orchestrate and review lanes (step 4), the nine-syntax spread, or the
+consult-seat next-seat rule.
 
 Ordered so each step publishes on its own; every step needs a version bump
 and a test shown to fail first. "Gen" names the generator that must change.
 
 | Step | Sites | New declaration | Owner plugin | Gen | Tests pinning existing behavior |
 |---|---|---|---|---|---|
-| 0 | job-kit, skills-kit manifests | add `bootstrap_lib` to `shared_lib_imports`; validate with `claude-dev` | job-kit, skills-kit | -- | `tests/job-kit/test_bin.py`, `tests/skills-kit/test_asset_dependencies.py` (manifest shape) |
-| 1 | spec + validator | `model-declaration.md`; `bootstrap_lib/model_declaration.py` parses and normalizes declarations, performs structural checks, rejects a literally-empty list and duplicates; no known-id errors, registry-file discovery, `SHIPPED_EXTENSION_IDS`, notices, drift tests, or shipped-defaults property test | bootstrap | -- | new: shape, empty list, duplicates; no known-id, path-drift, copy-drift, or shipped-defaults tests |
-| 1 | B1 reviewer `model` | list of ids; `peer:` accepted and rewritten until step 11 | bootstrap | -- | `tests/bootstrap/code_review/test_review_profiles.py` (`peer:` resolution, `model_fallbacks`) |
-| 1 | B2 `validator_models` | reason -> one-element list (scalar accepted; `review_profiles.py:348-360` is scalar-only) | bootstrap | -- | same test file |
-| 1 | `lane_prompts.py:61` alias set | replaced by the core set from the validator | bootstrap | -- | `test_lane_prompts.py` |
-| 2 | L2 registry | add shipped `haiku` (claude, tier 1); `check_registry_entry` classifies shadowed core entries as shadowed/unroutable; add filtered-render and itemised-floor tests | llm-scripting-kit | -- | `test_model_endpoints.py`, `test_endpoints.py`, filtered-render, floor-propagation and disposition tests |
-| 2 | L3 `choose --prefer` | `describe <id>...`; `order_by_pace` replaces `rank_candidates`; `choose` kept as alias | llm-scripting-kit | -- | `test_quota_selection.py` (two-band order), `test_llm_scripting_cli.py` |
-| 2 | L4 `resolve` / `complete --endpoint --model` | `--models <declaration>`; `--endpoint` kept as alias; `--model` stays a per-entry override | llm-scripting-kit | -- | `test_llm_scripting_cli.py`, `test_completion_factory.py` |
-| 2 | halt kinds | `HALT_QUOTA` from a rollout re-read; verdict write-back | llm-scripting-kit | -- | `test_completion_halt.py`, `test_completion_codex_backend.py:432-455`, `test_usage_budget.py` |
-| 2 | L5 `review_lane --model` | one id; endpoint lanes call `describe` | llm-scripting-kit | -- | `test_review_lane.py` |
-| 2 | A5 seats data | `describe` marks `[author]`; `SeatsResult` unchanged | llm-scripting-kit | -- | `test_seats.py` |
-| 2 | L6, O4 front-door groups | unchanged; a group is one declaration id | llm-scripting-kit | -- | `test_frontdoor.py` |
-| 3 | A1 rows | `models: [..]` without `agent:`; renderer filters hidden entries, retains usable/out-of-quota/unreachable entries, then pace-orders the rendered subset; no non-routable notice | awesome-kit | -- | `test_orchestration_guidance.py` (filtered render, reset time, no notice; no "moved back" or drops-nothing expectation) |
-| 3 | A2 `requires_model` | same ids, no prefix strip | awesome-kit | -- | same |
-| 3 | A3 `dispatch.py --model` | an id resolved via `discover_model_entries`; no hardcoded default; REFUSE posture | awesome-kit | -- | `test_dispatch.py` |
-| 3 | A4 backend `command:` | unchanged (adapter supplies the model) | awesome-kit | -- | -- |
-| 3 | A5 seats render (:1705-1723) | show out-of-quota seats with reset time | awesome-kit | -- | `test_orchestration_guidance.py` |
-| 3 | orchestrate SKILL.md step 4, seat rule :91 | choose-and-announce wording; rule text passed through from `describe`; hidden skip is silent | awesome-kit | -- | `test_orchestration_guidance.py`, `tests/repo-scripts/test_agent_directives.py` (no non-routable notice) |
-| 3 | R1 `check_model_dispatch.py` | reads ids, no `agent:` | repo script | -- | `tests/repo-scripts/test_check_model_dispatch.py` |
-| 4 | G1, G2, step 6 model-kind rule, stale "no Agent fallback" line (:506) | dispatch by entry harness; `describe`, choose, announce; print `Ranking.rule` verbatim; drop warning prose and the gotcha | git-kit, p4-kit | `scripts/gen_code_review_skills.py` | `test_skill_drift.py`, `test_lane_retry_prose.py`, `tests/git-kit/test_run_review_lane.py` (no warning prose) |
-| 5 | J1 `endpoint_preference` and aliases | `models: [..]` (old keys accepted); `select_endpoint` calls `describe(caller="process", requirements, capabilities, exclude)` and takes the first usable entry of the pace-ordered list; loop and ledger unchanged; pace readings logged | job-kit | -- | `tests/job-kit/test_select.py`, `test_model.py`, `test_runner.py` (same-job halts :604-611) |
-| 5 | register entries :90-102, :205-217 | reword job-kit determinism ("declared list plus logged pace readings"); amend pinned-verdict per D6; skip reasons remain silent | plugins/CLAUDE.md | -- | floor propagation and silent-skip tests; no notice expectations |
-| 6 | K3 `DEFAULT_ENDPOINTS`, `--endpoint` | `--models`; emitted as J1's new key | skills-kit | -- | `tests/skills-kit/test_emit_audit_jobs.py` |
-| 6 | K2 remediate literals (4) | `model: 'sonnet'` emitted from a one-entry declaration in the generator; structural validation only, no known-id or usable-set expectation, no llm-scripting-kit import | skills-kit | `plugins/skills-kit/scripts/gen_workflow_js.py` | `test_workflow_js_drift.py`, validator empty-list and duplicate expectations |
-| 6 | K1 hand-written literals (9) | one-entry declarations; a drift check that each literal equals the declared id | skills-kit | `check_shared_chunks` extended | `test_workflow_js_drift.py` |
-| 6 | K4 | unchanged (allow-list, not a declaration) | -- | -- | -- |
-| 7 | W1 `model:` | any structurally valid id; core ids compile to `agent()`; an unresolved or unroutable id is silently skipped | workflow-kit | -- | `tests/workflow-kit/test_loader.py`, `test_compiler.py` (silent skip, no compile notice) |
-| 7 | W3, W4 `haiku` | one-entry declaration; frontmatter/preamble emit the scalar carrier | workflow-kit | -- | `test_compiler.py` |
-| 8 | W2 openrouter node; L1 `default`/`defaultCheap`/`default_endpoint`; S6 aliases | ids must be transport ENTRIES: ship the `openrouter` sub-aliases as entries (`or-gpt-mini`, `or-qwen`), keep `models:` under an endpoint as a per-entry override only; `default_endpoint` becomes the one-entry default declaration | workflow-kit, llm-scripting-kit | -- | `test_openrouter_run.py`, `test_model_resolve.py`, floor propagation tests |
-| 9 | C1 env triple (`BACKEND`, `MODEL`, `ENDPOINT`), C2 run record | `CONTENT_PIPELINE_LLM_MODELS` via `run`; old envs mapped until step 11; run record stores the chosen entry; propagate the typed floor | content-pipeline-kit | -- | `test_llm_backends.py`, `test_llm_model_endpoint.py`, `test_llm_platform.py`, `test_run_cli.py`, floor propagation tests |
-| 9 | C3 `extra_launch_args --model` | an id from the same declaration (no in-repo caller) | content-pipeline-kit | -- | `test_execution_driver_claude_bg.py` |
-| 9 | Y1 `PlannerPolicy.model` | a declaration routed through the new C1 env | yaml-data-editor-kit (dev-only) | -- | `tests/yaml-data-editor-kit` |
-| 10 | O1 rows, O2 lanes, O3, O5, O6 preface and prose | drop `agent:`; `[astra, fable]`; fix the stale "never reads conserve_usage" preface and presence-autonomy :118; propagate the typed floor | claude-settings | -- | none (owner config); floor propagation tests |
-| 10 | R2 bakeoff `--model` | an id | repo script | -- | -- |
-| 11 | deprecations | remove `agent:`, `peer:`, job-kit old keys, content-pipeline old envs, `choose`/`--endpoint` aliases | bootstrap, awesome-kit, job-kit, content-pipeline-kit, llm-scripting-kit | -- | the tests above lose their compatibility cases |
+| 0 | halt kinds | `HALT_QUOTA` from a rollout re-read; verdict write-back | llm-scripting-kit | -- | `test_completion_halt.py`, `test_completion_codex_backend.py:432-455`, `test_usage_budget.py` |
+| 1 | job-kit, skills-kit manifests | add `bootstrap_lib` to `shared_lib_imports`; validate with `claude-dev` | job-kit, skills-kit | -- | `tests/job-kit/test_bin.py`, `tests/skills-kit/test_asset_dependencies.py` (manifest shape) |
+| 2 | spec + validator | `model-declaration.md`; `bootstrap_lib/model_declaration.py` parses and normalizes declarations, performs structural checks, rejects a literally-empty list and duplicates; no known-id errors, registry-file discovery, `SHIPPED_EXTENSION_IDS`, notices, drift tests, or shipped-defaults property test | bootstrap | -- | new: shape, empty list, duplicates; no known-id, path-drift, copy-drift, or shipped-defaults tests |
+| 2 | B1 reviewer `model` | list of ids; `peer:` accepted and rewritten until step 12 | bootstrap | -- | `tests/bootstrap/code_review/test_review_profiles.py` (`peer:` resolution, `model_fallbacks`) |
+| 2 | B2 `validator_models` | reason -> one-element list (scalar accepted; `review_profiles.py:348-360` is scalar-only) | bootstrap | -- | same test file |
+| 2 | `lane_prompts.py:61` alias set | replaced by the core set from the validator | bootstrap | -- | `test_lane_prompts.py` |
+| 3 | L2 registry | add shipped `haiku` (claude, tier 1); `check_registry_entry` classifies shadowed core entries as shadowed/unroutable; add filtered-render and itemised-floor tests | llm-scripting-kit | -- | `test_model_endpoints.py`, `test_endpoints.py`, filtered-render, floor-propagation and disposition tests |
+| 3 | L3 `choose --prefer` | `describe <id>...`; `order_by_pace` replaces `rank_candidates`; `choose` kept as alias | llm-scripting-kit | -- | `test_quota_selection.py` (two-band order), `test_llm_scripting_cli.py` |
+| 3 | L4 `resolve` / `complete --endpoint --model` | `--models <declaration>`; `--endpoint` kept as alias; `--model` stays a per-entry override | llm-scripting-kit | -- | `test_llm_scripting_cli.py`, `test_completion_factory.py` |
+| 3 | L5 `review_lane --model` | one id; endpoint lanes call `describe` | llm-scripting-kit | -- | `test_review_lane.py` |
+| 3 | A5 seats data | `describe` marks `[author]`; `SeatsResult` unchanged | llm-scripting-kit | -- | `test_seats.py` |
+| 3 | L6, O4 front-door groups | unchanged; a group is one declaration id | llm-scripting-kit | -- | `test_frontdoor.py` |
+| 4 | A1 rows | `models: [..]` without `agent:`; renderer filters hidden entries, retains usable/out-of-quota/unreachable entries, then pace-orders the rendered subset; no non-routable notice | awesome-kit | -- | `test_orchestration_guidance.py` (filtered render, reset time, no notice; no "moved back" or drops-nothing expectation) |
+| 4 | A2 `requires_model` | same ids, no prefix strip | awesome-kit | -- | same |
+| 4 | A3 `dispatch.py --model` | an id resolved via `discover_model_entries`; no hardcoded default; REFUSE posture | awesome-kit | -- | `test_dispatch.py` |
+| 4 | A4 backend `command:` | unchanged (adapter supplies the model) | awesome-kit | -- | -- |
+| 4 | A5 seats render (:1705-1723) | show out-of-quota seats with reset time | awesome-kit | -- | `test_orchestration_guidance.py` |
+| 4 | orchestrate SKILL.md step 4, seat rule :91 | choose-and-announce wording; rule text passed through from `describe`; hidden skip is silent | awesome-kit | -- | `test_orchestration_guidance.py`, `tests/repo-scripts/test_agent_directives.py` (no non-routable notice) |
+| 4 | R1 `check_model_dispatch.py` | reads ids, no `agent:` | repo script | -- | `tests/repo-scripts/test_check_model_dispatch.py` |
+| 5 | G1, G2, step 6 model-kind rule, stale "no Agent fallback" line (:506) | dispatch by entry harness; `describe`, choose, announce; print `Ranking.rule` verbatim; drop warning prose and the gotcha | git-kit, p4-kit | `scripts/gen_code_review_skills.py` | `test_skill_drift.py`, `test_lane_retry_prose.py`, `tests/git-kit/test_run_review_lane.py` (no warning prose) |
+| 6 | J1 `endpoint_preference` and aliases | `models: [..]` (old keys accepted); `select_endpoint` calls `describe(caller="process", requirements, capabilities, exclude)` and takes the first usable entry of the pace-ordered list; loop and ledger unchanged; pace readings logged | job-kit | -- | `tests/job-kit/test_select.py`, `test_model.py`, `test_runner.py` (same-job halts :604-611) |
+| 6 | register entries :90-102, :205-217 | reword job-kit determinism ("declared list plus logged pace readings"); amend pinned-verdict per D6; skip reasons remain silent | plugins/CLAUDE.md | -- | floor propagation and silent-skip tests; no notice expectations |
+| 7 | K3 `DEFAULT_ENDPOINTS`, `--endpoint` | `--models`; emitted as J1's new key | skills-kit | -- | `tests/skills-kit/test_emit_audit_jobs.py` |
+| 7 | K2 remediate literals (4) | `model: 'sonnet'` emitted from a one-entry declaration in the generator; structural validation only, no known-id or usable-set expectation, no llm-scripting-kit import | skills-kit | `plugins/skills-kit/scripts/gen_workflow_js.py` | `test_workflow_js_drift.py`, validator empty-list and duplicate expectations |
+| 7 | K1 hand-written literals (9) | one-entry declarations; a drift check that each literal equals the declared id | skills-kit | `check_shared_chunks` extended | `test_workflow_js_drift.py` |
+| 7 | K4 | unchanged (allow-list, not a declaration) | -- | -- | -- |
+| 8 | W1 `model:` | any structurally valid id; core ids compile to `agent()`; an unresolved or unroutable id is silently skipped | workflow-kit | -- | `tests/workflow-kit/test_loader.py`, `test_compiler.py` (silent skip, no compile notice) |
+| 8 | W3, W4 `haiku` | one-entry declaration; frontmatter/preamble emit the scalar carrier | workflow-kit | -- | `test_compiler.py` |
+| 9 | W2 openrouter node; L1 `default`/`defaultCheap`/`default_endpoint`; S6 aliases | ids must be transport ENTRIES: ship the `openrouter` sub-aliases as entries (`or-gpt-mini`, `or-qwen`), keep `models:` under an endpoint as a per-entry override only; `default_endpoint` becomes the one-entry default declaration | workflow-kit, llm-scripting-kit | -- | `test_openrouter_run.py`, `test_model_resolve.py`, floor propagation tests |
+| 10 | C1 env triple (`BACKEND`, `MODEL`, `ENDPOINT`), C2 run record | `CONTENT_PIPELINE_LLM_MODELS` via `run`; old envs mapped until step 12; run record stores the chosen entry; propagate the typed floor | content-pipeline-kit | -- | `test_llm_backends.py`, `test_llm_model_endpoint.py`, `test_llm_platform.py`, `test_run_cli.py`, floor propagation tests |
+| 10 | C3 `extra_launch_args --model` | an id from the same declaration (no in-repo caller) | content-pipeline-kit | -- | `test_execution_driver_claude_bg.py` |
+| 10 | Y1 `PlannerPolicy.model` | a declaration routed through the new C1 env | yaml-data-editor-kit (dev-only) | -- | `tests/yaml-data-editor-kit` |
+| 11 | O1 rows, O2 lanes, O3, O5, O6 preface and prose | drop `agent:`; `[astra, fable]`; fix the stale "never reads conserve_usage" preface and presence-autonomy :118; propagate the typed floor | claude-settings | -- | none (owner config); floor propagation tests |
+| 11 | R2 bakeoff `--model` | an id | repo script | -- | -- |
+| 12 | deprecations | remove `agent:`, `peer:`, job-kit old keys, content-pipeline old envs, `choose`/`--endpoint` aliases | bootstrap, awesome-kit, job-kit, content-pipeline-kit, llm-scripting-kit | -- | the tests above lose their compatibility cases |
 
 ## Review disposition (2026-09-16)
 
@@ -593,11 +605,11 @@ the reviewer.
 | 1 `run` API drops requirements, exclusion, job-kit loop | fixed in D4: `requirements=`, `exclude=`, `caller=`; job-kit keeps its loop, ledger and `max_attempts` and calls `describe`; `run` is for loop-less callers and counts attempts. The false "exactly as job-kit does in the existing implementation" is replaced by the stated behaviour change (quota/reachability pre-filter). |
 | 2 halt-only re-selection regresses review lanes | fixed in D6: session set = any unexplained failure; process set = classified halts. |
 | 3 pace: pinned freeze, None inputs, unbounded, same-pool example | fixed in D5: unpinned `evaluate()` for pace, pinned status only; edge rules for zero/None/near-reset; example corrected (fable = opus on `seven_day`, sonnet n/a); 0.44.1 referenced, not designed around. |
-| 4 `bootstrap_lib` not linked in job-kit / skills-kit | fixed: step 0 manifest edge. Lazy-import alternative not taken (reason in D2). |
+| 4 `bootstrap_lib` not linked in job-kit / skills-kit | fixed: step 1 manifest edge. Lazy-import alternative not taken (reason in D2). |
 | 5 D3 too lenient; reviewers split | SUPERSEDED by directions 9 and 13-17; the final D3 path is silent skip, hidden render, and itemised floor. |
-| 6 coverage and ownership gaps | fixed: rows for L4, L6/O4, C1 `ENDPOINT`, L1 `default_endpoint`; K1 = 9; A5 render moved to step 3; `lane_prompts.py:61` moved to step 1; Y1 owner corrected; B2 citation corrected. |
+| 6 coverage and ownership gaps | fixed: rows for L4, L6/O4, C1 `ENDPOINT`, L1 `default_endpoint`; K1 = 9; A5 render moved to step 4; `lane_prompts.py:61` moved to step 2; Y1 owner corrected; B2 citation corrected. |
 | 7 A3 is not a completion caller; posture | fixed in D4: `discover_model_entries`; REFUSE. |
-| 8 deprecation window vs owner config at step 10 | fixed: removals are step 11, after the owner config step. |
+| 8 deprecation window vs owner config at step 11 | fixed: removals are step 12, after the owner config step. |
 | 9 core-name shadowing | fixed in D1/D2: core ids reserved; `check_registry_entry`. |
 | 10 trigger text tested only in awesome-kit | fixed in D5: `describe` emits `Ranking.rule`; tested in llm-scripting-kit. |
 | 11 `HALT_QUOTA` source | fixed in D6: rollout re-read after a non-zero codex exit, because the backend runs without `--json`. |
@@ -618,7 +630,7 @@ Disagreements: none. Two choices among offered alternatives -- finding 1
 | 5 `read_codex_pool` spec for un-opted entries | fixed in D6: the entry's own spec, else a default `seven_day` spec for the read only; no pacing verdict is created. |
 | 6 live probes per attempt | fixed in D4: `reachability_cache=` parameter, run-scoped in job-kit. |
 | 7 `usable` vs `unknown` | fixed: D4 says "not unreachable (unknown counts)"; D6 cross-references it. |
-| 8 step 4 restates the trigger set | fixed: generated prose prints `Ranking.rule` verbatim. |
+| 8 step 5 restates the trigger set | fixed: generated prose prints `Ranking.rule` verbatim. |
 | 9 reservation check on the merged entry | fixed in D1 and D2 (`check_registry_entry(id, merged)`), with the owner's partial entries as the reason. |
 | 10 keep the disposition table | kept. |
 
