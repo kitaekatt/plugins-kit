@@ -1091,6 +1091,42 @@ def _action_diff(live, target):
     return None
 
 
+def _write_text_atomic(path: Path, text: str, mode: int | None = None) -> None:
+    """Write `text` to `path` without ever exposing a truncated or partial
+    file: create a fresh `<path>.tmp` in the same directory, write, flush
+    and fsync it, then `os.replace` it over `path` in one filesystem
+    operation. On any failure the temp file is removed and `path`'s prior
+    bytes are left untouched -- a reader never observes a half-written
+    file. `mode` sets the temp file's permissions at the moment it is
+    created (any pre-existing same-named temp file is removed first, so
+    `mode` always governs a freshly created file rather than a chmod after
+    the fact); `mode=None` uses the platform's normal create permissions.
+
+    This function is duplicated byte-for-byte in hue_kit_cli.py, since the
+    two scripts do not import each other -- keep the two copies identical.
+    """
+    path = Path(path)
+    tmp_path = path.with_name(path.name + ".tmp")
+    try:
+        tmp_path.unlink()
+    except OSError:
+        pass
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    fd = os.open(tmp_path, flags, 0o666 if mode is None else mode)
+    try:
+        with os.fdopen(fd, "w") as fh:
+            fh.write(text)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp_path, path)
+    except BaseException:
+        try:
+            tmp_path.unlink()
+        except OSError:
+            pass
+        raise
+
+
 def _unique_backup(scene_name):
     """A never-overwriting backup path (bumps a counter)."""
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -1231,7 +1267,7 @@ def apply_design(session, design, only, assume_yes):
             print(f"  (dry-run; pass --yes to write '{name}')")
             continue
         backup = _unique_backup(name)
-        backup.write_text(json.dumps(live, indent=2))
+        _write_text_atomic(backup, json.dumps(live, indent=2))
         actions = live["actions"]
         idx = {a["target"]["rid"]: a for a in actions}
         for rid, act in pending.items():
@@ -1434,7 +1470,7 @@ def main() -> int:
                                   source_docs=source_docs)
         dest = Path(args.html)
         dest.parent.mkdir(parents=True, exist_ok=True)
-        dest.write_text(html)
+        _write_text_atomic(dest, html)
         print(f"wrote {dest}  ({len(scenes)} scenes)")
         return 0
 
@@ -1461,7 +1497,7 @@ def main() -> int:
             sys.stdout.write(text)
         else:
             dest.parent.mkdir(parents=True, exist_ok=True)
-            dest.write_text(text)
+            _write_text_atomic(dest, text)
             print(f"wrote {dest}", file=sys.stderr)
         return 0
 
@@ -1469,7 +1505,7 @@ def main() -> int:
         text, n_groups = export_designs(data)
         dest = Path(args.export_designs)
         dest.parent.mkdir(parents=True, exist_ok=True)
-        dest.write_text(text)
+        _write_text_atomic(dest, text)
         print(f"wrote {dest}  ({len(data.get('scenes', []))} scenes, "
               f"{n_groups}-group vocabulary)")
         return 0
@@ -1477,7 +1513,7 @@ def main() -> int:
     if args.export_cells:
         dest = Path(args.export_cells)
         dest.parent.mkdir(parents=True, exist_ok=True)
-        dest.write_text(json.dumps(data, indent=2))
+        _write_text_atomic(dest, json.dumps(data, indent=2))
         n_lights = data.get("n_lights", len(data.get("universe", [])))
         print(f"wrote {dest} ({len(data.get('scenes', []))} scenes, "
               f"{n_lights} lights)")
@@ -1490,7 +1526,7 @@ def main() -> int:
         if args.out:
             out = Path(args.out)
             out.parent.mkdir(parents=True, exist_ok=True)
-            out.write_text(text)
+            _write_text_atomic(out, text)
             print(f"wrote {out}")
         else:
             print(text)
