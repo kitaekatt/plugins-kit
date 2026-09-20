@@ -172,6 +172,21 @@ def main() -> int:
         print(f"not enabled, skipping: {' '.join(skipped)}", file=sys.stderr)
 
     data_root = Path(args.data_root)
+
+    # --print is READ-ONLY, and must stay that way: it is what a caller uses to
+    # confirm where a run would write BEFORE letting it write there. Returning
+    # after the --fresh delete / mkdir / registry write made the preview itself
+    # destructive, so the check could not be trusted to answer its own question.
+    if args.print_only:
+        cmd = ["claude"]
+        for _, _, directory in selected:
+            cmd += ["--plugin-dir", str(directory)]
+        cmd += args.claude_args
+        print(f"plugins: {len(selected)} from {PLUGINS_DIR}", file=sys.stderr)
+        print(f"data root: {data_root}", file=sys.stderr)
+        print(" ".join(cmd))
+        return 0
+
     if args.fresh and data_root.exists():
         print(f"--fresh: removing {data_root}", file=sys.stderr)
         shutil.rmtree(data_root)
@@ -190,9 +205,6 @@ def main() -> int:
 
     print(f"plugins: {len(selected)} from {PLUGINS_DIR}", file=sys.stderr)
     print(f"data root: {data_root}", file=sys.stderr)
-    if args.print_only:
-        print(" ".join(cmd))
-        return 0
 
     try:
         return subprocess.call(cmd, env=env)

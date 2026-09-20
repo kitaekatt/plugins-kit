@@ -592,3 +592,85 @@ class TestPluginDisplayVsLog:
         assert any("shared-lib mylib" in e and "_shared_libs" in e for e in log_entries), log_entries
         # And the aggregate knows about it.
         assert link_log.summary() == "synced mylib"
+
+
+class TestStandaloneBroadcastGate:
+    """CLAUDE_BOOTSTRAP_DATA_ROOT redirects `shared_root` but NOT the machine-wide
+    standalone interpreter, so a redirected pass must not broadcast into it --
+    otherwise a durable machine-wide .pth ends up naming a disposable data root
+    and serving that root's copy of the library to every standalone consumer."""
+
+    def _run(self, tmp_path, monkeypatch, *, data_root, manifest, verbose=False):
+        from types import SimpleNamespace
+
+        import bootstrap_lib.engine as engine
+
+        calls = []
+        standalone = str(tmp_path / "standalone" / "python.exe")
+
+        def _spy(name, python, shared_root):
+            calls.append((name, python, shared_root))
+            return shared_lib.SharedLibResult(name, "linked", f"linked -> {shared_root}")
+
+        monkeypatch.setattr(shared_lib, "find_standalone_python", lambda: standalone)
+        monkeypatch.setattr(shared_lib, "link_shared_lib", _spy)
+        if data_root is None:
+            monkeypatch.delenv("CLAUDE_BOOTSTRAP_DATA_ROOT", raising=False)
+        else:
+            monkeypatch.setenv("CLAUDE_BOOTSTRAP_DATA_ROOT", data_root)
+
+        install = tmp_path / "install"
+        install.mkdir()
+        _make_pkg(str(install / "lib"), "mylib")
+        (install / "bootstrap.json").write_text(json.dumps(manifest), encoding="utf-8")
+        data_dir = str(tmp_path / "plugins-kit" / "bootstrap")
+        pi = SimpleNamespace(install_path=str(install), name="owner",
+                             version="1.0.0", marketplace="plugins-kit")
+
+        all_failures, display, deferred = [], [], []
+        engine._bootstrap_single_plugin(
+            pi, "windows", data_dir, all_failures,
+            verbose, display, deferred, SimpleNamespace(project_dir=None),
+            engine_version="1.0.0", shared_lib_links=_SharedLibLinkLog(),
+        )
+        log_entries = [e for _d, _l, entries in deferred for e in entries]
+        return calls, standalone, log_entries, all_failures
+
+    def test_broadcasts_when_data_root_is_not_redirected(self, tmp_path, monkeypatch):
+        """Control: without the env var the standalone broadcast DOES happen.
+
+        Without this, the gate test below could pass because nothing ever
+        broadcasts -- it pins that the spy would otherwise see the interpreter.
+        """
+        calls, standalone, _logs, failures = self._run(
+            tmp_path, monkeypatch, data_root=None,
+            manifest={"shared_libs": [{"name": "mylib", "src": "lib"}]},
+        )
+        assert failures == []
+        assert any(python == standalone for _n, python, _r in calls), calls
+
+    def test_no_broadcast_when_data_root_is_redirected(self, tmp_path, monkeypatch):
+        calls, standalone, logs, failures = self._run(
+            tmp_path, monkeypatch, data_root=str(tmp_path / "redirected"),
+            manifest={"shared_libs": [{"name": "mylib", "src": "lib"}]},
+            verbose=True,  # ctx.ok is verbose-only by the every-check-logs rule
+        )
+        assert failures == []
+        assert not any(python == standalone for _n, python, _r in calls), calls
+        assert any("standalone broadcast skipped" in e
+                   and "CLAUDE_BOOTSTRAP_DATA_ROOT is set" in e for e in logs), logs
+
+    def test_consumer_link_still_happens_when_redirected(self, tmp_path, monkeypatch):
+        """The gate suppresses the OWNER broadcast only.
+
+        Suppressing inside link_shared_lib instead would also kill the consumer
+        link, which is the half a test session actually needs.
+        """
+        calls, standalone, _logs, failures = self._run(
+            tmp_path, monkeypatch, data_root=str(tmp_path / "redirected"),
+            manifest={"shared_libs": [{"name": "mylib", "src": "lib"}],
+                      "shared_lib_imports": ["mylib"]},
+        )
+        assert failures == []
+        assert not any(python == standalone for _n, python, _r in calls), calls
+        assert calls, "consumer phase must still link the lib into the plugin venv"

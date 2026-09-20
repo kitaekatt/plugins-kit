@@ -44,6 +44,8 @@ import tempfile
 import uuid
 from typing import NamedTuple, Optional
 
+from .atomic_write import write_atomic
+
 
 class SharedLibResult(NamedTuple):
     name: str
@@ -262,9 +264,12 @@ def link_shared_lib(name: str, python: Optional[str], shared_root: str) -> Share
     if _read_text(pth) == desired:
         return SharedLibResult(name, "cached", f"linked (cached, {pth})")
 
+    # Atomic: a .pth is read by site.py at EVERY interpreter start, so a
+    # truncated write is not a transient state -- an incomplete executable line
+    # is a SyntaxError that site.addpackage prints on every startup until the
+    # next pass rewrites it. mkstemp + os.replace never exposes a partial file.
     try:
-        with open(pth, "w", encoding="utf-8") as f:
-            f.write(desired + "\n")
+        write_atomic(pth, desired + "\n")
     except OSError as e:
         return SharedLibResult(name, "failed", f"failed to write {pth}: {e}")
 

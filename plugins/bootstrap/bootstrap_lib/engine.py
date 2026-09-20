@@ -6089,6 +6089,20 @@ def _phase_shared_libs(ctx):
                 type="shared_lib", name=result.name, message=result.message,
             )
 
+    # The owner broadcast writes a .pth into the MACHINE-WIDE standalone
+    # interpreter. CLAUDE_BOOTSTRAP_DATA_ROOT redirects `shared_root` but NOT
+    # that interpreter, so a redirected run would point a durable machine-wide
+    # file at a data root the caller may delete -- and, until the next ordinary
+    # pass, serve that root's copy of the library to every standalone consumer.
+    # Skip it, matching the gate _process_interpreter_env already applies to
+    # machine-wide persistence. The consumer phase below is unaffected: it
+    # links into venvs that live inside the redirected root.
+    broadcast_skipped = (
+        "CLAUDE_BOOTSTRAP_DATA_ROOT is set"
+        if os.environ.get("CLAUDE_BOOTSTRAP_DATA_ROOT")
+        else None
+    )
+
     # Owner phase: publish source, then broadcast to the standalone Python.
     owner_venv_python = venv_python(os.path.join(ctx.data_dir, ".venv"))
     for lib_def in ctx.manifest.get("shared_libs", []):
@@ -6109,7 +6123,15 @@ def _phase_shared_libs(ctx):
             )
         _log_shared(sync_result)
         if sync_result.status != "failed":
-            _log_shared(link_shared_lib(lib_name, find_standalone_python(), shared_root))
+            if broadcast_skipped:
+                ctx.ok(
+                    f"shared-lib {lib_name}: standalone broadcast skipped "
+                    f"({broadcast_skipped})"
+                )
+            else:
+                _log_shared(
+                    link_shared_lib(lib_name, find_standalone_python(), shared_root)
+                )
 
     # Consumer phase: link into this plugin's own venv.
     shared_lib_imports = ctx.manifest.get("shared_lib_imports", [])
