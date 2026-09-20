@@ -95,9 +95,22 @@ class Sig:
         return True
 
 
+def is_dark(action: dict) -> bool:
+    """The one darkness test for a bridge action: `on:false`, `on` absent
+    entirely (a light the scene never addresses reads as off), or `on:true`
+    at brightness 0 -- the Hue app's own way of writing "off" for some
+    scenes (the bulb is nominally on but emits nothing). Every other site
+    that decides whether an action is dark calls this, or compares a
+    signature's `mode` to `"off"` (a mode this function's caller,
+    `action_sig`, already set from the same test)."""
+    if action.get("on", {}).get("on") is not True:
+        return True
+    bri = action.get("dimming", {}).get("brightness")
+    return bri is not None and bri <= 0.0
+
+
 def action_sig(action: dict) -> Sig:
-    on = action.get("on", {}).get("on")
-    if on is False:
+    if is_dark(action):
         return Sig(mode="off")
     flags = tuple(k for k in ("gradient", "effects", "effects_v2") if k in action)
     bri = action.get("dimming", {}).get("brightness")
@@ -245,10 +258,39 @@ def sig_label(sig: Sig) -> str:
 
 # ---------------------------------------------------------------- clustering
 
+def _tighten(items: list, sig_of, close) -> list[list]:
+    """Split `items` until every member is close() to its OWN cluster's final
+    mean. A running-mean accumulation (as greedy_clusters builds one) can
+    accept a member against an early mean that later members pull away from,
+    so the cluster's finished mean can end up farther than tolerance from a
+    member even though every step along the way looked fine. Recompute the
+    mean, peel off whichever members disagree with it, and recurse on
+    both halves -- this converges (each recursion strictly shrinks the
+    non-agreeing side, and a single item is trivially close to its own
+    mean), and it is what makes the emitted representative provably within
+    tolerance of every member, not just of the item that triggered its
+    merge."""
+    if len(items) <= 1:
+        return [items] if items else []
+    rep = mean_sig([sig_of(it) for it in items])
+    bad_ids = {id(it) for it in items if not close(rep, sig_of(it))}
+    if not bad_ids:
+        return [items]
+    good = [it for it in items if id(it) not in bad_ids]
+    bad = [it for it in items if id(it) in bad_ids]
+    if not good:  # degenerate safety net; a lone item always agrees with itself
+        return [[it] for it in items]
+    return _tighten(good, sig_of, close) + _tighten(bad, sig_of, close)
+
+
 def greedy_clusters(items: list, sig_of, close) -> list[list]:
     """Cluster by closeness to the running cluster MEAN, then merge clusters
     whose means end up within tolerance -- resistant to input-order effects
-    at tolerance boundaries (input is pre-sorted for determinism)."""
+    at tolerance boundaries (input is pre-sorted for determinism). A final
+    tightening pass (`_tighten`) guarantees the property the callers rely on:
+    every member ends up close() to the cluster's own finished mean -- the
+    representative later gets emitted from that mean, so a member cannot
+    drift outside tolerance of what is actually written out."""
     clusters: list[list] = []
     reps: list[Sig] = []
     for item in items:
@@ -274,7 +316,8 @@ def greedy_clusters(items: list, sig_of, close) -> list[list]:
                     break
             if merged:
                 break
-    return clusters
+    return [tight for cluster in clusters
+            for tight in _tighten(cluster, sig_of, close)]
 
 
 GROUP_SUFFIX = re.compile(r"^(.*?)-\d+$")
@@ -598,7 +641,7 @@ def _highlight(text: str, lang: str) -> str:
     return _py_highlight(text) if lang == "python" else _yaml_highlight(text)
 
 
-def layered_report(family, scenes, members, source_docs=None):
+def layered_report(family, scenes, members, source_docs=None, certified=None):
     """Render the LAYERED scene report (the single renderer for the layered
     model, reusing REPORT_CSS + swatch + scene_bar_svg). Inputs are plain data
     assembled by scene-layers.py (no solver types here):
@@ -610,9 +653,14 @@ def layered_report(family, scenes, members, source_docs=None):
       source_docs = optional [(title, text, lang), ...] (lang: yaml|python) --
                   shown inline in an overlay behind a 'View config & source'
                   link, so the report doubles as a self-contained spec.
-    Dropped vs the partition report (Christina, 2026-07-18): the meta-group
-    catalog, the templates/relative-brightness table, and the groups x scenes
-    matrix."""
+      certified = the result of proving `family` a minimum (any truthy
+                  value), or None/falsy when `family` is read from
+                  scene-groups.yaml as given rather than freshly solved --
+                  the heading names it "certified minimum" only when the
+                  caller can back that claim with a certification result.
+    Does not render the meta-group catalog, the templates/relative-brightness
+    table, or the groups x scenes matrix -- this renderer covers scenes as
+    layer stacks only."""
     light2group = {n: g for g, ns in members.items() for n in ns}
     out = ["<meta charset='utf-8'><title>Hue scenes -- layered</title>",
            f"<style>{REPORT_CSS}{OVERLAY_CSS}</style>",
@@ -629,8 +677,9 @@ def layered_report(family, scenes, members, source_docs=None):
                    "getElementById('srcmodal').style.display='block';"
                    "showDoc(0)\">&#9776; View config &amp; source</a></p>")
 
-    out.append(f"<h2>Meta-group family <span class='dim'>({len(family)} groups "
-               "&mdash; certified minimum)</span></h2>")
+    cert_suffix = " &mdash; certified minimum" if certified else ""
+    out.append(f"<h2>Meta-group family <span class='dim'>({len(family)} groups"
+               f"{cert_suffix})</span></h2>")
     out.append("<table><tr><th>Group</th><th>Lights</th><th>Zones</th></tr>")
     for name, lts in family:
         zs = _zones_of(lts, members)

@@ -495,10 +495,11 @@ its location moved. It differs from the three per-file lanes in five ways:
 1. **Whole-corpus scanner, not a per-file auditor.** The subject is the corpus.
    Step 1 parses scope intent into `--scope skills|references|md|all` (comma-
    combinable, default `skills`) plus optional repeatable `--path PATH`, and step
-   2 runs the scanner ONCE via the plugin venv:
+   2 runs the scanner ONCE under the bootstrap interpreter (the scanner is
+   stdlib-only; skills_kit_lib degrades gracefully without pyyaml):
 
    ```
-   uv run python "${CLAUDE_PLUGIN_ROOT}/skills/md-domain/scripts/references_audit.py" \
+   "${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${CLAUDE_PLUGIN_ROOT}/skills/md-domain/scripts/references_audit.py" \
      --project-dir .claude/skills --user-dir $HOME/.claude/skills $ARGUMENTS
    ```
 

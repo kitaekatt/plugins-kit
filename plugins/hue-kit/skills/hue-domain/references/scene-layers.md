@@ -68,7 +68,9 @@ Solver (read-only) -- `hue-kit report`:
 Sync (over the two files above):
 
 - `hue-kit groups [PATH]` (`--export-groups`) -- write a starter registry with
-  placeholder group names for you to rename.
+  placeholder group names for you to rename. Refuses to overwrite an existing
+  registry -- pass `--force` to overwrite; an agent does not pass `--force` on
+  the user's behalf.
 - `hue-kit export` (`--export-designs`) -- materialise `scene-designs.yaml` from
   the live bridge colours + `scene-groups.yaml`. VERIFIES the registry family
   expresses AND bakes every scene before writing (fail loud), so the design is
@@ -88,7 +90,7 @@ Sync (over the two files above):
   | Code | Meaning |
   |---|---|
   | 0 | clean -- ran cleanly, no discrepancy (or the requested write succeeded) |
-  | 1 | a generic error -- did not finish (malformed registry, unmatched `--scene`, a raised `SystemExit`, ...) |
+  | 1 | a generic error -- did not finish (malformed registry, unmatched `--scene`, a raised `SystemExit`, ...); or `--apply --yes` finished but at least one scene's write or verify failed (see its per-scene summary) |
   | 2 | argparse usage error |
   | `EXIT_DISCREPANCY` (4) | `--validate-design` ran cleanly and found a real discrepancy -- never reused for a run that failed to compare |
 
@@ -104,11 +106,14 @@ Sync (over the two files above):
   detect structural change; `export` re-baselines it, which is what clears a
   shape change once the user has pulled. Keep that coupling.
 - `hue-kit apply` (`--apply`) -- bake the layer stacks onto the bridge.
-  **Dry-run unless `--yes`.** Resolves every targeted scene first (atomic -- a
-  parse error writes nothing), writes ONLY beyond-tolerance lights (in-tolerance
-  lights stay byte-exact), backs each scene up to
-  `tmp/scene-backup-<scene>-layered-<ts>.json` (never-overwriting) then PUT +
-  verify by re-read. `--scene NAME` (repeatable) limits the set.
+  **Dry-run unless `--yes`.** Resolves every scene before the first write (a
+  parse error in the design/registry writes nothing); a rejected write stops
+  that scene, is reported with the bridge's error text, and the run
+  continues with the rest of the plan. Writes ONLY beyond-tolerance lights
+  (in-tolerance lights stay byte-exact), backs each scene up to
+  `tmp/scene-backup-<scene>-layered-<ts>.json` (never-overwriting, written
+  before that scene's PUT) then PUT + verify by re-read. `--scene NAME`
+  (repeatable) limits the set.
 
 ## Authoring workflow
 

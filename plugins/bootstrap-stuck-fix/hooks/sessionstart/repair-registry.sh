@@ -34,15 +34,34 @@ SCRIPTS="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pw
 PY=""
 for candidate in \
     "$HOME/.local/share/python-standalone/python/python.exe" \
-    "$HOME/.local/share/python-standalone/python/bin/python3" \
-    python3 \
-    python
+    "$HOME/.local/share/python-standalone/python/bin/python3"
 do
     if command -v "$candidate" >/dev/null 2>&1 && "$candidate" -c "" >/dev/null 2>&1; then
         PY="$candidate"
         break
     fi
 done
+
+# BOOTSTRAP_PYTHON is accepted only as a fallback for the deterministic
+# candidates above, and only when it resolves inside the standalone install
+# directory -- never trusted blind, which would reintroduce a dependency this
+# plugin exists to not have.
+if [[ -z "$PY" ]] && [[ -n "${BOOTSTRAP_PYTHON:-}" ]] && [[ -x "$BOOTSTRAP_PYTHON" ]]; then
+    case "$(cd "$(dirname "$BOOTSTRAP_PYTHON")" 2>/dev/null && pwd -P)" in
+        "$(cd "${HOME}/.local/share/python-standalone" 2>/dev/null && pwd -P)"/*)
+            "$BOOTSTRAP_PYTHON" -c "" >/dev/null 2>&1 && PY="$BOOTSTRAP_PYTHON"
+            ;;
+    esac
+fi
+
+if [[ -z "$PY" ]]; then
+    for candidate in python3 python; do
+        if command -v "$candidate" >/dev/null 2>&1 && "$candidate" -c "" >/dev/null 2>&1; then
+            PY="$candidate"
+            break
+        fi
+    done
+fi
 [[ -n "$PY" ]] || exit 0
 
 for script in repair_registry.py repair_update_scope.py; do

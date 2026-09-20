@@ -627,6 +627,9 @@ def _main():
              "engine launches the generated elevation script itself (UAC "
              "prompt), waits for it, then re-runs the checks. NEVER passed by "
              "the SessionStart hook.")
+    parser.add_argument("--project-key", dest="project_key", default=None,
+        help="Key naming this project's interpreter record (the hook's "
+             "_PROJECT_KEY). When absent it is the sha1 of --project-dir.")
     args = parser.parse_args()
 
     # --console implies --verbose
@@ -651,6 +654,30 @@ def _main():
     # venv activation and leave this Python with a stripped PATH that
     # fails tool_check / git_dep_check / etc.
     path_repair_result = repair_path()
+
+    # Export BOOTSTRAP_PYTHON (and clear any inherited BOOTSTRAP_PROJECT_PYTHON)
+    # before any branch can spawn a manifest command -- the always lane below
+    # included. Process-scoped only: see interpreter_env. The ok entry is
+    # appended once bootstrap_ok_entries exists, like path_repair_result's.
+    from . import interpreter_env
+    engine_python = interpreter_env.begin_pass()
+
+    # The pass-start project default (interface-v3 section 3): the normative
+    # rule WITH the per-project record, so the always lane below -- which never
+    # reads a manifest -- still sees the manifest-aware value (or the opt-out)
+    # a full pass recorded. The key is the hook's; a launch without
+    # --project-key (a harvest relaunch, a console run) hashes --project-dir
+    # verbatim.
+    project_key = args.project_key or (
+        interpreter_env.project_key(args.project_dir) if args.project_dir else None)
+    project_python_entry = None
+    if args.project_dir:
+        pp_value, pp_source = interpreter_env.export_project_default(
+            args.project_dir,
+            record_dir=os.path.join(data_dir, interpreter_env.RECORD_SUBDIR),
+            key=project_key,
+        )
+        project_python_entry = _project_python_entry(pp_value, pp_source)
 
     # Step 1: Load/migrate config
     defaults_dir = os.path.join(plugin_root, "defaults")
@@ -684,6 +711,8 @@ def _main():
         # would force a full pass every session forever. Swallow here, record
         # in the log, and let the next full pass surface the entry properly.
         entries = []
+        if args.verbose and project_python_entry:
+            entries.append(project_python_entry)
         try:
             failures, actions = _run_always_pass(
                 args.project_dir, current_os, data_dir, plugin_root,
@@ -759,6 +788,12 @@ def _main():
             f"{path_repair_result.after_entries} entries "
             f"({', '.join(details)})"
         )
+    # Verbose-only: names the interpreter every manifest command of this pass
+    # sees, so an author reading bootstrap.log finds the variable.
+    bootstrap_ok_entries.append(
+        f"python: {interpreter_env.ENGINE_VAR}={engine_python}")
+    if project_python_entry:
+        bootstrap_ok_entries.append(project_python_entry)
 
     # Detect plugins directory (where installed_plugins.json lives)
     # Dev layout: ~/Dev/<marketplace>/plugins/bootstrap → one up
@@ -909,6 +944,31 @@ def _main():
             "plugin": "bootstrap",
             "persist_across_sessions": True,
         })
+
+    # Step 3c-python (interface-v3 section 3), BEFORE the layered manifest is
+    # processed so its commands see both names: (1) the two machine-wide
+    # opt-outs, read from USER layers only; (2) BOOTSTRAP_PYTHON persistence
+    # and the shell hook; (3) a fresh, manifest-aware project default
+    # (subdir, project_python) that ignores the record.
+    ie_user_layers, ie_project_layers = _interpreter_env_layers(
+        args.project_dir, profile_state)
+    ie_persist, ie_shell_hook, ie_notes = interpreter_env.interpreter_env_settings(
+        ie_user_layers, parse_errors=bool(layered_parse_errors),
+        project_layers=ie_project_layers)
+    bootstrap_ok_entries.extend(ie_notes)
+    ie_action, ie_ok, ie_failures = _process_interpreter_env(
+        ie_persist, ie_shell_hook, current_os=current_os, data_dir=data_dir,
+        parse_errors=bool(layered_parse_errors))
+    bootstrap_action_entries.extend(ie_action)
+    bootstrap_ok_entries.extend(ie_ok)
+    all_failures.extend(ie_failures)
+    project_python_source = None
+    if args.project_dir:
+        _pp_value, project_python_source = _export_project_default_for_pass(
+            args.project_dir, layered_manifest, project_key,
+            bootstrap_ok_entries, bootstrap_quiet_entries,
+            user_layers=ie_user_layers, project_layers=ie_project_layers)
+
     if layered_manifest:
         action_entries = []
         ok_entries = []
@@ -946,10 +1006,35 @@ def _main():
         pv_quiet = []
         pv_action, pv_ok, pv_failures = _process_project_venv(
             project_venv_def, args.project_dir, quiet_entries=pv_quiet)
+        # A venv this pass has verified replaces the Step 3c default; Step 3e
+        # (env_checks) and Step 4 (plugin manifests) see it. A higher-priority
+        # Step 3c outcome is kept: an opted-out project exports no project
+        # interpreter at all, and an activated VIRTUAL_ENV outranks the venv.
+        if not pv_failures:
+            if project_python_source in _PROJECT_PYTHON_OUTRANKS_VENV:
+                pv_ok.append(_kept_over_venv_entry(project_python_source))
+            else:
+                project_python = _export_project_python(
+                    project_venv_def, args.project_dir)
+                if project_python:
+                    project_python_source = "venv"
+                    pv_ok.append(
+                        f"project_venv: exported "
+                        f"{interpreter_env.PROJECT_VAR}={project_python} (process)")
         bootstrap_action_entries.extend(_reprefix(e, "config: ") for e in pv_action)
         bootstrap_ok_entries.extend(_reprefix(e, "config: ") for e in pv_ok)
         bootstrap_quiet_entries.extend(_reprefix(e, "config: ") for e in pv_quiet)
         all_failures.extend(pv_failures)
+
+    # Step 3d-record: the project interpreter (or the opt-out) this pass
+    # settled on is recorded for the hook prelude and the always lane (write
+    # policy in interpreter_env.write_record). Skipped when a layered manifest
+    # failed to parse: the broken layer may be the one holding project_python.
+    if args.project_dir and project_python_source:
+        _maintain_project_python_record(
+            data_dir, project_key, os.environ.get(interpreter_env.PROJECT_VAR, ""),
+            project_python_source, bool(layered_parse_errors),
+            bootstrap_ok_entries, bootstrap_quiet_entries)
 
     # Step 3d2: Process project_npm from layered manifest (needs --project-dir).
     # After project_venv for the same reason project_venv sits where it does:
@@ -991,12 +1076,15 @@ def _main():
     # personalization refuses to guess.
     env_action_entries = []
     env_ok_entries = []
+    env_quiet_entries = []
     env_failures = _process_env_pass(
         args.project_dir, current_os, data_dir, plugin_root,
         env_action_entries, env_ok_entries, engine_version=version,
+        quiet_entries=env_quiet_entries,
     )
     bootstrap_action_entries.extend(_reprefix(e, "env: ") for e in env_action_entries)
     bootstrap_ok_entries.extend(_reprefix(e, "env: ") for e in env_ok_entries)
+    bootstrap_quiet_entries.extend(_reprefix(e, "env: ") for e in env_quiet_entries)
     if env_failures:
         all_failures.extend(env_failures)
 
@@ -3225,17 +3313,24 @@ def _strategy_install_command(ctx):
     install_detail = ({"install_cmd": result.install_cmd,
                        "install_output": install_output}
                       if install_output else None)
+    # A python-not-found install carries the interpreter hint on the log line
+    # and in the failure message (python_hint_for_output; empty otherwise).
+    failure_message = _with_python_hint(result.message, install_output)
     if install_state == "installed_but_path_stale":
         _append_detail(
             ctx.action_entries,
-            f"{ctx.prefix}{result.subject}: install succeeded but binary not findable afterward "
-            f"(add an installPath hint, or a download recipe to fetch our own copy)",
+            _with_python_hint(
+                f"{ctx.prefix}{result.subject}: install succeeded but binary not findable afterward "
+                f"(add an installPath hint, or a download recipe to fetch our own copy)",
+                install_output),
             detail=install_detail,
         )
     elif install_state == "install_failed":
         _append_detail(
             ctx.action_entries,
-            f"{ctx.prefix}{result.subject}: install command failed - `{result.install_cmd}`",
+            _with_python_hint(
+                f"{ctx.prefix}{result.subject}: install command failed - `{result.install_cmd}`",
+                install_output),
             detail=install_detail,
         )
     elif install_state == "manual_install":
@@ -3258,7 +3353,7 @@ def _strategy_install_command(ctx):
     return _StrategyOutcome(True, {
         "type": "tool",
         "name": result.subject,
-        "message": result.message,
+        "message": failure_message,
         "install_state": install_state,
         # manual_install carries no runnable command — null it so the item is
         # classified manual-attention (not fix-all eligible) downstream.
@@ -3836,6 +3931,337 @@ def _process_project_venv(venv_def, project_dir, quiet_entries=None):
         quiet_entries=quiet_entries,
     )
 
+    return action_entries, ok_entries, failures
+
+
+def _export_project_python(venv_def, project_dir):
+    """Export BOOTSTRAP_PROJECT_PYTHON after a project_venv step without failures.
+
+    Resolves the same target _process_project_venv used (``subdir`` with
+    realpath containment) and exports ``<target>/.venv``'s interpreter into
+    this process only (interpreter_env.export_project_python). The caller
+    invokes this only when that step reported no failures. It returns None,
+    exporting nothing, when the target cannot be resolved or has no
+    pyproject.toml (the step skipped it, so any .venv there was not verified
+    this pass), or when no venv interpreter exists. The caller logs the
+    returned value.
+    """
+    from .interpreter_env import export_project_python
+    if not isinstance(venv_def, dict) or not project_dir:
+        return None
+    try:
+        target_dir, failure = _resolve_project_subdir(
+            project_dir, venv_def.get("subdir"), "project_venv")
+    except (OSError, TypeError, ValueError):
+        return None
+    if failure:
+        return None
+    if not os.path.isfile(os.path.join(target_dir, "pyproject.toml")):
+        return None
+    return export_project_python(os.path.join(target_dir, ".venv"))
+
+
+#: Step 3c sources a verified Step 3d venv must not replace (normative rule
+#: steps 1 and 2 rank above step 4).
+_PROJECT_PYTHON_OUTRANKS_VENV = ("opt_out", "virtual_env")
+
+
+def _project_python_entry(value, source, suffix=""):
+    """The verbose log line naming the project interpreter outcome."""
+    from .interpreter_env import PROJECT_VAR
+    label = f"{source}{suffix}"
+    if value is None:
+        return (f"python: {PROJECT_VAR} not exported ({label}: the project "
+                "declares project_python false)")
+    return f"python: {PROJECT_VAR}={value} ({label})"
+
+
+def _kept_over_venv_entry(source):
+    """The project_venv ok line when Step 3c's outcome outranks the venv."""
+    from .interpreter_env import OPT_OUT, PROJECT_VAR
+    if source == OPT_OUT:
+        return (f"project_venv: {PROJECT_VAR} not exported (the project "
+                "declares project_python false)")
+    return (f"project_venv: {PROJECT_VAR} kept at {os.environ.get(PROJECT_VAR)} "
+            f"({source} outranks the project venv)")
+
+
+def _project_venv_subdir(project_dir, manifest):
+    """The declared ``project_venv.subdir`` when it passes containment, else None.
+
+    A rejected subdir is reported by the project_venv step itself; the
+    project default then resolves from the project root.
+    """
+    venv_def = manifest.get("project_venv") if isinstance(manifest, dict) else None
+    if not isinstance(venv_def, dict):
+        return None
+    subdir = venv_def.get("subdir")
+    if not subdir or not isinstance(subdir, str):
+        return None
+    try:
+        _target, failure = _resolve_project_subdir(project_dir, subdir, "project_venv")
+    except (OSError, TypeError, ValueError):
+        return None
+    return None if failure else subdir
+
+
+def _project_python_opt_out(user_layers, project_layers, notes):
+    """Whether the PROJECT layers opt out (``"project_python": false``).
+
+    Only ``<project>/.claude/bootstrap.json`` and its local variant (plus the
+    profile bodies they declare) can opt a project out; the key in a user layer
+    (``~/.claude/...``) is ignored with one log line appended to ``notes``, as
+    is any value other than ``false`` in a project layer. The terminal resolver
+    (shell/project-python.sh) applies the same boundary by never reading an
+    opt-out at the home directory.
+    """
+    from . import interpreter_env
+    note = interpreter_env.project_python_note(project_layers)
+    if note:
+        notes.append(note)
+    if any(isinstance(layer, dict) and interpreter_env.OPT_OUT_KEY in layer
+           for layer in user_layers or ()):
+        notes.append(
+            f"python: {interpreter_env.OPT_OUT_KEY} in a user manifest is ignored "
+            f"-- it opts one project out; set it in <project>/.claude/bootstrap.json")
+    return interpreter_env.project_python_opted_out(project_layers)
+
+
+def _export_project_default_for_pass(project_dir, layered_manifest, project_key,
+                                     ok_entries, quiet_entries,
+                                     user_layers=(), project_layers=()):
+    """Step 3c: export the manifest-aware project default; return (value, source).
+
+    Fresh resolution (no record read). ``"project_python": false`` in a
+    PROJECT layer opts the project out (value None, the name removed from the
+    process and the session block); see ``_project_python_opt_out``.
+    ``layered_manifest`` (merged) supplies ``project_venv.subdir`` only.
+    """
+    from . import interpreter_env
+    manifest = layered_manifest or {}
+    opted_out = _project_python_opt_out(user_layers, project_layers, quiet_entries)
+    value, source = interpreter_env.export_project_default(
+        project_dir,
+        subdir=_project_venv_subdir(project_dir, manifest),
+        opted_out=opted_out,
+        record_dir=None,
+        key=project_key,
+    )
+    ok_entries.append(_project_python_entry(value, source, ", manifest-aware"))
+    return value, source
+
+
+def _maintain_project_python_record(data_dir, key, value, source, parse_errors,
+                                    ok_entries, quiet_entries):
+    """Write or remove ``<data_dir>/project_python/<key>`` per the write policy.
+
+    ``venv`` -> the interpreter path; ``opt_out`` -> the opt-out marker;
+    ``engine`` -> remove a stale record; ``virtual_env`` -> leave the record
+    alone. Changes are quiet entries (always logged, never displayed); a
+    steady state is a verbose ok entry.
+    """
+    from . import interpreter_env
+    label = f"python: project record {key}"
+    if not key or key == interpreter_env.GLOBAL_KEY:
+        ok_entries.append(f"{label}: not kept (no per-project key)")
+        return
+    if parse_errors:
+        ok_entries.append(f"{label}: left unchanged (a layered manifest failed to parse)")
+        return
+    if source in interpreter_env.RECORD_SOURCES:
+        opt_out = source == interpreter_env.OPT_OUT
+        shown = interpreter_env.RECORD_OPT_OUT if opt_out else value
+        unchanged = (interpreter_env.record_opted_out(data_dir, key) if opt_out
+                     else interpreter_env.read_record(data_dir, key) == value)
+        if interpreter_env.write_record(data_dir, key, value, source):
+            if unchanged:
+                ok_entries.append(f"{label}: ok - {shown} ({source})")
+            else:
+                quiet_entries.append(f"{label}: recorded {shown} ({source})")
+        else:
+            quiet_entries.append(f"{label}: write FAILED for {shown} ({source})")
+    elif source == "engine":
+        if interpreter_env.remove_record(data_dir, key):
+            quiet_entries.append(f"{label}: removed (project resolves to the engine interpreter)")
+        else:
+            ok_entries.append(f"{label}: none (project resolves to the engine interpreter)")
+    else:
+        ok_entries.append(f"{label}: left unchanged ({source} is not recorded)")
+
+
+def _interpreter_env_layers(project_dir, profile_state):
+    """``(user_layers, project_layers)`` for ``interpreter_env_settings``.
+
+    Each list holds the layer files' parsed objects (lowest priority first)
+    followed by the bodies of the selected profile chain as declared in THOSE
+    files, so a profile body in a project layer never counts as a user
+    setting. Unreadable layers are skipped: the loader already reported them,
+    and its parse-error signal makes the caller skip the whole step.
+    """
+    from .profiles import _profile_body
+    home = os.environ.get("HOME") or os.path.expanduser("~")
+    chain = ()
+    if getattr(profile_state, "status", None) == "selected":
+        chain = tuple(getattr(profile_state, "chain", ()) or ())
+
+    def _layers(paths):
+        raw = []
+        for path in paths:
+            if os.path.isfile(path):
+                layer = _read_manifest_layer(path, [])
+                if isinstance(layer, dict):
+                    raw.append(layer)
+        bodies = []
+        for name in chain:
+            for layer in raw:
+                declared = layer.get("profiles")
+                body = declared.get(name) if isinstance(declared, dict) else None
+                if isinstance(body, dict):
+                    bodies.append(_profile_body(body))
+        return raw + bodies
+
+    claude_home = os.path.join(home, ".claude")
+    user = _layers([os.path.join(claude_home, "bootstrap.json"),
+                    os.path.join(claude_home, "bootstrap.local.json")])
+    project = []
+    if project_dir:
+        project_claude = os.path.join(str(project_dir), ".claude")
+        # A session in the home directory has no project layer: its
+        # .claude/bootstrap.json IS the user layer.
+        if not _same_dir(project_claude, claude_home):
+            project = _layers([os.path.join(project_claude, "bootstrap.json"),
+                               os.path.join(project_claude, "bootstrap.local.json")])
+    return user, project
+
+
+def _same_dir(a, b):
+    """Whether two directory spellings name the same place (realpath, case on Windows)."""
+    try:
+        return (os.path.normcase(os.path.realpath(a))
+                == os.path.normcase(os.path.realpath(b)))
+    except (OSError, ValueError):
+        return False
+
+
+def _process_interpreter_env(persist, shell_hook, *, current_os, data_dir,
+                             parse_errors=False):
+    """Persist BOOTSTRAP_PYTHON machine-wide and converge the shell hook.
+
+    Returns ``(action_entries, ok_entries, failures)``. Skipped entirely (one
+    verbose entry) under the test-isolation signal
+    (``interpreter_env.ISOLATION_ENV``), in a redirected test session
+    (``CLAUDE_BOOTSTRAP_DATA_ROOT``), or when a layered manifest failed to
+    parse (an unreadable layer may hold an opt-out).
+
+    ``persist``: the persisted VALUE is the deterministic standalone path
+    (``interpreter_env.standalone_python``), never ``sys.executable``, and only
+    when that file is executable; it goes through the env_vars helpers
+    (export, check, set, re-check). The first successful set displays the
+    discoverability line; the steady state is a verbose ok entry.
+    ``persist=False`` removes a persisted value (``unset_env_var``) once.
+    ``shell_hook`` is passed to ``shell_hook.ensure`` as ``enabled``.
+    """
+    from . import interpreter_env as ie
+    from .env_var_check import (
+        check_env_var, export_env_var, is_env_var_persisted, set_env_var,
+        unset_env_var,
+    )
+    from .path_check import _home
+
+    action_entries = []
+    ok_entries = []
+    failures = []
+    name = ie.ENGINE_VAR
+
+    if os.environ.get(ie.ISOLATION_ENV):
+        reason = f"{ie.ISOLATION_ENV} is set"
+    elif os.environ.get("CLAUDE_BOOTSTRAP_DATA_ROOT"):
+        reason = "CLAUDE_BOOTSTRAP_DATA_ROOT is set"
+    elif parse_errors:
+        reason = "a layered manifest failed to parse"
+    else:
+        reason = None
+    if reason:
+        ok_entries.append(
+            f"python: {name} persistence and shell hook skipped ({reason})")
+        return action_entries, ok_entries, failures
+
+    home = _home()
+    owned = ie.is_bootstrap_owned(sys.executable, home)
+    ok_entries.append(
+        f"python: engine runs under {ie.shell_path(sys.executable)} ("
+        + ("the bootstrap-owned interpreter" if owned
+           else "not the bootstrap-owned interpreter") + ")")
+
+    value = ie.standalone_python(home)
+    if persist:
+        if not (os.path.isfile(value) and os.access(value, os.X_OK)):
+            ok_entries.append(
+                f"python: {name} not persisted -- {value} is not an executable file")
+        else:
+            export_env_var(name, value)
+            result = check_env_var(name, value, current_os)
+            if result.passed:
+                ok_entries.append(f"python: {name} ok - {result.message}")
+            else:
+                set_ok, msg = set_env_var(name, value, current_os)
+                recheck = check_env_var(name, value, current_os)
+                if set_ok and recheck.passed:
+                    _append_detail(
+                        action_entries,
+                        f"python: {name} and {ie.PROJECT_VAR} are exported -- "
+                        f"invoke Python through them, never bare python/python3 "
+                        f"(/bootstrap fact {ie.FACT_ID})",
+                        detail={"persisted": msg, "value": value},
+                    )
+                else:
+                    detail = msg if not set_ok else (
+                        f"set reported '{msg}' but re-check failed: {recheck.message}")
+                    _append_detail(
+                        action_entries, f"python: {name} persist FAILED - {detail}",
+                        display=f"python: {name} persist FAILED",
+                    )
+                    failures.append({
+                        "type": "env_var",
+                        "name": name,
+                        "message": f"{name}: {detail}",
+                        "plugin": "bootstrap",
+                    })
+    elif is_env_var_persisted(name, current_os):
+        unset_ok, msg = unset_env_var(name, current_os)
+        if unset_ok:
+            action_entries.append(
+                f"python: {name} no longer persisted "
+                f"({ie.LAYERED_KEY}.persist is false) - {msg}")
+        else:
+            _append_detail(
+                action_entries, f"python: {name} unpersist FAILED - {msg}",
+                display=f"python: {name} unpersist FAILED",
+            )
+            failures.append({
+                "type": "env_var",
+                "name": name,
+                "message": f"{name}: {msg}",
+                "plugin": "bootstrap",
+            })
+    else:
+        ok_entries.append(
+            f"python: {name} not persisted ({ie.LAYERED_KEY}.persist is false)")
+
+    from . import shell_hook as _shell_hook
+    try:
+        sh_action, sh_ok, sh_failures = _shell_hook.ensure(
+            data_dir, current_os, enabled=shell_hook, home=home, documents=None)
+    except Exception as exc:
+        _append_detail(
+            action_entries,
+            f"python: shell hook FAILED - {type(exc).__name__}: {exc}",
+            display="python: shell hook FAILED",
+        )
+    else:
+        action_entries.extend(sh_action)
+        ok_entries.extend(sh_ok)
+        failures.extend(sh_failures)
     return action_entries, ok_entries, failures
 
 
@@ -5663,6 +6089,20 @@ def _phase_shared_libs(ctx):
                 type="shared_lib", name=result.name, message=result.message,
             )
 
+    # The owner broadcast writes a .pth into the MACHINE-WIDE standalone
+    # interpreter. CLAUDE_BOOTSTRAP_DATA_ROOT redirects `shared_root` but NOT
+    # that interpreter, so a redirected run would point a durable machine-wide
+    # file at a data root the caller may delete -- and, until the next ordinary
+    # pass, serve that root's copy of the library to every standalone consumer.
+    # Skip it, matching the gate _process_interpreter_env already applies to
+    # machine-wide persistence. The consumer phase below is unaffected: it
+    # links into venvs that live inside the redirected root.
+    broadcast_skipped = (
+        "CLAUDE_BOOTSTRAP_DATA_ROOT is set"
+        if os.environ.get("CLAUDE_BOOTSTRAP_DATA_ROOT")
+        else None
+    )
+
     # Owner phase: publish source, then broadcast to the standalone Python.
     owner_venv_python = venv_python(os.path.join(ctx.data_dir, ".venv"))
     for lib_def in ctx.manifest.get("shared_libs", []):
@@ -5683,7 +6123,15 @@ def _phase_shared_libs(ctx):
             )
         _log_shared(sync_result)
         if sync_result.status != "failed":
-            _log_shared(link_shared_lib(lib_name, find_standalone_python(), shared_root))
+            if broadcast_skipped:
+                ctx.ok(
+                    f"shared-lib {lib_name}: standalone broadcast skipped "
+                    f"({broadcast_skipped})"
+                )
+            else:
+                _log_shared(
+                    link_shared_lib(lib_name, find_standalone_python(), shared_root)
+                )
 
     # Consumer phase: link into this plugin's own venv.
     shared_lib_imports = ctx.manifest.get("shared_lib_imports", [])
@@ -5733,6 +6181,36 @@ _MANIFEST_PHASES = (
 )
 
 
+#: ``plugin_name`` of the layered (user/project) manifest in _process_manifest.
+_LAYERED_MANIFEST_NAME = "config"
+
+
+def _lint_manifest_python(ctx):
+    """Report bare-Python manifest commands, severity by boundary.
+
+    A shipped plugin manifest is written for machines its author never sees,
+    so a hit is a displayed action entry (never a failure). A layered manifest
+    (``plugin_name == "config"``) is the user's own machine: the hit is a
+    log-only quiet entry, and only a command that actually fails carries the
+    hint (``_with_python_hint``). See manifest_lint.
+    """
+    from .manifest_lint import lint_manifest_hits
+    layered = ctx.plugin_name == _LAYERED_MANIFEST_NAME
+    source = "layered manifest" if layered else f"{ctx.plugin_name} bootstrap.json"
+    for hit in lint_manifest_hits(ctx.manifest, source=source):
+        if layered:
+            ctx.quiet(hit.message)
+        else:
+            ctx.action(hit.message, display=hit.display)
+
+
+def _with_python_hint(text, output):
+    """``text`` plus the interpreter hint when ``output`` shows python missing."""
+    from .manifest_lint import python_hint_for_output
+    hint = python_hint_for_output(output or "")
+    return f"{text}; {hint}" if hint else text
+
+
 def _process_manifest(manifest, current_os, data_dir, plugin_root, action_entries, ok_entries, plugin_name="bootstrap", project_dir=None, project_detected=True, quiet_entries=None, shared_lib_links=None, marketplace=""):
     """Process a single plugin's bootstrap manifest. Returns list of failures.
 
@@ -5755,6 +6233,7 @@ def _process_manifest(manifest, current_os, data_dir, plugin_root, action_entrie
         quiet_entries=quiet_entries, shared_lib_links=shared_lib_links,
         marketplace=marketplace,
     )
+    _lint_manifest_python(ctx)
     for keys, handler in _MANIFEST_PHASES:
         if any(manifest.get(k) for k in keys):
             handler(ctx)
@@ -5776,10 +6255,11 @@ class _EnvManifestContext(_ManifestContext):
 
     def __init__(self, manifest, current_os, data_dir, plugin_root,
                  action_entries, ok_entries, project_dir,
-                 hostname, machines, cadence_filter=None):
+                 hostname, machines, cadence_filter=None, quiet_entries=None):
         super().__init__(
             manifest, current_os, data_dir, plugin_root,
             action_entries, ok_entries, "env", project_dir, True,
+            quiet_entries=quiet_entries,
         )
         self.hostname = hostname
         self.machines = machines
@@ -6326,6 +6806,7 @@ def _env_phase_env_checks(ctx):
     surface, not a "not configured" to converge on.
     """
     from .env_features import ENV_CHECK_DEFAULT_TIMEOUT, run_env_command
+    from .manifest_lint import lint_manifest_hits
     from .path_repair import repair_path
 
     entries = _env_section_entries(ctx, "env_checks", "env_check")
@@ -6410,6 +6891,11 @@ def _env_phase_env_checks(ctx):
         if not ctx.entry_applies(entry):
             ctx.ok(f"env_check {name}: skipped (os/hosts filter)")
             continue
+
+        # env.json is the user's own machine: a bare-Python command is a
+        # log-only note; only a fix that fails that way carries the hint.
+        for hit in lint_manifest_hits({"env_checks": [entry]}, source="env.json"):
+            ctx.quiet(hit.message)
 
         rc, detail = run_env_command(check, timeout)
         if rc == 0:
@@ -6509,6 +6995,7 @@ def _env_phase_env_checks(ctx):
                 display=f"env_check {name}: fixed",
             )
         else:
+            fix_detail = _with_python_hint(fix_detail, fix_detail)
             ctx.fail(
                 f"env_check {name}: FAILED - {fix_detail}",
                 type="env_check", name=name,
@@ -6671,7 +7158,7 @@ def _validate_env_machines(ctx, merged, hostname, current_os):
 
 def _process_env_pass(project_dir, current_os, data_dir, plugin_root,
                       action_entries, ok_entries, engine_version="",
-                      hostname=None):
+                      hostname=None, quiet_entries=None):
     """Step 3e: process the layered env.json manifest, gated by env_state.json.
 
     Returns the list of failure dicts (empty when green, skipped, or when no
@@ -6740,6 +7227,7 @@ def _process_env_pass(project_dir, current_os, data_dir, plugin_root,
         merged, current_os, data_dir, plugin_root,
         action_entries, ok_entries, project_dir,
         hostname, merged.get("machines") or {},
+        quiet_entries=quiet_entries,
     )
 
     for pe in parse_errors:

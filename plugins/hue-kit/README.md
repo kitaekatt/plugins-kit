@@ -35,9 +35,9 @@ for Hue CLIP v2 fundamentals.
 ```
 
 The `bootstrap` plugin
-provisions a venv (requests, pyyaml, urllib3) from `pyproject.toml` on session
-start -- no manual `pip install`. Claude Code adds this plugin's `bin/` to PATH,
-so the `hue-kit` command works from any directory.
+provisions a venv (requests, pyyaml, urllib3, zeroconf) from `pyproject.toml`
+on session start -- no manual `pip install`. Claude Code adds this plugin's
+`bin/` to PATH, so the `hue-kit` command works from any directory.
 
 ## Point it at your bridge
 
@@ -70,7 +70,7 @@ To create a key by hand: press the round link button on the bridge, then within
 ```bash
 curl -k -X POST https://<BRIDGE_IP>/api \
   -H 'Content-Type: application/json' \
-  -d '{"devicetype":"hue-kit#tool","generateclientkey":true}'
+  -d '{"devicetype":"hue-kit#user","generateclientkey":true}'
 ```
 
 ## The CLI
@@ -94,6 +94,7 @@ hue-kit report            # read the bridge; print the minimal group family
                           #   + each scene as a layer stack (read-only)
 hue-kit groups            # write a starter scene-groups.yaml (placeholder
                           #   names G1..) -- then rename the groups meaningfully
+                          #   refuses if the file exists; pass --force to overwrite
 hue-kit export            # materialise scene-designs.yaml from your live scenes
 hue-kit render            # render index.html (config + source embedded)
 hue-kit validate          # diff your YAML vs the bridge, per light (read-only)

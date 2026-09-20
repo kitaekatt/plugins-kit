@@ -20,26 +20,38 @@ _SCRIPTS = (Path(__file__).resolve().parent.parent.parent
 
 @pytest.fixture(autouse=True)
 def _pin_bridge_env(monkeypatch):
-    """M25 hygiene: pin HUE_BRIDGE_IP to a TEST-NET address (RFC 5737,
-    192.0.2.0/24 -- reserved for documentation, never routable) for every
-    test in this package, via monkeypatch so it is restored after EACH test
-    instead of leaking into the rest of the suite. Function-scoped and
-    autouse: it still covers tests that call hue_cli.__wrapped__() directly
-    (bypassing pytest's fixture request), since autouse fixtures apply to
-    every test collected in this directory regardless of what it requests."""
+    """Pin HUE_BRIDGE_IP to a TEST-NET address (RFC 5737, 192.0.2.0/24 --
+    reserved for documentation, never routable) for every test in this
+    package, via monkeypatch so it is restored after EACH test instead of
+    leaking into the rest of the suite. Function-scoped and autouse: it still
+    covers tests that call hue_cli.__wrapped__() directly (bypassing pytest's
+    fixture request), since autouse fixtures apply to every test collected in
+    this directory regardless of what it requests.
+
+    Also clears HUE_GROUPS_FILE, HUE_DESIGNS_FILE, HUE_KEY_FILE and
+    HUE_APP_KEY via monkeypatch.delenv. `_scene_layers_env` and
+    `_resolve_key_file` in hue_kit_cli.py write these straight into
+    os.environ rather than a copy, so a test that reaches either for real
+    leaves the value live for whatever test runs next. Deleting them here
+    through monkeypatch records each as absent and removes it again at
+    teardown, so a write from inside the code under test is undone after
+    every test regardless of which one performed it."""
     monkeypatch.setenv("HUE_BRIDGE_IP", "192.0.2.1")
+    for name in ("HUE_GROUPS_FILE", "HUE_DESIGNS_FILE", "HUE_KEY_FILE",
+                 "HUE_APP_KEY"):
+        monkeypatch.delenv(name, raising=False)
 
 
 @pytest.fixture(autouse=True, scope="package")
 def _isolate_sys_state():
-    """M25 hygiene: the fixtures below load two files by path, which mutates
-    global interpreter state to do it -- hue_kit_cli.py's own module-level
+    """The fixtures below load two files by path, which mutates global
+    interpreter state to do it -- hue_kit_cli.py's own module-level
     `sys.path.insert(0, ...)`, plus sys.modules entries for both loaded
     modules and their requests/urllib3/bootstrap_guard stubs. Restore both at
     the end of THIS package (tests/hue-kit has an __init__.py, so a
     scope="package" fixture is exactly one package), not the whole session --
-    a session-wide restore did nothing between tests/hue-kit and whatever
-    test directory ran next, which is where the leak actually bit."""
+    a session-wide restore leaves the leak to bite whatever test directory
+    runs after tests/hue-kit."""
     previous_path = list(sys.path)
     previous_modules = set(sys.modules.keys())
     yield
@@ -85,10 +97,10 @@ def hue_cli():
     function under test is pure process-plumbing and needs none of it. Restore
     the prior guard immediately after loading; the CLI retains its bound stubs.
 
-    Fixture hygiene (M25): the loaded module's `_resolve_bridge_ip()` reads
-    HUE_BRIDGE_IP -- pinned by the autouse `_pin_bridge_env` fixture above,
-    not here, so it is restored after each test rather than leaking into the
-    rest of the suite. BRIDGE_IP_CACHE / PAIRED_KEY_FILE are left as the
+    The loaded module's `_resolve_bridge_ip()` reads HUE_BRIDGE_IP -- pinned
+    by the autouse `_pin_bridge_env` fixture above, not here, so it is
+    restored after each test rather than leaking into the rest of the suite.
+    BRIDGE_IP_CACHE / PAIRED_KEY_FILE are left as the
     module computes them (under `data_dir("hue-kit")`, stubbed to
     Path("/nonexistent") below -- test_cli_loader_isolation.py asserts that
     literal path against the undecorated fixture function): neither resolves

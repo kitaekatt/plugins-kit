@@ -197,7 +197,7 @@ Prefer this over putting a plugin's `bin/` on PATH: PATH would need one entry pe
 
 ## `project_venv` — Project's Own Python Environment
 
-A **layered** manifest (`~/.claude/bootstrap.json` or `<project>/.claude/bootstrap.json`) declares `project_venv` to have bootstrap provision the *project's* venv — synced from the project's own `pyproject.toml` via `uv sync`, verified with `check_imports`. It runs only when the engine has a `--project-dir` (silently skipped otherwise), and never exports a `*_VENV` env var (the venv belongs to the project, not a plugin).
+A **layered** manifest (`~/.claude/bootstrap.json` or `<project>/.claude/bootstrap.json`) declares `project_venv` to have bootstrap provision the *project's* venv — synced from the project's own `pyproject.toml` via `uv sync`, verified with `check_imports`. It runs only when the engine has a `--project-dir` (silently skipped otherwise), and never exports a `*_VENV` env var (the venv belongs to the project, not a plugin) -- the project's interpreter is exposed as `BOOTSTRAP_PROJECT_PYTHON` instead (references/python-interpreter.md).
 
 Fields (all optional):
 
@@ -541,6 +541,22 @@ Variable references are expanded by the engine from plugin context and config:
 | `${plugin_root}` | Plugin's install path |
 | `${data_dir}` | Plugin's data directory |
 | `${uproject_dir}` | From plugin config (if applicable) |
+
+## Python inside manifest commands
+
+A `tools[].check`/`install` command, or an `env.json` `env_checks[].check`/`fix`
+command, that needs Python must invoke it through the interpreter variables the
+engine exports every pass -- never bare `python`/`python3`/`py`, and never a
+`${python}` manifest variable (no such variable exists: these commands are
+opaque shell strings the engine hands to `bash -c` unsubstituted, so none of
+the substitutions in the "Variable Expansion" table above reaches them):
+
+    "${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}"
+
+A bare command word is flagged by a manifest lint pass -- a displayed action
+entry for a shipped plugin manifest, a log-only entry (never displayed) for a layered or
+env.json manifest. Full contract, per-shell forms, and the visibility table
+across every call site: references/python-interpreter.md.
 
 ## `install` — Per-OS Install Methods
 

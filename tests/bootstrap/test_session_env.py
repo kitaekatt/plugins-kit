@@ -139,3 +139,97 @@ def test_unwritable_file_is_not_fatal(env_file, monkeypatch):
 
     monkeypatch.setattr("builtins.open", _boom)
     assert session_env.flush() == 0
+
+
+# --- atomic flush (interface-v3: temp file + os.replace, direct fallback) ---
+
+
+def test_flush_writes_via_tmp_and_replace(env_file, monkeypatch):
+    """The block lands through os.replace from a name Claude Code never reads."""
+    import fnmatch
+    import os
+
+    calls = []
+    real_replace = os.replace
+
+    def spy(src, dst):
+        calls.append((str(src), str(dst)))
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(session_env.os, "replace", spy)
+    session_env.record("FOO", "bar")
+    assert session_env.flush() == 1
+    tmp = session_env.tmp_path_for(str(env_file))
+    assert calls == [(tmp, str(env_file))]
+    base = os.path.basename(tmp)
+    assert base.endswith(".bootstrap-tmp")
+    assert not fnmatch.fnmatch(base, "sessionstart-hook-*")
+    assert not fnmatch.fnmatch(base, "*.sh")
+    assert not os.path.exists(tmp)
+    assert env_file.read_text(encoding="utf-8") == "export FOO=bar\n"
+
+
+def test_flush_replaces_atomically_or_falls_back(env_file, monkeypatch):
+    """T11h: a failing os.replace (a reader holding the file on Windows) still
+    preserves every export -- the direct write takes over -- and leaves no
+    temporary file behind."""
+    import os
+
+    env_file.write_text("export EARLIER=kept\n", encoding="utf-8")
+
+    def refuse(src, dst):
+        raise PermissionError("file in use")
+
+    monkeypatch.setattr(session_env.os, "replace", refuse)
+    session_env.record("NEW", "value")
+    assert session_env.flush() == 2
+    assert env_file.read_text(encoding="utf-8") == (
+        "export EARLIER=kept\nexport NEW=value\n")
+    assert not os.path.exists(session_env.tmp_path_for(str(env_file)))
+    assert session_env._pending == {}
+
+
+def test_flush_falls_back_when_tmp_cannot_be_written(env_file):
+    """A directory squatting on the temp name makes the temp write fail; the
+    direct write still delivers the block."""
+    import os
+
+    os.mkdir(session_env.tmp_path_for(str(env_file)))
+    session_env.record("FOO", "bar")
+    assert session_env.flush() == 1
+    assert env_file.read_text(encoding="utf-8") == "export FOO=bar\n"
+
+
+# --- forget (an opted-out project's BOOTSTRAP_PROJECT_PYTHON) ---
+
+
+def test_forget_drops_an_earlier_line(env_file):
+    env_file.write_text("export KEEP=1\nexport GONE=2\n", encoding="utf-8")
+    assert session_env.forget("GONE") == "GONE"
+    assert session_env.flush() == 1
+    assert env_file.read_text(encoding="utf-8") == "export KEEP=1\n"
+
+
+def test_forget_cancels_a_buffered_record_and_record_cancels_forget(env_file):
+    session_env.record("NAME", "a")
+    session_env.forget("NAME")
+    session_env.record("OTHER", "b")
+    session_env.flush()
+    assert _names(env_file) == ["OTHER"]
+    session_env.forget("OTHER")
+    session_env.record("OTHER", "c")
+    session_env.flush()
+    assert env_file.read_text(encoding="utf-8") == "export OTHER=c\n"
+
+
+def test_forget_of_an_absent_name_leaves_the_file_alone(env_file):
+    env_file.write_bytes(b"export KEEP=1\n# a comment the rewrite would drop\n")
+    session_env.forget("ABSENT")
+    assert session_env.flush() == 0
+    assert env_file.read_bytes() == b"export KEEP=1\n# a comment the rewrite would drop\n"
+
+
+def test_forget_noops_without_env_file(monkeypatch):
+    monkeypatch.delenv("CLAUDE_ENV_FILE", raising=False)
+    assert session_env.forget("X") is None
+    assert session_env.flush() == 0

@@ -171,6 +171,30 @@ uv run --extra dev pytest -n 12 -q      # full suite, ~3 min
 
 The two formerly-documented "pre-existing failure" clusters (the `tests/skills-kit/` collection errors and the bootstrap `engine`/`venv` `CalledProcessError`s) were **fixed**, not version quirks -- both were test-only issues: skills-kit imported the pre-extraction `schemas`/`_shared` modules, and the bootstrap tests spawned WSL `bash` to `source` a Windows env file and didn't isolate `HOME`. **The suite is not unconditionally green, and "green" is host-dependent.** On an arm64 machine (Apple Silicon) five `tests/bootstrap/test_manifest_normalization.py` scoop tests failed for months while passing on every amd64 box, because they fake `current_os` but not `detect_arch()`, which reads the real CPU -- see the `suite_green_is_host_dependent` insight below. Establish a baseline on YOUR machine before calling a failure your regression: first try undoing your own edits for a moment and re-running the failing test; when that cannot answer it, run the suite at the merge-base in a read-only worktree and remove it afterwards (see "Worktrees and scratch copies").
 
+**A MOVING victim is a leak, not a flake.** A distinct failure shape from the
+host-dependence above: the suite fails, and the test that fails CHANGES between
+runs. That is never load and never a bad assertion in the victim -- it is one
+test writing outside its sandbox and corrupting whichever test is in flight.
+The chain that produced it, named in `tests/conftest.py`'s autouse guard
+docstring: a bootstrap engine run that is not HOME-isolated discovers the
+developer's REAL `installed_plugins.json`, iterates the enabled plugins, and
+runs claude-ui-kit's `install_statusline.py` against the real
+`~/.claude/settings.json`, rewriting its `statusLine` to a pytest temp path.
+Cut at the source in claude-ui-kit 0.12.0 (c52e4113): `install()` refuses any
+data root that is not the canonical `~/.claude/plugins/data`, and a pytest temp
+dir never is.
+
+Two things to carry. First, when a victim moves, go looking for the WRITER --
+do not triage the victim, which is innocent by construction. Second, and the
+reason this is here rather than in a task folder: this failure had been recorded
+for months as an environmental fact about the host, with a documented rule for
+judging slices around it. Once a failure has an accepted name it stops being
+read as evidence, and the mechanism had been sitting in a guard docstring in
+plain prose the whole time. A standing caveat can be a finding wearing a
+workaround. If a moving victim reappears, that refutes the fix rather than
+restoring the caveat.
+
+
 **Local development** -- use `--plugin-dir` to test plugins from the working copy:
 
 ```bash
@@ -226,18 +250,36 @@ A release projects dev's tree, so it never merges. When `publish.py` refuses bec
 
 ### Pre-publish validation (default)
 
-**Default gate: before any publish, smoke-test the dev working copy with `claudx`.** `claudx` (defined in `~/.bashrc`) launches a `claude` session loading every `plugins/<name>` dir via one `--plugin-dir` each, so the session runs each plugin's skills/hooks/engine **code** straight from disk -- no cache, no `installed_plugins.json` change, reverts on exit. Run it, exercise the changed surface (invoke the skill, trigger the hook, run the command), confirm it behaves, then publish.
+**Default gate: before any publish, smoke-test the dev working copy with `claudx`.** `claudx` is an alias for `claude-plugin-test` (defined in `~/.bashrc`), which runs [`scripts/claude_plugin_test.py`](scripts/claude_plugin_test.py). It launches a `claude` session with one `--plugin-dir` per plugin ENABLED for the project (`--all` loads the whole tree), so those plugins' skills, hooks and engine **code** load straight from disk, and it also makes the bootstrap engine read their **`bootstrap.json` from disk**. Run it, exercise the changed surface (invoke the skill, trigger the hook, run the command), confirm it behaves, then publish.
 
 ```bash
-claudx        # claude + --plugin-dir for every plugins-kit plugin (see ~/.bashrc)
+claudx                    # plugins enabled for this project: dev code AND dev manifests
+claudx --all              # every plugin in the tree, ignoring enablement
+claudx --fresh            # discard the dev data root first
+claudx --print            # show the command, launch nothing
+claudx -- -p "hello"      # pass args through to claude
 ```
 
-**Known blind spot -- manifest content.** Under `--plugin-dir`, the bootstrap engine still reads each plugin's `bootstrap.json` from its **cached** `installPath`, not from disk (insight `plugin_dir_doesnt_test_cross_plugin`). So `claudx` validates code paths but **not** new `bootstrap.json` content (added tools, `download:` recipes, `venv.check_imports`). When your change touches manifest content, escalate to **`claude-dev`** (also in `~/.bashrc`) -- it uses `scripts/dev-tree.py` to repoint installPaths at the dev tree, so the engine loads `bootstrap.json` from disk too, then auto-restores normal cache mode on exit.
+`--project-dir` selects the project whose scoped settings decide enablement (default: cwd); `--data-root` relocates the session's bootstrap data.
+
+**Enablement filtering is the false-pass trap.** A plugin not enabled for the cwd project is dropped with a `not enabled, skipping: <names>` note on stderr, and a run with nothing enabled exits `error: no enabled <marketplace> plugins for <dir>`. So smoke-testing a plugin that is disabled for the project you launched from produces a GREEN run in which your plugin was never loaded. Use `--all` whenever the plugin under test may not be enabled where you are standing, and read the skipping note before trusting a pass.
+
+**How it reaches manifest content.** Two mechanisms. A synthetic dev-layout `installed_plugins.json` is written into `plugins/` (gitignored), which only an engine running from this working copy discovers -- `_find_plugins_dir` walks up from its own plugin root, so the cached engine every other session runs walks up to the real registry instead. And `CLAUDE_BOOTSTRAP_DATA_ROOT` moves everything bootstrap owns -- venvs, `_shared_libs`, logs, stamps, cooldowns, config -- into a separate tree.
+
+**The containment is real but PARTIAL, and the launcher's own docstring overstates it.** `CLAUDE_BOOTSTRAP_DATA_ROOT` redirects what bootstrap OWNS; it does not redirect what bootstrap REACHES OUT TO. Three escapes are known, all observed on a 2026-09-20 run:
+
+- **The shared-lib link is the dangerous one.** `shared_lib.py`'s `link_shared_lib` registers `<pkg>.pth` pointing at `<shared_root>/<name>/` on the TARGET INTERPRETER. The shared root follows the data root; the interpreter does not. So a test session rewrites `~/.local/share/python-standalone/python/Lib/site-packages/bootstrap_lib.pth` -- the machine-wide standalone interpreter every plugin on the fleet imports through -- to point INTO the test's data root. Delete that data root and every such import breaks until the next ordinary bootstrap pass relinks it. Never delete a test data root without running an ordinary pass afterwards, and reset the cooldown so that pass is not skipped.
+- **Marketplace refresh hits the real clone.** Bootstrap's own `bootstrap.json` sets `"alwaysUpdate": true`, so `_phase_marketplaces` runs `git fetch` against the real `~/.claude/plugins/marketplaces/plugins-kit`. That fetch is also where a test session can hang on network I/O, leaving a stalled engine holding the lock.
+- **`session-bootstrap.sh` writes `~/.local/bin` and the Windows PATH registry**, regardless of the data root. `BOOTSTRAP_SKIP_SHELL_INTEGRATION=1` suppresses the rc-file and registry persistence but gates neither of the two escapes above.
+
+**What `claudx` still does not test**, by construction: anything whose output IS the machine. Package-manager tool installs, PATH / rc-file / registry writes, marketplace clone refreshes, `claude plugin install/update`, `env.json` personalization, and the version-bump -> cache -> auto-update delivery path. A green run means "my plugin works", never "my plugin ships correctly".
 
 | Change touches ... | Default validator |
 |---|---|
 | skills / hooks / commands / engine code | `claudx` |
-| `bootstrap.json` / manifest content | `claude-dev` (dev-tree mode) |
+| `bootstrap.json` / manifest content | `claudx` (it reads manifests from disk) |
+
+**`scripts/dev-tree.py` is the superseded path, and is not the one to reach for.** It repoints installPaths by rewriting the real `~/.claude/plugins/installed_plugins.json`, which is machine-global: every other session, running or subsequent, then sees the dev tree, and a crash before the restore leaves the machine that way silently. The `claude-dev` shell wrapper that used to drive it is gone, so the escalation the table once named does not exist; `claudx` covers both rows.
 
 **Bypassable at your discretion.** This is a default, not a hard gate. Trivial changes -- a version-only bump, a doc/CLAUDE.md edit, a single-file mechanical fix -- don't need a smoke session; skip it and say so. An unambiguous publish go-signal does not silently waive validation, but you may explicitly bypass when the change can't plausibly break a runtime surface.
 
@@ -482,26 +524,69 @@ For a staged Git change, run `scripts/pre-commit-version-check.sh`; its existing
 
 **Anti-pattern: silent bootstrap operations.** Every bootstrap check must log its outcome -- `ok_entries` when passing (verbose-only), `action_entries` when remediating (always visible). Adding a check that creates files, clones repos, or writes config without emitting a log entry is a bug. See the "Every check must log its outcome" principle in [engine-internals.md](plugins/bootstrap/skills/bootstrap/references/engine-internals.md).
 
-**Always use `uv run python` in shell scripts** -- never bare `python` or `python3`. On Windows, the system PATH contains Microsoft Store stubs (`WindowsApps/python.exe`) that take precedence over any user PATH entry, causing bare `python`/`python3` to fail with "Permission denied" (exit 126) in Git Bash. On macOS, bare `python` often doesn't exist. Since bootstrap guarantees `uv` is available, `uv run python` is the standard way to invoke Python from any shell script in this project. It resolves the correct Python, activates the venv (giving access to installed packages), and works on all platforms.
+**`uv run [--extra dev] python` is for plugins-kit's own maintainer commands, run inside this checkout** -- never bare `python` or `python3`. This covers this repo's own `scripts/*.sh` and `scripts/*.py` entry points, and documented human commands (this file, CONTRIBUTING.md, `docs/**`). On Windows, the system PATH contains Microsoft Store stubs (`WindowsApps/python.exe`) that take precedence over any user PATH entry, causing bare `python`/`python3` to fail with "Permission denied" (exit 126) in Git Bash. On macOS, bare `python` often doesn't exist. Since bootstrap guarantees `uv` is available, `uv run python` is the standard way to invoke Python from a maintainer command in this project: it resolves the correct Python, syncs and activates THIS checkout's own venv (a `uv.lock` change is picked up immediately, not at the next bootstrap pass), and works on all platforms. A maintainer Python script spawning a same-environment child process uses `sys.executable`, not another `uv run python` (already true in `scripts/publish.py`).
+
+**This does not extend to `plugins/**`.** Code that ships to a consumer --
+a shipped plugin script, a hook, a manifest command, a skill example -- never
+uses `uv run python`. Run from a foreign working directory it creates or
+syncs a venv the caller never meant; see "Python interpreter variables"
+below for what those call sites use instead.
 
 **Scoped exception: Python CLI launcher shims.** `uv run python` resolves the
 venv from the CWD, so a launcher a user invokes from any directory -- the four
 Python-invoking `plugins/<name>/bin/` shims (hue-kit, job-kit,
 llm-scripting-kit, secrets-kit) and their `.cmd` twins -- would pick up the
 wrong environment, or none. Those shims resolve an absolute interpreter
-instead: the bootstrap-provisioned standalone Python or the plugin venv by its
-version-independent `~/.claude/plugins/data/<marketplace>/<plugin>/.venv/`
-path. POSIX shims fall back to `python3`, then `python`; `.cmd` shims fall back
-to `python.exe`. The absolute-path preference avoids the Windows Store stub
-when the preferred interpreter exists, but the PATH fallback can still resolve
-it. The `bin/qwen3*-server` scripts are outside this exception -- they invoke
+instead: the deterministic bootstrap-provisioned standalone Python path
+first; `BOOTSTRAP_PYTHON` next, but only when that deterministic file is
+absent and the variable's own realpath resolves inside the standalone
+directory (a stranger's `BOOTSTRAP_PYTHON` must never substitute for the file
+the shim was written to find); then the plugin venv by its version-independent
+`~/.claude/plugins/data/<marketplace>/<plugin>/.venv/` path. POSIX shims fall
+back to `python3`, then `python`; `.cmd` shims fall back to `python.exe`. The
+absolute-path preference avoids the Windows Store stub when the preferred
+interpreter exists, but the PATH fallback can still resolve it. The
+`bin/qwen3*-server` scripts are outside this exception -- they invoke
 `model-server.sh`, not Python.
 
-Outside these four launchers, deviations are limited to bootstrap or recovery
-code that cannot depend on `uv`, latency-critical hooks, diagnostics that
-intentionally probe a named interpreter, and stdlib-only checks required on an
-unprovisioned clone. Each deviation must state its reason at the call site. All
-other shell scripts use `uv run python`.
+Outside these two exceptions, every other FORCED call site -- bootstrap or
+recovery code that produces the interpreter itself, Claude Code hook scripts
+bootstrap ships, `bootstrap-stuck-fix`, and other levers -- uses the same
+deterministic-path-first chain: the deterministic standalone path, then
+`BOOTSTRAP_PYTHON` only when that file is absent and the variable's realpath
+resolves inside the standalone directory, then the existing PATH chain. Each
+such call site must state its reason. Exceptions to this standard are
+recorded in the repo guard's allowlist as `{path: (anchor_string, reason)}`,
+where `anchor_string` is text that already exists at the call site; the
+guard's staleness check asserts that text is still present. No new marker
+comments are added to shipped files for this purpose.
+
+## Python interpreter variables
+
+Every other Python call site -- shipped plugin scripts, hooks, manifest
+commands, skill examples, and any command documented for a CONSUMER project --
+invokes Python through two environment variables bootstrap exports, never
+bare `python`/`python3`/`py` and never `uv run python`:
+
+    # Project code -- prefers the project's own venv, falls back to bootstrap's:
+    "${BOOTSTRAP_PROJECT_PYTHON:-${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}}"
+
+    # Bootstrap/plugin machinery and stdlib-only glue -- always the bootstrap interpreter:
+    "${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}"
+
+Project calls DEFAULT to the project's own venv, then to the bootstrap
+interpreter, and are never forced past that. Bootstrap's own code -- the
+SessionStart hook, levers, hook scripts bootstrap ships -- is FORCED to run
+under the same interpreter every time, using the deterministic-path-first
+chain above instead of either variable form. The Debugging section's engine
+invocation below is an instance of the forced case:
+`"$BOOTSTRAP_PYTHON" plugins/bootstrap/engine/bootstrap_engine.py ...`, never
+`uv run python` -- the engine is bootstrap's own code.
+
+Contract, the full visibility table across every surface, per-shell
+copy-paste forms, and the opt-outs: the `/bootstrap` fact `python_interpreter`
+and `plugins/bootstrap/skills/bootstrap/references/python-interpreter.md`.
+Guard: `tests/repo-scripts/test_python_invocation_standard.py`.
 
 **Shell scripts must survive bash 3.2 and zsh.** `/bin/bash` on macOS is bash
 3.2 (no bash 4+ since the licence change, and none at all without Homebrew),
@@ -595,10 +680,12 @@ bash scripts/plugin-versions.sh
 # versions into the cache, and rewrites installed_plugins.json. Never point it at
 # a wedged machine before snapshotting its state -- see the hand-repair
 # anti-pattern in the Bootstrap section above.
-python plugins/bootstrap/engine/bootstrap_engine.py --plugin-root plugins/bootstrap --data-dir ~/.claude/plugins/data/bootstrap --console
+# The engine is bootstrap's own code (forced form), never `uv run python` --
+# see "Python interpreter variables" above.
+"$BOOTSTRAP_PYTHON" plugins/bootstrap/engine/bootstrap_engine.py --plugin-root plugins/bootstrap --data-dir ~/.claude/plugins/data/bootstrap --console
 
 # Verbose mode (show ok/cached entries too)
-python plugins/bootstrap/engine/bootstrap_engine.py --plugin-root plugins/bootstrap --data-dir ~/.claude/plugins/data/bootstrap --console --verbose
+"$BOOTSTRAP_PYTHON" plugins/bootstrap/engine/bootstrap_engine.py --plugin-root plugins/bootstrap --data-dir ~/.claude/plugins/data/bootstrap --console --verbose
 ```
 
 ## Task folders live in a private tasks repo, linked in at `dev/tasks`
@@ -783,7 +870,8 @@ claude_md:
         skill references (engine-internals.md, plugin-reload-lifecycle.md) -- consult those for
         mechanics. The REPO-specific residue to remember here:
         - dev-tree.py must SYNTHESIZE entries for repo plugins the registry doesn't record,
-          or `claude-dev` mode loads nothing on a v2 machine. publish.py does not use
+          or dev-tree mode loads nothing on a v2 machine (claudx's own synthetic registry
+          does the same job for the same reason). publish.py does not use
           dev-tree.py: its index.html regen passes generate.py a synthetic `--registry` built
           from the repo's own plugin.json files (the 0.47.0 release shipped an empty
           index.html when the page was built from the machine registry).
@@ -796,8 +884,14 @@ claude_md:
       added: "2026-07-16"
     - id: host_python_via_plugin_venv
       keywords: [host-side python, plugin venv, uv run python, ModuleNotFoundError, foreign cwd, project root, pyyaml, skill examples]
-      summary: SKILL.md examples that invoke host-side Python must use the explicit plugin-venv path, not `uv run python`, when the documented cwd is the user's project root.
+      summary: SKILL.md examples that invoke host-side Python never use `uv run python`, which resolves the venv from the cwd. The default form launches the script under `"${BOOTSTRAP_PYTHON:?...}"` and lets it re-exec into its plugin venv; the explicit plugin-venv path below remains valid for a script without a re-exec guard.
       detail: |
+        Default form (insight bootstrap_python_interpreter_variables):
+          "${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${CLAUDE_PLUGIN_ROOT}/scripts/<script>.py"
+        where the script calls reexec_under_plugin_venv before any third-party
+        import. The rest of this entry is why `uv run python` fails from a
+        project root.
+
         `uv run python` resolves the venv from the cwd's pyproject.toml. When a skill instructs
         the user to run from a project root that has no matching pyproject.toml (e.g. an
         Unreal project root, where p4 picks up .p4config.txt), uv falls back to a bare
@@ -832,24 +926,34 @@ claude_md:
       origin: "Surfaced 2026-05-27 while smoke-testing the tool-resolution redesign via claudx (--plugin-dir all dev plugins). jq/gh never got download-recorded because the engine was reading the cached 0.10.14 bootstrap.json which had no download: block."
       added: "2026-05-27"
     - id: plugin_dir_doesnt_test_cross_plugin
-      keywords: [--plugin-dir, claudx, smoke test, cross-plugin, bootstrap testing, installPath, dev tree, cache, layered manifests]
-      summary: --plugin-dir overrides Claude Code's load of one plugin from disk, but the bootstrap engine's per-plugin iteration still reads OTHER plugins' bootstrap.json from their cached installPath.
+      keywords: [--plugin-dir, claudx, claude-plugin-test, claude_plugin_test.py, smoke test, cross-plugin, bootstrap testing, installPath, dev tree, cache, layered manifests, synthetic registry, CLAUDE_BOOTSTRAP_DATA_ROOT, dev-tree superseded]
+      summary: "BARE --plugin-dir still cannot exercise manifest content -- the engine's per-plugin loop reads each plugin's bootstrap.json from its cached installPath. The REMEDY changed: claudx runs scripts/claude_plugin_test.py, which closes the gap with a synthetic dev-layout registry plus a redirected data root, so it validates manifests without touching machine-global state."
       detail: |
-        Loading a plugin via `--plugin-dir <dev tree>` only overrides Claude Code's loading of
-        THAT plugin's hooks/skills. The bootstrap engine's per-plugin loop iterates
-        `installed_plugins.json` and reads each plugin's bootstrap.json from its cached
-        installPath. So when claudx loads every dev plugin via --plugin-dir, the engine
-        still sees each plugin's CACHED bootstrap.json -- not the dev-tree version.
-        Implication: --plugin-dir smoke tests can exercise the new engine code paths (the
-        engine binary is loaded from dev), but they cannot exercise new bootstrap.json content
-        for any plugin without first publishing that plugin. Workarounds: (a) bump versions
-        and publish to test for real; (b) use the `claude-dev` mode helper (`scripts/dev-tree.py`), which rewrites
-        installed_plugins.json to point installPaths at the dev tree -- that does exercise
-        new bootstrap.json content; (c) test new bootstrap.json content via layered manifests
-        in `~/.claude/bootstrap.json` or `<project>/.claude/bootstrap.json`, which DO go
-        through the engine without an installPath lookup.
+        THE UNDERLYING FACT IS UNCHANGED. `--plugin-dir <dev tree>` only overrides Claude
+        Code's loading of that plugin's hooks/skills. The bootstrap engine's per-plugin loop
+        iterates `installed_plugins.json` and reads each plugin's bootstrap.json from its
+        cached installPath, so a BARE --plugin-dir session exercises dev engine CODE against
+        PUBLISHED manifests.
+        WHAT CHANGED IS THE FIX. `claudx` is an alias for `claude-plugin-test`, which runs
+        `scripts/claude_plugin_test.py`. That launcher writes a synthetic dev-layout
+        `installed_plugins.json` into `plugins/`, discovered ONLY by an engine running from
+        this working copy (`_find_plugins_dir` walks up from its own plugin root), and sets
+        `CLAUDE_BOOTSTRAP_DATA_ROOT` to move venvs, `_shared_libs`, logs, stamps, cooldowns
+        and config into a separate tree. So claudx DOES exercise new bootstrap.json content,
+        and writes nothing another session reads.
+        DO NOT reach for `scripts/dev-tree.py`. It rewrites the REAL machine-global
+        `~/.claude/plugins/installed_plugins.json`, so every other session sees the dev tree
+        and a crash before the restore leaves the machine that way silently. It survives in
+        the tree; the `claude-dev` wrapper that drove it is gone.
+        Layered manifests in `~/.claude/bootstrap.json` or `<project>/.claude/bootstrap.json`
+        remain a third route -- they go through the engine with no installPath lookup at all.
+        LIMIT OF THE CONTAINMENT: session-bootstrap.sh installs levers into `~/.local/bin`
+        and writes the Windows PATH registry entries regardless of the data root, and the
+        launcher's own docstring excludes the version-bump -> cache -> auto-update delivery
+        path. A green claudx run means "my plugin works", never "my plugin ships correctly".
       origin: Surfaced 2026-05-27 -- the claudx smoke test couldn't validate jq's new download recipe because the engine kept reading the cached bootstrap.json.
       added: "2026-05-27"
+      updated: "2026-09-20"
     - id: code_review_cross_plugin_cohesion
       keywords: [code-review domain, git-code-review, p4-code-review, cross-plugin cohesion, bootstrap_lib.code_review, dec_13, domain not built, inter-plugin opportunity, surface not merge]
       summary: git-kit:git-code-review + p4-kit:p4-code-review are dec_13-justified doer-skills sharing one subject, but they are deliberately NOT merged into a domain -- the members live in different plugins, and plugin boundaries are hard boundaries for cohesion work. Recorded as an inter-plugin cohesion observation, not acted on.
@@ -1202,6 +1306,62 @@ claude_md:
       origin: "2026-08-10 -- found while verifying that a published bootstrap_lib.codex resolved from the INSTALLED copy; llm-scripting-kit's own venv was resolving its superseded 0.6.1 cache dir. (A first reading blamed a second repo clone, because the recorded path spelled ~/.claude as D:\\Dev\\claude-settings; that is the same directory through the symlink, so compare paths with realpath before concluding the root moved.) RESOLVED 2026-08-21: two live bootstrap passes (bootstrap 0.86.0 -> 0.86.1, content-pipeline-kit 0.12.0 -> 0.13.0) each named the stale .pth and re-synced, both resulting .pth files were confirmed to point at the current version, and venv_check plus its tests were read to confirm both shapes are covered rather than only the two that happened to fire."
       added: "2026-08-10"
       updated: "2026-08-21"
+    - id: bootstrap_python_interpreter_variables
+      keywords: [BOOTSTRAP_PYTHON, BOOTSTRAP_PROJECT_PYTHON, python, python3, py, interpreter, bare python, uv run python, project_python, interpreter_env, python_interpreter, requires_bootstrap, python not found, default vs forced]
+      summary: Every Python call site outside plugins-kit's own maintainer commands invokes Python through `BOOTSTRAP_PYTHON` / `BOOTSTRAP_PROJECT_PYTHON`, never bare `python`/`python3`/`py` and never `uv run python` -- the engine exports both every pass, the SessionStart hook writes both into every Claude session before any skip gate, and shell integration keeps `BOOTSTRAP_PROJECT_PYTHON` current per directory in a terminal.
+      detail: |
+        Two names, two call-site forms. Project code (documented human commands
+        in a consumer project, a project's own scripts) uses the nested,
+        defaulting form:
+          "${BOOTSTRAP_PROJECT_PYTHON:-${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}}"
+        Bootstrap's own code and stdlib-only glue use the forced form:
+          "${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}"
+        Both fail loudly with that message on an engine older than 0.120.0
+        instead of silently falling through to a stranger's `python` on PATH.
+        DEFAULT VS FORCED is the boundary that decides which form applies:
+        project calls default to the project's own venv, then to the bootstrap
+        interpreter, and are never forced past that; bootstrap's own code (the
+        SessionStart hook, levers, hook scripts bootstrap ships) is forced to
+        run under the same interpreter every time, using a deterministic
+        standalone path first and the variable only as a further fallback (see
+        "Python interpreter variables" above for the exact chain).
+        Both names are exported every engine pass and written into every
+        Claude session by the SessionStart hook before any skip gate, so a
+        throttled or resumed session still has correct values without waiting
+        for a full pass. Persisted shells (bash/zsh rc files, the Windows
+        registry) carry `BOOTSTRAP_PYTHON`; a per-directory shell hook keeps
+        `BOOTSTRAP_PROJECT_PYTHON` current in bash/zsh and, only when a
+        PowerShell profile already exists (bootstrap never creates one), in
+        PowerShell too. `cmd.exe` gets the registry value only. Two named
+        gaps: zsh on Linux and login-only bash profiles are not covered by
+        bootstrap's rc-file writer (add the one line by hand), and pwsh off
+        Windows is not covered at all (profile writes are Windows-only).
+        A `bootstrap.json` `tools[].check`/`install` or an `env.json`
+        `env_checks[].check`/`fix` command that needs Python uses the forced
+        form -- there is no `${python}` manifest variable; these commands are
+        opaque shell strings handed to `bash -c` unsubstituted, so manifest
+        variable expansion never reaches them. A bare command word in a
+        shipped plugin manifest is a displayed lint action entry; the same in
+        a layered or env.json manifest is a log-only entry until the command
+        actually fails, when a failure hint names the fact.
+        Full contract, the visibility table across every surface, per-shell
+        forms, the `project_python` opt-out (`false` is the only accepted
+        value), and the `interpreter_env` opt-outs (`persist`, `shell_hook`;
+        both default `true`, user layers only): the `/bootstrap` fact
+        `python_interpreter` and
+        plugins/bootstrap/skills/bootstrap/references/python-interpreter.md.
+        Guard: tests/repo-scripts/test_python_invocation_standard.py.
+      gotchas:
+        - "`uv run python` is a different mechanism (an interpreter choice made
+          by the `uv` package manager) and is not a substitute for either
+          variable in shipped code -- see the `uv run [--extra dev] python`
+          paragraph above for where it still applies to plugins-kit's own
+          maintainer commands."
+        - A Bash tool call that `cd`s to a different project inside one Claude
+          session keeps the session's starting values; they are not
+          re-resolved per directory change inside a single session.
+      origin: "2026-09-16 -- BOOTSTRAP_PYTHON / BOOTSTRAP_PROJECT_PYTHON shipped for every Python call site, on every OS, superseding an engine-process-only draft that never landed on this file."
+      added: "2026-09-16"
   conventions:
     - rule: Commit and push to dev freely without asking; only a PUBLISH (dev -> master) needs the user. Do not coordinate around other agent sessions' concurrent work.
       keywords: [commit freely, push freely, no permission, dev branch, only publishes gated, other agents, concurrent sessions, shared tree, git commit -- paths]

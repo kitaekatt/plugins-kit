@@ -52,11 +52,21 @@ class TestWrapperCopiesMatch:
             )
 
     def test_consumers_require_the_parser_owner_version(self) -> None:
+        # The parser owner shipped in 0.113.0 (git-kit, p4-kit) and 0.107.0
+        # (llm-scripting-kit); git-kit and p4-kit also launch skill scripts
+        # through the guarded BOOTSTRAP_PYTHON form, which raises their floor
+        # to the interpreter contract's MIN_VERSION (0.120.0).
         expected = {
-            "git-kit": "0.113.0",
-            "p4-kit": "0.113.0",
+            "git-kit": "0.120.0",
+            "p4-kit": "0.120.0",
             "llm-scripting-kit": "0.107.0",
         }
+        minimum = {"git-kit": "0.113.0", "p4-kit": "0.113.0",
+                   "llm-scripting-kit": "0.107.0"}
+
+        def version(text):
+            return tuple(int(part) for part in text.split("."))
+
         for kit, floor in expected.items():
             manifest = json.loads(
                 (REPO_ROOT / "plugins" / kit / "bootstrap.json").read_text(
@@ -64,6 +74,7 @@ class TestWrapperCopiesMatch:
                 )
             )
             assert manifest["requires_bootstrap"] == floor
+            assert version(floor) >= version(minimum[kit])
 
     def test_parser_copies_are_byte_identical(self) -> None:
         first, *rest = [path.read_bytes() for path in PARSER_COPIES]

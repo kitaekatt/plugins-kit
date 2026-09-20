@@ -18,6 +18,12 @@ else
     PY="${HOME}/.local/share/python-standalone/python/bin/python3"
 fi
 
+if [ ! -x "$PY" ] && [ -n "${BOOTSTRAP_PYTHON:-}" ] && [ -x "$BOOTSTRAP_PYTHON" ]; then
+    case "$(cd "$(dirname "$BOOTSTRAP_PYTHON")" 2>/dev/null && pwd -P)" in
+        "$(cd "${HOME}/.local/share/python-standalone" 2>/dev/null && pwd -P)"/*) PY="$BOOTSTRAP_PYTHON" ;;
+    esac
+fi
+
 if [ ! -x "$PY" ]; then
     if command -v python3 >/dev/null 2>&1; then
         PY="python3"

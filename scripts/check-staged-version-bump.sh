@@ -85,12 +85,18 @@ staged_plugin_json_version() {
 # --- the publish point -----------------------------------------------------
 #
 # Resolved once. Interpreter resolution mirrors pre-commit-version-check.sh
-# (venv first, then whatever is on PATH); that script does not export its own
-# choice, and re-deriving it is cheaper than coupling the two by an env var.
+# (project variable, then venv, then whatever is on PATH); that script does
+# not export its own choice, and re-deriving it is cheaper than coupling the
+# two by an env var.
 plain_python=""
-for candidate in ".venv/bin/python" ".venv/Scripts/python.exe"; do
-    [ -x "$candidate" ] && { plain_python="$candidate"; break; }
-done
+if [ -n "${BOOTSTRAP_PROJECT_PYTHON:-}" ] && [ -x "$BOOTSTRAP_PROJECT_PYTHON" ]; then
+    plain_python="$BOOTSTRAP_PROJECT_PYTHON"
+fi
+if [ -z "$plain_python" ]; then
+    for candidate in ".venv/bin/python" ".venv/Scripts/python.exe"; do
+        [ -x "$candidate" ] && { plain_python="$candidate"; break; }
+    done
+fi
 if [ -z "$plain_python" ]; then
     for candidate in python3 python py; do
         if command -v "$candidate" >/dev/null 2>&1; then

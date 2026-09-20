@@ -1,4 +1,4 @@
-"""Truthful verdicts and exit codes (I01), RED step 6: `validate_design` /
+"""Truthful verdicts and exit codes: `validate_design` /
 `_scene_pending` against a fake bridge (fake `smg.clip_get`, no network).
 
 A design scene MISSING on the bridge must count as a discrepancy (not be

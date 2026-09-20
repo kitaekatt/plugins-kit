@@ -173,7 +173,7 @@ claude_md:
                    plugins/skills-kit/skills_kit_lib/CLAUDE.md \\
                    plugins/skills-kit/CLAUDE.md \\
                    CLAUDE.md; do
-            (cd plugins/skills-kit && uv run python -m skills_kit_lib.audit --config "../../$f")
+            (cd plugins/skills-kit && "${BOOTSTRAP_PROJECT_PYTHON:-${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}}" -m skills_kit_lib.audit --config "../../$f")
           done
 
         Catch second-order effects: a tightened technique-skill row may force one or
@@ -205,7 +205,7 @@ claude_md:
         - run classify
         - run tag
         - discover script
-        - bootstrap-installed venv python
+        - bootstrap-installed venv interpreter
       origin: Phase 4.6 P5 plugin-level orientation surface (2026-04-30); re-pointed at md-domain (2026-07-29).
       added: "2026-04-30"
       summary: md-domain loads on its trigger (audit or generation intent over project markdown) or via /md-domain; there is no /md-audit or /md-authoring alias. Scripts run via the plugin venv's Python.
@@ -215,17 +215,15 @@ claude_md:
           routes by the verb and artifact named -- each lane record declares its
           invocation_phrasings. The former /md-audit and /md-authoring commands do
           NOT exist as aliases (clean break, 2026-07-29).
-        - Scripts: invoke via the plugin venv directly. The bootstrap engine ensures
-          the venv exists at ~/.claude/plugins/data/plugins-kit/skills-kit/.venv;
-          calling its python.exe runs audit.py / classify.py / tag.py with pyyaml
-          available.
+        - Scripts: launch scripts/skills_kit_tool.py under the bootstrap
+          interpreter; it re-execs under the plugin venv the bootstrap engine
+          provisions (~/.claude/plugins/data/plugins-kit/skills-kit/.venv), so
+          audit.py / classify.py / tag.py run with pyyaml available, from any
+          directory:
 
-          Example (Windows; analogous on Mac/Linux with .venv/bin/python):
-
-          (cd plugins/skills-kit && \\
-            ~/.claude/plugins/data/plugins-kit/skills-kit/.venv/Scripts/python.exe \\
-            -m skills_kit_lib.audit \\
-            <path-to-SKILL.md-or-CLAUDE.md>)
+          "${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" \\
+            "${CLAUDE_PLUGIN_ROOT}/scripts/skills_kit_tool.py" audit \\
+            <path-to-SKILL.md-or-CLAUDE.md>
 
         - The md-domain lane scripts (scripts/discover_*.py, references_audit.py,
           report.py) are stdlib-only entry points invoked by the lanes themselves.

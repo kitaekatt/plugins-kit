@@ -8,7 +8,7 @@ GUIDANCE and RATIONALE prose that helps pick a profile; the EXECUTABLE table liv
 bootstrap_lib's shipped defaults (reproduced below) and is resolved per review by
 `bootstrap_lib.code_review.review_profiles`, invoked through this plugin's venv entry point:
 
-    uv run --no-project python ${CLAUDE_PLUGIN_ROOT}/scripts/render_review_profiles.py --project-root <project root>
+    "${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" ${CLAUDE_PLUGIN_ROOT}/scripts/render_review_profiles.py --project-root <project root>
 
 ## Mechanical syntax coverage
 
@@ -168,7 +168,7 @@ things, and which one it is decides how that lane is dispatched:
 | Value | Dispatch |
 |---|---|
 | `sonnet`, `opus`, `haiku`, `fable` | an Agent subagent (the default) |
-| anything else | an llm-scripting-kit endpoint id, run through `uv run --no-project python ${CLAUDE_PLUGIN_ROOT}/scripts/run_review_lane.py` |
+| anything else | an llm-scripting-kit endpoint id, run through `"${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" ${CLAUDE_PLUGIN_ROOT}/scripts/run_review_lane.py` |
 
 Every model the shipped table can resolve to is an Agent alias, so a review with no user or
 project override dispatches every lane as an Agent subagent -- unless a `peer:` entry resolves
@@ -303,7 +303,7 @@ For a `peer:<name>` entry the renderer asks llm-scripting-kit
 (`llm_scripting_kit.seats.discover_seats`) for the seats around `<name>`, takes the first
 reachable `BESIDE` seat, and writes that seat's endpoint id into the lane's `model` in the
 table it prints. Nothing downstream changes: the value is an endpoint id, so the lane
-dispatches through `uv run --no-project python ${CLAUDE_PLUGIN_ROOT}/scripts/run_review_lane.py` under the ordinary model-kind rule, and the agent-loop
+dispatches through `"${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" ${CLAUDE_PLUGIN_ROOT}/scripts/run_review_lane.py` under the ordinary model-kind rule, and the agent-loop
 constraint above still applies -- a `BESIDE` seat is always a harness endpoint, which is what
 this lane needs.
 
@@ -357,7 +357,7 @@ not ask for.
 
 Those states are still told apart, in a diagnostic channel rather than in the review:
 
-    uv run --no-project python ${CLAUDE_PLUGIN_ROOT}/scripts/render_review_profiles.py --project-root <project root> --explain-peer-seats
+    "${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" ${CLAUDE_PLUGIN_ROOT}/scripts/render_review_profiles.py --project-root <project root> --explain-peer-seats
 
 prints, on stderr, whether the plugin is absent (with the `claude plugin install` command) or
 present but predating `llm_scripting_kit.seats.discover_seats`, which first shipped in
@@ -391,7 +391,7 @@ probed for. To keep the peer preference on a different tier, state the list you 
 
 ## Inspecting the resolved table
 
-    uv run --no-project python ${CLAUDE_PLUGIN_ROOT}/scripts/render_review_profiles.py --project-root <project root>
+    "${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" ${CLAUDE_PLUGIN_ROOT}/scripts/render_review_profiles.py --project-root <project root>
 
 prints the merged `profiles` table as YAML, then a `---` separator, then which layers were
 applied and (for any absent override) the path that would create it. This is the same

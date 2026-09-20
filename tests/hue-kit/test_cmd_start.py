@@ -1,4 +1,4 @@
-"""Truthful verdicts and exit codes (I01): `_call_scene_layers`, `_cmd_start`,
+"""Truthful verdicts and exit codes: `_call_scene_layers`, `_cmd_start`,
 and `main`'s `export` branch.
 
 Every fake `scene-layers.py` subprocess below is a tiny stub script -- never
@@ -19,11 +19,10 @@ def _write_stub(tmp_path, body):
 
 
 class TestFixtureHygiene:
-    """M25: the hue_cli fixture must pin HUE_BRIDGE_IP so a test that forgets
-    to stub bridge resolution fails fast instead of quietly reaching
-    _discover_bridges. RED before the conftest fix (no HUE_BRIDGE_IP pinned):
-    this call fell through to discovery and _boom raised. GREEN after: the
-    pinned env short-circuits _resolve_bridge_ip before discovery runs."""
+    """The hue_cli fixture must pin HUE_BRIDGE_IP so a test that forgets to
+    stub bridge resolution fails fast instead of quietly reaching
+    _discover_bridges: the pinned env short-circuits _resolve_bridge_ip
+    before discovery runs, so a call that reaches discovery is a bug."""
 
     def test_resolve_bridge_ip_never_reaches_discovery(self, hue_cli, monkeypatch):
         def _boom(*a, **k):
@@ -36,9 +35,9 @@ class TestFixtureHygiene:
 
 
 class TestCallSceneLayersStderr:
-    """RED step 2: a captured run used to discard the child's stderr
-    entirely (capture_output=True captures both streams into proc.stdout/
-    proc.stderr, and only proc.stdout was ever returned)."""
+    """A captured run must not discard the child's stderr: with
+    capture_output=True capturing both streams into proc.stdout/proc.stderr,
+    the stderr text must reach the caller, not just proc.stdout."""
 
     def test_stderr_passes_through_on_a_captured_run(
             self, hue_cli, tmp_path, monkeypatch, capfd):
@@ -60,8 +59,8 @@ class TestCallSceneLayersStderr:
 
 
 class TestCmdStartVerdicts:
-    """RED steps 3-5: _cmd_start must always print a `hue-kit-verdict:` line
-    and must not misclassify a generic scene-layers failure as `changed`."""
+    """_cmd_start must always print a `hue-kit-verdict:` line and must not
+    misclassify a generic scene-layers failure as `changed`."""
 
     def _established_workdir(self, tmp_path, fingerprint="fp1"):
         (tmp_path / "scene-groups.yaml").write_text("groups: []\n")
@@ -71,9 +70,9 @@ class TestCmdStartVerdicts:
 
     def test_generic_validate_failure_is_validate_failed_not_changed(
             self, hue_cli, tmp_path, monkeypatch, capfd):
-        """RED step 3: today the CLI maps ANY nonzero --validate-design exit
-        to `changed` -- a registry typo (KITCHN) reads as bridge drift and
-        routes the agent toward a destructive `hue-kit export` pull."""
+        """The CLI must not map ANY nonzero --validate-design exit to
+        `changed` -- a registry typo (KITCHN) must not read as bridge drift
+        and route the agent toward a destructive `hue-kit export` pull."""
         workdir = self._established_workdir(tmp_path)
         stub = _write_stub(tmp_path, (
             "import sys\n"
@@ -102,8 +101,8 @@ class TestCmdStartVerdicts:
     ])
     def test_drift_contract(self, hue_cli, tmp_path, monkeypatch, capfd,
                             validate_exit, expected_verdict):
-        """RED step 4: only the distinct discrepancy exit code may produce
-        `changed`; a bare nonzero (today's only signal) must not."""
+        """Only the distinct discrepancy exit code may produce `changed`;
+        a bare nonzero exit must not."""
         workdir = self._established_workdir(tmp_path)
         stub = _write_stub(tmp_path, (
             "import os, sys\n"
@@ -138,8 +137,8 @@ class TestCmdStartVerdicts:
 
     def test_verdict_always_printed_when_bridge_resolution_raises(
             self, hue_cli, tmp_path, monkeypatch, capfd):
-        """RED step 5: SystemExit from bridge resolution used to escape
-        _cmd_start (and main()) entirely -- no hue-kit-verdict: line at all."""
+        """SystemExit from bridge resolution must not escape _cmd_start (or
+        main()) unhandled -- a hue-kit-verdict: line must still print."""
         monkeypatch.delenv("HUE_BRIDGE_IP", raising=False)
         monkeypatch.setattr(hue_cli, "_discover_bridges", lambda *a, **k: ([], None))
         monkeypatch.setattr(hue_cli, "_mdns_available", lambda: True)
@@ -154,10 +153,10 @@ class TestCmdStartVerdicts:
 
 
 class TestExportRebaseline:
-    """RED step 7: a failed post-export --fingerprint re-baseline was
-    silent -- `export` reported success while bridge-fingerprint.txt went
-    stale, so `start` would keep reporting a shape change forever with no
-    clue why."""
+    """A failed post-export --fingerprint re-baseline must not be silent --
+    `export` must not report success while bridge-fingerprint.txt goes
+    stale, which would otherwise leave `start` reporting a shape change
+    forever with no clue why."""
 
     def test_failed_rebaseline_warns_on_stderr(
             self, hue_cli, tmp_path, monkeypatch, capfd):

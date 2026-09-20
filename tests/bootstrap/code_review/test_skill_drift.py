@@ -285,21 +285,55 @@ class TestDeclinedLedgerPresent:
 
     def test_record_step_uses_correct_launch_prefix(self):
         # prepare_review.py ships mode 100644 with no shebang, so a bare-path
-        # launch exits 126 (permission denied) -- BOTH kits must launch it via
-        # `uv run --no-project python`, at every prepare and ledger-record
-        # site. Bare `python3` is not used either: it can be absent from PATH
-        # on Windows. There is no bare-path form left to assert for either kit.
+        # launch exits 126 (permission denied) -- BOTH kits must launch it
+        # through the guarded `$BOOTSTRAP_PYTHON` expression, at every prepare
+        # and ledger-record site (interface-v3 section 6: bootstrap exports
+        # BOOTSTRAP_PYTHON into every session, so an agent typing `tool:`
+        # verbatim never needs `uv` or a resolved plugin-venv path). Bare
+        # `python3` is not used either: it can be absent from PATH on
+        # Windows. There is no bare-path form left to assert for either kit.
+        from bootstrap_lib.interpreter_env import PLUGIN_CALL_SITE_EXPR as expr
+        assert expr.startswith('"${BOOTSTRAP_PYTHON:?requires bootstrap >= ')
         p4 = gen.render_skill("p4")
         git = gen.render_skill("git")
         for body in (p4, git):
-            assert "tool: uv run --no-project python ${CLAUDE_PLUGIN_ROOT}/scripts/prepare_review.py" in body
+            # Single-quoted as a whole: a YAML scalar cannot start with a
+            # quoted segment (PLUGIN_CALL_SITE_EXPR's own double quotes) and
+            # continue unquoted -- YAML strips only the outer pair, so the
+            # decoded value still starts with the guarded expression.
+            assert f"tool: '{expr} ${{CLAUDE_PLUGIN_ROOT}}/scripts/prepare_review.py'" in body
             assert "tool: ${CLAUDE_PLUGIN_ROOT}/scripts/prepare_review.py" not in body
             assert "python3 ${CLAUDE_PLUGIN_ROOT}" not in body
+            assert "uv run --no-project python ${CLAUDE_PLUGIN_ROOT}/scripts/prepare_review.py" not in body
         # ledger-record site (@PREPARE_TOOL@ token, shared LEDGER_RECORD_STEP body)
         p4_ledger = gen.render_declined_ledger("p4")
         git_ledger = gen.render_declined_ledger("git")
         for ledger in (p4_ledger, git_ledger):
-            assert "uv run --no-project python ${CLAUDE_PLUGIN_ROOT}/scripts/prepare_review.py --ledger-record" in ledger
+            assert f"{expr} ${{CLAUDE_PLUGIN_ROOT}}/scripts/prepare_review.py --ledger-record" in ledger
+
+    @pytest.mark.parametrize("script", [
+        "run_review_lane.py", "parse_review_lane.py", "render_review_profiles.py",
+    ])
+    def test_review_scripts_launch_through_bootstrap_python(self, script):
+        """The lane, parse, and render scripts launch through the guarded
+        BOOTSTRAP_PYTHON expression wherever they are rendered, and no
+        rendered file keeps a `uv run --no-project python` launcher. Each
+        script re-execs into its kit's venv (reexec_under_plugin_venv).
+
+        Revert that turns this RED: set the generator's LANE_TOOL, PARSE_TOOL,
+        or RENDER_TOOL back to the `uv run --no-project python` form.
+        """
+        from bootstrap_lib.interpreter_env import PLUGIN_CALL_SITE_EXPR as expr
+        rendered = gen.targets()
+        launcher = f"{expr} ${{CLAUDE_PLUGIN_ROOT}}/scripts/{script}"
+        for kit in ("git-kit", "p4-kit"):
+            kit_text = "\n".join(text for path, text in rendered.items()
+                                 if f"/{kit}/" in path.as_posix())
+            assert launcher in kit_text, (kit, script)
+            source = (REPO_ROOT / "plugins" / kit / "scripts" / script).read_text(encoding="utf-8")
+            assert "reexec_under_plugin_venv(" in source, (kit, script)
+        for path, text in rendered.items():
+            assert "uv run --no-project python" not in text, path
 
     def test_both_ledger_references_render(self):
         git_ref = gen.render_declined_ledger("git")
@@ -440,7 +474,7 @@ class TestVcsSeamsRendered:
         assert "- n: 10" in body               # p4-only auto-shelf cleanup step
         assert "- n: 11" in body               # p4 ledger-record step (after cleanup)
         assert "auto-created shelf" in body     # p4-only cleanup step content
-        assert "invoke through `uv run --no-project python`" in body  # p4-only launch gotcha
+        assert "invoke through `$BOOTSTRAP_PYTHON`" in body  # p4-only launch gotcha
         assert "Branch: <branch>" not in body  # no git output header
 
 

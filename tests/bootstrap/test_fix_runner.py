@@ -112,6 +112,15 @@ class TestPerTaskPrivilege:
         assert argv[-1] == cmd
         assert len(argv) == 3
 
+    def test_elevated_argv_carries_bootstrap_python_on_unix(self, runner):
+        """D3: sudo's env_reset drops the child env (see _child_env), so the
+        elevated argv must pass BOOTSTRAP_PYTHON through explicitly, the same
+        way it already does for HOME. `runner`'s os is fixed to "ubuntu" (not
+        whatever OS these tests happen to run on), so this is independent of
+        the host."""
+        argv = runner._shell_argv("apt-get install x", elevated=True)
+        assert any(a.startswith("BOOTSTRAP_PYTHON=") for a in argv)
+
     def test_brew_installer_is_never_sudo_wrapped(self, monkeypatch):
         """Homebrew's installer refuses to run as root."""
         seen = {}
@@ -208,6 +217,33 @@ class TestChildEnv:
         assert fr._msys_home("C:\\Users\\truff") == "/c/Users/truff"
         assert fr._msys_home("D:\\dev\\x") == "/d/dev/x"
         assert fr._msys_home("\\\\server\\share") == "//server/share"
+
+    def test_child_env_carries_the_normalized_interpreter_on_windows(
+            self, monkeypatch):
+        """D3: manifest commands and env_checks a queued task shells out to
+        must see BOOTSTRAP_PYTHON -- the same name interpreter_env.begin_pass
+        sets for an in-process bootstrap pass -- normalized to forward slashes
+        on Windows, same as the manifest-command variable form."""
+        monkeypatch.setattr(os, "name", "nt")
+        monkeypatch.setattr(sys, "executable", "C:\\Python\\python.exe")
+        env = fr._child_env("/usr/bin/bash")
+        assert env["BOOTSTRAP_PYTHON"] == "C:/Python/python.exe"
+
+    def test_child_env_carries_the_interpreter_verbatim_off_windows(
+            self, monkeypatch):
+        monkeypatch.setattr(os, "name", "posix")
+        monkeypatch.setattr(sys, "executable", "/usr/bin/python3")
+        env = fr._child_env("/usr/bin/bash")
+        assert env["BOOTSTRAP_PYTHON"] == "/usr/bin/python3"
+
+    def test_child_env_drops_inherited_project_python(self, monkeypatch):
+        """D3: BOOTSTRAP_PROJECT_PYTHON names a project's own venv interpreter;
+        a queued task's shell has no project context, and an inherited value
+        left over from the launching process's own environment must not leak
+        into it."""
+        monkeypatch.setenv("BOOTSTRAP_PROJECT_PYTHON", "/some/venv/bin/python")
+        env = fr._child_env("/usr/bin/bash")
+        assert "BOOTSTRAP_PROJECT_PYTHON" not in env
 
 
 # --------------------------------------------------------------------------- #

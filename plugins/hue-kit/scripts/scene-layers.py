@@ -92,6 +92,15 @@ from collections import Counter
 from datetime import datetime
 from pathlib import Path
 
+if __name__ == "__main__":
+    # Launched directly (e.g. `"$BOOTSTRAP_PYTHON" scripts/scene-layers.py`):
+    # re-exec under the plugin's bootstrap-provisioned venv, where requests,
+    # urllib3 and pyyaml live. A no-op under that venv, which is how
+    # hue_kit_cli.py runs this file; skipped when the file is imported.
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from bootstrap_guard import reexec_under_plugin_venv
+    reexec_under_plugin_venv("hue-kit")
+
 import requests
 import urllib3
 import yaml
@@ -99,7 +108,17 @@ import yaml
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-KEY_FILE = Path("secrets/hue-bridge-key.txt")
+# Load the vendored bootstrap-presence guard next to this script (same
+# pattern as hue_kit_cli.py) -- only data_dir() is needed here, to locate the
+# paired-key file `hue-kit pair` writes.
+sys.path.insert(0, str(SCRIPT_DIR))
+from bootstrap_guard import data_dir  # noqa: E402
+
+# Where `hue-kit pair` stores the minted application key. Mirrors
+# hue_kit_cli.py's PAIRED_KEY_FILE constant exactly (same data_dir("hue-kit")
+# call) -- duplicated rather than imported, since the two scripts do not
+# import each other.
+PAIRED_KEY_FILE = data_dir("hue-kit") / "app-key.txt"
 
 # --validate-design's distinct exit code for "ran cleanly and found a real
 # discrepancy" -- separate from 1 (a generic error: a malformed registry, an
@@ -112,14 +131,17 @@ EXIT_DISCREPANCY = 4
 
 
 def _cfg_file(name, env_var):
-    """Resolve a config YAML across layouts: an env override, else the source
-    repo's ../references/<name>, else <name> next to this script (flat/pastebin
-    layout)."""
+    """Resolve a config YAML's path: env_var if set (absolutized), else
+    <cwd>/<name> (absolutized) -- never derived from this script's own
+    location (__file__). Under the CLI the child's cwd IS the working
+    directory (hue_kit_cli.py's _run_scene_layers chdir's, _call_scene_layers
+    passes cwd=workdir) and HUE_GROUPS_FILE/HUE_DESIGNS_FILE are always set
+    by _scene_layers_env, so this agrees with the CLI's own resolution
+    (_workfile_path) without needing to know about it."""
     override = os.environ.get(env_var)
     if override:
-        return Path(override).expanduser()
-    ref = SCRIPT_DIR.parent / "references" / name
-    return ref if ref.exists() else SCRIPT_DIR / name
+        return Path(override).expanduser().resolve()
+    return (Path.cwd() / name).resolve()
 
 
 GROUPS_YAML = _cfg_file("scene-groups.yaml", "HUE_GROUPS_FILE")
@@ -144,17 +166,19 @@ smg = _load_analyzer()
 # ========================================================================
 def bridge_session() -> requests.Session:
     """A CLIP v2 session. The application key comes from (in order) the
-    HUE_APP_KEY env var, the HUE_KEY_FILE env var's path, or the default
-    secrets/hue-bridge-key.txt -- so it runs on any bridge (see README)."""
+    HUE_APP_KEY env var, the HUE_KEY_FILE env var's path, or the paired key
+    file `hue-kit pair` writes (PAIRED_KEY_FILE) -- so it runs on any bridge
+    (see README)."""
     key = os.environ.get("HUE_APP_KEY")
     if not key:
-        kf = Path(os.environ.get("HUE_KEY_FILE", str(KEY_FILE))).expanduser()
+        env_key_file = os.environ.get("HUE_KEY_FILE")
+        kf = Path(env_key_file).expanduser().resolve() if env_key_file \
+            else PAIRED_KEY_FILE
         if not kf.exists():
             raise SystemExit(
-                "error: no Hue application key -- set HUE_APP_KEY, or put the "
-                f"key in {kf} (set HUE_KEY_FILE to change the path). Create one "
-                "by pressing the bridge link button then POSTing to the bridge; "
-                "see the README.")
+                "error: no Hue application key -- set HUE_APP_KEY, set "
+                f"HUE_KEY_FILE to a key file, or run `hue-kit pair` to mint "
+                f"one (looked for {kf}).")
         key = kf.read_text().strip()
     session = requests.Session()
     session.headers["hue-application-key"] = key
@@ -174,7 +198,7 @@ def extract_from_bridge() -> dict:
     dups = sorted(n for n, c in Counter(lights.values()).items() if c > 1)
     if dups:
         raise SystemExit(f"error: duplicate light names on the bridge {dups}; "
-                         "light names must be unique (see naming-conventions.md)")
+                         "light names must be unique -- rename one in the Hue app")
     rooms = smg.clip_get(session, "room")
     zones = smg.clip_get(session, "zone")
     owners = {g["id"]: g["metadata"]["name"] for g in rooms + zones}
@@ -226,9 +250,12 @@ def extract_from_bridge() -> dict:
 # Model: turn the data dict into solver scenes
 # ========================================================================
 def is_off_cell(cell) -> bool:
-    """A light ON at 0% brightness is visually dark -> treat as OFF, so it folds
-    into the default layer rather than inflating the cell count."""
-    return cell.get("mode") == "off" or cell.get("bri") in (0, 0.0)
+    """A cell is OFF exactly when its mode is "off". `mode` already carries
+    the one darkness rule (smg.is_dark, applied by smg.action_sig when the
+    cell's signature was built) -- including on-at-0%, which folds into the
+    default layer rather than inflating the cell count -- so no second test
+    is needed here."""
+    return cell.get("mode") == "off"
 
 
 def build_model(data: dict):
@@ -338,6 +365,18 @@ def bake_ok(scene, layers):
 # ========================================================================
 # 2. Candidate pools
 # ========================================================================
+# MAX_ATOMS: cap on the atom count unions_of will enumerate over. unions_of
+# builds every non-empty union of the atom set, 2**MAX_ATOMS candidates, so
+# this bounds that enumeration to 2**20.
+MAX_ATOMS = 20
+
+# MAX_CELLS_PER_SCENE: cap on the cell count of any single scene.
+# cell_union_pool enumerates 2**len(cells) candidate unions for each scene it
+# processes, the same enumeration shape MAX_ATOMS bounds for unions_of, so it
+# reuses that bound (2**20) per scene.
+MAX_CELLS_PER_SCENE = MAX_ATOMS
+
+
 def atoms_of(scenes):
     """Common refinement of every scene's partition (cells + off)."""
     parts = frozenset({frozenset(s["off"]) for s in scenes if s["off"]})
@@ -354,7 +393,7 @@ def atoms_of(scenes):
 def unions_of(atoms):
     """All non-empty unions of the given atom sets (capped for safety)."""
     n = len(atoms)
-    if n > 20:
+    if n > MAX_ATOMS:
         raise RuntimeError(f"{n} atoms -> pool too large; refine input")
     pool = set()
     for r in range(1, n + 1):
@@ -399,7 +438,7 @@ def min_family(pool, scenes, seed_upper=None, tiebreak=True):
     skips the tie exploration (first minimum wins -- cheaper; use when only
     the minimum SIZE matters, e.g. the interpretability probe)."""
     pool = set(pool)
-    rel = {i: sorted(relevant(s, pool), key=lambda g: -len(g))
+    rel = {i: sorted(relevant(s, pool), key=lambda g: (-len(g), sorted(g)))
            for i, s in enumerate(scenes)}
 
     best = {"F": set(seed_upper) if seed_upper else None,
@@ -460,7 +499,7 @@ def slack_family(pool, scenes, k_max, seed):
     groups cannot game the objective; both components are monotone under
     group addition, so the partial (overlap, size) is an admissible bound."""
     pool = set(pool)
-    rel = {i: sorted(relevant(s, pool), key=lambda g: len(g))
+    rel = {i: sorted(relevant(s, pool), key=lambda g: (len(g), sorted(g)))
            for i, s in enumerate(scenes)}
 
     best = {"F": set(seed), "ov": pairwise_overlap(seed), "size": len(seed)}
@@ -534,9 +573,30 @@ def solve(scenes):
     equal to Fmin unless the budget buys strictly lower overlap.  layers are
     computed against Fsel.  Depends only on the scene partitions -- the
     universe U and named zones are the caller's concern (naming/reporting),
-    never the solve itself."""
+    never the solve itself.
+
+    Refuses BEFORE either candidate pool is enumerated: a scene over
+    MAX_CELLS_PER_SCENE cells would blow up cell_union_pool's per-scene
+    enumeration, and more than MAX_ATOMS atoms would blow up unions_of's
+    enumeration -- both checked here first, cheaply, rather than discovered
+    mid-enumeration."""
+    max_cells = max((len(s["cells"]) for s in scenes), default=0)
+    if max_cells > MAX_CELLS_PER_SCENE:
+        raise SystemExit(
+            f"error: a scene has {max_cells} colour cells, over the "
+            f"{MAX_CELLS_PER_SCENE}-cell solver cap (2**{max_cells} "
+            "candidate unions for that scene alone) -- split the scene into "
+            "fewer colour cells")
+    atoms = atoms_of(scenes)
+    n_atoms = len(atoms)
+    if n_atoms > MAX_ATOMS:
+        raise SystemExit(
+            f"error: {n_atoms} atoms (the common refinement of every "
+            f"scene's cells) is over the {MAX_ATOMS}-atom solver cap "
+            f"(2**{n_atoms} candidate unions) -- reduce distinct colour "
+            "cells or split the scene set")
     upper = min_family(cell_union_pool(scenes), scenes)
-    full_pool = unions_of(atoms_of(scenes))
+    full_pool = unions_of(atoms)
     Fmin = min_family(full_pool, scenes, seed_upper=upper)
     Fsel = slack_family(full_pool, scenes, len(Fmin) + SLACK, seed=Fmin)
     layers = {s["name"]: express(s, Fsel, want_layers=True) for s in scenes}
@@ -557,7 +617,7 @@ def report(U, zones, scenes):
     forced = {s["cells"][0] for s in scenes if len(s["cells"]) == 1}
     if forced:
         print("\nsingle-cell scenes force these exact groups:")
-        for g in sorted(forced, key=lambda g: -len(g)):
+        for g in sorted(forced, key=lambda g: (-len(g), sorted(g))):
             who = [s["name"] for s in scenes
                    if len(s["cells"]) == 1 and s["cells"][0] == g]
             print(f"    |{len(g):2d}|  {name(g):32s} <- {who}")
@@ -568,7 +628,7 @@ def report(U, zones, scenes):
         f" (certified minimum {len(Fmin)}; +{len(F) - len(Fmin)} for a " \
         "better-structured, lower-overlap family)"
     print(f"\n*** GLOBAL META-GROUP FAMILY:  |F| = {len(F)}{extra} ***")
-    for g in sorted(F, key=lambda g: -len(g)):
+    for g in sorted(F, key=lambda g: (-len(g), sorted(g))):
         print(f"    |{len(g):2d}|  {name(g)}")
 
     print("\n" + "=" * 72)
@@ -610,7 +670,7 @@ def json_result(U, zones, scenes):
         "n_lights": len(U),
         "k_min": len(Fmin),
         "family": [{"name": name(g), "lights": sorted(g), "size": len(g)}
-                   for g in sorted(F, key=lambda g: -len(g))],
+                   for g in sorted(F, key=lambda g: (-len(g), sorted(g)))],
         "scenes": {
             sname: [{"group": name(g), "lights": sorted(g),
                      "cell": sorted(c)} for g, c in ly]
@@ -625,23 +685,53 @@ def json_result(U, zones, scenes):
 # the editable vocabulary, the designs file is the authorable source of truth
 # the layered sync (Phase 2) bakes onto the bridge.
 # ========================================================================
-def load_group_registry(zone_lightsets, path=GROUPS_YAML):
+def load_group_registry(zone_lightsets, universe, path=GROUPS_YAML):
     """Read scene-groups.yaml -> ordered [(name, frozenset(lights))]. A group's
     light set is the union of its `zones:` (resolved live) plus any explicit
     `lights:` (a fallback for groups that are not a whole-zone union, e.g. an
-    --export-groups starter registry)."""
+    --export-groups starter registry). `universe` is every real light name
+    (bridge or offline export) -- an explicit `lights:` entry not in it is
+    rejected by name, so a typo cannot silently leave the light at its
+    default OFF target with nothing naming the mistake.
+
+    One SystemExit per malformed field; no KeyError/AttributeError/ValueError
+    escapes for a malformed scene-groups.yaml (missing `name`, a `zones:`
+    given as a bare string instead of a list, or a document whose root is not
+    a mapping)."""
     doc = yaml.safe_load(Path(path).read_text()) or {}
+    if not isinstance(doc, dict):
+        raise SystemExit(
+            f"error: {path} root must be a mapping with a 'groups:' key "
+            f"(got {type(doc).__name__} -- check the file structure)")
+    universe_set = set(universe)
     fam = []
     for entry in doc.get("groups", []):
+        if not isinstance(entry, dict) or "name" not in entry:
+            raise SystemExit(f"error: {path} has a group with no 'name' field")
         name = entry["name"]
+        zones_field = entry.get("zones", [])
+        if isinstance(zones_field, str):
+            raise SystemExit(
+                f"error: {path} group {name!r} field 'zones' must be a "
+                f"list, not a string ({zones_field!r})")
         lights = set()
-        for z in entry.get("zones", []):
+        for z in zones_field:
             if z not in zone_lightsets:
                 raise SystemExit(
                     f"error: scene-groups.yaml group {name!r} names unknown "
-                    f"zone {z!r} (see naming-conventions.md zone table)")
+                    f"zone {z!r} -- check the zone name against the bridge (hue-kit report)")
             lights |= set(zone_lightsets[z])
-        lights |= set(entry.get("lights", []))
+        lights_field = entry.get("lights", [])
+        if isinstance(lights_field, str):
+            raise SystemExit(
+                f"error: {path} group {name!r} field 'lights' must be a "
+                f"list, not a string ({lights_field!r})")
+        unknown = sorted(set(lights_field) - universe_set)
+        if unknown:
+            raise SystemExit(
+                f"error: {path} group {name!r} field 'lights' names "
+                f"unknown light(s) {unknown} (not in the universe)")
+        lights |= set(lights_field)
         if not lights:
             raise SystemExit(f"error: scene-groups.yaml group {name!r} is empty")
         fam.append((name, frozenset(lights)))
@@ -666,17 +756,21 @@ def _cell_cfg(cell):
     """(inline-yaml-config, hsl-comment) for a live colour cell dict.
     xy authoritative + a readable # hsl(...); ct: <mirek> = tunable white.
     A lit cell always has a colour (xy or ct); bri floors at 1 so a lit layer
-    is never written as on-at-0% (exact-0 cells fold to OFF via is_off_cell)."""
+    is never written as on-at-0% (exact-0 cells fold to OFF via is_off_cell).
+    bri keeps two decimal places rather than rounding to a whole percent --
+    the cluster this cell came from only guarantees each member within
+    BRI_TOL of the cluster's mean, so collapsing that mean to the nearest
+    integer could reintroduce drift a rounder emitted value would not have."""
     bri = cell.get("bri")
-    bri_i = max(1, int(round(bri))) if bri is not None else 100
+    bri_i = max(1.0, round(bri, 2)) if bri is not None else 100.0
     if cell.get("mode") == "ct":
         sig = smg.Sig("ct", bri=bri, mirek=cell["mirek"])
-        return f"ct: {int(round(cell['mirek']))}, bri: {bri_i}", \
+        return f"ct: {int(round(cell['mirek']))}, bri: {bri_i:g}", \
             smg.sig_color_label(sig)
     if cell.get("mode") == "xy":
         xy = cell["xy"]
         sig = smg.Sig("xy", bri=bri, x=xy[0], y=xy[1])
-        return f"xy: [{xy[0]:.4f}, {xy[1]:.4f}], bri: {bri_i}", \
+        return f"xy: [{xy[0]:.4f}, {xy[1]:.4f}], bri: {bri_i:g}", \
             smg.sig_color_label(sig)
     raise SystemExit(
         f"error: cannot export a lit cell with mode {cell.get('mode')!r} "
@@ -688,10 +782,12 @@ def _cell_cfg(cell):
 def export_designs(data):
     """Build the layered scene-designs.yaml text from live cells + the
     registry. VERIFIES the registry family expresses AND bakes every scene
-    before emitting (fail loud) so the design file is always faithful.
-    Returns (yaml_text, n_groups, n_min, n_sel)."""
+    before emitting (fail loud) so the design file is always faithful. The
+    registry family is taken as given -- it does not solve for a minimum, so
+    a scene set over the solver's caps still exports as long as the registry
+    expresses it. Returns (yaml_text, n_groups)."""
     zone_lightsets = data["light_groups"]
-    fam = load_group_registry(zone_lightsets)
+    fam = load_group_registry(zone_lightsets, data["universe"])
     name_of = {g: n for n, g in fam}
     if len(name_of) != len(fam):
         raise SystemExit("error: scene-groups.yaml has two groups sharing one "
@@ -699,7 +795,6 @@ def export_designs(data):
     F = {g for _, g in fam}
 
     _U, _zones, scenes = build_model(data)
-    Fmin, Fsel, _layers, _upper, _pool = solve(scenes)  # informational sizes
 
     color_by_cell = {}
     for s in data["scenes"]:
@@ -747,7 +842,7 @@ def export_designs(data):
                 line = f"{line.ljust(58)}  # {hsl}"
             out.append(line)
         out.append("")
-    return "\n".join(out).rstrip() + "\n", len(fam), len(Fmin), len(Fsel)
+    return "\n".join(out).rstrip() + "\n", len(fam)
 
 
 def _zone_token(zname):
@@ -786,7 +881,7 @@ def export_groups(data):
     the groups, then `--export-designs`."""
     U, zones, scenes = build_model(data)
     Fmin, F, _layers, _upper, _pool = solve(scenes)
-    fam = sorted(F, key=lambda g: -len(g))
+    fam = sorted(F, key=lambda g: (-len(g), sorted(g)))
     out = [
         "# Layered scene-group registry -- GENERATED by `scene-layers.py",
         "# --export-groups`. Certified minimum |F| = %d; this family has %d"
@@ -815,15 +910,34 @@ def export_groups(data):
 
 # ========================================================================
 # Layered SYNC: validate + apply the layered scene-designs.yaml onto the bridge.
-# (Phase 2 of the migration -- replaces scene-schema.py.) A scene is baked by
-# painting its layer stack bottom -> top (topmost covering layer wins), every
-# uncovered light -> OFF. The diff / backup / PUT / verify mechanics are the
-# proven scene-schema.py ones: resolve EVERY targeted scene first (atomic -- a
-# parse error writes nothing), write ONLY beyond-tolerance lights (in-tolerance
-# lights stay byte-exact), never-overwriting per-scene backup, verify by re-read.
+# A scene is baked by painting its layer stack bottom -> top (topmost
+# covering layer wins), every uncovered light -> OFF. The diff / backup /
+# PUT / verify mechanics resolve EVERY targeted scene before the first
+# write (so a parse error in the design/registry writes nothing); a rejected
+# write stops THAT scene only -- it is reported and the run continues with
+# the rest of the plan. Writes ONLY beyond-tolerance lights (in-tolerance
+# lights stay byte-exact), never-overwriting per-scene backup (written before
+# that scene's PUT), verify by re-read.
 # ========================================================================
 BRIDGE = smg.BRIDGE          # env-configurable (HUE_BRIDGE_IP); single source
 BACKUP_DIR = Path("tmp")
+
+# Value ranges enforced by _layer_action on a design layer's paint fields.
+# BRIGHTNESS_RANGE: dimming.brightness is documented as "0-100 percent" in
+# skills/hue-domain/references/hue-bridge-basics.md:52.
+BRIGHTNESS_RANGE = (0.0, 100.0)
+# XY_RANGE: hue-bridge-basics.md:52 describes color.xy as "CIE xy in the
+# bulb's gamut"; [0, 1] is the CIE xy coordinate system's own bound (a
+# property of the coordinate system itself, not a bulb-specific gamut).
+XY_RANGE = (0.0, 1.0)
+# MIREK_RANGE: NOT stated anywhere in this repository -- neither
+# hue-bridge-basics.md nor hue-beyond-scenes.md gives a numeric mirek range,
+# and the only existing mirek constant (smg.MIREK_TOL = 10) is a comparison
+# TOLERANCE, not a valid-value range, so no bound is implied by existing
+# code either. 153-500 is the CLIP v2 API's documented device-independent
+# default color_temperature range; used here as external knowledge and
+# explicitly marked as not repo-sourced.
+MIREK_RANGE = (153, 500)
 
 
 def _resolve_registry(session):
@@ -834,8 +948,9 @@ def _resolve_registry(session):
     zone_lightsets = {z["metadata"]["name"]:
                       sorted(lights[c["rid"]] for c in z["children"]
                              if c["rid"] in lights) for z in zones}
-    fam = load_group_registry(zone_lightsets)
-    return {n: g for n, g in fam}, sorted(lights.values())
+    universe = sorted(lights.values())
+    fam = load_group_registry(zone_lightsets, universe)
+    return {n: g for n, g in fam}, universe
 
 
 def _bridge_maps(session):
@@ -851,17 +966,56 @@ def _bridge_maps(session):
 
 
 def _layer_action(scene_name, layer):
-    """One layer's Hue action (xy colour or ct white + brightness)."""
-    bri = round(float(layer["bri"]), 2)
+    """One layer's Hue action (xy colour or ct white + brightness).
+
+    One SystemExit per malformed or out-of-range field, naming the scene and
+    the field -- no KeyError/ValueError/TypeError escapes for a malformed
+    design layer (missing `bri`, an `xy` with the wrong number of values, an
+    out-of-range `bri`/`xy`/`ct`). See BRIGHTNESS_RANGE / XY_RANGE /
+    MIREK_RANGE above for the bounds and their sources."""
+    gname = layer.get("group")
+    if "bri" not in layer:
+        raise SystemExit(f"error: scene {scene_name!r} layer for group "
+                         f"{gname!r} is missing field 'bri'")
+    try:
+        bri = round(float(layer["bri"]), 2)
+    except (TypeError, ValueError):
+        raise SystemExit(f"error: scene {scene_name!r} layer for group "
+                         f"{gname!r} field 'bri' is not a number "
+                         f"({layer['bri']!r})")
+    if not (BRIGHTNESS_RANGE[0] <= bri <= BRIGHTNESS_RANGE[1]):
+        raise SystemExit(
+            f"error: scene {scene_name!r} layer for group {gname!r} field "
+            f"'bri' = {bri} is outside {BRIGHTNESS_RANGE[0]:.0f}-"
+            f"{BRIGHTNESS_RANGE[1]:.0f} (dimming.brightness percent, see "
+            "hue-bridge-basics.md)")
     act = {"on": {"on": True}, "dimming": {"brightness": bri}}
     if "xy" in layer:
-        x, y = layer["xy"]
+        xy = layer["xy"]
+        if not (isinstance(xy, (list, tuple)) and len(xy) == 2):
+            raise SystemExit(
+                f"error: scene {scene_name!r} layer for group {gname!r} "
+                f"field 'xy' must have exactly 2 values (got {xy!r})")
+        x, y = xy
+        for axis, v in (("x", x), ("y", y)):
+            if not (XY_RANGE[0] <= v <= XY_RANGE[1]):
+                raise SystemExit(
+                    f"error: scene {scene_name!r} layer for group {gname!r} "
+                    f"field 'xy' {axis} = {v} is outside "
+                    f"{XY_RANGE[0]:.0f}-{XY_RANGE[1]:.0f} (CIE xy "
+                    "chromaticity coordinate)")
         act["color"] = {"xy": {"x": float(x), "y": float(y)}}
     elif "ct" in layer:
-        act["color_temperature"] = {"mirek": int(layer["ct"])}
+        ct = layer["ct"]
+        if not (MIREK_RANGE[0] <= ct <= MIREK_RANGE[1]):
+            raise SystemExit(
+                f"error: scene {scene_name!r} layer for group {gname!r} "
+                f"field 'ct' = {ct} is outside {MIREK_RANGE[0]}-"
+                f"{MIREK_RANGE[1]} mirek (see MIREK_RANGE)")
+        act["color_temperature"] = {"mirek": int(ct)}
     else:
         raise SystemExit(f"error: scene {scene_name!r} layer for group "
-                         f"{layer.get('group')!r} has neither xy nor ct")
+                         f"{gname!r} has neither xy nor ct")
     return act
 
 
@@ -870,6 +1024,9 @@ def _bake_targets(scene_name, layers, registry, universe):
     bottom -> top so the topmost covering layer wins per light."""
     targets = {n: {"on": {"on": False}} for n in universe}
     for layer in layers or []:
+        if "group" not in layer:
+            raise SystemExit(f"error: scene {scene_name!r} layer is missing "
+                             "field 'group'")
         gname = layer["group"]
         if gname not in registry:
             raise SystemExit(f"error: scene {scene_name!r} names unknown group "
@@ -889,26 +1046,24 @@ def _color_mode(act):
 
 
 def _effectively_off(action) -> bool:
-    """Is this action dark? True for on:false, for an absent action (a light the
-    scene never sets), AND for on:true at brightness 0.
-
-    That last case is the Hue app's own way of writing "off" for some scenes --
-    the bulb is nominally on but emits nothing. The analyzer already reads it as
-    off (a zero-brightness cell contributes no light, so such a scene reports as
-    all-OFF and exports to `layers: []`), so the diff has to agree. When it did
-    not, a scene holding these actions could never validate clean: export wrote
-    "off", validate compared against the raw on:true, and reported the same
-    discrepancies on every run no matter how many times it was applied."""
-    if not action.get("on", {}).get("on"):
-        return True
-    bri = action.get("dimming", {}).get("brightness")
-    return bri is not None and bri <= 0.0
+    """Is this action dark? Delegates to smg.is_dark -- the one darkness test,
+    also used by smg.action_sig -- so a raw bridge action and its analyzed
+    signature always agree on off. True for on:false, for an absent action (a
+    light the scene never sets), and for on:true at brightness 0 (the Hue
+    app's own way of writing "off" for some scenes: the bulb is nominally on
+    but emits nothing). The analyzer reads that last case as off too (a
+    zero-brightness cell contributes no light, so such a scene reports as
+    all-OFF and exports to `layers: []`), so the diff has to agree, or a scene
+    holding these actions could never validate clean: export writes "off",
+    validate compares against the raw on:true, and reports the same
+    discrepancy on every run no matter how many times it is applied."""
+    return smg.is_dark(action)
 
 
 def _action_diff(live, target):
-    """Beyond-tolerance difference description, or None. Proven scene-schema
-    logic incl. the colour-mode-none guard (a target colour vs a live action
-    with no colour is a real difference, not a match)."""
+    """Beyond-tolerance difference description, or None. Includes the
+    colour-mode-none guard (a target colour vs a live action with no colour
+    is a real difference, not a match)."""
     loff, toff = _effectively_off(live), _effectively_off(target)
     if loff != toff:
         return f"on {not loff} -> {not toff}"
@@ -935,6 +1090,42 @@ def _action_diff(live, target):
     return None
 
 
+def _write_text_atomic(path: Path, text: str, mode: int | None = None) -> None:
+    """Write `text` to `path` without ever exposing a truncated or partial
+    file: create a fresh `<path>.tmp` in the same directory, write, flush
+    and fsync it, then `os.replace` it over `path` in one filesystem
+    operation. On any failure the temp file is removed and `path`'s prior
+    bytes are left untouched -- a reader never observes a half-written
+    file. `mode` sets the temp file's permissions at the moment it is
+    created (any pre-existing same-named temp file is removed first, so
+    `mode` always governs a freshly created file rather than a chmod after
+    the fact); `mode=None` uses the platform's normal create permissions.
+
+    This function is duplicated byte-for-byte in hue_kit_cli.py, since the
+    two scripts do not import each other -- keep the two copies identical.
+    """
+    path = Path(path)
+    tmp_path = path.with_name(path.name + ".tmp")
+    try:
+        tmp_path.unlink()
+    except OSError:
+        pass
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    fd = os.open(tmp_path, flags, 0o666 if mode is None else mode)
+    try:
+        with os.fdopen(fd, "w") as fh:
+            fh.write(text)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp_path, path)
+    except BaseException:
+        try:
+            tmp_path.unlink()
+        except OSError:
+            pass
+        raise
+
+
 def _unique_backup(scene_name):
     """A never-overwriting backup path (bumps a counter)."""
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -955,9 +1146,9 @@ def _scene_pending(session, design, only):
     live scene on the bridge, in design order; only beyond-tolerance rids are
     pending in a plan entry.
 
-    An `only` filter that names no scene in the design is refused loudly here
-    (a silent 0-scene plan used to report as 0 discrepancies -- a false
-    match): every requested name must appear in the design, whether or not it
+    An `only` filter that names no scene in the design is refused loudly here,
+    because a silent 0-scene plan would report 0 discrepancies -- a false
+    match. Every requested name must appear in the design, whether or not it
     turns out to be MISSING on the bridge."""
     registry, universe = _resolve_registry(session)
     rid2name, name2rids, scene_by_name = _bridge_maps(session)
@@ -1020,8 +1211,8 @@ def bridge_fingerprint(data: dict) -> str:
 def validate_design(session, design, only):
     """Diff each designed scene against the live bridge (report only).
 
-    A design scene MISSING on the bridge counts as a discrepancy (it used to
-    be silently skipped, so a whole-scene deletion validated clean). Returns
+    A design scene MISSING on the bridge counts as a discrepancy, so a
+    whole-scene deletion never validates clean. Returns
     EXIT_DISCREPANCY when total > 0, 0 when the bridge matches -- distinct
     from a generic error (1), which always means validate_design did NOT
     finish comparing (a malformed registry, an unmatched --scene filter,
@@ -1048,13 +1239,20 @@ def validate_design(session, design, only):
 
 
 def apply_design(session, design, only, assume_yes):
-    """Bake the layered design onto the bridge (dry-run unless assume_yes)."""
+    """Bake the layered design onto the bridge (dry-run unless assume_yes).
+
+    Resolves every targeted scene before the first write (see
+    _scene_pending); a rejected write (an HTTP error, a connection failure,
+    or a verify mismatch) stops only THAT scene -- it is caught, reported
+    with the CLIP `errors[].description` when the bridge sent one, and the
+    run continues with the remaining scenes. Returns 1 if any scene failed,
+    else 0, and prints a final written/failed summary."""
     BACKUP_DIR.mkdir(parents=True, exist_ok=True)
     plan, rid2name, _missing = _scene_pending(session, design, only)
     if not any(p for _, _, p in plan):
         print("nothing to do -- bridge already matches the design")
         return 0
-    failed = False
+    written, failed_scenes = [], []
     for name, live, pending in plan:
         if not pending:
             print(f"{name}: already matches -- no write")
@@ -1068,7 +1266,7 @@ def apply_design(session, design, only, assume_yes):
             print(f"  (dry-run; pass --yes to write '{name}')")
             continue
         backup = _unique_backup(name)
-        backup.write_text(json.dumps(live, indent=2))
+        _write_text_atomic(backup, json.dumps(live, indent=2))
         actions = live["actions"]
         idx = {a["target"]["rid"]: a for a in actions}
         for rid, act in pending.items():
@@ -1077,24 +1275,51 @@ def apply_design(session, design, only, assume_yes):
             else:
                 actions.append({"target": {"rid": rid, "rtype": "light"},
                                 "action": act})
-        r = session.put(f"{BRIDGE}/clip/v2/resource/scene/{live['id']}",
-                        json={"actions": actions}, timeout=10, verify=False)
-        r.raise_for_status()
-        errs = r.json().get("errors")
+        # A failed PUT for this scene (a 4xx/5xx via raise_for_status, or a
+        # connection failure the request layer raises directly) must not
+        # abort the loop -- catch broadly on purpose so ANY per-scene
+        # HTTP-layer failure is recorded and the remaining scenes still run.
+        try:
+            r = session.put(f"{BRIDGE}/clip/v2/resource/scene/{live['id']}",
+                            json={"actions": actions}, timeout=10, verify=False)
+            r.raise_for_status()
+            errs = r.json().get("errors")
+        except Exception as exc:
+            resp = getattr(exc, "response", None)
+            desc = None
+            if resp is not None:
+                try:
+                    body_errs = resp.json().get("errors") or []
+                    desc = "; ".join(
+                        e.get("description", "") for e in body_errs
+                        if e.get("description")) or None
+                except Exception:
+                    desc = None
+            print(f"    -> backed up {backup.name}; PUT FAILED: {desc or exc}")
+            failed_scenes.append(name)
+            continue
         fresh = next((s for s in smg.clip_get(session, "scene")
                       if s["id"] == live["id"]), None)
         if fresh is None:
             print(f"    -> backed up {backup.name}; PUT VERIFY FAILED "
                   "(scene not found on re-read)")
-            failed = True
+            failed_scenes.append(name)
             continue
         fresh_live = {a["target"]["rid"]: a["action"] for a in fresh["actions"]}
         bad = [rid2name.get(rid, rid) for rid, act in pending.items()
                if _action_diff(fresh_live.get(rid, {}), act) is not None]
-        status = "OK" if not bad and not errs else f"MISMATCH {bad or errs}"
+        if bad or errs:
+            desc = errs[0].get("description") if errs else None
+            status = f"MISMATCH {bad or errs}" + (f" ({desc})" if desc else "")
+            failed_scenes.append(name)
+        else:
+            status = "OK"
+            written.append(name)
         print(f"    -> backed up {backup.name}; PUT {status}")
-        failed = failed or bool(bad or errs)
-    return 1 if failed else 0
+    if written or failed_scenes:
+        print(f"\n{len(written)} written, {len(failed_scenes)} failed"
+              + (f": {failed_scenes}" if failed_scenes else ""))
+    return 1 if failed_scenes else 0
 
 
 # ========================================================================
@@ -1118,11 +1343,11 @@ def layered_view(session):
     zone_lightsets = {z["metadata"]["name"]:
                       sorted(lights[c["rid"]] for c in z["children"]
                              if c["rid"] in lights) for z in zones}
-    fam = load_group_registry(zone_lightsets)          # [(name, frozenset)]
+    universe = frozenset(lights.values())
+    fam = load_group_registry(zone_lightsets, universe)  # [(name, frozenset)]
     name_of = {g: n for n, g in fam}
     F = {g for _, g in fam}
     tnames = load_template_names()
-    universe = frozenset(lights.values())
 
     scenes_raw = sorted(smg.clip_get(session, "scene"),
                         key=lambda s: s["metadata"]["name"].lower())
@@ -1134,7 +1359,7 @@ def layered_view(session):
         lit, sig_by_cell = [], {}
         for c in res.clusters:
             fs = frozenset(c.lights)
-            if c.sig.mode == "off" or c.sig.bri in (0, 0.0):
+            if c.sig.mode == "off":
                 continue
             lit.append(fs)
             sig_by_cell[fs] = c.sig
@@ -1162,10 +1387,10 @@ def main() -> int:
                     help="solve an offline scene-cells.json instead of the bridge")
     ap.add_argument("--json", action="store_true",
                     help="emit machine-readable result instead of the report")
-    ap.add_argument("--html", metavar="PATH", nargs="?",
-                    const="tmp/scene-layers.html",
-                    help="render a browsable HTML report (default "
-                    "tmp/scene-layers.html) and exit")
+    ap.add_argument("--html", metavar="PATH",
+                    help="render a browsable HTML report to PATH and exit "
+                    "(standalone use requires PATH -- the CLI always passes "
+                    "one)")
     ap.add_argument("--out", metavar="PATH", help="write output to PATH")
     ap.add_argument("--export-cells", metavar="PATH",
                     help="write the live per-scene cells to PATH and exit (no solve)")
@@ -1173,10 +1398,14 @@ def main() -> int:
                     help="generate a STARTER scene-groups.yaml (certified-minimum "
                     "family, placeholder names) to PATH or stdout, then exit -- "
                     "the bootstrap for a new bridge; rename, then --export-designs")
-    ap.add_argument("--export-designs", metavar="PATH", nargs="?",
-                    const=str(DESIGNS_YAML),
-                    help="materialise the layered scene-designs.yaml (default "
-                    f"{DESIGNS_YAML}) from live colours + scene-groups.yaml, then exit")
+    ap.add_argument("--force", action="store_true",
+                    help="--export-groups: overwrite an existing PATH (this "
+                    "regenerates placeholder names and discards any you set)")
+    ap.add_argument("--export-designs", metavar="PATH",
+                    help="materialise the layered scene-designs.yaml to PATH "
+                    "from live colours + scene-groups.yaml, then exit "
+                    "(standalone use requires PATH -- the CLI always passes "
+                    "one)")
     ap.add_argument("--fingerprint", action="store_true",
                     help="print a stable hash of the bridge's SHAPE (lights, "
                     "zone membership, scene set) and exit -- structural change "
@@ -1209,6 +1438,11 @@ def main() -> int:
             ap.error(f"design file {design_path} not found -- run "
                      "--export-designs first")
         design = yaml.safe_load(design_path.read_text()) or {}
+        if not isinstance(design, dict):
+            raise SystemExit(
+                f"error: {design_path} root must be a mapping with a "
+                f"'scenes:' key (got {type(design).__name__} -- check the "
+                "file structure)")
         only = set(args.scenes) if args.scenes else None
         session = bridge_session()
         if args.validate_design:
@@ -1235,7 +1469,7 @@ def main() -> int:
                                   source_docs=source_docs)
         dest = Path(args.html)
         dest.parent.mkdir(parents=True, exist_ok=True)
-        dest.write_text(html)
+        _write_text_atomic(dest, html)
         print(f"wrote {dest}  ({len(scenes)} scenes)")
         return 0
 
@@ -1247,33 +1481,38 @@ def main() -> int:
         return 0
 
     if args.export_groups:
+        dest = None if args.export_groups == "-" else Path(args.export_groups)
+        # Refuse before anything is computed: a regenerated registry has
+        # placeholder names, so overwriting an existing one silently drops
+        # every name a user chose. Checked before export_groups() runs and
+        # before the file is touched.
+        if dest is not None and dest.exists() and not args.force:
+            raise SystemExit(
+                f"error: {dest} already exists -- pass --force to overwrite "
+                "(this regenerates placeholder group names and discards any "
+                "you set)")
         text = export_groups(data)
-        if args.export_groups == "-":
+        if dest is None:
             sys.stdout.write(text)
         else:
-            dest = Path(args.export_groups)
             dest.parent.mkdir(parents=True, exist_ok=True)
-            dest.write_text(text)
+            _write_text_atomic(dest, text)
             print(f"wrote {dest}", file=sys.stderr)
         return 0
 
     if args.export_designs:
-        text, n_groups, n_min, n_sel = export_designs(data)
+        text, n_groups = export_designs(data)
         dest = Path(args.export_designs)
         dest.parent.mkdir(parents=True, exist_ok=True)
-        dest.write_text(text)
-        note = "" if n_groups <= n_sel else \
-            f"  WARNING: registry has {n_groups} groups but the solver " \
-            f"selects {n_sel} (certified minimum {n_min}) -- the family " \
-            "is larger than it needs to be"
+        _write_text_atomic(dest, text)
         print(f"wrote {dest}  ({len(data.get('scenes', []))} scenes, "
-              f"{n_groups}-group vocabulary){note}")
+              f"{n_groups}-group vocabulary)")
         return 0
 
     if args.export_cells:
         dest = Path(args.export_cells)
         dest.parent.mkdir(parents=True, exist_ok=True)
-        dest.write_text(json.dumps(data, indent=2))
+        _write_text_atomic(dest, json.dumps(data, indent=2))
         n_lights = data.get("n_lights", len(data.get("universe", [])))
         print(f"wrote {dest} ({len(data.get('scenes', []))} scenes, "
               f"{n_lights} lights)")
@@ -1286,7 +1525,7 @@ def main() -> int:
         if args.out:
             out = Path(args.out)
             out.parent.mkdir(parents=True, exist_ok=True)
-            out.write_text(text)
+            _write_text_atomic(out, text)
             print(f"wrote {out}")
         else:
             print(text)

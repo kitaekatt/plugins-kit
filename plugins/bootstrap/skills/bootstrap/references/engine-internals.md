@@ -27,7 +27,7 @@ The bootstrap engine has two distinct setup phases:
 
    **Registry-v2 fallback** (`plugin_resolve.discover_cache_plugins`, added 0.47.0): newer Claude Code keeps `installed_plugins.json` at `{"version": 2, "plugins": {}}` for marketplace installs — enablement lives in settings `enabledPlugins` and the code in `~/.claude/plugins/cache/<mkt>/<plugin>/<version>/`. Observed live 2026-07-16: after wiping `~/.claude/plugins`, all plugins re-synced and ran but the registry stayed empty, so the engine provisioned nothing but bootstrap itself. For any *enabled* ref the registry doesn't record, discovery synthesizes the entry from the cache (highest version dir = the code Claude Code loads); registry entries always take precedence. The enablement filter comes from `_load_enabled_refs` (settings `enabledPlugins` + registry); with no enablement source at all the fallback stays off — never provision blindly. The harvest has the same fallback (`harvest._cache_installed_bootstrap`) for reading bootstrap's installed version.
 
-   **Dev layout note**: When running the engine directly against the source tree (e.g. `python plugins/bootstrap/engine/bootstrap_engine.py --plugin-root plugins/bootstrap ...`), `plugins/installed_plugins.json` does not exist. `list_enabled_plugins()` returns `[], False` and sibling plugins (unreal-kit, p4-kit, ...) are not auto-discovered. This is expected and not part of any real dev workflow — the engine runs cleanly with no plugin output.
+   **Dev layout note**: When running the engine directly against the source tree (e.g. `"$BOOTSTRAP_PYTHON" plugins/bootstrap/engine/bootstrap_engine.py --plugin-root plugins/bootstrap ...` -- the engine is bootstrap's own code, so it is launched under the forced form, never `uv run python`; see references/python-interpreter.md), `plugins/installed_plugins.json` does not exist. `list_enabled_plugins()` returns `[], False` and sibling plugins (unreal-kit, p4-kit, ...) are not auto-discovered. This is expected and not part of any real dev workflow -- the engine runs cleanly with no plugin output.
 
 Discovery results are cached in `plugins/data/plugins-kit/bootstrap/config.json` under `bootstrap_cache` to avoid repeated filesystem scans — entries are added on first discovery and removed if `bootstrap.json` disappears (e.g. after a plugin update). Users can permanently opt out a plugin by adding its ref to `no_bootstrap` in that config file.
 
@@ -133,6 +133,44 @@ still need the
 separate `bootstrap-stuck-fix` plugin (`scripts/repair_registry.py`), which has
 no prior version to be wedged on. See the delivery-path rule in the repo
 CLAUDE.md and the `update_lifecycle` fact in the bootstrap SKILL.md.
+
+### Step 3c1: interpreter export, persistence, and shell integration
+
+Two environment variables, `BOOTSTRAP_PYTHON` and `BOOTSTRAP_PROJECT_PYTHON`,
+are exported at three points in a pass rather than one, because the correct
+value changes as more is learned: (1) immediately after the pass begins --
+`BOOTSTRAP_PYTHON` set to this process's own interpreter, and
+`BOOTSTRAP_PROJECT_PYTHON` to the normative resolution rule's answer with no
+manifest knowledge yet (a `--project-dir` is known, but not yet whether the
+project declares `project_venv` or opts out of detection via
+`project_python: false`); (2) here, at
+Step 3c1, immediately after the layered manifest loads and before
+`_process_manifest` runs, so that pass's `tools[].check`/`install` commands
+see the manifest-aware value; (3) after the `project_venv` step (3d)
+completes, the VERIFIED interpreter is exported and the per-project record
+under `<data_dir>/project_python/<key>` is written (or removed, if this pass
+resolved to the bootstrap interpreter for a project that previously had a
+record) -- the record is what lets a throttled session's SessionStart hook and
+the always lane answer correctly without loading the manifest themselves.
+
+Persistence and the shell hook are also decided here, from the layered
+`interpreter_env` key (`persist`, `shell_hook`; both default `true`, read
+from user layers only): `persist` runs `BOOTSTRAP_PYTHON` through the same
+`env_vars` machinery as any other persisted variable (rc files, the Windows
+registry), but only when the deterministic standalone interpreter exists and
+is executable -- a venv or fallback interpreter is never persisted
+machine-wide. The first successful persist on a machine displays one
+discoverability line; steady state is a verbose ok entry. `shell_hook` calls
+`shell_hook.ensure(...)`, which copies the shell templates into the data
+directory and adds (or, when disabled, removes) the rc line / PowerShell
+profile line that keeps `BOOTSTRAP_PROJECT_PYTHON` current per directory in a
+terminal -- see references/python-interpreter.md for what each does and does
+not cover. Both steps are skipped entirely, with a verbose note, under test
+isolation (`BOOTSTRAP_SKIP_SHELL_INTEGRATION`) or a redirected data root
+(`CLAUDE_BOOTSTRAP_DATA_ROOT`), and when the layered manifests themselves
+failed to parse -- a broken layer must never silently drop a user's opt-out.
+
+Full contract: references/python-interpreter.md.
 
 ### Step 3c2: bootstrap profile resolution
 
@@ -804,11 +842,11 @@ The lock is **engine-wide, not per-project** -- concurrent passes from *differen
 
 **Stand-down re-arms the harvest.** When the standing-down engine carries an update, `_stand_down_lock_contended` also **clears** `harvest_launched_version`. The older reasoning for leaving that marker alone -- "ANY completed pass stamps `engine_ran_version`, so the marker self-clears" -- is false when the pass that completes is an *older* engine: it stamps a version still behind the installed one, `should_harvest` stays true, and the already-consumed per-installed-version marker disarms every future harvest. That is a permanent wedge no later session recovers from without a manual pass. Clearing the marker is safe because the stamp is now monotonic (below): if a *newer* engine holds the lock, it completes and stamps `>=` our own version, making `should_harvest` false -- so a cleared marker cannot produce a duplicate spawn storm. The import-retry and registry-relaunch markers are still left alone; neither is version-keyed, so neither can wedge this way.
 
-**Stale-lock recovery.** A crashed or killed holder's lock is recovered, not permanently wedged: on contention, `_try_acquire` reads the recorded PID and checks liveness (`os.kill(pid, 0)` POSIX, `OpenProcess` Windows); a dead PID makes the lock stale and it is unlinked and re-claimed through the same exclusive-create path (never a non-exclusive overwrite, which would let two racers both believe they won). A lock whose PID is alive but whose file has aged past a generous ceiling is *also* treated as stale, guarding against the PID-reuse case (an unrelated new process recycling the dead holder's PID number) wedging the lock forever.
+**Stale-lock recovery.** A crashed or killed holder's lock is recovered, not permanently wedged: on contention, `_try_acquire` reads the recorded PID and checks liveness (`os.kill(pid, 0)` POSIX, `OpenProcess` Windows); a dead PID makes the lock stale and it is unlinked and re-claimed through the same exclusive-create path (never a non-exclusive overwrite, which would let two racers both believe they won). The exclusive create is necessary and was not sufficient: the removal is a rename-aside-then-inspect, and until bootstrap 0.120.1 its retry loop re-issued the rename without re-reading the owner, so a loser whose attempt raced would rename away the WINNER's freshly created lock and both callers would acquire. The owner is now re-read before every attempt, a vanished path ends the steal rather than being retried, only a Windows sharing violation is retried, and a wrongly-taken lock is restored with an exclusive link so it cannot overwrite a lock a third racer took while the path stood empty. A lock whose PID is alive but whose file has aged past a generous ceiling is *also* treated as stale, guarding against the PID-reuse case (an unrelated new process recycling the dead holder's PID number) wedging the lock forever.
 
 **Reading the lock without taking it.** `proc_lock.lock_holder(data_dir)` answers "is a pass running right now?" as a pure read -- it returns the holder's PID, the lock file's age, and the epoch the holder recorded, or `None`. It exists for the `bootstrap` PATH lever's status verb and for `bootstrap run`'s decision to attach rather than launch a second pass. Deliberately NOT expressed as try-acquire-then-release: acquiring clears a stale lock and holds the mutex for an instant, so a mere status probe could make a genuine launcher stand down. It applies exactly the staleness rules `_try_acquire` applies (dead PID, or a live PID whose lock has aged past the ceiling, both read as "not running"), so the query and the acquisition can never disagree; an unparseable lock younger than the in-flight grace window reads as running with a `None` PID, because some process is mid-claim.
 
-**Elevation is the one caller that releases early.** The `--fix-all` flow's `_spawn_recheck_pass` synchronously spawns a full second `bootstrap_engine.py` process with the *same* `--data-dir` and waits on it -- while the parent is still inside its own `engine_lock()`. Without intervention the child would see the parent's still-alive PID as the lock holder and stand down without running its post-elevation re-check. `_spawn_recheck_pass` calls `proc_lock.release_lock(data_dir)` immediately before spawning; it is safe because the parent has no more work after the child exits (the caller returns immediately), and `release_lock` only removes the lock file if it still records the caller's own PID -- it can never touch a lock some other process has since legitimately acquired.
+**Elevation is the one caller that releases early.** The `--fix-all` flow's `_spawn_recheck_pass` synchronously spawns a full second `bootstrap_engine.py` process with the *same* `--data-dir` and waits on it -- while the parent is still inside its own `engine_lock()`. Without intervention the child would see the parent's still-alive PID as the lock holder and stand down without running its post-elevation re-check. `_spawn_recheck_pass` calls `proc_lock.release_lock(data_dir)` immediately before spawning; it is safe because the parent has no more work after the child exits (the caller returns immediately), and `release_lock` only removes the lock file if it still records the caller's own PID -- it can never touch a lock some other process has since legitimately acquired. That holds because it goes through the same `_remove_if_owned` the steal path uses, and it is exactly what the pre-0.120.1 blind retry loop broke.
 
 ### Stamp files (`stamps.py`)
 

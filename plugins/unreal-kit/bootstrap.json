@@ -1,5 +1,6 @@
 {
-  "requires_bootstrap": "0.75.0",
+  "$comment": "requires_bootstrap is the call shape this plugin needs: custom_bootstrap.py and search_unreal_stub.py import bootstrap_lib.interpreter_env and hand agents its guarded BOOTSTRAP_PYTHON launch form; both first shipped in bootstrap 0.120.0.",
+  "requires_bootstrap": "0.120.0",
   "tools": [
     {
       "name": "p4",

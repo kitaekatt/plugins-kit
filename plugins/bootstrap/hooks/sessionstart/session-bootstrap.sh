@@ -131,6 +131,109 @@ _COOLDOWN_FILE="$_COOLDOWN_DIR/last_run_epoch.$_PROJECT_KEY"
 _COOLDOWN_SECS=3600  # 60-minute per-project cooldown; reset via bootstrap-reset-cooldown
 mkdir -p "$PLUGIN_DATA" "$_COOLDOWN_DIR"
 
+# --- Interpreter names for this session (every session, before any skip gate) ---
+# Appends BOOTSTRAP_PYTHON and BOOTSTRAP_PROJECT_PYTHON to this session's
+# $CLAUDE_ENV_FILE, which Claude Code sources before every Bash tool call. It
+# sits ABOVE both skip gates because a gate-skipped session still needs the
+# names. The engine's pass later records the verified values through
+# bootstrap_lib/session_env.py; this block only fills the gap until then.
+# - A name that already has an `export NAME=` line is never written again:
+#   that line is the engine-verified value, or this block's own earlier line.
+# - Project name. With a recorded interpreter in the engine's record
+#   <data>/project_python/<key> (never under the _global_ key): $VIRTUAL_ENV's
+#   interpreter, else the record. Without one: shell/project-python.sh, which
+#   applies the whole rule (opt-out, $VIRTUAL_ENV, venv walk, BOOTSTRAP_PYTHON);
+#   if it cannot run, $VIRTUAL_ENV's interpreter, else BOOTSTRAP_PYTHON.
+#   Rule: interpreter_env.py.
+# - An opt-out (the project set "project_python": false) suppresses the
+#   project name for the session, $VIRTUAL_ENV included: a record reading
+#   `opt_out`, or the resolver reporting an opted-out tree (empty output,
+#   status 1, which the subshell turns into the line `opt_out`).
+# - The resolver is sourced in a SUBSHELL with BOOTSTRAP_PP_NO_REGISTER=1 and
+#   stderr discarded, so it can neither register a prompt hook nor change or
+#   abort this shell. Everything else here is fork-free.
+# - $OSTYPE, never $OS ($OS is only assigned inside _provision). No cygpath:
+#   _ie_norm writes the C:/... form in pure bash.
+# - Append only. A value holding a single quote writes nothing, because the
+#   file is sourced as shell code.
+# - Console mode (a terminal run) has no session env file to write.
+_ie_py=""; _ie_pp=""; _have_py=""; _have_pp=""
+_ie_n=""; _ie_l=""; _ie_c=""; _ie_sep=""; _ie_out=""; _ie_rec=""; _ie_optout=""; _ie_venv=""
+_ie_nl=$'\n'; _ie_cr=$'\r'
+_ie_norm() {
+    # Result in $_ie_n: "/" separators; on Windows an MSYS /c/... prefix
+    # becomes C:/... (the drive letter is upper-cased by table lookup).
+    local _d _t _lc=abcdefghijklmnopqrstuvwxyz _uc=ABCDEFGHIJKLMNOPQRSTUVWXYZ
+    _ie_n=${1//\\//}
+    case "${OSTYPE:-}" in
+        msys*|cygwin*|win32*)
+            case "$_ie_n" in
+                /[A-Za-z]|/[A-Za-z]/*)
+                    _d=${_ie_n:1:1}
+                    _t=${_lc%%"$_d"*}
+                    [ ${#_t} -lt 26 ] && _d=${_uc:${#_t}:1}
+                    _ie_n="${_d}:${_ie_n:2}" ;;
+            esac ;;
+    esac
+}
+if [ -z "$FLAG_CONSOLE" ] && [ -n "${CLAUDE_ENV_FILE:-}" ]; then
+    _ie_norm "$HOME"
+    case "${OSTYPE:-}" in
+        msys*|cygwin*|win32*) _ie_py="$_ie_n/.local/share/python-standalone/python/python.exe" ;;
+        *) _ie_py="$_ie_n/.local/bin/python3" ;;
+    esac
+    if [ -x "$_ie_py" ]; then
+        if [ -f "$CLAUDE_ENV_FILE" ]; then
+            # A last line without a newline is still read; _ie_sep then puts
+            # the append on a line of its own.
+            while IFS= read -r _ie_l || { [ -n "$_ie_l" ] && _ie_sep=$_ie_nl; }; do
+                case "$_ie_l" in
+                    "export BOOTSTRAP_PYTHON="*) _have_py=1 ;;
+                    "export BOOTSTRAP_PROJECT_PYTHON="*) _have_pp=1 ;;
+                esac
+            done < "$CLAUDE_ENV_FILE"
+        fi
+        if [ -z "$_have_pp" ] && [ "$_PROJECT_KEY" != "_global_" ] \
+           && [ -f "$PLUGIN_DATA/project_python/$_PROJECT_KEY" ]; then
+            # read -r returns 1 on a last line without a newline but still
+            # fills the variable, so its status is not a validity test.
+            IFS= read -r _ie_rec < "$PLUGIN_DATA/project_python/$_PROJECT_KEY" 2>/dev/null || :
+            _ie_rec=${_ie_rec%"$_ie_cr"}
+            [ "$_ie_rec" = "opt_out" ] && _ie_optout=1
+        fi
+        if [ -z "$_have_pp" ] && [ -z "$_ie_optout" ]; then
+            _ie_venv=""
+            if [ -n "${VIRTUAL_ENV:-}" ]; then
+                _ie_norm "$VIRTUAL_ENV"
+                for _ie_c in "$_ie_n/bin/python" "$_ie_n/Scripts/python.exe"; do
+                    [ -x "$_ie_c" ] && _ie_venv=$_ie_c && break
+                done
+            fi
+            if [ -n "$_ie_rec" ] && [ -x "$_ie_rec" ]; then
+                _ie_pp=${_ie_venv:-$_ie_rec}
+            else
+                _ie_pp="$(exec 2>/dev/null; set +u; BOOTSTRAP_PP_NO_REGISTER=1; BOOTSTRAP_PYTHON=$_ie_py
+                    . "$PLUGIN_ROOT/shell/project-python.sh" && { bootstrap_resolve_project_python "$PWD" || printf 'opt_out\n'; })" || _ie_pp=""
+                case "$_ie_pp" in
+                    opt_out|*"${_ie_nl}opt_out") _ie_optout=1; _ie_pp="" ;;
+                esac
+                _ie_pp=${_ie_pp%%"$_ie_nl"*}
+                [ -x "$_ie_pp" ] || _ie_pp=$_ie_venv
+            fi
+            [ -n "$_ie_pp" ] || _ie_pp=$_ie_py
+            _ie_norm "$_ie_pp"; _ie_pp=$_ie_n
+        fi
+        case "$_ie_py$_ie_pp" in
+            *\'*) ;;
+            *)
+                [ -n "$_have_py" ] || _ie_out="${_ie_out}export BOOTSTRAP_PYTHON='${_ie_py}'${_ie_nl}"
+                [ -n "$_have_pp$_ie_optout" ] || _ie_out="${_ie_out}export BOOTSTRAP_PROJECT_PYTHON='${_ie_pp}'${_ie_nl}"
+                [ -z "$_ie_out" ] || printf '%s%s' "$_ie_sep" "$_ie_out" 2>/dev/null >> "$CLAUDE_ENV_FILE" || :
+                ;;
+        esac
+    fi
+fi
+
 # --- Per-session marker (SessionStart-missed rescue's detection signal) ---
 # Touch sessions/<session_id> at ENTRY -- before the gates, so even a gate-
 # skipped invocation records "a pass was invoked for this session". The
@@ -658,6 +761,7 @@ if [ -z "$FLAG_CONSOLE" ]; then
         --data-dir "$PLUGIN_DATA" \
         --hook-start-epoch "$HOOK_START_EPOCH" \
         --project-dir "$PWD" \
+        --project-key "$_PROJECT_KEY" \
         --background \
         ${ENGINE_FLAGS[@]+"${ENGINE_FLAGS[@]}"} > "$ENGINE_OUTPUT_LOG" 2>&1 &
 else
@@ -667,6 +771,7 @@ else
         --data-dir "$PLUGIN_DATA" \
         --hook-start-epoch "$HOOK_START_EPOCH" \
         --project-dir "$PWD" \
+        --project-key "$_PROJECT_KEY" \
         ${ENGINE_FLAGS[@]+"${ENGINE_FLAGS[@]}"}
 fi
 

@@ -97,7 +97,7 @@ The interactive HTML hierarchy report ships with the `md-domain` skill's `audit_
 
 - `/md-domain audit skill hierarchy` -- write `<project-root>/tmp/skill-hierarchy.html` and echo the path.
 - `/md-domain audit skill hierarchy <path>` / `/md-domain audit skill hierarchy -` -- explicit path / stdout.
-- `python skills/md-domain/scripts/skill_hierarchy_report.py [...flags]` -- direct invocation for dev iteration (default output `<project-root>/tmp/skill-hierarchy.html`).
+- `(cd plugins/skills-kit && "${BOOTSTRAP_PROJECT_PYTHON:-${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}}" skills/md-domain/scripts/skill_hierarchy_report.py [...flags])` -- direct invocation for dev iteration from a synced dev tree (`uv sync --extra dev` once first; default output `<project-root>/tmp/skill-hierarchy.html`).
 
 See `report-usage.md` (in this same skill-domain/ directory) for the full reference, including the companion `roster` subcommand for the markdown view.
 

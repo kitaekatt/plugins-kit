@@ -51,9 +51,9 @@ class _AgeNonzeroExit(SecretsError):
     nonzero.
 
     Distinct from every other :func:`_run` failure (missing binary, spawn
-    failure, caller deadline) so a caller that cares -- currently only
-    :func:`decrypt_with_identity` -- can re-type ONLY this one condition into
-    its own error. Not part of the public taxonomy: a caller that does not
+    failure, caller deadline) so a caller that cares -- :func:`decrypt_with_identity`
+    -- can re-type ONLY this one condition into its own error. Not part of the
+    public taxonomy: a caller that does not
     care catches ``SecretsError``, which this still is, and every other
     ``_run`` failure keeps that base type instead of this subclass.
     """

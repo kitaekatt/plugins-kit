@@ -367,7 +367,7 @@ def test_cloned_but_unseeded_repo_says_run_init(fleet):
 
 
 def test_clone_success_note_is_credential_safe(fleet, monkeypatch):
-    """I18 / SK-SOL-15: the 'cloned <url>' note must not carry URL userinfo.
+    """The 'cloned <url>' note must not carry URL userinfo.
 
     The clone dir is removed so ``is_clone`` reports False and the module
     takes its first-clone branch; ``repo_mod.clone`` is faked (no real git

@@ -136,7 +136,25 @@ echo
 echo "--- Installed plugins ---"
 REGISTRY="$HOME/.claude/plugins/installed_plugins.json"
 if [ -f "$REGISTRY" ]; then
-    uv run python -c "
+    # Deterministic standalone path first; BOOTSTRAP_PYTHON accepted only as a
+    # fallback whose realpath is inside the standalone install directory; then
+    # whatever is on PATH. A plain interpreter invocation has no side effect on
+    # any directory's own project venv, so this keeps line 3's promise without
+    # needing `uv run` at all.
+    _OS="$(uname -s 2>/dev/null || echo unknown)"
+    if [[ "$_OS" == MINGW* ]] || [[ "$_OS" == MSYS* ]] || [[ "$_OS" == CYGWIN* ]]; then
+        _DIAG_PY="${HOME}/.local/share/python-standalone/python/python.exe"
+    else
+        _DIAG_PY="${HOME}/.local/share/python-standalone/python/bin/python3"
+    fi
+    if [ ! -x "$_DIAG_PY" ] && [ -n "${BOOTSTRAP_PYTHON:-}" ] && [ -x "$BOOTSTRAP_PYTHON" ]; then
+        case "$(cd "$(dirname "$BOOTSTRAP_PYTHON")" 2>/dev/null && pwd -P)" in
+            "$(cd "${HOME}/.local/share/python-standalone" 2>/dev/null && pwd -P)"/*) _DIAG_PY="$BOOTSTRAP_PYTHON" ;;
+        esac
+    fi
+    [ -x "$_DIAG_PY" ] || _DIAG_PY="$(command -v python3 2>/dev/null || command -v python 2>/dev/null || true)"
+    if [ -n "$_DIAG_PY" ]; then
+        "$_DIAG_PY" -c "
 import json, sys
 with open(sys.argv[1]) as f:
     data = json.load(f)
@@ -148,6 +166,9 @@ for ref, entries in data.get('plugins', {}).items():
         print(f'  {ref} scope={scope} version={version}')
         print(f'    path: {path}')
 " "$REGISTRY" 2>&1 || echo "  (failed to parse registry)"
+    else
+        echo "  (no Python interpreter found to parse registry)"
+    fi
 else
     echo "  Registry not found at: $REGISTRY"
 fi

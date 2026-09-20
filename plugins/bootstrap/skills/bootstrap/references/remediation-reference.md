@@ -175,8 +175,10 @@ These are the **ASK** category (see [Two outcomes](#two-outcomes-auto-fix-or-ask
 
 Deferred operations are serialized as **typed tasks** in
 `<data_dir>/elevate/queue.json` -- data, not generated shell text -- and executed
-by `bootstrap_lib/fix_runner.py` (`python fix_runner.py <queue.json>`), the one
-place bootstrap has a TTY. The queue is shared by every project on the machine:
+by `bootstrap_lib/fix_runner.py`, launched under the engine's own interpreter
+(`"$BOOTSTRAP_PYTHON" fix_runner.py <queue.json>` -- bootstrap's own code, the
+forced form; see references/python-interpreter.md), the one place bootstrap
+has a TTY. The queue is shared by every project on the machine:
 each task records the project (`origin`) whose pass deferred it, a pass replaces
 only its own origin's tasks and keeps the others', and the queue and its
 `bootstrap-fix.{sh,bat}` launcher shim are deleted once the merged queue holds
@@ -191,6 +193,15 @@ cannot be removed is reported, never silently kept.
 | `apt` | `apt-get update`, then one `apt-get install -y <all queued packages>` |
 | `brew_installer` | Runs the official Homebrew installer. Never elevated -- it refuses to run as root and elevates itself where it needs to |
 | `path_prune` | Removes the task's `entries` from the Windows User PATH, backing the old value up to `entries`' sibling `path_backup.txt` first. **Never elevated** -- `HKCU` is the user's own hive; it is queued for *consent*, not privilege, because it deletes things |
+
+A `command` task that needs Python sees `BOOTSTRAP_PYTHON` -- the fix runner
+inherits it from its own launch -- but not a per-project
+`BOOTSTRAP_PROJECT_PYTHON`: that name is popped, not carried into the queue,
+because the value that produced it belongs to the pass that deferred the
+task, not to the runner's later, separate run. The nested call-site form
+degrades correctly in a queued command for this reason -- it falls through to
+`BOOTSTRAP_PYTHON` exactly as it would on any surface where only that name
+exists.
 
 The runner **prints the plan** before executing anything -- one numbered line per
 task, quickest first, marked `admin` where elevated and flagged where it

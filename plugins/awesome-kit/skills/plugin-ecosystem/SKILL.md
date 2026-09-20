@@ -71,7 +71,7 @@ Automate this rather than typing it: plugins-kit builds its `index.html` from `s
 ## How to Invoke
 
 ```bash
-uv run python "${CLAUDE_PLUGIN_ROOT}/skills/plugin-ecosystem/scripts/generate.py"
+"${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${CLAUDE_PLUGIN_ROOT}/skills/plugin-ecosystem/scripts/generate.py"
 ```
 
 The script uses only the Python standard library.

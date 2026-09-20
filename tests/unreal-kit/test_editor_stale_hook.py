@@ -132,9 +132,10 @@ class TestSharedConfigResolution:
         assert _marker(sub).is_file()
 
     def test_simple_parser_reads_quoted_engine_dir(self, tmp_path):
-        """The hook runs under `uv run --no-project python` (no pyyaml), where
-        ue_runner_config falls back to _parse_yaml_simple. That parser must
-        handle the quoted flat keys write_project_config emits."""
+        """The hook runs under the deterministic standalone/BOOTSTRAP_PYTHON
+        interpreter (no pyyaml), where ue_runner_config falls back to
+        _parse_yaml_simple. That parser must handle the quoted flat keys
+        write_project_config emits."""
         cfg = tmp_path / "config.yaml"
         cfg.write_text('engine_dir: "C:/UE5/Engine"\nuproject: "C:/P/G.uproject"\n', encoding="utf-8")
         data = _parse_yaml_simple(cfg)

@@ -1,3 +1,4 @@
 {
-  "$comment": "Minimal manifest: this plugin provisions no dependencies. It exists so bootstrap's self-registration (engine.py Step 4b2 / bootstrap_lib/self_register.py) picks the plugin up for in-session auto-update -- that pass only considers installed plugins that ship a bootstrap.json. Without this file the plugin falls back to Claude Code's own autoUpdate, which lags a publish. Declare real dependencies here if this plugin ever gains any."
+  "$comment": "Minimal manifest: this plugin provisions no dependencies. It exists so bootstrap's self-registration (engine.py Step 4b2 / bootstrap_lib/self_register.py) picks the plugin up for in-session auto-update -- that pass only considers installed plugins that ship a bootstrap.json. Without this file the plugin falls back to Claude Code's own autoUpdate, which lags a publish. Declare real dependencies here if this plugin ever gains any. requires_bootstrap: the skill's agent-run commands launch the report as \"${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}\", which only bootstrap 0.120.0's SessionStart hook exports; the ! preload keeps uv run, which needs no floor.",
+  "requires_bootstrap": "0.120.0"
 }

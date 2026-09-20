@@ -1,4 +1,4 @@
-"""I18 / SK-SOL-15: the CLI's own 'cloning <url> ...' print must be sanitized.
+"""The CLI's own 'cloning <url> ...' print must be sanitized.
 
 Loaded via importlib rather than a package import, matching the pattern the
 rest of this suite uses for ``secrets_kit_cli.py`` (a script, not a package
