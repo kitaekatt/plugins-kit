@@ -171,6 +171,30 @@ uv run --extra dev pytest -n 12 -q      # full suite, ~3 min
 
 The two formerly-documented "pre-existing failure" clusters (the `tests/skills-kit/` collection errors and the bootstrap `engine`/`venv` `CalledProcessError`s) were **fixed**, not version quirks -- both were test-only issues: skills-kit imported the pre-extraction `schemas`/`_shared` modules, and the bootstrap tests spawned WSL `bash` to `source` a Windows env file and didn't isolate `HOME`. **The suite is not unconditionally green, and "green" is host-dependent.** On an arm64 machine (Apple Silicon) five `tests/bootstrap/test_manifest_normalization.py` scoop tests failed for months while passing on every amd64 box, because they fake `current_os` but not `detect_arch()`, which reads the real CPU -- see the `suite_green_is_host_dependent` insight below. Establish a baseline on YOUR machine before calling a failure your regression: first try undoing your own edits for a moment and re-running the failing test; when that cannot answer it, run the suite at the merge-base in a read-only worktree and remove it afterwards (see "Worktrees and scratch copies").
 
+**A MOVING victim is a leak, not a flake.** A distinct failure shape from the
+host-dependence above: the suite fails, and the test that fails CHANGES between
+runs. That is never load and never a bad assertion in the victim -- it is one
+test writing outside its sandbox and corrupting whichever test is in flight.
+The chain that produced it, named in `tests/conftest.py`'s autouse guard
+docstring: a bootstrap engine run that is not HOME-isolated discovers the
+developer's REAL `installed_plugins.json`, iterates the enabled plugins, and
+runs claude-ui-kit's `install_statusline.py` against the real
+`~/.claude/settings.json`, rewriting its `statusLine` to a pytest temp path.
+Cut at the source in claude-ui-kit 0.12.0 (c52e4113): `install()` refuses any
+data root that is not the canonical `~/.claude/plugins/data`, and a pytest temp
+dir never is.
+
+Two things to carry. First, when a victim moves, go looking for the WRITER --
+do not triage the victim, which is innocent by construction. Second, and the
+reason this is here rather than in a task folder: this failure had been recorded
+for months as an environmental fact about the host, with a documented rule for
+judging slices around it. Once a failure has an accepted name it stops being
+read as evidence, and the mechanism had been sitting in a guard docstring in
+plain prose the whole time. A standing caveat can be a finding wearing a
+workaround. If a moving victim reappears, that refutes the fix rather than
+restoring the caveat.
+
+
 **Local development** -- use `--plugin-dir` to test plugins from the working copy:
 
 ```bash
