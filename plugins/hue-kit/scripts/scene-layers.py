@@ -198,7 +198,7 @@ def extract_from_bridge() -> dict:
     dups = sorted(n for n, c in Counter(lights.values()).items() if c > 1)
     if dups:
         raise SystemExit(f"error: duplicate light names on the bridge {dups}; "
-                         "light names must be unique (see naming-conventions.md)")
+                         "light names must be unique -- rename one in the Hue app")
     rooms = smg.clip_get(session, "room")
     zones = smg.clip_get(session, "zone")
     owners = {g["id"]: g["metadata"]["name"] for g in rooms + zones}
@@ -719,7 +719,7 @@ def load_group_registry(zone_lightsets, universe, path=GROUPS_YAML):
             if z not in zone_lightsets:
                 raise SystemExit(
                     f"error: scene-groups.yaml group {name!r} names unknown "
-                    f"zone {z!r} (see naming-conventions.md zone table)")
+                    f"zone {z!r} -- check the zone name against the bridge (hue-kit report)")
             lights |= set(zone_lightsets[z])
         lights_field = entry.get("lights", [])
         if isinstance(lights_field, str):
@@ -910,10 +910,9 @@ def export_groups(data):
 
 # ========================================================================
 # Layered SYNC: validate + apply the layered scene-designs.yaml onto the bridge.
-# (Phase 2 of the migration -- replaces scene-schema.py.) A scene is baked by
-# painting its layer stack bottom -> top (topmost covering layer wins), every
-# uncovered light -> OFF. The diff / backup / PUT / verify mechanics are the
-# proven scene-schema.py ones: resolves EVERY targeted scene before the first
+# A scene is baked by painting its layer stack bottom -> top (topmost
+# covering layer wins), every uncovered light -> OFF. The diff / backup /
+# PUT / verify mechanics resolve EVERY targeted scene before the first
 # write (so a parse error in the design/registry writes nothing); a rejected
 # write stops THAT scene only -- it is reported and the run continues with
 # the rest of the plan. Writes ONLY beyond-tolerance lights (in-tolerance
@@ -1062,9 +1061,9 @@ def _effectively_off(action) -> bool:
 
 
 def _action_diff(live, target):
-    """Beyond-tolerance difference description, or None. Proven scene-schema
-    logic incl. the colour-mode-none guard (a target colour vs a live action
-    with no colour is a real difference, not a match)."""
+    """Beyond-tolerance difference description, or None. Includes the
+    colour-mode-none guard (a target colour vs a live action with no colour
+    is a real difference, not a match)."""
     loff, toff = _effectively_off(live), _effectively_off(target)
     if loff != toff:
         return f"on {not loff} -> {not toff}"

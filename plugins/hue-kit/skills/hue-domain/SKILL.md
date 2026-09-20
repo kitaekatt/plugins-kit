@@ -199,17 +199,22 @@ domain_skill:
                  credential, first run, no key, generateclientkey]
       description: >-
         Mint an application key: press the bridge link button, POST
-        generateclientkey, store the key user-scoped. The app-authentication
-        step -- required once per bridge; the key cannot be auto-detected.
+        generateclientkey, store the key 0600 on POSIX (user-scoped on
+        Windows, which has no POSIX mode bits). The app-authentication step --
+        required once per bridge; the key cannot be auto-detected.
         AGENT FLOW (you run it; the user only presses the button): confirm
         readiness via AskUserQuestion ("Ready to pair the bridge? Confirm and
         you will have ~30 seconds to press the button." / "I'm ready to pair" /
-        "I'm not ready to pair"), then start `hue-kit pair --no-wait` IN THE
-        BACKGROUND and IMMEDIATELY say "press the round button on top of the
-        bridge now" -- the command blocks up to 30s polling, so the instruction
-        must not wait on it. Bare `hue-kit pair` keeps the interactive
-        press-Enter prompt for humans in a terminal.
-      operation: hue-kit pair [--no-wait]
+        "I'm not ready to pair"), then start `hue-kit pair` IN THE BACKGROUND
+        (no flags -- it goes non-interactive on its own when not run from a
+        terminal), CONFIRM the process is still alive, and only THEN tell the
+        user to press the round button on top of the bridge -- the command
+        blocks up to 30s polling, so the instruction must not wait on it, but a
+        command that died instantly must not be announced as ready either.
+        `--no-wait` is redundant here since stdin is not a tty when launched
+        this way; bare `hue-kit pair` keeps the interactive press-Enter prompt
+        for humans in a terminal.
+      operation: hue-kit pair [--no-wait] [--force]
       tool: scripts/hue_kit_cli.py
       reference_section: hue-bridge-basics.md (Connecting)
     - id: report
@@ -226,8 +231,10 @@ domain_skill:
                  groups, scene-groups.yaml]
       description: >-
         Write a starter scene-groups.yaml with placeholder group names for the
-        user to rename to something meaningful.
-      operation: hue-kit groups [PATH]
+        user to rename to something meaningful. Refuses to overwrite an
+        existing registry unless `--force` is given; do not pass `--force` on
+        the user's behalf.
+      operation: hue-kit groups [PATH] [--force]
       tool: scripts/hue_kit_cli.py
       reference_section: scene-layers.md (Sync)
     - id: export
@@ -349,14 +356,15 @@ domain_skill:
           fine, only the report step failed. Suggest retrying `hue-kit render`.
   tools:
     - name: hue-kit
-      command: hue-kit [--dir PATH] <start|report|groups|export|render|validate|apply|init>
+      command: hue-kit [--dir PATH] <discover|pair|start|report|groups|export|render|validate|apply|init>
       description: >-
         The verb CLI over the layered scene tool. NOTE `--dir` is a top-level
         option and must precede the VERB (argparse rejects it after). Invocation:
-        bin/hue-kit(.cmd) is a shim for when it is on PATH, but do NOT assume it
-        is -- nothing puts a plugin's bin/ on PATH. The portable form launches
-        the script under the bootstrap interpreter, which every
-        bootstrap-managed session exports (/bootstrap fact python_interpreter):
+        `bin/hue-kit` (`bin/hue-kit.cmd` on Windows) is on the Bash tool's PATH
+        while this plugin is enabled, so `hue-kit <verb>` works directly. The
+        portable form, for when the plugin's `bin/` is not what launched this
+        shell, uses the bootstrap interpreter, which every bootstrap-managed
+        session exports (/bootstrap fact python_interpreter):
         `"${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${CLAUDE_PLUGIN_ROOT}/scripts/hue_kit_cli.py" <verb>`
         The CLI re-execs under the plugin's bootstrap-provisioned venv either
         way. Working files (scene-groups.yaml / scene-designs.yaml /

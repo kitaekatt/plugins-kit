@@ -31,7 +31,7 @@ either uses `HUE_BRIDGE_IP`, a cached discovery result, or auto-discovers.
   ```bash
   curl -k -X POST https://<BRIDGE_IP>/api \
     -H 'Content-Type: application/json' \
-    -d '{"devicetype":"hue-kit#tool","generateclientkey":true}'
+    -d '{"devicetype":"hue-kit#user","generateclientkey":true}'
   ```
   The response's `"username"` value IS the key. Instead of pairing you may set
   `HUE_APP_KEY` directly, or point `HUE_KEY_FILE` at a file holding it. **A key

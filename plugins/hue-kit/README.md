@@ -35,9 +35,9 @@ for Hue CLIP v2 fundamentals.
 ```
 
 The `bootstrap` plugin
-provisions a venv (requests, pyyaml, urllib3) from `pyproject.toml` on session
-start -- no manual `pip install`. Claude Code adds this plugin's `bin/` to PATH,
-so the `hue-kit` command works from any directory.
+provisions a venv (requests, pyyaml, urllib3, zeroconf) from `pyproject.toml`
+on session start -- no manual `pip install`. Claude Code adds this plugin's
+`bin/` to PATH, so the `hue-kit` command works from any directory.
 
 ## Point it at your bridge
 
@@ -70,7 +70,7 @@ To create a key by hand: press the round link button on the bridge, then within
 ```bash
 curl -k -X POST https://<BRIDGE_IP>/api \
   -H 'Content-Type: application/json' \
-  -d '{"devicetype":"hue-kit#tool","generateclientkey":true}'
+  -d '{"devicetype":"hue-kit#user","generateclientkey":true}'
 ```
 
 ## The CLI

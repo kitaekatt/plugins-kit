@@ -658,9 +658,9 @@ def layered_report(family, scenes, members, source_docs=None, certified=None):
                   scene-groups.yaml as given rather than freshly solved --
                   the heading names it "certified minimum" only when the
                   caller can back that claim with a certification result.
-    Dropped vs the partition report (Christina, 2026-07-18): the meta-group
-    catalog, the templates/relative-brightness table, and the groups x scenes
-    matrix."""
+    Does not render the meta-group catalog, the templates/relative-brightness
+    table, or the groups x scenes matrix -- this renderer covers scenes as
+    layer stacks only."""
     light2group = {n: g for g, ns in members.items() for n in ns}
     out = ["<meta charset='utf-8'><title>Hue scenes -- layered</title>",
            f"<style>{REPORT_CSS}{OVERLAY_CSS}</style>",
