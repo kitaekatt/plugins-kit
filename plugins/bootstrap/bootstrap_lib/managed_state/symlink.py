@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 import tempfile
 
+from ..link_check import is_link as _is_link
 from .model import (
     Inspection,
     Operation,
@@ -45,12 +46,6 @@ def _reserve_backup(target: Path) -> Path:
 def _remove_if_present(path: Path | None) -> None:
     if path is not None and os.path.lexists(path):
         os.unlink(path)
-
-
-def _is_link(path: Path) -> bool:
-    # Junction behavior is UNVERIFIED ON A REAL WINDOWS HOST; tests model the
-    # documented Python semantics.
-    return path.is_symlink() or os.path.isjunction(path)
 
 
 def _link_spelling(path: Path) -> str | None:
