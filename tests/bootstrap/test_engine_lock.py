@@ -9,6 +9,7 @@ the lock permanently when a prior holder crashed or was killed.
 """
 
 import hashlib
+import pathlib
 import json
 import os
 import subprocess
@@ -44,6 +45,119 @@ def _argv(data_dir, plugin_root="unused-root", **extra):
         if v is not True:
             argv.append(str(v))
     return argv
+
+
+class TestStealNeverTakesAForeignLock:
+    """`_remove_if_owned` renames the stale lock aside, then inspects it.
+
+    The rename is only safe while the file at `lock_path` is STILL the stale
+    one. The retry loop that makes the Windows sharing-violation case work
+    used to re-issue `os.replace` without re-reading the owner, so a loser
+    whose first attempt lost the race would keep trying and eventually
+    rename away the WINNER's brand-new lock -- handing a second caller a
+    genuine `True`. Each test below drives a wrapper that raises
+    `AssertionError` (never `OSError`, which the production code swallows)
+    the moment a rename targets a file that is not the stale pid's.
+    """
+
+    @staticmethod
+    def _guarded_replace(real_replace, stale_pid, calls):
+        def wrapper(src, dst):
+            calls.append((src, dst))
+            try:
+                first = pathlib.Path(src).read_text().splitlines()[0].strip()
+            except (OSError, IndexError):
+                first = None
+            if first is not None and first != str(stale_pid):
+                raise AssertionError(
+                    f"renamed a lock owned by {first!r}, not the stale "
+                    f"pid {stale_pid!r} -- this is the foreign-lock steal"
+                )
+            return real_replace(src, dst)
+        return wrapper
+
+    def test_steal_stops_when_lock_vanishes_mid_rename(self, tmp_path, monkeypatch):
+        # A racer won the steal and created its own lock in the gap. The
+        # loser's first rename raises ENOENT; it must STOP, not retry onto
+        # the winner's fresh file.
+        lock_path = tmp_path / proc_lock.LOCK_FILENAME
+        stale_pid = 999999
+        lock_path.write_text(f"{stale_pid}\n1.0\n")
+        real_replace = os.replace
+        calls = []
+        guard = self._guarded_replace(real_replace, stale_pid, calls)
+
+        def first_call_vanishes(src, dst):
+            if not calls:
+                calls.append((src, dst))
+                lock_path.write_text(f"{os.getpid()}\n2.0\n")  # winner's lock
+                raise FileNotFoundError(src)
+            return guard(src, dst)
+
+        monkeypatch.setattr(proc_lock.os, "replace", first_call_vanishes)
+        proc_lock._remove_if_owned(str(lock_path), stale_pid)
+
+        assert len(calls) == 1, f"must not retry after ENOENT, got {calls}"
+        assert lock_path.read_text().splitlines()[0] == str(os.getpid()), (
+            "the winner's lock was taken by a loser's retry"
+        )
+
+    def test_steal_reverifies_owner_before_each_retry(self, tmp_path, monkeypatch):
+        # The Windows path: the first rename fails with a sharing violation,
+        # which IS worth retrying -- but the owner must be re-read first, and
+        # by then a winner owns the path.
+        lock_path = tmp_path / proc_lock.LOCK_FILENAME
+        stale_pid = 999999
+        lock_path.write_text(f"{stale_pid}\n1.0\n")
+        real_replace = os.replace
+        calls = []
+        guard = self._guarded_replace(real_replace, stale_pid, calls)
+
+        def first_call_busy(src, dst):
+            if not calls:
+                calls.append((src, dst))
+                lock_path.write_text(f"{os.getpid()}\n2.0\n")  # winner's lock
+                raise PermissionError(src)
+            return guard(src, dst)
+
+        monkeypatch.setattr(proc_lock.os, "replace", first_call_busy)
+        proc_lock._remove_if_owned(str(lock_path), stale_pid)
+
+        assert lock_path.read_text().splitlines()[0] == str(os.getpid()), (
+            "a retry renamed the winner's lock instead of re-reading the owner"
+        )
+
+    def test_restore_never_clobbers_a_lock_created_in_the_gap(
+            self, tmp_path, monkeypatch):
+        # The check->rename gap: ownership changes between the read and the
+        # rename, so the stale file turns out to hold someone else's pid and
+        # must go back -- but a third racer has legitimately taken the empty
+        # path meanwhile, and the restore must not overwrite it.
+        lock_path = tmp_path / proc_lock.LOCK_FILENAME
+        stale_pid = 999999
+        lock_path.write_text(f"{stale_pid}\n1.0\n")
+        real_replace = os.replace
+        state = {"renamed": False}
+
+        def racing_replace(src, dst):
+            if not state["renamed"]:
+                state["renamed"] = True
+                # ownership flipped in the gap ...
+                pathlib.Path(src).write_text("424242\n1.0\n")
+                result = real_replace(src, dst)
+                # ... and a third racer takes the now-empty path.
+                fd = os.open(lock_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+                with os.fdopen(fd, "w") as fh:
+                    fh.write(f"{os.getpid()}\n3.0\n")
+                return result
+            return real_replace(src, dst)
+
+        monkeypatch.setattr(proc_lock.os, "replace", racing_replace)
+        proc_lock._remove_if_owned(str(lock_path), stale_pid)
+
+        assert lock_path.read_text().splitlines()[0] == str(os.getpid()), (
+            "the restore overwrote a lock a third racer legitimately created"
+        )
 
 
 class TestProcLock:

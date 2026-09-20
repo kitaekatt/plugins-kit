@@ -194,15 +194,18 @@ def _try_acquire(lock_path: str) -> bool:
 def _remove_if_owned(lock_path: str, pid: Optional[int]) -> None:
     """Remove the lock file only if it still records ``pid``.
 
-    First rename it to a unique path. This makes the stale-file claim atomic:
-    a loser whose contender has already claimed the lock cannot remove that
-    contender's file. Inspect the claimed path before deleting it so a lock
-    whose content changed after the initial read is preserved.
+    First rename it to a unique path, then inspect what was taken before
+    deleting it, so a lock whose content changed after the read is preserved
+    rather than destroyed.
+
+    What makes the claim atomic is not the rename alone -- it is that the
+    owner is re-read before every attempt and that a vanished path ends the
+    steal. Renaming blind is how a LOSER took a WINNER's lock: its attempt
+    raced, the path was refilled by whoever won, and the retry renamed that
+    fresh file away, so both callers acquired. Restoring uses an exclusive
+    create for the same reason.
     Best-effort; never raises.
     """
-    owner = _read_lock_pid(lock_path)
-    if owner != pid:
-        return
     stale_path = f"{lock_path}.stale-{uuid.uuid4()}"
     # RETRIED, because on Windows this rename fails with a sharing violation
     # whenever anyone has the lock file open for reading -- and something does,
@@ -213,17 +216,49 @@ def _remove_if_owned(lock_path: str, pid: Optional[int]) -> None:
     # machine stands down for six hours. Observed directly, not theorized.
     # A reader's open is measured in microseconds, so the window closes well
     # inside this budget.
+    #
+    # The owner is re-read before EVERY attempt, and only a sharing violation
+    # is retried. Retrying blind is how a loser used to steal a WINNER's lock:
+    # its first rename lost the race, the path was refilled by whoever won,
+    # and the next attempt renamed that fresh file away -- so two callers each
+    # got a genuine acquire. ENOENT means someone else completed the steal;
+    # that is a result, not a transient error, so stop and let the caller
+    # retry _create_exclusive.
     for attempt in range(_RELEASE_RETRY_ATTEMPTS):
+        if _read_lock_pid(lock_path) != pid:
+            return
         try:
             os.replace(lock_path, stale_path)
             break
-        except OSError:
+        except FileNotFoundError:
+            return
+        except PermissionError:
             if attempt == _RELEASE_RETRY_ATTEMPTS - 1:
                 return
             time.sleep(random.uniform(0.002, 0.02))
+        except OSError:
+            return
+    else:
+        return
     if _read_lock_pid(stale_path) != pid:
+        # Ownership changed inside the microscopic check->rename gap, so the
+        # file just taken aside is not ours to delete. Put it back with an
+        # EXCLUSIVE create: an unconditional os.replace would overwrite a
+        # lock a third racer legitimately created while the path stood empty.
         try:
-            os.replace(stale_path, lock_path)
+            os.link(stale_path, lock_path)
+        except FileExistsError:
+            pass  # a third racer owns the path now; leave it alone
+        except OSError:
+            # No hard links on this filesystem (exFAT and friends). Fall back
+            # to the replace, which is what this did before.
+            try:
+                os.replace(stale_path, lock_path)
+            except OSError:
+                pass
+            return
+        try:
+            os.remove(stale_path)
         except OSError:
             pass
         return
