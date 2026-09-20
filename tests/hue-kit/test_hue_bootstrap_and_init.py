@@ -1,4 +1,9 @@
-"""hue-kit's bootstrap check routes pairing through the DEFERRED channel.
+"""hue-kit's bootstrap check and `init`'s refusal of the live working dir.
+
+Named for its subject rather than `test_custom_bootstrap.py`: pytest derives
+a module name from the basename, and tests/llm-scripting-kit already ships
+that name, so two same-named files collide in a full-suite run.
+
 
 Pairing needs a physical button press on a bridge. A machine that cannot
 reach one -- and a developer who never invokes hue-kit -- can never satisfy
