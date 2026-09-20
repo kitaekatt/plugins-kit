@@ -235,6 +235,16 @@ technique_skill:
             crosses a protected boundary halts the unit and reports the conflict. It does not
             grant authority to edit the excluded area.
 
+            A UNIT'S AUTHORITY STOPS AT SIDE EFFECTS, NOT JUST AT FILES. File ownership above
+            settles which unit owns which path inside the work; it says nothing about what a
+            unit may create, modify, move, or delete anywhere else, and silence there is not
+            permission to reach beyond it. A unit touches nothing outside the checkout it
+            was given to work in and its own session scratchpad. An experiment against a HOME-relative path
+            exports `HOME` and `USERPROFILE` into a scratch directory first and verifies both
+            resolve there before it runs anything. `git stash` is refused: the stash ref is
+            shared with every worktree of the repository, so a stash one unit writes is
+            visible to, and poppable by, another running at the same time.
+
             A HYPOTHESIS MAY FUND AN INVESTIGATION, NEVER A CHANGE OR A DEPLOYMENT. To brief a
             mutation on a premise, promote it with evidence first, or split the unit: establish,
             then change. Where the two must ride together, say so and require the agent to

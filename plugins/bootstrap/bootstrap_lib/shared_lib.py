@@ -116,6 +116,50 @@ def _read_text(path: str) -> Optional[str]:
         return None
 
 
+def _read_raw(path: str) -> Optional[str]:
+    """Like ``_read_text`` but without the whitespace strip.
+
+    Used to capture a ``.pth``'s exact prior bytes before an overwrite, so a
+    rollback can restore precisely what was there rather than a normalized
+    approximation of it.
+    """
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return f.read()
+    except OSError:
+        return None
+
+
+def _rollback_pth(pth: str, prior_raw: Optional[str]) -> str:
+    """Undo a ``.pth`` write whose import verification failed.
+
+    Restores ``prior_raw`` exactly if a ``.pth`` existed before the write, or
+    removes ``pth`` if there was none -- so a link that never verified is
+    never left looking like one that did (the cache check earlier in
+    ``link_shared_lib`` would otherwise match it forever). Returns a clause
+    for the caller's failure message. A rollback failure is reported, never
+    swallowed: a bare "failed" reads identically whether or not the broken
+    ``.pth`` is still installed, and only this message tells a reader which.
+    """
+    try:
+        if prior_raw is None:
+            try:
+                os.remove(pth)
+            except FileNotFoundError:
+                pass
+        else:
+            write_atomic(pth, prior_raw)
+    except OSError as e:
+        return (
+            f"rollback FAILED ({e}): {pth} still holds the unverified link; "
+            "remove it by hand and re-run bootstrap"
+        )
+    return (
+        "rolled back to the prior link" if prior_raw is not None
+        else "removed the unverified link"
+    )
+
+
 def _verify_import(python: str, name: str) -> bool:
     """Return True if ``import <name>`` succeeds under ``python``."""
     try:
@@ -264,6 +308,12 @@ def link_shared_lib(name: str, python: Optional[str], shared_root: str) -> Share
     if _read_text(pth) == desired:
         return SharedLibResult(name, "cached", f"linked (cached, {pth})")
 
+    # Capture the prior .pth exactly (or None if there was none) BEFORE the
+    # write below. Verification cannot run before the write -- the .pth is
+    # what makes `import <name>` resolve in the first place -- so this is the
+    # only point where "prior state" can be captured for a rollback.
+    prior_raw = _read_raw(pth)
+
     # Atomic: a .pth is read by site.py at EVERY interpreter start, so a
     # truncated write is not a transient state -- an incomplete executable line
     # is a SyntaxError that site.addpackage prints on every startup until the
@@ -273,6 +323,16 @@ def link_shared_lib(name: str, python: Optional[str], shared_root: str) -> Share
     except OSError as e:
         return SharedLibResult(name, "failed", f"failed to write {pth}: {e}")
 
-    if not _verify_import(python, name):
-        return SharedLibResult(name, "failed", f"wrote {pth} but `import {name}` still fails")
-    return SharedLibResult(name, "linked", f"linked -> {pth}")
+    if _verify_import(python, name):
+        return SharedLibResult(name, "linked", f"linked -> {pth}")
+
+    # A never-verified link must not be left in place: the cache check above
+    # reads exactly what was just written and would report "cached" on every
+    # later pass, so a link that never worked would never be retried. Roll
+    # back to the prior .pth (or remove it if there was none) so the next
+    # pass's cache check misses and the link is attempted again.
+    rollback_note = _rollback_pth(pth, prior_raw)
+    return SharedLibResult(
+        name, "failed",
+        f"wrote {pth} but `import {name}` still fails; {rollback_note}",
+    )

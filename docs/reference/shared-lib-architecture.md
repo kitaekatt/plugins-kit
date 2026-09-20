@@ -1,14 +1,16 @@
-# Shared-lib architecture: unfixed findings
+# Shared-lib architecture: review findings
 
 Six findings about bootstrap's `shared_libs` mechanism (declared in a plugin's
 `bootstrap.json`, implemented in `plugins/bootstrap/bootstrap_lib/shared_lib.py`
 and driven by `_phase_shared_libs` in `plugins/bootstrap/bootstrap_lib/engine.py`).
 Each was reviewed against the code at `dev` HEAD on 2026-09-20 and is recorded
-here so it survives outside the session transcript that found it. This is a
-write-up only -- none of the six is fixed by this document, and none should be
-inferred as fixed because it is now named here.
+here so it survives outside the session transcript that found it. Five are open
+at HEAD; Finding 2 was fixed in bootstrap 0.123.0 on 2026-09-20 and is kept
+here for the record. Being named in this document fixes nothing -- read each
+finding's own status line.
 
-The six findings are a verbatim copy of a task plan's record; the original
+Each finding's claim is a verbatim copy of a task plan's record, apart from the
+fix write-up added under Finding 2 when it was closed; the original
 reviewer notes were written to a session scratchpad that no longer exists, so
 this document -- and the source citations added while writing it -- is the only
 surviving record of the underlying claims.
@@ -30,10 +32,11 @@ fix added the `CLAUDE_BOOTSTRAP_DATA_ROOT` gate around the broadcast, made the
 `.pth` write atomic (`write_atomic`), and made `claude_plugin_test.py --print`
 side-effect-free. All three are in place at HEAD.
 
-The six findings below are unrelated defects in the same mechanism, still
-present at HEAD. Do not re-open or re-fix the `CLAUDE_BOOTSTRAP_DATA_ROOT` gate,
-the atomic write, or `--print` on the strength of anything in this document --
-those are closed. Everything below is open.
+The six findings below are unrelated defects in the same mechanism. Five are
+open at HEAD; Finding 2 is closed, and its section records what the fix does.
+Do not re-open or re-fix the `CLAUDE_BOOTSTRAP_DATA_ROOT` gate, the atomic
+write, `--print`, or Finding 2 on the strength of anything in this document --
+those are closed. The other five are open.
 
 ## Finding 1: two marketplaces publishing one package name collide in the standalone broadcast
 
@@ -87,9 +90,10 @@ machine-wide for it to target.
 
 ## Finding 2: a failed import verification leaves the new link installed
 
-**Confirmed**, and it compounds on the next pass.
+**Confirmed at review time (2026-09-20). Fixed in bootstrap 0.123.0
+(2026-09-20).**
 
-`link_shared_lib` (`shared_lib.py`) writes the `.pth` file before checking that
+`link_shared_lib` (`shared_lib.py`) wrote the `.pth` file before checking that
 the import it promises actually works:
 
 ```
@@ -103,12 +107,13 @@ if not _verify_import(python, name):
 return SharedLibResult(name, "linked", f"linked -> {pth}")
 ```
 
-On a failed `_verify_import`, the function returns `status="failed"`, but the
-`.pth` it just wrote is already on disk -- nothing removes it. A consumer venv,
-or the standalone interpreter, is left with a working path entry pointing at a
-package that does not actually import cleanly under that interpreter.
+On a failed `_verify_import`, the function returned `status="failed"`, but the
+`.pth` it had just written was already on disk -- nothing removed it. A
+consumer venv, or the standalone interpreter, was left with a working path
+entry pointing at a package that did not actually import cleanly under that
+interpreter.
 
-This compounds because the function's own cache check runs before any of the
+This compounded because the function's own cache check runs before any of the
 above:
 
 ```
@@ -118,9 +123,9 @@ if _read_text(pth) == desired:
     return SharedLibResult(name, "cached", f"linked (cached, {pth})")
 ```
 
-Once the failed attempt has written `desired` to `pth`, every later pass reads
-that content back unchanged and returns `"cached"` -- without calling
-`_verify_import` again. A link that never actually verified is therefore
+Once a failed attempt had written `desired` to `pth`, every later pass read
+that content back unchanged and returned `"cached"` -- without calling
+`_verify_import` again. A link that never actually verified was therefore
 treated as settled after its first failure, not retried.
 
 Contrast with `sync_shared_lib` (the owner-side publish, same file), whose
@@ -137,9 +142,30 @@ _swap_directory(stage_pkg, dest_pkg)
 ```
 
 A failed owner verification leaves the previously-published (working) copy in
-place, because the swap never happens. `link_shared_lib` has no staging step to
-verify against before committing -- it writes directly to the final path -- so
-it lacks the safety property `sync_shared_lib` has.
+place, because the swap never happens. `link_shared_lib` had no staging step to
+verify against before committing -- it wrote directly to the final path -- so
+it lacked the safety property `sync_shared_lib` has. Pre-write verification was
+never an option for `link_shared_lib` the way it is for `sync_shared_lib`: the
+`.pth` is what makes `import <name>` resolve in the first place, so a check
+run before the write would fail by construction.
+
+**The fix is a rollback, not a reorder.** `link_shared_lib` now reads the
+`.pth`'s exact prior content (`_read_raw`, unstripped, distinct from the
+`_read_text` the cache check uses) immediately before the write, so it has a
+true "prior state" to return to -- the file's previous bytes, or `None` when
+there was no prior `.pth` at all. When `_verify_import` still fails after the
+write, `_rollback_pth` either restores that prior content byte-for-byte
+(`write_atomic`, so the restore is itself torn-write-safe) or removes the file
+when there was nothing to restore. Either way, the next pass's cache check at
+the top of `link_shared_lib` misses -- it will not find `desired` sitting in
+`pth` -- so a never-verified link is retried instead of being trusted forever.
+A rollback that itself fails (e.g. the file cannot be removed or rewritten) is
+never swallowed: `_rollback_pth` reports it back through the `SharedLibResult`
+message so a reader can tell a cleanly-retried failure from one that left a
+broken `.pth` in place needing manual attention. Tests:
+`TestLinkRollback` in `tests/bootstrap/test_shared_lib.py`, including two
+control tests (a successful link still writes; a genuinely current link still
+hits the cache path unchanged) so the rollback tests cannot pass vacuously.
 
 ## Finding 3: uninstall revokes nothing
 

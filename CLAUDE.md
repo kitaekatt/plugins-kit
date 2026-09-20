@@ -59,7 +59,7 @@ plugins-kit/                          # Marketplace root
 | `plugins/bootstrap/hooks/sessionstart/session-bootstrap.sh` | SessionStart hook (bash wrapper for engine) |
 | `plugins/bootstrap/bootstrap.json` | Bootstrap plugin's own manifest |
 | `plugins/bootstrap/skills/bootstrap/references/engine-internals.md` | Bootstrap engine internals |
-| `docs/reference/shared-lib-architecture.md` | Six unfixed findings about the `shared_libs` mechanism (standalone-broadcast collisions, verify-after-write, no revocation, no version marker, `sys.modules` staleness, a duplicated standalone-interpreter path), reviewed 2026-09-20 |
+| `docs/reference/shared-lib-architecture.md` | Six findings about the `shared_libs` mechanism (standalone-broadcast collisions, verify-after-write, no revocation, no version marker, `sys.modules` staleness, a duplicated standalone-interpreter path), reviewed 2026-09-20; five open, verify-after-write fixed in bootstrap 0.123.0 |
 | `docs/planning/bootstrap/MILESTONES.md` | Development milestones and progress |
 | `docs/reference/adapters.md` | Current adapter guidance: model-task selection, corpus independence, admission, artifact contract, and task-skill ownership at the emitter |
 | `docs/reference/adapters-negative-results.md` | Closed adapter experiments, disqualified candidates, cost rejections, and explicitly unmeasured deferrals |
