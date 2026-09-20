@@ -186,6 +186,33 @@ def bridge_session() -> requests.Session:
     return session
 
 
+def _refuse_duplicate_scenes(scenes, owners) -> None:
+    """Refuse BEFORE any write when two live scenes share a name.
+
+    Scene identity in this framework is name-keyed and whole-home (a settled
+    product decision -- not a room-qualified key, not a composite key): a
+    name->scene dict is therefore last-wins, so a bridge holding two scenes
+    named the same thing would silently collapse to one of them everywhere
+    downstream (`_bridge_maps`'s scene_by_name, `_scene_pending`'s lookup by
+    name). Fail loud instead, naming the duplicated scene and every room/zone
+    that owns a copy of it, so the fix (rename one in the Hue app) is
+    unambiguous. Called by both `_bridge_maps` and `extract_from_bridge`,
+    each independently, before either reads or writes anything further."""
+    by_name = {}
+    for s in scenes:
+        by_name.setdefault(s["metadata"]["name"], []).append(
+            owners.get(s["group"]["rid"], "?"))
+    dups = {n: owns for n, owns in by_name.items() if len(owns) > 1}
+    if dups:
+        detail = "; ".join(
+            f"{n!r} (owned by {', '.join(owns)})"
+            for n, owns in sorted(dups.items()))
+        raise SystemExit(
+            f"error: duplicate scene name(s) on the bridge -- {detail} -- "
+            "scene identity here is name-keyed and whole-home, so two scenes "
+            "sharing a name collide; rename one in the Hue app to make them unique")
+
+
 def extract_from_bridge() -> dict:
     """Read the bridge and return {universe, light_groups, zone_lightsets,
     scenes:[{name, scale, cells:[{lights, mode, bri, xy?/hsl?/mirek?}],
@@ -208,6 +235,7 @@ def extract_from_bridge() -> dict:
                              if c["rid"] in lights) for z in zones}
     scenes = sorted(smg.clip_get(session, "scene"),
                     key=lambda s: s["metadata"]["name"].lower())
+    _refuse_duplicate_scenes(scenes, owners)
     universe = sorted(lights.values())
 
     out = {"universe": universe, "n_lights": len(universe),
@@ -827,12 +855,15 @@ def export_designs(data):
             raise SystemExit(
                 f"error: scene {s['name']!r} does not bake exactly from its "
                 "computed layer stack -- refusing to emit an unfaithful design.")
-        out.append(f"  - name: {s['name']}")
+        # json.dumps -- a JSON string is a valid YAML scalar -- so a scene
+        # name like `Off`, `Relax #2`, `Movie: night` or `[Test]` round-trips
+        # instead of changing identity under YAML 1.1 bool/comment/flow rules.
+        out.append(f"  - name: {json.dumps(s['name'])}")
         if not layers:
             out.append("    layers: []   # all lights off")
             out.append("")
             continue
-        frags = [(name_of[g],) + _cell_cfg(color_by_cell[(s["name"], cell)])
+        frags = [(json.dumps(name_of[g]),) + _cell_cfg(color_by_cell[(s["name"], cell)])
                  for g, cell in layers]
         gw = max(len(n) for n, _, _ in frags)
         out.append("    layers:   # bottom -> top")
@@ -899,12 +930,16 @@ def export_groups(data):
         taken.add(name)
         zs = [z for z, zl in zones.items() if zl and zl <= g]
         cov = frozenset().union(*(zones[z] for z in zs)) if zs else frozenset()
-        out.append(f"  - name: {name}")
+        # json.dumps -- see export_designs -- so a zone or light name like
+        # `Off`, `Relax #2` or `Hall: ceiling` round-trips as a string.
+        out.append(f"  - name: {json.dumps(name)}")
         if cov == g and zs:
             zs = sorted(zs, key=lambda z: (-len(zones[z]), z))
-            out.append(f"    zones: [{', '.join(zs)}]   # {len(g)} lights")
+            out.append(f"    zones: [{', '.join(json.dumps(z) for z in zs)}]"
+                       f"   # {len(g)} lights")
         else:
-            out.append(f"    lights: [{', '.join(sorted(g))}]")
+            out.append(
+                f"    lights: [{', '.join(json.dumps(l) for l in sorted(g))}]")
     return "\n".join(out) + "\n"
 
 
@@ -954,14 +989,20 @@ def _resolve_registry(session):
 
 
 def _bridge_maps(session):
-    """(rid->name, name->[rids], scene-name->live-scene)."""
+    """(rid->name, name->[rids], scene-name->live-scene). Refuses BEFORE any
+    PUT when two live scenes share a name -- see _refuse_duplicate_scenes;
+    `_scene_pending` inherits the refusal through this call."""
     lights_raw = smg.clip_get(session, "light")
     rid2name = {l["id"]: l["metadata"]["name"] for l in lights_raw}
     name2rids = {}
     for rid, nm in rid2name.items():
         name2rids.setdefault(nm, []).append(rid)
-    scene_by_name = {s["metadata"]["name"]: s
-                     for s in smg.clip_get(session, "scene")}
+    rooms = smg.clip_get(session, "room")
+    zones = smg.clip_get(session, "zone")
+    owners = {g["id"]: g["metadata"]["name"] for g in rooms + zones}
+    scenes_raw = smg.clip_get(session, "scene")
+    _refuse_duplicate_scenes(scenes_raw, owners)
+    scene_by_name = {s["metadata"]["name"]: s for s in scenes_raw}
     return rid2name, name2rids, scene_by_name
 
 
