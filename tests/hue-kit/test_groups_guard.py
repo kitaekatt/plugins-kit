@@ -150,10 +150,14 @@ class TestCliGroupsGuard:
 
 
 class TestCmdStartFirstRunNeverNeedsForce:
-    """`_cmd_start`'s first-run branch only reaches `--export-groups` when the
-    registry is absent (premise: confirmed by reading `_cmd_start` -- the
-    call is inside `if not groups_f.is_file() or not designs_f.is_file():`),
-    so it never has to pass `--force` and the guard never fires there."""
+    """`_cmd_start`'s first-run branch only reaches `--export-groups` when
+    BOTH working files are absent: a half-present workdir is refused earlier
+    under the `incomplete` verdict. So the registry is always absent by the
+    time the call is made, it never has to pass `--force`, and the guard
+    never fires there. (An earlier docstring justified this from the branch
+    condition alone, which was the weaker claim -- that condition fires when
+    EITHER file is missing, and the half-present case used to reach the
+    export and die on the guard.)"""
 
     def test_first_run_export_groups_call_carries_no_force_flag(
             self, hue_cli, tmp_path, monkeypatch):

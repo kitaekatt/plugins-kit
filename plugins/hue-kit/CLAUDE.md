@@ -67,14 +67,16 @@ paired key `hue-kit pair` writes to the plugin data directory.
 
 **Run this first for any opening request that does not already name an
 operation** -- including a bare skill invocation. It replaces hand-running the
-setup chain, and it decides among eight verdict states rather than making you
+setup chain, and it decides among nine verdict states rather than making you
 infer them (the domain skill's `default_flow.verdicts` is the full list with a
 `do:` for each). It prints `hue-kit-verdict: <state>` as its last line; branch
 on that.
 
 - `first-run` -- nothing existed, so it built `scene-groups.yaml` +
   `scene-designs.yaml`, rendered `index.html`, and opened it. This is the ONLY
-  state that writes without asking (nothing existed to overwrite). Report it and
+  state that writes without asking, and it requires BOTH working files to be
+  absent -- with one present the verdict is `incomplete` and nothing is
+  written. Report it and
   stop: the placeholder group names (`G1..`) are a working default, and asking
   the user to name them at setup -- or proposing names -- hands them a question
   their data cannot answer (see the naming guardrail in the domain skill).
@@ -82,10 +84,17 @@ on that.
   change a scene.
 - `changed` -- they disagree, in SHAPE (light/zone/scene added, removed, or
   renamed -- caught by the stored fingerprint) or in COLOUR (caught by
-  `validate`). **Nothing is written.** Surface what differs and ask which way to
+  `validate`). **No YAML and no scene data is written** -- it may establish a
+  missing `bridge-fingerprint.txt` baseline, and nothing else. Surface what
+  differs and ask which way to
   sync: a diff cannot distinguish "the bridge moved" from "the YAML holds
   unapplied edits", and pulling vs pushing destroys opposite work. `hue-kit
   start --accept` re-baselines a reviewed shape change without touching YAML.
+- `incomplete` -- exactly one of `scene-groups.yaml` / `scene-designs.yaml`
+  exists, so this is neither a first run nor an established workdir.
+  **Nothing is written**, and no export runs. The command's own diagnostic
+  names the missing file and the way forward; relay it (the domain skill's
+  `default_flow.verdicts` carries the `do:`).
 - `validate-failed` -- the comparison itself failed; fix the diagnostic, do
   not treat it as drift to sync (see the domain skill).
 - `bridge-unreachable`, `setup-failed`, `render-failed`, `accepted` -- see the

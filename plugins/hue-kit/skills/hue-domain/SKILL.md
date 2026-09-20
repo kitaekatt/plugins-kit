@@ -178,7 +178,7 @@ domain_skill:
       description: >-
         THE DEFAULT ENTRY POINT -- run this for a bare invocation, or any opening
         request that does not already name a specific operation. Detects which of
-        the eight verdict states applies (see default_flow) and reports a
+        the nine verdict states applies (see default_flow) and reports a
         machine-readable `hue-kit-verdict:` line. Read-only except on first run.
       operation: hue-kit start [--no-open] [--accept]
       tool: scripts/hue_kit_cli.py
@@ -293,19 +293,34 @@ domain_skill:
     command: hue-kit start
     note: >-
       The state detection is the script's job, not yours: it decides among the
-      eight verdicts below and prints `hue-kit-verdict: <state>` as its last
+      nine verdicts below and prints `hue-kit-verdict: <state>` as its last
       line. Branch on that line; do not re-derive the state by inspecting
       files.
     verdicts:
       - verdict: first-run
-        meaning: Nothing existed yet; it built the registry + design, rendered the
-          report, and opened it in the browser.
+        meaning: Neither working file existed; it built the registry + design,
+          rendered the report, and opened it in the browser. Requires BOTH
+          absent -- one present yields `incomplete`.
         do: >-
           Tell the user what was set up and that the report is open, and stop.
           Mention in ONE line that the group names are placeholders they can
           rename in scene-groups.yaml whenever they like. Do NOT ask them to name
           the groups now, and do NOT propose names or tabulate the groups to help
           them decide -- see the naming guardrail in behavioral_guardrails.
+      - verdict: incomplete
+        meaning: >-
+          Exactly one of scene-groups.yaml / scene-designs.yaml exists, so this
+          is neither a first run nor an established workdir. Nothing was
+          written, and no export ran.
+        do: >-
+          Relay the diagnostic, which names the missing file. The missing one
+          cannot be rebuilt safely on its own: a regenerated registry carries
+          placeholder group names the existing design does not reference, and a
+          regenerated design discards colour edits the user has not applied. If
+          the DESIGN is missing, `hue-kit export` rebuilds it from the registry.
+          If the REGISTRY is missing, the user restores it, or deletes the
+          design to start over from the bridge and accepts placeholder names.
+          Do not suggest --force, and do not delete anything for them.
       - verdict: accepted
         meaning: >-
           `--accept` re-baselined the bridge's current shape as the reference.

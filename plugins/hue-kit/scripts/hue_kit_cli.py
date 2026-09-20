@@ -510,7 +510,7 @@ def _open_report(path: Path) -> bool:
 def _cmd_start(args) -> int:
     """The default entry point: get the user to a current report in one command.
 
-    Eight verdicts, distinguished by what already exists, whether the bridge
+    Nine verdicts, distinguished by what already exists, whether the bridge
     still matches it, and whether each step actually succeeded:
 
       first-run        nothing here yet -> build the registry, materialise the
@@ -574,6 +574,30 @@ def _cmd_start(args) -> int:
             print(f"Accepted the bridge's current shape as the reference "
                   f"({workdir / 'bridge-fingerprint.txt'}).")
             return verdict("accepted")
+
+        # ---- exactly one working file: refuse, write nothing ------------
+        # `start` writes unasked ONLY when there is nothing to lose. With one
+        # file already here the missing one cannot be rebuilt safely in
+        # either direction: regenerating the registry yields placeholder
+        # group names the existing design does not reference, and
+        # regenerating the design discards colour edits the user has not
+        # applied (--export-designs has no exists guard, unlike
+        # --export-groups). Name the missing file and the way forward.
+        if groups_f.is_file() != designs_f.is_file():
+            missing, present = ((designs_f, groups_f) if groups_f.is_file()
+                                else (groups_f, designs_f))
+            print(f"hue-kit: {present.name} is here but {missing.name} is "
+                  f"missing, so this is not a first run and nothing was "
+                  f"written.", file=sys.stderr)
+            if missing is designs_f:
+                print("  Rebuild the design from the registry: `hue-kit "
+                      "export`.", file=sys.stderr)
+            else:
+                print(f"  Restore {missing.name} from wherever it went. To "
+                      f"start over from the bridge instead, delete "
+                      f"{present.name} first -- a rebuilt registry has "
+                      f"placeholder group names.", file=sys.stderr)
+            return verdict("incomplete", 1)
 
         # ---- first run: nothing local to lose, so build the whole chain ----
         if not groups_f.is_file() or not designs_f.is_file():
