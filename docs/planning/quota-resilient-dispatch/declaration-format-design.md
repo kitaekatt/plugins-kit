@@ -4,9 +4,10 @@ Written 2026-09-16 for task `quota-resilient-dispatch`, item
 `design-declaration-format`; revised the same day after two independent
 reviews (opus primary; opencode/deepseek-pro cross-check) and again after
 the owner answered the design's questions (plan.md directions 9-12, verbatim
-in the task's `log.md`). Maintainer material: it lives under `docs/` because
+in the task's `log.md`). Revised 2026-09-20 for directions 13-17 and the
+third cross-check. Maintainer material: it lives under `docs/` because
 nobody on a consumer machine needs it. Inputs: the task's `plan.md` (owner
-directions 1-12), `log.md`, `model-declarations.md` (the map; its site ids
+directions 1-17), `log.md`, `model-declarations.md` (the map; its site ids
 A1..R2 are used below), and `findings.md`. Where the map and findings.md
 disagree, the map wins. Line numbers cite the dev tree at commit 498cc21c.
 
@@ -14,7 +15,7 @@ disagree, the map wins. Line numbers cite the dev tree at commit 498cc21c.
 
 | Premise | Outcome |
 |---|---|
-| Owner directions 1-12 | established; applied throughout. Direction 8 replaces the "when it cannot run" condition of 6; direction 9 retires the constraint in 4; direction 10 settles unattended ordering. |
+| Owner directions 1-17 | established; applied throughout. Direction 8 replaces the "when it cannot run" condition of 6; direction 9 retires the constraint in 4; direction 10 settles unattended ordering; directions 13-17 settle silent skip, hidden render, and the itemised floor. |
 | llm-scripting-kit 0.44.0 reads an exhausted codex account as out-of-quota; orchestrate drops or moves seats (`orchestration_guidance.py:782` "moved back") | established; read at `load_quota_ranker` :689-786. |
 | Map citations spot-checked | established; every citation used here was re-read. |
 | hypothesis: llm-scripting-kit owns dispatch/ranking | CONFIRMED. It already owns every transport (`completion/factory.py:63-112`), the pacing verdicts (`usage_budget.py`), the ranking rule (`quota_selection.py`), reachability, seats, and halt classification. job-kit adds no provider (`select.py:141` calls `create_backend`). The two other provider-choosing paths (awesome-kit `dispatch.py:62`, content-pipeline-kit `backends.py:785`) wrap or bypass llm-scripting-kit code; neither adds a transport. |
@@ -27,7 +28,7 @@ llm-scripting-kit model registry (`default_config.yaml` `endpoints:` merged
 with the layered config and the user registry
 `~/.claude/config/model-endpoints.yaml`, `model_endpoints.py:28-54`). A
 one-model declaration is a one-element list (direction 2). A bare scalar is
-accepted on read as a one-element list, so today's `model: opus` files keep
+accepted on read as a one-element list, so existing `model: opus` files keep
 parsing; the written form is always a list. Any plugin may list any ids,
 including several served by one provider (direction 9).
 
@@ -57,15 +58,16 @@ one entry, and the caller's kind picks the mechanism. The three closed alias
 sets (`orchestration_guidance.py:538`, `lane_prompts.py:61`, workflow-kit
 `model.py:36`) collapse into the registry's `harness: claude` entries. The
 registry must gain a shipped `haiku` entry (tier 1, family anthropic) -- the
-only Claude alias in use (W3, W4) with no entry today.
+only Claude alias in use (W3, W4) with no registry entry.
 
 **Core ids are reserved.** `fable`, `opus`, `sonnet`, `haiku` are the CORE
 set: valid on every installation because the harness itself defines them,
 and routable by every plugin without llm-scripting-kit (direction 9: Claude
 routing belongs to the harness). Because a config-layer or registry entry
 shadows a shipped one (`models.py:518-521`), the core ids are RESERVED for
-`harness: claude`: the validator (D2) flags a core id whose MERGED entry has
-another harness or a `base_url`, and `describe` (D4) refuses to resolve it.
+`harness: claude`: `check_registry_entry` (D2) classifies a core id whose
+MERGED entry has another harness or a `base_url` as shadowed/unroutable. It
+contributes to the floor diagnostic; it does not abort at load or validation.
 The check runs on the merged entry, not on a single layer, because a partial
 layer is legitimate: the owner's `fable` and `opus` entries carry only
 `conserve_usage` (`claude-settings/config/llm-scripting-kit.yaml`).
@@ -99,64 +101,21 @@ and every plugin declares `dependencies: ["bootstrap"]`. bootstrap's part
 ends here: the spec and the validator. It adds no routing.
 
 **Validator:** `plugins/bootstrap/bootstrap_lib/model_declaration.py`. It
-never imports llm-scripting-kit; it reads the registry FILES as data
-(bootstrap_lib already depends on pyyaml). This is how an invalid id becomes
-a loud error (direction 9) on a plugin that has no llm-scripting-kit:
+never imports llm-scripting-kit. Its remaining job is declaration shape and
+structural validation, including the literal empty-list error and duplicate
+detection. Duplicates remain an error because they are a fact about the
+declaration's shape, independent of whether an id resolves or can route.
 
 ```
 parse(value) -> list[str]         # scalar -> [scalar]; rejects empty, non-string, duplicate
-known_ids(project_root) -> dict   # id -> where declared. Sources, read as YAML data:
-                                  #   the core set (always);
-                                  #   ~/.claude/config/model-endpoints.yaml  `models:` keys;
-                                  #   the llm-scripting-kit layers' `endpoints:` keys --
-                                  #     ~/.claude/config/llm-scripting-kit.yaml (fleet),
-                                  #     ~/.claude/plugins/data/plugins-kit/llm-scripting-kit/config.yaml,
-                                  #     <project_root>/.local-data/llm-scripting-kit/config.yaml
-                                  #     (the paths models.py:5-13 loads);
-                                  #   SHIPPED_EXTENSION_IDS -- a drift-tested copy of the ids
-                                  #     llm-scripting-kit's default_config.yaml ships that are not
-                                  #     core (sol: codex, luna: codex, openrouter: transport), so
-                                  #     they are known even when that plugin is absent;
-                                  #   the installed default_config.yaml as well, when llm-scripting-kit
-                                  #     is present (plugin_resolve.py: registry record or cache scan)
-validate(names, known, routable_harnesses) -> Report
-                                  # per id: core | declared(<file>, harness) | UNKNOWN
-                                  # UNKNOWN is an ERROR naming the id and every file searched
-                                  # declared but not in routable_harnesses -> NOTICE (see D3)
-                                  # no core or routable id left -> ERROR
-check_registry_entry(id, merged)  # core id whose MERGED entry is not harness: claude -> error
+validate(names) -> Declaration    # structural checks only; no registry discovery
+check_registry_entry(id, merged)  # shadowed core -> shadowed/unroutable disposition
 ```
 
-**Decision: a typo and a real non-Claude id are distinguishable by file
-read, not by import.** A typo (`sonnett`, `sol-`) matches no file and is an
-error. A real id matches the file that declares it, with its harness, and is
-then either routable by this plugin or a NOTICE (D3).
-
-**Decision: the id namespace includes llm-scripting-kit's shipped ids even
-when that plugin is absent.** Shipped plugin defaults name those ids --
-reviewer C's `[sol, opus]` (D1), orchestrate's shipped rows 1, 5 and 6
-(`sol`, `luna`; `defaults/orchestration.yaml:321-344`), and skills-kit's K3
-`[sonnet, opus, luna]` -- so if `sol` read as UNKNOWN on a machine without
-llm-scripting-kit, every consumer who installs git-kit alone would hit a
-loud error on every review, which contradicts direction 9 and D3. So
-`bootstrap_lib/model_declaration.py` carries `SHIPPED_EXTENSION_IDS`, a
-copy of the non-core ids in `plugins/llm-scripting-kit/lib/llm_scripting_kit/
-default_config.yaml` with their harness, and `sol` on such a machine reads
-"declared (llm-scripting-kit shipped default, codex); not routable here" --
-a NOTICE and a skip (D3), never an error. Two tests, because a copy-equals-
-source guard alone is green whenever both move together
-(`docs/reference/vacuous-checks.md`): `tests/bootstrap/
-test_model_declaration.py::test_shipped_extension_ids_match_default_config`
-fails when the copy and `default_config.yaml` drift; and
-`::test_shipped_defaults_validate_without_llm_scripting_kit` loads every
-shipped declaration (review_profiles.yaml, orchestration.yaml, K3) with
-`known_ids` restricted to the core set plus the copy and asserts no UNKNOWN
--- the property the copy exists to hold, which goes red if a shipped default
-ever names an id the copy lacks. The rejected alternative, (a) shipped
-defaults name only core ids and reviewer C ships as `[opus]`, was not taken:
-it forfeits cross-family independence in the shipped review (the author's
-own family reviews by default) to avoid a copy of three ids, and a typo
-still errors under (b) because it matches neither the files nor the copy.
+Unknown ids and valid-but-unroutable ids are resolved at runtime. They are
+silently skipped and recorded for the floor diagnostic; neither is a
+validation error or a visible notice. Usable-set emptiness is also a runtime
+question, not a validation question.
 
 **Linking.** A shared lib does not carry its own edges to consumers (the
 `$comment` in `plugins/content-pipeline-kit/bootstrap.json`). job-kit
@@ -180,16 +139,12 @@ quota is shown as information only (D5: "shares `seven_day` with opus").
 and nothing else: the Agent tool, Workflow `agent()`, background tasks,
 `claude -p`. The design adds NO infrastructure for Claude-to-Claude
 routing; the harness already knows how. Such a plugin's `routable_harnesses`
-is `{claude}`. Given a VALID non-Claude id in its list (declared in a
-registry file the validator read), the plugin SKIPS it with a visible notice
-in the rendered artifact -- "`sol` declared; this plugin routes only Claude
-ids without llm-scripting-kit" (orchestrate's `Degraded render.` heading,
-the review's `## Lane failures`, a workflow's compile output) -- and
-continues on the routable ids. Skip rather than error, because the id is
-valid and the list still holds work the plugin can do; a list with NO
-routable id is a loud error. This is the DEGRADE posture the plugin-dev
-table already assigns to orchestrate and the review runner, extended to
-every site.
+is `{claude}`. A valid-but-unroutable id is silently skipped and is absent
+from the rendered menu. It remains in the complete disposition set used only
+if the usable set is empty. An unresolved id, a requirements mismatch, an
+excluded id, and an out-of-quota id are also silently skipped at selection;
+the render and floor rules are defined in D4 and D5. There is no degraded
+render and no non-routable notice.
 
 **With llm-scripting-kit** (imported directly, or by a plugin that depends on
 it) every id the registry resolves is reachable through D4: its tooling and
@@ -203,10 +158,8 @@ llm-scripting-kit is present.
 claude."** This design reads it as a CAPABILITY requirement on the plugin --
 every routing plugin can drive a core id, which the harness gives for free
 -- not as a content rule that every list must contain a Claude id. A list
-such as `[sol]` stays legal; when codex is out, that unit stops, and the
-remedy is the owner's list, not a validator rule. No owner question remains
-on this point; if the content reading was intended, it is one line in the
-validator (`Report.no_core_id` -> error).
+such as `[sol]` stays legal; when codex is out, the runtime floor applies.
+The remedy is the owner's list, not a validator rule.
 
 Every migration step is checked against the sentence: steps 1, 6, 7 add no
 llm-scripting-kit import (bootstrap, skills-kit, workflow-kit route Claude
@@ -240,7 +193,7 @@ describe(names, *, project_root, caller, self_ref=None,
     reachability_cache: a caller-scoped mapping the probe results are read from
              and written to; without it every call probes every entry live
              (reachability.check_many has no cache; HTTP entries hit /models)
-    Ranking.entries: EntryState per id, in PACE ORDER (D5 rule)
+    Ranking.rendered_entries: EntryState for the rendered subset, in PACE ORDER (D5 rule)
         id, declared_index, resolved, kind, harness, model, family, tier, drive
         reachability: reachable | unreachable | unknown   (reachability.py)
         usability: pinned verdict status                  (pinned_evaluate)
@@ -250,21 +203,40 @@ describe(names, *, project_root, caller, self_ref=None,
                 pinned.usable and requirements match and not excluded
         default: bool       # first usable entry of the ordered list
         is_self: bool       # matches self_ref (D5 independence)
+    Ranking.dispositions: complete per-declaration disposition set, in
+                          DECLARATION ORDER; not rendered, read only by floor
+                          error handling
     Ranking.rule: the rendered choice rule and trigger text (D5, D6)
-    Ranking.warnings: unresolved ids, shadowed core ids
+
+    NoUsableRoutingTarget: typed error raised by describe() when no usable
+                           rendered entry remains; carries every declaration
+                           entry and its disposition in declaration order.
 
 run(names, request, *, project_root, requirements=None, exclude=(),
     max_attempts=1, on_attempt=None) -> RunResult
     Unattended dispatch for callers with NO loop of their own. Takes the
     FIRST usable entry of describe(caller="process"); each attempt is
     reported through on_attempt with its pace reading and counted against
-    max_attempts; a halt (D6, process set) writes the verdict back and moves
-    to the next usable entry of the same ordered list.
+    max_attempts, which limits EXECUTIONS only and is not the floor. A halt
+    (D6, process set) writes the verdict back and moves to the next usable
+    entry of the same pace-ordered rendered subset.
+    describe() raises NoUsableRoutingTarget when the floor is reached, and
+    run() and every caller propagate that typed error.
 ```
 
 CLI: `llm-scripting-kit describe <id>... [--self x] [--requirements f]
 [--exclude n] [--json]` renders the per-entry lines of D5 for in-session
 callers (the review skill's step 6, an agent checking before it dispatches).
+
+`describe` builds the complete disposition set first, then filters hidden
+entries from the render. It retains usable entries, out-of-quota entries with
+their reset time, and unreachable entries; it hides unresolved,
+unroutable-here, requirements-mismatch, and excluded entries. It pace-orders
+that filtered block, marks its first usable entry `[default]`, and raises
+`NoUsableRoutingTarget` when no usable entry remains. The error itemises every
+declared entry in declaration order as unresolved, unroutable, out-of-quota
+(with reset time), unreachable, requirements-mismatch, excluded, or malformed
+reserved-core entry. SKIP is silent; the floor is the only selection error.
 
 Two consumer kinds. IN-SESSION callers (orchestrate rows, consult seats,
 review lanes) call `describe(caller="session")` and let Claude choose
@@ -273,7 +245,7 @@ review lanes) call `describe(caller="session")` and let Claude choose
 `describe(caller="process", requirements=selection_job.requirements,
 capabilities=advertised, backend_factory=backend_factory,
 exclude=halts.current() | same_job_halts, reachability_cache=<run-scoped>)`
-where `select_endpoint` filters today, taking the first usable entry of the
+where `select_endpoint` filters the declaration, taking the first usable entry of the
 ordered list (direction 10). `selection_job` is the job with the run-level
 deny floor already applied (`_require_floor_subjects`, run.py:344,
 :601-603) -- passing the bare `job.requirements` would drop the floor -- and
@@ -285,11 +257,10 @@ is scoped to the run (one probe per entry per run), matching the register's
 "confirm with two attempts, then exclude" rule. Callers with no loop
 (workflow-kit's openrouter node, content-pipeline's `route()`) call `run`.
 
-What changes for job-kit: today it reads neither quota nor reachability
+What changes for job-kit: its current selector reads neither quota nor reachability
 (`select.py:120-162` filters by requirements and halts only); under
-`describe` the list is pace-ordered first, and an out-of-quota or
-unreachable entry is skipped before the first attempt, with the reason and
-every pace reading in the ledger. Its register entry (`plugins/CLAUDE.md:
+`describe` the filtered list is pace-ordered first, and an out-of-quota or
+unreachable entry is skipped before the first attempt. Its register entry (`plugins/CLAUDE.md:
 90-102`) is reworded: "job-kit selects deterministically: a run is
 explainable from the declared list plus the logged pace readings." No
 consumer walks a fallback chain itself any more; the generated review step 6
@@ -355,30 +326,35 @@ llm-scripting-kit 0.44.1 stores `resets_at = event time + 5h` for an
 exhaustion read with no parseable reset text, so a pinned OUT-OF-QUOTA
 always expires.
 
-**The ordering rule (direction 10).** Entries that have a pace are re-sorted
-by pace, highest first, AMONG THEIR OWN POSITIONS; entries without a pace
-keep their places; ties keep declaration order. Algorithm: take the indices
-of paced entries, sort those entries by pace descending (stable), write
-them back into the same indices. The owner's example, with opus at 76% and
-astra at 120%: `[qwen3.8-5090, opus, astra, qwen3.8-m5pro]` ->
+**The ordering rule (direction 10).** The pipeline is explicit: build the
+complete disposition set; filter out hidden entries; retain usable,
+out-of-quota, and unreachable entries; pace-order that filtered block; then
+mark its first usable entry `[default]`. Hidden entries are unresolved,
+unroutable here, requirements-mismatch, and excluded. Each `EntryState` keeps
+its original `declared_index` as provenance; only working/render positions
+compact. Entries that have a pace are re-sorted by pace, highest first,
+among their working positions; entries without a pace keep their places; ties
+keep declaration order. The owner's example, with opus at 76% and astra at
+120%, is unchanged because it contains no hidden entry:
+`[qwen3.8-5090, opus, astra, qwen3.8-m5pro]` ->
 `[qwen3.8-5090, astra, opus, qwen3.8-m5pro]`. One rule for every caller:
 
 - UNATTENDED callers (job-kit, `run`) take the FIRST AVAILABLE entry of the
   ordered list. A run is explainable from the declared list plus the logged
   pace readings.
-- IN-SESSION `describe` shows the same ordered list; its first usable entry
+- IN-SESSION `describe` shows the same pace-ordered rendered subset; its first usable entry
   is `[default]`, and Claude may still choose any usable entry by judgment
   and announce it (direction 8).
 
 This rule REPLACES awesome-kit 0.56.0's quota reordering
 (`load_quota_ranker`, `orchestration_guidance.py:689-786`: drop
 out-of-quota, move under-quota "back" behind peers) and the two-band
-`rank_candidates`. It differs in three ways: out-of-quota entries stay
-visible in place with their reset time instead of being dropped (a hidden
-entry cannot be reasoned about, and "when does it come back" is a fact to
-plan on); unpaced entries never move; and the sort is by the number, not by
-band. `ORCHESTRATE_QUOTA_ROUTING=0` keeps its meaning for tests: no reads,
-no reordering, no quota column.
+`rank_candidates`. It differs in three ways: hidden entries are removed
+before ordering slots are assigned; out-of-quota entries remain visible with
+their reset time, while the RENDERED SUBSET is still distinct from the FULL
+DECLARATION; and the sort is by the number, not by band. Unpaced entries
+never move. `ORCHESTRATE_QUOTA_ROUTING=0` keeps its meaning for tests: no
+reads, no reordering, no quota column.
 
 **What the agent is shown.** On the owner's config fable and opus both read
 the all-model `seven_day` pool (`claude-settings/config/llm-scripting-kit.yaml`),
@@ -431,14 +407,14 @@ classifier that misses one string must not be the thing that stops a lane.
 **Session set (orchestrate units, review lanes):** ANY dispatch failure the
 launch-correction rule (`references/configuration.md`) does not explain
 re-selects -- a non-zero exit, an Agent-tool error, a launch that produced
-no output. This is today's review-lane rule (`gen_code_review_skills.py:212`)
+no output. This is the existing review-lane rule (`gen_code_review_skills.py:212`)
 kept whole, so `plugins/CLAUDE.md:193-196` stays true. Only a schema-invalid
 or wrong RESULT from a lane or unit that ran to completion (exit 0) is a
 task failure, not a trigger. The agent announces the re-selection with the
 failure kind, classified when a marker matches and "unexplained exit"
 otherwise.
 
-**Partial edits.** This set is wider than today's orchestrate rule ("a
+**Partial edits.** This set is wider than the existing orchestrate rule ("a
 launch or transport error", `orchestration_guidance.py:1106-1109`), so it
 also covers units that WRITE, and a mid-unit quota halt always leaves
 whatever the unit wrote before it stopped. Rule: before re-selecting a unit
@@ -453,7 +429,7 @@ a workspace: reset or fresh worktree, recorded on the attempt.
 an unattended runner that re-dispatched on every non-zero exit would spend
 its budget re-running a job that is simply broken:
 
-| Trigger | Classified today | Change |
+| Trigger | Classified in the existing implementation | Change |
 |---|---|---|
 | quota (pool spent) | codex `usage_limit_exceeded` is NOT a halt: `test_completion_codex_backend.py:449` pins the prose to None | add `HALT_QUOTA` to `halt.py`. Source: `CodexCliBackend` runs codex WITHOUT `--json` (`codex_backend.py:111-116`), so no `task_complete` payload reaches it; on a non-zero codex exit the backend re-reads the rollout tail through `read_codex_pool` (the 0.44.0 exhaustion shape: null windows plus no credits, or the `usage_limit_exceeded` event with its reset text). `read_codex_pool` takes a `ConserveSpec` (:626-628): the entry's own when it declares `conserve_usage`, else the default `ConserveSpec(pool=seven_day)` -- the pool the codex reader remaps to `primary` -- used for the read only; an entry with no opt-in still gets no pacing verdict, only the halt. The stderr prose pin stays None. Mirror in content-pipeline `platform.py:378-386`. |
 | rate limit | `HALT_RATE_LIMIT` (429 envelopes, CLI backoff, timeouts) | unchanged |
@@ -464,7 +440,17 @@ its budget re-running a job that is simply broken:
 A task error, schema-invalid output, or a transport timeout with no marker
 stays a failed attempt in the process set.
 
-**Stale verdict.** Today an observed halt never updates the pinned verdict
+`max_attempts` limits EXECUTIONS, not the size of the routing pool. If a
+quota halt consumes the last allowed attempt, the result is "attempt limit
+reached", not `NoUsableRoutingTarget`; those are different failures, and the
+floor must not describe a broken job as an empty pool.
+
+**Zero-entry branch after a mid-run quota halt.** Record OUT-OF-QUOTA for
+the entry with its reset time, exclude it, and apply the Partial edits rule
+where it applies. Call `describe()` again. If another usable entry remains,
+dispatch it; otherwise propagate the itemised `NoUsableRoutingTarget` floor.
+
+**Stale verdict.** An observed halt never updates the pinned verdict
 (register entry `plugins/CLAUDE.md:205-217`: "never re-evaluated downward").
 The design amends that entry: a verdict is re-evaluated downward ONLY on an
 observed quota/credit halt, which writes OUT-OF-QUOTA for that entry with
@@ -478,10 +464,9 @@ a mid-session codex reset in the other direction.
 
 - **Direction 9 -- any ids, providers serve them, invalid is loud, Claude
   routing is the harness's.** Applied in D1 (no prefixes, provider defined),
-  D2 (validator reads registry files as data; unknown id is an error), D3
-  (constraint 4 retired; a plugin without llm-scripting-kit skips a valid
-  non-Claude id with a notice; every step checked against "not everything
-  depends on llm-scripting-kit"). Resolves former Q1.
+  D2 (structural validation only), and D3 (constraint 4 retired). The
+  invalid-id loud-error clause is superseded by direction 13 below.
+  Resolves former Q1.
 - **Direction 10 -- unattended takes the first available of the
   pace-ordered list; unpaced entries keep their places.** Applied in D4
   (`run`, job-kit) and D5 (the one ordering rule, replacing 0.56.0's
@@ -490,10 +475,50 @@ a mid-session codex reset in the other direction.
 - **Direction 12 -- drop `peer:`.** Applied in D1 and migration steps 1 and
   11. Resolves Q4.
 
-No owner question remains. D3 states the design's reading of "all plugins
-that do routing need to be able to route to claude" (a capability
-requirement on the plugin, not a content rule on lists) and the one-line
-change if the other reading was intended.
+- **Direction 13 -- An unknown id is SILENTLY SKIPPED** (2026-09-20;
+  supersedes the "invalid id is a loud error" clause of 9). A declaration is
+  a list of candidates: resolve what resolves, work with what is left.
+  Silent, not a visible notice -- the owner chose silent explicitly. Applied
+  in D2-D5: unknown ids are runtime dispositions, hidden from render, and
+  itemised only by the floor.
+- **Direction 14 -- An empty list of routing targets IS a loud error.** The
+  floor stays. Applied by `NoUsableRoutingTarget` in D4, raised in
+  `describe()`.
+- **Direction 15 -- Out of quota does not count as a routing target.**
+  Emptiness in 14 is evaluated on USABLE entries, not merely resolvable ones,
+  so a list whose every surviving entry is out of quota hits the same loud
+  error. The only thing that stops a unit is having genuinely run out of
+  road. Applied in D4-D6; `max_attempts` remains a separate execution limit.
+- **Direction 16 -- A valid-but-unroutable id is ALSO silently skipped**
+  (2026-09-20; completes 13). SKIPPING is silent for every non-usable entry,
+  whatever the reason -- unresolved, valid but unroutable here, or out of
+  quota. No error, no notice, no interruption; selection simply passes over
+  it. This overrides D3's visible notice AT DISPATCH. Applied by removing
+  degraded-render and notice paths; RENDER, SKIP, and FLOOR remain separate.
+  Three surfaces, and they must not be conflated (an earlier wording of this
+  direction did conflate them and contradicted direction 8):
+  - RENDER (`describe` output, the menu an agent chooses from) still shows
+    each declared entry and its state, out-of-quota with its reset time.
+    That is direction 8 and it stands: the render is information, not a
+    warning.
+  - SKIP (selection, dispatch) is silent, per this direction.
+  - FLOOR (14, 15: nothing usable left) is the loud error, and it itemises
+    every declared entry and its disposition.
+  The question this direction left open -- whether the RENDER also lists
+  unresolved and unroutable ids alongside usable ones -- is settled by
+  direction 17 below.
+- **Direction 17 -- Unrecognized and not-routable ids are HIDDEN from the
+  render** (2026-09-20; settles the question direction 16 left open). The
+  rendered menu shows only entries that are real on this machine: usable now,
+  or out of quota and usable again when it resets -- direction 8 keeps those
+  visible with their reset time. An id that resolves to nothing, or that this
+  plugin cannot route, does not appear in the render at all. The floor error
+  (14, 15) still itemises EVERY declared entry including the hidden ones;
+  that is where a typo surfaces. Applied in D4-D5. The lead's ruling also
+  hides requirements-mismatch and excluded entries, while keeping unreachable
+  entries visible because they are real on this machine and may return.
+
+Direction 9's loud-error clause is superseded; no owner question remains.
 
 ## Biggest risk
 
@@ -501,9 +526,10 @@ The Agent tool is driven by prose, so an in-session re-selection depends on
 Claude acting on a failure it sees rather than on a classifier. D6's session
 set makes any unexplained failure a trigger, which removes the missed-string
 risk but adds a new one: an agent re-selecting on a failure that was really
-the unit's own bug. The check: the announcement must carry the failure kind,
-and a live drill on this machine while codex is exhausted (until 2026-09-19
-15:34) dispatches a multi-entry row and confirms the announcement names a
+the unit's own bug. The check: the announcement must carry the failure kind.
+The drill needs the next exhaustion OR a simulated halt as its fixture, and
+until it runs the risk check is UNRUN. It must dispatch a multi-entry row and
+confirm the announcement names a
 usable entry with "codex: out of quota" as the reason, while a deliberately
 broken unit on a usable entry -- one that exits 0 with a wrong result -- is
 reported as a task failure and NOT re-routed, and a unit that halts after
@@ -511,53 +537,48 @@ writing is re-run only after its workspace is reset or replaced.
 `tests/llm-scripting-kit` pins the rule and trigger text that `describe`
 emits and the ordering rule against the owner's example. A second risk is
 the `haiku` entry and the `agent:` rewrite landing in different releases;
-the order below keeps the registry step first. A third, from direction 9:
-the validator's file read must track llm-scripting-kit's layer paths and
-its copy of the shipped ids must track `default_config.yaml`; the two drift
-tests in `tests/bootstrap/test_model_declaration.py` (path list equals
-`models.py`'s; copy equals the shipped file) plus the shipped-defaults
-property test in D2 catch a move or an addition.
+the order below keeps the registry step first.
 
 ## Migration table
 
 Ordered so each step publishes on its own; every step needs a version bump
 and a test shown to fail first. "Gen" names the generator that must change.
 
-| Step | Sites | New declaration | Owner plugin | Gen | Tests pinning today |
+| Step | Sites | New declaration | Owner plugin | Gen | Tests pinning existing behavior |
 |---|---|---|---|---|---|
 | 0 | job-kit, skills-kit manifests | add `bootstrap_lib` to `shared_lib_imports`; validate with `claude-dev` | job-kit, skills-kit | -- | `tests/job-kit/test_bin.py`, `tests/skills-kit/test_asset_dependencies.py` (manifest shape) |
-| 1 | spec + validator | `model-declaration.md`; `bootstrap_lib/model_declaration.py` reading registry files as data plus `SHIPPED_EXTENSION_IDS`; unknown id = error; non-routable id = notice; layer-path and shipped-id drift tests; shipped-defaults property test | bootstrap | -- | new: shape, core/declared/unknown, reserved ids, path drift, copy drift, shipped defaults validate without llm-scripting-kit |
+| 1 | spec + validator | `model-declaration.md`; `bootstrap_lib/model_declaration.py` parses and normalizes declarations, performs structural checks, rejects a literally-empty list and duplicates; no known-id errors, registry-file discovery, `SHIPPED_EXTENSION_IDS`, notices, drift tests, or shipped-defaults property test | bootstrap | -- | new: shape, empty list, duplicates; no known-id, path-drift, copy-drift, or shipped-defaults tests |
 | 1 | B1 reviewer `model` | list of ids; `peer:` accepted and rewritten until step 11 | bootstrap | -- | `tests/bootstrap/code_review/test_review_profiles.py` (`peer:` resolution, `model_fallbacks`) |
 | 1 | B2 `validator_models` | reason -> one-element list (scalar accepted; `review_profiles.py:348-360` is scalar-only) | bootstrap | -- | same test file |
 | 1 | `lane_prompts.py:61` alias set | replaced by the core set from the validator | bootstrap | -- | `test_lane_prompts.py` |
-| 2 | L2 registry | add shipped `haiku` (claude, tier 1); `check_registry_entry` on load | llm-scripting-kit | -- | `test_model_endpoints.py`, `test_endpoints.py` (mirror sync) |
+| 2 | L2 registry | add shipped `haiku` (claude, tier 1); `check_registry_entry` classifies shadowed core entries as shadowed/unroutable; add filtered-render and itemised-floor tests | llm-scripting-kit | -- | `test_model_endpoints.py`, `test_endpoints.py`, filtered-render, floor-propagation and disposition tests |
 | 2 | L3 `choose --prefer` | `describe <id>...`; `order_by_pace` replaces `rank_candidates`; `choose` kept as alias | llm-scripting-kit | -- | `test_quota_selection.py` (two-band order), `test_llm_scripting_cli.py` |
 | 2 | L4 `resolve` / `complete --endpoint --model` | `--models <declaration>`; `--endpoint` kept as alias; `--model` stays a per-entry override | llm-scripting-kit | -- | `test_llm_scripting_cli.py`, `test_completion_factory.py` |
 | 2 | halt kinds | `HALT_QUOTA` from a rollout re-read; verdict write-back | llm-scripting-kit | -- | `test_completion_halt.py`, `test_completion_codex_backend.py:432-455`, `test_usage_budget.py` |
 | 2 | L5 `review_lane --model` | one id; endpoint lanes call `describe` | llm-scripting-kit | -- | `test_review_lane.py` |
 | 2 | A5 seats data | `describe` marks `[author]`; `SeatsResult` unchanged | llm-scripting-kit | -- | `test_seats.py` |
 | 2 | L6, O4 front-door groups | unchanged; a group is one declaration id | llm-scripting-kit | -- | `test_frontdoor.py` |
-| 3 | A1 rows | `models: [..]` without `agent:`; renderer shows the pace-ordered list, drops nothing | awesome-kit | -- | `test_orchestration_guidance.py` (routing text, "moved back", dropped) |
+| 3 | A1 rows | `models: [..]` without `agent:`; renderer filters hidden entries, retains usable/out-of-quota/unreachable entries, then pace-orders the rendered subset; no non-routable notice | awesome-kit | -- | `test_orchestration_guidance.py` (filtered render, reset time, no notice; no "moved back" or drops-nothing expectation) |
 | 3 | A2 `requires_model` | same ids, no prefix strip | awesome-kit | -- | same |
 | 3 | A3 `dispatch.py --model` | an id resolved via `discover_model_entries`; no hardcoded default; REFUSE posture | awesome-kit | -- | `test_dispatch.py` |
 | 3 | A4 backend `command:` | unchanged (adapter supplies the model) | awesome-kit | -- | -- |
 | 3 | A5 seats render (:1705-1723) | show out-of-quota seats with reset time | awesome-kit | -- | `test_orchestration_guidance.py` |
-| 3 | orchestrate SKILL.md step 4, seat rule :91 | choose-and-announce wording; rule text passed through from `describe`; non-routable-id notice | awesome-kit | -- | `test_orchestration_guidance.py`, `tests/repo-scripts/test_agent_directives.py` |
+| 3 | orchestrate SKILL.md step 4, seat rule :91 | choose-and-announce wording; rule text passed through from `describe`; hidden skip is silent | awesome-kit | -- | `test_orchestration_guidance.py`, `tests/repo-scripts/test_agent_directives.py` (no non-routable notice) |
 | 3 | R1 `check_model_dispatch.py` | reads ids, no `agent:` | repo script | -- | `tests/repo-scripts/test_check_model_dispatch.py` |
-| 4 | G1, G2, step 6 model-kind rule, stale "no Agent fallback" line (:506) | dispatch by entry harness; `describe`, choose, announce; the prose prints `Ranking.rule` verbatim rather than restating the trigger set; drop the gotcha | git-kit, p4-kit | `scripts/gen_code_review_skills.py` | `test_skill_drift.py`, `test_lane_retry_prose.py`, `tests/git-kit/test_run_review_lane.py` |
+| 4 | G1, G2, step 6 model-kind rule, stale "no Agent fallback" line (:506) | dispatch by entry harness; `describe`, choose, announce; print `Ranking.rule` verbatim; drop warning prose and the gotcha | git-kit, p4-kit | `scripts/gen_code_review_skills.py` | `test_skill_drift.py`, `test_lane_retry_prose.py`, `tests/git-kit/test_run_review_lane.py` (no warning prose) |
 | 5 | J1 `endpoint_preference` and aliases | `models: [..]` (old keys accepted); `select_endpoint` calls `describe(caller="process", requirements, capabilities, exclude)` and takes the first usable entry of the pace-ordered list; loop and ledger unchanged; pace readings logged | job-kit | -- | `tests/job-kit/test_select.py`, `test_model.py`, `test_runner.py` (same-job halts :604-611) |
-| 5 | register entries :90-102, :205-217 | reword job-kit determinism ("declared list plus logged pace readings"); amend pinned-verdict per D6 | plugins/CLAUDE.md | -- | -- |
+| 5 | register entries :90-102, :205-217 | reword job-kit determinism ("declared list plus logged pace readings"); amend pinned-verdict per D6; skip reasons remain silent | plugins/CLAUDE.md | -- | floor propagation and silent-skip tests; no notice expectations |
 | 6 | K3 `DEFAULT_ENDPOINTS`, `--endpoint` | `--models`; emitted as J1's new key | skills-kit | -- | `tests/skills-kit/test_emit_audit_jobs.py` |
-| 6 | K2 remediate literals (4) | `model: 'sonnet'` emitted from a one-entry declaration in the generator; validated by the bootstrap validator, no llm-scripting-kit import | skills-kit | `plugins/skills-kit/scripts/gen_workflow_js.py` | `test_workflow_js_drift.py` |
+| 6 | K2 remediate literals (4) | `model: 'sonnet'` emitted from a one-entry declaration in the generator; structural validation only, no known-id or usable-set expectation, no llm-scripting-kit import | skills-kit | `plugins/skills-kit/scripts/gen_workflow_js.py` | `test_workflow_js_drift.py`, validator empty-list and duplicate expectations |
 | 6 | K1 hand-written literals (9) | one-entry declarations; a drift check that each literal equals the declared id | skills-kit | `check_shared_chunks` extended | `test_workflow_js_drift.py` |
 | 6 | K4 | unchanged (allow-list, not a declaration) | -- | -- | -- |
-| 7 | W1 `model:` | any validated id; core ids compile to `agent()`; a valid non-Claude id is a compile notice and the node is skipped (D3) | workflow-kit | -- | `tests/workflow-kit/test_loader.py`, `test_compiler.py` |
+| 7 | W1 `model:` | any structurally valid id; core ids compile to `agent()`; an unresolved or unroutable id is silently skipped | workflow-kit | -- | `tests/workflow-kit/test_loader.py`, `test_compiler.py` (silent skip, no compile notice) |
 | 7 | W3, W4 `haiku` | one-entry declaration; frontmatter/preamble emit the scalar carrier | workflow-kit | -- | `test_compiler.py` |
-| 8 | W2 openrouter node; L1 `default`/`defaultCheap`/`default_endpoint`; S6 aliases | ids must be transport ENTRIES: ship the `openrouter` sub-aliases as entries (`or-gpt-mini`, `or-qwen`), keep `models:` under an endpoint as a per-entry override only; `default_endpoint` becomes the one-entry default declaration | workflow-kit, llm-scripting-kit | -- | `test_openrouter_run.py`, `test_model_resolve.py` -- least certain step; may stay a scalar alias if the owner prefers |
-| 9 | C1 env triple (`BACKEND`, `MODEL`, `ENDPOINT`), C2 run record | `CONTENT_PIPELINE_LLM_MODELS` via `run`; old envs mapped until step 11; run record stores the chosen entry | content-pipeline-kit | -- | `test_llm_backends.py`, `test_llm_model_endpoint.py`, `test_llm_platform.py`, `test_run_cli.py` |
-| 9 | C3 `extra_launch_args --model` | an id from the same declaration (no in-repo caller today) | content-pipeline-kit | -- | `test_execution_driver_claude_bg.py` |
+| 8 | W2 openrouter node; L1 `default`/`defaultCheap`/`default_endpoint`; S6 aliases | ids must be transport ENTRIES: ship the `openrouter` sub-aliases as entries (`or-gpt-mini`, `or-qwen`), keep `models:` under an endpoint as a per-entry override only; `default_endpoint` becomes the one-entry default declaration | workflow-kit, llm-scripting-kit | -- | `test_openrouter_run.py`, `test_model_resolve.py`, floor propagation tests |
+| 9 | C1 env triple (`BACKEND`, `MODEL`, `ENDPOINT`), C2 run record | `CONTENT_PIPELINE_LLM_MODELS` via `run`; old envs mapped until step 11; run record stores the chosen entry; propagate the typed floor | content-pipeline-kit | -- | `test_llm_backends.py`, `test_llm_model_endpoint.py`, `test_llm_platform.py`, `test_run_cli.py`, floor propagation tests |
+| 9 | C3 `extra_launch_args --model` | an id from the same declaration (no in-repo caller) | content-pipeline-kit | -- | `test_execution_driver_claude_bg.py` |
 | 9 | Y1 `PlannerPolicy.model` | a declaration routed through the new C1 env | yaml-data-editor-kit (dev-only) | -- | `tests/yaml-data-editor-kit` |
-| 10 | O1 rows, O2 lanes, O3, O5, O6 preface and prose | drop `agent:`; `[astra, fable]`; fix the stale "never reads conserve_usage" preface and presence-autonomy :118 | claude-settings | -- | none (owner config) |
+| 10 | O1 rows, O2 lanes, O3, O5, O6 preface and prose | drop `agent:`; `[astra, fable]`; fix the stale "never reads conserve_usage" preface and presence-autonomy :118; propagate the typed floor | claude-settings | -- | none (owner config); floor propagation tests |
 | 10 | R2 bakeoff `--model` | an id | repo script | -- | -- |
 | 11 | deprecations | remove `agent:`, `peer:`, job-kit old keys, content-pipeline old envs, `choose`/`--endpoint` aliases | bootstrap, awesome-kit, job-kit, content-pipeline-kit, llm-scripting-kit | -- | the tests above lose their compatibility cases |
 
@@ -569,11 +590,11 @@ the reviewer.
 
 | Finding | Handling |
 |---|---|
-| 1 `run` API drops requirements, exclusion, job-kit loop | fixed in D4: `requirements=`, `exclude=`, `caller=`; job-kit keeps its loop, ledger and `max_attempts` and calls `describe`; `run` is for loop-less callers and counts attempts. The false "exactly as job-kit does today" is replaced by the stated behaviour change (quota/reachability pre-filter). |
+| 1 `run` API drops requirements, exclusion, job-kit loop | fixed in D4: `requirements=`, `exclude=`, `caller=`; job-kit keeps its loop, ledger and `max_attempts` and calls `describe`; `run` is for loop-less callers and counts attempts. The false "exactly as job-kit does in the existing implementation" is replaced by the stated behaviour change (quota/reachability pre-filter). |
 | 2 halt-only re-selection regresses review lanes | fixed in D6: session set = any unexplained failure; process set = classified halts. |
 | 3 pace: pinned freeze, None inputs, unbounded, same-pool example | fixed in D5: unpinned `evaluate()` for pace, pinned status only; edge rules for zero/None/near-reset; example corrected (fable = opus on `seven_day`, sonnet n/a); 0.44.1 referenced, not designed around. |
 | 4 `bootstrap_lib` not linked in job-kit / skills-kit | fixed: step 0 manifest edge. Lazy-import alternative not taken (reason in D2). |
-| 5 D3 too lenient; reviewers split | SUPERSEDED by direction 9 (third pass below). |
+| 5 D3 too lenient; reviewers split | SUPERSEDED by directions 9 and 13-17; the final D3 path is silent skip, hidden render, and itemised floor. |
 | 6 coverage and ownership gaps | fixed: rows for L4, L6/O4, C1 `ENDPOINT`, L1 `default_endpoint`; K1 = 9; A5 render moved to step 3; `lane_prompts.py:61` moved to step 1; Y1 owner corrected; B2 citation corrected. |
 | 7 A3 is not a completion caller; posture | fixed in D4: `discover_model_entries`; REFUSE. |
 | 8 deprecation window vs owner config at step 10 | fixed: removals are step 11, after the owner config step. |
@@ -609,10 +630,8 @@ gone; shared quota remains as information (`shares_quota_with`). Second-pass
 finding 4 (pinned vs fresh) also feeds the "has a pace" table in D5
 without changing its resolution.
 
-**Lead review (2026-09-16).** One conflict: D1's shipped `[sol, opus]`
-against D2's "shipped-only id reads as UNKNOWN without llm-scripting-kit".
-Resolved in D2 by decision (b): the namespace includes llm-scripting-kit's
-shipped ids through a drift-tested copy in the validator, with the property
-test that every shipped default validates without the plugin. Other shipped
-defaults with the same exposure, all covered by that test: orchestrate rows
-1, 5, 6 (`sol`, `luna`) and skills-kit K3 (`luna`).
+**Lead review (2026-09-16).** The earlier conflict about shipped ids and
+validator discovery is superseded by directions 13-17. The validator no
+longer discovers registry files or carries shipped-id copies; runtime
+resolution classifies unknown and unroutable entries, and the floor retains
+their dispositions in declaration order.
