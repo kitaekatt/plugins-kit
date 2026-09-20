@@ -10,8 +10,8 @@ rewriting the real `~/.claude/plugins/installed_plugins.json`, which is
 machine-global: every other session, running or subsequent, sees the dev tree,
 and a crash before the restore leaves the machine that way silently.
 
-This launcher closes the gap WITHOUT touching anything another session reads.
-Two mechanisms carry the whole isolation story:
+This launcher closes the gap without rewriting the machine-global registry.
+Two mechanisms carry most of the isolation story:
 
 1. DEV LAYOUT. The engine's `_find_plugins_dir` walks up from its own plugin
    root looking for `installed_plugins.json`. A synthetic one written into
@@ -29,9 +29,34 @@ Two mechanisms carry the whole isolation story:
 WHAT THIS DOES NOT TEST, by construction. Anything whose output IS the machine:
 installing tools via a package manager, PATH/rc/registry writes, marketplace
 clone refreshes, `claude plugin install/update`, env.json personalization, and
-the version-bump -> cache -> auto-update delivery path. Those cannot be verified
-without mutating shared state, which is the one thing this must not do. A green
-run here means "my plugin works", never "my plugin ships correctly".
+the version-bump -> cache -> auto-update delivery path. A green run here means
+"my plugin works", never "my plugin ships correctly".
+
+THE CONTAINMENT IS PARTIAL. These three escapes are observed, not theoretical
+(2026-09-20). `CLAUDE_BOOTSTRAP_DATA_ROOT` redirects what bootstrap OWNS; it
+does not redirect what bootstrap REACHES OUT TO.
+
+1. SHARED-LIB LINK -- the dangerous one. `shared_lib.link_shared_lib` registers
+   `<pkg>.pth` pointing at `<shared_root>/<name>/` on the TARGET INTERPRETER.
+   The shared root follows the data root; the interpreter does not. So a run
+   here rewrites the machine-wide standalone interpreter's `bootstrap_lib.pth`
+   -- the one every plugin imports through -- to point INTO this run's data
+   root. Deleting that data root then breaks those imports until the next
+   ordinary bootstrap pass relinks it. Never delete a data root used here
+   without running an ordinary pass afterwards, and reset the cooldown so that
+   pass is not skipped.
+2. MARKETPLACE REFRESH -- bootstrap's own bootstrap.json sets
+   `alwaysUpdate: true`, so the engine `git fetch`es the real
+   `~/.claude/plugins/marketplaces/<name>`.
+3. `session-bootstrap.sh` installs levers into `~/.local/bin` and writes the
+   Windows PATH registry entries, regardless of the data root.
+   `BOOTSTRAP_SKIP_SHELL_INTEGRATION=1` suppresses the rc/registry persistence
+   but gates neither 1 nor 2.
+
+ENABLEMENT FILTERING. Without `--all`, only plugins ENABLED for `--project-dir`
+are loaded; the rest are reported on stderr as "not enabled, skipping". Smoke-
+testing a plugin that is disabled for that project yields a green run in which
+it was never loaded.
 
 Usage:
     python scripts/claude_plugin_test.py [-- claude args...]

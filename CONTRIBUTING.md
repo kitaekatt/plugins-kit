@@ -156,14 +156,21 @@ directly from disk (no cache, reverts on exit):
 claude --plugin-dir ~/Dev/plugins-kit/plugins/my-plugin
 ```
 
-**Blind spot:** `--plugin-dir` validates a plugin's *code* (skills, hooks,
-engine), but the bootstrap engine still reads every plugin's `bootstrap.json`
-from its cached install path, not from disk. So `--plugin-dir` does **not**
-exercise new `bootstrap.json` content (added tools, `download:` recipes, new
-`check_imports`). When your change touches manifest content, validate in
-dev-tree mode instead (`scripts/dev-tree.py` repoints install paths at the dev
-tree so the engine loads manifests from disk too). The root
-[`CLAUDE.md`](CLAUDE.md) documents both modes and the helper shells around them.
+**Blind spot:** a bare `--plugin-dir` validates a plugin's *code* (skills,
+hooks, engine), but the bootstrap engine still reads every plugin's
+`bootstrap.json` from its cached install path, not from disk. So bare
+`--plugin-dir` does **not** exercise new `bootstrap.json` content (added tools,
+`download:` recipes, new `check_imports`). When your change touches manifest
+content, use `claudx`, which runs `scripts/claude_plugin_test.py`: it writes a
+synthetic dev-layout registry that only an engine running from this working
+copy discovers, and redirects `CLAUDE_BOOTSTRAP_DATA_ROOT`, so the engine loads
+manifests from disk. Do not use `scripts/dev-tree.py` -- it rewrites the
+machine-global registry.
+
+That containment is partial: a test session still touches machine-global state.
+Do not delete a test data root without running an ordinary bootstrap pass
+afterwards. The root [`CLAUDE.md`](CLAUDE.md) documents the gate, the flags,
+all three escapes, and what it still cannot test.
 
 ## Testing standards
 
