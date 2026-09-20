@@ -24,18 +24,16 @@ home's natural structure.
   (report / export / validate / apply). Driven via the CLI below.
 - `scripts/scene-meta-groups.py` -- a READ-ONLY primitives library imported by
   scene-layers.py (bridge I/O, colour math, the HTML renderer). Not run directly.
-- `scripts/hue_kit_cli.py` -- the `hue-kit` verb front-end (report / groups /
-  export / render / validate / apply / init). Re-execs under the plugin venv via
-  `bootstrap_guard.py` (vendored, stdlib-only; canonical in bootstrap's
-  `bootstrap_lib/`).
-- `bin/hue-kit`, `bin/hue-kit.cmd` -- shims for when the dir IS on PATH. Nothing
-  puts it there automatically: Claude Code does not add a plugin's `bin/` to
-  PATH (this doc claimed it did, and the hue-domain SKILL.md repeated it -- both
-  corrected 2026-08-05 after a consumer could not find the command). The
-  portable invocation is
+- `scripts/hue_kit_cli.py` -- the `hue-kit` verb front-end (discover / pair /
+  start / report / groups / export / render / validate / apply / init).
+  Re-execs under the plugin venv via `bootstrap_guard.py` (vendored,
+  stdlib-only; canonical in bootstrap's `bootstrap_lib/`).
+- `bin/hue-kit`, `bin/hue-kit.cmd` -- Claude Code adds an enabled plugin's
+  `bin/` to the Bash tool's PATH, so `hue-kit <verb>` works directly. The
+  portable invocation, for when this plugin's `bin/` did not launch the
+  current shell, is
   `"${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${CLAUDE_PLUGIN_ROOT}/scripts/hue_kit_cli.py" <verb>`:
-  every bootstrap-managed session exports `BOOTSTRAP_PYTHON`, while the
-  per-plugin `HUE_KIT_VENV` is absent from a throttled session. The CLI and
+  every bootstrap-managed session exports `BOOTSTRAP_PYTHON`. The CLI and
   `scene-layers.py` both re-exec under the plugin venv.
 - `examples/scene-groups.yaml`, `examples/scene-designs.yaml`, `examples/index.html`
   -- the author's home (42 lights, 12 scenes). **Example data**; a user
@@ -69,14 +67,16 @@ paired key `hue-kit pair` writes to the plugin data directory.
 
 **Run this first for any opening request that does not already name an
 operation** -- including a bare skill invocation. It replaces hand-running the
-setup chain, and it decides among eight verdict states rather than making you
+setup chain, and it decides among nine verdict states rather than making you
 infer them (the domain skill's `default_flow.verdicts` is the full list with a
 `do:` for each). It prints `hue-kit-verdict: <state>` as its last line; branch
 on that.
 
 - `first-run` -- nothing existed, so it built `scene-groups.yaml` +
   `scene-designs.yaml`, rendered `index.html`, and opened it. This is the ONLY
-  state that writes without asking (nothing existed to overwrite). Report it and
+  state that writes without asking, and it requires BOTH working files to be
+  absent -- with one present the verdict is `incomplete` and nothing is
+  written. Report it and
   stop: the placeholder group names (`G1..`) are a working default, and asking
   the user to name them at setup -- or proposing names -- hands them a question
   their data cannot answer (see the naming guardrail in the domain skill).
@@ -84,10 +84,17 @@ on that.
   change a scene.
 - `changed` -- they disagree, in SHAPE (light/zone/scene added, removed, or
   renamed -- caught by the stored fingerprint) or in COLOUR (caught by
-  `validate`). **Nothing is written.** Surface what differs and ask which way to
+  `validate`). **No YAML and no scene data is written** -- it may establish a
+  missing `bridge-fingerprint.txt` baseline, and nothing else. Surface what
+  differs and ask which way to
   sync: a diff cannot distinguish "the bridge moved" from "the YAML holds
   unapplied edits", and pulling vs pushing destroys opposite work. `hue-kit
   start --accept` re-baselines a reviewed shape change without touching YAML.
+- `incomplete` -- exactly one of `scene-groups.yaml` / `scene-designs.yaml`
+  exists, so this is neither a first run nor an established workdir.
+  **Nothing is written**, and no export runs. The command's own diagnostic
+  names the missing file and the way forward; relay it (the domain skill's
+  `default_flow.verdicts` carries the `do:`).
 - `validate-failed` -- the comparison itself failed; fix the diagnostic, do
   not treat it as drift to sync (see the domain skill).
 - `bridge-unreachable`, `setup-failed`, `render-failed`, `accepted` -- see the
@@ -117,19 +124,10 @@ not pass `--force` to "refresh" a registry on the user's behalf.
 
 ## Making scene changes from a conversation
 
-The core loop. When the user asks for a change ("make Reading warmer", "dim the
-bar in Movie night"):
-
-1. **Edit the YAML**, not the bridge directly:
-   - a scene's look -> edit its `layers:` in `scene-designs.yaml`. Colour is
-     `xy: [x, y]` (authoritative, exact Hue gamut) with a `# hsl(...)` note;
-     `ct: <mirek>` is tunable white; `bri` is percent. To shift a hue, edit the
-     `xy` (regenerate the `# hsl` note on the next `export`).
-   - the vocabulary (add/rename/re-scope a group) -> edit `scene-groups.yaml`.
-2. `hue-kit validate` -- show the user the exact per-light diff vs the bridge.
-3. `hue-kit apply` -- DRY-RUN. Show what would change.
-4. `hue-kit apply --yes` -- write it. Backs each scene up to `tmp/` first, writes
-   only beyond-tolerance lights, verifies by re-read.
+The domain skill's "When to invoke" and `behavioral_guardrails`
+(`skills/hue-domain/SKILL.md`) own the operating loop for a conversational
+change (edit YAML -> validate -> apply -> render -> open); follow that rather
+than re-deriving it here.
 
 ## Safety rules
 
@@ -157,11 +155,8 @@ bar in Movie night"):
 - `scene-meta-groups.py` is loaded by PATH (via `importlib`), so its hyphenated
   filename is intentional -- do not rename it or scene-layers.py without updating
   the loader.
-- `bootstrap_guard.py` is a **vendored** byte-for-byte copy of the canonical at
-  `plugins/bootstrap/bootstrap_lib/bootstrap_guard.py`; a drift test in
-  plugins-kit asserts copies match. Every other copy -- git-kit's, p4-kit's,
-  this one -- is vendored, so editing one of THOSE is what breaks the test (it
-  is how p4-kit 0.16.1 drifted). If you change the guard, change the canonical
-  and re-vendor.
+- `bootstrap_guard.py` here is a **vendored** byte-for-byte copy; edit the
+  canonical and re-vendor, never this copy directly -- see "bootstrap_guard.py
+  is vendored byte-for-byte" in this repo's `plugins/CLAUDE.md`.
 - The example YAML/HTML are the author's home. Keep them buildable but treat them
   as a worked example, not this plugin's own config.

@@ -68,7 +68,9 @@ Solver (read-only) -- `hue-kit report`:
 Sync (over the two files above):
 
 - `hue-kit groups [PATH]` (`--export-groups`) -- write a starter registry with
-  placeholder group names for you to rename.
+  placeholder group names for you to rename. Refuses to overwrite an existing
+  registry -- pass `--force` to overwrite; an agent does not pass `--force` on
+  the user's behalf.
 - `hue-kit export` (`--export-designs`) -- materialise `scene-designs.yaml` from
   the live bridge colours + `scene-groups.yaml`. VERIFIES the registry family
   expresses AND bakes every scene before writing (fail loud), so the design is

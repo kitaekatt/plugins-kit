@@ -35,7 +35,6 @@ def bootstrap(ctx: Any) -> None:
 
     ctx.add_failure(
         "hue_bridge_pairing",
-        field="HUE_APP_KEY",
         # ASK, not AUTO: pairing needs the user to physically press the bridge's
         # link button -- a user action bootstrap cannot perform. The framework
         # turns this into an AskUserQuestion prompt (see the bootstrap plugin's

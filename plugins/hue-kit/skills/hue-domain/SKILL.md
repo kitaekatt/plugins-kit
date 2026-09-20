@@ -178,7 +178,7 @@ domain_skill:
       description: >-
         THE DEFAULT ENTRY POINT -- run this for a bare invocation, or any opening
         request that does not already name a specific operation. Detects which of
-        the eight verdict states applies (see default_flow) and reports a
+        the nine verdict states applies (see default_flow) and reports a
         machine-readable `hue-kit-verdict:` line. Read-only except on first run.
       operation: hue-kit start [--no-open] [--accept]
       tool: scripts/hue_kit_cli.py
@@ -199,17 +199,22 @@ domain_skill:
                  credential, first run, no key, generateclientkey]
       description: >-
         Mint an application key: press the bridge link button, POST
-        generateclientkey, store the key user-scoped. The app-authentication
-        step -- required once per bridge; the key cannot be auto-detected.
+        generateclientkey, store the key 0600 on POSIX (user-scoped on
+        Windows, which has no POSIX mode bits). The app-authentication step --
+        required once per bridge; the key cannot be auto-detected.
         AGENT FLOW (you run it; the user only presses the button): confirm
         readiness via AskUserQuestion ("Ready to pair the bridge? Confirm and
         you will have ~30 seconds to press the button." / "I'm ready to pair" /
-        "I'm not ready to pair"), then start `hue-kit pair --no-wait` IN THE
-        BACKGROUND and IMMEDIATELY say "press the round button on top of the
-        bridge now" -- the command blocks up to 30s polling, so the instruction
-        must not wait on it. Bare `hue-kit pair` keeps the interactive
-        press-Enter prompt for humans in a terminal.
-      operation: hue-kit pair [--no-wait]
+        "I'm not ready to pair"), then start `hue-kit pair` IN THE BACKGROUND
+        (no flags -- it goes non-interactive on its own when not run from a
+        terminal), CONFIRM the process is still alive, and only THEN tell the
+        user to press the round button on top of the bridge -- the command
+        blocks up to 30s polling, so the instruction must not wait on it, but a
+        command that died instantly must not be announced as ready either.
+        `--no-wait` is redundant here since stdin is not a tty when launched
+        this way; bare `hue-kit pair` keeps the interactive press-Enter prompt
+        for humans in a terminal.
+      operation: hue-kit pair [--no-wait] [--force]
       tool: scripts/hue_kit_cli.py
       reference_section: hue-bridge-basics.md (Connecting)
     - id: report
@@ -226,8 +231,10 @@ domain_skill:
                  groups, scene-groups.yaml]
       description: >-
         Write a starter scene-groups.yaml with placeholder group names for the
-        user to rename to something meaningful.
-      operation: hue-kit groups [PATH]
+        user to rename to something meaningful. Refuses to overwrite an
+        existing registry unless `--force` is given; do not pass `--force` on
+        the user's behalf.
+      operation: hue-kit groups [PATH] [--force]
       tool: scripts/hue_kit_cli.py
       reference_section: scene-layers.md (Sync)
     - id: export
@@ -286,19 +293,34 @@ domain_skill:
     command: hue-kit start
     note: >-
       The state detection is the script's job, not yours: it decides among the
-      eight verdicts below and prints `hue-kit-verdict: <state>` as its last
+      nine verdicts below and prints `hue-kit-verdict: <state>` as its last
       line. Branch on that line; do not re-derive the state by inspecting
       files.
     verdicts:
       - verdict: first-run
-        meaning: Nothing existed yet; it built the registry + design, rendered the
-          report, and opened it in the browser.
+        meaning: Neither working file existed; it built the registry + design,
+          rendered the report, and opened it in the browser. Requires BOTH
+          absent -- one present yields `incomplete`.
         do: >-
           Tell the user what was set up and that the report is open, and stop.
           Mention in ONE line that the group names are placeholders they can
           rename in scene-groups.yaml whenever they like. Do NOT ask them to name
           the groups now, and do NOT propose names or tabulate the groups to help
           them decide -- see the naming guardrail in behavioral_guardrails.
+      - verdict: incomplete
+        meaning: >-
+          Exactly one of scene-groups.yaml / scene-designs.yaml exists, so this
+          is neither a first run nor an established workdir. Nothing was
+          written, and no export ran.
+        do: >-
+          Relay the diagnostic, which names the missing file. The missing one
+          cannot be rebuilt safely on its own: a regenerated registry carries
+          placeholder group names the existing design does not reference, and a
+          regenerated design discards colour edits the user has not applied. If
+          the DESIGN is missing, `hue-kit export` rebuilds it from the registry.
+          If the REGISTRY is missing, the user restores it, or deletes the
+          design to start over from the bridge and accepts placeholder names.
+          Do not suggest --force, and do not delete anything for them.
       - verdict: accepted
         meaning: >-
           `--accept` re-baselined the bridge's current shape as the reference.
@@ -349,14 +371,15 @@ domain_skill:
           fine, only the report step failed. Suggest retrying `hue-kit render`.
   tools:
     - name: hue-kit
-      command: hue-kit [--dir PATH] <start|report|groups|export|render|validate|apply|init>
+      command: hue-kit [--dir PATH] <discover|pair|start|report|groups|export|render|validate|apply|init>
       description: >-
         The verb CLI over the layered scene tool. NOTE `--dir` is a top-level
         option and must precede the VERB (argparse rejects it after). Invocation:
-        bin/hue-kit(.cmd) is a shim for when it is on PATH, but do NOT assume it
-        is -- nothing puts a plugin's bin/ on PATH. The portable form launches
-        the script under the bootstrap interpreter, which every
-        bootstrap-managed session exports (/bootstrap fact python_interpreter):
+        `bin/hue-kit` (`bin/hue-kit.cmd` on Windows) is on the Bash tool's PATH
+        while this plugin is enabled, so `hue-kit <verb>` works directly. The
+        portable form, for when the plugin's `bin/` is not what launched this
+        shell, uses the bootstrap interpreter, which every bootstrap-managed
+        session exports (/bootstrap fact python_interpreter):
         `"${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${CLAUDE_PLUGIN_ROOT}/scripts/hue_kit_cli.py" <verb>`
         The CLI re-execs under the plugin's bootstrap-provisioned venv either
         way. Working files (scene-groups.yaml / scene-designs.yaml /

@@ -10,14 +10,14 @@
 #
 # This 6-group family is a CERTIFIED MINIMUM (scene-layers.py: no 5-group family
 # can express the live scenes; every group here is a whole-zone union, so the
-# minimum is also fully nameable -- interpretability cost 0). Names DECIDED by
-# Christina 2026-07-18. Re-run `scene-layers.py` after adding/restyling scenes
-# to confirm the family is still minimal; edit this file to rename or re-scope a
-# group, then re-run the design exporter to re-verify + re-materialise.
+# minimum is also fully nameable -- interpretability cost 0). Re-run
+# `scene-layers.py` after adding/restyling scenes to confirm the family is
+# still minimal; edit this file to rename or re-scope a group, then re-run
+# the design exporter to re-verify + re-materialise.
 #
-# Zones are bridge-zone names (see naming-conventions.md); a group's light set
-# is the union of its zones' lights. Order below = largest first (documentation
-# only; the solver is order-independent).
+# Zones are bridge-zone names, as reported by `hue-kit report`; a group's
+# light set is the union of its zones' lights. Order below = largest first
+# (documentation only; the solver is order-independent).
 groups:
   - name: ALL
     # whole home (42) -- forced by every single-colour scene
@@ -42,7 +42,8 @@ groups:
     zones: [Guest Bathroom, Shower Lights, Throne Light, Vanity Lights]
 
 # Template names -- a TEMPLATE is a distinct layer-stack SEQUENCE (the ordered
-# list of groups a scene paints, bottom -> top). Christina's names 2026-07-18.
+# list of groups a scene paints, bottom -> top). Name each one whatever
+# describes the mood it paints.
 # The report groups scenes by their stack and labels each group with this name;
 # `stack` must match the group sequence exactly (order matters: Night and
 # Theater share {BATHROOM, MOOD} but in opposite order, so they are distinct).

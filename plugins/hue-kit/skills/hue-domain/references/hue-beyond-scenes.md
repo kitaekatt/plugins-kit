@@ -79,9 +79,9 @@ not a bug in whatever issued the command.
 
 ## Renaming lights
 
-The naming guardrail in SKILL.md says not to invent names for meta-groups. That
-is about the LOCAL group vocabulary. Renaming an actual bulb on the bridge is a
-different thing, and this is the call:
+Do not invent names for meta-groups; that rule is about the LOCAL group
+vocabulary. Renaming an actual bulb on the bridge is a different thing, and
+this is the call:
 
 ```
 PUT /clip/v2/resource/light/<id>
