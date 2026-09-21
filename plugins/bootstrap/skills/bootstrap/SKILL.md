@@ -536,11 +536,12 @@ reference_skill:
         delete-bootstrap.json opt-out.
     - id: bootstrap_cli
       path: references/bootstrap-cli.md
-      keywords: [bootstrap command, bootstrap CLI, bootstrap run, bootstrap --json, is a pass running, run bootstrap from a terminal, without starting Claude, tail a pass, attach to a running pass, stream the pass, events.watch, blocks, exit codes, BOOTSTRAP_MARKETPLACE, BOOTSTRAP_PLUGIN_ROOT, dev checkout, worktree, ~/.local/bin lever, command not found, cooldown exempt, bootstrap profile, profile set, profile clear, profile status]
+      keywords: [bootstrap command, bootstrap CLI, bootstrap run, bootstrap --json, is a pass running, run bootstrap from a terminal, without starting Claude, tail a pass, attach to a running pass, stream the pass, events.watch, blocks, exit codes, BOOTSTRAP_MARKETPLACE, BOOTSTRAP_PLUGIN_ROOT, dev checkout, worktree, ~/.local/bin lever, command not found, cooldown exempt, bootstrap profile, profile set, profile clear, profile status, PowerShell, cmd.exe, bootstrap.cmd, returns instantly with no output, Windows shim]
       summary: >-
         The bootstrap PATH command -- four-layer run scope, busy-pass refusal,
         status following, cooldown behavior, exit codes, engine/data discovery,
-        runtime prerequisites, and the `profile` / `profile set` / `profile clear`
+        runtime prerequisites, the Windows `.cmd` shims for cmd.exe and
+        PowerShell, and the `profile` / `profile set` / `profile clear`
         subcommands.
     - id: engine_internals
       path: references/engine-internals.md
