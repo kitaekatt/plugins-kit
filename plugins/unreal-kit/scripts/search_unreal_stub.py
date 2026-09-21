@@ -86,8 +86,16 @@ def main(argv: list[str] | None = None) -> int:
     """Search enriched, then stock, and explain how to recover if neither exists."""
     args = parse_args(argv)
     project_root = args.project_root.resolve()
-    config = load_effective_config(project_root)
-    stub = select_search_stub(project_root, config)
+    try:
+        config = load_effective_config(project_root)
+
+        def announce(message: str) -> None:
+            print(message, file=sys.stderr)
+
+        stub = select_search_stub(project_root, config, announce)
+    except (OSError, UnicodeError, ValueError) as exc:
+        print(f"Unreal API search is unavailable: {exc}", file=sys.stderr)
+        return 2
     if stub is None:
         print(
             "Unreal API search is unavailable: neither the consuming project's "
@@ -113,11 +121,15 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     found = False
-    with stub.open("r", encoding="utf-8", errors="replace") as handle:
-        for line_number, line in enumerate(handle, start=1):
-            if pattern.search(line):
-                found = True
-                print(f"{stub}:{line_number}:{line.rstrip()}")
+    try:
+        with stub.open("r", encoding="utf-8", errors="replace") as handle:
+            for line_number, line in enumerate(handle, start=1):
+                if pattern.search(line):
+                    found = True
+                    print(f"{stub}:{line_number}:{line.rstrip()}")
+    except (OSError, UnicodeError) as exc:
+        print(f"Unreal API search is unavailable: {exc}", file=sys.stderr)
+        return 2
     return 0 if found else 1
 
 

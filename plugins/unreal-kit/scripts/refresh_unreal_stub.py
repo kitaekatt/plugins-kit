@@ -19,6 +19,7 @@ require_bootstrap("unreal-kit", feature="Unreal API stub refresh")
 try:
     from unreal_stub import (  # noqa: E402
         DestinationNotWritableError,
+        StubValidationError,
         load_effective_config,
         refresh_durable_stub,
     )
@@ -71,6 +72,15 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     except DestinationNotWritableError as exc:
         print(f"Cannot refresh enriched Unreal API stub: {exc}", file=sys.stderr)
+        return 2
+    except StubValidationError as exc:
+        print(f"Cannot refresh enriched Unreal API stub: {exc}", file=sys.stderr)
+        return 2
+    except OSError as exc:
+        print(
+            f"Cannot refresh enriched Unreal API stub due to I/O error: {exc}",
+            file=sys.stderr,
+        )
         return 2
     already_up_to_date = any(
         message.startswith("Unreal API stub already up to date")
