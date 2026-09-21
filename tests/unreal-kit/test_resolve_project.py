@@ -16,7 +16,7 @@ for p in (_SCRIPTS_DIR, _LIB_DIR):
     if str(p) not in sys.path:
         sys.path.insert(0, str(p))
 
-from ue_runner import _resolve_project
+from ue_runner import _resolve_project, main, run_ue_script
 from ue_runner_config import RunnerConfig
 
 
@@ -71,9 +71,11 @@ class TestResolveProject:
 
     def test_script_path_discovery(self, tmp_path, monkeypatch):
         """When CWD has no project, fall back to script's location."""
-        # CWD is somewhere unrelated
-        unrelated = tmp_path / "unrelated"
-        unrelated.mkdir()
+        # Keep CWD beyond the resolver's six-parent search limit.  This also
+        # prevents the test fixture's sibling project from being discovered
+        # through a shared temporary-directory ancestor.
+        unrelated = tmp_path.joinpath(*("empty" for _ in range(8)))
+        unrelated.mkdir(parents=True)
         monkeypatch.chdir(unrelated)
 
         # Script lives inside a project
@@ -120,18 +122,72 @@ class TestResolveProject:
         assert result.engine_dir != "/old/wrong/engine"
         assert "Engine" in result.engine_dir
 
-    def test_invalid_explicit_project_falls_through(self, tmp_path, monkeypatch):
-        """--project with a bad path falls through to CWD discovery."""
+    @pytest.mark.parametrize(
+        "explicit_project",
+        ["nonexistent.uproject", "wrong-suffix.txt"],
+    )
+    def test_invalid_explicit_project_refuses_instead_of_falling_through(
+        self, tmp_path, monkeypatch, explicit_project
+    ):
+        """An invalid --project target must not select another project."""
         proj = tmp_path / "MyGame"
         _make_uproject(proj / "MyGame.uproject")
         monkeypatch.chdir(proj)
 
         config = RunnerConfig(uproject="", engine_dir="")
-        result = _resolve_project(
-            config,
-            str(proj / "script.py"),
-            explicit_project=str(tmp_path / "nonexistent.uproject"),
+        with pytest.raises(ValueError, match="--project path"):
+            _resolve_project(
+                config,
+                str(proj / "script.py"),
+                explicit_project=str(tmp_path / explicit_project),
+            )
+
+    def test_invalid_explicit_project_stops_before_either_transport(
+        self, tmp_path, monkeypatch
+    ):
+        """Public execution refuses a bad explicit target before dispatch."""
+        proj = tmp_path / "MyGame"
+        _make_uproject(proj / "MyGame.uproject")
+        monkeypatch.chdir(proj)
+        script = proj / "script.py"
+        script.write_text("pass")
+        config = RunnerConfig(uproject="", engine_dir="")
+
+        with patch("ue_runner._try_remote") as remote, patch(
+            "ue_runner._run_commandlet"
+        ) as commandlet:
+            result = run_ue_script(
+                str(script), config=config,
+                project=str(tmp_path / "missing.uproject"),
+            )
+
+        assert result.success is False
+        assert result.mode == "none"
+        assert "--project path" in result.error
+        remote.assert_not_called()
+        commandlet.assert_not_called()
+
+    def test_cli_invalid_explicit_project_stops_before_either_transport(
+        self, tmp_path, monkeypatch
+    ):
+        """The command-line entry point preserves the same fail-closed rule."""
+        proj = tmp_path / "MyGame"
+        _make_uproject(proj / "MyGame.uproject")
+        script = proj / "script.py"
+        script.write_text("pass")
+        monkeypatch.chdir(proj)
+        monkeypatch.setattr("ue_runner.load_config", lambda *_args: RunnerConfig())
+        monkeypatch.setattr(
+            "sys.argv",
+            ["ue_runner.py", str(script), "--project", str(tmp_path / "missing.uproject")],
         )
 
-        # Should fall through to CWD discovery
-        assert "MyGame" in result.uproject
+        with patch("ue_runner._try_remote") as remote, patch(
+            "ue_runner._run_commandlet"
+        ) as commandlet:
+            with pytest.raises(SystemExit) as exc_info:
+                main()
+
+        assert exc_info.value.code == 1
+        remote.assert_not_called()
+        commandlet.assert_not_called()
