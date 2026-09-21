@@ -95,3 +95,49 @@ def test_manifest_write_failure_blocks_all_mutation(tmp_path: Path) -> None:
     assert "pre-mutation recovery record" in stderr
     mutation_names = {"collection_set", "edit", "load", "save", "ue_delete", "p4_delete"}
     assert not mutation_names.intersection(event[0] for event in harness.events)
+
+
+def test_preexisting_project_collection_edit_blocks_before_new_cl(tmp_path: Path) -> None:
+    harness = make_harness(
+        tmp_path,
+        preexisting_collections=["//depot/project/Content/Collections/Existing.collection"],
+    )
+
+    code, _stdout, stderr, _manifest_path = harness.run()
+
+    assert code != 0
+    assert "pre-existing" in stderr.lower()
+    assert not any(event[0] == "create_cl" for event in harness.events)
+    assert not any(event[0] in {"edit", "ue_delete", "p4_delete"} for event in harness.events)
+
+
+def test_collection_query_failure_is_incomplete_and_never_sweeps(tmp_path: Path) -> None:
+    harness = make_harness(tmp_path, collection_query_error=True)
+
+    code, _stdout, stderr, manifest_path = harness.run()
+
+    assert code != 0
+    assert "collection" in stderr.lower()
+    assert not any(event[0] == "reopen" for event in harness.events)
+    manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    assert manifest["pre_delete_phase"] == "collection_reconciliation"
+
+
+def test_map_native_candidate_must_match_classification_snapshot(tmp_path: Path) -> None:
+    harness = make_harness(tmp_path)
+    umap = harness.project / "Content" / "R.umap"
+    umap.write_bytes(b"map")
+    harness.safe_json.write_text(
+        harness.safe_json.read_text(encoding="utf-8").replace(
+            '"referencer_files": [',
+            f'"mutation_files": ["{harness.redirector_file}"], "referencer_files": ['
+        ),
+        encoding="utf-8",
+    )
+    harness.redirector_file.unlink()
+
+    code, _stdout, stderr, _manifest_path = harness.run()
+
+    assert code != 0
+    assert "candidate" in stderr.lower() or "mutation" in stderr.lower()
+    assert not any(event[0] == "create_cl" for event in harness.events)

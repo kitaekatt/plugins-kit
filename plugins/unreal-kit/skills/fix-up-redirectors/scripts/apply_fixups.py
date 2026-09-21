@@ -63,6 +63,10 @@ from p4cli import (
     create_pending_cl, delete_files, edit_files, get_p4_user, reopen_files,
     run_p4, run_p4_or_die,
 )
+try:
+    from p4cli import where_records
+except ImportError:  # minimal provider shim used by offline tests
+    where_records = None
 from redirector_record import load_safe_set, save_apply_manifest
 
 
@@ -108,6 +112,101 @@ if MODE == 'auto':
     MODE = 'delete-only' if not any(_has_any_referencers(r) for r in records) else 'fixup'
 print(f"[apply_fixups] mode: {MODE}")
 
+
+def _current_mutation_files(record):
+    """Return the complete candidate set visible immediately before apply."""
+    primary = record.get('file')
+    candidates = []
+    if primary and os.path.isfile(primary):
+        candidates.append(primary)
+    if primary and primary.lower().endswith('.uasset'):
+        sibling = primary[:-len('.uasset')] + '.umap'
+        if os.path.isfile(sibling):
+            candidates.append(sibling)
+    return sorted(dict.fromkeys(candidates))
+
+
+for record in records:
+    expected = record.get('mutation_files')
+    actual = _current_mutation_files(record)
+    if expected is None:
+        # Legacy safe sets remain readable, but their candidate set is still
+        # materialized and checked before a CL is created.
+        expected = actual
+    expected = sorted(dict.fromkeys(str(path) for path in expected if path))
+    if expected != actual:
+        fail(
+            "Mutation candidate set changed since classification for "
+            f"{record.get('pkg', record.get('file'))}: expected {expected!r}, "
+            f"found {actual!r}; rerun classification"
+        )
+    if not expected:
+        fail(f"No existing mutation candidate for {record.get('pkg', record.get('file'))}")
+    record['mutation_files'] = expected
+
+
+def _collection_path_is_project_scoped(path):
+    """Keep broad collection queries inside this project's mapped depot subtree."""
+    normalized = str(path).replace('\\', '/').casefold()
+    return bool(_project_depot_prefix and normalized.startswith(
+        _project_depot_prefix.casefold() + '/content/collections/'
+    ))
+
+
+def _derive_project_depot_prefix():
+    """Derive the project depot root from a tagged mapping, never by naming."""
+    if where_records is None:
+        return None
+    project_dir = os.path.normpath(str(unreal.Paths.project_dir())).replace('\\', '/')
+    for record in records:
+        for local_path in record.get('mutation_files', []):
+            mappings = where_records([local_path])
+            if len(mappings) != 1 or not mappings[0].get('depotFile'):
+                continue
+            local = str(mappings[0].get('input', local_path)).replace('\\', '/')
+            depot = str(mappings[0]['depotFile']).replace('\\', '/')
+            if local.casefold() == project_dir.casefold():
+                return depot.rstrip('/')
+            prefix = project_dir.rstrip('/') + '/'
+            if not local.casefold().startswith(prefix.casefold()):
+                continue
+            relative = local[len(project_dir.rstrip('/')):]
+            if depot.casefold().endswith(relative.casefold()):
+                return depot[:-len(relative)].rstrip('/')
+    return None
+
+
+def _query_project_collections():
+    if not _project_depot_prefix:
+        return None, 'could not establish the project depot mapping'
+    rc, out, err = run_p4(['opened', '-c', 'default', '//...Content/Collections/....collection'])
+    if rc != 0:
+        return None, err or 'p4 opened collection query failed'
+    paths = []
+    for line in out.splitlines():
+        if ' - ' not in line:
+            continue
+        path = line.split('#', 1)[0].strip()
+        if path.casefold().endswith('.collection') and _collection_path_is_project_scoped(path):
+            paths.append(path)
+    return sorted(dict.fromkeys(paths)), None
+
+
+_project_depot_prefix = _derive_project_depot_prefix()
+
+if MODE == 'fixup':
+    preexisting_collections, preflight_collection_error = _query_project_collections()
+    if preflight_collection_error:
+        fail(
+            "Could not establish project collection state before mutation: "
+            f"{preflight_collection_error}"
+        )
+    if preexisting_collections:
+        fail(
+            "Refusing to mutate because pre-existing project collection edits "
+            "would be overwritten: " + ', '.join(preexisting_collections)
+        )
+
 # 1) Guard: refuse if a "Fix up redirectors" CL is already pending for this user.
 if not FORCE_NEW_CL:
     p4_user = get_p4_user()
@@ -132,35 +231,14 @@ if not FORCE_NEW_CL:
 #      MINUS any package that is itself a redirector in this safe set
 #      (those will be deleted, not re-saved). Empty in delete-only mode.
 redirector_pkgs = {r['pkg'] for r in records}
-redirector_files = [r['file'] for r in records if r.get('file')]
-
-# Always include .umap siblings of every redirector .uasset, in both modes.
-# Level redirectors come in .uasset+.umap pairs and both files must land in
-# the CL together — otherwise the depot keeps a dangling .umap pointing at a
-# deleted .uasset (or vice versa). Two distinct shapes need this:
-#   - Normal level redirectors: both .uasset and .umap exist on disk; UE deletes
-#     both; we need both in the apply CL.
-#   - .umap-native packages: discovery (UE asset registry) reports a .uasset
-#     path but on disk only the .umap exists; UE delete_asset removes the .umap
-#     and auto-opens it for delete in default; without pairing, the .umap is
-#     stranded outside the apply CL while the .uasset path is a phantom.
-# We add the sibling unconditionally if it exists on disk; cheap to check,
-# prevents an easy-to-miss correctness bug in either mode.
-def _umap_sibling(uasset_path):
-    if not uasset_path or not uasset_path.lower().endswith('.uasset'):
-        return None
-    candidate = uasset_path[:-len('.uasset')] + '.umap'
-    return candidate if os.path.isfile(candidate) else None
-
-
-umap_companion_files = []
-for f in list(redirector_files):
-    sibling = _umap_sibling(f)
-    if sibling:
-        umap_companion_files.append(sibling)
+redirector_files = list(dict.fromkeys(
+    path for record in records for path in record['mutation_files']
+))
+umap_companion_files = [
+    path for path in redirector_files if path.lower().endswith('.umap')
+]
 if umap_companion_files:
-    redirector_files = redirector_files + umap_companion_files
-    print(f"Including {len(umap_companion_files)} .umap sibling(s) of level redirectors.")
+    print(f"Including {len(umap_companion_files)} classified .umap companion(s).")
 
 referencer_pkgs = set()
 referencer_files = set()
@@ -241,6 +319,7 @@ save_failures = []
 ue_deleted = 0
 ue_delete_failures = []
 collections_reopened = []
+collection_reconciliation_error = None
 
 # 4) Mode-specific work.
 if MODE == 'fixup':
@@ -385,14 +464,17 @@ if MODE == 'fixup':
     #     is the workspace's default CL. Sweep there and reopen into our apply
     #     CL so the rewrites travel with the redirector deletes as one atomic,
     #     reviewable changelist.
-    rc, out, _err = run_p4(['opened', '-c', 'default', '//...Content/Collections/....collection'])
+    rc, out, err = run_p4(['opened', '-c', 'default', '//...Content/Collections/....collection'])
     if rc == 0:
         for line in out.splitlines():
             # Format: //depot/path/file.collection#N - edit default change (text) by user@client
             if ' - ' in line:
                 depot_path = line.split('#', 1)[0]
-                if depot_path.endswith('.collection'):
+                if (depot_path.casefold().endswith('.collection')
+                        and _collection_path_is_project_scoped(depot_path)):
                     collections_reopened.append(depot_path)
+    else:
+        collection_reconciliation_error = err or 'p4 opened collection query failed'
     if collections_reopened:
         try:
             reopen_files(cl_num, collections_reopened)
@@ -511,10 +593,19 @@ manifest.update({
     'umap_companions_included': umap_companion_files,
     'collections_reopened': collections_reopened,
     'lock_retry_list': retry_script,
-    'pre_delete_phase': 'complete',
-    'pre_delete_failures': [],
+    'pre_delete_phase': (
+        'collection_reconciliation' if collection_reconciliation_error else 'complete'
+    ),
+    'pre_delete_failures': ([collection_reconciliation_error]
+                            if collection_reconciliation_error else []),
 })
 _persist_manifest(manifest)
+
+if collection_reconciliation_error:
+    fail(
+        "Could not establish project collection attribution after mutation; "
+        "no collection sweep was performed: " + collection_reconciliation_error
+    )
 
 print()
 print(f"Done. CL {cl_num}: deleted {manifest['redirectors_deleted']} redirectors"

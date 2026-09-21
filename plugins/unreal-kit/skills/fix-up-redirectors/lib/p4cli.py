@@ -86,12 +86,14 @@ def get_workspace_mapping():
 
 def local_to_depot(local_path, depot_root, local_root):
     """Convert a local file path to its depot path. Returns None if not in workspace."""
-    lp = local_path.replace('\\', '/')
-    lr = local_root.replace('\\', '/')
-    if not lp.lower().startswith(lr.lower()):
+    lp = local_path.replace('\\', '/').rstrip('/')
+    lr = local_root.replace('\\', '/').rstrip('/')
+    lp_fold = lp.casefold()
+    lr_fold = lr.casefold()
+    if lp_fold != lr_fold and not lp_fold.startswith(lr_fold + '/'):
         return None
     rel = lp[len(lr):]
-    return depot_root + rel
+    return depot_root.rstrip('/') + rel
 
 
 def parse_opened(opened_output):
@@ -226,3 +228,68 @@ def where_batch(local_paths):
         if len(parts) >= 3 and parts[0].startswith('//'):
             depots.add(parts[0].lower())
     return depots
+
+
+def _parse_tagged_where(output):
+    """Parse one or more ``p4 -ztag where`` records.
+
+    A tagged record keeps the depot path associated with the input file.  This
+    matters when a client has overlapping mappings: a set of depot paths loses
+    which mapping belonged to which candidate and can approve the wrong file.
+    """
+    records = []
+    current = {}
+    for raw_line in output.splitlines():
+        line = raw_line.strip()
+        if not line:
+            if current:
+                records.append(current)
+                current = {}
+            continue
+        if line.startswith('... '):
+            field_value = line[4:]
+            field, sep, value = field_value.partition(' ')
+            if not sep:
+                continue
+            if field == 'depotFile' and 'depotFile' in current:
+                records.append(current)
+                current = {}
+            current[field] = value
+            continue
+        # Keep compatibility with a non-tagged fake or old p4 wrapper.  The
+        # normal production path is tagged and never relies on this parser.
+        parts = line.split(None, 2)
+        if len(parts) >= 3 and parts[0].startswith('//'):
+            records.append({'depotFile': parts[0], 'clientFile': parts[1], 'path': parts[2]})
+    if current:
+        records.append(current)
+    return records
+
+
+def where_records(local_paths):
+    """Resolve each local path independently and retain every tagged mapping.
+
+    The return value is a flat list of dictionaries.  Each dictionary has the
+    tagged P4 fields plus ``input`` identifying the local path that was
+    queried.  Multiple records for one input are deliberately retained as an
+    ambiguity; callers must refuse them rather than choosing the first view.
+    """
+    records = []
+    for local_path in local_paths:
+        if not local_path:
+            continue
+        try:
+            output = run_p4_or_die(
+                ['-ztag', 'where', local_path],
+                what=f'p4 where {local_path}',
+            )
+        except SystemExit:
+            # An unmapped or temporarily unavailable view is evidence of an
+            # incomplete classification, not permission to mutate the file.
+            continue
+        matches = _parse_tagged_where(output)
+        for match in matches:
+            record = dict(match)
+            record['input'] = local_path
+            records.append(record)
+    return records

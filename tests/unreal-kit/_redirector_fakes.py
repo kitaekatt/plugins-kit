@@ -35,6 +35,9 @@ class ApplyHarness:
         setter_error: Exception | None = None,
         soft_rewrite_error: Exception | None = None,
         fail_manifest: bool = False,
+        mutation_files: list[str] | None = None,
+        preexisting_collections: list[str] | None = None,
+        collection_query_error: bool = False,
     ) -> None:
         self.project = tmp_path / "project"
         self.project.mkdir()
@@ -53,6 +56,8 @@ class ApplyHarness:
             "referencer_pkgs": ["/Game/A"],
             "referencer_files": [str(self.referencer_file)],
         }
+        if mutation_files is not None:
+            record["mutation_files"] = list(mutation_files)
         self.safe_json.write_text(
             json.dumps({"scope": "/Game", "redirectors": [record]}),
             encoding="utf-8",
@@ -63,6 +68,9 @@ class ApplyHarness:
         self.setter_error = setter_error
         self.soft_rewrite_error = soft_rewrite_error
         self.fail_manifest = fail_manifest
+        self.preexisting_collections = list(preexisting_collections or [])
+        self.collection_query_error = collection_query_error
+        self.collection_query_calls = 0
         self.events: list[tuple[str, Any]] = []
         self._load_count = 0
         self._manifest_writer = None
@@ -161,6 +169,16 @@ class ApplyHarness:
         def run_p4(args: list[str], stdin: str | None = None) -> tuple[int, str, str]:
             harness.events.append(("run_p4", (list(args), stdin)))
             if args[:2] == ["opened", "-c"]:
+                if args[-1].endswith("....collection"):
+                    harness.collection_query_calls += 1
+                if harness.collection_query_error and harness.collection_query_calls > 1:
+                    return 1, "", "collection query failed"
+                if args[-1].endswith("....collection"):
+                    output = "\n".join(
+                        f"{path}#1 - edit default change (text) by alice@ws"
+                        for path in harness.preexisting_collections
+                    )
+                    return 0, output, ""
                 return 0, "", ""
             if "fstat" in args:
                 return 0, "\n".join(
@@ -176,6 +194,15 @@ class ApplyHarness:
             harness.events.append(("run_p4_or_die", list(args)))
             return ""
 
+        def where_records(paths: list[str]) -> list[dict[str, str]]:
+            return [
+                {
+                    "input": path,
+                    "depotFile": "//depot/project/Content/" + Path(path).name,
+                }
+                for path in paths
+            ]
+
         module.create_pending_cl = create_pending_cl
         module.delete_files = lambda *args, **kwargs: (_ for _ in ()).throw(
             AssertionError("delete_files should not be called by apply_fixups")
@@ -185,6 +212,7 @@ class ApplyHarness:
         module.reopen_files = reopen_files
         module.run_p4 = run_p4
         module.run_p4_or_die = run_p4_or_die
+        module.where_records = where_records
         return module
 
     @contextlib.contextmanager

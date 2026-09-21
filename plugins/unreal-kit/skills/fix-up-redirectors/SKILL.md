@@ -201,7 +201,12 @@ The classifier is a host-side script (no Unreal needed). Run it from the project
 
 The host-side classifier needs `pyyaml`, which the bootstrap engine installs into the unreal-kit plugin's venv at `~/.claude/plugins/data/plugins-kit/unreal-kit/.venv/`. Invoke that venv's Python directly -- the path is stable across plugin versions and resolves the right interpreter regardless of cwd. **Do NOT use `uv run python`** unless the cwd has a matching `pyproject.toml` listing `pyyaml`; from a project root that doesn't (the common case for this skill, since you run from your Unreal project's root for `p4` to pick up `.p4config.txt`), `uv` falls back to a basic Python without `pyyaml` and the script crashes with `ModuleNotFoundError`. On macOS/Linux the venv path is `~/.claude/plugins/data/plugins-kit/unreal-kit/.venv/bin/python`.
 
-The classifier runs `p4 opened -a` once for the workspace, then buckets each redirector:
+The classifier runs `p4 opened -a` once for the workspace and resolves each
+candidate file with a tagged per-file `p4 where`, then buckets each redirector.
+The tagged depot identity is retained; overlapping or missing mappings are
+blocked instead of being reduced to a guessed workspace prefix. It also
+materializes the complete on-disk mutation set, including an existing `.umap`
+companion, in each safe-set record.
 
 - `safe` — fix-up safe set: target exists, neither the redirector nor any of its referencers is opened by anyone (levels are included)
 - `blocked` — at least one file is opened by a teammate (or you, in another CL); records the user(s)
@@ -307,13 +312,21 @@ CL_DESC_SUFFIX="[Mix, Tool]" SAFE_JSON="$PWD/tmp/redirectors/safe_filtered.json"
 
 The apply script does (fix-up mode):
 
-1. Creates a new pending CL with description `Fix up redirectors: <N> assets in <scope>` (plus `CL_DESC_SUFFIX` if set).
-2. `p4 edit -c <CL>` every non-redirector referencer file.
-3. UE: load each referencer (resolves redirectors at link time), rewrite soft refs via `rename_referencing_soft_object_paths`, force-save each package.
-4. `EditorAssetLibrary.delete_asset` on each redirector to release UE's file handle, then GC, then `p4 reopen -c <CL>` to herd UE-auto-opened deletes into our pending CL (with `p4 delete -c <CL>` as fallback for any not auto-opened).
-5. Saves a manifest at `<project>/Saved/PythonOutput/redirectors_apply_<CL>.yaml`.
+1. Revalidates every recorded mutation candidate against the current on-disk
+   set, and refuses to create a CL if a file appeared, disappeared, or was
+   added outside classification. In fix-up mode it also checks the project's
+   default-CL collection state and refuses to overwrite a pre-existing edit.
+2. Creates a new pending CL with description `Fix up redirectors: <N> assets in <scope>` (plus `CL_DESC_SUFFIX` if set).
+3. `p4 edit -c <CL>` every non-redirector referencer file.
+4. UE: load each referencer (resolves redirectors at link time), rewrite soft refs via `rename_referencing_soft_object_paths`, force-save each package.
+5. `EditorAssetLibrary.delete_asset` on each redirector to release UE's file handle, then GC, then `p4 reopen -c <CL>` to herd UE-auto-opened deletes into our pending CL (with `p4 delete -c <CL>` as fallback for any not auto-opened).
+6. Saves a manifest at `<project>/Saved/PythonOutput/redirectors_apply_<CL>.yaml`.
 
-In delete-only mode: skips steps 2-4 (no referencer load/save needed), opens redirector .uasset files for delete in the new CL, and **automatically includes the `.umap` sibling of every redirector that has one** — level redirectors come in `.uasset`+`.umap` pairs and both files must land in the CL together.
+In delete-only mode: skips steps 3-5 (no referencer load/save needed), opens
+the classified redirector candidate files for delete in the new CL. Level
+redirectors include their `.umap` companion only when that companion was
+present during classification; a companion that appears later causes a
+refusal before CL creation.
 
 ### Phase 4 tail - lock-failure retry
 
@@ -345,8 +358,11 @@ If there are blocked redirectors, suggest: **"Tell the blocked users to run `/fi
 - **fixup_referencers reports failures:** UE returns a failure list; note them in the manifest. The CL still contains the partial fixup. The user can decide whether to submit or revert.
 - **Re-running mid-fix:** if there's already a pending CL with description starting `Fix up redirectors:`, refuse phase 4 and ask the user to either submit/revert that one first, or pass `--force-new-cl`.
 - **UE file-lock errors during `p4 delete`:** UE has been observed to keep Windows file handles open on referencer packages even after `delete_asset` and a GC pass. The apply script catches the OS-level lock errors -- the Windows P4 client emits the message as "being used by another process" (note: not the older "in use by another process"), and "access is denied" is the generic fallback -- per file, writes the affected paths to `redirectors_lock_retry_<CL>.txt`, and prints the exact `p4 -x - delete -c <CL>` command to run after the commandlet exits. **Empirically the locked files are still on disk when the commandlet exits** (UE held the handle long enough that the disk-delete never finished), so the retry uses `p4 delete` (which marks the depot delete and removes the local file in one step), NOT `p4 reconcile` (which would see an unchanged local file and do nothing). If a future UE version actually finishes the on-disk delete before exiting, `p4 delete` will error per-file with "file not found" -- in that case fall back to `p4 -x - reconcile -c <CL> < <list>` against the same list.
-- **Level redirectors (`.umap`):** in **both** fix-up and delete-only modes the script automatically includes the `.umap` sibling of every `.uasset` redirector it deletes (the pairing logic runs before UE work and adds any `.umap` that exists on disk to `redirector_files`). Two shapes need this: normal level redirectors with both `.uasset`+`.umap` on disk (both must land in the apply CL or the depot keeps a dangling half), and `.umap`-native packages where discovery (UE asset registry) reports a `.uasset` path but only the `.umap` exists on disk (UE deletes the `.umap` and auto-opens it for delete in default CL — without pairing, the `.umap` is stranded outside the apply CL).
-- **Content Collections (`.collection`):** UE's CollectionManager listens for redirector deletions and rewrites every affected `.collection` file under `Content/Collections/`. By default (`UCollectionSettings::bAutoCommitOnSave = true`) it then **auto-submits each collection as its own one-file CL** with the description "Collection '<Name>' not modified" -- the in-memory members are unchanged but the on-disk paths got rewritten. Phase 4 disables `bAutoCommitOnSave` for the lifetime of the commandlet so the rewrites happen but the auto-submits don't; the script then sweeps `Content/Collections/*.collection` in the default CL and `p4 reopen`s them into the apply CL. End result: collection-file rewrites travel inside the apply CL alongside the redirector deletes, no stray one-file submits. If you see `Collection '...' not modified` CLs after a run, the suppression failed (check the manifest's `collections_reopened` field and the warning log line).
+- **Level redirectors (`.umap`):** the classifier snapshots the complete
+  on-disk pair, including `.umap`-native packages where only the map exists.
+  Apply revalidates that snapshot before creating a CL, so a newly appearing
+  companion cannot be silently expanded into the mutation set.
+- **Content Collections (`.collection`):** UE's CollectionManager listens for redirector deletions and rewrites affected collection files. Apply checks the project's default-CL collection state before mutation and refuses a pre-existing edit. After mutation it reconciles only collection paths attributable to this project; a failed or ambiguous query is reported as incomplete and never sweeps every collection in the workspace. The no-auto-submit guard still covers the commandlet lifetime.
 
 ## Common Mistakes
 

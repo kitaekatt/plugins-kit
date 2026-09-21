@@ -75,3 +75,56 @@ class TestDeleteFiles:
         p4cli.delete_files("12345", files, batch_size=200)
 
         assert captured == [200, 200, 50]
+
+
+class TestWhereRecords:
+    def test_tagged_per_file_resolution_preserves_true_depot_identity(self, monkeypatch):
+        calls = []
+
+        def fake_run(args, stdin=None, what=None):
+            calls.append((args, stdin))
+            local = args[-1]
+            if local.endswith("/Mapped.uasset"):
+                return (
+                    "... depotFile //depot/plugin/Content/Mapped.uasset\n"
+                    "... clientFile //ws/plugin/Content/Mapped.uasset\n"
+                    "... path C:/work/plugin/Content/Mapped.uasset\n"
+                )
+            return (
+                "... depotFile //depot/game/Content/Other.uasset\n"
+                "... clientFile //ws/game/Content/Other.uasset\n"
+                "... path C:/work/game/Content/Other.uasset\n"
+            )
+
+        def fake_or_die(args, stdin=None, what=None):
+            result = fake_run(args, stdin, what)
+            return result
+
+        monkeypatch.setattr(p4cli, "run_p4_or_die", fake_or_die)
+        records = p4cli.where_records([
+            "C:/work/plugin/Content/Mapped.uasset",
+            "C:/work/game/Content/Other.uasset",
+        ])
+
+        assert records[0]["depotFile"] == "//depot/plugin/Content/Mapped.uasset"
+        assert records[1]["depotFile"] == "//depot/game/Content/Other.uasset"
+        assert [args[:3] for args, _ in calls] == [
+            ["-ztag", "where", "C:/work/plugin/Content/Mapped.uasset"],
+            ["-ztag", "where", "C:/work/game/Content/Other.uasset"],
+        ]
+
+    def test_ambiguous_mapping_is_retained_as_multiple_records(self, monkeypatch):
+        monkeypatch.setattr(
+            p4cli,
+            "run_p4_or_die",
+            lambda *args, **kwargs: (
+                "... depotFile //depot/a/File.uasset\n"
+                "... clientFile //ws/a/File.uasset\n"
+                "... path C:/work/File.uasset\n"
+                "... depotFile //depot/b/File.uasset\n"
+                "... clientFile //ws/b/File.uasset\n"
+                "... path C:/work/File.uasset\n"
+            ),
+        )
+        records = p4cli.where_records(["C:/work/File.uasset"])
+        assert len(records) == 2
