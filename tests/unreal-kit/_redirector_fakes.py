@@ -38,6 +38,11 @@ class ApplyHarness:
         mutation_files: list[str] | None = None,
         preexisting_collections: list[str] | None = None,
         collection_query_error: bool = False,
+        fstat_rc: int = 0,
+        fstat_output: str | None = None,
+        delete_results: dict[str, tuple[int, str]] | None = None,
+        reopen_error: Exception | None = None,
+        opened_output: str | None = None,
     ) -> None:
         self.project = tmp_path / "project"
         self.project.mkdir()
@@ -70,8 +75,15 @@ class ApplyHarness:
         self.fail_manifest = fail_manifest
         self.preexisting_collections = list(preexisting_collections or [])
         self.collection_query_error = collection_query_error
+        self.fstat_rc = fstat_rc
+        self.fstat_output = fstat_output
+        self.delete_results = dict(delete_results or {})
+        self.reopen_error = reopen_error
+        self.opened_output = opened_output
         self.collection_query_calls = 0
         self.events: list[tuple[str, Any]] = []
+        self.deleted_paths: list[str] = []
+        self.reopened_paths: list[str] = []
         self._load_count = 0
         self._manifest_writer = None
 
@@ -165,10 +177,21 @@ class ApplyHarness:
 
         def reopen_files(cl: str, files: list[str]) -> None:
             harness.events.append(("reopen", (cl, list(files))))
+            if harness.reopen_error:
+                raise harness.reopen_error
+            harness.reopened_paths.extend(files)
 
         def run_p4(args: list[str], stdin: str | None = None) -> tuple[int, str, str]:
             harness.events.append(("run_p4", (list(args), stdin)))
             if args[:2] == ["opened", "-c"]:
+                if args[-1] == "123":
+                    if harness.opened_output is not None:
+                        return 0, harness.opened_output, ""
+                    paths = list(dict.fromkeys(harness.deleted_paths + harness.reopened_paths))
+                    return 0, "\n".join(
+                        f"{path}#1 - delete change 123 (text) by alice@ws"
+                        for path in paths
+                    ), ""
                 if args[-1].endswith("....collection"):
                     harness.collection_query_calls += 1
                 if harness.collection_query_error and harness.collection_query_calls > 1:
@@ -181,13 +204,19 @@ class ApplyHarness:
                     return 0, output, ""
                 return 0, "", ""
             if "fstat" in args:
-                return 0, "\n".join(
+                if harness.fstat_output is not None:
+                    return harness.fstat_rc, harness.fstat_output, "fstat failed" if harness.fstat_rc else ""
+                return harness.fstat_rc, "\n".join(
                     f"... depotFile {harness.redirector_file}\n"
                     for _ in [0]
-                ), ""
+                ), "fstat failed" if harness.fstat_rc else ""
             if args and args[0] == "delete":
-                harness.events.append(("p4_delete", args[-1]))
-                return 0, "", ""
+                path = args[-1]
+                harness.events.append(("p4_delete", path))
+                rc, err = harness.delete_results.get(path, (0, ""))
+                if rc == 0:
+                    harness.deleted_paths.append(path)
+                return rc, "", err
             raise AssertionError(f"unexpected run_p4 call: {args!r}")
 
         def run_p4_or_die(args: list[str], **_kwargs: Any) -> str:

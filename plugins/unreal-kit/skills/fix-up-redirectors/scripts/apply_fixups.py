@@ -308,6 +308,10 @@ manifest = {
     'load_failures': [],
     'pre_delete_phase': 'planned',
     'pre_delete_failures': [],
+    'mutation_outcomes': {path: 'unknown' for path in redirector_files},
+    'ue_deleted': 0,
+    'ue_delete_failures': [],
+    'fstat_failures': [],
 }
 _persist_manifest(manifest)
 
@@ -490,39 +494,98 @@ if MODE == 'fixup':
 #    `p4 delete -c` does the whole job.
 delete_failures = []
 lock_failures = []  # files that hit "in use by another process" and need a retry pass
+unknown_files = []
+confirmed_candidates = []
+
+
+def _fstat_blocks(output):
+    blocks = []
+    current = {}
+    for raw_line in (output or '').splitlines() + ['']:
+        line = raw_line.strip()
+        if not line:
+            if current:
+                blocks.append(current)
+                current = {}
+            continue
+        if line.startswith('... depotFile '):
+            current['path'] = line[len('... depotFile '):].strip()
+        elif line.startswith('... action '):
+            current['action'] = line[len('... action '):].strip()
+    return blocks
+
+
+def _path_key(path):
+    return os.path.normcase(str(path).replace('\\', '/')).rstrip('/')
+
+
+def _match_fstat_path(reported, remaining):
+    reported_key = _path_key(reported)
+    exact = [path for path in remaining if _path_key(path) == reported_key]
+    if exact:
+        return exact[0]
+    basename = os.path.basename(reported_key)
+    by_name = [path for path in remaining if os.path.basename(_path_key(path)) == basename]
+    if len(by_name) == 1:
+        return by_name[0]
+    return None
+
+
+def _opened_in_cl_paths():
+    rc, out, err = run_p4(['opened', '-c', cl_num])
+    if rc != 0:
+        return None, err or 'p4 opened confirmation failed'
+    opened = {}
+    for line in out.splitlines():
+        if ' - ' not in line or not line.strip():
+            continue
+        path, details = line.split(' - ', 1)
+        opened[path.split('#', 1)[0].strip()] = details.split(None, 1)[0]
+    return opened, None
 
 if redirector_files:
-    rc, out, _err = run_p4(['-x', '-', 'fstat', '-T', 'depotFile,action,change'],
-                           stdin='\n'.join(redirector_files))
+    rc, out, fstat_err = run_p4(
+        ['-x', '-', 'fstat', '-T', 'depotFile,action,change'],
+        stdin='\n'.join(redirector_files),
+    )
+    blocks = _fstat_blocks(out) if rc == 0 else []
+    remaining = list(redirector_files)
     auto_opened = []
     not_opened = []
-    cur_path = None
-    cur_action = None
-    if rc == 0:
-        for line in out.splitlines():
-            line = line.strip()
-            if not line:
-                if cur_path and cur_action == 'delete':
-                    auto_opened.append(cur_path)
-                elif cur_path and cur_action is None:
-                    not_opened.append(cur_path)
-                cur_path = cur_action = None
-            elif line.startswith('... depotFile '):
-                cur_path = line[len('... depotFile '):]
-            elif line.startswith('... action '):
-                cur_action = line[len('... action '):]
-        if cur_path and cur_action == 'delete':
-            auto_opened.append(cur_path)
-        elif cur_path and cur_action is None:
-            not_opened.append(cur_path)
+    if rc != 0:
+        manifest['fstat_failures'] = [fstat_err or 'p4 fstat failed']
+        unknown_files.extend(redirector_files)
+    else:
+        for block in blocks:
+            reported = block.get('path')
+            path = _match_fstat_path(reported, remaining) if reported else None
+            if path is None:
+                continue
+            remaining.remove(path)
+            action = block.get('action')
+            if action == 'delete':
+                auto_opened.append(path)
+            elif action is None:
+                not_opened.append(path)
+            else:
+                unknown_files.append(path)
+                manifest['fstat_failures'].append(
+                    f'{path}: unexpected p4 action {action!r}'
+                )
+        unknown_files.extend(remaining)
+        for path in remaining:
+            manifest['fstat_failures'].append(f'{path}: omitted from p4 fstat output')
 
     if auto_opened:
         try:
             reopen_files(cl_num, auto_opened)
+            confirmed_candidates.extend(auto_opened)
             print(f"Reopened {len(auto_opened)} UE-auto-deleted redirector(s) into CL {cl_num}.")
-        except SystemExit:
+        except (Exception, SystemExit) as exc:
             delete_failures.extend(auto_opened)
-            sys.stderr.write("[apply_fixups] WARN: p4 reopen batch failed; see error above.\n")
+            for path in auto_opened:
+                manifest['mutation_outcomes'][path] = 'failed'
+            sys.stderr.write(f"[apply_fixups] WARN: p4 reopen batch failed: {exc}\n")
     if not_opened:
         # Per-file `p4 delete` so a single locked file doesn't sink the whole
         # batch. Files that hit "in use by another process" go to lock_failures
@@ -530,6 +593,7 @@ if redirector_files:
         for path in not_opened:
             rc, _out, err = run_p4(['delete', '-c', cl_num, path])
             if rc == 0:
+                confirmed_candidates.append(path)
                 continue
             err_lower = (err or '').lower()
             # Windows P4 emits "being used by another process" (the wording from
@@ -543,8 +607,10 @@ if redirector_files:
             )
             if any(marker in err_lower for marker in locked_markers):
                 lock_failures.append(path)
+                manifest['mutation_outcomes'][path] = 'pending-retry'
             else:
                 delete_failures.append(path)
+                manifest['mutation_outcomes'][path] = 'failed'
                 sys.stderr.write(f"[apply_fixups] WARN: p4 delete failed for {path}: {err.strip()}\n")
         if not_opened:
             print(f"Attempted p4 delete on {len(not_opened)} file(s); "
@@ -581,15 +647,44 @@ if lock_failures:
     print(f"[apply_fixups] Run after UE exits: "
           f"p4 -x - delete -c {cl_num} < {retry_script}")
 
-# 7) Manifest. The initial record was persisted before any mutation; update it
-# with the completed operation and retain any pre-delete diagnosis fields.
+# 7) Confirm final CL membership and action before declaring a deletion.
+if confirmed_candidates:
+    opened_paths, opened_error = _opened_in_cl_paths()
+    if opened_paths is None:
+        manifest['fstat_failures'].append(opened_error)
+        unknown_files.extend(confirmed_candidates)
+    else:
+        for path in confirmed_candidates:
+            exact = [
+                opened for opened in opened_paths
+                if _path_key(path) == _path_key(opened)
+                and opened_paths[opened] == 'delete'
+            ]
+            by_name = [
+                opened for opened in opened_paths
+                if os.path.basename(_path_key(opened)) == os.path.basename(_path_key(path))
+                and opened_paths[opened] == 'delete'
+            ]
+            if exact or len(by_name) == 1:
+                manifest['mutation_outcomes'][path] = 'confirmed'
+            else:
+                manifest['mutation_outcomes'][path] = 'unknown'
+                unknown_files.append(path)
+
+# The initial record was persisted before any mutation; update it with the
+# completed operation and retain all pre-delete diagnosis fields.
 manifest.update({
-    'redirectors_deleted': len(redirector_files) - len(delete_failures) - len(lock_failures),
+    'redirectors_deleted': sum(
+        outcome == 'confirmed'
+        for outcome in manifest['mutation_outcomes'].values()
+    ),
     'referencers_saved': saved,
     'referencer_save_failures': save_failures,
     'redirector_delete_failures': delete_failures,
     'redirector_lock_failures': lock_failures,
     'load_failures': load_failures,
+    'ue_deleted': ue_deleted,
+    'ue_delete_failures': ue_delete_failures,
     'umap_companions_included': umap_companion_files,
     'collections_reopened': collections_reopened,
     'lock_retry_list': retry_script,
@@ -605,6 +700,17 @@ if collection_reconciliation_error:
     fail(
         "Could not establish project collection attribution after mutation; "
         "no collection sweep was performed: " + collection_reconciliation_error
+    )
+
+incomplete = {
+    path: outcome for path, outcome in manifest['mutation_outcomes'].items()
+    if outcome != 'confirmed'
+}
+if incomplete:
+    fail(
+        "Deletion incomplete; confirmed "
+        f"{manifest['redirectors_deleted']}/{len(redirector_files)} file(s). "
+        + ', '.join(f'{path}: {outcome}' for path, outcome in incomplete.items())
     )
 
 print()
