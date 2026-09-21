@@ -61,7 +61,7 @@ classify -> code-ref filter -> directory-sample -> apply test CL
         -> soak (smoke playtest, tests, visual diff) -> apply full purge
 ```
 
-The fix-up safe set and the orphaned safe set both pass through this pipeline; only the per-direction details differ (orphan path skips the code-ref filter because there are no referencers).
+The fix-up safe set and the orphaned safe set both pass through this pipeline; only the per-direction details differ (the orphan path uses delete-only apply after the same code-reference filter).
 
 ### When to Extend Coverage
 
@@ -100,8 +100,8 @@ The skill takes up to two positional args: an optional **mode keyword** and an o
 |---|---|---|---|
 | `/fix-up-redirectors` | (none -- show menu) | -- | Print the "Common operations" menu below and ask which the user wants. Do NOT start any phase. |
 | `/fix-up-redirectors /Game/Art` | full (default) | `/Game/Art` | Run all phases: discover, classify, report, code-ref filter, apply both fix-up safe set and (if user opts in at Phase 3) orphaned safe set. |
-| `/fix-up-redirectors orphaned_safe` | orphan-only | `/Game` | Skip the fix-up path entirely. Discover, classify, report orphan counts, then Phase 4 against `orphaned.json` (the apply script auto-detects delete-only mode from the input shape). **Skip Phase 3.5** (orphans have no referencers, so source-code references can't apply). |
-| `/fix-up-redirectors orphaned_safe /Game/Art` | orphan-only | `/Game/Art` | Same as orphan-only, but scoped. |
+| `/fix-up-redirectors orphaned_safe` | orphan-only | `/Game` | Skip the fix-up path entirely. Discover, classify, report orphan counts, run Phase 3.5 against `orphaned.json`, then Phase 4 against `orphaned_filtered.json` (the apply script auto-detects delete-only mode from the input shape). |
+| `/fix-up-redirectors orphaned_safe /Game/Art` | orphan-only | `/Game/Art` | Same as orphan-only, but scoped and filtered through Phase 3.5 before deletion. |
 
 Anything that isn't the literal string `orphaned_safe` is treated as a scope. The mode keyword, if present, must come first.
 
@@ -119,9 +119,9 @@ Fix Up Redirectors -- common operations:
 
   /fix-up-redirectors orphaned_safe
       Delete the "orphaned safe" redirectors (target gone, zero referencers,
-      not checked out by anyone). Pure p4 deletes -- no referencer rewrites,
-      no code-ref filter. Cheap and routine; consider running every couple
-      of weeks.
+      not checked out by anyone). Phase 3.5 still verifies source-code
+      coverage before the delete-only apply. Cheap and routine; consider
+      running every couple of weeks.
 
   /fix-up-redirectors /Game/SomePath
       Full pipeline scoped to a sub-path: classify every redirector under
@@ -147,7 +147,7 @@ Pick the matching mode + scope from the user's reply and re-enter the skill at P
 The full pipeline has six phases (Discover, Classify, Report, Code-ref filter, Apply, Final report). Track progress in a TodoWrite list. Per-mode skips:
 
 - **full mode**: all six phases.
-- **orphan-only mode**: Discover, Classify, Report (orphan-focused), **skip Phase 3.5**, Apply (`--mode=delete-only`), Final report.
+- **orphan-only mode**: Discover, Classify, Report (orphan-focused), Phase 3.5 against the orphaned set, Apply (`--mode=delete-only`) using `orphaned_filtered.json`, Final report.
 
 ## Recommended: per-directory subset for broad purges
 
@@ -245,7 +245,7 @@ Do NOT proceed without explicit yes.
 
 ## Phase 3.5 - Filter against code references (host Python, only at apply time)
 
-**Skip this phase entirely in orphan-only mode.** Orphans have zero referencers by definition, including zero source-code referencers, so there's nothing for the filter to drop. Running it would just regenerate the cache for no benefit.
+Run this phase for both the fix-up safe set and the orphaned safe set. A registry-empty redirector can still have a literal source-code reference, so deletion also requires complete, matching source coverage.
 
 A redirector that's still referenced from C++/C#/Python source must NOT be fixed - the code would silently start pointing at a missing asset. We treat code references the same way we treat P4 checkouts: a hard block.
 
@@ -259,6 +259,8 @@ The cache lives at `./.local-data/code_references.yaml` (per-project, not checke
   --report-out tmp/redirectors/code_refs_report.json \
   --max-age-hours 24
 ```
+
+For the orphaned branch, run the same filter with `--safe-in tmp/redirectors/orphaned.json` and `--safe-out tmp/redirectors/orphaned_filtered.json`.
 
 The scan walks the cwd by default. Override with `--root <path>` if your code lives elsewhere. Default extensions cover C/C++/C#/Python/INI plus `.uproject`/`.uplugin`; override with `--extensions` (comma-separated) to include configs (`.yaml`, `.json`) if your project encodes asset paths in data.
 
@@ -287,10 +289,10 @@ SAFE_JSON="$PWD/tmp/redirectors/safe_filtered.json" \
   "${CLAUDE_PLUGIN_ROOT}/skills/fix-up-redirectors/scripts/apply_fixups.py"
 ```
 
-For the orphaned safe set (delete-only), point `SAFE_JSON` at `orphaned.json` from Phase 2. The script auto-detects the input shape and switches to delete-only mode (no referencer load/save, no code-ref filter required because orphans have no referencers):
+For the orphaned safe set (delete-only), point `SAFE_JSON` at `orphaned_filtered.json` from Phase 3.5. The script auto-detects the input shape and switches to delete-only mode:
 
 ```bash
-SAFE_JSON="$PWD/tmp/redirectors/orphaned.json" \
+SAFE_JSON="$PWD/tmp/redirectors/orphaned_filtered.json" \
   "${CLAUDE_PLUGIN_ROOT}/skills/ue-python-api/scripts/ue-runner.cmd" \
   "${CLAUDE_PLUGIN_ROOT}/skills/fix-up-redirectors/scripts/apply_fixups.py"
 ```
@@ -350,7 +352,7 @@ If there are blocked redirectors, suggest: **"Tell the blocked users to run `/fi
 
 - **Skipping validation in phase 4.** Never call `fixup_referencers` without first verifying the CL's opened set matches what discovery promised. A surprise file in the CL means the world moved between discovery and apply.
 - **Treating "checked out by me in another CL" as safe.** It's not. Other-CL checkouts are still blocked - the file would land in the wrong CL otherwise.
-- **Skipping the code-references filter for fix-up runs.** Phase 3.5 isn't optional for the fix-up path. A redirector that compiles into a string literal in C++/C#/Python source will silently break that code if you fix the redirector and the target asset later moves or is renamed. Always run the filter; never feed `safe.json` directly into Phase 4. (Orphan runs skip the filter — orphans have no referencers, including no source-code referencers.)
+- **Skipping the code-references filter.** Phase 3.5 isn't optional for either path. A redirector that compiles into a string literal in C++/C#/Python source will silently break that code if you fix the redirector and the target asset later moves or is renamed. Always run the filter; never feed `safe.json` or `orphaned.json` directly into Phase 4.
 - **Running a multi-thousand-file purge as the first apply.** For broad scopes use the per-directory subset reducer (`pick_one_per_dir.py`) for the test pass — it cuts apply time by 10x+ and surfaces breakage early when revert is still cheap.
 - **Passing a relative `SAFE_JSON` path from CI.** The apply script normalizes to absolute via `os.path.abspath`, but normalization happens in the commandlet's cwd (typically `<project>/Binaries/Win64`), not yours. Always pass an absolute path explicitly when scripting.
 - **Conflating orphaned redirectors with truly broken ones.** "target_exists: false" means two very different things depending on whether anyone references the redirector. The classifier splits these for you; don't lump them back together in tooling that consumes the report.

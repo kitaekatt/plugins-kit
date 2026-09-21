@@ -30,9 +30,9 @@ from redirector_record import load_discovery, save_safe_set, save_report
 def _is_orphaned(record):
     """Orphaned redirector: target gone AND nothing references it.
 
-    These are pure dead pointers — safe to delete with zero rewrite risk
-    (no referencers means no .uasset to rewrite, just `p4 delete` the
-    redirector file itself).
+    These have no registry referencers, so the apply operation is delete-only.
+    They still pass through the source-code reference filter before deletion;
+    registry emptiness does not establish complete source-code coverage.
     """
     refs = record.get('referencer_files') or []
     ref_pkgs = record.get('referencer_pkgs') or []

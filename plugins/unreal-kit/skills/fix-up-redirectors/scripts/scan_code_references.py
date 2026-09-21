@@ -18,7 +18,7 @@ sys.path.insert(0, os.path.normpath(os.path.join(os.path.dirname(__file__), '..'
 from bootstrap_guard import reexec_under_plugin_venv
 reexec_under_plugin_venv("unreal-kit")
 
-from code_refs import DEFAULT_EXTENSIONS, scan, save
+from code_refs import DEFAULT_EXTENSIONS, IncompleteScanError, scan, save
 
 
 def main():
@@ -35,7 +35,11 @@ def main():
 
     print(f"Scanning {args.root} for code references...")
     t0 = time.time()
-    refs, file_count, scanned_count, mounts = scan(args.root, extensions=extensions)
+    try:
+        refs, file_count, scanned_count, mounts = scan(args.root, extensions=extensions)
+    except IncompleteScanError as error:
+        print(f"Code-reference coverage failure: {error}", file=sys.stderr)
+        return 1
     elapsed = time.time() - t0
 
     save(args.out, refs, args.root, file_count, scanned_count, extensions, mounts=mounts)
@@ -44,7 +48,8 @@ def main():
     print(f"Mounts: {', '.join(sorted(mounts)) if mounts else '(none discovered)'}")
     print(f"Found {len(refs)} unique content references")
     print(f"Wrote {args.out}")
+    return 0
 
 
 if __name__ == '__main__':
-    main()
+    raise SystemExit(main())
