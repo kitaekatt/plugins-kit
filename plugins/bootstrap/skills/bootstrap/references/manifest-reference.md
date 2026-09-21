@@ -865,7 +865,9 @@ Optional shell command whose **exit code 0 means "present."** Use it when a
 tool's presence can't be expressed as name-on-PATH or a fixed install dir (app
 bundles, a `--version` smoke test, multiple acceptable locations). Runs via the
 same bash-on-Windows shim as `install`, so Unix syntax works regardless of the
-launching shell.
+launching shell. That bash is always Git for Windows' (`tool_check.resolve_bash()`),
+never WSL's `System32\bash.exe`, even when PATH lists System32 first: WSL's
+launcher would run the command inside a Linux distro, with the disk at `/mnt/c`.
 
 ```json
 {"name": "draw.io",
