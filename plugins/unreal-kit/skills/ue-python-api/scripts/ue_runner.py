@@ -13,10 +13,13 @@ Usage:
 """
 
 import argparse
+import json
 import os
+import secrets
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -57,6 +60,16 @@ class RunResult:
     # True when the remote dispatch may have reached UE but its completion was
     # lost.  Such a result must never be replayed through a commandlet.
     completion_unknown: bool = False
+
+
+@dataclass(frozen=True)
+class _CommandletInvocation:
+    """Private files used to correlate one commandlet process with its script."""
+
+    directory: Path
+    wrapper: Path
+    completion: Path
+    token: str
 
 
 class ProjectResolutionError(ValueError):
@@ -308,52 +321,66 @@ def _run_commandlet(script_path: str, config: RunnerConfig) -> RunResult:
     exe = config.editor_cmd_exe
     uproject = config.uproject
 
-    command = [
-        exe,
-        uproject,
-        "-run=pythonscript",
-        f"-script={script_path}",
-        "-stdout",
-        "-Unattended",
-        "-NoLoadStartupPackages",
-        "-FullStdOutLogOutput",
-    ]
-
     _info(f"Running commandlet...")
-    _info(f"  {' '.join(command)}")
 
     # Snapshot output dir before execution
     output_dir = _get_output_dir(config)
     pre_snapshot = _snapshot_output_dir(output_dir)
 
     start = time.time()
-    try:
-        proc = subprocess.run(
-            command,
-            capture_output=True,
-            text=True,
-            # No timeout — user can Ctrl-C if needed
-            creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
-        )
-    except FileNotFoundError:
-        return RunResult(
-            success=False, mode="commandlet",
-            error=f"Editor executable not found: {exe}",
-        )
+    project_dir = Path(uproject).parent
+    with _make_commandlet_invocation(script_path, output_dir, project_dir) as invocation:
+        command = [
+            exe,
+            uproject,
+            "-run=pythonscript",
+            f"-script={invocation.wrapper}",
+            "-stdout",
+            "-Unattended",
+            "-NoLoadStartupPackages",
+            "-FullStdOutLogOutput",
+        ]
+        _info(f"  {' '.join(command)}")
+        try:
+            proc = subprocess.run(
+                command,
+                capture_output=True,
+                text=True,
+                # No timeout -- user can Ctrl-C if needed
+                creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
+            )
+        except FileNotFoundError:
+            return RunResult(
+                success=False, mode="commandlet",
+                error=f"Editor executable not found: {exe}",
+            )
+
+        completion_outputs = _read_completion_outputs(invocation, script_path)
 
     elapsed = time.time() - start
-    output_file = _find_new_output(output_dir, pre_snapshot)
+    if completion_outputs is not None:
+        output_file = _first_existing_output(completion_outputs)
+    else:
+        # Preserve the historical zero-exit behavior for an external commandlet
+        # wrapper that did not emit our private record.  This branch is not a
+        # reason to tolerate a nonzero exit: output alone is never completion
+        # evidence for this invocation.
+        output_file = _find_new_output(output_dir, pre_snapshot) if proc.returncode == 0 else None
 
     # UE commandlets frequently exit non-zero due to asset loading warnings
     # (e.g. Niagara modules) that are unrelated to the Python script.
-    # Consider it a success if the output file was produced, or if stdout
-    # contains no Python-level error indicators.
-    has_script_error = _detect_script_error(proc.stdout, script_path)
+    # A nonzero exit may be tolerated only when our wrapper recorded normal
+    # completion for this exact invocation.  Output-file presence alone is not
+    # evidence because another process may have changed the directory.
+    has_script_error = _detect_script_error(
+        f"{proc.stdout}\n{proc.stderr}", script_path
+    )
 
     if has_script_error:
         success = False
-    elif output_file is not None:
-        # Script produced output — success regardless of UE exit code
+    elif completion_outputs is not None:
+        # The wrapper writes the record only after normal completion, including
+        # an intentional SystemExit(0).
         success = True
     else:
         success = proc.returncode == 0
@@ -361,7 +388,7 @@ def _run_commandlet(script_path: str, config: RunnerConfig) -> RunResult:
     error = ""
     if not success:
         if has_script_error:
-            error = "Python script error detected in output (see stdout)"
+            error = "Python script error detected in commandlet output (see stdout/stderr)"
         else:
             error = proc.stderr
 
@@ -410,6 +437,137 @@ def _detect_script_error(stdout: str, script_path: str) -> bool:
         block = []
 
     return any(script_name in b for b in block)
+
+
+def _make_commandlet_invocation(
+    script_path: str, output_dir: Path | None, project_dir: Path
+):
+    """Create a disposable wrapper and its invocation-specific completion path.
+
+    The wrapper runs the consumer script through ``runpy.run_path`` so the
+    script sees its own ``__file__`` and ``__main__`` context.  It writes the
+    completion record only after normal return or ``SystemExit(0)``.  The
+    project-local ephemeral directory also prevents stale records from an
+    earlier run from being accepted without writing user data beside the code.
+    """
+    invocation_root = project_dir / ".local-data" / "unreal-kit" / "commandlet"
+    invocation_root.mkdir(parents=True, exist_ok=True)
+    temp_dir = tempfile.TemporaryDirectory(prefix="ue-commandlet-", dir=invocation_root)
+    directory = Path(temp_dir.name)
+    token = secrets.token_urlsafe(32)
+    wrapper = directory / "invoke.py"
+    completion = directory / "completion.json"
+    target = str(Path(script_path).resolve())
+    output = str(output_dir.resolve()) if output_dir is not None else ""
+    wrapper.write_text(
+        _invocation_wrapper_source(
+            target=target,
+            output_dir=output,
+            completion=str(completion),
+            token=token,
+        ),
+        encoding="utf-8",
+    )
+    return _InvocationContext(temp_dir, _CommandletInvocation(directory, wrapper, completion, token))
+
+
+class _InvocationContext:
+    def __init__(self, temp_dir, invocation: _CommandletInvocation):
+        self._temp_dir = temp_dir
+        self.invocation = invocation
+
+    def __enter__(self):
+        return self.invocation
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        self._temp_dir.cleanup()
+        return False
+
+
+def _invocation_wrapper_source(*, target: str, output_dir: str, completion: str, token: str) -> str:
+    """Return source for the commandlet-side per-invocation wrapper."""
+    return f'''import json
+import runpy
+from pathlib import Path
+
+_TARGET = {target!r}
+_OUTPUT_DIR = {output_dir!r}
+_COMPLETION = {completion!r}
+_TOKEN = {token!r}
+
+
+def _snapshot():
+    if not _OUTPUT_DIR:
+        return {{}}
+    root = Path(_OUTPUT_DIR)
+    if not root.is_dir():
+        return {{}}
+    result = {{}}
+    for item in root.iterdir():
+        if item.suffix.lower() in (".yaml", ".yml") and item.is_file():
+            stat = item.stat()
+            result[str(item)] = (stat.st_mtime_ns, stat.st_size)
+    return result
+
+
+def _write_completion(before):
+    after = _snapshot()
+    changed = [
+        path for path, signature in after.items()
+        if before.get(path) != signature
+    ]
+    record = {{"token": _TOKEN, "script": _TARGET, "outputs": changed}}
+    temporary = Path(_COMPLETION + ".tmp")
+    temporary.write_text(json.dumps(record), encoding="utf-8")
+    temporary.replace(_COMPLETION)
+
+
+_before = _snapshot()
+try:
+    # The commandlet invokes this wrapper, but the consumer must observe the
+    # original script as argv[0] and receive no wrapper implementation args.
+    import sys
+    sys.argv = [_TARGET]
+    runpy.run_path(_TARGET, run_name="__main__")
+except SystemExit as exc:
+    if exc.code not in (None, 0):
+        raise
+    _write_completion(_before)
+else:
+    _write_completion(_before)
+'''
+
+
+def _read_completion_outputs(
+    invocation: _CommandletInvocation, script_path: str
+) -> list[str] | None:
+    """Validate this invocation's completion record and return its outputs."""
+    try:
+        record = json.loads(invocation.completion.read_text(encoding="utf-8"))
+    except (FileNotFoundError, OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    if not isinstance(record, dict):
+        return None
+    if record.get("token") != invocation.token:
+        return None
+    try:
+        expected_script = str(Path(script_path).resolve())
+    except (OSError, RuntimeError):
+        return None
+    if record.get("script") != expected_script:
+        return None
+    outputs = record.get("outputs", [])
+    if not isinstance(outputs, list) or not all(isinstance(path, str) for path in outputs):
+        return None
+    return outputs
+
+
+def _first_existing_output(outputs: list[str]) -> str | None:
+    """Return the first output observed by the wrapper that still exists."""
+    for path in outputs:
+        if Path(path).is_file():
+            return path
+    return None
 
 
 def _snapshot_output_dir(output_dir: Path | None) -> dict[str, float]:
