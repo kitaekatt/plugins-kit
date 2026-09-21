@@ -371,6 +371,51 @@ class TestRemoteDispatchAmbiguity:
     @patch("ue_runner._run_commandlet")
     @patch("ue_runner._try_remote")
     @patch("ue_runner._resolve_project")
+    def test_commandlet_budget_reaches_connection_fallback(
+        self, mock_resolve, mock_remote, mock_commandlet, tmp_path
+    ):
+        script = tmp_path / "test.py"
+        script.write_text("pass")
+        cfg = _make_valid_config(tmp_path)
+        mock_resolve.return_value = cfg
+        mock_remote.return_value = None
+        mock_commandlet.return_value = RunResult(success=False, mode="commandlet")
+
+        run_ue_script(
+            str(script), force_mode=None, config=cfg, commandlet_timeout_s=12.0
+        )
+
+        mock_commandlet.assert_called_once_with(str(script.resolve()), cfg, timeout_s=12.0)
+
+    @patch("ue_runner._run_commandlet")
+    @patch("ue_runner._try_remote")
+    @patch("ue_runner._resolve_project")
+    def test_commandlet_budget_reaches_opt_in_remote_error_fallback(
+        self, mock_resolve, mock_remote, mock_commandlet, tmp_path
+    ):
+        script = tmp_path / "test.py"
+        script.write_text("pass")
+        cfg = _make_valid_config(tmp_path)
+        mock_resolve.return_value = cfg
+        mock_remote.return_value = RunResult(
+            success=False, mode="remote", error="script error"
+        )
+        mock_commandlet.return_value = RunResult(success=True, mode="commandlet")
+
+        result = run_ue_script(
+            str(script),
+            force_mode=None,
+            config=cfg,
+            fallback_on_error=True,
+            commandlet_timeout_s=18.0,
+        )
+
+        assert result.success is True
+        mock_commandlet.assert_called_once_with(str(script.resolve()), cfg, timeout_s=18.0)
+
+    @patch("ue_runner._run_commandlet")
+    @patch("ue_runner._try_remote")
+    @patch("ue_runner._resolve_project")
     def test_remote_success_returns_immediately(
         self, mock_resolve, mock_remote, mock_commandlet, tmp_path
     ):

@@ -37,6 +37,20 @@ Run scripts without opening the full editor UI:
 UnrealEditor-Cmd.exe "C:/path/to/project.uproject" -ExecutePythonScript="C:/path/to/script.py"
 ```
 
+The host runner exposes the same operation through `run_ue_script` and its
+CLI. Use `--commandlet-timeout <seconds>` to bound only the headless
+commandlet; the remote editor transport keeps its own contract. The Python
+API argument is `commandlet_timeout_s=None`. The value must be finite and
+positive. When it is unset, the legacy unbounded behavior remains available,
+but it is not a hang guarantee. Unattended jobs must provide an explicit
+budget.
+
+A commandlet timeout terminates and reaps the child through the subprocess
+boundary, retains partial stdout and stderr, returns a nonzero result with
+completion marked unknown, and does not retry the script. A commandlet may
+have applied partial asset changes, so callers must inspect the retained
+diagnosis before deciding what to do next.
+
 **Use case:** CI/CD, batch processing, automated asset audits — and the default mode when the terminal runner detects no running Editor.
 
 **What works in commandlet mode:**

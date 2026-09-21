@@ -1,6 +1,7 @@
 """Tests for fix-up-redirectors p4cli helpers."""
 
 import sys
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -45,6 +46,158 @@ class TestGetP4User:
         monkeypatch.setenv("P4USER", "   ")
         monkeypatch.setattr(p4cli, "run_p4", lambda *a, **kw: (0, "User name: dan\n", ""))
         assert p4cli.get_p4_user() == "dan"
+
+
+class TestTimeoutBudgets:
+    def test_query_uses_query_budget_even_with_global_x_option(self, monkeypatch):
+        calls = []
+
+        def fake_run(command, **kwargs):
+            calls.append((command, kwargs))
+            return subprocess.CompletedProcess(command, 0, "ok", "")
+
+        monkeypatch.setenv("UNREAL_KIT_P4_QUERY_TIMEOUT_S", "1.25")
+        monkeypatch.setenv("UNREAL_KIT_P4_MUTATION_TIMEOUT_S", "9")
+        monkeypatch.setattr(p4cli.subprocess, "run", fake_run)
+
+        result = p4cli.run_p4(["-x", "-", "fstat"], stdin="//depot/a")
+
+        assert tuple(result) == (0, "ok", "")
+        assert calls[0][1]["timeout"] == 1.25
+
+    @pytest.mark.parametrize(
+        "args",
+        [
+            ["edit", "-c", "123"],
+            ["-x", "-", "delete", "-c", "123"],
+            ["reopen", "-c", "123"],
+            ["change", "-i"],
+        ],
+    )
+    def test_mutations_use_mutation_budget(self, monkeypatch, args):
+        calls = []
+
+        def fake_run(command, **kwargs):
+            calls.append(kwargs)
+            return subprocess.CompletedProcess(command, 0, "", "")
+
+        monkeypatch.setenv("UNREAL_KIT_P4_QUERY_TIMEOUT_S", "0.25")
+        monkeypatch.setenv("UNREAL_KIT_P4_MUTATION_TIMEOUT_S", "7.5")
+        monkeypatch.setattr(p4cli.subprocess, "run", fake_run)
+
+        p4cli.run_p4(args)
+
+        assert calls[0]["timeout"] == 7.5
+
+    def test_large_mutation_batches_use_the_independent_larger_budget(self, monkeypatch):
+        calls = []
+
+        def fake_run(command, **kwargs):
+            calls.append((command, kwargs))
+            return subprocess.CompletedProcess(command, 0, "", "")
+
+        monkeypatch.setenv("UNREAL_KIT_P4_QUERY_TIMEOUT_S", "0.25")
+        monkeypatch.setenv("UNREAL_KIT_P4_MUTATION_TIMEOUT_S", "30")
+        monkeypatch.setattr(p4cli.subprocess, "run", fake_run)
+
+        p4cli.delete_files("123", [f"/a/{index}.uasset" for index in range(450)])
+
+        assert len(calls) == 3
+        assert all(kwargs["timeout"] == 30 for _command, kwargs in calls)
+
+    def test_explicit_override_wins_over_selected_environment_budget(self, monkeypatch):
+        calls = []
+        monkeypatch.setenv("UNREAL_KIT_P4_QUERY_TIMEOUT_S", "1")
+        monkeypatch.setenv("UNREAL_KIT_P4_MUTATION_TIMEOUT_S", "2")
+        monkeypatch.setattr(
+            p4cli.subprocess,
+            "run",
+            lambda command, **kwargs: (
+                calls.append(kwargs)
+                or subprocess.CompletedProcess(command, 0, "", "")
+            ),
+        )
+
+        p4cli.run_p4(["delete", "//depot/a"], timeout_s=11)
+
+        assert calls[0]["timeout"] == 11
+
+    def test_unset_budgets_preserve_unbounded_legacy_call(self, monkeypatch):
+        calls = []
+        monkeypatch.delenv("UNREAL_KIT_P4_QUERY_TIMEOUT_S", raising=False)
+        monkeypatch.delenv("UNREAL_KIT_P4_MUTATION_TIMEOUT_S", raising=False)
+        monkeypatch.setattr(
+            p4cli.subprocess,
+            "run",
+            lambda command, **kwargs: (
+                calls.append(kwargs)
+                or subprocess.CompletedProcess(command, 0, "", "")
+            ),
+        )
+
+        p4cli.run_p4(["info"])
+
+        assert calls[0]["timeout"] is None
+
+    @pytest.mark.parametrize(
+        "name,value,args",
+        [
+            ("UNREAL_KIT_P4_QUERY_TIMEOUT_S", "0", ["info"]),
+            ("UNREAL_KIT_P4_MUTATION_TIMEOUT_S", "nan", ["delete", "//depot/a"]),
+            ("UNREAL_KIT_P4_QUERY_TIMEOUT_S", "not-a-number", ["info"]),
+        ],
+    )
+    def test_invalid_config_is_rejected_before_subprocess(self, monkeypatch, name, value, args):
+        calls = []
+        monkeypatch.setenv(name, value)
+        monkeypatch.setattr(
+            p4cli.subprocess,
+            "run",
+            lambda *args, **kwargs: calls.append((args, kwargs)),
+        )
+
+        with pytest.raises(p4cli.P4TimeoutConfigError):
+            p4cli.run_p4(args)
+
+        assert calls == []
+
+    def test_timeout_returns_partial_evidence_without_retry(self, monkeypatch):
+        calls = []
+
+        def fake_run(command, **kwargs):
+            calls.append((command, kwargs))
+            raise subprocess.TimeoutExpired(
+                command, kwargs["timeout"], output="partial stdout", stderr="partial stderr"
+            )
+
+        monkeypatch.setenv("UNREAL_KIT_P4_QUERY_TIMEOUT_S", "1")
+        monkeypatch.setattr(p4cli.subprocess, "run", fake_run)
+
+        result = p4cli.run_p4(["fstat", "//depot/a"])
+
+        assert result.returncode != 0
+        assert result.timed_out is True
+        assert "partial stdout" in result.stdout
+        assert "partial stderr" in result.stderr
+        assert "timed out" in result.stderr
+        assert len(calls) == 1
+
+    def test_timeout_is_phase_specific_for_die_wrapper(self, monkeypatch):
+        monkeypatch.setenv("UNREAL_KIT_P4_MUTATION_TIMEOUT_S", "2")
+
+        def fake_run(command, **kwargs):
+            raise subprocess.TimeoutExpired(
+                command, kwargs["timeout"], output="partial", stderr="child stopped"
+            )
+
+        monkeypatch.setattr(p4cli.subprocess, "run", fake_run)
+
+        with pytest.raises(p4cli.P4TimeoutError) as exc_info:
+            p4cli.run_p4_or_die(["delete", "//depot/a"], what="redirector delete")
+
+        assert exc_info.value.label == "redirector delete"
+        assert exc_info.value.result.timed_out is True
+        assert "partial" in exc_info.value.result.stdout
 
 
 class TestDeleteFiles:

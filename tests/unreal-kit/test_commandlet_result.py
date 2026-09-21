@@ -224,3 +224,73 @@ def test_stale_or_wrong_completion_token_does_not_confirm(tmp_path, monkeypatch)
     result = _run_commandlet(str(script), _config(tmp_path))
 
     assert result.success is False
+
+
+def test_commandlet_timeout_is_forwarded_and_retains_partial_evidence(tmp_path, monkeypatch):
+    script = tmp_path / "script.py"
+    script.write_text("pass\n")
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append(kwargs)
+        raise subprocess.TimeoutExpired(
+            command, kwargs["timeout"], output="partial stdout", stderr="partial stderr"
+        )
+
+    monkeypatch.setattr("ue_runner.subprocess.run", fake_run)
+    monkeypatch.setattr("ue_runner._get_output_dir", lambda config: tmp_path / "output")
+
+    result = _run_commandlet(str(script), _config(tmp_path), timeout_s=2.5)
+
+    assert result.success is False
+    assert result.mode == "commandlet"
+    assert result.stdout == "partial stdout"
+    assert result.stderr == "partial stderr"
+    assert "timed out" in result.error.lower()
+    assert result.output_file is None
+    assert calls[0]["timeout"] == 2.5
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize("timeout_s", [0, -1, float("inf"), float("nan")])
+def test_commandlet_timeout_must_be_finite_and_positive(tmp_path, monkeypatch, timeout_s):
+    script = tmp_path / "script.py"
+    script.write_text("pass\n")
+    monkeypatch.setattr(
+        "ue_runner.subprocess.run",
+        lambda *args, **kwargs: pytest.fail("invalid timeout reached subprocess"),
+    )
+
+    result = _run_commandlet(str(script), _config(tmp_path), timeout_s=timeout_s)
+
+    assert result.success is False
+    assert "timeout" in result.error.lower()
+
+
+def test_cli_forwards_commandlet_timeout(tmp_path, monkeypatch):
+    import sys
+    import ue_runner
+
+    config = _config(tmp_path)
+    script = tmp_path / "script.py"
+    script.write_text("pass\n")
+    captured = {}
+
+    monkeypatch.setattr(ue_runner, "load_config", lambda path=None: config)
+
+    def fake_run_ue_script(**kwargs):
+        captured.update(kwargs)
+        return ue_runner.RunResult(success=True, mode="commandlet")
+
+    monkeypatch.setattr(ue_runner, "run_ue_script", fake_run_ue_script)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["ue_runner.py", str(script), "--mode", "commandlet", "--commandlet-timeout", "4.5"],
+    )
+
+    with pytest.raises(SystemExit) as exc_info:
+        ue_runner.main()
+
+    assert exc_info.value.code == 0
+    assert captured["commandlet_timeout_s"] == 4.5

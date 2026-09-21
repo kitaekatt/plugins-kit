@@ -4,6 +4,7 @@ CCP: changes to the P4 CLI invocation contract change here. Used together by
 anything talking to P4 from a Claude script - hence the small module.
 """
 import os
+import math
 import shutil
 import subprocess
 import sys
@@ -44,18 +45,148 @@ def find_p4():
 
 P4 = find_p4()
 
-
-def run_p4(args, stdin=None):
-    """Run a p4 command. Returns (rc, stdout, stderr); does not raise."""
-    result = subprocess.run([P4] + list(args), capture_output=True, text=True, input=stdin, check=False)
-    return result.returncode, result.stdout, result.stderr
+QUERY_TIMEOUT_ENV = 'UNREAL_KIT_P4_QUERY_TIMEOUT_S'
+MUTATION_TIMEOUT_ENV = 'UNREAL_KIT_P4_MUTATION_TIMEOUT_S'
+P4_TIMEOUT_RETURN_CODE = 124
 
 
-def run_p4_or_die(args, stdin=None, what=None):
+class P4TimeoutConfigError(ValueError):
+    """A configured P4 timeout is missing, non-finite, or not positive."""
+
+
+class P4TimeoutError(SystemExit):
+    """A P4 child timed out and its completion state is unknown."""
+
+    def __init__(self, label, result):
+        super().__init__(1)
+        self.label = label
+        self.result = result
+
+
+class P4Result(tuple):
+    """Three-value tuple-compatible P4 result with diagnostics."""
+
+    def __new__(cls, returncode, stdout, stderr, *, timed_out=False, spawn_error=False):
+        result = super().__new__(cls, (returncode, stdout, stderr))
+        result.returncode = returncode
+        result.stdout = stdout
+        result.stderr = stderr
+        result.timed_out = timed_out
+        result.spawn_error = spawn_error
+        return result
+
+
+def _as_text(value):
+    if value is None:
+        return ''
+    if isinstance(value, bytes):
+        return value.decode(errors='replace')
+    return str(value)
+
+
+def _configured_timeout(name):
+    raw = os.environ.get(name)
+    if raw is None or not raw.strip():
+        return None
+    try:
+        value = float(raw)
+    except (TypeError, ValueError) as exc:
+        raise P4TimeoutConfigError(
+            f'{name} must be a finite positive number; got {raw!r}'
+        ) from exc
+    if not math.isfinite(value) or value <= 0:
+        raise P4TimeoutConfigError(
+            f'{name} must be a finite positive number; got {raw!r}'
+        )
+    return value
+
+
+def _command_name(args):
+    """Find the P4 verb after global options such as ``-x -``."""
+    args = list(args)
+    index = 0
+    while index < len(args):
+        token = str(args[index])
+        if token == '-x':
+            index += 2
+            continue
+        if token in ('-ztag', '-s', '-G', '-C', '-p', '-u', '-c', '-P', '-H', '-Q'):
+            # These options either stand alone or consume their next token.
+            index += 2 if token in ('-p', '-u', '-c', '-P', '-H', '-Q') else 1
+            continue
+        if token.startswith('-'):
+            index += 1
+            continue
+        return token.lower()
+    return ''
+
+
+_QUERY_COMMANDS = frozenset({'info', 'where', 'opened', 'fstat', 'changes', 'dirs'})
+
+
+def _timeout_for(args, timeout_s):
+    if timeout_s is not None:
+        try:
+            value = float(timeout_s)
+        except (TypeError, ValueError) as exc:
+            raise P4TimeoutConfigError(
+                f'timeout_s must be a finite positive number; got {timeout_s!r}'
+            ) from exc
+        if not math.isfinite(value) or value <= 0:
+            raise P4TimeoutConfigError(
+                f'timeout_s must be a finite positive number; got {timeout_s!r}'
+            )
+        return value
+    command = _command_name(args)
+    env_name = QUERY_TIMEOUT_ENV if command in _QUERY_COMMANDS else MUTATION_TIMEOUT_ENV
+    return _configured_timeout(env_name)
+
+
+def run_p4(args, stdin=None, timeout_s=None):
+    """Run P4 once with the command's query or mutation budget.
+
+    Unset environment settings retain the historical unbounded subprocess
+    call. A timeout returns partial evidence and a nonzero result; it never
+    retries a command whose completion is unknown.
+    """
+    args = list(args)
+    timeout = _timeout_for(args, timeout_s)
+    command = [P4] + args
+    try:
+        result = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            input=stdin,
+            check=False,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired as exc:
+        stdout = _as_text(getattr(exc, 'stdout', None) or getattr(exc, 'output', None))
+        stderr = _as_text(getattr(exc, 'stderr', None))
+        detail = f'P4 command timed out after {timeout:g}s'
+        if stderr:
+            stderr = f'{stderr}\n{detail}'
+        else:
+            stderr = detail
+        return P4Result(
+            P4_TIMEOUT_RETURN_CODE, stdout, stderr, timed_out=True
+        )
+    except OSError as exc:
+        return P4Result(
+            127, '', f'P4 command could not start: {exc}', spawn_error=True
+        )
+    return P4Result(result.returncode, result.stdout, result.stderr)
+
+
+def run_p4_or_die(args, stdin=None, what=None, timeout_s=None):
     """Run a p4 command. Exits with a clear error on non-zero return."""
-    rc, out, err = run_p4(args, stdin=stdin)
+    result = run_p4(args, stdin=stdin, timeout_s=timeout_s)
+    rc, out, err = result
     if rc != 0:
         label = what or f"p4 {' '.join(args)}"
+        if getattr(result, 'timed_out', False):
+            raise P4TimeoutError(label, result)
         sys.stderr.write(f"{label} failed (rc={rc}):\n{err}\n")
         sys.exit(1)
     return out
@@ -192,7 +323,10 @@ def get_p4_user():
     env_user = os.environ.get('P4USER', '').strip()
     if env_user:
         return env_user
-    rc, out, _err = run_p4(['info'])
+    result = run_p4(['info'])
+    rc, out, _err = result
+    if getattr(result, 'timed_out', False):
+        raise P4TimeoutError('p4 info', result)
     if rc != 0:
         return ''
     for line in out.splitlines():

@@ -92,6 +92,36 @@ The skill's value is the explicit map of what's covered and what isn't. Every re
 - The unreal-kit plugin installed; `ue-runner` available
 - A working dir for outputs (the skill defaults to `tmp/redirectors/` in cwd)
 
+## Unattended execution budgets
+
+P4 calls use two independent optional budgets. Set
+`UNREAL_KIT_P4_QUERY_TIMEOUT_S` for `info`, `where`, `opened`, `fstat`, and
+`changes`. Set `UNREAL_KIT_P4_MUTATION_TIMEOUT_S` for `change`, `edit`,
+`delete`, and `reopen`. Values must be finite and positive. An explicit
+`run_p4(..., timeout_s=...)` value takes precedence over either environment
+setting. If a setting is unset, the historical unbounded subprocess behavior
+is preserved. That legacy behavior is not a guarantee that a command will
+finish, so unattended use must supply both budgets.
+
+The commandlet runner accepts the independent optional
+`--commandlet-timeout <seconds>` budget. A timed-out query fails closed. A
+timed-out mutation or commandlet retains partial output, reports completion as
+unknown, and is never retried automatically. The apply manifest records the
+incomplete phase and pending CL so the result can be inspected before any
+follow-up action. These budgets do not bound the raw P4 retry command in the
+Phase 4 tail; that command runs after the UE process exits.
+
+For each Phase 1 or Phase 4 runner invocation below, set the optional argument
+array once in the shell. Leave the variable unset to preserve the legacy
+unbounded behavior:
+
+```bash
+ue_timeout_args=()
+if [ -n "${UNREAL_KIT_COMMANDLET_TIMEOUT_S:-}" ]; then
+  ue_timeout_args=(--commandlet-timeout "$UNREAL_KIT_COMMANDLET_TIMEOUT_S")
+fi
+```
+
 ## Arguments and modes
 
 The skill takes up to two positional args: an optional **mode keyword** and an optional **scope** (a UE content path like `/Game/Art`). Either, both, or neither may be present.
@@ -179,6 +209,7 @@ mkdir -p tmp/redirectors
 MSYS_NO_PATHCONV=1 SCOPE="${1:-/Game}" \
   "${CLAUDE_PLUGIN_ROOT}/skills/ue-python-api/scripts/ue-runner.cmd" \
   "${CLAUDE_PLUGIN_ROOT}/skills/fix-up-redirectors/scripts/discover_redirectors.py" \
+  "${ue_timeout_args[@]}" \
   --copy-output tmp/redirectors/
 ```
 
@@ -291,7 +322,8 @@ For the fix-up safe set, use `safe_filtered.json` from Phase 3.5, NOT the raw `s
 ```bash
 SAFE_JSON="$PWD/tmp/redirectors/safe_filtered.json" \
   "${CLAUDE_PLUGIN_ROOT}/skills/ue-python-api/scripts/ue-runner.cmd" \
-  "${CLAUDE_PLUGIN_ROOT}/skills/fix-up-redirectors/scripts/apply_fixups.py"
+  "${CLAUDE_PLUGIN_ROOT}/skills/fix-up-redirectors/scripts/apply_fixups.py" \
+  "${ue_timeout_args[@]}"
 ```
 
 For the orphaned safe set (delete-only), point `SAFE_JSON` at `orphaned_filtered.json` from Phase 3.5. The script auto-detects the input shape and switches to delete-only mode:
@@ -299,7 +331,8 @@ For the orphaned safe set (delete-only), point `SAFE_JSON` at `orphaned_filtered
 ```bash
 SAFE_JSON="$PWD/tmp/redirectors/orphaned_filtered.json" \
   "${CLAUDE_PLUGIN_ROOT}/skills/ue-python-api/scripts/ue-runner.cmd" \
-  "${CLAUDE_PLUGIN_ROOT}/skills/fix-up-redirectors/scripts/apply_fixups.py"
+  "${CLAUDE_PLUGIN_ROOT}/skills/fix-up-redirectors/scripts/apply_fixups.py" \
+  "${ue_timeout_args[@]}"
 ```
 
 To prepend a project-specific CL tag (e.g. for naming conventions like `[Mix, Tool]`), pass it via env:
@@ -307,7 +340,8 @@ To prepend a project-specific CL tag (e.g. for naming conventions like `[Mix, To
 ```bash
 CL_DESC_SUFFIX="[Mix, Tool]" SAFE_JSON="$PWD/tmp/redirectors/safe_filtered.json" \
   "${CLAUDE_PLUGIN_ROOT}/skills/ue-python-api/scripts/ue-runner.cmd" \
-  "${CLAUDE_PLUGIN_ROOT}/skills/fix-up-redirectors/scripts/apply_fixups.py"
+  "${CLAUDE_PLUGIN_ROOT}/skills/fix-up-redirectors/scripts/apply_fixups.py" \
+  "${ue_timeout_args[@]}"
 ```
 
 The apply script does (fix-up mode):

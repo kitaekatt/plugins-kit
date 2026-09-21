@@ -64,6 +64,11 @@ from p4cli import (
     run_p4, run_p4_or_die,
 )
 try:
+    from p4cli import P4TimeoutError
+except ImportError:  # minimal provider shim used by offline tests
+    class P4TimeoutError(SystemExit):
+        pass
+try:
     from p4cli import where_records
 except ImportError:  # minimal provider shim used by offline tests
     where_records = None
@@ -277,7 +282,13 @@ else:
         "Automated cleanup via /fix-up-redirectors. Rewrites referencers to "
         "point at redirector targets and deletes the redirector .uasset files."
     )
-cl_num = create_pending_cl(description, client=os.environ.get('P4CLIENT'))
+try:
+    cl_num = create_pending_cl(description, client=os.environ.get('P4CLIENT'))
+except P4TimeoutError as exc:
+    fail(
+        "P4 change creation timed out; completion is unknown and no retry was "
+        f"attempted: {exc.label}"
+    )
 print(f"Created CL {cl_num}")
 
 # Persist a recovery record before opening files or asking UE to mutate an
@@ -364,7 +375,23 @@ if MODE == 'fixup':
 
     # 4a) p4 edit only the non-redirector referencer files (so UE can re-save them).
     if referencer_files:
-        edit_files(cl_num, referencer_files)
+        try:
+            edit_files(cl_num, referencer_files)
+        except P4TimeoutError as exc:
+            manifest['pre_delete_phase'] = 'p4_mutation_timeout'
+            manifest['pre_delete_failures'] = [
+                f"edit: completion unknown ({exc.label})"
+            ]
+            manifest['p4_timeout_evidence'] = {
+                'phase': 'edit',
+                'stdout': exc.result.stdout,
+                'stderr': exc.result.stderr,
+            }
+            _persist_manifest(manifest)
+            fail(
+                "P4 edit timed out; completion is unknown. The partial CL and "
+                "manifest were preserved and no retry was attempted."
+            )
         print(f"Opened {len(referencer_files)} referencer file(s) for edit in CL {cl_num}.")
 
     # 4b) UE: load each referencer (resolves redirectors at link time), rewrite
@@ -483,6 +510,21 @@ if MODE == 'fixup':
         try:
             reopen_files(cl_num, collections_reopened)
             print(f"Reopened {len(collections_reopened)} UE-touched .collection file(s) into CL {cl_num}.")
+        except P4TimeoutError as exc:
+            manifest['pre_delete_phase'] = 'p4_mutation_timeout'
+            manifest['pre_delete_failures'] = [
+                f"reopen collections: completion unknown ({exc.label})"
+            ]
+            manifest['p4_timeout_evidence'] = {
+                'phase': 'reopen collections',
+                'stdout': exc.result.stdout,
+                'stderr': exc.result.stderr,
+            }
+            _persist_manifest(manifest)
+            fail(
+                "P4 collection reopen timed out; completion is unknown. The "
+                "partial CL and manifest were preserved and no retry was attempted."
+            )
         except SystemExit:
             sys.stderr.write("[apply_fixups] WARN: p4 reopen of .collection files failed; "
                              "they remain in default CL.\n")
@@ -581,6 +623,23 @@ if redirector_files:
             reopen_files(cl_num, auto_opened)
             confirmed_candidates.extend(auto_opened)
             print(f"Reopened {len(auto_opened)} UE-auto-deleted redirector(s) into CL {cl_num}.")
+        except P4TimeoutError as exc:
+            for path in auto_opened:
+                manifest['mutation_outcomes'][path] = 'unknown'
+            manifest['pre_delete_phase'] = 'p4_mutation_timeout'
+            manifest['pre_delete_failures'] = [
+                f"reopen deletes: completion unknown ({exc.label})"
+            ]
+            manifest['p4_timeout_evidence'] = {
+                'phase': 'reopen deletes',
+                'stdout': exc.result.stdout,
+                'stderr': exc.result.stderr,
+            }
+            _persist_manifest(manifest)
+            fail(
+                "P4 delete reopen timed out; completion is unknown. The partial "
+                "CL and manifest were preserved and no retry was attempted."
+            )
         except (Exception, SystemExit) as exc:
             delete_failures.extend(auto_opened)
             for path in auto_opened:
@@ -591,7 +650,25 @@ if redirector_files:
         # batch. Files that hit "in use by another process" go to lock_failures
         # for the post-UE retry pass below.
         for path in not_opened:
-            rc, _out, err = run_p4(['delete', '-c', cl_num, path])
+            p4_result = run_p4(['delete', '-c', cl_num, path])
+            rc, _out, err = p4_result
+            if getattr(p4_result, 'timed_out', False):
+                manifest['mutation_outcomes'][path] = 'unknown'
+                manifest['pre_delete_phase'] = 'p4_mutation_timeout'
+                manifest['pre_delete_failures'] = [
+                    f"delete {path}: completion unknown"
+                ]
+                manifest['p4_timeout_evidence'] = {
+                    'phase': f'delete {path}',
+                    'stdout': p4_result.stdout,
+                    'stderr': p4_result.stderr,
+                }
+                _persist_manifest(manifest)
+                fail(
+                    f"P4 delete timed out for {path}; completion is unknown. "
+                    "The partial CL and manifest were preserved and no retry "
+                    "was attempted."
+                )
             if rc == 0:
                 confirmed_candidates.append(path)
                 continue

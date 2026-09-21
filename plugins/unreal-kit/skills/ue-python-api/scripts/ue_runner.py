@@ -14,6 +14,7 @@ Usage:
 
 import argparse
 import json
+import math
 import os
 import secrets
 import shutil
@@ -76,6 +77,30 @@ class ProjectResolutionError(ValueError):
     """An explicit project target was supplied but cannot be used."""
 
 
+def _as_text(value):
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        return value.decode(errors="replace")
+    return str(value)
+
+
+def _validate_commandlet_timeout(timeout_s):
+    if timeout_s is None:
+        return None
+    try:
+        value = float(timeout_s)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"commandlet_timeout_s must be a finite positive number; got {timeout_s!r}"
+        ) from exc
+    if not math.isfinite(value) or value <= 0:
+        raise ValueError(
+            f"commandlet_timeout_s must be a finite positive number; got {timeout_s!r}"
+        )
+    return value
+
+
 def run_ue_script(
     script_path: str,
     force_mode: str | None = None,
@@ -83,6 +108,7 @@ def run_ue_script(
     copy_output_to: str | None = None,
     project: str | None = None,
     fallback_on_error: bool = False,
+    commandlet_timeout_s: float | None = None,
 ) -> RunResult:
     """
     Execute a UE Python script, auto-selecting the best execution path.
@@ -100,10 +126,17 @@ def run_ue_script(
                  executed side effects; re-running a non-idempotent script
                  doubles them. Connection-level failures (editor not
                  reachable) always fall back regardless of this flag.
+        commandlet_timeout_s: Optional finite positive limit for the headless
+                 commandlet. Unset preserves the historical unbounded behavior.
 
     Returns:
         RunResult with execution details.
     """
+    try:
+        commandlet_timeout_s = _validate_commandlet_timeout(commandlet_timeout_s)
+    except ValueError as exc:
+        return RunResult(success=False, mode="commandlet", error=str(exc))
+
     if config is None:
         try:
             config = load_config()
@@ -172,7 +205,7 @@ def run_ue_script(
     if errors:
         return RunResult(success=False, mode="commandlet", error="\n".join(errors))
 
-    result = _run_commandlet(script_path, config)
+    result = _run_commandlet(script_path, config, timeout_s=commandlet_timeout_s)
     if copy_output_to and result.output_file:
         result.output_file = _copy_output(result.output_file, copy_output_to)
     return result
@@ -319,8 +352,15 @@ def _try_remote(script_path: str, config: RunnerConfig) -> RunResult | None:
     )
 
 
-def _run_commandlet(script_path: str, config: RunnerConfig) -> RunResult:
+def _run_commandlet(
+    script_path: str, config: RunnerConfig, timeout_s: float | None = None
+) -> RunResult:
     """Run script via UnrealEditor-Cmd.exe -run=pythonscript."""
+    try:
+        timeout_s = _validate_commandlet_timeout(timeout_s)
+    except ValueError as exc:
+        return RunResult(success=False, mode="commandlet", error=str(exc))
+
     exe = config.editor_cmd_exe
     uproject = config.uproject
 
@@ -349,8 +389,21 @@ def _run_commandlet(script_path: str, config: RunnerConfig) -> RunResult:
                 command,
                 capture_output=True,
                 text=True,
-                # No timeout -- user can Ctrl-C if needed
+                timeout=timeout_s,
                 creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
+            )
+        except subprocess.TimeoutExpired as exc:
+            stdout = _as_text(getattr(exc, "stdout", None) or getattr(exc, "output", None))
+            stderr = _as_text(getattr(exc, "stderr", None))
+            detail = f"Commandlet timed out after {timeout_s:g}s; completion is unknown"
+            evidence = "Partial stderr was retained." if stderr else "Partial output was retained."
+            return RunResult(
+                success=False,
+                mode="commandlet",
+                stdout=stdout,
+                stderr=stderr,
+                elapsed=time.time() - start,
+                error=f"{detail}. {evidence}",
             )
         except FileNotFoundError:
             return RunResult(
@@ -888,6 +941,10 @@ def main():
         "--copy-output", metavar="DIR",
         help="Copy output YAML to this directory",
     )
+    parser.add_argument(
+        "--commandlet-timeout", type=float, metavar="SECONDS",
+        help="Bound headless commandlet execution; unset preserves legacy behavior",
+    )
     args = parser.parse_args()
 
     try:
@@ -911,6 +968,7 @@ def main():
         copy_output_to=getattr(args, "copy_output", None),
         project=args.project,
         fallback_on_error=args.fallback_on_error,
+        commandlet_timeout_s=args.commandlet_timeout,
     )
 
     # Print results
