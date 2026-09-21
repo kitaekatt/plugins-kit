@@ -11,9 +11,13 @@ InstalledBuild.txt and must never be flagged stale.
 
 import json
 import os
+import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
+
+import pytest
 
 _PLUGIN_DIR = Path(__file__).resolve().parent.parent.parent / "plugins" / "unreal-kit"
 _HOOK = _PLUGIN_DIR / "hooks" / "pretooluse" / "detect-editor-stale.py"
@@ -67,6 +71,28 @@ def _marker(cwd: Path) -> Path:
 
 def _sysmsg(cwd: Path) -> Path:
     return cwd / ".local-data" / "claude-ui-kit" / "systemmessage.unreal-kit.txt"
+
+
+def _diagnostic(cwd: Path) -> Path:
+    return cwd / ".local-data" / "plugins-kit" / "unreal-kit" / "editor-stale-detector.log"
+
+
+def _seed_stale_assertion(cwd: Path) -> None:
+    _marker(cwd).parent.mkdir(parents=True, exist_ok=True)
+    _marker(cwd).write_text("prior", encoding="utf-8")
+    _sysmsg(cwd).parent.mkdir(parents=True, exist_ok=True)
+    _sysmsg(cwd).write_text("Editor needs rebuild", encoding="utf-8")
+
+
+def _wait_for_text(path: Path, text: str, timeout: float = 2.0) -> str:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if path.is_file():
+            content = path.read_text(encoding="utf-8")
+            if text in content:
+                return content
+        time.sleep(0.01)
+    pytest.fail(f"timed out waiting for {text!r} in {path}")
 
 
 class TestStaleDetection:
@@ -142,7 +168,7 @@ class TestSharedConfigResolution:
         assert data["engine_dir"] == "C:/UE5/Engine"
         assert data["uproject"] == "C:/P/G.uproject"
 
-    def test_malformed_config_reports_unknown_and_preserves_marker(self, tmp_path):
+    def test_malformed_config_reports_unknown_and_clears_marker(self, tmp_path):
         proj = tmp_path / "proj"
         proj.mkdir()
         config = proj / PROJECT_CONFIG_NAME
@@ -155,7 +181,9 @@ class TestSharedConfigResolution:
         result = _run_hook(proj)
         assert result.returncode == 0
         assert "UNKNOWN" in result.stderr
-        assert marker.read_text(encoding="utf-8") == "prior"
+        assert not marker.exists()
+        assert not _sysmsg(proj).exists()
+        assert "UNKNOWN" in _diagnostic(proj).read_text(encoding="utf-8")
 
     def test_invalid_engine_path_type_reports_unknown(self, tmp_path):
         proj = tmp_path / "proj"
@@ -181,16 +209,159 @@ class TestInstalledBuildGate:
         result = _run_hook(proj)
         assert result.returncode == 0, result.stderr
         assert not _marker(proj).exists()
-        assert not _sysmsg(proj).exists()
 
     def test_installed_build_clears_leftover_marker(self, tmp_path):
         engine = _make_engine(tmp_path, stale=True, installed=True)
         proj = tmp_path / "proj"
         proj.mkdir()
         _write_config(proj / PROJECT_CONFIG_NAME, engine)
-        _marker(proj).parent.mkdir(parents=True, exist_ok=True)
-        _marker(proj).write_text("")
+        _seed_stale_assertion(proj)
 
         result = _run_hook(proj)
         assert result.returncode == 0, result.stderr
         assert not _marker(proj).exists()
+
+
+@pytest.mark.parametrize("case", ["absent_config", "invalid_config", "absent_dll", "absent_build_version", "unsupported_layout"])
+def test_unknown_detector_state_clears_stale_assertion_and_records_diagnostic(tmp_path, case):
+    """Unknown inputs must not leave a stale warning that looks authoritative."""
+    proj = tmp_path / "project with spaces"
+    proj.mkdir()
+    _seed_stale_assertion(proj)
+
+    if case == "invalid_config":
+        config = proj / PROJECT_CONFIG_NAME
+        config.parent.mkdir(parents=True, exist_ok=True)
+        config.write_text("remote_execution: [broken\n", encoding="utf-8")
+    elif case == "absent_dll":
+        engine = _make_engine(tmp_path, stale=True)
+        (engine / "Binaries" / "Win64" / "UnrealEditor-BuildSettings.dll").unlink()
+        _write_config(proj / PROJECT_CONFIG_NAME, engine)
+    elif case == "absent_build_version":
+        engine = _make_engine(tmp_path, stale=True)
+        (engine / "Build" / "Build.version").unlink()
+        _write_config(proj / PROJECT_CONFIG_NAME, engine)
+    elif case == "unsupported_layout":
+        engine = tmp_path / "Engine"
+        (engine / "Build").mkdir(parents=True)
+        _write_config(proj / PROJECT_CONFIG_NAME, engine)
+
+    result = _run_hook(proj)
+
+    assert result.returncode == 0
+    assert "UNKNOWN" in result.stderr
+    assert not _marker(proj).exists()
+    assert not _sysmsg(proj).exists()
+    assert "UNKNOWN" in _diagnostic(proj).read_text(encoding="utf-8")
+
+
+def test_direct_zsh_matching_input_handles_spaced_and_escaped_cwd(tmp_path):
+    zsh = shutil.which("zsh")
+    if not zsh:
+        pytest.skip("zsh is not installed")
+    proj = tmp_path / "project with spaces"
+    proj.mkdir()
+    payload = json.dumps({"tool_name": "mcp__unreal-engine__save", "cwd": str(proj)})
+    result = subprocess.run(
+        [zsh, str(_PLUGIN_DIR / "hooks/pretooluse/check-editor-build-fresh.sh")],
+        input=payload,
+        text=True,
+        capture_output=True,
+        env={**os.environ, "HOME": str(tmp_path / "home"), "BOOTSTRAP_PYTHON": str(tmp_path / "missing-python")},
+        timeout=5,
+    )
+    assert result.returncode == 0, result.stderr
+
+
+def test_matching_hook_extracts_escaped_spaced_cwd_for_detector(tmp_path):
+    """A JSON escaped separator must still reach the detector at the CWD."""
+    bash = shutil.which("bash")
+    if not bash:
+        pytest.skip("bash is not installed")
+    proj = tmp_path / "project \\with spaces"
+    proj.mkdir()
+    payload = json.dumps({"tool_name": "mcp__unreal-engine__save", "cwd": str(proj)})
+    home = tmp_path / "home"
+    standalone = home / ".local" / "share" / "python-standalone" / "python" / "bin" / "python3"
+    standalone.parent.mkdir(parents=True)
+    standalone.symlink_to(sys.executable)
+
+    result = subprocess.run(
+        [bash, str(_PLUGIN_DIR / "hooks/pretooluse/check-editor-build-fresh.sh")],
+        input=payload,
+        text=True,
+        capture_output=True,
+        env={**os.environ, "HOME": str(home)},
+        timeout=5,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "no project config was found" in _wait_for_text(
+        _diagnostic(proj), "no project config was found"
+    )
+
+
+def test_detached_wrapper_retains_detector_stderr(tmp_path):
+    home = tmp_path / "home"
+    interpreter = home / ".local" / "share" / "python-standalone" / "python" / "bin" / "python3"
+    interpreter.parent.mkdir(parents=True)
+    interpreter.write_text("#!/bin/sh\nprintf '%s\\n' sentinel-import-failure >&2\nexit 23\n", encoding="utf-8")
+    interpreter.chmod(0o755)
+    proj = tmp_path / "project with spaces"
+    proj.mkdir()
+    payload = json.dumps({"tool_name": "mcp__unreal-engine__save", "cwd": str(proj)})
+
+    result = subprocess.run(
+        ["bash", str(_PLUGIN_DIR / "hooks/pretooluse/check-editor-build-fresh.sh")],
+        input=payload,
+        text=True,
+        capture_output=True,
+        env={**os.environ, "HOME": str(home)},
+        timeout=5,
+    )
+
+    assert result.returncode == 0, result.stderr
+    log = _wait_for_text(_diagnostic(proj), "detector exited with status 23")
+    assert "sentinel-import-failure" in log
+
+
+def test_wrapper_logs_interpreter_resolution_failure(tmp_path):
+    bash = shutil.which("bash")
+    if not bash:
+        pytest.skip("bash is not installed")
+    tool_bin = tmp_path / "bin"
+    tool_bin.mkdir()
+    for name in ("cat", "tr", "grep", "sed", "uname", "dirname", "pwd", "mkdir"):
+        source = shutil.which(name)
+        if source:
+            (tool_bin / name).symlink_to(source)
+    bare_python = tool_bin / "python3"
+    bare_python.write_text(
+        f"#!/bin/sh\nprintf '%s\\n' bare-fallback-used > {tmp_path / 'bare-fallback'}\nexit 23\n",
+        encoding="utf-8",
+    )
+    bare_python.chmod(0o755)
+    home = tmp_path / "home"
+    proj = tmp_path / "project"
+    proj.mkdir()
+    payload = json.dumps({"tool_name": "mcp__unreal-engine__save", "cwd": str(proj)})
+
+    result = subprocess.run(
+        [bash, str(_PLUGIN_DIR / "hooks/pretooluse/check-editor-build-fresh.sh")],
+        input=payload,
+        text=True,
+        capture_output=True,
+        env={**os.environ, "HOME": str(home), "PATH": str(tool_bin)},
+        timeout=5,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert not (tmp_path / "bare-fallback").exists()
+    assert "no approved detector interpreter was found" in _wait_for_text(
+        _diagnostic(proj), "no approved detector interpreter"
+    )
+
+
+def test_wrapper_redirects_detached_subshell_streams_before_work():
+    source = (_PLUGIN_DIR / "hooks/pretooluse/check-editor-build-fresh.sh").read_text(encoding="utf-8")
+    assert 'exec </dev/null >>"$LOG" 2>&1' in source

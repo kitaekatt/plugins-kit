@@ -21,9 +21,9 @@ System msg:   <cwd>/.local-data/claude-ui-kit/systemmessage.unreal-kit.txt
 Cleans up after the path move: any stale marker at the old
 <cwd>/.local-data/unreal-kit/ location (and its empty directory) is removed.
 
-Runs under `uv run --no-project python` (see check-editor-build-fresh.sh), a
-bare interpreter with no pyyaml -- ue_runner_config falls back to its simple
-line parser in that case.
+Runs under the approved detached interpreter selected by
+check-editor-build-fresh.sh. A bare interpreter with no pyyaml uses
+ue_runner_config's simple line parser.
 
 Latency is not foreground-critical: this runs detached after the PreToolUse
 hook has already returned. The marker it writes is consumed by subsequent
@@ -36,6 +36,7 @@ import json
 import os
 import sys
 from pathlib import Path
+from typing import NamedTuple
 
 # hooks/pretooluse/ -> unreal-kit/lib (the plugin's shared config resolver)
 _LIB_DIR = os.path.normpath(
@@ -45,9 +46,36 @@ if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
 SYSMSG_TEXT = "Editor needs rebuild"
+DIAGNOSTIC_NAME = "editor-stale-detector.log"
 
 
-def read_engine_dir(cwd: str) -> str | None:
+class ConfigResult(NamedTuple):
+    engine_dir: str | None
+    unknown_reason: str | None = None
+
+
+def _diagnostic_path(cwd: str) -> str:
+    return os.path.join(cwd, ".local-data", "plugins-kit", "unreal-kit", DIAGNOSTIC_NAME)
+
+
+def _write_diagnostic(cwd: str, message: str) -> None:
+    """Keep an ephemeral explanation for an advisory detector's unknown state."""
+    path = _diagnostic_path(cwd)
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "a", encoding="utf-8") as stream:
+            stream.write(f"[detect-editor-stale] UNKNOWN: {message}\n")
+    except OSError:
+        # Diagnostics must never turn a PreToolUse hook into a blocking error.
+        pass
+
+
+def _clear_assertions(cwd: str) -> None:
+    _remove(os.path.join(cwd, ".local-data", "plugins-kit", "unreal-kit", "editor-stale.flag"))
+    _remove(os.path.join(cwd, ".local-data", "claude-ui-kit", "systemmessage.unreal-kit.txt"))
+
+
+def _read_engine_dir(cwd: str) -> ConfigResult:
     """Resolve engine_dir via the canonical per-project config resolver.
 
     Delegates path resolution (current config name + legacy fallbacks +
@@ -59,17 +87,22 @@ def read_engine_dir(cwd: str) -> str | None:
 
         config_path = find_project_config(Path(cwd))
         if not config_path:
-            return None
+            return ConfigResult(None, "no project config was found")
         data = _load_yaml(config_path, required=True)
         _validate_layer(data, config_path)
         value = data.get("engine_dir")
-        return value if isinstance(value, str) and value else None
+        if not isinstance(value, str) or not value:
+            return ConfigResult(None, f"engine_dir is missing or invalid in {config_path}")
+        return ConfigResult(value)
     except ConfigError as exc:
-        print(f"[detect-editor-stale] UNKNOWN: {exc}", file=sys.stderr)
-        return None
+        return ConfigResult(None, str(exc))
     except Exception as exc:
-        print(f"[detect-editor-stale] UNKNOWN: cannot read config: {exc}", file=sys.stderr)
-        return None
+        return ConfigResult(None, f"cannot read config: {exc}")
+
+
+def read_engine_dir(cwd: str) -> str | None:
+    """Compatibility wrapper returning only the resolved engine directory."""
+    return _read_engine_dir(cwd).engine_dir
 
 
 def _touch(path: str, content: str | None = None) -> None:
@@ -113,14 +146,24 @@ def main() -> int:
     old_marker = os.path.join(cwd, ".local-data", "unreal-kit", "editor-stale.flag")
     sysmsg = os.path.join(cwd, ".local-data", "claude-ui-kit", "systemmessage.unreal-kit.txt")
 
-    engine_dir = read_engine_dir(cwd)
-
-    # Clean up after the path move: drop any stale marker at the old location
-    # (and its now-empty directory) regardless of the staleness outcome.
+    # Clean up after the path move regardless of whether config resolution is
+    # known, unknown, or an installed build.
     _remove(old_marker)
     _rmdir_if_empty(os.path.dirname(old_marker))
 
+    config = _read_engine_dir(cwd)
+    if config.unknown_reason:
+        _clear_assertions(cwd)
+        _write_diagnostic(cwd, config.unknown_reason)
+        print(f"[detect-editor-stale] UNKNOWN: {config.unknown_reason}", file=sys.stderr)
+        return 0
+    engine_dir = config.engine_dir
+
     if not engine_dir:
+        _clear_assertions(cwd)
+        reason = "engine directory is not configured"
+        _write_diagnostic(cwd, reason)
+        print(f"[detect-editor-stale] UNKNOWN: {reason}", file=sys.stderr)
         return 0
 
     # Launcher/binary engine installs (Engine/Build/InstalledBuild.txt) are
@@ -133,7 +176,17 @@ def main() -> int:
 
     dll = os.path.join(engine_dir, "Binaries", "Win64", "UnrealEditor-BuildSettings.dll")
     version_file = os.path.join(engine_dir, "Build", "Build.version")
+    if not os.path.isdir(engine_dir):
+        _clear_assertions(cwd)
+        reason = f"engine directory does not exist: {engine_dir}"
+        _write_diagnostic(cwd, reason)
+        print(f"[detect-editor-stale] UNKNOWN: {reason}", file=sys.stderr)
+        return 0
     if not os.path.isfile(dll) or not os.path.isfile(version_file):
+        _clear_assertions(cwd)
+        reason = "source build layout is unsupported or incomplete"
+        _write_diagnostic(cwd, reason)
+        print(f"[detect-editor-stale] UNKNOWN: {reason}", file=sys.stderr)
         return 0
 
     is_stale = os.path.getmtime(dll) < os.path.getmtime(version_file)
