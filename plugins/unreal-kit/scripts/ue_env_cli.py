@@ -62,7 +62,7 @@ from ue_env import (  # noqa: E402
     launch_editor,
     wait_for_mcp_ready,
 )
-from ue_runner_config import load_config  # noqa: E402
+from ue_runner_config import ConfigError, load_config  # noqa: E402
 
 
 def _info(msg: str) -> None:
@@ -92,7 +92,11 @@ def _zombies(procs: list[dict]) -> list[dict]:
 
 
 def cmd_status(args: argparse.Namespace) -> int:
-    config = load_config(args.config)
+    try:
+        config = load_config(args.config)
+    except ConfigError as exc:
+        _err(str(exc))
+        return 2
     editor_exe = config.editor_exe
     uproject = config.uproject
     procs = find_editor_processes(editor_exe)
@@ -116,7 +120,11 @@ def cmd_status(args: argparse.Namespace) -> int:
 
 
 def cmd_launch_editor(args: argparse.Namespace) -> int:
-    config = load_config(args.config)
+    try:
+        config = load_config(args.config)
+    except ConfigError as exc:
+        _err(str(exc))
+        return 2
     editor_exe = config.editor_exe
     uproject = config.uproject
 

@@ -13,6 +13,7 @@ if str(_LIB_DIR) not in sys.path:
     sys.path.insert(0, str(_LIB_DIR))
 
 from ue_runner_config import (
+    ConfigError,
     PROJECT_CONFIG_NAME,
     RunnerConfig,
     _GLOBAL_CONFIG_PATH,
@@ -30,8 +31,8 @@ def _make_uproject(path: Path):
 def _write_yaml(path: Path, data: dict):
     """Write simple YAML key: "value" file."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    lines = [f'{k}: "{v}"' for k, v in data.items()]
-    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    import yaml
+    path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
 
 
 class TestFindProjectConfig:
@@ -172,3 +173,120 @@ class TestLoadConfig:
         assert config.engine_dir == ""
         # Remote config defaults should still be present
         assert config.remote.multicast_port == 6766
+
+    def test_layers_merge_project_over_global_skill_and_defaults(self, tmp_path, monkeypatch):
+        project = tmp_path / PROJECT_CONFIG_NAME
+        _write_yaml(project, {
+            "uproject": "/project/Game.uproject",
+            "remote_execution": {"multicast_port": 7000},
+        })
+        global_path = tmp_path / "global.yaml"
+        _write_yaml(global_path, {
+            "engine_dir": "/global/Engine",
+            "remote_execution": {"multicast_group": "239.1.1.1"},
+        })
+        skill_path = tmp_path / "skill.yaml"
+        _write_yaml(skill_path, {
+            "remote_execution": {"multicast_bind_address": "0.0.0.0"},
+        })
+        import ue_runner_config
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr(ue_runner_config, "SKILL_CONFIG_PATH", skill_path)
+        monkeypatch.setattr(ue_runner_config, "_GLOBAL_CONFIG_PATH", global_path)
+
+        config = load_config()
+        assert config.uproject == "/project/Game.uproject"
+        assert config.engine_dir == "/global/Engine"
+        assert config.remote.multicast_group == "239.1.1.1"
+        assert config.remote.multicast_bind_address == "0.0.0.0"
+        assert config.remote.multicast_port == 7000
+
+    def test_explicit_config_isolated_from_discovered_project_and_global(self, tmp_path, monkeypatch):
+        project = tmp_path / PROJECT_CONFIG_NAME
+        _write_yaml(project, {"uproject": "/project/Game.uproject"})
+        global_path = tmp_path / "global.yaml"
+        _write_yaml(global_path, {"engine_dir": "/global/Engine"})
+        explicit = tmp_path / "explicit.yaml"
+        _write_yaml(explicit, {"engine_dir": "/explicit/Engine"})
+        import ue_runner_config
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr(ue_runner_config, "_GLOBAL_CONFIG_PATH", global_path)
+
+        config = load_config(config_path=explicit)
+        assert config.engine_dir == "/explicit/Engine"
+        assert config.uproject == ""
+
+    @pytest.mark.parametrize("contents", ["[broken", "- a\n- b\n", "null\n", "remote_execution: []\n"])
+    def test_invalid_explicit_layer_names_file_and_refuses(self, tmp_path, contents):
+        explicit = tmp_path / "bad.yaml"
+        explicit.write_text(contents, encoding="utf-8")
+        with pytest.raises(ConfigError, match=str(explicit)):
+            load_config(config_path=explicit)
+
+    def test_missing_explicit_layer_is_an_error(self, tmp_path):
+        explicit = tmp_path / "missing.yaml"
+        with pytest.raises(ConfigError, match=str(explicit)):
+            load_config(config_path=explicit)
+
+    @pytest.mark.parametrize(
+        "field,value",
+        [
+            ("engine_dir", 42),
+            ("uproject", 42),
+            ("remote_execution", "null"),
+            ("remote_execution", "[]"),
+        ],
+    )
+    def test_invalid_types_refuse_with_path(self, tmp_path, field, value):
+        explicit = tmp_path / "typed.yaml"
+        if field == "remote_execution":
+            explicit.write_text(f"{field}: {value}\n", encoding="utf-8")
+        else:
+            explicit.write_text(f'{field}: {value}\n', encoding="utf-8")
+        with pytest.raises(ConfigError, match=str(explicit)):
+            load_config(config_path=explicit)
+
+    @pytest.mark.parametrize("port", [0, 65536, "quoted"])
+    def test_invalid_remote_port_refuses(self, tmp_path, port):
+        explicit = tmp_path / "port.yaml"
+        raw = f'"{port}"' if isinstance(port, str) else str(port)
+        explicit.write_text(f"remote_execution:\n  multicast_port: {raw}\n", encoding="utf-8")
+        with pytest.raises(ConfigError, match="multicast_port"):
+            load_config(config_path=explicit)
+
+    def test_simple_parser_preserves_quoted_empty_and_numeric_strings(self, tmp_path):
+        import ue_runner_config
+        config = tmp_path / "quoted.yaml"
+        config.write_text(
+            'engine_dir: ""\nremote_execution:\n  multicast_group: "6766"\n',
+            encoding="utf-8",
+        )
+        data = ue_runner_config._parse_yaml_simple(config)
+        assert data["engine_dir"] == ""
+        assert data["remote_execution"]["multicast_group"] == "6766"
+
+    def test_atomic_write_preserves_nested_and_quoted_values(self, tmp_path):
+        data = {
+            "engine_dir": 'C:/UE/With "quotes"',
+            "plugin_data_dir": "Generated/Plugin Data",
+            "nested": {"keep": ["a", "b"], "quote": 'x"y'},
+        }
+        path = write_project_config(tmp_path, data)
+        import ue_runner_config
+        assert ue_runner_config._load_yaml(path) == data
+
+    def test_atomic_write_failure_preserves_previous_bytes(self, tmp_path, monkeypatch):
+        path = write_project_config(tmp_path, {"uproject": "old"})
+        old = path.read_bytes()
+        import ue_runner_config
+        real_replace = ue_runner_config.os.replace
+
+        def fail_replace(*args, **kwargs):
+            raise OSError("replace failed")
+
+        monkeypatch.setattr(ue_runner_config.os, "replace", fail_replace)
+        with pytest.raises(OSError, match="replace failed"):
+            write_project_config(tmp_path, {"uproject": "new"})
+        assert path.read_bytes() == old
+        assert not list(path.parent.glob(".config.yaml.*.tmp"))
+        monkeypatch.setattr(ue_runner_config.os, "replace", real_replace)

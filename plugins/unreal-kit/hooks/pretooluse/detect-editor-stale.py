@@ -55,14 +55,20 @@ def read_engine_dir(cwd: str) -> str | None:
     never drift from the runner's resolution order.
     """
     try:
-        from ue_runner_config import _load_yaml, find_project_config
+        from ue_runner_config import ConfigError, _load_yaml, _validate_layer, find_project_config
 
         config_path = find_project_config(Path(cwd))
         if not config_path:
             return None
-        value = _load_yaml(config_path).get("engine_dir")
-        return str(value) if value else None
-    except Exception:
+        data = _load_yaml(config_path, required=True)
+        _validate_layer(data, config_path)
+        value = data.get("engine_dir")
+        return value if isinstance(value, str) and value else None
+    except ConfigError as exc:
+        print(f"[detect-editor-stale] UNKNOWN: {exc}", file=sys.stderr)
+        return None
+    except Exception as exc:
+        print(f"[detect-editor-stale] UNKNOWN: cannot read config: {exc}", file=sys.stderr)
         return None
 
 

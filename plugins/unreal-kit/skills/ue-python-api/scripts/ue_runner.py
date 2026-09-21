@@ -45,7 +45,7 @@ reexec_under_plugin_venv("unreal-kit")
 require_bootstrap("unreal-kit", feature="Unreal Python automation")
 
 from ue_discovery import find_engine_dir as _find_engine_dir, find_uproject_from_cwd, find_uproject_from_path
-from ue_runner_config import RunnerConfig, load_config
+from ue_runner_config import ConfigError, RunnerConfig, load_config
 
 
 @dataclass
@@ -105,7 +105,10 @@ def run_ue_script(
         RunResult with execution details.
     """
     if config is None:
-        config = load_config()
+        try:
+            config = load_config()
+        except ConfigError as exc:
+            return RunResult(success=False, mode="none", error=str(exc))
 
     script_path = os.path.abspath(script_path)
     if not os.path.isfile(script_path):
@@ -701,6 +704,8 @@ def run_setup(config: RunnerConfig) -> bool:
     """
     from ue_runner_config import (
         PROJECT_CONFIG_NAME,
+        _load_yaml,
+        _validate_layer,
         write_project_config as _write_project_config,
     )
 
@@ -732,12 +737,30 @@ def run_setup(config: RunnerConfig) -> bool:
         "engine_dir": str(engine_dir),
         "uproject": str(uproject),
     }
-    written = _write_project_config(project_root, data)
-    print(f"  WROTE {written}")
-
+    # Setup is an update operation. Preserve unrelated project settings while
+    # replacing only the two fields selected by this interactive run.
+    try:
+        existing = _load_yaml(config_path, required=False)
+        if not isinstance(existing, dict):
+            existing = {}
+        _validate_layer(existing, config_path)
+        existing.update(data)
+        _validate_layer(existing, config_path)
+        written = _write_project_config(project_root, existing)
+    except ConfigError as exc:
+        print(f"  ERROR: {exc}")
+        return False
+    except (OSError, TypeError, ValueError) as exc:
+        print(f"  ERROR: Could not write project config: {exc}")
+        return False
     # Reload config with the new file
     from ue_runner_config import load_config as _reload
-    config = _reload()
+    try:
+        config = _reload()
+    except ConfigError as exc:
+        print(f"  ERROR: {exc}")
+        return False
+    print(f"  WROTE {written}")
     print(f"\n  OK    uproject: {config.uproject}")
     print(f"  OK    engine:   {config.engine_dir}")
     print(
@@ -867,7 +890,11 @@ def main():
     )
     args = parser.parse_args()
 
-    config = load_config(args.config)
+    try:
+        config = load_config(args.config)
+    except ConfigError as exc:
+        print(f"[ue_runner] ERROR: {exc}", file=sys.stderr)
+        sys.exit(2)
 
     if args.setup:
         print("[ue_runner] Setup check:")

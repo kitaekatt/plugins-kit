@@ -142,6 +142,32 @@ class TestSharedConfigResolution:
         assert data["engine_dir"] == "C:/UE5/Engine"
         assert data["uproject"] == "C:/P/G.uproject"
 
+    def test_malformed_config_reports_unknown_and_preserves_marker(self, tmp_path):
+        proj = tmp_path / "proj"
+        proj.mkdir()
+        config = proj / PROJECT_CONFIG_NAME
+        config.parent.mkdir(parents=True, exist_ok=True)
+        config.write_text("remote_execution: [broken\n", encoding="utf-8")
+        marker = _marker(proj)
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.write_text("prior", encoding="utf-8")
+
+        result = _run_hook(proj)
+        assert result.returncode == 0
+        assert "UNKNOWN" in result.stderr
+        assert marker.read_text(encoding="utf-8") == "prior"
+
+    def test_invalid_engine_path_type_reports_unknown(self, tmp_path):
+        proj = tmp_path / "proj"
+        proj.mkdir()
+        config = proj / PROJECT_CONFIG_NAME
+        config.parent.mkdir(parents=True, exist_ok=True)
+        config.write_text("engine_dir: 42\n", encoding="utf-8")
+
+        result = _run_hook(proj)
+        assert result.returncode == 0
+        assert "UNKNOWN" in result.stderr
+
 
 class TestInstalledBuildGate:
     """U10 regressions: installed engines are never flagged stale."""
