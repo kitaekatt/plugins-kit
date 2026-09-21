@@ -501,6 +501,20 @@ OS="$(uname -s)"
 # way to ask whether a pass is running, and to drive one from a terminal
 # without starting Claude. Re-installed every session so they stay in sync
 # with the cached plugin version.
+#
+# Windows: cmd.exe and PowerShell cannot run an extensionless bash script, so
+# each lever also gets a <lever>.cmd twin that runs it under Git for Windows
+# bash by absolute path. Rendering, the bash lookup, and why there is no .ps1
+# twin: lever-cmd-shim.sh beside this file.
+_LEVER_BASH_WIN=""
+if [[ "$OS" == MINGW* ]] || [[ "$OS" == MSYS* ]]; then
+    if [ -f "$SCRIPT_DIR/lever-cmd-shim.sh" ] && . "$SCRIPT_DIR/lever-cmd-shim.sh"; then
+        _LEVER_BASH_WIN="$(bootstrap_lever_bash_win)" || _LEVER_BASH_WIN=""
+    fi
+    if [ -z "$_LEVER_BASH_WIN" ]; then
+        log_entry "levers: FAILED - no Git for Windows bash resolved; the cmd.exe/PowerShell shims in $LOCAL_BIN were not written"
+    fi
+fi
 for _lever in bootstrap bootstrap-reset-cooldown env-reset-cooldown; do
     _RESET_SRC="$PLUGIN_ROOT/scripts/${_lever}.sh"
     _RESET_DST="$LOCAL_BIN/${_lever}"
@@ -510,6 +524,17 @@ for _lever in bootstrap bootstrap-reset-cooldown env-reset-cooldown; do
         # Windows: symlinks need elevation; just copy.
         if ! cmp -s "$_RESET_SRC" "$_RESET_DST" 2>/dev/null; then
             cp -f "$_RESET_SRC" "$_RESET_DST" 2>/dev/null && chmod +x "$_RESET_DST" 2>/dev/null
+        fi
+        if [ -n "$_LEVER_BASH_WIN" ] && [ -f "$_RESET_DST" ]; then
+            if _shim_out="$(bootstrap_install_lever_cmd_shim "$LOCAL_BIN" "$_lever" "$_LEVER_BASH_WIN")"; then
+                if [ "$_shim_out" = "wrote" ]; then
+                    log_entry "levers: wrote $LOCAL_BIN/${_lever}.cmd (runs ${_lever} under $_LEVER_BASH_WIN)"
+                elif [ "$LOG_SUCCESS_SHELL" = "true" ]; then
+                    log_entry "levers: ok - $LOCAL_BIN/${_lever}.cmd is current"
+                fi
+            else
+                log_entry "levers: FAILED - could not write $LOCAL_BIN/${_lever}.cmd"
+            fi
         fi
     else
         # Unix: symlink so updates flow automatically when the plugin cache refreshes.
@@ -525,7 +550,7 @@ for _lever in bootstrap bootstrap-reset-cooldown env-reset-cooldown; do
         [ -x "$_RESET_SRC" ] || chmod +x "$_RESET_SRC" 2>/dev/null || true
     fi
 done
-unset _lever
+unset _lever _shim_out _LEVER_BASH_WIN
 
 # --- Ensure Python is installed in ~/.local/bin ---
 # We always use our standalone Python in ~/.local/bin. System Python is not used.
