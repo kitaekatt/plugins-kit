@@ -226,3 +226,69 @@ class TestRunInstall:
         ok, output = run_install("echo hello")
         assert ok is True
         assert "hello" in output
+
+
+class TestResolveBashWindows:
+    """resolve_bash() on Windows never returns WSL's launcher.
+
+    Driven through _windows_bash() with every environment input injected, so
+    these run on any OS.
+    """
+
+    WINDIR = r"C:\Windows"
+    GIT_USR = r"C:\Program Files\Git\usr\bin"
+    GIT_WRAPPER = r"C:\Program Files\Git\bin\bash.exe"
+    WSL = r"C:\Windows\System32\bash.exe"
+
+    @staticmethod
+    def _which_in(present):
+        """A which(name, path=...) that finds bash.exe in the listed dirs."""
+        import ntpath
+
+        def which(name, path=None):
+            for d in (path or "").split(";"):
+                if d in present:
+                    return ntpath.join(d, "bash.exe")
+            return None
+        return which
+
+    def _resolve(self, found, path_env, git_exe=None, present=(), files=()):
+        return tool_check._windows_bash(
+            found, path_env, self.WINDIR, git_exe,
+            which=self._which_in(present), isfile=lambda p: p in files)
+
+    def test_a_git_bash_found_first_is_kept(self):
+        found = self.GIT_USR + r"\bash.exe"
+        assert self._resolve(found, "") == found
+
+    def test_system32_first_falls_through_to_git_bash_on_path(self):
+        path_env = r"C:\Windows\System32;" + self.GIT_USR
+        assert self._resolve(self.WSL, path_env, present=(self.GIT_USR,)) \
+            == self.GIT_USR + r"\bash.exe"
+
+    def test_windows_dir_compares_without_case(self):
+        wsl_upper = r"C:\WINDOWS\system32\bash.exe"
+        path_env = r"C:\WINDOWS\system32;" + self.GIT_USR
+        assert self._resolve(wsl_upper, path_env, present=(self.GIT_USR,)) \
+            == self.GIT_USR + r"\bash.exe"
+
+    def test_windowsapps_alias_is_skipped(self):
+        alias = r"C:\Users\dev\AppData\Local\Microsoft\WindowsApps\bash.exe"
+        assert self._resolve(alias, r"C:\Users\dev\AppData\Local\Microsoft\WindowsApps") is None
+
+    def test_powershell_path_uses_the_git_wrapper_beside_git(self):
+        # PowerShell's PATH has Git\cmd, not Git\usr\bin: the only bash on it is WSL's.
+        path_env = r"C:\Windows\System32;C:\Program Files\Git\cmd"
+        got = self._resolve(self.WSL, path_env,
+                            git_exe=r"C:\Program Files\Git\cmd\git.exe",
+                            files=(self.GIT_WRAPPER,))
+        assert got == self.GIT_WRAPPER
+
+    def test_mingw64_git_also_finds_the_wrapper(self):
+        got = self._resolve(None, "",
+                            git_exe=r"C:\Program Files\Git\mingw64\bin\git.exe",
+                            files=(self.GIT_WRAPPER,))
+        assert got == self.GIT_WRAPPER
+
+    def test_only_wsl_available_resolves_to_none(self):
+        assert self._resolve(self.WSL, r"C:\Windows\System32") is None

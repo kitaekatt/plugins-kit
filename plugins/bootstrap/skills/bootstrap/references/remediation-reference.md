@@ -286,7 +286,9 @@ never adds `/usr/bin` either. Before this (0.49.0, observed live) every queued
 command died with exit 127 -- `ln: command not found`, `bash: command not
 found` -- while the runner itself launched fine off the queue's baked absolute
 bash path. `fix_runner._child_env` prepends the bash binary's directory to the
-task subprocess PATH, which is msys `usr/bin` itself.
+task subprocess PATH, which is msys `usr/bin` itself. When `resolve_bash()`
+found no Git bash on PATH and fell back to Git for Windows' `bin\bash.exe`, that
+directory is `Git\bin` instead, and the launcher puts `/usr/bin` on PATH itself.
 
 **Everything the runner prints is tee'd to `<data_dir>/elevate/fix-runner.log`**
 (overwritten per run), including child output -- the pump in `fix_runner._run`
