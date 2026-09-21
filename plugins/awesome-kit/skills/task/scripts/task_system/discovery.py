@@ -13,7 +13,7 @@ Two crawl modes, both script-driven (spec 8):
 Candidates are canonicalized (resolve.py) and deduped by canonical path; each
 survivor is classified via validate.py (classification logic is never
 duplicated here) and projected to a TaskRecord (id, classification, title,
-priority, host).
+priority, last update, host).
 
 Readings chosen in Step 3 (flagged in the implementation report):
 
@@ -51,12 +51,11 @@ Readings chosen in Step 3 (flagged in the implementation report):
   folder-crawl candidate carries no host). Remote refs are opaque: tmp +
   non-matching host is never read locally, even when a same-named local
   folder exists (validate's remote short-circuit governs).
-- **Archived omitted by default.** ``list`` is the working set: a task that
-  classifies as ``archived`` -- a folderless non-tmp ref left behind by a
-  committed archive, or a ref resolving through a parking directory -- is
-  dropped from the projection unless the caller asks for it with
-  ``status="archived"``. The classification itself is unchanged (validate
-  still reads it), only the default filter narrows.
+- **Archived omitted by default.** ``discover`` retains the working-set
+  projection: a task that classifies as ``archived`` is dropped unless the
+  caller asks for ``status="archived"``. The CLI applies its own open/closed
+  sectioning on top of this projection; remote, orphaned, and invalid records
+  remain available to direct discovery and explicit status queries.
 - **Notes, not crashes.** Skipped material (unreadable documents,
   unparseable/malformed ``task_list`` blocks, unresolvable ref paths,
   non-canonical folder hits) is collected into the optional ``notes``
@@ -90,6 +89,8 @@ SCOPES = ("project", "user", "skill", "file")
 DEFAULT_USER_ROOT = Path.home() / ".claude"
 
 _TASK_LIST_KEY_RE = re.compile(r"^task_list\s*:", re.MULTILINE)
+_LOG_DATE_RE = re.compile(r"^\s*-\s+(\d{4}-\d{2}-\d{2}):", re.MULTILINE)
+OPEN_CLASSIFICATIONS = frozenset(("active", "blocked"))
 
 
 class DiscoveryError(ValueError):
@@ -104,6 +105,7 @@ class TaskRecord:
     classification: str  # validate's outcome (stored status or computed)
     title: str | None = None
     priority: str | None = None
+    last_update: str | None = None
     host: str | None = None  # retained ref host tag, when any ref carried one
 
 
@@ -122,6 +124,21 @@ def read_task_block(folder: Path) -> dict | None:
         return None
     block = data.get("task")
     return block if isinstance(block, dict) else None
+
+
+def read_last_update(folder: Path) -> str | None:
+    """Return the latest ISO date from dated ``log.md`` entries.
+
+    The log is the task system's durable update history. A scaffold has no
+    dated entry yet, so the projection uses ``None`` until the first update or
+    archive entry is recorded.
+    """
+    try:
+        text = (folder / "log.md").read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None
+    dates = _LOG_DATE_RE.findall(text)
+    return max(dates) if dates else None
 
 
 # --- scope resolution --------------------------------------------------------
@@ -285,8 +302,8 @@ def discover(
     """Enumerate the tasks in a scope (spec 8). Returns records sorted by id.
 
     ``status``/``priority`` filter the projection (spec 8 step 5); with no
-    ``status`` every classification EXCEPT ``archived`` is emitted, so the
-    default listing is the working set (``status="archived"`` lists those);
+    ``status`` every classification except ``archived`` is emitted. Explicit
+    ``status`` values list any classification, including ``archived``.
     ``local_host`` overrides host detection (injectable for tests);
     ``notes``, when given, accumulates skip-with-note findings.
     """
@@ -321,6 +338,7 @@ def discover(
         )
         title: str | None = None
         prio: str | None = None
+        last_update: str | None = None
         if result.classification != "remote":  # remote is opaque: never read
             folder = effective_root / canonical
             if folder.is_dir():
@@ -330,11 +348,13 @@ def discover(
                     raw_prio = block.get("priority")
                     title = raw_title if isinstance(raw_title, str) else None
                     prio = raw_prio if isinstance(raw_prio, str) else None
+                last_update = read_last_update(folder)
         record = TaskRecord(
             id=canonical,
             classification=result.classification,
             title=title,
             priority=prio,
+            last_update=last_update,
             host=host,
         )
         if status is None:
