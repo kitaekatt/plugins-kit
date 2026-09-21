@@ -11,7 +11,7 @@ Scripts running inside UE Editor need packages like `pyyaml`, but UE's embedded 
 | Set | Manifest | Runtime | Manager | Install target |
 |-----|----------|---------|---------|----------------|
 | UE-side | `requirements.yaml` | UE's embedded Python | `bootstrap.py` + `unreal_pip.py` | Engine site-packages |
-| Host-side | `pyproject.toml` | System Python | Session bootstrap (uv sync) | Plugin data venv |
+| Host-side | `pyproject.toml` | Bootstrap-selected plugin interpreter | Session bootstrap | Plugin data venv |
 
 ## UE-Side Bootstrap (`lib/bootstrap.py`)
 
@@ -38,7 +38,15 @@ The function:
 
 The `.cmd` entry points handle host-side dependencies:
 
-- **`ue-runner.cmd`**: Execs `ue_runner.py` under the bootstrap-provisioned plugin venv (`~/.claude/plugins/data/plugins-kit/unreal-kit/.venv/Scripts/python.exe`), which carries upyrc + pyyaml; exits with the bootstrap-absence message when the venv is not provisioned. `ue_runner.py` itself also re-execs into that venv via `bootstrap_guard.reexec_under_plugin_venv`, so a bare `python ue_runner.py` lands in the same interpreter.
+For a host-side invocation from a POSIX shell, use the bootstrap-selected
+interpreter expression. It fails with a version diagnosis when the bootstrap
+variables are unavailable:
+
+```
+"${BOOTSTRAP_PROJECT_PYTHON:-${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}}" "${CLAUDE_PLUGIN_ROOT}/skills/ue-python-api/scripts/ue_runner.py" <script>.py
+```
+
+- **`ue-runner.cmd`**: Starts with the deterministic standalone interpreter, accepts a validated `BOOTSTRAP_PYTHON` fallback, and then checks the bootstrap-provisioned plugin venv (`~/.claude/plugins/data/plugins-kit/unreal-kit/.venv/Scripts/python.exe`). The runner then re-execs into that venv via `bootstrap_guard.reexec_under_plugin_venv`, where upyrc and pyyaml are available. If no bootstrap interpreter variable is present, the command prints the required version diagnosis.
 
 ## Stdlib-Only Constraint
 

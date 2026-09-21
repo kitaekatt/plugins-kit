@@ -1,5 +1,18 @@
 # Script Execution Modes
 
+## 0. Host Terminal Runner
+
+Run the host-side runner through the bootstrap-selected interpreter. The
+expression keeps project environments preferred and emits a version diagnosis
+when the bootstrap variables are missing:
+
+```
+"${BOOTSTRAP_PROJECT_PYTHON:-${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}}" "${CLAUDE_PLUGIN_ROOT}/skills/ue-python-api/scripts/ue_runner.py" <script>.py
+```
+
+The `py` examples below are Unreal Editor's embedded-console syntax. They run
+inside the Editor and are separate from the host launch command above.
+
 ## 1. Output Log Console
 
 The most common way to run scripts interactively.

@@ -6,10 +6,10 @@ Auto-detects whether UE Editor is running:
   - Editor not running → headless commandlet (slow, ~30-120s)
 
 Usage:
-    python ue_runner.py script.py
-    python ue_runner.py script.py --mode commandlet
-    python ue_runner.py script.py --mode remote
-    python ue_runner.py script.py --copy-output ./results/
+    "${BOOTSTRAP_PROJECT_PYTHON:-${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}}" "${CLAUDE_PLUGIN_ROOT}/skills/ue-python-api/scripts/ue_runner.py" script.py
+    "${BOOTSTRAP_PROJECT_PYTHON:-${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}}" "${CLAUDE_PLUGIN_ROOT}/skills/ue-python-api/scripts/ue_runner.py" script.py --mode commandlet
+    "${BOOTSTRAP_PROJECT_PYTHON:-${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}}" "${CLAUDE_PLUGIN_ROOT}/skills/ue-python-api/scripts/ue_runner.py" script.py --mode remote
+    "${BOOTSTRAP_PROJECT_PYTHON:-${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}}" "${CLAUDE_PLUGIN_ROOT}/skills/ue-python-api/scripts/ue_runner.py" script.py --copy-output ./results/
 """
 
 import argparse
@@ -32,21 +32,25 @@ _LIB_DIR = _PLUGIN_DIR / "lib"
 if str(_LIB_DIR) not in sys.path:
     sys.path.insert(0, str(_LIB_DIR))
 
+# Re-exec before importing any plugin library. This is a host-side entrypoint;
+# the UE-side apply/discover scripts deliberately do not use this guard.
+from bootstrap_guard import reexec_under_plugin_venv, require_bootstrap  # noqa: E402
+
+reexec_under_plugin_venv("unreal-kit")
+require_bootstrap("unreal-kit", feature="Unreal Python automation")
+
 # Restore registry-canonical PATH before subprocess fan-out — see
 # unreal-kit/lib/path_repair.py for the cmd.exe overflow failure mode.
 from path_repair import repair_path  # noqa: E402
 repair_path()
 
-# Re-exec under the bootstrap-provisioned plugin venv (no-op when already
-# there) so upyrc/pyyaml resolve regardless of which interpreter launched the
-# script; then fail fast with an actionable message if the bootstrap plugin
-# never provisioned this plugin at all (e.g. a stray system Python and no venv).
-from bootstrap_guard import reexec_under_plugin_venv, require_bootstrap  # noqa: E402
-reexec_under_plugin_venv("unreal-kit")
-require_bootstrap("unreal-kit", feature="Unreal Python automation")
-
 from ue_discovery import find_engine_dir as _find_engine_dir, find_uproject_from_cwd, find_uproject_from_path
 from ue_runner_config import ConfigError, RunnerConfig, load_config
+
+_HOST_RUNNER = (
+    '"${BOOTSTRAP_PROJECT_PYTHON:-${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}}" '
+    '"${CLAUDE_PLUGIN_ROOT}/skills/ue-python-api/scripts/ue_runner.py"'
+)
 
 
 @dataclass
@@ -198,7 +202,7 @@ def run_ue_script(
                 success=False,
                 mode="remote",
                 error="Remote execution failed. Is UE Editor running with Remote Execution enabled?\n"
-                      "  Run: python ue_runner.py --setup",
+                      f"  Run: {_HOST_RUNNER} --setup",
             )
 
     # Fall back to commandlet
@@ -907,11 +911,11 @@ def main():
     parser = argparse.ArgumentParser(
         description="Run UE Python scripts from the terminal.",
         epilog="Examples:\n"
-               "  python ue_runner.py --setup                # check/fix project settings\n"
-               "  python ue_runner.py script.py              # auto-detect mode\n"
-               "  python ue_runner.py script.py --mode remote # force remote only\n"
-               "  python ue_runner.py script.py --mode commandlet\n"
-               "  python ue_runner.py script.py --copy-output ./results/\n",
+               f"  {_HOST_RUNNER} --setup                # check/fix project settings\n"
+               f"  {_HOST_RUNNER} script.py              # auto-detect mode\n"
+               f"  {_HOST_RUNNER} script.py --mode remote # force remote only\n"
+               f"  {_HOST_RUNNER} script.py --mode commandlet\n"
+               f"  {_HOST_RUNNER} script.py --copy-output ./results/\n",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("script", nargs="?", help="Path to the .py script to execute")

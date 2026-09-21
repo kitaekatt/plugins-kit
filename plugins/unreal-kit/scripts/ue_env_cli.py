@@ -40,18 +40,15 @@ _LIB_DIR = _PLUGIN_DIR / "lib"
 if str(_LIB_DIR) not in sys.path:
     sys.path.insert(0, str(_LIB_DIR))
 
-from path_repair import repair_path  # noqa: E402
-
-repair_path()
-
-# Re-exec under the bootstrap-provisioned plugin venv (no-op when already
-# there) so plugin deps resolve regardless of which interpreter launched the
-# script; then fail fast with an actionable message if the bootstrap plugin
-# never provisioned this plugin at all (e.g. a stray system Python, no venv).
+# Re-exec before importing any plugin library. This is a host-side entrypoint.
 from bootstrap_guard import reexec_under_plugin_venv, require_bootstrap  # noqa: E402
 
 reexec_under_plugin_venv("unreal-kit")
 require_bootstrap("unreal-kit", feature="Unreal Python automation")
+
+from path_repair import repair_path  # noqa: E402
+
+repair_path()
 
 from ue_env import (  # noqa: E402
     DEFAULT_MCP_HOST,

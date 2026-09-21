@@ -19,6 +19,10 @@ U8 -- the dead remote.timeout_seconds config field stays deleted.
 """
 
 import json
+import ast
+import os
+import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -73,6 +77,113 @@ class TestReexecPolicy:
         assert not any("uv run" in l for l in code_lines), (
             "ue-runner.cmd must exec the plugin venv python, not a uv overlay"
         )
+
+    def test_ue_runner_cmd_has_deterministic_standalone_first_chain(self):
+        """The Windows shim must select a real interpreter before PATH lookup.
+
+        This is a command-structure test on POSIX. It does not pretend that a
+        shell on this host can execute cmd.exe, while still pinning the order,
+        validation, argument forwarding, and missing-runtime diagnosis.
+        """
+        src = (_PLUGIN_DIR / "skills/ue-python-api/scripts/ue-runner.cmd").read_text(encoding="utf-8")
+        standalone = 'set "STANDALONE_PY=%USERPROFILE%\\.local\\share\\python-standalone\\python\\python.exe"'
+        venv = 'set "VENV_PY=%USERPROFILE%\\.claude\\plugins\\data\\plugins-kit\\unreal-kit\\.venv\\Scripts\\python.exe"'
+        assert standalone in src
+        assert venv in src
+        assert src.index(standalone) < src.index(venv)
+        assert "if exist \"%STANDALONE_PY%\" set \"PY=%STANDALONE_PY%\"" in src
+        assert "BOOTSTRAP_PYTHON" in src
+        assert "_STANDALONE_DIR" in src
+        assert ".." in src  # traversal is rejected in the validated env branch
+        assert '"%PY%" "%SCRIPT_DIR%ue_runner.py" %*' in src
+        assert "BOOTSTRAP_PYTHON" in src.split("if not defined PY", 1)[-1]
+        assert "no usable Python interpreter" in src
+
+    def test_host_entrypoints_run_guard_before_plugin_imports(self):
+        """The re-exec guard is executable ordering, not a comment claim."""
+        watched = {
+            "path_repair", "ue_discovery", "ue_runner_config", "ue_env",
+            "p4cli", "code_refs", "redirector_record", "unreal_stub",
+            "bootstrap_lib",
+        }
+        for rel in _HOST_SCRIPTS:
+            tree = ast.parse((_PLUGIN_DIR / rel).read_text(encoding="utf-8"), filename=rel)
+            guard_imports = [
+                node.lineno for node in ast.walk(tree)
+                if isinstance(node, ast.ImportFrom) and node.module == "bootstrap_guard"
+            ]
+            assert guard_imports, f"{rel} does not import bootstrap_guard"
+            guard_line = min(guard_imports)
+            for node in ast.walk(tree):
+                module = None
+                if isinstance(node, ast.Import):
+                    for alias in node.names:
+                        if alias.name.split(".", 1)[0] in watched:
+                            module = alias.name
+                            break
+                elif isinstance(node, ast.ImportFrom) and node.module:
+                    if node.module.split(".", 1)[0] in watched:
+                        module = node.module
+                if module:
+                    assert guard_line < node.lineno, (
+                        f"{rel} imports {module} before its bootstrap guard"
+                    )
+
+    def test_host_documentation_uses_bootstrap_interpreter_expression(self):
+        """Host commands use the bootstrap contract; UE console `py` is separate."""
+        expression = "BOOTSTRAP_PROJECT_PYTHON"
+        for rel in (
+            "README.md",
+            "skills/ue-python-api/SKILL.md",
+            "skills/ue-python-api/references/architecture.md",
+            "skills/ue-python-api/references/bootstrapped-setup.md",
+            "skills/ue-python-api/references/project-setup.md",
+            "skills/ue-python-api/references/script-bootstrap.md",
+            "skills/ue-python-api/references/script-execution.md",
+        ):
+            text = (_PLUGIN_DIR / rel).read_text(encoding="utf-8")
+            assert expression in text, f"{rel} does not name the host interpreter contract"
+            assert "uv run python" not in text, f"{rel} adds a consumer uv interpreter"
+        assert re.search(r"(?m)^\s*py \"", (_PLUGIN_DIR / "skills/ue-python-api/references/architecture.md").read_text(encoding="utf-8"))
+        assert re.search(r"(?m)^\s*py \"", (_PLUGIN_DIR / "skills/ue-python-api/references/script-execution.md").read_text(encoding="utf-8"))
+
+    def test_bootstrap_host_command_preserves_sentinel_argv(self, tmp_path):
+        """A documented host command reaches its target with spaces intact."""
+        sentinel = tmp_path / "sentinel-interpreter"
+        args_file = tmp_path / "args.txt"
+        sentinel.write_text(
+            "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$SENTINEL_ARGS\"\n",
+            encoding="ascii",
+        )
+        sentinel.chmod(0o755)
+        command = (
+            '"${BOOTSTRAP_PROJECT_PYTHON:-${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}}" '
+            '"${CLAUDE_PLUGIN_ROOT}/skills/ue-python-api/scripts/ue_runner.py" '
+            '"script with spaces.py" --copy-output "output dir with spaces"'
+        )
+        env = os.environ.copy()
+        env.update({
+            "BOOTSTRAP_PROJECT_PYTHON": str(sentinel),
+            "BOOTSTRAP_PYTHON": str(tmp_path / "missing-bootstrap-python"),
+            "CLAUDE_PLUGIN_ROOT": str(_PLUGIN_DIR),
+            "SENTINEL_ARGS": str(args_file),
+        })
+        run = subprocess.run(command, shell=True, executable="/bin/sh", env=env,
+                             capture_output=True, text=True)
+        assert run.returncode == 0, run.stderr
+        assert args_file.read_text(encoding="ascii").splitlines() == [
+            str(_PLUGIN_DIR / "skills/ue-python-api/scripts/ue_runner.py"),
+            "script with spaces.py",
+            "--copy-output",
+            "output dir with spaces",
+        ]
+
+        env.pop("BOOTSTRAP_PROJECT_PYTHON")
+        env.pop("BOOTSTRAP_PYTHON")
+        missing = subprocess.run(command, shell=True, executable="/bin/sh", env=env,
+                                 capture_output=True, text=True)
+        assert missing.returncode != 0
+        assert "requires bootstrap >= 0.120.0" in missing.stderr
 
 
 class TestNoModuleShadowing:

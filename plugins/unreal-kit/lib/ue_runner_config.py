@@ -26,6 +26,10 @@ LEGACY_PROJECT_CONFIG_NAMES = (
 _GLOBAL_CONFIG_PATH = (
     Path.home() / ".claude" / "plugins" / "data" / "plugins-kit" / "unreal-kit" / "config.yaml"
 )
+_HOST_RUNNER = (
+    '"${BOOTSTRAP_PROJECT_PYTHON:-${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}}" '
+    '"${CLAUDE_PLUGIN_ROOT}/skills/ue-python-api/scripts/ue_runner.py"'
+)
 
 _DEFAULTS = {
     "remote_execution": {
@@ -69,12 +73,12 @@ class RunnerConfig:
         """Return list of validation errors (empty = valid)."""
         errors = []
         if not self.uproject:
-            errors.append("uproject path not configured. Run: python ue_runner.py --setup")
+            errors.append(f"uproject path not configured. Run: {_HOST_RUNNER} --setup")
         elif not os.path.isfile(self.uproject):
             errors.append(f"uproject not found: {self.uproject}")
 
         if not self.engine_dir:
-            errors.append("engine_dir not configured. Run: python ue_runner.py --setup")
+            errors.append(f"engine_dir not configured. Run: {_HOST_RUNNER} --setup")
         elif not os.path.isdir(self.engine_dir):
             errors.append(f"engine_dir not found: {self.engine_dir}")
 

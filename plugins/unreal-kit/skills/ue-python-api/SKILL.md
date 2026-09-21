@@ -55,7 +55,7 @@ capability_skill:
     - id: run_script
       keywords: [run script, execute, commandlet, remote, ue_runner, run python, send to editor]
       user_objective: Execute a Python script against the Unreal Editor, with the Editor either open (remote mode) or closed (commandlet mode).
-      operation: python ${CLAUDE_PLUGIN_ROOT}/skills/ue-python-api/scripts/ue_runner.py <script>.py [--copy-output <dir>]
+      operation: '"${BOOTSTRAP_PROJECT_PYTHON:-${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}}" ${CLAUDE_PLUGIN_ROOT}/skills/ue-python-api/scripts/ue_runner.py <script>.py [--copy-output <dir>]'
       tool: scripts/ue_runner.py
       scope_axes: [editor-open, editor-closed]
       reference_section: architecture.md (execution modes)
@@ -65,12 +65,12 @@ capability_skill:
     - id: search_stubs
       keywords: [search stubs, find class, find method, API lookup, autocomplete equivalent]
       user_objective: Look up class names, method signatures, or property names in the best available Unreal API stub before authoring a script.
-      operation: python ${CLAUDE_PLUGIN_ROOT}/scripts/search_unreal_stub.py "<pattern>" --project-root <project-root>
+      operation: '"${BOOTSTRAP_PROJECT_PYTHON:-${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}}" ${CLAUDE_PLUGIN_ROOT}/scripts/search_unreal_stub.py "<pattern>" --project-root <project-root>'
       tool: scripts/search_unreal_stub.py
       scope_axes: [classes, methods]
       reference_section: architecture.md (stubs)
   gotchas:
-    - ue_runner.py re-execs itself under the plugin venv (~/.claude/plugins/data/plugins-kit/unreal-kit/.venv/), so `python ue_runner.py` works from any interpreter -- provided bootstrap has provisioned the venv (see Precondition). If the venv is missing, the runner exits with the bootstrap-absence message instead of degrading to commandlet-only mode.
+    - ue_runner.py re-execs itself under the plugin venv (~/.claude/plugins/data/plugins-kit/unreal-kit/.venv/). Host commands must use the guarded BOOTSTRAP_PROJECT_PYTHON / BOOTSTRAP_PYTHON expression; if bootstrap is absent, it emits the required version diagnosis instead of selecting an unrelated interpreter.
     - The Editor prefix in class names like EditorAssetLibrary is a UE C++ naming convention -- it does NOT mean those classes need the Editor running. They work in commandlet mode. Exception EditorUtilityLibrary, which queries the user's active selection and does require a running Editor.
     - Output via unreal.log() is NOT captured by the terminal runner. To get results back, write YAML to <Project>/Saved/PythonOutput/ -- the runner auto-detects these.
     - Never add project-specific asset paths, class names, workflows, or code patterns. This plugin is engine-generic and MIT-licensed; project-specific content goes in a project-side skill.
