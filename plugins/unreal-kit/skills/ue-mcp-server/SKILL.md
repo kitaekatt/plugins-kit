@@ -447,6 +447,22 @@ with McpClient() as mcp:
     mcp.batch_console_commands(["cmd1", "cmd2"])
 ```
 
+Connection and request budgets are separate. The connection budget covers
+the WebSocket connect, `bridge_hello`/`bridge_ack` handshake, and cleanup;
+each request has its own action budget and a total cap that includes progress
+extensions. The defaults are 5 seconds for connection, 30 seconds per action,
+and 300 seconds as the total request cap. For a longer action, configure both
+request values together before dispatching:
+
+```python
+with McpClient(timeout_s=120, request_cap_s=600) as mcp:
+    mcp.save_all()
+```
+
+The cap must be at least as large as the action budget. Batch commands keep
+the action budget per command; they do not turn the whole batch into one
+request.
+
 **When to use this vs MCP tool calls:**
 - **MCP tool calls**: interactive work, one-off operations, when Claude is directly controlling the editor.
 - **Python McpClient**: batch operations (processing 100+ items), scripts that run unattended, when you need a loop with conditional logic.
