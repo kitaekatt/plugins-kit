@@ -580,6 +580,8 @@ class TestReset:
 
     def test_flags_pass_through(self, tmp_path, monkeypatch):
         """`--all`, `--status` and friends belong to the lever, not to argparse."""
+        import bootstrap_lib.tool_check as tool_check
+        monkeypatch.setattr(tool_check, "resolve_bash", lambda: "/resolved/bash")
         monkeypatch.setattr(cli, "find_reset_script", lambda f="": "/plug/reset.sh")
         seen = {}
 
@@ -589,7 +591,19 @@ class TestReset:
 
         monkeypatch.setattr(cli.subprocess, "call", fake_call)
         assert cli.main(["reset", "--all", "--clear-alerts"]) == 0
-        assert seen["cmd"] == ["bash", "/plug/reset.sh", "--all", "--clear-alerts"]
+        # The resolved bash, never a bare name: Windows process creation
+        # searches System32 first, where WSL's launcher lives.
+        assert seen["cmd"] == ["/resolved/bash", "/plug/reset.sh", "--all", "--clear-alerts"]
+
+    def test_no_bash_fails_loudly_instead_of_running_a_bare_name(self, monkeypatch, capsys):
+        import bootstrap_lib.tool_check as tool_check
+        monkeypatch.setattr(tool_check, "resolve_bash", lambda: None)
+        monkeypatch.setattr(cli, "find_reset_script", lambda f="": "/plug/reset.sh")
+        calls = []
+        monkeypatch.setattr(cli.subprocess, "call", lambda *a, **k: calls.append(a) or 0)
+        assert cli.main(["reset", "--all"]) == 127
+        assert calls == []
+        assert "no bash found" in capsys.readouterr().err
 
     def test_help_reaches_the_lever_rather_than_argparse(self, monkeypatch):
         """The advertised flags live in the delegate's help, so -h must reach it."""

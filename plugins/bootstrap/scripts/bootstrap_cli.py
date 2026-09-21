@@ -443,7 +443,14 @@ def cmd_reset(args) -> int:
         return 2
     # `bash <path>`, not a direct exec: a cached or cloned plugin copy can
     # arrive without its mode bits, the same reason `run` spells it this way.
-    return subprocess.call(["bash", script] + args.forward)
+    # Resolved, never a bare name: Windows process creation searches System32
+    # before PATH, so a bare `bash` starts WSL's launcher wherever WSL exists.
+    from bootstrap_lib.tool_check import resolve_bash
+    bash = resolve_bash()
+    if not bash:
+        sys.stderr.write("bootstrap reset: no bash found to run %s.\n" % script)
+        return 127
+    return subprocess.call([bash, script] + args.forward)
 
 
 def find_reset_script(fallback: str = "") -> str:
