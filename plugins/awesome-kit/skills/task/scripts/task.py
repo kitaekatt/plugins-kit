@@ -15,11 +15,12 @@ folder path to stdout on success; on failure the reason/findings go to
 stderr (and no partial folder is left behind).
 
 Read-op conventions (Step 3):
-- ``list`` prints one stable, parseable line per task --
-  ``id  status  priority  title`` (two-space separated; absent fields ``-``;
-  remote tasks as ``<path> @<host>  remote  -  -``, status not locally
-  resolvable). Archived tasks are omitted unless ``--status archived`` is
-  given. Discovery notes go to stderr. Exit 0 even when empty.
+- ``list`` prints stable, parseable task lines in two default sections:
+  ``Open tasks:`` (active/blocked) and ``Closed tasks:``. Each task line is
+  ``id  status  priority  last_update  title`` (two-space separated; absent
+  fields ``-``; ``last_update`` is the latest ISO date in dated ``log.md``
+  entries). Explicit ``--status`` prints only matching task lines. Discovery
+  notes go to stderr. Exit 0 even when empty.
 - ``show <ref>`` prints the selected task.yaml fields; non-zero with a
   reason on stderr when the ref is unresolvable or the folder is not
   readable locally (archived / orphaned / remote).
@@ -130,6 +131,7 @@ try:
     from task_system import state_ops  # noqa: E402
     from task_system.discovery import (  # noqa: E402
         DiscoveryError,
+        OPEN_CLASSIFICATIONS,
         discover,
         read_task_block,
     )
@@ -203,7 +205,13 @@ def _format_list_line(rec) -> str:
     if rec.classification == "remote" and rec.host:
         ident = f"{rec.id} @{rec.host}"
     return "  ".join(
-        [ident, rec.classification, rec.priority or "-", rec.title or "-"]
+        [
+            ident,
+            rec.classification,
+            rec.priority or "-",
+            rec.last_update or "-",
+            rec.title or "-",
+        ]
     )
 
 
@@ -224,8 +232,28 @@ def _cmd_list(args: argparse.Namespace) -> int:
         return 1
     for note in notes:
         print(f"note: {note}", file=sys.stderr)
-    for rec in records:
-        print(_format_list_line(rec))
+    if args.status is None:
+        sections = (
+            ("Open tasks:", [
+                rec for rec in records if rec.classification in OPEN_CLASSIFICATIONS
+            ]),
+            ("Closed tasks:", [
+                rec for rec in records if rec.classification == "closed"
+            ]),
+        )
+        printed_section = False
+        for heading, section in sections:
+            if not section:
+                continue
+            if printed_section:
+                print()
+            print(heading)
+            for rec in section:
+                print(_format_list_line(rec))
+            printed_section = True
+    else:
+        for rec in records:
+            print(_format_list_line(rec))
     return 0
 
 
@@ -607,8 +635,9 @@ def main(argv: list[str] | None = None) -> int:
     p_list.add_argument(
         "--status",
         default=None,
-        help="Only tasks with this status/classification. Default: every "
-        "classification except archived (pass --status archived for those).",
+        help="Only tasks with this status/classification. Default: open and "
+        "closed tasks in separate sections; pass an explicit status to list "
+        "another classification.",
     )
     p_list.add_argument(
         "--priority", default=None, help="Only tasks with this priority."

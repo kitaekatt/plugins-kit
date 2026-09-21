@@ -509,22 +509,43 @@ class TestListCLI:
         make_task(tmp_path, "tmp/foo", title="Fix the run", priority="P2")
         proc = run_cli(["list", "--root", str(tmp_path)], tmp_path)
         assert proc.returncode == 0, proc.stderr
-        assert proc.stdout.splitlines() == ["tmp/foo  active  P2  Fix the run"]
+        assert proc.stdout.splitlines() == [
+            "Open tasks:",
+            "tmp/foo  active  P2  -  Fix the run",
+        ]
+
+    def test_last_update_uses_latest_dated_log_entry(self, tmp_path):
+        folder = make_task(tmp_path, "tmp/foo", title="Fix the run", priority="P2")
+        (folder / "log.md").write_text(
+            "# Log\n\n"
+            "- 2026-09-18: update: first\n"
+            "- 2026-09-21: update: latest\n",
+            encoding="utf-8",
+        )
+        proc = run_cli(["list", "--root", str(tmp_path)], tmp_path)
+        assert proc.returncode == 0, proc.stderr
+        assert proc.stdout.splitlines() == [
+            "Open tasks:",
+            "tmp/foo  active  P2  2026-09-21  Fix the run",
+        ]
 
     def test_absent_fields_render_as_dash(self, tmp_path):
         make_task(tmp_path, "tmp/bare")  # no priority
         proc = run_cli(["list", "--root", str(tmp_path)], tmp_path)
-        assert proc.stdout.splitlines() == ["tmp/bare  active  -  A task"]
+        assert proc.stdout.splitlines() == [
+            "Open tasks:",
+            "tmp/bare  active  -  -  A task",
+        ]
 
     def test_remote_line_shape(self, tmp_path):
         write_doc(
             tmp_path / "tmp" / "notes.md",
             fenced_task_list([{"path": "tmp/spike", "host": OTHER}]),
         )
-        proc = run_cli(["list", "--root", str(tmp_path)], tmp_path)
+        proc = run_cli(["list", "--status", "remote", "--root", str(tmp_path)], tmp_path)
         assert proc.returncode == 0, proc.stderr
         assert proc.stdout.splitlines() == [
-            f"tmp/spike @{OTHER}  remote  -  -"
+            f"tmp/spike @{OTHER}  remote  -  -  -"
         ]
 
     def test_status_filter_flag(self, tmp_path):
@@ -534,7 +555,22 @@ class TestListCLI:
             ["list", "--status", "closed", "--root", str(tmp_path)], tmp_path
         )
         assert proc.returncode == 0, proc.stderr
-        assert proc.stdout.splitlines() == ["tmp/done  closed  -  A task"]
+        assert proc.stdout.splitlines() == ["tmp/done  closed  -  -  A task"]
+
+    def test_default_lists_open_and_closed_in_separate_sections(self, tmp_path):
+        make_task(tmp_path, "tmp/open", status="active")
+        make_task(tmp_path, "tmp/stuck", status="blocked")
+        make_task(tmp_path, "tmp/done", status="closed")
+        proc = run_cli(["list", "--root", str(tmp_path)], tmp_path)
+        assert proc.returncode == 0, proc.stderr
+        assert proc.stdout.splitlines() == [
+            "Open tasks:",
+            "tmp/open  active  -  -  A task",
+            "tmp/stuck  blocked  -  -  A task",
+            "",
+            "Closed tasks:",
+            "tmp/done  closed  -  -  A task",
+        ]
 
     def test_priority_filter_flag(self, tmp_path):
         make_task(tmp_path, "tmp/p1", priority="P1")
@@ -542,7 +578,10 @@ class TestListCLI:
         proc = run_cli(
             ["list", "--priority", "P1", "--root", str(tmp_path)], tmp_path
         )
-        assert proc.stdout.splitlines() == ["tmp/p1  active  P1  A task"]
+        assert proc.stdout.splitlines() == [
+            "Open tasks:",
+            "tmp/p1  active  P1  -  A task",
+        ]
 
     def test_scope_file_via_flags(self, tmp_path):
         write_doc(
@@ -566,7 +605,7 @@ class TestListCLI:
             tmp_path,
         )
         assert proc.returncode == 0, proc.stderr
-        assert proc.stdout.splitlines() == ["dev/tasks/one  archived  -  -"]
+        assert proc.stdout.splitlines() == ["dev/tasks/one  archived  -  -  -"]
 
     def test_notes_go_to_stderr_exit_zero(self, tmp_path):
         write_doc(
