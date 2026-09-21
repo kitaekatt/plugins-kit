@@ -925,6 +925,28 @@ def _main():
 
     layered_manifest, layered_parse_errors, profile_state = _load_layered_manifests_ex(
         args.project_dir, data_dir)
+
+    # Step 3c-pull: fast-forward the project checkout itself, FIRST, so every
+    # later phase -- tools, git_config, project_venv, project_npm, a project's
+    # check/fix entries -- converges on the updated tree in this same pass. A
+    # moved HEAD may carry a changed .claude/bootstrap.json, so the manifest is
+    # reloaded. Skipped over a parse error: a broken manifest drives nothing.
+    project_pull_notices = []
+    pull_def = (layered_manifest or {}).get("project_git_pull")
+    if args.project_dir and not layered_parse_errors and pull_def is not None:
+        pull_quiet = []
+        pull_action, pull_ok, pull_failures, pull_notice, pull_moved = _process_project_git_pull(
+            pull_def, args.project_dir, quiet_entries=pull_quiet)
+        bootstrap_action_entries.extend(_reprefix(e, "config: ") for e in pull_action)
+        bootstrap_ok_entries.extend(_reprefix(e, "config: ") for e in pull_ok)
+        bootstrap_quiet_entries.extend(_reprefix(e, "config: ") for e in pull_quiet)
+        all_failures.extend(pull_failures)
+        if pull_notice:
+            project_pull_notices.append(pull_notice)
+        if pull_moved:
+            layered_manifest, layered_parse_errors, profile_state = _load_layered_manifests_ex(
+                args.project_dir, data_dir)
+
     for pe in layered_parse_errors:
         _append_detail(
             bootstrap_action_entries,
@@ -1274,6 +1296,17 @@ def _main():
                 # the block back through Step 5's shell_content read and the
                 # notice would appear twice in the emitted display.
                 deferred_plugin_logs.append((data_dir, advice_label, [advice]))
+
+    # The project_git_pull outcome (Step 3c-pull) rides the same notice channel:
+    # informational, no relay directive, kept on every display path. Not gated
+    # by notify_reload_needed -- the user opted into the pull, and a blocked
+    # update they never hear about is the silent failure the feature exists to
+    # prevent.
+    for notice in project_pull_notices:
+        notice_label = f"{bootstrap_label} notice"
+        display_sections.append((notice_label, [notice], []))
+        if not args.console:
+            deferred_plugin_logs.append((data_dir, notice_label, [notice]))
 
     # Step 5: Read shell log entries BEFORE writing any engine entries to the log.
     # Plugin log writes are deferred to step 6 to avoid the bootstrap plugin's
@@ -4389,6 +4422,57 @@ def _process_project_npm(npm_def, project_dir, quiet_entries=None):
         })
 
     return action_entries, ok_entries, failures
+
+
+def _process_project_git_pull(pull_def, project_dir, quiet_entries=None):
+    """Process project_git_pull from a layered manifest: fast-forward the project
+    checkout when that cannot conflict (bootstrap_lib/project_git_pull.py).
+
+    Returns (action_entries, ok_entries, failures, notice, moved). ``notice`` is
+    the one line the user sees for an update or a blocked update -- rendered as
+    a "<label> notice" section by the caller, never a failure dict, because a
+    blocked update is information, not something bootstrap can remediate. Only
+    a malformed declaration is a failure. ``moved`` means HEAD changed, so the
+    caller must reload anything it read from the old tree.
+    """
+    from . import project_git_pull
+    from .records import Entry
+
+    action_entries, ok_entries, failures = [], [], []
+    if quiet_entries is None:
+        quiet_entries = []
+    config, error = project_git_pull.parse_config(pull_def)
+    if error:
+        _append_detail(
+            action_entries,
+            f"project_git_pull: FAILED - invalid declaration: {error}",
+            display="project_git_pull: FAILED",
+        )
+        failures.append({
+            "type": "project_git_pull",
+            "message": f"project_git_pull {error}",
+            "agent_msg": (
+                f"The project_git_pull declaration in a bootstrap.json layer is "
+                f"invalid: it {error}. Fix the declaration; bootstrap does not "
+                f"update the project checkout until it is valid."
+            ),
+            "plugin": "config",
+        })
+        return action_entries, ok_entries, failures, None, False
+    if not config.enabled:
+        ok_entries.append("project_git_pull: skipped - disabled")
+        return action_entries, ok_entries, failures, None, False
+
+    result = project_git_pull.pull_project(project_dir, config)
+    # Every outcome is logged, with its full diagnostics; the notice (when
+    # there is one) is the whole display. Authored as the entry's short label
+    # so the width limit never cuts the classification off the line.
+    quiet_entries.append(result.log_line)
+    if result.detail:
+        quiet_entries.append(f"project_git_pull: detail - {result.detail}")
+    notice = result.notice
+    return (action_entries, ok_entries, failures,
+            Entry(notice, short=notice) if notice else None, result.moved)
 
 
 def _process_config(config_section, plugin_data_dir, plugin_root, action_entries, ok_entries=None, plugin_name="", project_detected=True):

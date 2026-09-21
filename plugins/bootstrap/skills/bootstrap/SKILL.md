@@ -214,8 +214,8 @@ reference_skill:
         - Autodetect runs before required-field validation. A plugin's autodetect script can fill required fields silently; if autodetect partially succeeds, the remaining fields surface as fix-all items.
         - fix-all re-runs the engine after remediation. If issues persist after fix-all, the cause is likely outside the engine's known remediation paths.
     - id: condition_categories
-      summary: Eleven categories of remediable condition the engine knows how to address.
-      keywords: [tool, PATH, venv, npm, node, node_modules, package.json, git dependency, JSON config, INI settings, PyPI package, marketplace, plugin, user config, condition categories, remediation]
+      summary: Twelve categories of remediable condition the engine knows how to address.
+      keywords: [tool, PATH, venv, npm, node, node_modules, package.json, git dependency, project checkout, project_git_pull, git pull, fast-forward, JSON config, INI settings, PyPI package, marketplace, plugin, user config, condition categories, remediation]
       detail: |
         | Category       | Examples                              | Remediation                              |
         |----------------|---------------------------------------|------------------------------------------|
@@ -224,6 +224,7 @@ reference_skill:
         | Venv           | Python venv missing or broken         | uv sync from pyproject.toml              |
         | Node modules   | Project node_modules missing or stale | npm ci (or npm install) from package.json; no fallback on npm ci out-of-sync refusal |
         | Git dependency | Repo not cloned, wrong branch/commit  | clone once; pinned commits re-checkout; no steady-state pull |
+        | Project checkout | Behind its upstream (opt-in project_git_pull) | fast-forward only when nothing can conflict; any other outcome is a classified notice, never fix-all |
         | JSON config    | File lacks expected entries           | Merge missing entries into target JSON   |
         | INI settings   | Application config setting not set    | Write setting to config/ini file         |
         | PyPI package   | Extracted file missing locally        | Download from PyPI and extract           |
@@ -543,12 +544,12 @@ reference_skill:
         subcommands.
     - id: engine_internals
       path: references/engine-internals.md
-      keywords: [engine, internals, processing order, self-setup, manifest phase, script phase, messaging protocol, execution flow, throttling, first run, clean install, phases, design principles, shared library, hybrid model, agent_skills_link, agent skills link, codex skills, .agents, .agents/skills, agents directory, profile resolution, profile prompt gating, profile_prompts marker directory, CLAUDE_CODE_SESSION_ATTENDED, CLAUDE_CODE_SESSION_ID]
+      keywords: [engine, internals, processing order, project_git_pull, safe pull, Step 3c-pull, self-setup, manifest phase, script phase, messaging protocol, execution flow, throttling, first run, clean install, phases, design principles, shared library, hybrid model, agent_skills_link, agent skills link, codex skills, .agents, .agents/skills, agents directory, profile resolution, profile prompt gating, profile_prompts marker directory, CLAUDE_CODE_SESSION_ATTENDED, CLAUDE_CODE_SESSION_ID]
       summary: Engine internals deep-dive, including where profile resolution sits in the pass and how the profile prompt is gated.
     - id: manifest_reference
       path: references/manifest-reference.md
-      keywords: [bootstrap.json, env.json, manifest, schema, fields, variable expansion, layered config, merge semantics, identity keys, example, marketplace pin, pin field, unpin workflow, machines registry, env gate, env_checks, symlinks, shell_rc, macos_defaults, macos_hotkeys, login_items, personalization, agent_skills_link, codex, .agents/skills, profile, profiles, extends, profile inheritance]
-      summary: bootstrap.json manifest field reference (incl. the marketplace pin field, the unpin workflow, the agent_skills_link Codex-discovery opt-out, and the `profiles`/`profile` schema) PLUS the sibling env.json personalization manifest (machines registry, env gate, the five declarative features, and the env_checks contract).
+      keywords: [bootstrap.json, env.json, manifest, schema, fields, project_git_pull, git pull, fast-forward, project checkout, update gate, gate_timeout, variable expansion, layered config, merge semantics, identity keys, example, marketplace pin, pin field, unpin workflow, machines registry, env gate, env_checks, symlinks, shell_rc, macos_defaults, macos_hotkeys, login_items, personalization, agent_skills_link, codex, .agents/skills, profile, profiles, extends, profile inheritance]
+      summary: bootstrap.json manifest field reference (incl. the marketplace pin field, the project_git_pull safe fast-forward and its outcome codes, the unpin workflow, the agent_skills_link Codex-discovery opt-out, and the `profiles`/`profile` schema) PLUS the sibling env.json personalization manifest (machines registry, env gate, the five declarative features, and the env_checks contract).
     - id: remediation_reference
       path: references/remediation-reference.md
       keywords: [condition, remediation, check method, tool missing, venv broken, marketplace, plugin scope, fix-all, blocking, manual operation, pinned wrong commit, pin removed, unresolvable pin, agent_skills_link, agent skills link, codex, .agents, symlink, junction, p4ignore, info/exclude, profile prompt, ASK rung, typed choice, profile listing, too many profiles]
