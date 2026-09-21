@@ -54,6 +54,13 @@ class RunResult:
     output_file: str | None = None
     elapsed: float = 0.0
     error: str = ""
+    # True when the remote dispatch may have reached UE but its completion was
+    # lost.  Such a result must never be replayed through a commandlet.
+    completion_unknown: bool = False
+
+
+class ProjectResolutionError(ValueError):
+    """An explicit project target was supplied but cannot be used."""
 
 
 def run_ue_script(
@@ -92,7 +99,10 @@ def run_ue_script(
         return RunResult(success=False, mode="none", error=f"Script not found: {script_path}")
 
     # Resolve which project to target: explicit flag > CWD > script path > config
-    config = _resolve_project(config, script_path, project)
+    try:
+        config = _resolve_project(config, script_path, project)
+    except ProjectResolutionError as e:
+        return RunResult(success=False, mode="none", error=str(e))
 
     # Validate config (commandlet needs valid paths; remote can work without them)
     errors = config.validate()
@@ -116,6 +126,7 @@ def run_ue_script(
                 and fallback_on_error
                 and force_mode != "remote"
                 and not errors
+                and not result.completion_unknown
             ):
                 _warn(
                     f"Remote script error, retrying via commandlet (--fallback-on-error)...\n"
@@ -228,10 +239,15 @@ def _try_remote(script_path: str, config: RunnerConfig) -> RunResult | None:
     pre_snapshot = _snapshot_output_dir(output_dir)
 
     start = time.time()
+    dispatch_started = False
     try:
         with _ProjectFilteredConnection(remote_cfg) as conn:
             # EXECUTE_FILE tells UE to load and run a .py file by path.
             # EXECUTE_STATEMENT would exec() inline code instead.
+            # Mark this before crossing the library boundary: a timeout or
+            # connection exception from this call cannot prove whether UE
+            # received and started the script.
+            dispatch_started = True
             cmd_result = conn.execute_python_command(
                 script_path,
                 exec_type=upyre.ExecTypes.EXECUTE_FILE,
@@ -244,6 +260,20 @@ def _try_remote(script_path: str, config: RunnerConfig) -> RunResult | None:
         return None
     except Exception as e:
         err_str = str(e)
+        if dispatch_started:
+            elapsed = time.time() - start
+            return RunResult(
+                success=False,
+                mode="remote",
+                stderr=err_str,
+                elapsed=elapsed,
+                error=(
+                    "Remote dispatch completion is unknown: "
+                    f"{err_str}. Not retrying via commandlet because the "
+                    "script may already have run."
+                ),
+                completion_unknown=True,
+            )
         # Connection refused / timeout / failed = editor not running
         if any(keyword in err_str.lower() for keyword in ("timed out", "timeout", "refused", "unreachable", "connection failed")):
             _warn(f"Editor not responding ({err_str}). Falling back to commandlet...")
@@ -460,7 +490,9 @@ def _resolve_project(
             discovered = p
             source = "--project flag"
         else:
-            _warn(f"--project path is not a .uproject file: {p}")
+            raise ProjectResolutionError(
+                f"--project path is not a usable .uproject file: {p}"
+            )
 
     if not discovered:
         cwd_project = find_uproject_from_cwd()

@@ -100,6 +100,11 @@ class TestLockRetryDocMatchesScript:
         src = (_PLUGIN_DIR / "skills/fix-up-redirectors/scripts/apply_fixups.py").read_text(encoding="utf-8")
         assert "p4 -x - delete -c" in src
 
+    def test_apply_fixups_does_not_count_unconfirmed_files(self):
+        src = (_PLUGIN_DIR / "skills/fix-up-redirectors/scripts/apply_fixups.py").read_text(encoding="utf-8")
+        assert "outcome == 'confirmed'" in src
+        assert "Deletion incomplete; confirmed" in src
+
 
 class TestManifestConfigDrift:
     """U6: the legacy-path list is defined exactly once, in ue_runner_config;

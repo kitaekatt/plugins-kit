@@ -321,6 +321,9 @@ The apply script does (fix-up mode):
 4. UE: load each referencer (resolves redirectors at link time), rewrite soft refs via `rename_referencing_soft_object_paths`, force-save each package.
 5. `EditorAssetLibrary.delete_asset` on each redirector to release UE's file handle, then GC, then `p4 reopen -c <CL>` to herd UE-auto-opened deletes into our pending CL (with `p4 delete -c <CL>` as fallback for any not auto-opened).
 6. Saves a manifest at `<project>/Saved/PythonOutput/redirectors_apply_<CL>.yaml`.
+   The manifest records one outcome for every intended file: `confirmed`,
+   `failed`, `pending-retry`, or `unknown`. A file counts as deleted only after
+   `p4 opened -c <CL>` confirms its delete action and CL membership.
 
 In delete-only mode: skips steps 3-5 (no referencer load/save needed), opens
 the classified redirector candidate files for delete in the new CL. Level
@@ -329,6 +332,10 @@ present during classification; a companion that appears later causes a
 refusal before CL creation.
 
 ### Phase 4 tail - lock-failure retry
+
+The apply manifest records `confirmed`, `failed`, `pending-retry`, or `unknown`
+for every intended file. It exits nonzero until all intended deletes are
+confirmed in the pending CL.
 
 If the apply script reports lock failures (UE held Windows handles even after `delete_asset` returned), it writes a retry list to `<project>/Saved/PythonOutput/redirectors_lock_retry_<CL>.txt`. After the commandlet exits (UE's process is gone, file handles released), run:
 

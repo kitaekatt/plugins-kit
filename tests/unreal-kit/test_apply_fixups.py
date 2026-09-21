@@ -86,6 +86,21 @@ def test_delete_only_skips_referencer_work(tmp_path: Path) -> None:
     assert manifest["redirectors_deleted"] == 1
 
 
+def test_auto_opened_delete_is_confirmed_after_reopen(tmp_path: Path) -> None:
+    redirector = tmp_path / "project" / "Content" / "R.uasset"
+    harness = make_harness(
+        tmp_path,
+        fstat_output=f"... depotFile {redirector}\n... action delete\n",
+    )
+
+    code, _stdout, _stderr, manifest_path = harness.run()
+
+    assert code == 0
+    manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    assert manifest["redirectors_deleted"] == 1
+    assert manifest["mutation_outcomes"] == {str(redirector): "confirmed"}
+
+
 def test_manifest_write_failure_blocks_all_mutation(tmp_path: Path) -> None:
     harness = make_harness(tmp_path, fail_manifest=True)
 
@@ -141,3 +156,113 @@ def test_map_native_candidate_must_match_classification_snapshot(tmp_path: Path)
     assert code != 0
     assert "candidate" in stderr.lower() or "mutation" in stderr.lower()
     assert not any(event[0] == "create_cl" for event in harness.events)
+
+
+@pytest.mark.parametrize("mode", ["fixup", "delete-only"])
+def test_fstat_failure_is_unknown_and_retains_cl_and_ue_result(
+    tmp_path: Path, mode: str
+) -> None:
+    harness = make_harness(tmp_path, mode=mode, fstat_rc=1)
+
+    code, stdout, stderr, manifest_path = harness.run()
+
+    assert code != 0
+    assert "Done. CL" not in stdout
+    assert "fstat" in stderr.lower()
+    manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    assert manifest["cl"] == "123"
+    assert manifest["mutation_outcomes"] == {str(harness.redirector_file): "unknown"}
+    assert manifest["redirectors_deleted"] == 0
+    if mode == "fixup":
+        assert manifest["ue_deleted"] == 1
+
+
+def test_omitted_fstat_record_is_unknown_and_not_counted(tmp_path: Path) -> None:
+    harness = make_harness(tmp_path, fstat_output="")
+
+    code, _stdout, stderr, manifest_path = harness.run()
+
+    assert code != 0
+    assert "missing" in stderr.lower() or "omitted" in stderr.lower()
+    manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    assert manifest["redirectors_deleted"] == 0
+    assert manifest["mutation_outcomes"] == {str(harness.redirector_file): "unknown"}
+
+
+def test_unexpected_fstat_action_is_unknown_and_not_deleted(tmp_path: Path) -> None:
+    harness = make_harness(
+        tmp_path,
+        fstat_output=f"... depotFile {tmp_path / 'project' / 'Content' / 'R.uasset'}\n"
+        "... action edit\n",
+    )
+
+    code, _stdout, stderr, manifest_path = harness.run()
+
+    assert code != 0
+    assert "unexpected" in stderr.lower() or "action" in stderr.lower()
+    manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    assert manifest["redirectors_deleted"] == 0
+    assert manifest["mutation_outcomes"] == {str(harness.redirector_file): "unknown"}
+
+
+@pytest.mark.parametrize(
+    ("delete_error", "expected"),
+    [
+        ("delete failed", "failed"),
+        ("being used by another process", "pending-retry"),
+    ],
+)
+def test_partial_delete_outcomes_are_persisted_and_fail(
+    tmp_path: Path, delete_error: str, expected: str
+) -> None:
+    redirector = tmp_path / "project" / "Content" / "R.uasset"
+    harness = make_harness(
+        tmp_path,
+        delete_results={str(redirector): (1, delete_error)},
+    )
+
+    code, stdout, stderr, manifest_path = harness.run()
+
+    assert code != 0
+    assert "Done. CL" not in stdout
+    assert "FAIL" in stderr
+    manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    assert manifest["mutation_outcomes"] == {str(redirector): expected}
+    assert manifest["redirectors_deleted"] == 0
+    if expected == "pending-retry":
+        assert manifest["lock_retry_list"]
+        assert "p4 -x - delete -c 123" in stdout
+
+
+def test_failed_reopen_is_failed_and_does_not_report_complete(tmp_path: Path) -> None:
+    redirector = tmp_path / "project" / "Content" / "R.uasset"
+    harness = make_harness(
+        tmp_path,
+        fstat_output=f"... depotFile {redirector}\n... action delete\n",
+        reopen_error=RuntimeError("reopen failed"),
+    )
+
+    code, stdout, stderr, manifest_path = harness.run()
+
+    assert code != 0
+    assert "Done. CL" not in stdout
+    assert "reopen" in stderr.lower()
+    manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    assert manifest["mutation_outcomes"] == {str(redirector): "failed"}
+
+
+def test_final_cl_membership_must_confirm_delete_action(tmp_path: Path) -> None:
+    redirector = tmp_path / "project" / "Content" / "R.uasset"
+    harness = make_harness(
+        tmp_path,
+        opened_output=f"{redirector}#1 - edit change 123 (text) by alice@ws\n",
+    )
+
+    code, stdout, stderr, manifest_path = harness.run()
+
+    assert code != 0
+    assert "Done. CL" not in stdout
+    assert "unknown" in stderr.lower()
+    manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    assert manifest["redirectors_deleted"] == 0
+    assert manifest["mutation_outcomes"] == {str(redirector): "unknown"}
