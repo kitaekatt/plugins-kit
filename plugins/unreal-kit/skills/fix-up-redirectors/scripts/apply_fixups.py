@@ -202,6 +202,37 @@ else:
 cl_num = create_pending_cl(description, client=os.environ.get('P4CLIENT'))
 print(f"Created CL {cl_num}")
 
+# Persist a recovery record before opening files or asking UE to mutate an
+# asset. A failed write must stop the run: without this record a partial CL
+# would have no local diagnosis to accompany it.
+manifest_path = os.path.join(
+    str(unreal.Paths.project_dir()), 'Saved', 'PythonOutput',
+    f'redirectors_apply_{cl_num}.yaml',
+)
+
+
+def _persist_manifest(manifest):
+    try:
+        save_apply_manifest(manifest_path, manifest)
+    except Exception as exc:
+        fail(f"Could not persist pre-mutation recovery record: {exc}")
+
+
+manifest = {
+    'cl': cl_num,
+    'scope': scope,
+    'mode': MODE,
+    'redirectors_deleted': 0,
+    'referencers_saved': 0,
+    'referencer_save_failures': [],
+    'redirector_delete_failures': [],
+    'redirector_lock_failures': [],
+    'load_failures': [],
+    'pre_delete_phase': 'planned',
+    'pre_delete_failures': [],
+}
+_persist_manifest(manifest)
+
 # Initialize the bookkeeping that both modes' manifest needs.
 loaded_referencers = []
 load_failures = []
@@ -239,8 +270,14 @@ if MODE == 'fixup':
         )
         print("Disabled UCollectionSettings.bAutoCommitOnSave for this commandlet.")
     except Exception as exc:
-        print(f"[apply_fixups] WARN: could not flip bAutoCommitOnSave ({exc}); "
-              f"UE may auto-submit collection files into stray one-file CLs.")
+        manifest['pre_delete_phase'] = 'collection_guard'
+        manifest['pre_delete_failures'] = [str(exc)]
+        _persist_manifest(manifest)
+        fail(
+            "Could not establish the b_auto_commit_on_save no-auto-submit "
+            "collection guard; "
+            f"refusing to mutate referencers or redirectors: {exc}"
+        )
 
     # 4a) p4 edit only the non-redirector referencer files (so UE can re-save them).
     if referencer_files:
@@ -265,6 +302,16 @@ if MODE == 'fixup':
     print(f"Loaded {len(loaded_referencers)} referencer asset(s) "
           f"({len(load_failures)} failed to load)")
 
+    if load_failures:
+        manifest['load_failures'] = load_failures
+        manifest['pre_delete_phase'] = 'load'
+        manifest['pre_delete_failures'] = load_failures
+        _persist_manifest(manifest)
+        fail(
+            "Refusing to delete redirectors because referencer loads failed: "
+            + ', '.join(load_failures)
+        )
+
     # Soft-reference rewrite (only meaningful when there are loaded packages).
     redirector_map = {}
     for r in records:
@@ -275,7 +322,16 @@ if MODE == 'fixup':
         pkg_names = unreal.Array(unreal.Name)
         for p in loaded_referencers:
             pkg_names.append(unreal.Name(p))
-        asset_tools.rename_referencing_soft_object_paths(pkg_names, redirector_map)
+        try:
+            asset_tools.rename_referencing_soft_object_paths(pkg_names, redirector_map)
+        except Exception as exc:
+            manifest['pre_delete_phase'] = 'soft_rewrite'
+            manifest['pre_delete_failures'] = loaded_referencers
+            _persist_manifest(manifest)
+            fail(
+                "Refusing to delete redirectors because soft-reference rewrite "
+                f"failed for {', '.join(loaded_referencers)}: {exc}"
+            )
         print("Rewrote soft references.")
 
     for pkg in loaded_referencers:
@@ -286,6 +342,17 @@ if MODE == 'fixup':
             saved += 1
     print(f"Force-saved {saved} referencer package(s) "
           f"({len(save_failures)} failures)")
+
+    if save_failures:
+        manifest['referencers_saved'] = saved
+        manifest['referencer_save_failures'] = save_failures
+        manifest['pre_delete_phase'] = 'save'
+        manifest['pre_delete_failures'] = save_failures
+        _persist_manifest(manifest)
+        fail(
+            "Refusing to delete redirectors because referencer saves failed: "
+            + ', '.join(save_failures)
+        )
 
     # 4c) Delete each redirector via UE first, releasing the Windows file
     #     handle so `p4 delete` can succeed. Without this step `p4 delete`'s
@@ -432,11 +499,9 @@ if lock_failures:
     print(f"[apply_fixups] Run after UE exits: "
           f"p4 -x - delete -c {cl_num} < {retry_script}")
 
-# 7) Manifest.
-manifest = {
-    'cl': cl_num,
-    'scope': scope,
-    'mode': MODE,
+# 7) Manifest. The initial record was persisted before any mutation; update it
+# with the completed operation and retain any pre-delete diagnosis fields.
+manifest.update({
     'redirectors_deleted': len(redirector_files) - len(delete_failures) - len(lock_failures),
     'referencers_saved': saved,
     'referencer_save_failures': save_failures,
@@ -446,12 +511,10 @@ manifest = {
     'umap_companions_included': umap_companion_files,
     'collections_reopened': collections_reopened,
     'lock_retry_list': retry_script,
-}
-manifest_path = os.path.join(
-    str(unreal.Paths.project_dir()), 'Saved', 'PythonOutput',
-    f'redirectors_apply_{cl_num}.yaml',
-)
-save_apply_manifest(manifest_path, manifest)
+    'pre_delete_phase': 'complete',
+    'pre_delete_failures': [],
+})
+_persist_manifest(manifest)
 
 print()
 print(f"Done. CL {cl_num}: deleted {manifest['redirectors_deleted']} redirectors"
