@@ -319,6 +319,8 @@ class TestLaunchNewEngine:
         return str(ip)
 
     def test_launches_new_session_bootstrap(self, tmp_path, monkeypatch):
+        import bootstrap_lib.tool_check as tool_check
+        monkeypatch.setattr(tool_check, "resolve_bash", lambda: "/resolved/bash")
         install_path = self._install(tmp_path)
         data_dir = tmp_path / "data"
         data_dir.mkdir()
@@ -333,8 +335,9 @@ class TestLaunchNewEngine:
         assert ok is True
         assert len(popen_calls) == 1
         args, kwargs = popen_calls[0]
-        # bash <new installPath>/hooks/sessionstart/session-bootstrap.sh
-        assert args[0] == "bash"
+        # <resolved bash> <new installPath>/hooks/sessionstart/session-bootstrap.sh.
+        # Never a bare "bash": Windows searches System32 (WSL's launcher) first.
+        assert args[0] == "/resolved/bash"
         assert args[1].endswith("session-bootstrap.sh")
         assert install_path in args[1]
         assert kwargs["cwd"] == "/proj"
@@ -355,6 +358,18 @@ class TestLaunchNewEngine:
         monkeypatch.setattr(harvest.subprocess, "Popen", lambda *a, **k: None)
         harvest.launch_new_engine(install_path, "/proj", str(data_dir))
         assert not cd.exists(), "cooldown must be cleared to force the pass"
+
+    def test_no_bash_returns_false_without_spawning(self, tmp_path, monkeypatch):
+        import bootstrap_lib.tool_check as tool_check
+        monkeypatch.setattr(tool_check, "resolve_bash", lambda: None)
+        install_path = self._install(tmp_path)
+        data_dir = tmp_path / "data"
+        data_dir.mkdir()
+        popen_calls = []
+        monkeypatch.setattr(harvest.subprocess, "Popen",
+                            lambda *a, **k: popen_calls.append(1))
+        assert harvest.launch_new_engine(install_path, "/proj", str(data_dir)) is False
+        assert popen_calls == []
 
     def test_missing_script_returns_false(self, tmp_path, monkeypatch):
         install_path = self._install(tmp_path, with_script=False)

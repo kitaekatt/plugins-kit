@@ -1,5 +1,6 @@
 """Tool installation verification."""
 
+import ntpath
 import os
 import shutil
 import subprocess
@@ -35,8 +36,60 @@ def resolve_bash() -> Optional[str]:
     bash because Claude Code's SessionStart runs inside Git Bash (usr/bin on
     PATH); elevated cmd.exe would not (Git for Windows exposes Git\\cmd only),
     which is exactly why elevation embeds this ABSOLUTE path at render time.
+
+    On Windows it never returns WSL's launcher. ``C:\\Windows\\System32\\bash.exe``
+    (and the WindowsApps alias) starts a Linux distro, whose view of the disk
+    is /mnt/c, so a manifest command would run in the wrong system. It is found
+    whenever PATH lists System32 before Git's bash, which is the normal order
+    for a process started from PowerShell or cmd.exe. Such a candidate is
+    skipped, PATH is searched again without the Windows directories, and the
+    last resort is the Git for Windows ``bin\\bash.exe`` beside ``git`` on PATH:
+    that launcher puts ``/usr/bin`` on PATH itself, where ``usr\\bin\\bash.exe``
+    started from a Windows PATH finds no ``uname`` or ``sed``.
     """
-    return shutil.which("bash")
+    found = shutil.which("bash")
+    if sys.platform != "win32":
+        return found
+    return _windows_bash(
+        found,
+        os.environ.get("PATH", ""),
+        os.environ.get("SystemRoot") or os.environ.get("windir") or r"C:\Windows",
+        shutil.which("git"),
+    )
+
+
+_WSL_LAUNCHER_DIRS = ("system32", "syswow64", "sysnative")
+
+
+def _is_wsl_launcher(path: str, windir: str) -> bool:
+    """True for a bash under the Windows directory or in WindowsApps -- WSL's."""
+    p = ntpath.normcase(ntpath.normpath(path))
+    w = ntpath.normcase(ntpath.normpath(windir))
+    if any(p.startswith(ntpath.join(w, d) + "\\") for d in _WSL_LAUNCHER_DIRS):
+        return True
+    return "\\windowsapps\\" in p
+
+
+def _windows_bash(found, path_env, windir, git_exe, which=shutil.which, isfile=os.path.isfile):
+    """resolve_bash() on Windows, with every environment input injected."""
+    if found and not _is_wsl_launcher(found, windir):
+        return found
+    kept = [
+        d for d in path_env.split(";")
+        if d and not _is_wsl_launcher(ntpath.join(d.strip('"'), "bash.exe"), windir)
+    ]
+    alt = which("bash", path=";".join(kept)) if kept else None
+    if alt and not _is_wsl_launcher(alt, windir):
+        return alt
+    if git_exe:
+        # Git\cmd\git.exe, Git\bin\git.exe, Git\mingw64\bin\git.exe -> Git
+        d = ntpath.dirname(git_exe)
+        for _ in range(3):
+            candidate = ntpath.join(d, "bin", "bash.exe")
+            if isfile(candidate) and not _is_wsl_launcher(candidate, windir):
+                return candidate
+            d = ntpath.dirname(d)
+    return None
 
 
 def _dir_on_path(directory: str) -> bool:

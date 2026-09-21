@@ -281,12 +281,19 @@ def launch_new_engine(install_path: str, project_dir: str, data_dir: str) -> boo
             getattr(subprocess, "CREATE_NO_WINDOW", 0)
             | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
         )
+    # Resolved, never a bare name: Windows process creation searches System32
+    # before PATH, so a bare `bash` starts WSL's launcher wherever WSL exists.
+    from bootstrap_lib.tool_check import resolve_bash
+    bash = resolve_bash()
+    if not bash:
+        _write_launch_failure_note(data_dir, "no bash found to run session-bootstrap.sh")
+        return False
     try:
         stderr_path = Path(data_dir) / "harvest.stderr"
         stderr_path.parent.mkdir(parents=True, exist_ok=True)
         with stderr_path.open("w", encoding="utf-8") as stderr:
             popen_kwargs["stderr"] = stderr
-            subprocess.Popen(["bash", str(sb)], **popen_kwargs)
+            subprocess.Popen([bash, str(sb)], **popen_kwargs)
     except OSError as exc:
         _write_launch_failure_note(data_dir, str(exc))
         return False
