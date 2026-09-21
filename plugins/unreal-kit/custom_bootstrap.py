@@ -40,9 +40,14 @@ def autodetect() -> Optional[Dict[str, str]]:
 
 def bootstrap(ctx: Any) -> None:
     """Check the optional durable enriched stub without writing project data."""
-    uproject = ctx.config.get("uproject")
+    config = getattr(ctx, "config", None) or {}
+    uproject = config.get("uproject") if hasattr(config, "get") else None
     project_root = getattr(ctx, "project_dir", None)
-    if not uproject or not project_root:
+    if not uproject:
+        ctx.log("stubs: skipped - no uproject configured")
+        return
+    if not project_root:
+        ctx.log("stubs: skipped - project directory is unavailable")
         return
 
     from bootstrap_lib.config_resolve import resolve_plugin_data_dir
@@ -90,7 +95,11 @@ def bootstrap(ctx: Any) -> None:
         return
 
     defer = getattr(ctx, "add_deferred_requirement", None)
-    if defer is None:
+    if not callable(defer):
+        ctx.log(
+            "stubs: unavailable - bootstrap engine does not support "
+            "deferred requirements"
+        )
         return
     defer(
         "unreal_enriched_stub",

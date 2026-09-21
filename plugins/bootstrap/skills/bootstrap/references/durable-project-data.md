@@ -137,6 +137,13 @@ The split is:
 3. The plugin's explicit refresh action resolves the same path, tells the user
    what it will update, and writes the artifact after invocation.
 
+The check must emit exactly one truthful outcome log on every return. If required
+context is unavailable (for example, no configured source path or no project
+directory), log a skipped or unknown outcome rather than claiming the artifact
+is current. If the engine does not provide `add_deferred_requirement`, log an
+unavailable diagnostic; do not claim that the requirement was recorded or turn
+the optional requirement into a failure escalation.
+
 Do not aim an auto-remediating manifest entry at `${plugin_data_dir}`. In
 particular, `pypi_packages`, `ini_settings`, and `json_entries` can write their
 targets during SessionStart. Use them only with machine-local targets; use an

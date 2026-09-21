@@ -98,9 +98,10 @@ Notes that are load-bearing:
   EXPECTED state on a machine that does not use the capability, so it belongs
   in verbose output. Using `log` puts the nag back by a different door.
 - **Guard the call in a stdlib-only script** that may run against an older
-  engine: `getattr(ctx, "add_deferred_requirement", None)`. Fall back to
-  silence, never to `add_failure` -- the fallback would resurrect the very
-  prompt the deferral removes.
+  engine: `getattr(ctx, "add_deferred_requirement", None)`. If the API is
+  unavailable, log a truthful diagnostic and return without claiming that the
+  requirement was recorded. Never fall back to `add_failure` -- that would
+  resurrect the very prompt the deferral removes.
 
 ## Consuming it at the point of need
 
