@@ -24,7 +24,7 @@ The command prints the engine tree and each candidate manifest's presence, then
 streams checks and actions through the shared recorder. It uses the shared
 manifest handlers directly, without installed plugin manifest discovery, the
 legacy `user-bootstrap.json`, env.json personalization, self-provisioning, or
-implicit project setup. Project operations such as `project_venv`, `project_npm`,
+implicit project setup. Project operations such as `project_git_pull` (which runs first), `project_venv`, `project_npm`,
 and `agent_skills_link` run when declared in the merged layers.
 
 A `plugins` or `marketplaces` entry authored in one of these four files still

@@ -246,6 +246,45 @@ Example:
 }
 ```
 
+## `project_git_pull` -- Safe Fast-Forward of the Project Checkout
+
+A **layered** manifest declares `project_git_pull` to have bootstrap update the project checkout to its upstream at the start of every pass -- but only when that cannot conflict. Like `project_npm`, it needs `--project-dir` and cannot be declared by a shipped plugin (it is not one of the `_MANIFEST_PHASES`).
+
+```json
+{ "project_git_pull": { "gate": "node scripts/update-gate.mjs", "gate_timeout": 120 } }
+```
+
+`true` enables a plain safe pull. An object may set `enabled` (default `true`; `{"enabled": false}` in a higher-priority layer such as `<project>/.claude/bootstrap.local.json` opts that machine out), `gate` (a shell command run in the checkout, see below), and `gate_timeout` (whole seconds, 1-3600, default 120). Any other value is a `project_git_pull` failure and nothing is pulled.
+
+**It runs before the manifest phases.** The pull happens right after the layered manifest loads, before `env_vars` and every other manifest phase, so `tools`, `git_config`, `project_venv`, `project_npm` and the project's check/fix entries converge on the updated tree in the same pass. When the update moved HEAD, the manifest is reloaded, so a changed `.claude/bootstrap.json` also applies in that pass. `bootstrap run` does the same.
+
+**The checks, in order.** Each non-update outcome is a fixed code decided from git exit codes and plumbing output, never from git's human-facing messages:
+
+| Code | Meaning | Shown |
+|---|---|---|
+| `git-unavailable` | git is not installed (a fresh machine whose tools phase has not run yet) | log only |
+| `not-a-repository` | the project directory is not in a git checkout | log only |
+| `operation-in-progress` | a rebase, merge, cherry-pick, revert, sequence or bisect is under way, or conflicts are unresolved | notice |
+| `detached-head` | HEAD is not on a branch | log only |
+| `no-upstream` | the branch tracks nothing | log only |
+| `fetch-failed` | fetching the branch's remote failed or timed out (60s) | notice |
+| `current` | nothing to pull (local-only commits are reported in the log) | log only |
+| `diverged` | local commits not on the upstream AND new upstream commits: a fast-forward is impossible | notice |
+| `local-changes-overlap` | a staged, unstaged or untracked change sits on a path the update changes, or anything (an ignored file included) sits where the update adds a file or needs a directory | notice |
+| `gate-declined` | the project's gate said "not now" | notice |
+| `gate-failed` | the gate exited with any other status, timed out, or could not start | notice |
+| `unsupported-filter` | an incoming file uses a git filter other than Git LFS: a smudge filter that fails mid-checkout aborts the merge with HEAD unmoved but tracked files already deleted, so a filter bootstrap cannot pre-verify blocks | notice |
+| `lfs-unavailable` | an incoming file uses Git LFS and git-lfs is not installed | notice |
+| `lfs-fetch-failed` | pre-downloading the incoming LFS content failed (600s limit) | notice |
+| `ff-refused` | `git merge --ff-only` refused anyway -- git's own safety check is the backstop for anything the checks above did not predict. A refusal is not proof the tree is untouched, so the detail names any file the attempt left changed that was clean before it | notice |
+| `updated` | fast-forwarded | notice |
+
+Local changes on paths the update does not touch do NOT block: git carries them across a fast-forward untouched. The merge runs the repository's hooks exactly as a manual pull would (with a 1200s limit, since a post-merge hook may build); `updated` is decided by reading HEAD afterwards, so a hook that fails or times out after HEAD moved still reports the update.
+
+**The notice.** Every outcome goes to `bootstrap.log` with its full diagnostics (all overlapping paths, git's own output). An update or a blocked update is also shown as one `<label> notice` line -- `project updated: main fast-forwarded 3 commit(s) to a1b2c3d`, or `project not updated [<code>]: <detail>`. It is never a fix-all item: nothing about a blocked update is bootstrap's to remediate, and the next pass simply tries again.
+
+**The gate.** An optional project-owned veto for hazards git cannot see (for example: the update would change native sources whose prebuilt binary is not published yet). It runs after the fast-forward is known to be clean, in the checkout, with `BOOTSTRAP_PULL_FROM` and `BOOTSTRAP_PULL_TO` (full commit SHAs), `BOOTSTRAP_PULL_BRANCH` and `BOOTSTRAP_PULL_UPSTREAM` set. Exit `0` allows the update. Exit `75` declines it, and the last non-empty line of stdout -- reduced to printable ASCII and capped at 200 characters -- becomes the notice's detail, so the project, not bootstrap, owns that classification. Any other exit blocks as `gate-failed`.
+
 ## `agent_skills_link` — Codex Skill Discovery Link
 
 A **layered** boolean opt-out for an automatic project-root behavior:
@@ -406,7 +445,7 @@ variable's value with a one-line entry.
 Both fields are required strings. A leading `~` in `value` expands to the
 user's home at apply time, so committed manifests stay identity-free.
 
-**Processed first.** `env_vars` is the first phase in every manifest pass —
+**Processed first.** `env_vars` is the first manifest phase in every pass (only a layered `project_git_pull`, which is not a manifest phase, runs before it) —
 install commands in any later phase (e.g. a tool `install` invoking
 `$DEVROOT/...`) see the variables.
 
