@@ -41,17 +41,37 @@ def run_layered_bootstrap(
     )
     # No data_dir: the loader's deprecated user-bootstrap.json candidate is
     # deliberately excluded from a terminal run.
-    manifest, errors, profile_state = engine._load_layered_manifests_ex(str(project_dir))
-    for error in errors:
-        result.failures.append({"type": "manifest_parse", **error,
-                                "message": error["error"]})
-        result.actions.append(f"{error['path']}: PARSE FAILED - {error['error']}")
+    def load():
+        manifest, errors, profile_state = engine._load_layered_manifests_ex(str(project_dir))
+        for error in errors:
+            result.failures.append({"type": "manifest_parse", **error,
+                                    "message": error["error"]})
+            result.actions.append(f"{error['path']}: PARSE FAILED - {error['error']}")
+        return manifest, errors, profile_state
+
+    manifest, errors, profile_state = load()
     # A broken override must not allow lower-priority requirements to run.
     # Leaves profile_status at its default (None): a parse error keeps this
     # early return exactly as it was before profiles existed, rather than
     # reporting "unselected" over a manifest that never fully loaded.
     if errors:
         return result
+
+    # The project checkout is fast-forwarded first, as in the SessionStart
+    # pass (engine Step 3c-pull), so everything below applies to the updated
+    # tree -- including a .claude/bootstrap.json the update changed.
+    if project_dir and manifest.get("project_git_pull") is not None:
+        actions, checks, failures, notice, moved = engine._process_project_git_pull(
+            manifest["project_git_pull"], str(project_dir), quiet_entries=result.details)
+        result.actions.extend(actions)
+        result.checks.extend(checks)
+        result.failures.extend(failures)
+        if notice:
+            result.actions.append(notice)
+        if moved:
+            manifest, errors, profile_state = load()
+            if errors:
+                return result
 
     result.profile_status = profile_state.status
     # `bootstrap run` never prompts (there is no session to ask in): it only

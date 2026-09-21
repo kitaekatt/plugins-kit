@@ -134,6 +134,28 @@ separate `bootstrap-stuck-fix` plugin (`scripts/repair_registry.py`), which has
 no prior version to be wedged on. See the delivery-path rule in the repo
 CLAUDE.md and the `update_lifecycle` fact in the bootstrap SKILL.md.
 
+### Step 3c-pull: `project_git_pull` -- safe fast-forward of the project checkout
+
+Runs immediately after the layered manifest loads and before every other
+project phase, when the merged layers declare `project_git_pull`, the engine
+has a `--project-dir`, and no layer failed to parse. Implementation:
+`bootstrap_lib/project_git_pull.py` (the checks and outcome codes) and
+`engine._process_project_git_pull` (the entries). Running first is the point:
+`tools`, `git_config`, `project_venv`, `project_npm` and the project's
+check/fix entries all see the updated tree in the same pass, and a moved HEAD
+reloads the layered manifest so a changed `.claude/bootstrap.json` applies
+too. `layered_bootstrap.run_layered_bootstrap` mirrors it for `bootstrap run`.
+
+Every outcome is a quiet (always-logged) entry with its full diagnostics. An
+update or a blocked update also yields one notice line, rendered at Step 4d
+through the same `<label> notice` section as the reload advisory -- but not
+gated by `notify_reload_needed`, because the user opted in and a blocked update
+they never hear about is the failure the feature prevents. The notice is an
+`Entry` whose authored short label is its full text, so the collated-width
+limit cannot cut the classification off. Only a malformed declaration is a
+failure dict; a blocked update never is. The outcome table and the gate
+contract: manifest-reference.md, `project_git_pull`.
+
 ### Step 3c1: interpreter export, persistence, and shell integration
 
 Two environment variables, `BOOTSTRAP_PYTHON` and `BOOTSTRAP_PROJECT_PYTHON`,

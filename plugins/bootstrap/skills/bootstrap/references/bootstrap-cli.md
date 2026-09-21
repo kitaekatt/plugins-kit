@@ -24,7 +24,7 @@ The command prints the engine tree and each candidate manifest's presence, then
 streams checks and actions through the shared recorder. It uses the shared
 manifest handlers directly, without installed plugin manifest discovery, the
 legacy `user-bootstrap.json`, env.json personalization, self-provisioning, or
-implicit project setup. Project operations such as `project_venv`, `project_npm`,
+implicit project setup. Project operations such as `project_git_pull` (which runs first), `project_venv`, `project_npm`,
 and `agent_skills_link` run when declared in the merged layers.
 
 A `plugins` or `marketplaces` entry authored in one of these four files still
@@ -201,3 +201,14 @@ Terminal execution goes through `bootstrap_run.py`, which presents the shared
 `bootstrap_lib.layered_bootstrap` capability. Without Python, let Claude's normal
 lifecycle provision it first. Reset remains available without Python through
 its shell delegate.
+
+On Windows the hook also writes `bootstrap.cmd`, `bootstrap-reset-cooldown.cmd`
+and `env-reset-cooldown.cmd` beside the extensionless levers. cmd.exe cannot
+run an extensionless bash script, and Windows PowerShell 5.1 resolves one but
+does not run it: the command returns at once with no output. Both shells run
+the `.cmd` instead. It starts the lever under the Git for Windows bash that the
+hook ran under, by absolute path, so it never reaches WSL's `System32\bash.exe`.
+It forwards all arguments and the exit code. If that bash has moved, the `.cmd`
+exits 127 with a message, and the next session start rewrites it. There is no
+`.ps1` twin: PowerShell prefers a `.ps1`, and the default Restricted execution
+policy refuses it. Source: `hooks/sessionstart/lever-cmd-shim.sh`.

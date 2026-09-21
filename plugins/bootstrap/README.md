@@ -51,6 +51,8 @@ after that, steady state is quiet.
 
 Bootstrap installs a `bootstrap` command into `~/.local/bin` on every session,
 so a pass can be inspected or driven from any terminal without starting Claude.
+On Windows it works from Git Bash, cmd.exe and PowerShell: a `bootstrap.cmd`
+beside the bash script runs it under Git for Windows bash.
 
 ```bash
 bootstrap          # is a pass running? if so, wait for it and stream it
