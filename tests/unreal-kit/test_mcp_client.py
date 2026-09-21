@@ -46,6 +46,7 @@ class FakeWebSocket:
         self._send_log = []
         self._recv_queue = []
         self._timeout = None
+        self.timeout_log = []
         self.closed = False
 
     def send(self, data):
@@ -61,6 +62,7 @@ class FakeWebSocket:
         return json.dumps(self._recv_queue.pop(0))
 
     def settimeout(self, val):
+        self.timeout_log.append(("settimeout", val))
         self._timeout = val
 
     def close(self):
@@ -71,6 +73,49 @@ class FakeWebSocket:
         """Helper: enqueue messages to be returned by recv()."""
         for msg in messages:
             self._recv_queue.append(msg)
+
+
+class FakeClock:
+    """Deterministic monotonic clock for phase-budget tests."""
+
+    def __init__(self, now=0.0):
+        self.now = now
+
+    def __call__(self):
+        return self.now
+
+    def advance(self, seconds):
+        self.now += seconds
+
+
+class TimedWebSocket(FakeWebSocket):
+    """Fake socket that advances the supplied clock on each operation."""
+
+    def __init__(self, clock, recv_advance=0.0, send_advance=0.0, close_advance=0.0):
+        super().__init__()
+        self.clock = clock
+        self.recv_advance = recv_advance
+        self.send_advance = send_advance
+        self.close_advance = close_advance
+        self.timeout_log = []
+
+    def send(self, data):
+        self.timeout_log.append(("send", self._timeout))
+        super().send(data)
+        self.clock.advance(self.send_advance)
+
+    def recv(self):
+        self.timeout_log.append(("recv", self._timeout))
+        self.clock.advance(self.recv_advance)
+        return super().recv()
+
+    def settimeout(self, val):
+        self.timeout_log.append(("settimeout", val))
+        super().settimeout(val)
+
+    def close(self):
+        self.clock.advance(self.close_advance)
+        super().close()
 
 
 @pytest.fixture
@@ -188,6 +233,23 @@ class TestClientConfig:
         client = McpClient(host="1.2.3.4", port=1234)
         assert client.url == "ws://1.2.3.4:1234"
 
+    @pytest.mark.parametrize("value", [0, -1, float("inf"), float("nan")])
+    def test_budget_values_must_be_finite_and_positive(self, value):
+        with pytest.raises(ValueError, match="finite and positive"):
+            McpClient(connection_timeout_s=value)
+        with pytest.raises(ValueError, match="finite and positive"):
+            McpClient(request_cap_s=value)
+
+    def test_explicit_request_budget_cannot_exceed_cap(self):
+        with pytest.raises(ValueError, match="request.*cap"):
+            McpClient(timeout_s=31, request_cap_s=30)
+
+    def test_connection_and_request_cap_separate_from_action_timeout(self):
+        client = McpClient(timeout_s=10, connection_timeout_s=2, request_cap_s=60)
+        assert client._timeout_s == 10
+        assert client._connection_timeout_s == 2
+        assert client._request_cap_s == 60
+
 
 # ---------------------------------------------------------------------------
 # McpClient -- Handshake
@@ -236,6 +298,39 @@ class TestHandshake:
 
         with pytest.raises(HandshakeError, match="auth failed"):
             client._handshake()
+
+    @patch("ue_mcp_client.client.websocket")
+    def test_failed_connect_closes_once_and_clears_state(self, mock_ws_mod):
+        fake = FakeWebSocket()
+        fake.enqueue({"type": "bridge_error", "message": "rejected"})
+        mock_ws_mod.create_connection.return_value = fake
+        mock_ws_mod.WebSocketException = Exception
+        mock_ws_mod.WebSocketTimeoutException = type("Timeout", (Exception,), {})
+
+        client = McpClient(connection_timeout_s=1)
+        with pytest.raises(HandshakeError, match="rejected"):
+            client.connect()
+
+        assert fake.closed
+        assert client._ws is None
+        assert client._handshake_metadata is None
+        assert sum(m.get("type") == "bridge_goodbye" for m in fake._send_log) == 1
+
+    @patch("ue_mcp_client.client.websocket")
+    def test_context_entry_missing_ack_cleans_up_socket(self, mock_ws_mod):
+        fake = FakeWebSocket()
+        mock_ws_mod.create_connection.return_value = fake
+        mock_ws_mod.WebSocketException = Exception
+        mock_ws_mod.WebSocketTimeoutException = type("Timeout", (Exception,), {})
+
+        client = McpClient(connection_timeout_s=1)
+        with pytest.raises(HandshakeError):
+            with client:
+                pass
+
+        assert fake.closed
+        assert client._ws is None
+        assert client._handshake_metadata is None
 
 
 # ---------------------------------------------------------------------------
@@ -354,14 +449,43 @@ class TestSendRequest:
         pong_msgs = [m for m in ws._send_log if m.get("type") == "bridge_pong"]
         assert len(pong_msgs) >= 1
 
+    def test_request_send_uses_finite_remaining_budget(self, client_with_ws):
+        client, ws = client_with_ws
+        original_send = ws.send
+
+        def capturing_send(data):
+            msg = json.loads(data)
+            if msg.get("type") == "automation_request":
+                ws.enqueue({
+                    "type": "automation_response",
+                    "requestId": msg["requestId"],
+                    "success": True,
+                })
+            original_send(data)
+
+        ws.send = capturing_send
+        client.send_request("test_action", {}, timeout_s=2)
+        send_timeouts = [value for kind, value in ws.timeout_log if kind == "settimeout"]
+        assert send_timeouts
+        assert all(value is not None and value > 0 for value in send_timeouts)
+
+    def test_inconsistent_request_budget_fails_before_dispatch(self, client_with_ws):
+        client, ws = client_with_ws
+        before = len(ws._send_log)
+        with pytest.raises(ValueError, match="request.*cap"):
+            client.send_request("too_long", {}, timeout_s=301)
+        assert len(ws._send_log) == before
+
 
 # ---------------------------------------------------------------------------
 # McpClient -- Progress updates & timeout extension
 # ---------------------------------------------------------------------------
 
 class TestProgressUpdates:
-    def test_progress_extends_timeout(self, client_with_ws):
+    def test_progress_extends_timeout(self, client_with_ws, monkeypatch):
         client, ws = client_with_ws
+        clock = FakeClock()
+        monkeypatch.setattr("ue_mcp_client.client.time.monotonic", clock)
 
         original_send = ws.send
 
@@ -369,6 +493,7 @@ class TestProgressUpdates:
             msg = json.loads(data)
             if msg.get("type") == "automation_request":
                 rid = msg["requestId"]
+                clock.advance(0.05)
                 ws.enqueue(
                     {"type": "progress_update", "requestId": rid, "percent": 25},
                     {"type": "progress_update", "requestId": rid, "percent": 50},
@@ -385,6 +510,45 @@ class TestProgressUpdates:
 
         resp = client.send_request("long_action", {}, timeout_s=0.1)
         assert resp.success is True
+
+    def test_progress_inside_original_deadline_does_not_consume_extensions(self, client_with_ws, monkeypatch):
+        client, ws = client_with_ws
+        clock = FakeClock()
+        monkeypatch.setattr("ue_mcp_client.client.time.monotonic", clock)
+        original_send = ws.send
+
+        def capturing_send(data):
+            msg = json.loads(data)
+            if msg.get("type") == "automation_request":
+                rid = msg["requestId"]
+                for percent in range(11):
+                    clock.advance(1)
+                    ws.enqueue({"type": "progress_update", "requestId": rid, "percent": percent})
+                ws.enqueue({"type": "automation_response", "requestId": rid, "success": True})
+            original_send(data)
+
+        ws.send = capturing_send
+        assert client.send_request("long_action", {}, timeout_s=120).success
+
+    def test_progress_can_extend_short_base_but_respects_cap(self, client_with_ws, monkeypatch):
+        client, ws = client_with_ws
+        clock = FakeClock()
+        monkeypatch.setattr("ue_mcp_client.client.time.monotonic", clock)
+        original_send = ws.send
+
+        def capturing_send(data):
+            msg = json.loads(data)
+            if msg.get("type") == "automation_request":
+                rid = msg["requestId"]
+                clock.advance(0.5)
+                ws.enqueue({"type": "progress_update", "requestId": rid, "percent": 1})
+                ws.enqueue({"type": "automation_response", "requestId": rid, "success": True})
+            original_send(data)
+
+        ws.send = capturing_send
+        assert McpClient(request_cap_s=25)._request_cap_s == 25
+        client._request_cap_s = 25
+        assert client.send_request("extended", {}, timeout_s=1).success
 
     def test_stale_progress_raises(self, client_with_ws):
         client, ws = client_with_ws

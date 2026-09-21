@@ -56,6 +56,7 @@ require_bootstrap("unreal-kit", feature="Unreal Python automation")
 from ue_env import (  # noqa: E402
     DEFAULT_MCP_HOST,
     DEFAULT_MCP_PORT,
+    DEFAULT_PROBE_TIMEOUT_S,
     DEFAULT_READINESS_TIMEOUT_S,
     find_editor_processes,
     is_mcp_ready,
@@ -102,7 +103,11 @@ def cmd_status(args: argparse.Namespace) -> int:
     procs = find_editor_processes(editor_exe)
     interactive = _interactive(procs)
     zombies = _zombies(procs)
-    ready = is_mcp_ready(args.host, args.port)
+    ready = is_mcp_ready(
+        args.host,
+        args.port,
+        probe_timeout_s=getattr(args, "probe_timeout", DEFAULT_PROBE_TIMEOUT_S),
+    )
     print(f"editor_exe:  {editor_exe or '(not configured)'}")
     print(f"uproject:    {uproject or '(not configured)'}")
     print(f"processes:   {_summarize_processes(procs)}")
@@ -144,7 +149,11 @@ def cmd_launch_editor(args: argparse.Namespace) -> int:
             _err(e)
         return 2
 
-    if is_mcp_ready(args.host, args.port):
+    if is_mcp_ready(
+        args.host,
+        args.port,
+        probe_timeout_s=getattr(args, "probe_timeout", DEFAULT_PROBE_TIMEOUT_S),
+    ):
         _info("MCP bridge already reachable -- editor is up.")
         return 0
 
@@ -231,6 +240,15 @@ def main() -> None:
         type=int,
         default=DEFAULT_MCP_PORT,
         help=f"MCP bridge port (default: {DEFAULT_MCP_PORT}).",
+    )
+    parser.add_argument(
+        "--probe-timeout",
+        type=float,
+        default=DEFAULT_PROBE_TIMEOUT_S,
+        help=(
+            "Connection/handshake budget for each readiness probe "
+            f"(default: {DEFAULT_PROBE_TIMEOUT_S})."
+        ),
     )
     sub = parser.add_subparsers(dest="command", required=True)
 

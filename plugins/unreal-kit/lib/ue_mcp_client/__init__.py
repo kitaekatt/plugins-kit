@@ -34,6 +34,12 @@ Configuration (environment variables):
     MCP_AUTOMATION_WS_HOST  -- server host (default: 127.0.0.1)
     MCP_AUTOMATION_WS_PORT  -- server port (default: 8090)
     MCP_REQUEST_TIMEOUT_MS  -- default request timeout in ms (default: 30000)
+
+The client also accepts ``connection_timeout_s`` (default 5 seconds) for the
+connect/handshake/cleanup phase and ``request_cap_s`` (default 300 seconds)
+for the total lifetime of one request, including progress extensions. Set
+both ``timeout_s`` and ``request_cap_s`` when an action needs more time; a
+batch applies its action budget separately to each command.
 """
 
 from .client import (

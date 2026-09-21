@@ -45,6 +45,7 @@ now?" should look at ``has_window`` (and probably ``is_mcp_ready``).
 
 import csv
 import io
+import math
 import os
 import socket
 import subprocess
@@ -61,6 +62,18 @@ DEFAULT_POLL_INTERVAL_S = 2.0
 DEFAULT_PROBE_TIMEOUT_S = 1.0
 
 
+def _validate_budget(value, name, *, allow_zero=False):
+    if isinstance(value, bool):
+        raise ValueError(f"{name} must be finite and positive")
+    try:
+        value = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{name} must be finite and positive") from exc
+    if not math.isfinite(value) or value < 0 or (value == 0 and not allow_zero):
+        raise ValueError(f"{name} must be finite and positive")
+    return value
+
+
 def is_mcp_ready(
     host: str = DEFAULT_MCP_HOST,
     port: int = DEFAULT_MCP_PORT,
@@ -73,21 +86,50 @@ def is_mcp_ready(
     connect on (host, port) -- a weaker signal that only proves something
     is listening on the port.
     """
+    probe_timeout_s = _validate_budget(
+        probe_timeout_s, "probe_timeout_s", allow_zero=True
+    )
+    if probe_timeout_s == 0:
+        return False
+    deadline = time.monotonic() + probe_timeout_s
+    client = None
     try:
-        from ue_mcp_client import HandshakeError, McpClient, McpConnectionError
+        from ue_mcp_client import (
+            HandshakeError,
+            McpClient,
+            McpConnectionError,
+            McpTimeoutError,
+        )
     except ImportError:
         return _tcp_probe(host, port, probe_timeout_s)
 
     try:
-        client = McpClient(host=host, port=port, timeout_s=probe_timeout_s)
+        client = McpClient(
+            host=host,
+            port=port,
+            connection_timeout_s=probe_timeout_s,
+        )
         client.connect()
-        client.close()
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            client.close(deadline=deadline)
+            return False
+        client.close(timeout_s=remaining)
         return True
-    except (McpConnectionError, HandshakeError, OSError):
+    except (McpConnectionError, HandshakeError, McpTimeoutError, OSError):
         return False
+    finally:
+        if client is not None and getattr(client, "connected", False):
+            remaining = deadline - time.monotonic()
+            if remaining > 0:
+                client.close(timeout_s=remaining)
+            else:
+                client.close(deadline=deadline)
 
 
 def _tcp_probe(host: str, port: int, timeout_s: float) -> bool:
+    if timeout_s <= 0:
+        return False
     try:
         with socket.create_connection((host, port), timeout=timeout_s):
             return True
@@ -108,11 +150,20 @@ def wait_for_mcp_ready(
     failed probe so callers can surface progress without re-implementing
     the loop.
     """
+    total_timeout_s = _validate_budget(
+        total_timeout_s, "total_timeout_s", allow_zero=True
+    )
+    poll_interval_s = _validate_budget(
+        poll_interval_s, "poll_interval_s", allow_zero=True
+    )
     deadline = time.monotonic() + total_timeout_s
     attempt = 0
     while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return False
         attempt += 1
-        if is_mcp_ready(host, port):
+        if is_mcp_ready(host, port, probe_timeout_s=remaining):
             return True
         remaining = deadline - time.monotonic()
         if remaining <= 0:
