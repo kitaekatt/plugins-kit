@@ -1,7 +1,0 @@
-# Host-side Python dependencies for ue_runner.py
-# Install with: pip install -r host-requirements.txt
-#
-# These run in your system Python (NOT UE's embedded Python).
-# For UE-side dependencies, see requirements.yaml instead.
-upyrc
-pyyaml

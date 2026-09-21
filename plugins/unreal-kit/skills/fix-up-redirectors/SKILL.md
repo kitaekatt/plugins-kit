@@ -16,7 +16,7 @@ Unreal's editor command `Fix Up Redirectors in Folder` stalls on the first file 
 Not every redirector needs the same treatment:
 
 - **Fix-up redirectors** (target exists, has referencers): the standard case. Referencers must be re-saved to point at the redirector's target before the redirector .uasset can be deleted.
-- **Orphaned redirectors** (target gone, zero referencers): pure dead pointers. No rewriting needed — just `p4 delete` the .uasset (and its `.umap` sibling, for level redirectors). Much faster than the fix-up path because there's no UE referencer load/save work.
+- **Orphaned redirectors** (target gone, zero referencers): pure dead pointers. No rewriting needed -- just `p4 delete` the .uasset (and its `.umap` sibling, for level redirectors). Much faster than the fix-up path because there is no UE referencer load/save work.
 - **Referenced-broken** (target gone, has referencers): genuinely broken. Deleting the redirector would leave dangling refs. Manual cleanup required; the skill flags these but does not touch them.
 
 The classifier emits the fix-up safe set and (optionally) the orphaned safe set as separate JSON files. The apply script consumes either shape.
@@ -27,7 +27,7 @@ Redirectors are pointers, and pointers get referenced from places the on-disk as
 
 ### Known reference channels
 
-What the skill sees today:
+What the skill sees in the current implementation:
 
 - **Hard refs in other `.uasset` files** -- caught by phase-1 discovery via the UE asset registry. The redirector's own referencer list comes from here. Reliable for assets that import each other through standard UE serialization.
 - **Soft object paths in other `.uasset` files** -- also caught by phase-1 discovery (the asset registry tracks soft refs). Phase 4's `rename_referencing_soft_object_paths` handles the rewrite.
@@ -52,7 +52,7 @@ Because the residual risk is real, the apply path is structured as a series of p
 2. **Apply, soak, verify.** Submit the test slice. Run the same verification you'd run for any content change: smoke playtest, automated tests where they exist, visual diff on referencer assets if any were rewritten. Soak for at least a build cycle so any reference channel the scanner missed has time to surface as a load error or visual regression.
 3. **Full purge.** Only after the test slice is clean, re-run the apply on the original safe set (already-fixed redirectors are no-ops, so the second pass is naturally idempotent).
 
-The reason this works: a missed reference channel that breaks N assets in the test slice is cheap to revert (one CL, scoped to ~1% of the directories). The same channel breaking N assets in the full purge is expensive to revert (thousands of files, possibly across many directories whose referencers also got rewritten). Sampling concentrates the blast where reverts are still cheap.
+The reason this works: a missed reference channel that breaks N assets in the test slice is cheap to revert (one CL, scoped to about 1% of the directories). The same channel breaking N assets in the full purge is expensive to revert (thousands of files, possibly across many directories whose referencers also got rewritten). Sampling concentrates the blast where reverts are still cheap.
 
 The recommended workflow:
 
@@ -63,25 +63,9 @@ classify -> code-ref filter -> directory-sample -> apply test CL
 
 The fix-up safe set and the orphaned safe set both pass through this pipeline; only the per-direction details differ (the orphan path uses delete-only apply after the same code-reference filter).
 
-### When to Extend Coverage
-
-When a regression escapes the heuristic -- a missing-asset error, a broken Blueprint, a dangling soft ref after a clean fix-up run -- the playbook is:
-
-1. **Identify the missed channel.** What kind of file held the reference that the scan didn't see? Was it an extension not in `DEFAULT_EXTENSIONS` (e.g. a `.yaml` config, `.csv` data table)? A dynamic path construction? A redirect chain longer than one hop? An asset format outside the registry?
-2. **Extend the scan logic.** Most channels live in `lib/code_refs.py`:
-   - New file extension -> add to `DEFAULT_EXTENSIONS` (or document that the user must pass `--extensions` for that channel).
-   - New path *shape* (e.g. asset paths embedded in JSON quoted strings with extra escaping, or a project-specific naming convention) -> extend `_PATH_RE` or add a parallel matcher; keep the mount + on-disk filter so signal-to-noise stays high.
-   - New mount source (e.g. a non-standard plugin layout) -> extend `discover_mount_points`.
-   - Channels that aren't text-pattern-matchable (dynamic construction, registry blind spots) -> document the gap in this section instead of pretending the scanner covers it; the honest "we don't see this" is more useful than a false sense of safety.
-3. **Invalidate the cache.** This is the easy step to forget. The cache lives at `./.local-data/code_references.yaml` and the filter reuses it for 24 hours by default. After extending coverage, either delete the cache file or pass `--max-age-hours 0` to `filter_safe_by_code_refs.py` so the next run regenerates it. Without this, the filter still reads the pre-fix scan and the regression repeats.
-4. **Re-run the filter** (`scripts/filter_safe_by_code_refs.py`) and confirm the previously-missed reference now drops the affected redirector(s) from the safe set.
-5. **Update this section.** Move the new channel from "does NOT see" to "what the skill sees today" and note any new extension/flag the user has to pass.
-
-The skill's value is the explicit map of what's covered and what isn't. Every regression that prompts a coverage extension should also prompt an edit to this section so future Claude knows whether the channel is in scope before promising a clean fix.
-
 ## When to Use
 
-- Periodic content hygiene (every couple of weeks, or before a content freeze)
+- Periodic content hygiene, or before a content freeze
 - After a rename/move pass that left redirectors behind
 - When `Fix Up Redirectors in Folder` keeps failing on locked files
 - Cleaning up orphaned redirectors left behind by deleted assets (the orphan path is cheap; consider running it routinely)
@@ -151,7 +135,7 @@ Fix Up Redirectors -- common operations:
       Delete the "orphaned safe" redirectors (target gone, zero referencers,
       not checked out by anyone). Phase 3.5 still verifies source-code
       coverage before the delete-only apply. Cheap and routine; consider
-      running every couple of weeks.
+      running on the project's content-hygiene cadence.
 
   /fix-up-redirectors /Game/SomePath
       Full pipeline scoped to a sub-path: classify every redirector under
@@ -183,7 +167,7 @@ The full pipeline has six phases (Discover, Classify, Report, Code-ref filter, A
 
 For any safe set with more than ~100 redirectors, run the per-directory subset reducer first and apply that smaller set as a test pass. The reducer picks exactly one redirector per unique package directory, deterministically.
 
-Why this works: most "this might break something" scenarios are directory-shaped (a particular folder has unusual referencers, soft refs, or naming quirks). A one-per-directory slice exercises every directory shape without committing to a multi-thousand-file edit. In a reference run, 2839 safe redirectors collapsed to a 241-redirector subset that ran in ~19 minutes vs. multi-hour for the full purge — and surfaced any breakage early, when it could still be reverted cheaply.
+Why this works: most "this might break something" scenarios are directory-shaped (a particular folder has unusual referencers, soft refs, or naming quirks). A one-per-directory slice exercises every directory shape without committing to a multi-thousand-file edit. In one reference run, 2839 safe redirectors collapsed to a 241-redirector subset that ran in about 19 minutes versus multiple hours for the full purge, and surfaced any breakage early, when it could still be reverted cheaply.
 
 Use the reducer on either the fix-up safe set or the orphaned safe set; the input/output JSON shape is the same.
 
@@ -194,7 +178,7 @@ Use the reducer on either the fix-up safe set or the orphaned safe set; the inpu
   --out tmp/redirectors/safe_per_dir.json
 ```
 
-Then point Phase 4 at `safe_per_dir.json` instead. After the test CL submits cleanly, run Phase 4 again on the original safe set (with the per-dir entries removed if you want a strict residual, or just re-run the whole thing — already-fixed redirectors are no-ops in the second pass).
+Then point Phase 4 at `safe_per_dir.json` instead. After the test CL submits cleanly, run Phase 4 again on the original safe set (with the per-dir entries removed if you want a strict residual, or just re-run the whole thing -- already-fixed redirectors are no-ops in the second pass).
 
 ## Precondition - bootstrap must have provisioned unreal-kit
 
@@ -239,13 +223,13 @@ blocked instead of being reduced to a guessed workspace prefix. It also
 materializes the complete on-disk mutation set, including an existing `.umap`
 companion, in each safe-set record.
 
-- `safe` — fix-up safe set: target exists, neither the redirector nor any of its referencers is opened by anyone (levels are included)
-- `blocked` — at least one file is opened by a teammate (or you, in another CL); records the user(s)
-- `broken` — the redirector's target asset is missing. Sub-buckets:
-  - `orphaned_safe` — target gone AND zero referencers AND the redirector .uasset itself is unlocked. Safe to `p4 delete` directly. Emitted to `--out-orphaned` if provided.
-  - `orphaned_blocked` — orphaned but the redirector itself is checked out by someone. Re-run later.
-  - `referenced_broken` — target gone but referencers exist. Manual cleanup needed; the skill never touches these.
-- `non_writable` — at least one referencer file isn't in the local workspace mapping (plugin content we can't edit)
+- `safe` -- fix-up safe set: target exists, neither the redirector nor any of its referencers is opened by anyone (levels are included)
+- `blocked` -- at least one file is opened by a teammate (or you, in another CL); records the user(s)
+- `broken` -- the redirector's target asset is missing. Sub-buckets:
+  - `orphaned_safe` -- target gone AND zero referencers AND the redirector .uasset itself is unlocked. Safe to `p4 delete` directly. Emitted to `--out-orphaned` if provided.
+  - `orphaned_blocked` -- orphaned but the redirector itself is checked out by someone. Re-run later.
+  - `referenced_broken` -- target gone but referencers exist. Manual cleanup needed; the skill never touches these.
+- `non_writable` -- at least one referencer file is not in the local workspace mapping (plugin content we cannot edit)
 
 The report also tracks how many `safe` redirectors touch a `.umap` referencer, just for visibility.
 
@@ -315,7 +299,7 @@ To force a fresh scan ahead of time (e.g. you just renamed a bunch of assets in 
 
 ## Phase 4 - Apply fixups (UE Python, after approval)
 
-**Important: SAFE_JSON must be an absolute path.** UE commandlets run from a different cwd than the user's shell (typically `<project>/Binaries/Win64`), and a relative SAFE_JSON path silently misses the file. The apply script normalizes whatever it gets to absolute via `os.path.abspath`, so passing a relative path *usually* works — but pass an absolute path explicitly when scripting from CI or any setting where the cwd is unclear.
+**Important: SAFE_JSON must be an absolute path.** UE commandlets run from a different cwd than the user's shell (typically `<project>/Binaries/Win64`), and a relative SAFE_JSON path silently misses the file. The apply script normalizes whatever it gets to absolute via `os.path.abspath`, so passing a relative path usually works, but pass an absolute path explicitly when scripting from CI or any setting where the cwd is unclear.
 
 For the fix-up safe set, use `safe_filtered.json` from Phase 3.5, NOT the raw `safe.json`:
 
@@ -394,7 +378,7 @@ If there are blocked redirectors, suggest: **"Tell the blocked users to run `/fi
 
 - **No redirectors found:** print "Clean - no redirectors in <scope>." and stop.
 - **All redirectors blocked:** still print the report; nothing to apply. Suggest re-running later.
-- **Referenced-broken bucket non-empty:** these are redirectors with no target AND with referencers. The skill never touches them — surface them in the report (sample list comes through as `orphaned_samples` / `broken_samples` in `report.json`) and let the user investigate.
+- **Referenced-broken bucket non-empty:** these are redirectors with no target AND with referencers. The skill never touches them -- surface them in the report (sample list comes through as `orphaned_samples` / `broken_samples` in `report.json`) and let the user investigate.
 - **Phase-4 validation mismatch:** if `p4 opened -c <CL>` doesn't match the expected set, abort and tell the user. Do NOT call `fixup_referencers` against an unverified CL.
 - **fixup_referencers reports failures:** UE returns a failure list; note them in the manifest. The CL still contains the partial fixup. The user can decide whether to submit or revert.
 - **Re-running mid-fix:** if there's already a pending CL with description starting `Fix up redirectors:`, refuse phase 4 and ask the user to either submit/revert that one first, or pass `--force-new-cl`.
@@ -410,7 +394,7 @@ If there are blocked redirectors, suggest: **"Tell the blocked users to run `/fi
 - **Skipping validation in phase 4.** Never call `fixup_referencers` without first verifying the CL's opened set matches what discovery promised. A surprise file in the CL means the world moved between discovery and apply.
 - **Treating "checked out by me in another CL" as safe.** It's not. Other-CL checkouts are still blocked - the file would land in the wrong CL otherwise.
 - **Skipping the code-references filter.** Phase 3.5 isn't optional for either path. A redirector that compiles into a string literal in C++/C#/Python source will silently break that code if you fix the redirector and the target asset later moves or is renamed. Always run the filter; never feed `safe.json` or `orphaned.json` directly into Phase 4.
-- **Running a multi-thousand-file purge as the first apply.** For broad scopes use the per-directory subset reducer (`pick_one_per_dir.py`) for the test pass — it cuts apply time by 10x+ and surfaces breakage early when revert is still cheap.
+- **Running a multi-thousand-file purge as the first apply.** For broad scopes use the per-directory subset reducer (`pick_one_per_dir.py`) for the test pass -- it cuts apply time by 10x+ and surfaces breakage early when revert is still cheap.
 - **Passing a relative `SAFE_JSON` path from CI.** The apply script normalizes to absolute via `os.path.abspath`, but normalization happens in the commandlet's cwd (typically `<project>/Binaries/Win64`), not yours. Always pass an absolute path explicitly when scripting.
 - **Conflating orphaned redirectors with truly broken ones.** "target_exists: false" means two very different things depending on whether anyone references the redirector. The classifier splits these for you; don't lump them back together in tooling that consumes the report.
 
@@ -419,15 +403,15 @@ If there are blocked redirectors, suggest: **"Tell the blocked users to run `/fi
 The skill follows a facade-over-libs structure:
 
 - `scripts/` are thin facades that orchestrate one phase each
-  - `discover_redirectors.py` — Phase 1
-  - `classify_safety.py` — Phase 2 (emits fix-up safe set + optional orphaned safe set + report)
-  - `filter_safe_by_code_refs.py` / `scan_code_references.py` — Phase 3.5
-  - `pick_one_per_dir.py` — per-directory subset reducer (works on either safe-set shape)
-  - `apply_fixups.py` — Phase 4 (fix-up mode and delete-only mode; auto-detected from the input shape)
-- `lib/p4cli.py` — host-side P4 CLI (find, run, parse opened, where mapping)
-- `lib/package_paths.py` — UE-side mount-point map and package -> on-disk path
-- `lib/redirector_record.py` — YAML/JSON I/O for the discovery and safe-set files (`load_safe_set` / `save_safe_set` are reused by `pick_one_per_dir.py`)
-- `lib/code_refs.py` — host-side source scanner + cache I/O for `./.local-data/code_references.yaml` (24h freshness)
+  - `discover_redirectors.py` -- Phase 1
+  - `classify_safety.py` -- Phase 2 (emits fix-up safe set + optional orphaned safe set + report)
+  - `filter_safe_by_code_refs.py` / `scan_code_references.py` -- Phase 3.5
+  - `pick_one_per_dir.py` -- per-directory subset reducer (works on either safe-set shape)
+  - `apply_fixups.py` -- Phase 4 (fix-up mode and delete-only mode; auto-detected from the input shape)
+- `lib/p4cli.py` -- host-side P4 CLI (find, run, parse opened, where mapping)
+- `lib/package_paths.py` -- UE-side mount-point map and package -> on-disk path
+- `lib/redirector_record.py` -- YAML/JSON I/O for the discovery and safe-set files (`load_safe_set` / `save_safe_set` are reused by `pick_one_per_dir.py`)
+- `lib/code_refs.py` -- host-side source scanner + cache I/O for `./.local-data/code_references.yaml` (24h freshness)
 
 The libs are also useful for one-off redirector-related scripts. Import them directly:
 

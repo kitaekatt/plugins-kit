@@ -1,10 +1,10 @@
-# unreal-pip — UE Package Manager
+# unreal-pip - UE Package Manager
 
 **Repo:** https://github.com/hannesdelbeke/unreal-pip
-**Location:** `lib/unreal_pip.py` (vendored in this skill)
+**Location:** `<data_dir>/github/unreal-pip` (cloned by bootstrap)
 
 Package manager for installing Python packages into UE's embedded Python environment.
-UE's embedded Python has no pip by default — unreal-pip bridges that gap.
+UE's embedded Python has no pip by default. unreal-pip bridges that gap.
 
 ## How it works
 
@@ -42,16 +42,24 @@ and editor restarts.
 Scripts don't call unreal_pip directly. Instead, they use the bootstrap helper:
 
 ```python
-import sys, os
-sys.path.insert(0, os.path.expanduser('~/.claude/plugins/data/plugins-kit/unreal-kit/lib'))
-sys.path.insert(0, os.path.expanduser('~/.claude/plugins/data/plugins-kit/unreal-kit/github/unreal-pip'))
+import os
+import sys
+
+data_root = os.environ.get(
+    "CLAUDE_BOOTSTRAP_DATA_ROOT",
+    os.path.expanduser("~/.claude/plugins/data"),
+)
+plugin_data = os.path.join(data_root, "plugins-kit", "unreal-kit")
+sys.path.insert(0, os.path.join(plugin_data, "lib"))
+sys.path.insert(0, os.path.join(plugin_data, "github", "unreal-pip"))
 from bootstrap import ensure_dependencies
 ensure_dependencies()
 ```
 
-This reads `lib/requirements.yaml` from the data directory, checks what's installed, and uses
-unreal_pip to install anything missing. The bootstrap parser doesn't need pyyaml itself
-(handles the chicken-and-egg problem with a simple line parser).
+This reads `lib/requirements.yaml` from the data directory, checks what is
+installed, and uses unreal_pip to install anything missing. The bootstrap
+parser does not need pyyaml itself; it uses a small line parser while resolving
+that dependency.
 
 For the full bootstrapping architecture, see `references/script-bootstrap.md`.
 

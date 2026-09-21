@@ -64,7 +64,7 @@ capability_skill:
         - Prefer the MCP `screenshot` action over `unreal.AutomationLibrary.take_high_res_screenshot()`. The Python API call blocks after the first invocation in a single Python session -- the first call works, the second hangs the editor. Each MCP `screenshot` call is a fresh request to the editor process so the deadlock does not accumulate.
         - Prefer the MCP `screenshot` action over `unreal.KismetRenderingLibrary.export_render_target()`. The Python API call silently produces no file in the UE Python environment -- it returns success and writes nothing to disk.
         - Editor screenshots fail when PIE is running. Stop PIE before any batch screenshot run, or the screenshot completes silently with no file on disk.
-        - Editor screenshots also fail when the editor lost foreground recently. Set `t.IdleWhenNotForeground 0` at the start of every batch run via `mcp.console_command("t.IdleWhenNotForeground 0")` so the editor keeps rendering when minimized.
+        - Editor screenshots also fail after the editor loses foreground focus. Set `t.IdleWhenNotForeground 0` at the start of every batch run via `mcp.console_command("t.IdleWhenNotForeground 0")` so the editor keeps rendering when minimized.
     - id: manage_blueprint
       keywords: [blueprint, BP, create blueprint, add component, author graph, BP nodes]
       user_objective: Create Blueprints, add components, and author Blueprint graphs node-by-node.
@@ -249,7 +249,7 @@ capability_skill:
     - id: tool_catalog
       path: references/tool-catalog.md
       keywords: [all tools, all actions, parameter reference, what can it do, full list, tool catalog]
-      summary: Complete catalog of every MCP tool domain, every action, and the parameter shape for each action.
+      summary: Action summary for the MCP tool domains and common actions. Consult the connected server for parameter details.
     - id: workflows
       path: references/workflows.md
       keywords: [recipe, step-by-step, create blueprint from scratch, build a level, material setup, multi-step workflow]

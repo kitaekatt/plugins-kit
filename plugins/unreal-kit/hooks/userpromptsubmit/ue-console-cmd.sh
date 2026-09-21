@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ue-console-cmd.sh — UserPromptSubmit hook
+# ue-console-cmd.sh -- UserPromptSubmit hook
 #
 # Intercepts user prompts beginning with ">" and instructs Claude to execute
 # the remainder as an Unreal Engine console command via the MCP server.

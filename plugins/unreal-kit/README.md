@@ -55,13 +55,14 @@ Perforce-tracked assets, protected Slate struct fields, and more.
 
 The `bootstrap` plugin is installed automatically as a dependency and
 provisions unreal-kit on the first session start: the Python venv, host-side
-deps (upyrc, pyyaml), API stubs, and per-project config. Silent when healthy.
+deps (upyrc, pyyaml, websocket-client), API stubs, and per-project config.
+It stays quiet when all checks pass.
 
 ## Prerequisites
 
 - **A UE project and engine install.** You need a `.uproject` and a local
-  engine. Bootstrap autodetects both by walking up from the directory Claude
-  Code was launched in; if that fails, run
+  engine. Bootstrap searches the current directory and up to two child levels
+  for a project; if that fails, run
   `skills/ue-python-api/scripts/ue-runner.cmd --setup` to configure paths
   manually.
 - **Remote execution ini flags** for the fast path. Bootstrap writes
