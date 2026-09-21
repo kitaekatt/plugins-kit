@@ -211,6 +211,8 @@ claude --plugin-dir ~/Dev/plugins-kit/plugins/my-plugin
 
 Publishing is reversible-but-visible: nothing is destroyed, but it goes out to other machines. The bar is "user has expressed publish intent for this work," not "user has reconfirmed each git command." Treat unambiguous go-signals -- `go`, `ship it`, `publish`, `do it`, `close the loop`, `push` -- as authorizing the whole flow; run `publish.py` and let its preflight be the safety net. Confirm only when intent is genuinely ambiguous (partial work, no version bump in sight, unrelated WIP staged, or the user is mid-thought).
 
+**Plugin `uv.lock` files are ignored and untracked; never commit one.** `.gitignore` lists `uv.lock`, and a tracked plugin lockfile records the plugin's own version, so every bump leaves it stale and the next `uv sync` dirties the tree, which blocks `publish.py`. A dirty `plugins/<name>/uv.lock` therefore means one was re-tracked: `git rm --cached` it. Do not commit the refreshed copy. When merging a branch that deleted one, resolve the modify/delete conflict as the deletion. The root `uv.lock` (this checkout's maintainer environment) is the one tracked exception.
+
 **A publication hold on ONE plugin belongs here, not in a task folder.** A
 release ships the whole range, so every publish from `dev` carries every
 changed plugin; a hold that lives anywhere a publisher does not read binds
