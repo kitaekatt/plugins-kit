@@ -1643,6 +1643,38 @@ class TestPartialRelease:
             }
         monkeypatch.setattr(publish, "_regenerate_derived_in", fake)
 
+    def test_projection_marketplace_honors_dev_only_status(self, repo, monkeypatch):
+        """A held-back plugin can be published on master but dev-only now.
+
+        The projected index restores master's old manifest, which may not yet
+        contain ``published: false``.  The release listing must still honor
+        the current dev manifest's publication status.
+        """
+        fake_regen = SimpleNamespace(
+            regenerate=lambda **_: {
+                "plugins": [
+                    {"name": "pub-kit", "version": "1.0.0"},
+                    {"name": "dev-kit", "version": "0.1.0"},
+                ]
+            },
+            _serialize=lambda data: json.dumps(data, indent=2) + "\n",
+        )
+        monkeypatch.setattr(publish, "_load_rule_module", lambda _: fake_regen)
+
+        def fake_run(command, _what):
+            output = Path(command[command.index("--output") + 1])
+            output.write_text("const data = {};\n")
+
+        monkeypatch.setattr(publish, "run", fake_run)
+        temp_index = repo / "temporary-index"
+        env = publish._index_env(temp_index)
+        publish.git("read-tree", "dev", env=env)
+
+        derived = publish._regenerate_derived_in(env)
+
+        listing = json.loads(derived[".claude-plugin/marketplace.json"])
+        assert [plugin["name"] for plugin in listing["plugins"]] == ["pub-kit"]
+
     def _bump_both(self, repo: Path) -> None:
         self._second_published_plugin(repo)
         (repo / "plugins" / "other-kit" / "lib.py").write_text("v2\n")
