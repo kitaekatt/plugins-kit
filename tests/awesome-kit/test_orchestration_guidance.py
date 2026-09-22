@@ -1265,9 +1265,7 @@ class TestRenderScope:
         probes = list(self._principles_only_probes())
         for record_id, probe in probes:
             assert probe not in text, record_id
-        assert len(probes) >= 2, (
-            "the shipped data should still carry principles-only records"
-        )
+        assert probes, "the shipped data should still carry a principles-only record"
 
     def test_the_principles_only_probes_are_not_vacuous(self, monkeypatch, tmp_path):
         """Positive control: with the flag cleared, every probe MUST appear.
@@ -1358,8 +1356,9 @@ class TestCodexAbsentVariant:
     def test_the_hole_is_disclosed_in_one_clause(self, without, with_codex):
         """Silence about a known gap reads as an oversight and invites the
         reader to invent the answer the collapse test exists to prevent."""
-        assert "sequence the units or handle them inline" in without
-        assert "sequence the units or handle them inline" not in with_codex
+        assert "sequential delegated units on an eligible backend" in without
+        assert "sequential delegated units on an eligible backend" not in with_codex
+        assert "handle them inline" not in without
 
     def test_plan_checkpoint_shape_tests_render_in_both_variants(self, without, with_codex):
         """P0.6-P0.8 live in shaping, which both variants render."""
@@ -2364,3 +2363,93 @@ def test_a_move_note_fires_only_when_a_later_peer_overtakes(
     ordered, row_notes = rank(_models("x", "y"))
     assert [m["id"] for m in ordered] == ["y", "x"]
     assert any("`x` moved back" in n for n in row_notes)
+
+
+def test_invoked_orchestration_delegates_a_single_small_unit():
+    skill = (og.DEFAULTS_PATH.parent.parent / "SKILL.md").read_text(encoding="utf-8").lower()
+    skill = re.sub(r"\s+", " ", skill)
+    assert "directly or through" in skill
+    assert "`$task`" in skill
+    assert "one delegated unit" in skill
+    assert "small or single-step tasks cheaper to do inline" not in skill
+
+
+class TestOneOrchestrationContract:
+    @staticmethod
+    def skill():
+        return (og.DEFAULTS_PATH.parent.parent / "SKILL.md").read_text(encoding="utf-8").lower()
+
+    @staticmethod
+    def shape(test_id):
+        return next(
+            test for test in shipped()["shape"]["tests"] if test["id"] == test_id
+        )
+
+    def test_planning_placement_has_both_conditions_and_premise_checkpoint(self):
+        skill = self.skill()
+        policy = self.shape("who-authors-the-specification")
+        assert policy.get("render_scope") != "principles-only"
+        text = policy["text"].lower()
+        for source in (skill, text):
+            assert "best suited" in source
+            assert "verified" in source
+            assert "both" in source
+            assert "either" in source
+        assert "bounded" in text and "substantial" in text
+        assert "hypothesis:" in skill
+        assert "back to the planner" in skill
+        assert "fit to user intent" in skill
+
+    def test_implementation_edges_and_join_do_not_license_lead_edits(self):
+        skill = self.skill()
+        razor = self.shape("parallel-development-razor")["text"].lower()
+        fallback = self.shape("fan-out-collapse")["without_backend"]["codex"].lower()
+        venue = self.shape("implementation-venue")["text"].lower()
+        assert "one coherent delegated implementation unit" in razor
+        assert "cross-cutting implementation" in razor
+        assert "eligible backend" in fallback
+        assert "capability gap" in fallback
+        assert "one small or unsplittable unit" in venue
+        assert "delegated revision" in skill
+        assert "the lead changed it" not in skill
+        assert "handle them inline" not in fallback
+
+    def test_rendered_policy_exposes_planning_and_implementation_rules(
+        self, layered, monkeypatch
+    ):
+        monkeypatch.setattr(og, "DEFAULTS_PATH", _shipped_path())
+        monkeypatch.setattr(
+            og, "detect_backend",
+            lambda backend: (backend.get("id") == "agent", "stubbed"),
+        )
+        config, provenance = og.resolve_config(layered.project_root)
+        rendered = og.render(config, provenance).lower()
+        assert "if both the main model is best suited" in rendered
+        assert "if either fails, delegate planning" in rendered
+        assert "substantial investigation travels with the planning unit" in rendered
+        assert "one coherent delegated implementation unit" in rendered
+        assert "sequential delegated units on an eligible backend" in rendered
+        assert "main-thread implementation" in rendered
+        for old in (
+            "no -- write it inline",
+            "handle them inline",
+            "rarely needs delegating at all",
+            "author the draft and delegate plan review",
+        ):
+            assert old not in rendered
+
+    def test_optional_economics_and_lexicon_exclude_implementation(self):
+        boundary = self.shape("do-not-delegate")["text"].lower()
+        rationale = (
+            og.DEFAULTS_PATH.parent.parent / "references" / "why-delegate.md"
+        ).read_text(encoding="utf-8").lower()
+        lexicon = (
+            og.DEFAULTS_PATH.parent.parent / "references" / "lexicon.md"
+        ).read_text(encoding="utf-8").lower()
+        assert "optional coordination or read-only investigation" in boundary
+        assert "both" in boundary and "cost more" in boundary
+        assert "never permits main-thread implementation" in boundary
+        assert "planning uses a separate test" in rationale
+        assert "no eligible worker" in rationale
+        assert "plan or decision under review" in lexicon
+        assert "optional coordination and read-only work" in lexicon

@@ -2,7 +2,7 @@
 
 The task CLI remains the owner of persistence. This module only asks the
 configured Codex Luna completion for a one-line summary and writes it through
-``state_ops.update`` so the normal YAML and log discipline is preserved.
+state_ops.update so the normal YAML and log discipline is preserved.
 """
 
 from __future__ import annotations
@@ -14,7 +14,8 @@ from pathlib import Path
 from typing import Any
 
 from . import state_ops
-from .listing import TaskListing, TaskView
+from .discovery import read_task_block
+from .listing import TaskListing, TaskView, summary_source_fingerprint
 
 SUMMARY_MODEL = "gpt-5.6-luna"
 SUMMARY_EFFORT = "medium"
@@ -43,25 +44,9 @@ def _read_excerpt(path: Path, limit: int = 12000) -> str:
     return text[:limit] + "\n[truncated]"
 
 
-def _task_context(view: TaskView, root: Path) -> str:
-    folder = root / view.id
-    task_yaml = _read_excerpt(folder / "task.yaml")
-    claude = _read_excerpt(folder / "CLAUDE.md")
-    plan = _read_excerpt(folder / "plan.md")
-    log = _read_excerpt(folder / "log.md", limit=8000)
-    return "\n\n".join(
-        (
-            "TASK YAML:\n" + task_yaml,
-            "CLAUDE.md:\n" + claude,
-            "PLAN:\n" + plan,
-            "ACTIVITY LOG:\n" + log,
-        )
-    )
-
-
 def _normalize_summary(text: str) -> str:
     value = text.strip()
-    if value.startswith("```") and value.endswith("```"):
+    if value.startswith(chr(96) * 3) and value.endswith(chr(96) * 3):
         value = value[3:-3].strip()
     if value.lower().startswith("summary:"):
         value = value.split(":", 1)[1].strip()
@@ -85,6 +70,22 @@ def _default_backend():
     return CodexCliBackend()
 
 
+def _task_context(view: TaskView, root: Path) -> str:
+    folder = root / view.id
+    task_yaml = _read_excerpt(folder / "task.yaml")
+    claude = _read_excerpt(folder / "CLAUDE.md")
+    plan = _read_excerpt(folder / "plan.md")
+    log = _read_excerpt(folder / "log.md", limit=8000)
+    return "\n\n".join(
+        (
+            "TASK YAML:\n" + task_yaml,
+            "CLAUDE.md:\n" + claude,
+            "PLAN:\n" + plan,
+            "ACTIVITY LOG:\n" + log,
+        )
+    )
+
+
 def _complete(backend: Any, view: TaskView, root: Path) -> str:
     from llm_scripting_kit.completion import BackendOptions
 
@@ -96,6 +97,8 @@ def _complete(backend: Any, view: TaskView, root: Path) -> str:
     user = (
         "Task id: "
         + view.id
+        + "\nProject: "
+        + view.project_name
         + "\nCurrent status: "
         + view.status
         + "\n\n"
@@ -115,6 +118,35 @@ def _complete(backend: Any, view: TaskView, root: Path) -> str:
     return _normalize_summary(response.text)
 
 
+def _view_root(view: TaskView, fallback: Path) -> Path:
+    return view.project_root or fallback
+
+
+def _view_label(listing: TaskListing, view: TaskView) -> str:
+    return f"{view.project_name}/{view.id}" if listing.scope == "all" else view.id
+
+
+def _existing_folder(view: TaskView, root: Path) -> Path:
+    folder = root / view.id
+    if not folder.is_dir():
+        raise FileNotFoundError(f"{view.id}: task folder is no longer present")
+    return folder.resolve()
+
+
+def _assert_current_folder(view: TaskView, root: Path, expected: Path) -> None:
+    actual = _existing_folder(view, root)
+    if actual != expected:
+        raise RuntimeError(
+            f"{view.id}: task folder changed from {expected} to {actual}"
+        )
+    block = read_task_block(actual)
+    if block is None:
+        raise RuntimeError(f"{view.id}: task.yaml is no longer readable")
+    fingerprint = summary_source_fingerprint(actual, block)
+    if fingerprint != view.current_fingerprint:
+        raise RuntimeError(f"{view.id}: task changed during summary generation")
+
+
 def generate_missing_summaries(
     listing: TaskListing,
     project_root: Path,
@@ -129,30 +161,36 @@ def generate_missing_summaries(
     """
     generated: list[str] = []
     failed: list[tuple[str, str]] = []
-    effective_root = listing.effective_root
     candidate_views = [
         view
         for view in listing.views
         if view.summary_status in ("missing", "stale")
         and view.status in ELIGIBLE_STATUSES
-        and (effective_root / view.id).is_dir()
+        and (_view_root(view, project_root) / view.id).is_dir()
         and view.current_fingerprint is not None
     ]
     if not candidate_views:
         return SummaryGenerationReport()
+
     active_backend = backend if backend is not None else _default_backend()
     stamp = datetime.date.today().isoformat()
     for view in candidate_views:
+        root = _view_root(view, project_root)
+        label = _view_label(listing, view)
         try:
-            summary = _complete(active_backend, view, effective_root)
+            expected_folder = _existing_folder(view, root)
+            summary = _complete(active_backend, view, root)
+            _assert_current_folder(view, root, expected_folder)
             state_ops.update(
                 view.id,
-                effective_root,
+                root,
                 summary=summary,
                 summary_fingerprint=view.current_fingerprint,
                 summary_updated=stamp,
+                allow_init=False,
+                expected_folder=expected_folder,
             )
-            generated.append(view.id)
+            generated.append(label)
         except Exception as exc:  # one task must not suppress the rest
-            failed.append((view.id, str(exc)))
+            failed.append((label, str(exc)))
     return SummaryGenerationReport(tuple(generated), tuple(failed))

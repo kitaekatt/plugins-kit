@@ -96,9 +96,9 @@ On-demand siblings (do NOT pre-read; load only when relevant):
 
 After invoking the always-invoke skills AND reading the required docs above, open the first turn with:
 
-> "Invoked: <the skills `task work` emitted>. Read plan.md and log.md. Current goal: <restated in own words>. Prerequisites verified: <state of dependencies>. Starting with: <first concrete action>, dispatched to <sub-agent type / inline, with the reason>. Unclear / blocked on: <issue, or 'none'>."
+> "Invoked: <the skills `task work` emitted>. Read plan.md and log.md. Current goal: <restated in own words>. Prerequisites verified: <state of dependencies>. Starting with: <first concrete action>. Route: <delegated implementation worker, planning venue, or direct coordination/CLI action, with the reason>. Unclear / blocked on: <issue, or 'none'>."
 
-The `Invoked:` and `dispatched to` clauses are not filler -- they surface a skipped initialization or an un-dispatched build in turn 1, instead of at end of session.
+The `Invoked:` and `Route:` clauses surface a skipped initialization or an un-dispatched implementation in turn 1. Name the worker for implementation, including a trivial unit; planning and direct coordination/CLI actions use their own routes.
 
 Then START the first concrete action in the SAME turn -- the line announces the orientation, it does not ask for a go-ahead. When "Unclear / blocked on" reads "none", begin the work; end the turn there when the clause names a real blocker, or when a decision below is claimed for the user (this example's open question is one of those).
 
@@ -149,17 +149,19 @@ Standing principles, rules, and gates that apply continuously regardless of whic
 
 ### Sub-agent orchestration -- main-context preservation
 
-The main agent's job is orchestration, decision-routing, and surfacing concrete actions to the user. Heavy reading, code-drafting, file-authoring, and corpus-analysis should be pushed into sub-agents whenever possible; main reads the sub-agent's report instead of the raw inputs. This keeps main's context window available for the orchestration decisions only main can make.
+Once orchestrate is invoked through task, its contract is the same as direct invocation. Main coordinates, checks results, and stays available for user steering. Every work-product implementation unit -- code, tests, scripts, configuration, or documentation -- runs through a delegated worker, even when the unit is small or cannot be split. Running task CLI verbs, read-only listings, or other existing scripts for coordination or verification is not by itself implementation.
 
-Three concrete rules:
+Four concrete rules:
 
-1. **Prefer offloading work to sub-agents to preserve main context.** When a unit of work is bounded (e.g. "draft this module", "summarize these audit dumps", "scan the prior trial's denial signals and produce a short list of challenging atoms"), spawn a sub-agent with a tight task brief and have it report back. Main reads the report, not the inputs. Do this even when main could do the work directly -- the context savings compound across the session.
+1. **Place planning by model fit and context.** Main plans only when it is the best suited planning model under rendered policy AND already has sufficient verified, decision-relevant context. Otherwise delegate planning, including substantial context acquisition. A few bounded read-only checks may close a small gap before deciding. A requested plan deliverable follows the same test.
 
-2. **Main launches long-running processes itself.** Builds, test suites, cycle runners, servers, anything whose output the workflow needs back: main launches it (background bash, foreground tooling). Then main feeds the result into a sub-agent if analysis is needed. Reason: sub-agents are single-tier and cannot launch their own sub-agents, so "sub-agent launches a build that feeds another sub-agent" is impossible. Main is the only place that can tie launch + analysis together.
+2. **Delegate implementation.** Give each work-product unit a bounded brief and an eligible worker under rendered policy. If splitting is uneconomical, dispatch one coherent unit. Main checks the returned artifact and named verification; send a failed implementation check back as a worker correction.
 
-3. **If the work requires sub-agents, main orchestrates them.** Sub-agents are single-tier; they cannot spawn further sub-agents. When the work naturally fans out (e.g. "do A, then based on A do B and C in parallel and synthesize"), main coordinates: spawns sub-agent A, reads the result, then spawns B and C (in parallel where independent), then synthesizes. Do NOT write a sub-agent task brief that asks the sub-agent to spawn further sub-agents -- it cannot, and the chain breaks silently.
+3. **Keep optional delegation economical.** Main may perform coordination or read-only investigation directly when its model is best for that unit AND briefing, dispatch, waiting, joining, verifying, and correcting would cost more than direct work. Otherwise delegate the optional unit. This cost test does not change who implements the work product.
 
-The principle behind these rules is main-agent context preservation, NOT the addition of per-launch gates that the standing authorizations (LLM budget, background-agent dispatch, plan-as-authorization) already cover. If an action is pre-authorized elsewhere in this file, orchestration does not re-gate it -- just launch and continue.
+4. **Main coordinates processes and workers.** Main may launch long-running builds and checks and inspect their results. Sub-agents are single-tier and cannot spawn further sub-agents; main coordinates dependent or parallel units and synthesizes their results.
+
+These rules preserve the standing authorizations (LLM budget, background-agent dispatch, plan-as-authorization). If an action is pre-authorized elsewhere in this file, orchestration does not re-gate it -- launch and continue.
 
 ### Anti-patterns to avoid
 

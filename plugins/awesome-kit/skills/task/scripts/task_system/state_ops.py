@@ -306,11 +306,14 @@ def update(
     durable_outputs: list[str] | None = None,
     ref_host: str | None = None,
     local_host: str | None = None,
+    allow_init: bool = True,
+    expected_folder: Path | None = None,
 ) -> UpdateResult:
-    """``update <ref> [field edits]`` (spec 7.1): upsert (init when the
-    folder is absent), apply task.yaml field edits (lists REPLACE), append
-    the dated log.md entry, re-run validate. The write persists regardless of
-    findings; the result carries classification + findings.
+    """Update a task, upserting it unless initialization is disabled.
+
+    With ``allow_init=False``, a missing folder is an error. When
+    ``expected_folder`` is supplied, the resolved folder must still match
+    before any write, which protects summary maintenance from link retargets.
     """
     resolved = _resolve(ref, project_root)
 
@@ -326,8 +329,19 @@ def update(
     folder = resolved.folder(project_root)
     initialized = False
     if not folder.is_dir():
+        if not allow_init:
+            raise StateOpError(
+                f"{resolved.canonical}: task folder is missing; refusing to initialize it"
+            )
         _auto_init(resolved, project_root)
         initialized = True
+    if expected_folder is not None:
+        expected = expected_folder.resolve()
+        actual = folder.resolve()
+        if actual != expected:
+            raise StateOpError(
+                f"{resolved.canonical}: task folder changed from {expected} to {actual}"
+            )
 
     edits: dict[str, object] = {}
     for name, value in (

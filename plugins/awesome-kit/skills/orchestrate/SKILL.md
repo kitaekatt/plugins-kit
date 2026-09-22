@@ -1,13 +1,16 @@
 ---
 name: orchestrate
-description: Use when accomplishing significant multi-part work -- delegate to background agents or a CLI backend to preserve context. Do NOT use for single-step tasks.
+description: Use when orchestrating work through background agents or CLI, including another skill's invocation, regardless of task size. Do NOT use to author agent types.
 skill-type: technique-skill
 ---
 
 # orchestrate
 
-Take on the orchestrator role: accomplish significant work by delegating it to background
-agents, keeping the main agent's context reserved for coordination, judgment, and synthesis.
+Take on the orchestrator role whenever this skill is invoked, directly or through a
+user-requested workflow such as `$task`. Keep the main agent's context for coordination,
+judgment, verification, and synthesis. Delegate every implementation unit, including code,
+tests, scripts, configuration, and documentation. A small or unsplittable change is one
+delegated unit. Planning venue never licenses main-thread implementation.
 
 **Autonomy is high, and there is one level.** What authorizes the orchestrator is the task the
 user set and the authorizations their instructions record -- the CLAUDE.md files on the path,
@@ -37,19 +40,26 @@ and [references/tuning-selection.md](references/tuning-selection.md) when a rout
 firing more or less often than you want. The routing policy is hand-written configuration
 stated in the controlled vocabulary of [references/lexicon.md](references/lexicon.md).
 
+**Do not delegate when:** user steering, authorization, policy rendering and routing, final
+acceptance, and synthesis belong to the main thread. The main thread plans when BOTH it is
+the best suited planning model under rendered policy AND it has sufficient verified,
+decision-relevant context; otherwise delegate planning. For optional coordination or read-only
+investigation, keep the unit here only when BOTH the main model is best suited AND briefing,
+dispatch, waiting, joining, verifying, and correcting would cost more than doing it here.
+These cases do not permit main-thread implementation. If no eligible worker can implement
+to the required quality, report the capability or quality gap and leave that work pending.
+
 ```yaml
 technique_skill:
   _schema_version: "1"
-  identity: Orchestrate significant work through background agents so the main agent's context holds conclusions, not work product.
+  identity: Orchestrate invoked work through background agents so the main agent's context holds conclusions, not work product.
   scope:
     covers:
-      - decomposing significant work into delegable units and running them via background agents
+      - decomposing invoked work into delegable units and running implementation via background agents
       - rendering the machine's orchestration policy (routing, backends, capacity) and dispatching by it
       - keeping the main context clean while agents run, and synthesizing results on completion
       - routing a decision the orchestrator would otherwise put to the user, and the autonomy edges that decide when the user is asked at all
     excludes:
-      - small or single-step tasks cheaper to do inline than to delegate
-      - the Workflow tool's deterministic multi-agent orchestration (use Workflow when the user opts in)
       - subagent authoring (defining new agent types)
       - reviewer fan-out internal to an invoked review skill (N reviewers over one artifact) -- that skill's `SKILL.md` owns its reviewer roster and lane arithmetic; orchestrate still owns and routes the plan-checkpoint cross-check as a separate unit
 
@@ -120,16 +130,20 @@ technique_skill:
     - id: orchestrate
       name: Orchestrate work through background agents
       keywords: [orchestrator, background agents, delegate, preserve context, fan-out, parallel agents, synthesize results]
-      goal: Complete a significant task with the main context holding coordination state and conclusions, not raw work product.
+      goal: Complete an invoked task with the main context holding coordination state and conclusions, not raw work product.
       steps:
         - n: 1
-          action: Confirm the task warrants orchestration.
+          action: Apply the one orchestration contract to the invoked task.
           detail: |
-            Delegate for one of two reasons: footprint -- the unit, taken as the whole line of
-            investigation it runs, reads or emits far more than its conclusion -- or parallelism -- the rendered razor yields at least two leaves
-            runnable now. Neither means do it inline. One small self-contained unit whose result
-            feeds the next decision stays inline; an agent round-trip costs as much context as the
-            work. Difficulty and indecision are not reasons to delegate. In `user-present` (the user is watching the prompt) footprint bites harder: prefer the background for anything past one cheap foreground call.
+            Direct invocation and invocation through another user-requested workflow have the
+            same effect. Delegate implementation even when it is one short, self-contained unit.
+            The main thread may make bounded read-only checks for routing, planning context, and
+            the join. Compare model fit and total delegation cost for OPTIONAL coordination or
+            read-only investigation only. For mandatory implementation, use that cost to choose
+            an eligible worker, one compact unit when splitting adds overhead, and a tight return
+            contract. If the main model is best suited to implement, dispatch a background
+            instance of it when eligible; otherwise choose the best eligible worker and make the
+            brief and verification proportionate.
         - n: 2
           action: Render the orchestration policy by running the script in the policy block above.
           detail: >-
@@ -138,16 +152,30 @@ technique_skill:
             review, never route the plan's creation. Keep the output in view for steps 3-5;
             it is the source of truth for routing, backends and capacity on this machine.
         - n: 3
-          action: Decompose into self-contained units, apply the rendered parallel-development razor, and classify each -- the plan itself is the first candidate unit, and every decision you would otherwise put to the user is another.
+          action: Place planning by model fit and context, then decompose and apply the rendered parallel-development razor.
           detail: |
-            The decomposition you are about to author is a unit (the policy's plan-checkpoint
-            shaping tests): route it through the rendered tree before briefing anything from
-            it, which may mean delegating its creation, or authoring it and delegating its
-            review. A delegated plan-creation brief includes the rendered parallel-development
-            razor and returns candidate leaves labelled against each of its tests. Then per unit
-            note (a) dependencies; (b) whether the razor admits it as a parallel leaf; and (c)
+            After policy render, identify the best suited planning model under the rendered
+            routing rows and the plan's actual demands. Separately check whether this context
+            has sufficient verified, decision-relevant user rulings, constraints, repository
+            facts, interfaces, dependencies, and load-bearing premises. If BOTH the main model
+            is best suited and that context is sufficient, author the plan here. If EITHER is
+            false, delegate planning to the most appropriate eligible model. A few bounded
+            read-only checks may close a small context gap; substantial investigation travels
+            with the planning unit, possibly to a background instance of the main model when
+            it is best suited and eligible. A requested plan deliverable follows the same test.
+            Carry known context and exact user rulings in the planning brief. Name unknowns as
+            `hypothesis:`; require the planner to establish them with evidence or report a
+            blocker before implementation briefs rely on them. Check the returned plan's
+            premises and fit to user intent; send needed revisions back to the planner rather
+            than silently rewriting it. A delegated planning brief includes the rendered
+            parallel-development razor and returns candidate units, dependencies, premise
+            evidence, verification boundaries, and blockers. Apply the plan-checkpoint review
+            route before implementation dispatch.
+
+            For each unit, note (a) dependencies; (b) whether the razor admits it as a parallel leaf; and (c)
             compression profile -- does the result compress to a small conclusion?
-            High-generation-cost / small-conclusion units are the ideal footprint delegations.
+            High-generation-cost / small-conclusion read-only units are strong optional
+            footprint delegations.
 
             ORDER BY VALUE, NOT BY ARCHITECTURE. A decomposition comes out in
             dependency order by default, which puts the foundation first and the
@@ -172,17 +200,24 @@ technique_skill:
             through to the next model in that row. An unresolvable model or an unavailable
             harness removes that model, and a row with no surviving models disappears. A
             backend carrying a `**Selection.**` restriction is documented for its stated
-            condition and is not a routing target. When the user names a backend or model,
-            that names the dispatch: take the named one and skip this step.
+            condition and is not a routing target. When the user names an eligible backend
+            or model, it selects the dispatch target, not planning venue or implementation
+            permission. If no eligible worker remains, report the capability gap.
         - n: 5
-          action: Launch background units -- each prompt a standalone brief (goal, paths, constraints, premises, return shape).
+          action: Launch every delegated unit -- each prompt a standalone brief (goal, paths, constraints, premises, return shape).
           detail: |
             Use the launch mechanics the rendered policy gives for the chosen backend; they
             differ materially between backends (a CLI backend has no built-in isolation or
-            completion report). Launch every admitted leaf on the current dependency frontier in
-            one message. A leaf whose dependency has not completed is not admitted. When the
+            completion report). If the razor does not admit a parallel split, launch one coherent
+            delegated implementation unit. Launch admitted parallel leaves on the current
+            dependency frontier in one message. A leaf whose dependency has not completed is
+            not admitted. Once dispatched, each worker owns its files until the join; the main
+            thread may read them but sends any work-product correction back to a worker. When the
             runnable frontier changes, re-apply the rendered `parallel-development-razor` from
             `defaults/orchestration.yaml` before briefing additional leaves.
+            Each brief names the goal, paths and exclusive file ownership, constraints,
+            premises and dependency checks, named verification, authorized side effects,
+            and return shape.
             The return shape must require disclosure of any critical
             infrastructure the unit created, moved, retired, or changed -- generated
             artifacts and their generators, build/commit-time gates, load-bearing paths other
@@ -190,8 +225,9 @@ technique_skill:
             the unit just removed.
 
             RETURN BUDGET, NAMED. The default report is at most about 1,000 tokens and
-            contains only the disposition, files changed, premise outcomes, named checks,
-            and blockers. Put logs, inventories, source excerpts, and other bulky evidence
+            contains only the disposition, changed-file list or diff stat, material decisions
+            and reasons, premise outcomes, named checks and results, blockers, and critical
+            infrastructure changed. Put logs, inventories, source excerpts, and other bulky evidence
             in an artifact. Return its path and the exact parts the join must inspect.
             If the join needs named detail that cannot remain in an artifact, raise the
             budget in the brief. Otherwise, keep the default.
@@ -261,7 +297,7 @@ technique_skill:
             parameters (sampling windows, settle times) from the failure being chased, stating
             the basis; an interval inherited from other work is a hypothesis wearing a number.
         - n: 6
-          action: While units run, do orchestrator-level work only -- plan synthesis, inline units, or nothing -- and keep running units current.
+          action: While units run, do coordination and read-only join work, or wait, and keep running units current.
           detail: >-
             Waiting is passive. A background task re-invokes the session when it exits. If no
             useful unblocked work remains, end the turn. Waiting is correct in that state. Do
@@ -285,11 +321,12 @@ technique_skill:
             CONFORMING to its brief, the defect is in the brief OR in the check: validate the
             failing check before changing either. If the check is sound and the brief is
             defective, correct the specification and route that correction as its own unit (the
-            plan-checkpoint tests in `defaults/orchestration.yaml` apply), rather than
-            relaunching the worker. A wrong decision
+            plan-checkpoint tests in `defaults/orchestration.yaml` apply). Then send a
+            work-product correction brief to the same worker or an eligible replacement.
+            A wrong decision
             MAY affect sibling briefs cut from the same decomposition, so re-check them after
             confirming the brief is defective. A disclosed critical-infrastructure
-            change gets recorded in the appropriate CLAUDE.md as part of this synthesis --
+            change is briefed to a worker for recording in the appropriate CLAUDE.md --
             it must not be left sitting only in the agent's report, which the user never sees.
             Reverting a recorded change later is the responsibility of whichever agent
             decides to reverse it; the record is a signal of intent, not a prohibition.
@@ -306,8 +343,8 @@ technique_skill:
 
             `join <unit-id>: disposition=<accepted|corrected|rejected>; cause=<worker|brief|changed-constraint|integration|unknown>; verified=<named check>`
 
-            `accepted` means the returned artifact passed the named check without a lead-side
-            correction. `corrected` means the lead changed it before acceptance. `rejected`
+            `accepted` means the returned artifact passed the named check without a revision.
+            `corrected` means a delegated revision passed the named check before acceptance. `rejected`
             means none of the returned work was accepted. Disposition and cause are separate.
             Do not use a correction caused by a bad brief as evidence against the worker.
 
@@ -320,8 +357,8 @@ technique_skill:
       gotchas:
         - >-
           Delegating and then re-doing the same unit inline pays both costs. Once
-          dispatched, do not re-do that unit here. Independent work is not blocked
-          by it. Waiting for it is passive (step 6).
+          dispatched, send corrections back to a worker. Independent coordination is not
+          blocked by it. Waiting for it is passive (step 6).
         - Parallel units editing the same files clobber each other -- but a shared-file conflict is a PARTITIONING problem before it is a scheduling one. Re-split the work by file ownership first (one owner per file, stated in each brief), and sequence only what genuinely remains. Reaching for sequencing first serialises work that had no real dependency.
         - A unit that correctly removes or relocates something can silently destroy the only signpost pointing at it -- a green result and a clean diff will not surface that; only the unit's own disclosure does.
         - >-

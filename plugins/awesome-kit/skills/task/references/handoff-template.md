@@ -187,14 +187,14 @@ template-vs-additional; the consistent seven `##` shape is the contract.
     varies):
     > "Invoked: <skills, as emitted by `task work`>. Read plan.md (+ any
     > other required reads). Current goal: <restated in own words>.
-    > Starting with: <first concrete action>, dispatched to <sub-agent /
-    > inline, with the reason>. Unclear / blocked on: <issue, or 'none'>."
+    > Starting with: <first concrete action>. Route: <delegated implementation
+    > worker, planning venue, or direct coordination/CLI action, with the reason>.
+    > Unclear / blocked on: <issue, or 'none'>."
 
-    The `Invoked:` and `dispatched to` clauses are load-bearing: they make a
-    skipped initialization or an un-dispatched build visible to the user in
-    the first turn, rather than surfacing at end of session as "I invoked
-    the task skills but implemented everything inline." Stating the dispatch
-    decision out loud is also what forces it to BE a decision.
+    The `Invoked:` and `Route:` clauses are load-bearing: they make a skipped
+    initialization or an un-dispatched implementation visible to the user in
+    the first turn. Name the implementation worker even for a trivial unit;
+    planning and direct coordination/CLI actions use their own routes.
 
     Write this section so it cannot read as a checkpoint: the agent says
     the line and then STARTS the first concrete action in the same turn.
@@ -223,13 +223,16 @@ template-vs-additional; the consistent seven `##` shape is the contract.
     Authorizations pre-approves ACTIONS; Autonomy status names claimed
     DECISIONS.
   - **`### Rules to follow`** -- project-specific operational rules
-    ("background long-running work, never inline"; "ASCII-only in source
+    ("background long-running processes"; "ASCII-only in source
     files"; concurrency settings; tool wrappers).
-  - **`### Sub-agent orchestration -- main-context preservation`** -- when
-    work should be pushed to sub-agents, when main launches things itself
-    (long-running processes), the single-tier sub-agent constraint
-    (sub-agents can't spawn sub-agents). Main's job is orchestration; heavy
-    reading goes to sub-agents.
+  - **`### Sub-agent orchestration -- main-context preservation`** -- require
+    delegated work-product implementation after orchestrate is invoked.
+    Place planning on the main thread only when its model is best suited
+    under rendered policy AND it has sufficient verified, decision-relevant
+    context; otherwise delegate planning. Optional coordination or read-only
+    investigation stays with main only when its model is best for that unit
+    AND total delegation cost exceeds direct work. Main may launch and check
+    long-running processes; sub-agents cannot spawn sub-agents.
   - **`### Anti-patterns to avoid`** -- explicit don'ts for this work. "Be
     careful with X" is vague; anti-patterns make boundaries concrete.
 - **`## Relevant files`** -- file index. Split into:

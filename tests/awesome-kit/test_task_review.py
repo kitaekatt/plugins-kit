@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -13,7 +14,7 @@ import pytest
 import yaml
 
 from bootstrap_guard import _REEXEC_GUARD_ENV
-from task_system import listing, summary_ops
+from task_system import discovery, listing, summary_ops
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _TASK_CLI = (
@@ -70,6 +71,35 @@ def make_task(
     log = f"- {date}: update: task changed\n" if date else "placeholder\n"
     (folder / "log.md").write_text(log, encoding="utf-8")
     return folder
+
+
+def _link_directory(link: Path, target: Path) -> None:
+    link.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        os.symlink(target, link, target_is_directory=True)
+    except OSError:
+        if os.name != "nt":
+            pytest.skip("directory links are unavailable")
+        result = subprocess.run(
+            ["cmd", "/c", "mklink", "/J", str(link), str(target)],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            pytest.skip("directory links are unavailable")
+
+
+def _configure_project_directories(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, entries: list[str]
+) -> Path:
+    home = tmp_path / "home"
+    config = home / ".claude" / "task.local.yaml"
+    config.parent.mkdir(parents=True)
+    config.write_text(yaml.safe_dump({"project_directories": entries}), encoding="utf-8")
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    monkeypatch.setattr(discovery, "TASK_CONFIG_PATH", config)
+    return config
 
 
 class TestTaskListingAndReview:
@@ -145,6 +175,8 @@ class TestTaskListingAndReview:
         result = run_cli(
             [
                 "review",
+                "--scope",
+                "project",
                 "--no-generate-missing-summaries",
                 "--no-open",
                 "--output",
@@ -156,7 +188,7 @@ class TestTaskListingAndReview:
         )
         assert result.returncode == 0
         html = output.read_text(encoding="utf-8")
-        assert html.count("<details class=\"task-card") == 3
+        assert html.count('<details class="task-card') == 3
         assert "summary-line missing" in html
         assert "missing_summary" in html
         assert "Should not appear" not in html
@@ -166,7 +198,205 @@ class TestTaskListingAndReview:
         assert "missing task.summary" in result.stderr
 
 
+    def test_review_without_config_uses_current_project_and_all_explains_requirement(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        home = tmp_path / "home"
+        home.mkdir()
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.setenv("USERPROFILE", str(home))
+        monkeypatch.setattr(discovery, "TASK_CONFIG_PATH", home / ".claude" / "task.local.yaml")
+        devroot = tmp_path / "devroot"
+        project = devroot / "current"
+        make_task(project, "tmp/current", title="Current project task", summary="Current.")
+        make_task(devroot / "other", "tmp/other", title="Other project task", summary="Other.")
+        monkeypatch.setenv("DEVROOT", str(devroot))
+        output = tmp_path / "review.html"
+        args = ["review", "--no-generate-missing-summaries", "--no-open", "--output", str(output), "--root", str(project)]
+
+        result = run_cli(args, project)
+        assert result.returncode == 0, result.stderr
+        html = output.read_text(encoding="utf-8")
+        assert "Current project task" in html
+        assert "Other project task" not in html
+
+        explicit_all = run_cli([*args, "--scope", "all"], project)
+        assert explicit_all.returncode != 0
+        assert "project_directories" in explicit_all.stderr
+        assert "task.local.yaml" in explicit_all.stderr
+
+
+    def test_config_supports_literal_and_environment_parent_directories(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        first = tmp_path / "first"
+        second = tmp_path / "second"
+        make_task(first / "alpha", "tmp/a", title="Alpha", summary="A.")
+        make_task(second / "beta", "tmp/b", title="Beta", summary="B.")
+        monkeypatch.setenv("TASK_TEST_PROJECTS", str(first))
+        _configure_project_directories(tmp_path, monkeypatch, ["${TASK_TEST_PROJECTS}", str(second)])
+
+        assert discovery.configured_project_directories() == (first.resolve(), second.resolve())
+        collected = listing.collect_listing("all", first / "alpha")
+        assert {group.name for group in listing.project_groups(collected)} == {"alpha", "beta"}
+
+
+    def test_all_scope_groups_projects_and_deduplicates_shared_dev_tasks(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        devroot = tmp_path / "devroot"
+        short = devroot / "plugins-kit"
+        long = devroot / "plugins-kit2"
+        shared = tmp_path / "shared-tasks"
+        shared.mkdir(parents=True)
+        make_task(
+            shared,
+            "shared",
+            title="Shared dev task",
+            summary="Shared summary.",
+            date="2026-09-22",
+        )
+        _link_directory(short / "dev" / "tasks", shared)
+        _link_directory(long / "dev" / "tasks", shared)
+        make_task(short, "tmp/short-only", title="Short tmp", date="2026-09-20")
+        make_task(long, "tmp/long-only", title="Long tmp", date="2026-09-21")
+        monkeypatch.setenv("DEVROOT", str(devroot))
+        _configure_project_directories(tmp_path, monkeypatch, ["${DEVROOT}"])
+
+        collected = listing.collect_listing("all", short)
+        groups = {group.name: group for group in listing.project_groups(collected)}
+        assert set(groups) == {"plugins-kit", "plugins-kit2"}
+        assert {view.id for view in groups["plugins-kit"].views} == {
+            "dev/tasks/shared",
+            "tmp/short-only",
+        }
+        assert {view.id for view in groups["plugins-kit2"].views} == {"tmp/long-only"}
+        assert all(view.project_name == "plugins-kit" for view in groups["plugins-kit"].views)
+        assert all(view.project_name == "plugins-kit2" for view in groups["plugins-kit2"].views)
+
+        data = listing.listing_data(collected)
+        project_data = {project["name"]: project for project in data["projects"]}
+        assert project_data["plugins-kit"]["tasks"] == [
+            "plugins-kit::dev/tasks/shared",
+            "plugins-kit::tmp/short-only",
+        ]
+        assert project_data["plugins-kit2"]["tasks"] == ["plugins-kit2::tmp/long-only"]
+
+        output = tmp_path / "review.html"
+        result = run_cli(
+            [
+                "review",
+                "--no-generate-missing-summaries",
+                "--no-open",
+                "--output",
+                str(output),
+                "--root",
+                str(short),
+            ],
+            short,
+        )
+        assert result.returncode == 0
+        html = output.read_text(encoding="utf-8")
+        assert html.count('<details class="project-card">') == 2
+        assert html.count('<details class="task-card') == 3
+        assert html.count("Shared dev task") == 1
+        assert "plugins-kit2" in html
+        assert "missing task.summary" in result.stderr
+
+
+    def test_updates_are_reverse_chronological_by_date(self, tmp_path: Path) -> None:
+        folder = make_task(
+            tmp_path,
+            "tmp/chronology",
+            title="Chronology",
+            summary="Chronology summary.",
+        )
+        (folder / "log.md").write_text(
+            "- 2026-09-18: update: older\n"
+            "- 2026-09-22: update: newest\n"
+            "- 2026-09-20: update: middle\n",
+            encoding="utf-8",
+        )
+        view = listing.collect_listing("project", tmp_path).views[0]
+        assert [update.date for update in view.updates] == [
+            "2026-09-22",
+            "2026-09-20",
+            "2026-09-18",
+        ]
+
+    def test_same_day_updates_show_latest_appended_entry_first(
+        self, tmp_path: Path
+    ) -> None:
+        folder = make_task(
+            tmp_path, "tmp/same-day", title="Same day", summary="Summary."
+        )
+        (folder / "log.md").write_text(
+            "- 2026-09-22: update: first change\n"
+            "- 2026-09-21: update: previous day\n"
+            "- 2026-09-22: update: second change\n",
+            encoding="utf-8",
+        )
+        view = listing.collect_listing("project", tmp_path).views[0]
+        assert [update.detail for update in view.updates] == [
+            "update: second change",
+            "update: first change",
+            "update: previous day",
+        ]
+
+
 class TestSummaryGeneration:
+    def test_all_scope_generation_uses_selected_project_roots(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        devroot = tmp_path / "devroot"
+        owner = devroot / "kit"
+        other = devroot / "kit-long"
+        shared = tmp_path / "shared-tasks"
+        shared.mkdir()
+        shared_folder = make_task(shared, "shared", title="Shared task")
+        _link_directory(owner / "dev" / "tasks", shared)
+        _link_directory(other / "dev" / "tasks", shared)
+        other_folder = make_task(other, "tmp/other", title="Other task")
+        monkeypatch.setenv("DEVROOT", str(devroot))
+        _configure_project_directories(tmp_path, monkeypatch, ["${DEVROOT}"])
+
+        calls: list[tuple[str, Path]] = []
+
+        def complete(backend: object, view: listing.TaskView, root: Path) -> str:
+            calls.append((view.id, root))
+            return "Generated summary."
+
+        monkeypatch.setattr(summary_ops, "_complete", complete)
+        current = listing.collect_listing("all", owner)
+        report = summary_ops.generate_missing_summaries(
+            current, owner, backend=SimpleNamespace()
+        )
+
+        assert report.failed == ()
+        assert set(report.generated) == {"kit/dev/tasks/shared", "kit-long/tmp/other"}
+        assert set(calls) == {("dev/tasks/shared", owner), ("tmp/other", other)}
+        for folder in (shared_folder, other_folder):
+            block = yaml.safe_load((folder / "task.yaml").read_text(encoding="utf-8"))
+            assert block["task"]["summary"] == "Generated summary."
+
+    def test_generation_does_not_recreate_disappeared_task_folder(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        folder = make_task(tmp_path, "tmp/disappears", title="Disappears")
+        current = listing.collect_listing("project", tmp_path)
+
+        def disappear(backend, view, root):
+            shutil.rmtree(folder)
+            return "Generated summary."
+
+        monkeypatch.setattr(summary_ops, "_complete", disappear)
+        report = summary_ops.generate_missing_summaries(
+            current, tmp_path, backend=SimpleNamespace()
+        )
+        assert report.generated == ()
+        assert report.failed and report.failed[0][0] == "tmp/disappears"
+        assert not folder.exists()
+
     def test_generation_persists_summary_without_advancing_activity(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:

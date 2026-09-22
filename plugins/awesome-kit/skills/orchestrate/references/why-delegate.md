@@ -26,7 +26,23 @@ headroom or parallelism even when it costs more overall.
 
 A cluster expected to run tens of tool calls and consume tens of thousands of tokens can
 qualify on footprint. One `git status` or one targeted read does not: footprint is judged over
-the whole line of investigation, not over a single response.
+the whole line of investigation, not over a single response. These comparisons govern
+optional coordination and read-only investigation, not implementation of the requested work
+product.
+
+Planning uses a separate test after policy render: the main thread plans only when it is the
+best suited planning model AND has sufficient verified, decision-relevant context. A few bounded
+read-only checks can close a small gap; substantial investigation travels with a delegated
+planning unit. A returned plan still needs its premises and fit to user intent checked, with
+corrections returned to the planner.
+
+For an optional coordination or read-only unit, do not delegate only when BOTH the main model
+is best suited AND the total cost of briefing, dispatch, waiting, joining, verifying, and
+correcting exceeds direct work. Once orchestration is invoked, directly or through another
+user-requested workflow, every implementation unit goes to a worker. If the main model is best
+suited, an eligible background instance can do it. Delegation cost guides worker choice,
+packaging, and report size: one cohesive unit is often cheaper than a split, even for a
+five-line script. No eligible worker means a capability gap, not an inline edit.
 
 Agent-tool mechanics are already in the harness prompt every session; what this skill adds is
 the economics, the procedure, and -- through the rendered policy -- the machine's own dispatch
@@ -55,9 +71,9 @@ anti_patterns:
   - id: orchestrator_does_the_work
     name: Orchestrator absorbs the work product
     keywords: [context bloat, reading everything, inline generation]
-    why_it_seems_right: Reading all the raw output yourself feels more thorough than trusting summaries.
-    why_it_is_wrong: It defeats the entire point -- the main context fills with generation-cost material whose value was already captured in the agents' conclusions.
-    alternative: Ask agents for structured conclusions; pull raw detail only for the specific items you must verify or that agents disagreed on.
+    why_it_seems_right: Reading all raw output or making a quick fix yourself feels faster than another worker round-trip.
+    why_it_is_wrong: It spends the main context on implementation and hides who corrected the artifact.
+    alternative: Ask workers for structured conclusions; pull raw detail only for named join checks and send work-product corrections back to a worker.
   - id: active_waiting
     name: Polling, sleeping, or narrating while units run
     keywords: [still running, poll result file, sleep, standing by, idle turn, cat result]
@@ -93,26 +109,26 @@ anti_patterns:
       reason=<one clause>`, and keep going. Only a decision the user has
       CLAIMED, or product direction, waits for the user.
   - id: inline_footprint_work
-    name: Running a high-footprint line of investigation inline in the orchestrating context
+    name: Running a high-footprint optional investigation inline in the orchestrating context
     keywords: [inline work, context footprint, quick edit, difficulty axis, tool-call cluster, line of investigation]
     why_it_seems_right: "It's quick, I'm already here, and dispatching an agent costs a prompt and a relay."
     why_it_is_wrong: >-
-      Footprint accumulates across a line of investigation, not within one tool result. A
+      Footprint accumulates across a line of investigation, not within one tool result. For
+      optional coordination and read-only investigation, a
       cluster expected to need tens of calls and tens of thousands of tokens can crowd out
       later coordination; one targeted read or command does not, whatever its single result
       weighs. Difficulty and duration are the wrong axis.
     alternative: >-
-      Estimate the whole cluster's lifetime main-context cost against a background run, its
-      dispatch brief, and its returned summary. Delegate a multi-call, high-footprint line of
-      investigation when it materially protects headroom, or when the rendered
-      parallel-development razor independently admits it; keep targeted reads and commands
-      inline.
+      For optional coordination or read-only investigation, keep it inline only if the main
+      model is best suited AND the total delegation cost exceeds direct work. Bounded planning
+      context reads and named join checks may stay on the main thread. Delegate substantial
+      investigation with planning; package implementation as at least one worker unit.
   - id: parallelism_by_unit_count
     name: Splitting because several edits exist
     keywords: [parallelism, implementation shards, unit count, merge overhead]
     why_it_seems_right: More workers should finish any multi-file change sooner.
     why_it_is_wrong: Repeated orientation, overlapping ownership, serial dependencies, and integration can make the split slower than one implementation unit.
-    alternative: Apply the rendered parallel-development razor; launch only admitted leaves on the current dependency frontier.
+    alternative: Apply the rendered parallel-development razor; launch admitted leaves concurrently or one coherent delegated implementation unit when the split fails.
   - id: vague_dispatch
     name: Under-specified agent prompts
     keywords: [vague prompt, missing context, wrong question]
