@@ -1308,6 +1308,31 @@ def _main():
         if not args.console:
             deferred_plugin_logs.append((data_dir, notice_label, [notice]))
 
+    # Step 4e: A clean Claude bootstrap pass arms this project's Codex
+    # SessionStart adapter.  The generated .codex/ tree is machine-local and
+    # ignored by the project; the hook invokes the stable `bootstrap`
+    # executable rather than pinning a versioned plugin-cache path.  Do not
+    # materialize it after an incomplete pass: the user explicitly gets the
+    # adapter once bootstrap has successfully converged once.
+    codex_hook_actions, codex_hook_oks, codex_hook_failures = (
+        _run_codex_hook_setup(
+            args.project_dir,
+            console=args.console,
+            existing_failures=all_failures,
+        )
+    )
+    all_failures.extend(codex_hook_failures)
+
+    if codex_hook_actions or codex_hook_oks:
+        _record_entries(recorder, "action", codex_hook_actions, section="codex-hook")
+        _record_entries(recorder, "ok", codex_hook_oks, section="codex-hook")
+        codex_hook_label = f"{bootstrap_label} codex-hook"
+        display_sections.append((codex_hook_label, codex_hook_actions, codex_hook_oks))
+        codex_hook_log = codex_hook_actions + (
+            codex_hook_oks if log_success else [])
+        if codex_hook_log and not args.console:
+            deferred_plugin_logs.append((data_dir, codex_hook_label, codex_hook_log))
+
     # Step 5: Read shell log entries BEFORE writing any engine entries to the log.
     # Plugin log writes are deferred to step 6 to avoid the bootstrap plugin's
     # ok_entries leaking back through shell_content (its data_dir == engine data_dir).
@@ -5265,6 +5290,71 @@ _AGENT_SKILLS_FAILURE_KWARGS = {
     "persist_across_sessions": True,
     "ask_reason": "action",
 }
+
+
+def _run_codex_hook_setup(project_dir, *, console=False, existing_failures=()):
+    """Materialize the Codex adapter only after a clean automatic pass.
+
+    The returned lists follow the engine's normal ``(actions, oks, failures)``
+    convention.  Keeping the policy here makes the lifecycle gate testable and
+    prevents a future caller from accidentally generating a project hook during
+    a failed or read-only console diagnostic pass.
+    """
+    if not project_dir or console or existing_failures:
+        return [], [], []
+
+    try:
+        from .codex_hook import (
+            CodexHookError,
+            codex_ignore_context,
+            codex_ignore_preflight,
+            ensure_codex_hook,
+        )
+        preflight = codex_ignore_preflight(project_dir)
+        if not preflight.ready:
+            context = codex_ignore_context(preflight.project_dir)
+            detail = (
+                "cannot install project Codex hook until the generated .codex "
+                "directory is protected by the applicable ignore policy"
+            )
+            return (
+                ["codex hook: deferred - %s" % detail],
+                [],
+                [{
+                    "type": "codex_hook",
+                    "plugin": "bootstrap",
+                    "message": detail,
+                    "agent_msg": (
+                        "%s. %s After the policy is fixed, run bootstrap again; "
+                        "the Codex hook is not materialized before then."
+                        % (detail, context)
+                    ),
+                    "persist_across_sessions": True,
+                    "ask_reason": "action",
+                }],
+            )
+        result = ensure_codex_hook(preflight.project_dir)
+    except CodexHookError as exc:
+        detail = "cannot install project Codex hook: %s" % exc
+        return (
+            ["codex hook: FAILED - %s" % exc],
+            [],
+            [{
+                "type": "codex_hook",
+                "plugin": "bootstrap",
+                "message": detail,
+                "agent_msg": (
+                    "%s. Bootstrap will retry after the project Codex hook "
+                    "path is writable and its JSON is valid." % detail
+                ),
+                "persist_across_sessions": True,
+                "ask_reason": "action",
+            }],
+        )
+
+    if result.changed:
+        return ["codex hook: installed %s" % result.path], [], []
+    return [], ["codex hook: already current %s" % result.path], []
 
 
 def _run_agent_skills_link_check(project_dir, agent_skills_link_value):
