@@ -346,6 +346,35 @@ next attempt cheaper); a `cleanup failed` outcome tells the user to delete
 user who opens a fresh clone only in Codex, never in Claude Code, gets no
 link — the mechanism has nothing to run from.
 
+### Step 4e: Codex project SessionStart adapter
+
+After all automatic work completes, a clean non-console pass calls
+`bootstrap_lib/engine.py::_run_codex_hook_setup`. It resolves the Git root when
+there is one, checks the applicable Git and Perforce ignore policies, and only
+then writes the machine-local project file `<project>/.codex/hooks.json`
+through `bootstrap_lib/codex_hook.py`. If policy is missing, bootstrap reports
+remediation and defers the write; a failed pass or console diagnostic also does
+not create the adapter. The write path is project-ephemeral, not derived from
+the plugin script location, and the JSON preserves unrelated Codex hooks while
+replacing only bootstrap-owned entries. Existing hook-file modes are preserved,
+symlink targets are refused, and concurrent merges are serialized.
+
+The generated `SessionStart` matcher covers `startup` and `resume`. Its stable
+command is the user lever `bootstrap codex-hook`, rather than a versioned cache
+path. The CLI runs the full engine synchronously without the Claude background
+relay, so the engine's stdout is Codex `hookSpecificOutput` with
+`hookEventName: "SessionStart"` and `additionalContext`.
+
+`bootstrap codex-hook` then checks the project `.gitignore` and applicable
+`.p4ignore` for the anchored `/.codex/` rule. A missing or ineffective Git
+rule adds Codex context telling the agent to modify `.gitignore`. A present or
+mapped Perforce policy is checked with `p4 ignores`; its remediation tells the
+agent to run `p4 edit .p4ignore` before adding the rule. Healthy checks add no
+context. The engine is synchronous and bounded below the hook's 300-second
+timeout. Codex's hook review/trust flow remains in force, so a consumer may
+need to review the generated project hook once through `/hooks`; changing the
+definition requires review again.
+
 ### Plugin updates target the recorded scope
 
 `marketplace_lifecycle.update_plugin` runs `claude plugin update <ref> --scope

@@ -536,7 +536,7 @@ reference_skill:
         delete-bootstrap.json opt-out.
     - id: bootstrap_cli
       path: references/bootstrap-cli.md
-      keywords: [bootstrap command, bootstrap CLI, bootstrap run, bootstrap --json, is a pass running, run bootstrap from a terminal, without starting Claude, tail a pass, attach to a running pass, stream the pass, events.watch, blocks, exit codes, BOOTSTRAP_MARKETPLACE, BOOTSTRAP_PLUGIN_ROOT, dev checkout, worktree, ~/.local/bin lever, command not found, cooldown exempt, bootstrap profile, profile set, profile clear, profile status, PowerShell, cmd.exe, bootstrap.cmd, returns instantly with no output, Windows shim]
+      keywords: [bootstrap command, bootstrap CLI, bootstrap run, bootstrap codex-hook, Codex SessionStart, Codex additionalContext, bootstrap --json, is a pass running, run bootstrap from a terminal, without starting Claude, tail a pass, attach to a running pass, stream the pass, events.watch, blocks, exit codes, BOOTSTRAP_MARKETPLACE, BOOTSTRAP_PLUGIN_ROOT, dev checkout, worktree, ~/.local/bin lever, command not found, cooldown exempt, bootstrap profile, profile set, profile clear, profile status, PowerShell, cmd.exe, bootstrap.cmd, returns instantly with no output, Windows shim]
       summary: >-
         The bootstrap PATH command -- four-layer run scope, busy-pass refusal,
         status following, cooldown behavior, exit codes, engine/data discovery,
@@ -545,8 +545,8 @@ reference_skill:
         subcommands.
     - id: engine_internals
       path: references/engine-internals.md
-      keywords: [engine, internals, processing order, project_git_pull, safe pull, Step 3c-pull, self-setup, manifest phase, script phase, messaging protocol, execution flow, throttling, first run, clean install, phases, design principles, shared library, hybrid model, agent_skills_link, agent skills link, codex skills, .agents, .agents/skills, agents directory, profile resolution, profile prompt gating, profile_prompts marker directory, CLAUDE_CODE_SESSION_ATTENDED, CLAUDE_CODE_SESSION_ID]
-      summary: Engine internals deep-dive, including where profile resolution sits in the pass and how the profile prompt is gated.
+      keywords: [engine, internals, processing order, project_git_pull, safe pull, Step 3c-pull, self-setup, manifest phase, script phase, messaging protocol, execution flow, throttling, first run, clean install, phases, design principles, shared library, hybrid model, agent_skills_link, agent skills link, codex skills, Codex project hook, Step 4e, .codex/hooks.json, .gitignore, .p4ignore, p4 edit, .agents, .agents/skills, agents directory, profile resolution, profile prompt gating, profile_prompts marker directory, CLAUDE_CODE_SESSION_ATTENDED, CLAUDE_CODE_SESSION_ID]
+      summary: Engine internals deep-dive, including the Codex project-hook adapter, ignore-file preflight, profile resolution, and how the profile prompt is gated.
     - id: manifest_reference
       path: references/manifest-reference.md
       keywords: [bootstrap.json, env.json, manifest, schema, fields, project_git_pull, git pull, fast-forward, project checkout, update gate, gate_timeout, variable expansion, layered config, merge semantics, identity keys, example, marketplace pin, pin field, unpin workflow, machines registry, env gate, env_checks, symlinks, shell_rc, macos_defaults, macos_hotkeys, login_items, personalization, agent_skills_link, codex, .agents/skills, profile, profiles, extends, profile inheritance]

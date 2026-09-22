@@ -9,6 +9,8 @@
 #   bootstrap run             apply user/project bootstrap.json and
 #                             bootstrap.local.json only; no plugin discovery
 #   bootstrap run --verbose   accepted for console compatibility
+#   bootstrap codex-hook      run a synchronous full pass and emit Codex
+#                             SessionStart JSON
 #   bootstrap reset           clear this project's cooldown so the next session
 #                             start runs a real pass
 #   bootstrap reset --all     clear every project's cooldown (--status to list,
