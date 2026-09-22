@@ -250,6 +250,7 @@ def _scaffold_contents(
                     "_schema_version": "1",
                     "type": ttype.name,
                     "title": title,
+                    "summary": "",
                     "status": "active",
                 }
             },

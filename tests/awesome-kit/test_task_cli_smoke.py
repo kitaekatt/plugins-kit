@@ -150,7 +150,11 @@ class TestCliLifecycle:
         # --- list: one parseable line, the documented projection ---------
         res = run_cli(["list", *rootflag], cwd=root)
         assert res.returncode == 0, res.stderr
-        assert f"tmp/{STUB}  active  P2  {TITLE}" in res.stdout.splitlines()
+        assert any(
+            line.startswith(f"tmp/{STUB}  active  P2  ")
+            and line.endswith(f"  {TITLE}")
+            for line in res.stdout.splitlines()
+        )
 
         # --- show: selected task.yaml fields, no inference ---------------
         res = run_cli(["show", f"tmp/{STUB}", *rootflag], cwd=root)
@@ -224,7 +228,7 @@ class TestCliLifecycle:
         assert f"dev/tasks/{STUB}" not in res.stdout
         res = run_cli(["list", "--status", "archived", *rootflag], cwd=root)
         assert res.returncode == 0, res.stderr
-        assert f"dev/tasks/{STUB}  archived  -  -" in res.stdout.splitlines()
+        assert f"dev/tasks/{STUB}  archived  -  -  -" in res.stdout.splitlines()
 
     def test_delete_second_tmp_task(self, tmp_path):
         root = tmp_path

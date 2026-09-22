@@ -623,10 +623,6 @@ _SHELL_ALLOWLIST: dict[str, AllowlistEntry] = {
     "plugins/secrets-kit/bin/secrets-kit.cmd": AllowlistEntry(
         "Windows shim invoking the bundled CLI via standalone Python.",
         "class C launcher shim (Windows); same deterministic-first pattern"),
-    "plugins/unreal-kit/hooks/pretooluse/check-editor-build-fresh.sh": AllowlistEntry(
-        "Deterministic standalone path first; BOOTSTRAP_PYTHON accepted only",
-        "class B Claude Code hook script; deterministic standalone path, then "
-        "the validated BOOTSTRAP_PYTHON, then the PATH-name fallback"),
     "scripts/check-staged-version-bump.sh": AllowlistEntry(
         "Interpreter resolution mirrors pre-commit-version-check.sh",
         "class D-ish repo-root maintainer script; deliberately avoids uv "
@@ -752,16 +748,9 @@ _PYTHON_ALLOWLIST: dict[str, AllowlistEntry] = {
         "agent-facing remediation message; bare `python` is the "
         "documented Windows-PATH convention (P8) and the target script "
         "self-reexecs via reexec_under_plugin_venv"),
-    "plugins/unreal-kit/lib/ue_runner_config.py": AllowlistEntry(
-        "uproject path not configured. Run: python ue_runner.py --setup",
-        "same agent-facing P8 pattern; ue_runner.py self-reexecs"),
     "plugins/unreal-kit/scripts/search_unreal_stub.py": AllowlistEntry(
         "refresh_unreal_stub.py --project-root <project-root>",
         "same agent-facing P8 pattern; refresh_unreal_stub.py self-reexecs"),
-    "plugins/unreal-kit/skills/ue-python-api/scripts/ue_runner.py": AllowlistEntry(
-        "python ue_runner.py --setup                # check/fix project settings",
-        "same agent-facing P8 pattern (help/usage text); ue_runner.py "
-        "self-reexecs"),
     "plugins/workflow-kit/scripts/openrouter_run.py": AllowlistEntry(
         "with workflow-kit's venv python (bootstrap links llm_scripting_kit onto it via",
         "informational error message naming the plugin-venv interpreter, "
@@ -854,29 +843,13 @@ _MD_PLUGINS_ALLOWLIST: dict[str, AllowlistEntry] = {
     "plugins/skills-kit/skills_kit_lib/CLAUDE.md": AllowlistEntry(
         "invoked via `python -m skills_kit_lib.<module>`",
         "prose describing the same documented dual-mode CLI"),
-    "plugins/unreal-kit/README.md": AllowlistEntry(
-        "python ${CLAUDE_PLUGIN_ROOT}/scripts/refresh_unreal_stub.py --project-root .",
-        "refresh_unreal_stub.py confirmed to call "
-        "reexec_under_plugin_venv before any third-party import"),
     "plugins/unreal-kit/skills/fix-up-redirectors/SKILL.md": AllowlistEntry(
         "unless the cwd has a matching `pyproject.toml`",
         "gold-standard plugin-venv absolute path form + explicit warning"),
-    "plugins/unreal-kit/skills/ue-python-api/SKILL.md": AllowlistEntry(
-        "ue_runner.py re-execs itself under the plugin venv",
-        "reexec documented explicitly; bare python is safe by construction"),
     "plugins/unreal-kit/skills/ue-python-api/references/architecture.md": AllowlistEntry(
         'py "C:/path/to/script.py"',
         "Unreal Editor's own embedded Python console command syntax, not "
         "a host-machine interpreter invocation"),
-    "plugins/unreal-kit/skills/ue-python-api/references/bootstrapped-setup.md": AllowlistEntry(
-        "Run `python ue_runner.py --setup`",
-        "all three referenced scripts confirmed reexec-guarded"),
-    "plugins/unreal-kit/skills/ue-python-api/references/project-setup.md": AllowlistEntry(
-        "bRemoteExecution",
-        "reexec-guarded scripts (ue_runner.py / search_unreal_stub.py)"),
-    "plugins/unreal-kit/skills/ue-python-api/references/script-bootstrap.md": AllowlistEntry(
-        "Execs `ue_runner.py` under the bootstrap-provisioned plugin venv",
-        "prose explaining the reexec mechanism"),
     "plugins/unreal-kit/skills/ue-python-api/references/script-execution.md": AllowlistEntry(
         'py "C:/path/to/script.py"',
         "same UE console-command false positive as architecture.md"),

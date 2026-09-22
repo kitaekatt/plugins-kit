@@ -97,7 +97,7 @@
     {
       "name": "awesome-kit",
       "description": "Provides plugin-ecosystem, task, orchestrate, recap, debug-context, and verbose-updates skills for plugin browsing, task tracking, delegated work, response distillation, answering why-did-you questions from context, and progress communication.",
-      "version": "0.59.0",
+      "version": "0.61.0",
       "author": {
         "name": "Christina"
       },
@@ -106,19 +106,6 @@
       "dependencies": [
         "bootstrap",
         "skills-kit"
-      ]
-    },
-    {
-      "name": "prototypes",
-      "description": "Nursery for experimental skills awaiting graduation. Ships no skills at present.",
-      "version": "0.4.0",
-      "author": {
-        "name": "Christina"
-      },
-      "source": "./plugins/prototypes",
-      "category": "development",
-      "dependencies": [
-        "bootstrap"
       ]
     },
     {
@@ -220,6 +207,19 @@
         "name": "Christina"
       },
       "source": "./plugins/job-kit",
+      "category": "development",
+      "dependencies": [
+        "bootstrap"
+      ]
+    },
+    {
+      "name": "prototypes",
+      "description": "Nursery for experimental skills awaiting graduation. Ships no skills at present.",
+      "version": "0.4.0",
+      "author": {
+        "name": "Christina"
+      },
+      "source": "./plugins/prototypes",
       "category": "development",
       "dependencies": [
         "bootstrap"

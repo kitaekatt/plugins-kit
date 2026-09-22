@@ -193,11 +193,16 @@ def _append_log_entry(folder: Path, edits: dict[str, object]) -> None:
     """The minimal rotation share (module docstring): one dated log.md line
     recording the update; plan.md is untouched."""
     stamp = datetime.date.today().isoformat()
-    detail = (
-        "; ".join(f"{name} = {value!r}" for name, value in edits.items())
-        if edits
-        else "refresh (no field edits)"
-    )
+    if edits and set(edits).issubset(
+        {"summary", "summary_fingerprint", "summary_updated"}
+    ):
+        detail = "summary: refreshed"
+    else:
+        detail = (
+            "; ".join(f"{name} = {value!r}" for name, value in edits.items())
+            if edits
+            else "refresh (no field edits)"
+        )
     with (folder / "log.md").open("a", encoding="utf-8") as fh:
         fh.write(f"- {stamp}: update: {detail}\n")
 
@@ -291,6 +296,9 @@ def update(
     status: str | None = None,
     priority: str | None = None,
     description: str | None = None,
+    summary: str | None = None,
+    summary_fingerprint: str | None = None,
+    summary_updated: str | None = None,
     depends_on: list[str] | None = None,
     blocked_by: list[str] | None = None,
     agent_hint: str | None = None,
@@ -326,6 +334,9 @@ def update(
         ("status", status),
         ("priority", priority),
         ("description", description),
+        ("summary", summary),
+        ("summary_fingerprint", summary_fingerprint),
+        ("summary_updated", summary_updated),
         ("depends_on", depends_on),
         ("blocked_by", blocked_by),
         ("agent_hint", agent_hint),

@@ -168,14 +168,15 @@ def _index(text: str, needle: str) -> int:
 
 
 def test_check_editor_build_fresh_order_is_deterministic_first():
-    """Static (the detached subshell is not observable): the deterministic
-    assignment, then the guarded variable tier, then PATH."""
+    """Static (the detached subshell is not observable): deterministic path,
+    validated variable tier, then the explicit unknown outcome."""
     text = (REPO_ROOT / "plugins/unreal-kit/hooks/pretooluse/"
             "check-editor-build-fresh.sh").read_text(encoding="utf-8")
-    det = _index(text, '_DETECT_PY="${HOME}/.local/share/python-standalone/python/python.exe"')
-    var = _index(text, 'if [[ ! -x "$_DETECT_PY" ]] && [[ -n "${BOOTSTRAP_PYTHON:-}" ]]')
-    path = _index(text, '_DETECT_PY="$(command -v python3')
-    assert det < var < path
+    det = _index(text, '_STANDALONE_PY="${HOME:-}/.local/share/python-standalone/')
+    var = _index(text, 'elif [ -n "${BOOTSTRAP_PYTHON:-}" ] && [ -x "$BOOTSTRAP_PYTHON" ]')
+    unknown = _index(text, "no approved detector interpreter was found")
+    assert det < var < unknown
+    assert "command -v python3" not in text
 
 
 CMD_TWINS = {
@@ -184,7 +185,7 @@ CMD_TWINS = {
     "plugins/job-kit/bin/job-kit.cmd": "if not defined PY if defined BOOTSTRAP_PYTHON",
     "plugins/llm-scripting-kit/bin/llm-scripting-kit.cmd": "if not defined PY if defined BOOTSTRAP_PYTHON",
     "plugins/unreal-kit/skills/ue-python-api/scripts/ue-runner.cmd":
-        'if not exist "%_UEK_PY%" if defined BOOTSTRAP_PYTHON',
+        'if not defined PY if defined BOOTSTRAP_PYTHON',
 }
 
 
