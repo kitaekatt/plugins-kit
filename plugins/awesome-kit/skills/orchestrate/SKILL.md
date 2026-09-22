@@ -1,6 +1,6 @@
 ---
 name: orchestrate
-description: Use when accomplishing significant multi-part work -- delegate to background agents or a CLI backend to preserve context. Do NOT use for single-step tasks.
+description: Use when significant work needs context-preserving delegation, even if sequential or indivisible. Do NOT use for small tasks fitting one cheap foreground call.
 skill-type: technique-skill
 ---
 
@@ -48,7 +48,7 @@ technique_skill:
       - keeping the main context clean while agents run, and synthesizing results on completion
       - routing a decision the orchestrator would otherwise put to the user, and the autonomy edges that decide when the user is asked at all
     excludes:
-      - small or single-step tasks cheaper to do inline than to delegate
+      - genuinely small, self-contained tasks whose full work fits in one cheap foreground call
       - the Workflow tool's deterministic multi-agent orchestration (use Workflow when the user opts in)
       - subagent authoring (defining new agent types)
       - reviewer fan-out internal to an invoked review skill (N reviewers over one artifact) -- that skill's `SKILL.md` owns its reviewer roster and lane arithmetic; orchestrate still owns and routes the plan-checkpoint cross-check as a separate unit
