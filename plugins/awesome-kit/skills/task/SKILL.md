@@ -63,10 +63,10 @@ or a bare stub (ambiguous stub = error listing candidates).
 ```yaml
 capability_skill:
   _schema_version: "1"
-  identity: "Dispatch surface routing natural-language task requests to the task-system CLI's 13 verbs and defining the agent-side behaviors (work's Skill lines, status's background summarizer, update's rotation) the scripts deliberately leave to the agent."
+  identity: "Dispatch surface routing natural-language task requests to the task-system CLI's 14 verbs and defining the agent-side behaviors (work's Skill lines, status's background summarizer, update's rotation) the scripts deliberately leave to the agent."
   scope:
     covers:
-      - "Creating, listing, showing, validating, and summarizing file-backed task folders (tmp/<stub>, dev/tasks/<stub>)"
+      - "Creating, listing, showing, validating, reviewing, and summarizing file-backed task folders (tmp/<stub>, dev/tasks/<stub>)"
       - "Enumerating a task's open items (plan.md's task_items unit) with their states -- the item-level menu below the task level"
       - "Lifecycle transitions: close, reopen, archive, delete, and move (with task_list reference rewriting)"
       - "Filling in scaffolded task folders per the hand-off template (references/handoff-template.md)"
@@ -77,13 +77,13 @@ capability_skill:
   external_capability:
     kind: tool
     name: task.py (task-system CLI)
-    description: "Single-entry-point CLI at skills/task/scripts/task.py with 13 verb subcommands over task folders, task.yaml records, task_list references, and plan.md task_items blocks. 12 verbs are script-driven; status is the one inference verb (the script prints substrate only)."
+    description: "Single-entry-point CLI at skills/task/scripts/task.py with 14 verb subcommands over task folders, task.yaml records, task_list references, and plan.md task_items blocks. 13 verbs are script-driven; status is the one inference verb (the script prints substrate only). Review is script-driven and may use Codex Luna to repair summaries."
   layering:
     claude_md: []
     skill_md:
       - "The data model in one breath (folder = SoT, items in plan.md's task_items block, refs inert, id = path, explicit task refs, durability = location)"
       - "The canonical venv-python invocation and CLI conventions"
-      - "The 13-verb capability surface with per-verb contracts"
+      - "The 14-verb capability surface with per-verb contracts"
       - "The agent-side behaviors the scripts leave open (work's initialization block -- invoke every emitted skill, then dispatch -- status background summary, update rotation, and the hand-off packaging plus baton, which run only when the user invokes /task hand-off)"
     references:
       - "handoff-template.md -- how to fill in and rotate a scaffolded folder's CLAUDE.md / plan.md / log.md"
@@ -180,11 +180,26 @@ capability_skill:
     - id: list
       keywords: [list tasks, open tasks, enumerate, discovery, scope, filter]
       user_objective: "Enumerate tasks in a scope (folder crawl + task_list reference scan)."
-      operation: task.py list [--scope user|project|skill|file] [--target X] [--status S] [--priority P] [--root PATH]
+      operation: task.py list [--scope user|project|skill|file] [--target X] [--status S] [--priority P] [--format text|json|yaml] [--root PATH]
       gotchas:
-        - "Contract: the default output has separate Open tasks: and Closed tasks: sections. Open means active or blocked; each task line is 'id  status  priority  last_update  title' (absent fields '-'); last_update is the latest ISO date in dated log.md entries. Explicit --status prints only matching task lines, including archived and other classifications. Dedupe by canonical path; classify each via validate. Exit 0 even when empty; notes go to stderr."
+        - "Contract: the default output has separate Open tasks: and Closed tasks: sections. Open means active or blocked; each task line is 'id  status  priority  last_update  title' (absent fields '-'); last_update is the latest ISO date in dated log.md entries. Explicit --status prints only matching task lines, including archived and other classifications. Dedupe by canonical path; classify each via validate. Exit 0 even when empty; notes and summary warnings go to stderr."
+        - "--format text preserves the legacy line output; --format json or yaml emits the shared versioned listing projection, including task.summary, summary_status, summary_missing, update history, and diagnostics for missing or stale summaries. List never invokes inference or writes task folders."
         - "The project list is always computed (documents ARE the registry) -- there is no stored master list to consult or maintain."
         - "project/user scope enumerate the TASK ROOTS: folder crawl over tmp/ + dev/tasks/, plus a task_list reference scan of the *.md under those roots (the parked <root>/archived-tasks/ subtree excluded under either root). They do NOT crawl the whole tree -- an embedded task_list block is indistinguishable from an EXAMPLE of one, so a whole-tree scan reports the format's own documentation as live tasks. A task_list embedded elsewhere (a SKILL.md, a domain issues.md) is reached by NAMING its document: --scope skill <name> or --scope file <path>."
+    - id: review
+      keywords: [review tasks, task dashboard, task overview, task summaries, open tasks, closed tasks, missing summaries]
+      user_objective: "Generate and open an HTML review of all non-archived tasks in the selected scope."
+      operation: task.py review [--scope user|project|skill|file] [--target X] [--output PATH|-] [--no-open] [--generate-missing-summaries | --no-generate-missing-summaries] [--root PATH]
+      steps:
+        - n: 1
+          action: "Run the shared listing projection used by list. Group active/blocked tasks as Open, closed tasks as Closed, and omit archived tasks. Within each group, sort by each folder's latest dated activity, newest first; show the full reverse-chronological update list inside each collapsible task card."
+        - n: 2
+          action: "By default, generate missing or stale one-line task.summary values before rendering. The script dispatches each eligible local active, blocked, or closed task to Codex Luna at medium effort with a read-only, no-network sandbox, then persists the summary and provenance through the update path. Use --no-generate-missing-summaries to inspect gaps without writing; --generate-missing-summaries is the explicit form of the default."
+        - n: 3
+          action: "Write a self-contained HTML document, open it in the user's browser unless --no-open is set, and report generation failures on stderr. --output - writes HTML to stdout; otherwise the default is a private temporary HTML file."
+      gotchas:
+        - "Missing or stale summaries have a distinct warning treatment in HTML and remain visible in the structured diagnostics. Unavailable, remote, invalid, or orphaned tasks are shown as unavailable and are never sent to the model."
+        - "Summary-maintenance log entries do not advance last_update. Later substantive task changes invalidate the stored summary fingerprint and cause the next default review to regenerate it."
     - id: show
       keywords: [show task, task details, read fields, inspect]
       user_objective: "Render one task's selected task.yaml fields, cheaply."

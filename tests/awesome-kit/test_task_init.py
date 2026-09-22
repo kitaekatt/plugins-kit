@@ -127,6 +127,7 @@ class TestInitTmp:
                 "_schema_version": "1",
                 "type": "hand-off",
                 "title": "Spike ipv6 diag",
+                "summary": "",
                 "status": "active",
             }
         }

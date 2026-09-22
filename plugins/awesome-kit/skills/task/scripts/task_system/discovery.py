@@ -89,12 +89,20 @@ SCOPES = ("project", "user", "skill", "file")
 DEFAULT_USER_ROOT = Path.home() / ".claude"
 
 _TASK_LIST_KEY_RE = re.compile(r"^task_list\s*:", re.MULTILINE)
-_LOG_DATE_RE = re.compile(r"^\s*-\s+(\d{4}-\d{2}-\d{2}):", re.MULTILINE)
+_LOG_ENTRY_RE = re.compile(r"^\s*-\s+(\d{4}-\d{2}-\d{2}):\s*(.*?)\s*$", re.MULTILINE)
 OPEN_CLASSIFICATIONS = frozenset(("active", "blocked"))
 
 
 class DiscoveryError(ValueError):
     """A discovery scope or target could not be resolved."""
+
+
+@dataclass(frozen=True)
+class TaskUpdate:
+    """One dated entry from a task folder's append-only update log."""
+
+    date: str
+    detail: str
 
 
 @dataclass(frozen=True)
@@ -133,12 +141,26 @@ def read_last_update(folder: Path) -> str | None:
     dated entry yet, so the projection uses ``None`` until the first update or
     archive entry is recorded.
     """
+    updates = read_task_updates(folder)
+    return max((entry.date for entry in updates), default=None)
+
+
+def read_task_updates(folder: Path) -> tuple[TaskUpdate, ...]:
+    """Read dated activity entries from the task's append-only log.
+
+    Summary-maintenance entries are deliberately excluded: generating a
+    summary must not make an otherwise idle task appear recently active.
+    """
     try:
         text = (folder / "log.md").read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError):
-        return None
-    dates = _LOG_DATE_RE.findall(text)
-    return max(dates) if dates else None
+        return ()
+    entries = [
+        TaskUpdate(date=date, detail=detail)
+        for date, detail in _LOG_ENTRY_RE.findall(text)
+        if not (detail.startswith("summary:") or detail.startswith("update: summary:"))
+    ]
+    return tuple(reversed(entries))
 
 
 # --- scope resolution --------------------------------------------------------

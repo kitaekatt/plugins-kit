@@ -34,6 +34,11 @@ TASK_SCHEMA: dict = {
         "status": {"required": True, "type": "string"},
         "priority": {"required": False, "type": "string"},
         "description": {"required": False, "type": "string"},
+        # Review metadata. Summary provenance is optional so older task
+        # records remain readable and can be upgraded by ``review``.
+        "summary": {"required": False, "type": "string"},
+        "summary_fingerprint": {"required": False, "type": "string"},
+        "summary_updated": {"required": False, "type": "string"},
         # Entries are reference paths (list[path]); per-entry string-ness and
         # resolvability are checked by validate.py's dangling-entry walk (the
         # engine's `items` rule only supports dict-shaped list members).

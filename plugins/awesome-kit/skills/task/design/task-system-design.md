@@ -57,7 +57,7 @@ The materialized task. A directory (the generalized hand-off folder) created whe
 ### 2.2 `task.yaml` — the structured record
 
 The canonical, script-readable/writable record. Lives at the root of the task folder. This is what
-`show`, `list`, `update`, and `validate` read and write. Fields below are the **default
+`show`, `list`, `review`, `update`, and `validate` read and write. Fields below are the **default
 (`hand-off`) type**; the field set and vocabularies are **type-defined** (see §2.5).
 
 ```yaml
@@ -66,6 +66,7 @@ task:
   _schema_version: "1"
   type: hand-off                  # which task type (selects schema, vocab, closure policy)
   title: "Re-terminate the My Office closet cat6a run"
+  summary: "Re-terminate and validate the damaged office closet cable run."
   status: active                  # active | blocked | closed | archived  (type-defined vocabulary)
   priority: P2                    # type-defined scale (default P1..P3, P1 highest)
   description: |                  # freeform; readable + updatable
@@ -87,6 +88,9 @@ task:
 | `status` | enum | yes | One of the type's `state_vocabulary` (default: `active` / `blocked` / `closed` / `archived`). |
 | `priority` | string | no | Matches the type's priority pattern (default `^P[1-3]$`, P1 highest). |
 | `description` | string | no | Freeform multi-line. |
+| `summary` | string | no | One-line review summary. Missing/stale summaries are diagnostics; generated values carry provenance metadata. |
+| `summary_fingerprint` | string | no | Fingerprint of the task material used to generate `summary`. |
+| `summary_updated` | string | no | Date the generated summary was persisted. |
 | `depends_on` | list[path] | no | Reference paths that must be `closed`/`archived` before this is workable. |
 | `blocked_by` | list[path] | no | Reference paths currently blocking this task (a task with non-empty `blocked_by` reads as `blocked`). |
 | `agent_hint` | string | no | Sub-agent type for `work` dispatch (e.g. `backend-developer`). |
@@ -316,7 +320,8 @@ inference exception.
 | `delete <ref>` | script | Operates on an `active` **or `archived`** task (a still-present archived folder -- the `vcs_pending` output, or a folder PARKED at `<location>/archived-tasks/<stub>`, named by its live ref -- is what delete finishes off). **Git-dirty guard** where git can verify (a dirty `dev/tasks` folder refuses; delete never auto-commits; outside a git repo, and on a parked folder, the agent owns VCS state), **and delete the folder even when it is tmp**. Removes the working folder unconditionally. |
 | `move <ref> <dest>` | script | Relocate the folder (commonly `tmp/<stub>` → `dev/tasks/<stub>`) **and rewrite every reference** to the new path (§7.2). |
 | `status <ref>` | **inference** | Summarize a task — works on **any** task. Resolves the task's classification via `validate`, then **summarizes** in a **background agent** to preserve context. |
-| `list [--scope ...]` | script | Enumerate tasks in a scope (§8). Resolves references → folders → projects selected `task.yaml` fields, classifying each via `validate`. Dedupes by path. |
+| `list [--scope ...]` | script | Enumerate tasks in a scope (§8) through the shared listing projection. The default text output is backward-compatible; JSON/YAML include summaries, update history, and diagnostics. List does not write or invoke inference. |
+| `review [--scope ...]` | script + model-assisted maintenance | Build a self-contained collapsible HTML review from the shared listing projection, omitting archived tasks and separating open/closed sections. By default, Codex Luna generates missing or stale summaries for eligible local tasks before rendering; `--no-generate-missing-summaries` preserves gaps for inspection; `--generate-missing-summaries` is the explicit form of the default. |
 | `show <ref>` | script | Render one task's selected `task.yaml` fields. Cheap, no inference. |
 | `items <ref>` | script | Enumerate the task's open items (the plan.md `task_items` unit, §2.6): one line per item — `id  state  priority  title` — sorted by priority then block order; `--state`/`--priority` filter. Ref is required. Cheap, no inference. |
 | `validate <ref>` | script | Check the folder/`task.yaml` against the type schema **and the `task_items` unit** (§2.6). Emits errors and warnings. **All warnings originate here.** Gates `work` (§9). |
@@ -384,9 +389,10 @@ inference exception.
 
 - **`status <ref>`** — *(inference)* Resolve + `validate` to classify, then a **background agent**
   summarizes `task.yaml` + `plan.md`/`log.md`. Works on **any** task. The only inference verb.
-- **`list [--scope user|project|skill|file <target>] [--status … --priority …]`** — Discovery (§8) →
+- **`list [--scope user|project|skill|file <target>] [--status … --priority … --format text|json|yaml]`** — Discovery (§8) →
   resolve → classify each via `validate` → **dedupe by canonical path** → project `id`/`title`/`status`/
-  `priority`. Remote tasks are listed as opaque (`@host`, status unresolved). Script-only.
+  `priority`, summary metadata, and update history through the shared listing projection. Remote tasks are listed as opaque (`@host`, status unresolved). Text is the legacy projection; JSON/YAML are versioned and include diagnostics. Script-only; no inference or writes.
+- **`review [--scope user|project|skill|file <target>] [--output PATH|-] [--no-open] [--generate-missing-summaries | --no-generate-missing-summaries]`** — Discovery (§8) and the shared listing projection produce the source data. By default, eligible local active/blocked/closed tasks with missing or stale `task.summary` values are summarized through Codex Luna with a read-only, no-network sandbox and persisted through `update` with a source fingerprint. Summary-maintenance log entries do not advance activity. The renderer writes self-contained HTML with one collapsible card per task, Open/Closed sections, newest activity first, and escaped values. Archived tasks are absent. Missing, stale, and unavailable summaries have distinct visible treatments; model failures are reported on stderr and the HTML is still written. `--output -` emits HTML to stdout, otherwise a temporary file is opened in the browser unless `--no-open` is set.
 - **`show <ref>`** — Resolve → print selected `task.yaml` fields. Cheap, no inference.
 - **`validate <ref>`** — §9. Emit errors + warnings; classify `active`/`invalid`/`remote`. Exit `0` iff
   no findings.
@@ -466,7 +472,7 @@ Two crawl modes, both script-driven:
 | `skill` | one skill's `SKILL.md` **plus its `references/`** |
 | `file` | a single document |
 
-**Algorithm (`list --scope <s> [target]`):**
+**Algorithm (`list`/`review --scope <s> [target]`):**
 1. **Resolve scope → roots + document set:**
    - `user` → roots `~/.claude/{dev/tasks,tmp}`-equivalent; docs = `*.md` under those roots.
    - `project` → roots `<project>/dev/tasks` + `<project>/tmp`; docs = `*.md` **under those roots only**,
@@ -492,7 +498,10 @@ Two crawl modes, both script-driven:
    or `-` when no dated entry exists. Folderless-non-tmp refs read as `archived`. With no
    `--status`, active/blocked and closed classifications are emitted; the CLI presents them in
    separate Open tasks and Closed tasks sections. An explicit `--status` lists that classification,
-   including archived and other non-working states.
+    including archived and other non-working states. The shared projection also reads `task.summary`,
+    computes summary freshness from a source fingerprint, and reports missing/stale/unavailable
+    summaries as non-blocking diagnostics. `review` groups the projection into collapsible HTML and
+    sorts each displayed section by latest activity descending.
 
 **Dedupe:** a task referenced from multiple documents appears **once**, keyed by canonical folder path.
 References carry no metadata to merge — the folder's `task.yaml` is the single record.

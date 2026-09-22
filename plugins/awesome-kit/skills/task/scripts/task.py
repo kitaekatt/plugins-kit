@@ -1,9 +1,9 @@
 """task.py -- the task-system CLI entry point (spec section 7).
 
-One entry point with verb subcommands. The CLI exposes 13 verbs:
+One entry point with verb subcommands. The CLI exposes 14 verbs:
 ``init``, ``list``, ``show``, ``status``, ``validate``,
 ``work``, ``update``, ``items``, ``close``, ``reopen``,
-``archive``, ``delete``, and ``move``.
+``archive``, ``delete``, ``move``, and ``review``.
 
 Conventions (spec 7.1): exit 0 on success, non-zero on failure/block;
 findings print to stderr. ``validate`` exits 0 iff there are no errors AND no
@@ -92,7 +92,12 @@ Usage:
     task.py validate <ref> [--root PATH]
     task.py init <stub|desc> [--dest tmp|dev/tasks] [--type hand-off] [--root PATH]
     task.py list [--scope user|project|skill|file] [--target X]
-                 [--status S] [--priority P] [--root PATH]
+                 [--status S] [--priority P] [--format text|json|yaml]
+                 [--root PATH]
+  task.py review [--scope user|project|skill|file] [--target X]
+                   [--output PATH|-] [--no-open]
+                   [--generate-missing-summaries | --no-generate-missing-summaries]
+                   [--root PATH]
     task.py show <ref> [--root PATH]
     task.py items <ref> [--state S] [--priority P] [--root PATH]
     task.py status <ref> [--root PATH]
@@ -109,7 +114,10 @@ Usage:
 """
 
 import argparse
+import os
 import sys
+import tempfile
+import webbrowser
 from pathlib import Path
 
 # Plugins define their own bootstrap-provisioned venv and must run under it
@@ -131,11 +139,18 @@ try:
     from task_system import state_ops  # noqa: E402
     from task_system.discovery import (  # noqa: E402
         DiscoveryError,
-        OPEN_CLASSIFICATIONS,
-        discover,
         read_task_block,
     )
     from task_system.init import InitError, init_task  # noqa: E402
+    from task_system.listing import (
+        TaskListing,
+        collect_listing,
+        listing_data,
+        section_views,
+        serialize_listing,
+    )  # noqa: E402
+    from task_system.review_html import render_review_html  # noqa: E402
+    from task_system.summary_ops import generate_missing_summaries  # noqa: E402
     from task_system.state_ops import StateOpError  # noqa: E402
     from task_system.task_items import read_task_items, sort_items  # noqa: E402
     from task_system.types import DEFAULT_TYPE_NAME, get_type  # noqa: E402
@@ -200,61 +215,115 @@ def _render_value(value: object) -> str:
     return text
 
 
-def _format_list_line(rec) -> str:
-    ident = rec.id
-    if rec.classification == "remote" and rec.host:
-        ident = f"{rec.id} @{rec.host}"
+def _format_list_line(view) -> str:
+    ident = view.id
+    if view.status == "remote" and view.host:
+        ident = f"{view.id} @{view.host}"
     return "  ".join(
         [
             ident,
-            rec.classification,
-            rec.priority or "-",
-            rec.last_update or "-",
-            rec.title or "-",
+            view.status,
+            view.priority or "-",
+            view.last_update or "-",
+            view.title or "-",
         ]
     )
 
 
-def _cmd_list(args: argparse.Namespace) -> int:
-    root = (args.root if args.root is not None else Path.cwd()).resolve()
-    notes: list[str] = []
+def _print_listing_diagnostics(listing: TaskListing) -> None:
+    for note in listing.notes:
+        print(f"note: {note}", file=sys.stderr)
+    for warning in listing.warnings:
+        print(f"warning: {warning}", file=sys.stderr)
+
+
+def _collect_listing(args: argparse.Namespace, root: Path) -> TaskListing | None:
     try:
-        records = discover(
+        listing = collect_listing(
             args.scope,
             root,
             target=args.target,
-            status=args.status,
-            priority=args.priority,
-            notes=notes,
+            status=getattr(args, "status", None),
+            priority=getattr(args, "priority", None),
         )
     except DiscoveryError as exc:
         print(f"error: {exc}", file=sys.stderr)
+        return None
+    _print_listing_diagnostics(listing)
+    return listing
+
+
+def _cmd_list(args: argparse.Namespace) -> int:
+    root = (args.root if args.root is not None else Path.cwd()).resolve()
+    listing = _collect_listing(args, root)
+    if listing is None:
         return 1
-    for note in notes:
-        print(f"note: {note}", file=sys.stderr)
+    if args.format != "text":
+        sys.stdout.write(serialize_listing(listing, args.format))
+        return 0
     if args.status is None:
-        sections = (
-            ("Open tasks:", [
-                rec for rec in records if rec.classification in OPEN_CLASSIFICATIONS
-            ]),
-            ("Closed tasks:", [
-                rec for rec in records if rec.classification == "closed"
-            ]),
-        )
+        sections = section_views(listing.views)
         printed_section = False
-        for heading, section in sections:
+        for heading, section in (("Open tasks:", sections["open"]), ("Closed tasks:", sections["closed"])):
             if not section:
                 continue
             if printed_section:
                 print()
             print(heading)
-            for rec in section:
-                print(_format_list_line(rec))
+            for view in section:
+                print(_format_list_line(view))
             printed_section = True
     else:
-        for rec in records:
-            print(_format_list_line(rec))
+        for view in listing.views:
+            print(_format_list_line(view))
     return 0
+
+
+def _cmd_review(args: argparse.Namespace) -> int:
+    root = (args.root if args.root is not None else Path.cwd()).resolve()
+    listing = _collect_listing(args, root)
+    if listing is None:
+        return 1
+    generation_failed = False
+    if args.generate_missing_summaries:
+        try:
+            report = generate_missing_summaries(listing, root)
+        except Exception as exc:
+            print(f"error: summary generation unavailable: {exc}", file=sys.stderr)
+            generation_failed = True
+        else:
+            for task_id, reason in report.failed:
+                print(f"error: could not generate summary for {task_id}: {reason}", file=sys.stderr)
+            generation_failed = bool(report.failed)
+            if report.generated:
+                listing = _collect_listing(args, root)
+                if listing is None:
+                    return 1
+    data = listing_data(listing)
+    html = render_review_html(data)
+    if str(args.output) == "-":
+        sys.stdout.write(html)
+        output_path = None
+    else:
+        if args.output is None:
+            handle, temp_name = tempfile.mkstemp(prefix="task-review-", suffix=".html")
+            with os.fdopen(handle, "w", encoding="utf-8") as stream:
+                stream.write(html)
+            output_path = Path(temp_name)
+            output_path.chmod(0o600)
+        else:
+            output_path = args.output.resolve()
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            output_path.write_text(html, encoding="utf-8")
+        print(f"review: {output_path}", file=sys.stderr)
+        if not args.no_open:
+            try:
+                opened = webbrowser.open(output_path.as_uri())
+                if not opened:
+                    print("warning: browser did not accept the review URL", file=sys.stderr)
+            except Exception as exc:
+                print(f"warning: could not open review in browser: {exc}", file=sys.stderr)
+    return 1 if generation_failed else 0
 
 
 _SHOW_FIELDS = (
@@ -263,6 +332,7 @@ _SHOW_FIELDS = (
     "status",
     "priority",
     "description",
+    "summary",
     "depends_on",
     "blocked_by",
     "agent_hint",
@@ -411,6 +481,7 @@ def _cmd_update(args: argparse.Namespace) -> int:
             status=args.status,
             priority=args.priority,
             description=args.description,
+            summary=args.summary,
             depends_on=args.depends_on,
             blocked_by=args.blocked_by,
             agent_hint=args.agent_hint,
@@ -643,6 +714,59 @@ def main(argv: list[str] | None = None) -> int:
         "--priority", default=None, help="Only tasks with this priority."
     )
     p_list.add_argument(
+        "--format",
+        choices=["text", "json", "yaml"],
+        default="text",
+        help="Output format (default: text; structured formats include summary diagnostics).",
+    )
+    p_list.add_argument(
+        "--root",
+        type=Path,
+        default=None,
+        help="Project root (default: cwd).",
+    )
+
+    p_review = sub.add_parser(
+        "review",
+        help="Build a collapsible HTML review of all discovered non-archived tasks.",
+    )
+    p_review.add_argument(
+        "--scope",
+        choices=["user", "project", "skill", "file"],
+        default="project",
+        help="Discovery scope (default: project).",
+    )
+    p_review.add_argument(
+        "--target",
+        default=None,
+        help="Scope target: skill name-or-path or document path.",
+    )
+    p_review.add_argument(
+        "--output",
+        type=Path,
+        default=None,
+        help="Write HTML to PATH; default uses a private temporary file; '-' writes stdout.",
+    )
+    p_review.add_argument(
+        "--no-open",
+        action="store_true",
+        help="Do not open the generated HTML in the browser.",
+    )
+    summary_group = p_review.add_mutually_exclusive_group()
+    summary_group.add_argument(
+        "--generate-missing-summaries",
+        dest="generate_missing_summaries",
+        action="store_true",
+        help="Generate missing/stale summaries before rendering (the default).",
+    )
+    summary_group.add_argument(
+        "--no-generate-missing-summaries",
+        dest="generate_missing_summaries",
+        action="store_false",
+        help="Keep missing/stale summaries visible instead of generating them.",
+    )
+    p_review.set_defaults(generate_missing_summaries=True)
+    p_review.add_argument(
         "--root",
         type=Path,
         default=None,
@@ -747,6 +871,9 @@ def main(argv: list[str] | None = None) -> int:
         "--description", default=None, help="Set task.description."
     )
     p_update.add_argument(
+        "--summary", default=None, help="Set task.summary."
+    )
+    p_update.add_argument(
         "--depends-on",
         dest="depends_on",
         action="append",
@@ -830,6 +957,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_init(args)
     if args.verb == "list":
         return _cmd_list(args)
+    if args.verb == "review":
+        return _cmd_review(args)
     if args.verb == "show":
         return _cmd_show(args)
     if args.verb == "items":
