@@ -72,9 +72,20 @@ The fix-up safe set and the orphaned safe set both pass through this pipeline; o
 
 ## Prerequisites
 
-- Perforce CLI on PATH (`p4`)
+- A detected Perforce workspace and the Perforce CLI on PATH (`p4`)
 - The unreal-kit plugin installed; `ue-runner` available
 - A working dir for outputs (the skill defaults to `tmp/redirectors/` in cwd)
+
+This skill is the only unreal-kit capability that requires P4. The Python API
+and MCP capabilities do not install or require a VCS client. Bootstrap detects
+Perforce workspace markers through its existing project contract and records a
+point-of-need requirement when `p4` is absent; it does not install P4 for an
+unrelated workspace. Before starting this workflow, confirm that `p4` resolves
+and that the workspace is intended for Perforce-backed cleanup. If the prepared
+requirement is present, install the optional provider with
+`claude plugin install p4-kit@plugins-kit`, wait for bootstrap to provision it,
+and retry this action. Do not run this workflow against a Git- or Plastic-only
+project.
 
 ## Unattended execution budgets
 

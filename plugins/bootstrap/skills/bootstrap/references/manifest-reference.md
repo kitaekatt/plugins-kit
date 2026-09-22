@@ -126,6 +126,15 @@ scope when manifests merge and force user-scope installation or enablement.
 Install scope belongs to the consumer's enablement and registry contract; the
 plugin manifest declares the requirements the plugin needs to run.
 
+Optional provider declarations follow the capability and workspace that need
+them. A redirector-only provider such as `plugins-kit:p4-kit` may be declared
+as a manual, point-of-need dependency for `fix-up-redirectors`, while the
+plugin's unrelated Python and MCP capabilities remain provider-independent.
+Detect that need through existing bootstrap contracts such as project config,
+autodetection, workspace markers, or a custom bootstrap check. Do not add a
+user-maintained VCS preference key or make a specialty provider a top-level
+requirement for every consumer.
+
 ## `requires_bootstrap` -- Minimum Engine Version
 
 A top-level manifest key naming the oldest bootstrap engine that can process this

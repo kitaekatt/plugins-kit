@@ -54,9 +54,17 @@ def _stub_paths(tmp_path):
     return project_dir, uproject, generated, durable
 
 
-def _assert_one_outcome(ctx):
-    assert len(ctx.outcomes) == 1
-    return ctx.outcomes[0][1]
+def _assert_one_outcome(ctx, *, p4_checked=False):
+    if p4_checked:
+        assert ("ok", "redirectors: skipped - no Perforce workspace marker") in ctx.outcomes
+        outcomes = [
+            message for kind, message in ctx.outcomes
+            if not message.startswith("redirectors:")
+        ]
+    else:
+        outcomes = [message for _kind, message in ctx.outcomes]
+    assert len(outcomes) == 1
+    return outcomes[0]
 
 
 def test_missing_uproject_logs_skipped_outcome(tmp_path):
@@ -94,7 +102,7 @@ def test_present_current_durable_stub_logs_success(tmp_path):
 
     module.bootstrap(ctx)
 
-    message = _assert_one_outcome(ctx)
+    message = _assert_one_outcome(ctx, p4_checked=True)
     assert "current" in message
     assert ctx.deferred == []
 
@@ -107,7 +115,7 @@ def test_present_durable_without_generated_source_logs_truthfully(tmp_path):
 
     module.bootstrap(ctx)
 
-    message = _assert_one_outcome(ctx)
+    message = _assert_one_outcome(ctx, p4_checked=True)
     assert "present" in message
     assert "unavailable" in message
     assert ctx.deferred == []
@@ -124,7 +132,7 @@ def test_missing_or_stale_durable_stub_defers_and_logs_once(tmp_path, state):
 
     module.bootstrap(ctx)
 
-    message = _assert_one_outcome(ctx)
+    message = _assert_one_outcome(ctx, p4_checked=True)
     assert "deferred" in message
     assert [name for name, _kwargs in ctx.deferred] == ["unreal_enriched_stub"]
 
@@ -137,7 +145,7 @@ def test_missing_defer_api_is_diagnosed_and_logs_once(tmp_path):
 
     module.bootstrap(ctx)
 
-    message = _assert_one_outcome(ctx)
+    message = _assert_one_outcome(ctx, p4_checked=True)
     assert "defer" in message
     assert "unavailable" in message or "unsupported" in message
     assert ctx.deferred == []

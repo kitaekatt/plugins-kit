@@ -7,9 +7,59 @@ Two entry points:
 
 import filecmp
 import os
+import shutil
 import sys
 from pathlib import Path
 from typing import Any, Dict, Optional
+
+
+_P4_MARKERS = (".p4config.txt", ".p4config", ".p4ignore.txt", ".p4ignore")
+
+
+def _in_p4_workspace(path: Path) -> bool:
+    """Detect a Perforce workspace without spawning the optional p4 client."""
+    directory = path.resolve()
+    while True:
+        if any((directory / marker).is_file() for marker in _P4_MARKERS):
+            return True
+        parent = directory.parent
+        if parent == directory:
+            return False
+        directory = parent
+
+
+def _check_redirector_p4(ctx: Any, project_root: Path) -> None:
+    """Record P4 only for a detected workspace that can use redirector cleanup."""
+    if not _in_p4_workspace(project_root):
+        ctx.log_ok("redirectors: skipped - no Perforce workspace marker")
+        return
+    if shutil.which("p4"):
+        ctx.log_ok("redirectors: P4 client is available")
+        return
+
+    defer = getattr(ctx, "add_deferred_requirement", None)
+    if not callable(defer):
+        ctx.log(
+            "redirectors: P4 client unavailable - bootstrap engine does not "
+            "support deferred requirements"
+        )
+        return
+    defer(
+        "unreal_redirector_p4",
+        user_msg=(
+            "Redirector cleanup is available for this Perforce workspace, "
+            "but its optional P4 provider is not installed."
+        ),
+        agent_msg=(
+            "The fix-up-redirectors capability requires the P4 client in a "
+            "detected Perforce workspace. Install the optional provider with "
+            "`claude plugin install p4-kit@plugins-kit`, then retry the "
+            "redirector cleanup action. Python and MCP capabilities do not "
+            "need this provider."
+        ),
+        satisfied_by="claude plugin install p4-kit@plugins-kit",
+    )
+    ctx.log_ok("redirectors: P4 client missing - requirement deferred to point of need")
 
 
 def autodetect() -> Optional[Dict[str, str]]:
@@ -49,6 +99,8 @@ def bootstrap(ctx: Any) -> None:
     if not project_root:
         ctx.log("stubs: skipped - project directory is unavailable")
         return
+
+    _check_redirector_p4(ctx, Path(project_root))
 
     from bootstrap_lib.config_resolve import resolve_plugin_data_dir
     from bootstrap_lib.interpreter_env import PLUGIN_CALL_SITE_EXPR
