@@ -125,11 +125,14 @@ technique_skill:
         - n: 1
           action: Confirm the task warrants orchestration.
           detail: |
-            Delegate for one of two reasons: footprint -- the unit, taken as the whole line of
-            investigation it runs, reads or emits far more than its conclusion -- or parallelism -- the rendered razor yields at least two leaves
-            runnable now. Neither means do it inline. One small self-contained unit whose result
-            feeds the next decision stays inline; an agent round-trip costs as much context as the
-            work. Difficulty and indecision are not reasons to delegate. In `user-present` (the user is watching the prompt) footprint bites harder: prefer the background for anything past one cheap foreground call.
+            Delegate for footprint -- the unit, taken as the whole line of investigation it runs,
+            reads or emits far more than its conclusion -- parallelism -- the rendered razor
+            yields at least two leaves runnable now -- or context preservation: significant work
+            belongs in a background agent even when it is sequential or cannot be decomposed.
+            Dispatch that work as one end-to-end unit. Keep a small self-contained unit inline
+            when its result feeds the next decision and the work fits in one cheap foreground
+            call. In `user-present` (the user is watching the prompt), prefer the background for
+            significant work so the main context stays available for coordination and judgment.
         - n: 2
           action: Render the orchestration policy by running the script in the policy block above.
           detail: >-
