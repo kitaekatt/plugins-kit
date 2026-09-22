@@ -184,6 +184,39 @@ class CommentStore:
             temporary.unlink(missing_ok=True)
         return target
 
+    def write_if_absent(self, comment: Comment) -> bool:
+        '''Atomically create one comment without replacing an existing record.'''
+        self._require_root()
+        problems = _comment_diagnostics(comment, self.root / '<write>')
+        if problems:
+            raise ValueError('; '.join(str(problem) for problem in problems))
+        target = self._path_for(comment.id)
+        rendered = yaml.safe_dump(
+            _comment_mapping(comment), sort_keys=False, allow_unicode=True
+        )
+        temporary = self.root / '.{}.{}.tmp'.format(comment.id, uuid4().hex)
+        try:
+            with temporary.open('x', encoding='utf-8', newline='\n') as stream:
+                stream.write(rendered)
+                stream.flush()
+                os.fsync(stream.fileno())
+            try:
+                os.link(temporary, target)
+            except FileExistsError:
+                self._check_collision(target, comment.id)
+                existing, problems = _load_comment(target)
+                if existing is None or problems:
+                    detail = "; ".join(str(problem) for problem in problems)
+                    raise ValueError(
+                        "cannot preserve malformed existing comment {}{}".format(
+                            target, ": " + detail if detail else ""
+                        )
+                    )
+                return False
+            return True
+        finally:
+            temporary.unlink(missing_ok=True)
+
     def resolve(self, comment: Comment) -> Comment:
         '''Mark one comment resolved and persist it without changing its guard.'''
         if comment.kind == QUESTION:

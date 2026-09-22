@@ -86,13 +86,18 @@ def materialize_failed_questions(
     comment_store: CommentStore,
 ) -> list[str]:
     """Materialize every durable question failure missing from the comment store."""
+    question_attempts = [
+        attempt
+        for attempt in execution.list_attempts(run_id)
+        if attempt.kind is AttemptKind.FAIL
+        and attempt.error
+        and attempt.error.startswith(QUESTION_FAILURE_PREFIX)
+    ]
+    if not question_attempts:
+        return []
     existing = {comment.id: comment for comment in comment_store.load().comments}
     created: list[str] = []
-    for attempt in execution.list_attempts(run_id):
-        if attempt.kind is not AttemptKind.FAIL or not attempt.error:
-            continue
-        if not attempt.error.startswith(QUESTION_FAILURE_PREFIX):
-            continue
+    for attempt in question_attempts:
         anchor, question = _decode_question_failure(attempt.error)
         unit = adapter.unit_for(attempt.unit_id)
         target = _target_for_anchor(unit_targets(unit), anchor)
@@ -124,9 +129,28 @@ def materialize_failed_questions(
         if prior is not None:
             _check_question_identity(prior, comment)
             continue
-        comment_store.write(comment)
-        existing[question_id] = comment
-        created.append(question_id)
+        if comment_store.write_if_absent(comment):
+            existing[question_id] = comment
+            created.append(question_id)
+            continue
+        current = {
+            item.id: item for item in comment_store.load().comments
+        }.get(question_id)
+        if current is not None:
+            _check_question_identity(current, comment)
+            continue
+        if comment_store.write_if_absent(comment):
+            existing[question_id] = comment
+            created.append(question_id)
+            continue
+        current = {
+            item.id: item for item in comment_store.load().comments
+        }.get(question_id)
+        if current is None:
+            raise ValueError(
+                "question materialization lost its target {!r}".format(question_id)
+            )
+        _check_question_identity(current, comment)
     return created
 
 

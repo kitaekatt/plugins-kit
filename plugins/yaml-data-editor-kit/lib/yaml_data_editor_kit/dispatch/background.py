@@ -17,8 +17,11 @@ from content_pipeline.execution.drivers.claude_bg import ClaudeCli, dispatch_wav
 from content_pipeline.execution.model import AttemptKind, UnitState
 from content_pipeline.execution.store import ExecutionStore
 
+from yaml_data_editor_kit.comments import CommentStore
+
 from .adapter import adapter_for
 from .planner import CommentPlanStore, CommentPlanner, PlannerPolicy
+from .protocol import materialize_failed_questions
 from .request import DispatchRequest, DispatchRequestSet, load_request
 from .run import RunSummary, _apply_machine_result, _load_attributed, _request_value
 from .state import DispatchPlan, load_plan, write_plan
@@ -209,6 +212,17 @@ def get_background_dispatch_status(run: BackgroundRef) -> BackgroundDispatchStat
     prepared = _prepared(run)
     plan = load_plan(prepared.plan_path)
     execution = ExecutionStore(prepared.execution_store)
+    # A worker records a terminal question failure before it writes the open
+    # question. Reconcile at the status boundary so an interrupted worker or
+    # comment-store write cannot leave durable execution state without its
+    # editor-facing question. The materializer is idempotent and preserves
+    # already resolved questions.
+    materialize_failed_questions(
+        execution,
+        plan.run_id,
+        adapter_for(plan),
+        CommentStore(plan.comment_store_path),
+    )
     states: dict[str, str] = {}
     failed: dict[str, str] = {}
     rejected: dict[str, str] = {}
@@ -274,7 +288,5 @@ def finalize_background_dispatch(run: BackgroundRef, *, at: float | None = None)
     )
     return RunSummary(plan.run_id, "claude_bg", status.planned, accepted, status.applied, rejected, len(status.stale), status.halted, prepared.attributed_store, prepared.execution_store, status.states)
 
-
-from yaml_data_editor_kit.comments import CommentStore
 
 __all__ = ["BackgroundCommandRunner", "BackgroundDispatchOptions", "BackgroundDispatchStatus", "BackgroundRef", "BackgroundStagesRequiredError", "BackgroundWaveSummary", "DispatchInput", "PreparedBackgroundDispatch", "finalize_background_dispatch", "get_background_dispatch_status", "load_background_dispatch", "prepare_background_dispatch", "run_background_wave"]

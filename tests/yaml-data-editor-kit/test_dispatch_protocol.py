@@ -191,6 +191,52 @@ def test_question_id_collision_on_immutable_fields_is_rejected(tmp_path, write) 
         materialize_failed_questions(execution, "run-1", adapter, comments)
 
 
+def test_question_materialization_does_not_overwrite_a_concurrent_resolution(
+    tmp_path, write, monkeypatch
+) -> None:
+    profile, adapter, comments, execution, token, _ = _setup(tmp_path, write)
+    execution.fail_unit(
+        "run-1",
+        "unit-1",
+        token,
+        error=encode_question_failure("product/bolt", "Which?"),
+        terminal=True,
+    )
+    materialize_failed_questions(execution, "run-1", adapter, comments)
+    question = comments.load().comments[0]
+    resolved = comments.rule(question, "Use bolt.")
+    (comments.root / "{}.yaml".format(resolved.id)).unlink()
+
+    original_write_if_absent = comments.write_if_absent
+
+    def resolve_during_materialization(comment):
+        comments.write(resolved)
+        return original_write_if_absent(comment)
+
+    monkeypatch.setattr(comments, "write_if_absent", resolve_during_materialization)
+    assert materialize_failed_questions(execution, "run-1", adapter, comments) == []
+    assert comments.load().comments[0].state == "resolved"
+
+
+def test_question_materialization_refuses_a_malformed_same_id_occupant(tmp_path, write) -> None:
+    profile, adapter, comments, execution, token, _ = _setup(tmp_path, write)
+    execution.fail_unit(
+        "run-1",
+        "unit-1",
+        token,
+        error=encode_question_failure("product/bolt", "Which?"),
+        terminal=True,
+    )
+    materialize_failed_questions(execution, "run-1", adapter, comments)
+    question = comments.load().comments[0]
+    (comments.root / "{}.yaml".format(question.id)).write_text(
+        "id: {}\n".format(question.id), encoding="utf-8"
+    )
+
+    with pytest.raises(ValueError, match="malformed existing comment"):
+        materialize_failed_questions(execution, "run-1", adapter, comments)
+
+
 def test_reconciliation_repairs_failure_committed_before_comment_write(tmp_path, write) -> None:
     profile, adapter, comments, execution, token, _ = _setup(tmp_path, write)
     execution.fail_unit("run-1", "unit-1", token, error=encode_question_failure("product/bolt", "Which?"), terminal=True)

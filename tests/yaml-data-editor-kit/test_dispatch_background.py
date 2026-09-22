@@ -1,4 +1,5 @@
 from pathlib import Path
+import shutil
 
 import pytest
 import yaml
@@ -18,6 +19,12 @@ from yaml_data_editor_kit.dispatch import (
     load_background_dispatch,
     prepare_background_dispatch,
 )
+from yaml_data_editor_kit.dispatch.adapter import adapter_for
+from yaml_data_editor_kit.dispatch.protocol import (
+    encode_question_failure,
+    materialize_failed_questions,
+)
+from yaml_data_editor_kit.dispatch.state import load_plan
 from yaml_data_editor_kit.schema import load_corpus, load_profile
 
 
@@ -124,6 +131,65 @@ def test_status_reports_planned_units(tmp_path: Path, write) -> None:
     assert status == get_background_dispatch_status(PreparedBackgroundDispatch(**prepared.__dict__))
     assert status.planned == 1
     assert status.states == {"record:product/bolt": "pending"}
+
+
+def test_status_reconciles_a_question_after_materialization_write_failure(
+    tmp_path: Path, write, monkeypatch
+) -> None:
+    prepared = prepare_background_dispatch(_request(tmp_path, write))
+    execution = ExecutionStore(prepared.execution_store)
+    unit = execution.list_units(prepared.run_id)[0]
+    claim = execution.claim_unit(prepared.run_id, unit.unit_id, "worker")
+    execution.fail_unit(
+        prepared.run_id,
+        unit.unit_id,
+        claim.fencing_token,
+        error=encode_question_failure("product/bolt", "Which name?"),
+        terminal=True,
+    )
+
+    comments = CommentStore(prepared.run_dir.parent / "comments")
+    plan = load_plan(prepared.plan_path)
+    adapter = adapter_for(plan)
+
+    def fail_write(_comment):
+        raise OSError("simulated comment-store interruption")
+
+    monkeypatch.setattr(comments, "write_if_absent", fail_write)
+    with pytest.raises(OSError, match="simulated comment-store interruption"):
+        materialize_failed_questions(execution, prepared.run_id, adapter, comments)
+    assert not any(comment.kind == "question" for comment in comments.load().comments)
+
+    monkeypatch.undo()
+    first = get_background_dispatch_status(prepared)
+    assert first.failed[unit.unit_id].startswith("question/1:")
+    questions = [comment for comment in comments.load().comments if comment.kind == "question"]
+    assert len(questions) == 1 and questions[0].text == "Which name?"
+
+    get_background_dispatch_status(prepared)
+    assert len([comment for comment in comments.load().comments if comment.kind == "question"]) == 1
+
+
+def test_status_without_question_failures_does_not_require_comment_store(
+    tmp_path: Path, write
+) -> None:
+    prepared = prepare_background_dispatch(_request(tmp_path, write))
+    shutil.rmtree(tmp_path / "comments")
+
+    status = get_background_dispatch_status(prepared)
+
+    assert status.states == {"record:product/bolt": "pending"}
+
+
+def test_finalize_without_question_failures_does_not_require_comment_store(
+    tmp_path: Path, write
+) -> None:
+    prepared = prepare_background_dispatch(_request(tmp_path, write))
+    shutil.rmtree(tmp_path / "comments")
+
+    summary = finalize_background_dispatch(prepared)
+
+    assert summary.planned == 1 and summary.accepted == 0
 
 
 def _two_unit_request(tmp_path: Path, write) -> DispatchRequest:
