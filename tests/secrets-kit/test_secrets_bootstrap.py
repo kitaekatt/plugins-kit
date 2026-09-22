@@ -94,11 +94,9 @@ def test_unconfigured_machine_logs_verbose_only_and_adds_no_failure(module, tmp_
     assert ok_entries == ["secrets: not configured"]
 
 
-def test_no_profiles_for_this_host_is_also_quiet(module, tmp_path, monkeypatch):
-    """A machine deliberately left out of every profile is opt-out, not a
-    problem: manifest.py's Config.machine_key() docstring calls an unlisted
-    machine 'not an error' -- 'subsetting by omission is how a machine opts
-    out of holding secrets it has no business holding.'"""
+def test_no_profiles_for_this_host_explains_repair_path(module, tmp_path, monkeypatch):
+    """An unlisted machine is safe, but the user can repair an accidental omission."""
+    monkeypatch.setattr(module, "resolve_host", lambda: ["workstation.example", "workstation"])
     monkeypatch.setattr(
         module, "converge",
         lambda *a, **k: _stub_result(skipped_reason="no profiles for this host"),
@@ -108,8 +106,13 @@ def test_no_profiles_for_this_host_is_also_quiet(module, tmp_path, monkeypatch):
     module.bootstrap(ctx)
 
     assert ctx.failures == []
-    assert log_entries == []
-    assert ok_entries == ["secrets: no profiles for this host"]
+    assert log_entries == [
+        "secrets: this machine is not listed in ~/.claude/secrets.json "
+        "(checked workstation.example, workstation); no secrets were materialized. "
+        "If this machine should receive secrets, add one of those machine keys "
+        "with its profiles."
+    ]
+    assert ok_entries == []
 
 
 def test_performed_work_stays_on_the_visible_channel(module, tmp_path, monkeypatch):

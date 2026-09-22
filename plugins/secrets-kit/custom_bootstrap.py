@@ -7,9 +7,9 @@ lands and secrets folds into the engine, this adapter is what gets replaced,
 and the package moves unchanged.
 
 The pass itself is one idempotent converge (check = hash compare, fix =
-decrypt + write). It is silent in the steady state, never blocks a session on
-connectivity, and raises exactly one ASK -- the one-time per-machine unlock,
-which is the only step a human can perform.
+decrypt + write). It is silent when this machine is configured and converged,
+never blocks a session on connectivity, and raises exactly one ASK -- the
+one-time per-machine unlock, which is the only step a human can perform.
 """
 
 import json
@@ -23,6 +23,7 @@ if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
 from secrets_kit.converge import converge  # noqa: E402
+from secrets_kit.manifest import resolve_host  # noqa: E402
 
 # The machine-facing declaration lives beside env.json in the private
 # claude-settings repo, not in the plugin: the mechanism is public, the
@@ -34,16 +35,23 @@ ENV_PATH = Path.home() / ".claude" / "env.json"
 # than a problem, and so belong on the verbose-only channel:
 #   "not configured" -- the third-party default (Config.load's docstring: "a
 #     plugin nobody has declared anything for should produce no noise").
-#   "no profiles for this host" -- Config.machine_key()'s docstring: "subsetting
-#     by omission is how a machine opts out of holding secrets it has no
-#     business holding."
 # Every other skipped_reason (e.g. "age not installed", "repo not seeded yet",
 # "locked") stays on the always-shown channel until it earns the same
 # classification -- an unclassified skip must not go quiet.
 _QUIET_SKIP_REASONS = frozenset({
     "not configured",
-    "no profiles for this host",
 })
+
+
+def _unlisted_host_notice() -> str:
+    """Explain an unlisted host without turning an intentional opt-out into ASK."""
+    checked = ", ".join(resolve_host())
+    return (
+        "secrets: this machine is not listed in ~/.claude/secrets.json "
+        f"(checked {checked}); no secrets were materialized. "
+        "If this machine should receive secrets, add one of those machine keys "
+        "with its profiles."
+    )
 
 
 def bootstrap(ctx: Any) -> None:
@@ -69,7 +77,11 @@ def bootstrap(ctx: Any) -> None:
         ctx.add_failure(failure.key, **kwargs)
 
     if result.skipped_reason and not result.failures:
-        if result.skipped_reason in _QUIET_SKIP_REASONS:
+        if result.skipped_reason == "no profiles for this host":
+            # Omission is still a safe opt-out, but silence makes an accidental
+            # hostname mismatch impossible for the user to repair.
+            ctx.log(_unlisted_host_notice())
+        elif result.skipped_reason in _QUIET_SKIP_REASONS:
             # Expected inactive state -- see _QUIET_SKIP_REASONS above. The
             # verbose-only channel, not the always-shown one: a plugin
             # deliberately unused on this machine should produce no noise.
