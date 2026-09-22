@@ -6,6 +6,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 import time
 from pathlib import Path
+import shutil
 from typing import Any, Protocol
 from uuid import uuid4
 
@@ -143,22 +144,41 @@ def prepare_background_dispatch(request: DispatchInput) -> PreparedBackgroundDis
     comments = CommentStore(resolved.comment_store_path).load()
     if comments.diagnostics:
         raise ValueError("comment-store diagnostics prevent dispatch: {}".format(comments.diagnostics))
-    resolved.run_dir.mkdir(parents=True, exist_ok=True)
-    policy = PlannerPolicy(cache_dir=resolved.run_dir / "planner-cache")
-    units = CommentPlanner(policy=policy).units(CommentPlanStore(profile, corpus, comments.comments, resolved.selection))
-    run_id = "dispatch-{}".format(uuid4().hex)
-    plan_path = resolved.run_dir / "dispatch-plan.yaml"
-    plan = write_plan(plan_path, run_id=run_id, corpus_path=resolved.corpus_path, comment_store_path=resolved.comment_store_path, units=[{"id": unit.id, "payload": unit.payload} for unit in units])
-    execution_path = resolved.run_dir / plan.execution_store
-    attributed_path = resolved.run_dir / plan.attributed_store
-    if not attributed_path.exists():
-        from .run import _atomic_dump
+    run_dir = resolved.run_dir
+    try:
+        # The final mkdir is the ownership reservation. Only one caller can
+        # create the leaf directory; every later caller must refuse it, even
+        # when an earlier validation failure left it empty.
+        run_dir.mkdir(parents=True, exist_ok=False)
+    except FileExistsError as exc:
+        if not run_dir.is_dir():
+            raise ValueError("background run path is not a directory: {}".format(run_dir)) from exc
+        raise ValueError(
+            "run directory already contains a background run: {}".format(run_dir)
+        ) from exc
+    try:
+        policy = PlannerPolicy(cache_dir=run_dir / "planner-cache")
+        units = CommentPlanner(policy=policy).units(CommentPlanStore(profile, corpus, comments.comments, resolved.selection))
+        run_id = "dispatch-{}".format(uuid4().hex)
+        plan_path = run_dir / "dispatch-plan.yaml"
+        plan = write_plan(plan_path, run_id=run_id, corpus_path=resolved.corpus_path, comment_store_path=resolved.comment_store_path, units=[{"id": unit.id, "payload": unit.payload} for unit in units])
+        execution_path = run_dir / plan.execution_store
+        attributed_path = run_dir / plan.attributed_store
+        if not attributed_path.exists():
+            from .run import _atomic_dump
 
-        _atomic_dump(attributed_path, {"records": {}})
-    execution = ExecutionStore(execution_path)
-    execution.create_run(run_id, driver="claude_bg", backend="claude-bg", model="", adapter_version=plan.adapter_version)
-    execution.register_units(run_id, list(plan.unit_ids))
-    return PreparedBackgroundDispatch(run_id, resolved.run_dir, plan_path, execution_path, attributed_path, len(units))
+            _atomic_dump(attributed_path, {"records": {}})
+        execution = ExecutionStore(execution_path)
+        execution.create_run(run_id, driver="claude_bg", backend="claude-bg", model="", adapter_version=plan.adapter_version)
+        execution.register_units(run_id, list(plan.unit_ids))
+        return PreparedBackgroundDispatch(run_id, run_dir, plan_path, execution_path, attributed_path, len(units))
+    except BaseException:
+        # The leaf directory was atomically reserved above and is not a
+        # recoverable run until this function returns its handle. Remove only
+        # that newly owned directory so a failed preparation cannot strand a
+        # path that later calls must refuse.
+        shutil.rmtree(run_dir, ignore_errors=True)
+        raise
 
 
 def load_background_dispatch(run_dir: str | Path) -> PreparedBackgroundDispatch:

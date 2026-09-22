@@ -3,6 +3,7 @@ from pathlib import Path
 import pytest
 import yaml
 
+import yaml_data_editor_kit.dispatch.background as background_module
 from content_pipeline.llm.backends import MockBackend
 from content_pipeline.execution.model import AttemptKind, UnitState
 from content_pipeline.execution.store import ExecutionStore
@@ -49,6 +50,64 @@ def test_prepare_is_durable_and_load_reproduces_identity(tmp_path: Path, write) 
     assert prepared.attributed_store.exists()
     loaded = load_background_dispatch(prepared.run_dir)
     assert loaded == prepared
+
+
+def test_prepare_refuses_to_reuse_an_existing_run_directory(
+    tmp_path: Path, write
+) -> None:
+    first = prepare_background_dispatch(_request(tmp_path, write))
+    before = {
+        path: path.read_bytes()
+        for path in (first.plan_path, first.execution_store, first.attributed_store)
+    }
+
+    with pytest.raises(ValueError, match="already contains a background run"):
+        prepare_background_dispatch(_request(tmp_path, write))
+
+    assert first.run_id == load_background_dispatch(first.run_dir).run_id
+    assert {path: path.read_bytes() for path in before} == before
+
+
+def test_prepare_refuses_an_existing_empty_run_directory(
+    tmp_path: Path, write
+) -> None:
+    request = _request(tmp_path, write)
+    request.run_dir.mkdir()
+
+    with pytest.raises(ValueError, match="already contains a background run"):
+        prepare_background_dispatch(request)
+
+
+def test_prepare_removes_its_owned_directory_when_initialization_fails(
+    tmp_path: Path, write, monkeypatch
+) -> None:
+    request = _request(tmp_path, write)
+
+    def fail_write_plan(*args, **kwargs):
+        raise RuntimeError("plan write failed")
+
+    monkeypatch.setattr(background_module, "write_plan", fail_write_plan)
+
+    with pytest.raises(RuntimeError, match="plan write failed"):
+        prepare_background_dispatch(request)
+
+    assert not request.run_dir.exists()
+
+
+def test_prepare_cleans_up_after_interrupt_during_initialization(
+    tmp_path: Path, write, monkeypatch
+) -> None:
+    request = _request(tmp_path, write)
+
+    def interrupt_write_plan(*args, **kwargs):
+        raise KeyboardInterrupt()
+
+    monkeypatch.setattr(background_module, "write_plan", interrupt_write_plan)
+
+    with pytest.raises(KeyboardInterrupt):
+        prepare_background_dispatch(request)
+
+    assert not request.run_dir.exists()
 
 
 def test_background_request_keeps_inline_error_compatibility(tmp_path: Path, write) -> None:
