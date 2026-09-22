@@ -1,6 +1,6 @@
 ---
 name: orchestrate
-description: Use when accomplishing significant multi-part work -- delegate to background agents or a CLI backend to preserve context. Do NOT use for single-step tasks.
+description: Use when significant work needs context-preserving delegation, even if sequential or indivisible. Do NOT use for small tasks fitting one cheap foreground call.
 skill-type: technique-skill
 ---
 
@@ -48,7 +48,7 @@ technique_skill:
       - keeping the main context clean while agents run, and synthesizing results on completion
       - routing a decision the orchestrator would otherwise put to the user, and the autonomy edges that decide when the user is asked at all
     excludes:
-      - small or single-step tasks cheaper to do inline than to delegate
+      - genuinely small, self-contained tasks whose full work fits in one cheap foreground call
       - the Workflow tool's deterministic multi-agent orchestration (use Workflow when the user opts in)
       - subagent authoring (defining new agent types)
       - reviewer fan-out internal to an invoked review skill (N reviewers over one artifact) -- that skill's `SKILL.md` owns its reviewer roster and lane arithmetic; orchestrate still owns and routes the plan-checkpoint cross-check as a separate unit
@@ -125,11 +125,14 @@ technique_skill:
         - n: 1
           action: Confirm the task warrants orchestration.
           detail: |
-            Delegate for one of two reasons: footprint -- the unit, taken as the whole line of
-            investigation it runs, reads or emits far more than its conclusion -- or parallelism -- the rendered razor yields at least two leaves
-            runnable now. Neither means do it inline. One small self-contained unit whose result
-            feeds the next decision stays inline; an agent round-trip costs as much context as the
-            work. Difficulty and indecision are not reasons to delegate. In `user-present` (the user is watching the prompt) footprint bites harder: prefer the background for anything past one cheap foreground call.
+            Delegate for footprint -- the unit, taken as the whole line of investigation it runs,
+            reads or emits far more than its conclusion -- parallelism -- the rendered razor
+            yields at least two leaves runnable now -- or context preservation: significant work
+            belongs in a background agent even when it is sequential or cannot be decomposed.
+            Dispatch that work as one end-to-end unit. Keep a small self-contained unit inline
+            when its result feeds the next decision and the work fits in one cheap foreground
+            call. In `user-present` (the user is watching the prompt), prefer the background for
+            significant work so the main context stays available for coordination and judgment.
         - n: 2
           action: Render the orchestration policy by running the script in the policy block above.
           detail: >-
