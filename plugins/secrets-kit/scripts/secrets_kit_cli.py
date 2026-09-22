@@ -110,30 +110,6 @@ def _ensure_clone(config: Config, *, data_dir: Path, sync: bool = False) -> Path
     return clone
 
 
-def _ensure_guarded(config: Config, *, data_dir: Path) -> Path:
-    """Sync and guard under caller-held whole-operation ownership.
-
-    Nested repo/key/state/publication helpers never acquire recursively.
-
-    Every authoring verb records its recovery baseline before synchronizing,
-    so each prepares its own operation rather than calling this. Two things
-    have to be true before we let git record anything permanently, and neither
-    is inheritable:
-
-    - The clone must be level with the remote. The session pass fetches at most
-      once every few hours, so the working tree an authoring verb would read
-      its decisions from is routinely hours stale -- and "is this repo seeded?"
-      answered about the past is how a second fleet identity gets generated.
-    - The pre-commit guard must exist. It lives in ``.git/hooks``, which is
-      untracked, so it has to be re-established locally every time.
-    """
-    clone = _ensure_clone(config, data_dir=data_dir, sync=True)
-    note = guard.require_guard(clone)
-    if note:
-        print(f"pre-commit guard: {note}")
-    return clone
-
-
 # --------------------------------------------------------------------------
 # unlock
 # --------------------------------------------------------------------------

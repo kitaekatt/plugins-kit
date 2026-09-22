@@ -1279,6 +1279,22 @@ def _regenerate_derived_in(env: dict[str, str]) -> dict[str, str]:
             os.environ.pop("GIT_INDEX_FILE", None)
         else:
             os.environ["GIT_INDEX_FILE"] = previous
+
+    # A partial projection restores held-back plugin files from master.  A
+    # plugin that became dev-only after the last release can therefore have an
+    # old master manifest without ``published: false``.  Publication status is
+    # a dev-side release decision, so filter those names after deriving the
+    # projected versions; otherwise the generated marketplace leaks them.
+    dev_only = {
+        name for name, manifest in local_plugins().items()
+        if not is_published(manifest)
+    }
+    if dev_only:
+        marketplace_data = dict(marketplace_data)
+        marketplace_data["plugins"] = [
+            plugin for plugin in marketplace_data.get("plugins", [])
+            if plugin.get("name") not in dev_only
+        ]
     marketplace_text = regen_module._serialize(marketplace_data)
 
     scratch = Path(tempfile.mkdtemp(prefix="publish-scratch-"))

@@ -39,6 +39,7 @@ bootstrap                 # report; follow a running lifecycle pass to completio
 bootstrap --json          # non-blocking machine-readable status
 bootstrap run             # apply the four user/project layers
 bootstrap run --verbose   # accepted for console compatibility
+bootstrap codex-hook      # synchronous full pass + Codex SessionStart JSON
 bootstrap reset           # clear this project's next-session throttle
 bootstrap reset --all     # all projects; --status and --project also supported
 bootstrap install-hook    # administrator: write the ensure-bootstrap hook here
@@ -82,6 +83,18 @@ own dependencies exist.
 `bootstrap install-hook` writes the project SessionStart hook that installs or
 updates bootstrap on machines that lack it. It is documented, with its
 opt-out, in fleet-management.md.
+
+`bootstrap codex-hook` is the runtime command used by the project-local Codex
+adapter that normal bootstrap creates at the canonical project root's
+`.codex/hooks.json`. It is not a separate hook-installation step. A clean
+non-console pass first uses the existing Codex CLI detector; when Codex is not
+available, it skips this setup. When Codex is available, bootstrap installs the
+adapter even if the ignore policy is not ready. The command runs the full
+engine synchronously and emits the normal Codex `SessionStart` JSON response.
+It rechecks the policies and appends Codex-only remediation if they are
+missing or drift. For a Perforce ignore file, the remediation requires the
+`p4 edit .p4ignore` command before the file is changed. Bootstrap does not
+create this adapter for a failed automatic pass or a `--console` diagnostic.
 
 ## Running passes and exit codes
 

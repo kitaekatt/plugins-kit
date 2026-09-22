@@ -58,6 +58,7 @@ beside the bash script runs it under Git for Windows bash.
 bootstrap          # is a pass running? if so, wait for it and stream it
 bootstrap --json   # report only, never blocking (the scripting form)
 bootstrap run      # apply only user/project bootstrap.json and bootstrap.local.json
+bootstrap codex-hook  # synchronous Codex SessionStart adapter
 bootstrap reset    # clear this project's cooldown (--all, --status, --project)
 ```
 
@@ -85,6 +86,17 @@ its flags, `--help` included, pass straight through.
 With more than one marketplace installed, `bootstrap` reports on all of them
 and `bootstrap run` asks you to set `BOOTSTRAP_MARKETPLACE` rather than guess
 which engine to run.
+
+After a clean automatic pass with the applicable ignore policy already in
+place, bootstrap creates a machine-local `.codex/hooks.json` with a
+`SessionStart` hook. Starting Codex then runs the same full bootstrap engine
+and injects its remediation context into the Codex session. If the policy is
+missing, Claude receives the remediation and bootstrap defers hook creation so
+the first generated `.codex` tree cannot leak into source control. The hook
+rechecks the project's `.gitignore` and applicable `.p4ignore` for `/.codex/`;
+Perforce remediation tells the agent to run `p4 edit .p4ignore` before changing
+that file. Codex may require a one-time review/trust of the generated project
+hook through `/hooks`.
 
 To verify bootstrap actually ran for a plugin, read its log:
 

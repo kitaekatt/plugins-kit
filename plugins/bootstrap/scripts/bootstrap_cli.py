@@ -12,6 +12,9 @@ ensure-bootstrap SessionStart hook into a project (install_bootstrap_hook.py):
     bootstrap run    Apply only the four user/project manifest layers.
                      Refuse while another pass is running; attaching could
                      inherit that pass's broader or different project scope.
+    bootstrap codex-hook
+                     Run a synchronous full pass for a Codex SessionStart hook
+                     and return Codex hook JSON with any project remediation.
     bootstrap reset  Clear the cooldown stamp so the NEXT session start runs a
                      real pass. Not a pass itself -- it is the lever for the
                      one case `run` does not cover, a layered bootstrap.json
@@ -46,6 +49,10 @@ import time
 # one-second watched-flush floor, so the bound on what a reader waits for is
 # the recorder's interval, not this one.
 POLL_INTERVAL = 0.25
+
+# Leave a small margin below the generated Codex hook's 300-second limit so a
+# stalled engine can still produce a bounded SessionStart response.
+CODEX_ENGINE_TIMEOUT_SECONDS = 285
 
 # How often the tail asks whether the pass is still running. Deliberately much
 # coarser than POLL_INTERVAL: see the comment at its use in follow().
@@ -367,6 +374,116 @@ def cmd_run(args) -> int:
         data_dir,
         lambda: subprocess.Popen(_run_cmd(
             runner, plugin_root, data_dir, Path.cwd(), args.forward)))
+
+
+# --------------------------------------------------------------------------
+# codex-hook
+# --------------------------------------------------------------------------
+
+def _hook_response(stdout: str):
+    """Decode the engine's final JSON response, if it emitted one."""
+    for line in reversed((stdout or "").splitlines()):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            value = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(value, dict):
+            return value
+    return None
+
+
+def _bootstrap_engine_python() -> str:
+    """Use the interpreter exported by bootstrap, with a legacy fallback."""
+    return os.environ.get("BOOTSTRAP_PYTHON") or _bootstrap_python_value()
+
+
+def cmd_codex_hook(args) -> int:
+    """Run bootstrap as a synchronous Codex SessionStart hook.
+
+    This is deliberately separate from ``bootstrap run``: Codex needs the
+    complete plugin lifecycle, but it also needs the engine's non-background
+    SessionStart JSON on stdout. The hook is a best-effort adapter and always
+    returns success after emitting its context so a bootstrap defect cannot
+    prevent Codex from opening the project.
+    """
+    from bootstrap_lib import codex_hook
+
+    mkts = marketplaces()
+    response = None
+    context_parts = []
+    project_dir = codex_hook.resolve_project_root(args.project_dir or os.getcwd())
+    if len(mkts) > 1 and not os.environ.get("BOOTSTRAP_MARKETPLACE"):
+        context_parts.append(
+            "Bootstrap could not choose a marketplace for this Codex startup. "
+            "Set BOOTSTRAP_MARKETPLACE and retry. Available marketplaces: %s."
+            % ", ".join(mkts)
+        )
+    else:
+        marketplace = mkts[0]
+        data_dir = plugin_data_dir(marketplace)
+        plugin_root = find_plugin_root(marketplace, args.plugin_root)
+        if not plugin_root:
+            context_parts.append(
+                "Bootstrap could not find its installed plugin tree for Codex. "
+                "Run Claude once so bootstrap can provision itself, then retry."
+            )
+        else:
+            runner = Path(plugin_root) / "engine" / "bootstrap_engine.py"
+            try:
+                result = subprocess.run(
+                    [
+                        _bootstrap_engine_python(), str(runner),
+                        "--plugin-root", plugin_root,
+                        "--data-dir", data_dir,
+                        "--project-dir", str(project_dir),
+                        "--project-key", "",
+                    ],
+                    cwd=str(project_dir), capture_output=True, text=True,
+                    timeout=CODEX_ENGINE_TIMEOUT_SECONDS,
+                )
+            except (OSError, subprocess.SubprocessError) as exc:
+                context_parts.append(
+                    "Bootstrap could not complete during this Codex startup (%s). "
+                    "Run Claude once to repair bootstrap, then retry."
+                    % type(exc).__name__
+                )
+            else:
+                response = _hook_response(result.stdout)
+                if result.stderr:
+                    sys.stderr.write(result.stderr)
+                if response is None and result.returncode != 0:
+                    context_parts.append(
+                        "Bootstrap did not complete during this Codex startup (exit %s). "
+                        "Run Claude once to repair bootstrap, then retry."
+                        % result.returncode
+                    )
+
+    ignore_context = codex_hook.codex_ignore_context(str(project_dir))
+    if ignore_context:
+        context_parts.append(ignore_context)
+
+    if response is None and context_parts:
+        response = _codex_context_response("\n\n".join(context_parts))
+    elif response is not None and context_parts:
+        response = codex_hook.add_additional_context(
+            response, "\n\n".join(context_parts))
+    if response is not None:
+        print(json.dumps(response))
+    return 0
+
+
+def _codex_context_response(context: str) -> dict:
+    return {
+        "continue": True,
+        "suppressOutput": False,
+        "hookSpecificOutput": {
+            "hookEventName": "SessionStart",
+            "additionalContext": context,
+        },
+    }
 
 
 def _run_cmd(runner, plugin_root, data_dir, project_dir, forward=()):
@@ -939,6 +1056,13 @@ def main(argv=None) -> int:
                         "project in the working directory, with this "
                         "bootstrap's version as the minimum")
 
+    codex_hook_parser = sub.add_parser(
+        "codex-hook",
+        help="run a full synchronous pass and emit Codex SessionStart JSON")
+    codex_hook_parser.add_argument(
+        "--project-dir", default=None,
+        help="project directory (default: the working directory)")
+
     # --engine is declared ONLY here, never on `parser` above -- the
     # discard-before-the-subcommand trap (plugins/CLAUDE.md, "A flag on both
     # a parser and its subparser is discarded") applies only to a dest shared
@@ -1008,6 +1132,10 @@ def main(argv=None) -> int:
         if extra:
             parser.error("unrecognized arguments: %s" % " ".join(extra))
         return cmd_install_hook(args)
+    if args.command == "codex-hook":
+        if extra:
+            parser.error("unrecognized arguments: %s" % " ".join(extra))
+        return cmd_codex_hook(args)
     if args.command in ("run", "reset"):
         args.forward = extra
         return cmd_run(args) if args.command == "run" else cmd_reset(args)
