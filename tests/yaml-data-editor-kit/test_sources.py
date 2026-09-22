@@ -4,7 +4,10 @@ file_per_record, keyed_map and single."""
 from pathlib import Path
 from typing import Callable
 
+import pytest
+
 from yaml_data_editor_kit.schema import (
+    ProfileError,
     Profile,
     errors_only,
     load_corpus,
@@ -340,6 +343,163 @@ nut:  { amount: 45 }
     corpus = load_corpus(profile, tmp_path)
     assert sorted(r.identity for r in corpus.of_type("price")) == ["bolt", "nut"]
     assert errors_only(validate_corpus(profile, tmp_path)) == []
+
+
+def test_record_keys_from_orders_transitive_source_dependencies(
+    tmp_path, profile_dir, write
+) -> None:
+    """A dependent source may be declared before its dependency source."""
+    write(
+        "profile/types.yaml",
+        """
+dialect: type/1
+id: leaf
+identified_by: id
+fields:
+  id: { type: id }
+---
+dialect: type/1
+id: mid
+identified_by: id
+fields:
+  id: { type: id }
+  value: { type: int }
+---
+dialect: type/1
+id: top
+identified_by: id
+fields:
+  id: { type: id }
+  value: { type: int }
+---
+dialect: source/1
+of: top
+layout: keyed_map
+path: content/top.yaml
+record_keys_from: mid.id
+---
+dialect: source/1
+of: mid
+layout: keyed_map
+path: content/mid.yaml
+record_keys_from: leaf.id
+---
+dialect: source/1
+of: leaf
+layout: rows
+path: content/leaf.yaml
+""",
+    )
+    write("content/leaf.yaml", "- { id: m1 }\n")
+    write("content/mid.yaml", "m1: { id: m1, value: 1 }\n")
+    write("content/top.yaml", "m1: { id: m1, value: 2 }\n")
+
+    profile = load_profile(profile_dir)
+    corpus = load_corpus(profile, tmp_path)
+
+    assert [record.identity for record in corpus.of_type("mid")] == ["m1"]
+    assert [record.identity for record in corpus.of_type("top")] == ["m1"]
+    assert errors_only(corpus.diagnostics) == []
+
+
+def test_record_keys_from_cycle_is_rejected_with_a_clear_profile_error(
+    profile_dir, write
+) -> None:
+    write(
+        "profile/types.yaml",
+        """
+dialect: type/1
+id: left
+identified_by: id
+fields:
+  id: { type: id }
+---
+dialect: type/1
+id: right
+identified_by: id
+fields:
+  id: { type: id }
+---
+dialect: source/1
+of: left
+layout: keyed_map
+path: content/left.yaml
+record_keys_from: right.id
+---
+dialect: source/1
+of: right
+layout: keyed_map
+path: content/right.yaml
+record_keys_from: left.id
+""",
+    )
+
+    profile = load_profile(profile_dir)
+    with pytest.raises(ProfileError, match="cyclic 'record_keys_from:'"):
+        load_corpus(profile, profile_dir.parent)
+
+
+def test_record_keys_from_waits_for_all_sources_of_a_provider_type(
+    tmp_path, profile_dir, write
+) -> None:
+    """A provider assembled from several sources is complete before use."""
+    write(
+        "profile/types.yaml",
+        """
+dialect: type/1
+id: base
+identified_by: id
+fields:
+  id: { type: id }
+---
+dialect: type/1
+id: provider
+identified_by: id
+fields:
+  id: { type: id }
+---
+dialect: type/1
+id: consumer
+identified_by: id
+fields:
+  id: { type: id }
+---
+dialect: source/1
+of: consumer
+layout: keyed_map
+path: content/consumer.yaml
+record_keys_from: provider.id
+---
+dialect: source/1
+of: provider
+layout: rows
+path: content/provider-rows.yaml
+---
+dialect: source/1
+of: provider
+layout: keyed_map
+path: content/provider-map.yaml
+record_keys_from: base.id
+---
+dialect: source/1
+of: base
+layout: rows
+path: content/base.yaml
+""",
+    )
+    write("content/base.yaml", "- { id: mapped }\n")
+    write("content/provider-rows.yaml", "- { id: direct }\n")
+    write("content/provider-map.yaml", "mapped: {}\n")
+    write("content/consumer.yaml", "direct: {}\nmapped: {}\n")
+
+    profile = load_profile(profile_dir)
+    corpus = load_corpus(profile, tmp_path)
+
+    assert sorted(record.identity for record in corpus.of_type("consumer")) == [
+        "direct",
+        "mapped",
+    ]
+    assert errors_only(corpus.diagnostics) == []
 
 
 def test_keyed_map_refuses_a_key_declared_as_neither_record_nor_metadata(

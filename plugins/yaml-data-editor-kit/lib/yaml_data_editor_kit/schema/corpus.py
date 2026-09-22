@@ -16,7 +16,7 @@ from typing import Any, Iterator
 
 import yaml
 
-from .errors import ADVISORY, Diagnostic
+from .errors import ADVISORY, Diagnostic, ProfileError
 from .model import PathWalk, Profile, SourceSpec, TypeSpec
 
 _MAX_LISTED_VALUES = 12
@@ -254,13 +254,57 @@ def _precompute_single_claims(
 
 
 def _ordered_sources(profile: Profile) -> list[SourceSpec]:
-    """Sources whose record keys come from another type are read last.
+    """Return sources in stable dependency order.
 
-    ``record_keys_from:`` needs that other type's ids to exist already.
+    ``record_keys_from:`` needs the referenced type's ids to exist already.
+    Keep declaration order among independent sources, but topologically sort
+    dependent sources so a chain can be declared in any order. A cycle is a
+    profile error rather than an empty id set that silently drops records.
     """
-    plain = [s for s in profile.sources if s.record_keys_from is None]
-    deferred = [s for s in profile.sources if s.record_keys_from is not None]
-    return plain + deferred
+    remaining = list(profile.sources)
+    provider_counts: dict[str, int] = {}
+    for source in remaining:
+        provider_counts[source.of] = provider_counts.get(source.of, 0) + 1
+    loaded_counts: dict[str, int] = {}
+    ordered: list[SourceSpec] = []
+
+    while remaining:
+        ready = [
+            source
+            for source in remaining
+            if source.record_keys_from is None
+            or loaded_counts.get(source.record_keys_from.split(".", 1)[0], 0)
+            >= provider_counts.get(source.record_keys_from.split(".", 1)[0], 0)
+        ]
+        if not ready:
+            # A missing provider is still allowed to reach corpus diagnostics;
+            # only a dependency whose type is actually sourced can form a
+            # cycle. Schedule those sources after all available providers.
+            missing_provider = [
+                source
+                for source in remaining
+                if source.record_keys_from is not None
+                and source.record_keys_from.split(".", 1)[0] not in provider_counts
+            ]
+            if missing_provider:
+                ready = missing_provider
+            else:
+                cycle = " -> ".join(
+                    "{} ({})".format(source.of, source.record_keys_from)
+                    for source in remaining
+                )
+                document = remaining[0].document
+                raise ProfileError(
+                    "cyclic 'record_keys_from:' declarations: {}".format(cycle),
+                    document,
+                )
+        ready_ids = {id(source) for source in ready}
+        for source in ready:
+            ordered.append(source)
+            loaded_counts[source.of] = loaded_counts.get(source.of, 0) + 1
+        remaining = [source for source in remaining if id(source) not in ready_ids]
+
+    return ordered
 
 
 def _relative(path: Path, root: Path) -> str:
