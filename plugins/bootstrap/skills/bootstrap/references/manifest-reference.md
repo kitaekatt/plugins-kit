@@ -118,6 +118,14 @@ Three schema gotchas worth calling out:
 - **`autodetect` is a string**, `"<script_path> <function_name>"` (e.g. `"scripts/autodetect.py detect"`), for both `config` and `project_config`. A dict form is not understood.
 - **`python_stub_check` is not a manifest field** — it lives only under `self_setup` in bootstrap's own `config.json` (see its section below).
 
+### Plugin declarations and install scope
+
+A shipped plugin's own `bootstrap.json` must not self-install its own plugin in
+`plugins[]`. A self-entry can override a consumer's deliberate project-only
+scope when manifests merge and force user-scope installation or enablement.
+Install scope belongs to the consumer's enablement and registry contract; the
+plugin manifest declares the requirements the plugin needs to run.
+
 ## `requires_bootstrap` -- Minimum Engine Version
 
 A top-level manifest key naming the oldest bootstrap engine that can process this
