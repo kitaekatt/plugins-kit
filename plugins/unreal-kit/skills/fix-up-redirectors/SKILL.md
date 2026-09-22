@@ -16,7 +16,7 @@ Unreal's editor command `Fix Up Redirectors in Folder` stalls on the first file 
 Not every redirector needs the same treatment:
 
 - **Fix-up redirectors** (target exists, has referencers): the standard case. Referencers must be re-saved to point at the redirector's target before the redirector .uasset can be deleted.
-- **Orphaned redirectors** (target gone, zero referencers): pure dead pointers. No rewriting needed — just `p4 delete` the .uasset (and its `.umap` sibling, for level redirectors). Much faster than the fix-up path because there's no UE referencer load/save work.
+- **Orphaned redirectors** (target gone, zero referencers): pure dead pointers. No rewriting needed -- just `p4 delete` the .uasset (and its `.umap` sibling, for level redirectors). Much faster than the fix-up path because there is no UE referencer load/save work.
 - **Referenced-broken** (target gone, has referencers): genuinely broken. Deleting the redirector would leave dangling refs. Manual cleanup required; the skill flags these but does not touch them.
 
 The classifier emits the fix-up safe set and (optionally) the orphaned safe set as separate JSON files. The apply script consumes either shape.
@@ -27,7 +27,7 @@ Redirectors are pointers, and pointers get referenced from places the on-disk as
 
 ### Known reference channels
 
-What the skill sees today:
+What the skill sees in the current implementation:
 
 - **Hard refs in other `.uasset` files** -- caught by phase-1 discovery via the UE asset registry. The redirector's own referencer list comes from here. Reliable for assets that import each other through standard UE serialization.
 - **Soft object paths in other `.uasset` files** -- also caught by phase-1 discovery (the asset registry tracks soft refs). Phase 4's `rename_referencing_soft_object_paths` handles the rewrite.
@@ -52,7 +52,7 @@ Because the residual risk is real, the apply path is structured as a series of p
 2. **Apply, soak, verify.** Submit the test slice. Run the same verification you'd run for any content change: smoke playtest, automated tests where they exist, visual diff on referencer assets if any were rewritten. Soak for at least a build cycle so any reference channel the scanner missed has time to surface as a load error or visual regression.
 3. **Full purge.** Only after the test slice is clean, re-run the apply on the original safe set (already-fixed redirectors are no-ops, so the second pass is naturally idempotent).
 
-The reason this works: a missed reference channel that breaks N assets in the test slice is cheap to revert (one CL, scoped to ~1% of the directories). The same channel breaking N assets in the full purge is expensive to revert (thousands of files, possibly across many directories whose referencers also got rewritten). Sampling concentrates the blast where reverts are still cheap.
+The reason this works: a missed reference channel that breaks N assets in the test slice is cheap to revert (one CL, scoped to about 1% of the directories). The same channel breaking N assets in the full purge is expensive to revert (thousands of files, possibly across many directories whose referencers also got rewritten). Sampling concentrates the blast where reverts are still cheap.
 
 The recommended workflow:
 
@@ -61,36 +61,61 @@ classify -> code-ref filter -> directory-sample -> apply test CL
         -> soak (smoke playtest, tests, visual diff) -> apply full purge
 ```
 
-The fix-up safe set and the orphaned safe set both pass through this pipeline; only the per-direction details differ (orphan path skips the code-ref filter because there are no referencers).
-
-### When to Extend Coverage
-
-When a regression escapes the heuristic -- a missing-asset error, a broken Blueprint, a dangling soft ref after a clean fix-up run -- the playbook is:
-
-1. **Identify the missed channel.** What kind of file held the reference that the scan didn't see? Was it an extension not in `DEFAULT_EXTENSIONS` (e.g. a `.yaml` config, `.csv` data table)? A dynamic path construction? A redirect chain longer than one hop? An asset format outside the registry?
-2. **Extend the scan logic.** Most channels live in `lib/code_refs.py`:
-   - New file extension -> add to `DEFAULT_EXTENSIONS` (or document that the user must pass `--extensions` for that channel).
-   - New path *shape* (e.g. asset paths embedded in JSON quoted strings with extra escaping, or a project-specific naming convention) -> extend `_PATH_RE` or add a parallel matcher; keep the mount + on-disk filter so signal-to-noise stays high.
-   - New mount source (e.g. a non-standard plugin layout) -> extend `discover_mount_points`.
-   - Channels that aren't text-pattern-matchable (dynamic construction, registry blind spots) -> document the gap in this section instead of pretending the scanner covers it; the honest "we don't see this" is more useful than a false sense of safety.
-3. **Invalidate the cache.** This is the easy step to forget. The cache lives at `./.local-data/code_references.yaml` and the filter reuses it for 24 hours by default. After extending coverage, either delete the cache file or pass `--max-age-hours 0` to `filter_safe_by_code_refs.py` so the next run regenerates it. Without this, the filter still reads the pre-fix scan and the regression repeats.
-4. **Re-run the filter** (`scripts/filter_safe_by_code_refs.py`) and confirm the previously-missed reference now drops the affected redirector(s) from the safe set.
-5. **Update this section.** Move the new channel from "does NOT see" to "what the skill sees today" and note any new extension/flag the user has to pass.
-
-The skill's value is the explicit map of what's covered and what isn't. Every regression that prompts a coverage extension should also prompt an edit to this section so future Claude knows whether the channel is in scope before promising a clean fix.
+The fix-up safe set and the orphaned safe set both pass through this pipeline; only the per-direction details differ (the orphan path uses delete-only apply after the same code-reference filter).
 
 ## When to Use
 
-- Periodic content hygiene (every couple of weeks, or before a content freeze)
+- Periodic content hygiene, or before a content freeze
 - After a rename/move pass that left redirectors behind
 - When `Fix Up Redirectors in Folder` keeps failing on locked files
 - Cleaning up orphaned redirectors left behind by deleted assets (the orphan path is cheap; consider running it routinely)
 
 ## Prerequisites
 
-- Perforce CLI on PATH (`p4`)
+- A detected Perforce workspace and the Perforce CLI on PATH (`p4`)
 - The unreal-kit plugin installed; `ue-runner` available
 - A working dir for outputs (the skill defaults to `tmp/redirectors/` in cwd)
+
+This skill is the only unreal-kit capability that requires P4. The Python API
+and MCP capabilities do not install or require a VCS client. Bootstrap detects
+Perforce workspace markers through its existing project contract and records a
+point-of-need requirement when `p4` is absent; it does not install P4 for an
+unrelated workspace. Before starting this workflow, confirm that `p4` resolves
+and that the workspace is intended for Perforce-backed cleanup. If the prepared
+requirement is present, install the optional provider with
+`claude plugin install p4-kit@plugins-kit`, wait for bootstrap to provision it,
+and retry this action. Do not run this workflow against a Git- or Plastic-only
+project.
+
+## Unattended execution budgets
+
+P4 calls use two independent optional budgets. Set
+`UNREAL_KIT_P4_QUERY_TIMEOUT_S` for `info`, `where`, `opened`, `fstat`, and
+`changes`. Set `UNREAL_KIT_P4_MUTATION_TIMEOUT_S` for `change`, `edit`,
+`delete`, and `reopen`. Values must be finite and positive. An explicit
+`run_p4(..., timeout_s=...)` value takes precedence over either environment
+setting. If a setting is unset, the historical unbounded subprocess behavior
+is preserved. That legacy behavior is not a guarantee that a command will
+finish, so unattended use must supply both budgets.
+
+The commandlet runner accepts the independent optional
+`--commandlet-timeout <seconds>` budget. A timed-out query fails closed. A
+timed-out mutation or commandlet retains partial output, reports completion as
+unknown, and is never retried automatically. The apply manifest records the
+incomplete phase and pending CL so the result can be inspected before any
+follow-up action. These budgets do not bound the raw P4 retry command in the
+Phase 4 tail; that command runs after the UE process exits.
+
+For each Phase 1 or Phase 4 runner invocation below, set the optional argument
+array once in the shell. Leave the variable unset to preserve the legacy
+unbounded behavior:
+
+```bash
+ue_timeout_args=()
+if [ -n "${UNREAL_KIT_COMMANDLET_TIMEOUT_S:-}" ]; then
+  ue_timeout_args=(--commandlet-timeout "$UNREAL_KIT_COMMANDLET_TIMEOUT_S")
+fi
+```
 
 ## Arguments and modes
 
@@ -100,8 +125,8 @@ The skill takes up to two positional args: an optional **mode keyword** and an o
 |---|---|---|---|
 | `/fix-up-redirectors` | (none -- show menu) | -- | Print the "Common operations" menu below and ask which the user wants. Do NOT start any phase. |
 | `/fix-up-redirectors /Game/Art` | full (default) | `/Game/Art` | Run all phases: discover, classify, report, code-ref filter, apply both fix-up safe set and (if user opts in at Phase 3) orphaned safe set. |
-| `/fix-up-redirectors orphaned_safe` | orphan-only | `/Game` | Skip the fix-up path entirely. Discover, classify, report orphan counts, then Phase 4 against `orphaned.json` (the apply script auto-detects delete-only mode from the input shape). **Skip Phase 3.5** (orphans have no referencers, so source-code references can't apply). |
-| `/fix-up-redirectors orphaned_safe /Game/Art` | orphan-only | `/Game/Art` | Same as orphan-only, but scoped. |
+| `/fix-up-redirectors orphaned_safe` | orphan-only | `/Game` | Skip the fix-up path entirely. Discover, classify, report orphan counts, run Phase 3.5 against `orphaned.json`, then Phase 4 against `orphaned_filtered.json` (the apply script auto-detects delete-only mode from the input shape). |
+| `/fix-up-redirectors orphaned_safe /Game/Art` | orphan-only | `/Game/Art` | Same as orphan-only, but scoped and filtered through Phase 3.5 before deletion. |
 
 Anything that isn't the literal string `orphaned_safe` is treated as a scope. The mode keyword, if present, must come first.
 
@@ -119,9 +144,9 @@ Fix Up Redirectors -- common operations:
 
   /fix-up-redirectors orphaned_safe
       Delete the "orphaned safe" redirectors (target gone, zero referencers,
-      not checked out by anyone). Pure p4 deletes -- no referencer rewrites,
-      no code-ref filter. Cheap and routine; consider running every couple
-      of weeks.
+      not checked out by anyone). Phase 3.5 still verifies source-code
+      coverage before the delete-only apply. Cheap and routine; consider
+      running on the project's content-hygiene cadence.
 
   /fix-up-redirectors /Game/SomePath
       Full pipeline scoped to a sub-path: classify every redirector under
@@ -147,13 +172,13 @@ Pick the matching mode + scope from the user's reply and re-enter the skill at P
 The full pipeline has six phases (Discover, Classify, Report, Code-ref filter, Apply, Final report). Track progress in a TodoWrite list. Per-mode skips:
 
 - **full mode**: all six phases.
-- **orphan-only mode**: Discover, Classify, Report (orphan-focused), **skip Phase 3.5**, Apply (`--mode=delete-only`), Final report.
+- **orphan-only mode**: Discover, Classify, Report (orphan-focused), Phase 3.5 against the orphaned set, Apply (`--mode=delete-only`) using `orphaned_filtered.json`, Final report.
 
 ## Recommended: per-directory subset for broad purges
 
 For any safe set with more than ~100 redirectors, run the per-directory subset reducer first and apply that smaller set as a test pass. The reducer picks exactly one redirector per unique package directory, deterministically.
 
-Why this works: most "this might break something" scenarios are directory-shaped (a particular folder has unusual referencers, soft refs, or naming quirks). A one-per-directory slice exercises every directory shape without committing to a multi-thousand-file edit. In a reference run, 2839 safe redirectors collapsed to a 241-redirector subset that ran in ~19 minutes vs. multi-hour for the full purge — and surfaced any breakage early, when it could still be reverted cheaply.
+Why this works: most "this might break something" scenarios are directory-shaped (a particular folder has unusual referencers, soft refs, or naming quirks). A one-per-directory slice exercises every directory shape without committing to a multi-thousand-file edit. In one reference run, 2839 safe redirectors collapsed to a 241-redirector subset that ran in about 19 minutes versus multiple hours for the full purge, and surfaced any breakage early, when it could still be reverted cheaply.
 
 Use the reducer on either the fix-up safe set or the orphaned safe set; the input/output JSON shape is the same.
 
@@ -164,7 +189,7 @@ Use the reducer on either the fix-up safe set or the orphaned safe set; the inpu
   --out tmp/redirectors/safe_per_dir.json
 ```
 
-Then point Phase 4 at `safe_per_dir.json` instead. After the test CL submits cleanly, run Phase 4 again on the original safe set (with the per-dir entries removed if you want a strict residual, or just re-run the whole thing — already-fixed redirectors are no-ops in the second pass).
+Then point Phase 4 at `safe_per_dir.json` instead. After the test CL submits cleanly, run Phase 4 again on the original safe set (with the per-dir entries removed if you want a strict residual, or just re-run the whole thing -- already-fixed redirectors are no-ops in the second pass).
 
 ## Precondition - bootstrap must have provisioned unreal-kit
 
@@ -179,6 +204,7 @@ mkdir -p tmp/redirectors
 MSYS_NO_PATHCONV=1 SCOPE="${1:-/Game}" \
   "${CLAUDE_PLUGIN_ROOT}/skills/ue-python-api/scripts/ue-runner.cmd" \
   "${CLAUDE_PLUGIN_ROOT}/skills/fix-up-redirectors/scripts/discover_redirectors.py" \
+  "${ue_timeout_args[@]}" \
   --copy-output tmp/redirectors/
 ```
 
@@ -201,15 +227,20 @@ The classifier is a host-side script (no Unreal needed). Run it from the project
 
 The host-side classifier needs `pyyaml`, which the bootstrap engine installs into the unreal-kit plugin's venv at `~/.claude/plugins/data/plugins-kit/unreal-kit/.venv/`. Invoke that venv's Python directly -- the path is stable across plugin versions and resolves the right interpreter regardless of cwd. **Do NOT use `uv run python`** unless the cwd has a matching `pyproject.toml` listing `pyyaml`; from a project root that doesn't (the common case for this skill, since you run from your Unreal project's root for `p4` to pick up `.p4config.txt`), `uv` falls back to a basic Python without `pyyaml` and the script crashes with `ModuleNotFoundError`. On macOS/Linux the venv path is `~/.claude/plugins/data/plugins-kit/unreal-kit/.venv/bin/python`.
 
-The classifier runs `p4 opened -a` once for the workspace, then buckets each redirector:
+The classifier runs `p4 opened -a` once for the workspace and resolves each
+candidate file with a tagged per-file `p4 where`, then buckets each redirector.
+The tagged depot identity is retained; overlapping or missing mappings are
+blocked instead of being reduced to a guessed workspace prefix. It also
+materializes the complete on-disk mutation set, including an existing `.umap`
+companion, in each safe-set record.
 
-- `safe` — fix-up safe set: target exists, neither the redirector nor any of its referencers is opened by anyone (levels are included)
-- `blocked` — at least one file is opened by a teammate (or you, in another CL); records the user(s)
-- `broken` — the redirector's target asset is missing. Sub-buckets:
-  - `orphaned_safe` — target gone AND zero referencers AND the redirector .uasset itself is unlocked. Safe to `p4 delete` directly. Emitted to `--out-orphaned` if provided.
-  - `orphaned_blocked` — orphaned but the redirector itself is checked out by someone. Re-run later.
-  - `referenced_broken` — target gone but referencers exist. Manual cleanup needed; the skill never touches these.
-- `non_writable` — at least one referencer file isn't in the local workspace mapping (plugin content we can't edit)
+- `safe` -- fix-up safe set: target exists, neither the redirector nor any of its referencers is opened by anyone (levels are included)
+- `blocked` -- at least one file is opened by a teammate (or you, in another CL); records the user(s)
+- `broken` -- the redirector's target asset is missing. Sub-buckets:
+  - `orphaned_safe` -- target gone AND zero referencers AND the redirector .uasset itself is unlocked. Safe to `p4 delete` directly. Emitted to `--out-orphaned` if provided.
+  - `orphaned_blocked` -- orphaned but the redirector itself is checked out by someone. Re-run later.
+  - `referenced_broken` -- target gone but referencers exist. Manual cleanup needed; the skill never touches these.
+- `non_writable` -- at least one referencer file is not in the local workspace mapping (plugin content we cannot edit)
 
 The report also tracks how many `safe` redirectors touch a `.umap` referencer, just for visibility.
 
@@ -245,7 +276,7 @@ Do NOT proceed without explicit yes.
 
 ## Phase 3.5 - Filter against code references (host Python, only at apply time)
 
-**Skip this phase entirely in orphan-only mode.** Orphans have zero referencers by definition, including zero source-code referencers, so there's nothing for the filter to drop. Running it would just regenerate the cache for no benefit.
+Run this phase for both the fix-up safe set and the orphaned safe set. A registry-empty redirector can still have a literal source-code reference, so deletion also requires complete, matching source coverage.
 
 A redirector that's still referenced from C++/C#/Python source must NOT be fixed - the code would silently start pointing at a missing asset. We treat code references the same way we treat P4 checkouts: a hard block.
 
@@ -259,6 +290,8 @@ The cache lives at `./.local-data/code_references.yaml` (per-project, not checke
   --report-out tmp/redirectors/code_refs_report.json \
   --max-age-hours 24
 ```
+
+For the orphaned branch, run the same filter with `--safe-in tmp/redirectors/orphaned.json` and `--safe-out tmp/redirectors/orphaned_filtered.json`.
 
 The scan walks the cwd by default. Override with `--root <path>` if your code lives elsewhere. Default extensions cover C/C++/C#/Python/INI plus `.uproject`/`.uplugin`; override with `--extensions` (comma-separated) to include configs (`.yaml`, `.json`) if your project encodes asset paths in data.
 
@@ -277,22 +310,24 @@ To force a fresh scan ahead of time (e.g. you just renamed a bunch of assets in 
 
 ## Phase 4 - Apply fixups (UE Python, after approval)
 
-**Important: SAFE_JSON must be an absolute path.** UE commandlets run from a different cwd than the user's shell (typically `<project>/Binaries/Win64`), and a relative SAFE_JSON path silently misses the file. The apply script normalizes whatever it gets to absolute via `os.path.abspath`, so passing a relative path *usually* works — but pass an absolute path explicitly when scripting from CI or any setting where the cwd is unclear.
+**Important: SAFE_JSON must be an absolute path.** UE commandlets run from a different cwd than the user's shell (typically `<project>/Binaries/Win64`), and a relative SAFE_JSON path silently misses the file. The apply script normalizes whatever it gets to absolute via `os.path.abspath`, so passing a relative path usually works, but pass an absolute path explicitly when scripting from CI or any setting where the cwd is unclear.
 
 For the fix-up safe set, use `safe_filtered.json` from Phase 3.5, NOT the raw `safe.json`:
 
 ```bash
 SAFE_JSON="$PWD/tmp/redirectors/safe_filtered.json" \
   "${CLAUDE_PLUGIN_ROOT}/skills/ue-python-api/scripts/ue-runner.cmd" \
-  "${CLAUDE_PLUGIN_ROOT}/skills/fix-up-redirectors/scripts/apply_fixups.py"
+  "${CLAUDE_PLUGIN_ROOT}/skills/fix-up-redirectors/scripts/apply_fixups.py" \
+  "${ue_timeout_args[@]}"
 ```
 
-For the orphaned safe set (delete-only), point `SAFE_JSON` at `orphaned.json` from Phase 2. The script auto-detects the input shape and switches to delete-only mode (no referencer load/save, no code-ref filter required because orphans have no referencers):
+For the orphaned safe set (delete-only), point `SAFE_JSON` at `orphaned_filtered.json` from Phase 3.5. The script auto-detects the input shape and switches to delete-only mode:
 
 ```bash
-SAFE_JSON="$PWD/tmp/redirectors/orphaned.json" \
+SAFE_JSON="$PWD/tmp/redirectors/orphaned_filtered.json" \
   "${CLAUDE_PLUGIN_ROOT}/skills/ue-python-api/scripts/ue-runner.cmd" \
-  "${CLAUDE_PLUGIN_ROOT}/skills/fix-up-redirectors/scripts/apply_fixups.py"
+  "${CLAUDE_PLUGIN_ROOT}/skills/fix-up-redirectors/scripts/apply_fixups.py" \
+  "${ue_timeout_args[@]}"
 ```
 
 To prepend a project-specific CL tag (e.g. for naming conventions like `[Mix, Tool]`), pass it via env:
@@ -300,20 +335,36 @@ To prepend a project-specific CL tag (e.g. for naming conventions like `[Mix, To
 ```bash
 CL_DESC_SUFFIX="[Mix, Tool]" SAFE_JSON="$PWD/tmp/redirectors/safe_filtered.json" \
   "${CLAUDE_PLUGIN_ROOT}/skills/ue-python-api/scripts/ue-runner.cmd" \
-  "${CLAUDE_PLUGIN_ROOT}/skills/fix-up-redirectors/scripts/apply_fixups.py"
+  "${CLAUDE_PLUGIN_ROOT}/skills/fix-up-redirectors/scripts/apply_fixups.py" \
+  "${ue_timeout_args[@]}"
 ```
 
 The apply script does (fix-up mode):
 
-1. Creates a new pending CL with description `Fix up redirectors: <N> assets in <scope>` (plus `CL_DESC_SUFFIX` if set).
-2. `p4 edit -c <CL>` every non-redirector referencer file.
-3. UE: load each referencer (resolves redirectors at link time), rewrite soft refs via `rename_referencing_soft_object_paths`, force-save each package.
-4. `EditorAssetLibrary.delete_asset` on each redirector to release UE's file handle, then GC, then `p4 reopen -c <CL>` to herd UE-auto-opened deletes into our pending CL (with `p4 delete -c <CL>` as fallback for any not auto-opened).
-5. Saves a manifest at `<project>/Saved/PythonOutput/redirectors_apply_<CL>.yaml`.
+1. Revalidates every recorded mutation candidate against the current on-disk
+   set, and refuses to create a CL if a file appeared, disappeared, or was
+   added outside classification. In fix-up mode it also checks the project's
+   default-CL collection state and refuses to overwrite a pre-existing edit.
+2. Creates a new pending CL with description `Fix up redirectors: <N> assets in <scope>` (plus `CL_DESC_SUFFIX` if set).
+3. `p4 edit -c <CL>` every non-redirector referencer file.
+4. UE: load each referencer (resolves redirectors at link time), rewrite soft refs via `rename_referencing_soft_object_paths`, force-save each package.
+5. `EditorAssetLibrary.delete_asset` on each redirector to release UE's file handle, then GC, then `p4 reopen -c <CL>` to herd UE-auto-opened deletes into our pending CL (with `p4 delete -c <CL>` as fallback for any not auto-opened).
+6. Saves a manifest at `<project>/Saved/PythonOutput/redirectors_apply_<CL>.yaml`.
+   The manifest records one outcome for every intended file: `confirmed`,
+   `failed`, `pending-retry`, or `unknown`. A file counts as deleted only after
+   `p4 opened -c <CL>` confirms its delete action and CL membership.
 
-In delete-only mode: skips steps 2-4 (no referencer load/save needed), opens redirector .uasset files for delete in the new CL, and **automatically includes the `.umap` sibling of every redirector that has one** — level redirectors come in `.uasset`+`.umap` pairs and both files must land in the CL together.
+In delete-only mode: skips steps 3-5 (no referencer load/save needed), opens
+the classified redirector candidate files for delete in the new CL. Level
+redirectors include their `.umap` companion only when that companion was
+present during classification; a companion that appears later causes a
+refusal before CL creation.
 
 ### Phase 4 tail - lock-failure retry
+
+The apply manifest records `confirmed`, `failed`, `pending-retry`, or `unknown`
+for every intended file. It exits nonzero until all intended deletes are
+confirmed in the pending CL.
 
 If the apply script reports lock failures (UE held Windows handles even after `delete_asset` returned), it writes a retry list to `<project>/Saved/PythonOutput/redirectors_lock_retry_<CL>.txt`. After the commandlet exits (UE's process is gone, file handles released), run:
 
@@ -338,20 +389,23 @@ If there are blocked redirectors, suggest: **"Tell the blocked users to run `/fi
 
 - **No redirectors found:** print "Clean - no redirectors in <scope>." and stop.
 - **All redirectors blocked:** still print the report; nothing to apply. Suggest re-running later.
-- **Referenced-broken bucket non-empty:** these are redirectors with no target AND with referencers. The skill never touches them — surface them in the report (sample list comes through as `orphaned_samples` / `broken_samples` in `report.json`) and let the user investigate.
+- **Referenced-broken bucket non-empty:** these are redirectors with no target AND with referencers. The skill never touches them -- surface them in the report (sample list comes through as `orphaned_samples` / `broken_samples` in `report.json`) and let the user investigate.
 - **Phase-4 validation mismatch:** if `p4 opened -c <CL>` doesn't match the expected set, abort and tell the user. Do NOT call `fixup_referencers` against an unverified CL.
 - **fixup_referencers reports failures:** UE returns a failure list; note them in the manifest. The CL still contains the partial fixup. The user can decide whether to submit or revert.
 - **Re-running mid-fix:** if there's already a pending CL with description starting `Fix up redirectors:`, refuse phase 4 and ask the user to either submit/revert that one first, or pass `--force-new-cl`.
 - **UE file-lock errors during `p4 delete`:** UE has been observed to keep Windows file handles open on referencer packages even after `delete_asset` and a GC pass. The apply script catches the OS-level lock errors -- the Windows P4 client emits the message as "being used by another process" (note: not the older "in use by another process"), and "access is denied" is the generic fallback -- per file, writes the affected paths to `redirectors_lock_retry_<CL>.txt`, and prints the exact `p4 -x - delete -c <CL>` command to run after the commandlet exits. **Empirically the locked files are still on disk when the commandlet exits** (UE held the handle long enough that the disk-delete never finished), so the retry uses `p4 delete` (which marks the depot delete and removes the local file in one step), NOT `p4 reconcile` (which would see an unchanged local file and do nothing). If a future UE version actually finishes the on-disk delete before exiting, `p4 delete` will error per-file with "file not found" -- in that case fall back to `p4 -x - reconcile -c <CL> < <list>` against the same list.
-- **Level redirectors (`.umap`):** in **both** fix-up and delete-only modes the script automatically includes the `.umap` sibling of every `.uasset` redirector it deletes (the pairing logic runs before UE work and adds any `.umap` that exists on disk to `redirector_files`). Two shapes need this: normal level redirectors with both `.uasset`+`.umap` on disk (both must land in the apply CL or the depot keeps a dangling half), and `.umap`-native packages where discovery (UE asset registry) reports a `.uasset` path but only the `.umap` exists on disk (UE deletes the `.umap` and auto-opens it for delete in default CL — without pairing, the `.umap` is stranded outside the apply CL).
-- **Content Collections (`.collection`):** UE's CollectionManager listens for redirector deletions and rewrites every affected `.collection` file under `Content/Collections/`. By default (`UCollectionSettings::bAutoCommitOnSave = true`) it then **auto-submits each collection as its own one-file CL** with the description "Collection '<Name>' not modified" -- the in-memory members are unchanged but the on-disk paths got rewritten. Phase 4 disables `bAutoCommitOnSave` for the lifetime of the commandlet so the rewrites happen but the auto-submits don't; the script then sweeps `Content/Collections/*.collection` in the default CL and `p4 reopen`s them into the apply CL. End result: collection-file rewrites travel inside the apply CL alongside the redirector deletes, no stray one-file submits. If you see `Collection '...' not modified` CLs after a run, the suppression failed (check the manifest's `collections_reopened` field and the warning log line).
+- **Level redirectors (`.umap`):** the classifier snapshots the complete
+  on-disk pair, including `.umap`-native packages where only the map exists.
+  Apply revalidates that snapshot before creating a CL, so a newly appearing
+  companion cannot be silently expanded into the mutation set.
+- **Content Collections (`.collection`):** UE's CollectionManager listens for redirector deletions and rewrites affected collection files. Apply checks the project's default-CL collection state before mutation and refuses a pre-existing edit. After mutation it reconciles only collection paths attributable to this project; a failed or ambiguous query is reported as incomplete and never sweeps every collection in the workspace. The no-auto-submit guard still covers the commandlet lifetime.
 
 ## Common Mistakes
 
 - **Skipping validation in phase 4.** Never call `fixup_referencers` without first verifying the CL's opened set matches what discovery promised. A surprise file in the CL means the world moved between discovery and apply.
 - **Treating "checked out by me in another CL" as safe.** It's not. Other-CL checkouts are still blocked - the file would land in the wrong CL otherwise.
-- **Skipping the code-references filter for fix-up runs.** Phase 3.5 isn't optional for the fix-up path. A redirector that compiles into a string literal in C++/C#/Python source will silently break that code if you fix the redirector and the target asset later moves or is renamed. Always run the filter; never feed `safe.json` directly into Phase 4. (Orphan runs skip the filter — orphans have no referencers, including no source-code referencers.)
-- **Running a multi-thousand-file purge as the first apply.** For broad scopes use the per-directory subset reducer (`pick_one_per_dir.py`) for the test pass — it cuts apply time by 10x+ and surfaces breakage early when revert is still cheap.
+- **Skipping the code-references filter.** Phase 3.5 isn't optional for either path. A redirector that compiles into a string literal in C++/C#/Python source will silently break that code if you fix the redirector and the target asset later moves or is renamed. Always run the filter; never feed `safe.json` or `orphaned.json` directly into Phase 4.
+- **Running a multi-thousand-file purge as the first apply.** For broad scopes use the per-directory subset reducer (`pick_one_per_dir.py`) for the test pass -- it cuts apply time by 10x+ and surfaces breakage early when revert is still cheap.
 - **Passing a relative `SAFE_JSON` path from CI.** The apply script normalizes to absolute via `os.path.abspath`, but normalization happens in the commandlet's cwd (typically `<project>/Binaries/Win64`), not yours. Always pass an absolute path explicitly when scripting.
 - **Conflating orphaned redirectors with truly broken ones.** "target_exists: false" means two very different things depending on whether anyone references the redirector. The classifier splits these for you; don't lump them back together in tooling that consumes the report.
 
@@ -360,15 +414,15 @@ If there are blocked redirectors, suggest: **"Tell the blocked users to run `/fi
 The skill follows a facade-over-libs structure:
 
 - `scripts/` are thin facades that orchestrate one phase each
-  - `discover_redirectors.py` — Phase 1
-  - `classify_safety.py` — Phase 2 (emits fix-up safe set + optional orphaned safe set + report)
-  - `filter_safe_by_code_refs.py` / `scan_code_references.py` — Phase 3.5
-  - `pick_one_per_dir.py` — per-directory subset reducer (works on either safe-set shape)
-  - `apply_fixups.py` — Phase 4 (fix-up mode and delete-only mode; auto-detected from the input shape)
-- `lib/p4cli.py` — host-side P4 CLI (find, run, parse opened, where mapping)
-- `lib/package_paths.py` — UE-side mount-point map and package -> on-disk path
-- `lib/redirector_record.py` — YAML/JSON I/O for the discovery and safe-set files (`load_safe_set` / `save_safe_set` are reused by `pick_one_per_dir.py`)
-- `lib/code_refs.py` — host-side source scanner + cache I/O for `./.local-data/code_references.yaml` (24h freshness)
+  - `discover_redirectors.py` -- Phase 1
+  - `classify_safety.py` -- Phase 2 (emits fix-up safe set + optional orphaned safe set + report)
+  - `filter_safe_by_code_refs.py` / `scan_code_references.py` -- Phase 3.5
+  - `pick_one_per_dir.py` -- per-directory subset reducer (works on either safe-set shape)
+  - `apply_fixups.py` -- Phase 4 (fix-up mode and delete-only mode; auto-detected from the input shape)
+- `lib/p4cli.py` -- host-side P4 CLI (find, run, parse opened, where mapping)
+- `lib/package_paths.py` -- UE-side mount-point map and package -> on-disk path
+- `lib/redirector_record.py` -- YAML/JSON I/O for the discovery and safe-set files (`load_safe_set` / `save_safe_set` are reused by `pick_one_per_dir.py`)
+- `lib/code_refs.py` -- host-side source scanner + cache I/O for `./.local-data/code_references.yaml` (24h freshness)
 
 The libs are also useful for one-off redirector-related scripts. Import them directly:
 

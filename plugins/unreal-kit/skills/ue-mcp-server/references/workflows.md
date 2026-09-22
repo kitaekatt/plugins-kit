@@ -1,6 +1,7 @@
 # MCP Workflow Recipes
 
-Multi-step recipes that combine multiple MCP tool domains. Stub document for the first ship; populate as common workflows materialize.
+Multi-step recipes that combine multiple MCP tool domains for common authoring
+tasks. They are workflow summaries, not a server schema.
 
 Each recipe below names the goal, lists the tool calls in order, and notes the post-conditions to verify before declaring the workflow complete.
 
@@ -32,5 +33,7 @@ Each recipe below names the goal, lists the tool calls in order, and notes the p
 1. `control_editor` -> `play` to start PIE.
 2. `control_editor` -> `console_command` to drive in-game state (cheats, teleport, skip onboarding).
 3. `inspect` to read runtime actor state.
-4. `control_editor` -> `screenshot` for visual capture.
-5. `control_editor` -> `stop_pie` when done.
+4. `control_editor` -> `stop_pie` when runtime checks are complete.
+5. `control_editor` -> `screenshot` for an editor-state capture. This does not
+   capture the runtime state; runtime visual capture remains unverified until
+   a supported server operation is established.

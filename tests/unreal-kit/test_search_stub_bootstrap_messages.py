@@ -14,6 +14,7 @@ flag (tests/unreal-kit/conftest.py).
 from __future__ import annotations
 
 import os
+import runpy
 import shutil
 import subprocess
 import sys
@@ -95,3 +96,48 @@ def test_current_bootstrap_lib_reaches_the_search(tmp_path):
     run = _run(tmp_path, str(BOOTSTRAP_LIB.parent))
     assert run.returncode != 3, run.stderr
     assert "too old" not in run.stderr and "has not provisioned" not in run.stderr
+
+
+def test_real_stock_stub_search_returns_match(tmp_path):
+    """The real search path must search a provisioned temporary stock stub."""
+    data_root = tmp_path / "data"
+    plugin_data = data_root / "plugins-kit" / "unreal-kit"
+    home = tmp_path / "home"
+    stock = home / ".claude" / "plugins" / "data" / "plugins-kit" / "unreal-kit" / "stubs" / "unreal.py"
+    stock.parent.mkdir(parents=True)
+    plugin_data.mkdir(parents=True)
+    (plugin_data / "bootstrap.log").write_text("provisioned\n", encoding="utf-8")
+    stock.write_text("class SomePattern:\n    pass\n", encoding="utf-8")
+    env = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
+    env.update({
+        "_BOOTSTRAP_GUARD_VENV_REEXEC": "1",
+        "CLAUDE_BOOTSTRAP_DATA_ROOT": str(data_root),
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "PYTHONPATH": str(BOOTSTRAP_LIB.parent),
+        "HOME": str(home),
+    })
+    run = subprocess.run(
+        [sys.executable, str(SCRIPT), "SomePattern", "--project-root", str(tmp_path)],
+        cwd=tmp_path, capture_output=True, text=True, env=env, timeout=120,
+    )
+    assert run.returncode == 0, run.stderr
+    assert f"{stock}:1:class SomePattern:" in run.stdout
+
+
+def test_unrelated_post_import_exception_is_not_reported_as_search_success(tmp_path, monkeypatch):
+    """A post-import failure must escape instead of becoming exit 0/1."""
+    data_root = tmp_path / "data"
+    plugin_data = data_root / "plugins-kit" / "unreal-kit"
+    plugin_data.mkdir(parents=True)
+    (plugin_data / "bootstrap.log").write_text("provisioned\n", encoding="utf-8")
+    monkeypatch.setenv("_BOOTSTRAP_GUARD_VENV_REEXEC", "1")
+    monkeypatch.setenv("CLAUDE_BOOTSTRAP_DATA_ROOT", str(data_root))
+    monkeypatch.setenv("PYTHONDONTWRITEBYTECODE", "1")
+    module = runpy.run_path(str(SCRIPT), run_name="search_unreal_stub_test")
+
+    def explode(*_args, **_kwargs):
+        raise RuntimeError("unrelated post-import failure")
+
+    module["main"].__globals__["select_search_stub"] = explode
+    with pytest.raises(RuntimeError, match="unrelated post-import failure"):
+        module["main"](["SomePattern", "--project-root", str(tmp_path)])

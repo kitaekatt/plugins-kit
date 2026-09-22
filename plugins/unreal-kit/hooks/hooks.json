@@ -5,7 +5,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/userpromptsubmit/ue-console-cmd.sh"
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/userpromptsubmit/ue-console-cmd.sh\""
           }
         ]
       }
@@ -16,7 +16,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/pretooluse/check-editor-build-fresh.sh"
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/pretooluse/check-editor-build-fresh.sh\""
           }
         ]
       }

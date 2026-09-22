@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import ast
 import json
+import os
 import shutil
 import stat
+import tempfile
+import tokenize
 from collections.abc import Callable, Mapping
 from pathlib import Path
 
@@ -35,6 +39,10 @@ class DestinationNotWritableError(Exception):
     the user may check the file out of version control (or clear the
     read-only flag).
     """
+
+
+class StubValidationError(ValueError):
+    """Raised when a stub is not readable, nonempty, and valid Python text."""
 
 
 def _is_read_only(path: Path) -> bool:
@@ -74,6 +82,39 @@ def _not_writable_message(destination: Path) -> str:
         f"{destination} is read-only. Check it out of version control (or "
         "clear the read-only flag), then re-run this refresh."
     )
+
+
+def _validate_stub(path: Path) -> bytes:
+    """Validate a stub as Python source without importing or executing it."""
+    try:
+        if not path.is_file():
+            raise StubValidationError(f"stub source is not a regular file: {path}")
+        if path.stat().st_size == 0:
+            raise StubValidationError(f"stub source is empty: {path}")
+        with tokenize.open(str(path)) as handle:
+            source = handle.read()
+        if not source.strip():
+            raise StubValidationError(f"stub source is empty: {path}")
+        ast.parse(source, filename=str(path), mode="exec")
+        return path.read_bytes()
+    except StubValidationError:
+        raise
+    except (OSError, SyntaxError, UnicodeError, LookupError) as exc:
+        raise StubValidationError(
+            f"stub source is not readable valid Python: {path}: {exc}"
+        ) from exc
+
+
+def _remove_candidate(path: Path | None) -> None:
+    if path is None:
+        return
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        pass
+    except OSError:
+        # Preserve the original copy/replace error if a platform denies cleanup.
+        pass
 
 
 def load_effective_config(project_root: Path) -> dict:
@@ -138,13 +179,40 @@ def deferred_requirement_message(name: str) -> str | None:
 def select_search_stub(
     project_root: Path,
     config: Mapping[str, object],
+    announce: Callable[[str], None] | None = None,
 ) -> Path | None:
-    """Prefer the durable enriched stub, then the machine-local stock stub."""
+    """Prefer usable enriched data, then usable stock data.
+
+    A malformed or empty enriched file is not treated as project-specific
+    coverage. When stock data is usable, the optional callback receives an
+    explicit fallback diagnostic so callers can disclose the reduced source.
+    """
     enriched = durable_stub_path(project_root, config)
-    if enriched.is_file():
-        return enriched
+    enriched_error: StubValidationError | None = None
+    if enriched.exists():
+        try:
+            _validate_stub(enriched)
+        except StubValidationError as exc:
+            enriched_error = exc
+        else:
+            return enriched
     stock = stock_stub_path()
-    return stock if stock.is_file() else None
+    if stock.exists():
+        try:
+            _validate_stub(stock)
+        except StubValidationError as exc:
+            if announce is not None:
+                announce(f"Stock Unreal API stub is unusable: {exc}")
+            return None
+        if enriched_error is not None and announce is not None:
+            announce(
+                "Enriched Unreal API stub is unusable; falling back to the "
+                f"machine-local stock stub: {enriched_error}"
+            )
+        return stock
+    if enriched_error is not None and announce is not None:
+        announce(f"Enriched Unreal API stub is unusable: {enriched_error}")
+    return None
 
 
 def refresh_durable_stub(
@@ -159,9 +227,11 @@ def refresh_durable_stub(
     if not source.is_file():
         raise FileNotFoundError(source)
 
+    source_bytes = _validate_stub(source)
+
     destination = durable_stub_path(project_root, config)
 
-    if destination.is_file() and source.read_bytes() == destination.read_bytes():
+    if destination.is_file() and source_bytes == destination.read_bytes():
         announce(f"Unreal API stub already up to date at {destination}")
         return destination
 
@@ -173,5 +243,23 @@ def refresh_durable_stub(
     # This must remain durable consuming-project data. Bootstrap may check this
     # path, but only this explicit human-invoked action may create or update it.
     destination.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(source, destination)
+    candidate: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="wb",
+            dir=destination.parent,
+            prefix=f".{destination.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as stream:
+            candidate = Path(stream.name)
+        # Copy into a same-directory candidate. A failed copy can therefore
+        # never truncate the old destination, and the finally block removes
+        # the partial candidate.
+        shutil.copy2(source, candidate)
+        _validate_stub(candidate)
+        os.replace(candidate, destination)
+        candidate = None
+    finally:
+        _remove_candidate(candidate)
     return destination

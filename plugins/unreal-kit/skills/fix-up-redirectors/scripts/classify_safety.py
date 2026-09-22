@@ -24,20 +24,40 @@ from path_repair import repair_path
 repair_path()
 
 from p4cli import get_opened_map, get_workspace_mapping, local_to_depot
+try:
+    from p4cli import where_records
+except ImportError:  # legacy test/provider shim; production p4cli always has it
+    where_records = None
 from redirector_record import load_discovery, save_safe_set, save_report
 
 
 def _is_orphaned(record):
     """Orphaned redirector: target gone AND nothing references it.
 
-    These are pure dead pointers — safe to delete with zero rewrite risk
-    (no referencers means no .uasset to rewrite, just `p4 delete` the
-    redirector file itself).
+    These have no registry referencers, so the apply operation is delete-only.
+    They still pass through the source-code reference filter before deletion;
+    registry emptiness does not establish complete source-code coverage.
     """
     refs = record.get('referencer_files') or []
     ref_pkgs = record.get('referencer_pkgs') or []
     has_level = record.get('has_level_referencer', False)
     return not refs and not ref_pkgs and not has_level
+
+
+def _candidate_files(record):
+    """Freeze the complete on-disk mutation set during classification."""
+    declared = record.get('mutation_files')
+    if declared is not None:
+        return sorted(dict.fromkeys(str(path) for path in declared if path))
+    primary = record.get('file')
+    candidates = []
+    if primary and os.path.isfile(primary):
+        candidates.append(primary)
+    if primary and primary.lower().endswith('.uasset'):
+        sibling = primary[:-len('.uasset')] + '.umap'
+        if os.path.isfile(sibling):
+            candidates.append(sibling)
+    return sorted(dict.fromkeys(candidates))
 
 
 def main():
@@ -76,10 +96,24 @@ def main():
         (fix-up and orphaned) charge the same tally.
         """
         blockers = []
+        tagged = {}
+        if where_records is not None and local_paths:
+            for mapping in where_records(local_paths):
+                tagged.setdefault(str(mapping.get('input', '')).casefold(), []).append(mapping)
         for local_path in local_paths:
             if not local_path:
                 continue
-            depot = local_to_depot(local_path, depot_root, local_root)
+            matches = tagged.get(str(local_path).casefold()) if tagged else None
+            if where_records is not None:
+                if not matches:
+                    blockers.append({'file': local_path, 'reason': 'not_in_workspace'})
+                    continue
+                if len(matches) != 1 or not matches[0].get('depotFile'):
+                    blockers.append({'file': local_path, 'reason': 'ambiguous_mapping'})
+                    continue
+                depot = matches[0]['depotFile']
+            else:
+                depot = local_to_depot(local_path, depot_root, local_root)
             if not depot:
                 blockers.append({'file': local_path, 'reason': 'not_in_workspace'})
                 continue
@@ -91,13 +125,19 @@ def main():
         return blockers
 
     for r in redirectors:
+        mutation_files = _candidate_files(r)
+        r['mutation_files'] = mutation_files
+        if not mutation_files:
+            r['blockers'] = [{'file': r.get('file'), 'reason': 'missing_mutation_candidate'}]
+            non_writable.append(r)
+            continue
         if not r.get('target_exists'):
             # Broken target — split into orphaned (zero referencers, safe to delete)
             # vs referenced-broken (has referencers, manual cleanup needed).
             if _is_orphaned(r):
                 # Only the redirector's own file matters for lock-checking;
                 # there are no referencers to consider.
-                blockers = _check_blockers([r.get('file')])
+                blockers = _check_blockers(mutation_files)
                 if blockers:
                     r['blockers'] = blockers
                     orphaned_blocked.append(r)
@@ -116,7 +156,7 @@ def main():
             non_writable.append(r)
             continue
 
-        all_files = [r['file']] + list(r.get('referencer_files', []))
+        all_files = mutation_files + list(r.get('referencer_files', []))
         blockers = _check_blockers(all_files)
 
         if blockers:

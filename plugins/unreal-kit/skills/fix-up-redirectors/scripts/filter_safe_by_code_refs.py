@@ -19,21 +19,43 @@ sys.path.insert(0, os.path.normpath(os.path.join(os.path.dirname(__file__), '..'
 from bootstrap_guard import reexec_under_plugin_venv
 reexec_under_plugin_venv("unreal-kit")
 
-from code_refs import DEFAULT_EXTENSIONS, get_age_hours, load, save, scan
+from code_refs import (
+    DEFAULT_EXTENSIONS,
+    IncompleteScanError,
+    cache_matches,
+    discover_mount_points,
+    get_age_hours,
+    load,
+    save,
+    scan,
+)
 from redirector_record import load_safe_set, save_report, save_safe_set
 
 
-def _maybe_regenerate(refs_path, root, max_age_hours, extensions):
+def _maybe_regenerate(refs_path, root, max_age_hours, extensions, scope=None):
     age = get_age_hours(refs_path)
     if age is None:
         print(f"Code-refs cache missing - scanning {root}...")
     elif age > max_age_hours:
         print(f"Code-refs cache is {age:.1f}h old (>{max_age_hours}h) - rescanning {root}...")
     else:
-        print(f"Code-refs cache is {age:.1f}h old (fresh).")
-        return
+        mounts = discover_mount_points(root)
+        try:
+            cached = load(refs_path)
+        except (OSError, TypeError, ValueError):
+            cached = None
+        if cache_matches(cached, root, extensions, mounts, scope=scope):
+            print(f"Code-refs cache is {age:.1f}h old (fresh and matching).")
+            return
+        print(
+            f"Code-refs cache is {age:.1f}h old but provenance does not match "
+            f"root/scope/extensions/mounts; rescanning {root}..."
+        )
     refs, file_count, scanned_count, mounts = scan(root, extensions=extensions)
-    save(refs_path, refs, root, file_count, scanned_count, extensions, mounts=mounts)
+    save(
+        refs_path, refs, root, file_count, scanned_count, extensions,
+        mounts=mounts, scope=scope,
+    )
     print(f"Wrote {refs_path}: {len(refs)} references from {file_count} files.")
 
 
@@ -53,7 +75,18 @@ def main():
     extensions = tuple(e.strip() if e.strip().startswith('.') else '.' + e.strip()
                        for e in args.extensions.split(',') if e.strip())
 
-    _maybe_regenerate(args.refs, args.root, args.max_age_hours, extensions)
+    safe = load_safe_set(args.safe_in)
+    scope = safe.get('scope', '/Game')
+    try:
+        _maybe_regenerate(
+            args.refs, args.root, args.max_age_hours, extensions, scope=scope
+        )
+    except IncompleteScanError as error:
+        sys.stderr.write(
+            f"[filter_safe_by_code_refs] Code-reference coverage failure: "
+            f"{error}\n"
+        )
+        sys.exit(1)
 
     refs_doc = load(args.refs) or {}
     refs_set = set(refs_doc.get('references') or [])
@@ -65,8 +98,6 @@ def main():
             f"at {args.refs} has 0 references. Check --root and --extensions.\n")
         sys.exit(1)
 
-    safe = load_safe_set(args.safe_in)
-    scope = safe.get('scope', '/Game')
     records = safe.get('redirectors', [])
 
     kept = []

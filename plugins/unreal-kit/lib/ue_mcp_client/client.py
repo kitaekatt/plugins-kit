@@ -10,6 +10,7 @@ Protocol reference: Tools/Source/Unreal_mcp/src/automation/bridge.ts
 """
 
 import json
+import math
 import os
 import time
 import uuid
@@ -26,6 +27,7 @@ DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8090
 DEFAULT_TIMEOUT_S = 30.0
 HANDSHAKE_TIMEOUT_S = 5.0
+DEFAULT_CONNECTION_TIMEOUT_S = HANDSHAKE_TIMEOUT_S
 SUBPROTOCOL = "mcp-automation"
 
 # Progress extension safeguards
@@ -33,6 +35,20 @@ PROGRESS_EXTENSION_S = 30.0
 MAX_PROGRESS_EXTENSIONS = 10
 PROGRESS_STALE_THRESHOLD = 3
 ABSOLUTE_MAX_TIMEOUT_S = 300.0
+DEFAULT_REQUEST_CAP_S = ABSOLUTE_MAX_TIMEOUT_S
+
+
+def _validate_budget(value, name):
+    """Return a finite, positive timeout or raise a useful configuration error."""
+    if isinstance(value, bool):
+        raise ValueError(f"{name} must be finite and positive")
+    try:
+        value = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{name} must be finite and positive") from exc
+    if not math.isfinite(value) or value <= 0:
+        raise ValueError(f"{name} must be finite and positive")
+    return value
 
 
 # ---------------------------------------------------------------------------
@@ -150,9 +166,22 @@ class McpClient:
     - ``MCP_AUTOMATION_WS_HOST`` -- server host (default: 127.0.0.1)
     - ``MCP_AUTOMATION_WS_PORT`` -- server port (default: 8090)
     - ``MCP_REQUEST_TIMEOUT_MS``  -- default timeout in ms (default: 30000)
+
+    ``connection_timeout_s`` controls the complete connect/hello/ack phase
+    (default: 5 seconds). ``request_cap_s`` is the absolute upper bound for
+    one request, including progress extensions (default: 300 seconds). A
+    longer action must provide both a larger ``timeout_s`` and a larger
+    ``request_cap_s`` when constructing the client.
     """
 
-    def __init__(self, host=None, port=None, timeout_s=None):
+    def __init__(
+        self,
+        host=None,
+        port=None,
+        timeout_s=None,
+        connection_timeout_s=DEFAULT_CONNECTION_TIMEOUT_S,
+        request_cap_s=DEFAULT_REQUEST_CAP_S,
+    ):
         self._host = host or os.environ.get(
             "MCP_AUTOMATION_WS_HOST",
             os.environ.get("MCP_AUTOMATION_HOST", DEFAULT_HOST),
@@ -162,14 +191,24 @@ class McpClient:
             or os.environ.get("MCP_AUTOMATION_WS_PORT", DEFAULT_PORT)
         )
         env_timeout_ms = os.environ.get("MCP_REQUEST_TIMEOUT_MS")
+        timeout_was_explicit = timeout_s is not None
         if timeout_s is not None:
-            self._timeout_s = float(timeout_s)
+            self._timeout_s = _validate_budget(timeout_s, "timeout_s")
         elif env_timeout_ms is not None:
-            self._timeout_s = int(env_timeout_ms) / 1000.0
+            self._timeout_s = _validate_budget(
+                int(env_timeout_ms) / 1000.0, "timeout_s"
+            )
         else:
             self._timeout_s = DEFAULT_TIMEOUT_S
+        self._connection_timeout_s = _validate_budget(
+            connection_timeout_s, "connection_timeout_s"
+        )
+        self._request_cap_s = _validate_budget(request_cap_s, "request_cap_s")
+        if timeout_was_explicit and self._timeout_s > self._request_cap_s:
+            raise ValueError("timeout_s cannot exceed request_cap_s")
         self._ws = None
         self._handshake_metadata = None
+        self._last_cleanup_error = None
 
     # -- Context manager ---------------------------------------------------
 
@@ -187,12 +226,35 @@ class McpClient:
     def url(self):
         return f"ws://{self._host}:{self._port}"
 
+    def _remaining(self, deadline, phase):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise McpTimeoutError(
+                f"{phase} budget expired before the phase completed"
+            )
+        return remaining
+
+    def _set_timeout(self, timeout_s):
+        """Set a finite socket timeout; never reset it to an unbounded value."""
+        timeout_s = _validate_budget(timeout_s, "socket timeout_s")
+        self._ws.settimeout(timeout_s)
+
+    def _send_json(self, payload, deadline, phase):
+        remaining = self._remaining(deadline, f"{phase} send")
+        self._set_timeout(remaining)
+        try:
+            self._ws.send(json.dumps(payload))
+        except (OSError, websocket.WebSocketException) as exc:
+            raise McpConnectionError(f"Failed to send {phase}: {exc}") from exc
+
     def connect(self):
         """Open the WebSocket and complete the bridge handshake."""
+        deadline = time.monotonic() + self._connection_timeout_s
         try:
+            remaining = self._remaining(deadline, "connection")
             self._ws = websocket.create_connection(
                 self.url,
-                timeout=HANDSHAKE_TIMEOUT_S,
+                timeout=remaining,
                 subprotocols=[SUBPROTOCOL],
             )
         except (OSError, websocket.WebSocketException) as exc:
@@ -201,23 +263,67 @@ class McpClient:
                 f"Is the Editor running with the McpAutomationBridge plugin? ({exc})"
             ) from exc
 
-        self._handshake()
+        try:
+            self._handshake(deadline=deadline)
+        except Exception as exc:
+            # A context entry can fail after the socket has been created. It
+            # still owns that socket, so always close it exactly once and
+            # clear handshake state before exposing the original diagnosis.
+            self.close(deadline=deadline)
+            if isinstance(exc, McpError):
+                raise
+            raise McpConnectionError(
+                f"Connection setup failed for {self.url}: {exc}"
+            ) from exc
 
-    def close(self):
-        """Send bridge_goodbye and close the socket."""
-        if self._ws is not None:
+    def close(self, timeout_s=None, *, deadline=None):
+        """Send bridge_goodbye and close the socket within a cleanup budget.
+
+        Cleanup is best effort so a context manager never masks the action or
+        handshake diagnosis. ``last_cleanup_error`` retains a short
+        diagnostic when the goodbye could not be sent.
+        """
+        if self._ws is None:
+            self._handshake_metadata = None
+            return
+
+        if deadline is None:
+            budget = self._connection_timeout_s if timeout_s is None else _validate_budget(
+                timeout_s, "close timeout_s"
+            )
+            deadline = time.monotonic() + budget
+        elif timeout_s is not None:
+            raise ValueError("pass either timeout_s or deadline, not both")
+
+        ws = self._ws
+        self._last_cleanup_error = None
+        try:
+            remaining = self._remaining(deadline, "goodbye")
+        except McpTimeoutError as exc:
+            self._last_cleanup_error = str(exc)
+        else:
             try:
-                self._ws.send(json.dumps({
+                self._set_timeout(remaining)
+                ws.send(json.dumps({
                     "type": "bridge_goodbye",
                     "reason": "client closing",
                 }))
-            except Exception:
-                pass
+            except Exception as exc:
+                self._last_cleanup_error = f"goodbye send failed: {exc}"
+        finally:
             try:
-                self._ws.close()
-            except Exception:
-                pass
+                ws.close()
+            except Exception as exc:
+                self._last_cleanup_error = self._last_cleanup_error or (
+                    f"socket close failed: {exc}"
+                )
             self._ws = None
+            self._handshake_metadata = None
+
+    @property
+    def last_cleanup_error(self):
+        """Best-effort cleanup diagnosis from the most recent ``close``."""
+        return self._last_cleanup_error
 
     @property
     def connected(self):
@@ -225,22 +331,29 @@ class McpClient:
 
     # -- Handshake ---------------------------------------------------------
 
-    def _handshake(self):
+    def _handshake(self, *, deadline=None):
         """Send bridge_hello and wait for bridge_ack."""
+        if deadline is None:
+            deadline = time.monotonic() + self._connection_timeout_s
         hello = {"type": "bridge_hello"}
-        self._ws.send(json.dumps(hello))
+        self._send_json(hello, deadline, "handshake")
 
-        deadline = time.monotonic() + HANDSHAKE_TIMEOUT_S
-        while time.monotonic() < deadline:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
+        while True:
+            try:
+                remaining = self._remaining(deadline, "handshake receive")
+            except McpTimeoutError:
                 break
-            self._ws.settimeout(remaining)
+            self._set_timeout(remaining)
             try:
                 raw = self._ws.recv()
             except websocket.WebSocketTimeoutException:
                 break
             except websocket.WebSocketException as exc:
+                # Some test/integration wrappers replace websocket's public
+                # exception classes after the socket was constructed. Keep
+                # timeout diagnostics correct for the concrete timeout type.
+                if exc.__class__.__name__ == "WebSocketTimeoutException":
+                    break
                 raise McpConnectionError(
                     f"Connection lost during handshake: {exc}"
                 ) from exc
@@ -252,10 +365,9 @@ class McpClient:
             msg_type = msg.get("type")
             if msg_type == "bridge_ack":
                 self._handshake_metadata = msg
-                self._ws.settimeout(None)
                 return
             if msg_type == "bridge_ping":
-                self._send_pong()
+                self._send_pong(deadline=deadline)
                 continue
             if msg_type == "bridge_error":
                 raise HandshakeError(
@@ -263,7 +375,7 @@ class McpClient:
                 )
 
         raise HandshakeError(
-            f"Handshake timed out after {HANDSHAKE_TIMEOUT_S}s -- "
+            f"Handshake timed out after {self._connection_timeout_s}s -- "
             f"no bridge_ack received from {self.url}"
         )
 
@@ -296,6 +408,15 @@ class McpClient:
         if not self.connected:
             raise McpConnectionError("Not connected. Call connect() or use a context manager.")
 
+        base_timeout = self._timeout_s if timeout_s is None else _validate_budget(
+            timeout_s, "timeout_s"
+        )
+        if base_timeout > self._request_cap_s:
+            raise ValueError("timeout_s cannot exceed request_cap_s")
+
+        start = time.monotonic()
+        request_deadline = start + base_timeout
+        absolute_deadline = start + self._request_cap_s
         request_id = str(uuid.uuid4())
         message = {
             "type": "automation_request",
@@ -304,21 +425,37 @@ class McpClient:
             "payload": payload or {},
         }
         try:
-            self._ws.send(json.dumps(message))
-        except websocket.WebSocketException as exc:
+            self._send_json(message, min(request_deadline, absolute_deadline), "request")
+        except (OSError, websocket.WebSocketException) as exc:
             raise McpConnectionError(f"Failed to send request: {exc}") from exc
 
-        base_timeout = timeout_s if timeout_s is not None else self._timeout_s
-        return self._recv_response(request_id, tool, base_timeout)
+        return self._recv_response(
+            request_id,
+            tool,
+            base_timeout,
+            deadline=request_deadline,
+            absolute_deadline=absolute_deadline,
+        )
 
-    def _recv_response(self, request_id, action, base_timeout):
+    def _recv_response(
+        self,
+        request_id,
+        action,
+        base_timeout,
+        *,
+        deadline=None,
+        absolute_deadline=None,
+    ):
         """Block until the matching automation_response arrives.
 
         Transparently handles ping/pong, progress_update (with timeout
         extension and deadlock safeguards), and other control messages.
         """
-        deadline = time.monotonic() + base_timeout
-        absolute_deadline = time.monotonic() + ABSOLUTE_MAX_TIMEOUT_S
+        if deadline is None:
+            start = time.monotonic()
+            deadline = start + base_timeout
+        if absolute_deadline is None:
+            absolute_deadline = time.monotonic() + self._request_cap_s
         extension_count = 0
         last_progress_percent = None
         stale_count = 0
@@ -333,7 +470,7 @@ class McpClient:
                     f"or the action may not exist."
                 )
 
-            self._ws.settimeout(remaining)
+            self._set_timeout(remaining)
             try:
                 raw = self._ws.recv()
             except websocket.WebSocketTimeoutException:
@@ -355,7 +492,7 @@ class McpClient:
 
             # -- Heartbeat --
             if msg_type == "bridge_ping":
-                self._send_pong()
+                self._send_pong(deadline=min(deadline, absolute_deadline))
                 continue
 
             # -- Progress update: extend timeout with deadlock safeguards --
@@ -384,8 +521,13 @@ class McpClient:
                     stale_count = 0
 
                 last_progress_percent = percent
-                extension_count += 1
-                deadline = time.monotonic() + PROGRESS_EXTENSION_S
+                candidate = min(
+                    time.monotonic() + PROGRESS_EXTENSION_S,
+                    absolute_deadline,
+                )
+                if candidate > deadline:
+                    extension_count += 1
+                    deadline = candidate
                 continue
 
             # -- Ignorable control messages --
@@ -416,10 +558,12 @@ class McpClient:
 
             # Unknown message type -- skip silently.
 
-    def _send_pong(self):
+    def _send_pong(self, *, deadline=None):
+        if deadline is None:
+            deadline = time.monotonic() + self._connection_timeout_s
         try:
-            self._ws.send(json.dumps({"type": "bridge_pong"}))
-        except websocket.WebSocketException:
+            self._send_json({"type": "bridge_pong"}, deadline, "pong")
+        except (McpTimeoutError, McpConnectionError, OSError, websocket.WebSocketException):
             pass  # Best effort; recv loop will catch the broken socket.
 
     # -- Convenience methods -----------------------------------------------

@@ -40,29 +40,27 @@ _LIB_DIR = _PLUGIN_DIR / "lib"
 if str(_LIB_DIR) not in sys.path:
     sys.path.insert(0, str(_LIB_DIR))
 
-from path_repair import repair_path  # noqa: E402
-
-repair_path()
-
-# Re-exec under the bootstrap-provisioned plugin venv (no-op when already
-# there) so plugin deps resolve regardless of which interpreter launched the
-# script; then fail fast with an actionable message if the bootstrap plugin
-# never provisioned this plugin at all (e.g. a stray system Python, no venv).
+# Re-exec before importing any plugin library. This is a host-side entrypoint.
 from bootstrap_guard import reexec_under_plugin_venv, require_bootstrap  # noqa: E402
 
 reexec_under_plugin_venv("unreal-kit")
 require_bootstrap("unreal-kit", feature="Unreal Python automation")
 
+from path_repair import repair_path  # noqa: E402
+
+repair_path()
+
 from ue_env import (  # noqa: E402
     DEFAULT_MCP_HOST,
     DEFAULT_MCP_PORT,
+    DEFAULT_PROBE_TIMEOUT_S,
     DEFAULT_READINESS_TIMEOUT_S,
     find_editor_processes,
     is_mcp_ready,
     launch_editor,
     wait_for_mcp_ready,
 )
-from ue_runner_config import load_config  # noqa: E402
+from ue_runner_config import ConfigError, load_config  # noqa: E402
 
 
 def _info(msg: str) -> None:
@@ -92,13 +90,21 @@ def _zombies(procs: list[dict]) -> list[dict]:
 
 
 def cmd_status(args: argparse.Namespace) -> int:
-    config = load_config(args.config)
+    try:
+        config = load_config(args.config)
+    except ConfigError as exc:
+        _err(str(exc))
+        return 2
     editor_exe = config.editor_exe
     uproject = config.uproject
     procs = find_editor_processes(editor_exe)
     interactive = _interactive(procs)
     zombies = _zombies(procs)
-    ready = is_mcp_ready(args.host, args.port)
+    ready = is_mcp_ready(
+        args.host,
+        args.port,
+        probe_timeout_s=getattr(args, "probe_timeout", DEFAULT_PROBE_TIMEOUT_S),
+    )
     print(f"editor_exe:  {editor_exe or '(not configured)'}")
     print(f"uproject:    {uproject or '(not configured)'}")
     print(f"processes:   {_summarize_processes(procs)}")
@@ -116,7 +122,11 @@ def cmd_status(args: argparse.Namespace) -> int:
 
 
 def cmd_launch_editor(args: argparse.Namespace) -> int:
-    config = load_config(args.config)
+    try:
+        config = load_config(args.config)
+    except ConfigError as exc:
+        _err(str(exc))
+        return 2
     editor_exe = config.editor_exe
     uproject = config.uproject
 
@@ -136,7 +146,11 @@ def cmd_launch_editor(args: argparse.Namespace) -> int:
             _err(e)
         return 2
 
-    if is_mcp_ready(args.host, args.port):
+    if is_mcp_ready(
+        args.host,
+        args.port,
+        probe_timeout_s=getattr(args, "probe_timeout", DEFAULT_PROBE_TIMEOUT_S),
+    ):
         _info("MCP bridge already reachable -- editor is up.")
         return 0
 
@@ -223,6 +237,15 @@ def main() -> None:
         type=int,
         default=DEFAULT_MCP_PORT,
         help=f"MCP bridge port (default: {DEFAULT_MCP_PORT}).",
+    )
+    parser.add_argument(
+        "--probe-timeout",
+        type=float,
+        default=DEFAULT_PROBE_TIMEOUT_S,
+        help=(
+            "Connection/handshake budget for each readiness probe "
+            f"(default: {DEFAULT_PROBE_TIMEOUT_S})."
+        ),
     )
     sub = parser.add_subparsers(dest="command", required=True)
 

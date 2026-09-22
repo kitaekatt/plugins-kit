@@ -7,6 +7,7 @@ class paths, third-party include paths) is filtered out.
 
 import os
 import sys
+import builtins
 from pathlib import Path
 
 import pytest
@@ -22,7 +23,8 @@ _LIB_DIR = (
 if str(_LIB_DIR) not in sys.path:
     sys.path.insert(0, str(_LIB_DIR))
 
-from code_refs import discover_mount_points, scan
+import code_refs
+from code_refs import IncompleteScanError, discover_mount_points, scan
 
 
 def _make_project(tmp_path: Path):
@@ -183,6 +185,89 @@ class TestScan:
         root, _ = _make_project(tmp_path)
         _, _, _, mounts = scan(str(root))
         assert set(mounts) >= {"/Game", "/Engine", "/MyPlugin"}
+
+    @pytest.mark.parametrize("encoding", ["utf-16-le", "utf-16-be"])
+    def test_scans_utf16_source_files(self, tmp_path, encoding):
+        root, src = _make_project(tmp_path)
+        (src / "ref.ini").write_bytes(
+            'Redirector="/Game/UI/WBP_Real"'.encode(encoding)
+        )
+
+        refs, _, _, _ = scan(str(root))
+
+        assert "/Game/UI/WBP_Real" in refs
+
+    def test_lowercase_plugin_mount_is_scanned(self, tmp_path):
+        root, src = _make_project(tmp_path)
+        plugin = root / "Plugins" / "lowerplugin"
+        (plugin / "Content").mkdir(parents=True)
+        (plugin / "Content" / "Bar.uasset").write_bytes(b"\x00")
+        (plugin / "lowerplugin.uplugin").write_text("{}")
+        (src / "ref.cpp").write_text('K = "/lowerplugin/Bar";')
+
+        refs, _, _, mounts = scan(str(root))
+
+        assert "/lowerplugin" in mounts
+        assert "/lowerplugin/Bar" in refs
+
+    def test_oversized_eligible_file_fails_closed(self, tmp_path):
+        root, src = _make_project(tmp_path)
+        (src / "huge.cpp").write_bytes(
+            b"x" * (code_refs._MAX_FILE_BYTES + 1)
+            + b'\nK = "/Game/UI/WBP_Real";'
+        )
+
+        with pytest.raises(IncompleteScanError, match="oversized"):
+            scan(str(root))
+
+    def test_stat_failure_fails_closed(self, tmp_path, monkeypatch):
+        root, src = _make_project(tmp_path)
+        target = src / "ref.cpp"
+        target.write_text('K = "/Game/UI/WBP_Real";')
+        original_getsize = code_refs.os.path.getsize
+
+        def fail_for_target(path):
+            if os.path.abspath(path) == os.path.abspath(target):
+                raise OSError("stat denied")
+            return original_getsize(path)
+
+        monkeypatch.setattr(code_refs.os.path, "getsize", fail_for_target)
+
+        with pytest.raises(IncompleteScanError, match="stat"):
+            scan(str(root))
+
+    def test_open_failure_fails_closed(self, tmp_path, monkeypatch):
+        root, src = _make_project(tmp_path)
+        target = src / "ref.cpp"
+        target.write_text('K = "/Game/UI/WBP_Real";')
+        original_open = builtins.open
+
+        def fail_for_target(path, *args, **kwargs):
+            if os.path.abspath(path) == os.path.abspath(target):
+                raise OSError("open denied")
+            return original_open(path, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "open", fail_for_target)
+
+        with pytest.raises(IncompleteScanError, match="open"):
+            scan(str(root))
+
+    def test_directory_enumeration_failure_fails_closed(self, tmp_path, monkeypatch):
+        root, src = _make_project(tmp_path)
+        (src / "ref.cpp").write_text('K = "/Game/UI/WBP_Real";')
+        original_walk = code_refs.os.walk
+
+        def walk_with_error(path, *args, **kwargs):
+            onerror = kwargs.get("onerror")
+            for item in original_walk(path, *args, **kwargs):
+                yield item
+            if onerror and os.path.abspath(path) == os.path.abspath(root):
+                onerror(OSError("unreadable subtree"))
+
+        monkeypatch.setattr(code_refs.os, "walk", walk_with_error)
+
+        with pytest.raises(IncompleteScanError, match="directory"):
+            scan(str(root))
 
 
 class TestCacheAge:

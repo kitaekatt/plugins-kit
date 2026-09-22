@@ -20,7 +20,7 @@ for p in (_SCRIPTS_DIR, _LIB_DIR):
     if str(p) not in sys.path:
         sys.path.insert(0, str(p))
 
-from ue_runner import _detect_script_error
+from ue_runner import _detect_script_error, _run_commandlet
 
 SCRIPT = "C:/work/my_script.py"
 
@@ -95,3 +95,36 @@ class TestDetectScriptError:
             "LogPython: Error: ValueError: nope\n"
         )
         assert _detect_script_error(stdout, SCRIPT) is False
+
+
+def test_python_error_on_stderr_is_failure(tmp_path, monkeypatch):
+    script = tmp_path / "my_script.py"
+    script.write_text("raise RuntimeError('boom')\n")
+    project = tmp_path / "Project.uproject"
+    project.write_text("{}")
+    config = type(
+        "Config",
+        (),
+        {
+            "editor_cmd_exe": str(tmp_path / "UnrealEditor-Cmd.exe"),
+            "uproject": str(project),
+        },
+    )()
+
+    def fake_run(command, **kwargs):
+        return type("Proc", (), {
+            "returncode": 0,
+            "stdout": "",
+            "stderr": (
+                "LogPython: Error: Traceback (most recent call last):\n"
+                f'LogPython: Error:   File "{script}", line 1, in <module>\n'
+                "LogPython: Error: RuntimeError: boom\n"
+            ),
+        })()
+
+    monkeypatch.setattr("ue_runner.subprocess.run", fake_run)
+    monkeypatch.setattr("ue_runner._get_output_dir", lambda config: tmp_path / "output")
+
+    result = _run_commandlet(str(script), config)
+
+    assert result.success is False

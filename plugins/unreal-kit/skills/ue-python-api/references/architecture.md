@@ -45,7 +45,7 @@ The `ensure_dependencies()` function in `lib/bootstrap.py` reads `requirements.y
 
 API search has two sources, resolved in this order:
 
-- **Durable enriched stub** (`<project>/.plugin-data/plugins-kit/unreal-kit/unreal.py`) -- includes project-specific custom types. UE generates the source at `<Project>/Intermediate/PythonStub/unreal.py` when Developer Mode is enabled and the project receives a full compile. Bootstrap checks presence and freshness without writing it. Refresh it explicitly with `python ${CLAUDE_PLUGIN_ROOT}/scripts/refresh_unreal_stub.py --project-root <project-root>`.
+- **Durable enriched stub** (`<project>/.plugin-data/plugins-kit/unreal-kit/unreal.py`) -- includes project-specific custom types. UE generates the source at `<Project>/Intermediate/PythonStub/unreal.py` when Developer Mode is enabled and the project receives a full compile. Bootstrap checks presence and freshness without writing it. Refresh it explicitly with `"${BOOTSTRAP_PROJECT_PYTHON:-${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}}" ${CLAUDE_PLUGIN_ROOT}/scripts/refresh_unreal_stub.py --project-root <project-root>`.
 - **Machine-local stock stub** (`~/.claude/plugins/data/plugins-kit/unreal-kit/stubs/unreal.py`) -- generic stock UE API from the public `unreal-stub` PyPI package. Bootstrap downloads it automatically.
 
 `scripts/search_unreal_stub.py` implements that fallback chain. If neither file

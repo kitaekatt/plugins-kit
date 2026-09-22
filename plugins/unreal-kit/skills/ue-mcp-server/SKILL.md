@@ -64,7 +64,7 @@ capability_skill:
         - Prefer the MCP `screenshot` action over `unreal.AutomationLibrary.take_high_res_screenshot()`. The Python API call blocks after the first invocation in a single Python session -- the first call works, the second hangs the editor. Each MCP `screenshot` call is a fresh request to the editor process so the deadlock does not accumulate.
         - Prefer the MCP `screenshot` action over `unreal.KismetRenderingLibrary.export_render_target()`. The Python API call silently produces no file in the UE Python environment -- it returns success and writes nothing to disk.
         - Editor screenshots fail when PIE is running. Stop PIE before any batch screenshot run, or the screenshot completes silently with no file on disk.
-        - Editor screenshots also fail when the editor lost foreground recently. Set `t.IdleWhenNotForeground 0` at the start of every batch run via `mcp.console_command("t.IdleWhenNotForeground 0")` so the editor keeps rendering when minimized.
+        - Editor screenshots also fail after the editor loses foreground focus. Set `t.IdleWhenNotForeground 0` at the start of every batch run via `mcp.console_command("t.IdleWhenNotForeground 0")` so the editor keeps rendering when minimized.
     - id: manage_blueprint
       keywords: [blueprint, BP, create blueprint, add component, author graph, BP nodes]
       user_objective: Create Blueprints, add components, and author Blueprint graphs node-by-node.
@@ -249,7 +249,7 @@ capability_skill:
     - id: tool_catalog
       path: references/tool-catalog.md
       keywords: [all tools, all actions, parameter reference, what can it do, full list, tool catalog]
-      summary: Complete catalog of every MCP tool domain, every action, and the parameter shape for each action.
+      summary: Action summary for the MCP tool domains and common actions. Consult the connected server for parameter details.
     - id: workflows
       path: references/workflows.md
       keywords: [recipe, step-by-step, create blueprint from scratch, build a level, material setup, multi-step workflow]
@@ -446,6 +446,22 @@ with McpClient() as mcp:
     mcp.save_all()
     mcp.batch_console_commands(["cmd1", "cmd2"])
 ```
+
+Connection and request budgets are separate. The connection budget covers
+the WebSocket connect, `bridge_hello`/`bridge_ack` handshake, and cleanup;
+each request has its own action budget and a total cap that includes progress
+extensions. The defaults are 5 seconds for connection, 30 seconds per action,
+and 300 seconds as the total request cap. For a longer action, configure both
+request values together before dispatching:
+
+```python
+with McpClient(timeout_s=120, request_cap_s=600) as mcp:
+    mcp.save_all()
+```
+
+The cap must be at least as large as the action budget. Batch commands keep
+the action budget per command; they do not turn the whole batch into one
+request.
 
 **When to use this vs MCP tool calls:**
 - **MCP tool calls**: interactive work, one-off operations, when Claude is directly controlling the editor.

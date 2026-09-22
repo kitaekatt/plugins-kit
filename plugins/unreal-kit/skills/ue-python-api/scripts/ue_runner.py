@@ -6,17 +6,21 @@ Auto-detects whether UE Editor is running:
   - Editor not running → headless commandlet (slow, ~30-120s)
 
 Usage:
-    python ue_runner.py script.py
-    python ue_runner.py script.py --mode commandlet
-    python ue_runner.py script.py --mode remote
-    python ue_runner.py script.py --copy-output ./results/
+    "${BOOTSTRAP_PROJECT_PYTHON:-${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}}" "${CLAUDE_PLUGIN_ROOT}/skills/ue-python-api/scripts/ue_runner.py" script.py
+    "${BOOTSTRAP_PROJECT_PYTHON:-${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}}" "${CLAUDE_PLUGIN_ROOT}/skills/ue-python-api/scripts/ue_runner.py" script.py --mode commandlet
+    "${BOOTSTRAP_PROJECT_PYTHON:-${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}}" "${CLAUDE_PLUGIN_ROOT}/skills/ue-python-api/scripts/ue_runner.py" script.py --mode remote
+    "${BOOTSTRAP_PROJECT_PYTHON:-${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}}" "${CLAUDE_PLUGIN_ROOT}/skills/ue-python-api/scripts/ue_runner.py" script.py --copy-output ./results/
 """
 
 import argparse
+import json
+import math
 import os
+import secrets
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -28,21 +32,25 @@ _LIB_DIR = _PLUGIN_DIR / "lib"
 if str(_LIB_DIR) not in sys.path:
     sys.path.insert(0, str(_LIB_DIR))
 
+# Re-exec before importing any plugin library. This is a host-side entrypoint;
+# the UE-side apply/discover scripts deliberately do not use this guard.
+from bootstrap_guard import reexec_under_plugin_venv, require_bootstrap  # noqa: E402
+
+reexec_under_plugin_venv("unreal-kit")
+require_bootstrap("unreal-kit", feature="Unreal Python automation")
+
 # Restore registry-canonical PATH before subprocess fan-out — see
 # unreal-kit/lib/path_repair.py for the cmd.exe overflow failure mode.
 from path_repair import repair_path  # noqa: E402
 repair_path()
 
-# Re-exec under the bootstrap-provisioned plugin venv (no-op when already
-# there) so upyrc/pyyaml resolve regardless of which interpreter launched the
-# script; then fail fast with an actionable message if the bootstrap plugin
-# never provisioned this plugin at all (e.g. a stray system Python and no venv).
-from bootstrap_guard import reexec_under_plugin_venv, require_bootstrap  # noqa: E402
-reexec_under_plugin_venv("unreal-kit")
-require_bootstrap("unreal-kit", feature="Unreal Python automation")
-
 from ue_discovery import find_engine_dir as _find_engine_dir, find_uproject_from_cwd, find_uproject_from_path
-from ue_runner_config import RunnerConfig, load_config
+from ue_runner_config import ConfigError, RunnerConfig, load_config
+
+_HOST_RUNNER = (
+    '"${BOOTSTRAP_PROJECT_PYTHON:-${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}}" '
+    '"${CLAUDE_PLUGIN_ROOT}/skills/ue-python-api/scripts/ue_runner.py"'
+)
 
 
 @dataclass
@@ -54,6 +62,47 @@ class RunResult:
     output_file: str | None = None
     elapsed: float = 0.0
     error: str = ""
+    # True when the remote dispatch may have reached UE but its completion was
+    # lost.  Such a result must never be replayed through a commandlet.
+    completion_unknown: bool = False
+
+
+@dataclass(frozen=True)
+class _CommandletInvocation:
+    """Private files used to correlate one commandlet process with its script."""
+
+    directory: Path
+    wrapper: Path
+    completion: Path
+    token: str
+
+
+class ProjectResolutionError(ValueError):
+    """An explicit project target was supplied but cannot be used."""
+
+
+def _as_text(value):
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        return value.decode(errors="replace")
+    return str(value)
+
+
+def _validate_commandlet_timeout(timeout_s):
+    if timeout_s is None:
+        return None
+    try:
+        value = float(timeout_s)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"commandlet_timeout_s must be a finite positive number; got {timeout_s!r}"
+        ) from exc
+    if not math.isfinite(value) or value <= 0:
+        raise ValueError(
+            f"commandlet_timeout_s must be a finite positive number; got {timeout_s!r}"
+        )
+    return value
 
 
 def run_ue_script(
@@ -63,6 +112,7 @@ def run_ue_script(
     copy_output_to: str | None = None,
     project: str | None = None,
     fallback_on_error: bool = False,
+    commandlet_timeout_s: float | None = None,
 ) -> RunResult:
     """
     Execute a UE Python script, auto-selecting the best execution path.
@@ -80,19 +130,32 @@ def run_ue_script(
                  executed side effects; re-running a non-idempotent script
                  doubles them. Connection-level failures (editor not
                  reachable) always fall back regardless of this flag.
+        commandlet_timeout_s: Optional finite positive limit for the headless
+                 commandlet. Unset preserves the historical unbounded behavior.
 
     Returns:
         RunResult with execution details.
     """
+    try:
+        commandlet_timeout_s = _validate_commandlet_timeout(commandlet_timeout_s)
+    except ValueError as exc:
+        return RunResult(success=False, mode="commandlet", error=str(exc))
+
     if config is None:
-        config = load_config()
+        try:
+            config = load_config()
+        except ConfigError as exc:
+            return RunResult(success=False, mode="none", error=str(exc))
 
     script_path = os.path.abspath(script_path)
     if not os.path.isfile(script_path):
         return RunResult(success=False, mode="none", error=f"Script not found: {script_path}")
 
     # Resolve which project to target: explicit flag > CWD > script path > config
-    config = _resolve_project(config, script_path, project)
+    try:
+        config = _resolve_project(config, script_path, project)
+    except ProjectResolutionError as e:
+        return RunResult(success=False, mode="none", error=str(e))
 
     # Validate config (commandlet needs valid paths; remote can work without them)
     errors = config.validate()
@@ -116,6 +179,7 @@ def run_ue_script(
                 and fallback_on_error
                 and force_mode != "remote"
                 and not errors
+                and not result.completion_unknown
             ):
                 _warn(
                     f"Remote script error, retrying via commandlet (--fallback-on-error)...\n"
@@ -138,14 +202,14 @@ def run_ue_script(
                 success=False,
                 mode="remote",
                 error="Remote execution failed. Is UE Editor running with Remote Execution enabled?\n"
-                      "  Run: python ue_runner.py --setup",
+                      f"  Run: {_HOST_RUNNER} --setup",
             )
 
     # Fall back to commandlet
     if errors:
         return RunResult(success=False, mode="commandlet", error="\n".join(errors))
 
-    result = _run_commandlet(script_path, config)
+    result = _run_commandlet(script_path, config, timeout_s=commandlet_timeout_s)
     if copy_output_to and result.output_file:
         result.output_file = _copy_output(result.output_file, copy_output_to)
     return result
@@ -228,10 +292,15 @@ def _try_remote(script_path: str, config: RunnerConfig) -> RunResult | None:
     pre_snapshot = _snapshot_output_dir(output_dir)
 
     start = time.time()
+    dispatch_started = False
     try:
         with _ProjectFilteredConnection(remote_cfg) as conn:
             # EXECUTE_FILE tells UE to load and run a .py file by path.
             # EXECUTE_STATEMENT would exec() inline code instead.
+            # Mark this before crossing the library boundary: a timeout or
+            # connection exception from this call cannot prove whether UE
+            # received and started the script.
+            dispatch_started = True
             cmd_result = conn.execute_python_command(
                 script_path,
                 exec_type=upyre.ExecTypes.EXECUTE_FILE,
@@ -244,6 +313,20 @@ def _try_remote(script_path: str, config: RunnerConfig) -> RunResult | None:
         return None
     except Exception as e:
         err_str = str(e)
+        if dispatch_started:
+            elapsed = time.time() - start
+            return RunResult(
+                success=False,
+                mode="remote",
+                stderr=err_str,
+                elapsed=elapsed,
+                error=(
+                    "Remote dispatch completion is unknown: "
+                    f"{err_str}. Not retrying via commandlet because the "
+                    "script may already have run."
+                ),
+                completion_unknown=True,
+            )
         # Connection refused / timeout / failed = editor not running
         if any(keyword in err_str.lower() for keyword in ("timed out", "timeout", "refused", "unreachable", "connection failed")):
             _warn(f"Editor not responding ({err_str}). Falling back to commandlet...")
@@ -273,57 +356,91 @@ def _try_remote(script_path: str, config: RunnerConfig) -> RunResult | None:
     )
 
 
-def _run_commandlet(script_path: str, config: RunnerConfig) -> RunResult:
+def _run_commandlet(
+    script_path: str, config: RunnerConfig, timeout_s: float | None = None
+) -> RunResult:
     """Run script via UnrealEditor-Cmd.exe -run=pythonscript."""
+    try:
+        timeout_s = _validate_commandlet_timeout(timeout_s)
+    except ValueError as exc:
+        return RunResult(success=False, mode="commandlet", error=str(exc))
+
     exe = config.editor_cmd_exe
     uproject = config.uproject
 
-    command = [
-        exe,
-        uproject,
-        "-run=pythonscript",
-        f"-script={script_path}",
-        "-stdout",
-        "-Unattended",
-        "-NoLoadStartupPackages",
-        "-FullStdOutLogOutput",
-    ]
-
     _info(f"Running commandlet...")
-    _info(f"  {' '.join(command)}")
 
     # Snapshot output dir before execution
     output_dir = _get_output_dir(config)
     pre_snapshot = _snapshot_output_dir(output_dir)
 
     start = time.time()
-    try:
-        proc = subprocess.run(
-            command,
-            capture_output=True,
-            text=True,
-            # No timeout — user can Ctrl-C if needed
-            creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
-        )
-    except FileNotFoundError:
-        return RunResult(
-            success=False, mode="commandlet",
-            error=f"Editor executable not found: {exe}",
-        )
+    project_dir = Path(uproject).parent
+    with _make_commandlet_invocation(script_path, output_dir, project_dir) as invocation:
+        command = [
+            exe,
+            uproject,
+            "-run=pythonscript",
+            f"-script={invocation.wrapper}",
+            "-stdout",
+            "-Unattended",
+            "-NoLoadStartupPackages",
+            "-FullStdOutLogOutput",
+        ]
+        _info(f"  {' '.join(command)}")
+        try:
+            proc = subprocess.run(
+                command,
+                capture_output=True,
+                text=True,
+                timeout=timeout_s,
+                creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
+            )
+        except subprocess.TimeoutExpired as exc:
+            stdout = _as_text(getattr(exc, "stdout", None) or getattr(exc, "output", None))
+            stderr = _as_text(getattr(exc, "stderr", None))
+            detail = f"Commandlet timed out after {timeout_s:g}s; completion is unknown"
+            evidence = "Partial stderr was retained." if stderr else "Partial output was retained."
+            return RunResult(
+                success=False,
+                mode="commandlet",
+                stdout=stdout,
+                stderr=stderr,
+                elapsed=time.time() - start,
+                error=f"{detail}. {evidence}",
+            )
+        except FileNotFoundError:
+            return RunResult(
+                success=False, mode="commandlet",
+                error=f"Editor executable not found: {exe}",
+            )
+
+        completion_outputs = _read_completion_outputs(invocation, script_path)
 
     elapsed = time.time() - start
-    output_file = _find_new_output(output_dir, pre_snapshot)
+    if completion_outputs is not None:
+        output_file = _first_existing_output(completion_outputs)
+    else:
+        # Preserve the historical zero-exit behavior for an external commandlet
+        # wrapper that did not emit our private record.  This branch is not a
+        # reason to tolerate a nonzero exit: output alone is never completion
+        # evidence for this invocation.
+        output_file = _find_new_output(output_dir, pre_snapshot) if proc.returncode == 0 else None
 
     # UE commandlets frequently exit non-zero due to asset loading warnings
     # (e.g. Niagara modules) that are unrelated to the Python script.
-    # Consider it a success if the output file was produced, or if stdout
-    # contains no Python-level error indicators.
-    has_script_error = _detect_script_error(proc.stdout, script_path)
+    # A nonzero exit may be tolerated only when our wrapper recorded normal
+    # completion for this exact invocation.  Output-file presence alone is not
+    # evidence because another process may have changed the directory.
+    has_script_error = _detect_script_error(
+        f"{proc.stdout}\n{proc.stderr}", script_path
+    )
 
     if has_script_error:
         success = False
-    elif output_file is not None:
-        # Script produced output — success regardless of UE exit code
+    elif completion_outputs is not None:
+        # The wrapper writes the record only after normal completion, including
+        # an intentional SystemExit(0).
         success = True
     else:
         success = proc.returncode == 0
@@ -331,7 +448,7 @@ def _run_commandlet(script_path: str, config: RunnerConfig) -> RunResult:
     error = ""
     if not success:
         if has_script_error:
-            error = "Python script error detected in output (see stdout)"
+            error = "Python script error detected in commandlet output (see stdout/stderr)"
         else:
             error = proc.stderr
 
@@ -380,6 +497,137 @@ def _detect_script_error(stdout: str, script_path: str) -> bool:
         block = []
 
     return any(script_name in b for b in block)
+
+
+def _make_commandlet_invocation(
+    script_path: str, output_dir: Path | None, project_dir: Path
+):
+    """Create a disposable wrapper and its invocation-specific completion path.
+
+    The wrapper runs the consumer script through ``runpy.run_path`` so the
+    script sees its own ``__file__`` and ``__main__`` context.  It writes the
+    completion record only after normal return or ``SystemExit(0)``.  The
+    project-local ephemeral directory also prevents stale records from an
+    earlier run from being accepted without writing user data beside the code.
+    """
+    invocation_root = project_dir / ".local-data" / "unreal-kit" / "commandlet"
+    invocation_root.mkdir(parents=True, exist_ok=True)
+    temp_dir = tempfile.TemporaryDirectory(prefix="ue-commandlet-", dir=invocation_root)
+    directory = Path(temp_dir.name)
+    token = secrets.token_urlsafe(32)
+    wrapper = directory / "invoke.py"
+    completion = directory / "completion.json"
+    target = str(Path(script_path).resolve())
+    output = str(output_dir.resolve()) if output_dir is not None else ""
+    wrapper.write_text(
+        _invocation_wrapper_source(
+            target=target,
+            output_dir=output,
+            completion=str(completion),
+            token=token,
+        ),
+        encoding="utf-8",
+    )
+    return _InvocationContext(temp_dir, _CommandletInvocation(directory, wrapper, completion, token))
+
+
+class _InvocationContext:
+    def __init__(self, temp_dir, invocation: _CommandletInvocation):
+        self._temp_dir = temp_dir
+        self.invocation = invocation
+
+    def __enter__(self):
+        return self.invocation
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        self._temp_dir.cleanup()
+        return False
+
+
+def _invocation_wrapper_source(*, target: str, output_dir: str, completion: str, token: str) -> str:
+    """Return source for the commandlet-side per-invocation wrapper."""
+    return f'''import json
+import runpy
+from pathlib import Path
+
+_TARGET = {target!r}
+_OUTPUT_DIR = {output_dir!r}
+_COMPLETION = {completion!r}
+_TOKEN = {token!r}
+
+
+def _snapshot():
+    if not _OUTPUT_DIR:
+        return {{}}
+    root = Path(_OUTPUT_DIR)
+    if not root.is_dir():
+        return {{}}
+    result = {{}}
+    for item in root.iterdir():
+        if item.suffix.lower() in (".yaml", ".yml") and item.is_file():
+            stat = item.stat()
+            result[str(item)] = (stat.st_mtime_ns, stat.st_size)
+    return result
+
+
+def _write_completion(before):
+    after = _snapshot()
+    changed = [
+        path for path, signature in after.items()
+        if before.get(path) != signature
+    ]
+    record = {{"token": _TOKEN, "script": _TARGET, "outputs": changed}}
+    temporary = Path(_COMPLETION + ".tmp")
+    temporary.write_text(json.dumps(record), encoding="utf-8")
+    temporary.replace(_COMPLETION)
+
+
+_before = _snapshot()
+try:
+    # The commandlet invokes this wrapper, but the consumer must observe the
+    # original script as argv[0] and receive no wrapper implementation args.
+    import sys
+    sys.argv = [_TARGET]
+    runpy.run_path(_TARGET, run_name="__main__")
+except SystemExit as exc:
+    if exc.code not in (None, 0):
+        raise
+    _write_completion(_before)
+else:
+    _write_completion(_before)
+'''
+
+
+def _read_completion_outputs(
+    invocation: _CommandletInvocation, script_path: str
+) -> list[str] | None:
+    """Validate this invocation's completion record and return its outputs."""
+    try:
+        record = json.loads(invocation.completion.read_text(encoding="utf-8"))
+    except (FileNotFoundError, OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    if not isinstance(record, dict):
+        return None
+    if record.get("token") != invocation.token:
+        return None
+    try:
+        expected_script = str(Path(script_path).resolve())
+    except (OSError, RuntimeError):
+        return None
+    if record.get("script") != expected_script:
+        return None
+    outputs = record.get("outputs", [])
+    if not isinstance(outputs, list) or not all(isinstance(path, str) for path in outputs):
+        return None
+    return outputs
+
+
+def _first_existing_output(outputs: list[str]) -> str | None:
+    """Return the first output observed by the wrapper that still exists."""
+    for path in outputs:
+        if Path(path).is_file():
+            return path
+    return None
 
 
 def _snapshot_output_dir(output_dir: Path | None) -> dict[str, float]:
@@ -460,7 +708,9 @@ def _resolve_project(
             discovered = p
             source = "--project flag"
         else:
-            _warn(f"--project path is not a .uproject file: {p}")
+            raise ProjectResolutionError(
+                f"--project path is not a usable .uproject file: {p}"
+            )
 
     if not discovered:
         cwd_project = find_uproject_from_cwd()
@@ -511,6 +761,8 @@ def run_setup(config: RunnerConfig) -> bool:
     """
     from ue_runner_config import (
         PROJECT_CONFIG_NAME,
+        _load_yaml,
+        _validate_layer,
         write_project_config as _write_project_config,
     )
 
@@ -542,12 +794,30 @@ def run_setup(config: RunnerConfig) -> bool:
         "engine_dir": str(engine_dir),
         "uproject": str(uproject),
     }
-    written = _write_project_config(project_root, data)
-    print(f"  WROTE {written}")
-
+    # Setup is an update operation. Preserve unrelated project settings while
+    # replacing only the two fields selected by this interactive run.
+    try:
+        existing = _load_yaml(config_path, required=False)
+        if not isinstance(existing, dict):
+            existing = {}
+        _validate_layer(existing, config_path)
+        existing.update(data)
+        _validate_layer(existing, config_path)
+        written = _write_project_config(project_root, existing)
+    except ConfigError as exc:
+        print(f"  ERROR: {exc}")
+        return False
+    except (OSError, TypeError, ValueError) as exc:
+        print(f"  ERROR: Could not write project config: {exc}")
+        return False
     # Reload config with the new file
     from ue_runner_config import load_config as _reload
-    config = _reload()
+    try:
+        config = _reload()
+    except ConfigError as exc:
+        print(f"  ERROR: {exc}")
+        return False
+    print(f"  WROTE {written}")
     print(f"\n  OK    uproject: {config.uproject}")
     print(f"  OK    engine:   {config.engine_dir}")
     print(
@@ -641,11 +911,11 @@ def main():
     parser = argparse.ArgumentParser(
         description="Run UE Python scripts from the terminal.",
         epilog="Examples:\n"
-               "  python ue_runner.py --setup                # check/fix project settings\n"
-               "  python ue_runner.py script.py              # auto-detect mode\n"
-               "  python ue_runner.py script.py --mode remote # force remote only\n"
-               "  python ue_runner.py script.py --mode commandlet\n"
-               "  python ue_runner.py script.py --copy-output ./results/\n",
+               f"  {_HOST_RUNNER} --setup                # check/fix project settings\n"
+               f"  {_HOST_RUNNER} script.py              # auto-detect mode\n"
+               f"  {_HOST_RUNNER} script.py --mode remote # force remote only\n"
+               f"  {_HOST_RUNNER} script.py --mode commandlet\n"
+               f"  {_HOST_RUNNER} script.py --copy-output ./results/\n",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("script", nargs="?", help="Path to the .py script to execute")
@@ -675,9 +945,17 @@ def main():
         "--copy-output", metavar="DIR",
         help="Copy output YAML to this directory",
     )
+    parser.add_argument(
+        "--commandlet-timeout", type=float, metavar="SECONDS",
+        help="Bound headless commandlet execution; unset preserves legacy behavior",
+    )
     args = parser.parse_args()
 
-    config = load_config(args.config)
+    try:
+        config = load_config(args.config)
+    except ConfigError as exc:
+        print(f"[ue_runner] ERROR: {exc}", file=sys.stderr)
+        sys.exit(2)
 
     if args.setup:
         print("[ue_runner] Setup check:")
@@ -694,6 +972,7 @@ def main():
         copy_output_to=getattr(args, "copy_output", None),
         project=args.project,
         fallback_on_error=args.fallback_on_error,
+        commandlet_timeout_s=args.commandlet_timeout,
     )
 
     # Print results

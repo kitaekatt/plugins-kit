@@ -231,18 +231,17 @@ claude_md:
           judgment-required on the YAML contract row. classify.py and tag.py operate
           on frontmatter and a regex-detected YAML root key; they do not need pyyaml.
     - id: audit_framework_paths_are_cross_plugin_api
-      keywords: [audit-framework.md, audit-framework.yaml, cross-plugin consumers, breaking rename, md-domain references, awesome-kit, prototypes, path contract]
-      summary: skills/md-domain/references/audit-framework.{md,yaml} are consumed BY PATH from awesome-kit and prototypes -- renaming or moving them is a breaking cross-plugin change requiring consumer version bumps.
+      keywords: [audit-framework.md, audit-framework.yaml, cross-plugin consumers, breaking rename, md-domain references, awesome-kit, path contract]
+      summary: skills/md-domain/references/audit-framework.{md,yaml} are consumed BY PATH from awesome-kit -- renaming or moving them is a breaking cross-plugin change requiring consumer version bumps.
       detail: |
-        awesome-kit and prototypes reference
+        awesome-kit references
         plugins/skills-kit/skills/md-domain/references/audit-framework.md and
         audit-framework.yaml by literal path (the shared audit framework is a
         cross-plugin API surface, not a private reference). Treat any
         rename/move/restructure of those two files like a breaking library
         change: update every consumer in the same release and bump the
         consumers' plugin versions, or do not move the files. Grep
-        plugins/awesome-kit and plugins/prototypes for "audit-framework"
-        before touching them.
+        plugins/awesome-kit for "audit-framework" before touching it.
 
         The md-domain fold is the worked example: the files moved from
         skills/md-audit/references/ to skills/md-domain/references/, and the

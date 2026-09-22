@@ -1,15 +1,19 @@
 # MCP Tool Catalog
 
-Complete catalog of every MCP tool domain exposed by the Unreal MCP Server, every action each one accepts, and the parameter shape per action. Stub document for the first ship -- expand each section as new tool domains and actions are added.
+This document is a concise action summary for the Unreal MCP Server domains
+that this skill routes to. It is not an authoritative schema. The connected
+server's advertised schema and the versioned server source define accepted
+parameters and response fields.
 
-This is a reference companion to `SKILL.md`. The capability surface in SKILL.md lists each tool domain and links here for parameter detail; consult this file when authoring a tool call and you need to know the action name, the required parameters, or the response shape.
+This is a reference companion to `SKILL.md`. The capability surface lists tool
+domains and links here for action summaries. Use the connected server schema
+or versioned server source for parameter and response details; unsupported
+calls must be refused visibly.
 
 ## How to read this file
 
-Each section below covers one MCP tool domain. Inside a section:
-- A short purpose sentence.
-- An `actions:` table -- action name, what it does, required parameters, optional parameters, response shape.
-- Notes on common gotchas specific to that domain.
+Each section below covers one MCP tool domain and names common actions. The
+summaries do not claim to list every action or parameter.
 
 When this file is silent on a parameter, the canonical answer is the MCP server source -- request the user open the relevant Editor source if needed.
 

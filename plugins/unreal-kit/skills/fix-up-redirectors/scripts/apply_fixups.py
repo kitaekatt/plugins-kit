@@ -63,6 +63,15 @@ from p4cli import (
     create_pending_cl, delete_files, edit_files, get_p4_user, reopen_files,
     run_p4, run_p4_or_die,
 )
+try:
+    from p4cli import P4TimeoutError
+except ImportError:  # minimal provider shim used by offline tests
+    class P4TimeoutError(SystemExit):
+        pass
+try:
+    from p4cli import where_records
+except ImportError:  # minimal provider shim used by offline tests
+    where_records = None
 from redirector_record import load_safe_set, save_apply_manifest
 
 
@@ -108,6 +117,101 @@ if MODE == 'auto':
     MODE = 'delete-only' if not any(_has_any_referencers(r) for r in records) else 'fixup'
 print(f"[apply_fixups] mode: {MODE}")
 
+
+def _current_mutation_files(record):
+    """Return the complete candidate set visible immediately before apply."""
+    primary = record.get('file')
+    candidates = []
+    if primary and os.path.isfile(primary):
+        candidates.append(primary)
+    if primary and primary.lower().endswith('.uasset'):
+        sibling = primary[:-len('.uasset')] + '.umap'
+        if os.path.isfile(sibling):
+            candidates.append(sibling)
+    return sorted(dict.fromkeys(candidates))
+
+
+for record in records:
+    expected = record.get('mutation_files')
+    actual = _current_mutation_files(record)
+    if expected is None:
+        # Legacy safe sets remain readable, but their candidate set is still
+        # materialized and checked before a CL is created.
+        expected = actual
+    expected = sorted(dict.fromkeys(str(path) for path in expected if path))
+    if expected != actual:
+        fail(
+            "Mutation candidate set changed since classification for "
+            f"{record.get('pkg', record.get('file'))}: expected {expected!r}, "
+            f"found {actual!r}; rerun classification"
+        )
+    if not expected:
+        fail(f"No existing mutation candidate for {record.get('pkg', record.get('file'))}")
+    record['mutation_files'] = expected
+
+
+def _collection_path_is_project_scoped(path):
+    """Keep broad collection queries inside this project's mapped depot subtree."""
+    normalized = str(path).replace('\\', '/').casefold()
+    return bool(_project_depot_prefix and normalized.startswith(
+        _project_depot_prefix.casefold() + '/content/collections/'
+    ))
+
+
+def _derive_project_depot_prefix():
+    """Derive the project depot root from a tagged mapping, never by naming."""
+    if where_records is None:
+        return None
+    project_dir = os.path.normpath(str(unreal.Paths.project_dir())).replace('\\', '/')
+    for record in records:
+        for local_path in record.get('mutation_files', []):
+            mappings = where_records([local_path])
+            if len(mappings) != 1 or not mappings[0].get('depotFile'):
+                continue
+            local = str(mappings[0].get('input', local_path)).replace('\\', '/')
+            depot = str(mappings[0]['depotFile']).replace('\\', '/')
+            if local.casefold() == project_dir.casefold():
+                return depot.rstrip('/')
+            prefix = project_dir.rstrip('/') + '/'
+            if not local.casefold().startswith(prefix.casefold()):
+                continue
+            relative = local[len(project_dir.rstrip('/')):]
+            if depot.casefold().endswith(relative.casefold()):
+                return depot[:-len(relative)].rstrip('/')
+    return None
+
+
+def _query_project_collections():
+    if not _project_depot_prefix:
+        return None, 'could not establish the project depot mapping'
+    rc, out, err = run_p4(['opened', '-c', 'default', '//...Content/Collections/....collection'])
+    if rc != 0:
+        return None, err or 'p4 opened collection query failed'
+    paths = []
+    for line in out.splitlines():
+        if ' - ' not in line:
+            continue
+        path = line.split('#', 1)[0].strip()
+        if path.casefold().endswith('.collection') and _collection_path_is_project_scoped(path):
+            paths.append(path)
+    return sorted(dict.fromkeys(paths)), None
+
+
+_project_depot_prefix = _derive_project_depot_prefix()
+
+if MODE == 'fixup':
+    preexisting_collections, preflight_collection_error = _query_project_collections()
+    if preflight_collection_error:
+        fail(
+            "Could not establish project collection state before mutation: "
+            f"{preflight_collection_error}"
+        )
+    if preexisting_collections:
+        fail(
+            "Refusing to mutate because pre-existing project collection edits "
+            "would be overwritten: " + ', '.join(preexisting_collections)
+        )
+
 # 1) Guard: refuse if a "Fix up redirectors" CL is already pending for this user.
 if not FORCE_NEW_CL:
     p4_user = get_p4_user()
@@ -132,35 +236,14 @@ if not FORCE_NEW_CL:
 #      MINUS any package that is itself a redirector in this safe set
 #      (those will be deleted, not re-saved). Empty in delete-only mode.
 redirector_pkgs = {r['pkg'] for r in records}
-redirector_files = [r['file'] for r in records if r.get('file')]
-
-# Always include .umap siblings of every redirector .uasset, in both modes.
-# Level redirectors come in .uasset+.umap pairs and both files must land in
-# the CL together — otherwise the depot keeps a dangling .umap pointing at a
-# deleted .uasset (or vice versa). Two distinct shapes need this:
-#   - Normal level redirectors: both .uasset and .umap exist on disk; UE deletes
-#     both; we need both in the apply CL.
-#   - .umap-native packages: discovery (UE asset registry) reports a .uasset
-#     path but on disk only the .umap exists; UE delete_asset removes the .umap
-#     and auto-opens it for delete in default; without pairing, the .umap is
-#     stranded outside the apply CL while the .uasset path is a phantom.
-# We add the sibling unconditionally if it exists on disk; cheap to check,
-# prevents an easy-to-miss correctness bug in either mode.
-def _umap_sibling(uasset_path):
-    if not uasset_path or not uasset_path.lower().endswith('.uasset'):
-        return None
-    candidate = uasset_path[:-len('.uasset')] + '.umap'
-    return candidate if os.path.isfile(candidate) else None
-
-
-umap_companion_files = []
-for f in list(redirector_files):
-    sibling = _umap_sibling(f)
-    if sibling:
-        umap_companion_files.append(sibling)
+redirector_files = list(dict.fromkeys(
+    path for record in records for path in record['mutation_files']
+))
+umap_companion_files = [
+    path for path in redirector_files if path.lower().endswith('.umap')
+]
 if umap_companion_files:
-    redirector_files = redirector_files + umap_companion_files
-    print(f"Including {len(umap_companion_files)} .umap sibling(s) of level redirectors.")
+    print(f"Including {len(umap_companion_files)} classified .umap companion(s).")
 
 referencer_pkgs = set()
 referencer_files = set()
@@ -199,8 +282,49 @@ else:
         "Automated cleanup via /fix-up-redirectors. Rewrites referencers to "
         "point at redirector targets and deletes the redirector .uasset files."
     )
-cl_num = create_pending_cl(description, client=os.environ.get('P4CLIENT'))
+try:
+    cl_num = create_pending_cl(description, client=os.environ.get('P4CLIENT'))
+except P4TimeoutError as exc:
+    fail(
+        "P4 change creation timed out; completion is unknown and no retry was "
+        f"attempted: {exc.label}"
+    )
 print(f"Created CL {cl_num}")
+
+# Persist a recovery record before opening files or asking UE to mutate an
+# asset. A failed write must stop the run: without this record a partial CL
+# would have no local diagnosis to accompany it.
+manifest_path = os.path.join(
+    str(unreal.Paths.project_dir()), 'Saved', 'PythonOutput',
+    f'redirectors_apply_{cl_num}.yaml',
+)
+
+
+def _persist_manifest(manifest):
+    try:
+        save_apply_manifest(manifest_path, manifest)
+    except Exception as exc:
+        fail(f"Could not persist pre-mutation recovery record: {exc}")
+
+
+manifest = {
+    'cl': cl_num,
+    'scope': scope,
+    'mode': MODE,
+    'redirectors_deleted': 0,
+    'referencers_saved': 0,
+    'referencer_save_failures': [],
+    'redirector_delete_failures': [],
+    'redirector_lock_failures': [],
+    'load_failures': [],
+    'pre_delete_phase': 'planned',
+    'pre_delete_failures': [],
+    'mutation_outcomes': {path: 'unknown' for path in redirector_files},
+    'ue_deleted': 0,
+    'ue_delete_failures': [],
+    'fstat_failures': [],
+}
+_persist_manifest(manifest)
 
 # Initialize the bookkeeping that both modes' manifest needs.
 loaded_referencers = []
@@ -210,6 +334,7 @@ save_failures = []
 ue_deleted = 0
 ue_delete_failures = []
 collections_reopened = []
+collection_reconciliation_error = None
 
 # 4) Mode-specific work.
 if MODE == 'fixup':
@@ -239,12 +364,34 @@ if MODE == 'fixup':
         )
         print("Disabled UCollectionSettings.bAutoCommitOnSave for this commandlet.")
     except Exception as exc:
-        print(f"[apply_fixups] WARN: could not flip bAutoCommitOnSave ({exc}); "
-              f"UE may auto-submit collection files into stray one-file CLs.")
+        manifest['pre_delete_phase'] = 'collection_guard'
+        manifest['pre_delete_failures'] = [str(exc)]
+        _persist_manifest(manifest)
+        fail(
+            "Could not establish the b_auto_commit_on_save no-auto-submit "
+            "collection guard; "
+            f"refusing to mutate referencers or redirectors: {exc}"
+        )
 
     # 4a) p4 edit only the non-redirector referencer files (so UE can re-save them).
     if referencer_files:
-        edit_files(cl_num, referencer_files)
+        try:
+            edit_files(cl_num, referencer_files)
+        except P4TimeoutError as exc:
+            manifest['pre_delete_phase'] = 'p4_mutation_timeout'
+            manifest['pre_delete_failures'] = [
+                f"edit: completion unknown ({exc.label})"
+            ]
+            manifest['p4_timeout_evidence'] = {
+                'phase': 'edit',
+                'stdout': exc.result.stdout,
+                'stderr': exc.result.stderr,
+            }
+            _persist_manifest(manifest)
+            fail(
+                "P4 edit timed out; completion is unknown. The partial CL and "
+                "manifest were preserved and no retry was attempted."
+            )
         print(f"Opened {len(referencer_files)} referencer file(s) for edit in CL {cl_num}.")
 
     # 4b) UE: load each referencer (resolves redirectors at link time), rewrite
@@ -265,6 +412,16 @@ if MODE == 'fixup':
     print(f"Loaded {len(loaded_referencers)} referencer asset(s) "
           f"({len(load_failures)} failed to load)")
 
+    if load_failures:
+        manifest['load_failures'] = load_failures
+        manifest['pre_delete_phase'] = 'load'
+        manifest['pre_delete_failures'] = load_failures
+        _persist_manifest(manifest)
+        fail(
+            "Refusing to delete redirectors because referencer loads failed: "
+            + ', '.join(load_failures)
+        )
+
     # Soft-reference rewrite (only meaningful when there are loaded packages).
     redirector_map = {}
     for r in records:
@@ -275,7 +432,16 @@ if MODE == 'fixup':
         pkg_names = unreal.Array(unreal.Name)
         for p in loaded_referencers:
             pkg_names.append(unreal.Name(p))
-        asset_tools.rename_referencing_soft_object_paths(pkg_names, redirector_map)
+        try:
+            asset_tools.rename_referencing_soft_object_paths(pkg_names, redirector_map)
+        except Exception as exc:
+            manifest['pre_delete_phase'] = 'soft_rewrite'
+            manifest['pre_delete_failures'] = loaded_referencers
+            _persist_manifest(manifest)
+            fail(
+                "Refusing to delete redirectors because soft-reference rewrite "
+                f"failed for {', '.join(loaded_referencers)}: {exc}"
+            )
         print("Rewrote soft references.")
 
     for pkg in loaded_referencers:
@@ -286,6 +452,17 @@ if MODE == 'fixup':
             saved += 1
     print(f"Force-saved {saved} referencer package(s) "
           f"({len(save_failures)} failures)")
+
+    if save_failures:
+        manifest['referencers_saved'] = saved
+        manifest['referencer_save_failures'] = save_failures
+        manifest['pre_delete_phase'] = 'save'
+        manifest['pre_delete_failures'] = save_failures
+        _persist_manifest(manifest)
+        fail(
+            "Refusing to delete redirectors because referencer saves failed: "
+            + ', '.join(save_failures)
+        )
 
     # 4c) Delete each redirector via UE first, releasing the Windows file
     #     handle so `p4 delete` can succeed. Without this step `p4 delete`'s
@@ -318,18 +495,36 @@ if MODE == 'fixup':
     #     is the workspace's default CL. Sweep there and reopen into our apply
     #     CL so the rewrites travel with the redirector deletes as one atomic,
     #     reviewable changelist.
-    rc, out, _err = run_p4(['opened', '-c', 'default', '//...Content/Collections/....collection'])
+    rc, out, err = run_p4(['opened', '-c', 'default', '//...Content/Collections/....collection'])
     if rc == 0:
         for line in out.splitlines():
             # Format: //depot/path/file.collection#N - edit default change (text) by user@client
             if ' - ' in line:
                 depot_path = line.split('#', 1)[0]
-                if depot_path.endswith('.collection'):
+                if (depot_path.casefold().endswith('.collection')
+                        and _collection_path_is_project_scoped(depot_path)):
                     collections_reopened.append(depot_path)
+    else:
+        collection_reconciliation_error = err or 'p4 opened collection query failed'
     if collections_reopened:
         try:
             reopen_files(cl_num, collections_reopened)
             print(f"Reopened {len(collections_reopened)} UE-touched .collection file(s) into CL {cl_num}.")
+        except P4TimeoutError as exc:
+            manifest['pre_delete_phase'] = 'p4_mutation_timeout'
+            manifest['pre_delete_failures'] = [
+                f"reopen collections: completion unknown ({exc.label})"
+            ]
+            manifest['p4_timeout_evidence'] = {
+                'phase': 'reopen collections',
+                'stdout': exc.result.stdout,
+                'stderr': exc.result.stderr,
+            }
+            _persist_manifest(manifest)
+            fail(
+                "P4 collection reopen timed out; completion is unknown. The "
+                "partial CL and manifest were preserved and no retry was attempted."
+            )
         except SystemExit:
             sys.stderr.write("[apply_fixups] WARN: p4 reopen of .collection files failed; "
                              "they remain in default CL.\n")
@@ -341,46 +536,141 @@ if MODE == 'fixup':
 #    `p4 delete -c` does the whole job.
 delete_failures = []
 lock_failures = []  # files that hit "in use by another process" and need a retry pass
+unknown_files = []
+confirmed_candidates = []
+
+
+def _fstat_blocks(output):
+    blocks = []
+    current = {}
+    for raw_line in (output or '').splitlines() + ['']:
+        line = raw_line.strip()
+        if not line:
+            if current:
+                blocks.append(current)
+                current = {}
+            continue
+        if line.startswith('... depotFile '):
+            current['path'] = line[len('... depotFile '):].strip()
+        elif line.startswith('... action '):
+            current['action'] = line[len('... action '):].strip()
+    return blocks
+
+
+def _path_key(path):
+    return os.path.normcase(str(path).replace('\\', '/')).rstrip('/')
+
+
+def _match_fstat_path(reported, remaining):
+    reported_key = _path_key(reported)
+    exact = [path for path in remaining if _path_key(path) == reported_key]
+    if exact:
+        return exact[0]
+    basename = os.path.basename(reported_key)
+    by_name = [path for path in remaining if os.path.basename(_path_key(path)) == basename]
+    if len(by_name) == 1:
+        return by_name[0]
+    return None
+
+
+def _opened_in_cl_paths():
+    rc, out, err = run_p4(['opened', '-c', cl_num])
+    if rc != 0:
+        return None, err or 'p4 opened confirmation failed'
+    opened = {}
+    for line in out.splitlines():
+        if ' - ' not in line or not line.strip():
+            continue
+        path, details = line.split(' - ', 1)
+        opened[path.split('#', 1)[0].strip()] = details.split(None, 1)[0]
+    return opened, None
 
 if redirector_files:
-    rc, out, _err = run_p4(['-x', '-', 'fstat', '-T', 'depotFile,action,change'],
-                           stdin='\n'.join(redirector_files))
+    rc, out, fstat_err = run_p4(
+        ['-x', '-', 'fstat', '-T', 'depotFile,action,change'],
+        stdin='\n'.join(redirector_files),
+    )
+    blocks = _fstat_blocks(out) if rc == 0 else []
+    remaining = list(redirector_files)
     auto_opened = []
     not_opened = []
-    cur_path = None
-    cur_action = None
-    if rc == 0:
-        for line in out.splitlines():
-            line = line.strip()
-            if not line:
-                if cur_path and cur_action == 'delete':
-                    auto_opened.append(cur_path)
-                elif cur_path and cur_action is None:
-                    not_opened.append(cur_path)
-                cur_path = cur_action = None
-            elif line.startswith('... depotFile '):
-                cur_path = line[len('... depotFile '):]
-            elif line.startswith('... action '):
-                cur_action = line[len('... action '):]
-        if cur_path and cur_action == 'delete':
-            auto_opened.append(cur_path)
-        elif cur_path and cur_action is None:
-            not_opened.append(cur_path)
+    if rc != 0:
+        manifest['fstat_failures'] = [fstat_err or 'p4 fstat failed']
+        unknown_files.extend(redirector_files)
+    else:
+        for block in blocks:
+            reported = block.get('path')
+            path = _match_fstat_path(reported, remaining) if reported else None
+            if path is None:
+                continue
+            remaining.remove(path)
+            action = block.get('action')
+            if action == 'delete':
+                auto_opened.append(path)
+            elif action is None:
+                not_opened.append(path)
+            else:
+                unknown_files.append(path)
+                manifest['fstat_failures'].append(
+                    f'{path}: unexpected p4 action {action!r}'
+                )
+        unknown_files.extend(remaining)
+        for path in remaining:
+            manifest['fstat_failures'].append(f'{path}: omitted from p4 fstat output')
 
     if auto_opened:
         try:
             reopen_files(cl_num, auto_opened)
+            confirmed_candidates.extend(auto_opened)
             print(f"Reopened {len(auto_opened)} UE-auto-deleted redirector(s) into CL {cl_num}.")
-        except SystemExit:
+        except P4TimeoutError as exc:
+            for path in auto_opened:
+                manifest['mutation_outcomes'][path] = 'unknown'
+            manifest['pre_delete_phase'] = 'p4_mutation_timeout'
+            manifest['pre_delete_failures'] = [
+                f"reopen deletes: completion unknown ({exc.label})"
+            ]
+            manifest['p4_timeout_evidence'] = {
+                'phase': 'reopen deletes',
+                'stdout': exc.result.stdout,
+                'stderr': exc.result.stderr,
+            }
+            _persist_manifest(manifest)
+            fail(
+                "P4 delete reopen timed out; completion is unknown. The partial "
+                "CL and manifest were preserved and no retry was attempted."
+            )
+        except (Exception, SystemExit) as exc:
             delete_failures.extend(auto_opened)
-            sys.stderr.write("[apply_fixups] WARN: p4 reopen batch failed; see error above.\n")
+            for path in auto_opened:
+                manifest['mutation_outcomes'][path] = 'failed'
+            sys.stderr.write(f"[apply_fixups] WARN: p4 reopen batch failed: {exc}\n")
     if not_opened:
         # Per-file `p4 delete` so a single locked file doesn't sink the whole
         # batch. Files that hit "in use by another process" go to lock_failures
         # for the post-UE retry pass below.
         for path in not_opened:
-            rc, _out, err = run_p4(['delete', '-c', cl_num, path])
+            p4_result = run_p4(['delete', '-c', cl_num, path])
+            rc, _out, err = p4_result
+            if getattr(p4_result, 'timed_out', False):
+                manifest['mutation_outcomes'][path] = 'unknown'
+                manifest['pre_delete_phase'] = 'p4_mutation_timeout'
+                manifest['pre_delete_failures'] = [
+                    f"delete {path}: completion unknown"
+                ]
+                manifest['p4_timeout_evidence'] = {
+                    'phase': f'delete {path}',
+                    'stdout': p4_result.stdout,
+                    'stderr': p4_result.stderr,
+                }
+                _persist_manifest(manifest)
+                fail(
+                    f"P4 delete timed out for {path}; completion is unknown. "
+                    "The partial CL and manifest were preserved and no retry "
+                    "was attempted."
+                )
             if rc == 0:
+                confirmed_candidates.append(path)
                 continue
             err_lower = (err or '').lower()
             # Windows P4 emits "being used by another process" (the wording from
@@ -394,8 +684,10 @@ if redirector_files:
             )
             if any(marker in err_lower for marker in locked_markers):
                 lock_failures.append(path)
+                manifest['mutation_outcomes'][path] = 'pending-retry'
             else:
                 delete_failures.append(path)
+                manifest['mutation_outcomes'][path] = 'failed'
                 sys.stderr.write(f"[apply_fixups] WARN: p4 delete failed for {path}: {err.strip()}\n")
         if not_opened:
             print(f"Attempted p4 delete on {len(not_opened)} file(s); "
@@ -432,26 +724,71 @@ if lock_failures:
     print(f"[apply_fixups] Run after UE exits: "
           f"p4 -x - delete -c {cl_num} < {retry_script}")
 
-# 7) Manifest.
-manifest = {
-    'cl': cl_num,
-    'scope': scope,
-    'mode': MODE,
-    'redirectors_deleted': len(redirector_files) - len(delete_failures) - len(lock_failures),
+# 7) Confirm final CL membership and action before declaring a deletion.
+if confirmed_candidates:
+    opened_paths, opened_error = _opened_in_cl_paths()
+    if opened_paths is None:
+        manifest['fstat_failures'].append(opened_error)
+        unknown_files.extend(confirmed_candidates)
+    else:
+        for path in confirmed_candidates:
+            exact = [
+                opened for opened in opened_paths
+                if _path_key(path) == _path_key(opened)
+                and opened_paths[opened] == 'delete'
+            ]
+            by_name = [
+                opened for opened in opened_paths
+                if os.path.basename(_path_key(opened)) == os.path.basename(_path_key(path))
+                and opened_paths[opened] == 'delete'
+            ]
+            if exact or len(by_name) == 1:
+                manifest['mutation_outcomes'][path] = 'confirmed'
+            else:
+                manifest['mutation_outcomes'][path] = 'unknown'
+                unknown_files.append(path)
+
+# The initial record was persisted before any mutation; update it with the
+# completed operation and retain all pre-delete diagnosis fields.
+manifest.update({
+    'redirectors_deleted': sum(
+        outcome == 'confirmed'
+        for outcome in manifest['mutation_outcomes'].values()
+    ),
     'referencers_saved': saved,
     'referencer_save_failures': save_failures,
     'redirector_delete_failures': delete_failures,
     'redirector_lock_failures': lock_failures,
     'load_failures': load_failures,
+    'ue_deleted': ue_deleted,
+    'ue_delete_failures': ue_delete_failures,
     'umap_companions_included': umap_companion_files,
     'collections_reopened': collections_reopened,
     'lock_retry_list': retry_script,
+    'pre_delete_phase': (
+        'collection_reconciliation' if collection_reconciliation_error else 'complete'
+    ),
+    'pre_delete_failures': ([collection_reconciliation_error]
+                            if collection_reconciliation_error else []),
+})
+_persist_manifest(manifest)
+
+if collection_reconciliation_error:
+    fail(
+        "Could not establish project collection attribution after mutation; "
+        "no collection sweep was performed: " + collection_reconciliation_error
+    )
+
+incomplete = {
+    path: outcome for path, outcome in manifest['mutation_outcomes'].items()
+    if outcome != 'confirmed'
 }
-manifest_path = os.path.join(
-    str(unreal.Paths.project_dir()), 'Saved', 'PythonOutput',
-    f'redirectors_apply_{cl_num}.yaml',
-)
-save_apply_manifest(manifest_path, manifest)
+if incomplete:
+    fail(
+        "Deletion incomplete; confirmed "
+        f"{manifest['redirectors_deleted']}/{len(redirector_files)} file(s). "
+        + ', '.join(f'{path}: {outcome}' for path, outcome in incomplete.items())
+    )
 
 print()
 print(f"Done. CL {cl_num}: deleted {manifest['redirectors_deleted']} redirectors"

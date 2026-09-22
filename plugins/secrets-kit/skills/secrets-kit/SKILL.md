@@ -405,3 +405,10 @@ dict keyed by machine name). secrets-kit cross-checks and raises an ASK on a
 mismatch rather than guessing -- a machine name that exists in only one of the
 two files is a typo with consequences, not a new machine. When env.json is
 absent, unreadable, or has no machines entries, the cross-check is skipped.
+
+When `secrets.json` exists but this host matches no machine key, secrets-kit
+does not materialize anything and does not raise an ASK: omission remains a
+safe opt-out. Bootstrap does show an informational notice with the hostname
+keys it checked and tells the user to add one of those keys with its profiles
+if the omission was accidental. This keeps intentional opt-outs non-blocking
+while making a mistyped or missing machine entry repairable.

@@ -16,7 +16,7 @@ The bootstrap engine (`bootstrap.json`) handles:
 
 ## After First Session
 
-**Restart UE Editor** -- the `bRemoteExecution` and `bIsDeveloperMode` settings only take effect on editor startup. After Developer Mode is active, complete a full compile, then explicitly refresh the enriched stub with `python ${CLAUDE_PLUGIN_ROOT}/scripts/refresh_unreal_stub.py --project-root <project-root>`.
+**Restart UE Editor** -- the `bRemoteExecution` and `bIsDeveloperMode` settings only take effect on editor startup. After Developer Mode is active, complete a full compile, then explicitly refresh the enriched stub with `"${BOOTSTRAP_PROJECT_PYTHON:-${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}}" ${CLAUDE_PLUGIN_ROOT}/scripts/refresh_unreal_stub.py --project-root <project-root>`.
 
 ## Interactive Setup
 
@@ -48,4 +48,4 @@ If PyPI is unreachable (firewall, no internet):
 
 - Stubs are optional -- scripts will still run; only API search is unavailable.
 - A new session retries the machine-local stock download.
-- To create the durable enriched stub, enable Developer Mode, complete a full compile, and explicitly run `python ${CLAUDE_PLUGIN_ROOT}/scripts/refresh_unreal_stub.py --project-root <project-root>`.
+- To create the durable enriched stub, enable Developer Mode, complete a full compile, and explicitly run `"${BOOTSTRAP_PROJECT_PYTHON:-${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}}" ${CLAUDE_PLUGIN_ROOT}/scripts/refresh_unreal_stub.py --project-root <project-root>`.

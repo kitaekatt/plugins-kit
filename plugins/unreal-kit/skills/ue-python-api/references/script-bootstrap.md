@@ -11,24 +11,36 @@ Scripts running inside UE Editor need packages like `pyyaml`, but UE's embedded 
 | Set | Manifest | Runtime | Manager | Install target |
 |-----|----------|---------|---------|----------------|
 | UE-side | `requirements.yaml` | UE's embedded Python | `bootstrap.py` + `unreal_pip.py` | Engine site-packages |
-| Host-side | `pyproject.toml` | System Python | Session bootstrap (uv sync) | Plugin data venv |
+| Host-side | `pyproject.toml` | Bootstrap-selected plugin interpreter | Session bootstrap | Plugin data venv |
 
 ## UE-Side Bootstrap (`lib/bootstrap.py`)
 
 Scripts call `ensure_dependencies()` at the top:
 
 ```python
-import sys, os
-sys.path.insert(0, os.path.expanduser('~/.claude/plugins/data/plugins-kit/unreal-kit/lib'))
-sys.path.insert(0, os.path.expanduser('~/.claude/plugins/data/plugins-kit/unreal-kit/github/unreal-pip'))
+import os
+import sys
+
+data_root = os.environ.get(
+    "CLAUDE_BOOTSTRAP_DATA_ROOT",
+    os.path.expanduser("~/.claude/plugins/data"),
+)
+plugin_data = os.path.join(data_root, "plugins-kit", "unreal-kit")
+sys.path.insert(0, os.path.join(plugin_data, "lib"))
+sys.path.insert(0, os.path.join(plugin_data, "github", "unreal-pip"))
 from bootstrap import ensure_dependencies
 ensure_dependencies()
 
 import yaml  # now available
 ```
 
+Bootstrap syncs `lib` into the plugin data directory and clones the pinned
+`unreal-pip` dependency at `<data_dir>/github/unreal-pip`. UE-side scripts add
+those two data-directory paths before importing `bootstrap`; consumer scripts
+should use the bootstrap data root instead of assuming a repository checkout.
+
 The function:
-1. Reads `requirements.yaml` using a **hand-rolled YAML parser** (not pyyaml — since pyyaml is itself a dependency being installed)
+1. Reads `requirements.yaml` using a hand-rolled YAML parser (not pyyaml, since pyyaml is itself a dependency being installed)
 2. Checks installed packages via `importlib.metadata.distributions()`
 3. Installs missing packages via `unreal_pip.install()`, which shells out to pip using UE's embedded Python interpreter
 4. Targets UE's own site-packages: `Engine/Binaries/ThirdParty/Python3/Win64/Lib/site-packages`
@@ -38,18 +50,27 @@ The function:
 
 The `.cmd` entry points handle host-side dependencies:
 
-- **`ue-runner.cmd`**: Execs `ue_runner.py` under the bootstrap-provisioned plugin venv (`~/.claude/plugins/data/plugins-kit/unreal-kit/.venv/Scripts/python.exe`), which carries upyrc + pyyaml; exits with the bootstrap-absence message when the venv is not provisioned. `ue_runner.py` itself also re-execs into that venv via `bootstrap_guard.reexec_under_plugin_venv`, so a bare `python ue_runner.py` lands in the same interpreter.
+For a host-side invocation from a POSIX shell, use the bootstrap-selected
+interpreter expression. It fails with a version diagnosis when the bootstrap
+variables are unavailable:
+
+```
+"${BOOTSTRAP_PROJECT_PYTHON:-${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}}" "${CLAUDE_PLUGIN_ROOT}/skills/ue-python-api/scripts/ue_runner.py" <script>.py
+```
+
+- **`ue-runner.cmd`**: Starts with the deterministic standalone interpreter, accepts a validated `BOOTSTRAP_PYTHON` fallback, and then checks the bootstrap-provisioned plugin venv (`~/.claude/plugins/data/plugins-kit/unreal-kit/.venv/Scripts/python.exe`). The runner then re-execs into that venv via `bootstrap_guard.reexec_under_plugin_venv`, where upyrc and pyyaml are available. If no bootstrap interpreter variable is present, the command prints the required version diagnosis.
 
 ## Stdlib-Only Constraint
 
-Three modules include hand-rolled minimal YAML parsers to avoid needing pyyaml before it's installed:
+Two modules include hand-rolled minimal YAML parsers to avoid needing pyyaml before it is installed:
 
 | Module | Where it runs | Why it can't use pyyaml |
 |--------|--------------|------------------------|
 | `lib/bootstrap.py` | UE Editor | pyyaml is the dependency being installed |
 | `lib/ue_runner_config.py` | Host Python | May run before venv exists |
 
-This duplication is intentional — each module must function independently during the bootstrapping phase when no external packages are guaranteed to exist.
+This duplication is intentional. Each module must function independently while
+the bootstrap phase is still establishing dependencies.
 
 ## Config Resolution
 
@@ -57,11 +78,15 @@ The runner loads configuration through a layered system:
 
 ```
 CLI args  >  project config  >  skill config  >  hardcoded defaults
-              (~/.claude/.local-data/skills/     (ue_runner_config.yaml)
-               ue-python-api/project.yaml)
+              (<project_root>/.local-data/plugins-kit/unreal-kit/config.yaml)
+              (ue_runner_config.yaml)
 ```
 
-The bootstrap engine's `project_config` primitive writes the project config during session start. The config includes `engine_dir` and `uproject` paths needed by both the remote executor and the commandlet fallback.
+The bootstrap engine's `project_config` primitive writes
+`<project_root>/.local-data/plugins-kit/unreal-kit/config.yaml` during session
+start. The config includes `engine_dir` and `uproject`, which the remote
+executor and commandlet fallback both require. An explicit config path is
+isolated from discovered global and project layers.
 
 ## Interaction Flow
 

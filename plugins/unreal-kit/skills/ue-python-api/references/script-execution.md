@@ -1,5 +1,18 @@
 # Script Execution Modes
 
+## 0. Host Terminal Runner
+
+Run the host-side runner through the bootstrap-selected interpreter. The
+expression keeps project environments preferred and emits a version diagnosis
+when the bootstrap variables are missing:
+
+```
+"${BOOTSTRAP_PROJECT_PYTHON:-${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}}" "${CLAUDE_PLUGIN_ROOT}/skills/ue-python-api/scripts/ue_runner.py" <script>.py
+```
+
+The `py` examples below are Unreal Editor's embedded-console syntax. They run
+inside the Editor and are separate from the host launch command above.
+
 ## 1. Output Log Console
 
 The most common way to run scripts interactively.
@@ -36,6 +49,20 @@ Run scripts without opening the full editor UI:
 ```
 UnrealEditor-Cmd.exe "C:/path/to/project.uproject" -ExecutePythonScript="C:/path/to/script.py"
 ```
+
+The host runner exposes the same operation through `run_ue_script` and its
+CLI. Use `--commandlet-timeout <seconds>` to bound only the headless
+commandlet; the remote editor transport keeps its own contract. The Python
+API argument is `commandlet_timeout_s=None`. The value must be finite and
+positive. When it is unset, the legacy unbounded behavior remains available,
+but it is not a hang guarantee. Unattended jobs must provide an explicit
+budget.
+
+A commandlet timeout terminates and reaps the child through the subprocess
+boundary, retains partial stdout and stderr, returns a nonzero result with
+completion marked unknown, and does not retry the script. A commandlet may
+have applied partial asset changes, so callers must inspect the retained
+diagnosis before deciding what to do next.
 
 **Use case:** CI/CD, batch processing, automated asset audits — and the default mode when the terminal runner detects no running Editor.
 
