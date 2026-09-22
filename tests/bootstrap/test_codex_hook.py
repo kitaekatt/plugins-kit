@@ -223,7 +223,7 @@ class TestEngineWiring:
         )
         assert calls == []
 
-    def test_missing_gitignore_defers_hook_and_instructs_agent(self, tmp_path, monkeypatch):
+    def test_missing_gitignore_does_not_block_hook_install(self, tmp_path, monkeypatch):
         project = _git_project(tmp_path)
         monkeypatch.setattr(
             codex,
@@ -235,15 +235,19 @@ class TestEngineWiring:
             codex_hook.shutil, "which",
             lambda name: None if name == "p4" else which(name),
         )
+        monkeypatch.setattr(
+            codex_hook,
+            "ensure_codex_hook",
+            lambda project: codex_hook.CodexHookInstallResult(
+                True, project + "/.codex/hooks.json"
+            ),
+        )
 
         actions, oks, failures = engine._run_codex_hook_setup(str(project))
 
-        assert not oks
-        assert actions[0].startswith("codex hook: deferred")
-        assert failures[0]["type"] == "codex_hook"
-        assert ".gitignore" in failures[0]["agent_msg"]
-        assert "/.codex/" in failures[0]["agent_msg"]
-        assert not (project / ".codex" / "hooks.json").exists()
+        assert actions == ["codex hook: installed %s/.codex/hooks.json" % project]
+        assert oks == []
+        assert failures == []
 
 
 class TestCodexCli:

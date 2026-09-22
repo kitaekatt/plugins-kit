@@ -88,12 +88,11 @@ opt-out, in fleet-management.md.
 adapter that normal bootstrap creates at the canonical project root's
 `.codex/hooks.json`. It is not a separate hook-installation step. A clean
 non-console pass first uses the existing Codex CLI detector; when Codex is not
-available, it skips this setup. When Codex is available, bootstrap requires the
-applicable Git and Perforce ignore policy to protect `/.codex/`; otherwise it
-reports remediation to Claude and defers the adapter. The command runs the
-full engine synchronously and emits the normal Codex `SessionStart` JSON
-response. It also rechecks the policies and appends Codex-only remediation if
-they drift. For a Perforce ignore file, the remediation requires the
+available, it skips this setup. When Codex is available, bootstrap installs the
+adapter even if the ignore policy is not ready. The command runs the full
+engine synchronously and emits the normal Codex `SessionStart` JSON response.
+It rechecks the policies and appends Codex-only remediation if they are
+missing or drift. For a Perforce ignore file, the remediation requires the
 `p4 edit .p4ignore` command before the file is changed. Bootstrap does not
 create this adapter for a failed automatic pass or a `--console` diagnostic.
 

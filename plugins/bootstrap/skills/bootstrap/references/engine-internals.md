@@ -352,11 +352,11 @@ After all automatic work completes, a clean non-console pass calls
 `bootstrap_lib/engine.py::_run_codex_hook_setup`. It first uses
 `bootstrap_lib.codex.detect_codex()`; when Codex is unavailable, the pass
 silently skips this Codex-only setup. When Codex is available, it resolves the
-Git root when there is one, checks the applicable Git and Perforce ignore
-policies, and only then writes the machine-local project file
-`<project>/.codex/hooks.json` through `bootstrap_lib/codex_hook.py`. If policy is
-missing, bootstrap reports remediation and defers the write; a failed pass or
-console diagnostic also does not create the adapter. The write path is
+Git root when there is one and writes the machine-local project file
+`<project>/.codex/hooks.json` through `bootstrap_lib/codex_hook.py`. Ignore
+policy does not block this first write: the generated hook's runtime preflight
+reports missing or ineffective Git and Perforce rules to Codex. A failed pass
+or console diagnostic still does not create the adapter. The write path is
 project-ephemeral, not derived from the plugin script location, and the JSON
 preserves unrelated Codex hooks while replacing only bootstrap-owned entries.
 Existing hook-file modes are preserved, symlink targets are refused, and
