@@ -35,7 +35,7 @@
     {
       "name": "bootstrap",
       "description": "Installs each plugin's tools, Python venvs, and config automatically at session start.",
-      "version": "0.128.0",
+      "version": "0.128.1",
       "author": {
         "name": "Christina"
       },
@@ -207,19 +207,6 @@
         "name": "Christina"
       },
       "source": "./plugins/job-kit",
-      "category": "development",
-      "dependencies": [
-        "bootstrap"
-      ]
-    },
-    {
-      "name": "prototypes",
-      "description": "Nursery for experimental skills awaiting graduation. Ships no skills at present.",
-      "version": "0.4.0",
-      "author": {
-        "name": "Christina"
-      },
-      "source": "./plugins/prototypes",
       "category": "development",
       "dependencies": [
         "bootstrap"
