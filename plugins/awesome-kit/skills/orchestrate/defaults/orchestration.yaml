@@ -130,9 +130,9 @@ lexicon:
   kind: skill
   render: glossed
   test: >-
-    Is the thing being reviewed something this context drafted itself, rather than the output
-    of a delegated unit?
-  gloss: the orchestrator drafted the artifact under review
+    Is the plan or decision under review something this context drafted itself, rather than
+    the output of a delegated unit?
+  gloss: the orchestrator drafted the plan or decision under review
 - id: conversational
   kind: skill
   render: glossed
@@ -241,21 +241,37 @@ shape:
     render_scope: principles-only
     text: >-
       For {known} work that is not {sufficient}: many units -- author the specification once,
-      then execute across them; one unit -- skip it.
+      then execute across them; one unit -- brief it directly.
+  - id: implementation-venue
+    text: >-
+      Invoked orchestration has one contract, directly or through a user-requested workflow:
+      delegate every implementation unit, including one small or unsplittable unit. If no
+      eligible worker can implement to the required quality, report the capability or quality
+      gap and leave the work pending.
   - id: who-authors-the-specification
     principle: P0.4
-    render_scope: principles-only
     text: >-
-      Does writing the specification require reading material you do not already have in context?
-      Yes -- a sub-agent writes it. No -- write it inline.
+      After policy render, identify the best suited planning model and check for sufficient
+      verified, decision-relevant context. If BOTH the main model is best suited and context is
+      sufficient, it plans; if EITHER fails, delegate planning to the most appropriate eligible
+      model. A few bounded read-only checks may close a small context gap; substantial
+      investigation travels with the planning unit. Name unknowns as hypotheses and require
+      evidence or a blocker before implementation briefs rely on them.
+  - id: do-not-delegate
+    text: >-
+      Do not delegate user steering, authorization, policy rendering, routing, final acceptance,
+      or synthesis. Keep optional coordination or read-only investigation on the main thread
+      only when BOTH the main model is best suited AND briefing, dispatch, waiting, joining,
+      verifying, and correcting cost more than doing that coordination directly. This never
+      permits main-thread implementation.
   - id: fan-out-collapse
     principle: P0.5
     text: >-
       Decide {fan-out} before dispatching. One that collapses into a single shell command
-      is ONE unit, and work a one-liner does rarely needs delegating at all.
+      is ONE delegated unit.
     without_backend:
-      codex: A genuine fan-out then has no other route -- sequence the units or handle them
-        inline.
+      codex: Without this backend, use one or sequential delegated units on an eligible backend;
+        if none exists, report the capability gap.
   - id: parallel-development-razor
     principle: P0.9
     text: >-
@@ -274,8 +290,9 @@ shape:
       shape is never inherited from an earlier frontier or increment. Cut along existing module
       and test seams. Mark each admitted unit {parallel-leaf}. A weak or cheap implementor takes
       only a {known} {rule-applying} leaf that is neither {unverifiable} nor {mutating}; interface
-      design, cross-cutting decisions, integration, and conflict resolution stay with the
-      orchestrator or the strongest available model.
+      design and cross-cutting implementation go to one strong eligible worker. If the split
+      fails, dispatch one coherent delegated implementation unit. Coordination decisions,
+      final integration checks, and conflict resolution stay with the orchestrator.
   - id: plan-is-a-unit
     principle: P0.6
     text: >-
@@ -291,11 +308,13 @@ shape:
   - id: plan-create-or-review
     principle: P0.7
     text: >-
-      For a {plan-checkpoint} that reaches the highest-cost route: can a standalone brief
-      carry or reference every decision-relevant constraint without encoding the answer and
-      without losing context that exists only in this conversation? Yes -- delegate plan CREATION
-      (question brief). No -- author the draft and delegate plan REVIEW of it. A model that
-      created a plan is not an independent reviewer of it.
+      Planning venue for every {plan-checkpoint}, including a requested plan deliverable, follows
+      the model-fit and verified-context test above. When planning is delegated, transfer every
+      decision-relevant constraint without encoding the answer; ask the planner to establish
+      missing facts. If a required fact can neither be conveyed nor established, report that
+      specific blocker. The main thread checks the returned plan's premises and user intent,
+      sends needed corrections back to the planner, and applies the checkpoint review route.
+      A model that created a plan is not an independent reviewer of it.
   - id: plan-review-second-family
     principle: P0.8
     text: >-

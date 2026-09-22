@@ -91,10 +91,10 @@ Location-op conventions (Step 5):
 Usage:
     task.py validate <ref> [--root PATH]
     task.py init <stub|desc> [--dest tmp|dev/tasks] [--type hand-off] [--root PATH]
-    task.py list [--scope user|project|skill|file] [--target X]
+    task.py list [--scope all|user|project|skill|file] [--target X]
                  [--status S] [--priority P] [--format text|json|yaml]
                  [--root PATH]
-  task.py review [--scope user|project|skill|file] [--target X]
+  task.py review [--scope all|user|project|skill|file] [--target X]
                    [--output PATH|-] [--no-open]
                    [--generate-missing-summaries | --no-generate-missing-summaries]
                    [--root PATH]
@@ -139,6 +139,7 @@ try:
     from task_system import state_ops  # noqa: E402
     from task_system.discovery import (  # noqa: E402
         DiscoveryError,
+        configured_project_directories,
         read_task_block,
     )
     from task_system.init import InitError, init_task  # noqa: E402
@@ -146,6 +147,7 @@ try:
         TaskListing,
         collect_listing,
         listing_data,
+        project_groups,
         section_views,
         serialize_listing,
     )  # noqa: E402
@@ -245,12 +247,31 @@ def _collect_listing(args: argparse.Namespace, root: Path) -> TaskListing | None
             target=args.target,
             status=getattr(args, "status", None),
             priority=getattr(args, "priority", None),
+            devroot=getattr(args, "devroot", None),
         )
     except DiscoveryError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return None
     _print_listing_diagnostics(listing)
     return listing
+
+
+def _print_task_sections(
+    sections: dict[str, list],
+    *,
+    indent: str = "",
+) -> bool:
+    printed = False
+    for heading, section in (("Open tasks:", sections["open"]), ("Closed tasks:", sections["closed"])):
+        if not section:
+            continue
+        if printed:
+            print()
+        print(indent + heading)
+        for view in section:
+            print(indent + _format_list_line(view))
+        printed = True
+    return printed
 
 
 def _cmd_list(args: argparse.Namespace) -> int:
@@ -261,26 +282,36 @@ def _cmd_list(args: argparse.Namespace) -> int:
     if args.format != "text":
         sys.stdout.write(serialize_listing(listing, args.format))
         return 0
-    if args.status is None:
-        sections = section_views(listing.views)
-        printed_section = False
-        for heading, section in (("Open tasks:", sections["open"]), ("Closed tasks:", sections["closed"])):
-            if not section:
-                continue
-            if printed_section:
+    if args.scope == "all":
+        projects = project_groups(listing)
+        for index, project in enumerate(projects):
+            if index:
                 print()
-            print(heading)
-            for view in section:
-                print(_format_list_line(view))
-            printed_section = True
+            print(f"Project: {project.name}")
+            print(f"Root: {project.root}")
+            if args.status is None:
+                _print_task_sections(section_views(project.views), indent="  ")
+            else:
+                for view in project.views:
+                    print("  " + _format_list_line(view))
+        return 0
+    if args.status is None:
+        _print_task_sections(section_views(listing.views))
     else:
         for view in listing.views:
             print(_format_list_line(view))
     return 0
 
 
+
 def _cmd_review(args: argparse.Namespace) -> int:
     root = (args.root if args.root is not None else Path.cwd()).resolve()
+    if args.scope is None:
+        try:
+            args.scope = "all" if configured_project_directories() else "project"
+        except DiscoveryError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
     listing = _collect_listing(args, root)
     if listing is None:
         return 1
@@ -693,7 +724,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     p_list.add_argument(
         "--scope",
-        choices=["user", "project", "skill", "file"],
+        choices=["all", "user", "project", "skill", "file"],
         default="project",
         help="Discovery scope (default: project).",
     )
@@ -732,9 +763,9 @@ def main(argv: list[str] | None = None) -> int:
     )
     p_review.add_argument(
         "--scope",
-        choices=["user", "project", "skill", "file"],
-        default="project",
-        help="Discovery scope (default: project).",
+        choices=["all", "user", "project", "skill", "file"],
+        default=None,
+        help="Discovery scope (default: all when project directories are configured, otherwise project).",
     )
     p_review.add_argument(
         "--target",

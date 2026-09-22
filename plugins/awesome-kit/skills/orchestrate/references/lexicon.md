@@ -120,11 +120,11 @@ would catch a wrong shared decision can be named: that is a rebuttable
 presumption stated in the tree, not a property of planhood.
 
 ### `authored-here` `[skill]` `render: glossed`
-The artifact under review was drafted inline by the orchestrator -- this
-context wrote it.
-**Test:** is the thing being reviewed something this context drafted itself,
-rather than the output of a delegated unit?
-**Gloss:** "the orchestrator drafted the artifact under review"
+The plan or decision under review was drafted by the orchestrator after the
+model-fit and verified-context planning test -- this context wrote it.
+**Test:** is the plan or decision under review something this context drafted
+itself, rather than the output of a delegated unit?
+**Gloss:** "the orchestrator drafted the plan or decision under review"
 
 *Consequence:* a review is independent only when the reviewer is not the
 author's model. `authored-here` names the artifacts that test applies to, so
@@ -210,7 +210,11 @@ The user dismissed the agent ("go", "get it done", a loop) or has gone quiet sin
 A decision put to an independent seat -- a different model from the one deciding -- before the agent takes it.
 **Test:** would a wrong answer propagate (`load-bearing`), and is the seat a different model from the one deciding?
 
-*Consequence:* Presence prices foreground work and is not a routing axis: it changes the cost of doing a unit inline, not which model does it. A `consult` routes as an `open` + `load-bearing` unit on the existing rows, adding `cross-check` when the agent already holds an answer -- no new row; the concepts belong to the consumer's own instructions where those define them, and this lexicon carries the tests either way.
+*Consequence:* Presence prices foreground optional coordination and read-only work,
+not implementation venue or the routed model. A `consult` routes as an `open` +
+`load-bearing` unit on the existing rows, adding `cross-check` when the agent
+already holds an answer -- no new row; the concepts belong to the consumer's own
+instructions where those define them, and this lexicon carries the tests either way.
 
 ## Anti-terms `[concept]`
 

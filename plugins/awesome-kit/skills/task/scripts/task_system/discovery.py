@@ -72,6 +72,7 @@ validation (via ``skills_kit_lib.schema_engine``) happen here.
 
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -85,8 +86,11 @@ from . import resolve
 from .schemas import TASK_LIST_SCHEMA
 from .validate import validate_ref
 
-SCOPES = ("project", "user", "skill", "file")
+SCOPES = ("all", "project", "user", "skill", "file")
+LOCAL_SCOPES = ("project", "user", "skill", "file")
 DEFAULT_USER_ROOT = Path.home() / ".claude"
+TASK_CONFIG_PATH = DEFAULT_USER_ROOT / "task.local.yaml"
+_ENV_REFERENCE_RE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}|%([A-Za-z_][A-Za-z0-9_]*)%")
 
 _TASK_LIST_KEY_RE = re.compile(r"^task_list\s*:", re.MULTILINE)
 _LOG_ENTRY_RE = re.compile(r"^\s*-\s+(\d{4}-\d{2}-\d{2}):\s*(.*?)\s*$", re.MULTILINE)
@@ -95,6 +99,14 @@ OPEN_CLASSIFICATIONS = frozenset(("active", "blocked"))
 
 class DiscoveryError(ValueError):
     """A discovery scope or target could not be resolved."""
+
+
+@dataclass(frozen=True)
+class ProjectRoot:
+    """A project directory eligible for configured multi-project discovery."""
+
+    name: str
+    root: Path
 
 
 @dataclass(frozen=True)
@@ -115,6 +127,8 @@ class TaskRecord:
     priority: str | None = None
     last_update: str | None = None
     host: str | None = None  # retained ref host tag, when any ref carried one
+    project_name: str = ""
+    project_root: Path | None = None
 
 
 def read_task_block(folder: Path) -> dict | None:
@@ -160,7 +174,7 @@ def read_task_updates(folder: Path) -> tuple[TaskUpdate, ...]:
         for date, detail in _LOG_ENTRY_RE.findall(text)
         if not (detail.startswith("summary:") or detail.startswith("update: summary:"))
     ]
-    return tuple(reversed(entries))
+    return tuple(sorted(reversed(entries), key=lambda entry: entry.date, reverse=True))
 
 
 # --- scope resolution --------------------------------------------------------
@@ -310,10 +324,11 @@ def _scan_doc(
 # --- the section-8 algorithm -------------------------------------------------
 
 
-def discover(
+def _discover_local(
     scope: str,
     project_root: Path,
     *,
+    project_name: str | None = None,
     target: str | None = None,
     user_root: Path | None = None,
     local_host: str | None = None,
@@ -331,7 +346,7 @@ def discover(
     """
     if notes is None:
         notes = []
-    if scope not in SCOPES:
+    if scope not in LOCAL_SCOPES:
         raise DiscoveryError(
             f"unknown scope {scope!r} (expected one of: " + ", ".join(SCOPES) + ")"
         )
@@ -378,6 +393,8 @@ def discover(
             priority=prio,
             last_update=last_update,
             host=host,
+            project_name=project_name or effective_root.name,
+            project_root=effective_root,
         )
         if status is None:
             if record.classification == "archived":
@@ -388,3 +405,143 @@ def discover(
             continue
         records.append(record)
     return records
+
+
+def configured_project_directories(config_path: Path | None = None) -> tuple[Path, ...]:
+    """Read user-configured parents for multi-project discovery."""
+    path = config_path if config_path is not None else TASK_CONFIG_PATH
+    if not path.exists():
+        return ()
+    try:
+        data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, yaml.YAMLError) as exc:
+        raise DiscoveryError(f"cannot read task config {path}: {exc}") from exc
+    if not isinstance(data, dict) or not isinstance(data.get("project_directories"), list):
+        raise DiscoveryError(f"{path}: project_directories must be a list of paths")
+
+    def expand_reference(match: re.Match[str]) -> str:
+        name = match.group(1) or match.group(2)
+        value = os.environ.get(name)
+        if not value:
+            raise DiscoveryError(f"{path}: environment variable {name} is not set")
+        return value
+
+    directories: list[Path] = []
+    for raw in data["project_directories"]:
+        if not isinstance(raw, str) or not raw.strip():
+            raise DiscoveryError(f"{path}: project_directories entries must be nonempty strings")
+        candidate = Path(_ENV_REFERENCE_RE.sub(expand_reference, raw)).expanduser()
+        if not candidate.is_absolute() or not candidate.is_dir():
+            raise DiscoveryError(f"{path}: project directory is not an existing absolute directory: {candidate}")
+        directories.append(candidate.resolve())
+    return tuple(dict.fromkeys(directories))
+
+
+def discover_project_roots(parents: tuple[Path, ...]) -> tuple[ProjectRoot, ...]:
+    """Return direct child directories of configured parents in stable order."""
+    entries: dict[Path, Path] = {}
+    for parent in parents:
+        try:
+            for entry in parent.iterdir():
+                if entry.is_dir() and not entry.name.startswith("."):
+                    entries.setdefault(entry.resolve(), entry)
+        except OSError as exc:
+            raise DiscoveryError(f"cannot read project directory {parent}: {exc}") from exc
+    return tuple(
+        ProjectRoot(name=entry.name, root=entry)
+        for entry in sorted(entries.values(), key=lambda path: (path.name.casefold(), path.name, str(path)))
+    )
+
+
+def _record_identity(record: TaskRecord) -> tuple[str, ...]:
+    """Identify a physical task folder, preserving absent references separately."""
+    root = record.project_root
+    if root is None:
+        return ("record", record.id, record.host or "")
+    folder = root / record.id
+    if folder.is_dir():
+        try:
+            return ("folder", os.path.normcase(os.path.normpath(str(folder.resolve()))))
+        except OSError:
+            pass
+    return ("reference", os.path.normcase(os.path.normpath(str(root.resolve()))), record.id, record.host or "")
+
+
+def _project_preference(record: TaskRecord) -> tuple[int, str, str, str]:
+    """Prefer the shortest project name when a physical task is shared."""
+    return (
+        len(record.project_name),
+        record.project_name.casefold(),
+        record.project_name,
+        str(record.project_root or ""),
+    )
+
+
+def discover(
+    scope: str,
+    project_root: Path,
+    *,
+    target: str | None = None,
+    user_root: Path | None = None,
+    local_host: str | None = None,
+    status: str | None = None,
+    priority: str | None = None,
+    notes: list[str] | None = None,
+    devroot: Path | None = None,
+) -> list[TaskRecord]:
+    """Enumerate one project or projects under configured parent directories."""
+    if scope != "all":
+        return _discover_local(
+            scope,
+            project_root,
+            target=target,
+            user_root=user_root,
+            local_host=local_host,
+            status=status,
+            priority=priority,
+            notes=notes,
+            project_name=(
+                (user_root if user_root is not None else DEFAULT_USER_ROOT).name
+                if scope == "user"
+                else project_root.name
+            ),
+        )
+    if target is not None:
+        raise DiscoveryError("scope 'all' does not accept a target")
+
+    collected: list[TaskRecord] = []
+    output_notes = notes if notes is not None else []
+    parents = (devroot,) if devroot is not None else configured_project_directories()
+    if not parents:
+        raise DiscoveryError(f"scope 'all' requires project_directories in {TASK_CONFIG_PATH}")
+    for project in discover_project_roots(parents):
+        project_notes: list[str] = []
+        collected.extend(
+            _discover_local(
+                "project",
+                project.root,
+                local_host=local_host,
+                status=status,
+                priority=priority,
+                notes=project_notes,
+                project_name=project.name,
+            )
+        )
+        output_notes.extend(
+            f"{project.name}: {message}" for message in project_notes
+        )
+
+    selected: dict[tuple[str, ...], TaskRecord] = {}
+    for record in collected:
+        identity = _record_identity(record)
+        current = selected.get(identity)
+        if current is None or _project_preference(record) < _project_preference(current):
+            selected[identity] = record
+    return sorted(
+        selected.values(),
+        key=lambda record: (
+            record.project_name.casefold(),
+            record.project_name,
+            record.id,
+        ),
+    )
