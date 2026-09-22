@@ -450,3 +450,155 @@ record_keys_from: note.code
         "identity-less type 'note' cannot supply an id set to 'record_keys_from:'"
         in message
     )
+
+
+@pytest.mark.parametrize(
+    ("name", "document", "message"),
+    [
+        (
+            "fields must be a mapping",
+            """
+dialect: type/1
+id: product
+fields: []
+""",
+            "'fields:' must be a mapping",
+        ),
+        (
+            "required must be a YAML boolean",
+            """
+dialect: type/1
+id: product
+fields:
+  name: { type: string, required: "false" }
+""",
+            "'required:' must be a boolean",
+        ),
+        (
+            "total must be a YAML boolean",
+            """
+dialect: type/1
+id: product
+fields:
+  counts:
+    type: map
+    key: { type: enum, values: [a] }
+    value: { type: int }
+    total: "false"
+""",
+            "'total:' must be a boolean",
+        ),
+        (
+            "variant fields must be a mapping",
+            """
+dialect: type/1
+id: product
+fields:
+  category: { type: enum, values: [a] }
+variants:
+  on: category
+  when:
+    a: []
+""",
+            "variant 'a': 'fields:' must be a mapping",
+        ),
+        (
+            "view link must be a YAML boolean",
+            """
+dialect: type/1
+id: product
+fields:
+  name: { type: string }
+---
+dialect: view/1
+id: product_card
+of: product
+form: card
+fields:
+  - { field: name, link: "false" }
+""",
+            "'link:' must be a boolean",
+        ),
+        (
+            "constraint both_ways must be a YAML boolean",
+            """
+dialect: type/1
+id: product
+fields:
+  id: { type: id }
+---
+dialect: type/1
+id: category
+fields:
+  id: { type: id }
+---
+dialect: type/1
+id: links
+fields:
+  product: { type: ref, to: product }
+constraints:
+  - kind: covers
+    why: product links category
+    from: product.id
+    to: category.id
+    both_ways: "false"
+""",
+            "'both_ways:' must be a boolean",
+        ),
+        (
+            "record_keys must be a list",
+            """
+dialect: type/1
+id: product
+identified_by: id
+fields:
+  id: { type: id }
+---
+dialect: source/1
+of: product
+layout: keyed_map
+path: content/products.yaml
+record_keys: product.id
+""",
+            "'record_keys:' must be a list",
+        ),
+        (
+            "metadata_keys must be a list",
+            """
+dialect: type/1
+id: product
+identified_by: id
+fields:
+  id: { type: id }
+---
+dialect: source/1
+of: product
+layout: keyed_map
+path: content/products.yaml
+metadata_keys: revision
+""",
+            "'metadata_keys:' must be a list",
+        ),
+        (
+            "min_length must be an integer",
+            """
+dialect: type/1
+id: product
+fields:
+  tags:
+    type: list
+    of: { type: string }
+    min_length: "2"
+""",
+            "'min_length:' must be an integer",
+        ),
+    ],
+)
+def test_loader_refuses_malformed_declaration_shapes(
+    profile_dir, write, name: str, document: str, message: str
+) -> None:
+    """Malformed YAML must fail at load time instead of changing semantics."""
+    write("profile/bad.yaml", document)
+
+    with pytest.raises(ProfileError, match=message):
+        load_profile(profile_dir)

@@ -135,6 +135,32 @@ def _require(raw: dict, key: str, where: str, document: Path) -> Any:
     return raw[key]
 
 
+def _as_bool(raw: Any, key: str, where: str, document: Path) -> bool:
+    if type(raw) is not bool:
+        raise ProfileError("{0}: '{1}:' must be a boolean".format(where, key), document)
+    return raw
+
+
+def _as_int(raw: Any, key: str, where: str, document: Path) -> int:
+    if isinstance(raw, bool) or not isinstance(raw, int):
+        raise ProfileError("{0}: '{1}:' must be an integer".format(where, key), document)
+    return raw
+
+
+def _as_number(raw: Any, key: str, where: str, document: Path) -> int | float:
+    if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+        raise ProfileError("{0}: '{1}:' must be a number".format(where, key), document)
+    return raw
+
+
+def _as_text_list(raw: Any, key: str, where: str, document: Path) -> list[str]:
+    if not isinstance(raw, list) or any(not isinstance(item, str) for item in raw):
+        raise ProfileError(
+            "{0}: '{1}:' must be a list of strings".format(where, key), document
+        )
+    return list(raw)
+
+
 # --------------------------------------------------------------------------
 # type documents
 # --------------------------------------------------------------------------
@@ -155,7 +181,9 @@ def _parse_type(raw: dict, document: Path) -> TypeSpec:
     type_id = _require(raw, "id", "type document", document)
     where = "type '{0}'".format(type_id)
 
-    fields = _parse_fields(raw.get("fields") or {}, where, document)
+    fields = _parse_fields(
+        raw["fields"] if "fields" in raw else {}, where, document
+    )
     value = (
         _parse_field(
             'value',
@@ -275,13 +303,19 @@ def _parse_field(name: str, raw: Any, where: str, document: Path) -> FieldSpec:
         )
 
     spec = FieldSpec(name=name)
-    spec.total = bool(raw.get('total', False))
+    spec.total = (
+        _as_bool(raw["total"], "total", where, document) if "total" in raw else False
+    )
     if spec.total and 'type' not in raw:
         raise ProfileError(
             '{0}: {1!r} is only legal on a map'.format(where, 'total: true'),
             document,
         )
-    spec.required = bool(raw.get("required", True))
+    spec.required = (
+        _as_bool(raw["required"], "required", where, document)
+        if "required" in raw
+        else True
+    )
     spec.unit = raw.get("unit")
     spec.meaning = raw.get("meaning")
     spec.derived = raw.get("derived")
@@ -289,13 +323,35 @@ def _parse_field(name: str, raw: Any, where: str, document: Path) -> FieldSpec:
     if "sentinel" in raw:
         spec.sentinel = _parse_sentinel(raw["sentinel"], where, document)
 
-    spec.length = raw.get("length")
-    spec.min_length = raw.get("min_length")
-    spec.max_length = raw.get("max_length")
-    spec.min_chars = raw.get("min_chars")
-    spec.max_chars = raw.get("max_chars")
-    spec.minimum = raw.get("min")
-    spec.maximum = raw.get("max")
+    spec.length = (
+        _as_int(raw["length"], "length", where, document) if "length" in raw else None
+    )
+    spec.min_length = (
+        _as_int(raw["min_length"], "min_length", where, document)
+        if "min_length" in raw
+        else None
+    )
+    spec.max_length = (
+        _as_int(raw["max_length"], "max_length", where, document)
+        if "max_length" in raw
+        else None
+    )
+    spec.min_chars = (
+        _as_int(raw["min_chars"], "min_chars", where, document)
+        if "min_chars" in raw
+        else None
+    )
+    spec.max_chars = (
+        _as_int(raw["max_chars"], "max_chars", where, document)
+        if "max_chars" in raw
+        else None
+    )
+    spec.minimum = (
+        _as_number(raw["min"], "min", where, document) if "min" in raw else None
+    )
+    spec.maximum = (
+        _as_number(raw["max"], "max", where, document) if "max" in raw else None
+    )
     if "ordered" in raw:
         spec.ordered = _parse_ordered(raw["ordered"], where, document)
 
@@ -304,7 +360,9 @@ def _parse_field(name: str, raw: Any, where: str, document: Path) -> FieldSpec:
         return spec
     if "partial_of" in raw:
         spec.partial_of = str(raw["partial_of"])
-        spec.routes = _parse_routes(raw.get("routes") or {}, where, document)
+        spec.routes = _parse_routes(
+            raw["routes"] if "routes" in raw else {}, where, document
+        )
         return spec
     if "routes" in raw:
         raise ProfileError(
@@ -557,7 +615,7 @@ def _parse_variants(
     when: dict[Any, dict[str, FieldSpec]] = {}
     for value, added in when_raw.items():
         when[value] = _parse_fields(
-            added or {}, "{0} variant '{1}'".format(where, value), document
+            added, "{0} variant '{1}'".format(where, value), document
         )
     return Variants(on=on, when=when)
 
@@ -604,7 +662,11 @@ def _parse_constraints(raw: Any, where: str, document: Path) -> list[Constraint]
                 why=str(why),
                 from_path=_as_path(_require(entry, "from", spot, document), "from", spot, document),
                 to_path=_as_path(_require(entry, "to", spot, document), "to", spot, document),
-                both_ways=bool(entry.get("both_ways", False)),
+                both_ways=(
+                    _as_bool(entry["both_ways"], "both_ways", spot, document)
+                    if "both_ways" in entry
+                    else False
+                ),
             )
         elif kind == "matches_files":
             constraint = Constraint(
@@ -664,7 +726,7 @@ def _parse_view(raw: dict, document: Path) -> ViewSpec:
             ),
             document,
         )
-    entries_raw = raw.get("fields") or []
+    entries_raw = raw["fields"] if "fields" in raw else []
     if not isinstance(entries_raw, list):
         raise ProfileError("{0}: 'fields:' must be an ordered list".format(where), document)
     entries: list[ViewEntry] = []
@@ -688,7 +750,11 @@ def _parse_view(raw: dict, document: Path) -> ViewSpec:
                 computed=entry.get("computed"),
                 label=entry.get("label"),
                 format=entry.get("format"),
-                link=bool(entry.get("link", False)),
+                link=(
+                    _as_bool(entry["link"], "link", spot, document)
+                    if "link" in entry
+                    else False
+                ),
                 group=entry.get("group"),
                 when=entry.get("when"),
                 from_expr=entry.get("from"),
@@ -722,9 +788,17 @@ def _parse_source(raw: dict, document: Path) -> SourceSpec:
         path=str(_require(raw, "path", where, document)),
         key=raw.get("key"),
         generated_by=raw.get("generated_by"),
-        record_keys=raw.get("record_keys"),
+        record_keys=(
+            _as_text_list(raw["record_keys"], "record_keys", where, document)
+            if "record_keys" in raw
+            else None
+        ),
         record_keys_from=raw.get("record_keys_from"),
-        metadata_keys=raw.get("metadata_keys"),
+        metadata_keys=(
+            _as_text_list(raw["metadata_keys"], "metadata_keys", where, document)
+            if "metadata_keys" in raw
+            else None
+        ),
         document=document,
     )
     if layout != "rows" and spec.key is not None:
