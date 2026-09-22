@@ -62,6 +62,7 @@ every noun in a consuming project's profile, and the kit must behave
 identically. Locks, triage vocabulary, queues and task conventions all
 fail that test and live in the consumer.
 
-The planning, dispatch and editor packages are declared but unbuilt. Do
-not read them as work in flight; see `architecture.html` for current
-status.
+The Python dispatch package is implemented and uses content-pipeline-kit at
+the file seam. The browser-facing editor belongs to Databench and is not
+shipped by this library. See `architecture.html` for the current package
+boundaries and verification status.

@@ -1,7 +1,7 @@
 [project]
 name = "yaml-data-editor-kit"
-version = "0.15.7"
-description = "Project-independent YAML data dialect: schema, anchors and comments, planner/dispatcher, and a web editor surface."
+version = "0.15.8"
+description = "Project-independent YAML data dialect: schema, anchored comments, and planner/dispatcher binding. Databench owns the browser editor boundary; this package ships no web editor."
 requires-python = ">=3.10"
 
 dependencies = ["pyyaml", "openai>=1.0.0"]
