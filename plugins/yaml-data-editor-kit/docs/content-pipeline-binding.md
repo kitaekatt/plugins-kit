@@ -12,24 +12,24 @@ Adopt directly, do not reimplement:
 
 - `store.attributed` -- `human > machine > sourced` precedence. A human
   edit in the editor writes the `human` slice; an agent writes `machine`.
-  This is the whole answer to "the human keeps authoring while work is in
-  flight", and it is structural rather than a runtime check.
-- `validate.contract` -- schema conformance as `Validator`s, one list
-  shared by the in-loop generation site and the post-hoc audit.
+  The dispatcher applies this precedence in its file-backed attributed YAML
+  result store rather than through a CPK delivery or VCS operation.
+- `llm.platform.ValidationSpec` and `submit_validated` -- the shared response
+  parser and validator boundary. `validation_spec_for_unit` supplies the same
+  spec to the inline adapter and the saved-plan worker adapter, so both paths
+  judge agentic and mechanical responses identically.
 - `execution/*` -- the claim/fence/lease/reclaim machinery, the protocol
   mount (`read`/`submit`/`fail`), `RunAdapter`, `WorkerCommand`.
-- `deliver.inplace` + `vcs.git_vcs` -- ownership markers, first-class
-  revert, exact-path never-wildcard adds.
 - `freshness.hashing.content_hash` -- on the ANCHORED SLICE ONLY, to detect
   that data moved under a comment while its unit was in flight.
 
 Submit acceptance and apply rejection are separate axes, and `execution/*`
 models them separately. `ACCEPTED` records that adjudication accepted a
-worker's text; `APPLY_REJECTED` records that delivery was refused without a
-side effect. A refused apply therefore keeps the unit `ACCEPTED` -- staleness
-at apply time changes whether the result is still applicable, not whether it
-was accepted -- so a stale unit settles without stranding the healthy units
-finalized alongside it.
+worker's text; `APPLY_REJECTED` records that the attributed-store apply was
+refused without a side effect. A refused apply therefore keeps the unit
+`ACCEPTED` -- staleness at apply time changes whether the result is still
+applicable, not whether it was accepted -- so a stale unit settles without
+stranding the healthy units finalized alongside it.
 
 ## Dispatch implementation boundary
 

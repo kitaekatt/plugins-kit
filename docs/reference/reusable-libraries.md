@@ -62,13 +62,13 @@ Harness layers may add optional native ergonomics, automation, richer presentati
 
 ## `yaml_data_editor_kit`
 
-**Capability:** A project-independent YAML data dialect with schema/profile loading and corpus validation, plus anchored comments that can be resolved, checked for staleness, and re-anchored. The package also contains dispatch and editor layers, but those layers do not currently advertise a Python export surface.
+**Capability:** A project-independent YAML data dialect with schema/profile loading and corpus validation, anchored comments that can be resolved, checked for staleness, and re-anchored, and a content-pipeline-kit dispatch binding with inline and staged background execution. The editor boundary is owned by Databench; this package ships no web editor.
 
 **Use when:** A project needs typed YAML records and views, corpus diagnostics, or comments attached to stable semantic locations rather than raw line numbers.
 
-**Entry points:** `yaml_data_editor_kit.schema.__all__` declares the profile, corpus, validation, merge, and diagnostic API. `yaml_data_editor_kit.comments.__all__` declares addressing, comment storage, staleness, and re-anchoring APIs. Treat `dispatch` and `editor` as non-public until they declare exports or consumer documentation.
+**Entry points:** `yaml_data_editor_kit.schema.__all__` declares the profile, corpus, validation, merge, and diagnostic API. `yaml_data_editor_kit.comments.__all__` declares addressing, comment storage, staleness, and re-anchoring APIs. `yaml_data_editor_kit.dispatch.__all__` declares planning, inline execution, staged background lifecycle, worker protocol, and question-recovery APIs. `editor/` is a Databench-owned boundary and has no shipped Python export surface.
 
-**More:** [`schema/__init__.py`](../../plugins/yaml-data-editor-kit/lib/yaml_data_editor_kit/schema/__init__.py), [`comments/__init__.py`](../../plugins/yaml-data-editor-kit/lib/yaml_data_editor_kit/comments/__init__.py), and [`yaml_data_editor_kit/`](../../plugins/yaml-data-editor-kit/lib/yaml_data_editor_kit/).
+**More:** [`schema/__init__.py`](../../plugins/yaml-data-editor-kit/lib/yaml_data_editor_kit/schema/__init__.py), [`comments/__init__.py`](../../plugins/yaml-data-editor-kit/lib/yaml_data_editor_kit/comments/__init__.py), [`dispatch/__init__.py`](../../plugins/yaml-data-editor-kit/lib/yaml_data_editor_kit/dispatch/__init__.py), and [`yaml_data_editor_kit/`](../../plugins/yaml-data-editor-kit/lib/yaml_data_editor_kit/).
 
 ## Boundary notes
 

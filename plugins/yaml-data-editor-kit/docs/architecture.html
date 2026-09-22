@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>yaml-data-editor-kit 0.15.8 &mdash; architecture</title>
+<title>yaml-data-editor-kit 0.15.9 &mdash; architecture</title>
 <style>
 :root{--bg:#f7f6f3;--surface:#fff;--ink:#23211c;--muted:#6b675e;--line:#d9d5cc;--accent:#2f6f6a;--accent-soft:#e2efee;--human:#8a5a2b;--human-soft:#f3e9dc;--file:#5b5f8a;--file-soft:#e8e9f3;--new:#92402f;--new-soft:#f6e6e1;--code-bg:#efede8;--warn:#8a6d1f}
 @media(prefers-color-scheme:dark){:root{--bg:#1c1b18;--surface:#26251f;--ink:#e8e5dd;--muted:#a09b8e;--line:#44423a;--accent:#6fbdb6;--accent-soft:#22403d;--human:#d3a15f;--human-soft:#40331f;--file:#a3a8d8;--file-soft:#2e3046;--new:#dd8a72;--new-soft:#47281f;--code-bg:#211f1a;--warn:#d6b458}}
@@ -12,7 +12,7 @@
 </head>
 <body><main>
 <h1>yaml-data-editor-kit</h1>
-<p class="subtitle">Architecture and current implementation status for version 0.15.8. Sources: the plugin charter, dialect specification, binding note, and current Python package.</p>
+<p class="subtitle">Architecture and current implementation status for version 0.15.9. Sources: the plugin charter, dialect specification, binding note, and current Python package.</p>
 
 <h2>The idea</h2>
 <p class="lead"><strong>Make the data model explicit.</strong> A consuming project writes a <strong>profile</strong> in this plugin's YAML dialect. The profile declares types, shapes, meaning, presentation, and storage. The plugin loads that profile and validates a corpus without importing or hardcoding the consuming project's vocabulary.</p>
@@ -52,7 +52,7 @@ key: items</code></pre></figure></div>
 <div class="cols"><div class="panel adopted"><h4>Implemented shape</h4><ul><li>value-shaped types, keyed-map sources, and document metadata</li><li>typed refs, sourced and stored-integer enums</li><li>nested records, lists, maps, ranges, sizes, and total maps</li><li>discriminated <code>variants</code> and sparse <code>extensible</code> records</li></ul></div><div class="panel adopted"><h4>Implemented checks</h4><ul><li><code>shape_from</code> with a foreign-schema adapter</li><li><code>partial_of</code> layers and declared routes</li><li><code>covers</code>, <code>matches_files</code>, and <code>unique</code></li><li>ordered declarations, source layouts, and path-key obligations</li></ul></div></div>
 
 <h2>The comments package: address, guard, classify</h2>
-<p><code>comments/</code> is part of the current 0.15.8 library. It treats an anchor as an address in the loaded corpus, not as YAML's <code>&amp;anchor</code>/<code>*alias</code> syntax. A selector can denote a set; an anchor is the singular subset used by a persisted comment.</p>
+<p><code>comments/</code> is part of the current 0.15.9 library. It treats an anchor as an address in the loaded corpus, not as YAML's <code>&amp;anchor</code>/<code>*alias</code> syntax. A selector can denote a set; an anchor is the singular subset used by a persisted comment.</p>
 <h3>Address grammar and public types</h3>
 <div class="scroll"><table><tr><th>Surface</th><th>What it does</th></tr><tr><td><code>parse_selector</code></td><td>Parses up to three slash-separated segments: type, record, and dotted field path. It accepts type and record wildcards, <code>@doc</code>, zero-based <code>#N</code>, predicates with <code>=</code>, <code>!=</code>, <code>has</code>, and <code>in</code>, plus map-key field wildcards.</td></tr><tr><td><code>parse_anchor</code></td><td>Uses the selector grammar but refuses wildcards and predicates because a persisted anchor must be singular.</td></tr><tr><td><code>evaluate</code></td><td>Expands a parsed <code>Selector</code> into an <code>Evaluation</code> of concrete <code>Point</code> values and reports matched records.</td></tr><tr><td><code>resolve_anchor</code></td><td>Resolves one singular address to a <code>ResolvedAnchor</code> containing its concrete point, exact slice value, and record. An optional guard prevents an indexed row from silently retargeting.</td></tr><tr><td><code>contains</code>, <code>overlaps</code>, <code>intersects</code></td><td>Compare concrete paths and evaluation sets by containment and overlap.</td></tr><tr><td><code>Selector</code>, <code>Point</code>, <code>Evaluation</code>, <code>ResolvedAnchor</code></td><td>Normalized selector, concrete corpus point, set evaluation, and guarded resolved slice types. <code>Predicate</code> is the parsed record-filter type.</td></tr></table></div>
 <p>Predicates compare against declared field shapes. Numeric comparisons are refused; legal operators are exactly <code>=</code>, <code>!=</code>, <code>has</code>, and <code>in</code>. Identity globbing is refused. A field wildcard expands declared map keys; a bare <code>id</code> map key remains advisory and uncheckable rather than inventing a legal set.</p>
@@ -65,7 +65,7 @@ key: items</code></pre></figure></div>
 <p>The binding note now describes an implemented dispatcher boundary: <code>dispatch/</code> is the only package importing content-pipeline-kit and uses its work-unit, execution, validation, and anchored-slice freshness machinery, then applies accepted results through its attributed YAML store. The editor boundary remains Databench-owned; this package does not claim to ship a web surface.</p>
 <ol class="stages"><li><span class="t">Schema dialect and corpus validation</span> <span class="tag done">IMPLEMENTED</span><span class="d">Profile loader, model, sources, corpus records, merge algebra, constraints, views, and diagnostics.</span></li><li><span class="t">Anchored comments</span> <span class="tag done">IMPLEMENTED</span><span class="d">Selector and anchor grammar, evaluation, containment predicates, comment store, canonical hashing, and staleness reports.</span></li><li><span class="t">Editor surface</span> <span class="tag stub">DATABENCH-OWNED</span><span class="d">The browser-facing workbench is owned by Databench; this package has no shipped web editor.</span></li><li><span class="t">Dispatcher and pipeline binding</span> <span class="tag done">IMPLEMENTED</span><span class="d">Planner, inline and staged background lifecycle, worker protocol, CPK binding, validation, and question recovery.</span></li></ol>
 <div class="note"><strong>Verification.</strong> The row suite passes <strong>479 tests</strong> with <strong>1 opt-in live-backend skip</strong>. No live Claude background session is asserted here; editor behavior remains Databench-owned.</div>
-<p class="subtitle">yaml-data-editor-kit 0.15.8 &middot; self-contained architecture overview</p>
+<p class="subtitle">yaml-data-editor-kit 0.15.9 &middot; self-contained architecture overview</p>
 </main>
 </body>
 </html>

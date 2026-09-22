@@ -62,7 +62,8 @@ every noun in a consuming project's profile, and the kit must behave
 identically. Locks, triage vocabulary, queues and task conventions all
 fail that test and live in the consumer.
 
-The Python dispatch package is implemented and uses content-pipeline-kit at
-the file seam. The browser-facing editor belongs to Databench and is not
-shipped by this library. See `architecture.html` for the current package
-boundaries and verification status.
+The Python dispatch package is implemented and uses content-pipeline-kit for
+planning and execution behind the file seam. The browser-facing editor
+belongs to Databench and is not shipped by this library. See
+`architecture.html` for the current package boundaries and verification
+status.
