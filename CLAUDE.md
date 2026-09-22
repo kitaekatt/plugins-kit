@@ -209,6 +209,12 @@ claude --plugin-dir ~/Dev/plugins-kit/plugins/my-plugin
 **Publishing** is `uv run python scripts/publish.py` -- the only user-gated action in this repo, and the source of truth for the flow; do not hand-run its steps. Definition of a publish, `marketplace.json` as derived data, the commit-scoped pre-commit check, dev-only filtering, and `index.html` regeneration:
 [docs/reference/publish-reconcile.md](docs/reference/publish-reconcile.md).
 
+**Publication completeness is conditional on configuration.** A plugin is
+correctly published when its manifest says `published: true` (or omits the
+flag) and it is present in the release. A plugin is correctly unpublished when
+its manifest says `published: false` and the publisher holds its files back.
+Do not report an intentionally unpublished plugin as a publication gap.
+
 Publishing is reversible-but-visible: nothing is destroyed, but it goes out to other machines. The bar is "user has expressed publish intent for this work," not "user has reconfirmed each git command." Treat unambiguous go-signals -- `go`, `ship it`, `publish`, `do it`, `close the loop`, `push` -- as authorizing the whole flow; run `publish.py` and let its preflight be the safety net. Confirm only when intent is genuinely ambiguous (partial work, no version bump in sight, unrelated WIP staged, or the user is mid-thought).
 
 **Plugin `uv.lock` files are ignored and untracked; never commit one.** `.gitignore` lists `uv.lock`, and a tracked plugin lockfile records the plugin's own version, so every bump leaves it stale and the next `uv sync` dirties the tree, which blocks `publish.py`. A dirty `plugins/<name>/uv.lock` therefore means one was re-tracked: `git rm --cached` it. Do not commit the refreshed copy. When merging a branch that deleted one, resolve the modify/delete conflict as the deletion. The root `uv.lock` (this checkout's maintainer environment) is the one tracked exception.

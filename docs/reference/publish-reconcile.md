@@ -37,6 +37,12 @@ pushed, and the release landed on `master`. Anything less is not a publish
 a bump each leaves consumers on the release in their cache. `publish.py` refuses
 each of these rather than half-shipping.
 
+**Publication completeness is conditional on the manifest.** A plugin whose
+manifest has `published: true` (or no `published` key) is complete when it is
+included in the release. A plugin whose manifest has `published: false` is
+complete when its files are held back from the release. The latter is an
+intentional dev-only state, not a missing publication and not a publish error.
+
 `.claude-plugin/marketplace.json` is **derived data** -- rebuilt from each
 plugin's `plugin.json`, filtered by `"published"` (missing = `true`; `false` =
 excluded). Never hand-edit its plugin entries; the pre-commit hook rejects
