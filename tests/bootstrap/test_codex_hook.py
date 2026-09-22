@@ -6,7 +6,7 @@ import os
 import subprocess
 from pathlib import Path
 
-from bootstrap_lib import codex_hook, engine
+from bootstrap_lib import codex, codex_hook, engine
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -173,6 +173,11 @@ class TestCodexResponse:
 class TestEngineWiring:
     def test_clean_automatic_pass_installs_hook(self, tmp_path, monkeypatch):
         monkeypatch.setattr(
+            codex,
+            "detect_codex",
+            lambda: codex.CodexDetection(available=True, reason="fake codex"),
+        )
+        monkeypatch.setattr(
             codex_hook,
             "ensure_codex_hook",
             lambda project: codex_hook.CodexHookInstallResult(True, project + "/.codex/hooks.json"),
@@ -183,6 +188,24 @@ class TestEngineWiring:
         assert actions == ["codex hook: installed %s/.codex/hooks.json" % tmp_path]
         assert oks == []
         assert failures == []
+
+    def test_codex_unavailable_skips_hook_without_remediation(self, tmp_path, monkeypatch):
+        calls = []
+        monkeypatch.setattr(
+            codex,
+            "detect_codex",
+            lambda: codex.CodexDetection(
+                available=False, reason="`codex` not found on PATH"
+            ),
+        )
+        monkeypatch.setattr(
+            codex_hook,
+            "ensure_codex_hook",
+            lambda project: calls.append(project),
+        )
+
+        assert engine._run_codex_hook_setup(str(tmp_path)) == ([], [], [])
+        assert calls == []
 
     def test_hook_is_not_created_after_an_incomplete_or_console_pass(self, tmp_path, monkeypatch):
         calls = []
@@ -202,6 +225,11 @@ class TestEngineWiring:
 
     def test_missing_gitignore_defers_hook_and_instructs_agent(self, tmp_path, monkeypatch):
         project = _git_project(tmp_path)
+        monkeypatch.setattr(
+            codex,
+            "detect_codex",
+            lambda: codex.CodexDetection(available=True, reason="fake codex"),
+        )
         which = codex_hook.shutil.which
         monkeypatch.setattr(
             codex_hook.shutil, "which",

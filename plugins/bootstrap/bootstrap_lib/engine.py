@@ -5293,14 +5293,21 @@ _AGENT_SKILLS_FAILURE_KWARGS = {
 
 
 def _run_codex_hook_setup(project_dir, *, console=False, existing_failures=()):
-    """Materialize the Codex adapter only after a clean automatic pass.
+    """Materialize the Codex adapter only when Codex is installed and clean.
 
     The returned lists follow the engine's normal ``(actions, oks, failures)``
     convention.  Keeping the policy here makes the lifecycle gate testable and
     prevents a future caller from accidentally generating a project hook during
-    a failed or read-only console diagnostic pass.
+    a failed, Codex-free, or read-only console diagnostic pass.
     """
     if not project_dir or console or existing_failures:
+        return [], [], []
+
+    # Use the bootstrap plugin's single Codex detector.  A project should not
+    # acquire a Codex-only hook merely because Claude bootstrap happened to run;
+    # installing Codex later causes the next normal pass to converge it.
+    from . import codex
+    if not codex.detect_codex().available:
         return [], [], []
 
     try:
