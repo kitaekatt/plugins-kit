@@ -757,7 +757,7 @@ Two edge sets exist, and they are not the same thing:
   bare strings (version constraints would resolve against `{plugin}--v{ver}`
   git tags this repo does not use). Verified edges: every plugin -> bootstrap
   (enforced by `check_bootstrap_dependency.py` + the publish gate), plus
-  awesome-kit -> skills-kit and prototypes -> skills-kit. This graph cannot
+  awesome-kit -> skills-kit. This graph cannot
   even EXPRESS the fragility in question -- it carries no versions -- and CC
   uses it only for install-time presence, which channels never affect
   (channels move versions, not presence). It needs no change and takes no
