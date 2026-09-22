@@ -109,19 +109,6 @@
       ]
     },
     {
-      "name": "prototypes",
-      "description": "Nursery for experimental skills awaiting graduation. Ships no skills at present.",
-      "version": "0.4.0",
-      "author": {
-        "name": "Christina"
-      },
-      "source": "./plugins/prototypes",
-      "category": "development",
-      "dependencies": [
-        "bootstrap"
-      ]
-    },
-    {
       "name": "llm-scripting-kit",
       "description": "LLM access for scripts and pipelines: credentials, endpoint/model resolution, local Qwen server profiles, and one completion seam over HTTP, Claude, Codex, and OpenCode.",
       "version": "0.44.2",

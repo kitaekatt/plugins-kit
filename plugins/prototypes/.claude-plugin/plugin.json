@@ -1,6 +1,6 @@
 {
   "name": "prototypes",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "Nursery for experimental skills awaiting graduation. Ships no skills at present.",
   "author": {
     "name": "Christina"
@@ -12,5 +12,6 @@
   ],
   "dependencies": [
     "bootstrap"
-  ]
+  ],
+  "published": false
 }
