@@ -59,9 +59,9 @@ jobs:
   `requirements` mapping is llm-scripting-kit's requirement language over an
   adapter's advertised `Capabilities` -- see llm-scripting-kit's README,
   "Capability requirements" subsection; an entry whose backend advertises
-  nothing is never selected. The pre-declaration keys `endpoint_preference`,
-  `endpoint_preferences`, `endpoints` and `endpoint` are no longer accepted; a
-  job file using one of them fails loading with an error naming `models`.
+  nothing is never selected. The keys `endpoint_preference`, `endpoint_preferences`, `endpoints` and
+  `endpoint` are rejected: a job that uses one of them in place of `models`
+  fails loading with an error that names the key and points to `models`.
   Requires llm-scripting-kit >= 0.46.0, the version that added
   `describe` (and, before it, `subjects_for_disallowed_tools` for the deny
   floor); job_kit.select fails at import time with a named remediation if an
