@@ -181,11 +181,8 @@ for callers with no loop of their own. Four things are easy to break:
   transport`); the code-review skills do, for every reviewer lane the lane
   runner binds to a transport.
 
-`quota_selection.choose_endpoint` is a thin caller of `describe` that never
-probes, and `rank_candidates` keeps the two-band rank for any caller that
-still imports it; no plugin in this repo does. Both are deprecated names. The `usage` and `describe` verbs (and
-`choose`, a deprecated alias of `describe`) are the inspection surfaces for a
-check that is otherwise invisible.
+The `usage` and `describe` verbs are the inspection surfaces for a check that
+is otherwise invisible.
 
 ## Scope: one call, made correctly
 

@@ -31,11 +31,12 @@ options and the normalized response are adapted across the seam so this module's
 :class:`~content_pipeline.llm.platform.LLMResponse` stay the pipeline-facing
 types regardless of provider.
 
-:func:`route` reads a process-level env var (``CONTENT_PIPELINE_LLM_BACKEND``)
-and returns the active backend -- backend selection is one process-wide switch
-rather than a parameter threaded through every call site. The returned
-response's ``model`` reflects the model that ACTUALLY ran, so audit stamping
-stays truthful.
+:func:`route` reads one process-level model declaration
+(``CONTENT_PIPELINE_LLM_MODELS``) and returns the backend for its first usable
+entry; unset, it returns the default :class:`OpenRouterBackend`. Backend
+selection is one process-wide switch rather than a parameter threaded through
+every call site. The returned response's ``model`` reflects the model that
+ACTUALLY ran, so audit stamping stays truthful.
 """
 
 from __future__ import annotations
@@ -456,15 +457,6 @@ class OpencodeCliBackend(_LazyDelegate):
 # Model-endpoint backend -- delegates to llm_scripting_kit
 # ---------------------------------------------------------------------------
 
-ENDPOINT_ENV = "CONTENT_PIPELINE_LLM_ENDPOINT"
-"""Selects WHICH registry entry this backend talks to (an entry id).
-
-Empty means the registry's own ``default`` entry. Separate from
-:data:`BACKEND_ENV`, which selects the backend itself: one names the transport,
-the other names the server.
-"""
-
-
 @dataclass
 class ModelEndpointBackend(_LazyDelegate):
     """Completion against a registered model endpoint.
@@ -489,9 +481,7 @@ class ModelEndpointBackend(_LazyDelegate):
     across worker threads; the lazy delegate build is double-checked-locked.
     """
 
-    endpoint: str = field(
-        default_factory=lambda: os.environ.get(ENDPOINT_ENV, "").strip()
-    )
+    endpoint: str = ""
     project_root: Optional[Path] = None
     client: Any = None
     name: str = field(default="model-endpoint", init=False)
@@ -511,8 +501,8 @@ class ModelEndpointBackend(_LazyDelegate):
         REGISTRY, not left as None. Passing None onward reaches
         ``resolve_endpoint``, whose default is the llm-scripting-kit config's
         default endpoint -- ``openrouter`` -- and NOT this registry's own
-        ``default:`` key. That mismatch is not cosmetic: it makes an unset
-        CONTENT_PIPELINE_LLM_ENDPOINT probe OpenRouter and fail with
+        ``default:`` key. That mismatch is not cosmetic: it makes an empty
+        ``endpoint`` probe OpenRouter and fail with
         "no API key resolved", a nonsense diagnosis for a backend whose entries
         are typically keyless and local.
 
@@ -770,33 +760,16 @@ class MockBackend:
 # Process-level routing
 # ---------------------------------------------------------------------------
 
-BACKEND_ENV = "CONTENT_PIPELINE_LLM_BACKEND"
-"""Process-level backend selection env var (empty / unset => openrouter).
-
-DEPRECATED, together with :data:`MODEL_ENV` and :data:`ENDPOINT_ENV`: replaced
-by the single :data:`MODELS_ENV` declaration. All three are still honoured
-until migration step 12 (mapped to a synthesized one-entry declaration; see
-:func:`declared_model_names`), with a deprecation warning when
-:data:`MODELS_ENV` is unset and any of the three is set explicitly.
-"""
-
-MODEL_ENV = "CONTENT_PIPELINE_LLM_MODEL"
-"""Optional override for the model a routed non-openrouter backend runs.
-
-DEPRECATED -- see :data:`BACKEND_ENV`.
-"""
-
 MODELS_ENV = "CONTENT_PIPELINE_LLM_MODELS"
 """One model declaration -- a comma-separated list of llm-scripting-kit
 registry ids (``bootstrap_lib.model_declaration``'s format; see bootstrap's
 ``plugin-dev`` skill, ``references/model-declaration.md``) naming which
-model(s) may serve a completion in this process. Replaces the
-:data:`BACKEND_ENV` / :data:`MODEL_ENV` / :data:`ENDPOINT_ENV` triple
-(R37). Resolved through ``llm_scripting_kit.declaration.describe`` (the D3
-routing layer) via :func:`resolve_declaration`, so quota pacing, reachability,
-and the itemised :class:`~llm_scripting_kit.declaration.NoUsableRoutingTarget`
-floor apply exactly as they do for every other declaration-driven caller.
-Unset means the legacy triple still governs (R37: honoured until step 12).
+model(s) may serve a completion in this process. It is the only routing env.
+Resolved through ``llm_scripting_kit.declaration.describe`` (the D3 routing
+layer) via :func:`resolve_declaration`, so quota pacing, reachability, and the
+itemised :class:`~llm_scripting_kit.declaration.NoUsableRoutingTarget` floor
+apply exactly as they do for every other declaration-driven caller. Unset
+means the default entry: :class:`OpenRouterBackend`.
 """
 
 _DECLARATION_FLOOR = "0.46.0"
@@ -804,8 +777,7 @@ _DECLARATION_FLOOR = "0.46.0"
 
 _MISSING_DECLARATION_LIB_MSG = (
     "needs the 'llm_scripting_kit' shared lib (from llm-scripting-kit) for "
-    f"{MODELS_ENV} routing, or use the legacy "
-    "CONTENT_PIPELINE_LLM_BACKEND/_MODEL/_ENDPOINT triple. Run "
+    f"{MODELS_ENV} routing. Run "
     "`claude plugin install llm-scripting-kit@plugins-kit`."
 )
 _STALE_DECLARATION_LIB_MSG = (
@@ -846,37 +818,6 @@ def declared_model_names() -> Optional[List[str]]:
     if not raw:
         return None
     return [part.strip() for part in raw.split(",") if part.strip()]
-
-
-_LEGACY_HARNESS_SHIPPED_DEFAULT = {"claude-cli": "opus", "codex-cli": "sol"}
-"""The shipped registry entry each legacy CLI backend name maps to.
-
-:data:`MODEL_ENV` under the legacy triple is a raw vendor model id (e.g.
-``claude-sonnet-4-6``), not a registry id, so it cannot generally be resolved
-to a declaration entry -- the legacy mapping falls back to the harness's
-shipped default entry instead (documented lossiness, accepted for a
-deprecated path). ``model-endpoint`` is the one legacy backend whose
-:data:`ENDPOINT_ENV` already names a registry id exactly, so it maps without
-loss.
-"""
-
-
-def _legacy_declaration_name() -> "tuple[str, bool]":
-    """Synthesize a one-entry declaration id from the legacy env triple.
-
-    Returns ``(entry_id, is_explicit)``; ``is_explicit`` is True when the
-    caller set at least one of :data:`BACKEND_ENV` / :data:`MODEL_ENV` /
-    :data:`ENDPOINT_ENV`, which is when the deprecation warning fires -- a
-    process running on bare defaults (nothing set at all) gets no noise.
-    """
-    explicit = any(
-        os.environ.get(var, "").strip() for var in (BACKEND_ENV, MODEL_ENV, ENDPOINT_ENV)
-    )
-    name = active_backend_name()
-    if name == "model-endpoint":
-        endpoint = os.environ.get(ENDPOINT_ENV, "").strip()
-        return endpoint or "openrouter", explicit
-    return _LEGACY_HARNESS_SHIPPED_DEFAULT.get(name, "openrouter"), explicit
 
 
 def resolve_declaration(names: "Sequence[str] | List[str]", *, project_root: Optional[str] = None) -> Any:
@@ -928,10 +869,7 @@ def _resolve_declared_entry(*, project_root: Optional[str] = None) -> Any:
 
     Callers gate on ``declared_model_names() is not None`` before calling
     this (:func:`route`, :func:`routed_model`), so ``names`` is never
-    ``None`` here -- there is no legacy fallback to resolve at this layer.
-    The legacy-triple deprecation warning is a SEPARATE concern, handled by
-    :func:`_warn_legacy_env_if_explicit` on the branch where a caller did
-    NOT set :data:`MODELS_ENV` at all.
+    ``None`` here.
     """
     names = declared_model_names()
     key = (tuple(names), project_root)
@@ -943,31 +881,6 @@ def _resolve_declared_entry(*, project_root: Optional[str] = None) -> Any:
 def reset_declared_entry_cache() -> None:
     """Test seam: clear the per-process declaration memo."""
     _declared_entry_cache.clear()
-
-
-def _warn_legacy_env_if_explicit() -> None:
-    """One-shot ``DeprecationWarning`` for the legacy env triple.
-
-    Called from :func:`route` / :func:`routed_model` on the branch where
-    :data:`MODELS_ENV` is UNSET -- legacy dispatch itself is unchanged
-    (byte-identical), this only surfaces the deprecation notice when at
-    least one of :data:`BACKEND_ENV` / :data:`MODEL_ENV` / :data:`ENDPOINT_ENV`
-    was set explicitly (never on bare defaults). Needs no
-    ``llm_scripting_kit`` / registry resolution -- :func:`_legacy_declaration_name`
-    is pure string logic over the env, so this is cheap to call on every
-    legacy dispatch.
-    """
-    entry_id, explicit = _legacy_declaration_name()
-    if not explicit:
-        return
-    import warnings  # noqa: PLC0415
-
-    warnings.warn(
-        f"{BACKEND_ENV}/{MODEL_ENV}/{ENDPOINT_ENV} are deprecated; set "
-        f"{MODELS_ENV}=[{entry_id}] instead.",
-        DeprecationWarning,
-        stacklevel=3,
-    )
 
 
 def _backend_for_entry(entry: Any) -> Any:
@@ -984,56 +897,34 @@ def _backend_for_entry(entry: Any) -> Any:
     return ModelEndpointBackend(endpoint=entry.id)
 
 
-def active_backend_name() -> str:
-    """The process-active backend name (``"openrouter"`` when unset)."""
-    return os.environ.get(BACKEND_ENV, "").strip() or "openrouter"
-
-
-def set_active_backend(name: Optional[str]) -> None:
-    """Set (or clear, with ``None`` / ``"openrouter"``) the active backend.
-
-    Writes the env var rather than module state so worker subprocesses inherit
-    the selection.
-    """
-    if name and name != "openrouter":
-        os.environ[BACKEND_ENV] = name
-    else:
-        os.environ.pop(BACKEND_ENV, None)
-
-
 def route(
     *,
     openrouter: Optional[Any] = None,
-    claude_cli: Optional[Any] = None,
-    codex_cli: Optional[Any] = None,
-    opencode_cli: Optional[Any] = None,
-    model_endpoint: Optional[Any] = None,
     mock: Optional[Any] = None,
 ) -> Any:
     """Return the process-active backend instance.
 
+    A supplied ``mock`` wins UNCONDITIONALLY -- checked before the
+    declaration is even read. This is the seam that keeps tests off a live
+    transport; it must never be contingent on environment state.
+
     When :data:`MODELS_ENV` is set, the backend is resolved through the
-    declaration (:func:`_resolve_declared_entry`) instead of the legacy
-    triple below -- ``NoUsableRoutingTarget`` (R23) and an absent/stale
-    ``llm_scripting_kit`` propagate uncaught. A ``model-endpoint``-kind
-    entry is still probed before being returned, exactly like the legacy
-    ``model-endpoint`` branch. A supplied ``mock`` wins UNCONDITIONALLY,
-    regardless of
-    :data:`BACKEND_ENV` -- checked before the active name is even read, so a
-    test can inject a mock without also calling :func:`set_active_backend`.
-    This is the seam that keeps tests off a live transport; it must never be
-    contingent on environment state. Absent a supplied ``mock``, reads
-    :data:`BACKEND_ENV` and returns the active backend, using any other
-    caller-supplied instance for that name, otherwise constructing a default.
+    declaration (:func:`_resolve_declared_entry`) --
+    ``NoUsableRoutingTarget`` (R23) and an absent/stale ``llm_scripting_kit``
+    propagate uncaught. A ``model-endpoint``-kind entry is probed before
+    being returned: a registry server is up only if somebody started it, so
+    a dead one refuses here rather than once per unit. Unset, the default
+    entry runs: the supplied ``openrouter`` instance, else a new
+    :class:`OpenRouterBackend`.
     """
     if mock is not None:
         return mock
-    name = active_backend_name()
-    if name == "mock":
-        return MockBackend()
     if declared_model_names() is not None:
         backend = _backend_for_entry(_resolve_declared_entry())
-        if isinstance(backend, ModelEndpointBackend) and backend.client is None:
+        # PROBE ONLY THE SELECTED ENTRY, and only here. One ping per route()
+        # call. A server that dies MID-run surfaces instead as
+        # HALT_UNREACHABLE on the failing call.
+        if isinstance(backend, ModelEndpointBackend):
             probe = backend.probe()
             if not probe.ok:
                 raise platform.LLMUnavailableError(
@@ -1042,67 +933,28 @@ def route(
                     f"yours) or change {MODELS_ENV}."
                 )
         return backend
-    _warn_legacy_env_if_explicit()
-    if name == "claude-cli":
-        return claude_cli if claude_cli is not None else ClaudeCliBackend()
-    if name == "codex-cli":
-        return codex_cli if codex_cli is not None else CodexCliBackend()
-    if name == "opencode-cli":
-        return opencode_cli if opencode_cli is not None else OpencodeCliBackend()
-    if name == "model-endpoint":
-        backend = (
-            model_endpoint if model_endpoint is not None else ModelEndpointBackend()
-        )
-        # PROBE ONLY THE SELECTED ENTRY, and only here. One ping per route()
-        # call -- ~4ms when up, at most one 2s timeout when down -- regardless
-        # of how many entries the registry holds; the others' state is
-        # irrelevant to a run that will not use them. No caching: route() runs
-        # about once per run, so a cache buys nothing and can go stale. A
-        # server that dies MID-run surfaces instead as HALT_UNREACHABLE on the
-        # failing call.
-        #
-        # An injected client is the caller's affair -- that is the hermetic
-        # test seam, and probing it would put tests back on the network.
-        if backend.client is None:
-            probe = backend.probe()
-            if not probe.ok:
-                raise platform.LLMUnavailableError(
-                    f"model endpoint {probe.endpoint!r} is unavailable: "
-                    f"{probe.detail}. Start that server (if it is one of "
-                    f"yours), select another registry entry "
-                    f"({ENDPOINT_ENV}), or another backend ({BACKEND_ENV})."
-                )
-        return backend
     return openrouter if openrouter is not None else OpenRouterBackend()
 
 
 def routed_model(requested_model: str, *, backend_name: Optional[str] = None) -> str:
-    """Resolve the model a routed call should run, with truthful substitution.
-
-    An OpenRouter-style slug means nothing to the claude-cli transport, so a
-    claude-cli call substitutes :data:`MODEL_ENV` when the requested id does
-    not already name that backend's family. Codex model ids are passed through
-    unchanged: they are fully qualified ids such as ``gpt-5.6-luna`` or
-    ``gpt-5.6-sol`` and bare codenames are not dispatchable. The substituted or
-    preserved id is what lands on ``LLMResponse.model`` and therefore on audit
-    records.
+    """Resolve the model a routed call should run, truthfully.
 
     When :data:`MODELS_ENV` is set, ``requested_model`` and ``backend_name``
     are both ignored in favour of the declaration's resolved entry -- its own
-    concrete model IS the truthful answer, with none of the per-backend
-    substitution rules below needed (Y1: a caller like
+    concrete model IS the truthful answer (Y1: a caller like
     ``yaml-data-editor-kit``'s ``PlannerPolicy.model`` is routed through this
     env exactly like every other model choice).
+
+    Otherwise the requested id runs unchanged, with one exception: a
+    ``model-endpoint`` backend runs the registry default entry's own model,
+    because an OpenRouter-style slug means nothing to that server. The
+    returned id is what lands on ``LLMResponse.model`` and therefore on
+    audit records.
     """
     if declared_model_names() is not None:
         entry = _resolve_declared_entry()
         return entry.model or requested_model
-    _warn_legacy_env_if_explicit()
-    name = backend_name or active_backend_name()
-    if name == "model-endpoint":
-        override = os.environ.get(MODEL_ENV, "").strip()
-        if override:
-            return override
+    if backend_name == "model-endpoint":
         try:
             from llm_scripting_kit.models import resolve_model  # noqa: PLC0415
 
@@ -1113,15 +965,6 @@ def routed_model(requested_model: str, *, backend_name: Optional[str] = None) ->
             if _is_harness_refusal(exc):
                 raise
             return requested_model
-    if name == "opencode-cli":
-        # OpenCode model ids are provider/model strings from the user's own
-        # OpenCode configuration. Do not translate an OpenRouter slug or invent
-        # a provider; an explicit process-level override is authoritative.
-        return os.environ.get(MODEL_ENV, "").strip() or requested_model
-    if name == "codex-cli":
-        return requested_model
-    if name == "claude-cli" and not requested_model.startswith("claude"):
-        return os.environ.get(MODEL_ENV, "").strip() or requested_model
     return requested_model
 
 
@@ -1132,13 +975,8 @@ __all__ = [
     "OpencodeCliBackend",
     "ModelEndpointBackend",
     "MockBackend",
-    "BACKEND_ENV",
-    "ENDPOINT_ENV",
-    "MODEL_ENV",
     "MODELS_ENV",
     "OPENCODE_FILESYSTEM_POSTURE",
-    "active_backend_name",
-    "set_active_backend",
     "route",
     "routed_model",
     "declared_model_names",

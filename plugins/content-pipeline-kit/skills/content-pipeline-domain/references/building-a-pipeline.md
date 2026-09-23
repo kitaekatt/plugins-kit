@@ -229,17 +229,21 @@ of this.
   the model-endpoints registry.
 - **`MockBackend`** -- deterministic and scriptable, for every test.
 
-`route(openrouter=, claude_cli=, codex_cli=, opencode_cli=, model_endpoint=, mock=)` reads the
-`CONTENT_PIPELINE_LLM_BACKEND` env var and returns the active instance; a
-supplied `mock` always wins so tests never reach a live transport.
+`route(openrouter=, mock=)` reads the `CONTENT_PIPELINE_LLM_MODELS` model
+declaration (llm-scripting-kit registry ids, comma-separated) and returns the
+backend for its first usable entry: a `claude`, `codex` or `opencode` harness
+entry gets that CLI backend, the `openrouter` entry gets `OpenRouterBackend`,
+and any other transport entry gets `ModelEndpointBackend`. Unset, it returns
+`OpenRouterBackend`. A supplied `mock` always wins so tests never reach a live
+transport. `CONTENT_PIPELINE_LLM_MODELS` is the only routing env.
 
 ### The model-endpoint backend
 
-`CONTENT_PIPELINE_LLM_BACKEND=model-endpoint` talks to an OpenAI-compatible
-endpoint declared in the registry at `~/.claude/config/model-endpoints.yaml`
-(or whichever file `MODEL_ENDPOINTS_REGISTRY` names) -- typically a locally
-hosted keyless server, though keyed entries are supported too. Pick a specific
-entry with `CONTENT_PIPELINE_LLM_ENDPOINT=<entry id>`; omit it for the
+`CONTENT_PIPELINE_LLM_MODELS=<entry id>` naming a transport entry of the
+registry at `~/.claude/config/model-endpoints.yaml` (or whichever file
+`MODEL_ENDPOINTS_REGISTRY` names) talks to that OpenAI-compatible endpoint --
+typically a locally hosted keyless server, though keyed entries are supported
+too. A `ModelEndpointBackend()` constructed with no `endpoint` uses the
 registry's own `default`.
 
 Two things differ from the other transports:

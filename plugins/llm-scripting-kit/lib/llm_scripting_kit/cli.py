@@ -253,18 +253,6 @@ def _parser() -> argparse.ArgumentParser:
     )
     describe_cmd.add_argument("ids", nargs="+", help="Declared registry ids, in declared order.")
     _add_describe_args(describe_cmd)
-    # `choose` is kept as an alias of `describe` until migration step 12.
-    # --prefer carries the declaration as a comma list; --default is appended
-    # as the last declared entry, the place it held as the fallback.
-    choose = sub.add_parser("choose", help="Alias of `describe` (deprecated).")
-    choose.add_argument("ids", nargs="*", help="Declared registry ids, in declared order.")
-    choose.add_argument("--prefer", help="Comma-separated ids, in declared order.")
-    choose.add_argument(
-        "--default",
-        dest="fallback",
-        help="Appended as the last declared entry.",
-    )
-    _add_describe_args(choose)
     seats = sub.add_parser("seats", help="List reachable UP and BESIDE harness seats.")
     seats.add_argument("--self", dest="self_ref", required=True, help="Self endpoint or exact model id.")
     seats.add_argument("--json", action="store_true", help="Emit the structured result as JSON.")
@@ -338,11 +326,6 @@ def main(argv: Optional[list[str]] = None) -> int:
             return _cmd_probe(args.endpoint, args.project_root, args.timeout)
         if args.cmd == "describe":
             return _cmd_describe(list(args.ids), args)
-        if args.cmd == "choose":
-            ids = list(args.ids) + _split_ids([args.prefer] if args.prefer else [])
-            if args.fallback and args.fallback not in ids:
-                ids.append(args.fallback)
-            return _cmd_describe(ids, args)
         if args.cmd == "usage":
             return _cmd_usage(args.json, args.project_root, args.no_pin)
         if args.cmd == "seats":

@@ -201,9 +201,6 @@ only on a classified halt". `--self` marks the author's entry `[author]` and
 adds the independence preference. `--json` emits the rendered entries, the
 default, and the rule -- never a hidden id.
 
-`choose --prefer a,b` is a deprecated alias of `describe a b` (`--default X`
-appends `X` as the last declared entry).
-
 The numbers come only from files the harnesses already write: claude-ui-kit's
 statusline snapshot for claude, the newest `~/.codex/sessions` rollout for
 codex. Nothing here reads a credential or calls a usage API, so what a CLI does
@@ -355,9 +352,7 @@ instead of stacking a second model's work on the first one's partial edits.
 
 `order_by_pace(items)` is the ordering rule on its own. `check_registry_entry(id,
 merged)` reports a core id (`fable`, `opus`, `sonnet`, `haiku`) whose merged
-entry is not a Claude harness. `choose_endpoint` (a thin caller of `describe`
-that never probes) and `rank_candidates` (the two-band rank) stay
-importable as deprecated names.
+entry is not a Claude harness.
 
 ## Completion seam
 

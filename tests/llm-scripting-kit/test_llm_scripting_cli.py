@@ -610,7 +610,7 @@ def test_frontdoor_verb_forwards_leading_options(monkeypatch, tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Migration step 3: describe, choose alias, --models (L3, L4)
+# Migration step 3: describe, --models (L3, L4); step 12 removed `choose`
 # ---------------------------------------------------------------------------
 
 
@@ -678,12 +678,12 @@ def test_describe_exclude_and_self(declared, capsys):
     assert payload["rendered_entries"][0]["is_self"] is True
 
 
-def test_choose_is_an_alias_of_describe(declared, capsys):
-    assert cli.main(["choose", "--prefer", "typo,good", "--caller", "process", "--json"]) == cli.EXIT_OK
-    via_choose = json.loads(capsys.readouterr().out)
-    assert cli.main(["describe", "typo", "good", "--caller", "process", "--json"]) == cli.EXIT_OK
-    via_describe = json.loads(capsys.readouterr().out)
-    assert via_choose == via_describe
+def test_choose_is_not_a_command(declared, capsys):
+    """Migration step 12 removed the `choose` alias; `describe` replaces it."""
+    with pytest.raises(SystemExit) as exc:
+        cli.main(["choose", "--prefer", "typo,good", "--caller", "process", "--json"])
+    assert exc.value.code == 2
+    assert "invalid choice: 'choose'" in capsys.readouterr().err
 
 
 def test_resolve_models_takes_the_first_usable_entry(declared, capsys):
@@ -725,11 +725,6 @@ def test_describe_json_names_no_hidden_id(declared, capsys):
     out = capsys.readouterr().out
     assert "typo-id" not in out and "other" not in out
     assert json.loads(out)["default"] == "good"
-
-
-def test_choose_json_names_no_hidden_id(declared, capsys):
-    assert cli.main(["choose", "--prefer", "typo-id,good", "--caller", "process", "--json"]) == cli.EXIT_OK
-    assert "typo-id" not in capsys.readouterr().out
 
 
 def test_describe_text_names_no_hidden_id(declared, capsys):
