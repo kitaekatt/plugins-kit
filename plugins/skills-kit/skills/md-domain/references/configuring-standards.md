@@ -214,11 +214,11 @@ Three things to know before you add an id:
   markdown audit** -- not that the endpoint is small, local, or likely to
   benefit. Attaching the pack to a model that does not need it costs tokens for
   no gain, so do not widen the set to make a run attach a pack.
-- **A mixed preference list is an error, not a guess.** An
-  `endpoint_preference` list naming both admitted and non-admitted endpoints
-  fails the emit (`emit_audit_jobs.py`, exit 4), because the endpoint is
-  resolved at run time and either choice would be wrong. Emit one job file per
-  endpoint class instead.
+- **A mixed preference list is an error, not a guess.** A `models` list
+  naming both admitted and non-admitted endpoints fails the emit
+  (`emit_audit_jobs.py`, exit 4), because the endpoint is resolved at run
+  time and either choice would be wrong. Emit one job file per endpoint class
+  instead.
 
 ## Additive standards files
 

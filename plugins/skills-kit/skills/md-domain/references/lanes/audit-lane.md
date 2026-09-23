@@ -576,7 +576,7 @@ job file, one job per doc:
 
 ```
 emit_audit_jobs.py <subject-dir> [--repo-root PATH] [--standards PATH]
-    [--endpoint NAME ...] [--report-dir PATH] [--max-parallel N]
+    [--models NAME ...] [--report-dir PATH] [--max-parallel N]
     [--limit N] [--out PATH|-]
 ```
 

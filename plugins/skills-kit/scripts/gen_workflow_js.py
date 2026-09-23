@@ -20,11 +20,15 @@ Usage:
 
 The detect/classify scripts are NOT fully generated (their bodies diverge more
 than the remediate trio), but their shared skeleton chunks (args
-normalization; the detect totals reducer) are enforced by check_shared_chunks().
+normalization; the detect totals reducer) are enforced by check_shared_chunks(),
+which also asserts (K1, migration step 7) that each hand-written `model: '...'`
+literal in those scripts matches its declared one-entry model declaration in
+MODEL_LITERAL_DECLARATIONS.
 """
 
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
 
@@ -33,6 +37,52 @@ SKILLS = PLUGIN_ROOT / "skills"
 MD_DOMAIN = SKILLS / "md-domain"
 
 EM = "\u2014"  # em-dash; the escape keeps this source file ASCII-only
+
+# bootstrap_lib.model_declaration -- import posture REQUIRED (plugins/CLAUDE.md
+# "Optional use of another plugin"): bootstrap is already a universal, declared
+# dependency of every plugin (D2 of declaration-format-design.md), and
+# skills-kit's own bootstrap.json already lists bootstrap_lib in
+# shared_lib_imports (migration step 1). This generator runs as repo-maintainer
+# tooling (`uv run python`), not under skills-kit's provisioned plugin venv, so
+# it resolves the shared lib itself via a sys.path insert at this plugin's
+# sibling "bootstrap" directory -- the same checkout-relative layout every
+# in-repo test relies on (root pyproject.toml's pythonpath entry) -- rather than
+# via the .pth link a provisioned venv would carry.
+#
+# Distinct messages for the two failure states import alone cannot tell apart
+# (optional-plugin-dependencies.md): ABSENT (bootstrap_lib is not importable at
+# all -- this checkout has no plugins/bootstrap, or it is not on sys.path) vs
+# TOO OLD (bootstrap_lib imports, but predates model_declaration or its
+# `validate` symbol -- the frontier symbol this generator calls).
+_BOOTSTRAP_ROOT = PLUGIN_ROOT.parent / "bootstrap"
+if str(_BOOTSTRAP_ROOT) not in sys.path:
+    sys.path.insert(0, str(_BOOTSTRAP_ROOT))
+
+try:
+    from bootstrap_lib import model_declaration
+except ImportError as _exc:
+    raise ImportError(
+        "bootstrap_lib is not importable from "
+        f"{_BOOTSTRAP_ROOT} -- bootstrap is a required dependency of every "
+        "plugin (plugins/CLAUDE.md); run this generator from a plugins-kit "
+        f"checkout with the bootstrap plugin present ({_exc})"
+    ) from _exc
+
+if not hasattr(model_declaration, "validate"):
+    raise ImportError(
+        "bootstrap_lib.model_declaration has no validate() -- this "
+        "checkout's bootstrap plugin predates the model-declaration "
+        "validator (requires bootstrap >= 0.129.0); update plugins-kit"
+    )
+
+# K2 (migration step 7): the remediate lanes' model is a one-entry model
+# declaration (D1), structurally validated by bootstrap_lib.model_declaration
+# -- shape only, no known-id or usable-set check, no llm-scripting-kit import
+# (D2, D3). REMEDIATE_MODEL is what actually fills @REMEDIATE_MODEL@ below, so
+# the four generated remediate.js files' `model: '...'` literal is DERIVED
+# from the declaration rather than typed twice.
+REMEDIATE_MODEL_DECLARATION = model_declaration.validate(["sonnet"])
+REMEDIATE_MODEL = REMEDIATE_MODEL_DECLARATION.ids[0]
 
 # ---------------------------------------------------------------------------
 # Canonical remediate.js template. Tokens (@...@) are filled per lane.
@@ -97,7 +147,7 @@ const results = await parallel(actionable.map((f) => () =>
   agent(lanePrompt(f), {
     label: `fix:${f.@KEY@.split(/[\\\\/]/)@LABEL_TAIL@}`,
     phase: 'Remediate',
-    model: 'sonnet',
+    model: '@REMEDIATE_MODEL@',
     effort: 'low',
     schema: FILE_RESULT_SCHEMA,
   }).then((r) => ({ ...r, @KEY@: f.@KEY@ }))
@@ -417,6 +467,7 @@ def render_remediate(lane: str) -> str:
     frags = REMEDIATE_FRAGMENTS[lane]
     out = REMEDIATE_TEMPLATE
     out = out.replace("@EM@", EM)
+    out = out.replace("@REMEDIATE_MODEL@", REMEDIATE_MODEL)
     out = out.replace("@HEADER@", frags["HEADER"])
     for token in ("META_NAME", "META_DESC", "PHASE_DETAIL", "KEY", "ACTION_FIELD",
                   "ERR_SHAPE", "ITEM_NOUN", "ITEMS", "IV", "LANE_PROMPT_FN",
@@ -556,9 +607,63 @@ SHARED_CHUNK_TARGETS = {
     MD_DOMAIN / "workflow" / "references-classify.js": [ARGS_NORM_CHUNK],
 }
 
+# K1 (migration step 7): the 9 hand-written `model: '...'` literals across
+# these detect/classify/generate scripts are NOT template-rendered (their
+# bodies diverge too much for the remediate template to cover), so each file
+# is declared here as a one-entry model declaration (D1), structurally
+# validated by bootstrap_lib.model_declaration -- shape only, same posture as
+# REMEDIATE_MODEL_DECLARATION above. check_shared_chunks() asserts every
+# `model: '...'` literal actually present in the file equals its declared id,
+# so a hand-edit that drifts the literal away from its declaration fails here
+# rather than only at runtime. Counts: claude-md-detect.js (1),
+# claude-md-generate.js (3), project-doc-detect.js (1), coverage-detect.js
+# (2), references-classify.js (1), skill-detect.js (1) = 9.
+MODEL_LITERAL_DECLARATIONS = {
+    MD_DOMAIN / "workflow" / "claude-md-detect.js": ["opus"],
+    MD_DOMAIN / "workflow" / "claude-md-generate.js": ["opus"],
+    MD_DOMAIN / "workflow" / "project-doc-detect.js": ["opus"],
+    MD_DOMAIN / "workflow" / "coverage-detect.js": ["opus"],
+    MD_DOMAIN / "workflow" / "references-classify.js": ["opus"],
+    MD_DOMAIN / "workflow" / "skill-detect.js": ["opus"],
+}
+
+_MODEL_LITERAL_RE = re.compile(r"model:\s*'([^']*)'")
+
+
+def check_model_literals() -> list[str]:
+    """Drift check (K1): every model: '...' literal in a declared file equals
+    its declared one-entry model declaration, verbatim."""
+    problems: list[str] = []
+    for path, declared in MODEL_LITERAL_DECLARATIONS.items():
+        try:
+            declaration = model_declaration.validate(declared)
+        except model_declaration.DeclarationError as exc:
+            problems.append(f"{path}: declared model list is invalid: {exc}")
+            continue
+        expected = declaration.ids[0]
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError as e:
+            problems.append(f"{path}: unreadable ({e})")
+            continue
+        literals = _MODEL_LITERAL_RE.findall(text)
+        if not literals:
+            problems.append(
+                f"{path}: no model: '...' literal found (declared {expected!r})"
+            )
+            continue
+        for literal in literals:
+            if literal != expected:
+                problems.append(
+                    f"{path}: model literal {literal!r} does not match "
+                    f"declared id {expected!r}"
+                )
+    return problems
+
 
 def check_shared_chunks() -> list[str]:
-    """Return drift messages for detect/classify shared-skeleton chunks."""
+    """Return drift messages for detect/classify shared-skeleton chunks, plus
+    (K1) the hand-written model literals declared in MODEL_LITERAL_DECLARATIONS."""
     problems: list[str] = []
     for path, chunks in SHARED_CHUNK_TARGETS.items():
         try:
@@ -573,6 +678,7 @@ def check_shared_chunks() -> list[str]:
                     f"{path}: shared skeleton chunk starting '{first_line}' "
                     "not found verbatim"
                 )
+    problems.extend(check_model_literals())
     return problems
 
 
