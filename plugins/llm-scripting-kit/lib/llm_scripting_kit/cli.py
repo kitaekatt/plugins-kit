@@ -102,9 +102,8 @@ def _add_project_arg(parser: argparse.ArgumentParser) -> None:
 
 
 def _add_models_arg(parser: argparse.ArgumentParser) -> None:
-    """``--models`` (a declaration) and its alias ``--endpoint`` (one id)."""
-    group = parser.add_mutually_exclusive_group()
-    group.add_argument(
+    """``--models``: a declaration of registry ids."""
+    parser.add_argument(
         "--models",
         action="append",
         default=None,
@@ -112,11 +111,6 @@ def _add_models_arg(parser: argparse.ArgumentParser) -> None:
             "Model declaration: registry ids, comma-separated or repeated. The "
             "first usable entry of the pace-ordered list is used."
         ),
-    )
-    group.add_argument(
-        "--endpoint",
-        default=None,
-        help="Alias of --models with one id (deprecated).",
     )
 
 
@@ -166,11 +160,9 @@ def _split_ids(values: Optional[list[str]]) -> list[str]:
 
 
 def _declared_models(args: argparse.Namespace) -> Optional[list[str]]:
-    """The declaration named by --models or its --endpoint alias, else None."""
+    """The declaration named by --models, else None."""
     if getattr(args, "models", None):
         return _split_ids(args.models)
-    if getattr(args, "endpoint", None):
-        return [args.endpoint]
     return None
 
 
@@ -243,6 +235,26 @@ def _parser() -> argparse.ArgumentParser:
             "verdict. Inspection only -- it neither reads nor writes the pin."
         ),
     )
+    record_halt = sub.add_parser(
+        "record-halt",
+        help=(
+            "Record an observed quota or credit halt: a conserve_usage entry reads "
+            "out of quota for the rest of this session."
+        ),
+    )
+    record_halt.add_argument("entry", help="The registry id whose dispatch halted.")
+    record_halt.add_argument(
+        "--kind", choices=("quota", "credit"), default="quota",
+        help="The halt observed (default quota).",
+    )
+    record_halt.add_argument(
+        "--resets-at", type=int, default=None,
+        help=(
+            "The halt's reset time, epoch seconds. Default: the reset the pool "
+            "reading reports, else a five-hour latch."
+        ),
+    )
+    _add_project_arg(record_halt)
     describe_cmd = sub.add_parser(
         "describe",
         help=(
@@ -326,6 +338,8 @@ def main(argv: Optional[list[str]] = None) -> int:
             return _cmd_probe(args.endpoint, args.project_root, args.timeout)
         if args.cmd == "describe":
             return _cmd_describe(list(args.ids), args)
+        if args.cmd == "record-halt":
+            return _cmd_record_halt(args.entry, args.kind, args.resets_at, args.project_root)
         if args.cmd == "usage":
             return _cmd_usage(args.json, args.project_root, args.no_pin)
         if args.cmd == "seats":
@@ -485,6 +499,43 @@ def _cmd_usage(as_json: bool, project_root: Optional[str], no_pin: bool) -> int:
         return EXIT_OK
     for entry_id, budget in verdicts.items():
         print(f"{entry_id}: {budget.status} -- {budget.detail}")
+    return EXIT_OK
+
+
+def _cmd_record_halt(
+    entry_id: str, kind: str, resets_at: Optional[int], project_root: Optional[str]
+) -> int:
+    """Write an in-session quota/credit halt back to the pinned verdict.
+
+    ``run()`` records the halts it observes itself. A session caller -- an
+    agent driving the harness for orchestrate or a review lane -- observes the
+    halt instead, and this verb is its write-back, so a later ``describe`` in
+    the same session reads the entry out of quota rather than the stale
+    AVAILABLE pin. An entry without ``conserve_usage`` has no verdict to move
+    and is a silent no-op; an unknown id is a usage error.
+    """
+    entry = discover_model_entries(project_root=project_root).get(entry_id)
+    if entry is None:
+        raise EndpointResolveError(f"unknown entry '{entry_id}'")
+    result: dict[str, Any] = {"entry": entry_id, "kind": kind, "recorded": False}
+    spec = getattr(entry, "conserve_usage", None)
+    if spec is None:
+        result["reason"] = "entry declares no conserve_usage; no verdict to record"
+        _json(result)
+        return EXIT_OK
+    if resets_at is None:
+        # The pool's own reading of the halt carries its reset time when the
+        # harness recorded one (codex's "try again at" clause).
+        reading = usage_budget.evaluate(spec, entry.harness)
+        if reading.status == usage_budget.STATUS_OUT_OF_QUOTA:
+            resets_at = reading.resets_at
+    budget = usage_budget.record_observed_halt(entry_id, spec, resets_at=resets_at)
+    if budget is None:
+        result["reason"] = "no session key; nothing is pinned to record against"
+    else:
+        result["recorded"] = True
+        result["budget"] = budget.to_json()
+    _json(result)
     return EXIT_OK
 
 

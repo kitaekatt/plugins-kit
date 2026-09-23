@@ -181,6 +181,13 @@ for callers with no loop of their own. Four things are easy to break:
   transport`); the code-review skills do, for every reviewer lane the lane
   runner binds to a transport.
 
+- **A session caller records its own quota halt.** `run()` and job-kit call
+  `record_observed_halt` for halts they observe. An agent driving the harness
+  itself observes the halt instead, so `RULE_TRIGGER_SESSION` tells it to run
+  the `record-halt` CLI verb before re-selecting; without that, the pinned
+  AVAILABLE verdict keeps the spent entry `[default]` for the session (drill
+  finding F1, `tests/llm-scripting-kit/test_risk_drill.py`).
+
 The `usage` and `describe` verbs are the inspection surfaces for a check that
 is otherwise invisible.
 

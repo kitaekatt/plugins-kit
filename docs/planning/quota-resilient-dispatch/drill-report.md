@@ -17,7 +17,7 @@ after step 4, and the report says the fixture was simulated").
 
 | Assertion | Process layer (A) | Session layer (B) |
 |---|---|---|
-| 1. Out-of-quota codex entry -> a usable entry is announced, with codex out of quota as the reason | PASS | Agent behaviour UNRUN. Render input PASS for a known exhaustion. Gap F1 for an exhaustion first seen at dispatch. |
+| 1. Out-of-quota codex entry -> a usable entry is announced, with `<entry> failed: quota` as the reason | PASS | Agent behaviour UNRUN. Render input PASS for a known exhaustion. For an exhaustion first seen at dispatch, gap F1 is fixed by the `record-halt` verb (render input PASS). |
 | 2. A wrong result with exit 0 on a usable entry is a task failure and is NOT re-routed | PASS | Agent behaviour UNRUN. The rule text is present in the render. |
 | 3. A unit that halts after writing is re-run only after its workspace is reset | PASS | Agent behaviour UNRUN. The rule text is present in the render. |
 
@@ -87,7 +87,8 @@ Menu that a later dispatch in the same session sees, after
 Floor-diagnostic line for the codex entry:
 `codex: out-of-quota until 2027-01-20 21:34 UTC (observed quota/credit halt at dispatch)`.
 The announcement that the shipped Rule line produces from these attempts is
-`route: drill-unit -> opus; codex failed: quota`. See F2 about the wording.
+`route: drill-unit -> opus; codex failed: quota`. That is the passing form;
+see F2.
 
 ### Assertion 2: PASS
 
@@ -129,6 +130,7 @@ was deleted after the run:
 |---|---|---|
 | `CodexCliBackend._quota_probe` returns None (step 0 re-read lost) | 1 | `('codex', None, 'failed') != ('codex', 'quota', 'halted')`: the usage-limit prose alone is not classified, so the run fails with no re-route |
 | `record_observed_halt` becomes a no-op | 1 | later menu: `assert 'available' == 'out-of-quota'` |
+| `record_observed_halt` becomes a no-op, in-session form (`record-halt` verb) | 1 (in session) | later menu still `codex ... available  n/a (no reading)   [default]` |
 | codex backend turns a wrong exit-0 answer into a quota halt | 2 | `assert (2 == 1)`: re-routed to opus |
 | `_WorkspaceSnapshot.restore` becomes a no-op | 3 | `re-run saw another model's partial edits: {'kept': 'partial edit by codex\n', 'codex_scratch_exists': True, ...}` |
 
@@ -217,7 +219,8 @@ exhausted after the first render):** see F1.
 
 **F1 (defect: design-conformance gap, session layer). A quota halt observed
 in a session is never written back, so the menu keeps offering the exhausted
-codex entry as `[default]` for the rest of the session.**
+codex entry as `[default]` for the rest of the session.** Status: FIXED in
+llm-scripting-kit 0.47.0 -- see "F1 fix" below.
 
 Evidence, from the scratch-HOME render. The session key stays the same. The
 first render reads a healthy rollout; a simulated dispatch then leaves an
@@ -247,16 +250,28 @@ OUT-OF-QUOTA. That holds for `run` and job-kit, but not for a session caller.
 
 Consequence: each later unit in the same session is defaulted to the spent
 codex entry again. It fails once more before the agent re-selects, unless the
-agent remembers the earlier halt from its context. Not fixed, as the brief
-requires.
+agent remembers the earlier halt from its context.
 
-**F2 (wording mismatch; decide before the live session drill).** The design
-and R31 check for the reason "codex: out of quota". The shipped Rule line
-prescribes `<prior entry> failed: <kind>`, which gives
-`sol failed: quota` or `codex failed: quota`. The floor line spells the kind
-`out-of-quota`, and the menu uses `out of quota until <time>`. An agent that
-follows the Rule exactly cannot produce the literal string the drill
-specifies. A live drill needs to agree which form passes.
+F1 fix. A `record-halt` CLI verb
+(`llm-scripting-kit record-halt <entry> [--kind quota|credit] [--resets-at EPOCH]`)
+calls `record_observed_halt` for an entry that declares `conserve_usage`,
+under the current session key. The reset is `--resets-at`, else the pool
+reading's reset, else the five-hour latch. The session Re-select line
+(`RULE_TRIGGER_SESSION`) tells the agent to run it before re-selecting or
+re-running describe with `--exclude`. The in-session drill check
+(`check_assertion_1_in_session` in `test_risk_drill.py`) shows the stale
+`[default]` after an unrecorded halt, then codex out of quota until its
+reset and `opus` as `[default]` after `record-halt`. A paired red case makes
+`record_observed_halt` a no-op and the check fails. Whether a live agent
+runs the verb stays UNRUN, like the rest of the session layer.
+
+**F2 (wording mismatch; RESOLVED).** The design and R31 checked for the
+reason "codex: out of quota", while the shipped Rule line prescribes
+`<prior entry> failed: <kind>`. Orchestrator decision: keep the shipped
+format. The announcement reads `<entry> failed: quota` (for example
+`sol failed: quota`), and that is the form a live drill passes. The design's
+"Biggest risk" wording is aligned to it. The floor line (`out-of-quota`) and
+the menu (`out of quota until <time>`) are separate surfaces and unchanged.
 
 **F3 (observation, not a defect).** Process-layer quota classification
 depends only on the rollout re-read. The first red case shows that the

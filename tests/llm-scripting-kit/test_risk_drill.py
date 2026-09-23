@@ -26,6 +26,11 @@ The three drill assertions:
   3. A unit that halts after writing is re-run only after its workspace is
      reset to its launch state.
 
+Assertion 1 also has an IN-SESSION form (drill finding F1): an agent that
+drives codex itself sees the halt, not ``run()``, so the pinned AVAILABLE
+verdict stays until the agent runs ``llm-scripting-kit record-halt <entry>``
+as the rendered Re-select line tells it to.
+
 Each assertion has a paired ``TestDrillGoesRed`` case that breaks the
 behaviour it depends on (monkeypatch only; no shipped code is edited) and
 shows the drill check fails.
@@ -389,6 +394,40 @@ def check_assertion_3_unresettable(drill: Drill, monkeypatch, tmp_path: Path) ->
     return {"detail": result.detail}
 
 
+def check_assertion_1_in_session(drill: Drill, monkeypatch) -> dict[str, Any]:
+    """F1: a halt the AGENT observed is written back by the record-halt verb."""
+    from llm_scripting_kit import cli
+
+    before = drill.menu()
+    assert before.default is not None and before.default.id == "codex", before.render()
+
+    # The agent drives codex itself (a session caller); run() never sees it.
+    env = dict(os.environ, DRILL_CODEX_MODE="quota")
+    halted = subprocess.run(
+        [drill.codex.argv_prefix[0], "exec", "-"], input="", env=env,
+        capture_output=True, text=True, cwd=drill.root,
+    )
+    assert halted.returncode == 1 and "usage limit" in halted.stderr
+    stale = drill.menu()
+    assert stale.default is not None and stale.default.id == "codex", (
+        "the pinned AVAILABLE verdict no longer outlives an unrecorded halt; "
+        "re-check whether record-halt is still needed"
+    )
+
+    # What the Re-select line tells the agent to run.
+    assert "llm-scripting-kit record-halt <entry>" in decl.RULE_TRIGGER_SESSION
+    monkeypatch.setattr(cli, "discover_model_entries", lambda **_kw: _entries())
+    assert cli.main(["record-halt", "codex"]) == cli.EXIT_OK
+
+    after = drill.menu()
+    codex_state = next(e for e in after.rendered_entries if e.id == "codex")
+    assert codex_state.usability == usage_budget.STATUS_OUT_OF_QUOTA, after.render()
+    assert str(_RESET_YEAR) in codex_state.status_text, after.render()
+    assert after.default is not None and after.default.id == "opus", after.render()
+    return {"menu_before": before.render(), "menu_stale": stale.render(),
+            "menu_after": after.render()}
+
+
 # ---------------------------------------------------------------------------
 # The drill
 # ---------------------------------------------------------------------------
@@ -397,6 +436,10 @@ def check_assertion_3_unresettable(drill: Drill, monkeypatch, tmp_path: Path) ->
 class TestRiskDrill:
     def test_assertion_1_out_of_quota_codex_reselects_a_usable_entry(self, drill, monkeypatch):
         evidence = check_assertion_1(drill, monkeypatch)
+        print(json.dumps(evidence, indent=2))
+
+    def test_assertion_1_in_session_halt_is_recorded_by_record_halt(self, drill, monkeypatch, capsys):
+        evidence = check_assertion_1_in_session(drill, monkeypatch)
         print(json.dumps(evidence, indent=2))
 
     def test_assertion_2_wrong_exit_zero_result_is_a_task_failure(self, drill, monkeypatch):
@@ -426,6 +469,11 @@ class TestDrillGoesRed:
         monkeypatch.setattr(decl, "record_observed_halt", lambda *a, **k: None)
         with pytest.raises(AssertionError):
             check_assertion_1(drill, monkeypatch)
+
+    def test_1_in_session_red_when_record_halt_writes_nothing(self, drill, monkeypatch):
+        monkeypatch.setattr(usage_budget, "record_observed_halt", lambda *a, **k: None)
+        with pytest.raises(AssertionError):
+            check_assertion_1_in_session(drill, monkeypatch)
 
     def test_2_red_when_a_completed_run_is_re_routed(self, drill, monkeypatch):
         # A backend that validates and re-routes a wrong answer as a halt.

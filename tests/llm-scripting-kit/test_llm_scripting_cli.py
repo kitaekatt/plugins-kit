@@ -170,7 +170,7 @@ def test_resolve_emits_selection(monkeypatch, capsys):
     backend = FakeBackend()
     monkeypatch.setattr(cli, "create_backend", lambda *_, **__: _selection(backend))
 
-    assert cli.main(["resolve", "--endpoint", "chosen"]) == 0
+    assert cli.main(["resolve", "--models", "chosen"]) == 0
     payload = json.loads(capsys.readouterr().out)
     assert payload == {
         "backend": "fake", "effort": "high", "endpoint": "chosen",
@@ -692,9 +692,17 @@ def test_resolve_models_takes_the_first_usable_entry(declared, capsys):
     assert payload["endpoint"] == "good"
 
 
-def test_resolve_endpoint_is_an_alias_of_models(declared, capsys):
-    assert cli.main(["resolve", "--endpoint", "good"]) == cli.EXIT_OK
-    assert json.loads(capsys.readouterr().out)["endpoint"] == "good"
+@pytest.mark.parametrize("argv", [
+    ["resolve", "--endpoint", "good"],
+    ["complete", "--endpoint", "good", "--prompt", "hi"],
+])
+def test_endpoint_alias_of_models_is_removed(declared, capsys, argv):
+    """Migration step 12 removed the `--endpoint` alias of `--models`."""
+    with pytest.raises(SystemExit) as exc:
+        cli.main(argv)
+    assert exc.value.code == 2
+    assert "--endpoint" in capsys.readouterr().err
+    assert declared == []  # nothing was resolved
 
 
 def test_resolve_model_stays_a_per_entry_override(declared, capsys):
@@ -710,11 +718,6 @@ def test_resolve_models_floor_is_exit_one(declared, capsys):
 def test_complete_models_dispatches_the_first_usable_entry(declared, capsys):
     assert cli.main(["complete", "--models", "typo,good", "--prompt", "hi"]) == cli.EXIT_OK
     assert json.loads(capsys.readouterr().out)["endpoint"] == "good"
-
-
-def test_models_and_endpoint_together_are_refused(declared, capsys):
-    with pytest.raises(SystemExit):
-        cli.main(["resolve", "--models", "good", "--endpoint", "good"])
 
 
 def test_describe_json_names_no_hidden_id(declared, capsys):
@@ -768,3 +771,92 @@ def test_describe_without_dispatchable_still_hides_the_transport(declared, capsy
     ]) == cli.EXIT_OK
     payload = json.loads(capsys.readouterr().out)
     assert [e["id"] for e in payload["rendered_entries"]] == ["sonnet"]
+
+
+# ---------------------------------------------------------------------------
+# record-halt: an in-session caller writes an observed quota halt back (F1)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def paced(declared, monkeypatch, tmp_path):
+    """A paced codex entry and an unpaced opus entry, scratch quota state."""
+    from llm_scripting_kit import models, usage_budget
+    from llm_scripting_kit.model_endpoints import HARNESS_KIND, EndpointEntry
+
+    entries = models.ModelDiscovery({
+        "codex": EndpointEntry(
+            id="codex", base_url=None, model="gpt-codex", kind=HARNESS_KIND,
+            harness="codex", conserve_usage=usage_budget.ConserveSpec(pool="seven_day"),
+        ),
+        "opus": EndpointEntry(
+            id="opus", base_url=None, model="claude-opus", kind=HARNESS_KIND,
+            harness="claude",
+        ),
+    })
+    monkeypatch.setattr(cli, "discover_model_entries", lambda **_kw: entries)
+    monkeypatch.setattr(models, "discover_model_entries", lambda **_kw: entries)
+    verdicts = tmp_path / "usage-verdicts.json"
+    sessions = tmp_path / "codex-sessions"
+    sessions.mkdir()
+    monkeypatch.setattr(usage_budget, "VERDICT_CACHE", verdicts)
+    monkeypatch.setattr(usage_budget, "CODEX_SESSIONS_DIR", sessions)
+    monkeypatch.setenv("LLM_SCRIPTING_KIT_USAGE_SESSION", "record-halt-session")
+    return verdicts
+
+
+def _describe_json(capsys, *ids):
+    assert cli.main(["describe", *ids, "--json"]) == cli.EXIT_OK
+    return json.loads(capsys.readouterr().out)
+
+
+def test_record_halt_marks_a_paced_entry_out_of_quota_for_the_session(paced, capsys):
+    before = _describe_json(capsys, "codex", "opus")
+    assert before["default"] == "codex"
+
+    assert cli.main(["record-halt", "codex", "--resets-at", "4102444800"]) == cli.EXIT_OK
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["recorded"] is True and payload["entry"] == "codex"
+    assert payload["kind"] == "quota"
+    assert payload["budget"]["status"] == "out-of-quota"
+    assert payload["budget"]["resets_at"] == 4102444800
+    stored = json.loads(paced.read_text())
+    assert stored["session_key"] == "record-halt-session"
+    assert stored["verdicts"]["codex"]["budget"]["status"] == "out-of-quota"
+
+    after = _describe_json(capsys, "codex", "opus")
+    codex = next(e for e in after["rendered_entries"] if e["id"] == "codex")
+    assert codex["usability"] == "out-of-quota"
+    assert after["default"] == "opus"
+
+
+def test_record_halt_without_a_reset_latches_one(paced, capsys):
+    assert cli.main(["record-halt", "codex", "--kind", "credit"]) == cli.EXIT_OK
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["recorded"] is True and payload["kind"] == "credit"
+    assert payload["budget"]["resets_at"] > 0
+
+
+def test_record_halt_is_a_silent_no_op_for_an_unpaced_entry(paced, capsys):
+    assert cli.main(["record-halt", "opus"]) == cli.EXIT_OK
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["recorded"] is False
+    assert "conserve_usage" in payload["reason"]
+    assert not paced.exists()
+
+
+def test_record_halt_without_a_session_key_writes_nothing(paced, capsys, monkeypatch):
+    monkeypatch.delenv("LLM_SCRIPTING_KIT_USAGE_SESSION")
+    monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
+    assert cli.main(["record-halt", "codex"]) == cli.EXIT_OK
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["recorded"] is False
+    assert "session" in payload["reason"]
+    assert not paced.exists()
+
+
+def test_record_halt_unknown_entry_is_a_usage_error(paced, capsys):
+    assert cli.main(["record-halt", "no-such-entry"]) == cli.EXIT_USAGE
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "no-such-entry" in json.loads(captured.err)["error"]["message"]
