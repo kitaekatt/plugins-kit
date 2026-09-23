@@ -25,6 +25,16 @@ from .discovery import (
 SUMMARY_METADATA_KEYS = frozenset(("summary", "summary_fingerprint", "summary_updated"))
 SUMMARY_ELIGIBLE_STATUSES = frozenset(("active", "blocked", "closed"))
 
+# Folded into summary_source_fingerprint's hashed material below. Bump this
+# whenever summary_ops's generation contract changes (system prompt wording,
+# section structure, or the character cap) so every fingerprint stored under
+# the old contract mismatches the freshly computed one and reads as stale on
+# the next `task.py review`. Owned here (rather than in summary_ops) because
+# this module defines summary_source_fingerprint and summary_ops already
+# imports from listing -- putting the version constant in summary_ops instead
+# would require listing to import it back, creating a cycle.
+SUMMARY_PROMPT_VERSION = 2
+
 
 @dataclass(frozen=True)
 class TaskView:
@@ -82,6 +92,7 @@ def summary_source_fingerprint(folder: Path, block: dict[str, Any]) -> str:
         f"{entry.date}: {entry.detail}" for entry in reversed(read_task_updates(folder))
     )
     material = {
+        "prompt_version": SUMMARY_PROMPT_VERSION,
         "task": task_material,
         "CLAUDE.md": _read_text(folder / "CLAUDE.md"),
         "plan.md": _read_text(folder / "plan.md"),

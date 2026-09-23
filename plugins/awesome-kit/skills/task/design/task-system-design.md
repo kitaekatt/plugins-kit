@@ -88,7 +88,7 @@ task:
 | `status` | enum | yes | One of the type's `state_vocabulary` (default: `active` / `blocked` / `closed` / `archived`). |
 | `priority` | string | no | Matches the type's priority pattern (default `^P[1-3]$`, P1 highest). |
 | `description` | string | no | Freeform multi-line. |
-| `summary` | string | no | One-line review summary. Missing/stale summaries are diagnostics; generated values carry provenance metadata. |
+| `summary` | string | no | One-line review summary: problem it solves; how it is being solved; where it stands now (semicolon-separated, <=240 chars total, <=80 per section). Missing/stale summaries are diagnostics; generated values carry provenance metadata. |
 | `summary_fingerprint` | string | no | Fingerprint of the task material used to generate `summary`. |
 | `summary_updated` | string | no | Date the generated summary was persisted. |
 | `depends_on` | list[path] | no | Reference paths that must be `closed`/`archived` before this is workable. |
