@@ -664,6 +664,41 @@ def test_resolve_declaration_stale_lib_names_the_floor(monkeypatch):
         backends.resolve_declaration(["opus"])
 
 
+def test_absent_declaration_lib_message_names_the_install_command(monkeypatch):
+    """plugins/CLAUDE.md ('Optional use of another plugin'): the probe-failure
+    message must name the owning plugin and a command the consumer can
+    actually run -- never a manifest (bootstrap.json's shared_lib_imports)
+    the consumer cannot edit."""
+    import sys
+
+    monkeypatch.delitem(sys.modules, "llm_scripting_kit", raising=False)
+    monkeypatch.delitem(sys.modules, "llm_scripting_kit.declaration", raising=False)
+    if _has_llm_scripting_kit():  # pragma: no cover - env-dependent
+        pytest.skip("llm_scripting_kit importable in this environment")
+    with pytest.raises(ImportError) as ei:
+        backends.resolve_declaration(["opus"])
+    assert "claude plugin install llm-scripting-kit@plugins-kit" in str(ei.value)
+    assert "shared_lib_imports" not in str(ei.value)
+    assert "bootstrap.json" not in str(ei.value)
+
+
+def test_stale_declaration_lib_message_names_the_update_command(monkeypatch):
+    import sys
+    import types
+
+    stale = types.ModuleType("llm_scripting_kit.declaration")  # no describe/run/etc.
+    package = types.ModuleType("llm_scripting_kit")
+    package.declaration = stale
+    monkeypatch.setitem(sys.modules, "llm_scripting_kit", package)
+    monkeypatch.setitem(sys.modules, "llm_scripting_kit.declaration", stale)
+    with pytest.raises(ImportError) as ei:
+        backends.resolve_declaration(["opus"])
+    assert "claude plugin update llm-scripting-kit@plugins-kit" in str(ei.value)
+    assert "0.46.0" in str(ei.value)
+    assert "shared_lib_imports" not in str(ei.value)
+    assert "bootstrap.json" not in str(ei.value)
+
+
 def test_resolve_declaration_returns_the_default_entry(monkeypatch):
     entry = _entry("opus", harness="claude", model="claude-opus-5")
     _install_fake_declaration(monkeypatch, default=entry)
@@ -746,29 +781,66 @@ def test_declared_entry_is_memoized_per_process(monkeypatch):
     assert len(calls) == 1
 
 
-def test_legacy_triple_deprecation_warning_only_when_explicit(monkeypatch):
-    """Bare defaults (nothing set) must stay silent; an explicit legacy env
-    must warn once it is actually consulted (R37: honoured with a
-    deprecation line)."""
-    entry = _entry("opus", harness="claude", model="claude-opus-5", drive="claude-cli")
+def test_route_and_routed_model_emit_no_warning_with_nothing_set():
+    """Bare defaults (nothing set at all) must stay silent."""
+    import warnings
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        route()
+        routed_model("deepseek/deepseek-v4")
+    assert not any(issubclass(w.category, DeprecationWarning) for w in caught)
+
+
+def test_route_and_routed_model_emit_no_warning_with_models_env_set(monkeypatch):
+    """The new declaration path is not itself deprecated."""
+    monkeypatch.setenv(backends.MODELS_ENV, "sol")
+    entry = _entry("sol", harness="codex", model="gpt-5.6-sol", drive="codex-cli")
     _install_fake_declaration(monkeypatch, default=entry)
 
     import warnings
 
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
-        backends._resolve_declared_entry()
+        route()
+        routed_model("anything", backend_name="codex-cli")
     assert not any(issubclass(w.category, DeprecationWarning) for w in caught)
 
-    backends.reset_declared_entry_cache()
+
+def test_route_emits_exactly_one_deprecation_warning_via_the_public_path(monkeypatch):
+    """R37 / code review fix: the legacy-triple warning must fire on the
+    PUBLIC route()/routed_model() path when only CONTENT_PIPELINE_LLM_BACKEND
+    (etc.) is set -- ``_resolve_declared_entry`` is never reached by a legacy
+    call at all, so the warning cannot live there. Legacy dispatch itself
+    stays byte-identical (still returns ClaudeCliBackend)."""
     monkeypatch.setenv(backends.BACKEND_ENV, "claude-cli")
+    import warnings
+
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
-        backends._resolve_declared_entry()
-    assert any(
-        issubclass(w.category, DeprecationWarning) and backends.MODELS_ENV in str(w.message)
-        for w in caught
-    )
+        result = route()
+    assert isinstance(result, ClaudeCliBackend)
+    matches = [
+        w for w in caught
+        if issubclass(w.category, DeprecationWarning) and backends.MODELS_ENV in str(w.message)
+    ]
+    assert len(matches) == 1
+
+
+def test_routed_model_emits_exactly_one_deprecation_warning_via_the_public_path(monkeypatch):
+    monkeypatch.setenv(backends.BACKEND_ENV, "claude-cli")
+    monkeypatch.setenv(backends.MODEL_ENV, "claude-sonnet-4-6")
+    import warnings
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        result = routed_model("deepseek/deepseek-v4")
+    assert result == "claude-sonnet-4-6"
+    matches = [
+        w for w in caught
+        if issubclass(w.category, DeprecationWarning) and backends.MODELS_ENV in str(w.message)
+    ]
+    assert len(matches) == 1
 
 
 def test_legacy_claude_cli_maps_to_shipped_default_entry(monkeypatch):

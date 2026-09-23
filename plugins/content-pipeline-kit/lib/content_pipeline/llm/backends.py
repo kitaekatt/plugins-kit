@@ -804,13 +804,14 @@ _DECLARATION_FLOOR = "0.46.0"
 
 _MISSING_DECLARATION_LIB_MSG = (
     "needs the 'llm_scripting_kit' shared lib (from llm-scripting-kit) for "
-    f"{MODELS_ENV} routing. Declare it via the plugin's shared_lib_imports, or "
-    "use the legacy CONTENT_PIPELINE_LLM_BACKEND/_MODEL/_ENDPOINT triple."
+    f"{MODELS_ENV} routing, or use the legacy "
+    "CONTENT_PIPELINE_LLM_BACKEND/_MODEL/_ENDPOINT triple. Run "
+    "`claude plugin install llm-scripting-kit@plugins-kit`."
 )
 _STALE_DECLARATION_LIB_MSG = (
     "the linked llm_scripting_kit predates llm_scripting_kit.declaration "
     f"(describe/run); {MODELS_ENV} routing needs llm-scripting-kit >= "
-    f"{_DECLARATION_FLOOR} -- update the llm-scripting-kit plugin"
+    f"{_DECLARATION_FLOOR}. Run `claude plugin update llm-scripting-kit@plugins-kit`."
 )
 
 _DECLARATION_SYMBOLS = ("describe", "run", "RunRequest", "NoUsableRoutingTarget", "CALLER_PROCESS")
@@ -923,25 +924,16 @@ mid-run re-selection that should re-probe)."""
 
 
 def _resolve_declared_entry(*, project_root: Optional[str] = None) -> Any:
-    """The first usable entry for the ACTIVE declaration (env-sourced), memoized.
+    """The first usable entry for the ACTIVE :data:`MODELS_ENV` declaration, memoized.
 
-    Falls back to the legacy env triple's synthesized one-entry declaration
-    when :data:`MODELS_ENV` is unset, emitting a ``DeprecationWarning`` when
-    the legacy envs were set explicitly (never on bare defaults).
+    Callers gate on ``declared_model_names() is not None`` before calling
+    this (:func:`route`, :func:`routed_model`), so ``names`` is never
+    ``None`` here -- there is no legacy fallback to resolve at this layer.
+    The legacy-triple deprecation warning is a SEPARATE concern, handled by
+    :func:`_warn_legacy_env_if_explicit` on the branch where a caller did
+    NOT set :data:`MODELS_ENV` at all.
     """
     names = declared_model_names()
-    if names is None:
-        entry_id, explicit = _legacy_declaration_name()
-        if explicit:
-            import warnings  # noqa: PLC0415
-
-            warnings.warn(
-                f"{BACKEND_ENV}/{MODEL_ENV}/{ENDPOINT_ENV} are deprecated; set "
-                f"{MODELS_ENV}=[{entry_id}] instead.",
-                DeprecationWarning,
-                stacklevel=3,
-            )
-        names = [entry_id]
     key = (tuple(names), project_root)
     if key not in _declared_entry_cache:
         _declared_entry_cache[key] = resolve_declaration(names, project_root=project_root)
@@ -951,6 +943,31 @@ def _resolve_declared_entry(*, project_root: Optional[str] = None) -> Any:
 def reset_declared_entry_cache() -> None:
     """Test seam: clear the per-process declaration memo."""
     _declared_entry_cache.clear()
+
+
+def _warn_legacy_env_if_explicit() -> None:
+    """One-shot ``DeprecationWarning`` for the legacy env triple.
+
+    Called from :func:`route` / :func:`routed_model` on the branch where
+    :data:`MODELS_ENV` is UNSET -- legacy dispatch itself is unchanged
+    (byte-identical), this only surfaces the deprecation notice when at
+    least one of :data:`BACKEND_ENV` / :data:`MODEL_ENV` / :data:`ENDPOINT_ENV`
+    was set explicitly (never on bare defaults). Needs no
+    ``llm_scripting_kit`` / registry resolution -- :func:`_legacy_declaration_name`
+    is pure string logic over the env, so this is cheap to call on every
+    legacy dispatch.
+    """
+    entry_id, explicit = _legacy_declaration_name()
+    if not explicit:
+        return
+    import warnings  # noqa: PLC0415
+
+    warnings.warn(
+        f"{BACKEND_ENV}/{MODEL_ENV}/{ENDPOINT_ENV} are deprecated; set "
+        f"{MODELS_ENV}=[{entry_id}] instead.",
+        DeprecationWarning,
+        stacklevel=3,
+    )
 
 
 def _backend_for_entry(entry: Any) -> Any:
@@ -1025,6 +1042,7 @@ def route(
                     f"yours) or change {MODELS_ENV}."
                 )
         return backend
+    _warn_legacy_env_if_explicit()
     if name == "claude-cli":
         return claude_cli if claude_cli is not None else ClaudeCliBackend()
     if name == "codex-cli":
@@ -1079,6 +1097,7 @@ def routed_model(requested_model: str, *, backend_name: Optional[str] = None) ->
     if declared_model_names() is not None:
         entry = _resolve_declared_entry()
         return entry.model or requested_model
+    _warn_legacy_env_if_explicit()
     name = backend_name or active_backend_name()
     if name == "model-endpoint":
         override = os.environ.get(MODEL_ENV, "").strip()
