@@ -129,8 +129,8 @@ _BOOTSTRAP_PYTHON_VARS = ("BOOTSTRAP_PYTHON", "BOOTSTRAP_PROJECT_PYTHON")
 def _isolate_bootstrap_python_vars(monkeypatch):
     """Start every test without the engine's interpreter names, and leak none.
 
-    engine._main and layered_bootstrap.run_layered_bootstrap export these into
-    os.environ (bootstrap_lib.interpreter_env). Tests drive both in-process, so
+    engine._main exports these into os.environ
+    (bootstrap_lib.interpreter_env). Tests drive it in-process, so
     without this a value set by one test is inherited by every later test --
     and by every engine subprocess they spawn.
 

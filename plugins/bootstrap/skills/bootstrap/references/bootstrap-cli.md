@@ -1,44 +1,55 @@
 # The `bootstrap` command
 
-A PATH command for inspecting Claude bootstrap passes and applying user/project
-requirements from a terminal.
+A PATH command for inspecting Claude bootstrap passes and running a full pass
+from a terminal.
 
 ## Terminal run scope
 
-`bootstrap run` merges and applies only these four files, in ascending priority:
+`bootstrap run` launches the same engine pass as the SessionStart hook and
+`bootstrap codex-hook`: `engine/bootstrap_engine.py`, in `--console` mode.
+The pass does everything a hook pass does, in the same order:
 
-1. `~/.claude/bootstrap.json`
-2. `~/.claude/bootstrap.local.json`
-3. `<working-directory>/.claude/bootstrap.json`
-4. `<working-directory>/.claude/bootstrap.local.json`
+- self-setup and registry repair;
+- every declared marketplace refresh, including bootstrap's own
+  `alwaysUpdate` entry, before any plugin version check (engine Step 3c-mkt);
+- the four user/project layers, in ascending priority:
+  1. `~/.claude/bootstrap.json`
+  2. `~/.claude/bootstrap.local.json`
+  3. `<working-directory>/.claude/bootstrap.json`
+  4. `<working-directory>/.claude/bootstrap.local.json`
+- plugin updates for declared (and self-registered) plugins, in the same pass
+  that refreshed their marketplace;
+- env.json personalization and every installed plugin's own manifest.
 
-Missing files are skipped. Later conflicting values win under shared manifest
-merge rules. A parse error stops provisioning so a broken override cannot allow
-lower-priority requirements to run unexpectedly.
+Missing layer files are skipped. Later conflicting values win under shared
+manifest merge rules. A layer that fails to parse is reported as a failure.
 
 The project directory is the exact working directory, with no parent or Git-root
 search. From `/`, the project candidates are `/.claude/bootstrap.json` and
 `/.claude/bootstrap.local.json`; user requirements still apply.
 
-The command prints the engine tree and each candidate manifest's presence, then
-streams checks and actions through the shared recorder. It uses the shared
-manifest handlers directly, without installed plugin manifest discovery, the
-legacy `user-bootstrap.json`, env.json personalization, self-provisioning, or
-implicit project setup. Project operations such as `project_git_pull` (which runs first), `project_venv`, `project_npm`,
-and `agent_skills_link` run when declared in the merged layers.
+The command prints the engine tree and each candidate layer's presence, then
+streams checks and actions through the shared recorder.
 
-A `plugins` or `marketplaces` entry authored in one of these four files still
-installs or updates what it explicitly declares. Installing a plugin does not
-add that plugin's own manifest to this terminal run. Claude's automatic lifecycle
-retains its full plugin-provisioning scope.
+A terminal pass differs from a hook pass only where it must:
+
+| Terminal pass | Why |
+|---|---|
+| Console output; no `bootstrap.log` writes, engine version stamps (`last_version`, `engine_ran_version`), pending display file, or fix-all queue | The terminal is the display; the version stamps drive the next session's update handling |
+| Not throttled by the cooldown, and does not consume or reset it | It is the explicit request for a pass now |
+| `--project-key _global_`: the per-project interpreter record is neither read nor written | The record is keyed by the hook's hash of Claude's cwd, which a terminal cwd cannot reproduce |
+| No Codex project hook is generated | A console pass never materializes `.codex/hooks.json` in the directory it runs from |
+| Refuses a held lock (exit 2) instead of attaching | A running pass may have a different project scope |
+| Exits 1 when the pass reports failures (`--exit-status`) | A hook pass always exits 0 so a defect cannot block a session |
+| stdin is closed | A manifest command or custom script cannot prompt on, or hang on, the terminal |
 
 ## Invocation
 
 ```bash
 bootstrap                 # report; follow a running lifecycle pass to completion
 bootstrap --json          # non-blocking machine-readable status
-bootstrap run             # apply the four user/project layers
-bootstrap run --verbose   # accepted for console compatibility
+bootstrap run             # run the full pass now for the working directory
+bootstrap run --verbose   # accepted; a console pass is already verbose
 bootstrap codex-hook      # synchronous full pass + Codex SessionStart JSON
 bootstrap reset           # clear this project's next-session throttle
 bootstrap reset --all     # all projects; --status and --project also supported
@@ -98,11 +109,11 @@ create this adapter for a failed automatic pass or a `--console` diagnostic.
 
 ## Running passes and exit codes
 
-The terminal runner uses the shared single-instance lock. If another pass is
+The terminal pass uses the shared single-instance lock. If another pass is
 running, `bootstrap run` refuses with exit code 2 and asks you to retry after it
-finishes. It never attaches to that pass: its manifests or project may differ.
-The runner also checks the lock atomically to cover a race after the initial
-probe. Refusal does not alter lifecycle cooldowns or version stamps.
+finishes. It never attaches to that pass: its project may differ. The engine
+also checks the lock atomically to cover a race after the initial probe, and
+exits 2 when it stands down (`--exit-status`).
 
 Bare `bootstrap` retains its status-and-follow behavior. `bootstrap --json`
 always returns immediately. The status probe reads the lock without acquiring
@@ -111,17 +122,19 @@ or clearing it.
 | Form | Exit code |
 |---|---|
 | Bare `bootstrap` | 0 whether idle or running |
-| `bootstrap run` | 0 on success; 1 on manifest/provisioning failure |
-| `bootstrap run`, busy or ambiguous marketplace | 2 |
+| `bootstrap run` | 0 on a clean pass; 1 when the pass reports failures or crashes |
+| `bootstrap run`, busy (before or during launch) or ambiguous marketplace | 2 |
 | `bootstrap run`, missing plugin tree | 2 |
 | `bootstrap reset` | The delegated reset script's exit code |
 
 ## Cooldowns and records
 
-`bootstrap run` neither consumes nor advances the SessionStart cooldown. It also
-leaves plugin lifecycle version stamps and env.json state unchanged.
-`bootstrap reset` delegates to `bootstrap-reset-cooldown` to clear the cooldown
-and session guard for the next genuine Claude session.
+`bootstrap run` neither consumes nor advances the SessionStart cooldown, and it
+does not write the engine version stamps. Because the cooldown does not throttle
+it, it is the way to force a pass now: for example, to apply a plugin version
+published since the session started. `bootstrap reset` delegates to
+`bootstrap-reset-cooldown` to clear the cooldown and session guard for the next
+genuine Claude session.
 
 The CLI creates an `events.watch` marker while tailing and removes it afterwards.
 The recorder retains console events in `bootstrap_events.jsonl`. Bare status
@@ -173,8 +186,8 @@ nothing written, if it is not -- `none` is always accepted, even when the
 current `profiles` declaration is `invalid`); the selection is written
 atomically to the resolved target (every other key in that file is
 preserved); a project-local write is additionally excluded from Git; and the
-command then launches a bootstrap pass against the same project to converge
-the new selection, streaming its output the same way `bootstrap run` does.
+command then launches the same pass `bootstrap run` launches, against that
+project, to converge the new selection, and streams its output.
 Without `--user`/`--project`, the target is the state's own `write_target`
 (see manifest-reference.md). If no bootstrap plugin tree can be found to run
 the converging pass, the selection is still written and reported, but the
@@ -203,17 +216,18 @@ fallback. Version components sort numerically.
 
 Data directories are discovered under
 `${CLAUDE_BOOTSTRAP_DATA_ROOT:-~/.claude/plugins/data}`. With multiple marketplaces,
-`run` requires `BOOTSTRAP_MARKETPLACE` to choose its engine/data context. This
-selection does not add plugin manifests to the four-layer run. Bare status can
+`run` requires `BOOTSTRAP_MARKETPLACE` to choose its engine/data context. Bare status can
 report all marketplaces. Reset acts on all marketplaces unless scoped by the
 environment.
 
 The SessionStart hook installs the shell shim into `~/.local/bin/bootstrap`.
 The shim resolves an existing interpreter and delegates to `bootstrap_cli.py`.
-Terminal execution goes through `bootstrap_run.py`, which presents the shared
-`bootstrap_lib.layered_bootstrap` capability. Without Python, let Claude's normal
-lifecycle provision it first. Reset remains available without Python through
-its shell delegate.
+`run` and `profile set` launch `engine/bootstrap_engine.py` under
+`BOOTSTRAP_PYTHON` (else the CLI's own interpreter) -- the same entry
+`codex-hook` launches -- adding `--console --project-key _global_
+--exit-status`. `codex-hook` passes none of these three flags. Without
+Python, let Claude's normal lifecycle provision it first. Reset remains
+available without Python through its shell delegate.
 
 On Windows the hook also writes `bootstrap.cmd`, `bootstrap-reset-cooldown.cmd`
 and `env-reset-cooldown.cmd` beside the extensionless levers. cmd.exe cannot

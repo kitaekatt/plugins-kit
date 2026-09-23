@@ -397,10 +397,13 @@ class TestEngineWiring:
         assert oks == ["project_git_pull: skipped - disabled"]
         assert git(work, "rev-parse", "HEAD") == head
 
-    def test_bootstrap_run_applies_the_manifest_the_update_brought(self, repos, tmp_path, monkeypatch):
+    def test_bootstrap_run_applies_the_manifest_the_update_brought(self, repos, tmp_path, data_dir):
         """The pull runs first and the manifest is reloaded, so a git_config
-        entry that arrives WITH the update is applied in the same run."""
-        from bootstrap_lib.layered_bootstrap import run_layered_bootstrap
+        entry that arrives WITH the update is applied in the same run -- here
+        through the exact engine invocation `bootstrap run` makes."""
+        import subprocess
+        import sys
+        from bootstrap.test_engine_personal import ENGINE_SCRIPT, make_minimal_root
         work, editor = repos
         write(editor / ".claude" / "bootstrap.json", '{"project_git_pull": true}\n')
         commit_all(editor, "opt in")
@@ -412,16 +415,16 @@ class TestEngineWiring:
         git(editor, "push", "-q", "origin", "HEAD:main")
         home = tmp_path / "home"
         (home / ".claude").mkdir(parents=True)
-        data = tmp_path / "data"
-        data.mkdir()
-        plugin = tmp_path / "plugin"
-        plugin.mkdir()
-        monkeypatch.setenv("HOME", str(home))
-        monkeypatch.setenv("USERPROFILE", str(home))
-        result = run_layered_bootstrap(work, plugin, data, "linux")
-        assert result.failures == []
+        env = dict(os.environ, HOME=str(home), USERPROFILE=str(home))
+        result = subprocess.run(
+            [sys.executable, ENGINE_SCRIPT, "--plugin-root", make_minimal_root(tmp_path),
+             "--data-dir", data_dir, "--project-dir", str(work),
+             "--project-key", "_global_", "--console", "--exit-status"],
+            capture_output=True, text=True, env=env, cwd=str(work),
+            stdin=subprocess.DEVNULL)
+        assert result.returncode == 0, result.stdout + result.stderr
         assert git(work, "rev-parse", "HEAD") == target
-        assert any(str(a).startswith("project updated: ") for a in result.actions)
+        assert "project updated: " in result.stdout
         assert git(work, "config", "--local", "fixture.pulled") == "yes"
 
     def test_session_start_pass_shows_the_whole_line_as_a_notice(self, repos, tmp_path, data_dir):
