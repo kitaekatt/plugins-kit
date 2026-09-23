@@ -162,7 +162,7 @@ the choice and re-selection rule text (`Ranking.rule`). It raises
 usable remains. It RANKS and does not dispatch, which is what lets job-kit
 pass its own requirements, capabilities, factory, exclusions and run-scoped
 reachability cache into one selection it still owns. `run` is the dispatcher
-for callers with no loop of their own. Three things are easy to break:
+for callers with no loop of their own. Four things are easy to break:
 
 - **RENDER, SKIP and FLOOR are separate surfaces.** Nothing may name a hidden
   id outside the floor, including the render header. A notice, warning or log

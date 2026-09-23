@@ -108,7 +108,7 @@ plugin-dev `references/model-declaration.md` specifies. `wkOpenRouter`'s `spec`:
   `default_endpoint`), and its `default` model, or `defaultCheap` with
   `cheap: true`. This is the usual choice: pick the *role*, not the slug.
 - `model: 'qwen'` (an alias) or `model: 'qwen/qwen3-32b'` (a raw slug) -- the
-  older form. It still runs on the default entry, and prints a deprecation line.
+  deprecated form. It runs on the default entry and prints a deprecation line.
 
 Change the entries or the defaults once, in llm-scripting-kit's config, and
 every openrouter node across every plugin follows:
@@ -125,7 +125,9 @@ Provisioning:
 - `llm_scripting_kit` (owned by the llm-scripting-kit plugin) is published as a
   shared library by the bootstrap engine and linked onto workflow-kit's venv because workflow-kit
   declares `"shared_lib_imports": ["llm_scripting_kit"]` -- the runner imports it
-  directly, no path discovery, no dependency on the llm-scripting-kit plugin.
+  directly, with no path discovery. workflow-kit's bootstrap.json declares
+  llm-scripting-kit as a REQUIRED `install: "auto"` plugin edge, so bootstrap
+  installs the owning plugin.
 - `openai` is a declared workflow-kit dependency (`pyproject.toml` +
   `venv.check_imports`), so bootstrap installs it into workflow-kit's venv.
 
