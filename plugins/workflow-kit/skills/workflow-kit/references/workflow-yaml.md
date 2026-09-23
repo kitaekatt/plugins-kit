@@ -91,7 +91,11 @@ A **step** is exactly one of: an agent step, a pipeline step, a `script` node, o
 
 - **agent step** -- `agent: { prompt, schema?, model?, agentType?, isolation?, label? }`.
   Add `for_each: "{{ ... }}"` + `mode: parallel` to fan out (the item is bound to
-  `item`).
+  `item`). `model` is a model declaration: one registry id or a list of them
+  (the format is bootstrap's plugin-dev `references/model-declaration.md`). An
+  agent step runs on the harness, so it compiles to the FIRST Claude core id in
+  the list (`fable`, `opus`, `sonnet`, `haiku`) and skips every other id without
+  comment. A list with no core id is a compile error that names each declared id.
 - **pipeline step** -- `pipeline: { over, as, stages: [...] }`. Each stage is an
   agent step; a stage may add `fan_out: { over, as, mode }` to fan out within the
   stage. Stages run with no barrier (item A reaches stage 2 while item B is still
@@ -104,8 +108,11 @@ A **step** is exactly one of: an agent step, a pipeline step, a `script` node, o
 - **openrouter node** -- `openrouter: { prompt_file, model?, cheap?, system?, out?,
   status?, label? }`. One non-Claude model call whose reply lands in `$OUT`.
   `prompt_file` is a path (an input, or an upstream node's `{{ steps.ID.path }}`).
-  Omit `model` to use llm-scripting-kit's configured `default` (or set `cheap: true`
-  for `defaultCheap`); or pass a registry alias / raw slug. See `node-strategies.md`.
+  `model` is a model declaration of llm-scripting-kit transport entry ids
+  (e.g. `or-qwen`, or `[or-qwen, or-gpt-mini]`). Omit it to use the configured
+  default declaration (set `cheap: true` for that entry's `defaultCheap`). A
+  model alias or raw slug is still accepted and is deprecated. See
+  `node-strategies.md`.
 
 **Templating** -- `{{ inputs.X }}`, `{{ steps.ID }}`, `{{ steps.ID[*].field }}`
 (flatten), `{{ <as> }}` (pipeline/fan_out item), `{{ <prevStage>.field }}`

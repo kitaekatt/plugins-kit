@@ -223,7 +223,10 @@ LANE_ROUTING = """\
             - For each declaration with two or more entries, run
               `llm-scripting-kit describe <entry>... --caller session` with the entries in
               declared order, plus `--project-root <bundle.project_root>` when the bundle
-              has one, plus `--self <id>` when one declared entry is the model you are
+              has one, plus `--dispatchable transport` when the reviewer is not
+              `reviewer_a_claude_md_compliance` or `reviewer_c_introduced_code` (the lane
+              runner runs a transport entry for every other reviewer, so describe keeps
+              transports in that menu), plus `--self <id>` when one declared entry is the model you are
               running on, so that entry is marked `[author]`. Run every such describe
               before the fan-out, in one message. For each, print its stdout verbatim:
               the menu, its `[default]` mark, and its `Rule:` and `Re-select:` lines (and
@@ -2289,7 +2292,7 @@ no separate field to set.
 
 For a reviewer whose declaration has two or more entries, the skill runs
 
-    llm-scripting-kit describe <entry>... --caller session [--project-root <root>] [--self <id>]
+    llm-scripting-kit describe <entry>... --caller session [--project-root <root>] [--dispatchable transport] [--self <id>]
 
 and prints its output verbatim: the entries this machine can use or will be able to use, in pace
 order, the one marked `[default]`, and the rule text that says how to choose, how to announce
@@ -2300,9 +2303,12 @@ prefers a non-author entry.
 
 describe leaves out every entry this machine cannot run: an id the registry does not know, an
 entry this caller cannot drive, and an excluded one. A left-out entry is skipped without
-comment. `--caller session` is the in-session caller kind, and it drives only harness entries,
-so a transport endpoint is left out of a multi-entry declaration's menu; a transport endpoint
-runs only as a one-entry declaration, which goes straight to `@LANE_TOOL@` with no menu. Out-of-quota and unreachable
+comment. `--caller session` is the in-session caller kind, and by itself it drives only harness
+entries. `--dispatchable transport` tells describe this caller can also run transport
+endpoints, through `@LANE_TOOL@`, so they stay in the menu. The skill passes it for every
+reviewer except `reviewer_a_claude_md_compliance` and `reviewer_c_introduced_code`, the two
+lanes the runner binds only to a harness entry (see "Which lanes may take an endpoint entry"
+below); for those two a transport endpoint is left out of the menu. Out-of-quota and unreachable
 entries stay in the menu, with their reset time or state, because they are real on this
 machine; they are not usable until that changes. When no entry is usable, describe exits 1
 with a JSON error that itemises every declared entry, left-out ones included, and the skill

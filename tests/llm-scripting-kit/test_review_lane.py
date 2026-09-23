@@ -554,3 +554,42 @@ class TestTransportSdkPreflight:
             endpoint="e", kind="harness", backend=FakeBackend([]), model="m"
         )
         lr._check_transport_sdk(selection)
+
+
+class TestEndpointLanesCallDescribe:
+    """Migration step 3 (L5): one id; the endpoint lane runs it through describe()."""
+
+    def test_an_out_of_quota_endpoint_fails_the_lane_with_the_floor(self, seam, monkeypatch) -> None:
+        from llm_scripting_kit import declaration
+
+        seam.selection = _transport([FakeResponse(ONE_ISSUE)])
+
+        def floor(names, **_kw):
+            raise declaration.NoUsableRoutingTarget(
+                ["my-endpoint"],
+                [declaration.Disposition("my-endpoint", 0, "out-of-quota", "spent", 1_790_000_000)],
+                "process",
+            )
+
+        monkeypatch.setattr(lr, "describe", floor, raising=False)
+        with pytest.raises(lr.LaneRunError, match="out-of-quota"):
+            lr.run_lane(lane=LANE, model="my-endpoint", diff_text="d")
+        assert seam.selection.backend.calls == []
+
+    def test_describe_is_called_for_a_process_caller_with_the_one_id(self, seam, monkeypatch) -> None:
+        seen = {}
+        real = lr.describe
+
+        def spy(names, **kw):
+            seen["names"], seen["caller"] = names, kw["caller"]
+            return real(names, **kw)
+
+        monkeypatch.setattr(lr, "describe", spy)
+        seam.selection = _transport([FakeResponse(ONE_ISSUE)])
+        lr.run_lane(lane=LANE, model="my-endpoint", diff_text="d")
+        assert seen == {"names": ["my-endpoint"], "caller": "process"}
+
+    def test_an_unknown_endpoint_is_still_a_config_error(self, seam) -> None:
+        seam.resolve_error = FakeEndpointResolveError("no such endpoint")
+        with pytest.raises(lr.LaneConfigError, match="neither an Agent-tool alias"):
+            lr.run_lane(lane=LANE, model="typo-endpoint", diff_text="d")

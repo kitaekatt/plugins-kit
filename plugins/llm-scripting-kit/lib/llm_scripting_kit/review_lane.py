@@ -37,7 +37,21 @@ from llm_scripting_kit.completion import (
     HaltError,
     create_backend,
 )
+from llm_scripting_kit.declaration import (
+    DISPOSITION_SHADOWED_CORE,
+    DISPOSITION_UNRESOLVED,
+    DISPOSITION_UNROUTABLE,
+    NoUsableRoutingTarget,
+    describe,
+)
 from llm_scripting_kit.models import EndpointResolveError, discover_model_entries
+from llm_scripting_kit.models import EndpointResolveError as _SeamResolveError
+
+#: Floor dispositions that mean the id itself is wrong here, as opposed to a
+#: real entry that is spent or down right now.
+_CONFIGURATION_DISPOSITIONS = (
+    DISPOSITION_UNRESOLVED, DISPOSITION_UNROUTABLE, DISPOSITION_SHADOWED_CORE,
+)
 
 EXIT_OK = 0
 EXIT_LANE_FAILED = 1
@@ -242,6 +256,40 @@ def _cwd_for(lane: str, project_root: Optional[str]) -> Optional[Path]:
     return Path(project_root)
 
 
+def _lane_factory(name: str, **kwargs: Any) -> Any:
+    """``create_backend`` looked up at call time, raising the seam's resolve error."""
+    try:
+        return create_backend(name, **kwargs)
+    except EndpointResolveError as exc:
+        raise _SeamResolveError(str(exc)) from exc
+
+
+def _describe_lane_model(model: str, project_root: Optional[str]) -> str:
+    """Run the lane's one id through ``describe`` for a process caller.
+
+    The lane names ONE id; the review skill owns choosing among a
+    declaration's entries and re-dispatching. ``describe`` supplies what the
+    bare factory could not: an out-of-quota or unreachable endpoint is refused
+    before any prompt is built, with the floor's itemised disposition.
+    """
+    try:
+        ranking = describe(
+            [model], project_root=project_root, caller="process",
+            backend_factory=_lane_factory,
+        )
+    except NoUsableRoutingTarget as floor:
+        if all(d.disposition in _CONFIGURATION_DISPOSITIONS for d in floor.dispositions):
+            raise LaneConfigError(
+                f"model {model!r} is neither an Agent-tool alias nor a known "
+                f"llm-scripting-kit endpoint id: {floor}"
+            ) from floor
+        raise LaneRunError(
+            f"endpoint {model!r} is not serving this run: {floor}"
+        ) from floor
+    assert ranking.default is not None  # describe() raises the floor otherwise
+    return ranking.default.id
+
+
 def run_lane(
     *,
     lane: str,
@@ -263,9 +311,10 @@ def run_lane(
     ``LaneRunError`` for one that was attempted and failed.
     """
     check_lane_dispatchable(lane, model)
+    endpoint = _describe_lane_model(model, project_root)
 
     try:
-        selection = create_backend(model, project_root=project_root)
+        selection = create_backend(endpoint, project_root=project_root)
     except EndpointResolveError as exc:
         raise LaneConfigError(
             f"model {model!r} is neither an Agent-tool alias nor a known "

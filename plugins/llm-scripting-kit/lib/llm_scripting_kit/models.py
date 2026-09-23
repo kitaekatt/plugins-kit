@@ -116,9 +116,37 @@ DEFAULT_MODEL_CONFIG = {
         #     "harness": "codex", "model": "gpt-6-astra", "effort": "high",
         #     "tier": 4, "family": "openai",
         # },
+        # OpenRouter models as ENTRIES. A declaration names registry ids, so
+        # each alias of the top-level `models:` map below also ships as a
+        # direct transport entry. The alias map stays: under an endpoint it is
+        # a per-entry override (a `model=` / --model choice inside that
+        # entry), no longer an id a declaration names. A test keeps the two
+        # namespaces in step (one `or-<alias>` entry per shipped alias).
+        "or-qwen": {
+            "base_url": "https://openrouter.ai/api/v1",
+            "key_env": "OPENROUTER_API_KEY", "account_check": "openrouter",
+            "model": "qwen/qwen3-32b",
+        },
+        "or-gpt-mini": {
+            "base_url": "https://openrouter.ai/api/v1",
+            "key_env": "OPENROUTER_API_KEY", "account_check": "openrouter",
+            "model": "openai/gpt-4o-mini",
+        },
+        "or-gemini-lite": {
+            "base_url": "https://openrouter.ai/api/v1",
+            "key_env": "OPENROUTER_API_KEY", "account_check": "openrouter",
+            "model": "google/gemini-2.5-flash-lite",
+        },
         # Claude subscription models, shipped for the same reason: the
         # claude-cli adapter had no endpoint pointing at it. Effort is a
         # per-call mapped param on this adapter, so none is set here.
+        # haiku completes the core id set (bootstrap_lib.model_declaration
+        # CORE_IDS): every core id is a shipped claude entry, so a declaration
+        # naming it resolves on every machine.
+        "haiku": {
+            "harness": "claude", "model": "claude-haiku-4-5",
+            "tier": 1, "family": "anthropic",
+        },
         "sonnet": {
             "harness": "claude", "model": "claude-sonnet-5",
             "tier": 2, "family": "anthropic",
@@ -258,9 +286,68 @@ def load_model_config(*, project_root: Optional[str] = None) -> dict:
     return deep_merge(base, file_cfg)
 
 
+def _default_endpoint_value(config: Mapping[str, object]) -> object:
+    value = config.get("default_endpoint")
+    return value if value else DEFAULT_ENDPOINT_NAME
+
+
 def default_endpoint_name(config: dict) -> str:
-    """The endpoint used when a caller does not name one."""
-    return config.get("default_endpoint") or DEFAULT_ENDPOINT_NAME
+    """The endpoint used when a caller does not name one.
+
+    ``default_endpoint`` is the one-entry default DECLARATION (see
+    :func:`default_declaration`); a caller that takes a single endpoint
+    reads its first id.
+    """
+    value = _default_endpoint_value(config)
+    if isinstance(value, (list, tuple)):
+        first = next((item for item in value if isinstance(item, str) and item.strip()), None)
+        return first.strip() if first else DEFAULT_ENDPOINT_NAME
+    return value if isinstance(value, str) else DEFAULT_ENDPOINT_NAME
+
+
+def default_declaration(
+    *, config: Optional[dict] = None, project_root: Optional[str] = None
+) -> list:
+    """The default model declaration: ``default_endpoint`` read as a declaration.
+
+    Shipped, this is ``["openrouter"]``: one transport entry whose own
+    ``default`` / ``defaultCheap`` selectors pick the model, so a caller that
+    names no model keeps the meaning ``default_endpoint`` always had. It may
+    be written as a list of registry ids. Structural validation is
+    ``bootstrap_lib.model_declaration.parse`` (a ``DeclarationError`` for an
+    empty or duplicated list); whether an id resolves is decided at dispatch.
+    """
+    from .declaration import _model_declaration  # noqa: PLC0415 -- import cycle
+
+    cfg = config if config is not None else load_model_config(project_root=project_root)
+    return _model_declaration().parse(_default_endpoint_value(cfg))
+
+
+def is_model_alias(
+    name: str, *, config: Optional[dict] = None, project_root: Optional[str] = None
+) -> bool:
+    """Whether ``name`` is a model alias or raw slug rather than an entry id.
+
+    Before model declarations, a caller named a model by an alias under the
+    default endpoint (``qwen``) or by a raw provider slug (``qwen/qwen3-32b``).
+    A declaration names registry ENTRIES instead (``or-qwen``). This tells the
+    two apart so a caller can keep honouring the older form: True when
+    ``name`` is not an endpoint or entry id and resolves as a model under the
+    default endpoint. Never raises.
+    """
+    try:
+        cfg = config if config is not None else load_model_config(project_root=project_root)
+        if "/" in name:
+            return True
+        endpoints = cfg.get("endpoints") or {}
+        if name == DEFAULT_ENDPOINT_NAME or (isinstance(endpoints, dict) and name in endpoints):
+            return False
+        if name in discover_model_entries(config=cfg):
+            return False
+        resolve_model(name, config=cfg)
+        return True
+    except Exception:  # noqa: BLE001 -- a classifier: anything unresolvable is not an alias
+        return False
 
 
 def _registry_entry_ids() -> set:

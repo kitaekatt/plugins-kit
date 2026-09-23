@@ -35,9 +35,38 @@ class _Probe:
 @pytest.fixture(autouse=True)
 def _clean_routing(monkeypatch):
     monkeypatch.delenv(ENDPOINT_ENV, raising=False)
+    monkeypatch.delenv(backends.MODELS_ENV, raising=False)
     set_active_backend(None)
+    backends.reset_declared_entry_cache()
     yield
     set_active_backend(None)
+    backends.reset_declared_entry_cache()
+
+
+def _install_fake_declaration(monkeypatch, entry_id):
+    """A minimal ``llm_scripting_kit.declaration`` naming a transport entry.
+
+    Mirrors ``test_llm_backends.py``'s injection pattern for the
+    ``CONTENT_PIPELINE_LLM_MODELS`` (C1) selection path.
+    """
+    import sys
+    import types
+
+    def _describe(names, **_kwargs):
+        return types.SimpleNamespace(
+            default=types.SimpleNamespace(id=entry_id, harness=None, model=None, drive=entry_id)
+        )
+
+    declaration = types.ModuleType("llm_scripting_kit.declaration")
+    declaration.describe = _describe
+    declaration.run = lambda *a, **kw: None
+    declaration.RunRequest = object
+    declaration.NoUsableRoutingTarget = RuntimeError
+    declaration.CALLER_PROCESS = "process"
+    package = types.ModuleType("llm_scripting_kit")
+    package.declaration = declaration
+    monkeypatch.setitem(sys.modules, "llm_scripting_kit", package)
+    monkeypatch.setitem(sys.modules, "llm_scripting_kit.declaration", declaration)
 
 
 # --- identity ---------------------------------------------------------------
@@ -345,6 +374,28 @@ def test_injected_client_skips_the_probe(monkeypatch):
     assert route(model_endpoint=b) is b
 
 
+def test_route_via_declaration_builds_model_endpoint_backend_and_probes_it(monkeypatch):
+    """CONTENT_PIPELINE_LLM_MODELS naming a transport registry entry routes
+    to a ModelEndpointBackend for that entry id, probed exactly like the
+    legacy model-endpoint path (C1)."""
+    monkeypatch.setenv(backends.MODELS_ENV, "qwen38")
+    _install_fake_declaration(monkeypatch, "qwen38")
+    monkeypatch.setattr(ModelEndpointBackend, "probe", lambda self, **k: _Probe(True))
+    result = route()
+    assert isinstance(result, ModelEndpointBackend)
+    assert result.endpoint == "qwen38"
+
+
+def test_route_via_declaration_refuses_when_the_endpoint_is_down(monkeypatch):
+    monkeypatch.setenv(backends.MODELS_ENV, "qwen38")
+    _install_fake_declaration(monkeypatch, "qwen38")
+    monkeypatch.setattr(
+        ModelEndpointBackend, "probe", lambda self, **k: _Probe(False, detail="connection refused")
+    )
+    with pytest.raises(LLMUnavailableError, match="connection refused"):
+        route()
+
+
 def test_a_supplied_mock_still_wins_over_this_backend():
     """route()'s unconditional mock seam must not regress -- the probe must not
     run when a mock is supplied, whatever backend is selected."""
@@ -375,3 +426,34 @@ def test_other_backends_are_unaffected():
     """The openrouter cache-key path must be byte-identical to before."""
     set_active_backend(None)
     assert routed_model("deepseek/deepseek-v4") == "deepseek/deepseek-v4"
+
+
+def test_routed_model_via_declaration_ignores_an_explicit_request(monkeypatch):
+    """When CONTENT_PIPELINE_LLM_MODELS governs, the resolved entry's own
+    model is truthful even when a caller (e.g. PlannerPolicy.model, Y1)
+    passed a different explicit id -- the declaration is a process-wide fact,
+    not a per-call preference."""
+    import sys
+    import types
+
+    monkeypatch.setenv(backends.MODELS_ENV, "qwen38")
+
+    def _describe(names, **_kwargs):
+        return types.SimpleNamespace(
+            default=types.SimpleNamespace(
+                id="qwen38", harness=None, model="qwen/qwen3-32b", drive="qwen38"
+            )
+        )
+
+    declaration = types.ModuleType("llm_scripting_kit.declaration")
+    declaration.describe = _describe
+    declaration.run = lambda *a, **kw: None
+    declaration.RunRequest = object
+    declaration.NoUsableRoutingTarget = RuntimeError
+    declaration.CALLER_PROCESS = "process"
+    package = types.ModuleType("llm_scripting_kit")
+    package.declaration = declaration
+    monkeypatch.setitem(sys.modules, "llm_scripting_kit", package)
+    monkeypatch.setitem(sys.modules, "llm_scripting_kit.declaration", declaration)
+
+    assert routed_model("explicit/override", backend_name="model-endpoint") == "qwen/qwen3-32b"

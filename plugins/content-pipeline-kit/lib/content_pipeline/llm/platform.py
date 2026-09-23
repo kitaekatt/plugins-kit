@@ -304,12 +304,31 @@ same thing. Should a registry entry ever point at a managed always-on service,
 that entry -- not this constant -- is where the exception belongs.
 """
 
+HALT_QUOTA = "quota"
+"""Subscription pool spent (codex usage-limit exhaustion). Mirrors
+``llm_scripting_kit.completion.halt.HALT_QUOTA`` (same string value, so a
+delegated classifier's answer needs no translation).
+
+Unlike every other kind in this taxonomy, HALT_QUOTA is never produced by
+:func:`classify_halt_text` or :func:`classify_openai_exception`'s own
+substring/type matching -- codex's default (non-``--json``) path emits no
+channel either function could scan. It is set by the CALLER on the raised
+exception's ``halt_kind`` attribute after re-reading the session rollout
+(llm-scripting-kit's ``CodexCliBackend`` / ``read_codex_pool``, >= 0.45.0),
+and :func:`classify_openai_exception` reports that carried verdict verbatim,
+ahead of any delegation or text-based classification (D6, migration step
+10). content-pipeline-kit has no verdict write-back of its own (that stays
+llm-scripting-kit's pinned-verdict machinery) -- it only classifies, so
+:data:`HALT_INSUFFICIENT_CREDIT` stays a distinct kind here rather than
+folding into HALT_QUOTA."""
+
 
 class PipelineHaltError(Exception):
     """A failure that persists across subsequent calls -- stop the bulk run.
 
     Carries a machine-readable ``kind`` (one of :data:`HALT_AUTH`,
-    :data:`HALT_RATE_LIMIT`, :data:`HALT_INSUFFICIENT_CREDIT`) so a bulk
+    :data:`HALT_RATE_LIMIT`, :data:`HALT_INSUFFICIENT_CREDIT`,
+    :data:`HALT_QUOTA`) so a bulk
     runner can halt-and-resume without parsing the message text. ``call_llm``
     raises this when a backend classifies the underlying exception as a halt;
     a non-halt failure propagates as its original exception type.
@@ -372,18 +391,29 @@ def classify_halt_text(text: str) -> Optional[str]:
 def _classify_openai_exception_local(exc: BaseException) -> Optional[str]:
     """CPK's own OpenAI-SDK exception classifier (no delegation).
 
-    Returns :data:`HALT_AUTH`, :data:`HALT_RATE_LIMIT`, or
-    :data:`HALT_INSUFFICIENT_CREDIT` for the known persistent failures;
+    Returns :data:`HALT_AUTH`, :data:`HALT_RATE_LIMIT`, :data:`HALT_QUOTA`,
+    or :data:`HALT_INSUFFICIENT_CREDIT` for the known persistent failures;
     ``None`` otherwise. The ``openai`` import is optional -- when absent, the
     text-marker fallback still catches the common shapes. Recurses on
-    ``__cause__`` so a wrapped SDK exception is still classified.
+    ``__cause__`` so a wrapped SDK exception is still classified -- which
+    also means a carried ``halt_kind`` on a wrapped cause is still found
+    (the same check runs again on the recursive call).
 
     This is the fallback :func:`classify_openai_exception` uses when
     ``llm_scripting_kit`` is not importable, and its own logic when it is --
     the two are kept as separate functions so the delegation in
     :func:`classify_openai_exception` is a single, obvious try/except rather
-    than interleaved with the classification rules themselves.
+    than interleaved with the classification rules themselves. It is
+    stdlib-only and importable with no shared lib present, per D6 / migration
+    step 10's "keep the local fallback importable without llm_scripting_kit".
     """
+    halt_kind = getattr(exc, "halt_kind", None)
+    if halt_kind:
+        # HALT_QUOTA (a codex usage-limit exhaustion) is never produced by
+        # substring or SDK-type matching below -- see HALT_QUOTA's docstring.
+        # The raise site already read the session rollout, which this
+        # classifier has no access to, so it is reported verbatim.
+        return halt_kind
     try:
         import openai  # noqa: PLC0415
     except ImportError:
@@ -456,24 +486,37 @@ def _is_callers_own_deadline(exc: BaseException) -> bool:
 def classify_openai_exception(exc: BaseException) -> Optional[str]:
     """Map an OpenAI-SDK exception (or one wrapping it) to a halt kind.
 
-    Returns :data:`HALT_AUTH`, :data:`HALT_RATE_LIMIT`, or
-    :data:`HALT_INSUFFICIENT_CREDIT` for the known persistent failures;
-    ``None`` otherwise.
+    Returns :data:`HALT_AUTH`, :data:`HALT_RATE_LIMIT`,
+    :data:`HALT_INSUFFICIENT_CREDIT`, or :data:`HALT_QUOTA` for the known
+    persistent failures; ``None`` otherwise.
 
-    Delegates to ``llm_scripting_kit.completion.halt.classify_openai_exception``
-    when that shared lib is importable -- the two classifiers implement the
+    A carried ``exc.halt_kind`` (a CodexRunError-shaped exception whose quota
+    re-read already ran -- see :data:`HALT_QUOTA`'s docstring) is reported
+    verbatim BEFORE any delegation is attempted: neither this module's own
+    classifier nor llm_scripting_kit's ``classify_openai_exception`` scans
+    for it (that check lives only on the CLI backend's own ``classify_halt``,
+    which this generic exception classifier is not), so checking it here is
+    what makes D6's rule hold regardless of which branch runs next (migration
+    step 10).
+
+    Otherwise delegates to
+    ``llm_scripting_kit.completion.halt.classify_openai_exception`` when that
+    shared lib is importable -- the two classifiers implement the
     same rules against the same category vocabulary (``HALT_AUTH == "auth"``,
     ``HALT_RATE_LIMIT == "rate_limit"``, ``HALT_INSUFFICIENT_CREDIT ==
-    "insufficient_credit"`` on both sides, verified against
-    ``tests/llm-scripting-kit/test_completion_halt.py`` and this module's own
-    tests), so delegating changes no observable behaviour today and avoids
-    maintaining the duplicate. The import is lazy and optional, matching the
-    pattern used elsewhere in this module (see
+    "insufficient_credit"``, ``HALT_QUOTA == "quota"`` on both sides, verified
+    against ``tests/llm-scripting-kit/test_completion_halt.py`` and this
+    module's own tests), so delegating changes no observable behaviour today
+    and avoids maintaining the duplicate. The import is lazy and optional,
+    matching the pattern used elsewhere in this module (see
     :func:`_classify_openai_exception_local` above and
     ``backends._is_connection_error``): when ``llm_scripting_kit`` is absent,
     this falls back to CPK's own classifier so content-pipeline-kit keeps
     working without the shared lib installed.
     """
+    halt_kind = getattr(exc, "halt_kind", None)
+    if halt_kind:
+        return halt_kind
     try:
         from llm_scripting_kit.completion.halt import (  # noqa: PLC0415
             classify_openai_exception as _lsk_classify_openai_exception,
@@ -1402,6 +1445,7 @@ __all__ = [
     "HALT_AUTH",
     "HALT_RATE_LIMIT",
     "HALT_INSUFFICIENT_CREDIT",
+    "HALT_QUOTA",
     "PipelineHaltError",
     "HaltError",
     "HALT_UNREACHABLE",

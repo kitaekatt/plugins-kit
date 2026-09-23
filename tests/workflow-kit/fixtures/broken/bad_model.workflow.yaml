@@ -1,7 +1,7 @@
 name: bad-model
-description: Uses an invalid model name.
+description: Declares a model with an empty list, which is not a declaration.
 steps:
   - id: x
     agent:
       prompt: "hello"
-      model: gpt-4
+      model: []

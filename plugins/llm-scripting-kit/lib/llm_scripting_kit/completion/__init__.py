@@ -82,7 +82,7 @@ from .types import (
     LLMResponse,
     ResponseError,
 )
-from .factory import BackendSelection, create_backend
+from .factory import BackendSelection, create_backend, create_transport_backend
 from .opencode_backend import (
     DEFAULT_OPENCODE_TIMEOUT_S,
     OPENCODE_FILESYSTEM_POSTURE,
@@ -124,6 +124,7 @@ __all__ = [
     "LLMBackend",
     "BackendSelection",
     "create_backend",
+    "create_transport_backend",
     # halt taxonomy
     "HALT_AUTH",
     "HALT_RATE_LIMIT",

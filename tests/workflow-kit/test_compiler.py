@@ -246,3 +246,79 @@ def test_shipped_node_strategies_example_compiles():
     assert "const step_classify = await wkOpenRouter(" in js
     assert "const step_reconcile = await agent(" in js
     assert "step_stats.path" in js and "step_classify.path" in js
+
+
+# --------------------------------------------------------------------------- #
+# Migration step 8 (W1, W3, W4): an agent step routes Claude core ids through
+# the harness. The first core id of the declaration compiles to agent(); any
+# other id is skipped SILENTLY (no compile notice, nothing in the emitted
+# script). A declaration with no core id is the floor: a compile error that
+# itemises every declared id.
+# --------------------------------------------------------------------------- #
+def _agent_wf(model_yaml):
+    return (
+        "name: m\ndescription: x\nsteps:\n  - id: a\n    agent:\n"
+        f"      prompt: hi\n      model: {model_yaml}\n"
+    )
+
+
+def test_fable_compiles_to_agent(write_workflow):
+    js = _compile_text(_agent_wf("fable"), write_workflow)
+    assert 'model: "fable"' in js
+
+
+def test_an_unroutable_id_is_skipped_silently(write_workflow, capsys):
+    js = _compile_text(_agent_wf("[sol, qwen3.8-5090, opus, sonnet]"), write_workflow)
+    assert 'agent(`hi`, { model: "opus" })' in js
+    for skipped in ("sol", "qwen3.8-5090"):
+        assert skipped not in js
+    captured = capsys.readouterr()
+    assert captured.out == "" and captured.err == ""
+
+
+def test_a_declaration_with_no_core_id_is_the_floor(write_workflow):
+    with pytest.raises(WorkflowError) as caught:
+        _compile_text(_agent_wf("[gpt-4, sol]"), write_workflow)
+    message = str(caught.value)
+    assert "no usable routing target" in message
+    # itemised, in declaration order
+    assert message.index("gpt-4") < message.index("sol")
+
+
+def test_pipeline_stage_model_routes_the_same_way(write_workflow):
+    js = _compile_text(
+        "name: p\ndescription: x\nsteps:\n  - id: s\n    pipeline:\n      over: [1]\n"
+        "      as: n\n      stages:\n        - id: one\n          agent:\n"
+        "            prompt: hi\n            model: [luna, haiku]\n",
+        write_workflow,
+    )
+    assert 'model: "haiku"' in js and "luna" not in js
+
+
+def test_openrouter_list_declaration_compiles_to_the_comma_carrier(write_workflow):
+    js = _compile_text(
+        "name: o\ndescription: x\nsteps:\n  - id: c\n    openrouter:\n"
+        "      prompt_file: p.txt\n      model: [or-qwen, or-gpt-mini]\n",
+        write_workflow,
+    )
+    assert 'model: "or-qwen,or-gpt-mini"' in js
+
+
+def test_executor_model_is_a_one_entry_declaration_carried_as_a_scalar():
+    """W3/W4: the node executor's `haiku` is a one-entry declaration; the agent
+    frontmatter and the preamble emit its scalar carrier, and must agree."""
+    import re
+
+    from bootstrap_lib.model_declaration import validate
+    from wk_testlib import PLUGIN_ROOT
+
+    from workflow_kit_lib.declarations import EXECUTOR_MODELS
+
+    assert len(validate(list(EXECUTOR_MODELS))) == 1
+    (only,) = EXECUTOR_MODELS
+    agent_md = (PLUGIN_ROOT / "agents" / "workflow-kit-agent.md").read_text(encoding="utf-8")
+    assert re.findall(r"(?m)^model:\s*(\S+)\s*$", agent_md) == [only]
+    preamble = (
+        PLUGIN_ROOT / "skills" / "workflow-kit" / "references" / "preamble.js"
+    ).read_text(encoding="utf-8")
+    assert re.findall(r"\bmodel:\s*'([^']+)'", preamble) == [only]

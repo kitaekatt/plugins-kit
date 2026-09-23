@@ -547,6 +547,33 @@ def test_call_llm_halt_is_not_retried_and_maps_to_halt_error(monkeypatch):
     assert len(backend.calls) == 1  # halted immediately, no retry
 
 
+class _CodexRunErrorLike(RuntimeError):
+    """Stands in for llm_scripting_kit's ``CodexRunError``: the transcript is
+    kept off the message (model-authored text must never forge a halt), and
+    the authoritative verdict from a quota re-read is carried on
+    ``halt_kind`` instead -- see ``completion/halt.py``'s HALT_QUOTA
+    docstring and ``codex_backend.CodexCliBackend.classify_halt``."""
+
+    def __init__(self, message: str = "codex exec failed (exit 1)", *, halt_kind=None) -> None:
+        super().__init__(message)
+        self.halt_kind = halt_kind
+
+
+def test_call_llm_halts_immediately_on_a_carried_quota_halt_kind(monkeypatch):
+    """D6 / migration step 10: a codex usage-limit exhaustion (HALT_QUOTA,
+    llm-scripting-kit >= 0.45.0) must halt the run exactly like a rate-limit
+    or auth halt -- MockBackend.classify_halt reports the raise site's own
+    verdict first, mirroring CodexCliBackend.classify_halt's own rule."""
+    monkeypatch.setattr(platform.time, "sleep", lambda *_: None)
+    backend = MockBackend(
+        responses=[_CodexRunErrorLike(halt_kind=platform.HALT_QUOTA), "unreached"]
+    )
+    with pytest.raises(PipelineHaltError) as ei:
+        call_llm(backend, "s", "u", model="test/model", retries=3)
+    assert ei.value.kind == platform.HALT_QUOTA
+    assert len(backend.calls) == 1  # halted immediately, no retry
+
+
 class _TimeoutHaltingBackend(MockBackend):
     """A backend that classifies a raw ``TimeoutError`` as a halt -- the
     documented shape of ModelEndpointBackend (connection-error halt) and
@@ -650,6 +677,38 @@ def test_classify_openai_exception_delegates_to_llm_scripting_kit(monkeypatch):
     sentinel = "sentinel-kind"
     _install_fake_lsk_halt(monkeypatch, lambda exc: sentinel)
     assert platform.classify_openai_exception(RuntimeError("whatever")) == sentinel
+
+
+def test_classify_openai_exception_reports_a_carried_halt_kind_first(monkeypatch):
+    """D6 / migration step 10: a CodexRunError-shaped exception's own
+    ``halt_kind`` (set by a quota re-read; codex emits no channel this
+    classifier could scan) wins BEFORE any delegation is even attempted --
+    llm_scripting_kit is not installed in this test venv at all, so this
+    also pins the LOCAL fallback."""
+    exc = RuntimeError("codex exec failed (exit 1)")
+    exc.halt_kind = platform.HALT_QUOTA
+    assert platform.classify_openai_exception(exc) == platform.HALT_QUOTA
+
+
+def test_classify_openai_exception_carried_halt_kind_wins_over_delegation(monkeypatch):
+    """The carried verdict must win even when llm_scripting_kit IS
+    importable and its own classifier would return something else -- the
+    raise site already read the session rollout, which no generic classifier
+    has access to, so it is authoritative."""
+    _install_fake_lsk_halt(monkeypatch, lambda _exc: "should-not-be-used")
+    exc = RuntimeError("codex exec failed (exit 1)")
+    exc.halt_kind = platform.HALT_QUOTA
+    assert platform.classify_openai_exception(exc) == platform.HALT_QUOTA
+
+
+def test_classify_openai_exception_ignores_a_falsy_halt_kind(monkeypatch):
+    """``halt_kind=None`` (the ordinary case for every non-codex exception,
+    and for a codex failure that was not a quota exhaustion) must fall
+    through to ordinary classification rather than short-circuiting."""
+    _install_fake_lsk_halt(monkeypatch, lambda exc: platform.classify_halt_text(str(exc)))
+    exc = RuntimeError('"api_error_status":429 hit your limit')
+    exc.halt_kind = None
+    assert platform.classify_openai_exception(exc) == platform.HALT_RATE_LIMIT
 
 
 @pytest.mark.parametrize(

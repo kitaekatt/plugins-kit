@@ -367,3 +367,111 @@ def test_routing_effort_style_accepts_ninfer(tmp_path):
     registry = load_endpoint_registry({"MODEL_ENDPOINTS_REGISTRY": str(path)})
     assert registry.entries["a"].routing.effort_style == "ninfer"
     assert registry.notes == []
+
+
+# ---------------------------------------------------------------------------
+# Migration step 3 (L2): the shipped registry carries every core id
+# ---------------------------------------------------------------------------
+
+
+class TestShippedCoreEntries:
+    """Every core id is a shipped ``harness: claude`` entry, haiku included."""
+
+    def test_haiku_ships_as_a_tier_one_claude_entry(self):
+        from llm_scripting_kit import DEFAULT_MODEL_CONFIG, discover_model_entries
+
+        haiku = discover_model_entries(config=DEFAULT_MODEL_CONFIG)["haiku"]
+        assert haiku.kind == "harness"
+        assert haiku.harness == "claude"
+        assert haiku.model == "claude-haiku-4-5"
+        assert haiku.tier == 1
+        assert haiku.family == "anthropic"
+        assert haiku.base_url is None
+
+    def test_every_core_id_is_shipped_on_the_claude_harness(self):
+        from bootstrap_lib.model_declaration import CORE_IDS
+        from llm_scripting_kit import DEFAULT_MODEL_CONFIG, discover_model_entries
+        from llm_scripting_kit.declaration import check_registry_entry
+
+        found = discover_model_entries(config=DEFAULT_MODEL_CONFIG)
+        for core in sorted(CORE_IDS):
+            assert core in found, core
+            assert check_registry_entry(core, found[core]) is None
+
+    def test_haiku_describes_as_an_agent_entry_in_session(self, fake_home):
+        from llm_scripting_kit import DEFAULT_MODEL_CONFIG, discover_model_entries
+        from llm_scripting_kit.declaration import describe
+        from llm_scripting_kit.reachability import Reachability
+
+        entries = discover_model_entries(config=DEFAULT_MODEL_CONFIG)
+        ranking = describe(
+            ["haiku"], caller="session", entries=entries,
+            reachability_cache={"haiku": Reachability("reachable", "cli-version", "ok")},
+        )
+        assert ranking.default.id == "haiku"
+        assert ranking.default.drive == "agent"
+        assert ranking.default.tier == 1
+
+
+class TestDeclarationRenderAgainstTheRegistry:
+    """Filtered render and floor over a real registry file (R18-R21, R23)."""
+
+    REGISTRY = """\
+version: 1
+models:
+  local-box:
+    base_url: http://local-box.invalid/v1
+    model: local-27b
+  opencode-pro:
+    harness: opencode
+    model: provider/pro
+"""
+
+    def _entries(self, fake_home):
+        from llm_scripting_kit import DEFAULT_MODEL_CONFIG, discover_model_entries
+
+        _write_convention(fake_home, self.REGISTRY)
+        return discover_model_entries(config=DEFAULT_MODEL_CONFIG)
+
+    def test_session_render_hides_the_transport_and_the_typo(self, fake_home):
+        from llm_scripting_kit.declaration import describe
+        from llm_scripting_kit.reachability import Reachability
+
+        entries = self._entries(fake_home)
+        ranking = describe(
+            ["local-box", "sol", "sonet", "opencode-pro"], caller="session", entries=entries,
+            reachability_cache={
+                "sol": Reachability("reachable", "cli-version", "ok"),
+                "opencode-pro": Reachability("unreachable", "cli-version", "missing"),
+            },
+        )
+        assert [e.id for e in ranking.rendered_entries] == ["sol", "opencode-pro"]
+        assert "local-box" not in ranking.render() and "sonet" not in ranking.render()
+        assert [d.disposition for d in ranking.dispositions] == [
+            "unroutable", "usable", "unresolved", "unreachable",
+        ]
+
+    def test_process_render_routes_the_transport(self, fake_home):
+        from llm_scripting_kit.declaration import describe
+        from llm_scripting_kit.reachability import Reachability
+
+        entries = self._entries(fake_home)
+        ranking = describe(
+            ["local-box", "sol"], caller="process", entries=entries,
+            reachability_cache={
+                "local-box": Reachability("reachable", "models-endpoint", "ok"),
+                "sol": Reachability("reachable", "cli-version", "ok"),
+            },
+        )
+        assert ranking.default.id == "local-box"
+
+    def test_floor_itemises_hidden_entries_from_the_registry(self, fake_home):
+        from llm_scripting_kit.declaration import NoUsableRoutingTarget, describe
+
+        entries = self._entries(fake_home)
+        with pytest.raises(NoUsableRoutingTarget) as excinfo:
+            describe(["local-box", "sonet"], caller="session", entries=entries,
+                     reachability_cache={})
+        assert [(d.id, d.disposition) for d in excinfo.value.dispositions] == [
+            ("local-box", "unroutable"), ("sonet", "unresolved"),
+        ]

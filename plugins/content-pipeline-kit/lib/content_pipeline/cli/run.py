@@ -194,6 +194,18 @@ def build_commands(
         check, and this is the surface a caller uses to confirm what was
         actually stored (see below).
 
+        ``backend`` / ``model`` (positional 3/4) may each be left empty
+        (``""``) when ``--models=<declaration>`` is supplied: the declaration
+        is resolved through
+        :func:`~content_pipeline.llm.backends.declared_backend_and_model`
+        (llm-scripting-kit's ``describe``, the D3 routing layer), and the
+        CHOSEN entry's drive name and model are stored on the
+        :class:`~content_pipeline.execution.model.RunRecord` instead of a
+        caller-guessed label (C2, R23: an empty declaration or one with no
+        usable entry propagates ``NoUsableRoutingTarget`` uncaught). An
+        explicit non-empty ``backend``/``model`` always wins over
+        ``--models``, unchanged from before this flag existed.
+
         ``adapter_version`` validation (defect 2): when this mount has an
         ``adapter`` (the ``build_commands(..., adapter=...)`` case), a
         supplied ``adapter_version`` that disagrees with the mounted
@@ -220,11 +232,23 @@ def build_commands(
         runs -- see ``execution.adapter.require_creatable_environment``). A
         mount with no adapter records no snapshot, same as today.
         """
-        positional, _flags = _split_flags(args)
+        positional, flags = _split_flags(args)
         run_id = _require(positional, 0, "run_id")
         driver = _require(positional, 1, "driver")
-        backend = _require(positional, 2, "backend")
-        model = _require(positional, 3, "model")
+        backend = positional[2] if len(positional) > 2 else ""
+        model = positional[3] if len(positional) > 3 else ""
+        if not backend or not model:
+            declaration = flags.get("models", "")
+            if not declaration:
+                raise ValueError(
+                    f"missing required argument: {'backend' if not backend else 'model'}"
+                )
+            from content_pipeline.llm.backends import declared_backend_and_model  # noqa: PLC0415
+
+            names = [part.strip() for part in declaration.split(",") if part.strip()]
+            resolved_backend, resolved_model = declared_backend_and_model(names)
+            backend = backend or resolved_backend
+            model = model or resolved_model
         if len(positional) > 4:
             adapter_version = positional[4]
         elif adapter is not None:

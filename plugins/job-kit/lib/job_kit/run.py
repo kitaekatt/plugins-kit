@@ -26,6 +26,7 @@ from llm_scripting_kit.completion import (
     ERROR,
     HALT_AUTH,
     HALT_INSUFFICIENT_CREDIT,
+    HALT_QUOTA,
     HALT_RATE_LIMIT,
     HaltError,
     TIMEOUT,
@@ -52,7 +53,13 @@ from .model import (
 # Imported from the package .select probes, and AFTER it, so a too-old shared
 # lib raises SharedLibTooOldError with its named remediation rather than a bare
 # ImportError naming a symbol the user has never heard of.
-from .select import SelectionError, select_endpoint
+from .select import (
+    NoCompatibleEndpointError,
+    SelectionError,
+    select_endpoint_with_readings,
+)
+import llm_scripting_kit.models as _lsk_models
+import llm_scripting_kit.usage_budget as _lsk_usage_budget
 from llm_scripting_kit.completion import subjects_for_disallowed_tools
 from llm_scripting_kit.completion.capabilities import FILESYSTEM_WRITE
 from .store import DuplicateJobError, JobStore, StoreError, UnknownRunError
@@ -63,11 +70,14 @@ DEFAULT_TIMEOUT_S = 900.0
 CONTRACT_OUTPUT_LIMIT = 2000
 HALT_UNREACHABLE = "unreachable"
 _HALT_KINDS = frozenset(
-    {HALT_AUTH, HALT_RATE_LIMIT, HALT_INSUFFICIENT_CREDIT, HALT_UNREACHABLE}
+    {HALT_AUTH, HALT_RATE_LIMIT, HALT_INSUFFICIENT_CREDIT, HALT_QUOTA, HALT_UNREACHABLE}
 )
 _PERSISTENT_HALT_KINDS = frozenset(
-    {HALT_AUTH, HALT_RATE_LIMIT, HALT_INSUFFICIENT_CREDIT}
+    {HALT_AUTH, HALT_RATE_LIMIT, HALT_INSUFFICIENT_CREDIT, HALT_QUOTA}
 )
+# A spent pool: the halted entry's pinned verdict is written back as
+# OUT-OF-QUOTA until its reset, so later selections in this session skip it.
+_QUOTA_HALT_KINDS = frozenset({HALT_QUOTA, HALT_INSUFFICIENT_CREDIT})
 
 try:
     import openai as _openai
@@ -455,6 +465,7 @@ def _exception_attempt(
     ended_at: str,
     exc: BaseException,
     workspace: WorkspaceResolution,
+    pace_readings: Optional[tuple[Mapping[str, object], ...]] = None,
 ) -> tuple[Attempt, Optional[JobState]]:
     """Build the durable attempt record for a raised seam exception."""
     # Job-kit owns this deadline, so its timeout is retryable, not a provider halt.
@@ -498,6 +509,7 @@ def _exception_attempt(
         finish_reason=(
             str(finish_reason_value) if finish_reason_value is not None else None
         ),
+        pace_readings=pace_readings,
     )
     outcome = JobState.HALTED if halt_kind is not None else JobState.FAILED
     return attempt, _terminal_state_after_attempt(job, budget_no, outcome)
@@ -512,6 +524,7 @@ def _response_attempt(
     budget_no: int,
     response: object,
     workspace: WorkspaceResolution,
+    pace_readings: Optional[tuple[Mapping[str, object], ...]] = None,
 ) -> tuple[Attempt, Optional[JobState]]:
     """Copy the truthful fields from one successful seam return."""
     response_error_value = getattr(response, "error", None)
@@ -567,6 +580,7 @@ def _response_attempt(
         workspace_status=workspace.status,
         workspace_reason=workspace.reason,
         acceptance=None,
+        pace_readings=pace_readings,
     )
     if status != COMPLETED:
         outcome = JobState.HALTED if halt_kind is not None else JobState.FAILED
@@ -586,8 +600,18 @@ def run_job(
     backend_factory: Optional[BackendFactory] = None,
     workspace_root: Optional[str | Path] = None,
     workspace_manager: Optional[WorkspaceManager] = None,
+    reachability_cache: Optional[dict] = None,
 ) -> Attempt:
-    """Execute one non-terminal job with exactly one seam invocation."""
+    """Execute one non-terminal job with exactly one seam invocation.
+
+    The endpoint is the first usable entry of ``job.models`` in pace order
+    (:func:`~.select.select_endpoint_with_readings`), with the run's halted
+    endpoints and this job's own halted endpoints excluded. The pace readings
+    it was chosen from are logged on the attempt. A quota or credit halt
+    writes the entry's pinned verdict back as OUT-OF-QUOTA when the entry
+    declares ``conserve_usage``. When no usable entry remains the typed floor,
+    :class:`~.select.NoCompatibleEndpointError`, propagates.
+    """
     if timeout_s <= 0:
         raise ValueError("timeout_s must be positive")
     advertised = dict(
@@ -606,12 +630,13 @@ def run_job(
         for attempt in store.list_attempts(run_id, job.id)
         if attempt.halt_kind is not None
     }
-    selection = select_endpoint(
+    selection, pace_readings = select_endpoint_with_readings(
         selection_job,
         halted_endpoints=frozenset(halted_endpoints) | same_job_halts,
         capabilities=advertised,
         backend_factory=backend_factory or create_backend,
         project_root=str(job.declared_directory),
+        reachability_cache=reachability_cache if reachability_cache is not None else {},
     )
     manager = workspace_manager
     if manager is None:
@@ -738,8 +763,16 @@ def run_job(
             ended_at=utc_now_iso(),
             exc=exc,
             workspace=workspace,
+            pace_readings=pace_readings,
         )
-        return store.append_attempt(attempt, terminal_state=terminal_state)
+        recorded = store.append_attempt(
+            attempt,
+            terminal_state=terminal_state,
+            reason=_attempt_limit_reason(job, terminal_state),
+        )
+        if recorded.halt_kind in _QUOTA_HALT_KINDS:
+            _record_quota_halt(job, recorded.endpoint, exc)
+        return recorded
     except (KeyboardInterrupt, SystemExit) as exc:
         attempt, terminal_state = _exception_attempt(
             run_id=run_id,
@@ -753,6 +786,7 @@ def run_job(
             ended_at=utc_now_iso(),
             exc=exc,
             workspace=workspace,
+            pace_readings=pace_readings,
         )
         store.append_attempt(attempt, terminal_state=terminal_state)
         raise
@@ -766,6 +800,7 @@ def run_job(
             budget_no=reservation.budget_no,
             response=response,
             workspace=workspace,
+            pace_readings=pace_readings,
         )
         attempt = replace(attempt, started_at=started_at)
     except (KeyboardInterrupt, SystemExit) as exc:
@@ -781,6 +816,7 @@ def run_job(
             ended_at=utc_now_iso(),
             exc=exc,
             workspace=workspace,
+            pace_readings=pace_readings,
         )
         interrupted_attempt = replace(
             interrupted_attempt,
@@ -797,7 +833,14 @@ def run_job(
         )
         raise
     if terminal_state is not None or attempt.status != COMPLETED:
-        return store.append_attempt(attempt, terminal_state=terminal_state)
+        recorded = store.append_attempt(
+            attempt,
+            terminal_state=terminal_state,
+            reason=_attempt_limit_reason(job, terminal_state),
+        )
+        if recorded.halt_kind in _QUOTA_HALT_KINDS:
+            _record_quota_halt(job, recorded.endpoint, response)
+        return recorded
 
     try:
         contract_timeout_s = timeout_s - completion_elapsed_s
@@ -876,6 +919,40 @@ def run_job(
     return store.append_attempt(attempt, terminal_state=terminal_state)
 
 
+def _attempt_limit_reason(job: Job, terminal_state: Optional[JobState]) -> Optional[str]:
+    """Name the attempt limit when a halt spent the job's last attempt.
+
+    ``max_attempts`` bounds executions, not the routing pool: a halt that uses
+    the last attempt ends the job at the limit even if other entries remain
+    usable, so the job says so rather than reading like an empty pool (the
+    floor, :class:`~.select.NoCompatibleEndpointError`, is only for that).
+    """
+    if terminal_state is not JobState.HALTED:
+        return None
+    return (
+        f"job {job.id!r} halted: attempt limit reached ({job.max_attempts}); "
+        "the last attempt ended in a halt"
+    )
+
+
+def _record_quota_halt(job: Job, endpoint: str, exc: BaseException) -> None:
+    """Write an observed quota/credit halt back as the entry's pinned verdict.
+
+    Only an entry that declares ``conserve_usage`` has a pinned verdict; any
+    other entry is excluded by the halt ledger alone. The reset time is the
+    halt's own when it carried one, else llm-scripting-kit's bounded default.
+    """
+    entry = _lsk_models.discover_model_entries(
+        project_root=str(job.declared_directory)
+    ).get(endpoint)
+    spec = getattr(entry, "conserve_usage", None)
+    if spec is None:
+        return
+    _lsk_usage_budget.record_observed_halt(
+        endpoint, spec, resets_at=getattr(exc, "resets_at", None)
+    )
+
+
 def replace_attempt_acceptance(attempt: Attempt, acceptance: Acceptance) -> Attempt:
     """Return an attempt with its observed contract result attached."""
     return replace(attempt, acceptance=acceptance)
@@ -890,8 +967,25 @@ def _selection_halted_reason(
     job: Job,
     attempts: Sequence[Attempt],
     halted_endpoints: Collection[str],
+    floor: Optional[NoCompatibleEndpointError] = None,
 ) -> str:
-    """Explain the endpoint exclusions that followed a recorded attempt."""
+    """Explain the endpoint exclusions that followed a recorded attempt.
+
+    ``floor`` appends the itemised disposition of every declared id -- the
+    one surface where an id that selection skipped silently may be named.
+    """
+    reason = _exclusion_summary(job, attempts, halted_endpoints)
+    if floor is None:
+        return reason
+    return f"{reason}; no usable routing target remains:\n{floor.dispositions_text()}"
+
+
+def _exclusion_summary(
+    job: Job,
+    attempts: Sequence[Attempt],
+    halted_endpoints: Collection[str],
+) -> str:
+    """Name the exclusions recorded against a job's declared entries."""
     exclusions: list[str] = []
     described: set[str] = set()
     for attempt in attempts:
@@ -899,7 +993,7 @@ def _selection_halted_reason(
             continue
         exclusions.append(f"{attempt.endpoint!r} ({attempt.halt_kind})")
         described.add(attempt.endpoint)
-    for endpoint in job.endpoint_preference:
+    for endpoint in job.models:
         if endpoint in halted_endpoints and endpoint not in described:
             exclusions.append(f"{endpoint!r} (excluded after a confirming probe or persistent halt)")
             described.add(endpoint)
@@ -954,6 +1048,7 @@ def _drive_job(
     backend_factory: Optional[BackendFactory],
     workspace_root: Path,
     workspace_manager: WorkspaceManager,
+    reachability_cache: Optional[dict] = None,
 ) -> None:
     """Drive one job to a terminal state or to its attempt budget.
 
@@ -978,20 +1073,22 @@ def _drive_job(
                 backend_factory=backend_factory,
                 workspace_root=workspace_root,
                 workspace_manager=workspace_manager,
+                reachability_cache=reachability_cache,
             )
         except SelectionError as exc:
+            floor = exc if isinstance(exc, NoCompatibleEndpointError) else None
             attempts = store.list_attempts(run_id, job.id)
             if attempts:
                 store.mark_halted(
                     run_id,
                     job.id,
-                    _selection_halted_reason(job, attempts, halted_endpoints),
+                    _selection_halted_reason(job, attempts, halted_endpoints, floor),
                 )
-            elif set(job.endpoint_preference) & set(halted_endpoints):
+            elif set(job.models) & set(halted_endpoints):
                 store.mark_unroutable(
                     run_id,
                     job.id,
-                    _selection_halted_reason(job, attempts, halted_endpoints),
+                    _selection_halted_reason(job, attempts, halted_endpoints, floor),
                 )
             else:
                 store.mark_unroutable(run_id, job.id, str(exc))
@@ -1041,6 +1138,8 @@ def _run_pending(
     pending = [record.job for record in records if not record.terminal]
     dispatch: dict[str, object] = dict(
         halts=halts,
+        # One reachability probe per entry per run, shared by every worker.
+        reachability_cache={},
         timeout_s=timeout_s,
         run_floor=run_floor,
         capabilities_provider=capabilities_provider,

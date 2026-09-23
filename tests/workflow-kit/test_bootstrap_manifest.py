@@ -30,3 +30,13 @@ class TestTools:
         manifest = json.loads((PLUGIN_ROOT / "bootstrap.json").read_text(encoding="utf-8"))
         names = [t["name"] for t in manifest.get("tools", [])]
         assert "claude" not in names
+
+
+class TestRequiresBootstrap:
+    def test_floor_covers_the_model_declaration_call(self):
+        # The loader calls bootstrap_lib.model_declaration.parse / CORE_IDS,
+        # first shipped in bootstrap 0.129.0 (workflow_kit_lib.declarations).
+        from workflow_kit_lib.declarations import MODEL_DECLARATION_BOOTSTRAP
+
+        manifest = json.loads((PLUGIN_ROOT / "bootstrap.json").read_text(encoding="utf-8"))
+        assert manifest.get("requires_bootstrap") == MODEL_DECLARATION_BOOTSTRAP

@@ -281,7 +281,11 @@ def test_classify_halt_does_not_rebuild(monkeypatch):
 def _clean_backend_env(monkeypatch):
     monkeypatch.delenv(backends.BACKEND_ENV, raising=False)
     monkeypatch.delenv(backends.MODEL_ENV, raising=False)
+    monkeypatch.delenv(backends.ENDPOINT_ENV, raising=False)
+    monkeypatch.delenv(backends.MODELS_ENV, raising=False)
+    backends.reset_declared_entry_cache()
     yield
+    backends.reset_declared_entry_cache()
 
 
 def test_routing_default_is_openrouter():
@@ -581,3 +585,287 @@ def test_seam_error_is_normalized_to_data_at_the_boundary():
     }
     # an older shared lib without the type is passed through untouched
     assert _error_to_data("legacy") == "legacy"
+
+
+# --- CONTENT_PIPELINE_LLM_MODELS declaration (step 10, C1/C2) ---------------
+
+
+def _install_fake_declaration(monkeypatch, *, default=None, raises=None):
+    """Install a fake ``llm_scripting_kit.declaration`` module.
+
+    ``default`` is the ``EntryState``-shaped object ``describe()`` returns as
+    ``Ranking.default``; ``raises`` is an exception instance ``describe()``
+    raises instead. Mirrors the existing ``_install_counting_completion``
+    sys.modules-injection pattern in this file.
+    """
+    import sys
+    import types
+
+    class _NoUsableRoutingTarget(Exception):
+        pass
+
+    def _describe(names, **_kwargs):
+        if raises is not None:
+            raise raises
+        return types.SimpleNamespace(default=default)
+
+    declaration = types.ModuleType("llm_scripting_kit.declaration")
+    declaration.describe = _describe
+    declaration.run = lambda *a, **kw: None
+    declaration.RunRequest = object
+    declaration.NoUsableRoutingTarget = _NoUsableRoutingTarget
+    declaration.CALLER_PROCESS = "process"
+
+    package = types.ModuleType("llm_scripting_kit")
+    package.declaration = declaration
+    monkeypatch.setitem(sys.modules, "llm_scripting_kit", package)
+    monkeypatch.setitem(sys.modules, "llm_scripting_kit.declaration", declaration)
+    return declaration
+
+
+def _entry(id, harness=None, model=None, drive=None):
+    import types
+
+    return types.SimpleNamespace(
+        id=id, harness=harness, model=model, drive=drive or (f"{harness}-cli" if harness else id)
+    )
+
+
+def test_declared_model_names_unset_is_none():
+    assert backends.declared_model_names() is None
+
+
+def test_declared_model_names_parses_comma_list(monkeypatch):
+    monkeypatch.setenv(backends.MODELS_ENV, "sol, astra , opus")
+    assert backends.declared_model_names() == ["sol", "astra", "opus"]
+
+
+def test_resolve_declaration_absent_lib_names_itself(monkeypatch):
+    import sys
+
+    monkeypatch.delitem(sys.modules, "llm_scripting_kit", raising=False)
+    monkeypatch.delitem(sys.modules, "llm_scripting_kit.declaration", raising=False)
+    if _has_llm_scripting_kit():  # pragma: no cover - env-dependent
+        pytest.skip("llm_scripting_kit importable in this environment")
+    with pytest.raises(ImportError, match="llm_scripting_kit"):
+        backends.resolve_declaration(["opus"])
+
+
+def test_resolve_declaration_stale_lib_names_the_floor(monkeypatch):
+    import sys
+    import types
+
+    stale = types.ModuleType("llm_scripting_kit.declaration")  # no describe/run/etc.
+    package = types.ModuleType("llm_scripting_kit")
+    package.declaration = stale
+    monkeypatch.setitem(sys.modules, "llm_scripting_kit", package)
+    monkeypatch.setitem(sys.modules, "llm_scripting_kit.declaration", stale)
+    with pytest.raises(ImportError, match="0.46.0"):
+        backends.resolve_declaration(["opus"])
+
+
+def test_absent_declaration_lib_message_names_the_install_command(monkeypatch):
+    """plugins/CLAUDE.md ('Optional use of another plugin'): the probe-failure
+    message must name the owning plugin and a command the consumer can
+    actually run -- never a manifest (bootstrap.json's shared_lib_imports)
+    the consumer cannot edit."""
+    import sys
+
+    monkeypatch.delitem(sys.modules, "llm_scripting_kit", raising=False)
+    monkeypatch.delitem(sys.modules, "llm_scripting_kit.declaration", raising=False)
+    if _has_llm_scripting_kit():  # pragma: no cover - env-dependent
+        pytest.skip("llm_scripting_kit importable in this environment")
+    with pytest.raises(ImportError) as ei:
+        backends.resolve_declaration(["opus"])
+    assert "claude plugin install llm-scripting-kit@plugins-kit" in str(ei.value)
+    assert "shared_lib_imports" not in str(ei.value)
+    assert "bootstrap.json" not in str(ei.value)
+
+
+def test_stale_declaration_lib_message_names_the_update_command(monkeypatch):
+    import sys
+    import types
+
+    stale = types.ModuleType("llm_scripting_kit.declaration")  # no describe/run/etc.
+    package = types.ModuleType("llm_scripting_kit")
+    package.declaration = stale
+    monkeypatch.setitem(sys.modules, "llm_scripting_kit", package)
+    monkeypatch.setitem(sys.modules, "llm_scripting_kit.declaration", stale)
+    with pytest.raises(ImportError) as ei:
+        backends.resolve_declaration(["opus"])
+    assert "claude plugin update llm-scripting-kit@plugins-kit" in str(ei.value)
+    assert "0.46.0" in str(ei.value)
+    assert "shared_lib_imports" not in str(ei.value)
+    assert "bootstrap.json" not in str(ei.value)
+
+
+def test_resolve_declaration_returns_the_default_entry(monkeypatch):
+    entry = _entry("opus", harness="claude", model="claude-opus-5")
+    _install_fake_declaration(monkeypatch, default=entry)
+    assert backends.resolve_declaration(["opus"]) is entry
+
+
+def test_resolve_declaration_propagates_the_floor(monkeypatch):
+    floor = RuntimeError("no usable routing target in [sol, astra]")
+    _install_fake_declaration(monkeypatch, raises=floor)
+    with pytest.raises(RuntimeError, match="no usable routing target"):
+        backends.resolve_declaration(["sol", "astra"])
+
+
+def test_declared_backend_and_model_from_claude_entry(monkeypatch):
+    entry = _entry("opus", harness="claude", model="claude-opus-5", drive="claude-cli")
+    _install_fake_declaration(monkeypatch, default=entry)
+    assert backends.declared_backend_and_model(["opus"]) == ("claude-cli", "claude-opus-5")
+
+
+def test_route_uses_declared_entry_for_codex_harness(monkeypatch):
+    monkeypatch.setenv(backends.MODELS_ENV, "sol")
+    entry = _entry("sol", harness="codex", model="gpt-5.6-sol", drive="codex-cli")
+    _install_fake_declaration(monkeypatch, default=entry)
+    assert isinstance(route(), CodexCliBackend)
+
+
+def test_route_uses_declared_entry_for_openrouter_transport(monkeypatch):
+    monkeypatch.setenv(backends.MODELS_ENV, "openrouter")
+    entry = _entry("openrouter", harness=None, model=None, drive="openrouter")
+    _install_fake_declaration(monkeypatch, default=entry)
+    assert isinstance(route(), OpenRouterBackend)
+
+
+def test_route_supplied_mock_wins_even_with_models_env_set(monkeypatch):
+    """R16-adjacent: the hermetic test seam must never be shadowed by a
+    declaration, exactly like it must never be shadowed by BACKEND_ENV."""
+    monkeypatch.setenv(backends.MODELS_ENV, "sol")
+    mine = MockBackend(responses=["x"])
+    assert route(mock=mine) is mine
+
+
+def test_routed_model_uses_declared_entry_model(monkeypatch):
+    monkeypatch.setenv(backends.MODELS_ENV, "sol")
+    entry = _entry("sol", harness="codex", model="gpt-5.6-sol", drive="codex-cli")
+    _install_fake_declaration(monkeypatch, default=entry)
+    assert routed_model("anything", backend_name="codex-cli") == "gpt-5.6-sol"
+
+
+def test_declared_entry_is_memoized_per_process(monkeypatch):
+    """A declaration governs a run; re-probing on every call site is wasted
+    work (and, live, a second network/CLI probe). One resolve per (names,
+    project_root) key."""
+    monkeypatch.setenv(backends.MODELS_ENV, "sol")
+    calls = []
+
+    def _describe(names, **_kwargs):
+        import types
+
+        calls.append(tuple(names))
+        return types.SimpleNamespace(
+            default=_entry("sol", harness="codex", model="gpt-5.6-sol", drive="codex-cli")
+        )
+
+    import sys
+    import types as _types
+
+    declaration = _types.ModuleType("llm_scripting_kit.declaration")
+    declaration.describe = _describe
+    declaration.run = lambda *a, **kw: None
+    declaration.RunRequest = object
+    declaration.NoUsableRoutingTarget = RuntimeError
+    declaration.CALLER_PROCESS = "process"
+    package = _types.ModuleType("llm_scripting_kit")
+    package.declaration = declaration
+    monkeypatch.setitem(sys.modules, "llm_scripting_kit", package)
+    monkeypatch.setitem(sys.modules, "llm_scripting_kit.declaration", declaration)
+
+    routed_model("x", backend_name="codex-cli")
+    route()
+    assert len(calls) == 1
+
+
+def test_route_and_routed_model_emit_no_warning_with_nothing_set():
+    """Bare defaults (nothing set at all) must stay silent."""
+    import warnings
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        route()
+        routed_model("deepseek/deepseek-v4")
+    assert not any(issubclass(w.category, DeprecationWarning) for w in caught)
+
+
+def test_route_and_routed_model_emit_no_warning_with_models_env_set(monkeypatch):
+    """The new declaration path is not itself deprecated."""
+    monkeypatch.setenv(backends.MODELS_ENV, "sol")
+    entry = _entry("sol", harness="codex", model="gpt-5.6-sol", drive="codex-cli")
+    _install_fake_declaration(monkeypatch, default=entry)
+
+    import warnings
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        route()
+        routed_model("anything", backend_name="codex-cli")
+    assert not any(issubclass(w.category, DeprecationWarning) for w in caught)
+
+
+def test_route_emits_exactly_one_deprecation_warning_via_the_public_path(monkeypatch):
+    """R37 / code review fix: the legacy-triple warning must fire on the
+    PUBLIC route()/routed_model() path when only CONTENT_PIPELINE_LLM_BACKEND
+    (etc.) is set -- ``_resolve_declared_entry`` is never reached by a legacy
+    call at all, so the warning cannot live there. Legacy dispatch itself
+    stays byte-identical (still returns ClaudeCliBackend)."""
+    monkeypatch.setenv(backends.BACKEND_ENV, "claude-cli")
+    import warnings
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        result = route()
+    assert isinstance(result, ClaudeCliBackend)
+    matches = [
+        w for w in caught
+        if issubclass(w.category, DeprecationWarning) and backends.MODELS_ENV in str(w.message)
+    ]
+    assert len(matches) == 1
+
+
+def test_routed_model_emits_exactly_one_deprecation_warning_via_the_public_path(monkeypatch):
+    monkeypatch.setenv(backends.BACKEND_ENV, "claude-cli")
+    monkeypatch.setenv(backends.MODEL_ENV, "claude-sonnet-4-6")
+    import warnings
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        result = routed_model("deepseek/deepseek-v4")
+    assert result == "claude-sonnet-4-6"
+    matches = [
+        w for w in caught
+        if issubclass(w.category, DeprecationWarning) and backends.MODELS_ENV in str(w.message)
+    ]
+    assert len(matches) == 1
+
+
+def test_legacy_claude_cli_maps_to_shipped_default_entry(monkeypatch):
+    monkeypatch.setenv(backends.BACKEND_ENV, "claude-cli")
+    entry_id, explicit = backends._legacy_declaration_name()
+    assert entry_id == "opus"
+    assert explicit is True
+
+
+def test_legacy_codex_cli_maps_to_shipped_default_entry(monkeypatch):
+    monkeypatch.setenv(backends.BACKEND_ENV, "codex-cli")
+    entry_id, explicit = backends._legacy_declaration_name()
+    assert entry_id == "sol"
+    assert explicit is True
+
+
+def test_legacy_model_endpoint_maps_to_named_endpoint_exactly(monkeypatch):
+    monkeypatch.setenv(backends.BACKEND_ENV, "model-endpoint")
+    monkeypatch.setenv(backends.ENDPOINT_ENV, "my-vllm")
+    entry_id, explicit = backends._legacy_declaration_name()
+    assert entry_id == "my-vllm"
+    assert explicit is True
+
+
+def test_legacy_defaults_map_to_openrouter_and_are_not_explicit():
+    entry_id, explicit = backends._legacy_declaration_name()
+    assert entry_id == "openrouter"
+    assert explicit is False

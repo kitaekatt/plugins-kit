@@ -38,7 +38,7 @@ def test_status_reads_a_run_from_an_explicit_store(
     job = Job(
         id="status-job",
         prompt=Prompt(user="status"),
-        endpoint_preference=("fake",),
+        models=("fake",),
         directory=tmp_path,
         contract=Contract(command=("true",), directory=tmp_path),
     )
@@ -357,7 +357,7 @@ def _accepted_snapshot(tmp_path: Path) -> RunSnapshot:
     job = Job(
         id="cli-job",
         prompt=Prompt(user="run"),
-        endpoint_preference=("fake",),
+        models=("fake",),
         directory=tmp_path,
         contract=Contract(command=("true",), directory=tmp_path),
     )

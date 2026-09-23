@@ -128,3 +128,100 @@ def test_missing_required_argument_maps_to_exit_error(commands):
 def test_unknown_command_gets_did_you_mean(commands):
     code, _out, err = _dispatch(commands, ["statu"])
     assert "Did you mean: status" in err
+
+
+# --- create-run --models (step 10, C2) --------------------------------------
+
+
+def _install_fake_declaration(monkeypatch, entry_id, *, harness=None, model=None, drive=None):
+    """Install a fake ``llm_scripting_kit.declaration`` module.
+
+    Mirrors ``tests/content-pipeline-kit/test_llm_backends.py``'s
+    sys.modules-injection pattern.
+    """
+    import sys
+    import types
+
+    def _describe(names, **_kwargs):
+        return types.SimpleNamespace(
+            default=types.SimpleNamespace(
+                id=entry_id, harness=harness, model=model, drive=drive or entry_id
+            )
+        )
+
+    declaration = types.ModuleType("llm_scripting_kit.declaration")
+    declaration.describe = _describe
+    declaration.run = lambda *a, **kw: None
+    declaration.RunRequest = object
+    declaration.NoUsableRoutingTarget = RuntimeError
+    declaration.CALLER_PROCESS = "process"
+    package = types.ModuleType("llm_scripting_kit")
+    package.declaration = declaration
+    monkeypatch.setitem(sys.modules, "llm_scripting_kit", package)
+    monkeypatch.setitem(sys.modules, "llm_scripting_kit.declaration", declaration)
+
+
+def test_create_run_resolves_backend_and_model_from_models_flag(commands, store, monkeypatch):
+    """``--models=<declaration>`` lets create-run store the CHOSEN entry
+    (C2) instead of a caller-supplied guess -- backend/model positional args
+    are left empty and filled from the resolved entry."""
+    _install_fake_declaration(monkeypatch, "sol", harness="codex", model="gpt-5.6-sol", drive="codex-cli")
+
+    code, out, _err = _dispatch(
+        commands, ["create-run", "r1", "inline", "", "", "v1", "--models=sol"]
+    )
+    assert code == EXIT_OK
+    assert "backend: codex-cli" in out
+    assert "model: gpt-5.6-sol" in out
+    run = store.get_run("r1")
+    assert run.backend == "codex-cli"
+    assert run.model == "gpt-5.6-sol"
+
+
+def test_create_run_explicit_backend_and_model_win_over_models_flag(commands, store, monkeypatch):
+    """An explicit backend/model always wins, unchanged from before this flag
+    existed -- --models is a fallback, never an override."""
+    _install_fake_declaration(monkeypatch, "sol", harness="codex", model="gpt-5.6-sol", drive="codex-cli")
+
+    code, out, _err = _dispatch(
+        commands, ["create-run", "r1", "inline", "mock", "m", "v1", "--models=sol"]
+    )
+    assert code == EXIT_OK
+    run = store.get_run("r1")
+    assert run.backend == "mock"
+    assert run.model == "m"
+
+
+def test_create_run_without_models_or_backend_still_errors(commands):
+    code, _out, err = _dispatch(commands, ["create-run", "r1", "inline"])
+    assert code == EXIT_ERROR
+    assert "missing required argument: backend" in err
+
+
+def test_create_run_reports_the_floor_from_the_models_flag(commands, monkeypatch):
+    """R23: an exhausted declaration's typed floor reaches the caller's error
+    channel rather than being swallowed into a generic message -- ``dispatch``
+    (``cli.scaffold``) maps every non-SystemExit exception to EXIT_ERROR plus
+    its message, so this is what "propagates" looks like at this boundary."""
+    import sys
+    import types
+
+    def _describe(names, **_kwargs):
+        raise RuntimeError(f"no usable routing target in {list(names)}")
+
+    declaration = types.ModuleType("llm_scripting_kit.declaration")
+    declaration.describe = _describe
+    declaration.run = lambda *a, **kw: None
+    declaration.RunRequest = object
+    declaration.NoUsableRoutingTarget = RuntimeError
+    declaration.CALLER_PROCESS = "process"
+    package = types.ModuleType("llm_scripting_kit")
+    package.declaration = declaration
+    monkeypatch.setitem(sys.modules, "llm_scripting_kit", package)
+    monkeypatch.setitem(sys.modules, "llm_scripting_kit.declaration", declaration)
+
+    code, _out, err = _dispatch(
+        commands, ["create-run", "r1", "inline", "", "", "v1", "--models=sol,astra"]
+    )
+    assert code == EXIT_ERROR
+    assert "no usable routing target" in err

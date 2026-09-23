@@ -153,14 +153,39 @@ stays in `seats` and sorts after any peer of the same relation that is not
 behind pace. Quota rank sits BELOW relation and ABOVE tier -- a seat's relation
 says whether it can do the job at all, which outranks how much budget is left.
 
-`quota_selection.py` is the consumer-facing half: given a caller's own
-preference order it returns the ranked usable chain, the disabled endpoints,
-and a `default` fallback for when every preference is spent. It RANKS and does
-not dispatch, the same altitude split this package holds when it classifies a
-halt without deciding to stop -- which is what lets job-kit apply it as one
-input to a selection it already owns rather than inheriting a policy. The
-`usage` and `choose` verbs are the inspection surfaces for a check that is
-otherwise invisible.
+`declaration.py` is the consumer-facing half and the one API over a model
+declaration. `describe` classifies every declared id, keeps usable,
+out-of-quota and unreachable entries in the render, hides the rest SILENTLY,
+orders the render by pace (`order_by_pace`), marks the default, and emits
+the choice and re-selection rule text (`Ranking.rule`). It raises
+`NoUsableRoutingTarget`, which itemises every declared id, when nothing
+usable remains. It RANKS and does not dispatch, which is what lets job-kit
+pass its own requirements, capabilities, factory, exclusions and run-scoped
+reachability cache into one selection it still owns. `run` is the dispatcher
+for callers with no loop of their own. Four things are easy to break:
+
+- **RENDER, SKIP and FLOOR are separate surfaces.** Nothing may name a hidden
+  id outside the floor, including the render header. A notice, warning or log
+  line for a skipped id reverses the owner's silent-skip ruling (directions
+  13, 16 and 17 in the repo's declaration-format design).
+- **Status is pinned, pace is fresh.** `usable` and `[default]` come from
+  `pinned_evaluate`. Only the pace number comes from an unpinned read, so a
+  pinned AVAILABLE verdict still never flips on a re-read.
+- **`max_attempts` is not the floor.** A halt that uses up the last attempt
+  returns `attempt-limit`. It never raises `NoUsableRoutingTarget`, because
+  the pool was not empty.
+- **A session caller hides transports unless it says it can run them.** A
+  transport entry has no agent loop, so `caller="session"` classifies it
+  unroutable by default. A session caller that reaches transports through a
+  runner of its own passes `dispatchable=("transport",)` (CLI `--dispatchable
+  transport`); the code-review skills do, for every reviewer lane the lane
+  runner binds to a transport.
+
+`quota_selection.choose_endpoint` is a thin caller of `describe` that never
+probes, and `rank_candidates` keeps the two-band rank for any caller that
+still imports it; no plugin in this repo does. Both are deprecated names. The `usage` and `describe` verbs (and
+`choose`, a deprecated alias of `describe`) are the inspection surfaces for a
+check that is otherwise invisible.
 
 ## Scope: one call, made correctly
 

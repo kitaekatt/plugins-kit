@@ -2,9 +2,9 @@
 
 Durable execution for heterogeneous agent jobs through a bounded worker pool.
 
-A job file declares work; the runner executes each job once, selects an
-endpoint from what llm-scripting-kit actually advertises, and accepts a result
-only when a command says so.
+A job file declares work; the runner executes each job once, selects a model
+from the job's declaration through llm-scripting-kit, and accepts a result only
+when a command says so.
 
 ```bash
 job-kit run jobs.yaml [--store PATH] [--timeout SECONDS] [--run-id ID] [--max-parallel N]
@@ -32,7 +32,7 @@ jobs:
     prompt:
       system: "You are a coding assistant."
       user: "Fix the lint errors."
-    endpoint_preference: [qwen38-5090, luna, sonnet]
+    models: [qwen38-5090, luna, sonnet]
     requirements:
       params: [cwd]
     directory: .
@@ -42,17 +42,29 @@ jobs:
 
 ## What it gives you
 
-- **Advertisement-based endpoint selection.** `endpoint_preference` is tried in
-  order, but an endpoint is skipped unless it advertises the `requirements` the
-  job states. Preference alone would dispatch a job to a backend that cannot
-  serve it; the requirements are what make the order safe. The `requirements`
-  mapping is llm-scripting-kit's requirement language over an adapter's
-  advertised `Capabilities` -- see llm-scripting-kit's README, "Capability
-  requirements" subsection, for the named convenience keys and dotted-path
-  fallback. job-kit consumes that language and that advertisement; it does not
-  define its own. Requires llm-scripting-kit >= 0.35.0, the version that added
-  `subjects_for_disallowed_tools`; job_kit.select fails at import time with a
-  named remediation if an older llm-scripting-kit is linked in.
+- **Deterministic selection from a model declaration.** `models` is a list of
+  llm-scripting-kit registry ids in the one declaration format (bootstrap's
+  plugin-dev skill, `references/model-declaration.md`); a scalar is a
+  one-element list. Each attempt calls llm-scripting-kit's
+  `describe(caller="process")` over it and takes the FIRST USABLE entry of the
+  pace-ordered list. An entry is skipped, silently, when it does not resolve,
+  does not advertise the `requirements` the job states, is out of quota, is
+  probed unreachable, or is excluded by a halt. Paced entries (those declaring
+  `conserve_usage`) are ordered by pace, highest first; unpaced entries keep
+  their declared places. Every attempt records the pace readings it was
+  selected from (`pace_readings` in `job-kit status`), so a run is explainable
+  from the declared list plus those readings. When no declared entry is usable
+  the job ends with the floor: an error naming every declared id and why it
+  could not run, which is the one place a skipped id is ever named. The
+  `requirements` mapping is llm-scripting-kit's requirement language over an
+  adapter's advertised `Capabilities` -- see llm-scripting-kit's README,
+  "Capability requirements" subsection; an entry whose backend advertises
+  nothing is never selected. The keys `endpoint_preference`,
+  `endpoint_preferences`, `endpoints` and `endpoint` are accepted as aliases
+  of the same declaration. Requires llm-scripting-kit >= 0.46.0, the version that added
+  `describe` (and, before it, `subjects_for_disallowed_tools` for the deny
+  floor); job_kit.select fails at import time with a named remediation if an
+  older llm-scripting-kit is linked in.
 - **Command-shaped acceptance.** A `contract` command must exit zero for the
   attempt to be accepted. Model output that does not satisfy it is a failure,
   not a result, so nothing downstream has to trust the text.
@@ -63,7 +75,13 @@ jobs:
   a process loss after arming is recorded as a reservation loss, not as a
   fabricated attempt row, and it consumes one retry budget unit.
 - **Halts narrow the run; timeouts do not.** An endpoint that returns a
-  persistent halt is excluded from the rest of the run. An unreachable endpoint
+  persistent halt (auth, rate limit, insufficient credit, or a spent
+  subscription pool) is excluded from the rest of the run, and the job's next
+  attempt re-selects from what remains. A quota or credit halt on an entry that
+  declares `conserve_usage` also records that entry out of quota until its
+  reset, so later selections in the session skip it too. `max_attempts` bounds
+  executions only: a halt that spends the last attempt ends the job with
+  "attempt limit reached", never with the floor. An unreachable endpoint
   is excluded from the run only after a confirming probe: two observed
   unreachable attempts on that endpoint, where the later attempt starts after
   the earlier attempt ends and no non-unreachable attempt starts between them.

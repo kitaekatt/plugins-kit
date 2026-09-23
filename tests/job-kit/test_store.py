@@ -26,7 +26,7 @@ def _job(directory: Path, job_id: str = "job") -> Job:
     return Job(
         id=job_id,
         prompt=Prompt(user="run the task"),
-        endpoint_preference=("fake",),
+        models=("fake",),
         directory=directory,
         contract=Contract(command=("true",), directory=directory),
     )
@@ -439,7 +439,7 @@ def test_effective_directory_is_persisted_for_resume(
     job = Job(
         id="implicit-directory",
         prompt=Prompt(user="run"),
-        endpoint_preference=("fake",),
+        models=("fake",),
         contract=Contract(command=("true",)),
     )
     db_path = tmp_path / "directory.sqlite3"

@@ -1,52 +1,28 @@
-"""Apply a quota verdict to a caller's stated preference order.
+"""Quota-aware selection over a caller's preference order (compatibility layer).
 
-The consumer-facing half of :mod:`llm_scripting_kit.usage_budget`. That module
-answers "what is this one endpoint's quota state"; this one answers the
-question a caller actually has -- **given the models I would delegate to, in
-the order I prefer them, which one should run this?**
+The selection rule lives in :mod:`llm_scripting_kit.declaration`:
+:func:`~.declaration.describe` classifies a declaration, removes out-of-quota
+entries from the usable set, and orders the rest by PACE
+(:func:`~.declaration.order_by_pace`). :func:`choose_endpoint` is a thin caller
+of it that keeps this module's :class:`QuotaSelection` return shape, and
+:func:`rank_candidates` keeps the two-band rank (available before
+under-quota, stated order inside each band) for callers that still import it.
+Both names are kept until migration step 12; other callers use ``describe``.
 
-Worked, because the shape is easier to see than to state. Preference
-``[opus, sol]``:
+The one rule both layers share: **an out-of-quota endpoint is removed, a
+behind-pace endpoint is only moved.** Treating "behind pace" as "unusable"
+would drop a model that can still answer, which is the opposite of what pacing
+is for.
 
-===============================  ====================================
-state                            chosen
-===============================  ====================================
-both fine                        ``opus``  -- first preference wins
-``opus`` out of quota            ``sol``   -- opus is disabled
-``sol`` out of quota             ``opus``
-both out of quota                the ``default``
-``opus`` under quota, sol fine   ``sol``   -- opus is de-prioritized,
-                                 not disabled, and loses to a peer
-                                 that is not behind pace
-both under quota                 ``opus``  -- neither is disabled, so
-                                 the stated preference decides again
-===============================  ====================================
-
-Two rules produce all six rows, and the second is the one that is easy to get
-wrong: **an out-of-quota endpoint is removed, an under-quota endpoint is only
-moved.** Collapsing them -- treating "behind pace" as "unusable" -- would drop
-a model that can still answer, which is the opposite of what pacing is for. And
-the preference order survives both: it is the tiebreak inside each quota band,
-so a caller's stated order is never silently reordered by anything except the
-budget.
-
-**This module ranks; it does not dispatch.** It answers which endpoint to use
-and why, and the caller then does whatever it was going to do. That is the same
-altitude split the rest of this package holds -- it classifies a halt and lets
-the caller decide whether to stop -- and it is what lets a consumer with its own
-selection rules (job-kit filters a preference order by capability requirements
-before anything else) apply this as one input rather than inheriting a policy.
-
-Endpoints that do not declare ``conserve_usage`` have no budget at all and rank
-as AVAILABLE: opting in is what asks for pacing, so an endpoint that did not
-opt in is never de-prioritized or disabled by it.
+**This module ranks; it does not dispatch.** Endpoints that do not declare
+``conserve_usage`` have no budget and are never moved or removed by it.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any, Dict, List, Mapping, Optional, Sequence
 
-from .usage_budget import Budget, pinned_evaluate
+from .usage_budget import Budget
 
 #: Rank of each disposition within the ordering. Lower sorts first. Only two
 #: values, because only two things can happen to a usable endpoint: it is
@@ -87,7 +63,10 @@ class Candidate:
 
 @dataclass(frozen=True)
 class QuotaSelection:
-    """The outcome. ``chosen`` is None only when nothing at all was usable.
+    """The outcome. ``chosen`` is the head of ``ranked``, else the ``default``.
+
+    With nothing usable and no ``default``, :func:`choose_endpoint` raises the
+    floor instead of returning.
 
     ``ranked`` is every usable candidate in the order they should be tried, so
     a caller with its own retry loop gets the whole fallback chain rather than
@@ -117,12 +96,13 @@ class QuotaSelection:
 
 
 def rank_candidates(candidates: Sequence[Candidate]) -> "tuple[List[Candidate], List[Candidate]]":
-    """Split into (ranked usable, disabled), pure and side-effect free.
+    """DEPRECATED two-band rank; use ``declaration.order_by_pace``. Pure.
 
-    Exposed separately from :func:`choose_endpoint` because the ordering rule
-    is the part worth testing and reusing; obtaining the budgets is I/O.
-    The sort is STABLE on ``preference_index``, which is what keeps the
-    caller's stated order intact inside each quota band.
+    Splits into (ranked usable, disabled): available before under-quota, the
+    sort STABLE on ``preference_index`` inside each band. No plugin in this
+    repo imports it (awesome-kit's orchestrate renderer ranks through
+    ``describe``); it keeps its behaviour for outside callers and is removed
+    at migration step 12.
     """
     usable = [c for c in candidates if c.usable]
     disabled = [c for c in candidates if not c.usable]
@@ -137,27 +117,28 @@ def rank_candidates(candidates: Sequence[Candidate]) -> "tuple[List[Candidate], 
 
 def _reason(
     ranked: Sequence[Candidate],
-    spent: Sequence[Candidate],
-    unknown: Sequence[Candidate],
+    spent: Sequence[str],
+    unknown: Sequence[str],
+    other: Sequence[str],
     default: Optional[str],
 ) -> str:
-    """Say why the head was chosen, keeping the two exclusion causes apart.
+    """Say why the head was chosen, keeping the exclusion causes apart.
 
-    ``spent`` and ``unknown`` are deliberately separate parameters rather than
-    one merged list: an endpoint that names no configured entry was excluded by
-    a CONFIGURATION error, and calling that "out of quota" is a false claim
-    about the account -- one that would send a reader looking at their usage for
-    a typo. This sentence is what the `choose` verb prints, so it is the only
-    place many callers ever learn why an endpoint was skipped.
+    ``spent`` and ``unknown`` stay separate: an endpoint that names no
+    configured entry was excluded by a CONFIGURATION error, and calling that
+    "out of quota" is a false claim about the account -- one that would send a
+    reader looking at their usage for a typo. ``unknown`` and ``other`` are
+    non-empty only on the floor path, the one surface allowed to name a hidden
+    id; a successful selection passes rendered entries only.
     """
-    spent_names = ", ".join(c.endpoint for c in spent)
-    unknown_names = ", ".join(c.endpoint for c in unknown)
+    causes = []
+    if spent:
+        causes.append(f"out of quota ({', '.join(spent)})")
+    if unknown:
+        causes.append(f"not configured ({', '.join(unknown)})")
+    if other:
+        causes.append(f"not usable here ({', '.join(other)})")
     if not ranked:
-        causes = []
-        if spent:
-            causes.append(f"out of quota ({spent_names})")
-        if unknown:
-            causes.append(f"not configured ({unknown_names})")
         if not causes:
             return "no candidates were given"
         why = "every candidate was excluded: " + "; ".join(causes)
@@ -165,16 +146,11 @@ def _reason(
             return f"{why}; no default was given"
         return f"{why}; fell back to '{default}'"
     head = ranked[0]
-    passed_over = [c.endpoint for c in ranked[1:] if c.preference_index < head.preference_index]
     parts = [f"'{head.endpoint}'"]
-    if head.deprioritized:
-        parts.append("under quota, but the least-constrained candidate available")
+    passed_over = [c.endpoint for c in ranked[1:] if c.preference_index < head.preference_index]
     if passed_over:
-        parts.append(f"preferred over {', '.join(passed_over)} (under quota)")
-    if spent:
-        parts.append(f"skipping {spent_names} (out of quota)")
-    if unknown:
-        parts.append(f"skipping {unknown_names} (not configured)")
+        parts.append(f"higher pace than {', '.join(passed_over)}")
+    parts.extend(f"skipping {cause}" for cause in causes)
     return "; ".join(parts)
 
 
@@ -185,59 +161,91 @@ def choose_endpoint(
     entries: Optional[Mapping[str, Any]] = None,
     project_root: Optional[str] = None,
 ) -> QuotaSelection:
-    """Pick one endpoint from ``preferences``, applying each one's quota state.
+    """Pick one endpoint from ``preferences``: a thin caller of ``describe``.
 
-    ``preferences`` is the caller's own order, most-preferred first. ``default``
-    is what to use when every preference is out of quota -- the caller's
-    fallback, returned with ``used_default`` set so the caller can tell the two
-    apart rather than having to compare strings.
+    ``preferences`` is a model declaration; the selection is
+    :func:`~.declaration.describe` for a process caller, so out-of-quota
+    entries leave the chain and the usable ones are ordered by pace (D5).
+    Reachability is NOT probed -- every entry is answered from a cache of
+    ``unknown``, which counts as usable -- because this API never spawned or
+    fetched anything and callers rely on that.
 
-    An endpoint naming no configured entry is skipped as unusable and appears
-    in ``disabled``; that is a configuration error the caller can see, and
-    raising instead would make one typo take down a fallback chain that was
-    otherwise fine.
-
-    ``entries`` injects an already-discovered entry map (tests and callers that
-    have one); otherwise the layered configuration and user registry are read.
-    Verdicts go through :func:`~.usage_budget.pinned_evaluate`, so a selection
-    made twice in one session returns the same answer.
+    ``default`` is the caller's own fallback when nothing is usable, returned
+    with ``used_default`` set. Without one the floor
+    (:class:`~.declaration.NoUsableRoutingTarget`) propagates. Kept until
+    migration step 12; other callers use ``describe`` directly.
     """
-    if entries is None:
-        from .models import discover_model_entries  # noqa: PLC0415 -- import cycle
+    from .declaration import (  # noqa: PLC0415 -- declaration imports this package's models
+        DISPOSITION_OUT_OF_QUOTA,
+        DISPOSITION_UNREACHABLE,
+        DISPOSITION_UNRESOLVED,
+        DISPOSITION_USABLE,
+        NoUsableRoutingTarget,
+        describe,
+    )
+    from .reachability import STATUS_UNKNOWN, Reachability  # noqa: PLC0415
 
-        entries = discover_model_entries(project_root=project_root).entries
-
-    candidates: List[Candidate] = []
-    missing: List[Candidate] = []
-    for index, name in enumerate(preferences):
-        entry = entries.get(name)
-        if entry is None:
-            missing.append(Candidate(endpoint=name, preference_index=index, budget=None))
-            continue
-        spec = getattr(entry, "conserve_usage", None)
-        budget = (
-            pinned_evaluate(name, spec, getattr(entry, "harness", None))
-            if spec is not None
-            else None
+    names = list(preferences)
+    if not names:
+        return QuotaSelection(
+            chosen=default, ranked=(), disabled=(), used_default=default is not None,
+            reason=_reason((), (), (), (), default),
         )
-        candidates.append(Candidate(endpoint=name, preference_index=index, budget=budget))
+    unprobed = {
+        name: Reachability(status=STATUS_UNKNOWN, checked="none", detail="not probed by choose_endpoint")
+        for name in names
+    }
+    try:
+        ranking = describe(
+            names, project_root=project_root, caller="process",
+            entries=entries, reachability_cache=unprobed,
+        )
+        # A success names rendered entries only: out-of-quota ones may be
+        # reported as disabled, hidden ones (unresolved, unroutable, ...) are
+        # skipped silently and surface only through the floor below.
+        dispositions = tuple(
+            d for d in ranking.dispositions
+            if d.disposition in (DISPOSITION_USABLE, DISPOSITION_OUT_OF_QUOTA, DISPOSITION_UNREACHABLE)
+        )
+        ranked = tuple(
+            Candidate(endpoint=e.id, preference_index=e.declared_index, budget=_pinned_budget(e))
+            for e in ranking.rendered_entries
+            if e.usable
+        )
+    except NoUsableRoutingTarget as floor:
+        if default is None:
+            raise
+        dispositions, ranked = floor.dispositions, ()
 
-    ranked, spent = rank_candidates(candidates)
-    # An unknown name is not a quota fact. It rides in `disabled` because it is
-    # equally unusable, but `_reason` is told about it SEPARATELY so the
-    # sentence never calls a typo "out of quota".
-    disabled = sorted(spent + missing, key=lambda c: c.preference_index)
-
-    if ranked:
-        chosen, used_default = ranked[0].endpoint, False
-    else:
-        chosen, used_default = default, default is not None
+    spent = [d.id for d in dispositions if d.disposition == DISPOSITION_OUT_OF_QUOTA]
+    unknown = [d.id for d in dispositions if d.disposition == DISPOSITION_UNRESOLVED]
+    other = [
+        d.id for d in dispositions
+        if d.disposition not in (DISPOSITION_USABLE, DISPOSITION_OUT_OF_QUOTA, DISPOSITION_UNRESOLVED)
+    ]
+    disabled = tuple(
+        Candidate(endpoint=d.id, preference_index=d.declared_index, budget=None)
+        for d in dispositions
+        if d.disposition != DISPOSITION_USABLE
+    )
+    chosen = ranked[0].endpoint if ranked else default
     return QuotaSelection(
         chosen=chosen,
-        ranked=tuple(ranked),
-        disabled=tuple(disabled),
-        used_default=used_default,
-        reason=_reason(ranked, spent, missing, default),
+        ranked=ranked,
+        disabled=disabled,
+        used_default=not ranked and default is not None,
+        reason=_reason(ranked, spent, unknown, other, default),
+    )
+
+
+def _pinned_budget(entry: Any) -> Optional[Budget]:
+    """The pinned verdict an EntryState was ranked on, as a Budget."""
+    if entry.usability is None:
+        return None
+    return Budget(
+        status=entry.usability, pool=entry.pool or "", detail="",
+        remaining=entry.remaining, window_remaining=entry.window_remaining,
+        resets_at=entry.resets_at,
     )
 
 
