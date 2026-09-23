@@ -114,8 +114,9 @@ ownership in its brief.
 
 OpenCode itself documents no concurrency limit. A locally hosted model entry
 can point to a hand-started server that SERIALIZES concurrent requests. Obey
-the routing row's limit for that entry. A dead server is a transport error that
-falls through to the next model. That fallback is intended behaviour.
+the routing row's limit for that entry. A dead server fails the dispatch;
+re-select another usable entry of the row by the `Re-select:` line the rendered
+policy prints.
 
 ## Collecting
 

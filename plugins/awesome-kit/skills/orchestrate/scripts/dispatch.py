@@ -59,7 +59,15 @@ if not callable(getattr(codex_lib, "build_codex_exec_argv", None)):
     sys.exit(EXIT_BOOTSTRAP_MISSING)
 
 
-DEFAULT_MODEL = "gpt-5.6-sol"
+# `--model` is a model-declaration id (orchestrate's routing rows name ids,
+# not provider model values), resolved to its `harness: codex` registry entry
+# through llm-scripting-kit. There is no default model: the row's chosen entry
+# is always passed. Posture: REFUSE -- without llm-scripting-kit there is no
+# registry to resolve an id against, and a dispatch on a guessed model value
+# would be read as the entry the routing chose. awesome-kit declares no
+# install edge to llm-scripting-kit, so the probe below carries the floor.
+LLM_SCRIPTING_KIT_FLOOR = "0.46.0"
+EXIT_REFUSED = 3
 DEFAULT_EFFORT = "high"
 DEFAULT_SANDBOX = "workspace-write"
 DEFAULT_GLOBAL_CACHE = (
@@ -74,8 +82,15 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--list", action="store_true", help="list cached dispatch entries")
     parser.add_argument("--label", help="short slug used in the entry directory name")
     parser.add_argument("--brief", type=Path, help="file containing the unit brief")
-    parser.add_argument("--model", default=DEFAULT_MODEL)
-    parser.add_argument("--effort", default=DEFAULT_EFFORT)
+    parser.add_argument(
+        "--model",
+        metavar="ENTRY_ID",
+        help="model registry entry id whose harness is codex (for example `sol`); required to dispatch",
+    )
+    parser.add_argument(
+        "--effort",
+        help=f"reasoning effort; default: the entry's own effort, else {DEFAULT_EFFORT}",
+    )
     parser.add_argument(
         "--cwd",
         type=Path,
@@ -222,11 +237,67 @@ def _argv(
     )
 
 
+class RefusedError(RuntimeError):
+    """The model registry this dispatch needs is absent or too old."""
+
+
+def _discover_model_entries() -> Any:
+    """Return llm-scripting-kit's discover_model_entries, or refuse.
+
+    Absent and too old are diagnosed apart: a shared-lib link pins no
+    version, and the two states have different remedies.
+    """
+    try:
+        import llm_scripting_kit as model_kit  # noqa: PLC0415
+    except ImportError as exc:
+        raise RefusedError(
+            "[awesome-kit] codex dispatch resolves --model through the "
+            "plugins-kit:llm-scripting-kit model registry, which is not "
+            f"available here ({type(exc).__name__}). Install it with `claude "
+            "plugin install llm-scripting-kit@plugins-kit` and start a new session."
+        ) from exc
+    discover = getattr(model_kit, "discover_model_entries", None)
+    if not callable(discover):
+        raise RefusedError(
+            "[awesome-kit] the plugins-kit:llm-scripting-kit installed here predates "
+            "discover_model_entries, so codex dispatch cannot resolve --model "
+            f"(awesome-kit needs llm-scripting-kit >= {LLM_SCRIPTING_KIT_FLOOR}). "
+            "Update it with `claude plugin update llm-scripting-kit@plugins-kit`."
+        )
+    return discover
+
+
+def _resolve_codex_entry(
+    parser: argparse.ArgumentParser, entry_id: str, cwd: Path
+) -> tuple[str, str | None]:
+    """Resolve a declaration id to (codex model value, entry default effort)."""
+    discovery = _discover_model_entries()(project_root=str(cwd))
+    entries = getattr(discovery, "entries", discovery)
+
+    def is_codex(entry: Any) -> bool:
+        return (
+            getattr(entry, "kind", None) == "harness"
+            and str(getattr(entry, "harness", None) or "").lower() == "codex"
+        )
+
+    entry = entries.get(entry_id)
+    if entry is None or not is_codex(entry) or not getattr(entry, "model", None):
+        codex_ids = sorted(str(key) for key, value in entries.items() if is_codex(value))
+        parser.error(
+            f"--model {entry_id!r} is not a codex model entry; codex entries here: "
+            + (", ".join(codex_ids) if codex_ids else "none")
+        )
+    effort = getattr(entry, "effort", None)
+    return str(entry.model), (str(effort) if effort else None)
+
+
 def _validate_run_args(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
     if not args.label or not LABEL_RE.fullmatch(args.label):
         parser.error("--label must be an ASCII slug containing letters, digits, '.', '_' or '-'")
     if args.brief is None:
         parser.error("--brief is required unless --list is used")
+    if not args.model:
+        parser.error("--model is required unless --list is used: name a codex model entry id")
     if args.ttl_days < 0:
         parser.error("--ttl-days must be non-negative")
 
@@ -279,9 +350,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     except OSError as exc:
         parser.error(f"could not read brief: {exc}")
 
+    try:
+        model, entry_effort = _resolve_codex_entry(parser, args.model, cwd)
+    except RefusedError as exc:
+        print(str(exc), file=sys.stderr)
+        return EXIT_REFUSED
+    effort = args.effort or entry_effort or DEFAULT_EFFORT
+
     cache_dir, cache_source = _cache_location(cwd, args.cache_dir)
     _ensure_cache(cache_dir)
-    key = _cache_key(args.model, args.effort, args.sandbox, cwd, add_dirs, brief)
+    key = _cache_key(model, effort, args.sandbox, cwd, add_dirs, brief)
     swept, skipped = _sweep(cache_dir, args.ttl_days)
     if not args.no_cache:
         hit = _cache_hit(cache_dir, key, cwd, add_dirs)
@@ -295,8 +373,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     entry = _entry_path(cache_dir, args.label)
     result = entry / "result.md"
     run_argv = _argv(
-        model=args.model,
-        effort=args.effort,
+        model=model,
+        effort=effort,
         sandbox=args.sandbox,
         cwd=cwd,
         add_dirs=add_dirs,
@@ -316,8 +394,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     started = _utc_now()
     meta: dict[str, Any] = {
         "label": args.label,
-        "model": args.model,
-        "effort": args.effort,
+        "entry": args.model,
+        "model": model,
+        "effort": effort,
         "sandbox": args.sandbox,
         "cwd": str(cwd),
         "add_dirs": [str(path) for path in add_dirs],

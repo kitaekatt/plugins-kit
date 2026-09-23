@@ -26,9 +26,11 @@ What it checks
 Everything is derived from the shipped policy, so a routing row added tomorrow
 is probed tomorrow with no edit here:
 
-  * every `routing[].models[]` name with the `agent:` prefix, via
-    `claude -p --model <id>` with a one-word prompt. The prefix is the reserved
-    Agent-tool namespace, so the external model registry is not consulted;
+  * every `routing[].models[]` core id (`fable`, `opus`, `sonnet`, `haiku`,
+    from bootstrap_lib.model_declaration.CORE_IDS), via
+    `claude -p --model <id>` with a one-word prompt. The harness defines the
+    core ids, so the external model registry is not consulted. A deprecated
+    `agent:<id>` entry is read as `<id>`;
   * every other `routing[].models[]` name, by delegating discovery to the
     orchestrate guidance resolver. Its harness entry supplies both the
     harness (`codex` or `opencode`) and the model id that harness receives --
@@ -91,10 +93,14 @@ DISPATCH_DOC = ORCHESTRATE / "references" / "codex-dispatch.md"
 # round trip to the named model.
 PROMPT = "Reply with exactly: ok"
 
-# The `agent:` namespace is fixed by the Agent tool. Every other routing name
-# must resolve through llm-scripting-kit to one of these CLI harnesses.
+# Routing rows are model declarations. The core ids are the harness's own and
+# come from the one declaration validator; every other id must resolve
+# through llm-scripting-kit to one of these CLI harnesses. `agent:<id>` is the
+# deprecated prefix, still read as `<id>`.
+sys.path.insert(0, str(REPO_ROOT / "plugins" / "bootstrap"))
+from bootstrap_lib.model_declaration import CORE_IDS  # noqa: E402
+
 AGENT_MODEL_PREFIX = "agent:"
-AGENT_MODEL_NAMES = frozenset(("fable", "opus", "sonnet", "haiku"))
 HARNESS_NAMES = frozenset(("codex", "opencode"))
 
 # Config keys whose probe value is not derivable from the policy.
@@ -206,32 +212,18 @@ def _routing_probe(
             is_routing=True,
         )
 
-    if raw_model.startswith(AGENT_MODEL_PREFIX):
-        model = raw_model[len(AGENT_MODEL_PREFIX):]
-        if model not in AGENT_MODEL_NAMES:
-            return Probe(
-                "unresolved-model",
-                raw_model,
-                where,
-                f"unknown Agent-tool model `{model}`",
-                is_routing=True,
-            )
+    name = raw_model
+    if name.startswith(AGENT_MODEL_PREFIX):
+        name = name[len(AGENT_MODEL_PREFIX):]
+    if name in CORE_IDS:
         return Probe(
             "claude-model",
-            model,
+            name,
             where,
             f"entry={raw_model}",
             is_routing=True,
         )
-
-    if ":" in raw_model:
-        return Probe(
-            "unresolved-model",
-            raw_model,
-            where,
-            "only `agent:` is a reserved namespace; other names must be unprefixed",
-            is_routing=True,
-        )
+    raw_model = name
 
     entry = model_entries.get(raw_model)
     if entry is None:
@@ -292,8 +284,7 @@ def collect_probes(
                 and isinstance(row.get("models"), list)
                 and any(
                     isinstance(model, str)
-                    and not model.startswith(AGENT_MODEL_PREFIX)
-                    and ":" not in model
+                    and model.removeprefix(AGENT_MODEL_PREFIX) not in CORE_IDS
                     for model in row["models"]
                 )
                 for row in routing_rows
@@ -606,7 +597,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         choices=["all", "claude", "codex", "opencode"],
         default="all",
         help=(
-            "restrict probes to a dispatch harness (agent: -> claude; "
+            "restrict probes to a dispatch harness (core ids -> claude; "
             "routing entries may name codex or opencode; default: all)"
         ),
     )

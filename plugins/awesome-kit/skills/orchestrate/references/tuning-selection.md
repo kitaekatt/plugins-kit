@@ -23,7 +23,7 @@ Two consequences matter:
 | `lexicon[].test` / `.gloss` -- reword a shape term | high | low | cleanly |
 | `routing[].shape` -- add or remove a shape term | very high | high | cleanly |
 | `routing` row order -- move a row | very high | high | cleanly |
-| `routing[].models` -- change priority or fallback | medium | medium | cleanly |
+| `routing[].models` -- change the declared models or their order | medium | medium | cleanly |
 | `routing[].gate` / `.guards` -- refine the decision ritual | medium | low | cleanly |
 | `routing[].shape: []` -- change the default row | total | total | cleanly |
 
@@ -55,7 +55,7 @@ failure mode that the term had been excluding before removing it.
 ```yaml
 routing:
 - shape: [novel, load-bearing]
-  models: [agent:fable, sol]
+  models: [fable, sol]
 ```
 
 ### Moving a row
@@ -65,18 +65,21 @@ narrow case should win. Keep the empty-shape row last unless it is intentionally
 
 ### Changing model priority
 
-The first surviving model in a row is the preferred target. Later entries are fallback targets
-for launch or transport errors. An unprefixed model must be an entry exposed by
-`llm_scripting_kit`; an `agent:` name must belong to the Agent tool's fixed menu.
+A row's `models` is a model declaration, in preference order. Entries with a pace reading are
+re-sorted by pace in the rendered menu, entries without one keep their places, and the first
+usable entry is the default. Later entries are the other choices and the re-selection targets
+after a failed dispatch. An id is a core id (`fable`, `opus`, `sonnet`, `haiku`) or an entry
+exposed by `llm_scripting_kit`.
 
 ```yaml
 routing:
 - shape: [fan-out]
-  models: [luna, agent:sonnet]
+  models: [luna, sonnet]
 ```
 
-The renderer skips unresolved entries and drops a row whose entries all fail to resolve. Use
-`--explain` to see the reason for each skipped entry.
+The renderer leaves out, without comment, an id that resolves to nothing or that this policy
+cannot drive. A row with no usable entry shows the floor instead of a menu: it names every
+declared id and why it cannot run here.
 
 ### The gate and guards
 
@@ -88,7 +91,8 @@ visible to the orchestrator.
 ## Measuring what changed
 
 The announcement line is the instrument. It records the target and the shape terms from the
-matched row. A fallback also records `fell through from <id>`. Collect a sample of
+matched row. A choice from a multi-entry row also records a `route:` line naming the entry and
+the reason. Collect a sample of
 announcements, compare row frequencies, and adjust one key at a time.
 
 A felt frequency is a legitimate reason to start tuning. It is a poor reason to stop, because

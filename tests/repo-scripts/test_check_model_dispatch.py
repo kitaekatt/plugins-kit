@@ -133,3 +133,50 @@ def test_list_performs_no_dispatch(tmp_path, monkeypatch, capsys):
     assert "codex-model gpt-5.6-sol" in output
     assert "entry=sol" in output
     assert "no dispatch performed" in output
+
+
+def test_core_ids_are_read_without_a_prefix(tmp_path):
+    """Routing rows are model declarations: a core id names a Claude model
+    directly, and the checker probes it through `claude -p`."""
+    policy = {
+        "routing": [
+            {"shape": ["cross-check"], "models": ["fable", "sol"]},
+            {"shape": [], "models": ["sonnet"]},
+        ],
+        "backends": [],
+    }
+    probes = _CHECKER.collect_probes(
+        policy,
+        tmp_path / "orchestration.yaml",
+        model_entries={"sol": {"harness": "codex", "model": "gpt-5.6-sol"}},
+    )
+    routing = [probe for probe in probes if probe.is_routing]
+    assert [(probe.kind, probe.value) for probe in routing] == [
+        ("claude-model", "fable"),
+        ("codex-model", "gpt-5.6-sol"),
+        ("claude-model", "sonnet"),
+    ]
+    assert routing[0].extra == "entry=fable"
+
+
+def test_core_ids_come_from_the_declaration_validator():
+    """One core set: the checker restates no Agent-tool alias list."""
+    from bootstrap_lib.model_declaration import CORE_IDS
+
+    source = _SCRIPT.read_text(encoding="utf-8")
+    assert "AGENT_MODEL_NAMES" not in source
+    assert _CHECKER.CORE_IDS == CORE_IDS
+
+
+def test_the_shipped_policy_needs_no_harness_lookup_for_claude_rows(tmp_path):
+    """A registry that carries claude harness entries must not turn a core id
+    into an unsupported-harness failure."""
+    policy = {"routing": [{"shape": [], "models": ["opus"]}], "backends": []}
+    probes = _CHECKER.collect_probes(
+        policy,
+        tmp_path / "orchestration.yaml",
+        model_entries={"opus": {"harness": "claude", "model": "claude-opus"}},
+    )
+    assert [(probe.kind, probe.value) for probe in probes if probe.is_routing] == [
+        ("claude-model", "opus"),
+    ]

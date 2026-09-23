@@ -91,14 +91,20 @@ technique_skill:
     reading_it: |
       Treat the rendered block as authoritative over anything you believe about model
       lineups or dispatch mechanics: a model or harness absent from the rendered policy must
-      not be dispatched to. A routing row falls through to its next model on a launch or
-      transport error. The model entries and backends listed are the only ones that exist
-      here. Anything not installed on this machine is omitted from the output entirely, so do
-      not reach for a backend or model you remember but cannot see, and do not tell the user
-      something is "unavailable" on the strength of its absence. (`--explain` reports what
-      was skipped and why, if you need to answer that question.)
+      not be dispatched to. Each routing row lists the models it declares that are real on
+      this machine -- usable, out of quota until a stated reset, or unreachable -- and the
+      backends listed are the only ones that exist here. A declared model that resolves to
+      nothing or that this policy cannot drive is left out without comment, and anything not
+      installed on this machine is omitted from the output entirely, so do not reach for a
+      backend or model you remember but cannot see, and do not tell the user something is
+      "unavailable" on the strength of its absence. (`--explain` reports each backend's
+      detection status, if you need to answer that question.)
 
       The Consult seats section is who to ask; take the first UP seat, else the first BESIDE.
+      A seat listed as out of quota is not askable until its reset time. When a consult
+      dispatch fails for a reason the launch-correction rule in
+      [references/configuration.md](references/configuration.md) does not explain, ask the
+      next seat in that order and say which seat failed and how.
 
       Being LISTED is not the same as being ELIGIBLE. A backend whose block opens with a
       `**Selection.**` line is not a routing target: it is documented so you can drive it
@@ -193,16 +199,27 @@ technique_skill:
             call -- not the question -- through the rendered tree by its own terms, exactly as
             the plan; a ruling that comes back stands (step 7).
         - n: 4
-          action: Match the unit to the rendered routing rows and choose the first available model.
+          action: Match the unit to the rendered routing rows, choose an entry from the matching row, and announce the choice.
           detail: >-
-            Evaluate routing rows in declaration order. A row's shape must match the unit;
-            its models are tried in declaration order, and a launch or transport error falls
-            through to the next model in that row. An unresolvable model or an unavailable
-            harness removes that model, and a row with no surviving models disappears. A
-            backend carrying a `**Selection.**` restriction is documented for its stated
-            condition and is not a routing target. When the user names an eligible backend
-            or model, it selects the dispatch target, not planning venue or implementation
-            permission. If no eligible worker remains, report the capability gap.
+            Evaluate routing rows in declaration order; the first row whose shape matches the
+            unit is its row. The row's menu lists the models it declares that are real on this
+            machine, ordered by pace, and marks the first usable one `[default]`. Choose one
+            usable entry and announce it as the `Rule:` line printed under the rows says; that
+            line, the `Re-select:` line, and any `Independence:` line come from
+            llm-scripting-kit and govern the choice. When a dispatch fails, apply the
+            launch-correction rule in references/configuration.md first; any failure it does
+            not explain is handled by re-selection as the `Re-select:` line says -- another
+            usable entry of the same row, announced with the entry that failed and how. A
+            declared model the menu leaves out is not a routing target on this machine. A row
+            that shows the floor has no usable model here: the unit stops, and the floor goes
+            to the user. When the
+            render prints no `Rule:` line (its Degraded render note says why), take the entry
+            marked `[default]`, and after a failed dispatch choose the next listed entry and
+            name the entry that failed and how. A backend carrying a `**Selection.**`
+            restriction is documented for its stated condition and is not a routing target.
+            When the user names an eligible backend or model, it selects the dispatch target,
+            not planning venue or implementation permission. If no eligible worker remains,
+            report the capability gap.
         - n: 5
           action: Launch every delegated unit -- each prompt a standalone brief (goal, paths, constraints, premises, return shape).
           detail: |

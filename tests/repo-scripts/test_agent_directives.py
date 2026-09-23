@@ -205,3 +205,58 @@ def test_real_repo_is_clean():
     """The live marketplace passes its own gate."""
     mod = _load_module()
     assert mod.collect_worktree() == []
+
+
+# --- orchestrate routing directives (model-declaration migration) ---------- #
+
+_ORCHESTRATE = Path(__file__).resolve().parents[2] / "plugins" / "awesome-kit" / "skills" / "orchestrate"
+
+
+def _orchestrate_prose():
+    """Every shipped prose file that instructs an agent how to route."""
+    paths = [_ORCHESTRATE / "SKILL.md", _ORCHESTRATE / "defaults" / "orchestration.yaml"]
+    paths += sorted((_ORCHESTRATE / "references").glob("*.md"))
+    return {path.relative_to(_ORCHESTRATE).as_posix(): path.read_text(encoding="utf-8")
+            for path in paths}
+
+
+@pytest.mark.parametrize("phrase", [
+    # The non-routable notice and the retired drop/move-back reordering: a
+    # skipped id is silent everywhere but the floor.
+    "skipped within its row",
+    "is skipped within",
+    "Not dispatchable",
+    "DROPPED from the row",
+    "MOVED BEHIND",
+    "moved back",
+    "a row with no surviving models",
+    # The retired try-in-order fall-through, superseded by choose, announce
+    # and re-select from the rendered rule.
+    "tried in declaration order",
+    "falls through to its next model",
+    "falls through to the next model",
+    "fell through from",
+    "choose the first available model",
+])
+def test_orchestrate_prose_carries_no_non_routable_notice(phrase):
+    offenders = [name for name, text in _orchestrate_prose().items()
+                 if phrase.lower() in " ".join(text.split()).lower()]
+    assert offenders == [], f"{phrase!r} in {offenders}"
+
+
+def test_orchestrate_routing_rows_name_ids_without_the_agent_prefix():
+    import yaml
+
+    policy = yaml.safe_load((_ORCHESTRATE / "defaults" / "orchestration.yaml").read_text(encoding="utf-8"))
+    models = [model for row in policy["routing"] for model in row["models"]]
+    assert models and not any(model.startswith("agent:") for model in models)
+
+
+def test_orchestrate_step_4_is_choose_and_announce_from_the_rendered_rule():
+    skill = " ".join((_ORCHESTRATE / "SKILL.md").read_text(encoding="utf-8").split())
+    step = skill.split("- n: 4", 1)[1].split("- n: 5", 1)[0]
+    # The agent chooses from the menu, announces, and re-selects by the rule
+    # the render prints -- the rule text itself is llm-scripting-kit's.
+    for required in ("[default]", "choose", "announce", "re-select", "Rule"):
+        assert required in step, required
+    assert "floor" in step
