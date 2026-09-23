@@ -228,8 +228,9 @@ closed and omits the backend.
 
 The optional `llm_scripting_kit` dependency is feature-detected. An importable stale or
 version-skewed copy is insufficient: the renderer requires the model-discovery callable and
-the harness entry-kind markers. A missing feature causes registry rows and their model section
-to disappear while Agent-tool rows continue to work.
+the harness entry-kind markers. A missing feature drops registry entries from every row and
+removes their model section; the Agent-tool core ids still render, and a row left with no core
+id renders the floor.
 
 Consult seats use a separate degradation ladder: no `llm-scripting-kit` -> no section;
 `llm-scripting-kit` without `discover_seats` (< 0.28.0) -> no section; entries without tier
