@@ -58,9 +58,10 @@ def _profile(config: dict[str, Any], profile_id: str) -> dict[str, Any]:
 def test_shipped_only_render_matches_pre_seam_bytes(tmp_path: Path) -> None:
     """The shipped executable projection is pinned byte-for-byte.
 
-    The autouse fixture below makes the owner absent, so the shipped
-    `[peer:opus, opus]` priority list resolves to `opus` -- the projection the
-    fixture has always pinned.
+    The shipped `[sol, opus]` declaration for reviewer C names no `peer:`
+    entry, so it resolves to `sol` with `opus` left in `model_fallbacks`
+    whether or not the owner is installed. The review skill joins the two
+    back into the declaration it hands to `describe`.
     """
     home, project_root, _project_path = _layers(tmp_path)
     config, provenance = rp.resolve_config(project_root, home=home)
@@ -400,9 +401,24 @@ def _no_real_owner(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
 
+# The shipped table names no `peer:` entry (reviewer C is `[sol, opus]`), so
+# the deprecated-`peer:` tests below state one in a user layer, exactly as a
+# user still may until migration step 12.
+_PEER_LAYER: dict[str, Any] = {
+    "profiles": [
+        {
+            "id": "code",
+            "reviewers": [
+                {"name": "reviewer_c_introduced_code", "model": ["peer:opus", "opus"]}
+            ],
+        }
+    ]
+}
+
+
 def _shipped(tmp_path: Path) -> dict[str, Any]:
-    """Resolve the shipped-only table, whose code profile carries a peer entry."""
-    return _resolved(tmp_path)
+    """Resolve a table whose code profile's reviewer C carries a peer entry."""
+    return _resolved(tmp_path, user=_PEER_LAYER)
 
 
 def _reviewer(config: dict[str, Any], profile_id: str, name: str) -> dict[str, Any]:
@@ -413,12 +429,16 @@ def _reviewer(config: dict[str, Any], profile_id: str, name: str) -> dict[str, A
     )
 
 
-def test_shipped_default_gives_reviewer_c_one_peer_priority_list(tmp_path: Path) -> None:
-    """The shipped priority list is exactly one lane in exactly one profile."""
-    config = _shipped(tmp_path)
+def test_shipped_default_gives_reviewer_c_a_sol_opus_declaration(tmp_path: Path) -> None:
+    """Migration step 5: `[peer:opus, opus]` becomes `[sol, opus]` (design D1).
+
+    The shipped multi-entry declaration is exactly one lane in exactly one
+    profile, and names no `peer:` entry.
+    """
+    config = _resolved(tmp_path)
 
     assert _reviewer(config, "code", "reviewer_c_introduced_code")["model"] == [
-        "peer:opus",
+        "sol",
         "opus",
     ]
     listed = [
@@ -494,21 +514,24 @@ def test_a_peer_entry_that_resolves_substitutes_and_discloses(tmp_path: Path) ->
     assert calls[0][1]["project_root"] == str(tmp_path)
 
 
-def test_a_present_owner_without_a_seat_falls_through_and_notes_the_skip(
+def test_a_present_owner_without_a_seat_falls_through_silently(
     tmp_path: Path,
 ) -> None:
+    """Directions 13 and 16: a skipped entry is skipped silently.
+
+    The reason stays available on the opt-in diagnostic channel
+    (`--explain-peer-seats`); it is never a disclosure the review repeats.
+    """
     config, disclosures, diagnostics = rp.apply_model_priority(
         _shipped(tmp_path), discover=_discover(_FakeSeat("UP", "up-seat"))
     )
 
     assert _reviewer(config, "code", "reviewer_c_introduced_code")["model"] == "opus"
-    assert diagnostics == []
-    assert len(disclosures) == 1
-    line = disclosures[0]
-    assert line.startswith("model-priority: profile 'code' lane ")
-    assert "skipped priority entry 'peer:opus'" in line
+    assert disclosures == []
+    assert len(diagnostics) == 1
+    line = diagnostics[0]
+    assert "'peer:opus'" in line
     assert "no reachable BESIDE seat" in line
-    assert "runs on 'opus'" in line
 
 
 def test_absent_owner_is_silent_and_diagnosed_as_absent(
@@ -578,22 +601,23 @@ def test_a_raising_probe_degrades_to_the_next_entry(tmp_path: Path) -> None:
     )
 
     assert _reviewer(config, "code", "reviewer_c_introduced_code")["model"] == "opus"
-    assert len(disclosures) == 1
-    assert "skipped priority entry 'peer:opus' (seat discovery failed)" in (
-        disclosures[0]
+    assert disclosures == []
+    assert any("RuntimeError: registry unreadable" in line for line in diagnostics)
+    assert any(
+        "'peer:opus'" in line and "seat discovery failed" in line
+        for line in diagnostics
     )
-    assert len(diagnostics) == 1
-    assert "RuntimeError: registry unreadable" in diagnostics[0]
 
 
 def test_a_malformed_seats_result_degrades_rather_than_raising(tmp_path: Path) -> None:
     """An unexpected owner shape falls through to the next entry."""
-    config, disclosures, _diagnostics = rp.apply_model_priority(
+    config, disclosures, diagnostics = rp.apply_model_priority(
         _shipped(tmp_path), discover=lambda self_ref, **kwargs: object()
     )
 
     assert _reviewer(config, "code", "reviewer_c_introduced_code")["model"] == "opus"
-    assert "no reachable BESIDE seat" in disclosures[0]
+    assert disclosures == []
+    assert "no reachable BESIDE seat" in diagnostics[0]
 
 
 def test_a_list_whose_entries_all_fail_is_a_configuration_error(tmp_path: Path) -> None:
@@ -758,7 +782,7 @@ def test_an_unresolvable_peer_is_absent_from_the_fallback_chain(
     tmp_path: Path,
 ) -> None:
     """An entry that cannot resolve now cannot run later either."""
-    resolved, disclosures, _diag = rp.apply_model_priority(
+    resolved, disclosures, diag = rp.apply_model_priority(
         _with_model(tmp_path, ["peer:opus", "luna", "peer:sonnet", "sonnet"]),
         discover=_discover(_FakeSeat("UP", "up-seat")),
     )
@@ -766,11 +790,11 @@ def test_an_unresolvable_peer_is_absent_from_the_fallback_chain(
     reviewer = _reviewer(resolved, "code", "reviewer_c_introduced_code")
     assert reviewer["model"] == "luna"
     assert reviewer["model_fallbacks"] == ["sonnet"]
-    # The skip disclosure is the one the chosen entry already produced; a later
-    # entry dropping out does not change what the lane runs on.
-    assert len(disclosures) == 1
-    assert "skipped priority entry 'peer:opus'" in disclosures[0]
-    assert "runs on 'luna'" in disclosures[0]
+    # Skips are silent (directions 13, 16); only the diagnostic channel says
+    # which entry was passed over before the chosen one.
+    assert disclosures == []
+    assert len(diag) == 1
+    assert "'peer:opus'" in diag[0]
 
 
 def test_a_resolved_peer_in_the_chain_is_carried_as_its_endpoint_id(
@@ -1056,7 +1080,11 @@ def test_one_probe_per_distinct_peer_target_within_a_single_call(
                         {
                             "name": "reviewer_a_claude_md_compliance",
                             "model": ["peer:opus", "opus"],
-                        }
+                        },
+                        {
+                            "name": "reviewer_c_introduced_code",
+                            "model": ["peer:opus", "opus"],
+                        },
                     ],
                 }
             ]
@@ -1082,6 +1110,7 @@ def test_cli_discloses_a_substitution_on_stderr_and_keeps_stdout_parseable(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     home, project_root, _project_path = _layers(tmp_path)
+    _write_yaml(home / ".claude" / "config" / rp.CONFIG_NAME, _PEER_LAYER)
     monkeypatch.setattr(
         rp,
         "_probe_discover_seats",
@@ -1105,6 +1134,7 @@ def test_cli_is_silent_about_an_absent_owner_until_explain_is_asked_for(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     home, project_root, _project_path = _layers(tmp_path)
+    _write_yaml(home / ".claude" / "config" / rp.CONFIG_NAME, _PEER_LAYER)
     monkeypatch.setattr(rp, "_probe_discover_seats", _REAL_PROBE)
     monkeypatch.setitem(sys.modules, "llm_scripting_kit", None)
 

@@ -99,8 +99,10 @@ EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max")
 #
 # The edge is OPTIONAL (plugin-dev enabling.md). Without the owner a `peer:`
 # entry simply does not resolve and the next entry does, so the rendered table
-# states the model that will run and absence is silent. A resolved `peer:`
-# entry is never silent: it is disclosed on stderr, one line per lane.
+# states the model that will run and absence is silent. A `peer:` entry that
+# does not resolve is skipped silently with the owner present too; its reason
+# is on the opt-in `--explain-peer-seats` channel. A resolved `peer:` entry is
+# a rewrite, and that is disclosed on stderr, one line per lane.
 #
 # --------------------------------------------------------------------------
 # model_fallbacks: what is left of the list once one entry has been chosen
@@ -971,13 +973,15 @@ def apply_model_priority(
                 f"family) reported by {PEER_SEATS_FRONTIER}."
             )
         elif skipped and peers.available:
-            # The owner is present and the probe ran, so the skip is a fact
-            # about this fleet's seats rather than about a missing plugin --
-            # which is why it is disclosed here and absence stays silent.
+            # A skipped entry is skipped SILENTLY (model-declaration directions
+            # 13 and 16): the table states the model the lane starts on, so it
+            # is true as read. The reason goes to the opt-in diagnostic channel
+            # (`--explain-peer-seats`), never to the disclosure channel a review
+            # repeats.
             detail = ", ".join(f"{entry!r} ({reason})" for entry, reason in skipped)
-            disclosures.append(
-                f"model-priority: profile {profile_id!r} lane {lane!r} skipped "
-                f"priority entry {detail} and runs on {chosen!r}."
+            peers.diagnostics.append(
+                f"profile {profile_id!r} lane {lane!r} passed over priority "
+                f"entry {detail}; the lane starts on {chosen!r}."
             )
 
     return resolved, disclosures, peers.diagnostics

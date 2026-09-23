@@ -27,7 +27,7 @@ profiles:
     model: opus
   - name: reviewer_c_introduced_code
     model:
-    - peer:opus
+    - sol
     - opus
   validator_models:
     bug: opus

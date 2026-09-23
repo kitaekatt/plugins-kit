@@ -6,8 +6,8 @@ Two contracts, and they are the reason this lever exists at all:
    acquired the lock -- even briefly -- would clear a stale one and could make
    a genuine launcher stand down, so the probe reads the lock and never
    touches it.
-2. `run` applies only user/project layers. It must refuse a running pass,
-   whose manifest scope may include plugins or another project.
+2. `run` launches the hooks' own engine pass for the working directory. It
+   must refuse a running pass, whose project scope may differ.
 """
 
 import hashlib
@@ -258,19 +258,26 @@ class TestRun:
 
         def fake_run(cmd, **kw):
             seen["cmd"] = cmd
+            seen["stdin"] = kw.get("stdin")
             return _ExitedProcess()
 
         monkeypatch.setattr(cli.subprocess, "Popen", fake_run)
         monkeypatch.setattr(cli, "FINAL_GRACE_SECONDS", 0.0)
         monkeypatch.setattr(cli, "POLL_INTERVAL", 0.0)
+        monkeypatch.delenv("BOOTSTRAP_PYTHON", raising=False)
         assert cli.main(["run", "--verbose"]) == 0
         capsys.readouterr()
-        assert seen["cmd"][-2:] == ["--console", "--verbose"]
-        assert seen["cmd"][0] == sys.executable
-        assert os.path.normpath(seen["cmd"][1]) == os.path.normpath(
-            "/plug/scripts/bootstrap_run.py"
-        )
-        assert seen["cmd"][seen["cmd"].index("--project-dir") + 1] == os.getcwd()
+        cmd = seen["cmd"]
+        assert cmd[-3:] == ["--console", "--exit-status", "--verbose"]
+        # The hooks' own entry point, under the interpreter codex-hook uses.
+        assert cmd[0] == cli._bootstrap_engine_python()
+        assert os.path.normpath(cmd[1]) == os.path.normpath(
+            "/plug/engine/bootstrap_engine.py")
+        assert cmd[cmd.index("--project-dir") + 1] == os.getcwd()
+        assert cmd[cmd.index("--project-key") + 1] == "_global_"
+        assert "--console" in cmd and "--exit-status" in cmd
+        # A pass's commands must never read the caller's terminal.
+        assert seen["stdin"] is cli.subprocess.DEVNULL
 
     def test_unknown_flag_without_run_is_still_an_error(self, capsys):
         with pytest.raises(SystemExit):

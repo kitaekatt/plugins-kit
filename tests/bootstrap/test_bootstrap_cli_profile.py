@@ -264,9 +264,8 @@ class TestResolvesThroughTheEngine:
         payload = json.loads(capsys.readouterr().out)
         assert payload["status"] == "no_profiles"
         assert payload["write_target"] == "/nowhere/bootstrap.local.json"
-        # The legacy layer is deliberately excluded from a terminal resolution
-        # (layered_bootstrap.py calls _load_layered_manifests_ex the same
-        # way): data_dir must be None, never the CLI's own plugin data dir.
+        # The deprecated legacy layer is left out of the profile report:
+        # data_dir must be None, never the CLI's own plugin data dir.
         assert calls == [(str(env.project), None)]
 
     def test_engine_missing_the_helper_fails_loudly(self, env, capsys):
@@ -407,6 +406,7 @@ class TestSet:
 
         def fake_popen(cmd, **kw):
             seen["cmd"] = cmd
+            seen["stdin"] = kw.get("stdin")
             return _ExitedProcess()
 
         monkeypatch.setattr(cli.subprocess, "Popen", fake_popen)
@@ -417,6 +417,9 @@ class TestSet:
         assert rc == 0
         cmd = seen["cmd"]
         assert cmd[cmd.index("--project-dir") + 1] == str(env.project)
+        # The same engine pass `bootstrap run` launches, not a separate runner.
+        assert cmd == cli._engine_cmd("/plug", str(env.data_dir), env.project)
+        assert seen["stdin"] is cli.subprocess.DEVNULL
 
     def test_project_dir_before_set_is_honored_not_discarded(self, env, capsys):
         """--project-dir given BEFORE `set` must not be silently dropped.

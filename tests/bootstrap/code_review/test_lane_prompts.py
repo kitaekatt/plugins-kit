@@ -40,31 +40,41 @@ class TestModelClassification:
 
 
 class TestShippedDefaultsPreserveAgentDispatch:
-    def test_every_shipped_model_is_an_agent_alias(self, tmp_path: Path) -> None:
-        """The no-override path must dispatch exactly as it did before.
+    def test_every_shipped_declaration_still_routes_without_an_endpoint(
+        self, tmp_path: Path
+    ) -> None:
+        """The no-override path must still run on a machine with no endpoint.
 
-        This is the compatibility guarantee the whole feature rests on: if a
-        shipped default ever became an endpoint id, every user would silently
-        start routing reviews off the Agent tool.
+        Every shipped reviewer declaration (resolved `model` plus
+        `model_fallbacks`) ends in an Agent alias, so a machine without
+        llm-scripting-kit, or whose endpoints are all unusable, still routes
+        every lane through the Agent tool. The one shipped endpoint entry is
+        `sol` ahead of `opus` on reviewer_c (migration step 5: the explicit form
+        of the `[peer:opus, opus]` it replaced). Validators are never
+        endpoint-eligible, so each is an alias.
 
-        The shipped `code` profile states reviewer_c as a priority list, so the
-        table is resolved first -- with a stub owner that reports no seat, which
-        is the no-peer path. Each resolved value is asserted to be a STRING
-        before it reaches is_agent_alias: a list must never get this far, since
-        every downstream consumer (is_agent_alias, the lane runner) reads one
-        model per lane.
+        Each resolved value is asserted to be a STRING before it reaches
+        is_agent_alias: a list must never get this far, since every downstream
+        consumer (is_agent_alias, the lane runner) reads one model per lane.
         """
         config, _provenance = rp.resolve_config(tmp_path / "project", home=tmp_path / "home")
         config, _disclosures, _diagnostics = rp.apply_model_priority(
             config, discover=lambda self_ref, **kwargs: None
         )
+        endpoint_entries = []
         for profile in config["profiles"]:
             for reviewer in profile["reviewers"]:
                 assert isinstance(reviewer["model"], str), (
                     f"resolved {profile['id']}.{reviewer['name']} is not a string"
                 )
-                assert lp.is_agent_alias(reviewer["model"]), (
-                    f"shipped {profile['id']}.{reviewer['name']} is not an Agent alias"
+                declaration = [reviewer["model"], *reviewer["model_fallbacks"]]
+                assert lp.is_agent_alias(declaration[-1]), (
+                    f"shipped {profile['id']}.{reviewer['name']} does not end in an Agent alias"
+                )
+                endpoint_entries.extend(
+                    (profile["id"], reviewer["name"], entry)
+                    for entry in declaration
+                    if not lp.is_agent_alias(entry)
                 )
             for reason, model in profile["validator_models"].items():
                 assert isinstance(model, str), (
@@ -73,6 +83,7 @@ class TestShippedDefaultsPreserveAgentDispatch:
                 assert lp.is_agent_alias(model), (
                     f"shipped {profile['id']}.validator_models.{reason} is not an Agent alias"
                 )
+        assert endpoint_entries == [("code", "reviewer_c_introduced_code", "sol")]
 
 
 class TestParseIssueArray:
