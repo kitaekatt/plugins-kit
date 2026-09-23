@@ -100,11 +100,6 @@ technique_skill:
             `---` separator and layer provenance; parse only the YAML above the separator. Keep
             the resolved `profiles` list for steps 6 and 7. See references/configuration.md for
             the full layer/merge/override contract.
-            The renderer may also print `model-priority:` lines on STDERR. Each one names a
-            lane whose deprecated `peer:` entry the renderer rewrote to an endpoint id. Keep
-            every such line and repeat it verbatim in the step-9 review header, under
-            `## Model-priority substitutions`, and never edit the resolved table to undo it.
-            A `peer:` entry that did not resolve is left out of the table without a line.
           tool: Read + "${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" ${CLAUDE_PLUGIN_ROOT}/scripts/render_review_profiles.py
         - n: 5
           action: |
@@ -384,11 +379,6 @@ technique_skill:
               verbatim, re-selections included. This is a disclosure, not a warning: the
               rendered review looks identical whichever entry ran, so the reader must never
               have to infer which model actually reviewed their change.
-            - When the step-4 renderer printed any `model-priority:` line on stderr,
-              prepend a `## Model-priority substitutions` section carrying each line verbatim.
-              Such a lane's table entry is an endpoint id the renderer wrote in place of a
-              deprecated `peer:` entry. This is a disclosure, not a warning: the rewrite is
-              the configured behaviour and nothing needs fixing.
             - When `bundle.submit_gates` is non-empty, prepend a `## Submit checklist`
               section, each gate carrying its step-5 verdict and the evidence for it.
             - When `bundle.unresolved` or `bundle.stale_open` is non-empty, prepend a
@@ -562,9 +552,8 @@ technique_skill:
         - Record declined findings ONLY through `prepare_review.py --ledger-record <json>`. Never hand-edit ledger.json -- the key normalization (criterion/reason + taxonomy + normalized anchor) must be computed deterministically, not typed.
         - The `review_profiles` block above is SELECTION GUIDANCE AND RATIONALE ONLY. It carries no reviewer roster, model, or validator_models -- that executable table is resolved per review by "${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" ${CLAUDE_PLUGIN_ROOT}/scripts/render_review_profiles.py (step 4), which merges the shipped bootstrap_lib defaults with any `~/.claude/config/review_profiles.yaml` (user) or `<project_root>/.claude/review_profiles.yaml` (project) override. Never merge those layers yourself and never hand-edit the resolved output.
         - The `profile` in steps 6-7 is always an entry from that RESOLVED table, never the guidance block. Match the guidance prose to decide which profile id fits the change, then read `reviewers` and `validator_models` off the resolved entry with that id.
-        - See references/configuration.md for the layer precedence, merge rules (profiles/reviewers merge by id/name; validator_models and other mappings deep-merge; `disabled: true` removes a record; plain lists like `data_only_extensions` replace), the shipped default table, what a declaration entry may name, how a multi-entry declaration is routed, which lanes may take an endpoint entry, what happens when a lane fails, and the deprecated `peer:` entry (plus the `--explain-peer-seats` diagnostic).
+        - See references/configuration.md for the layer precedence, merge rules (profiles/reviewers merge by id/name; validator_models and other mappings deep-merge; `disabled: true` removes a record; plain lists like `data_only_extensions` replace), the shipped default table, what a declaration entry may name, how a multi-entry declaration is routed, which lanes may take an endpoint entry, and what happens when a lane fails.
         - A reviewer's `model` is a model DECLARATION -- the resolved `model` followed by its `model_fallbacks`. Each entry is dispatched by its harness under step 6's entry-harness rule -- a `claude` entry launches an Agent subagent, any other entry runs through "${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" ${CLAUDE_PLUGIN_ROOT}/scripts/run_review_lane.py.
-        - An entry spelled `peer:<name>` is a deprecated spelling the renderer resolves to a reachable PEER endpoint -- same tier as `<name>`, different model family -- or leaves out of the table when it cannot. The table you read already carries the result. Do not probe for a peer yourself.
         - Apply references/configuration.md's pre-dispatch launch-correction rule before classifying a failed invocation.
         - A reviewer record may carry an `effort` (`low`, `medium`, `high`, `xhigh`, `max`) beside its `model`. It selects the DISPATCH TARGET, not a parameter: the Agent tool has no effort argument, so an effort-carrying lane goes to the `p4-kit:review-lane-<effort>` agent, whose frontmatter sets it. A lane with no `effort` keeps `general-purpose` and inherits this session's effort. Do not attempt to pass effort as an Agent argument, and do not read a lane's effort off the agent's page -- the RESOLVED table is the authority.
         - Effort and model are independent and BOTH are honoured: the profile's `model` goes at the CALL SITE, where it overrides whatever the effort agent's own frontmatter would imply. Never move a lane to a different model to obtain an effort level, and never move it to a different effort to obtain a model.

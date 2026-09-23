@@ -292,45 +292,6 @@ is unchanged -- the other reviewers and all validators keep their shipped declar
 endpoint reviewer's findings still pass through the same validation. Stating the endpoint alone,
 `model: my-local-endpoint`, makes it a one-entry declaration: the lane runs there or fails.
 
-## Deprecated: `peer:` entries
-
-An entry spelled `peer:<name>` is still accepted and keeps its meaning until it is removed:
-
-| Entry | Resolves to | When |
-|---|---|---|
-| `peer:<name>` | a reachable PEER endpoint of `<name>` | only when llm-scripting-kit is installed, current, and reports one |
-
-A PEER is a seat in the SAME tier as `<name>` but a DIFFERENT model family. Name the id you mean
-instead: the shipped table's `[sol, opus]` for `reviewer_c_introduced_code` is the explicit form
-of the `[peer:opus, opus]` it replaced, because `sol` is the shipped peer of `opus`.
-
-For a `peer:<name>` entry the renderer asks llm-scripting-kit
-(`llm_scripting_kit.seats.discover_seats`) for the seats around `<name>`, takes the first
-reachable `BESIDE` seat, and writes that seat's endpoint id into the table in place of the
-entry. A rewrite is announced on STDERR, one line per lane:
-
-    model-priority: profile 'code' lane 'reviewer_c_introduced_code' runs on llm-scripting-kit
-    endpoint 'sol' -- priority entry 'peer:opus' resolved to a reachable BESIDE seat (same
-    tier, different model family) reported by llm_scripting_kit.seats.discover_seats.
-
-(Wrapped here for width; it is emitted as a single line.) `p4-code-review` carries that line
-into the review header. A `peer:` entry that does not resolve -- no reachable seat, or
-llm-scripting-kit absent, too old, or left over from an uninstall -- is left out of the table
-without a line. A declaration of `peer:` entries only, none of which resolves, is a
-configuration error: the renderer exits non-zero naming the profile, the lane, and the list,
-and prints no table.
-
-Why a `peer:` entry did not resolve is available in a diagnostic channel rather than in the
-review:
-
-    "${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" ${CLAUDE_PLUGIN_ROOT}/scripts/render_review_profiles.py --project-root <project root> --explain-peer-seats
-
-prints, on stderr, whether the plugin is absent (with the `claude plugin install` command) or
-present but predating `llm_scripting_kit.seats.discover_seats`, which first shipped in
-llm-scripting-kit 0.28.0 (with the `claude plugin update` command), and which entries a lane
-passed over. None of it changes the table. The probe runs fresh on each render, so removing
-the plugin takes effect on the very next review.
-
 ## Worked override example
 
 To run the `code` profile's `reviewer_c_introduced_code` on Sonnet instead of Opus for one
@@ -358,6 +319,3 @@ between. To keep a cross-family entry ahead of it, state the list you want inste
 prints the merged `profiles` table as YAML, then a `---` separator, then which layers were
 applied and (for any absent override) the path that would create it. This is the same
 resolution step 4 of `p4-code-review` performs -- never merge the layers by hand.
-
-Add `--explain-peer-seats` to see why a `peer:` entry did not resolve. That output is
-diagnostics, never part of the table.
