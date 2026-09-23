@@ -546,9 +546,11 @@ def live(records: Any) -> List[Dict[str, Any]]:
 # A routing row's `models` is a model declaration: a list of registry ids
 # (plugins/bootstrap/skills/plugin-dev/references/model-declaration.md). The
 # core ids (fable, opus, sonnet, haiku) come from bootstrap_lib's validator,
-# not from a set restated here. `agent:<id>` predates the format; it is
-# ACCEPTED and rewritten to `<id>` through the deprecation window.
-AGENT_MODEL_PREFIX = "agent:"
+# not from a set restated here. The deprecated `agent:<id>` prefix predated
+# the format; the deprecation window has closed (declaration-format migration
+# step 12) and it is no longer accepted or rewritten -- an `agent:<id>` entry
+# is now an ordinary unknown id, resolving to nothing like any other
+# unrecognized prefix.
 HARNESS_NAMES = frozenset(("codex", "opencode"))
 CLAUDE_HARNESS = "claude"
 
@@ -942,29 +944,6 @@ def _target(entry_id: str, harness: Optional[str]) -> str:
     return f"{harness}/{entry_id}"
 
 
-def _rewrite_prefixes(raw_models: Any) -> Tuple[Any, List[Tuple[str, str]]]:
-    """Read a deprecated `agent:<id>` entry as `<id>`.
-
-    Accepted and rewritten through the model-declaration deprecation window
-    (plugins/bootstrap/skills/plugin-dev/references/model-declaration.md,
-    "Prefixes"); `--explain` notes each rewrite. Any other prefix is an
-    ordinary id to the validator, and so resolves to nothing.
-    """
-    if isinstance(raw_models, str):
-        raw_models = [raw_models]
-    if not isinstance(raw_models, list):
-        return raw_models, []
-    rewritten: List[Any] = []
-    rewrites: List[Tuple[str, str]] = []
-    for value in raw_models:
-        if isinstance(value, str) and value.startswith(AGENT_MODEL_PREFIX):
-            bare = value[len(AGENT_MODEL_PREFIX):]
-            rewrites.append((value, bare))
-            value = bare
-        rewritten.append(value)
-    return rewritten, rewrites
-
-
 def _drivable_harnesses(config: Dict[str, Any], routable_ids: set) -> set:
     """Harness ids whose backends[] record carries dispatch mechanics.
 
@@ -1146,9 +1125,8 @@ def resolve_routing_models(
             )
             continue
 
-        raw_models, rewrites = _rewrite_prefixes(raw_row.get("models"))
         try:
-            ids = declaration.parse(raw_models)
+            ids = declaration.parse(raw_row.get("models"))
         except declaration.DeclarationError as exc:
             notes.append(f"routing row {row_number} skipped: models: {exc}")
             continue
@@ -1174,13 +1152,6 @@ def resolve_routing_models(
             )
             row = _reduced_row(ids, core_ids, self_ref, reason)
 
-        shown = {model["id"] for model in row["models"]}
-        for declared, bare in rewrites:
-            if bare in shown:
-                notes.append(
-                    f"routing row {row_number}: `{declared}` is read as `{bare}`; the "
-                    "`agent:` prefix is deprecated -- write the bare id"
-                )
         routes.append(
             {
                 "number": row_number,

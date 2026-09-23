@@ -107,8 +107,9 @@ plugin-dev `references/model-declaration.md` specifies. `wkOpenRouter`'s `spec`:
 - omit `model` -- use the configured default declaration (llm-scripting-kit's
   `default_endpoint`), and its `default` model, or `defaultCheap` with
   `cheap: true`. This is the usual choice: pick the *role*, not the slug.
-- `model: 'qwen'` (an alias) or `model: 'qwen/qwen3-32b'` (a raw slug) -- the
-  deprecated form. It runs on the default entry and prints a deprecation line.
+- `model: 'qwen'` (an alias) or `model: 'qwen/qwen3-32b'` (a raw slug) -- not
+  an entry id. It resolves to no entry, so the node exits 2 with the itemised
+  status. Name the entry instead (`or-qwen`).
 
 Change the entries or the defaults once, in llm-scripting-kit's config, and
 every openrouter node across every plugin follows:

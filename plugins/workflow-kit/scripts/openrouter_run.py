@@ -12,10 +12,10 @@ usable entry is left, the typed floor (``NoUsableRoutingTarget``) is reported
 with every declared id and its disposition.
 
 With no ``--model`` the node runs the configured default declaration
-(llm-scripting-kit's ``default_endpoint``); ``--cheap`` selects that entry's
-``defaultCheap`` model. A bare model alias (``qwen``) or raw slug
-(``qwen/qwen3-32b``) is still accepted, runs on the default entry as before,
-and prints a deprecation line naming the replacement form.
+(llm-scripting-kit's ``default_endpoint``); ``--cheap`` selects each entry's
+``defaultCheap`` model. A model alias (``qwen``) or raw slug
+(``qwen/qwen3-32b``) is not an entry id: it resolves to no entry and reaches
+the floor like any other unresolved id.
 
 Run this with WORKFLOW-KIT's OWN venv python, which bootstrap provisions with:
   - `llm_scripting_kit` and `bootstrap_lib` -- shared libraries linked onto this
@@ -46,8 +46,8 @@ import sys
 from pathlib import Path
 
 #: The llm-scripting-kit release that shipped create_transport_backend, the
-#: newest symbol this runner uses (with default_declaration, is_model_alias
-#: and the declaration module's run/NoUsableRoutingTarget).
+#: newest symbol this runner uses (with default_declaration and the
+#: declaration module's run/NoUsableRoutingTarget).
 _LLM_SCRIPTING_KIT_MIN = "0.46.0"
 
 
@@ -72,7 +72,7 @@ def main(argv=None):
         default=None,
         help="A model declaration: one or more llm-scripting-kit transport entry ids, "
         "comma-separated (e.g. or-qwen,or-gpt-mini). If omitted, the configured default "
-        "declaration is used. A model alias or raw slug is accepted (deprecated).",
+        "declaration is used.",
     )
     ap.add_argument(
         "--cheap",
@@ -104,7 +104,7 @@ def main(argv=None):
         )
         return 2
     try:
-        from llm_scripting_kit import default_declaration, is_model_alias
+        from llm_scripting_kit import default_declaration
         from llm_scripting_kit.completion import BackendOptions, create_transport_backend
         from llm_scripting_kit.declaration import (
             DeclarationSupportError,
@@ -125,18 +125,7 @@ def main(argv=None):
 
     project_root = os.getcwd()
     names = _split(args.model)
-    override = None
     try:
-        if len(names) == 1 and is_model_alias(names[0], project_root=project_root):
-            # The pre-declaration form: an alias or slug under the default entry.
-            override = names[0]
-            print(
-                f"workflow-kit: model {override!r} is a model alias or raw slug; that form is "
-                "deprecated. Name a transport entry id instead (e.g. or-qwen); see "
-                "`llm-scripting-kit endpoints`.",
-                file=sys.stderr,
-            )
-            names = []
         if not names:
             names = default_declaration(project_root=project_root)
     except (DeclarationSupportError, ValueError) as exc:  # DeclarationError is a ValueError
@@ -153,9 +142,7 @@ def main(argv=None):
     request = RunRequest(system=args.system or "", prompt=prompt, options=BackendOptions(**backend_kwargs))
 
     def factory(name, project_root=None):
-        return create_transport_backend(
-            name, model=override, cheap=args.cheap, project_root=project_root
-        )
+        return create_transport_backend(name, cheap=args.cheap, project_root=project_root)
 
     try:
         result = run(

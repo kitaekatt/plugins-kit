@@ -121,7 +121,10 @@ RULE_TRIGGER_SESSION = (
     "result from a run that exited 0 is a task failure, not a trigger. Before "
     "re-selecting a unit that may have written, reset its workspace to its "
     "launch state or re-run it in a fresh worktree; read-only review lanes skip "
-    "this step."
+    "this step. A quota or credit halt (a usage-limit or out-of-credits error) "
+    "is written back first: run `llm-scripting-kit record-halt <entry>` before "
+    "re-selecting or re-running describe with --exclude, so every later render "
+    "in this session shows that entry out of quota."
 )
 RULE_TRIGGER_PROCESS = (
     "Re-select: only a classified halt (quota, rate limit, auth, insufficient "

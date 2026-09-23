@@ -219,13 +219,17 @@ def test_a_task_error_is_a_failed_node_without_a_halt(lsk, tmp_path):
     assert "no API key resolved" in payload["detail"]
 
 
-@pytest.mark.parametrize("legacy, slug", [("qwen", "qwen/qwen3-32b"), ("qwen/qwen3-32b", "qwen/qwen3-32b")])
-def test_a_model_alias_or_raw_slug_still_runs_with_a_deprecation_line(lsk, tmp_path, capsys, legacy, slug):
-    rc, _out, payload = _run(tmp_path, "--model", legacy)
-    assert rc == 0
-    assert (lsk["calls"][0]["endpoint"], lsk["calls"][0]["model"]) == ("openrouter", slug)
-    assert payload["entry"] == "openrouter"
-    assert "deprecated" in capsys.readouterr().err
+@pytest.mark.parametrize("legacy", ["qwen", "qwen/qwen3-32b"])
+def test_a_model_alias_or_raw_slug_is_not_an_entry(lsk, tmp_path, capsys, legacy):
+    """Migration step 12: an alias or raw slug no longer runs on the default
+    entry. It is not a transport entry id, so the node dispatches nothing and
+    exits 2; the entry id (``or-qwen``) is the only accepted form."""
+    rc, out, payload = _run(tmp_path, "--model", legacy)
+    assert rc == 2
+    assert not out.exists()
+    assert lsk["calls"] == []
+    assert payload["ok"] is False
+    assert "deprecated" not in capsys.readouterr().err
 
 
 def test_a_structurally_invalid_declaration_exits_2(lsk, tmp_path, capsys):

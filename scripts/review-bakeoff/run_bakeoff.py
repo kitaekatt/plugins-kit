@@ -21,6 +21,9 @@ RESULTS = Path(os.environ.get("REVIEW_BAKEOFF_RESULTS", BAKEOFF / "results"))
 LANE = "reviewer_b_diff_only_bugs"
 RUNNER = ROOT / "plugins" / "git-kit" / "scripts" / "run_review_lane.py"
 LINE_RANGE = re.compile(r"(\d+)(?:-(\d+))?")
+# The core ids are reserved for `harness: claude`: the review-lane runner refuses
+# them, so their arms go through the `prompts` and `ingest` steps instead.
+CLAUDE_HARNESS_IDS = frozenset({"fable", "opus", "sonnet", "haiku"})
 
 
 @dataclass(frozen=True)
@@ -169,7 +172,22 @@ def _write_json(path: Path, value: Any) -> None:
     path.write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8")
 
 
+def _require_lane_model_id(arm: str) -> None:
+    """Refuse an arm the lane runner cannot take as its --model registry id."""
+    if ":" in arm:
+        raise BakeoffError(
+            f"--arm {arm!r} is not a registry id; a declaration names ids with no "
+            "prefix (for example sol or qwen38-5090-harness)"
+        )
+    if arm in CLAUDE_HARNESS_IDS:
+        raise BakeoffError(
+            f"--arm {arm!r} is a harness: claude id, which the lane runner does not "
+            "dispatch; use the prompts and ingest steps for it"
+        )
+
+
 def run_arm(arm: str, selected: Sequence[str]) -> int:
+    _require_lane_model_id(arm)
     cases = load_cases()
     wanted = set(selected)
     cases = [case for case in cases if not wanted or case.case_id in wanted]
@@ -279,7 +297,7 @@ def score(arms: Sequence[str]) -> int:
 def parser() -> argparse.ArgumentParser:
     root = argparse.ArgumentParser(description="Run and score the reviewer_b bakeoff.")
     sub = root.add_subparsers(dest="command", required=True)
-    run = sub.add_parser("run", help="run an endpoint arm")
+    run = sub.add_parser("run", help="run an endpoint arm; --arm is the registry id passed as the lane --model")
     run.add_argument("--arm", required=True)
     run.add_argument("--case", action="append", default=[])
     prompts = sub.add_parser("prompts", help="write Agent prompt files")

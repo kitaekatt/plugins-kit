@@ -111,7 +111,7 @@ A **step** is exactly one of: an agent step, a pipeline step, a `script` node, o
   `model` is a model declaration of llm-scripting-kit transport entry ids
   (e.g. `or-qwen`, or `[or-qwen, or-gpt-mini]`). Omit it to use the configured
   default declaration (set `cheap: true` for that entry's `defaultCheap`). A
-  model alias or raw slug is still accepted and is deprecated. See
+  model alias or raw slug is not an entry id and is not accepted. See
   `node-strategies.md`.
 
 **Templating** -- `{{ inputs.X }}`, `{{ steps.ID }}`, `{{ steps.ID[*].field }}`

@@ -92,8 +92,9 @@ format every plugin in this marketplace uses (bootstrap's plugin-dev skill,
 `references/model-declaration.md`). The core ids `fable`, `opus`, `sonnet`, and `haiku` are the
 Claude harness's own, driven by the Agent tool. Every other id resolves against the model
 entries exposed by `llm-scripting-kit`. The harness belongs to the resolved entry, not to the
-id: a registry entry named `sol` whose harness is Codex is announced as `codex/sol`. A
-deprecated `agent:<id>` entry is still read as `<id>`, and `--explain` notes each one.
+id: a registry entry named `sol` whose harness is Codex is announced as `codex/sol`. The
+former `agent:<id>` prefix is not accepted -- an `agent:<id>` entry is an ordinary unknown
+id and resolves to nothing, like any other unrecognized prefix.
 
 ### How a row's menu is rendered
 

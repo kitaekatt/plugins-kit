@@ -29,8 +29,9 @@ is probed tomorrow with no edit here:
   * every `routing[].models[]` core id (`fable`, `opus`, `sonnet`, `haiku`,
     from bootstrap_lib.model_declaration.CORE_IDS), via
     `claude -p --model <id>` with a one-word prompt. The harness defines the
-    core ids, so the external model registry is not consulted. A deprecated
-    `agent:<id>` entry is read as `<id>`;
+    core ids, so the external model registry is not consulted. The deprecated
+    `agent:<id>` prefix is no longer accepted; an `agent:<id>` entry is an
+    ordinary unresolved id, listed with the rest;
   * every other `routing[].models[]` name, by delegating discovery to the
     orchestrate guidance resolver. Its harness entry supplies both the
     harness (`codex` or `opencode`) and the model id that harness receives --
@@ -95,12 +96,12 @@ PROMPT = "Reply with exactly: ok"
 
 # Routing rows are model declarations. The core ids are the harness's own and
 # come from the one declaration validator; every other id must resolve
-# through llm-scripting-kit to one of these CLI harnesses. `agent:<id>` is the
-# deprecated prefix, still read as `<id>`.
+# through llm-scripting-kit to one of these CLI harnesses. The deprecated
+# `agent:<id>` prefix is no longer accepted (declaration-format migration
+# step 12); an `agent:<id>` entry is now an ordinary unresolved id.
 sys.path.insert(0, str(REPO_ROOT / "plugins" / "bootstrap"))
 from bootstrap_lib.model_declaration import CORE_IDS  # noqa: E402
 
-AGENT_MODEL_PREFIX = "agent:"
 HARNESS_NAMES = frozenset(("codex", "opencode"))
 
 # Config keys whose probe value is not derivable from the policy.
@@ -212,18 +213,14 @@ def _routing_probe(
             is_routing=True,
         )
 
-    name = raw_model
-    if name.startswith(AGENT_MODEL_PREFIX):
-        name = name[len(AGENT_MODEL_PREFIX):]
-    if name in CORE_IDS:
+    if raw_model in CORE_IDS:
         return Probe(
             "claude-model",
-            name,
+            raw_model,
             where,
             f"entry={raw_model}",
             is_routing=True,
         )
-    raw_model = name
 
     entry = model_entries.get(raw_model)
     if entry is None:
@@ -283,8 +280,7 @@ def collect_probes(
                 isinstance(row, dict)
                 and isinstance(row.get("models"), list)
                 and any(
-                    isinstance(model, str)
-                    and model.removeprefix(AGENT_MODEL_PREFIX) not in CORE_IDS
+                    isinstance(model, str) and model not in CORE_IDS
                     for model in row["models"]
                 )
                 for row in routing_rows

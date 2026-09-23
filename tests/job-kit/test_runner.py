@@ -576,7 +576,7 @@ def test_job_file_floor_reaches_the_run(tmp_path: Path) -> None:
 jobs:
   - id: file-floor
     prompt: run
-    endpoint_preference: [fake-endpoint]
+    models: [fake-endpoint]
     directory: .
     contract:
       command: [true]

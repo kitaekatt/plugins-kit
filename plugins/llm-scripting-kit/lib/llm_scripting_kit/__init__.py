@@ -93,12 +93,6 @@ from .models import (
     resolve_endpoint,
     resolve_model,
 )
-from .quota_selection import (
-    Candidate,
-    QuotaSelection,
-    choose_endpoint,
-    rank_candidates,
-)
 from .usage_budget import (
     STATUS_AVAILABLE,
     STATUS_UNDER_QUOTA,
@@ -230,11 +224,6 @@ __all__ = [
     "evaluate_usage_budget",
     "pinned_evaluate",
     "record_observed_halt",
-    # quota-aware selection over a caller's preference order
-    "Candidate",
-    "QuotaSelection",
-    "choose_endpoint",
-    "rank_candidates",
     # the one API over a model declaration (describe / run)
     "CALLER_PROCESS",
     "CALLER_SESSION",

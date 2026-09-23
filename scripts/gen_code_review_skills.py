@@ -552,9 +552,8 @@ LEDGER_GOTCHAS = """
 PROFILE_GOTCHAS = """
         - The `review_profiles` block above is SELECTION GUIDANCE AND RATIONALE ONLY. It carries no reviewer roster, model, or validator_models -- that executable table is resolved per review by @RENDER_TOOL@ (step 4), which merges the shipped bootstrap_lib defaults with any `~/.claude/config/review_profiles.yaml` (user) or `<project_root>/.claude/review_profiles.yaml` (project) override. Never merge those layers yourself and never hand-edit the resolved output.
         - The `profile` in steps 6-7 is always an entry from that RESOLVED table, never the guidance block. Match the guidance prose to decide which profile id fits the change, then read `reviewers` and `validator_models` off the resolved entry with that id.
-        - See references/configuration.md for the layer precedence, merge rules (profiles/reviewers merge by id/name; validator_models and other mappings deep-merge; `disabled: true` removes a record; plain lists like `data_only_extensions` replace), the shipped default table, what a declaration entry may name, how a multi-entry declaration is routed, which lanes may take an endpoint entry, what happens when a lane fails, and the deprecated `peer:` entry (plus the `--explain-peer-seats` diagnostic).
+        - See references/configuration.md for the layer precedence, merge rules (profiles/reviewers merge by id/name; validator_models and other mappings deep-merge; `disabled: true` removes a record; plain lists like `data_only_extensions` replace), the shipped default table, what a declaration entry may name, how a multi-entry declaration is routed, which lanes may take an endpoint entry, and what happens when a lane fails.
         - A reviewer's `model` is a model DECLARATION -- the resolved `model` followed by its `model_fallbacks`. Each entry is dispatched by its harness under step 6's entry-harness rule -- a `claude` entry launches an Agent subagent, any other entry runs through @LANE_TOOL@.
-        - An entry spelled `peer:<name>` is a deprecated spelling the renderer resolves to a reachable PEER endpoint -- same tier as `<name>`, different model family -- or leaves out of the table when it cannot. The table you read already carries the result. Do not probe for a peer yourself.
         - Apply references/configuration.md's pre-dispatch launch-correction rule before classifying a failed invocation.
         - A reviewer record may carry an `effort` (`low`, `medium`, `high`, `xhigh`, `max`) beside its `model`. It selects the DISPATCH TARGET, not a parameter: the Agent tool has no effort argument, so an effort-carrying lane goes to the `@KIT@:review-lane-<effort>` agent, whose frontmatter sets it. A lane with no `effort` keeps `general-purpose` and inherits this session's effort. Do not attempt to pass effort as an Agent argument, and do not read a lane's effort off the agent's page -- the RESOLVED table is the authority.
         - Effort and model are independent and BOTH are honoured: the profile's `model` goes at the CALL SITE, where it overrides whatever the effort agent's own frontmatter would imply. Never move a lane to a different model to obtain an effort level, and never move it to a different effort to obtain a model."""
@@ -665,11 +664,6 @@ technique_skill:
             `---` separator and layer provenance; parse only the YAML above the separator. Keep
             the resolved `profiles` list for steps 6 and 7. See references/configuration.md for
             the full layer/merge/override contract.
-            The renderer may also print `model-priority:` lines on STDERR. Each one names a
-            lane whose deprecated `peer:` entry the renderer rewrote to an endpoint id. Keep
-            every such line and repeat it verbatim in the step-9 review header, under
-            `## Model-priority substitutions`, and never edit the resolved table to undo it.
-            A `peer:` entry that did not resolve is left out of the table without a line.
           tool: Read + @RENDER_TOOL@
         - n: 5
           action: |
@@ -812,11 +806,6 @@ technique_skill:
               verbatim, re-selections included. This is a disclosure, not a warning: the
               rendered review looks identical whichever entry ran, so the reader must never
               have to infer which model actually reviewed their change.
-            - When the step-4 renderer printed any `model-priority:` line on stderr,
-              prepend a `## Model-priority substitutions` section carrying each line verbatim.
-              Such a lane's table entry is an endpoint id the renderer wrote in place of a
-              deprecated `peer:` entry. This is a disclosure, not a warning: the rewrite is
-              the configured behaviour and nothing needs fixing.
             - When `bundle.submit_gates` is non-empty, prepend a `## Submit checklist`
               section, each gate carrying its step-5 verdict and the evidence for it.
 @STEP9_TAIL@
@@ -2395,45 +2384,6 @@ is unchanged -- the other reviewers and all validators keep their shipped declar
 endpoint reviewer's findings still pass through the same validation. Stating the endpoint alone,
 `model: my-local-endpoint`, makes it a one-entry declaration: the lane runs there or fails.
 
-## Deprecated: `peer:` entries
-
-An entry spelled `peer:<name>` is still accepted and keeps its meaning until it is removed:
-
-| Entry | Resolves to | When |
-|---|---|---|
-| `peer:<name>` | a reachable PEER endpoint of `<name>` | only when llm-scripting-kit is installed, current, and reports one |
-
-A PEER is a seat in the SAME tier as `<name>` but a DIFFERENT model family. Name the id you mean
-instead: the shipped table's `[sol, opus]` for `reviewer_c_introduced_code` is the explicit form
-of the `[peer:opus, opus]` it replaced, because `sol` is the shipped peer of `opus`.
-
-For a `peer:<name>` entry the renderer asks llm-scripting-kit
-(`llm_scripting_kit.seats.discover_seats`) for the seats around `<name>`, takes the first
-reachable `BESIDE` seat, and writes that seat's endpoint id into the table in place of the
-entry. A rewrite is announced on STDERR, one line per lane:
-
-    model-priority: profile 'code' lane 'reviewer_c_introduced_code' runs on llm-scripting-kit
-    endpoint 'sol' -- priority entry 'peer:opus' resolved to a reachable BESIDE seat (same
-    tier, different model family) reported by llm_scripting_kit.seats.discover_seats.
-
-(Wrapped here for width; it is emitted as a single line.) `@SKILL_NAME@` carries that line
-into the review header. A `peer:` entry that does not resolve -- no reachable seat, or
-llm-scripting-kit absent, too old, or left over from an uninstall -- is left out of the table
-without a line. A declaration of `peer:` entries only, none of which resolves, is a
-configuration error: the renderer exits non-zero naming the profile, the lane, and the list,
-and prints no table.
-
-Why a `peer:` entry did not resolve is available in a diagnostic channel rather than in the
-review:
-
-    @RENDER_TOOL@ --project-root <project root> --explain-peer-seats
-
-prints, on stderr, whether the plugin is absent (with the `claude plugin install` command) or
-present but predating `llm_scripting_kit.seats.discover_seats`, which first shipped in
-llm-scripting-kit 0.28.0 (with the `claude plugin update` command), and which entries a lane
-passed over. None of it changes the table. The probe runs fresh on each render, so removing
-the plugin takes effect on the very next review.
-
 ## Worked override example
 
 To run the `code` profile's `reviewer_c_introduced_code` on Sonnet instead of Opus for one
@@ -2461,9 +2411,6 @@ between. To keep a cross-family entry ahead of it, state the list you want inste
 prints the merged `profiles` table as YAML, then a `---` separator, then which layers were
 applied and (for any absent override) the path that would create it. This is the same
 resolution step 4 of `@SKILL_NAME@` performs -- never merge the layers by hand.
-
-Add `--explain-peer-seats` to see why a `peer:` entry did not resolve. That output is
-diagnostics, never part of the table.
 """
 
 CONFIGURATION_FRAGMENTS = {

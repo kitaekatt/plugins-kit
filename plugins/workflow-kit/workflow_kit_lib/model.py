@@ -195,7 +195,7 @@ class OpenRouterSpec:
     `model` is a model declaration of llm-scripting-kit transport entry ids
     (e.g. `or-qwen`), passed to the node runner unchanged; omit it to use the
     configured default declaration, and set `cheap: true` for that entry's
-    `defaultCheap`. A bare model alias or raw slug is still accepted (deprecated).
+    `defaultCheap`. A model alias or raw slug is not an entry id.
     """
 
     prompt_file: str

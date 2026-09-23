@@ -58,9 +58,7 @@ class TestShippedDefaultsPreserveAgentDispatch:
         consumer (is_agent_alias, the lane runner) reads one model per lane.
         """
         config, _provenance = rp.resolve_config(tmp_path / "project", home=tmp_path / "home")
-        config, _disclosures, _diagnostics = rp.apply_model_priority(
-            config, discover=lambda self_ref, **kwargs: None
-        )
+        config = rp.apply_model_priority(config)
         endpoint_entries = []
         for profile in config["profiles"]:
             for reviewer in profile["reviewers"]:

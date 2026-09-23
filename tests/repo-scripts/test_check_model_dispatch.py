@@ -23,8 +23,8 @@ def _write_policy(tmp_path, policy):
 def test_routing_rows_are_read_and_names_are_classified(tmp_path):
     policy = {
         "routing": [
-            {"shape": ["cross-check"], "models": ["agent:fable", "sol"]},
-            {"shape": [], "models": ["agent:sonnet"]},
+            {"shape": ["cross-check"], "models": ["fable", "sol"]},
+            {"shape": [], "models": ["sonnet"]},
         ],
         "backends": [],
     }
@@ -46,16 +46,38 @@ def test_routing_rows_are_read_and_names_are_classified(tmp_path):
         ("codex-model", "gpt-5.6-sol"),
         ("claude-model", "sonnet"),
     ]
-    assert routing[0].extra == "entry=agent:fable"
+    assert routing[0].extra == "entry=fable"
     assert routing[1].extra == "entry=sol, effort=high"
     assert "routing[row=1].models[1]" in routing[1].where
     assert all("ladders" not in probe.where for probe in routing)
 
 
+def test_agent_prefix_is_no_longer_accepted(tmp_path):
+    """The deprecated `agent:<id>` prefix (declaration-format migration step
+    12) is not stripped -- it is an ordinary unresolved id, exactly like any
+    other unrecognized prefix such as `codex:<id>`."""
+    policy = {
+        "routing": [{"shape": [], "models": ["agent:fable", "sol"]}],
+        "backends": [],
+    }
+    probes = _CHECKER.collect_probes(
+        policy,
+        tmp_path / "orchestration.yaml",
+        model_entries={"sol": {"harness": "codex", "model": "gpt-5.6-sol"}},
+    )
+
+    routing = [probe for probe in probes if probe.is_routing]
+    assert [(probe.kind, probe.value) for probe in routing] == [
+        ("unresolved-model", "agent:fable"),
+        ("codex-model", "gpt-5.6-sol"),
+    ]
+    assert "no harness model entry named `agent:fable`" in routing[0].extra
+
+
 def test_hardcoded_backend_command_model_is_still_collected(tmp_path, monkeypatch):
     monkeypatch.setattr(_CHECKER, "collect_config_keys", lambda _path: {})
     policy = {
-        "routing": [{"shape": [], "models": ["agent:fable"]}],
+        "routing": [{"shape": [], "models": ["fable"]}],
         "backends": [
             {"id": "codex", "command": "codex exec -m gpt-5.6-sol -"},
         ],
@@ -100,7 +122,7 @@ def test_list_performs_no_dispatch(tmp_path, monkeypatch, capsys):
     policy_path = _write_policy(
         tmp_path,
         {
-            "routing": [{"shape": [], "models": ["agent:fable", "sol"]}],
+            "routing": [{"shape": [], "models": ["fable", "sol"]}],
             "backends": [],
         },
     )

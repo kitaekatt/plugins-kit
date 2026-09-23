@@ -14,8 +14,8 @@ validated before it is returned so callers can resolve the profile before any
 review fan-out starts.
 
 A reviewer's ``model`` is one of those ordinary lists when it is not a bare
-string: an ordered priority list whose first resolving entry becomes the lane's
-model, replaced wholesale by any higher layer that states one. What is left of
+string: an ordered priority list whose first entry becomes the lane's model,
+replaced wholesale by any higher layer that states one. What is left of
 that list survives into the resolved table as ``model_fallbacks``. See the model
 priority notes below ``REVIEWER_FIELDS`` and ``apply_model_priority``.
 """
@@ -24,7 +24,6 @@ from __future__ import annotations
 
 import argparse
 from copy import deepcopy
-import importlib
 import sys
 from pathlib import Path
 from typing import Any, Mapping, NoReturn, Sequence
@@ -73,68 +72,30 @@ REQUIRED_PROFILE_FIELDS = frozenset({"selection", "reviewers", "validator_models
 EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max")
 
 # --------------------------------------------------------------------------
-# model priority lists: the optional llm-scripting-kit seats edge
+# model priority lists
 # --------------------------------------------------------------------------
 #
 # A reviewer's `model` is a model declaration in the shared format
 # (bootstrap_lib.model_declaration; plugin-dev references/model-declaration.md):
-# a string (one entry) or a non-empty ordered list naming no entry twice,
-# evaluated in order; the first entry that RESOLVES becomes the lane's model.
-# Two entry kinds exist:
-#
-#   <name>        a plain Agent alias or endpoint id -- always resolves.
-#   peer:<name>   resolves only when llm-scripting-kit is installed AND current
-#                 enough to expose the frontier symbol below AND reports a
-#                 reachable BESIDE seat for <name> -- an endpoint in the same
-#                 tier but a different model family. It resolves to that seat's
-#                 endpoint id.
-#
-# A reviewer reading the same change on a different family is the point; a
-# second lane on the same family would agree with itself.
+# a string (one entry) or a non-empty ordered list naming no entry twice. Every
+# entry names a plain Agent alias or endpoint id, and the first entry always
+# becomes the lane's model.
 #
 # The list is a PLAIN list, so a higher layer's `model` replaces it wholesale.
-# That is the whole reason this replaced the former `peer_when_available`
-# boolean: a by-name reviewer merge inherited the boolean, so a user override
-# stating `model: fable` still ran on a peer seat.
-#
-# The edge is OPTIONAL (plugin-dev enabling.md). Without the owner a `peer:`
-# entry simply does not resolve and the next entry does, so the rendered table
-# states the model that will run and absence is silent. A `peer:` entry that
-# does not resolve is skipped silently with the owner present too; its reason
-# is on the opt-in `--explain-peer-seats` channel. A resolved `peer:` entry is
-# a rewrite, and that is disclosed on stderr, one line per lane.
 #
 # --------------------------------------------------------------------------
-# model_fallbacks: what is left of the list once one entry has been chosen
+# model_fallbacks: what is left of the list once the first entry is chosen
 # --------------------------------------------------------------------------
 #
-# Resolution answers "which model does this lane START on", and that is settled
-# here. Whether the model WORKS is only learned at dispatch, where an endpoint
-# can be out of credits, rate limited, or withdrawn -- none of which this
-# module can see. So the entries AFTER the chosen one are carried into the
-# resolved table rather than discarded: a caller whose dispatch fails already
-# holds the order the user asked for, instead of having to re-resolve the
-# configuration mid-review to learn what to try next. Whether it falls over is
-# the caller's decision; what it may fall over TO is this module's answer.
-#
-# The chain is resolved exactly as the chosen entry was. A later `peer:` entry
-# is carried as its endpoint id when a seat is reachable and OMITTED when it is
-# not -- an entry that cannot resolve now cannot run later either, and the
-# table is dispatched from verbatim, so a `peer:` token reaching a caller would
-# be dispatched as if it were an endpoint id. An empty chain is stated rather
+# Resolution answers "which model does this lane START on". Whether the model
+# WORKS is only learned at dispatch, where an endpoint can be out of credits,
+# rate limited, or withdrawn -- none of which this module can see. So the
+# entries after the first are carried into the resolved table rather than
+# discarded: a caller whose dispatch fails already holds the order the user
+# asked for, instead of having to re-resolve the configuration mid-review to
+# learn what to try next. Whether it falls over is the caller's decision; what
+# it may fall over TO is this module's answer. An empty chain is stated rather
 # than left out: "nothing left to try" is an answer.
-PEER_ENTRY_PREFIX = "peer:"
-PEER_SEATS_OWNER = "llm-scripting-kit"
-PEER_SEATS_MARKETPLACE = "plugins-kit"
-PEER_SEATS_MODULE = "llm_scripting_kit.seats"
-PEER_SEATS_FRONTIER = "llm_scripting_kit.seats.discover_seats"
-# The owner version that first shipped the frontier symbol. Named in the
-# too-old diagnosis so the remedy is a version rather than a guess.
-PEER_SEATS_FRONTIER_VERSION = "0.28.0"
-# Per-seat reachability probe budget, stated here rather than inherited: a
-# review must not stall behind seat discovery.
-PEER_SEATS_TIMEOUT_S = 5.0
-PEER_SEATS_RELATION = "BESIDE"
 
 
 class ConfigError(ValueError):
@@ -272,20 +233,9 @@ def _parse_declaration(value: Any, source: Path | str, location: str) -> list[st
 def _validate_model(value: Any, source: Path | str, location: str) -> None:
     """Validate a reviewer's model declaration: an ordered list of ids.
 
-    A bare string is exactly a one-entry list, `peer:` prefix included -- so
-    `model: peer:opus` is legal and simply has nothing to fall back to when no
-    seat is reachable, which is reported as a configuration error at resolution.
+    A bare string is exactly a one-entry list.
     """
-    entries = _parse_declaration(value, source, location)
-    for index, text in enumerate(entries):
-        entry_location = location if isinstance(value, str) else f"{location}[{index}]"
-        if text.startswith(PEER_ENTRY_PREFIX) and not text[len(PEER_ENTRY_PREFIX):].strip():
-            _fail(
-                source,
-                entry_location,
-                f"a {PEER_ENTRY_PREFIX!r} entry must name a model, e.g. "
-                f"'{PEER_ENTRY_PREFIX}opus'",
-            )
+    _parse_declaration(value, source, location)
 
 
 def _validate_model_fallbacks(value: Any, source: Path | str, location: str) -> None:
@@ -401,7 +351,7 @@ def _validate_reviewer(
             source,
             f"{location}.peer_when_available",
             "was removed: state the preference as an ordered model priority "
-            f"list instead, e.g. `model: [{PEER_ENTRY_PREFIX}<name>, <name>]`",
+            "list instead, e.g. `model: [<name>, <name>]`",
         )
     _validate_known_fields(value, REVIEWER_FIELDS, source, location)
     if "name" not in value:
@@ -718,58 +668,6 @@ def resolve_config(
     return config, provenance
 
 
-def _peer_seats_absent_diagnosis(reason: str) -> str:
-    """Diagnose state 1: the owner plugin was never installed."""
-    return (
-        f"absent: the {PEER_SEATS_OWNER} plugin is not installed, so no peer "
-        f"seat can be discovered. Install it with `claude plugin install "
-        f"{PEER_SEATS_OWNER}@{PEER_SEATS_MARKETPLACE}` and start a new session "
-        f"so bootstrap links its shared library. Underlying error: {reason}"
-    )
-
-
-def _peer_seats_too_old_diagnosis(reason: str) -> str:
-    """Diagnose states 2 and 3: installed, but not current enough (or stale)."""
-    return (
-        f"too old or stale: {PEER_SEATS_OWNER} is importable but does not "
-        f"expose {PEER_SEATS_FRONTIER}, which first shipped in "
-        f"{PEER_SEATS_OWNER} {PEER_SEATS_FRONTIER_VERSION}. Update it with "
-        f"`claude plugin update {PEER_SEATS_OWNER}@{PEER_SEATS_MARKETPLACE}` "
-        f"and start a new session so bootstrap re-syncs its shared library. "
-        f"Underlying error: {reason}"
-    )
-
-
-def _probe_discover_seats() -> tuple[Any | None, str | None]:
-    """Return the frontier callable, or ``None`` and a diagnosis.
-
-    Three runtime states have to be told apart and an ``import`` cannot do it
-    (plugin-dev optional-plugin-dependencies.md): absent, too old, and stale
-    after an uninstall. The package import answers "absent"; everything past it
-    is diagnosed by probing the frontier symbol, never by module presence.
-
-    The import is guarded with ``ImportError`` only. A broader handler here
-    would swallow a syntax error in a half-synced copy and report it as an
-    absent plugin.
-    """
-    try:
-        importlib.import_module("llm_scripting_kit")
-    except ImportError as exc:
-        return None, _peer_seats_absent_diagnosis(str(exc))
-
-    try:
-        module = importlib.import_module(PEER_SEATS_MODULE)
-    except ImportError as exc:
-        return None, _peer_seats_too_old_diagnosis(str(exc))
-
-    found = getattr(module, "discover_seats", None)
-    if not callable(found):
-        return None, _peer_seats_too_old_diagnosis(
-            f"{PEER_SEATS_FRONTIER} is missing"
-        )
-    return found, None
-
-
 def _reviewer_lanes(
     config: Mapping[str, Any],
 ) -> list[tuple[str, dict[str, Any]]]:
@@ -785,116 +683,13 @@ def _reviewer_lanes(
     return lanes
 
 
-def _first_beside_endpoint(result: Any) -> str | None:
-    """Return the first reachable BESIDE seat's endpoint id, if any.
-
-    Attributes are read defensively: the shared lib is linked by a ``.pth``
-    that pins no version, so a shape change reaches this venv without the
-    consumer asking for it. An unexpected shape degrades to "no seat", which
-    leaves the stated model in place.
-    """
-    for seat in getattr(result, "seats", ()) or ():
-        if getattr(seat, "relation", None) != PEER_SEATS_RELATION:
-            continue
-        endpoint = getattr(seat, "endpoint", None)
-        if isinstance(endpoint, str) and endpoint.strip():
-            return endpoint
-    return None
-
-
-class _PeerResolver:
-    """Resolve ``peer:<name>`` entries, probing the owner at most once."""
-
-    def __init__(
-        self,
-        *,
-        project_root: PathLike | None,
-        timeout: float | None,
-        discover: Any | None,
-    ) -> None:
-        self._project_root = project_root
-        self._timeout = timeout
-        self._discover = discover
-        self._probed = discover is not None
-        self.available = discover is not None
-        self.diagnostics: list[str] = []
-        # One seat probe per distinct peer target within this call, memoizing
-        # the reason too so a second lane naming the same target reports the
-        # same cause. This is not a cache across invocations, which the
-        # enabling contract forbids.
-        self._seen: dict[str, tuple[str | None, str]] = {}
-
-    def _ensure_discover(self) -> None:
-        if self._probed:
-            return
-        self._probed = True
-        self._discover, diagnosis = _probe_discover_seats()
-        if self._discover is None:
-            self.diagnostics.append(str(diagnosis))
-        else:
-            self.available = True
-
-    def resolve(self, target: str) -> tuple[str | None, str]:
-        """Return an endpoint id for ``target``, or ``None`` and a reason."""
-        self._ensure_discover()
-        if self._discover is None:
-            return None, f"{PEER_SEATS_OWNER} is not available"
-        if target in self._seen:
-            return self._seen[target]
-
-        reason = f"no reachable {PEER_SEATS_RELATION} seat"
-        try:
-            result = self._discover(
-                target,
-                project_root=(
-                    None if self._project_root is None else str(self._project_root)
-                ),
-                timeout=(
-                    PEER_SEATS_TIMEOUT_S if self._timeout is None else self._timeout
-                ),
-            )
-            endpoint = _first_beside_endpoint(result)
-        except Exception as exc:  # noqa: BLE001 - degrade, never fail a review
-            endpoint = None
-            reason = "seat discovery failed"
-            self.diagnostics.append(
-                f"seat discovery for {PEER_ENTRY_PREFIX}{target} failed, so "
-                f"every entry naming it is skipped: {type(exc).__name__}: {exc}"
-            )
-        outcome = (endpoint, "" if endpoint else reason)
-        self._seen[target] = outcome
-        return outcome
-
-
-def apply_model_priority(
-    config: Mapping[str, Any],
-    *,
-    project_root: PathLike | None = None,
-    timeout: float | None = None,
-    discover: Any | None = None,
-) -> tuple[dict[str, Any], list[str], list[str]]:
+def apply_model_priority(config: Mapping[str, Any]) -> dict[str, Any]:
     """Resolve every reviewer's model priority list to a single model.
 
-    Entries are evaluated in order and the first that resolves wins: a plain
-    name always resolves, a ``peer:<name>`` entry only when the owner reports a
-    reachable ``BESIDE`` seat. Each lane also gains ``model_fallbacks``, the
-    runnable remainder of its list, so a caller that finds the chosen model
-    unusable at dispatch can fail over without re-resolving the configuration.
-    Returns the resolved table, the disclosure lines a caller MUST surface, and
-    diagnostic lines that stay out of the disclosure channel.
-
-    Nothing raised by the probe or the owner escapes: a lane that cannot
-    discover a seat falls through to its next entry, which is what the list
-    already said would happen. A resolved ``peer:`` entry is disclosed by lane,
-    so the table is never quietly different from what ran.
-
-    ``discover`` injects the frontier callable for tests and for a caller that
-    already holds one; when omitted the callable is probed for on demand, and
-    only when an entry actually needs it. Probe results are deliberately not
-    cached across calls -- consent to this disclosure ends with the skill
-    invocation that produced it.
-
-    Raises ``ConfigError`` when no entry of some lane's list resolves.
+    The first entry of an ordered model declaration always becomes the lane's
+    model. Each lane also gains ``model_fallbacks``, the remainder of its list,
+    so a caller that finds the chosen model unusable at dispatch can fail over
+    without re-resolving the configuration.
     """
     resolved = deepcopy(dict(config))
     # A validator declaration names exactly one id (validated at load), so it
@@ -906,85 +701,16 @@ def apply_model_priority(
                 reason: _validator_model(model)
                 for reason, model in profile["validator_models"].items()
             }
-    peers = _PeerResolver(
-        project_root=project_root, timeout=timeout, discover=discover
-    )
-    disclosures: list[str] = []
 
-    for profile_id, reviewer in _reviewer_lanes(resolved):
+    for _profile_id, reviewer in _reviewer_lanes(resolved):
         model = reviewer.get("model")
         entries = _model_entries(model)
         if not entries:
             continue
-        lane = str(reviewer.get("name"))
-        skipped: list[tuple[str, str]] = []
-        chosen: str | None = None
-        chosen_entry = ""
-        chosen_index = 0
+        reviewer["model"] = entries[0]
+        reviewer["model_fallbacks"] = entries[1:]
 
-        for index, entry in enumerate(entries):
-            if not entry.startswith(PEER_ENTRY_PREFIX):
-                chosen = entry
-                chosen_entry = entry
-                chosen_index = index
-                break
-            target = entry[len(PEER_ENTRY_PREFIX):].strip()
-            endpoint, reason = peers.resolve(target)
-            if endpoint is not None:
-                chosen = endpoint
-                chosen_entry = entry
-                chosen_index = index
-                break
-            skipped.append((entry, reason))
-
-        if chosen is None:
-            _fail(
-                "resolved review profiles",
-                f"profile {profile_id!r} lane {lane!r} model",
-                "no entry resolved: "
-                + repr(entries)
-                + ". A plain name always resolves -- add one as the last entry.",
-            )
-
-        reviewer["model"] = chosen
-        # What the lane may fall over TO, in the order the user stated it. A
-        # skipped entry BEFORE the chosen one is already known not to resolve
-        # and is not revisited; an entry after it is resolved now, so a caller
-        # holding this table needs nothing from this module at dispatch time.
-        fallbacks: list[str] = []
-        for entry in entries[chosen_index + 1:]:
-            if not entry.startswith(PEER_ENTRY_PREFIX):
-                fallbacks.append(entry)
-                continue
-            endpoint, _reason = peers.resolve(entry[len(PEER_ENTRY_PREFIX):].strip())
-            # A skip here is silent on purpose: the disclosure channel reports
-            # what the lane RUNS on, and an unreachable seat the lane was never
-            # going to start on has not changed that.
-            if endpoint is not None:
-                fallbacks.append(endpoint)
-        reviewer["model_fallbacks"] = fallbacks
-
-        if chosen_entry.startswith(PEER_ENTRY_PREFIX):
-            disclosures.append(
-                f"model-priority: profile {profile_id!r} lane {lane!r} runs on "
-                f"{PEER_SEATS_OWNER} endpoint {chosen!r} -- priority entry "
-                f"{chosen_entry!r} resolved to a reachable "
-                f"{PEER_SEATS_RELATION} seat (same tier, different model "
-                f"family) reported by {PEER_SEATS_FRONTIER}."
-            )
-        elif skipped and peers.available:
-            # A skipped entry is skipped SILENTLY (model-declaration directions
-            # 13 and 16): the table states the model the lane starts on, so it
-            # is true as read. The reason goes to the opt-in diagnostic channel
-            # (`--explain-peer-seats`), never to the disclosure channel a review
-            # repeats.
-            detail = ", ".join(f"{entry!r} ({reason})" for entry, reason in skipped)
-            peers.diagnostics.append(
-                f"profile {profile_id!r} lane {lane!r} passed over priority "
-                f"entry {detail}; the lane starts on {chosen!r}."
-            )
-
-    return resolved, disclosures, peers.diagnostics
+    return resolved
 
 
 def _projected_model(profile: Mapping[str, Any], reviewer: Mapping[str, Any]) -> str:
@@ -1096,37 +822,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--home",
         help="Override the home root used for the user layer (for isolated callers/tests)",
     )
-    parser.add_argument(
-        "--explain-peer-seats",
-        action="store_true",
-        help=(
-            "Print why a `peer:<name>` priority entry did not resolve (absent "
-            "vs too old or stale owner). Diagnostics only -- never part of the "
-            "rendered table."
-        ),
-    )
     args = parser.parse_args(argv)
     project_root = Path(args.project_root).expanduser().resolve()
     home = Path(args.home).expanduser().resolve() if args.home else None
 
     try:
         config, provenance = resolve_config(project_root, home=home)
-        config, disclosures, diagnostics = apply_model_priority(
-            config, project_root=project_root
-        )
+        config = apply_model_priority(config)
     except ConfigError as exc:
         print(f"review profiles config error: {exc}", file=sys.stderr)
         return 1
-
-    # Disclosures always reach stderr: a resolved peer entry that nobody was
-    # told about would make the rendered table a false claim about what ran.
-    # Diagnostics stay behind the flag -- an absent or too-old owner is silent,
-    # because the table then states exactly the model the lane will use.
-    for line in disclosures:
-        print(line, file=sys.stderr)
-    if args.explain_peer_seats:
-        for line in diagnostics:
-            print(f"model-priority: {line}", file=sys.stderr)
 
     sys.stdout.write(render(config, provenance))
     return 0

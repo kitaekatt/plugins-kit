@@ -14,11 +14,9 @@ import pytest
 
 from content_pipeline.llm import backends
 from content_pipeline.llm.backends import (
-    ENDPOINT_ENV,
     ModelEndpointBackend,
     route,
     routed_model,
-    set_active_backend,
 )
 from content_pipeline.llm.platform import (
     HALT_UNREACHABLE,
@@ -34,12 +32,9 @@ class _Probe:
 
 @pytest.fixture(autouse=True)
 def _clean_routing(monkeypatch):
-    monkeypatch.delenv(ENDPOINT_ENV, raising=False)
     monkeypatch.delenv(backends.MODELS_ENV, raising=False)
-    set_active_backend(None)
     backends.reset_declared_entry_cache()
     yield
-    set_active_backend(None)
     backends.reset_declared_entry_cache()
 
 
@@ -79,9 +74,8 @@ def test_name_is_constant_so_cache_keys_stay_stable():
     assert ModelEndpointBackend(endpoint="b").name == "model-endpoint"
 
 
-def test_endpoint_defaults_from_env(monkeypatch):
-    monkeypatch.setenv(ENDPOINT_ENV, "  qwen38  ")
-    assert ModelEndpointBackend().endpoint == "qwen38"
+def test_endpoint_defaults_to_empty_meaning_the_registry_default():
+    assert ModelEndpointBackend().endpoint == ""
 
 
 def test_empty_endpoint_resolves_through_the_registry_not_the_config(monkeypatch):
@@ -90,7 +84,7 @@ def test_empty_endpoint_resolves_through_the_registry_not_the_config(monkeypatch
 
     None reaches resolve_endpoint, whose default is the llm-scripting-kit
     config's default endpoint -- `openrouter` -- not this registry's. Live, that
-    made an unset CONTENT_PIPELINE_LLM_ENDPOINT probe OpenRouter and report
+    made an empty endpoint probe OpenRouter and report
     "no API key resolved", a nonsense diagnosis for a keyless local entry. Every
     other test here injects or patches, so only an end-to-end run caught it.
     """
@@ -195,11 +189,10 @@ def test_explicit_harness_is_refused_as_transport(monkeypatch, tmp_path):
         "    model: openai/gpt-5\n",
     )
     monkeypatch.setenv("MODEL_ENDPOINTS_REGISTRY", str(path))
-    monkeypatch.setenv(ENDPOINT_ENV, "opencode")
-    set_active_backend("model-endpoint")
 
-    with pytest.raises(LLMUnavailableError, match="harness entry"):
-        route()
+    probe = ModelEndpointBackend(endpoint="opencode").probe()
+    assert not probe.ok
+    assert "harness entry" in probe.detail
 
 
 def test_constructs_without_the_shared_lib():
@@ -340,44 +333,9 @@ def test_non_connection_error_defers_to_the_delegate(monkeypatch):
 # --- route(): the selection-time probe --------------------------------------
 
 
-def test_route_returns_the_backend_when_the_endpoint_is_up(monkeypatch):
-    set_active_backend("model-endpoint")
-    b = ModelEndpointBackend(endpoint="qwen38")
-    monkeypatch.setattr(b, "probe", lambda **k: _Probe(True))
-    assert route(model_endpoint=b) is b
-
-
-def test_route_refuses_when_the_endpoint_is_down(monkeypatch):
-    set_active_backend("model-endpoint")
-    b = ModelEndpointBackend(endpoint="qwen38")
-    monkeypatch.setattr(
-        b, "probe", lambda **k: _Probe(False, detail="connection refused")
-    )
-    with pytest.raises(LLMUnavailableError) as e:
-        route(model_endpoint=b)
-    msg = str(e.value)
-    assert "qwen38" in msg and "connection refused" in msg
-    # The remedy names env vars the consumer controls, never a file in our tree.
-    assert ENDPOINT_ENV in msg and backends.BACKEND_ENV in msg
-
-
-def test_injected_client_skips_the_probe(monkeypatch):
-    """The hermetic test seam: an injected client is the caller's affair, and
-    probing it would put every such test back on the network."""
-    set_active_backend("model-endpoint")
-
-    def explode(**k):  # pragma: no cover - must never run
-        raise AssertionError("probe ran despite an injected client")
-
-    b = ModelEndpointBackend(endpoint="qwen38", client=object())
-    monkeypatch.setattr(b, "probe", explode)
-    assert route(model_endpoint=b) is b
-
-
 def test_route_via_declaration_builds_model_endpoint_backend_and_probes_it(monkeypatch):
     """CONTENT_PIPELINE_LLM_MODELS naming a transport registry entry routes
-    to a ModelEndpointBackend for that entry id, probed exactly like the
-    legacy model-endpoint path (C1)."""
+    to a ModelEndpointBackend for that entry id, probed at selection (C1)."""
     monkeypatch.setenv(backends.MODELS_ENV, "qwen38")
     _install_fake_declaration(monkeypatch, "qwen38")
     monkeypatch.setattr(ModelEndpointBackend, "probe", lambda self, **k: _Probe(True))
@@ -392,14 +350,18 @@ def test_route_via_declaration_refuses_when_the_endpoint_is_down(monkeypatch):
     monkeypatch.setattr(
         ModelEndpointBackend, "probe", lambda self, **k: _Probe(False, detail="connection refused")
     )
-    with pytest.raises(LLMUnavailableError, match="connection refused"):
+    with pytest.raises(LLMUnavailableError) as e:
         route()
+    msg = str(e.value)
+    assert "qwen38" in msg and "connection refused" in msg
+    # The remedy names the env the consumer controls, never a file in our tree.
+    assert backends.MODELS_ENV in msg
 
 
-def test_a_supplied_mock_still_wins_over_this_backend():
+def test_a_supplied_mock_still_wins_over_this_backend(monkeypatch):
     """route()'s unconditional mock seam must not regress -- the probe must not
-    run when a mock is supplied, whatever backend is selected."""
-    set_active_backend("model-endpoint")
+    run when a mock is supplied, whatever the declaration names."""
+    monkeypatch.setenv(backends.MODELS_ENV, "qwen38")
     mine = backends.MockBackend(responses=["x"])
     assert route(mock=mine) is mine
 
@@ -407,24 +369,15 @@ def test_a_supplied_mock_still_wins_over_this_backend():
 # --- routed_model() ---------------------------------------------------------
 
 
-def test_routed_model_prefers_the_pipeline_override(monkeypatch):
-    set_active_backend("model-endpoint")
-    monkeypatch.setenv(backends.MODEL_ENV, "explicit/override")
-    assert routed_model("deepseek/deepseek-v4") == "explicit/override"
-
-
 def test_routed_model_falls_back_truthfully(monkeypatch):
-    """An unresolvable registry must not invent a model id -- the requested one
-    is returned so the audit record stays honest."""
-    set_active_backend("model-endpoint")
-    monkeypatch.delenv(backends.MODEL_ENV, raising=False)
-    monkeypatch.setenv(ENDPOINT_ENV, "nonexistent-entry-xyz")
-    assert routed_model("deepseek/deepseek-v4") == "deepseek/deepseek-v4"
+    """An unresolvable registry entry must not invent a model id -- the
+    requested one is returned so the audit record stays honest."""
+    monkeypatch.setattr(ModelEndpointBackend, "_entry_id", lambda self: "nonexistent-entry-xyz")
+    assert routed_model("deepseek/deepseek-v4", backend_name="model-endpoint") == "deepseek/deepseek-v4"
 
 
 def test_other_backends_are_unaffected():
     """The openrouter cache-key path must be byte-identical to before."""
-    set_active_backend(None)
     assert routed_model("deepseek/deepseek-v4") == "deepseek/deepseek-v4"
 
 

@@ -593,8 +593,8 @@ def cfg(**over):
             "tests": [{"id": "axes", "text": "{known} or {open}."}],
         },
         "routing": [
-            {"shape": ["novel"], "models": ["agent:fable"]},
-            {"shape": [], "models": ["agent:sonnet"]},
+            {"shape": ["novel"], "models": ["fable"]},
+            {"shape": [], "models": ["sonnet"]},
         ],
         "backends": [{"id": "agent", "name": "Agent", "detect": {"always": True}}],
         "capacity": {"source": "none"},
@@ -645,7 +645,7 @@ class TestRender:
 
     def test_routing_row_with_unknown_shape_is_hidden(self, layered):
         layered("shipped", cfg(
-            routing=[{"shape": ["missing-shape"], "models": ["agent:fable"]}],
+            routing=[{"shape": ["missing-shape"], "models": ["fable"]}],
         ))
         config, provenance = og.resolve_config(layered.project_root)
         body = og.render(config, provenance).split("\n---\n")[0]
@@ -885,7 +885,7 @@ class TestShippedOpencodeBackend:
         )
         layered(
             "user",
-            {"routing": [{"shape": ["known"], "models": ["dusk", "agent:sonnet"]}]},
+            {"routing": [{"shape": ["known"], "models": ["dusk", "sonnet"]}]},
         )
         monkeypatch.setattr(
             og,
@@ -928,7 +928,7 @@ class TestShippedOpencodeBackend:
             "-m example/model --agent build --auto"
         )
         assert re.search(
-            r"llm-scripting-kit resolve\s+--endpoint <entry-id> "
+            r"llm-scripting-kit resolve\s+--models <entry-id> "
             r"--project-root <ABSOLUTE root>",
             rendered,
         )
@@ -1086,8 +1086,8 @@ class TestCli:
             cfg(
                 routing=[
                     {"shape": ["novel"], "models": ["missing"]},
-                    {"shape": ["open"], "models": ["agent:haiku"]},
-                    {"shape": [], "models": ["agent:sonnet"]},
+                    {"shape": ["open"], "models": ["haiku"]},
+                    {"shape": [], "models": ["sonnet"]},
                 ]
             ),
         )
@@ -1098,7 +1098,6 @@ class TestCli:
         assert "routing  row       1: novel -> no usable model (floor)" in out
         assert "routing  row       2: open -> haiku" in out
         assert "routing  row       3: default -> sonnet" in out
-        assert "`agent:haiku` is read as `haiku`" in out
 
     def test_broken_config_exits_nonzero_with_a_reason(self, capsys, layered, tmp_path):
         layered("shipped", {"default_tier": "workhorse"})
@@ -1133,7 +1132,7 @@ class TestOrderedElimination:
     def test_models_render_in_declared_priority_order(self, layered):
         layered(
             "shipped",
-            cfg(routing=[{"shape": ["novel"], "models": ["agent:fable", "agent:sonnet"]}]),
+            cfg(routing=[{"shape": ["novel"], "models": ["fable", "sonnet"]}]),
         )
         config, provenance = og.resolve_config(layered.project_root)
         text = og.render(config, provenance)
@@ -1249,7 +1248,7 @@ class TestNegativeGuards:
     def test_routing_guards_render(self, layered):
         layered("shipped", cfg(routing=[{
             "shape": ["novel"],
-            "models": ["agent:fable"],
+            "models": ["fable"],
             "guards": ["Keep this route explicit."],
         }]))
         config, provenance = og.resolve_config(layered.project_root)
@@ -1258,7 +1257,7 @@ class TestNegativeGuards:
     def test_routing_gate_renders(self, layered):
         layered("shipped", cfg(routing=[{
             "shape": ["novel"],
-            "models": ["agent:fable"],
+            "models": ["fable"],
             "gate": "write the reason before dispatch",
         }]))
         config, provenance = og.resolve_config(layered.project_root)
@@ -1381,7 +1380,6 @@ class TestCodexAbsentVariant:
     def test_registry_model_is_skipped_when_codex_is_absent(self, without):
         assert "codex/sol" not in without
         assert "codex/luna" not in without
-        assert "agent:fable" not in without
         assert "fable" in without
 
     def test_fan_out_row_defaults_to_its_claude_entry_without_codex(self, without):
@@ -1445,8 +1443,8 @@ class TestRegistryOnlyHarnessIsNotRoutable:
         _install_repo_harness_library(monkeypatch)
         monkeypatch.setattr(og, "HARNESS_NAMES", og.HARNESS_NAMES | {"nova"})
         layered("shipped", cfg(routing=[
-            {"shape": ["novel"], "models": ["dawn", "agent:fable"]},
-            {"shape": [], "models": ["agent:sonnet"]},
+            {"shape": ["novel"], "models": ["dawn", "fable"]},
+            {"shape": [], "models": ["sonnet"]},
         ]))
         monkeypatch.setattr(
             og,
@@ -1547,7 +1545,7 @@ class TestRegistryOnlyHarnessIsNotRoutable:
                     "without_backend": {"opencode": "Use the fallback route."},
                 }],
             },
-            routing=[{"shape": ["novel"], "models": ["dawn", "agent:fable"]}],
+            routing=[{"shape": ["novel"], "models": ["dawn", "fable"]}],
             backends=[
                 {"id": "agent", "detect": {"always": True}},
                 {"id": "opencode", "detect": {"always": True}},
@@ -1590,7 +1588,7 @@ class TestRoutingRendering:
     def test_a_row_lists_its_declared_models_in_order(self, layered):
         layered(
             "shipped",
-            cfg(routing=[{"shape": ["novel"], "models": ["agent:fable", "agent:sonnet"]}]),
+            cfg(routing=[{"shape": ["novel"], "models": ["fable", "sonnet"]}]),
         )
         config, provenance = og.resolve_config(layered.project_root)
         text = og.render(config, provenance)
@@ -1610,7 +1608,7 @@ class TestRoutingRendering:
         assert block.count("default is marked") == 1
 
     def test_empty_shape_is_the_default_route(self, layered):
-        layered("shipped", cfg(routing=[{"shape": [], "models": ["agent:haiku"]}]))
+        layered("shipped", cfg(routing=[{"shape": [], "models": ["haiku"]}]))
         config, provenance = og.resolve_config(layered.project_root)
         text = og.render(config, provenance)
         assert _row_lines(text, 1)[0] == "1. If anything:"
@@ -1669,7 +1667,7 @@ class TestLayeringOverridesTheTree:
 
     def test_a_user_layer_replaces_the_routing_list(self, layered):
         layered("shipped", cfg())
-        replacement = {"routing": [{"shape": ["open"], "models": ["agent:haiku"]}]}
+        replacement = {"routing": [{"shape": ["open"], "models": ["haiku"]}]}
         layered("user", replacement)
         config, provenance = og.resolve_config(layered.project_root)
         assert config["routing"] == replacement["routing"]
@@ -1680,8 +1678,8 @@ class TestLayeringOverridesTheTree:
 
     def test_a_project_routing_list_wins_over_a_machine_list(self, layered):
         layered("shipped", cfg())
-        machine_routing = [{"shape": ["open"], "models": ["agent:haiku"]}]
-        project_routing = [{"shape": ["novel"], "models": ["agent:fable"]}]
+        machine_routing = [{"shape": ["open"], "models": ["haiku"]}]
+        project_routing = [{"shape": ["novel"], "models": ["fable"]}]
         layered("machine", {"routing": machine_routing})
         layered("project", {"routing": project_routing})
 
@@ -1773,7 +1771,7 @@ class TestProjectLayerCannotExecute:
     executable field from it would run that repo's chosen program on render."""
 
     def test_project_detect_command_is_stripped(self, layered):
-        layered("shipped", {"routing": [{"shape": [], "models": ["agent:sonnet"]}],
+        layered("shipped", {"routing": [{"shape": [], "models": ["sonnet"]}],
                             "backends": [{"id": "agent", "detect": {"always": True}}],
                             "capacity": {"source": "none"}})
         layered("project", {"backends": [{"id": "evil", "detect": {"command": ["calc.exe"]}}]})
@@ -1798,11 +1796,11 @@ class TestProjectLayerCannotExecute:
         assert config["capacity"]["command"] == ["my-probe"]
 
     def test_a_harmless_project_layer_is_untouched(self, layered):
-        layered("shipped", {"routing": [{"shape": [], "models": ["agent:sonnet"]}], "backends": [{"id": "agent"}],
+        layered("shipped", {"routing": [{"shape": [], "models": ["sonnet"]}], "backends": [{"id": "agent"}],
                             "capacity": {"source": "none"}})
-        layered("project", {"routing": [{"shape": [], "models": ["agent:haiku"]}]})
+        layered("project", {"routing": [{"shape": [], "models": ["haiku"]}]})
         config, provenance = og.resolve_config(layered.project_root)
-        assert config["routing"][0]["models"] == ["agent:haiku"]
+        assert config["routing"][0]["models"] == ["haiku"]
         assert not any("executable field" in s for _, _, s in provenance)
 
 
@@ -1830,7 +1828,7 @@ class TestRoutingResolution:
             routing=[
                 {"shape": ["novel"], "models": ["missing"]},
                 {"shape": ["open"], "models": ["also-missing"]},
-                {"shape": [], "models": ["agent:sonnet"]},
+                {"shape": [], "models": ["sonnet"]},
             ]
         )
         layered("shipped", config_data)
@@ -1842,16 +1840,19 @@ class TestRoutingResolution:
         # Notes are for --explain and never name a skipped id.
         assert not any("missing" in note for note in notes)
 
-    def test_any_prefix_but_agent_is_an_ordinary_id(self, layered):
+    def test_every_prefix_including_agent_is_an_ordinary_id(self, layered):
+        """`agent:<id>` is no longer rewritten; it resolves like any other
+        unknown-prefixed id -- silently skipped, no note on any surface."""
         layered(
             "shipped",
-            cfg(routing=[{"shape": [], "models": ["codex:sol", "agent:sonnet"]}]),
+            cfg(routing=[{"shape": [], "models": ["codex:sol", "agent:sonnet", "sonnet"]}]),
         )
         config, _ = og.resolve_config(layered.project_root)
         routes, notes = og.resolve_routing_models(config, {}, {})
         assert [model["target"] for model in routes[0]["models"]] == ["sonnet"]
         assert not any("codex:sol" in note for note in notes)
-        assert any("`agent:sonnet` is read as `sonnet`" in note for note in notes)
+        assert not any("agent:sonnet" in note for note in notes)
+        assert not any("`agent:" in note for note in notes)
 
     def test_a_structurally_invalid_declaration_skips_the_row_with_a_note(self, layered):
         layered("shipped", cfg(routing=[{"shape": [], "models": ["sonnet", "sonnet"]}]))
@@ -2464,12 +2465,22 @@ class TestDeclarationRender:
         # chosen for a different shape.
         assert _menu_ids(text, 2) == ["sonnet"]
 
-    def test_agent_prefix_is_read_as_the_bare_id(self, declared, layered, capsys):
+    def test_agent_prefix_is_an_ordinary_unresolved_id(self, declared, layered, capsys):
+        """`agent:<id>` is no longer accepted or rewritten (step 12 of the
+        declaration-format migration). It is now indistinguishable from any
+        other unresolved id: silently dropped from the rendered menu, no
+        note on `--explain`."""
         text = declared([{"shape": ["novel"], "models": ["agent:fable", "sol"]}])
-        assert _menu_ids(text, 1) == ["fable", "sol"]
+        assert _menu_ids(text, 1) == ["sol"]
         assert "agent:" not in text
         assert og.main(["--explain", "--project-root", str(layered.project_root)]) == 0
-        assert "`agent:fable` is read as `fable`" in capsys.readouterr().out
+        out = capsys.readouterr().out
+        routing_lines = "\n".join(
+            line for line in out.splitlines() if line.startswith("routing")
+        )
+        assert "agent:fable" not in routing_lines
+        assert "fable" not in routing_lines
+        assert "is read as" not in out
 
     def test_quota_opt_out_makes_no_reads(self, declared, monkeypatch):
         import llm_scripting_kit.declaration as declaration

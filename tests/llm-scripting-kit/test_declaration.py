@@ -883,3 +883,13 @@ class TestSessionDispatchableTransport:
     def test_an_unknown_dispatchable_kind_is_refused(self, quota):
         with pytest.raises(ValueError, match="dispatchable"):
             decl.describe(["sol"], caller="session", entries=self._entries(), dispatchable=("harness",))
+
+
+def test_session_reselect_rule_tells_the_agent_to_record_a_quota_halt():
+    """Drill F1: an in-session quota/credit halt must be written back."""
+    from llm_scripting_kit import declaration as _decl
+
+    rule = _decl.RULE_TRIGGER_SESSION
+    assert "llm-scripting-kit record-halt <entry>" in rule
+    assert rule.index("record-halt") < rule.index("--exclude")
+    assert "quota or credit halt" in rule

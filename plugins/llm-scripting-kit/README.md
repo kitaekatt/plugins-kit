@@ -10,6 +10,7 @@ llm-scripting-kit probe --endpoint sol
 llm-scripting-kit usage
 llm-scripting-kit models --endpoint openrouter
 llm-scripting-kit describe fable sol opus --self opus
+llm-scripting-kit record-halt sol
 llm-scripting-kit resolve --models sol,opus
 printf 'Review this design' | llm-scripting-kit complete --models sol,opus
 llm-scripting-kit complete --models openrouter --model qwen \
@@ -18,9 +19,9 @@ llm-scripting-kit complete --models openrouter --model qwen \
 
 `--models` takes a model declaration: registry ids, comma-separated or
 repeated, in the order you prefer them. `resolve` and `complete` use the first
-usable entry of the pace-ordered list (see `describe` below). `--endpoint NAME`
-is a deprecated alias of `--models NAME`, and `--model` overrides the model id
-of whichever entry is chosen.
+usable entry of the pace-ordered list (see `describe` below), and `--model`
+overrides the model id of whichever entry is chosen. `resolve` and `complete`
+take no `--endpoint` flag; name one entry as `--models NAME`.
 
 Discovery and completion commands emit JSON by default. `complete --format
 text` prints only the response text. Exit codes are `0` for success, `1` for a
@@ -188,6 +189,27 @@ What is shown and what is not:
   error on stderr that lists EVERY declared id and what happened to it, in
   declared order. That is where a typo shows up.
 
+### `record-halt` -- write an observed quota halt back
+
+```bash
+llm-scripting-kit record-halt ENTRY [--kind quota|credit] [--resets-at EPOCH] [--project-root DIR]
+```
+
+A session caller drives the harness itself, so the completion seam never sees
+its quota or credit halt, and the pinned AVAILABLE verdict would keep the spent
+entry `[default]` for the rest of the session. `record-halt` records the halt:
+for an entry that declares `conserve_usage`, it pins the entry OUT-OF-QUOTA
+under the current session key, and every later `describe` in the session shows
+it out of quota until its reset. The reset is `--resets-at` when given, else
+the reset the pool reading reports (codex's "try again at" clause), else a
+five-hour latch. The session Re-select rule tells the agent to run it before
+re-selecting.
+
+It prints one JSON object: `entry`, `kind`, `recorded`, and either `budget`
+(the written verdict) or `reason`. Exit `0` also covers the two cases that
+record nothing: an entry without `conserve_usage` (no verdict to move) and no
+session key (nothing is pinned). An unknown entry id exits `2`.
+
 `--caller session` (the default) is for an agent that drives the harness
 itself: a Claude id runs on the Agent tool, codex and opencode ids run through
 their CLI, and a transport entry (no agent loop) is not routable -- unless the
@@ -200,9 +222,6 @@ unexplained dispatch failure"; the process rule is "take the default; move on
 only on a classified halt". `--self` marks the author's entry `[author]` and
 adds the independence preference. `--json` emits the rendered entries, the
 default, and the rule -- never a hidden id.
-
-`choose --prefer a,b` is a deprecated alias of `describe a b` (`--default X`
-appends `X` as the last declared entry).
 
 The numbers come only from files the harnesses already write: claude-ui-kit's
 statusline snapshot for claude, the newest `~/.codex/sessions` rollout for
@@ -355,9 +374,7 @@ instead of stacking a second model's work on the first one's partial edits.
 
 `order_by_pace(items)` is the ordering rule on its own. `check_registry_entry(id,
 merged)` reports a core id (`fable`, `opus`, `sonnet`, `haiku`) whose merged
-entry is not a Claude harness. `choose_endpoint` (a thin caller of `describe`
-that never probes) and `rank_candidates` (the two-band rank) stay
-importable as deprecated names.
+entry is not a Claude harness.
 
 ## Completion seam
 
