@@ -22,6 +22,7 @@ technique_skill:
       - cross-plugin imports and optional shared-library edges
       - REQUIRED, REFUSE, and DEGRADE branch selection
       - skill-embedded enabling and consented capability probes
+      - the shared model-declaration format and its structural validator
     excludes:
       - bootstrap manifest configuration
       - skill and CLAUDE.md authoring standards
@@ -53,4 +54,8 @@ references:
     path: references/enabling.md
     keywords: [skill enabling, consented probe, silent absence, capability advertisement, stale capability, disclosure scope, EN criteria, enabling reviewer checklist]
     summary: Skill-hosted enabling contract for present disclosure and silence when an absent or old capability leaves the artifact true; EN-1..EN-7 criteria, consent rules, anti-patterns, and reviewer checklist.
+  - id: model_declaration
+    path: references/model-declaration.md
+    keywords: [model declaration, models list, registry id, core ids, fable opus sonnet haiku, agent prefix, peer prefix, duplicate id, empty list, bootstrap_lib.model_declaration]
+    summary: The one format every plugin uses to declare which models may do a unit of work -- a list of registry ids -- plus the core ids, the deprecated prefixes, and the stdlib-only structural validator.
 ```

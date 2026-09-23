@@ -29,6 +29,7 @@ import sys
 from pathlib import Path
 from typing import Any, Mapping, NoReturn, Sequence
 
+from bootstrap_lib import model_declaration
 from bootstrap_lib.code_review import lane_prompts
 
 
@@ -75,9 +76,11 @@ EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max")
 # model priority lists: the optional llm-scripting-kit seats edge
 # --------------------------------------------------------------------------
 #
-# A reviewer's `model` is either a string (one entry) or a non-empty ordered
-# list of entries evaluated in order; the first entry that RESOLVES becomes the
-# lane's model. Two entry kinds exist:
+# A reviewer's `model` is a model declaration in the shared format
+# (bootstrap_lib.model_declaration; plugin-dev references/model-declaration.md):
+# a string (one entry) or a non-empty ordered list naming no entry twice,
+# evaluated in order; the first entry that RESOLVES becomes the lane's model.
+# Two entry kinds exist:
 #
 #   <name>        a plain Agent alias or endpoint id -- always resolves.
 #   peer:<name>   resolves only when llm-scripting-kit is installed AND current
@@ -243,37 +246,37 @@ def _validate_disabled(value: Mapping[str, Any], source: Path | str, location: s
 
 def _model_entries(value: Any) -> list[str]:
     """Return a model's ordered entries, treating a string as a one-entry list."""
-    if isinstance(value, str):
-        return [value.strip()]
-    if isinstance(value, list):
-        return [entry.strip() for entry in value if isinstance(entry, str)]
-    return []
+    try:
+        return model_declaration.parse(value)
+    except model_declaration.DeclarationError:
+        return []
+
+
+def _parse_declaration(value: Any, source: Path | str, location: str) -> list[str]:
+    """Parse a model declaration through the shared validator.
+
+    The grammar -- a list of ids, a scalar read as a one-element list, no empty
+    list, no repeated id -- is bootstrap_lib.model_declaration's, so every
+    plugin reading a declaration rejects the same shapes. The error is
+    re-raised as this module's ``ConfigError`` with the entry's location.
+    """
+    try:
+        return model_declaration.parse(value)
+    except model_declaration.DeclarationError as exc:
+        where = location if exc.index is None else f"{location}[{exc.index}]"
+        _fail(source, where, str(exc))
 
 
 def _validate_model(value: Any, source: Path | str, location: str) -> None:
-    """Validate a reviewer's model: a string, or a non-empty ordered list.
+    """Validate a reviewer's model declaration: an ordered list of ids.
 
     A bare string is exactly a one-entry list, `peer:` prefix included -- so
     `model: peer:opus` is legal and simply has nothing to fall back to when no
     seat is reachable, which is reported as a configuration error at resolution.
     """
-    if isinstance(value, str):
-        entries: list[tuple[Any, str]] = [(value, location)]
-    elif isinstance(value, list):
-        if not value:
-            _fail(source, location, "must be a non-empty list of strings, or a string")
-        entries = [(entry, f"{location}[{index}]") for index, entry in enumerate(value)]
-    else:
-        _fail(
-            source,
-            location,
-            "must be a string or a non-empty list of strings, got "
-            f"{type(value).__name__}",
-        )
-
-    for entry, entry_location in entries:
-        _validate_nonempty_string(entry, source, entry_location)
-        text = entry.strip()
+    entries = _parse_declaration(value, source, location)
+    for index, text in enumerate(entries):
+        entry_location = location if isinstance(value, str) else f"{location}[{index}]"
         if text.startswith(PEER_ENTRY_PREFIX) and not text[len(PEER_ENTRY_PREFIX):].strip():
             _fail(
                 source,
@@ -351,13 +354,30 @@ def _validate_validator_models(value: Any, source: Path | str, location: str) ->
     Reason keys are intentionally extensible. ``bug`` and ``claude_md`` are
     the shipped reasons; a new reason is an addressable mapping record and is
     appended by the normal mapping merge.
+
+    Each value is a model declaration naming exactly ONE id, written as a
+    one-element list or, equivalently, a bare string. A validator is never
+    endpoint-eligible and has no failover chain, so a second entry would be a
+    preference nothing honours; it is refused rather than silently ignored.
     """
     if not isinstance(value, dict):
         _fail(source, location, f"must be a mapping, got {type(value).__name__}")
     for reason, model in value.items():
         if not isinstance(reason, str) or not reason.strip():
             _fail(source, f"{location} key {reason!r}", "must be a non-empty string")
-        _validate_nonempty_string(model, source, f"{location}.{reason}")
+        entries = _parse_declaration(model, source, f"{location}.{reason}")
+        if len(entries) != 1:
+            _fail(
+                source,
+                f"{location}.{reason}",
+                f"must name exactly one id, got {entries!r}: a validator has no "
+                "failover chain",
+            )
+
+
+def _validator_model(value: Any) -> str:
+    """Return a validator declaration's one id (a scalar or a one-element list)."""
+    return model_declaration.parse(value)[0]
 
 
 def _validate_reviewer(
@@ -875,6 +895,15 @@ def apply_model_priority(
     Raises ``ConfigError`` when no entry of some lane's list resolves.
     """
     resolved = deepcopy(dict(config))
+    # A validator declaration names exactly one id (validated at load), so it
+    # resolves to that id; the table then carries one string per validator,
+    # exactly as it carries one per reviewer lane.
+    for profile in resolved.get("profiles", []):
+        if isinstance(profile, dict) and isinstance(profile.get("validator_models"), dict):
+            profile["validator_models"] = {
+                reason: _validator_model(model)
+                for reason, model in profile["validator_models"].items()
+            }
     peers = _PeerResolver(
         project_root=project_root, timeout=timeout, discover=discover
     )
@@ -1010,7 +1039,7 @@ def canonical_projection(value: Mapping[str, Any]) -> dict[str, Any]:
                     for reviewer in profile["reviewers"]
                 ],
                 "validator_models": {
-                    reason: model
+                    reason: _validator_model(model)
                     for reason, model in profile["validator_models"].items()
                 },
             }

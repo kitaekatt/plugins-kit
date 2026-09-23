@@ -13,6 +13,12 @@ from bootstrap_lib.code_review import review_profiles as rp
 
 
 class TestModelClassification:
+    def test_the_agent_alias_set_is_the_validator_core_set(self) -> None:
+        """One definition of the harness-defined ids: model_declaration owns it."""
+        from bootstrap_lib import model_declaration
+
+        assert lp.AGENT_MODEL_ALIASES is model_declaration.CORE_IDS
+
     @pytest.mark.parametrize("alias", ["sonnet", "opus", "haiku", "fable"])
     def test_agent_aliases_are_agent_path(self, alias: str) -> None:
         assert lp.is_agent_alias(alias)
