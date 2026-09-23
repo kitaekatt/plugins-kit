@@ -9,11 +9,18 @@ llm-scripting-kit endpoints --verify
 llm-scripting-kit probe --endpoint sol
 llm-scripting-kit usage
 llm-scripting-kit models --endpoint openrouter
-llm-scripting-kit resolve --endpoint sol
-printf 'Review this design' | llm-scripting-kit complete --endpoint sol
-llm-scripting-kit complete --endpoint openrouter --model qwen \
+llm-scripting-kit describe fable sol opus --self opus
+llm-scripting-kit resolve --models sol,opus
+printf 'Review this design' | llm-scripting-kit complete --models sol,opus
+llm-scripting-kit complete --models openrouter --model qwen \
   --system-file system.txt --prompt-file prompt.txt
 ```
+
+`--models` takes a model declaration: registry ids, comma-separated or
+repeated, in the order you prefer them. `resolve` and `complete` use the first
+usable entry of the pace-ordered list (see `describe` below). `--endpoint NAME`
+is a deprecated alias of `--models NAME`, and `--model` overrides the model id
+of whichever entry is chosen.
 
 Discovery and completion commands emit JSON by default. `complete --format
 text` prints only the response text. Exit codes are `0` for success, `1` for a
@@ -144,17 +151,56 @@ model** -- a missing snapshot, an absent pool, or a window that has already
 reset all leave the endpoint fully usable, the same way `probe` reports
 `unknown` rather than claiming an endpoint is down.
 
-`choose` applies that to a preference order you state:
+### `describe` -- a model declaration on this machine
+
+`describe` applies all three axes to a model declaration, the ordered list of
+registry ids you would let do a unit of work:
 
 ```bash
-llm-scripting-kit choose --prefer opus,sol --default openrouter
+llm-scripting-kit describe fable astra sol opus sonnet --self opus
 ```
 
-Both fine, you get `opus` -- your stated order. `opus` out of quota, you get
-`sol`. Both out of quota, you get the default. `opus` under quota and `sol`
-fine, you get `sol` -- but `opus` stays in the returned chain, because
-de-prioritized is not disabled. Both under quota and your order decides again.
-Add `--json` for the whole ranking, the disabled endpoints, and the reason.
+```
+Declared models (ordered by pace): choose one; default is marked.
+  fable   claude/agent   under quota  38% left, 50% of window   pace 76%   [default]  shares seven_day with opus
+  astra   codex          out of quota until 2026-09-19 15:34 UTC
+  sol     codex          out of quota until 2026-09-19 15:34 UTC
+  opus    claude/agent   under quota  38% left, 50% of window   pace 76%   [author]  shares seven_day with fable
+  sonnet  claude/agent   n/a (unpaced)
+Rule: any usable entry may be chosen; ...
+```
+
+**Pace** is `remaining / window_remaining`: 100% is exactly on pace, above is
+ahead, below is behind. Entries that have a pace are re-sorted by it, highest
+first, among their own positions; entries without one (unpaced, no reading,
+out of quota, about to reset) keep their places, and ties keep your order. The
+first usable entry is `[default]`. The status and `[default]` come from this
+session's pinned verdict; only the pace number is read fresh.
+
+What is shown and what is not:
+
+- **Shown:** usable entries, out-of-quota entries with their reset time, and
+  unreachable entries -- all real on this machine.
+- **Hidden, silently:** an id that resolves to nothing, one this caller cannot
+  route, one that fails `--requirements`, and one you `--exclude`. No notice or
+  warning is printed for them.
+- **The floor:** when no usable entry is left, `describe` exits `1` with a JSON
+  error on stderr that lists EVERY declared id and what happened to it, in
+  declared order. That is where a typo shows up.
+
+`--caller session` (the default) is for an agent that drives the harness
+itself: a Claude id runs on the Agent tool, codex and opencode ids run through
+their CLI, and a transport entry (no agent loop) is not routable.
+`--caller process` is for a program that dispatches through the completion
+seam, where every resolvable entry routes. The printed rule text differs to
+match: the session rule is choose-and-announce plus "re-select on any
+unexplained dispatch failure"; the process rule is "take the default; move on
+only on a classified halt". `--self` marks the author's entry `[author]` and
+adds the independence preference. `--json` emits the rendered entries, every
+disposition, the default, and the rule.
+
+`choose --prefer a,b` is a deprecated alias of `describe a b` (`--default X`
+appends `X` as the last declared entry).
 
 The numbers come only from files the harnesses already write: claude-ui-kit's
 statusline snapshot for claude, the newest `~/.codex/sessions` rollout for
@@ -249,6 +295,55 @@ endpoints:
     models:
       llama: {slug: meta-llama/Llama-3.1-8B-Instruct}
 ```
+
+### Model declarations: `describe` and `run`
+
+A consumer that names "which model(s) may do this" passes a declaration (a
+list of registry ids; a bare string reads as one id) to one of two calls.
+Both need bootstrap >= 0.129.0, whose `bootstrap_lib.model_declaration`
+validates the list's shape (non-empty, no duplicates):
+
+```python
+from llm_scripting_kit import NoUsableRoutingTarget, RunRequest, describe, run
+
+ranking = describe(["fable", "sol", "opus"], caller="session", self_ref="opus")
+print(ranking.render())          # the menu, with Ranking.rule at the end
+ranking.default.id               # first usable entry of the pace-ordered list
+
+result = run(["sol", "opus"], RunRequest(system="...", prompt="..."), max_attempts=2)
+result.status                    # "completed" | "failed" | "attempt-limit"
+```
+
+`describe(names, *, project_root=None, caller, self_ref=None,
+requirements=None, capabilities=None, backend_factory=None, exclude=(),
+reachability_cache=None, entries=None)` returns a `Ranking`:
+`rendered_entries` (`EntryState` records in pace order), `dispositions`
+(every declared id in declared order), `rule` (the choice and re-selection
+text), `default`, `render()`, and `to_json()`. `requirements` is matched
+against `capabilities` (default: the shipped advertisement) by the resolved
+backend's name; `backend_factory` resolves an id (default: the merged
+registry, then `create_backend`); `reachability_cache` is read first and
+receives every probe, so a caller-scoped dict probes each entry once. When
+nothing usable remains it raises `NoUsableRoutingTarget`, whose
+`dispositions` itemise every declared id; skipping is otherwise silent.
+
+`run(names, request, *, project_root=None, requirements=None, exclude=(),
+max_attempts=1, on_attempt=None, ...)` is for callers with no loop of their
+own. It dispatches the default entry. A quota or credit halt records that
+entry out of quota for the session (when it declares `conserve_usage`), and
+any classified halt or launch failure excludes it before `describe` runs
+again. A task error stays a failed attempt. `max_attempts` counts executions:
+reaching it returns `"attempt-limit"` and never raises the floor. When
+`request.workspace` names a git work tree, it is reset to its launch state
+before another entry runs. A workspace that cannot be reset ends the run
+instead of stacking a second model's work on the first one's partial edits.
+`on_attempt` receives each `Attempt` with its pace reading.
+
+`order_by_pace(items)` is the ordering rule on its own. `check_registry_entry(id,
+merged)` reports a core id (`fable`, `opus`, `sonnet`, `haiku`) whose merged
+entry is not a Claude harness. `choose_endpoint` (a thin caller of `describe`
+that never probes) and `rank_candidates` (the two-band rank) stay
+importable as deprecated names.
 
 ## Completion seam
 

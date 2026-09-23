@@ -138,6 +138,22 @@ from .completion import (
     classify_openai_exception,
     match_capabilities,
 )
+from .declaration import (
+    CALLER_PROCESS,
+    CALLER_SESSION,
+    Attempt,
+    DeclarationSupportError,
+    Disposition,
+    EntryState,
+    NoUsableRoutingTarget,
+    Ranking,
+    RunRequest,
+    RunResult,
+    check_registry_entry,
+    describe,
+    order_by_pace,
+    run,
+)
 
 __all__ = [
     "API_KEY_ENV",
@@ -215,6 +231,21 @@ __all__ = [
     "QuotaSelection",
     "choose_endpoint",
     "rank_candidates",
+    # the one API over a model declaration (describe / run)
+    "CALLER_PROCESS",
+    "CALLER_SESSION",
+    "Attempt",
+    "DeclarationSupportError",
+    "Disposition",
+    "EntryState",
+    "NoUsableRoutingTarget",
+    "Ranking",
+    "RunRequest",
+    "RunResult",
+    "check_registry_entry",
+    "describe",
+    "order_by_pace",
+    "run",
     # harness adapters
     "CODEX_EFFORT_MENU",
     "HarnessAdapter",

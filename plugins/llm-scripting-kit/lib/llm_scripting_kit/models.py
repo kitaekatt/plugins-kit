@@ -119,6 +119,13 @@ DEFAULT_MODEL_CONFIG = {
         # Claude subscription models, shipped for the same reason: the
         # claude-cli adapter had no endpoint pointing at it. Effort is a
         # per-call mapped param on this adapter, so none is set here.
+        # haiku completes the core id set (bootstrap_lib.model_declaration
+        # CORE_IDS): every core id is a shipped claude entry, so a declaration
+        # naming it resolves on every machine.
+        "haiku": {
+            "harness": "claude", "model": "claude-haiku-4-5",
+            "tier": 1, "family": "anthropic",
+        },
         "sonnet": {
             "harness": "claude", "model": "claude-sonnet-5",
             "tier": 2, "family": "anthropic",

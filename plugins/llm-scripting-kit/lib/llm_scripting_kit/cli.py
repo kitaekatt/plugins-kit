@@ -37,7 +37,7 @@ from .reachability import (
     check_many,
 )
 from . import usage_budget
-from .quota_selection import choose_endpoint
+from .declaration import DeclarationSupportError, NoUsableRoutingTarget, describe
 from .seats import discover_seats
 from .request_protocol import (
     PROTOCOL_VERSION,
@@ -101,6 +101,82 @@ def _add_project_arg(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--project-root", help="Project root for layered configuration.")
 
 
+def _add_models_arg(parser: argparse.ArgumentParser) -> None:
+    """``--models`` (a declaration) and its alias ``--endpoint`` (one id)."""
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument(
+        "--models",
+        action="append",
+        default=None,
+        help=(
+            "Model declaration: registry ids, comma-separated or repeated. The "
+            "first usable entry of the pace-ordered list is used."
+        ),
+    )
+    group.add_argument(
+        "--endpoint",
+        default=None,
+        help="Alias of --models with one id (deprecated).",
+    )
+
+
+def _add_describe_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--caller",
+        choices=("session", "process"),
+        default="session",
+        help=(
+            "session: an agent drives the harness itself (default); process: "
+            "the completion seam drives it."
+        ),
+    )
+    parser.add_argument("--self", dest="self_ref", help="The author's endpoint id or model id.")
+    parser.add_argument(
+        "--requirements",
+        type=Path,
+        help="JSON file holding a capability requirement mapping.",
+    )
+    parser.add_argument(
+        "--exclude",
+        action="append",
+        default=[],
+        help="An id the caller has ruled out; repeatable or comma-separated.",
+    )
+    parser.add_argument("--json", action="store_true", help="Emit the ranking as JSON.")
+    _add_project_arg(parser)
+
+
+def _split_ids(values: Optional[list[str]]) -> list[str]:
+    """Flatten repeated and comma-separated id arguments, keeping order."""
+    ids: list[str] = []
+    for value in values or ():
+        ids.extend(part.strip() for part in value.split(",") if part.strip())
+    return ids
+
+
+def _declared_models(args: argparse.Namespace) -> Optional[list[str]]:
+    """The declaration named by --models or its --endpoint alias, else None."""
+    if getattr(args, "models", None):
+        return _split_ids(args.models)
+    if getattr(args, "endpoint", None):
+        return [args.endpoint]
+    return None
+
+
+def _backend_factory(name: str, **kwargs: Any) -> Any:
+    """``create_backend`` looked up at call time, so the module seam holds."""
+    return create_backend(name, **kwargs)
+
+
+def _first_usable(ids: list[str], project_root: Optional[str]) -> str:
+    """The default entry of ``describe`` for a process caller; raises the floor."""
+    ranking = describe(
+        ids, project_root=project_root, caller="process", backend_factory=_backend_factory
+    )
+    assert ranking.default is not None  # describe() raises the floor otherwise
+    return ranking.default.id
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="llm-scripting-kit")
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -156,22 +232,28 @@ def _parser() -> argparse.ArgumentParser:
             "verdict. Inspection only -- it neither reads nor writes the pin."
         ),
     )
-    choose = sub.add_parser(
-        "choose",
-        help="Pick one endpoint from a preference order, applying quota state.",
+    describe_cmd = sub.add_parser(
+        "describe",
+        help=(
+            "Render a model declaration for this machine: the usable, "
+            "out-of-quota and unreachable entries in pace order, the default, "
+            "and the choice rule."
+        ),
     )
-    choose.add_argument(
-        "--prefer",
-        required=True,
-        help="Comma-separated endpoint ids, most preferred first (e.g. opus,sol).",
-    )
+    describe_cmd.add_argument("ids", nargs="+", help="Declared registry ids, in declared order.")
+    _add_describe_args(describe_cmd)
+    # `choose` is kept as an alias of `describe` until migration step 12.
+    # --prefer carries the declaration as a comma list; --default is appended
+    # as the last declared entry, the place it held as the fallback.
+    choose = sub.add_parser("choose", help="Alias of `describe` (deprecated).")
+    choose.add_argument("ids", nargs="*", help="Declared registry ids, in declared order.")
+    choose.add_argument("--prefer", help="Comma-separated ids, in declared order.")
     choose.add_argument(
         "--default",
         dest="fallback",
-        help="Endpoint to use when every preference is out of quota.",
+        help="Appended as the last declared entry.",
     )
-    choose.add_argument("--json", action="store_true", help="Emit the ranking as JSON.")
-    _add_project_arg(choose)
+    _add_describe_args(choose)
     seats = sub.add_parser("seats", help="List reachable UP and BESIDE harness seats.")
     seats.add_argument("--self", dest="self_ref", required=True, help="Self endpoint or exact model id.")
     seats.add_argument("--json", action="store_true", help="Emit the structured result as JSON.")
@@ -181,13 +263,13 @@ def _parser() -> argparse.ArgumentParser:
     _add_endpoint_arg(models)
     _add_project_arg(models)
     resolve = sub.add_parser("resolve", help="Resolve an endpoint/model selection.")
-    _add_endpoint_arg(resolve)
+    _add_models_arg(resolve)
     _add_project_arg(resolve)
     resolve.add_argument("--model")
     resolve.add_argument("--cheap", action="store_true")
 
     complete = sub.add_parser("complete", help="Run one configured completion.")
-    _add_endpoint_arg(complete)
+    _add_models_arg(complete)
     _add_project_arg(complete)
     complete.add_argument("--model")
     # Every call-describing flag defaults to None so "unset" is distinguishable
@@ -243,8 +325,13 @@ def main(argv: Optional[list[str]] = None) -> int:
             return _cmd_endpoints(args.project_root, verify=args.verify, timeout_s=args.timeout)
         if args.cmd == "probe":
             return _cmd_probe(args.endpoint, args.project_root, args.timeout)
+        if args.cmd == "describe":
+            return _cmd_describe(list(args.ids), args)
         if args.cmd == "choose":
-            return _cmd_choose(args.prefer, args.fallback, args.json, args.project_root)
+            ids = list(args.ids) + _split_ids([args.prefer] if args.prefer else [])
+            if args.fallback and args.fallback not in ids:
+                ids.append(args.fallback)
+            return _cmd_describe(ids, args)
         if args.cmd == "usage":
             return _cmd_usage(args.json, args.project_root, args.no_pin)
         if args.cmd == "seats":
@@ -252,13 +339,21 @@ def main(argv: Optional[list[str]] = None) -> int:
         if args.cmd == "models":
             return _cmd_models(args.endpoint, args.project_root)
         if args.cmd == "resolve":
-            return _cmd_resolve(args.endpoint, args.model, args.cheap, args.project_root)
+            return _cmd_resolve(_declared_models(args), args.model, args.cheap, args.project_root)
         if args.cmd == "request-schema":
             _json(describe_request_schema())
             return EXIT_OK
         if args.cmd == "complete":
             return _cmd_complete(args)
-    except (EndpointResolveError, ModelResolveError, EndpointRegistryError, OSError, ValueError) as exc:
+    except NoUsableRoutingTarget as floor:
+        # The floor is the one selection error: loud, itemised, and a
+        # failure rather than a usage error -- a reset window can clear it.
+        _json({"error": floor.to_json()}, stream=sys.stderr)
+        return EXIT_FAILURE
+    except (
+        EndpointResolveError, ModelResolveError, EndpointRegistryError, OSError, ValueError,
+        DeclarationSupportError,
+    ) as exc:
         _json({"error": {"kind": "configuration", "message": str(exc)}}, stream=sys.stderr)
         return EXIT_USAGE
     return EXIT_USAGE
@@ -399,28 +494,31 @@ def _cmd_usage(as_json: bool, project_root: Optional[str], no_pin: bool) -> int:
     return EXIT_OK
 
 
-def _cmd_choose(
-    prefer: str,
-    fallback: Optional[str],
-    as_json: bool,
-    project_root: Optional[str],
-) -> int:
-    """Rank a preference order by quota state and name the winner.
+def _cmd_describe(ids: list[str], args: argparse.Namespace) -> int:
+    """Render a declaration for ``--caller``; the floor exits EXIT_FAILURE.
 
-    Exits EXIT_FAILURE when nothing is usable and no --default was given: the
-    caller asked which endpoint to run and there is no answer, which a zero
-    exit would misreport as a successful choice.
+    A process caller resolves ids through the completion seam's factory,
+    because that is what will drive them; a session caller resolves them
+    against the merged registry, because the agent drives the harness itself.
+    Hidden entries are absent from the output; they surface only in the floor.
     """
-    preferences = [name.strip() for name in prefer.split(",") if name.strip()]
-    selection = choose_endpoint(
-        preferences, default=fallback, project_root=project_root
+    requirements = None
+    if args.requirements is not None:
+        requirements = json.loads(args.requirements.read_text(encoding="utf-8"))
+    ranking = describe(
+        ids,
+        project_root=args.project_root,
+        caller=args.caller,
+        self_ref=args.self_ref,
+        requirements=requirements,
+        backend_factory=_backend_factory if args.caller == "process" else None,
+        exclude=_split_ids(args.exclude),
     )
-    if as_json:
-        _json(selection.to_json())
+    if args.json:
+        _json(ranking.to_json())
     else:
-        print(selection.chosen or "<none>")
-        print(f"  {selection.reason}", file=sys.stderr)
-    return EXIT_OK if selection.chosen is not None else EXIT_FAILURE
+        print(ranking.render())
+    return EXIT_OK
 
 
 def _cmd_seats(
@@ -493,7 +591,14 @@ def _cmd_models(endpoint: Optional[str], project_root: Optional[str]) -> int:
     return EXIT_OK
 
 
-def _cmd_resolve(endpoint: Optional[str], model: Optional[str], cheap: bool, project_root: Optional[str]) -> int:
+def _cmd_resolve(
+    declared: Optional[list[str]], model: Optional[str], cheap: bool, project_root: Optional[str]
+) -> int:
+    """Resolve the first usable entry of ``--models`` (or the default endpoint).
+
+    ``--model`` stays a per-entry override applied to whichever entry is chosen.
+    """
+    endpoint = _first_usable(declared, project_root) if declared else None
     selection = create_backend(endpoint, model=model, cheap=cheap, project_root=project_root)
     _json({"endpoint": selection.endpoint, "kind": selection.kind, "backend": selection.backend.name,
            "model": selection.model, "effort": selection.effort})
@@ -515,6 +620,7 @@ def _read_text(path: Optional[Path], inline: Optional[str], *, stdin_fallback: b
 #: --project-root are absent because they describe the CLI's own behaviour
 #: rather than the request, so they compose with either surface.
 _COMPLETE_CALL_FLAGS = (
+    "models",
     "endpoint",
     "model",
     "cheap",
@@ -549,8 +655,9 @@ def _request_from_flags(args: argparse.Namespace) -> "tuple[str, str, Any, Backe
 
     system = _read_text(args.system_file, flag("system"))
     user = _read_text(args.prompt_file, args.prompt, stdin_fallback=True)
+    declared = _declared_models(args)
     selection = create_backend(
-        args.endpoint,
+        _first_usable(declared, args.project_root) if declared else None,
         model=args.model,
         cheap=flag("cheap"),
         project_root=args.project_root,

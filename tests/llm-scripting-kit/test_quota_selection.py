@@ -1,10 +1,11 @@
 """Tests for quota-aware selection over a caller's preference order.
 
-The six-row table in `quota_selection`'s module docstring is the spec; every
-row has a test here, named for the row it pins.
+``choose_endpoint`` is a thin caller of :func:`llm_scripting_kit.declaration.describe`
+(migration step 3, L3): an out-of-quota entry is removed from the chain, and
+the usable ones are ordered by PACE (D5), not by the two-band rank the module
+used to apply. ``rank_candidates`` keeps its two-band behaviour as a
+deprecated compatibility name until awesome-kit moves to ``order_by_pace``.
 """
-
-import json
 
 import pytest
 
@@ -14,10 +15,12 @@ from llm_scripting_kit import (
     STATUS_OUT_OF_QUOTA,
     STATUS_UNDER_QUOTA,
     ConserveSpec,
+    NoUsableRoutingTarget,
     choose_endpoint,
+    order_by_pace,
     rank_candidates,
 )
-from llm_scripting_kit import quota_selection
+from llm_scripting_kit import declaration
 from llm_scripting_kit.model_endpoints import HARNESS_KIND, EndpointEntry
 from llm_scripting_kit.quota_selection import Candidate
 from llm_scripting_kit.usage_budget import Budget
@@ -34,52 +37,62 @@ def _entry(name, *, paced=True):
     )
 
 
-def _budget(status):
-    return Budget(status=status, pool="seven_day", detail=status, resets_at=10)
+def _budget(status, remaining=None, window=None):
+    return Budget(
+        status=status, pool="seven_day", detail=status, resets_at=10,
+        remaining=remaining, window_remaining=window,
+    )
 
 
-def _choose(preferences, verdicts, *, default=None, paced=None):
-    """Run a selection with each named endpoint pinned to a given status.
+@pytest.fixture
+def pinned(monkeypatch):
+    """Pin verdicts (status) and fresh readings ((remaining, window)) per id."""
+    state = {"verdicts": {}, "fresh": {}}
 
-    `verdicts` maps endpoint -> status; an endpoint absent from it is a
-    configured entry that never opted in (no budget at all).
-    """
-    paced = verdicts if paced is None else paced
-    entries = {name: _entry(name, paced=name in paced) for name in preferences}
-    original = quota_selection.pinned_evaluate
-    try:
-        quota_selection.pinned_evaluate = (
-            lambda entry_id, spec, harness: _budget(verdicts[entry_id])
-        )
-        return choose_endpoint(preferences, default=default, entries=entries)
-    finally:
-        quota_selection.pinned_evaluate = original
+    monkeypatch.setattr(
+        declaration, "pinned_evaluate",
+        lambda entry_id, spec, harness, **_kw: _budget(state["verdicts"][entry_id]),
+    )
 
+    def fresh(entry_id, spec, harness):
+        remaining, window = state["fresh"].get(entry_id, (None, None))
+        return _budget(STATUS_AVAILABLE, remaining, window)
 
-# --- the six rows of the spec table ---------------------------------------
+    monkeypatch.setattr(declaration, "_fresh_reading", fresh)
+    return state
 
 
-def test_both_fine_takes_the_first_preference():
-    result = _choose(["opus", "sol"], {"opus": STATUS_AVAILABLE, "sol": STATUS_AVAILABLE})
+def _choose(pinned, preferences, verdicts, *, fresh=None, default=None):
+    pinned["verdicts"] = verdicts
+    pinned["fresh"] = fresh or {}
+    entries = {name: _entry(name, paced=name in verdicts) for name in preferences}
+    return choose_endpoint(preferences, default=default, entries=entries)
+
+
+# --- removal: out of quota leaves the chain -------------------------------
+
+
+def test_both_fine_takes_the_first_preference(pinned):
+    result = _choose(pinned, ["opus", "sol"], {"opus": STATUS_AVAILABLE, "sol": STATUS_AVAILABLE})
     assert result.chosen == "opus"
     assert result.used_default is False
 
 
-def test_first_out_of_quota_falls_to_the_second():
-    result = _choose(["opus", "sol"], {"opus": STATUS_OUT_OF_QUOTA, "sol": STATUS_AVAILABLE})
+def test_first_out_of_quota_falls_to_the_second(pinned):
+    result = _choose(pinned, ["opus", "sol"], {"opus": STATUS_OUT_OF_QUOTA, "sol": STATUS_AVAILABLE})
     assert result.chosen == "sol"
     assert [c.endpoint for c in result.disabled] == ["opus"]
 
 
-def test_second_out_of_quota_keeps_the_first():
-    result = _choose(["opus", "sol"], {"opus": STATUS_AVAILABLE, "sol": STATUS_OUT_OF_QUOTA})
+def test_second_out_of_quota_keeps_the_first(pinned):
+    result = _choose(pinned, ["opus", "sol"], {"opus": STATUS_AVAILABLE, "sol": STATUS_OUT_OF_QUOTA})
     assert result.chosen == "opus"
     assert [c.endpoint for c in result.disabled] == ["sol"]
 
 
-def test_both_out_of_quota_uses_the_default():
+def test_both_out_of_quota_uses_the_default(pinned):
     result = _choose(
-        ["opus", "sol"],
+        pinned, ["opus", "sol"],
         {"opus": STATUS_OUT_OF_QUOTA, "sol": STATUS_OUT_OF_QUOTA},
         default="openrouter",
     )
@@ -89,66 +102,76 @@ def test_both_out_of_quota_uses_the_default():
     assert "out of quota" in result.reason
 
 
-def test_under_quota_loses_to_an_available_peer():
-    # The de-prioritize row: opus is preferred but behind pace, so a peer that
-    # is not behind pace wins -- without opus being removed from the chain.
-    result = _choose(["opus", "sol"], {"opus": STATUS_UNDER_QUOTA, "sol": STATUS_AVAILABLE})
+def test_an_out_of_quota_endpoint_is_never_in_the_chain(pinned):
+    result = _choose(pinned, ["opus", "sol"], {"opus": STATUS_OUT_OF_QUOTA, "sol": STATUS_AVAILABLE})
+    assert "opus" not in [c.endpoint for c in result.ranked]
+
+
+# --- ordering: pace, not bands --------------------------------------------
+
+
+def test_lower_pace_loses_to_a_higher_pace_peer(pinned):
+    # opus is preferred but at 60% pace; sol at 160% moves ahead of it --
+    # without opus being removed from the chain.
+    result = _choose(
+        pinned, ["opus", "sol"],
+        {"opus": STATUS_UNDER_QUOTA, "sol": STATUS_AVAILABLE},
+        fresh={"opus": (0.3, 0.5), "sol": (0.8, 0.5)},
+    )
     assert result.chosen == "sol"
     assert [c.endpoint for c in result.ranked] == ["sol", "opus"]
     assert result.disabled == ()
+    assert "higher pace" in result.reason
 
 
-def test_both_under_quota_falls_back_to_the_stated_preference():
-    # Neither is disabled, so the caller's own order decides again.
-    result = _choose(["opus", "sol"], {"opus": STATUS_UNDER_QUOTA, "sol": STATUS_UNDER_QUOTA})
+def test_equal_pace_keeps_the_stated_preference(pinned):
+    result = _choose(
+        pinned, ["opus", "sol"],
+        {"opus": STATUS_UNDER_QUOTA, "sol": STATUS_UNDER_QUOTA},
+        fresh={"opus": (0.3, 0.5), "sol": (0.3, 0.5)},
+    )
     assert result.chosen == "opus"
     assert [c.endpoint for c in result.ranked] == ["opus", "sol"]
 
 
-# --- the rules behind the table -------------------------------------------
+def test_the_owners_example_orders_by_pace():
+    # D5, stated on plain values: the rule is order_by_pace.
+    class E:
+        def __init__(self, id, pace):
+            self.id, self.pace = id, pace
+
+    ordered = order_by_pace([
+        E("qwen3.8-5090", None), E("opus", 0.76), E("astra", 1.20), E("qwen3.8-m5pro", None),
+    ])
+    assert [e.id for e in ordered] == ["qwen3.8-5090", "astra", "opus", "qwen3.8-m5pro"]
 
 
-def test_an_under_quota_endpoint_is_still_in_the_chain():
-    # The distinction the whole feature rests on: de-prioritized is not
-    # dropped, so a caller with a retry loop can still reach it.
-    result = _choose(["opus", "sol"], {"opus": STATUS_UNDER_QUOTA, "sol": STATUS_AVAILABLE})
-    assert "opus" in [c.endpoint for c in result.ranked]
-
-
-def test_an_out_of_quota_endpoint_is_never_in_the_chain():
-    result = _choose(["opus", "sol"], {"opus": STATUS_OUT_OF_QUOTA, "sol": STATUS_AVAILABLE})
-    assert "opus" not in [c.endpoint for c in result.ranked]
-
-
-def test_an_endpoint_that_never_opted_in_ranks_available():
-    # Opting in is what asks for pacing; an endpoint that did not is never
-    # de-prioritized by it.
+def test_an_endpoint_that_never_opted_in_keeps_its_place(pinned):
     entries = {"opus": _entry("opus", paced=False), "sol": _entry("sol", paced=False)}
     result = choose_endpoint(["sol", "opus"], entries=entries)
     assert result.chosen == "sol"
     assert all(c.budget is None for c in result.ranked)
 
 
-def test_no_data_does_not_deprioritize():
-    result = _choose(["opus", "sol"], {"opus": STATUS_NO_DATA, "sol": STATUS_AVAILABLE})
+def test_no_data_has_no_pace_and_keeps_its_place(pinned):
+    result = _choose(
+        pinned, ["opus", "sol"], {"opus": STATUS_NO_DATA, "sol": STATUS_AVAILABLE},
+        fresh={"sol": (0.9, 0.5)},
+    )
     assert result.chosen == "opus", "a pool that could not be read must not cost priority"
 
 
-def test_preference_order_is_the_tiebreak_within_a_band():
+def test_pace_sorts_only_among_paced_positions(pinned):
     result = _choose(
-        ["a", "b", "c", "d"],
-        {
-            "a": STATUS_UNDER_QUOTA,
-            "b": STATUS_AVAILABLE,
-            "c": STATUS_UNDER_QUOTA,
-            "d": STATUS_AVAILABLE,
-        },
+        pinned, ["a", "b", "c", "d"],
+        {"a": STATUS_UNDER_QUOTA, "b": STATUS_AVAILABLE, "c": STATUS_NO_DATA, "d": STATUS_AVAILABLE},
+        fresh={"a": (0.2, 0.5), "b": (0.6, 0.5), "d": (0.9, 0.5)},
     )
-    # Available in stated order, then under-quota in stated order.
-    assert [c.endpoint for c in result.ranked] == ["b", "d", "a", "c"]
+    # c has no reading and keeps slot 2; a, b, d re-sort by pace into 0, 1, 3.
+    assert [c.endpoint for c in result.ranked] == ["d", "b", "c", "a"]
 
 
-def test_ranking_is_pure_and_stable():
+def test_rank_candidates_keeps_its_two_band_behaviour_while_deprecated():
     candidates = [
         Candidate("a", 0, _budget(STATUS_UNDER_QUOTA)),
         Candidate("b", 1, _budget(STATUS_AVAILABLE)),
@@ -163,49 +186,36 @@ def test_ranking_is_pure_and_stable():
 # --- edges ----------------------------------------------------------------
 
 
-def test_nothing_usable_and_no_default_chooses_nothing():
-    result = _choose(["opus"], {"opus": STATUS_OUT_OF_QUOTA})
-    assert result.chosen is None
-    assert result.used_default is False
-    assert "no default" in result.reason
-    assert "out of quota (opus)" in result.reason
+def test_nothing_usable_and_no_default_propagates_the_floor(pinned):
+    with pytest.raises(NoUsableRoutingTarget) as excinfo:
+        _choose(pinned, ["opus"], {"opus": STATUS_OUT_OF_QUOTA})
+    assert excinfo.value.dispositions[0].disposition == "out-of-quota"
 
 
-def test_an_unknown_endpoint_is_skipped_rather_than_raising():
-    # One typo must not take down a fallback chain that is otherwise fine.
+def test_an_unknown_endpoint_is_skipped_rather_than_raising(pinned):
     entries = {"sol": _entry("sol", paced=False)}
     result = choose_endpoint(["opsu", "sol"], entries=entries)
     assert result.chosen == "sol"
     assert [c.endpoint for c in result.disabled] == ["opsu"]
 
 
-def test_an_unknown_endpoint_is_never_called_out_of_quota():
-    # A typo is a configuration error, not an account fact. Saying "out of
-    # quota" here sends the reader to look at their usage for a misspelling --
-    # and this sentence is what the `choose` verb prints.
+def test_an_unknown_endpoint_is_never_called_out_of_quota(pinned):
     entries = {"sol": _entry("sol", paced=False)}
     result = choose_endpoint(["opsu", "sol"], entries=entries)
     assert "not configured" in result.reason
     assert "out of quota" not in result.reason
 
 
-def test_an_unknown_only_list_reports_configuration_not_quota():
+def test_an_unknown_only_list_reports_configuration_not_quota(pinned):
     result = choose_endpoint(["opsu"], default="openrouter", entries={})
     assert result.chosen == "openrouter"
     assert "not configured (opsu)" in result.reason
     assert "out of quota" not in result.reason
 
 
-def test_both_exclusion_causes_are_named_separately():
-    entries = {"opus": _entry("opus")}
-    original = quota_selection.pinned_evaluate
-    try:
-        quota_selection.pinned_evaluate = (
-            lambda entry_id, spec, harness: _budget(STATUS_OUT_OF_QUOTA)
-        )
-        result = choose_endpoint(["opus", "slo"], entries=entries)
-    finally:
-        quota_selection.pinned_evaluate = original
+def test_both_exclusion_causes_are_named_separately(pinned):
+    pinned["verdicts"] = {"opus": STATUS_OUT_OF_QUOTA}
+    result = choose_endpoint(["opus", "slo"], default="sol", entries={"opus": _entry("opus")})
     assert "out of quota (opus)" in result.reason
     assert "not configured (slo)" in result.reason
 
@@ -216,54 +226,12 @@ def test_an_empty_preference_list_chooses_the_default():
     assert result.used_default is True
 
 
-# --- the CLI surface ------------------------------------------------------
-
-
-def test_choose_verb_prints_the_winner_and_its_reason(monkeypatch, capsys):
-    from llm_scripting_kit import cli
-
+def test_choose_endpoint_never_probes(pinned, monkeypatch):
+    # The Python API kept its no-probe contract: reachability is answered from
+    # a cache of "unknown" (fail-open), so nothing is spawned or fetched.
     monkeypatch.setattr(
-        cli,
-        "choose_endpoint",
-        lambda prefs, **kw: quota_selection.QuotaSelection(
-            chosen="sol", ranked=(), disabled=(), reason="'sol'; preferred over opus"
-        ),
+        declaration, "check_many",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("probed")),
     )
-    assert cli.main(["choose", "--prefer", "opus,sol"]) == cli.EXIT_OK
-    captured = capsys.readouterr()
-    assert captured.out.strip() == "sol"
-    assert "preferred over opus" in captured.err
-
-
-def test_choose_verb_exits_nonzero_when_nothing_is_usable(monkeypatch, capsys):
-    from llm_scripting_kit import cli
-
-    monkeypatch.setattr(
-        cli,
-        "choose_endpoint",
-        lambda prefs, **kw: quota_selection.QuotaSelection(
-            chosen=None, ranked=(), disabled=(), reason="every candidate is out of quota"
-        ),
-    )
-    # A zero exit here would report a successful choice that was never made.
-    assert cli.main(["choose", "--prefer", "opus,sol"]) == cli.EXIT_FAILURE
-
-
-def test_choose_verb_json_carries_the_whole_chain(monkeypatch, capsys):
-    from llm_scripting_kit import cli
-
-    monkeypatch.setattr(
-        cli,
-        "choose_endpoint",
-        lambda prefs, **kw: quota_selection.QuotaSelection(
-            chosen="sol",
-            ranked=(Candidate("sol", 1, None), Candidate("opus", 0, _budget(STATUS_UNDER_QUOTA))),
-            disabled=(Candidate("fable", 2, _budget(STATUS_OUT_OF_QUOTA)),),
-            reason="x",
-        ),
-    )
-    assert cli.main(["choose", "--prefer", "opus,sol,fable", "--json"]) == cli.EXIT_OK
-    payload = json.loads(capsys.readouterr().out)
-    assert payload["chosen"] == "sol"
-    assert [c["endpoint"] for c in payload["ranked"]] == ["sol", "opus"]
-    assert payload["disabled"][0]["budget"]["status"] == STATUS_OUT_OF_QUOTA
+    result = _choose(pinned, ["opus"], {"opus": STATUS_AVAILABLE})
+    assert result.chosen == "opus"

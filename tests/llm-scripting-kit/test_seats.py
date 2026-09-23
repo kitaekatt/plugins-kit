@@ -459,3 +459,36 @@ def test_relation_outranks_quota_state(monkeypatch):
 
     result = discover_seats("self", registry=registry)
     assert [seat.endpoint for seat in result.seats] == ["up-behind", "beside-ahead"]
+
+
+# ---------------------------------------------------------------------------
+# Migration step 3 (A5): describe() marks [author]; SeatsResult is unchanged
+# ---------------------------------------------------------------------------
+
+
+def test_seats_result_shape_is_unchanged_by_step_three():
+    import dataclasses
+
+    from llm_scripting_kit.seats import SeatsResult
+
+    assert [f.name for f in dataclasses.fields(SeatsResult)] == [
+        "self", "seats", "unclassified", "probe_unknown", "out_of_quota",
+    ]
+
+
+@pytest.mark.parametrize("self_ref", ["opus", "claude-opus-5"])
+def test_describe_marks_the_author_by_id_or_model_like_seats(self_ref):
+    from llm_scripting_kit import DEFAULT_MODEL_CONFIG, discover_model_entries
+    from llm_scripting_kit.declaration import describe
+    from llm_scripting_kit.reachability import Reachability
+
+    entries = discover_model_entries(config=DEFAULT_MODEL_CONFIG)
+    ok = Reachability("reachable", "cli-version", "ok")
+    ranking = describe(
+        ["sol", "opus"], caller="session", self_ref=self_ref, entries=entries,
+        reachability_cache={"sol": ok, "opus": ok},
+    )
+    marked = [e.id for e in ranking.rendered_entries if e.is_self]
+    assert marked == ["opus"]
+    assert "[author]" in ranking.render()
+    assert "prefer a non-author entry" in ranking.rule

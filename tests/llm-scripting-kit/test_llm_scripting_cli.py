@@ -607,3 +607,111 @@ def test_frontdoor_verb_forwards_leading_options(monkeypatch, tmp_path):
     monkeypatch.setattr(frontdoor_mod, "main", fake_main)
     assert cli_mod.main(["frontdoor", "--check", "--port", "4001"]) == 0
     assert seen["argv"] == ["--check", "--port", "4001"]
+
+
+# ---------------------------------------------------------------------------
+# Migration step 3: describe, choose alias, --models (L3, L4)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def declared(monkeypatch):
+    """Fake the factory and the probe: `good` resolves, anything else does not."""
+    from llm_scripting_kit import declaration
+    from llm_scripting_kit.models import EndpointResolveError
+
+    made = []
+
+    def create_backend(name=None, **kwargs):
+        made.append((name, kwargs.get("model")))
+        if name not in ("good", "other"):
+            raise EndpointResolveError(f"unknown endpoint '{name}'")
+        return BackendSelection(name, "harness", FakeBackend(LLMResponse(text="ok", model="m")), kwargs.get("model") or f"{name}-model", "high")
+
+    monkeypatch.setattr(cli, "create_backend", create_backend)
+    monkeypatch.setattr(
+        declaration, "check_many",
+        lambda entries, **_kw: {n: Reachability(STATUS_REACHABLE, "cli-version", "ok") for n in entries},
+    )
+    return made
+
+
+def test_describe_renders_the_rendered_subset_and_the_rule(declared, capsys):
+    assert cli.main(["describe", "typo", "good", "--caller", "process"]) == cli.EXIT_OK
+    out = capsys.readouterr().out
+    assert "good" in out and "[default]" in out
+    assert "typo" not in out  # hidden, and silently so
+    assert "Rule:" in out
+
+
+def test_describe_json_carries_dispositions(declared, capsys):
+    assert cli.main(["describe", "typo", "good", "--caller", "process", "--json"]) == cli.EXIT_OK
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["default"] == "good"
+    assert [d["disposition"] for d in payload["dispositions"]] == ["unresolved", "usable"]
+
+
+def test_describe_floor_exits_one_with_the_itemised_error(declared, capsys):
+    assert cli.main(["describe", "typo", "nope", "--caller", "process"]) == cli.EXIT_FAILURE
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    error = json.loads(captured.err)["error"]
+    assert error["kind"] == "no-usable-routing-target"
+    assert [d["id"] for d in error["dispositions"]] == ["typo", "nope"]
+
+
+def test_describe_defaults_to_the_session_caller(declared, capsys):
+    # sonnet is a shipped core claude entry; in session it drives the Agent tool.
+    assert cli.main(["describe", "sonnet", "--json"]) == cli.EXIT_OK
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["caller"] == "session"
+    assert payload["rendered_entries"][0]["drive"] == "agent"
+
+
+def test_describe_exclude_and_self(declared, capsys):
+    assert cli.main([
+        "describe", "good", "other", "--caller", "process",
+        "--exclude", "good", "--self", "other", "--json",
+    ]) == cli.EXIT_OK
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["default"] == "other"
+    assert payload["rendered_entries"][0]["is_self"] is True
+
+
+def test_choose_is_an_alias_of_describe(declared, capsys):
+    assert cli.main(["choose", "--prefer", "typo,good", "--caller", "process", "--json"]) == cli.EXIT_OK
+    via_choose = json.loads(capsys.readouterr().out)
+    assert cli.main(["describe", "typo", "good", "--caller", "process", "--json"]) == cli.EXIT_OK
+    via_describe = json.loads(capsys.readouterr().out)
+    assert via_choose == via_describe
+
+
+def test_resolve_models_takes_the_first_usable_entry(declared, capsys):
+    assert cli.main(["resolve", "--models", "typo,good,other"]) == cli.EXIT_OK
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["endpoint"] == "good"
+
+
+def test_resolve_endpoint_is_an_alias_of_models(declared, capsys):
+    assert cli.main(["resolve", "--endpoint", "good"]) == cli.EXIT_OK
+    assert json.loads(capsys.readouterr().out)["endpoint"] == "good"
+
+
+def test_resolve_model_stays_a_per_entry_override(declared, capsys):
+    assert cli.main(["resolve", "--models", "good", "--model", "pinned-slug"]) == cli.EXIT_OK
+    assert json.loads(capsys.readouterr().out)["model"] == "pinned-slug"
+
+
+def test_resolve_models_floor_is_exit_one(declared, capsys):
+    assert cli.main(["resolve", "--models", "typo"]) == cli.EXIT_FAILURE
+    assert json.loads(capsys.readouterr().err)["error"]["kind"] == "no-usable-routing-target"
+
+
+def test_complete_models_dispatches_the_first_usable_entry(declared, capsys):
+    assert cli.main(["complete", "--models", "typo,good", "--prompt", "hi"]) == cli.EXIT_OK
+    assert json.loads(capsys.readouterr().out)["endpoint"] == "good"
+
+
+def test_models_and_endpoint_together_are_refused(declared, capsys):
+    with pytest.raises(SystemExit):
+        cli.main(["resolve", "--models", "good", "--endpoint", "good"])

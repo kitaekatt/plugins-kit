@@ -123,7 +123,13 @@ endpoints:
   # claude CLI reproduces the fleet's routing from shipped defaults alone. The
   # claude-cli adapter existed with no endpoint pointing at it, which made
   # Claude reachable in principle and unusable in practice. Effort is a
-  # per-call mapped param on this adapter, so none is set here.
+  # per-call mapped param on this adapter, so none is set here. haiku completes
+  # the core id set (fable, opus, sonnet, haiku), each a claude entry.
+  haiku:
+    harness: claude
+    model: claude-haiku-4-5
+    tier: 1
+    family: anthropic
   sonnet:
     harness: claude
     model: claude-sonnet-5
