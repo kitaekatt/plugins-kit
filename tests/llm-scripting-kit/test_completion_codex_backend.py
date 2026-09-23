@@ -7,6 +7,7 @@ and the round trip is the thing worth pinning.
 """
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 
@@ -62,6 +63,44 @@ def _backend(runner, **kw) -> CodexCliBackend:
 
 def _root(tmp_path: Path) -> Path:
     return tmp_path.resolve()
+
+
+def _write_exhausted_rollout(tmp_path: Path, *, error_message=None, timestamp=None) -> Path:
+    """A codex session rollout in the real 0.44.0 exhaustion shape (both
+    windows null, no credits) -- see usage_budget.read_codex_pool and its own
+    test fixture (tests/llm-scripting-kit/test_usage_budget.py::_rollout),
+    reproduced locally so this file stays hermetic and does not import a
+    sibling test module's private helper.
+    """
+    lines = []
+    rate_limits_event = {
+        "type": "event_msg",
+        "payload": {
+            "type": "token_count",
+            "rate_limits": {
+                "primary": None,
+                "secondary": None,
+                "credits": {"has_credits": False, "unlimited": False, "balance": "0"},
+            },
+        },
+    }
+    if timestamp is not None:
+        rate_limits_event = {"timestamp": timestamp, **rate_limits_event}
+    lines.append(json.dumps(rate_limits_event))
+    if error_message is not None:
+        error_event = {
+            "type": "event_msg",
+            "payload": {
+                "type": "task_complete",
+                "error": {"message": error_message, "codex_error_info": "usage_limit_exceeded"},
+            },
+        }
+        if timestamp is not None:
+            error_event = {"timestamp": timestamp, **error_event}
+        lines.append(json.dumps(error_event))
+    path = tmp_path / "rollout.jsonl"
+    path.write_text("\n".join(lines) + "\n")
+    return path
 
 
 # ---------------------------------------------------------------------------
@@ -456,6 +495,78 @@ class TestProtocolAndHalt:
     def test_classify_halt(self, message, expected):
         backend = CodexCliBackend(argv_prefix=ARGV_PREFIX)
         assert backend.classify_halt(RuntimeError(message)) == expected
+
+
+class TestQuotaHaltClassification:
+    """HALT_QUOTA: codex runs without ``--json``, so no ``task_complete``
+    payload reaches the caller on exhaustion -- the evidence lives only in
+    the session rollout, not in any exception channel. On a non-zero exit
+    the backend re-reads the rollout tail (usage_budget.read_codex_pool,
+    the default seven_day/primary spec) and, when it reads OUT_OF_QUOTA,
+    marks the raised CodexRunError with an authoritative ``halt_kind`` that
+    classify_halt reports ahead of the text-based classifier. See
+    docs/planning/quota-resilient-dispatch/declaration-format-design.md,
+    Decision 6.
+    """
+
+    def test_non_zero_exit_with_exhausted_rollout_classifies_as_halt_quota(
+        self, tmp_path: Path
+    ):
+        error_message = (
+            "You've hit your usage limit. Visit "
+            "https://chatgpt.com/codex/settings/usage to purchase more "
+            "credits or try again at Jan 20th, 2027 3:34 PM."
+        )
+        sessions_dir = tmp_path / "sessions"
+        sessions_dir.mkdir()
+        _write_exhausted_rollout(sessions_dir, error_message=error_message)
+        runner = _StubRunner(output_text=None, result=("", "", 1))
+        backend = _backend(runner, sessions_dir=sessions_dir)
+        with pytest.raises(CodexRunError) as excinfo:
+            backend.complete(
+                "s", "u", model="gpt-5.4-codex",
+                options=BackendOptions(cwd=_root(tmp_path)),
+            )
+        exc = excinfo.value
+        assert exc.halt_kind == halt.HALT_QUOTA
+        assert exc.resets_at is not None
+        assert backend.classify_halt(exc) == halt.HALT_QUOTA
+
+    def test_non_zero_exit_with_no_quota_evidence_is_unaffected(self, tmp_path: Path):
+        runner = _StubRunner(output_text=None, result=("", "boom", 1))
+        backend = _backend(runner, sessions_dir=tmp_path / "no-such-dir")
+        with pytest.raises(CodexRunError) as excinfo:
+            backend.complete(
+                "s", "u", model="gpt-5.4-codex",
+                options=BackendOptions(cwd=_root(tmp_path)),
+            )
+        exc = excinfo.value
+        assert exc.halt_kind is None
+        assert backend.classify_halt(exc) is None
+
+    def test_healthy_non_exhausted_rollout_does_not_forge_quota(self, tmp_path: Path):
+        sessions_dir = tmp_path / "sessions"
+        sessions_dir.mkdir()
+        healthy = {
+            "type": "event_msg",
+            "payload": {
+                "type": "token_count",
+                "rate_limits": {
+                    "primary": {"used_percent": 10.0, "resets_at": 9_999_999_999, "window_minutes": 300},
+                },
+            },
+        }
+        (sessions_dir / "rollout.jsonl").write_text(json.dumps(healthy) + "\n")
+        runner = _StubRunner(output_text=None, result=("", "boom", 1))
+        backend = _backend(runner, sessions_dir=sessions_dir)
+        with pytest.raises(CodexRunError) as excinfo:
+            backend.complete(
+                "s", "u", model="gpt-5.4-codex",
+                options=BackendOptions(cwd=_root(tmp_path)),
+            )
+        exc = excinfo.value
+        assert exc.halt_kind is None
+        assert backend.classify_halt(exc) is None
 
 
 # ---------------------------------------------------------------------------

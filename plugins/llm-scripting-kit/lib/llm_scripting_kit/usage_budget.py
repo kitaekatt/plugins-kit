@@ -870,6 +870,64 @@ def pinned_evaluate(
     return fresh
 
 
+def record_observed_halt(
+    entry_id: str,
+    spec: ConserveSpec,
+    *,
+    resets_at: Optional[int] = None,
+    now: Optional[float] = None,
+    cache_path: Optional[Path] = None,
+    environ: Optional[Mapping[str, str]] = None,
+) -> Optional[Budget]:
+    """Force the pinned verdict to OUT_OF_QUOTA after an observed quota/credit halt.
+
+    :func:`pinned_evaluate` only ever improves a stored verdict within a
+    session -- an UNDER-QUOTA or OUT-OF-QUOTA reading is recomputed once its
+    window resets, and an AVAILABLE reading is never recomputed at all (the
+    ``conserve_usage`` register entry, root ``CLAUDE.md``). This is the one
+    exception: a caller that OBSERVED a real dispatch failure -- codex's own
+    :data:`~.completion.halt.HALT_QUOTA`, or an equivalent credit halt --
+    knows the pool is spent right now, and writes that fact back so the rest
+    of the session does not re-select the same exhausted entry on the
+    strength of a stale AVAILABLE verdict. An AVAILABLE verdict still never
+    flips from a mere re-READ; only an observed failure moves it.
+
+    ``resets_at`` is the halt's own reset time when it carried one (a
+    ``usage_limit_exceeded`` "try again at" clause, as
+    ``usage_budget.read_codex_pool`` parses it). Absent that, the reset is
+    latched to ``now + 5h`` -- the same
+    :data:`_CODEX_EXHAUSTION_LATCH_SECONDS` bound ``read_codex_pool`` itself
+    falls back to, so an unbounded verdict is never left to hold for the rest
+    of the session.
+
+    Returns the written :class:`Budget`, or ``None`` when there is no
+    session key to pin against (nothing is written -- an unpinnable call gets
+    a fresh :func:`evaluate` every time regardless, so writing to a keyless
+    cache would leak the observation into an unrelated later session).
+    """
+    key = session_key(environ)
+    if key is None:
+        return None
+    moment = time.time() if now is None else now
+    reset_at = (
+        int(resets_at)
+        if resets_at is not None
+        else int(moment + _CODEX_EXHAUSTION_LATCH_SECONDS)
+    )
+    budget = Budget(
+        status=STATUS_OUT_OF_QUOTA,
+        pool=spec.pool,
+        detail="observed quota/credit halt at dispatch",
+        remaining=0.0,
+        resets_at=reset_at,
+    )
+    path = VERDICT_CACHE if cache_path is None else cache_path
+    verdicts = _load_cache(path, key)
+    verdicts[entry_id] = {"spec": spec.to_json(), "budget": budget.to_json()}
+    _store_cache(path, key, verdicts)
+    return budget
+
+
 _STATUSES = (STATUS_AVAILABLE, STATUS_UNDER_QUOTA, STATUS_OUT_OF_QUOTA, STATUS_NO_DATA)
 
 
@@ -899,5 +957,6 @@ __all__ = [
     "evaluate",
     "evaluate_usage_budget",
     "pinned_evaluate",
+    "record_observed_halt",
     "session_key",
 ]

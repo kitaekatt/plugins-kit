@@ -71,7 +71,7 @@
     {
       "name": "skills-kit",
       "description": "Author and audit every md file a project loads or ships -- CLAUDE.md, SKILL.md, project docs, and their cross-references -- for placement, cohesion, and drift.",
-      "version": "0.76.3",
+      "version": "0.77.0",
       "author": {
         "name": "Christina"
       },
@@ -111,7 +111,7 @@
     {
       "name": "llm-scripting-kit",
       "description": "LLM access for scripts and pipelines: credentials, endpoint/model resolution, local Qwen server profiles, and one completion seam over HTTP, Claude, Codex, and OpenCode.",
-      "version": "0.44.2",
+      "version": "0.45.0",
       "author": {
         "name": "Christina"
       },
@@ -202,7 +202,7 @@
     {
       "name": "job-kit",
       "description": "Durable execution for heterogeneous agent jobs through a bounded worker pool, with advertisement-based endpoint selection and command-shaped acceptance.",
-      "version": "0.5.1",
+      "version": "0.6.0",
       "author": {
         "name": "Christina"
       },

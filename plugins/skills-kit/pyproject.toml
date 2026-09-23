@@ -1,6 +1,6 @@
 [project]
 name = "skills-kit"
-version = "0.76.3"
+version = "0.77.0"
 requires-python = ">=3.10"
 dependencies = ["pyyaml"]
 

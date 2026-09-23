@@ -218,3 +218,25 @@ class TestClassifyCodexException:
 
         on_stderr = _CodexErr("codex exec failed (exit 1)", stderr=prose)
         assert halt.classify_codex_exception(on_stderr) == halt.HALT_RATE_LIMIT
+
+
+class TestHaltQuota:
+    """HALT_QUOTA is a taxonomy constant classified from a rollout re-read
+    (CodexCliBackend), not from exception text -- classify_codex_exception
+    itself never returns it, because the exhaustion evidence lives in the
+    codex session rollout, not in any channel this module's text matchers
+    scan. This just pins the constant exists and is spelled as documented.
+    """
+
+    def test_halt_quota_constant(self):
+        assert halt.HALT_QUOTA == "quota"
+
+    def test_usage_limit_text_alone_is_not_classified_as_quota(self):
+        # No text marker exists for codex quota exhaustion -- confirms the
+        # premise that today's (and post-fix) text classifier never invents
+        # one; the real classification happens in codex_backend.py.
+        exc = _CodexErr(
+            "codex exec failed (exit 1)",
+            stderr="you have exceeded your usage limit, try again later",
+        )
+        assert halt.classify_codex_exception(exc) is None

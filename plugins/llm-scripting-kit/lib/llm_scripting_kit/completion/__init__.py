@@ -40,6 +40,7 @@ from .codex_backend import (
 from .halt import (
     HALT_AUTH,
     HALT_INSUFFICIENT_CREDIT,
+    HALT_QUOTA,
     HALT_RATE_LIMIT,
     HaltError,
     classify_claude_exception,
@@ -127,6 +128,7 @@ __all__ = [
     "HALT_AUTH",
     "HALT_RATE_LIMIT",
     "HALT_INSUFFICIENT_CREDIT",
+    "HALT_QUOTA",
     "HaltError",
     "classify_halt_text",
     "classify_openai_exception",
