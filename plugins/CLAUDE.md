@@ -87,17 +87,21 @@ unconfigurable opinion whose test passes is a finding.
   task system whose retirement step is manual, and should either accept that or drive
   submission themselves; there is no half-working git path to be surprised by.
 
-- **job-kit selects deterministically from the caller's stated preference order.** No
-  scoring, no endpoint aliases, no learned or adaptive routing: a job names an ordered
-  endpoint preference, requirements filter it against llm-scripting-kit's advertisement,
-  and the first surviving entry runs. A user who wants "pick whichever is cheapest or
+- **job-kit selects deterministically: a run is explainable from the declared list plus
+  the logged pace readings.** No scoring, no learned or adaptive routing: a job's
+  `models` declaration is ranked by llm-scripting-kit's `describe(caller="process")` --
+  unusable entries skipped silently, paced entries ordered by pace, unpaced entries in
+  their declared places -- and the first usable entry runs. Every attempt row records the
+  pace readings it was selected from. A user who wants "pick whichever is cheapest or
   fastest right now" has no way to express it, and that is the point -- an UNATTENDED run
-  must be explainable from its inputs alone, because nobody is watching to notice that the
-  runner chose differently than last time. Judgment-driven routing is a session concern:
-  that user wants `awesome-kit:orchestrate`, whose whole job is deciding, not a runner
-  whose job is executing a decision already made. Within a run, job-kit only ever NARROWS
-  the stated order -- an endpoint that returned a persistent halt is excluded from later
-  jobs -- and the ledger records every exclusion.
+  must be explainable from what it recorded, because nobody is watching to notice that
+  the runner chose differently than last time. Judgment-driven routing is a session
+  concern: that user wants `awesome-kit:orchestrate`, whose whole job is deciding, not a
+  runner whose job is executing a decision already made. Within a run, job-kit only ever
+  NARROWS the declared list -- an endpoint that returned a persistent halt, a spent quota
+  included, is excluded from later attempts and jobs -- and the ledger records every
+  exclusion. When nothing usable remains, the job ends with the floor, which itemises
+  every declared id and its disposition; a skip reason appears nowhere else.
 
 - **A run-level deny floor is a selection REQUIREMENT, not a best-effort request.** When a
   run declares tools an endpoint must not be able to use, an endpoint whose advertisement
@@ -203,18 +207,22 @@ unconfigurable opinion whose test passes is a finding.
   anyway" states the order it wants and can see, afterwards, which model each finding came
   from.
 
-- **A `conserve_usage` verdict is pinned for the session and never re-evaluated
-  downward.** llm-scripting-kit computes a paced endpoint's availability once per session
-  key and reuses it; an UNDER-QUOTA or OUT-OF-QUOTA verdict is recomputed only once its
-  window resets, and an AVAILABLE one is never recomputed at all. A team could reasonably want live
-  re-evaluation -- a session running for days holds an `available` verdict computed against
-  numbers that have since moved -- and the only remedy we leave them is to start a new
-  session (or `llm-scripting-kit usage --no-pin`, which inspects without changing what
-  `seats` returns). We refuse the seam because the alternative is the failure the feature
-  exists to prevent: an endpoint that was usable when work was planned against it
-  disappearing mid-run, which strands that work with no signal a caller can act on. A
-  verdict that only ever improves within a session is a guarantee; one that can flip either
-  way is a race.
+- **A `conserve_usage` verdict is pinned for the session and re-evaluated downward ONLY
+  on an observed quota or credit halt.** llm-scripting-kit computes a paced endpoint's
+  availability once per session key and reuses it; an UNDER-QUOTA or OUT-OF-QUOTA verdict
+  is recomputed only once its window resets, and an AVAILABLE one is never recomputed from
+  a re-read. The one downward move is an actual failure: a dispatch that halts on quota or
+  credit writes OUT-OF-QUOTA for that entry until the halt's own reset time, or the event
+  time plus 5 hours when it carries none, and a passed reset time returns it to no-data. A
+  team could reasonably want live re-evaluation -- a session running for days holds an
+  `available` verdict computed against numbers that have since moved -- and the only
+  remedy we leave them is to start a new session (or `llm-scripting-kit usage --no-pin`,
+  which inspects without changing what `seats` returns). We refuse the seam because the
+  alternative is the failure the feature exists to prevent: an endpoint that was usable
+  when work was planned against it disappearing mid-run on a re-read, which strands that
+  work with no signal a caller can act on. A verdict that moves down only when a dispatch
+  actually failed is a guarantee; one that can flip on any reading is a race. An entry
+  skipped for its verdict is skipped silently; only the floor names it.
 
 - **A shipped mechanical review check cannot be disabled.** The layered
   `mechanical_checks.yaml` configuration adds pattern checks. Duplicate IDs

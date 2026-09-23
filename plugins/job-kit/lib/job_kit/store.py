@@ -36,7 +36,9 @@ from .model import (
 
 DEFAULT_BUSY_TIMEOUT_MS = 5000
 ERROR_LIMIT = 2000
-_PERSISTENT_HALT_KINDS = ("auth", "rate_limit", "insufficient_credit")
+# "quota" is llm-scripting-kit's HALT_QUOTA: a spent subscription pool, which
+# persists until the pool resets, so it narrows the run like the other three.
+_PERSISTENT_HALT_KINDS = ("auth", "rate_limit", "insufficient_credit", "quota")
 
 
 class StoreError(Exception):
@@ -180,6 +182,9 @@ _MIGRATIONS: list[list[str]] = [
         "CREATE INDEX idx_reservations_run_job ON reservations(run_id, job_id, id)",
         "CREATE UNIQUE INDEX idx_attempts_run_job_no ON attempts(run_id, job_id, attempt_no)",
     ],
+    [
+        "ALTER TABLE attempts ADD COLUMN pace_readings_json TEXT",
+    ],
 ]
 
 
@@ -230,6 +235,18 @@ def _acceptance_from_json(value: Optional[str]) -> Optional[Acceptance]:
         accepted=bool(raw.get("accepted", False)),
         outcome=str(raw.get("outcome", "observed")),
     )
+
+
+def _pace_readings_from_json(
+    value: Optional[str],
+) -> Optional[tuple[Mapping[str, object], ...]]:
+    """Rebuild the logged pace readings; NULL on rows that predate them."""
+    if value is None:
+        return None
+    raw = _load_json(value)
+    if not isinstance(raw, list) or not all(isinstance(item, Mapping) for item in raw):
+        raise StoreError("ledger pace readings column is not a JSON list of mappings")
+    return tuple(dict(item) for item in raw)
 
 
 def _row_to_job(row: sqlite3.Row) -> JobRecord:
@@ -315,6 +332,7 @@ def _row_to_attempt(row: sqlite3.Row) -> Attempt:
         ),
         workspace_removal_forced=bool(row["workspace_removal_forced"]),
         acceptance=_acceptance_from_json(row["acceptance_json"]),
+        pace_readings=_pace_readings_from_json(row["pace_readings_json"]),
     )
 
 
@@ -1115,6 +1133,7 @@ class JobStore:
         *,
         terminal_state: Optional[JobState] = None,
         at: Optional[float] = None,
+        reason: Optional[str] = None,
     ) -> Attempt:
         """Append one attempt and update its job state atomically.
 
@@ -1122,7 +1141,8 @@ class JobStore:
         direct-append path accepts the next available number for stores that
         predate reservations. The method never updates an attempt row and
         refuses a terminal job. A null ``terminal_state`` leaves the job
-        pending for another attempt.
+        pending for another attempt. ``reason`` becomes the job's error
+        message when the attempt terminalizes it, and is ignored otherwise.
         """
         if terminal_state is not None and terminal_state not in TERMINAL_STATES:
             raise ValueError("append_attempt requires a terminal or null job state")
@@ -1188,10 +1208,10 @@ class JobStore:
                     response_text, reasoning, finish_reason, workspace, base_ref,
                     workspace_status,
                     workspace_reason, workspace_removed_at, workspace_removal_forced,
-                    acceptance_json
+                    acceptance_json, pace_readings_json
                 ) VALUES (
                     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
                 )
                 """,
                 (
@@ -1240,6 +1260,11 @@ class JobStore:
                         if attempt.acceptance is not None
                         else None
                     ),
+                    _json_or_none(
+                        [dict(reading) for reading in attempt.pace_readings]
+                        if attempt.pace_readings is not None
+                        else None
+                    ),
                 ),
             )
             attempt_id = int(conn.execute("SELECT last_insert_rowid()").fetchone()[0])
@@ -1249,10 +1274,15 @@ class JobStore:
                     "WHERE id = ?",
                     ("completed", str(when), int(reservation["id"])),
                 )
+            job_reason = (
+                str(reason)[:ERROR_LIMIT]
+                if reason is not None and terminal_state is not None
+                else None
+            )
             conn.execute(
-                "UPDATE jobs SET state = ?, error_message = NULL, updated_at = ? "
+                "UPDATE jobs SET state = ?, error_message = ?, updated_at = ? "
                 "WHERE run_id = ? AND id = ?",
-                (next_state.value, when, attempt.run_id, attempt.job_id),
+                (next_state.value, job_reason, when, attempt.run_id, attempt.job_id),
             )
         return replace(attempt, id=attempt_id)
 
