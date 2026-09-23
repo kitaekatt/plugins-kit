@@ -1712,7 +1712,14 @@ def dispatch_wave(
     e.g. ``extra_launch_args=("--agent", "pipeline-worker")`` for the agent
     definition this plugin ships, or its own agent name -- and how any other
     launch flag (a permission mode, a system-prompt file) reaches the
-    worker.
+    worker. A caller passing ``--model <id>`` through this seam names an id
+    from the SAME model declaration (``bootstrap_lib.model_declaration``'s
+    format; see ``content_pipeline.llm.backends.MODELS_ENV``) governing the
+    rest of the run -- not an arbitrary vendor string -- so the worker session
+    and the dispatcher's own routing never disagree about which entries are
+    in play (C3). No caller in this repo passes ``--model`` through
+    ``extra_launch_args`` today; this states the contract for the one that
+    does.
 
     The default is empty and the driver NEVER adds a flag of its own, which
     is deliberate rather than conservative: whether agent-selection flags

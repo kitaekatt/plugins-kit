@@ -174,8 +174,35 @@ def _planner_fixture(tmp_path: Path, profile_dir: Path, write: Writer, response:
 
 def test_no_configured_backend_returns_mechanical_plan_without_routing(tmp_path, profile_dir, write, monkeypatch):
     monkeypatch.delenv("CONTENT_PIPELINE_LLM_BACKEND", raising=False)
+    monkeypatch.delenv("CONTENT_PIPELINE_LLM_MODELS", raising=False)
     planner, store, _ = _planner_fixture(tmp_path, profile_dir, write, "")
     assert planner.units(store)[0].id == "record:product/bolt"
+
+
+def test_models_env_alone_triggers_the_live_path(tmp_path, profile_dir, write, monkeypatch):
+    """Y1: CONTENT_PIPELINE_LLM_MODELS (the C1 declaration) turns on the
+    agentic path by itself -- the trigger used to check only
+    CONTENT_PIPELINE_LLM_BACKEND, which would have silently fallen back to
+    the mechanical-only plan on a machine configured with the new
+    declaration alone."""
+    monkeypatch.delenv("CONTENT_PIPELINE_LLM_BACKEND", raising=False)
+    monkeypatch.setenv("CONTENT_PIPELINE_LLM_MODELS", "sol")
+    from yaml_data_editor_kit.dispatch import planner as planner_module
+
+    calls = []
+
+    def _fake_route(*, mock=None):
+        calls.append("route")
+        return MockBackend(
+            responses=['{"schema_version":"1","work_units":[{"comment_ids":["note"],"instruction":"x"}]}']
+        )
+
+    monkeypatch.setattr(planner_module, "route", _fake_route)
+    monkeypatch.setattr(planner_module, "routed_model", lambda *a, **k: "gpt-5.6-sol")
+    planner, store, _ = _planner_fixture(tmp_path, profile_dir, write, "")
+    units = planner.units(store)
+    assert calls == ["route"]
+    assert units and units[0].id.startswith("group:")
 
 
 def test_planner_prompt_is_canonical_json_with_anchored_slices(tmp_path, profile_dir, write):

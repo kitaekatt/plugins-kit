@@ -129,6 +129,9 @@ from content_pipeline.llm.backends import (
     ModelEndpointBackend,
     OpencodeCliBackend,
     OpenRouterBackend,
+    declared_backend_and_model,
+    declared_model_names,
+    resolve_declaration,
     route,
     routed_model,
 )
@@ -174,4 +177,7 @@ __all__ = [
     "MockBackend",
     "route",
     "routed_model",
+    "declared_model_names",
+    "resolve_declaration",
+    "declared_backend_and_model",
 ]

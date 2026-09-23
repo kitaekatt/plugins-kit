@@ -2533,6 +2533,29 @@ def test_dispatch_wave_forwards_extra_launch_args_to_the_launcher(tmp_path):
     assert argv[4].startswith("Run id: run-1\n")
 
 
+def test_dispatch_wave_forwards_a_model_flag_through_extra_launch_args(tmp_path):
+    """A `--model <id>` passed the same way is forwarded unaltered too --
+    there is nothing extra_launch_args does or validates about it (C3: no
+    in-repo caller passes `--model` today, so this pins only that the seam
+    stays a verbatim passthrough for it, exactly like `--agent`)."""
+    argv = _dispatch_one_and_capture_launch_argv(
+        tmp_path, extra_launch_args=("--model", "sol")
+    )
+    assert argv[:4] == ["claude", "--bg", "--model", "sol"]
+
+
+def test_dispatch_wave_docstring_states_the_model_declaration_contract():
+    """C3: a `--model` id passed through `extra_launch_args` must name an id
+    from the SAME model declaration governing the run (R37,
+    `content_pipeline.llm.backends.MODELS_ENV`), not an arbitrary vendor
+    string. Pinned as prose since there is no in-repo caller to exercise this
+    behaviorally -- see the declaration-format-design migration table, step
+    10, row C3."""
+    doc = claude_bg.dispatch_wave.__doc__
+    assert "model declaration" in doc
+    assert "MODELS_ENV" in doc
+
+
 def test_dispatch_wave_default_launch_argv_is_byte_identical_without_the_seam(tmp_path):
     """REFUSAL DIRECTION: passing no seam argument must launch exactly what
     the driver launched before the seam existed -- [exe, "--bg", prompt] and

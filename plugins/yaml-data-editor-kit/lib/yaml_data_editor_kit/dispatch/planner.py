@@ -12,7 +12,7 @@ from typing import Any
 
 from content_pipeline.freshness.hashing import content_hash
 from content_pipeline.llm import BackendOptions, CostBudget, LLMBackend, route, routed_model, submit_validated
-from content_pipeline.llm.backends import BACKEND_ENV
+from content_pipeline.llm.backends import BACKEND_ENV, declared_model_names
 from content_pipeline.pipeline.workunit import WorkUnit, WorkUnitStrategy
 
 from yaml_data_editor_kit.comments import DOC, INSTRUCTION, QUESTION, Comment, CommentSet, resolve_anchor
@@ -108,7 +108,15 @@ class AgenticCommentPlanner(MechanicalCommentPlanner):
         mechanical = MechanicalCommentPlanner(self.profile, self.corpus, self.comments, self.selection).units(store)
         if not mechanical:
             return mechanical
-        if self.backend is None and not os.environ.get(BACKEND_ENV, "").strip():
+        # A model declaration (CONTENT_PIPELINE_LLM_MODELS, Y1) also turns on
+        # the live/agentic path -- BACKEND_ENV alone is the legacy trigger and
+        # would otherwise silently fall back to the mechanical-only plan on a
+        # machine that configured only the new declaration.
+        if (
+            self.backend is None
+            and not os.environ.get(BACKEND_ENV, "").strip()
+            and declared_model_names() is None
+        ):
             return mechanical
         try:
             user = _planner_input(mechanical)
