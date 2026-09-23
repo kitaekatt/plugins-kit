@@ -30,8 +30,9 @@ profiles:
     model: opus
     model_fallbacks: []
   - name: reviewer_c_introduced_code
-    model: opus
-    model_fallbacks: []
+    model: sol
+    model_fallbacks:
+    - opus
   validator_models:
     bug: opus
     claude_md: sonnet

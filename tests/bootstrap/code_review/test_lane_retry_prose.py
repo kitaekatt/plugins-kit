@@ -48,61 +48,59 @@ def test_corrected_attempts_are_disclosed_not_counted_as_missing(skill_dir: Path
     assert "Only a completed, schema-valid reviewer result restores that lane's coverage" in body
     assert "including an unsuccessful launch correction" in body
     assert "non-zero parser exit is a FAILED lane" in body
-    # Scoped, not dropped: a lane reaching this section has no fallback left, so
-    # "a different model" means one its own configuration never named.
-    assert "never re-run the lane on a model its own configuration did not name" in body
-    assert "only with an EMPTY or EXHAUSTED `model_fallbacks`" in body
+    # Scoped, not dropped: a lane reaching this section has no usable entry
+    # left, so "a different model" means one its declaration never named.
+    assert "never re-run the lane on a model its own declaration did not name" in body
+    assert "only when its declaration has no usable entry left" in body
 
 
-def test_failed_lane_fails_over_along_its_configured_chain(skill_dir: Path) -> None:
+# --------------------------------------------------------------------------
+# Migration step 5: a failed lane re-selects through `describe`, following
+# the rule describe prints. The skill does not restate that rule, and the
+# old "walk model_fallbacks in order" chain is gone.
+# --------------------------------------------------------------------------
+
+
+def test_failed_lane_reselects_through_describe_with_exclusions(skill_dir: Path) -> None:
     body = _normalized(skill_dir / "SKILL.md")
-    assert "FAILOVER-ELIGIBLE" in body
-    assert "when the resolved reviewer record's `model_fallbacks` is non-empty" in body
-    assert "re-dispatch the SAME lane on the next entry in `model_fallbacks`" in body
-    assert (
-        "Walk the chain in order, trying each entry AT MOST ONCE, until one produces a "
-        "schema-valid result or the chain is exhausted"
-    ) in body
-    assert "do not retry an entry already tried and do not skip ahead" in body
+    assert "follow the `Re-select:` line describe printed" in body
+    assert "one `--exclude <entry>` per entry this lane has already failed on" in body
+    assert "Each entry is tried at most once per lane." in body
 
 
-def test_lane_with_no_fallbacks_still_fails_exactly_as_before(skill_dir: Path) -> None:
+def test_the_old_fallback_chain_walk_is_gone(skill_dir: Path) -> None:
+    body = _normalized(skill_dir / "SKILL.md")
+    ref = _normalized(skill_dir / "references/configuration.md")
+    for text in (body, ref):
+        assert "FAILOVER-ELIGIBLE" not in text
+        assert "Walk the chain in order" not in text
+        assert "re-dispatch the SAME lane on the next entry in `model_fallbacks`" not in text
+        assert "## Lane failovers" not in text
+
+
+def test_the_skill_prints_the_rule_instead_of_restating_it(skill_dir: Path) -> None:
+    """The trigger set is describe's text (llm-scripting-kit RULE_TRIGGER_SESSION)."""
+    body = _normalized(skill_dir / "SKILL.md")
+    assert "print its stdout verbatim" in body
+    assert "a launch that produced no output -- moves to another usable entry" not in body
+    assert "is a task failure, not a trigger" not in body
+
+
+def test_a_lane_with_no_usable_entry_left_is_a_failed_lane(skill_dir: Path) -> None:
     body = _normalized(skill_dir / "SKILL.md")
     assert (
-        "A lane with an EMPTY `model_fallbacks` -- every validator lane, and any reviewer "
-        "configured with no fallback -- behaves exactly as before: do NOT retry it, silently "
-        'substitute an Agent, or treat absent output as "no issues found"'
-    ) in body
-
-
-def test_exhausted_chain_is_still_a_failed_lane_with_missing_coverage(skill_dir: Path) -> None:
-    body = _normalized(skill_dir / "SKILL.md")
-    assert (
-        "A lane whose `model_fallbacks` chain is EXHAUSTED (every entry tried and failed) is a "
-        "FAILED lane the same way: report it in step 9, name every model tried, and mark "
-        'coverage missing -- never treat absent output as "no issues found"'
+        "the lane has no usable entry left: report it in step 9 under `## Lane failures`, "
+        "naming every entry tried and why it failed, and mark coverage missing -- never treat "
+        'absent output as "no issues found"'
     ) in body
     ref = _normalized(skill_dir / "references/configuration.md")
-    assert (
-        "This happens when a lane has no `model_fallbacks` to try, or when every entry in its "
-        "chain has been tried and failed."
-    ) in ref
-    assert "no fallback beyond the configured chain to an unlisted Agent" in ref
+    assert "A lane reaches `## Lane failures` only when no usable entry of its declaration is left." in ref
 
 
-def test_lane_failovers_disclosure_section_is_required(skill_dir: Path) -> None:
+def test_lane_routes_disclosure_section_is_required(skill_dir: Path) -> None:
     body = _normalized(skill_dir / "SKILL.md")
-    assert "prepend a `## Lane failovers` section naming, per failed-over lane" in body
-    assert (
-        "the lane, the model that failed and the runner's stderr reason, and the model that "
-        "actually produced the review"
-    ) in body
-    assert (
-        "State once that these files were reviewed by a different model than the "
-        "configuration's first choice."
-    ) in body
+    assert "prepend a `## Lane routes` section carrying every `route:` line announced in step 6, verbatim" in body
     assert "This is a disclosure, not a warning" in body
-    checklist = _normalized(skill_dir / "SKILL.md")
-    assert "`## Lane failovers` section (lane, failed model + stderr reason, model that actually reviewed)" in checklist
+    assert "`## Lane routes` section" in body
     ref = _normalized(skill_dir / "references/configuration.md")
-    assert "the rendered review carries a `## Lane failovers` section naming the model that failed" in ref
+    assert "the rendered review carries a `## Lane routes` section" in ref

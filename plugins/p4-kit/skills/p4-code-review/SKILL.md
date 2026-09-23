@@ -101,17 +101,10 @@ technique_skill:
             the resolved `profiles` list for steps 6 and 7. See references/configuration.md for
             the full layer/merge/override contract.
             The renderer may also print `model-priority:` lines on STDERR. Each one names a
-            lane whose `model` was configured as a priority list, saying which entry the
-            renderer resolved -- a `peer:` entry that resolved to an endpoint, or a `peer:`
-            entry it skipped and the entry it ran instead. It is the only record of a `peer:`
-            entry that was probed and resolved, or probed and skipped. Keep every such line
-            and repeat it verbatim in the step-9 review header, under
-            `## Model-priority substitutions`. Never drop it, and never edit the resolved table
-            to undo it. Silence on stderr means either every lane took the first entry of its
-            list, or llm-scripting-kit was not available to probe a `peer:` entry at all --
-            that second case runs the next entry silently and is reported only by
-            `--explain-peer-seats`. Either way the resolved table states the model each lane
-            actually runs.
+            lane whose deprecated `peer:` entry the renderer rewrote to an endpoint id. Keep
+            every such line and repeat it verbatim in the step-9 review header, under
+            `## Model-priority substitutions`, and never edit the resolved table to undo it.
+            A `peer:` entry that did not resolve is left out of the table without a line.
           tool: Read + "${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" ${CLAUDE_PLUGIN_ROOT}/scripts/render_review_profiles.py
         - n: 5
           action: |
@@ -157,15 +150,41 @@ technique_skill:
             the validator wave to the Workflow tool instead of launching inline. Same
             reviewers, same validators, same output either way -- only the dispatch
             mechanism changes.
-            Model-kind rule (per lane, mechanical -- read the value, do not interpret it):
-            each reviewer's `model` and each `validator_models[reason]` value from the
-            RESOLVED table is EITHER one of the Agent tool's aliases -- `sonnet`, `opus`,
-            `haiku`, `fable` -- OR an llm-scripting-kit endpoint id. An alias launches an
-            Agent subagent (the default path; the shipped table is
-            all aliases, so an unconfigured review behaves identically to before). Any other
-            value is an endpoint id: run that lane as a parallel Bash call to
+            Lane routing rule (per reviewer): a reviewer's DECLARATION is its resolved
+            `model` followed by its `model_fallbacks`, in that order, read off the RESOLVED
+            table. Validators are routed by step 7, not by this rule.
+            - A one-entry declaration has no menu and no announcement: dispatch its entry by
+              the entry-harness rule below.
+            - For each declaration with two or more entries, run
+              `llm-scripting-kit describe <entry>... --caller session` with the entries in
+              declared order, plus `--project-root <bundle.project_root>` when the bundle
+              has one, plus `--self <id>` when one declared entry is the model you are
+              running on, so that entry is marked `[author]`. Run every such describe
+              before the fan-out, in one message. For each, print its stdout verbatim:
+              the menu, its `[default]` mark, and its `Rule:` and `Re-select:` lines (and
+              `Independence:` when present). Choose one usable entry as that printed rule
+              says, and announce the choice in the form that rule gives, with the
+              reviewer name as the unit. The same entry serves every chunk of that
+              reviewer. The menu shows only entries that are real on this machine; a
+              declared entry it leaves out is skipped, and you say nothing about it.
+            - When describe exits 1, its stderr is a JSON `error` itemising every declared
+              entry and its disposition: no entry is usable. That reviewer does not run;
+              report it in step 9 under `## Lane failures` with that itemised list, and mark
+              its coverage missing. Any other non-zero describe exit is reported the same
+              way, with its stderr.
+            - When `llm-scripting-kit` is not on PATH, or its argument parser rejects
+              `describe` as an invalid choice (a release older than 0.46.0), route without a
+              menu: take the declaration's `sonnet`, `opus`, `haiku` and `fable` entries in
+              declared order, dispatch the first, and skip every other entry without
+              comment. A declaration with none of those four does not run; report it in
+              step 9 under `## Lane failures`, naming each declared entry, and mark its
+              coverage missing.
+            Entry-harness rule (per lane, mechanical): an entry whose describe line reads
+            `claude/agent` -- or, on a one-entry declaration or the no-menu route, one of
+            `sonnet`, `opus`, `haiku`, `fable` -- launches an Agent subagent with
+            `model: <entry>`. Any other entry runs as a parallel Bash call to
             "${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" ${CLAUDE_PLUGIN_ROOT}/scripts/run_review_lane.py instead of launching an Agent for it, passing `--lane <reviewer
-            name>`, `--model <the value>`, `--chunk <absolute chunk diff path>`, one
+            name>`, `--model <the entry>`, `--chunk <absolute chunk diff path>`, one
             `--file` per repo-relative path in that chunk, `--description <the change
             description>`, `--bundle <bundle.bundle_dir>/bundle.json`, and `--project-root
             <bundle.project_root>` when the bundle has one. For reviewer_a and reviewer_b
@@ -177,28 +196,23 @@ technique_skill:
             issues, in the same shape an Agent lane returns.
             Endpoint lanes and Agent lanes go out in the SAME message as one another; mixing
             the two dispatch mechanisms in one fan-out is normal and expected.
-            A NON-ZERO exit is never an empty result. Before marking a lane failed,
+            A NON-ZERO exit is never an empty result. Before treating a lane as failed,
             apply the pre-dispatch launch-correction rule in references/configuration.md.
-            A non-zero exit the launch-correction rule does not explain is FAILOVER-ELIGIBLE
-            when the resolved reviewer record's `model_fallbacks` is non-empty: re-dispatch
-            the SAME lane on the next entry in `model_fallbacks`, by the dispatch mechanism
-            that entry implies -- an Agent alias launches an Agent, an endpoint id runs
-            through "${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" ${CLAUDE_PLUGIN_ROOT}/scripts/run_review_lane.py exactly as the model-kind rule above prescribes for that
-            value's kind. Walk the chain in order, trying each entry AT MOST ONCE, until one
-            produces a schema-valid result or the chain is exhausted; do not retry an entry
-            already tried and do not skip ahead. Every failover is disclosed in step 9's
-            `## Lane failovers` section -- never silent, and never presented as though the
-            first-choice model produced the review.
-            A lane with an EMPTY `model_fallbacks` -- every validator lane, and any reviewer
-            configured with no fallback -- behaves exactly as before: do NOT retry it,
-            silently substitute an Agent, or treat absent output as "no issues found". Keep
-            the stderr line, report the failure in step 9, and mark coverage missing.
-            A lane whose `model_fallbacks` chain is EXHAUSTED (every entry tried and failed)
-            is a FAILED lane the same way: report it in step 9, name every model tried, and
-            mark coverage missing -- never treat absent output as "no issues found".
-            Only the lanes the runner supports may carry an endpoint id; it refuses
-            the rest by name and exits 2, which is a configuration error for the user to fix,
-            not something to work around.
+            For a failure that rule does not explain, follow the `Re-select:` line describe
+            printed: run describe again with the same arguments plus one `--exclude <entry>`
+            per entry this lane has already failed on, print its stdout verbatim, choose,
+            and announce as its rule says, with `<reviewer name> chunk <i>` as the unit and
+            the prior entry and its failure kind as the reason. Dispatch the chosen entry by
+            the entry-harness rule. Each entry is tried at most once per lane. On the
+            no-menu route, re-select the next of the four core entries in declared order
+            and announce it as `route: <reviewer name> chunk <i> -> <entry>; <prior entry>
+            failed: <kind>`. A one-entry declaration has nothing to re-select.
+            When describe exits 1 on a re-run, or no entry is left to try, the lane has no
+            usable entry left: report it in step 9 under `## Lane failures`, naming every
+            entry tried and why it failed, and mark coverage missing -- never treat absent
+            output as "no issues found".
+            The runner refuses a lane it does not support by name and exits 2, which is a
+            configuration error for the user to fix, not something to work around.
 
             Effort rule (per lane, mechanical -- applies to AGENT lanes only): a reviewer
             record in the RESOLVED table may carry an `effort` value alongside its `model`.
@@ -206,12 +220,12 @@ technique_skill:
             instead of `general-purpose`. When it does not, use `general-purpose` and the lane
             inherits this session's effort -- the behavior every lane had before the field
             existed, which is why an unstated effort is never a silent change. The effort
-            agent binds ONLY the reasoning budget: pass the lane's resolved `model` at the
-            call site exactly as you would otherwise (a call-site model overrides an agent
-            definition's own) and pass the lane's canonical prompt verbatim as always, because
-            the agent adds no review criteria of its own.
+            agent binds ONLY the reasoning budget: pass the lane's chosen entry as `model`
+            at the call site exactly as you would otherwise (a call-site model overrides an
+            agent definition's own) and pass the lane's canonical prompt verbatim as always,
+            because the agent adds no review criteria of its own.
             `effort` does NOT reach an ENDPOINT lane: an endpoint's effort comes from its own
-            llm-scripting-kit configuration, so a record carrying both an endpoint id and an
+            llm-scripting-kit configuration, so a record carrying both an endpoint entry and an
             `effort` runs at the endpoint's configured effort. Note that in one line rather
             than reporting an effort the lane did not run at, and do not substitute an Agent
             to honour the field.
@@ -330,17 +344,18 @@ technique_skill:
             chain. Endpoint envelopes already contain output from the same shared parser. A
             non-zero parser exit is a FAILED lane under the existing failure rule; never pass
             its unparsed issues to validators.
-          tool: Agent (per the model-kind rule, a lane whose model is an endpoint id runs as a Bash call to "${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" ${CLAUDE_PLUGIN_ROOT}/scripts/run_review_lane.py instead)
+          tool: Bash (`llm-scripting-kit describe`) + Agent (per the entry-harness rule, a lane whose entry is not a `claude` entry runs as a Bash call to "${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" ${CLAUDE_PLUGIN_ROOT}/scripts/run_review_lane.py instead)
           expected: JSON arrays of candidate issues from each launched reviewer (one array per (reviewer, chunk) lane), plus a recorded failure for any lane that exited non-zero.
         - n: 7
           action: |
             Launch one validator subagent per candidate issue, all in parallel via a single message.
             Use the selected profile's `validator_models[reason]` (from the RESOLVED table fetched
-            in step 4) to pick the model per issue. The model-kind rule from step 6 applies here
-            too, but no validator lane is endpoint-eligible: the runner refuses one and
-            exits 2, because the validator is the control that suppresses a weak reviewer's noise
-            and must not be replaced in the same change as a reviewer. An endpoint id in
-            `validator_models` is therefore a configuration error to report, not a lane to run.
+            in step 4) to pick the model per issue. It names one entry, one of `sonnet`, `opus`,
+            `haiku`, `fable`, and launches an Agent with that `model`. No validator lane is
+            endpoint-eligible: the runner refuses one and exits 2, because the validator is the
+            control that suppresses a weak reviewer's noise and must not be replaced in the same
+            change as a reviewer. Any other entry in `validator_models` is therefore a
+            configuration error to report, not a lane to run.
           tool: Agent
           expected: CONFIRMED or REJECTED per issue.
         - n: 8
@@ -359,25 +374,18 @@ technique_skill:
               rest of the review looks identical whether a lane ran or not, so without it a
               partial review is indistinguishable from a complete one. Never describe a
               failed lane's files as clean, and never re-run the lane on a model its own
-              configuration did not name -- a lane reaches this section only with an EMPTY
-              or EXHAUSTED `model_fallbacks`, so there is no entry left to try; report it
-              and let the user decide.
-            - When any lane FAILED OVER (a non-zero exit the launch-correction rule did not
-              explain was followed by a re-dispatch on a later `model_fallbacks` entry that
-              produced a schema-valid result), prepend a `## Lane failovers` section naming,
-              per failed-over lane: the lane, the model that failed and the runner's stderr
-              reason, and the model that actually produced the review. State once that these
-              files were reviewed by a different model than the configuration's first choice.
-              This is a disclosure, not a warning: the rendered review looks identical whether
-              the first entry or a later one ran, so the reader must never have to infer which
-              model actually reviewed their change.
+              declaration did not name -- a lane reaches this section only when its
+              declaration has no usable entry left; report it and let the user decide.
+            - When any reviewer's declaration had two or more entries, prepend a
+              `## Lane routes` section carrying every `route:` line announced in step 6,
+              verbatim, re-selections included. This is a disclosure, not a warning: the
+              rendered review looks identical whichever entry ran, so the reader must never
+              have to infer which model actually reviewed their change.
             - When the step-4 renderer printed any `model-priority:` line on stderr,
               prepend a `## Model-priority substitutions` section carrying each line verbatim.
-              Such a lane ran on a model chosen from a priority list rather than on a single
-              configured name, and the rendered review looks identical either way, so omitting
-              this would let the reader believe a model reviewed their change that never saw
-              it. This is a disclosure, not a warning: resolving the list is the configured
-              behaviour and nothing needs fixing.
+              Such a lane's table entry is an endpoint id the renderer wrote in place of a
+              deprecated `peer:` entry. This is a disclosure, not a warning: the rewrite is
+              the configured behaviour and nothing needs fixing.
             - When `bundle.submit_gates` is non-empty, prepend a `## Submit checklist`
               section, each gate carrying its step-5 verdict and the evidence for it.
             - When `bundle.unresolved` or `bundle.stale_open` is non-empty, prepend a
@@ -509,7 +517,7 @@ technique_skill:
         - Validators launched in parallel (single message, N Agent calls), models picked from the profile's validator_models
         - Filtered to confirmed-only
         - Launch rationale line emitted once (file-type-driven; md_trivial variant when the change is all-mechanical)
-        - A FAILED lane's non-empty `model_fallbacks` walked in order, at most once per entry, until a schema-valid result or an exhausted chain; every failover disclosed via the `## Lane failovers` section (lane, failed model + stderr reason, model that actually reviewed), never presented as the first-choice model's review; an exhausted chain still reports a `## Lane failures` entry with coverage missing
+        - Every multi-entry reviewer declaration routed through `llm-scripting-kit describe` (stdout printed verbatim, choice announced as a `route:` line) or, without describe, through its core entries; a FAILED lane re-selected per the printed `Re-select:` line, each entry at most once; every `route:` line carried into the `## Lane routes` section; a lane with no usable entry left still reports a `## Lane failures` entry with coverage missing
         - md-domain subject-lens pass launched for the NON-TRIVIAL bundle.claimed_files when skills-kit md-domain is available (or claimed files folded back into the generic review on version-skew fallback); skipped silently when md-domain is absent
         - Trivial claimed files (prepare's `trivial` flag) reported via the `## Mechanical checks (audit skipped)` section, never as an audit or DIFF-CLEAN; nothing written to the ledger for them; whole review skipped when every claimed file is trivial and there are no generic diff chunks
         - Machine-emitted artifacts (bundle.machine_emitted_files) reported via the `## Machine-emitted artifacts (not reviewed)` section, naming each file's exclusion axis (content banner or declared plugin-write path) and the rule that matched, never as an audit or DIFF-CLEAN; review of machine-emitted output belongs on the generator
@@ -551,10 +559,10 @@ technique_skill:
         - Record declined findings ONLY through `prepare_review.py --ledger-record <json>`. Never hand-edit ledger.json -- the key normalization (criterion/reason + taxonomy + normalized anchor) must be computed deterministically, not typed.
         - The `review_profiles` block above is SELECTION GUIDANCE AND RATIONALE ONLY. It carries no reviewer roster, model, or validator_models -- that executable table is resolved per review by "${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" ${CLAUDE_PLUGIN_ROOT}/scripts/render_review_profiles.py (step 4), which merges the shipped bootstrap_lib defaults with any `~/.claude/config/review_profiles.yaml` (user) or `<project_root>/.claude/review_profiles.yaml` (project) override. Never merge those layers yourself and never hand-edit the resolved output.
         - The `profile` in steps 6-7 is always an entry from that RESOLVED table, never the guidance block. Match the guidance prose to decide which profile id fits the change, then read `reviewers` and `validator_models` off the resolved entry with that id.
-        - See references/configuration.md for the layer precedence, merge rules (profiles/reviewers merge by id/name; validator_models and other mappings deep-merge; `disabled: true` removes a record; plain lists like `data_only_extensions` replace), the shipped default table, what a `model` value may name, which lanes may take an endpoint id, what happens when an endpoint lane fails, and how a reviewer's ordered `model` priority list resolves a `peer:` entry (plus the `--explain-peer-seats` diagnostic).
-        - A `model` value is NOT always an Agent-tool model. The four aliases `sonnet`, `opus`, `haiku` and `fable` name the Agent tool; every other value is an llm-scripting-kit endpoint id and that lane runs through "${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" ${CLAUDE_PLUGIN_ROOT}/scripts/run_review_lane.py instead (step 6's model-kind rule). Every `model` in the RESOLVED table is a single string -- the renderer has already picked one entry out of any priority list the configuration stated -- so this rule needs no extra case.
-        - A reviewer's configured `model` may be an ORDERED PRIORITY LIST rather than a single name, and an entry spelled `peer:<name>` asks the renderer to run that lane on a reachable PEER endpoint -- same tier as `<name>`, different model family -- when llm-scripting-kit is installed and current. The renderer evaluates the list and prints one resolved model, so the table you read already carries the chosen value, and the lane dispatches through "${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" ${CLAUDE_PLUGIN_ROOT}/scripts/run_review_lane.py under the ordinary step-6 model-kind rule. Do not probe for a peer yourself, and do not treat a resolved peer endpoint as an override the user forgot to make.
-        - Apply references/configuration.md's pre-dispatch launch-correction rule before classifying a failed invocation. An actual failed endpoint lane has no Agent fallback: report it and mark coverage missing rather than claiming review by the configured model.
+        - See references/configuration.md for the layer precedence, merge rules (profiles/reviewers merge by id/name; validator_models and other mappings deep-merge; `disabled: true` removes a record; plain lists like `data_only_extensions` replace), the shipped default table, what a declaration entry may name, how a multi-entry declaration is routed, which lanes may take an endpoint entry, what happens when a lane fails, and the deprecated `peer:` entry (plus the `--explain-peer-seats` diagnostic).
+        - A reviewer's `model` is a model DECLARATION -- the resolved `model` followed by its `model_fallbacks`. Each entry is dispatched by its harness under step 6's entry-harness rule -- a `claude` entry launches an Agent subagent, any other entry runs through "${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" ${CLAUDE_PLUGIN_ROOT}/scripts/run_review_lane.py.
+        - An entry spelled `peer:<name>` is a deprecated spelling the renderer resolves to a reachable PEER endpoint -- same tier as `<name>`, different model family -- or leaves out of the table when it cannot. The table you read already carries the result. Do not probe for a peer yourself.
+        - Apply references/configuration.md's pre-dispatch launch-correction rule before classifying a failed invocation.
         - A reviewer record may carry an `effort` (`low`, `medium`, `high`, `xhigh`, `max`) beside its `model`. It selects the DISPATCH TARGET, not a parameter: the Agent tool has no effort argument, so an effort-carrying lane goes to the `p4-kit:review-lane-<effort>` agent, whose frontmatter sets it. A lane with no `effort` keeps `general-purpose` and inherits this session's effort. Do not attempt to pass effort as an Agent argument, and do not read a lane's effort off the agent's page -- the RESOLVED table is the authority.
         - Effort and model are independent and BOTH are honoured: the profile's `model` goes at the CALL SITE, where it overrides whatever the effort agent's own frontmatter would imply. Never move a lane to a different model to obtain an effort level, and never move it to a different effort to obtain a model.
   narration:
@@ -691,8 +699,8 @@ technique_skill:
       scope: CLAUDE.md compliance only, restricted to the files in one chunk
       input: "absolute path to ONE chunk .diff file, the depot paths of the files in that chunk, the per-file CLAUDE.md mapping restricted to those files, the full text of each relevant CLAUDE.md (read in step 4), and the paths of every claimed file (paths only -- their content belongs to the subject-lens reviewer)"
       canonical_prompt_note: |
-        This lane can run EITHER as an Agent subagent or, when its resolved `model` is an
-        endpoint id, as a plain completion (see the step-6 model-kind rule). Both paths must
+        This lane can run EITHER as an Agent subagent or, when its chosen entry is not a
+        `claude` entry, as a plain completion (see the step-6 entry-harness rule). Both paths must
         review by the same standard, so the prompt below is the single source: it is rendered
         here from bootstrap_lib.code_review.lane_prompts, which is also what the endpoint
         runner sends. When launching this lane as an Agent, use it as the subagent's
@@ -776,8 +784,8 @@ technique_skill:
       scope: obvious bugs visible in one chunk's diff alone
       input: "absolute path to ONE chunk .diff file, the depot paths of the files in that chunk, and the CL description"
       canonical_prompt_note: |
-        This lane can run EITHER as an Agent subagent or, when its resolved `model` is an
-        endpoint id, as a plain completion (see the step-6 model-kind rule). Both paths must
+        This lane can run EITHER as an Agent subagent or, when its chosen entry is not a
+        `claude` entry, as a plain completion (see the step-6 entry-harness rule). Both paths must
         review by the same standard, so the prompt below is the single source: it is rendered
         here from bootstrap_lib.code_review.lane_prompts, which is also what the endpoint
         runner sends. When launching this lane as an Agent, use it as the subagent's
@@ -837,8 +845,8 @@ technique_skill:
       scope: bugs/security/logic problems in the introduced code that need broader context, restricted to one chunk's files
       input: "absolute path to ONE chunk .diff file, the depot paths of the files in that chunk, local paths for those files, and the CL description"
       canonical_prompt_note: |
-        This lane can run EITHER as an Agent subagent or, when its resolved `model` is an
-        endpoint id, as a plain completion (see the step-6 model-kind rule). Both paths must
+        This lane can run EITHER as an Agent subagent or, when its chosen entry is not a
+        `claude` entry, as a plain completion (see the step-6 entry-harness rule). Both paths must
         review by the same standard, so the prompt below is the single source: it is rendered
         here from bootstrap_lib.code_review.lane_prompts, which is also what the endpoint
         runner sends. When launching this lane as an Agent, use it as the subagent's
