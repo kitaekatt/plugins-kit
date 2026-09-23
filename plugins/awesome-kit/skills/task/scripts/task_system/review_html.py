@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from html import escape
 from typing import Any
+from urllib.parse import quote
 
 
 _SECTION_TITLES = {
@@ -11,7 +12,6 @@ _SECTION_TITLES = {
     "closed": "Closed tasks",
     "other": "Needs attention",
 }
-
 
 def _text(value: Any, fallback: str = "-") -> str:
     if value is None or value == "":
@@ -28,22 +28,6 @@ def _task_key(task: dict[str, Any]) -> str:
     return str(task.get("key") or task.get("id") or "")
 
 
-def _render_updates(task: dict[str, Any]) -> str:
-    updates = task.get("updates") or []
-    if not updates:
-        return '<p class="muted">No dated activity entries.</p>'
-    items = []
-    for update in updates:
-        items.append(
-            "<li><time>"
-            + _text(update.get("date"))
-            + "</time><span>"
-            + _text(update.get("detail"))
-            + "</span></li>"
-        )
-    return '<ul class="updates">' + "".join(items) + '</ul>'
-
-
 def _render_task(task: dict[str, Any]) -> str:
     missing = bool(task.get("summary_missing"))
     summary_status = task.get("summary_status") or "unavailable"
@@ -54,7 +38,7 @@ def _render_task(task: dict[str, Any]) -> str:
             if summary_status == "stale"
             else "Summary is missing."
         )
-    elif summary_status == "unavailable":
+    elif summary_status == "unavailable" and not task.get("summary"):
         summary_class = "unavailable"
         summary_text = "Summary is unavailable for this task locally."
     else:
@@ -63,35 +47,31 @@ def _render_task(task: dict[str, Any]) -> str:
     task_id = _text(task.get("id"))
     title = _text(task.get("title"), "Untitled task")
     status = _text(task.get("status"))
-    priority = _text(task.get("priority"))
     last_update = _text(task.get("last_update"))
+    summary_id = "task-summary-" + quote(_task_key(task), safe="")
     return (
-        '<details class="task-card ' + summary_class + '">'
-        '<summary><span class="task-title">'
+        '<div class="task-card ' + summary_class + '"><div class="task-row">'
+        '<span class="task-name-wrap"><span class="task-title" tabindex="0" aria-describedby="'
+        + escape(summary_id, quote=True)
+        + '">'
         + title
-        + '</span><span class="task-id">'
+        + '</span><span class="summary-card" id="'
+        + escape(summary_id, quote=True)
+        + '" role="tooltip"><strong>Summary:</strong> '
+        + summary_text
+        + '</span></span><span class="task-id-group"><button class="task-id-copy" type="button" data-task-id="'
+        + escape(str(task.get("id") or ""), quote=True)
+        + '" aria-label="Copy task work command for '
+        + escape(str(task.get("id") or ""), quote=True)
+        + '">'
         + task_id
-        + '</span><span class="task-status status-'
+        + '</button><span class="copy-feedback" aria-live="polite" aria-atomic="true"></span></span><span class="task-status status-'
         + escape(str(task.get("status") or "unknown"))
         + '">'
         + status
         + '</span><span class="task-date">'
         + last_update
-        + "</span></summary>"
-        '<div class="task-body">'
-        '<div class="summary-line '
-        + summary_class
-        + '"><strong>Summary:</strong> '
-        + summary_text
-        + "</div>"
-        '<dl class="metadata"><div><dt>Priority</dt><dd>'
-        + priority
-        + '</dd></div><div><dt>Last activity</dt><dd>'
-        + last_update
-        + "</dd></div></dl>"
-        "<h4>Updates</h4>"
-        + _render_updates(task)
-        + "</div></details>"
+        + "</span></div></div>"
     )
 
 
@@ -115,8 +95,8 @@ def _render_project(
         ]
         task_list.sort(key=_task_sort_key, reverse=True)
         cards = "".join(_render_task(task) for task in task_list)
-        if not cards:
-            cards = '<p class="empty">No tasks in this section.</p>'
+        if not task_list:
+            continue
         rendered_sections.append(
             '<section class="task-section"><h3>'
             + _text(_SECTION_TITLES[name])
@@ -128,7 +108,7 @@ def _render_project(
         )
     return (
         '<details class="project-card">'
-        '<summary><span class="project-title">'
+        '<summary class="project-row"><span class="project-title">'
         + _text(project.get("name"), "Unnamed project")
         + '</span><span class="project-root">'
         + _text(project.get("root"))
@@ -144,14 +124,17 @@ def _render_project(
 def render_review_html(data: dict[str, Any]) -> str:
     """Render a complete self-contained review page from grouped listing data."""
     tasks = {_task_key(task): task for task in data.get("tasks", [])}
-    projects = data.get("projects") or [
-        {
-            "name": data.get("scope", "project"),
-            "root": "",
-            "tasks": list(tasks),
-            "sections": data.get("sections", {}),
-        }
-    ]
+    projects = list(
+        data.get("projects")
+        or [
+            {
+                "name": data.get("scope", "project"),
+                "root": "",
+                "tasks": list(tasks),
+                "sections": data.get("sections", {}),
+            }
+        ]
+    )
     rendered_projects = "".join(_render_project(project, tasks) for project in projects)
     if not rendered_projects:
         rendered_projects = '<p class="empty">No projects with non-archived tasks.</p>'
@@ -185,17 +168,14 @@ def render_review_html(data: dict[str, Any]) -> str:
             "<style>",
             ":root { color-scheme: light dark; --bg:#10151d; --panel:#18212d; --text:#e9eef5; --muted:#9eabba; --line:#334255; --accent:#71b7ff; --warn:#f2b84b; --bad:#ff7b7b; --good:#83d6a3; }",
             "@media (prefers-color-scheme: light) { :root { --bg:#f5f7fa; --panel:#fff; --text:#17202c; --muted:#617083; --line:#d9e0e8; --accent:#1769aa; --warn:#9a6400; --bad:#b42318; --good:#147a43; } }",
-            "* { box-sizing:border-box; } body { margin:0; background:var(--bg); color:var(--text); font:15px/1.5 system-ui,-apple-system,Segoe UI,sans-serif; }",
-            "main { max-width:1180px; margin:0 auto; padding:32px 20px 60px; } h1 { margin:0 0 4px; } h2,h3 { display:flex; gap:10px; align-items:center; border-bottom:1px solid var(--line); padding-bottom:8px; margin:22px 0 10px; } h4 { margin:20px 0 6px; }",
+            "* { box-sizing:border-box; } body { margin:0; background:var(--bg); color:var(--text); font:14px/1.25 system-ui,-apple-system,Segoe UI,sans-serif; }",
+            "main { max-width:1180px; margin:0 auto; padding:8px 12px 16px; } h1 { font-size:1.2em; line-height:1.25; margin:0 0 2px; } h2,h3 { display:flex; gap:6px; align-items:center; border-bottom:1px solid var(--line); padding-bottom:3px; margin:8px 0 4px; } h4 { margin:8px 0 3px; }",
             ".subtitle,.muted,.empty { color:var(--muted); } .count { font-size:.8em; color:var(--muted); font-weight:normal; }",
-            ".diagnostics { border:1px solid var(--warn); background:color-mix(in srgb,var(--warn) 12%,transparent); padding:12px 16px; margin:20px 0; border-radius:8px; } .diagnostics ul { margin:6px 0 0; padding-left:20px; } .diagnostic-code { color:var(--warn); font-family:ui-monospace,monospace; margin-right:8px; }",
-            ".project-card { background:var(--panel); border:1px solid var(--line); border-radius:10px; margin:14px 0; overflow:hidden; } .project-card[open] { border-color:var(--accent); } .project-card > summary { cursor:pointer; list-style:none; display:grid; grid-template-columns:minmax(170px,auto) minmax(260px,1fr) auto; gap:12px; align-items:center; padding:14px 16px; } .project-card > summary::-webkit-details-marker { display:none; } .project-card > summary::before { content:'>'; color:var(--muted); font-size:.75em; } .project-card[open] > summary::before { content:'v'; } .project-title { font-weight:700; } .project-root { color:var(--muted); font:12px ui-monospace,monospace; overflow-wrap:anywhere; } .project-body { border-top:1px solid var(--line); padding:2px 16px 18px; }",
-            ".task-section h3 { font-size:1.05em; }",
-            ".task-card { background:color-mix(in srgb,var(--panel) 82%,var(--bg)); border:1px solid var(--line); border-radius:8px; margin:8px 0; overflow:hidden; } .task-card[open] { border-color:var(--accent); } .task-card > summary { cursor:pointer; list-style:none; display:grid; grid-template-columns:minmax(180px,1fr) minmax(160px,auto) auto auto; gap:12px; align-items:center; padding:12px 14px; } .task-card > summary::-webkit-details-marker { display:none; } .task-card > summary::before { content:'>'; color:var(--muted); font-size:.75em; } .task-card[open] > summary::before { content:'v'; }",
-            ".task-title { font-weight:650; } .task-id { color:var(--muted); font:12px ui-monospace,monospace; overflow-wrap:anywhere; } .task-status { font-size:12px; padding:2px 7px; border-radius:99px; border:1px solid var(--line); } .status-active,.status-blocked { color:var(--accent); } .status-closed { color:var(--good); } .task-date { color:var(--muted); white-space:nowrap; font-size:12px; }",
-            ".task-body { border-top:1px solid var(--line); padding:14px 18px 18px 40px; } .summary-line { padding:10px 12px; border-left:4px solid var(--good); background:color-mix(in srgb,var(--good) 10%,transparent); border-radius:4px; } .summary-line.missing { border-left-color:var(--bad); background:color-mix(in srgb,var(--bad) 12%,transparent); color:var(--bad); } .summary-line.unavailable { border-left-color:var(--warn); background:color-mix(in srgb,var(--warn) 10%,transparent); color:var(--warn); }",
-            ".metadata { display:flex; gap:28px; margin:14px 0; } .metadata div { display:flex; gap:7px; } dt { color:var(--muted); } dd { margin:0; } .updates { list-style:none; padding:0; margin:0; } .updates li { display:flex; gap:12px; padding:4px 0; border-bottom:1px solid color-mix(in srgb,var(--line) 50%,transparent); } .updates time { color:var(--muted); font:12px ui-monospace,monospace; min-width:90px; } .empty { padding:12px; }",
-            "@media (max-width:700px) { .project-card > summary { grid-template-columns:1fr auto; } .project-root { grid-column:1 / -1; grid-row:2; } .project-card > summary .count { grid-column:2; grid-row:1; } .task-card > summary { grid-template-columns:1fr auto; } .task-id { grid-column:1 / -1; grid-row:2; } .task-status { grid-column:1; grid-row:3; width:max-content; } .task-date { grid-column:2; grid-row:3; } .metadata { flex-direction:column; gap:4px; } }",
+            ".diagnostics { border:1px solid var(--warn); background:color-mix(in srgb,var(--warn) 12%,transparent); padding:4px 8px; margin:4px 0; border-radius:4px; } .diagnostics ul { margin:2px 0 0; padding-left:16px; } .diagnostic-code { color:var(--warn); font-family:ui-monospace,monospace; margin-right:6px; }",
+            ".project-card { background:var(--panel); border:1px solid var(--line); border-radius:4px; margin:2px 0; } .project-card[open] { border-color:var(--accent); } .project-row { cursor:pointer; list-style:none; display:grid; grid-template-columns:10px minmax(0,auto) auto minmax(0,1fr); gap:6px; align-items:center; padding:1px 5px; min-height:1.5em; } .project-row::-webkit-details-marker { display:none; } .project-row::before { content:'>'; color:var(--muted); font-size:.75em; } .project-card[open] > .project-row::before { content:'v'; } .project-title { font-weight:700; } .project-root { color:var(--muted); font:12px ui-monospace,monospace; overflow-wrap:anywhere; } .project-row .count { justify-self:start; white-space:nowrap; } .project-body { border-top:1px solid var(--line); padding:0 6px 6px; }",
+            ".task-section h3 { font-size:1em; }",
+            ".task-card { position:relative; background:color-mix(in srgb,var(--panel) 82%,var(--bg)); border:1px solid var(--line); border-radius:4px; margin:2px 0; } .task-row { display:grid; grid-template-columns:minmax(0,1fr) minmax(120px,auto) auto auto; gap:6px; align-items:center; padding:3px 6px; } .task-name-wrap { position:relative; min-width:0; } .task-title { font-weight:650; cursor:help; } .task-title:focus-visible { outline:1px solid var(--accent); outline-offset:2px; } .summary-card { display:none; position:absolute; z-index:5; top:calc(100% + 5px); left:0; width:min(420px,calc(100vw - 32px)); padding:9px 11px; border:1px solid var(--accent); border-radius:4px; background:var(--panel); box-shadow:0 4px 14px #0006; white-space:normal; overflow-wrap:anywhere; } .task-name-wrap:hover .summary-card, .task-title:focus + .summary-card { display:block; } .task-card.missing .summary-card { border-color:var(--bad); } .task-card.unavailable .summary-card { border-color:var(--warn); } .task-id-group { display:flex; align-items:center; gap:6px; min-width:0; } .task-id-copy { appearance:none; border:0; background:transparent; color:var(--muted); font:12px ui-monospace,monospace; padding:0; text-align:left; overflow-wrap:anywhere; cursor:pointer; } .task-id-copy:hover { color:var(--accent); text-decoration:underline; } .task-id-copy:focus-visible { outline:1px solid var(--accent); outline-offset:2px; } .copy-feedback { color:var(--good); font-size:11px; white-space:nowrap; } .copy-feedback[data-state=error] { color:var(--bad); } .task-status { font-size:12px; padding:2px 7px; border-radius:99px; border:1px solid var(--line); } .status-active,.status-blocked { color:var(--accent); } .status-closed { color:var(--good); } .task-date { color:var(--muted); white-space:nowrap; font-size:12px; } .empty { padding:4px 6px; margin:2px 0; }",
+            "@media (max-width:700px) { .project-row { grid-template-columns:10px minmax(0,1fr) auto; } .project-root { grid-column:2 / -1; grid-row:2; } .project-row .count { grid-column:3; grid-row:1; justify-self:end; } .task-row { grid-template-columns:minmax(0,1fr) auto; } .task-name-wrap { grid-column:1 / -1; } .task-id-group { grid-column:1; grid-row:2; } .task-status { grid-column:1; grid-row:3; width:max-content; } .task-date { grid-column:2; grid-row:3; } .copy-feedback { color:var(--good); } }",
             "</style>",
             "</head>",
             "<body><main>",
@@ -211,7 +191,7 @@ def render_review_html(data: dict[str, Any]) -> str:
             rendered_projects,
             "</main>",
             "<script>",
-            "// Keep one project and one task focused at a time.",
+            "// Keep one project open at a time.",
             "document.querySelectorAll('details.project-card').forEach(function (current) {",
             "  current.addEventListener('toggle', function () {",
             "    if (!current.open) return;",
@@ -220,12 +200,32 @@ def render_review_html(data: dict[str, Any]) -> str:
             "    });",
             "  });",
             "});",
-            "document.querySelectorAll('details.task-card').forEach(function (current) {",
-            "  current.addEventListener('toggle', function () {",
-            "    if (!current.open) return;",
-            "    document.querySelectorAll('details.task-card[open]').forEach(function (other) {",
-            "      if (other !== current) other.removeAttribute('open');",
-            "    });",
+            "document.querySelectorAll('.task-id-copy').forEach(function (button) {",
+            "  button.addEventListener('click', async function (event) {",
+            "    event.preventDefault();",
+            "    event.stopPropagation();",
+            "    var command = 'task work ' + button.dataset.taskId;",
+            "    var feedback = button.nextElementSibling;",
+            "    async function legacyCopy() {",
+            "      var field = document.createElement('textarea');",
+            "      field.value = command;",
+            "      field.setAttribute('readonly', '');",
+            "      field.style.position = 'fixed';",
+            "      field.style.opacity = '0';",
+            "      document.body.appendChild(field);",
+            "      field.select();",
+            "      var copied = false;",
+            "      try { copied = document.execCommand('copy'); } finally { field.remove(); }",
+            "      if (!copied) throw new Error('copy failed');",
+            "    }",
+            "    try {",
+            "      if (navigator.clipboard && navigator.clipboard.writeText) {",
+            "        try { await navigator.clipboard.writeText(command); } catch (_) { await legacyCopy(); }",
+            "      } else { await legacyCopy(); }",
+            "      feedback.dataset.state = 'success';",
+            "      feedback.textContent = 'Copied';",
+            "    } catch (_) { feedback.dataset.state = 'error'; feedback.textContent = 'Copy failed'; }",
+            "    window.setTimeout(function () { feedback.textContent = ''; feedback.removeAttribute('data-state'); }, 1400);",
             "  });",
             "});",
             "</script>",
