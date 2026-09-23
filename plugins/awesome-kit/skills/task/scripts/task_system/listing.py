@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -22,6 +23,7 @@ from .discovery import (
 
 
 SUMMARY_METADATA_KEYS = frozenset(("summary", "summary_fingerprint", "summary_updated"))
+SUMMARY_ELIGIBLE_STATUSES = frozenset(("active", "blocked", "closed"))
 
 
 @dataclass(frozen=True)
@@ -35,6 +37,7 @@ class TaskView:
     title: str | None
     summary: str | None
     summary_status: str
+    summary_updated: str | None
     summary_fingerprint: str | None
     current_fingerprint: str | None
     host: str | None
@@ -102,6 +105,7 @@ def _view_record(record: TaskRecord, fallback_root: Path) -> TaskView:
             title=record.title,
             summary=None,
             summary_status="unavailable",
+            summary_updated=None,
             summary_fingerprint=None,
             current_fingerprint=None,
             host=record.host,
@@ -119,6 +123,7 @@ def _view_record(record: TaskRecord, fallback_root: Path) -> TaskView:
             title=record.title,
             summary=None,
             summary_status="unavailable",
+            summary_updated=None,
             summary_fingerprint=None,
             current_fingerprint=None,
             host=record.host,
@@ -137,12 +142,22 @@ def _view_record(record: TaskRecord, fallback_root: Path) -> TaskView:
         stored_fingerprint if isinstance(stored_fingerprint, str) else None
     )
     current_fingerprint = summary_source_fingerprint(folder, block)
+    raw_summary_updated = block.get("summary_updated")
+    try:
+        summary_updated = date.fromisoformat(raw_summary_updated).isoformat()
+    except (TypeError, ValueError):
+        summary_updated = None
     if summary is None:
         summary_status = "missing"
     elif stored_fingerprint and stored_fingerprint != current_fingerprint:
         summary_status = "stale"
     else:
         summary_status = "present"
+    if record.classification not in SUMMARY_ELIGIBLE_STATUSES and summary_status in (
+        "missing",
+        "stale",
+    ):
+        summary_status = "unavailable"
     return TaskView(
         id=record.id,
         status=record.classification,
@@ -151,6 +166,7 @@ def _view_record(record: TaskRecord, fallback_root: Path) -> TaskView:
         title=record.title,
         summary=summary,
         summary_status=summary_status,
+        summary_updated=summary_updated,
         summary_fingerprint=stored_fingerprint,
         current_fingerprint=current_fingerprint,
         host=record.host,
@@ -195,6 +211,8 @@ def collect_listing(
     )
     warnings: list[str] = []
     for view in views:
+        if view.status not in SUMMARY_ELIGIBLE_STATUSES:
+            continue
         label = (
             f"{view.project_name}/{view.id}"
             if scope == "all"
@@ -238,12 +256,24 @@ def project_groups(listing: TaskListing) -> tuple[ProjectGroup, ...]:
     groups: dict[tuple[str, Path], list[TaskView]] = {}
     for view in listing.views:
         groups.setdefault((view.project_name, view.project_root), []).append(view)
+    ordered_groups = sorted(
+        groups.items(),
+        key=lambda item: (item[0][0].casefold(), item[0][0], str(item[0][1])),
+    )
+    ordered_groups.sort(
+        key=lambda item: max(
+            (
+                view.last_update or view.summary_updated or ""
+                for view in item[1]
+            ),
+            default=None,
+        )
+        or "",
+        reverse=True,
+    )
     return tuple(
         ProjectGroup(name=name, root=root, views=tuple(views))
-        for (name, root), views in sorted(
-            groups.items(),
-            key=lambda item: (item[0][0].casefold(), item[0][0], str(item[0][1])),
-        )
+        for (name, root), views in ordered_groups
     )
 
 

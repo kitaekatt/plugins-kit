@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import datetime
 import json
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -22,6 +23,7 @@ SUMMARY_EFFORT = "medium"
 SUMMARY_TIMEOUT_S = 180.0
 SUMMARY_MAX_CHARS = 320
 ELIGIBLE_STATUSES = frozenset(("active", "blocked", "closed"))
+SUMMARY_WORKERS = 4
 
 
 @dataclass(frozen=True)
@@ -174,17 +176,55 @@ def generate_missing_summaries(
 
     active_backend = backend if backend is not None else _default_backend()
     stamp = datetime.date.today().isoformat()
+    # Refill each worker slot as soon as a completion finishes. Persistence
+    # stays in the caller thread so updates cannot race, and is applied in
+    # listing order after every model completion has finished.
+    prepared: list[tuple[TaskView, Path, str, Path | None, Exception | None]] = []
     for view in candidate_views:
         root = _view_root(view, project_root)
         label = _view_label(listing, view)
         try:
             expected_folder = _existing_folder(view, root)
-            summary = _complete(active_backend, view, root)
+            prepared.append((view, root, label, expected_folder, None))
+        except Exception as exc:
+            prepared.append((view, root, label, None, exc))
+
+    results: dict[int, str | Exception] = {
+        index: error
+        for index, (_view, _root, _label, _folder, error) in enumerate(prepared)
+        if error is not None
+    }
+    pending: dict[Future[str], int] = {}
+    next_index = 0
+    with ThreadPoolExecutor(max_workers=SUMMARY_WORKERS) as pool:
+        while next_index < len(prepared) or pending:
+            while next_index < len(prepared) and len(pending) < SUMMARY_WORKERS:
+                view, root, _label, expected_folder, error = prepared[next_index]
+                if error is None and expected_folder is not None:
+                    pending[pool.submit(_complete, active_backend, view, root)] = next_index
+                next_index += 1
+            if not pending:
+                continue
+            completed, _ = wait(pending, return_when=FIRST_COMPLETED)
+            for future in completed:
+                index = pending.pop(future)
+                try:
+                    results[index] = future.result()
+                except Exception as exc:
+                    results[index] = exc
+
+    for index, (view, root, label, expected_folder, error) in enumerate(prepared):
+        try:
+            result = results[index] if error is None else error
+            if isinstance(result, Exception):
+                raise result
+            if expected_folder is None:
+                raise FileNotFoundError(f"{view.id}: task folder is no longer present")
             _assert_current_folder(view, root, expected_folder)
             state_ops.update(
                 view.id,
                 root,
-                summary=summary,
+                summary=result,
                 summary_fingerprint=view.current_fingerprint,
                 summary_updated=stamp,
                 allow_init=False,
