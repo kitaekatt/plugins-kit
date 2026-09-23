@@ -31,9 +31,9 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Optional, Union
 
+from .declarations import parse_declaration
 from .errors import WorkflowError
 
-VALID_MODELS = {"sonnet", "opus", "haiku"}
 VALID_ISOLATION = {"worktree"}
 VALID_MODE = {"parallel"}  # v1 exposes only parallel fan-out for flat steps / nested fan_out
 
@@ -143,7 +143,8 @@ class PhaseSpec:
 class AgentSpec:
     prompt: str
     schema: Optional[str] = None  # name of a block in WorkflowDoc.schemas
-    model: Optional[str] = None
+    # A model declaration (ids in declared order); the compiler routes it.
+    model: Optional[tuple] = None
     agentType: Optional[str] = None
     isolation: Optional[str] = None
     label: Optional[str] = None
@@ -157,7 +158,7 @@ class AgentSpec:
         return cls(
             prompt=_str(_req(d, "prompt", where), "prompt", where),
             schema=_opt_str(d, "schema", where),
-            model=_enum(_opt_str(d, "model", where), VALID_MODELS, "model", where),
+            model=parse_declaration(d.get("model"), "model", where),
             agentType=_opt_str(d, "agentType", where),
             isolation=_enum(
                 _opt_str(d, "isolation", where), VALID_ISOLATION, "isolation", where
@@ -191,12 +192,14 @@ class ScriptSpec:
 class OpenRouterSpec:
     """An `openrouter:` node -- one non-Claude model call whose reply lands in `$OUT`.
 
-    `model` is an llm-scripting-kit registry alias or a raw slug (NOT a Claude model);
-    omit it to use the configured `default`, or set `cheap: true` for `defaultCheap`.
+    `model` is a model declaration of llm-scripting-kit transport entry ids
+    (e.g. `or-qwen`), passed to the node runner unchanged; omit it to use the
+    configured default declaration, and set `cheap: true` for that entry's
+    `defaultCheap`. A bare model alias or raw slug is still accepted (deprecated).
     """
 
     prompt_file: str
-    model: Optional[str] = None
+    model: Optional[tuple] = None
     cheap: bool = False
     system: Optional[str] = None
     out: Optional[str] = None
@@ -218,7 +221,7 @@ class OpenRouterSpec:
             )
         return cls(
             prompt_file=_str(_req(d, "prompt_file", where), "prompt_file", where),
-            model=_opt_str(d, "model", where),  # alias/slug -- not the Claude model set
+            model=parse_declaration(d.get("model"), "model", where),
             cheap=cheap,
             system=_opt_str(d, "system", where),
             out=_opt_str(d, "out", where),

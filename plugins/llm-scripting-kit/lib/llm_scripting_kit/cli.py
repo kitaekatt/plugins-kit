@@ -132,6 +132,17 @@ def _add_describe_args(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument("--self", dest="self_ref", help="The author's endpoint id or model id.")
     parser.add_argument(
+        "--dispatchable",
+        action="append",
+        choices=("transport",),
+        default=[],
+        help=(
+            "An entry kind this session caller can dispatch beyond the harness "
+            "drives (repeatable). `transport`: keep OpenAI-compatible transport "
+            "entries in the menu, for a caller with its own transport runner."
+        ),
+    )
+    parser.add_argument(
         "--requirements",
         type=Path,
         help="JSON file holding a capability requirement mapping.",
@@ -513,6 +524,7 @@ def _cmd_describe(ids: list[str], args: argparse.Namespace) -> int:
         requirements=requirements,
         backend_factory=_backend_factory if args.caller == "process" else None,
         exclude=_split_ids(args.exclude),
+        dispatchable=tuple(args.dispatchable),
     )
     if args.json:
         _json(ranking.to_json())

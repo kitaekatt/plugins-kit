@@ -158,7 +158,10 @@ technique_skill:
             - For each declaration with two or more entries, run
               `llm-scripting-kit describe <entry>... --caller session` with the entries in
               declared order, plus `--project-root <bundle.project_root>` when the bundle
-              has one, plus `--self <id>` when one declared entry is the model you are
+              has one, plus `--dispatchable transport` when the reviewer is not
+              `reviewer_a_claude_md_compliance` or `reviewer_c_introduced_code` (the lane
+              runner runs a transport entry for every other reviewer, so describe keeps
+              transports in that menu), plus `--self <id>` when one declared entry is the model you are
               running on, so that entry is marked `[author]`. Run every such describe
               before the fan-out, in one message. For each, print its stdout verbatim:
               the menu, its `[default]` mark, and its `Rule:` and `Re-select:` lines (and

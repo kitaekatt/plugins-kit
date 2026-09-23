@@ -735,3 +735,41 @@ def test_choose_json_names_no_hidden_id(declared, capsys):
 def test_describe_text_names_no_hidden_id(declared, capsys):
     assert cli.main(["describe", "typo-id", "good", "--caller", "process"]) == cli.EXIT_OK
     assert "typo-id" not in capsys.readouterr().out
+
+
+def _project_with_transport(tmp_path):
+    """A project config layer declaring one transport entry and nothing else."""
+    root = tmp_path / "proj"
+    layer = root / ".local-data" / "plugins-kit" / "llm-scripting-kit"
+    layer.mkdir(parents=True)
+    (layer / "config.yaml").write_text(
+        "endpoints:\n"
+        "  lane-transport:\n"
+        "    base_url: http://127.0.0.1:1/v1\n"
+        "    key_env: null\n"
+        "    model: served-model\n",
+        encoding="utf-8",
+    )
+    return root
+
+
+def test_describe_dispatchable_transport_keeps_a_transport_for_a_session_caller(
+    declared, capsys, tmp_path
+):
+    root = _project_with_transport(tmp_path)
+    assert cli.main([
+        "describe", "lane-transport", "sonnet", "--project-root", str(root),
+        "--dispatchable", "transport", "--json",
+    ]) == cli.EXIT_OK
+    payload = json.loads(capsys.readouterr().out)
+    assert [e["id"] for e in payload["rendered_entries"]] == ["lane-transport", "sonnet"]
+    assert payload["default"] == "lane-transport"
+
+
+def test_describe_without_dispatchable_still_hides_the_transport(declared, capsys, tmp_path):
+    root = _project_with_transport(tmp_path)
+    assert cli.main([
+        "describe", "lane-transport", "sonnet", "--project-root", str(root), "--json",
+    ]) == cli.EXIT_OK
+    payload = json.loads(capsys.readouterr().out)
+    assert [e["id"] for e in payload["rendered_entries"]] == ["sonnet"]

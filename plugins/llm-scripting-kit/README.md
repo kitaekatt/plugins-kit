@@ -190,8 +190,10 @@ What is shown and what is not:
 
 `--caller session` (the default) is for an agent that drives the harness
 itself: a Claude id runs on the Agent tool, codex and opencode ids run through
-their CLI, and a transport entry (no agent loop) is not routable.
-`--caller process` is for a program that dispatches through the completion
+their CLI, and a transport entry (no agent loop) is not routable -- unless the
+caller passes `--dispatchable transport`, which says it runs transports through
+a runner of its own (the code-review lane runner does), so they stay in the
+menu. `--caller process` is for a program that dispatches through the completion
 seam, where every resolvable entry routes. The printed rule text differs to
 match: the session rule is choose-and-announce plus "re-select on any
 unexplained dispatch failure"; the process rule is "take the default; move on
@@ -235,8 +237,9 @@ registry from this plugin, so keys are set up once and consumed everywhere.
 
 - **Named OpenAI-compatible endpoints.** `config.yaml` has an `endpoints:` map;
   each endpoint carries its own `base_url`, `key_env`, model registry, and an
-  `account_check` mode. `default_endpoint` (default: `openrouter`) is used when
-  a caller names none. Point a script at OpenRouter today, a local vLLM or any
+  `account_check` mode. `default_endpoint` (default: `openrouter`) is the
+  default model declaration, used when a caller names no model; it may be a
+  list of entry ids, and a caller that takes one endpoint reads the first. Point a script at OpenRouter today, a local vLLM or any
   OpenAI-compatible server tomorrow, without touching the code.
 - **Key setup that validates before writing.** `llm-scripting-kit set-key`
   checks the key before anything lands on disk, so a typo is rejected instead
@@ -258,9 +261,14 @@ registry from this plugin, so keys are set up once and consumed everywhere.
   `key_file`), and a key
   resolved from it is flagged (`KeyLookupResult.legacy_location`, plus a
   one-time stderr notice) rather than silently accepted.
-- **Shared model registry.** A layered `config.yaml` maps aliases (plus
-  `default` / `defaultCheap` selectors) to concrete slugs, per endpoint. One
-  project override changes the model for every consumer at once.
+- **Shared model registry.** A model declaration names registry ENTRIES. The
+  OpenRouter models ship as transport entries `or-qwen`, `or-gpt-mini` and
+  `or-gemini-lite`. Under an endpoint, a `models:` alias map (plus `default` /
+  `defaultCheap` selectors) is a per-entry override: it picks the model inside
+  that entry, and is not itself an id a declaration names. The top-level
+  aliases (`qwen`, `gpt-mini`, `gemini-lite`) are deprecated in favour of the
+  `or-` entries and keep resolving until they are removed. One project
+  override changes the model for every consumer at once.
 - **Local server launch profiles.** The canonical `model-server.sh` script owns
   the measured NInfer argument sets for Qwen3.6 and Qwen3.8, plus a `qwen38l`
   llama.cpp profile for the same model as a comparable second backend. Claude
@@ -316,7 +324,7 @@ result.status                    # "completed" | "failed" | "attempt-limit"
 
 `describe(names, *, project_root=None, caller, self_ref=None,
 requirements=None, capabilities=None, backend_factory=None, exclude=(),
-reachability_cache=None, entries=None)` returns a `Ranking`:
+reachability_cache=None, entries=None, dispatchable=())` returns a `Ranking`:
 `rendered_entries` (`EntryState` records in pace order), `dispositions`
 (every declared id, in memory only), `rule` (the choice and re-selection
 text), `default`, `render()`, and `to_json()` (the last two name rendered entries only). `requirements` is matched
@@ -326,6 +334,12 @@ registry, then `create_backend`); `reachability_cache` is read first and
 receives every probe, so a caller-scoped dict probes each entry once. When
 nothing usable remains it raises `NoUsableRoutingTarget`, whose
 `dispositions` itemise every declared id; skipping is otherwise silent.
+`dispatchable=("transport",)` keeps transport entries routable for a session
+caller that runs them itself. A caller that dispatches transport entries only
+passes `backend_factory=create_transport_backend`
+(`llm_scripting_kit.completion`), which makes a harness entry unroutable
+there. `default_declaration()` returns the default declaration, and
+`is_model_alias(name)` tells a deprecated alias or raw slug apart from an entry id.
 
 `run(names, request, *, project_root=None, requirements=None, exclude=(),
 max_attempts=1, on_attempt=None, ...)` is for callers with no loop of their

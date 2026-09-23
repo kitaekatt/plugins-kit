@@ -39,6 +39,8 @@ function wkNode(cmd, out, opts) {
     'OUT=' + out + '\n' +
     (opts.status ? 'STATUS=' + opts.status + '\n' : '') +
     'COMMAND:\n' + cmd + '\n'
+  // The executor's model is the one-entry declaration [haiku], written as its
+  // scalar carrier (workflow_kit_lib.declarations.EXECUTOR_MODELS).
   const agentOpts = {
     agentType: 'workflow-kit:workflow-kit-agent',
     model: 'haiku',
@@ -59,8 +61,8 @@ function wkScript(command, out, opts) {
   return wkNode('{ ' + command + ' ; } > ' + shq(out), out, opts)
 }
 
-// openrouter strategy: one non-Claude model call via llm-scripting-kit's openai
-// runner (scripts/openrouter_run.py -> llm_scripting_kit.make_openai_client),
+// openrouter strategy: one non-Claude model call via llm-scripting-kit's
+// declaration API (scripts/openrouter_run.py -> llm_scripting_kit.declaration.run),
 // written to `out`. `runner` is the command prefix that runs that script under
 // workflow-kit's OWN venv python -- it declares `openai` (its pyproject) and gets
 // `llm_scripting_kit` on its path via the bootstrap shared-libs .pth, e.g.
@@ -68,11 +70,12 @@ function wkScript(command, out, opts) {
 // where <workflow-kit-venv-python> is
 //   ~/.claude/plugins/data/plugins-kit/workflow-kit/.venv/Scripts/python.exe  (Windows)
 //   ~/.claude/plugins/data/plugins-kit/workflow-kit/.venv/bin/python          (macOS/Linux)
-// `spec` = { model?, cheap?, promptFile, system?, out, status? }. `model` may be
-// a registry alias (e.g. 'qwen') or a raw slug (e.g. 'qwen/qwen3-32b'). When
-// `model` is omitted the runner uses llm-scripting-kit's configured 'default'
-// (or 'defaultCheap' when `cheap` is true) -- configure those in llm-scripting-kit's
-// config.yaml instead of hardcoding a slug here.
+// `spec` = { model?, cheap?, promptFile, system?, out, status? }. `model` is a
+// model declaration of transport entry ids, comma-separated (e.g. 'or-qwen' or
+// 'or-qwen,or-gpt-mini'). When `model` is omitted the runner uses
+// llm-scripting-kit's configured default declaration and its 'default' model
+// (or 'defaultCheap' when `cheap` is true) -- configure those in
+// llm-scripting-kit's config.yaml instead of hardcoding a slug here.
 function wkOpenRouter(runner, spec, opts) {
   opts = opts || {}
   // every spec value is shq-quoted: paths may contain spaces, and only single

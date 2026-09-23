@@ -250,3 +250,54 @@ def test_non_colliding_pipeline_still_compiles(write_workflow):
         write_workflow,
     )
     assert doc.steps[0].pipeline.as_ == "dim"
+
+
+# --------------------------------------------------------------------------- #
+# Migration step 8 (W1): `model:` is a model declaration -- any structurally
+# valid id or list of ids, validated by bootstrap_lib.model_declaration. The
+# loader checks SHAPE only; which id can route is the compiler's question.
+# --------------------------------------------------------------------------- #
+def _agent_model(model_yaml, write_workflow):
+    return _load_text(
+        "name: m\ndescription: x\nsteps:\n  - id: a\n    agent:\n"
+        f"      prompt: hi\n      model: {model_yaml}\n",
+        write_workflow,
+    )
+
+
+@pytest.mark.parametrize(
+    "model_yaml, expected",
+    [
+        ("fable", ("fable",)),                    # a core id the old enum refused
+        ("sonnet", ("sonnet",)),
+        ("[sol, opus]", ("sol", "opus")),         # a multi-entry declaration
+        ("gpt-4", ("gpt-4",)),                    # structurally valid; routing is decided later
+    ],
+)
+def test_agent_model_accepts_any_structurally_valid_declaration(model_yaml, expected, write_workflow):
+    doc = _agent_model(model_yaml, write_workflow)
+    assert doc.steps[0].agent.model == expected
+
+
+@pytest.mark.parametrize(
+    "model_yaml, match",
+    [("[]", "empty"), ("[opus, opus]", "duplicate"), ("[opus, 3]", "string")],
+)
+def test_agent_model_rejects_a_structurally_invalid_declaration(model_yaml, match, write_workflow):
+    with pytest.raises(WorkflowError, match=match):
+        _agent_model(model_yaml, write_workflow)
+
+
+def test_openrouter_model_is_a_declaration(write_workflow):
+    doc = _load_text(
+        "name: o\ndescription: x\nsteps:\n  - id: c\n    openrouter:\n"
+        "      prompt_file: p.txt\n      model: [or-qwen, or-gpt-mini]\n",
+        write_workflow,
+    )
+    assert doc.steps[0].openrouter.model == ("or-qwen", "or-gpt-mini")
+    with pytest.raises(WorkflowError, match="duplicate"):
+        _load_text(
+            "name: o\ndescription: x\nsteps:\n  - id: c\n    openrouter:\n"
+            "      prompt_file: p.txt\n      model: [or-qwen, or-qwen]\n",
+            write_workflow,
+        )

@@ -39,7 +39,7 @@ log(`wordcount exit=${stats.exit_code} bytes=${stats.bytes}`)
 phase('Classify')
 // openrouter strategy: a non-Claude model call (model diversity). Reply -> $OUT.
 // model omitted + cheap:true -> llm-scripting-kit's configured 'defaultCheap' model
-// (set it in llm-scripting-kit's config.yaml; or pass model: 'qwen' / a raw slug).
+// (set it in llm-scripting-kit's config.yaml; or pass model: 'or-qwen', a transport entry id).
 const gpt = await wkOpenRouter(runner, {
   cheap: true,
   promptFile: args.source,

@@ -8,6 +8,7 @@ from typing import Optional
 from ..model_endpoints import HARNESS_KIND, EndpointEntry
 from ..models import (
     EndpointResolveError,
+    ModelResolveError,
     default_endpoint_name,
     discover_model_entries,
     load_model_config,
@@ -112,4 +113,35 @@ def create_backend(
     )
 
 
-__all__ = ["BackendSelection", "create_backend"]
+def create_transport_backend(
+    endpoint: Optional[str] = None,
+    *,
+    model: Optional[str] = None,
+    cheap: bool = False,
+    project_root: Optional[str | Path] = None,
+) -> BackendSelection:
+    """``create_backend`` for a caller that dispatches TRANSPORT entries only.
+
+    A harness entry is refused with ``EndpointResolveError``, which
+    ``declaration.describe`` reads as "unroutable here" and skips silently. A
+    model alias that does not resolve is reported the same way, so a bad
+    per-entry override lands in the floor's itemised list instead of escaping
+    as a crash. ``model`` and ``cheap`` are the per-entry override: they pick
+    within the entry's own model map and selectors.
+    """
+    root = str(project_root) if project_root is not None else None
+    config = load_model_config(project_root=root)
+    name = endpoint or default_endpoint_name(config)
+    entry = _harness_entry(name, config=config, project_root=root)
+    if entry is not None and entry.kind == HARNESS_KIND:
+        raise EndpointResolveError(
+            f"entry '{name}' is a {entry.harness} harness entry; this caller "
+            "dispatches transport entries only"
+        )
+    try:
+        return create_backend(name, model=model, cheap=cheap, project_root=project_root)
+    except ModelResolveError as exc:
+        raise EndpointResolveError(str(exc)) from exc
+
+
+__all__ = ["BackendSelection", "create_backend", "create_transport_backend"]

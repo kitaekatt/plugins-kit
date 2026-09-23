@@ -1,5 +1,6 @@
 {
-  "$comment": "workflow-kit's openrouter node strategy imports llm_scripting_kit for endpoint, model and key resolution. The edge is declared here so the owning plugin is installed rather than assumed present.",
+  "$comment": "workflow-kit's openrouter node strategy imports llm_scripting_kit (REQUIRED: the node dispatches its model declaration through llm_scripting_kit.declaration.run and needs llm-scripting-kit >= 0.46.0). The edge is declared here so the owning plugin is installed rather than assumed present. bootstrap_lib is REQUIRED too: the loader validates every model: declaration with bootstrap_lib.model_declaration.parse and CORE_IDS, first shipped in bootstrap 0.129.0, which sets requires_bootstrap.",
+  "requires_bootstrap": "0.129.0",
   "plugins": [
     {
       "ref": "plugins-kit:llm-scripting-kit",

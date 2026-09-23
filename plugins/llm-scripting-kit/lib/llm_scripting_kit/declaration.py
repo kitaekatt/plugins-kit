@@ -90,6 +90,13 @@ _HARNESS_ADAPTERS = {"claude": "claude-cli", "codex": "codex-cli", "opencode": "
 #: How an in-session caller drives each harness (D1's caller table).
 _SESSION_DRIVE = {"claude": "agent", "codex": "codex exec", "opencode": "opencode run"}
 
+#: Entry kinds a session caller may declare it can dispatch beyond the harness
+#: drives above. A transport has no agent loop, so a session caller hides it by
+#: default; a caller that reaches transports through a runner of its own (the
+#: code-review lane runner) passes ``dispatchable=("transport",)``.
+DISPATCHABLE_TRANSPORT = TRANSPORT_KIND
+_DISPATCHABLE_KINDS = (DISPATCHABLE_TRANSPORT,)
+
 #: Below this fraction of the window left, a pace is not meaningful.
 _ABOUT_TO_RESET = 0.01
 
@@ -432,6 +439,10 @@ def _adapter_name(kind: str, harness: Optional[str]) -> Optional[str]:
 
 
 def _drive(caller: str, kind: str, harness: Optional[str], backend_name: Optional[str]) -> str:
+    if caller == CALLER_SESSION and kind == TRANSPORT_KIND:
+        # Reached only when the session caller declared transports dispatchable:
+        # it drives the entry through the same adapter a process caller would.
+        return backend_name or _adapter_name(kind, harness) or "unroutable"
     if caller == CALLER_SESSION:
         return _SESSION_DRIVE.get((harness or "").lower(), "unroutable")
     return backend_name or _adapter_name(kind, harness) or "unroutable"
@@ -459,6 +470,7 @@ def describe(
     exclude: Iterable[str] = (),
     reachability_cache: Optional[MutableMapping[str, Reachability]] = None,
     entries: Optional[Mapping[str, Any]] = None,
+    dispatchable: Iterable[str] = (),
 ) -> Ranking:
     """Classify, filter, pace-order and default a declaration.
 
@@ -475,6 +487,11 @@ def describe(
     ``reachability_cache`` is read first and receives every probe made, so a
     caller-scoped mapping probes each entry once; without it every call
     probes live. ``entries`` injects the merged entry map.
+    ``dispatchable`` names entry kinds a SESSION caller can drive beyond the
+    harness drives; the only kind is ``"transport"``, for a session caller
+    that reaches transports through a runner of its own. Default: none, so a
+    transport is unroutable for a session caller. A process caller already
+    routes every resolvable kind, so the argument changes nothing there.
 
     Raises :class:`NoUsableRoutingTarget` when nothing usable remains, and
     ``bootstrap_lib.model_declaration.DeclarationError`` for a structurally
@@ -482,6 +499,13 @@ def describe(
     """
     if caller not in _CALLERS:
         raise ValueError(f"caller must be one of {_CALLERS}, got {caller!r}")
+    extra_kinds = set(dispatchable or ())
+    unknown_kinds = sorted(extra_kinds - set(_DISPATCHABLE_KINDS))
+    if unknown_kinds:
+        raise ValueError(
+            f"dispatchable kinds must be among {_DISPATCHABLE_KINDS}, got {unknown_kinds}"
+        )
+    session_transport = caller == CALLER_SESSION and DISPATCHABLE_TRANSPORT in extra_kinds
     declared = _model_declaration().parse(names)
     root = str(project_root) if project_root is not None else None
     injected = entries is not None
@@ -532,8 +556,9 @@ def describe(
         kind = getattr(merged, "kind", None) or getattr(selection, "kind", None) or TRANSPORT_KIND
         harness = getattr(merged, "harness", None)
         backend_name = getattr(getattr(selection, "backend", None), "name", None)
-        if caller == CALLER_SESSION and (
-            kind != HARNESS_KIND or (harness or "").lower() not in _SESSION_DRIVE
+        if caller == CALLER_SESSION and not (
+            (kind == TRANSPORT_KIND and session_transport)
+            or (kind == HARNESS_KIND and (harness or "").lower() in _SESSION_DRIVE)
         ):
             settle(
                 DISPOSITION_UNROUTABLE,
@@ -879,6 +904,7 @@ def run(
 __all__ = [
     "CALLER_PROCESS",
     "CALLER_SESSION",
+    "DISPATCHABLE_TRANSPORT",
     "DISPOSITION_EXCLUDED",
     "DISPOSITION_OUT_OF_QUOTA",
     "DISPOSITION_REQUIREMENTS_MISMATCH",

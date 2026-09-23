@@ -99,10 +99,10 @@ def rank_candidates(candidates: Sequence[Candidate]) -> "tuple[List[Candidate], 
     """DEPRECATED two-band rank; use ``declaration.order_by_pace``. Pure.
 
     Splits into (ranked usable, disabled): available before under-quota, the
-    sort STABLE on ``preference_index`` inside each band. awesome-kit's
-    orchestrate renderer probes for this name, so it keeps its behaviour until
-    that renderer moves to the pace rule (migration step 4); it is removed at
-    step 12.
+    sort STABLE on ``preference_index`` inside each band. No plugin in this
+    repo imports it (awesome-kit's orchestrate renderer ranks through
+    ``describe``); it keeps its behaviour for outside callers and is removed
+    at migration step 12.
     """
     usable = [c for c in candidates if c.usable]
     disabled = [c for c in candidates if not c.usable]

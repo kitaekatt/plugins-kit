@@ -174,10 +174,16 @@ for callers with no loop of their own. Three things are easy to break:
 - **`max_attempts` is not the floor.** A halt that uses up the last attempt
   returns `attempt-limit`. It never raises `NoUsableRoutingTarget`, because
   the pool was not empty.
+- **A session caller hides transports unless it says it can run them.** A
+  transport entry has no agent loop, so `caller="session"` classifies it
+  unroutable by default. A session caller that reaches transports through a
+  runner of its own passes `dispatchable=("transport",)` (CLI `--dispatchable
+  transport`); the code-review skills do, for every reviewer lane the lane
+  runner binds to a transport.
 
 `quota_selection.choose_endpoint` is a thin caller of `describe` that never
-probes, and `rank_candidates` keeps the two-band rank for awesome-kit's
-renderer. Both are deprecated names. The `usage` and `describe` verbs (and
+probes, and `rank_candidates` keeps the two-band rank for any caller that
+still imports it; no plugin in this repo does. Both are deprecated names. The `usage` and `describe` verbs (and
 `choose`, a deprecated alias of `describe`) are the inspection surfaces for a
 check that is otherwise invisible.
 

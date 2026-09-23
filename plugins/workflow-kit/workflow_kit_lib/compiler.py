@@ -27,6 +27,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from .declarations import agent_model
 from .errors import WorkflowError
 from .expr import Scope, compile_single, compile_template
 from .model import WorkflowDoc, Step, Stage
@@ -91,15 +92,16 @@ def _phase_table(doc: WorkflowDoc):
     return ordered, by_id
 
 
-def _agent_call(agent, phase_id, scope: Scope, phase_titles: dict) -> str:
+def _agent_call(agent, phase_id, scope: Scope, phase_titles: dict, where: str) -> str:
     prompt_js = compile_template(agent.prompt, scope)
     opts = []
     if agent.schema:
         opts.append(f"schema: schema_{agent.schema}")
     if phase_id:
         opts.append(f"phase: {json.dumps(phase_titles[phase_id])}")
-    if agent.model:
-        opts.append(f"model: {json.dumps(agent.model)}")
+    model = agent_model(agent.model, where)  # silent skip; the floor raises
+    if model:
+        opts.append(f"model: {json.dumps(model)}")
     if agent.agentType:
         opts.append(f"agentType: {json.dumps(agent.agentType)}")
     if agent.isolation:
@@ -198,7 +200,8 @@ def _emit_openrouter_node(step: Step, defined: dict, phase_titles: dict, inputs:
     out_js = compile_template(op.out, scope) if op.out else _default_out_js(step.id, ".out", fan)
     spec = []
     if op.model:
-        spec.append(f"model: {json.dumps(op.model)}")
+        # The comma carrier: the runner reads `--model a,b` as the declaration.
+        spec.append(f"model: {json.dumps(','.join(op.model))}")
     if op.cheap:
         spec.append("cheap: true")
     spec.append(f"promptFile: {compile_template(op.prompt_file, scope)}")
@@ -215,7 +218,7 @@ def _emit_openrouter_node(step: Step, defined: dict, phase_titles: dict, inputs:
 
 def _emit_flat_step(step: Step, defined: dict, phase_titles: dict, inputs: set) -> str:
     scope, over_js = _node_scope(step, defined, inputs)
-    call = _agent_call(step.agent, step.phase, scope, phase_titles)
+    call = _agent_call(step.agent, step.phase, scope, phase_titles, f"step {step.id!r}.agent")
     return _wrap_node(_var(step.id), call, over_js)
 
 
@@ -224,6 +227,7 @@ def _emit_stage_callback(
     inputs: set,
 ) -> str:
     prev = (prev_stage_id, PREV_VAR) if prev_stage_id else None
+    where = f"stage {stage.id!r}.agent"
     if stage.fan_out is not None:
         fan = stage.fan_out
         over_scope = Scope(
@@ -236,13 +240,13 @@ def _emit_stage_callback(
             prev_stage=prev,
             inputs=inputs,
         )
-        call = _agent_call(stage.agent, stage.phase, body_scope, phase_titles)
+        call = _agent_call(stage.agent, stage.phase, body_scope, phase_titles, where)
         body = f"parallel({over_js}.map(({fan.as_}) => () => {call}))"
     else:
         scope = Scope(
             step_vars=defined, locals={as_name: as_name}, prev_stage=prev, inputs=inputs
         )
-        body = _agent_call(stage.agent, stage.phase, scope, phase_titles)
+        body = _agent_call(stage.agent, stage.phase, scope, phase_titles, where)
     return f"({PREV_VAR}, {as_name}, i) => {body}"
 
 

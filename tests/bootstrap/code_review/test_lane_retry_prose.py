@@ -104,3 +104,23 @@ def test_lane_routes_disclosure_section_is_required(skill_dir: Path) -> None:
     assert "`## Lane routes` section" in body
     ref = _normalized(skill_dir / "references/configuration.md")
     assert "the rendered review carries a `## Lane routes` section" in ref
+
+
+# --------------------------------------------------------------------------
+# A reviewer lane that can run a transport entry keeps it in the describe
+# menu (carried fix from the step 5 review). The runner binds only the lanes
+# outside LANES_REQUIRING_AGENT_LOOP to a transport, so only those describes
+# pass `--dispatchable transport`; the others keep the default session menu.
+# --------------------------------------------------------------------------
+
+
+def test_describe_keeps_transports_for_lanes_that_can_run_them(skill_dir: Path) -> None:
+    from bootstrap_lib.code_review.lane_prompts import LANES_REQUIRING_AGENT_LOOP
+
+    body = _normalized(skill_dir / "SKILL.md")
+    assert "plus `--dispatchable transport` when the reviewer is not" in body
+    for lane in sorted(LANES_REQUIRING_AGENT_LOOP):
+        assert f"`{lane}`" in body
+    ref = _normalized(skill_dir / "references/configuration.md")
+    assert "[--dispatchable transport]" in ref
+    assert "a transport endpoint is left out of a multi-entry declaration's menu" not in ref

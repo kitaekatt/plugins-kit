@@ -335,3 +335,86 @@ def test_resolve_model_accepts_a_registered_slug_without_a_slash():
     }
     assert resolve_model("qwen3.8", config=config, endpoint="local") == "qwen3.8"
     assert resolve_model("local", config=config, endpoint="local") == "qwen3.8"
+
+
+# ---------------------------------------------------------------------------
+# Migration step 9 (L1, S6): the openrouter sub-aliases ship as transport
+# ENTRIES, so a declaration names them by id; `models:` under an endpoint is a
+# per-entry override only; `default_endpoint` is the one-entry default
+# declaration. The old aliases and selectors keep their meaning until step 12.
+# ---------------------------------------------------------------------------
+
+_SHIPPED_OR_ENTRIES = {"or-qwen": "qwen", "or-gpt-mini": "gpt-mini", "or-gemini-lite": "gemini-lite"}
+
+
+class TestShippedOpenRouterEntries:
+    def test_each_openrouter_alias_ships_as_a_transport_entry(self):
+        from llm_scripting_kit import TRANSPORT_KIND, discover_model_entries
+
+        found = discover_model_entries(config=DEFAULT_MODEL_CONFIG)
+        openrouter = DEFAULT_MODEL_CONFIG["endpoints"]["openrouter"]
+        for entry_id, alias in _SHIPPED_OR_ENTRIES.items():
+            entry = found[entry_id]
+            assert entry.kind == TRANSPORT_KIND
+            assert entry.base_url == openrouter["base_url"]
+            assert entry.key_env == openrouter["key_env"]
+            assert entry.model == DEFAULT_MODEL_CONFIG["models"][alias]["slug"]
+
+    def test_every_shipped_alias_has_an_entry(self):
+        # The alias namespace and the entry namespace must not drift: every
+        # shipped alias under the openrouter endpoint has its `or-` entry.
+        assert {f"or-{alias}" for alias in DEFAULT_MODEL_CONFIG["models"]} == set(_SHIPPED_OR_ENTRIES)
+
+    def test_an_entry_resolves_as_an_openrouter_endpoint(self):
+        from llm_scripting_kit import resolve_endpoint
+
+        ep = resolve_endpoint("or-qwen", config=DEFAULT_MODEL_CONFIG)
+        assert ep["account_check"] == "openrouter"
+        assert resolve_model(endpoint="or-qwen", config=DEFAULT_MODEL_CONFIG) == "qwen/qwen3-32b"
+        # cheap selects within the entry, which has one model
+        assert resolve_model(endpoint="or-qwen", cheap=True, config=DEFAULT_MODEL_CONFIG) == "qwen/qwen3-32b"
+
+    def test_legacy_aliases_and_selectors_keep_their_meaning(self):
+        assert resolve_model("qwen", config=DEFAULT_MODEL_CONFIG) == "qwen/qwen3-32b"
+        assert resolve_model(config=DEFAULT_MODEL_CONFIG) == "openai/gpt-4o-mini"
+        assert resolve_model(cheap=True, config=DEFAULT_MODEL_CONFIG) == "qwen/qwen3-32b"
+
+
+class TestDefaultDeclaration:
+    def test_shipped_default_is_the_one_entry_openrouter_declaration(self):
+        from llm_scripting_kit import default_declaration
+
+        assert default_declaration(config=DEFAULT_MODEL_CONFIG) == ["openrouter"]
+
+    def test_default_endpoint_may_be_written_as_a_list(self):
+        from llm_scripting_kit import default_declaration, default_endpoint_name, resolve_endpoint
+
+        cfg = dict(DEFAULT_MODEL_CONFIG, default_endpoint=["or-qwen", "or-gpt-mini"])
+        assert default_declaration(config=cfg) == ["or-qwen", "or-gpt-mini"]
+        assert default_endpoint_name(cfg) == "or-qwen"
+        assert resolve_endpoint(None, config=cfg)["name"] == "or-qwen"
+
+    def test_a_structurally_invalid_default_is_refused(self):
+        from bootstrap_lib.model_declaration import DeclarationError
+        from llm_scripting_kit import default_declaration
+
+        with pytest.raises(DeclarationError):
+            default_declaration(config=dict(DEFAULT_MODEL_CONFIG, default_endpoint=["or-qwen", "or-qwen"]))
+
+
+class TestIsModelAlias:
+    @pytest.mark.parametrize(
+        "name, expected",
+        [
+            ("qwen", True),               # an S6 alias under the default endpoint
+            ("qwen/qwen3-32b", True),     # a raw slug
+            ("or-qwen", False),           # a transport entry
+            ("openrouter", False),        # the endpoint itself
+            ("sol", False),               # a harness entry
+            ("typo", False),              # neither: an unresolved id
+        ],
+    )
+    def test_classifies_names(self, name, expected):
+        from llm_scripting_kit import is_model_alias
+
+        assert is_model_alias(name, config=DEFAULT_MODEL_CONFIG) is expected

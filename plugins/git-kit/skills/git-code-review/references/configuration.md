@@ -189,7 +189,7 @@ no separate field to set.
 
 For a reviewer whose declaration has two or more entries, the skill runs
 
-    llm-scripting-kit describe <entry>... --caller session [--project-root <root>] [--self <id>]
+    llm-scripting-kit describe <entry>... --caller session [--project-root <root>] [--dispatchable transport] [--self <id>]
 
 and prints its output verbatim: the entries this machine can use or will be able to use, in pace
 order, the one marked `[default]`, and the rule text that says how to choose, how to announce
@@ -200,9 +200,12 @@ prefers a non-author entry.
 
 describe leaves out every entry this machine cannot run: an id the registry does not know, an
 entry this caller cannot drive, and an excluded one. A left-out entry is skipped without
-comment. `--caller session` is the in-session caller kind, and it drives only harness entries,
-so a transport endpoint is left out of a multi-entry declaration's menu; a transport endpoint
-runs only as a one-entry declaration, which goes straight to `"${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" ${CLAUDE_PLUGIN_ROOT}/scripts/run_review_lane.py` with no menu. Out-of-quota and unreachable
+comment. `--caller session` is the in-session caller kind, and by itself it drives only harness
+entries. `--dispatchable transport` tells describe this caller can also run transport
+endpoints, through `"${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" ${CLAUDE_PLUGIN_ROOT}/scripts/run_review_lane.py`, so they stay in the menu. The skill passes it for every
+reviewer except `reviewer_a_claude_md_compliance` and `reviewer_c_introduced_code`, the two
+lanes the runner binds only to a harness entry (see "Which lanes may take an endpoint entry"
+below); for those two a transport endpoint is left out of the menu. Out-of-quota and unreachable
 entries stay in the menu, with their reset time or state, because they are real on this
 machine; they are not usable until that changes. When no entry is usable, describe exits 1
 with a JSON error that itemises every declared entry, left-out ones included, and the skill

@@ -836,3 +836,50 @@ class TestHiddenIdsNeverLeaveTheFloor:
                           exclude=["ruled-out"], reachability_cache={})
         payload = excinfo.value.to_json()
         assert [d["id"] for d in payload["dispositions"]] == ["typo-id", "ruled-out"]
+
+
+# ---------------------------------------------------------------------------
+# A session caller that CAN dispatch transports says so (carried fix from the
+# step 5 review): code-review lanes reach a transport entry through the lane
+# runner, so describe must not hide one from them. Default is unchanged.
+# ---------------------------------------------------------------------------
+
+
+class TestSessionDispatchableTransport:
+    def _entries(self):
+        return {"sol": _harness("sol", "codex"), "gpt-transport": _transport("gpt-transport")}
+
+    def _cache(self):
+        return {"sol": _reach(), "gpt-transport": _reach()}
+
+    def test_default_session_caller_still_hides_a_transport(self, quota, no_probe):
+        ranking = decl.describe(
+            ["gpt-transport", "sol"], caller="session", entries=self._entries(),
+            reachability_cache=self._cache(),
+        )
+        assert [e.id for e in ranking.rendered_entries] == ["sol"]
+        assert ranking.dispositions[0].disposition == decl.DISPOSITION_UNROUTABLE
+
+    def test_dispatchable_transport_keeps_it_in_the_session_menu(self, quota, no_probe):
+        ranking = decl.describe(
+            ["gpt-transport", "sol"], caller="session", entries=self._entries(),
+            reachability_cache=self._cache(), dispatchable=("transport",),
+        )
+        assert [e.id for e in ranking.rendered_entries] == ["gpt-transport", "sol"]
+        assert ranking.default.id == "gpt-transport"
+        assert ranking.default.drive == "openrouter"
+        assert "transport/openrouter" in ranking.render()
+        # harness entries keep their in-session drive
+        assert ranking.rendered_entries[1].drive == "codex exec"
+
+    def test_a_transport_only_declaration_is_usable_when_dispatchable(self, quota, no_probe):
+        entries = {"gpt-transport": _transport("gpt-transport")}
+        ranking = decl.describe(
+            ["gpt-transport"], caller="session", entries=entries,
+            reachability_cache={"gpt-transport": _reach()}, dispatchable=["transport"],
+        )
+        assert ranking.default.id == "gpt-transport"
+
+    def test_an_unknown_dispatchable_kind_is_refused(self, quota):
+        with pytest.raises(ValueError, match="dispatchable"):
+            decl.describe(["sol"], caller="session", entries=self._entries(), dispatchable=("harness",))

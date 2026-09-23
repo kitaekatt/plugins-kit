@@ -19,7 +19,10 @@
 #
 # Keep in sync with DEFAULT_MODEL_CONFIG in models.py (a test enforces this).
 
-# Which endpoint is used when a caller passes endpoint=None.
+# The default model declaration: the entry (or list of entries) used when a
+# caller names no model or endpoint. A caller that takes one endpoint reads
+# its first id. `openrouter` keeps its own default/defaultCheap selectors
+# below, so a caller asking for the cheap default still gets defaultCheap.
 default_endpoint: openrouter
 
 # Named OpenAI-compatible endpoints. Each may carry base_url, key_env, an
@@ -117,6 +120,27 @@ endpoints:
   #   effort: high
   #   tier: 4
   #   family: openai
+
+  # OpenRouter models as ENTRIES. A model declaration names registry ids, so
+  # each alias of the top-level `models:` map below also ships as a direct
+  # transport entry (one `or-<alias>` entry per alias). The alias map stays:
+  # under an endpoint it is a per-entry override (a --model choice inside that
+  # entry), no longer an id a declaration names.
+  or-qwen:
+    base_url: https://openrouter.ai/api/v1
+    key_env: OPENROUTER_API_KEY
+    account_check: openrouter
+    model: qwen/qwen3-32b
+  or-gpt-mini:
+    base_url: https://openrouter.ai/api/v1
+    key_env: OPENROUTER_API_KEY
+    account_check: openrouter
+    model: openai/gpt-4o-mini
+  or-gemini-lite:
+    base_url: https://openrouter.ai/api/v1
+    key_env: OPENROUTER_API_KEY
+    account_check: openrouter
+    model: google/gemini-2.5-flash-lite
 
   # Claude subscription models, shipped for the same reason as the codex pair
   # above: nothing about them is machine-specific, so a fresh machine with the
