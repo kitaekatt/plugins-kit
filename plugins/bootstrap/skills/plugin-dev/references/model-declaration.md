@@ -61,8 +61,8 @@ deprecated:
 | `peer:<id>` | a reachable peer model of `<id>`: same tier, different model family |
 
 A site that accepted a prefix before this format still accepts it and rewrites
-it to an id before dispatch. A new site does not accept either prefix. To the
-validator a prefixed entry is an ordinary string.
+it to an id before dispatch. A site added after this format does not accept
+either prefix. To the validator a prefixed entry is an ordinary string.
 
 ## Validation
 

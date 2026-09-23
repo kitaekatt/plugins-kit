@@ -3,7 +3,7 @@ _schema_version: 1
 name: plugin-dev
 author: christina
 skill-type: technique-skill
-description: Use when cross-plugin edge, REQUIRED/REFUSE/DEGRADE, skill enable, optional-lib probe, or silent vs disclosed. Do NOT use for bootstrap config or md authoring.
+description: Use when cross-plugin edge, REQUIRED/REFUSE/DEGRADE, enable, opt-lib probe, silent/disclosed, model declaration. Do NOT use for bootstrap config/md authoring.
 ---
 
 # Plugin development
@@ -16,7 +16,7 @@ when the consuming skill can host a consented probe.
 ```yaml
 technique_skill:
   _schema_version: "1"
-  identity: Procedure for choosing and applying the REQUIRED / REFUSE / DEGRADE contract for cross-plugin capability edges.
+  identity: Procedure for choosing and applying the REQUIRED / REFUSE / DEGRADE contract for cross-plugin capability edges, and for the shared model-declaration format.
   scope:
     covers:
       - cross-plugin imports and optional shared-library edges
