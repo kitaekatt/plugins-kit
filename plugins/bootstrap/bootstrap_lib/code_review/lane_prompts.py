@@ -41,6 +41,7 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from bootstrap_lib.code_review.mechanical import LEGACY_CHECK_IDS, check_phrase
+from bootstrap_lib.model_declaration import CORE_IDS
 
 
 # --------------------------------------------------------------------------
@@ -57,8 +58,10 @@ from bootstrap_lib.code_review.mechanical import LEGACY_CHECK_IDS, check_phrase
 #
 # The set is deliberately CLOSED and deliberately not read from the harness: a
 # typo ("sonnett") must fall through to the endpoint path and fail loudly with
-# "no such endpoint", not silently launch some default Agent.
-AGENT_MODEL_ALIASES = frozenset({"sonnet", "opus", "haiku", "fable"})
+# "no such endpoint", not silently launch some default Agent. It IS the core
+# set of the shared model-declaration format, owned by
+# bootstrap_lib.model_declaration, so the two cannot disagree.
+AGENT_MODEL_ALIASES = CORE_IDS
 
 
 def is_agent_alias(model: str) -> bool:

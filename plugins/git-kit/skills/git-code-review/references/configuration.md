@@ -176,9 +176,10 @@ for the one lane that states one (below). Naming an endpoint id is the whole ove
 mechanism -- there is no separate field to set, because `model` was already a free-form
 value resolved through the three layers above.
 
-A reviewer's `model` may also be an ORDERED PRIORITY LIST (`validator_models` values may not
--- a validator is never endpoint-eligible, so it has nothing to fall back to). The list is
-described in its own section below; the renderer always prints ONE resolved string per lane,
+A reviewer's `model` may also be an ORDERED PRIORITY LIST. A `validator_models` value may be
+written as a one-element list, but never names more than one model -- a validator is never
+endpoint-eligible, so it has nothing to fall back to. The list is described in its own section
+below; the renderer always prints ONE resolved string per lane,
 so everything on this page about dispatching a `model` reads the resolved value.
 
 An endpoint id is resolved by llm-scripting-kit (`create_backend`), so it may name an
@@ -290,6 +291,9 @@ off-family. The shipped table states `[peer:opus, opus]` for `reviewer_c_introdu
 the `code` profile, and a plain string everywhere else.
 
 A single string is exactly a one-entry list, so `model: sonnet` means what it always meant.
+Both `model` and `validator_models` values use the shared model-declaration format, specified
+in the bootstrap plugin's `skills/plugin-dev/references/model-declaration.md`: an empty list,
+or a list naming the same entry twice, is a configuration error at resolve time.
 `model: peer:opus` is legal too -- it simply has nothing to fall back to, so it is a
 configuration error whenever no seat is reachable (below).
 

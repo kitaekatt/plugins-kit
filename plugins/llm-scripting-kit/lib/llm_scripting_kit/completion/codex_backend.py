@@ -40,6 +40,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, ClassVar, Dict, Mapping, Optional
 
+from .. import usage_budget
 from . import halt
 from .claude_runner import run_cli_streaming
 from .adapter_capabilities import CODEX_CAPABILITIES
@@ -52,6 +53,16 @@ from .results import (
     utc_now_iso,
 )
 from .types import BackendOptions, LLMResponse
+
+
+#: The spec a non-zero-exit quota re-read is evaluated against. Deliberately
+#: the harness-neutral default, not an entry's own ``conserve_usage`` --
+#: nothing this far down the completion seam carries the registry entry a
+#: model id resolved from (that wiring is out of this step's scope; see
+#: docs/planning/quota-resilient-dispatch/declaration-format-design.md,
+#: Decision 6). ``read_codex_pool`` remaps ``seven_day`` to codex's own
+#: ``primary`` window, so this is the same read an opted-in entry would get.
+_QUOTA_PROBE_SPEC = usage_budget.ConserveSpec(pool=usage_budget.POOL_SEVEN_DAY)
 
 
 class CodexRunError(RuntimeError):
@@ -73,11 +84,21 @@ class CodexRunError(RuntimeError):
         stdout: str = "",
         stderr: str = "",
         returncode: Optional[int] = None,
+        halt_kind: Optional[str] = None,
+        resets_at: Optional[int] = None,
     ) -> None:
         super().__init__(message)
         self.stdout = stdout
         self.stderr = stderr
         self.returncode = returncode
+        # Authoritative pre-classification for a non-zero exit whose halt
+        # kind was determined by re-reading the session rollout rather than
+        # by matching this exception's own channels -- see
+        # CodexCliBackend._quota_probe. None (the default) means the raise
+        # site did no such probe or the probe found no quota evidence; the
+        # ordinary text classifiers in `halt` still apply in that case.
+        self.halt_kind = halt_kind
+        self.resets_at = resets_at
 
 
 #: Separator between the system and user halves of the composed stdin prompt.
@@ -224,6 +245,10 @@ class CodexCliBackend:
     default_timeout_s: float = 900.0
     argv_prefix: Optional[tuple] = None
     runner: Callable[..., "tuple[str, str, int]"] = run_cli_streaming
+    # Test seam for the quota re-read (_quota_probe). None uses
+    # usage_budget.CODEX_SESSIONS_DIR, the real machine-wide rollout
+    # directory.
+    sessions_dir: Optional[Path] = None
     name: str = field(default="codex-cli", init=False)
     capabilities: ClassVar[Capabilities] = CODEX_CAPABILITIES
 
@@ -288,6 +313,16 @@ class CodexCliBackend:
             wall_ms = int((time.monotonic() - start) * 1000)
 
             if returncode != 0:
+                quota = self._quota_probe()
+                if quota is not None and quota.status == usage_budget.STATUS_OUT_OF_QUOTA:
+                    raise CodexRunError(
+                        f"codex exec failed (exit {returncode})",
+                        stdout=stdout,
+                        stderr=stderr,
+                        returncode=returncode,
+                        halt_kind=halt.HALT_QUOTA,
+                        resets_at=quota.resets_at,
+                    )
                 raise CodexRunError(
                     f"codex exec failed (exit {returncode})",
                     stdout=stdout,
@@ -370,7 +405,36 @@ class CodexCliBackend:
             return None
 
     def classify_halt(self, exc: BaseException) -> Optional[str]:
+        """Report the raise site's own verdict first, then fall back to text.
+
+        A :class:`CodexRunError` raised by :meth:`complete` after a quota
+        re-read carries an authoritative ``halt_kind`` (see
+        :data:`~.halt.HALT_QUOTA`'s docstring) -- that determination already
+        read the session rollout, which this method has no access to, so it
+        is reported verbatim rather than re-derived from exception text.
+        Every other exception (no ``halt_kind`` attribute, or ``None``) falls
+        through to the ordinary text-based classifier unchanged.
+        """
+        kind = getattr(exc, "halt_kind", None)
+        if kind is not None:
+            return kind
         return halt.classify_codex_exception(exc)
+
+    def _quota_probe(self) -> Optional["usage_budget.Budget"]:
+        """Re-read the codex session rollout for a quota-exhaustion verdict.
+
+        Called only on a non-zero exit -- a healthy call's rollout has
+        nothing to probe, and probing it anyway would cost a filesystem scan
+        on every successful dispatch. Fails open (returns ``None``) on any
+        read error: a broken probe must never mask or replace the real
+        dispatch failure being reported.
+        """
+        try:
+            return usage_budget.read_codex_pool(
+                _QUOTA_PROBE_SPEC, sessions_dir=self.sessions_dir
+            )
+        except Exception:
+            return None
 
     # -- internals ---------------------------------------------------------
 

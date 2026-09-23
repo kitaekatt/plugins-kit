@@ -3,7 +3,7 @@ _schema_version: 1
 name: plugin-dev
 author: christina
 skill-type: technique-skill
-description: Use when cross-plugin edge, REQUIRED/REFUSE/DEGRADE, skill enable, optional-lib probe, or silent vs disclosed. Do NOT use for bootstrap config or md authoring.
+description: Use when cross-plugin edge, REQUIRED/REFUSE/DEGRADE, enable, opt-lib probe, silent/disclosed, model declaration. Do NOT use for bootstrap config/md authoring.
 ---
 
 # Plugin development
@@ -16,12 +16,13 @@ when the consuming skill can host a consented probe.
 ```yaml
 technique_skill:
   _schema_version: "1"
-  identity: Procedure for choosing and applying the REQUIRED / REFUSE / DEGRADE contract for cross-plugin capability edges.
+  identity: Procedure for choosing and applying the REQUIRED / REFUSE / DEGRADE contract for cross-plugin capability edges, and for the shared model-declaration format.
   scope:
     covers:
       - cross-plugin imports and optional shared-library edges
       - REQUIRED, REFUSE, and DEGRADE branch selection
       - skill-embedded enabling and consented capability probes
+      - the shared model-declaration format and its structural validator
     excludes:
       - bootstrap manifest configuration
       - skill and CLAUDE.md authoring standards
@@ -53,4 +54,8 @@ references:
     path: references/enabling.md
     keywords: [skill enabling, consented probe, silent absence, capability advertisement, stale capability, disclosure scope, EN criteria, enabling reviewer checklist]
     summary: Skill-hosted enabling contract for present disclosure and silence when an absent or old capability leaves the artifact true; EN-1..EN-7 criteria, consent rules, anti-patterns, and reviewer checklist.
+  - id: model_declaration
+    path: references/model-declaration.md
+    keywords: [model declaration, models list, registry id, core ids, fable opus sonnet haiku, agent prefix, peer prefix, duplicate id, empty list, bootstrap_lib.model_declaration]
+    summary: The one format every plugin uses to declare which models may do a unit of work -- a list of registry ids -- plus the core ids, the deprecated prefixes, and the stdlib-only structural validator.
 ```

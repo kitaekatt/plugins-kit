@@ -12,7 +12,7 @@
       "install": "auto"
     }
   ],
-  "shared_lib_imports": ["llm_scripting_kit"],
+  "shared_lib_imports": ["llm_scripting_kit", "bootstrap_lib"],
   "venv": {
     "check_imports": [
       "yaml",

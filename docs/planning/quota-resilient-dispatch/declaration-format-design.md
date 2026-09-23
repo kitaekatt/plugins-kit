@@ -13,6 +13,12 @@ map; its site ids
 A1..R2 are used below), and `findings.md`. Where the map and findings.md
 disagree, the map wins. Line numbers cite the dev tree at commit 498cc21c.
 
+The numbered, testable requirements this design implements are in the
+sibling `requirements.md`, R1-R38, each tracing to an owner direction, a
+migration-table step, and a test. This document is the HOW; requirements.md
+is the WHAT. The "Owner decisions" section below cites its direction bullets
+by R-id.
+
 ## Premise outcomes
 
 | Premise | Outcome |
@@ -468,35 +474,37 @@ a mid-session codex reset in the other direction.
   routing is the harness's.** Applied in D1 (no prefixes, provider defined),
   D2 (structural validation only), and D3 (constraint 4 retired). The
   invalid-id loud-error clause is superseded by direction 13 below.
-  Resolves former Q1.
+  Resolves former Q1. (R1, R6, R7, R8, R35)
 - **Direction 10 -- unattended takes the first available of the
   pace-ordered list; unpaced entries keep their places.** Applied in D4
   (`run`, job-kit) and D5 (the one ordering rule, replacing 0.56.0's
-  reordering). Resolves former Q2.
-- **Direction 11 -- the name is "pace".** Applied throughout. Resolves Q3.
+  reordering). Resolves former Q2. (R14, R15)
+- **Direction 11 -- the name is "pace".** Applied throughout. Resolves Q3. (R13)
 - **Direction 12 -- drop `peer:`.** Applied in D1 and migration steps 2 and
-  12. Resolves Q4.
+  12. Resolves Q4. (R3, R37, R38)
 
 - **Direction 13 -- An unknown id is SILENTLY SKIPPED** (2026-09-20;
   supersedes the "invalid id is a loud error" clause of 9). A declaration is
   a list of candidates: resolve what resolves, work with what is left.
   Silent, not a visible notice -- the owner chose silent explicitly. Applied
   in D2-D5: unknown ids are runtime dispositions, hidden from render, and
-  itemised only by the floor.
+  itemised only by the floor. (R9, R18, R32, R34)
 - **Direction 14 -- An empty list of routing targets IS a loud error.** The
   floor stays. Applied by `NoUsableRoutingTarget` in D4, raised in
-  `describe()`.
+  `describe()`. (R23)
 - **Direction 15 -- Out of quota does not count as a routing target.**
   Emptiness in 14 is evaluated on USABLE entries, not merely resolvable ones,
   so a list whose every surviving entry is out of quota hits the same loud
   error. The only thing that stops a unit is having genuinely run out of
   road. Applied in D4-D6; `max_attempts` remains a separate execution limit.
+  (R22, R24)
 - **Direction 16 -- A valid-but-unroutable id is ALSO silently skipped**
   (2026-09-20; completes 13). SKIPPING is silent for every non-usable entry,
   whatever the reason -- unresolved, valid but unroutable here, or out of
   quota. No error, no notice, no interruption; selection simply passes over
   it. This overrides D3's visible notice AT DISPATCH. Applied by removing
   degraded-render and notice paths; RENDER, SKIP, and FLOOR remain separate.
+  (R18, R32, R34)
   Three surfaces, and they must not be conflated (an earlier wording of this
   direction did conflate them and contradicted direction 8):
   - RENDER (`describe` output, the menu an agent chooses from) still shows
@@ -519,6 +527,7 @@ a mid-session codex reset in the other direction.
   that is where a typo surfaces. Applied in D4-D5. The lead's ruling also
   hides requirements-mismatch and excluded entries, while keeping unreachable
   entries visible because they are real on this machine and may return.
+  (R19, R20)
 
 Direction 9's loud-error clause is superseded; no owner question remains.
 

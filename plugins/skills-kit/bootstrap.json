@@ -1,6 +1,7 @@
 {
   "$comment": "requires_bootstrap is the call shape this plugin needs: shipped skill text launches scripts as \"${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}\", which only bootstrap 0.120.0's SessionStart hook exports.",
   "requires_bootstrap": "0.120.0",
+  "shared_lib_imports": ["bootstrap_lib"],
   "shared_libs": [
     { "name": "skills_kit_lib", "src": "." }
   ],

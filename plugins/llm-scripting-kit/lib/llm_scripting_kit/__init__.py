@@ -111,6 +111,7 @@ from .usage_budget import (
     evaluate_usage_budget,
     parse_conserve_usage,
     pinned_evaluate,
+    record_observed_halt,
 )
 from .completion import (
     AgentTimeoutError,
@@ -123,6 +124,7 @@ from .completion import (
     OpencodeRunError,
     HALT_AUTH,
     HALT_INSUFFICIENT_CREDIT,
+    HALT_QUOTA,
     HALT_RATE_LIMIT,
     HaltError,
     LLMBackend,
@@ -207,6 +209,7 @@ __all__ = [
     "parse_conserve_usage",
     "evaluate_usage_budget",
     "pinned_evaluate",
+    "record_observed_halt",
     # quota-aware selection over a caller's preference order
     "Candidate",
     "QuotaSelection",
@@ -235,6 +238,7 @@ __all__ = [
     "HALT_AUTH",
     "HALT_RATE_LIMIT",
     "HALT_INSUFFICIENT_CREDIT",
+    "HALT_QUOTA",
     "classify_halt_text",
     "classify_openai_exception",
     "classify_claude_exception",

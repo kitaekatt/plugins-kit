@@ -28,6 +28,21 @@ HALT_RATE_LIMIT = "rate_limit"
 HALT_INSUFFICIENT_CREDIT = "insufficient_credit"
 """Account credit exhausted (402) or suspended (403)."""
 
+HALT_QUOTA = "quota"
+"""Subscription pool spent (codex usage-limit exhaustion).
+
+Unlike every other kind in this module, HALT_QUOTA is never produced by the
+text classifiers here -- codex's default (non-``--json``) path emits no
+``task_complete`` payload and no stderr marker for its own exhaustion, so
+there is no channel this module's substring matchers could scan. It is
+classified by :class:`~.codex_backend.CodexCliBackend` re-reading the
+session rollout (``usage_budget.read_codex_pool``) after a non-zero exit and
+setting the raised :class:`~.codex_backend.CodexRunError`'s ``halt_kind``
+attribute, which ``classify_halt`` reports ahead of the text-based
+classifier. See
+docs/planning/quota-resilient-dispatch/declaration-format-design.md,
+Decision 6."""
+
 
 class HaltError(Exception):
     """A failure that persists across subsequent calls -- stop the bulk run.
@@ -346,6 +361,7 @@ __all__ = [
     "HALT_AUTH",
     "HALT_RATE_LIMIT",
     "HALT_INSUFFICIENT_CREDIT",
+    "HALT_QUOTA",
     "HaltError",
     "classify_halt_text",
     "classify_openai_exception",

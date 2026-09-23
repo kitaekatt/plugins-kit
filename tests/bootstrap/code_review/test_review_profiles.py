@@ -759,7 +759,7 @@ def test_an_unresolvable_peer_is_absent_from_the_fallback_chain(
 ) -> None:
     """An entry that cannot resolve now cannot run later either."""
     resolved, disclosures, _diag = rp.apply_model_priority(
-        _with_model(tmp_path, ["peer:opus", "luna", "peer:opus", "sonnet"]),
+        _with_model(tmp_path, ["peer:opus", "luna", "peer:sonnet", "sonnet"]),
         discover=_discover(_FakeSeat("UP", "up-seat")),
     )
 
@@ -1154,3 +1154,89 @@ def test_cli_exits_nonzero_when_no_entry_of_a_list_resolves(
     assert captured.out == ""
     assert "review profiles config error:" in captured.err
     assert "reviewer_c_introduced_code" in captured.err
+
+
+# --------------------------------------------------------------------------
+# The shared declaration format (bootstrap_lib.model_declaration)
+# --------------------------------------------------------------------------
+
+
+def _with_validator(tmp_path: Path, model: Any) -> dict[str, Any]:
+    """Resolve a table whose code profile's `bug` validator states ``model``."""
+    return _resolved(
+        tmp_path,
+        user={"profiles": [{"id": "code", "validator_models": {"bug": model}}]},
+    )
+
+
+def test_a_reviewer_model_naming_one_id_twice_is_rejected(tmp_path: Path) -> None:
+    with pytest.raises(rp.ConfigError) as excinfo:
+        _with_model(tmp_path, ["sol", "opus", "sol"])
+
+    message = str(excinfo.value)
+    assert ".model" in message
+    assert "duplicate" in message
+    assert "'sol'" in message
+
+
+def test_a_reviewer_model_parses_through_the_shared_validator(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """One grammar: the reviewer field is checked by model_declaration.parse."""
+    from bootstrap_lib import model_declaration
+
+    seen: list[Any] = []
+    real_parse = model_declaration.parse
+
+    def spy(value: Any) -> list[str]:
+        seen.append(value)
+        return real_parse(value)
+
+    monkeypatch.setattr(model_declaration, "parse", spy)
+    _with_model(tmp_path, ["luna", "sonnet"])
+    assert ["luna", "sonnet"] in seen
+
+
+def test_a_one_element_validator_list_is_accepted_and_resolves_to_its_id(
+    tmp_path: Path,
+) -> None:
+    config = _with_validator(tmp_path, ["sonnet"])
+
+    resolved, _disclosures, _diag = rp.apply_model_priority(config)
+    assert _profile(resolved, "code")["validator_models"]["bug"] == "sonnet"
+    table = yaml.safe_load(rp.render_projection(resolved))
+    code = next(p for p in table["profiles"] if p["id"] == "code")
+    assert code["validator_models"] == {"bug": "sonnet", "claude_md": "sonnet"}
+
+
+def test_a_scalar_validator_still_resolves_to_its_id(tmp_path: Path) -> None:
+    resolved, _disclosures, _diag = rp.apply_model_priority(
+        _with_validator(tmp_path, "haiku")
+    )
+    assert _profile(resolved, "code")["validator_models"]["bug"] == "haiku"
+
+
+@pytest.mark.parametrize(
+    ("label", "model", "fragment"),
+    [
+        ("empty list", [], "empty"),
+        ("two entries", ["opus", "sonnet"], "exactly one"),
+        ("duplicate", ["opus", "opus"], "duplicate"),
+        ("non-string entry", [7], "string"),
+        ("blank", "  ", "string"),
+    ],
+)
+def test_an_invalid_validator_declaration_is_rejected(
+    tmp_path: Path, label: str, model: Any, fragment: str
+) -> None:
+    with pytest.raises(rp.ConfigError) as excinfo:
+        _with_validator(tmp_path, model)
+
+    message = str(excinfo.value)
+    assert "validator_models.bug" in message, label
+    assert fragment in message, label
+
+
+def test_a_resolved_table_with_a_validator_list_still_validates(tmp_path: Path) -> None:
+    config = _with_validator(tmp_path, ["opus"])
+    rp.validate_config(config)

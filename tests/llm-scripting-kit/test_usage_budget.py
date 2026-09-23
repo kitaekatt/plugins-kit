@@ -825,3 +825,82 @@ def test_an_out_of_quota_verdict_is_recomputed_once_its_window_resets(tmp_path, 
         "fable", spec, "claude", now=NOW + 200, cache_path=cache, environ=env
     )
     assert (before.status, after.status) == (STATUS_OUT_OF_QUOTA, STATUS_AVAILABLE)
+
+
+# --- verdict write-back on an observed quota/credit halt -------------------
+#
+# The register entry says a pinned verdict is "never re-evaluated downward";
+# record_observed_halt is the one exception -- a caller that OBSERVED a real
+# dispatch failure writes that fact back so the session does not re-select
+# the same exhausted endpoint on a stale AVAILABLE verdict. See
+# docs/planning/quota-resilient-dispatch/declaration-format-design.md,
+# Decision 6, "Stale verdict".
+
+
+def test_record_observed_halt_writes_out_of_quota_with_its_own_reset_time(tmp_path):
+    cache = tmp_path / "verdicts.json"
+    env = {"CLAUDE_CODE_SESSION_ID": "s1"}
+    spec = ConserveSpec(pool="seven_day")
+
+    written = usage_budget.record_observed_halt(
+        "astra", spec, resets_at=NOW + 3600, now=NOW, cache_path=cache, environ=env,
+    )
+    assert written.status == STATUS_OUT_OF_QUOTA
+    assert written.resets_at == NOW + 3600
+
+    read_back = usage_budget.pinned_evaluate(
+        "astra", spec, "codex", now=NOW + 10, cache_path=cache, environ=env,
+    )
+    assert read_back.status == STATUS_OUT_OF_QUOTA
+    assert read_back.resets_at == NOW + 3600
+
+
+def test_record_observed_halt_without_a_reset_time_latches_five_hours(tmp_path):
+    cache = tmp_path / "verdicts.json"
+    env = {"CLAUDE_CODE_SESSION_ID": "s1"}
+    spec = ConserveSpec(pool="seven_day")
+
+    written = usage_budget.record_observed_halt(
+        "astra", spec, now=NOW, cache_path=cache, environ=env,
+    )
+    assert written.status == STATUS_OUT_OF_QUOTA
+    assert written.resets_at == NOW + 5 * 3600
+
+
+def test_record_observed_halt_overrides_a_prior_available_verdict(tmp_path, monkeypatch):
+    # This is the actual override: pinned_evaluate on its own never moves an
+    # AVAILABLE verdict downward, but record_observed_halt writes past it
+    # directly on an observed failure.
+    cache = tmp_path / "verdicts.json"
+    env = {"CLAUDE_CODE_SESSION_ID": "s1"}
+    spec = ConserveSpec(pool="seven_day")
+
+    monkeypatch.setattr(
+        usage_budget, "evaluate",
+        lambda spec, harness, *, now=None: usage_budget.Budget(
+            status=STATUS_AVAILABLE, pool=spec.pool, detail="fresh",
+        ),
+    )
+    pinned = usage_budget.pinned_evaluate(
+        "astra", spec, "codex", now=NOW, cache_path=cache, environ=env,
+    )
+    assert pinned.status == STATUS_AVAILABLE
+
+    usage_budget.record_observed_halt(
+        "astra", spec, resets_at=NOW + 60, now=NOW, cache_path=cache, environ=env,
+    )
+    after = usage_budget.pinned_evaluate(
+        "astra", spec, "codex", now=NOW + 1, cache_path=cache, environ=env,
+    )
+    assert after.status == STATUS_OUT_OF_QUOTA
+    assert after.resets_at == NOW + 60
+
+
+def test_record_observed_halt_without_a_session_key_writes_nothing(tmp_path):
+    cache = tmp_path / "verdicts.json"
+    spec = ConserveSpec(pool="seven_day")
+    result = usage_budget.record_observed_halt(
+        "astra", spec, resets_at=NOW + 60, now=NOW, cache_path=cache, environ={},
+    )
+    assert result is None
+    assert not cache.exists()
