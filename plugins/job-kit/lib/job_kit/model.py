@@ -18,9 +18,10 @@ The package consumes a small YAML document with one flat list of jobs::
 registry ids, in the one format specified by bootstrap's plugin-dev skill
 (``references/model-declaration.md``) and validated structurally by
 ``bootstrap_lib.model_declaration``. A scalar is read as a one-element list.
-The keys ``endpoint_preference``, ``endpoint_preferences``, ``endpoints`` and
-``endpoint`` are read as the same declaration, so older job files and ledger
-rows keep loading; a job is always written back under ``models``.
+The pre-declaration keys ``endpoint_preference``, ``endpoint_preferences``,
+``endpoints`` and ``endpoint`` are no longer accepted (declaration-format
+migration step 12); a job file using one of them fails loading with an error
+naming ``models``.
 
 The job's directory is the declared working directory. Git repositories use
 that directory as the starting point for per-attempt isolation. A contract
@@ -317,10 +318,11 @@ class WorkspaceSpec:
         return result
 
 
-#: Job-file keys read as the model declaration, the current key first. The
-#: others are the pre-declaration spellings, accepted with the same meaning.
-_DECLARATION_KEYS = (
-    "models",
+#: The pre-declaration spellings a job file may no longer use. Declared
+#: separately from the one accepted key (``models``) so a job written under
+#: one of these fails loading with a message naming the removed key rather
+#: than a bare "requires models".
+_LEGACY_DECLARATION_KEYS = (
     "endpoint_preference",
     "endpoint_preferences",
     "endpoints",
@@ -436,11 +438,6 @@ class Job:
             raise ValueError("job max_attempts must be a positive integer")
 
     @property
-    def endpoint_preference(self) -> tuple[str, ...]:
-        """The model declaration under its pre-declaration name."""
-        return self.models
-
-    @property
     def system(self) -> str:
         """The system prompt text."""
         return self.prompt.system
@@ -476,11 +473,17 @@ class Job:
             }
         prompt = Prompt.from_value(prompt_value)
 
-        declared: object = next(
-            (value[key] for key in _DECLARATION_KEYS if value.get(key) is not None),
-            None,
-        )
+        declared: object = value.get("models")
         if declared is None:
+            legacy = next(
+                (key for key in _LEGACY_DECLARATION_KEYS if value.get(key) is not None),
+                None,
+            )
+            if legacy is not None:
+                raise ValueError(
+                    f"job {value.get('id')!r} uses the removed `{legacy}` key -- "
+                    "declare its model priority under `models` instead"
+                )
             raise ValueError(f"job {value.get('id')!r} requires models")
 
         workspace = WorkspaceSpec.from_value(value.get("workspace"), base_dir=base_dir)

@@ -524,7 +524,7 @@ def _jobs_file(tmp_path: Path, job_ids: Sequence[str]) -> Path:
         f"""  - id: {job_id}
     prompt:
       user: {job_id}
-    endpoint_preference: [fake-endpoint]
+    models: [fake-endpoint]
     directory: {tmp_path}
     contract:
       command: [{sys.executable}, -c, "pass"]

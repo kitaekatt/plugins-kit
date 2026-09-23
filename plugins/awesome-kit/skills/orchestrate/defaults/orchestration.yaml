@@ -629,7 +629,7 @@ backends:
       The rendered command uses one discovered entry as an example. Before
       every launch, take `<entry-id>` from the chosen
       `opencode/<entry-id>` target and run `llm-scripting-kit resolve
-      --endpoint <entry-id> --project-root <ABSOLUTE root>`. Replace the
+      --models <entry-id> --project-root <ABSOLUTE root>`. Replace the
       displayed `-m` value with the returned `model`. Remove any displayed
       `--variant`, then add `--variant <effort>` only when the returned
       `effort` is non-null. Never reuse the example model for another target.
