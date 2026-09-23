@@ -60,8 +60,8 @@ jobs:
   adapter's advertised `Capabilities` -- see llm-scripting-kit's README,
   "Capability requirements" subsection; an entry whose backend advertises
   nothing is never selected. The keys `endpoint_preference`,
-  `endpoint_preferences`, `endpoints` and `endpoint` are still read as the same
-  declaration. Requires llm-scripting-kit >= 0.46.0, the version that added
+  `endpoint_preferences`, `endpoints` and `endpoint` are accepted as aliases
+  of the same declaration. Requires llm-scripting-kit >= 0.46.0, the version that added
   `describe` (and, before it, `subjects_for_disallowed_tools` for the deny
   floor); job_kit.select fails at import time with a named remediation if an
   older llm-scripting-kit is linked in.
