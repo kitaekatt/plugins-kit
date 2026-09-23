@@ -644,11 +644,11 @@ def test_describe_renders_the_rendered_subset_and_the_rule(declared, capsys):
     assert "Rule:" in out
 
 
-def test_describe_json_carries_dispositions(declared, capsys):
+def test_describe_json_carries_rendered_entries(declared, capsys):
     assert cli.main(["describe", "typo", "good", "--caller", "process", "--json"]) == cli.EXIT_OK
     payload = json.loads(capsys.readouterr().out)
     assert payload["default"] == "good"
-    assert [d["disposition"] for d in payload["dispositions"]] == ["unresolved", "usable"]
+    assert [e["id"] for e in payload["rendered_entries"]] == ["good"]
 
 
 def test_describe_floor_exits_one_with_the_itemised_error(declared, capsys):
@@ -715,3 +715,23 @@ def test_complete_models_dispatches_the_first_usable_entry(declared, capsys):
 def test_models_and_endpoint_together_are_refused(declared, capsys):
     with pytest.raises(SystemExit):
         cli.main(["resolve", "--models", "good", "--endpoint", "good"])
+
+
+def test_describe_json_names_no_hidden_id(declared, capsys):
+    assert cli.main([
+        "describe", "typo-id", "other", "good", "--caller", "process",
+        "--exclude", "other", "--json",
+    ]) == cli.EXIT_OK
+    out = capsys.readouterr().out
+    assert "typo-id" not in out and "other" not in out
+    assert json.loads(out)["default"] == "good"
+
+
+def test_choose_json_names_no_hidden_id(declared, capsys):
+    assert cli.main(["choose", "--prefer", "typo-id,good", "--caller", "process", "--json"]) == cli.EXIT_OK
+    assert "typo-id" not in capsys.readouterr().out
+
+
+def test_describe_text_names_no_hidden_id(declared, capsys):
+    assert cli.main(["describe", "typo-id", "good", "--caller", "process"]) == cli.EXIT_OK
+    assert "typo-id" not in capsys.readouterr().out

@@ -346,13 +346,21 @@ class NoUsableRoutingTarget(Exception):
 
 @dataclass(frozen=True)
 class Ranking:
-    """The result of :func:`describe`."""
+    """The result of :func:`describe`.
 
-    names: tuple
-    caller: str
-    rendered_entries: tuple
-    dispositions: tuple
-    rule: str
+    ``names`` and ``dispositions`` cover EVERY declared id, hidden ones
+    included. They stay in memory for callers that build their own floor
+    diagnostic and are never emitted: ``repr``, :meth:`render` and
+    :meth:`to_json` name rendered entries only. Only
+    :class:`NoUsableRoutingTarget` may name a hidden id (RENDER, SKIP and
+    FLOOR are separate surfaces).
+    """
+
+    names: tuple = field(repr=False)
+    caller: str = ""
+    rendered_entries: tuple = ()
+    dispositions: tuple = field(default=(), repr=False)
+    rule: str = ""
 
     @property
     def default(self) -> Optional[EntryState]:
@@ -384,12 +392,11 @@ class Ranking:
 
     def to_json(self) -> Dict[str, Any]:
         default = self.default
+        # No `names` and no `dispositions`: both carry hidden ids.
         return {
-            "names": list(self.names),
             "caller": self.caller,
             "default": default.id if default is not None else None,
             "rendered_entries": [entry.to_json() for entry in self.rendered_entries],
-            "dispositions": [d.to_json() for d in self.dispositions],
             "rule": self.rule,
         }
 

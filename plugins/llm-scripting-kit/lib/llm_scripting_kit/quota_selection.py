@@ -127,7 +127,9 @@ def _reason(
     ``spent`` and ``unknown`` stay separate: an endpoint that names no
     configured entry was excluded by a CONFIGURATION error, and calling that
     "out of quota" is a false claim about the account -- one that would send a
-    reader looking at their usage for a typo.
+    reader looking at their usage for a typo. ``unknown`` and ``other`` are
+    non-empty only on the floor path, the one surface allowed to name a hidden
+    id; a successful selection passes rendered entries only.
     """
     causes = []
     if spent:
@@ -175,6 +177,7 @@ def choose_endpoint(
     """
     from .declaration import (  # noqa: PLC0415 -- declaration imports this package's models
         DISPOSITION_OUT_OF_QUOTA,
+        DISPOSITION_UNREACHABLE,
         DISPOSITION_UNRESOLVED,
         DISPOSITION_USABLE,
         NoUsableRoutingTarget,
@@ -197,7 +200,13 @@ def choose_endpoint(
             names, project_root=project_root, caller="process",
             entries=entries, reachability_cache=unprobed,
         )
-        dispositions = ranking.dispositions
+        # A success names rendered entries only: out-of-quota ones may be
+        # reported as disabled, hidden ones (unresolved, unroutable, ...) are
+        # skipped silently and surface only through the floor below.
+        dispositions = tuple(
+            d for d in ranking.dispositions
+            if d.disposition in (DISPOSITION_USABLE, DISPOSITION_OUT_OF_QUOTA, DISPOSITION_UNREACHABLE)
+        )
         ranked = tuple(
             Candidate(endpoint=e.id, preference_index=e.declared_index, budget=_pinned_budget(e))
             for e in ranking.rendered_entries

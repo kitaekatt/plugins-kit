@@ -196,8 +196,8 @@ seam, where every resolvable entry routes. The printed rule text differs to
 match: the session rule is choose-and-announce plus "re-select on any
 unexplained dispatch failure"; the process rule is "take the default; move on
 only on a classified halt". `--self` marks the author's entry `[author]` and
-adds the independence preference. `--json` emits the rendered entries, every
-disposition, the default, and the rule.
+adds the independence preference. `--json` emits the rendered entries, the
+default, and the rule -- never a hidden id.
 
 `choose --prefer a,b` is a deprecated alias of `describe a b` (`--default X`
 appends `X` as the last declared entry).
@@ -318,8 +318,8 @@ result.status                    # "completed" | "failed" | "attempt-limit"
 requirements=None, capabilities=None, backend_factory=None, exclude=(),
 reachability_cache=None, entries=None)` returns a `Ranking`:
 `rendered_entries` (`EntryState` records in pace order), `dispositions`
-(every declared id in declared order), `rule` (the choice and re-selection
-text), `default`, `render()`, and `to_json()`. `requirements` is matched
+(every declared id, in memory only), `rule` (the choice and re-selection
+text), `default`, `render()`, and `to_json()` (the last two name rendered entries only). `requirements` is matched
 against `capabilities` (default: the shipped advertisement) by the resolved
 backend's name; `backend_factory` resolves an id (default: the merged
 registry, then `create_backend`); `reachability_cache` is read first and

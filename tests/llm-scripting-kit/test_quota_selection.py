@@ -196,13 +196,13 @@ def test_an_unknown_endpoint_is_skipped_rather_than_raising(pinned):
     entries = {"sol": _entry("sol", paced=False)}
     result = choose_endpoint(["opsu", "sol"], entries=entries)
     assert result.chosen == "sol"
-    assert [c.endpoint for c in result.disabled] == ["opsu"]
+    assert result.disabled == ()  # hidden ids are skipped silently
 
 
 def test_an_unknown_endpoint_is_never_called_out_of_quota(pinned):
     entries = {"sol": _entry("sol", paced=False)}
     result = choose_endpoint(["opsu", "sol"], entries=entries)
-    assert "not configured" in result.reason
+    assert "opsu" not in result.reason  # only the floor names a hidden id
     assert "out of quota" not in result.reason
 
 
@@ -235,3 +235,13 @@ def test_choose_endpoint_never_probes(pinned, monkeypatch):
     )
     result = _choose(pinned, ["opus"], {"opus": STATUS_AVAILABLE})
     assert result.chosen == "opus"
+
+
+def test_a_successful_selection_names_no_hidden_id(pinned):
+    # Only the floor may name an unresolved id; a success names rendered ones.
+    import json
+
+    entries = {"sol": _entry("sol", paced=False)}
+    result = choose_endpoint(["typo-id", "sol"], entries=entries)
+    assert result.chosen == "sol"
+    assert "typo-id" not in json.dumps(result.to_json())

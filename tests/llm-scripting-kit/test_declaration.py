@@ -539,14 +539,14 @@ class TestFactoryAndCache:
         decl.describe(["typo", "t", "sol"], caller="session", entries=entries, exclude=["x"])
         assert calls == [["sol"]]
 
-    def test_to_json_carries_rendered_and_dispositions(self, quota, no_probe):
+    def test_to_json_carries_rendered_entries_only(self, quota, no_probe):
         entries = {"sol": _harness("sol", "codex")}
         payload = decl.describe(
             ["typo", "sol"], caller="session", entries=entries,
             reachability_cache={"sol": _reach()},
         ).to_json()
         assert [e["id"] for e in payload["rendered_entries"]] == ["sol"]
-        assert [d["id"] for d in payload["dispositions"]] == ["typo", "sol"]
+        assert "dispositions" not in payload and "names" not in payload
         assert payload["default"] == "sol"
         assert "rule" in payload
 
@@ -806,3 +806,33 @@ def test_bootstrap_lib_absent_and_too_old_messages_differ(monkeypatch):
     assert str(absent_exc.value) != str(old_exc.value)
     assert "not linked" in str(absent_exc.value)
     assert "0.129.0" in str(old_exc.value)
+
+
+class TestHiddenIdsNeverLeaveTheFloor:
+    """Directions 13, 16, 17: only the floor may name a hidden id."""
+
+    def _ranking(self):
+        entries = {"sol": _harness("sol", "codex"), "ruled-out": _harness("ruled-out", "codex")}
+        return decl.describe(
+            ["typo-id", "ruled-out", "sol"], caller="session", entries=entries,
+            exclude=["ruled-out"], reachability_cache={"sol": _reach()},
+        )
+
+    def test_to_json_names_no_hidden_id(self, quota):
+        import json
+
+        text = json.dumps(self._ranking().to_json())
+        assert "typo-id" not in text and "ruled-out" not in text
+        assert "sol" in text
+
+    def test_repr_names_no_hidden_id(self, quota):
+        text = repr(self._ranking())
+        assert "typo-id" not in text and "ruled-out" not in text
+
+    def test_the_floor_still_itemises_every_hidden_id(self, quota):
+        entries = {"ruled-out": _harness("ruled-out", "codex")}
+        with pytest.raises(decl.NoUsableRoutingTarget) as excinfo:
+            decl.describe(["typo-id", "ruled-out"], caller="session", entries=entries,
+                          exclude=["ruled-out"], reachability_cache={})
+        payload = excinfo.value.to_json()
+        assert [d["id"] for d in payload["dispositions"]] == ["typo-id", "ruled-out"]
