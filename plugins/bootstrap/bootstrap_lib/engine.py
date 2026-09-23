@@ -104,6 +104,22 @@ def main():
 
     _stand_down_lock_contended(data_dir, project_dir, plugin_root,
                                console=console, background=background)
+    if _exit_status_requested():
+        # `bootstrap run` needs "no pass ran" to be distinguishable from a
+        # clean pass; the hooks never pass --exit-status and keep exit 0.
+        sys.exit(2)
+
+
+def _exit_status_requested() -> bool:
+    """Lenient pre-parse of --exit-status (see _main_pass's parser).
+
+    Kept out of _peek_lock_args so the lock-args tuple the crash handlers
+    unpack keeps its shape.
+    """
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument("--exit-status", dest="exit_status", action="store_true")
+    args, _ = parser.parse_known_args()
+    return bool(args.exit_status)
 
 
 # Bounds for the version-aware retry in main(). Module constants, not inlined
@@ -606,6 +622,17 @@ def _new_recorder(data_dir, start_time, args):
 
 
 def _main():
+    """One engine pass. The pass-level marketplace state (_marketplace_pass)
+    is reset on entry AND exit, so an in-process caller (the tests) never
+    carries one pass's settled marketplaces into another."""
+    _reset_marketplace_pass()
+    try:
+        _main_pass()
+    finally:
+        _reset_marketplace_pass()
+
+
+def _main_pass():
     start_time = datetime.now(timezone.utc)
 
     parser = argparse.ArgumentParser(description="Bootstrap engine")
@@ -629,7 +656,13 @@ def _main():
              "the SessionStart hook.")
     parser.add_argument("--project-key", dest="project_key", default=None,
         help="Key naming this project's interpreter record (the hook's "
-             "_PROJECT_KEY). When absent it is the sha1 of --project-dir.")
+             "_PROJECT_KEY). When absent it is the sha1 of --project-dir. "
+             "'_global_' reads and writes no record (`bootstrap run`).")
+    parser.add_argument("--exit-status", dest="exit_status", action="store_true",
+        help="Exit 1 when the pass reports failures and 2 when it stands "
+             "down on a held lock. For terminal callers (`bootstrap run`); "
+             "the SessionStart and Codex hooks never pass it, so their exit "
+             "status is unchanged.")
     args = parser.parse_args()
 
     # --console implies --verbose
@@ -692,6 +725,8 @@ def _main():
         current_os = detect_os()
     except UnsupportedPlatformError as e:
         _emit_unsupported_platform(str(e), data_dir, args)
+        if getattr(args, "exit_status", False):
+            sys.exit(1)
         return
 
     # The throttled always-lane branches out here, before self-setup, the
@@ -967,6 +1002,55 @@ def _main():
             "persist_across_sessions": True,
         })
 
+    # Plugin discovery inputs, shared by Step 3c-mkt and Step 4.
+    registry_path = os.path.join(plugins_dir, "installed_plugins.json")
+
+    # In dev layout the registry lists all repo plugins, not just enabled ones.
+    # Build an enabled_refs filter from settings.json + production registry so only
+    # actively-enabled plugins are bootstrapped. Production layout is unaffected
+    # (its registry is already authoritative).
+    home = os.environ.get("HOME") or os.path.expanduser("~")
+    prod_registry = os.path.normpath(os.path.join(home, ".claude", "plugins", "installed_plugins.json"))
+    is_dev_layout = os.path.normpath(registry_path) != prod_registry
+    enabled_refs = _load_enabled_refs(args.project_dir) if is_dev_layout else None
+
+    # Registry-v2 fallback filter: newer Claude Code keeps installed_plugins.json
+    # at {"plugins": {}} for marketplace installs, so cache-derived fallback
+    # entries need their own enablement source (settings enabledPlugins). In the
+    # dev layout enabled_refs already carries it; in production load it here.
+    fallback_refs = enabled_refs if enabled_refs is not None else _load_enabled_refs(args.project_dir)
+
+    # Sort: bootstrap plugin first, then same-marketplace plugins, then others
+    def _plugin_sort_key(pi):
+        if pi.name == boot_plugin_name and pi.marketplace == marketplace_name:
+            return (0, pi.name)
+        if pi.marketplace == marketplace_name:
+            return (1, pi.name)
+        return (2, pi.name)
+
+    # Step 3c-mkt: marketplace barrier. Every marketplaces[] entry -- the
+    # layered manifest's and every enabled plugin manifest's, bootstrap's own
+    # alwaysUpdate entry included -- is settled HERE, before the first plugins
+    # phase (layered Step 3c, then Step 4) compares an installed version with
+    # a marketplace clone. Without it the layered plugins phase read a clone
+    # that Step 4 refreshed only afterwards, so a published update applied one
+    # pass late. It runs after self-setup and registry repair (above), and the
+    # manifests keep their Step 3c/4 order, so a layered pin still wins. See
+    # _marketplace_barrier for the CLI-missing (fresh install) case.
+    barrier_plugins, barrier_cache_changed = list_enabled_plugins(
+        config, registry_path, plugins_dir, enabled_refs,
+        fallback_enabled_refs=fallback_refs,
+    )
+    if barrier_cache_changed:
+        from .config import save_config
+        save_config(data_dir, config)
+    barrier_plugins.sort(key=_plugin_sort_key)
+    all_failures.extend(_marketplace_barrier(
+        layered_manifest, barrier_plugins, current_os, data_dir, plugin_root,
+        args.project_dir, version, bootstrap_action_entries,
+        bootstrap_ok_entries, bootstrap_quiet_entries,
+    ))
+
     # Step 3c-python (interface-v3 section 3), BEFORE the layered manifest is
     # processed so its commands see both names: (1) the two machine-wide
     # opt-outs, read from USER layers only; (2) BOOTSTRAP_PYTHON persistence
@@ -1113,24 +1197,9 @@ def _main():
     # Add bootstrap's own section to display
     display_sections.append((bootstrap_label, list(bootstrap_action_entries), list(bootstrap_ok_entries)))
 
-    # Step 4: Process enabled plugins (auto-discovered via bootstrap.json presence)
-    registry_path = os.path.join(plugins_dir, "installed_plugins.json")
-
-    # In dev layout the registry lists all repo plugins, not just enabled ones.
-    # Build an enabled_refs filter from settings.json + production registry so only
-    # actively-enabled plugins are bootstrapped. Production layout is unaffected
-    # (its registry is already authoritative).
-    home = os.environ.get("HOME") or os.path.expanduser("~")
-    prod_registry = os.path.normpath(os.path.join(home, ".claude", "plugins", "installed_plugins.json"))
-    is_dev_layout = os.path.normpath(registry_path) != prod_registry
-    enabled_refs = _load_enabled_refs(args.project_dir) if is_dev_layout else None
-
-    # Registry-v2 fallback filter: newer Claude Code keeps installed_plugins.json
-    # at {"plugins": {}} for marketplace installs, so cache-derived fallback
-    # entries need their own enablement source (settings enabledPlugins). In the
-    # dev layout enabled_refs already carries it; in production load it here.
-    fallback_refs = enabled_refs if enabled_refs is not None else _load_enabled_refs(args.project_dir)
-
+    # Step 4: Process enabled plugins (auto-discovered via bootstrap.json presence).
+    # The discovery inputs (registry_path, enabled_refs, fallback_refs, the sort
+    # key) are set up before Step 3c-mkt, which reads the same plugin set.
     enabled_plugins, cache_changed = list_enabled_plugins(
         config, registry_path, plugins_dir, enabled_refs,
         fallback_enabled_refs=fallback_refs,
@@ -1138,14 +1207,6 @@ def _main():
     if cache_changed:
         from .config import save_config
         save_config(data_dir, config)
-
-    # Sort: bootstrap plugin first, then same-marketplace plugins, then others
-    def _plugin_sort_key(pi):
-        if pi.name == boot_plugin_name and pi.marketplace == marketplace_name:
-            return (0, pi.name)
-        if pi.marketplace == marketplace_name:
-            return (1, pi.name)
-        return (2, pi.name)
 
     enabled_plugins.sort(key=_plugin_sort_key)
     deferred_plugin_logs = []
@@ -1410,6 +1471,10 @@ def _main():
         # Console mode: plain text to stdout, no JSON
         for line in display_lines:
             print(line)
+        # A console pass never prompts (Step 8's profile directive is for a
+        # session); it names the command that does the choosing instead.
+        if profile_state.status in ("unselected", "unknown"):
+            print("profile: none selected -- run 'bootstrap profile'")
         if all_failures:
             print(f"\n{bootstrap_label} -> {len(all_failures)} failure(s):")
             for f in all_failures:
@@ -1428,6 +1493,8 @@ def _main():
         # append-only record breaks neither rule, and a console pass against a
         # wedged machine is exactly the state worth having evidence of.
         recorder.record("emit", "\n".join(display_lines), channel="console")
+        if getattr(args, "exit_status", False) and all_failures:
+            sys.exit(1)
         return
 
     # Build final display: shell entries + section entries
@@ -5575,6 +5642,81 @@ def _ensure_shell_scripts_executable(root):
 # needed outside tests.
 _pinned_marketplaces_this_run = set()
 
+# Pass-level marketplace state written by the Step 3c-mkt barrier:
+#   settled  -- marketplace names the barrier already processed this pass; a
+#               later marketplaces phase (layered Step 3c, Step 4) reports them
+#               as settled instead of fetching or failing a second time.
+#   unusable -- names the barrier could not add and that have no clone; every
+#               later plugins phase stands down on installs from them, whichever
+#               manifest declared the plugins.
+# Reset by _main on entry and exit.
+_marketplace_pass = {"settled": set(), "unusable": set()}
+
+
+def _reset_marketplace_pass():
+    _marketplace_pass["settled"].clear()
+    _marketplace_pass["unusable"].clear()
+
+
+def _marketplace_barrier(layered_manifest, plugin_infos, current_os, data_dir,
+                         plugin_root, project_dir, engine_version,
+                         action_entries, ok_entries, quiet_entries):
+    """Step 3c-mkt: settle every declared marketplace before any plugin check.
+
+    Runs _phase_marketplaces over the layered manifest, then over each enabled
+    plugin's bootstrap.json in Step 4 order, so pin precedence is exactly the
+    in-order behaviour. A manifest that fails to parse, is not an object, or
+    whose ``requires_bootstrap`` this engine does not meet is skipped here; its
+    own Step 4 processing reports it. Entries land in bootstrap's own section,
+    prefixed ``config:`` or ``<plugin>:``. Returns the failures.
+
+    Without a resolvable ``claude`` CLI the barrier does nothing: on a fresh
+    extension-only machine the CLI arrives through bootstrap's own ``tools``
+    phase in Step 4, and each manifest's in-order marketplaces phase then runs
+    exactly as before (tools before marketplaces).
+    """
+    from .marketplace_lifecycle import resolve_claude_cli
+
+    if not resolve_claude_cli():
+        return []
+
+    sources = []
+    if layered_manifest and layered_manifest.get("marketplaces"):
+        sources.append((_LAYERED_MANIFEST_NAME, layered_manifest, data_dir,
+                        plugin_root, ""))
+    for pi in plugin_infos:
+        path = os.path.join(pi.install_path, "bootstrap.json")
+        try:
+            with open(path, "r") as f:
+                manifest = json.load(f)
+        except (OSError, ValueError):
+            continue
+        if not isinstance(manifest, dict) or not manifest.get("marketplaces"):
+            continue
+        if _requires_bootstrap_unmet(manifest, engine_version):
+            continue
+        sources.append((pi.name, manifest, _plugin_data_dir(data_dir, pi),
+                        pi.install_path, pi.marketplace))
+
+    failures = []
+    for name, manifest, ctx_data_dir, ctx_root, marketplace in sources:
+        actions, oks, quiets = [], [], []
+        ctx = _ManifestContext(
+            manifest, current_os, ctx_data_dir, ctx_root, actions, oks, name,
+            project_dir, True, quiet_entries=quiets, marketplace=marketplace,
+        )
+        ctx.marketplace_barrier = True
+        _phase_marketplaces(ctx)
+        prefix = f"{name}: "
+        action_entries.extend(_reprefix(e, prefix) for e in actions)
+        ok_entries.extend(_reprefix(e, prefix) for e in oks)
+        quiet_entries.extend(_reprefix(e, prefix) for e in quiets)
+        failures.extend(ctx.failures)
+        _marketplace_pass["unusable"].update(ctx.unusable_marketplaces)
+        _marketplace_pass["settled"].update(
+            m.get("name") for m in manifest.get("marketplaces", []) if m.get("name"))
+    return failures
+
 
 def _report_marketplace_add_failure(ctx, mkt_name, source_url, add_result):
     """Report ONE failed `marketplace add`, and mark the marketplace unusable.
@@ -5682,11 +5824,19 @@ def _phase_marketplaces(ctx):
         )
         return
 
+    barrier = getattr(ctx, "marketplace_barrier", False)
     for mkt_def in ctx.manifest.get("marketplaces", []):
         mkt_name = mkt_def.get("name", "")
         source_url = mkt_def.get("source", "")
         pin = mkt_def.get("pin", "")
         if not mkt_name:
+            continue
+
+        if not barrier and mkt_name in _marketplace_pass["settled"]:
+            # Step 3c-mkt already processed every declaration of this
+            # marketplace, in this same manifest order; repeating it would
+            # fetch twice and report any failure twice.
+            ctx.ok(f"marketplace {mkt_name}: settled earlier this pass")
             continue
 
         # remove / enabled:false -- deregister the marketplace (and its plugins)
@@ -5885,13 +6035,14 @@ def _phase_plugins(ctx):
     #
     # getattr: a phase must tolerate a context stub that predates this
     # attribute (tests build minimal recording contexts).
-    unusable = getattr(ctx, "unusable_marketplaces", None) or set()
+    unusable = (set(getattr(ctx, "unusable_marketplaces", None) or ())
+                | _marketplace_pass["unusable"])
     # The key is the marketplace HALF of the ref, an exact name match (refs are
     # "<marketplace>:<plugin>"), not a prefix test. It can miss when the
-    # manifest's `name` differs from the name the CLI registers, or when the
-    # marketplace was declared in a different manifest layer than the plugins
-    # (each layer gets its own ctx); both degrade to the previous per-entry
-    # behaviour rather than to a wrong skip.
+    # manifest's `name` differs from the name the CLI registers; that degrades
+    # to the previous per-entry behaviour rather than to a wrong skip. A
+    # marketplace the Step 3c-mkt barrier found unusable is known pass-wide
+    # (_marketplace_pass), whichever manifest declared the plugins.
     installs_skipped = {}       # mkt -> [ref]
 
     plugins_installed = {}      # mkt -> [(name, detail)]
