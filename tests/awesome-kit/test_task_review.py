@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
 from pathlib import Path
 from types import SimpleNamespace
+from html import unescape
 
 import pytest
 import yaml
@@ -48,6 +50,7 @@ def make_task(
     title: str,
     status: str = "active",
     summary: str | None = None,
+    summary_updated: str | None = None,
     date: str | None = None,
 ) -> Path:
     folder = root / rel
@@ -60,6 +63,8 @@ def make_task(
     }
     if summary is not None:
         block["summary"] = summary
+    if summary_updated is not None:
+        block["summary_updated"] = summary_updated
     (folder / "task.yaml").write_text(
         yaml.safe_dump({"task": block}), encoding="utf-8"
     )
@@ -188,14 +193,158 @@ class TestTaskListingAndReview:
         )
         assert result.returncode == 0
         html = output.read_text(encoding="utf-8")
-        assert html.count('<details class="task-card') == 3
-        assert "summary-line missing" in html
+        assert html.count('<div class="task-card ') == 3
+        assert '<button class="task-id-copy" type="button" data-task-id="tmp/newer-open"' in html
+        assert "var command = 'task work ' + button.dataset.taskId;" in html
+        assert "event.stopPropagation();" in html
+        assert "navigator.clipboard.writeText(command)" in html
+        assert "document.execCommand('copy')" in html
+        assert html.count('<section class="task-section">') == 2
+        assert "Needs attention" not in html
+        assert '<summary class="project-row">' in html
+        assert ".project-row {" in html
+        assert '<div class="task-card missing">' in html
         assert "missing_summary" in html
         assert "Should not appear" not in html
         assert "Older &lt;open&gt;" in html
         assert html.index("tmp/newer-open") < html.index("tmp/older-open")
-        assert "document.querySelectorAll('details.task-card[open]')" in html
+        assert "details.task-card" not in html
+        assert "aria-describedby=\"task-summary-tmp%2Fnewer-open\"" in html
+        assert "role=\"tooltip\"" in html
+        assert "Updates" not in html
         assert "missing task.summary" in result.stderr
+
+    def test_invalid_task_missing_summary_is_non_actionable_but_stays_in_review(
+        self, tmp_path: Path
+    ) -> None:
+        make_task(tmp_path, "dev/tasks/nano", title="Nano", status="invalid")
+        stale_folder = make_task(
+            tmp_path,
+            "dev/tasks/stale-invalid",
+            title="Stale invalid",
+            status="invalid",
+            summary="Existing summary remains visible.",
+        )
+        stale_block = yaml.safe_load(
+            (stale_folder / "task.yaml").read_text(encoding="utf-8")
+        )
+        stale_block["task"]["summary_fingerprint"] = "outdated-fingerprint"
+        (stale_folder / "task.yaml").write_text(
+            yaml.safe_dump(stale_block), encoding="utf-8"
+        )
+
+        collected = listing.collect_listing("project", tmp_path)
+        data = listing.listing_data(collected)
+        views = {view.id: view for view in collected.views}
+
+        assert views["dev/tasks/nano"].status == "invalid"
+        assert views["dev/tasks/nano"].summary_status == "unavailable"
+        assert views["dev/tasks/stale-invalid"].summary_status == "unavailable"
+        assert all(not task["summary_missing"] for task in data["tasks"])
+        assert collected.warnings == ()
+        assert not any(
+            item["code"] in ("missing_summary", "stale_summary")
+            for item in data["diagnostics"]
+        )
+        assert set(data["sections"]["other"]) == {
+            "dev/tasks/nano",
+            "dev/tasks/stale-invalid",
+        }
+
+        output = tmp_path / "review.html"
+        result = run_cli(
+            [
+                "review",
+                "--scope",
+                "project",
+                "--no-generate-missing-summaries",
+                "--no-open",
+                "--output",
+                str(output),
+                "--root",
+                str(tmp_path),
+            ],
+            tmp_path,
+        )
+        assert result.returncode == 0
+        assert "missing task.summary" not in result.stderr
+        html = output.read_text(encoding="utf-8")
+        assert "Nano" in html
+        assert "Needs attention" in html
+        assert "status-invalid" in html
+        assert "Existing summary remains visible." in html
+
+    def test_project_groups_sort_by_activity_with_summary_date_fallback(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        devroot = tmp_path / "devroot"
+        project_specs = {
+            "alpha": {"date": "2026-09-20"},
+            "beta": {"summary_updated": "2026-09-22"},
+            "delta": {"date": "2026-09-22"},
+            "gamma": {},
+            "zeta": {"date": "2026-09-23"},
+        }
+        for name, dates in project_specs.items():
+            make_task(
+                devroot / name,
+                "tmp/task",
+                title=f"{name} task",
+                summary="Current summary.",
+                summary_updated=dates.get("summary_updated"),
+                date=dates.get("date"),
+            )
+        make_task(
+            devroot / "zeta",
+            "tmp/undated",
+            title="zeta undated task",
+            summary="Current summary.",
+        )
+        monkeypatch.setenv("DEVROOT", str(devroot))
+        _configure_project_directories(tmp_path, monkeypatch, ["${DEVROOT}"])
+
+        collected = listing.collect_listing("all", devroot / "alpha")
+        groups = listing.project_groups(collected)
+        expected_order = [
+            "zeta",
+            "beta",
+            "delta",
+            "alpha",
+            "gamma",
+        ]
+        assert [group.name for group in groups] == expected_order
+        data = listing.listing_data(collected)
+        assert [project["name"] for project in data["projects"]] == expected_order
+        beta_view = next(view for view in collected.views if view.project_name == "beta")
+        assert beta_view.last_update is None
+        assert beta_view.summary_updated == "2026-09-22"
+        assert "summary_updated" not in data["tasks"][0]
+
+        output = tmp_path / "ordered-review.html"
+        result = run_cli(
+            [
+                "review",
+                "--scope",
+                "all",
+                "--no-generate-missing-summaries",
+                "--no-open",
+                "--output",
+                str(output),
+                "--root",
+                str(devroot / "alpha"),
+            ],
+            devroot / "alpha",
+        )
+        assert result.returncode == 0
+        html = output.read_text(encoding="utf-8")
+        rendered_order = [
+            unescape(name)
+            for name in re.findall(
+                r'<summary class="project-row"><span class="project-title">(.*?)</span>',
+                html,
+            )
+        ]
+        assert rendered_order == expected_order
 
 
     def test_review_without_config_uses_current_project_and_all_explains_requirement(
@@ -298,7 +447,7 @@ class TestTaskListingAndReview:
         assert result.returncode == 0
         html = output.read_text(encoding="utf-8")
         assert html.count('<details class="project-card">') == 2
-        assert html.count('<details class="task-card') == 3
+        assert html.count('<div class="task-card ') == 3
         assert html.count("Shared dev task") == 1
         assert "plugins-kit2" in html
         assert "missing task.summary" in result.stderr
