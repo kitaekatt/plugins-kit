@@ -79,7 +79,9 @@ _REQUIRED_COMPLETION_SYMBOLS = (
 # API, called with requirements, capabilities, backend_factory, exclude and a
 # run-scoped reachability_cache, all of which shipped with describe itself.
 _REQUIRED_DECLARATION_SYMBOLS = ("describe", "NoUsableRoutingTarget", "CALLER_PROCESS")
-_REQUIRED_USAGE_SYMBOLS = ("record_observed_halt",)
+# quota_pool_key is the FRONTIER symbol: it shipped with record_observed_halt's
+# ``entries`` argument, which run.py passes so a halt spends the whole pool.
+_REQUIRED_USAGE_SYMBOLS = ("record_observed_halt", "quota_pool_key")
 
 _require_module("llm_scripting_kit.completion", _REQUIRED_COMPLETION_SYMBOLS)
 _declaration = _require_module(

@@ -92,7 +92,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Mapping, Optional, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 STATUS_AVAILABLE = "available"
 """The pool was read and the burn-down is at or ahead of the clock."""
@@ -870,10 +870,45 @@ def pinned_evaluate(
     return fresh
 
 
+def quota_pool_key(harness: Optional[str], spec: Optional[ConserveSpec]) -> Optional[tuple]:
+    """The identity of the quota an entry draws on, or None when it has none.
+
+    Entries on the same harness account reading the same declared pool (and,
+    for a model-scoped pool, the same labelled row) share one quota. This is
+    the one definition: ``describe`` labels such entries "shares <pool> with
+    <x>", and :func:`record_observed_halt` spends all of them on one observed
+    halt. An entry with no ``conserve_usage`` or no harness draws on no known
+    quota and shares with nothing.
+    """
+    key = (harness or "").strip().lower()
+    if spec is None or not key:
+        return None
+    return (key, spec.pool, spec.display_name)
+
+
+def _pool_siblings(
+    entry_id: str, spec: ConserveSpec, entries: Mapping[str, Any]
+) -> List[Tuple[str, ConserveSpec]]:
+    """Every other entry in ``entries`` that shares ``entry_id``'s quota."""
+    own = entries.get(entry_id)
+    key = quota_pool_key(getattr(own, "harness", None), spec)
+    if key is None:
+        return []
+    siblings = []
+    for name, entry in entries.items():
+        other = getattr(entry, "conserve_usage", None)
+        if name != entry_id and other is not None and quota_pool_key(
+            getattr(entry, "harness", None), other
+        ) == key:
+            siblings.append((name, other))
+    return siblings
+
+
 def record_observed_halt(
     entry_id: str,
     spec: ConserveSpec,
     *,
+    entries: Optional[Mapping[str, Any]] = None,
     resets_at: Optional[int] = None,
     now: Optional[float] = None,
     cache_path: Optional[Path] = None,
@@ -900,7 +935,15 @@ def record_observed_halt(
     falls back to, so an unbounded verdict is never left to hold for the rest
     of the session.
 
-    Returns the written :class:`Budget`, or ``None`` when there is no
+    ``entries`` is the registry the caller resolved ``entry_id`` from. When
+    it is given, the halt is written for every entry that shares the halted
+    entry's quota (:func:`quota_pool_key`: same harness account, same pool),
+    each under its own ``conserve_usage``: a spent pool is spent for all of
+    them, and without this each sibling would cost one more failed dispatch
+    before its own halt was observed. Entries without ``conserve_usage`` get
+    no verdict. Every caller that has the registry passes it.
+
+    Returns the halted entry's written :class:`Budget`, or ``None`` when there is no
     session key to pin against (nothing is written -- an unpinnable call gets
     a fresh :func:`evaluate` every time regardless, so writing to a keyless
     cache would leak the observation into an unrelated later session).
@@ -924,6 +967,17 @@ def record_observed_halt(
     path = VERDICT_CACHE if cache_path is None else cache_path
     verdicts = _load_cache(path, key)
     verdicts[entry_id] = {"spec": spec.to_json(), "budget": budget.to_json()}
+    for name, sibling_spec in _pool_siblings(entry_id, spec, entries or {}):
+        verdicts[name] = {
+            "spec": sibling_spec.to_json(),
+            "budget": Budget(
+                status=STATUS_OUT_OF_QUOTA,
+                pool=sibling_spec.pool,
+                detail=f"observed quota/credit halt on {entry_id}, which shares this pool",
+                remaining=0.0,
+                resets_at=reset_at,
+            ).to_json(),
+        }
     _store_cache(path, key, verdicts)
     return budget
 
@@ -957,6 +1011,7 @@ __all__ = [
     "evaluate",
     "evaluate_usage_budget",
     "pinned_evaluate",
+    "quota_pool_key",
     "record_observed_halt",
     "session_key",
 ]
