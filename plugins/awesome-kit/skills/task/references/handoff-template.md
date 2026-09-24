@@ -397,8 +397,13 @@ rotation targets, and growth here is the system working (split logs,
 - Notes that would help someone six months from now reconstruct reasoning.
 
 Multiple log files (`log-decisions.md`, `log-dead-ends.md`) are fine when
-volume justifies the split. (`task update` appends a mechanical dated entry
-to log.md; the substantive content above is the agent's to write.)
+volume justifies the split. (`task update` appends a mechanical timestamped
+entry to log.md; the substantive content above is the agent's to write.)
+
+A dated entry is a list line `- YYYY-MM-DD HH:MM: <detail>` in local time;
+these lines are the task's activity history, and the review ranks and dims
+tasks by the newest one. Write the time when you add an entry by hand. A
+date-only entry (`- YYYY-MM-DD: <detail>`) still parses and reads as noon.
 
 ## Optional referenced docs
 

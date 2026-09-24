@@ -54,6 +54,7 @@ class TaskView:
     project_name: str
     project_root: Path
     updates: tuple[TaskUpdate, ...] = ()
+    last_activity: str | None = None  # YYYY-MM-DD HH:MM of the newest update
 
 
 @dataclass(frozen=True)
@@ -75,6 +76,7 @@ class ProjectGroup:
     root: Path
     views: tuple[TaskView, ...]
     last_update: str | None
+    last_activity: str | None
 
 
 def _read_text(path: Path) -> str:
@@ -103,6 +105,15 @@ def summary_source_fingerprint(folder: Path, block: dict[str, Any]) -> str:
         material, sort_keys=True, ensure_ascii=False, default=str
     ).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
+
+
+def _last_activity(updates: tuple[TaskUpdate, ...]) -> str | None:
+    return max((update.timestamp for update in updates), default=None)
+
+
+def activity_key(view: TaskView) -> str | None:
+    """The view's newest activity: its timestamp, else its date alone."""
+    return view.last_activity or view.last_update
 
 
 def _view_record(record: TaskRecord, fallback_root: Path) -> TaskView:
@@ -142,6 +153,7 @@ def _view_record(record: TaskRecord, fallback_root: Path) -> TaskView:
             project_name=record.project_name or root.name,
             project_root=root,
             updates=updates,
+            last_activity=_last_activity(updates),
         )
     raw_summary = block.get("summary")
     summary = (
@@ -185,6 +197,7 @@ def _view_record(record: TaskRecord, fallback_root: Path) -> TaskView:
         project_name=record.project_name or root.name,
         project_root=root,
         updates=updates,
+        last_activity=_last_activity(updates),
     )
 
 
@@ -266,36 +279,40 @@ def section_views(views: tuple[TaskView, ...]) -> dict[str, list[TaskView]]:
 def project_groups(listing: TaskListing) -> tuple[ProjectGroup, ...]:
     """Group tasks by project, most recently updated project first.
 
-    A project's last update is the newest last_update among its open tasks;
+    A project's last activity is the newest activity among its open tasks;
     projects with no dated open task sort last, then by name.
     """
     groups: dict[tuple[str, Path], list[TaskView]] = {}
     for view in listing.views:
         groups.setdefault((view.project_name, view.project_root), []).append(view)
-    projects = [
-        ProjectGroup(
-            name=name,
-            root=root,
-            views=tuple(views),
-            last_update=project_last_update(views),
+    projects = []
+    for (name, root), views in groups.items():
+        last_activity = project_last_activity(views)
+        projects.append(
+            ProjectGroup(
+                name=name,
+                root=root,
+                views=tuple(views),
+                last_update=last_activity[:10] if last_activity else None,
+                last_activity=last_activity,
+            )
         )
-        for (name, root), views in groups.items()
-    ]
     projects.sort(key=lambda group: (group.name.casefold(), group.name, str(group.root)))
     projects.sort(
-        key=lambda group: (group.last_update is not None, group.last_update or ""),
+        key=lambda group: (group.last_activity is not None, group.last_activity or ""),
         reverse=True,
     )
     return tuple(projects)
 
 
-def project_last_update(views: Iterable[TaskView]) -> str | None:
-    """Return the newest last_update among open tasks, or None."""
+def project_last_activity(views: Iterable[TaskView]) -> str | None:
+    """Return the newest activity among open tasks, or None."""
     return max(
         (
-            view.last_update
+            activity
             for view in views
-            if view.status in OPEN_CLASSIFICATIONS and view.last_update
+            if view.status in OPEN_CLASSIFICATIONS
+            and (activity := activity_key(view))
         ),
         default=None,
     )
@@ -310,7 +327,8 @@ def task_key(listing: TaskListing, view: TaskView) -> str:
 
 def review_sort_key(view: TaskView) -> tuple[bool, str]:
     """Sort newest activity first; missing dates are oldest."""
-    return (view.last_update is not None, view.last_update or "")
+    activity = activity_key(view)
+    return (activity is not None, activity or "")
 
 
 def _view_dict(listing: TaskListing, view: TaskView) -> dict[str, Any]:
@@ -320,6 +338,7 @@ def _view_dict(listing: TaskListing, view: TaskView) -> dict[str, Any]:
         "status": view.status,
         "priority": view.priority,
         "last_update": view.last_update,
+        "last_activity": activity_key(view),
         "title": view.title,
         "summary": view.summary,
         "summary_status": view.summary_status,
@@ -358,6 +377,7 @@ def listing_data(listing: TaskListing) -> dict[str, Any]:
                 "name": project.name,
                 "root": str(project.root),
                 "last_update": project.last_update,
+                "last_activity": project.last_activity,
                 "tasks": [task_key(listing, view) for view in project.views],
                 "sections": {
                     name: [task_key(listing, view) for view in views]
