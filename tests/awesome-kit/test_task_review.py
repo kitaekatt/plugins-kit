@@ -9,7 +9,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 from html import unescape
 
 import pytest
@@ -76,6 +76,27 @@ def make_task(
     log = f"- {date}: update: task changed\n" if date else "placeholder\n"
     (folder / "log.md").write_text(log, encoding="utf-8")
     return folder
+
+
+def _install_fake_completion_module(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Stand in for llm_scripting_kit.completion, which is not a test-venv dep.
+
+    summary_ops._complete does `from llm_scripting_kit.completion import
+    BackendOptions` at call time; real backends are always monkeypatched over
+    _complete in the other tests in this module, but the prompt-contract test
+    below calls _complete itself, so the import needs somewhere to resolve.
+    """
+    parent = ModuleType("llm_scripting_kit")
+    completion = ModuleType("llm_scripting_kit.completion")
+
+    class BackendOptions:
+        def __init__(self, **kwargs: object) -> None:
+            self.kwargs = kwargs
+
+    completion.BackendOptions = BackendOptions
+    parent.completion = completion
+    monkeypatch.setitem(sys.modules, "llm_scripting_kit", parent)
+    monkeypatch.setitem(sys.modules, "llm_scripting_kit.completion", completion)
 
 
 def _link_directory(link: Path, target: Path) -> None:
@@ -203,7 +224,7 @@ class TestTaskListingAndReview:
         assert "Needs attention" not in html
         assert '<summary class="project-row">' in html
         assert ".project-row {" in html
-        assert '<div class="task-card missing">' in html
+        assert '<div class="task-card missing" ' in html
         assert "missing_summary" in html
         assert "Should not appear" not in html
         assert "Older &lt;open&gt;" in html
@@ -274,7 +295,7 @@ class TestTaskListingAndReview:
         assert "status-invalid" in html
         assert "Existing summary remains visible." in html
 
-    def test_project_groups_sort_by_activity_with_summary_date_fallback(
+    def test_project_groups_sort_by_newest_open_task_activity(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         devroot = tmp_path / "devroot"
@@ -300,21 +321,39 @@ class TestTaskListingAndReview:
             title="zeta undated task",
             summary="Current summary.",
         )
+        # Closed-task activity does not advance a project's last update.
+        make_task(
+            devroot / "alpha",
+            "dev/tasks/closed",
+            title="alpha closed task",
+            status="closed",
+            summary="Closed summary.",
+            date="2026-09-24",
+        )
         monkeypatch.setenv("DEVROOT", str(devroot))
         _configure_project_directories(tmp_path, monkeypatch, ["${DEVROOT}"])
 
         collected = listing.collect_listing("all", devroot / "alpha")
         groups = listing.project_groups(collected)
+        # A summary date is not activity: beta has no dated open task.
         expected_order = [
             "zeta",
-            "beta",
             "delta",
             "alpha",
+            "beta",
             "gamma",
         ]
         assert [group.name for group in groups] == expected_order
+        assert [group.last_update for group in groups] == [
+            "2026-09-23",
+            "2026-09-22",
+            "2026-09-20",
+            None,
+            None,
+        ]
         data = listing.listing_data(collected)
         assert [project["name"] for project in data["projects"]] == expected_order
+        assert data["projects"][0]["last_update"] == "2026-09-23"
         beta_view = next(view for view in collected.views if view.project_name == "beta")
         assert beta_view.last_update is None
         assert beta_view.summary_updated == "2026-09-22"
@@ -492,6 +531,37 @@ class TestTaskListingAndReview:
             "update: previous day",
         ]
 
+    def test_timestamped_entries_parse_and_order_within_a_day(
+        self, tmp_path: Path
+    ) -> None:
+        folder = make_task(
+            tmp_path, "tmp/timed", title="Timed", summary="Summary."
+        )
+        (folder / "log.md").write_text(
+            "- 2026-09-22 19:21:39: update: seconds dropped\n"
+            "- 2026-09-22 08:05: update: morning\n"
+            "- 2026-09-22: update: date only reads as noon\n",
+            encoding="utf-8",
+        )
+        view = listing.collect_listing("project", tmp_path).views[0]
+        assert [update.timestamp for update in view.updates] == [
+            "2026-09-22 19:21",
+            "2026-09-22 12:00",
+            "2026-09-22 08:05",
+        ]
+        assert view.updates[0].detail == "update: seconds dropped"
+        assert view.last_update == "2026-09-22"
+        assert view.last_activity == "2026-09-22 19:21"
+
+    def test_tasks_on_the_same_day_sort_by_time(self, tmp_path: Path) -> None:
+        for stub, stamp in (("early", "2026-09-22 08:00"), ("late", "2026-09-22 18:00")):
+            folder = make_task(tmp_path, f"tmp/{stub}", title=stub, summary="S.")
+            (folder / "log.md").write_text(
+                f"- {stamp}: update: work\n", encoding="utf-8"
+            )
+        views = listing.collect_listing("project", tmp_path).views
+        assert [view.id for view in views] == ["tmp/late", "tmp/early"]
+
 
 class TestSummaryGeneration:
     def test_all_scope_generation_uses_selected_project_roots(
@@ -575,3 +645,65 @@ class TestSummaryGeneration:
         assert view.summary_status == "present"
         assert view.last_update == "2026-09-19"
         assert view.updates[0].detail == "update: task changed"
+
+
+class TestSummaryPromptContract:
+    def test_normalize_summary_truncates_at_new_cap_on_a_word_boundary(self) -> None:
+        text = " ".join(["alpha"] * 60)  # 359 chars, past both the 240 cap and the old 320 cap
+        normalized = summary_ops._normalize_summary(text)
+        assert len(normalized) <= 240
+        assert normalized.endswith("...")
+        assert not normalized.endswith(" ...")
+
+    def test_normalize_summary_keeps_a_short_three_section_line_intact(self) -> None:
+        text = "Closet run is dead; re-terminating cat6a; re-test pending."
+        assert summary_ops._normalize_summary(text) == text
+
+    def test_complete_system_prompt_states_problem_approach_state_contract(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        make_task(tmp_path, "tmp/contract", title="Contract check")
+        view = listing.collect_listing("project", tmp_path).views[0]
+        _install_fake_completion_module(monkeypatch)
+
+        captured: dict[str, str] = {}
+
+        class _StubBackend:
+            def complete(self, system: str, user: str, **_kwargs: object) -> SimpleNamespace:
+                captured["system"] = system
+                captured["user"] = user
+                return SimpleNamespace(text="Problem stated; approach stated; state stated")
+
+        result = summary_ops._complete(_StubBackend(), view, tmp_path)
+        assert result == "Problem stated; approach stated; state stated"
+
+        system = captured["system"]
+        lowered = system.lower()
+        assert "problem the task solves" in lowered
+        assert "how it is being solved" in lowered
+        assert "stands now" in lowered
+        assert str(summary_ops.SUMMARY_MAX_CHARS) in system
+        assert str(summary_ops.SUMMARY_SECTION_MAX_CHARS) in system
+        assert "plan.md's task_items" in system
+        assert "no heading, markdown, bullets, or quotes" in lowered
+        assert "```" not in system
+
+    def test_fingerprint_bump_invalidates_a_summary_stored_under_the_old_scheme(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        folder = make_task(
+            tmp_path, "tmp/legacy", title="Legacy", summary="Old summary."
+        )
+        block = discovery.read_task_block(folder)
+
+        with monkeypatch.context() as patched:
+            patched.setattr(listing, "SUMMARY_PROMPT_VERSION", "pre-upgrade-scheme")
+            legacy_fingerprint = listing.summary_source_fingerprint(folder, block)
+
+        task_yaml = folder / "task.yaml"
+        data = yaml.safe_load(task_yaml.read_text(encoding="utf-8"))
+        data["task"]["summary_fingerprint"] = legacy_fingerprint
+        task_yaml.write_text(yaml.safe_dump(data), encoding="utf-8")
+
+        view = listing.collect_listing("project", tmp_path).views[0]
+        assert view.summary_status == "stale"

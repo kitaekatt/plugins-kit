@@ -88,7 +88,7 @@ task:
 | `status` | enum | yes | One of the type's `state_vocabulary` (default: `active` / `blocked` / `closed` / `archived`). |
 | `priority` | string | no | Matches the type's priority pattern (default `^P[1-3]$`, P1 highest). |
 | `description` | string | no | Freeform multi-line. |
-| `summary` | string | no | One-line review summary. Missing/stale summaries are diagnostics; generated values carry provenance metadata. |
+| `summary` | string | no | One-line review summary: problem it solves; how it is being solved; where it stands now (semicolon-separated, <=240 chars total, <=80 per section). Missing/stale summaries are diagnostics; generated values carry provenance metadata. |
 | `summary_fingerprint` | string | no | Fingerprint of the task material used to generate `summary`. |
 | `summary_updated` | string | no | Date the generated summary was persisted. |
 | `depends_on` | list[path] | no | Reference paths that must be `closed`/`archived` before this is workable. |
@@ -392,7 +392,7 @@ inference exception.
 - **`list [--scope user|project|skill|file <target>] [--status … --priority … --format text|json|yaml]`** — Discovery (§8) →
   resolve → classify each via `validate` → **dedupe by canonical path** → project `id`/`title`/`status`/
   `priority`, summary metadata, and update history through the shared listing projection. Remote tasks are listed as opaque (`@host`, status unresolved). Text is the legacy projection; JSON/YAML are versioned and include diagnostics. Script-only; no inference or writes.
-- **`review [--scope user|project|skill|file <target>] [--output PATH|-] [--no-open] [--generate-missing-summaries | --no-generate-missing-summaries]`** — Discovery (§8) and the shared listing projection produce the source data. By default, eligible local active/blocked/closed tasks with missing or stale `task.summary` values are summarized through Codex Luna with a read-only, no-network sandbox and persisted through `update` with a source fingerprint. Summary-maintenance log entries do not advance activity. The renderer writes self-contained HTML with one collapsible card per task, Open/Closed sections, newest activity first, and escaped values. Archived tasks are absent. Missing, stale, and unavailable summaries have distinct visible treatments; model failures are reported on stderr and the HTML is still written. `--output -` emits HTML to stdout, otherwise a temporary file is opened in the browser unless `--no-open` is set.
+- **`review [--scope all|user|project|skill|file <target>] [--output PATH|-] [--no-open] [--generate-missing-summaries | --no-generate-missing-summaries]`** -- Discovery (section 8) and the shared listing projection produce the source data. By default, eligible local active/blocked/closed tasks with missing or stale `task.summary` values are summarized through Codex Luna with a read-only, no-network sandbox and persisted through `update` with a source fingerprint. Summary-maintenance log entries do not advance activity. The renderer writes self-contained HTML with one collapsible card per task, Open/Closed sections, newest activity first, and escaped values. In all scope, projects are ordered by their newest open-task activity (summary dates and closed tasks excluded), newest first; projects without a dated open task sort last by name. Each task row dims with age: full brightness up to 4 hours since its `last_activity`, fading linearly to 33% at 120 hours and beyond (undated tasks are dimmest). Archived tasks are absent. Missing, stale, and unavailable summaries have distinct visible treatments; model failures are reported on stderr and the HTML is still written. `--output -` emits HTML to stdout, otherwise a temporary file is opened in the browser unless `--no-open` is set.
 - **`show <ref>`** — Resolve → print selected `task.yaml` fields. Cheap, no inference.
 - **`validate <ref>`** — §9. Emit errors + warnings; classify `active`/`invalid`/`remote`. Exit `0` iff
   no findings.
@@ -494,8 +494,11 @@ Two crawl modes, both script-driven:
 4. **Classify each** via `validate`: `active`/`blocked`/`closed`/`archived` (read from `task.yaml`), or
    computed `remote` (tmp + host mismatch — opaque, not read) / `orphaned` (tmp ref, local, no folder).
 5. **Project + filter:** emit `id`(path), `status`, `priority`, `last_update`, `title`; apply
-   `--status`/`--priority` filters. `last_update` is the latest ISO date in dated `log.md` entries,
-   or `-` when no dated entry exists. Folderless-non-tmp refs read as `archived`. With no
+   `--status`/`--priority` filters. A dated `log.md` entry is `- YYYY-MM-DD HH:MM: <detail>`
+   (local time; seconds, when present, are dropped; a date-only entry reads as 12:00).
+   `last_update` is the latest ISO date in dated `log.md` entries, or `-` when no dated entry
+   exists; the structured projection also carries `last_activity`, the latest entry's
+   `YYYY-MM-DD HH:MM`, which orders tasks and projects. Folderless-non-tmp refs read as `archived`. With no
    `--status`, active/blocked and closed classifications are emitted; the CLI presents them in
    separate Open tasks and Closed tasks sections. An explicit `--status` lists that classification,
     including archived and other non-working states. The shared projection also reads `task.summary`,

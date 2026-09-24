@@ -21,7 +21,8 @@ from .listing import TaskListing, TaskView, summary_source_fingerprint
 SUMMARY_MODEL = "gpt-5.6-luna"
 SUMMARY_EFFORT = "medium"
 SUMMARY_TIMEOUT_S = 180.0
-SUMMARY_MAX_CHARS = 320
+SUMMARY_MAX_CHARS = 240
+SUMMARY_SECTION_MAX_CHARS = 80
 ELIGIBLE_STATUSES = frozenset(("active", "blocked", "closed"))
 SUMMARY_WORKERS = 4
 
@@ -92,9 +93,14 @@ def _complete(backend: Any, view: TaskView, root: Path) -> str:
     from llm_scripting_kit.completion import BackendOptions
 
     system = (
-        "Write a concise one-line task summary for a task review dashboard. "
-        "State the task's purpose and current outcome or next focus. Return "
-        "only the summary sentence, with no heading, markdown, bullets, or quotes."
+        "Write task.summary for a task review dashboard as ONE line with "
+        "three semicolon-separated sections, in this exact order: (1) the "
+        "problem the task solves, (2) how it is being solved, (3) where it "
+        f"stands now. Each section is at most {SUMMARY_SECTION_MAX_CHARS} "
+        f"characters, and the full line is at most {SUMMARY_MAX_CHARS} "
+        "characters. Prefer the current state from plan.md's task_items and "
+        "the latest log entries. Telegraphic style is fine. Return only the "
+        "summary line: no heading, markdown, bullets, or quotes."
     )
     user = (
         "Task id: "

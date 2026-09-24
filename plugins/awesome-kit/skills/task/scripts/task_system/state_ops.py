@@ -64,7 +64,6 @@ Readings chosen in Step 4 (flagged in the implementation report):
 
 from __future__ import annotations
 
-import datetime
 import shutil
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -73,7 +72,7 @@ from pathlib import Path
 import yaml
 
 from . import resolve
-from .discovery import read_task_block
+from .discovery import log_timestamp, read_task_block
 from .init import InitError, derive_stub_and_title, init_task
 from .validate import ValidationResult, validate_ref
 
@@ -192,7 +191,7 @@ def _write_task_yaml(folder: Path, data: dict) -> None:
 def _append_log_entry(folder: Path, edits: dict[str, object]) -> None:
     """The minimal rotation share (module docstring): one dated log.md line
     recording the update; plan.md is untouched."""
-    stamp = datetime.date.today().isoformat()
+    stamp = log_timestamp()
     if edits and set(edits).issubset(
         {"summary", "summary_fingerprint", "summary_updated"}
     ):

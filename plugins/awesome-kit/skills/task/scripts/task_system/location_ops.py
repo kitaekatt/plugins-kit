@@ -99,13 +99,13 @@ Readings chosen in Step 5 (flagged in the implementation report):
 
 from __future__ import annotations
 
-import datetime
 import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path, PurePath, PureWindowsPath
 
 from . import resolve
+from .discovery import log_timestamp
 from .state_ops import (
     StateOpError,
     _read_task_yaml,
@@ -369,7 +369,7 @@ def _git_commit_folder(
 def _append_archive_log_entry(folder: Path, detail: str) -> None:
     """The dated log.md line recording the archival (mirrors state_ops'
     update log discipline)."""
-    stamp = datetime.date.today().isoformat()
+    stamp = log_timestamp()
     with (folder / "log.md").open("a", encoding="utf-8") as fh:
         fh.write(f"- {stamp}: archive: {detail}\n")
 
