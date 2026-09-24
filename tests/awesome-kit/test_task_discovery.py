@@ -22,7 +22,7 @@ import pytest
 import yaml
 
 from bootstrap_guard import _REEXEC_GUARD_ENV
-from task_system.discovery import DiscoveryError, discover
+from task_system.discovery import DiscoveryError, discover, read_task_updates
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _TASK_CLI = (
@@ -528,6 +528,60 @@ class TestListCLI:
             "Open tasks:",
             "tmp/foo  active  P2  2026-09-21  Fix the run",
         ]
+
+    def test_last_update_uses_dated_heading_before_summary_refresh(self, tmp_path):
+        folder = make_task(tmp_path, "tmp/foo", title="Fix the run", priority="P2")
+        (folder / "log.md").write_text(
+            "# Log\n\n"
+            "## 2026-08-29 -- Linux E7 verification disposition\n"
+            "- 2026-09-20: update: summary: refreshed\n",
+            encoding="utf-8",
+        )
+        proc = run_cli(["list", "--root", str(tmp_path)], tmp_path)
+        assert proc.returncode == 0, proc.stderr
+        assert proc.stdout.splitlines() == [
+            "Open tasks:",
+            "tmp/foo  active  P2  2026-08-29  Fix the run",
+        ]
+
+    def test_dated_heading_with_time_is_in_update_history(self, tmp_path):
+        folder = make_task(tmp_path, "tmp/foo")
+        (folder / "log.md").write_text(
+            "# Log\n\n"
+            "## 2026-08-29 14:37 -- Linux E7 verification disposition\n",
+            encoding="utf-8",
+        )
+
+        updates = read_task_updates(folder)
+
+        assert [(entry.date, entry.time, entry.detail) for entry in updates] == [
+            ("2026-08-29", "14:37", "Linux E7 verification disposition")
+        ]
+
+    def test_dated_heading_without_detail_is_in_update_history(self, tmp_path):
+        folder = make_task(tmp_path, "tmp/foo")
+        (folder / "log.md").write_text(
+            "# Log\n\n"
+            "## 2026-07-13\n",
+            encoding="utf-8",
+        )
+
+        updates = read_task_updates(folder)
+
+        assert [(entry.date, entry.detail) for entry in updates] == [
+            ("2026-07-13", "")
+        ]
+
+    def test_undated_heading_is_not_an_update(self, tmp_path):
+        folder = make_task(tmp_path, "tmp/foo")
+        (folder / "log.md").write_text(
+            "# Log\n\n"
+            "## Notes\n"
+            "A heading without a date is not a log entry.\n",
+            encoding="utf-8",
+        )
+
+        assert read_task_updates(folder) == ()
 
     def test_absent_fields_render_as_dash(self, tmp_path):
         make_task(tmp_path, "tmp/bare")  # no priority
