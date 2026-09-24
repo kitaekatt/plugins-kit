@@ -133,6 +133,8 @@ _BUNDLE_MIN_VERSION = "0.42.0"
 
 _BUNDLE_PHRASE_MAP_MIN_VERSION = "0.43.0"
 
+_CHUNK_INDEX_MIN_VERSION = "0.49.0"
+
 
 def _supports_claimed_file() -> bool | None:
     """True/False if the probe ran and observed an answer; None if it could
@@ -215,6 +217,27 @@ def _supports_bundle_phrase_map() -> bool | None:
     return "mechanical_check_phrases" in parameters
 
 
+def _supports_chunk_index() -> bool | None:
+    """Return whether the shared parser accepts --chunk-index.
+
+    Probed with --bundle and --chunk-index alone (no --chunk), since the flag
+    only became legal once the parser stopped requiring --chunk outright.
+    """
+    parse_args = getattr(_review_lane, "_parse_args", None)
+    if not callable(parse_args):
+        return None
+    probe_argv = [
+        "--lane", "_probe", "--model", "_probe",
+        "--bundle", "_probe", "--chunk-index", "0",
+    ]
+    try:
+        with contextlib.redirect_stderr(io.StringIO()):
+            parse_args(probe_argv)
+    except SystemExit:
+        return False
+    return True
+
+
 if __name__ == "__main__":
     if "--claimed-file" in sys.argv[1:] and _supports_claimed_file() is False:
         _refuse_too_old(
@@ -249,5 +272,11 @@ if __name__ == "__main__":
             "review_lane.run_lane does not accept mechanical_check_phrases",
             min_version=_BUNDLE_PHRASE_MAP_MIN_VERSION,
             capability="bundle mechanical check phrase support",
+        )
+    if "--chunk-index" in sys.argv[1:] and _supports_chunk_index() is False:
+        _refuse_too_old(
+            "review_lane._parse_args does not accept --chunk-index",
+            min_version=_CHUNK_INDEX_MIN_VERSION,
+            capability="--chunk-index bundle-derived dispatch support",
         )
     sys.exit(_main())
