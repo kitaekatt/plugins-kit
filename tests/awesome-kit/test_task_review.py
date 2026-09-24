@@ -618,9 +618,9 @@ class TestSummaryGeneration:
 
 class TestSummaryPromptContract:
     def test_normalize_summary_truncates_at_new_cap_on_a_word_boundary(self) -> None:
-        text = " ".join(["alpha"] * 60)  # 359 chars, well past the cap
+        text = " ".join(["alpha"] * 60)  # 359 chars, past both the 240 cap and the old 320 cap
         normalized = summary_ops._normalize_summary(text)
-        assert len(normalized) <= summary_ops.SUMMARY_MAX_CHARS
+        assert len(normalized) <= 240
         assert normalized.endswith("...")
         assert not normalized.endswith(" ...")
 
