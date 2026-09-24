@@ -17,13 +17,13 @@ after step 4, and the report says the fixture was simulated").
 
 | Assertion | Process layer (A) | Session layer (B) |
 |---|---|---|
-| 1. Out-of-quota codex entry -> a usable entry is announced, with `<entry> failed: quota` as the reason | PASS | Agent behaviour UNRUN. Render input PASS for a known exhaustion. For an exhaustion first seen at dispatch, gap F1 is fixed by the `record-halt` verb (render input PASS). |
-| 2. A wrong result with exit 0 on a usable entry is a task failure and is NOT re-routed | PASS | Agent behaviour UNRUN. The rule text is present in the render. |
-| 3. A unit that halts after writing is re-run only after its workspace is reset | PASS | Agent behaviour UNRUN. The rule text is present in the render. |
+| 1. Out-of-quota codex entry -> a usable entry is announced, with `<entry> failed: quota` as the reason | PASS | PASS (live agent, third attempt, 2026-09-24). See F4 for a sibling-entry gap. |
+| 2. A wrong result with exit 0 on a usable entry is a task failure and is NOT re-routed | PASS | PASS (live agent, third attempt). |
+| 3. A unit that halts after writing is re-run only after its workspace is reset | PASS | PASS (live agent, third attempt). |
 
-R31 is confirmed for the process layer only. Its session-layer half, which is
-the risk the design names ("an agent acting on prose"), was not exercised by
-a live agent. See "Session layer" for the reason.
+R31 is confirmed for both layers. The session layer ran once per assertion
+against a live agent on 2026-09-24 ("Third attempt" below); one run per
+variant is evidence of the behaviour, not a rate.
 
 ## Layer A: process (deterministic)
 
@@ -208,6 +208,102 @@ For these reasons, no nested agent session ran. The session layer's live
 behaviour (what an agent announces, and whether it re-selects correctly) is
 **UNRUN**. That includes the exit-0 wrong-result variant.
 
+#### Third attempt, 2026-09-24, owner token
+
+Result: the session layer **RAN**. Assertions 1, 2 and 3 PASS, one live
+run each. Fixture: SIMULATED, as before.
+
+Login method. The owner created a long-lived token with
+`claude setup-token` and gave it for this run (ruling "1B"). It reached the
+child only as the `CLAUDE_CODE_OAUTH_TOKEN` environment variable of that one
+child process. The launcher script read it from a variable set for the same
+shell invocation, so the script file never held it. No keychain access and
+no copied credential file were used. After the runs, every capture file was
+searched for the token and none held it.
+
+Setup, per run (three runs, each with its own fresh fixture):
+
+- HOME and USERPROFILE on a scratch directory. The launcher printed both and
+  `cd ~ && pwd -P` before the child started.
+- A nested `claude -p` (Claude Code 2.1.281, `--model opus`, stream-json
+  transcript), with CLAUDECODE, CLAUDE_CODE_SESSION_ID, BOOTSTRAP_PYTHON and
+  BOOTSTRAP_PROJECT_PYTHON cleared, and a 1200 s bound.
+- Dev-tree plugins by `--plugin-dir`: awesome-kit, llm-scripting-kit and
+  skills-kit from this working copy. This deviates from `claudx` on purpose:
+  the bootstrap dependency was met by a stub holding only bootstrap's
+  `plugin.json` (no hooks), so no bootstrap pass ran and none of the three
+  `claudx` escapes could fire. The scratch plugin-venv paths the skill and
+  the `llm-scripting-kit` shim use were wrappers that run the installed
+  awesome-kit venv interpreter with PYTHONPATH on the dev
+  `llm-scripting-kit/lib`, `bootstrap` and `skills-kit`.
+- The scratch project (a git repo) put a fake `codex` first on PATH:
+  `--version` prints `codex-cli 0.146.0`; `exec` in mode `quota` copies an
+  exhausted rollout (the `test_risk_drill.py` shape) into the scratch
+  `~/.codex/sessions`, prints the usage-limit error and exits 1; mode
+  `quota-write` first writes `kept.txt` and `codex-scratch.txt`; mode
+  `wrong` writes `ANSWER: 5` to the `-o` file and exits 0. A healthy rollout
+  an hour old made codex AVAILABLE at the first render. A scratch
+  `llm-scripting-kit.yaml` set `conserve_usage` on `sol` and `luna`.
+- Prompt: invoke `awesome-kit:orchestrate`, self alias `opus`, classify the
+  unit `parallel-leaf` + `known` + `rule-applying`, dispatch by the render,
+  verify the result, re-render at the end. The prompt did not mention
+  `record-halt`, quota, workspace reset, or how to treat a wrong result.
+  The first render's row 5 was
+  `luna    codex          available  95% left, 80% of window   pace 119%   [default]`.
+
+**Assertion 1: PASS** (unit: compute 2+2, read-only; codex mode `quota`).
+Transcript order: `route: add-2-2 -> luna; default`, then
+`codex exec ... -m gpt-5.6-luna ...` returned
+`ERROR: You've hit your usage limit. ...` and `EXIT=1`, then
+`llm-scripting-kit record-halt luna` returned
+`{"budget": {"detail": "observed quota/credit halt at dispatch", ... "status": "out-of-quota", ...}, "entry": "luna", "kind": "quota", "recorded": true}`,
+then `route: add-2-2 -> sonnet; luna failed: quota` and an Agent-tool
+dispatch with `model: sonnet`, which returned `ANSWER: 4` (accepted). The
+closing render showed:
+
+```
+5. If `parallel-leaf` + `known` + `rule-applying`:
+     luna    codex          out of quota until 2027-01-20 21:34 UTC
+     sonnet  claude/agent   n/a (unpaced)   [default]
+```
+
+The agent also ran `git status --porcelain` before re-selecting and found
+nothing to reset.
+
+**Assertion 2: PASS** (same unit; codex mode `wrong`). One announcement,
+`route: add-2-plus-2 -> luna; default`. The codex run exited 0 and the
+result file read `ANSWER: 5`. The agent made no further route, ran no
+`record-halt`, and dispatched nothing else. Its join line:
+`join add-2-plus-2: disposition=rejected; cause=worker; verified=result.md == "ANSWER: 4" (failed: got "ANSWER: 5")`.
+It quoted the rendered rule: "A schema-invalid or wrong result from a run
+that exited 0 is a task failure, not a trigger." The closing render still
+showed luna `available ... [default]`.
+
+**Assertion 3: PASS** (unit: create `answer.txt` with `ANSWER: 4`; codex
+mode `quota-write`). Order: `route: answer-file -> luna; default`, the
+usage-limit error with `EXIT=1`, then
+`llm-scripting-kit record-halt luna; echo "EXIT=$?"; git status --porcelain`
+(which listed `?? codex-scratch.txt` and `?? kept.txt`), an inspection of
+both files, then `rm codex-scratch.txt kept.txt && git status --porcelain --ignored`,
+and only then `route: answer-file -> sonnet; luna failed: quota` and the
+sonnet Agent dispatch. The final tree held only `?? answer.txt`
+(`ANSWER: 4`, checked with `od -c`) and the ignored `bin/`. The closing
+render showed luna out of quota until 2027-01-20 21:34 UTC. The reset
+removed exactly the files the halted run wrote; it did not use
+`git clean` or a fresh worktree, which the rule also allows.
+
+Real state check. Before and after all runs:
+`~/.claude/plugins/data/plugins-kit/llm-scripting-kit/usage-verdicts.json`
+mtime 1790263287 (Sep 24 10:21:27), `~/.codex/sessions` 1788018694 and
+`~/.codex/sessions/2026` 1788277389, all unchanged. None of the three child
+session ids appears in the real verdict cache, and no `*drill*` rollout
+exists under the real `~/.codex/sessions`. The fake `codex` logged every
+call, so the real `/opt/homebrew/bin/codex` was never run.
+
+Cleanup: an exit trap in the launcher cleared the token variable and
+checked both capture files; the calling shell unset it too. The scratch
+HOMEs, projects, bootstrap stub and captures were then deleted.
+
 ### What ran instead: the render the agent acts on
 
 `orchestration_guidance.py --self opus` ran from the dev tree under this
@@ -323,12 +419,29 @@ exhaustion window, any non-zero codex exit is therefore classified as quota.
 While the pool really is spent this is the correct answer; it is recorded
 here only so a later reader does not mistake it for per-run evidence.
 
+**F4 (gap, session layer; not fixed). A recorded halt marks only the named
+entry, so a sibling entry on the same codex account stays `[default]`.**
+In the third attempt's assertion 1 run, after `record-halt luna` the closing
+render showed row 5 with luna out of quota, but rows 1 and 2 still read
+`sol  codex          available  n/a (no reading)   [default]`. The scratch
+verdict cache held `sol` pinned `available` (remaining 0.95) beside `luna`
+`out-of-quota`. Both entries draw on one codex account, so a later
+`cross-check` unit in the same session would default to `sol`, fail once,
+and re-select only after a second halt. Cause:
+`record_observed_halt` writes `verdicts[entry_id]` for the one entry it is
+given (`plugins/llm-scripting-kit/lib/llm_scripting_kit/usage_budget.py:873`,
+called per entry from `cli.py:532`), and `pinned_evaluate` returns the
+stored AVAILABLE verdict for every other entry without re-reading
+(`usage_budget.py:814-869`). The cost is one extra failed dispatch per
+sibling entry per session, not a wrong result. Not fixed here (the brief
+forbids shipped-code changes).
+
 ## Not run
 
-- The nested agent session (Layer B live behaviour), for all three
-  assertions, including the exit-0 wrong-result variant. Reason: see
-  "Session layer" above. To close it, the drill needs one of two things: a
-  credential that a scratch-HOME child can use, which the owner would have to
-  authorize, or a way to point `usage_budget.VERDICT_CACHE` and
-  `CODEX_SESSIONS_DIR` at scratch while HOME stays real. The second option
-  would still leave the `claudx` bootstrap escapes.
+- Repeated session-layer runs. Each assertion ran once against a live
+  agent, so the result shows the behaviour occurs, not how often.
+- The session layer through `claudx` itself: the third attempt loaded the
+  dev plugins by `--plugin-dir` with a hookless bootstrap stub, so the
+  bootstrap pass and its provisioning were not exercised.
+- A `cross-check` unit after a halt on a sibling entry (F4), which would
+  show the extra failed dispatch directly.
