@@ -47,6 +47,28 @@ committed the stub as a 588,614-line deletion of a file they meant to keep on di
 Nothing about the situation required touching their index at all; see the root
 `CLAUDE.md` for the correct move (`git commit -F <msg> -- <your paths>`).
 
+## Pushing when local dev is behind and another session's index blocks a pull
+
+Local `dev` can be behind `origin/dev` while another session's staged-but-uncommitted
+edits make `git pull` / `git merge` refuse ("Your local changes ... would be
+overwritten"). Do not stash, unstage, or commit that other session's work to clear the
+refusal (see the unstaging rule above). Build the merge commit directly with plumbing,
+touching neither the index nor the working tree, and push it:
+
+```bash
+T=$(git merge-tree --write-tree HEAD origin/dev)
+M=$(git commit-tree "$T" -p HEAD -p origin/dev -m "Merge remote-tracking branch 'origin/dev' into dev")
+git push origin "${M}:refs/heads/dev"
+```
+
+Local `dev` is then behind `origin/dev` and fast-forwards on a later pull once the tree
+is clean. `git merge-tree` exits non-zero on a real conflict -- stop and report rather
+than resolving someone else's files by hand. Note that `publish.py` still refuses a
+dirty tree, so a publish waits for the other session to commit its work regardless of
+whether this push succeeded.
+
+Observed 2026-09-24.
+
 ## Creating or switching a branch
 
 **Worked example (2026-08-08).** A `review-bootstrap-cli` branch was created off
