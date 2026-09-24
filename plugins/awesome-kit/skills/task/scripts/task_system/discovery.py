@@ -73,6 +73,7 @@ validation (via ``skills_kit_lib.schema_engine``) happen here.
 from __future__ import annotations
 
 import os
+import datetime
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -93,7 +94,14 @@ TASK_CONFIG_PATH = DEFAULT_USER_ROOT / "task.local.yaml"
 _ENV_REFERENCE_RE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}|%([A-Za-z_][A-Za-z0-9_]*)%")
 
 _TASK_LIST_KEY_RE = re.compile(r"^task_list\s*:", re.MULTILINE)
-_LOG_ENTRY_RE = re.compile(r"^\s*-\s+(\d{4}-\d{2}-\d{2}):\s*(.*?)\s*$", re.MULTILINE)
+# A log entry is `- YYYY-MM-DD HH:MM: detail`; the time is optional (older
+# entries carry the date only) and may include seconds, which are dropped.
+_LOG_ENTRY_RE = re.compile(
+    r"^\s*-\s+(\d{4}-\d{2}-\d{2})(?:[ T](\d{2}:\d{2})(?::\d{2})?)?:\s*(.*?)\s*$",
+    re.MULTILINE,
+)
+# The time a date-only log entry is read as.
+DATE_ONLY_TIME = "12:00"
 OPEN_CLASSIFICATIONS = frozenset(("active", "blocked"))
 
 
@@ -115,6 +123,18 @@ class TaskUpdate:
 
     date: str
     detail: str
+    time: str | None = None
+
+    @property
+    def timestamp(self) -> str:
+        """Sortable ``YYYY-MM-DD HH:MM``; a date-only entry reads as noon."""
+        return f"{self.date} {self.time or DATE_ONLY_TIME}"
+    time: str | None = None
+
+    @property
+    def timestamp(self) -> str:
+        """Sortable ``YYYY-MM-DD HH:MM``; a date-only entry reads as noon."""
+        return f"{self.date} {self.time or DATE_ONLY_TIME}"
 
 
 @dataclass(frozen=True)
@@ -170,11 +190,18 @@ def read_task_updates(folder: Path) -> tuple[TaskUpdate, ...]:
     except (OSError, UnicodeDecodeError):
         return ()
     entries = [
-        TaskUpdate(date=date, detail=detail)
-        for date, detail in _LOG_ENTRY_RE.findall(text)
+        TaskUpdate(date=date, detail=detail, time=time or None)
+        for date, time, detail in _LOG_ENTRY_RE.findall(text)
         if not (detail.startswith("summary:") or detail.startswith("update: summary:"))
     ]
-    return tuple(sorted(reversed(entries), key=lambda entry: entry.date, reverse=True))
+    return tuple(
+        sorted(reversed(entries), key=lambda entry: entry.timestamp, reverse=True)
+    )
+
+
+def log_timestamp() -> str:
+    """The local ``YYYY-MM-DD HH:MM`` stamp a new log.md entry carries."""
+    return datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
 
 
 # --- scope resolution --------------------------------------------------------

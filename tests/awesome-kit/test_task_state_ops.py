@@ -14,6 +14,7 @@ All fixtures build under pytest tmp_path -- the real repo's tmp/, dev/, and
 
 import datetime
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -285,14 +286,18 @@ class TestUpdateLib:
         assert log_after.startswith(log_before)
         added = log_after[len(log_before):]
         today = datetime.date.today().isoformat()
-        assert added == f"- {today}: update: priority = 'P1'\n"
+        assert re.fullmatch(
+            rf"- {today} \d{{2}}:\d{{2}}: update: priority = 'P1'\n", added
+        )
 
     def test_update_without_edits_logs_a_refresh_entry(self, tmp_path):
         folder = make_task(tmp_path, "tmp/a")
         state_ops.update("tmp/a", tmp_path)
         log = (folder / "log.md").read_text(encoding="utf-8")
         today = datetime.date.today().isoformat()
-        assert log.endswith(f"- {today}: update: refresh (no field edits)\n")
+        assert re.search(
+            rf"- {today} \d{{2}}:\d{{2}}: update: refresh \(no field edits\)\n\Z", log
+        )
 
     def test_warning_case_still_persists_the_edit(self, tmp_path):
         folder = make_task(tmp_path, "tmp/a")

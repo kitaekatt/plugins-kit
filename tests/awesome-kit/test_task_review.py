@@ -224,7 +224,7 @@ class TestTaskListingAndReview:
         assert "Needs attention" not in html
         assert '<summary class="project-row">' in html
         assert ".project-row {" in html
-        assert '<div class="task-card missing">' in html
+        assert '<div class="task-card missing" ' in html
         assert "missing_summary" in html
         assert "Should not appear" not in html
         assert "Older &lt;open&gt;" in html
@@ -530,6 +530,37 @@ class TestTaskListingAndReview:
             "update: first change",
             "update: previous day",
         ]
+
+    def test_timestamped_entries_parse_and_order_within_a_day(
+        self, tmp_path: Path
+    ) -> None:
+        folder = make_task(
+            tmp_path, "tmp/timed", title="Timed", summary="Summary."
+        )
+        (folder / "log.md").write_text(
+            "- 2026-09-22 19:21:39: update: seconds dropped\n"
+            "- 2026-09-22 08:05: update: morning\n"
+            "- 2026-09-22: update: date only reads as noon\n",
+            encoding="utf-8",
+        )
+        view = listing.collect_listing("project", tmp_path).views[0]
+        assert [update.timestamp for update in view.updates] == [
+            "2026-09-22 19:21",
+            "2026-09-22 12:00",
+            "2026-09-22 08:05",
+        ]
+        assert view.updates[0].detail == "update: seconds dropped"
+        assert view.last_update == "2026-09-22"
+        assert view.last_activity == "2026-09-22 19:21"
+
+    def test_tasks_on_the_same_day_sort_by_time(self, tmp_path: Path) -> None:
+        for stub, stamp in (("early", "2026-09-22 08:00"), ("late", "2026-09-22 18:00")):
+            folder = make_task(tmp_path, f"tmp/{stub}", title=stub, summary="S.")
+            (folder / "log.md").write_text(
+                f"- {stamp}: update: work\n", encoding="utf-8"
+            )
+        views = listing.collect_listing("project", tmp_path).views
+        assert [view.id for view in views] == ["tmp/late", "tmp/early"]
 
 
 class TestSummaryGeneration:

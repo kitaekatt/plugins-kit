@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
-from task_system.review_html import render_review_html
+from datetime import datetime
+
+import pytest
+
+from task_system.review_html import MIN_BRIGHTNESS, age_brightness, render_review_html
 
 
 def _task(
@@ -120,5 +124,44 @@ def test_missing_stale_and_unavailable_summaries_remain_clear() -> None:
             "projects": [{"name": "home", "root": "projects/home", "tasks": ["review"], "sections": {"open": ["review"]}}],
         }
         html = render_review_html(data)
-        assert f'<div class="task-card {expected_class}">' in html
+        assert f'<div class="task-card {expected_class}" ' in html
         assert expected_text in html
+
+
+NOW = datetime(2026, 9, 24, 12, 0)
+
+
+@pytest.mark.parametrize(
+    ("last_activity", "expected"),
+    [
+        ("2026-09-24 12:00", 1.0),  # just now
+        ("2026-09-24 08:00", 1.0),  # exactly 4 hours: still full
+        ("2026-09-21 22:00", 1.0 - 0.5 * (1.0 - MIN_BRIGHTNESS)),  # 62 h: halfway
+        ("2026-09-19 12:00", MIN_BRIGHTNESS),  # exactly 120 hours
+        ("2026-07-01 12:00", MIN_BRIGHTNESS),  # far older
+        ("2026-09-24", 1.0),  # date only reads as noon
+        (None, MIN_BRIGHTNESS),  # undated
+    ],
+)
+def test_age_brightness_interpolates_between_fresh_and_stale(
+    last_activity: str | None, expected: float
+) -> None:
+    assert age_brightness(last_activity, NOW) == pytest.approx(expected)
+
+
+def test_task_rows_carry_their_age_brightness() -> None:
+    fresh = _task("fresh", project="alpha", last_update="2026-09-24")
+    fresh["last_activity"] = "2026-09-24 11:00"
+    stale = _task("stale", project="alpha", last_update="2026-07-01")
+    stale["last_activity"] = "2026-07-01 12:00"
+    data = {
+        "scope": "project",
+        "tasks": [fresh, stale],
+        "sections": {"open": ["fresh", "stale"], "closed": [], "other": []},
+    }
+
+    html = render_review_html(data, now=NOW)
+
+    assert 'style="--age-brightness:1.00"' in html
+    assert f'style="--age-brightness:{MIN_BRIGHTNESS:.2f}"' in html
+    assert "opacity:var(--age-brightness,1)" in html
