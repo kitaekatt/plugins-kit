@@ -368,6 +368,11 @@ Two habits survive this policy, because they are hygiene rather than permission-
 - **When the index already holds someone else's staged work, do not fight it.**
   `git commit -F <msg> -- <your paths>` commits exactly those paths without touching
   the index; reserve `git reset` for an index you own.
+- **When local `dev` is behind `origin/dev` and that same staged work makes `git
+  pull`/`git merge` refuse**, build the merge commit with plumbing instead of touching
+  the index or tree, and push it directly:
+  [docs/reference/shared-tree-git-discipline.md](docs/reference/shared-tree-git-discipline.md)
+  ("Pushing when local dev is behind and another session's index blocks a pull").
 
 #### Anti-pattern: unstaging another session's work to scope your own commit
 
