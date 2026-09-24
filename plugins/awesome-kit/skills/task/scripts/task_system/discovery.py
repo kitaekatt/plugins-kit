@@ -100,6 +100,14 @@ _LOG_ENTRY_RE = re.compile(
     r"^\s*-\s+(\d{4}-\d{2}-\d{2})(?:[ T](\d{2}:\d{2})(?::\d{2})?)?:\s*(.*?)\s*$",
     re.MULTILINE,
 )
+# Dated headings are historical/imported entries; writers continue to append
+# the bullet form above.
+_LOG_HEADING_ENTRY_RE = re.compile(
+    r"^[ \t]*\#{1,6}[ \t]+(\d{4}-\d{2}-\d{2})"
+    r"(?:[ T](\d{2}:\d{2})(?::\d{2})?)?"
+    r"[ \t]*(?:(?:--|-|:|\u2014)[ \t]+(.*?)[ \t]*)?$",
+    re.MULTILINE,
+)
 # The time a date-only log entry is read as.
 DATE_ONLY_TIME = "12:00"
 OPEN_CLASSIFICATIONS = frozenset(("active", "blocked"))
@@ -183,10 +191,21 @@ def read_task_updates(folder: Path) -> tuple[TaskUpdate, ...]:
         text = (folder / "log.md").read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError):
         return ()
+    matches = sorted(
+        (
+            (match.start(), *match.groups())
+            for pattern in (_LOG_ENTRY_RE, _LOG_HEADING_ENTRY_RE)
+            for match in pattern.finditer(text)
+        ),
+        key=lambda match: match[0],
+    )
     entries = [
-        TaskUpdate(date=date, detail=detail, time=time or None)
-        for date, time, detail in _LOG_ENTRY_RE.findall(text)
-        if not (detail.startswith("summary:") or detail.startswith("update: summary:"))
+        TaskUpdate(date=date, detail=detail or "", time=time or None)
+        for _, date, time, detail in matches
+        if not (
+            (detail or "").startswith("summary:")
+            or (detail or "").startswith("update: summary:")
+        )
     ]
     return tuple(
         sorted(reversed(entries), key=lambda entry: entry.timestamp, reverse=True)
