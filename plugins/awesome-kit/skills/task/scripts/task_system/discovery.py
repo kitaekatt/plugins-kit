@@ -129,12 +129,6 @@ class TaskUpdate:
     def timestamp(self) -> str:
         """Sortable ``YYYY-MM-DD HH:MM``; a date-only entry reads as noon."""
         return f"{self.date} {self.time or DATE_ONLY_TIME}"
-    time: str | None = None
-
-    @property
-    def timestamp(self) -> str:
-        """Sortable ``YYYY-MM-DD HH:MM``; a date-only entry reads as noon."""
-        return f"{self.date} {self.time or DATE_ONLY_TIME}"
 
 
 @dataclass(frozen=True)
