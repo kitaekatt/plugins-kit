@@ -48,6 +48,14 @@ plugin's `plugin.json`, filtered by `"published"` (missing = `true`; `false` =
 excluded). Never hand-edit its plugin entries; the pre-commit hook rejects
 drift.
 
+`scripts/regen_marketplace.py` also takes its own `--only <plugin>`
+(repeatable), distinct from `publish.py --only` below: it rewrites ONLY the
+named plugins' entries from their `plugin.json`, leaving every other entry
+byte-identical to what is already in `marketplace.json`. Use it to commit one
+plugin's version bump while another session's plugin.json in this shared
+tree holds an unstaged bump of its own -- a bare regen would rebuild every
+entry from disk and pick that up too. An unknown plugin name exits non-zero.
+
 ### Partial release: `--only <plugin>`
 
 `uv run python scripts/publish.py --only <plugin>` (repeatable) ships one
@@ -99,6 +107,13 @@ consumes a shared library another plugin owns (`shared_lib_imports`, or a
 consumer's venv would then resolve the older library. The bare publish is the
 one that cannot do that. Use `--only` for a self-contained change, and read
 the range first as gotcha 1 requires.
+
+`--only` is also the route when an UNRELATED plugin blocks a bare publish --
+preflight refuses because another plugin changed files without a version
+bump (observed: unreal-kit, 2026-09-24). Ship the ready plugins with `--only
+<plugin>` (repeatable) and leave the unbumped plugin to its owner; the range
+does not advance, so the held-back plugin's commits ship whole at the next
+bare publish.
 
 ### Commit-scoped generated-data checks
 

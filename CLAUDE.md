@@ -311,6 +311,8 @@ claudx -- -p "hello"      # pass args through to claude
 
 **Bypassable at your discretion.** This is a default, not a hard gate. Trivial changes -- a version-only bump, a doc/CLAUDE.md edit, a single-file mechanical fix -- don't need a smoke session; skip it and say so. An unambiguous publish go-signal does not silently waive validation, but you may explicitly bypass when the change can't plausibly break a runtime surface.
 
+**A nested `claude -p` child under a scratch HOME/USERPROFILE is not logged in.** The macOS keychain lookup follows HOME, so a child launched that way exits with "Not logged in", and copying only the non-secret `oauthAccount` section of `~/.claude.json` does not fix it. The permission classifier refuses keychain workarounds -- symlinking `~/Library/Keychains` into the scratch HOME, a metadata-only `security find-generic-password` probe -- as credential access, even under owner authorization. What works: an owner-generated `claude setup-token` token passed only as the child's `CLAUDE_CODE_OAUTH_TOKEN` environment variable, never written to disk. A real HOME is not a safe substitute -- llm-scripting-kit's usage-verdict cache and the Codex sessions directory both derive from `Path.home()`, so a real HOME reads and writes real quota state and real session history regardless of other config variables. Worked example: docs/planning/quota-resilient-dispatch/drill-report.md (Layer B, 2026-09-24).
+
 ### Anti-pattern: creating a branch, or switching the one that is checked out
 
 **Stay on `dev`. Do not create branches, and never run `git checkout` / `git switch`
