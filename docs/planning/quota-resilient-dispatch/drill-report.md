@@ -164,6 +164,46 @@ with HOME and USERPROFILE in a scratch directory.
    - The child would read the real `~/.codex/sessions`, not the simulated
      rollout.
 
+#### Second attempt, 2026-09-24, with an owner-authorized sandbox login
+
+The owner authorized one scratch-HOME test session to use the existing
+Claude Code login (ruling "1B", 2026-09-24). The grant does not cover
+sending, printing, committing, or keeping the credential. Result: the
+session layer is still **UNRUN**. Assertions 1, 2 and 3 were not exercised
+by a live agent.
+
+Login methods, in order of least exposure:
+
+1. A config-dir override with HOME kept real was rejected before any
+   attempt. `usage_budget.VERDICT_CACHE` and `CODEX_SESSIONS_DIR` are built
+   from `Path.home()` (`usage_budget.py:145-155`), so a real HOME would
+   read and write real quota state no matter where `CLAUDE_CONFIG_DIR`
+   points.
+2. Only the non-secret `oauthAccount` section of `~/.claude.json` was
+   copied into the scratch HOME (plus `hasCompletedOnboarding`). A trivial
+   `claude -p` child, with CLAUDECODE cleared and HOME and USERPROFILE on
+   scratch, exited 1 with `Not logged in - Please run /login`. The account
+   file is not enough, because the keychain lookup follows HOME.
+3. Two steps were refused by the harness permission classifier
+   (Credential Exploration), even with the owner's authorization cited:
+   a metadata-only `security find-generic-password` probe (no `-w`/`-g`)
+   under the scratch HOME, and a symlink from
+   `<scratch HOME>/Library/Keychains` to `~/Library/Keychains` that a trap
+   would remove. As the brief required, no further workaround was tried.
+   Copying the credential into scratch (the last resort) was not attempted.
+
+To unblock: the owner must allow the keychain step as its own permission
+rule. The narrowest rule is a Bash allow for
+`ln -s ~/Library/Keychains <scratch>/home/Library/Keychains`, for one
+drill run only. It passes no secret through the agent, and the symlink is
+removed when the run exits. The alternative is to set
+`CLAUDE_CODE_OAUTH_TOKEN` in the child's environment from a
+`claude setup-token` token that the owner creates.
+
+Cleanup: the scratch probe directory, including the copied account file,
+was deleted after the attempt. The keychain symlink was never created. No
+credential was read, printed, or written.
+
 For these reasons, no nested agent session ran. The session layer's live
 behaviour (what an agent announces, and whether it re-selects correctly) is
 **UNRUN**. That includes the exit-0 wrong-result variant.
