@@ -31,6 +31,22 @@ content was a stale re-add already in history. Where it does -- a staged deletio
 or untrack, which records an intent no file carries -- the exception does not
 apply and the index must be left alone.
 
+## Unstaging another session's work: a mis-restore worked example
+
+**2026-08-08.** Six files were staged by explicit path for an orchestrate change.
+`git diff --staged` showed roughly twenty more, including
+`plugins/unreal-kit/skills/ue-python-api/stubs/unreal.py` staged as 588,614 deletions.
+That file was `git restore --staged`-ed to get the commit scoped. It turned out to be a
+deliberate `git rm --cached` -- another session was untracking a generated stub, paired
+with a staged `.gitignore` change in the same index. Restoring it required inferring
+that intent from the surrounding staged files and re-running `git rm --cached` by hand.
+The other session committed as `dafc06b` moments later with its work intact, but only
+because the reconstruction happened to be correct. A plain `git add` would have
+committed the stub as a 588,614-line deletion of a file they meant to keep on disk.
+
+Nothing about the situation required touching their index at all; see the root
+`CLAUDE.md` for the correct move (`git commit -F <msg> -- <your paths>`).
+
 ## Creating or switching a branch
 
 **Worked example (2026-08-08).** A `review-bootstrap-cli` branch was created off

@@ -69,8 +69,6 @@ plugins-kit/                          # Marketplace root
 ### Key Design Decisions
 
 - **Bootstrapping**: Two-layer system -- session bootstrap (bash SessionStart hook, manifest-driven) ensures system tools, venv, and git deps; script bootstrap (Python, runs inside UE Editor) handles UE-side packages at runtime. See [engine-internals.md](plugins/bootstrap/skills/bootstrap/references/engine-internals.md) for engine details and [script-bootstrap.md](plugins/unreal-kit/skills/ue-python-api/references/script-bootstrap.md) for UE-side bootstrapping.
-- **Config resolution order**: CLI args > per-project config (`<project_root>/.claude/unreal-kit.yaml`) > global config (`~/.claude/plugins/data/plugins-kit/unreal-kit/config.yaml`, legacy fallback) > skill config (`ue_runner_config.yaml`) > hardcoded defaults
-- **Auto-detection execution**: `ue_runner.py` tries remote execution (UDP via upyrc) first, falls back to headless commandlet if editor isn't running
 
 ### Unreal Engine work
 
@@ -111,7 +109,7 @@ A hand-repair fails twice over:
 
 The second cost is the one that gets underestimated, because the machine looks *better* afterwards. It isn't. A healthy machine with an unknown root cause is strictly worse than a wedged machine you can still read.
 
-**Both entry points are the anti-pattern when a machine is wedged or being diagnosed.** This applies equally to the engine (`bootstrap_engine.py`) and to the hook (`plugins/bootstrap/hooks/sessionstart/session-bootstrap.sh`). Hand-invoking either on a wedged machine runs a full live pass outside the conditions bootstrap is designed for, so what you observe generalizes to nobody. The one sanctioned manual run is post-update convergence on a HEALTHY machine -- the bootstrap skill's `manual_convergence` fact (reset the cooldown, then run the hook so a published plugin update provisions without a restart); it converges, it does not diagnose, and it is never the answer to a wedge. (An earlier insight in this file, `run_bootstrap_hook_directly`, advised the opposite; it is retracted and replaced by `never_run_bootstrap_hook_directly`.)
+**Both entry points are the anti-pattern when a machine is wedged or being diagnosed.** This applies equally to the engine (`bootstrap_engine.py`) and to the hook (`plugins/bootstrap/hooks/sessionstart/session-bootstrap.sh`). Hand-invoking either on a wedged machine runs a full live pass outside the conditions bootstrap is designed for, so what you observe generalizes to nobody. The one sanctioned manual run is post-update convergence on a HEALTHY machine -- the bootstrap skill's `manual_convergence` fact (`bootstrap run`, which runs the SessionStart engine pass exempt from both skip gates); it converges, it does not diagnose, and it is never the answer to a wedge. (An earlier insight in this file, `run_bootstrap_hook_directly`, advised the opposite; it is retracted and replaced by `never_run_bootstrap_hook_directly`.)
 
 **The legitimate way to make bootstrap run again on a wedged machine** is to clear the throttle and let a real session start do the work:
 
@@ -131,9 +129,7 @@ A hand-run engine invocation is a diagnostic of last resort, valid only *after* 
 
 **`--console` is not read-only.** It suppresses log-file writes and JSON output; it does **not** suppress provisioning. A `--console` pass still fetches marketplaces, installs plugin versions into the cache, and rewrites `installed_plugins.json`. Do not reach for it as a safe way to look at a wedged machine -- it is a live pass with quieter output. (Misreading `--console` as read-only is what turned a 2026-07-27 wedge investigation into a repair -- nine plugins reported `not cached`, the engine was hand-invoked, and the failing state was destroyed before it could be diagnosed; see the `never_hand_repair_a_wedge` insight.)
 
-**Bootstrap cannot patch itself -- ship the escape hatch in `bootstrap-stuck-fix`.** When a bug is in the *delivery path* (update, harvest, registry record selection, install scope), fixing it in bootstrap is a no-op for everyone it affects: the fix reaches a machine only by the mechanism that is broken there. Publishing it looks like progress, converges nobody, and strands every LATER bootstrap fix behind the same wedge. Such bugs are also self-masking -- the machine reports one stable error forever, so it reads as a known annoyance rather than a stuck update.
-
-Test before writing the fix: *would this change have to be installed by the thing it repairs?* If yes, the repair belongs in `plugins/bootstrap-stuck-fix/` -- a separate, dependency-free plugin with no prior version to be wedged on, so it runs current code on its first session. Fix the root cause in bootstrap too, for machines that are not yet stuck; just do not mistake that for remediation of the ones that are. See that plugin's README for the two defects covered and the narrowness discipline every remediation there follows (act on one exact shape, never force a version, never break a session).
+**Bootstrap cannot patch itself.** A delivery-path bug (update, harvest, registry record selection, install scope) is remediated in `plugins/bootstrap-stuck-fix/`, not by a bootstrap release. Such bugs self-mask as one stable error. Test and rationale: `/bootstrap` fact `update_lifecycle`. Covered defects and the narrowness discipline: that plugin's README.
 
 For deeper material -- manifest schema, condition categories, fix-all flow, engine internals -- invoke `/bootstrap`.
 
@@ -172,28 +168,8 @@ uv run --extra dev pytest -n 12 -q      # full suite, ~3 min
 
 The two formerly-documented "pre-existing failure" clusters (the `tests/skills-kit/` collection errors and the bootstrap `engine`/`venv` `CalledProcessError`s) were **fixed**, not version quirks -- both were test-only issues: skills-kit imported the pre-extraction `schemas`/`_shared` modules, and the bootstrap tests spawned WSL `bash` to `source` a Windows env file and didn't isolate `HOME`. **The suite is not unconditionally green, and "green" is host-dependent.** On an arm64 machine (Apple Silicon) five `tests/bootstrap/test_manifest_normalization.py` scoop tests failed for months while passing on every amd64 box, because they fake `current_os` but not `detect_arch()`, which reads the real CPU -- see the `suite_green_is_host_dependent` insight below. Establish a baseline on YOUR machine before calling a failure your regression: first try undoing your own edits for a moment and re-running the failing test; when that cannot answer it, run the suite at the merge-base in a read-only worktree and remove it afterwards (see "Worktrees and scratch copies").
 
-**A MOVING victim is a leak, not a flake.** A distinct failure shape from the
-host-dependence above: the suite fails, and the test that fails CHANGES between
-runs. That is never load and never a bad assertion in the victim -- it is one
-test writing outside its sandbox and corrupting whichever test is in flight.
-The chain that produced it, named in `tests/conftest.py`'s autouse guard
-docstring: a bootstrap engine run that is not HOME-isolated discovers the
-developer's REAL `installed_plugins.json`, iterates the enabled plugins, and
-runs claude-ui-kit's `install_statusline.py` against the real
-`~/.claude/settings.json`, rewriting its `statusLine` to a pytest temp path.
-Cut at the source in claude-ui-kit 0.12.0 (c52e4113): `install()` refuses any
-data root that is not the canonical `~/.claude/plugins/data`, and a pytest temp
-dir never is.
-
-Two things to carry. First, when a victim moves, go looking for the WRITER --
-do not triage the victim, which is innocent by construction. Second, and the
-reason this is here rather than in a task folder: this failure had been recorded
-for months as an environmental fact about the host, with a documented rule for
-judging slices around it. Once a failure has an accepted name it stops being
-read as evidence, and the mechanism had been sitting in a guard docstring in
-plain prose the whole time. A standing caveat can be a finding wearing a
-workaround. If a moving victim reappears, that refutes the fix rather than
-restoring the caveat.
+If the failing test changes between runs it is a leak, not a flake -- find the
+writer, not the victim; see [docs/reference/testing.md](docs/reference/testing.md).
 
 
 **Local development** -- use `--plugin-dir` to test plugins from the working copy:
@@ -204,7 +180,7 @@ claude --plugin-dir ~/Dev/plugins-kit/plugins/my-plugin
 
 `--plugin-dir` loads the plugin directly from disk (no cache copy) and makes no persistent changes -- it doesn't modify `installed_plugins.json`, the cache, or `known_marketplaces.json`. Ending the session reverts to the marketplace-installed version.
 
-**Reload vs restart (measured -- see [plugin-reload-lifecycle.md](plugins/bootstrap/skills/bootstrap/references/plugin-reload-lifecycle.md)).** Three layers, not one rule: (1) a hook/engine/skill's **script content** is read fresh from disk on every invocation, so editing it is live with no reload/restart; (2) **registration** (`hooks.json` command map, which skills/commands exist) is reloaded **in-session by `/reload-plugins`** -- including a changed hook command (the old "hooks require a full restart" claim is wrong as a blanket rule); (3) a **`SessionStart`** hook's registration reloads but it only **re-fires on a new session**, so re-running bootstrap's pass needs a restart. For a **real version update** (cache version dir moves), restart Claude / your IDE -- it re-resolves install paths and re-fires SessionStart reliably.
+**Reload vs restart:** edits to hook/skill script content are live; `/reload-plugins` reloads registration in-session; only a SessionStart re-fire or a real version update needs a restart. Details: [plugin-reload-lifecycle.md](plugins/bootstrap/skills/bootstrap/references/plugin-reload-lifecycle.md).
 
 **Publishing** is `uv run python scripts/publish.py` -- the only user-gated action in this repo, and the source of truth for the flow; do not hand-run its steps. Definition of a publish, `marketplace.json` as derived data, the commit-scoped pre-commit check, dev-only filtering, and `index.html` regeneration:
 [docs/reference/publish-reconcile.md](docs/reference/publish-reconcile.md).
@@ -222,19 +198,13 @@ Publishing is reversible-but-visible: nothing is destroyed, but it goes out to o
 **A publication hold on ONE plugin belongs here, not in a task folder.** A
 release ships the whole range, so every publish from `dev` carries every
 changed plugin; a hold that lives anywhere a publisher does not read binds
-nobody. Recorded because it was tested and failed: a secrets-kit hold was
-kept in a task folder through 2026-09-16 and four separate publishes
-(0.8.25, 0.8.26, 0.8.27-0.8.29, 0.8.30) carried the plugin to `master`
-anyway, each by a session that had no reason to open that folder and did
-nothing wrong. The hold was later accepted as overtaken rather than
-retracted.
+nobody. The recorded failure behind this rule: docs/reference/publish-reconcile.md
+("Publication hold rationale").
 
-Two ways to hold a plugin back that actually work. `"published": false` in
-its `plugin.json` keeps its FILES off `master` on every projection, by a
-mechanism no publisher has to know about. Otherwise the hold goes in THIS
-file, in the section a publisher reads before running `publish.py`, naming
-the plugin and what would lift it. A note anywhere else is a record of an
-intention, not a gate.
+Two ways to hold a plugin back that actually work: `"published": false` (see
+"Dev-only plugins -- do not publish to master" below), or a hold named in THIS
+file, in the section a publisher reads before running `publish.py`. A note
+anywhere else is a record of an intention, not a gate.
 
 
 After publish:
@@ -257,7 +227,7 @@ The consequence to plan around: a dev-only plugin's copy on master is re-checked
 - **yaml-data-editor-kit** (source removed from master in `37fb94f6`; the hold-back keeps it off).
 - **prototypes** (inactive experimental nursery/archive; ships no skills).
 
-Commits for a dev-only plugin need no action -- the file hold-back handles them. Do NOT branch from master to cherry-pick around them; creating or switching a branch in this shared tree is its own anti-pattern (see below).
+Commits for a dev-only plugin need no action -- the file hold-back handles them. See "Anti-pattern: creating a branch" for why not to route around them with one.
 
 **`git branch --contains <sha>` cannot tell you whether your work shipped.**
 Because a release is a tree PROJECTION rather than a merge, a dev commit's SHA
@@ -269,8 +239,6 @@ plugin's version in `origin/master:plugins/<name>/.claude-plugin/plugin.json`.
 The same trap runs the other way through the plugin cache: a version present
 under `~/.claude/plugins/cache/` was fetched from master, so its presence is
 evidence of a publish that this repo's git graph will not show you.
-
-**`git log origin/master..origin/dev` is not a meaningful range here.** A release is a tree PROJECTION, so master's commits are not counterparts of dev's and master is not an ancestor of dev; that range counts every commit since the branches last shared a tip and grows without bound. The honest range is `uv run python scripts/publish.py --print-range-base`..dev, read from the `Published-From:` trailer that `range_base()` searches for down master's history.
 
 ### dev -> master reconcile: master-only content
 
@@ -292,22 +260,19 @@ claudx -- -p "hello"      # pass args through to claude
 
 **Enablement filtering is the false-pass trap.** A plugin not enabled for the cwd project is dropped with a `not enabled, skipping: <names>` note on stderr, and a run with nothing enabled exits `error: no enabled <marketplace> plugins for <dir>`. So smoke-testing a plugin that is disabled for the project you launched from produces a GREEN run in which your plugin was never loaded. Use `--all` whenever the plugin under test may not be enabled where you are standing, and read the skipping note before trusting a pass.
 
-**How it reaches manifest content.** Two mechanisms. A synthetic dev-layout `installed_plugins.json` is written into `plugins/` (gitignored), which only an engine running from this working copy discovers -- `_find_plugins_dir` walks up from its own plugin root, so the cached engine every other session runs walks up to the real registry instead. And `CLAUDE_BOOTSTRAP_DATA_ROOT` moves everything bootstrap owns -- venvs, `_shared_libs`, logs, stamps, cooldowns, config -- into a separate tree.
-
-**The containment is real but PARTIAL, and the launcher's own docstring overstates it.** `CLAUDE_BOOTSTRAP_DATA_ROOT` redirects what bootstrap OWNS; it does not redirect what bootstrap REACHES OUT TO. Three escapes are known, all observed on a 2026-09-20 run:
-
-- **The shared-lib link is the dangerous one.** `shared_lib.py`'s `link_shared_lib` registers `<pkg>.pth` pointing at `<shared_root>/<name>/` on the TARGET INTERPRETER. The shared root follows the data root; the interpreter does not. So a test session rewrites `~/.local/share/python-standalone/python/Lib/site-packages/bootstrap_lib.pth` -- the machine-wide standalone interpreter every plugin on the fleet imports through -- to point INTO the test's data root. Delete that data root and every such import breaks until the next ordinary bootstrap pass relinks it. Never delete a test data root without running an ordinary pass afterwards, and reset the cooldown so that pass is not skipped.
-- **Marketplace refresh hits the real clone.** Bootstrap's own `bootstrap.json` sets `"alwaysUpdate": true`, so `_phase_marketplaces` runs `git fetch` against the real `~/.claude/plugins/marketplaces/plugins-kit`. That fetch is also where a test session can hang on network I/O, leaving a stalled engine holding the lock.
-- **`session-bootstrap.sh` writes `~/.local/bin` and the Windows PATH registry**, regardless of the data root. `BOOTSTRAP_SKIP_SHELL_INTEGRATION=1` suppresses the rc-file and registry persistence but gates neither of the two escapes above.
-
-**What `claudx` still does not test**, by construction: anything whose output IS the machine. Package-manager tool installs, PATH / rc-file / registry writes, marketplace clone refreshes, `claude plugin install/update`, `env.json` personalization, and the version-bump -> cache -> auto-update delivery path. A green run means "my plugin works", never "my plugin ships correctly".
+**Safety rail: never delete a claudx data root without an ordinary bootstrap pass
+afterwards and a cooldown reset.** The shared-lib link it wrote repoints the
+machine-wide `bootstrap_lib.pth`; deleting the root without relinking breaks every
+plugin's import until the next unthrottled pass. Containment mechanics (what it
+does and does not test) and the two other known escapes:
+[docs/reference/testing.md](docs/reference/testing.md).
 
 | Change touches ... | Default validator |
 |---|---|
 | skills / hooks / commands / engine code | `claudx` |
 | `bootstrap.json` / manifest content | `claudx` (it reads manifests from disk) |
 
-**`scripts/dev-tree.py` is the superseded path, and is not the one to reach for.** It repoints installPaths by rewriting the real `~/.claude/plugins/installed_plugins.json`, which is machine-global: every other session, running or subsequent, then sees the dev tree, and a crash before the restore leaves the machine that way silently. The `claude-dev` shell wrapper that used to drive it is gone, so the escalation the table once named does not exist; `claudx` covers both rows.
+**`scripts/dev-tree.py` is the superseded path, and is not the one to reach for.** It repoints installPaths by rewriting the real `~/.claude/plugins/installed_plugins.json`, which is machine-global: every other session, running or subsequent, then sees the dev tree, and a crash before the restore leaves the machine that way silently. `claudx` covers both rows.
 
 **Bypassable at your discretion.** This is a default, not a hard gate. Trivial changes -- a version-only bump, a doc/CLAUDE.md edit, a single-file mechanical fix -- don't need a smoke session; skip it and say so. An unambiguous publish go-signal does not silently waive validation, but you may explicitly bypass when the change can't plausibly break a runtime surface.
 
@@ -371,65 +336,38 @@ match in `.claude/settings.json` (`EnterWorktree` denied, `worktree.bgIsolation:
 
 ### Committing and pushing to `dev` is unrestricted -- only PUBLISHES are gated
 
-**Standing policy. Commit and push to `dev` freely, without asking.** Do not hold
-finished work back for a confirmation, do not present a commit as a proposal, and do
-not ask whether to push. `dev` is a working branch: nothing on it reaches a consumer
-BY YOUR HAND, because `master` is the cache source. The only gated action in this
-repo is a PUBLISH (`dev` -> `master` via `publish.py`), which broadcasts to every
-machine and needs the user's intent per the go-signal rule above.
+**Standing policy. Commit and push to `dev` freely, without asking.** `dev` is a working
+branch: nothing on it reaches a consumer by your hand, because `master` is the cache
+source. The only gated action is a PUBLISH (`dev` -> `master` via `publish.py`), which
+needs the user's intent per the go-signal rule above.
 
 **The implied contract: pushing to `dev` consents to someone else publishing your
-work.** The gate is on the ACT of publishing, not on your commits, and a publish
-ships the whole range rather than one session's slice. So the next publish by
-anyone -- another agent session, the user, a session you never spoke to -- carries
-whatever you pushed, without asking you and usually without knowing you exist. Read
-the "nothing reaches a consumer" line above precisely: it says you will not be the
-one who ships it, not that it will not ship.
+work.** The gate is on the ACT of publishing, not on your commits; the next publish by
+anyone carries whatever you pushed, whole-range, without asking you.
 
-Two consequences, and the first is the one that bites:
+- **Push at consumer quality, not at working-branch quality.** If work must not ship
+  yet, the mechanisms that hold it back are a `published: false` plugin or simply not
+  pushing -- not delaying the push itself.
+- **Work incrementally; do not hold files open across a long stretch.** Land small,
+  shippable pieces and keep pushing rather than hoarding a large uncommitted pile.
+- **Your work shipping is not evidence you shipped it.** Check CONTENT to know whether
+  something published; a version can advance with no action from your session at all.
 
-- **Push at consumer quality, not at working-branch quality.** A commit you meant
-  to refine tomorrow can be on every machine tonight. If work genuinely must not
-  ship yet, pushing it to `dev` is the wrong place to hold it -- the mechanisms
-  that actually hold work back are a `published: false` plugin (whose FILES the
-  projection holds back on every release) or simply not pushing.
-- **Work incrementally; do not hold files open across a long stretch.** The
-  corollary of the rule above is NOT to hoard changes until they are perfect.
-  A long-lived pile of uncommitted edits blocks the sessions sharing this tree,
-  loses everything if the session dies, and grows into a change too large to
-  review or revert cleanly. Land small complete pieces, each shippable on its
-  own, and push them. Both halves are the pusher's responsibility: what you push
-  must be fit to ship, and you must keep pushing rather than sitting on it.
-- **Your work shipping is not evidence you shipped it.** A version can advance,
-  and your content can reach `master`, with no action from your session at all.
-  When checking whether something published, check CONTENT rather than assuming
-  the absence of your own publish means the absence of a publish.
+**As the publisher, ship what is pushed.** Given a go-signal, do not stop or ask
+whether other sessions' commits in the range are ready -- pushing to `dev` was their
+declaration that the work is publishable.
 
-**The other half of the contract: as the publisher, ship what is pushed.** Given
-the user's go-signal, do NOT stop because the range holds commits from sessions
-you did not talk to, and do not go asking whether their work is ready. Pushing to
-`dev` was their declaration that it is publishable, and the responsibility for
-what is on `dev` sits with whoever put it there. A publisher who tries to
-adjudicate other sessions' readiness is guessing at intent they cannot see, and
-stalling a release the user asked for.
+**Do not coordinate around other agent sessions.** The tree is shared; do not wait for
+it to be clean, ask about someone else's uncommitted work, or treat unrelated commits
+riding along on a push as a reason to stop or as your regression.
 
-**Do not coordinate around other agent sessions.** The tree is shared and other
-sessions commit, stage, and push concurrently. That is normal and is not your problem
-to manage: do not wait for the tree to be clean, do not ask about someone else's
-uncommitted work, do not treat unrelated commits riding along on a `git push origin dev`
-as a reason to stop, and do not report another session's failing tests as if they were
-your regression. Push carries whatever else is on `dev`; that is the intended
-behaviour, not gotcha 1 (which is exclusively about `dev` -> `master`).
+Two habits survive this policy, because they are hygiene rather than permission-seeking:
 
-Two habits survive this policy, because they are hygiene rather than permission-seeking
-and they cost seconds:
-
-- **Scope the commit to your own files, by explicit path.** Not to protect the other
-  session from you, but so `git log` stays readable and a revert stays surgical.
+- **Scope the commit to your own files, by explicit path**, so `git log` stays
+  readable and a revert stays surgical.
 - **When the index already holds someone else's staged work, do not fight it.**
-  `git commit -F <msg> -- <your paths>` commits the working-tree state of exactly those
-  paths and leaves the index otherwise untouched, so you never have to unstage
-  another session's work to get your own in. Reserve `git reset` for an index you own.
+  `git commit -F <msg> -- <your paths>` commits exactly those paths without touching
+  the index; reserve `git reset` for an index you own.
 
 #### Anti-pattern: unstaging another session's work to scope your own commit
 
@@ -467,25 +405,14 @@ not yours. The documented rule says the staged set must be exactly your files --
 unstaging the rest feels like compliance. It is not. The rule exists so your COMMIT is
 scoped; it was never a licence to edit a shared index.
 
-**Worked example (2026-08-08).** Six files were staged by explicit path for an
-orchestrate change. `git diff --staged` showed roughly twenty more, including
-`plugins/unreal-kit/skills/ue-python-api/stubs/unreal.py` staged as 588,614 deletions.
-That file was `git restore --staged`-ed to get the commit scoped. It turned out to be a
-deliberate `git rm --cached` -- another session was untracking a generated stub, paired
-with a staged `.gitignore` change in the same index. Restoring it required inferring
-that intent from the surrounding staged files and re-running `git rm --cached` by hand.
-The other session committed as `dafc06b` moments later with its work intact, but only
-because the reconstruction happened to be correct. A plain `git add` would have
-committed the stub as a 588,614-line deletion of a file they meant to keep on disk.
-
-Nothing about the situation required touching their index at all. The correct move,
-available from the start, was:
+Nothing about the situation ever requires touching another session's index. The correct
+move, available from the start, is:
 
 ```bash
 git commit -F <msg> -- <your paths>     # commits those paths; index untouched
 ```
 
-The exception applied correctly in a second incident:
+Worked examples, including a case where the exception applied correctly:
 [docs/reference/shared-tree-git-discipline.md](docs/reference/shared-tree-git-discipline.md).
 
 If you have already unstaged something that was not yours, say so plainly rather than
@@ -496,7 +423,7 @@ test.
 
 ### Safe-publish practices
 
-Publishing is the riskiest moment in this repo because it broadcasts to every consumer. Two failure modes have happened, both recoverable but visible (the retraction commits in `git log master` are the scars). Avoid them with these checks.
+Publishing is the riskiest moment in this repo because it broadcasts to every consumer. Two failure modes have happened, both recoverable but visible (the retraction commits in `git log master` are the scars). Avoid them with these checks. Rationale and worked recoveries for every gotcha below: [docs/reference/publish-reconcile.md](docs/reference/publish-reconcile.md) ("Publishing rationale").
 
 **Gotcha 1: a release ships everything in the range, not just your feature.** `dev` typically contains in-flight work from other plugins. **Mandatory check before any publish:**
 
@@ -505,43 +432,23 @@ git fetch origin
 git log --oneline $(uv run python scripts/publish.py --print-range-base)..dev
 ```
 
-Use that range, NOT `origin/master..origin/dev`. A release is a tree projection, so master is not an ancestor of dev and the plain range grows without bound -- it reports commits published long ago and tells you nothing.
+Use `publish.py --print-range-base` as the range base, NOT `origin/master..origin/dev`. Given a go-signal, ship the range -- other sessions' commits in it are not a reason to stop (see "The implied contract" above). A self-contained change that must ship alone uses `uv run python scripts/publish.py --only <plugin>`; mechanics: [docs/reference/publish-reconcile.md](docs/reference/publish-reconcile.md), "Partial release".
 
-Read the range to know WHAT you are shipping, not to decide WHETHER to. Other sessions' commits in it are not a reason to stop: pushing to `dev` is their declaration that the work is publishable, and the responsibility for what sits on `dev` is theirs (see "The implied contract" above). Given a go-signal, ship the range.
+See "Anti-pattern: creating a branch" -- do not branch from master to route around this. `publish.py`'s fast-forward shortcut is refused outright while any dev-only plugin exists.
 
-What the check is actually for:
-
-1. **Knowing what went out**, so you can say so afterwards and so a bad release can be traced. This is the main reason, and it is enough on its own.
-2. **Catching a plugin that changed without a version bump.** Every plugin shipping needs its own `plugin.json` + `marketplace.json` bump; without one, fresh installs silently diverge from the cache. Preflight catches this, but seeing it in the range first is cheaper than reading a refusal.
-3. **Confirming the hold-back covers what it should.** A `published: false` plugin's FILES never move onto master whatever its commits do -- `_publish_projection` reads the dev-only set from the manifests, not from a flag. Nothing to do by hand; just know it applies.
-
-The one case that still warrants a narrower release is a **self-contained** change you have a specific reason to ship alone: `uv run python scripts/publish.py --only <plugin>` projects only that plugin's files and holds every other published plugin at master's content, leaving the publish range unadvanced so the rest ships whole at the next bare publish. It does not check cross-plugin coupling, so a plugin needing a shared-lib change that sits in another plugin must ship with it. Mechanics: [docs/reference/publish-reconcile.md](docs/reference/publish-reconcile.md), "Partial release".
-
-(Earlier revisions told you to **stop** when the range held anything beyond your own commits, and to escalate the choice to the user. Both are retired: they made every release wait on a quiet tree, which a shared tree never is, and they asked the user to adjudicate readiness that the pushing session had already declared.)
-
-**Do NOT branch from master to route around this.** `git checkout -b` in this shared tree silently reparents whatever a concurrent session commits next -- the harm is documented under "Anti-pattern: creating a branch" above and in [docs/reference/shared-tree-git-discipline.md](docs/reference/shared-tree-git-discipline.md). Nothing in a publish needs a second checkout: `publish.py` computes the release with git plumbing. (Earlier revisions of this section recommended `git checkout -b <feature> origin/master` and a squash-merged feature branch; both are retired.)
-
-`publish.py` still has a fast-forward shortcut for the case where master is an ancestor of dev, but it is gated on `_fast_forward_is_safe()` -- refused outright while any dev-only plugin exists, because a fast-forward moves dev's tree wholesale and would bypass the hold-back.
-
-**Gotcha 2: `git add <file>` sweeps pre-existing working-tree modifications.** If a tracked file already had uncommitted local edits and you touch it for your feature, `git add <file>` stages *all* the changes in that file, not just yours. The feature commit then ships unrelated WIP. **Mandatory check before any publish commit:**
+**Gotcha 2: `git add <file>` sweeps pre-existing working-tree modifications.** **Mandatory check before any publish commit:**
 
 ```bash
 git diff --staged
 ```
 
-Read every line. If anything is unrelated to the feature, `git restore --staged <file>` and use `git add -p` (or `git stash` the WIP first) to stage only the intended hunks. Same discipline for untracked files -- don't `git add .` from a dirty tree.
+Read every line and confirm the staged set is exactly your files, even after a targeted `git add` -- the index may already hold another session's staged work. If anything is unrelated, `git restore --staged <file>` and use `git add -p` (or `git stash` the WIP first).
 
-*Sharpening -- the dev tree is a live workspace.* The index may already hold **another session's** (or your own earlier) staged work before you touch it. `git add <your specific files>` followed by `git commit` commits the **entire index**, not just the files you named -- so a pre-staged rename or WIP rides along under your commit message. The `git diff --staged` check above is the only guard: run it every time and confirm the staged set is *exactly* your files, even when you used a targeted `git add`. (This is how a `workflow-glue -> workflow-kit` rename once landed inside an unrelated test-coverage commit.)
+**Gotcha 3: a botched publish burns the version number.** A burned version is never reused -- patch-bump *past* it (e.g. 0.11.0 broken -> not 0.11.1, jump to 0.12.0) so every consumer's cache invalidates cleanly.
 
-**Gotcha 3: a botched publish burns the version number.** Cache entries on consumer machines key off `(plugin, version)`. If a bad version is pushed to master, retracting it doesn't evict caches that already pulled it -- same version = same code, forever, from the cache's view. The fix is a patch-bump *past* the burned number (e.g. 0.11.0 broken -> don't ship 0.11.1, jump to 0.12.0) so every consumer's cache invalidates cleanly. The 0.11.1 / `patch-bump 4 plugins to force-refresh post-retraction caches` commits on master are an example of this recovery pattern.
+**Gotcha 4: unauthorized publish.** Running `publish.py` without a go-signal is the defect; see "Committing and pushing to `dev` is unrestricted -- only PUBLISHES are gated" for the implied contract.
 
-**Gotcha 4: unauthorized publish.** What needs the user's intent is the ACT of publishing, not the contents of the range. Running `publish.py` without a go-signal is the defect -- not shipping other sessions' commits alongside your own, which is the intended behaviour and is covered by the implied contract above. Never branch from master to separate them.
-
-**Recovery: how to retract.** A bad publish on master is fixed forward, never with `push --force` to master. Push a follow-up commit that either (a) reverts the bad commit and patch-bumps the affected plugins past the burned version, or (b) re-implements correctly under a new version. Consumers with `autoUpdate: true` then refresh on their next session start. Never rewrite master history -- other machines have already fetched it.
-
-**Master carries repo infrastructure with every bare publish.** A release projects dev's whole tree (minus dev-only plugins), so gotchas, tests and tooling reach master alongside plugin work; there is no separate infra-drift sync. A `--only` release holds everything outside the named plugin at master's content, and the next bare publish carries it.
-
-**The cache keys on version** -- same version = same code; the cache never refreshes without a bump, and fresh installs between releases copy HEAD code under the old version string (**silent divergence**). Consequences: `plugin.json` and `marketplace.json` versions must move together (the regenerator + `scripts/pre-commit-version-check.sh` enforce this); **manifest edits count as code edits** (a `bootstrap.json` change without a bump is structurally invisible to consumers -- see the `manifest_changes_need_version_bump` insight below); never copy files directly into the plugin cache; and don't omit the version field hoping for rolling updates (Claude Code substitutes a git SHA that becomes a static cache key anyway).
+**Recovery: how to retract.** A bad publish on master is fixed forward, never with `push --force` to master. Push a follow-up commit that either (a) reverts the bad commit and patch-bumps the affected plugins past the burned version, or (b) re-implements correctly under a new version. Never rewrite master history -- other machines have already fetched it.
 
 **Submit gate:** Verify every changed plugin is version-bumped since the last publish, each stated pyproject version matches plugin.json, and marketplace derived data matches the manifests.
 Applies to:
@@ -628,8 +535,6 @@ apply to this repo's own `scripts/*.sh` as much as to shipped plugin code, and
 neither surfaces as a test failure. A Windows session cannot self-check these
 -- verify on a Mac, or assert POSIX-only constructs in a test.
 
-**Plan non-trivial tasks**: Plan when both (a) the task is non-trivial, and (b) the implementation could go several reasonable directions. Share the plan, get a thumbs-up, then implement. Skip planning when the path is obvious or the user has already framed the approach -- in those cases extra ceremony reads as procedural friction, not rigor. When you do plan, use plan mode (`EnterPlanMode`) as the sanctioned space to think and propose; don't ritualize the steps. The goal is alignment on intent, not a checklist.
-
 **Skill-based document placement** (package cohesion): when creating a document, ask "what skill does this belong to?" and place it by the CCP/CRP/ADP framework -- `plugins/skills-kit/skills/md-domain/references/cohesion-principles.md` is the SSOT for those principles and the placement algorithm. If no existing skill fits, create a stub skill and let the document live as a progressively-disclosed reference inside it.
 
 **That rule applies to documents a SKILL's readers need. It stops at the plugin
@@ -712,10 +617,10 @@ bash scripts/plugin-versions.sh
 # anti-pattern in the Bootstrap section above.
 # The engine is bootstrap's own code (forced form), never `uv run python` --
 # see "Python interpreter variables" above.
-"$BOOTSTRAP_PYTHON" plugins/bootstrap/engine/bootstrap_engine.py --plugin-root plugins/bootstrap --data-dir ~/.claude/plugins/data/bootstrap --console
+"$BOOTSTRAP_PYTHON" plugins/bootstrap/engine/bootstrap_engine.py --plugin-root plugins/bootstrap --data-dir ~/.claude/plugins/data/plugins-kit/bootstrap --console
 
 # Verbose mode (show ok/cached entries too)
-"$BOOTSTRAP_PYTHON" plugins/bootstrap/engine/bootstrap_engine.py --plugin-root plugins/bootstrap --data-dir ~/.claude/plugins/data/bootstrap --console --verbose
+"$BOOTSTRAP_PYTHON" plugins/bootstrap/engine/bootstrap_engine.py --plugin-root plugins/bootstrap --data-dir ~/.claude/plugins/data/plugins-kit/bootstrap --console --verbose
 ```
 
 ## Task folders live in a private tasks repo, linked in at `dev/tasks`
@@ -777,9 +682,14 @@ claude_md:
       - bootstrap engine / hook invocation
       - cross-plugin observations no single plugin owns -- a cohesion opportunity
         spanning two plugins, or a refuted proposal to couple them
+      - shared-tree git discipline
+      - publish flow
+      - test-suite discipline
+      - Python invocation standard
     excludes:
-      - per-plugin internals confined to ONE plugin (covered by per-plugin
-        CLAUDE.md / bootstrap.json)
+      - per-plugin internals confined to ONE plugin that ship with it (covered
+        by per-plugin CLAUDE.md / bootstrap.json); maintainer-only single-plugin
+        facts stay here because plugins/<name>/ ships to consumers
   insights:
     - id: suite_green_is_host_dependent
       keywords: [full suite green, pre-existing failure, is this my regression, baseline, arm64, apple silicon, amd64, detect_arch, platform.machine, host arch, faked current_os, monkeypatch, worktree baseline, test isolation, passes on my machine]
@@ -827,25 +737,11 @@ claude_md:
       added: "2026-04-28"
     - id: never_run_bootstrap_hook_directly
       keywords: [bootstrap hook, sessionstart, force update, plugin refresh, install update, session-bootstrap.sh, run hook directly, force a pass, anti-pattern, superseded]
-      summary: "SUPERSEDES the former run_bootstrap_hook_directly guidance (2026-04-28), which was wrong. Do NOT hand-invoke session-bootstrap.sh or bootstrap_engine.py to force a pass on a WEDGED or under-diagnosis machine. Reset the cooldown and let the next real session run it. Post-update convergence on a HEALTHY machine (reset the cooldown, then invoke the hook) is the one sanctioned manual run -- the bootstrap skill's `manual_convergence` fact."
+      summary: "Do NOT hand-invoke session-bootstrap.sh or bootstrap_engine.py to force a pass on a WEDGED or under-diagnosis machine. Reset the cooldown and let the next real session run it. Post-update convergence on a HEALTHY machine (the bootstrap skill's `manual_convergence` fact: `bootstrap run`, which runs the SessionStart engine pass exempt from both skip gates) is the one sanctioned manual run."
       detail: |
         The former guidance told you to invoke plugins/bootstrap/hooks/sessionstart/session-bootstrap.sh
-        directly to force a refresh. Treat that as retracted. Hand-invoking either entry point --
-        the hook or the engine -- runs a full live pass outside the conditions bootstrap is
-        designed for, and it is how a diagnosable wedge gets converted into an unexplained one
-        (see never_hand_repair_a_wedge and the anti-pattern section in the Bootstrap chapter).
-        The legitimate way to make bootstrap run again ON A WEDGED MACHINE is to clear the
-        throttle and let a REAL session start do it:
-          bash plugins/bootstrap/scripts/bootstrap-reset-cooldown.sh   # then start a session
-        That path exercises the same code under the same conditions users get, so what you
-        observe is what they would observe. A hand-invoked pass does not, and its success or
-        failure generalizes to nobody.
-        Narrow exception: a hand-invoked pass is a diagnostic of last resort, permitted only
-        AFTER the machine's state has been snapshotted, and preferred only when no read-only
-        probe would answer the question.
-        Separate and sanctioned: on a HEALTHY machine, resetting the cooldown and invoking the
-        hook to converge provisioning after a plugin update is the documented path (bootstrap
-        skill fact `manual_convergence`); it converges, it does not diagnose.
+        directly to force a refresh. Treat that as retracted.
+        See "Anti-pattern: repairing a wedged machine by hand".
       origin: "User directive 2026-07-27, superseding the 2026-04-28 directive. The original guidance was followed during a 'not cached' investigation and destroyed the failing state before it could be diagnosed."
       added: "2026-07-27"
     - id: bootstrap_cooldown_reset
@@ -867,10 +763,9 @@ claude_md:
         than their stamp; a skip never refreshes the stamp, so the bypass stays armed until a
         pass actually re-provisions. Manual bootstrap-reset-cooldown (clears BOTH gates) is
         needed only for a LAYERED bootstrap.json edit, which touches no registry file.
-        MEASURED reload/restart rule (don't trust "hooks always need a restart" -- wrong):
-        script CONTENT is read fresh from disk each run; REGISTRATION reloads in-session via
-        /reload-plugins; only SessionStart re-firing needs a new session. Full mechanics, the
-        convergence sweep, the reload-nag (_reload_advice), and the probe method:
+        See "Reload vs restart" in Development Workflow for the reload/restart rule.
+        Full mechanics, the convergence sweep, the reload-nag (_reload_advice), and the
+        probe method:
         plugins/bootstrap/skills/bootstrap/references/plugin-reload-lifecycle.md and the
         /bootstrap skill's update_lifecycle fact. Companion to bootstrap_cooldown_reset.
       origin: "Feedback report 2026-05-31 -- openrouter-kit 0.1.5 -> 0.2.0 publish left a consumer's _shared_libs stale because the cooldown blocked the resync across restarts. Implemented Part 1 (registry-change bypass) + Part 2 (convergence sweep)."
@@ -916,26 +811,12 @@ claude_md:
       keywords: [host-side python, plugin venv, uv run python, ModuleNotFoundError, foreign cwd, project root, pyyaml, skill examples]
       summary: SKILL.md examples that invoke host-side Python never use `uv run python`, which resolves the venv from the cwd. The default form launches the script under `"${BOOTSTRAP_PYTHON:?...}"` and lets it re-exec into its plugin venv; the explicit plugin-venv path below remains valid for a script without a re-exec guard.
       detail: |
-        Default form (insight bootstrap_python_interpreter_variables):
-          "${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${CLAUDE_PLUGIN_ROOT}/scripts/<script>.py"
-        where the script calls reexec_under_plugin_venv before any third-party
-        import. The rest of this entry is why `uv run python` fails from a
-        project root.
-
-        `uv run python` resolves the venv from the cwd's pyproject.toml. When a skill instructs
-        the user to run from a project root that has no matching pyproject.toml (e.g. an
-        Unreal project root, where p4 picks up .p4config.txt), uv falls back to a bare
-        interpreter without the plugin's installed dependencies and the script crashes with
-        ModuleNotFoundError. Bootstrap installs each plugin's venv at a stable canonical path:
-          Windows: ~/.claude/plugins/data/<marketplace>/<plugin>/.venv/Scripts/python.exe
+        Explicit plugin-venv interpreter, for a script without a re-exec guard
+        (version-independent, resolves from any cwd):
+          Windows:     ~/.claude/plugins/data/<marketplace>/<plugin>/.venv/Scripts/python.exe
           macOS/Linux: ~/.claude/plugins/data/<marketplace>/<plugin>/.venv/bin/python
-        The path does not change across plugin versions and resolves correctly from any cwd.
-        Use it directly in SKILL.md examples instead of `uv run python`.
-
-        Script-side self-defense (the code that consumes a shared lib) is a plugin
-        implementation detail -- see plugins/CLAUDE.md "Shared-lib scripts must re-exec
-        under the plugin venv" for the reexec_under_plugin_venv rule that makes a
-        standalone script invocation-method-agnostic.
+        Variable forms: "Python interpreter variables" above. Re-exec rule:
+        plugins/bootstrap/skills/bootstrap/references/python-interpreter.md.
       origin: "Surfaced 2026-05-05 in unreal-kit fix-up-redirectors -- broke Phase 2 with ModuleNotFoundError: yaml. Fixed in 0.9.4."
       added: "2026-05-05"
     - id: manifest_changes_need_version_bump
@@ -964,23 +845,7 @@ claude_md:
         iterates `installed_plugins.json` and reads each plugin's bootstrap.json from its
         cached installPath, so a BARE --plugin-dir session exercises dev engine CODE against
         PUBLISHED manifests.
-        WHAT CHANGED IS THE FIX. `claudx` is an alias for `claude-plugin-test`, which runs
-        `scripts/claude_plugin_test.py`. That launcher writes a synthetic dev-layout
-        `installed_plugins.json` into `plugins/`, discovered ONLY by an engine running from
-        this working copy (`_find_plugins_dir` walks up from its own plugin root), and sets
-        `CLAUDE_BOOTSTRAP_DATA_ROOT` to move venvs, `_shared_libs`, logs, stamps, cooldowns
-        and config into a separate tree. So claudx DOES exercise new bootstrap.json content,
-        and writes nothing another session reads.
-        DO NOT reach for `scripts/dev-tree.py`. It rewrites the REAL machine-global
-        `~/.claude/plugins/installed_plugins.json`, so every other session sees the dev tree
-        and a crash before the restore leaves the machine that way silently. It survives in
-        the tree; the `claude-dev` wrapper that drove it is gone.
-        Layered manifests in `~/.claude/bootstrap.json` or `<project>/.claude/bootstrap.json`
-        remain a third route -- they go through the engine with no installPath lookup at all.
-        LIMIT OF THE CONTAINMENT: session-bootstrap.sh installs levers into `~/.local/bin`
-        and writes the Windows PATH registry entries regardless of the data root, and the
-        launcher's own docstring excludes the version-bump -> cache -> auto-update delivery
-        path. A green claudx run means "my plugin works", never "my plugin ships correctly".
+        Remedy: claudx; see "Pre-publish validation (default)".
       origin: Surfaced 2026-05-27 -- the claudx smoke test couldn't validate jq's new download recipe because the engine kept reading the cached bootstrap.json.
       added: "2026-05-27"
       updated: "2026-09-20"
@@ -1008,75 +873,16 @@ claude_md:
       keywords: [orchestration.yaml, capabilities block, codex capabilities, adapter advertisement, CODEX_CAPABILITIES, guidance-migration, retire the yaml block, duplicate source of truth, xhigh, CODEX_EFFORT_MENU, display contract, direct dispatch vs completion seam, do not build, refuted]
       summary: orchestration.yaml's per-backend `capabilities:` block is NOT a stale copy of llm-scripting-kit's adapter advertisement -- they describe different code paths answering to different validators. Deriving the rendered codex effort menu from the advertisement would ERASE xhigh. Do not re-propose retiring the block.
       detail: |
-        The two look like one fact stated twice and are not. orchestration.yaml describes a
-        `codex exec` command the ORCHESTRATOR types and runs itself, rendered through
-        CodexAdapter.build_argv; CODEX_CAPABILITIES describes what CodexCliBackend emits
-        through the COMPLETION SEAM. They are siblings converging only at
-        bootstrap_lib.codex.build_codex_exec_argv, which is the single source of the argv
-        CONSTRUCTION CODE. Scope that precisely: the construction is deduplicated, the argv
-        SPELLINGS are not. Fourteen flags are restated as string literals across up to five
-        files (`codex exec`, `-s workspace-write`, `windows.sandbox="unelevated"`,
-        `sandbox_workspace_write.network_access=true`, `-m`, `model_reasoning_effort=`, `-C`,
-        `--add-dir`, `-o`, `--output-schema`, `--skip-git-repo-check`, `--color never`,
-        `--json`, trailing `-`), and the effort menu is stated at FOUR sites --
-        orchestration.yaml, CODEX_EFFORT_MENU in harness_adapters.py, a prose note inside
-        CODEX_CAPABILITIES, and codex-dispatch.md. An earlier revision of this insight said the
-        genuine duplication was already deduplicated; that is too strong and misled a follow-up
-        task into expecting to find nothing. Most of the YAML block is still not capability
-        fact at all (unrestricted reads outside -C, silent HTTP-000
-        egress, the TUI dying when backgrounded, where concurrent writers land, judging by
-        the -o file);
-        references/codex-dispatch.md owns those.
-        THE CONCRETE DAMAGE, which is why this is an insight and not a preference: the YAML
-        asserts the effort menu low|medium|high|xhigh|max and the advertisement deliberately
-        carries NO `values` for codex effort. Not a contradiction -- CodexAdapter owns and
-        VALIDATES that menu (CODEX_EFFORT_MENU, harness_adapters.py, whose comment says the
-        accepted menu is a runtime contract rather than a transcription of one version's help
-        text), while CodexCliBackend BYPASSES that validator, which is exactly why its
-        advertisement advertises no menu. Deriving the rendered menu from the advertisement
-        deletes xhigh, a value verified against a live run and carrying an explicit
-        do-not-remove warning in two places.
-        Also load-bearing: backend capabilities in orchestration.yaml are USER-OVERRIDABLE
-        CONFIGURATION, so removing the seam must pass the plugin-opinion razor, and
-        plugins/CLAUDE.md bars relocating ownership across a plugin boundary to remove apparent
-        duplication. Separately, there is NO capability fallback -- deleting the block and
-        having discovery fail would silently drop the safety summary.
-        SETTLED, SECOND TIME: a follow-up task investigated the harness-owned display/dispatch
-        contract on its own merits and returned DO-NOT-BUILD. The deciding evidence: the ONE
-        drift defect in this history (commit 7e4b18ab -- CodexAdapter dropped `--add-dir`, so a
-        dispatched unit exited 0 having written nothing) was orchestration.yaml <-> CodexAdapter,
-        the DIRECT-DISPATCH axis, NOT <-> CODEX_CAPABILITIES. A contract consuming the
-        completion-seam advertisement would not have prevented it. Its fix was already a test.
-        The plugin-opinion razor also fails for removing the config seam -- no serious, and no
-        two distinct, power-user scenarios could be named. A drift TEST across the boundary
-        remains the cheap alternative if the maintenance ever bites; it was scoped and
-        deliberately not built.
-        If the idea is ever revisited, it is a NEW design (a harness-owned display/dispatch
-        contract distinct from CODEX_CAPABILITIES, with explicit fallback and precedence rules),
-        not a retirement of a duplicate. A drift TEST across the boundary is the cheap
-        alternative worth evaluating first.
+        Operative: do not re-propose merging orchestration.yaml's capabilities block into
+        llm-scripting-kit's adapter advertisement as a duplicate. Details:
+        docs/reference/orchestrate-codex-boundaries.md.
       origin: "2026-09-01 -- the guidance-migration item of the llm-invoke task was investigated (codex/sol, adversarial brief) and returned DO-NOT-BUILD; the decisive claims were re-verified by hand against harness_adapters.py and adapter_capabilities.py. No code changed."
       added: "2026-09-01"
     - id: never_hand_repair_a_wedge
       keywords: [hand repair, manual fix, wedged machine, not cached, snapshot first, evidence destroyed, converges nobody, console not read-only, anti-pattern, ship the repair, diagnostic of last resort]
       summary: Never unwedge a machine by hand. A wedge is a specification for a repair that ships -- hand-fixing it converges nobody and destroys the only evidence of the defect. Snapshot the state first, then write the repair into bootstrap or bootstrap-stuck-fix.
       detail: |
-        A hand-repair fails twice: it reaches only the machine in front of you, and it
-        overwrites the registry/cache/marketplace state that is the sole record of the
-        defect -- turning a diagnosable bug into a permanently unexplained one. The second
-        cost is systematically underestimated because the machine looks healthier afterwards.
-        Procedure when a machine is wedged: (1) snapshot installed_plugins.json verbatim, the
-        cache tree listing, each marketplace clone's HEAD sha + git status, enabledPlugins
-        from user and project settings, and the Claude Code version; (2) write the repair
-        into the plugin, choosing bootstrap vs bootstrap-stuck-fix by the escape-hatch test;
-        (3) let the mechanism heal the machine -- the wedged machine is the integration test
-        for the repair, and unwedging it by hand forfeits that test.
-        Load-bearing correction: `--console` is NOT read-only. It suppresses log writes and
-        JSON output only; the pass still fetches marketplaces, installs versions into the
-        cache, and rewrites installed_plugins.json. Misreading it as a safe probe is exactly
-        what converted the 2026-07-27 investigation into a repair.
-        For the discipline and --console correction, see "Anti-pattern: repairing a wedged
-        machine by hand" in the Bootstrap section above.
+        See "Anti-pattern: repairing a wedged machine by hand" in the Bootstrap section above.
       origin: "User directive 2026-07-27 after nine plugins reported 'not cached' and the engine was run by hand to clear it -- the machine recovered, the root cause became unrecoverable, and no fix shipped to any other machine."
       added: "2026-07-27"
     - id: a_check_must_be_shown_to_fail
@@ -1198,63 +1004,19 @@ claude_md:
       keywords: [git reset, git restore --staged, git rm --cached, unstage, shared index, scope my commit, staged set must be exactly my files, another session, concurrent staging, git commit -- paths, index has no reflog, narrow exception, stale re-add, superseded by HEAD]
       summary: Never unstage a file you did not stage, outside one narrow mechanically-checkable exception. Use `git commit -F <msg> -- <your paths>` to scope a commit without touching a shared index -- the index has no history, so undoing someone's staging destroys the only record of their decision.
       detail: |
-        The mandatory `git diff --staged` check surfaces foreign files, and the rule that
-        the staged set must be exactly your files makes unstaging them FEEL like
-        compliance. It is not: that rule scopes your COMMIT, not the index. The index is
-        shared mutable state with no reflog, and it does not record intent -- a deliberate
-        `git rm --cached` (untracking a generated file, usually paired with a `.gitignore`
-        change staged alongside it) is indistinguishable from an accidental `git add` of a
-        deletion. Restore one as the other and you silently corrupt the other session's
-        commit.
-        `git commit -F <msg> -- <paths>` commits the working-tree state of exactly those
-        paths and leaves the index otherwise intact, which removes the only reason anyone
-        would reach for `git reset` here. Reserve `git reset` for an index you own. If you
-        have already unstaged something that was not yours, SAY SO rather than
-        reconstructing it silently -- the owning session can restate its intent in one
-        line and you cannot read it out of the index.
-        The exception: discard a staged state only when ALL of `git diff HEAD` is empty
-        for those paths, the staged content is demonstrably superseded by HEAD (a version
-        going backwards, text HEAD already carries a newer revision of), and nothing is
-        staged as a deletion or untrack. Then the index is a stale re-add whose content is
-        already in history. The operative question behind both the rule and its exception
-        is whether the index holds information that exists nowhere else.
-        The full narrative and first worked example are in "Anti-pattern: unstaging another
-        session's work to scope your own commit" in Development Workflow; the second worked
-        example is in `docs/reference/shared-tree-git-discipline.md`.
+        See "Anti-pattern: unstaging another session's work to scope your own commit" in
+        Development Workflow; the second worked example is in
+        `docs/reference/shared-tree-git-discipline.md`.
       origin: "2026-08-08 -- a unreal-kit stub staged as 588,614 deletions was `git restore --staged`-ed to scope an orchestrate commit; it was a deliberate `git rm --cached` paired with a staged .gitignore change, and putting it back required inferring that intent by hand."
       added: "2026-08-08"
     - id: never_create_or_switch_branches
       keywords: [branch, git checkout, git switch, feature branch, create a branch, scope a review, cherry-pick branch, shared working tree, concurrent session, stranded commits, worktree, stay on dev]
       summary: Stay on dev -- never create a branch or move the checked-out branch. The working tree is shared with concurrent agent sessions, so a branch switch silently redirects THEIR commits onto your branch.
       detail: |
-        The checked-out branch is a property of the one shared working tree, not of your
-        session. Switching it reaches into every other session running in this directory:
-        the other session commits normally, git writes to whatever branch the tree is on,
-        and no error is raised. When the branch was cut from master -- the natural base for
-        a review or cherry-pick -- those commits are parented on master and have silently
-        lost every dev commit beneath them.
-        Scope reviews and diffs with a RANGE (`<a>..<b>`, `<sha>^..<sha>`) plus path
-        filters; git log / git diff / prepare_review.py all read history without touching
-        the tree. Non-contiguous commits: review each individually rather than assembling a
-        branch. A review needs no second checkout at all; the rare task that does follows
-        "Worktrees and scratch copies" (a read-only worktree, removed afterwards). Publishing
-        needs no branch -- publish.py owns dev -> master,
-        and unrelated dev commits in the range are shipped rather than escalated (gotcha 1);
-        a self-contained change that must ship alone uses `publish.py --only <plugin>`.
-        The rule and range-scoping alternative remain in "Anti-pattern: creating a branch, or
-        switching the one that is checked out" in Development Workflow; the worked example is
-        in `docs/reference/shared-tree-git-discipline.md`.
+        See "Anti-pattern: creating a branch, or switching the one that is checked out" in
+        Development Workflow; the worked example is in `docs/reference/shared-tree-git-discipline.md`.
       origin: "2026-08-08 -- a review-bootstrap-cli branch was created off origin/master to scope a code review; a concurrent session then committed twice onto it, stranding both commits on a master-based throwaway branch that git branch --contains showed existed nowhere else."
       added: "2026-08-08"
-    - id: orchestration_yaml_is_generated
-      keywords: [orchestration.yaml, generated decision half, tier-principles.md, generate_orchestration.py, hand-edit orchestration.yaml, one-way authorship, orchestrate skill policy, retracted, superseded, routing]
-      summary: "RETRACTED 2026-08-26. orchestration.yaml is HAND-WRITTEN configuration; its generator, its principles source, and its pre-commit and publish drift gates are deleted. The former rule -- never hand-edit it -- no longer applies."
-      detail: |
-        RETRACTED: the former "orchestration.yaml is generated, never hand-edit it" rule is dead.
-        `orchestration.yaml` is hand-written configuration at `schema_version: 3` with an ordered `routing:` list.
-      origin: "2026-08-08 -- disclosure gap identified after the unshipping move removed the in-plugin links that used to name this chain. RETRACTED 2026-08-26 when config-driven routing replaced the generated decision half."
-      added: "2026-08-08"
-      updated: "2026-08-26"
     - id: orchestrate_routing_deferred_evidence
       keywords: [routing, unmeasured assumption, deferred evidence, evidence gaps, orchestration.yaml, tier-principles, orchestrate-2.0, benchmark, pool consumption, fan-out]
       summary: The routing policy in orchestration.yaml rests on seven UNMEASURED assumptions, recorded as a dated ledger in docs/planning/orchestrate/deferred-evidence-experiments.md -- read it before changing a routing row on the strength of an assumption it lists.
@@ -1265,74 +1027,24 @@ claude_md:
         experiment that would close it. It replaced section 7 of the deleted
         tier-principles.md (commit 4cb4d96c) and is maintainer material, which
         is why it lives under docs/planning/ rather than in the shipped skill.
+        orchestration.yaml is hand-written config.
       origin: "2026-09-04 -- task orchestrate-2.0 could not be retired because its declared durable output had been deleted with the generated policy; the ledger was reconstructed into docs/planning/."
       added: "2026-09-04"
     - id: codex_dispatch_is_silent_on_failure
       keywords: [codex, codex exec, sandbox, workspace-write, windows.sandbox, absolute -C, add-dir, exit 0, no approval channel, permission spam, danger-full-access, reads unrestricted, bootstrap_lib.codex, CodexCliBackend, run_cli_streaming, discovery vs execution, does orchestrate use llm-scripting-kit, who invokes codex, two paths to codex]
       summary: Every way a codex dispatch can be misconfigured fails SILENTLY at exit 0, so codex machinery is built to refuse bad input rather than trust it. There are TWO paths to codex -- the completion seam (CodexCliBackend) and orchestrate rendering a `codex exec` argv for the agent to run -- and orchestrate does not call the seam, but it DOES reach bootstrap_lib.codex through llm-scripting-kit's CodexAdapter.
       detail: |
-        A codex dispatch can fail silently at exit 0 -- judge it by its `-o` file, never `$?`.
-        Dispatch reference: plugins/awesome-kit/skills/orchestrate/references/codex-dispatch.md.
-        ORCHESTRATE'S RELATIONSHIP TO llm-scripting-kit, which is easy to get backwards
-        because it differs by AXIS rather than being all-or-nothing. DISCOVERY: orchestrate
-        DOES consume llm-scripting-kit -- orchestration_guidance.py imports it and calls
-        discover_model_entries, and orchestration.yaml states that every routing name
-        without the `agent:` prefix resolves against it. EXECUTION: orchestrate does NOT
-        go through the completion seam (CodexCliBackend), but it is NOT independent of
-        bootstrap_lib.codex -- orchestration_guidance.py's adapter_command_text_provider
-        resolves a harness adapter via llm_scripting_kit.resolve_harness_adapter and calls
-        CodexAdapter.build_argv, which calls bootstrap_lib.codex.build_codex_exec_argv.
-        The literal `command:` string in orchestration.yaml's backends record is the
-        DISCLOSED FALLBACK (_command_fallback), reached only when llm_scripting_kit is
-        unavailable, version-skewed, or the adapter raises, and it appends a note saying
-        so. Do not mistake that degradation path for the mechanism.
-        So "orchestrate does not use llm-scripting-kit" is FALSE on both axes. What stays
-        true is narrower: a codex dispatch from orchestrate does not exercise the
-        COMPLETION SEAM, so a failure there implicates the argv, the sandbox, or the
-        caller's process handling -- not CodexCliBackend.
+        Operative: judge a codex dispatch by its `-o` output file, not its exit status.
+        Details: docs/reference/orchestrate-codex-boundaries.md.
       origin: "2026-08-10 -- empirical probing of codex-cli 0.146.0 while adding codex as a work backend; the shipped policy had hardcoded network-on, no windows.sandbox, and framed the missing approval flag as a mere gotcha."
       added: "2026-08-10"
     - id: stale_editable_self_install
       keywords: [editable install, __editable__ pth, venv runs old code, stale pth, plugin version change, silently old release, site-packages, venv_check, scan_editable_installs, own package not shared lib, fixed, detected and remediated]
       summary: RESOLVED. A plugin venv's editable self-install .pth used to keep pointing at the previous version's cache dir, so a plugin's OWN venv could silently execute a superseded release. bootstrap's venv_check now detects it on the recorded path and re-syncs; the durable lesson is the detection ARGUMENT, not an open defect.
       detail: |
-        THE DEFECT, for context. Every plugin with a pyproject.toml gets an
-        `__editable__.<name>-<ver>.pth` in its provisioned venv recording the
-        plugin CACHE directory present when the venv was created. The venv lives
-        at a version-INDEPENDENT path while the source lives in a version-keyed
-        cache dir, so after an update the old dir still exists, the import
-        succeeds, and the venv serves the previous release's code. Observed
-        simultaneously on one machine 2026-08-10: content-pipeline-kit pinned
-        0.6.0 while running 0.6.6, llm-scripting-kit 0.6.1 while running 0.7.0,
-        skills-kit 0.35.0 while running 0.44.1.
-        THE FIX, verified at source and live 2026-08-21.
-        `bootstrap_lib/venv_check.py::scan_editable_installs` is called from
-        `check_venv` AFTER the import checks and fails the venv with
-        `stale editable install: <detail>`, remediated by
-        `uv sync --project <plugin_root>`. Both .pth shapes the old note said to
-        establish before designing a fix ARE handled by `_read_editable_paths`:
-        the DIRECT shape (bare filesystem paths) and the FINDER shape (an
-        `import __editable___<name>_finder` one-liner whose sibling module holds
-        a MAPPING dict). Detection is a CONTAINMENT test, not equality, because
-        build backends legitimately record `<project_dir>/lib` rather than the
-        project root. It FAILS CLOSED: an unparseable .pth is reported unreadable
-        and never treated as stale, so an unfamiliar shape yields a verbose note
-        instead of a rewritten venv. Pinned by
-        `tests/bootstrap/test_venv_check.py` (stale fails, current passes,
-        unreadable passes with a note, stale syncs and logs an action).
-        WHY IT NEEDED A PATH CHECK AT ALL, which is the reusable part: such a
-        venv passes every BEHAVIORAL check. The import succeeds -- it just
-        resolves the wrong source -- so only the recorded path reveals it. When a
-        defect's symptom is "the right answer from the wrong source", test the
-        wiring, not the behavior.
-        SHARED LIBS WERE NEVER AFFECTED, which is why this hid for so long: a
-        shared-lib .pth does `sys.path.insert(0, ...)` and outranks the editable,
-        which merely appends. A plugin's OWN package has no shared-lib entry in
-        its own venv, so nothing outranked the stale editable there.
-        STILL TRUE AND STILL LOAD-BEARING: do NOT clear a stale .pth by hand. It
-        fixes one box, converges nobody, and destroys the evidence
-        (never_hand_repair_a_wedge). That rule is what kept this diagnosable
-        until the fix shipped, and it applies to whatever the next such wedge is.
+        When the symptom is the right answer from the wrong source, test the wiring, not
+        the behaviour. Never hand-clear a stale .pth. Fixed:
+        venv_check.scan_editable_installs, pinned by tests/bootstrap/test_venv_check.py.
       origin: "2026-08-10 -- found while verifying that a published bootstrap_lib.codex resolved from the INSTALLED copy; llm-scripting-kit's own venv was resolving its superseded 0.6.1 cache dir. (A first reading blamed a second repo clone, because the recorded path spelled ~/.claude as D:\\Dev\\claude-settings; that is the same directory through the symlink, so compare paths with realpath before concluding the root moved.) RESOLVED 2026-08-21: two live bootstrap passes (bootstrap 0.86.0 -> 0.86.1, content-pipeline-kit 0.12.0 -> 0.13.0) each named the stale .pth and re-synced, both resulting .pth files were confirmed to point at the current version, and venv_check plus its tests were read to confirm both shapes are covered rather than only the two that happened to fire."
       added: "2026-08-10"
       updated: "2026-08-21"
@@ -1346,39 +1058,11 @@ claude_md:
           "${BOOTSTRAP_PROJECT_PYTHON:-${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}}"
         Bootstrap's own code and stdlib-only glue use the forced form:
           "${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}"
-        Both fail loudly with that message on an engine older than 0.120.0
-        instead of silently falling through to a stranger's `python` on PATH.
-        DEFAULT VS FORCED is the boundary that decides which form applies:
-        project calls default to the project's own venv, then to the bootstrap
-        interpreter, and are never forced past that; bootstrap's own code (the
-        SessionStart hook, levers, hook scripts bootstrap ships) is forced to
-        run under the same interpreter every time, using a deterministic
-        standalone path first and the variable only as a further fallback (see
-        "Python interpreter variables" above for the exact chain).
-        Both names are exported every engine pass and written into every
-        Claude session by the SessionStart hook before any skip gate, so a
-        throttled or resumed session still has correct values without waiting
-        for a full pass. Persisted shells (bash/zsh rc files, the Windows
-        registry) carry `BOOTSTRAP_PYTHON`; a per-directory shell hook keeps
-        `BOOTSTRAP_PROJECT_PYTHON` current in bash/zsh and, only when a
-        PowerShell profile already exists (bootstrap never creates one), in
-        PowerShell too. `cmd.exe` gets the registry value only. Two named
-        gaps: zsh on Linux and login-only bash profiles are not covered by
-        bootstrap's rc-file writer (add the one line by hand), and pwsh off
-        Windows is not covered at all (profile writes are Windows-only).
-        A `bootstrap.json` `tools[].check`/`install` or an `env.json`
-        `env_checks[].check`/`fix` command that needs Python uses the forced
-        form -- there is no `${python}` manifest variable; these commands are
-        opaque shell strings handed to `bash -c` unsubstituted, so manifest
-        variable expansion never reaches them. A bare command word in a
-        shipped plugin manifest is a displayed lint action entry; the same in
-        a layered or env.json manifest is a log-only entry until the command
-        actually fails, when a failure hint names the fact.
+        DEFAULT VS FORCED: project calls default to the project's own venv, then
+        to the bootstrap interpreter, and are never forced past that; bootstrap's
+        own code is forced to run under the same interpreter every time.
         Full contract, the visibility table across every surface, per-shell
-        forms, the `project_python` opt-out (`false` is the only accepted
-        value), and the `interpreter_env` opt-outs (`persist`, `shell_hook`;
-        both default `true`, user layers only): the `/bootstrap` fact
-        `python_interpreter` and
+        forms, and the opt-outs: the `/bootstrap` fact `python_interpreter` and
         plugins/bootstrap/skills/bootstrap/references/python-interpreter.md.
         Guard: tests/repo-scripts/test_python_invocation_standard.py.
       gotchas:
