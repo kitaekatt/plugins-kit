@@ -190,8 +190,8 @@ capability_skill:
         - "--scope all scans direct, non-hidden project directories under each parent in ~/.claude/task.local.yaml's project_directories list. Entries are absolute paths or paths containing ${NAME} / %NAME% environment references; for example, project_directories: ['${DEVROOT}']. Without configured parents, explicit --scope all exits with a config error. Each project contributes tmp/ and dev/tasks/; physical task folders reached through shared dev/tasks symlinks or junctions are emitted once, owned by the shortest project name."
         - "project/user scope enumerate the TASK ROOTS: folder crawl over tmp/ + dev/tasks/, plus a task_list reference scan of the *.md under those roots (the parked <root>/archived-tasks/ subtree excluded under either root). They do NOT crawl the whole tree -- an embedded task_list block is indistinguishable from an EXAMPLE of one, so a whole-tree scan reports the format's own documentation as live tasks. A task_list embedded elsewhere (a SKILL.md, a domain issues.md) is reached by NAMING its document: --scope skill <name> or --scope file <path>."
     - id: triage
-      keywords: [triage, triage the tasks, task triage, audit tasks, stale tasks, review old tasks, close stale tasks, /task triage]
-      user_objective: "Audit stale open tasks and present one disposition decision at a time for the user."
+      keywords: [triage, triage the tasks, task triage, audit tasks, oldest first, review old tasks, /task triage]
+      user_objective: "Audit open and deferred tasks, oldest first, and present one disposition decision at a time for the user."
       operation: "/task triage [<ref>] -- agent-side; no CLI verb"
       steps:
         - n: 1
@@ -279,8 +279,8 @@ capability_skill:
 references:
   - id: task_triage_protocol
     path: references/task-triage-protocol.md
-    keywords: [triage, triage the tasks, task triage, audit tasks, stale tasks, review old tasks, close stale tasks, /task triage, substantive update, stale task audit, task disposition, defer task]
-    summary: "Protocol for selecting stale open tasks, running parallel read-only evidence audits, presenting one recommendation at a time within a 200-word summary, and applying the user's archive, close, defer, update, merge, or reviewed-keep ruling."
+    keywords: [triage, triage the tasks, task triage, audit tasks, oldest first, review old tasks, /task triage, task disposition, defer task]
+    summary: "Protocol for selecting every open and deferred task (presented oldest first), running parallel read-only evidence audits, presenting one recommendation at a time within a 200-word summary, and applying the user's archive, close, defer, update, merge, or reviewed-keep ruling."
   - id: handoff_template
     path: references/handoff-template.md
     keywords: [hand-off template, seven sections, CLAUDE.md template, plan rotation, log filter, fill in scaffold, task_items block, item states, promotion rule, priorities reference items, pre-contract conversion, convert old folder, no task_items block, opening response protocol, orientation line, autonomy status, document size budgets, line budget, oversized document, approaching budget, dominant section, session diary, 400 lines, log.md exempt, durable outputs, document outlives the task, where does this doc live, spec deleted by archive, extraction at authoring time]

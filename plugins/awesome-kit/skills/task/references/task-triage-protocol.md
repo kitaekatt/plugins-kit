@@ -6,8 +6,8 @@ orchestration path.
 
 ## Trigger and scope
 
-- `triage the tasks` or `/task triage` with no ref means every open task in the
-  project.
+- `triage the tasks` or `/task triage` with no ref means every open and
+  deferred task in the project.
 - `/task triage <ref>` or `triage <task>` means only that task.
 
 For a project-wide triage, prepare all audits before presenting any ruling. For
@@ -15,20 +15,20 @@ a specific task, use the same protocol for that task only.
 
 ## 1. Select
 
-This step is project-wide only. Run `task.py list`. Select open tasks whose
-last **substantive update** is more than 30 days old. Summary-maintenance log
-lines such as `update: summary: refreshed` do not count; current `list`
-behavior excludes them and reads dated `## YYYY-MM-DD --` headings (available
-since awesome-kit 0.63.3 / plugins-kit commit `60600b40`). A task with no dated
-entries (`-`) is a candidate.
+This step is project-wide only. Run `task.py list`. Select every open task
+(active or blocked) and every deferred task; no age or last-updated threshold
+of any kind. An empty scaffold (`task_items` with `items: []` and placeholder
+documents) needs no audit: classify it directly as `never-started` and
+recommend archive.
 
-If the date shown by `list` disagrees with `log.md`, trust the log and record
-the discrepancy. An empty scaffold (`task_items` with `items: []` and
-placeholder documents) needs no audit: classify it directly as
-`never-started` and recommend archive.
+Selection is complete when every open and deferred task is either selected
+for audit or classified as an empty scaffold.
 
-Selection is complete when every open task is either selected for audit or
-classified as an empty scaffold.
+Audits are prepared for all selected tasks. Presentation order defaults to
+oldest first -- longest since last update, using the `last_update` column
+`task.py list` prints (a task with no date `-` sorts first; deferred tasks
+appear in `list`'s Deferred tasks: section with the same column and sort into
+the same order). The user may name another order.
 
 ## 2. Audit
 
@@ -37,7 +37,7 @@ standalone unit and reads the task folder's `CLAUDE.md`, `plan.md` and its
 `task_items` block, `log.md`, and `task.yaml`.
 
 Verify **every** open item against live repository state. Use git history since
-the last substantive entry, grep or equivalent searches for named files and
+the task's last dated log entry, grep or equivalent searches for named files and
 functions, and direct checks of whether described problems still exist. Cite
 evidence for each item: commit, `file:line`, or command output. Flag stale
 claims anywhere in the task folder. Check overlap with other tasks in the same
@@ -65,9 +65,10 @@ return sections.
 ## 3. Present
 
 The orchestrator verifies each audit and forms its own recommendation. Present
-one task at a time, in recommended-action order if useful. Lead with the
-recommendation, then give a more detailed summary of the task and remaining
-work in no more than 200 words, then present the options and consequences.
+one task at a time, in presentation order (oldest first by default, per step
+1, or the order the user named). Lead with the recommendation, then give a
+more detailed summary of the task and remaining work in no more than 200
+words, then present the options and consequences.
 
 Wait for the user's ruling for that task. The disposition is the user's
 decision. The user may answer for several presented tasks at once. Answer
@@ -107,11 +108,6 @@ leave live work without an owner; name that work so it can be re-homed.
 
 ## Gotchas
 
-- Before the parser fix, `list` missed dated heading entries and under-reported
-  `last_update` for seven tasks. If `list` disagrees with the log, trust the
-  log.
-- An audit brief must say **last substantive update**, not **last update**;
-  summary refreshes touch the folder daily.
 - An edit brief for an existing task must say: **do not modify existing log or
   plan lines**. A "keep ASCII" instruction was once read as permission to
   rewrite a historical log line whose non-ASCII character was the point of
