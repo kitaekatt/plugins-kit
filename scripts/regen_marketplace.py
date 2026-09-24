@@ -13,6 +13,13 @@ Usage:
   uv run python scripts/regen_marketplace.py                     # rewrite marketplace.json
   uv run python scripts/regen_marketplace.py --check             # working tree; exit non-zero on drift
   uv run python scripts/regen_marketplace.py --check --staged    # index-aware, for the pre-commit hook
+  uv run python scripts/regen_marketplace.py --only <plugin>     # rewrite ONLY that plugin's entry
+                                                                  # (repeatable); every other entry is
+                                                                  # left byte-identical -- for committing
+                                                                  # one plugin's bump while another
+                                                                  # session holds an unstaged bump
+                                                                  # elsewhere in the shared tree. An
+                                                                  # unknown plugin name exits non-zero.
 """
 from __future__ import annotations
 
@@ -164,6 +171,66 @@ def regenerate(*, from_index: bool = False) -> dict:
     return out
 
 
+def regenerate_only(names: list[str], *, from_index: bool = False) -> dict:
+    """Return marketplace.json contents with ONLY the named plugins' entries
+    rebuilt from their plugin.json; every other entry is carried over from
+    the current marketplace.json byte-identical.
+
+    For committing one plugin's version bump while another session holds an
+    unstaged bump to a different plugin.json in this shared tree -- a bare
+    regen would pick up that unstaged bump too, since it rebuilds the whole
+    plugins[] array from every plugin.json on disk.
+    """
+    current_text = _read(MARKETPLACE_JSON, from_index=from_index)
+    if current_text is None:
+        where = "the index" if from_index else "the working tree"
+        print(f"error: {MARKETPLACE_JSON} not readable from {where}",
+              file=sys.stderr)
+        sys.exit(1)
+    current = json.loads(current_text)
+    manifests = _load_plugin_manifests(from_index=from_index)
+
+    unknown = [n for n in names if n not in manifests]
+    if unknown:
+        print(
+            f"error: unknown plugin(s) for --only: {', '.join(unknown)}\n"
+            "Each --only name must match a \"name\" in some "
+            "plugins/<dir>/.claude-plugin/plugin.json.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    name_set = set(names)
+    existing = list(current.get("plugins", []))
+    seen = {p.get("name") for p in existing}
+
+    updated = []
+    for entry in existing:
+        n = entry.get("name")
+        if n in name_set:
+            manifest = manifests[n]
+            if _is_published(manifest):
+                updated.append(_build_entry(manifest))
+            # else: plugin flipped to published: false -- drop its entry.
+        else:
+            updated.append(entry)
+
+    # A named plugin absent from the current marketplace.json (newly
+    # published) is appended, same as a full regen's alphabetical append.
+    for n in sorted(name_set):
+        if n not in seen:
+            manifest = manifests[n]
+            if _is_published(manifest):
+                updated.append(_build_entry(manifest))
+
+    out = {}
+    for k in TOP_LEVEL_KEYS:
+        if k in current:
+            out[k] = current[k]
+    out["plugins"] = updated
+    return out
+
+
 def _serialize(data: dict) -> str:
     """Stable JSON serialization matching repo conventions (2-space indent, trailing newline)."""
     return json.dumps(data, indent=2, ensure_ascii=False) + "\n"
@@ -176,8 +243,25 @@ def _is_derivation_input(path: str) -> bool:
     )
 
 
+def _parse_only(argv: list[str]) -> list[str]:
+    """Repeatable `--only <plugin>` values, in the order given."""
+    names = []
+    i = 0
+    while i < len(argv):
+        if argv[i] == "--only":
+            if i + 1 >= len(argv):
+                print("error: --only requires a plugin name", file=sys.stderr)
+                sys.exit(2)
+            names.append(argv[i + 1])
+            i += 2
+        else:
+            i += 1
+    return names
+
+
 def main(argv: list[str]) -> int:
     check_only = "--check" in argv
+    only_names = _parse_only(argv)
     # --staged judges the INDEX (what a plain `git commit` will record) instead
     # of the worktree, and only when the commit actually touches the derivation.
     # Both halves matter, and the second is the one that unblocks the repo's
@@ -216,7 +300,17 @@ def main(argv: list[str]) -> int:
         else:
             from_index = True
 
-    regenerated = regenerate(from_index=from_index)
+    if only_names:
+        try:
+            regenerated = regenerate_only(only_names, from_index=from_index)
+        except SystemExit as e:
+            # Return rather than propagate: regenerate_only reports and exits
+            # like the rest of this module's error paths, but main() is called
+            # directly (not just via the __main__ entry point) by callers and
+            # tests that need an int, not a raised SystemExit.
+            return e.code if isinstance(e.code, int) else 1
+    else:
+        regenerated = regenerate(from_index=from_index)
     new_text = _serialize(regenerated)
     current_text = _read(MARKETPLACE_JSON, from_index=from_index) or ""
 

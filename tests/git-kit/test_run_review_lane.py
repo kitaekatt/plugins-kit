@@ -165,6 +165,101 @@ def test_mechanical_finding_probe_refuses_old_owner(
     assert "mechanical scan finding support" in capsys.readouterr().err
 
 
+def test_chunk_index_probe_refuses_old_owner(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    import argparse
+
+    package = types.ModuleType("llm_scripting_kit")
+    package.__path__ = []
+    review_lane = types.ModuleType("llm_scripting_kit.review_lane")
+
+    def old_parse(argv):
+        parser = argparse.ArgumentParser()
+        parser.add_argument("--lane", required=True)
+        parser.add_argument("--model", required=True)
+        parser.add_argument("--chunk", required=True)
+        parser.add_argument("--bundle")
+        return parser.parse_args(argv)
+
+    review_lane._parse_args = old_parse
+    review_lane.main = lambda: 42
+    monkeypatch.setitem(sys.modules, "llm_scripting_kit.review_lane", review_lane)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            str(_SCRIPT), "--lane", "x", "--model", "y",
+            "--bundle", "b.json", "--chunk-index", "0",
+        ],
+    )
+
+    code = _run_wrapper(monkeypatch, package, review_lane)
+
+    assert code != 0
+    stderr = capsys.readouterr().err
+    assert "too old" in stderr
+    assert "0.49.0" in stderr
+
+
+def test_chunk_index_falls_through_to_main_when_probe_symbol_is_absent(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    package = types.ModuleType("llm_scripting_kit")
+    package.__path__ = []
+    review_lane = types.ModuleType("llm_scripting_kit.review_lane")
+    review_lane.main = lambda: 42
+    monkeypatch.setitem(sys.modules, "llm_scripting_kit.review_lane", review_lane)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            str(_SCRIPT), "--lane", "x", "--model", "y",
+            "--bundle", "b.json", "--chunk-index", "0",
+        ],
+    )
+
+    code = _run_wrapper(monkeypatch, package, review_lane)
+
+    assert code == 42
+    stderr = capsys.readouterr().err
+    assert "too old" not in stderr
+
+
+def test_chunk_index_probe_accepts_a_current_owner(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    import argparse
+
+    package = types.ModuleType("llm_scripting_kit")
+    package.__path__ = []
+    review_lane = types.ModuleType("llm_scripting_kit.review_lane")
+
+    def new_parse(argv):
+        parser = argparse.ArgumentParser()
+        parser.add_argument("--lane", required=True)
+        parser.add_argument("--model", required=True)
+        parser.add_argument("--chunk", default=None)
+        parser.add_argument("--bundle")
+        parser.add_argument("--chunk-index", type=int, default=None)
+        return parser.parse_args(argv)
+
+    review_lane._parse_args = new_parse
+    review_lane.main = lambda: 0
+    monkeypatch.setitem(sys.modules, "llm_scripting_kit.review_lane", review_lane)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            str(_SCRIPT), "--lane", "x", "--model", "y",
+            "--bundle", "b.json", "--chunk-index", "0",
+        ],
+    )
+
+    assert _run_wrapper(monkeypatch, package, review_lane) == 0
+    assert capsys.readouterr().err == ""
+
+
 def test_wrapper_passes_through_to_shared_main(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

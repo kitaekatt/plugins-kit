@@ -48,6 +48,14 @@ plugin's `plugin.json`, filtered by `"published"` (missing = `true`; `false` =
 excluded). Never hand-edit its plugin entries; the pre-commit hook rejects
 drift.
 
+`scripts/regen_marketplace.py` also takes its own `--only <plugin>`
+(repeatable), distinct from `publish.py --only` below: it rewrites ONLY the
+named plugins' entries from their `plugin.json`, leaving every other entry
+byte-identical to what is already in `marketplace.json`. Use it to commit one
+plugin's version bump while another session's plugin.json in this shared
+tree holds an unstaged bump of its own -- a bare regen would rebuild every
+entry from disk and pick that up too. An unknown plugin name exits non-zero.
+
 ### Partial release: `--only <plugin>`
 
 `uv run python scripts/publish.py --only <plugin>` (repeatable) ships one
@@ -99,6 +107,13 @@ consumes a shared library another plugin owns (`shared_lib_imports`, or a
 consumer's venv would then resolve the older library. The bare publish is the
 one that cannot do that. Use `--only` for a self-contained change, and read
 the range first as gotcha 1 requires.
+
+`--only` is also the route when an UNRELATED plugin blocks a bare publish --
+preflight refuses because another plugin changed files without a version
+bump (observed: unreal-kit, 2026-09-24). Ship the ready plugins with `--only
+<plugin>` (repeatable) and leave the unbumped plugin to its owner; the range
+does not advance, so the held-back plugin's commits ship whole at the next
+bare publish.
 
 ### Commit-scoped generated-data checks
 
@@ -214,6 +229,60 @@ projection release (`53645fd2`, 2026-08-27). `range_base()` in `scripts/publish.
 history for the most recent `Published-From:` trailer (bounded by
 `_RANGE_BASE_SEARCH_DEPTH`) rather than reading master's tip, so those
 untrailered commits do not hide the publish boundary.
+
+## Publishing rationale
+
+Narrative and rationale behind the root CLAUDE.md's operative publish
+guardrails.
+
+**Publication hold rationale.** A publication hold on ONE plugin belongs in
+root CLAUDE.md, not in a task folder: a release ships the whole range, so a
+hold anywhere a publisher does not read binds nobody. Recorded because it was
+tested and failed: a secrets-kit hold was kept in a task folder through
+2026-09-16 and four separate publishes (0.8.25, 0.8.26, 0.8.27-0.8.29, 0.8.30)
+carried the plugin to `master` anyway, each by a session that had no reason to
+open that folder and did nothing wrong. The hold was later accepted as
+overtaken rather than retracted.
+
+**Safe-publish gotcha explanations.**
+
+- Gotcha 1 (ship the whole range): what the mandatory range check is actually
+  for -- knowing what went out so a bad release can be traced (the main
+  reason, sufficient on its own); catching a plugin that changed without a
+  version bump (preflight also catches this, but seeing it in the range first
+  is cheaper than reading a refusal); and confirming the dev-only hold-back
+  covers what it should. Earlier revisions of this rule told you to STOP when
+  the range held anything beyond your own commits, and to escalate the choice
+  to the user; both are retired, because they made every release wait on a
+  quiet tree, which a shared tree never is, and asked the user to adjudicate
+  readiness the pushing session had already declared.
+- Gotcha 2 (`git add` sweeps pre-existing modifications): the dev tree is a
+  live workspace, so the index may already hold another session's (or your
+  own earlier) staged work before you touch it -- `git add <your files>`
+  followed by `git commit` commits the ENTIRE index, not just the files you
+  named, so a pre-staged rename or WIP rides along under your commit message.
+  This is how a `workflow-glue -> workflow-kit` rename once landed inside an
+  unrelated test-coverage commit. `git diff --staged` is the only guard: run
+  it every time and confirm the staged set is exactly your files.
+- Gotcha 3 (burned version numbers): cache entries on consumer machines key
+  off `(plugin, version)`, so retracting a bad version doesn't evict caches
+  that already pulled it -- same version means same code forever, from the
+  cache's view. The 0.11.1 / "patch-bump 4 plugins to force-refresh
+  post-retraction caches" commits on master are an example of this recovery
+  pattern.
+
+**Submit gate background.** The gate verifies every changed plugin is
+version-bumped since the last publish, each stated pyproject version matches
+plugin.json, and marketplace derived data matches the manifests. This exists
+because the cache keys on version: the same version means the same code
+forever, so a `bootstrap.json` change without a bump is structurally invisible
+to consumers (manifest edits count as code edits), and fresh installs between
+releases copy HEAD code under the old version string (silent divergence).
+`plugin.json` and `marketplace.json` versions must move together, enforced by
+the regenerator plus `scripts/pre-commit-version-check.sh`. Never copy files
+directly into the plugin cache, and do not omit the version field hoping for
+rolling updates -- Claude Code substitutes a git SHA that becomes a static
+cache key anyway.
 
 ## Landing-page preview
 

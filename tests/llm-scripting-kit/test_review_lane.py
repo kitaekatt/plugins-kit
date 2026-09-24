@@ -513,6 +513,176 @@ class TestCli:
         assert "cannot read chunk" in capsys.readouterr().err
 
 
+class TestChunkIndexDerivation:
+    """The runner reads the bundle itself: --chunk-index derives everything
+    the generated skill prose otherwise tells an agent to build by hand.
+    """
+
+    @staticmethod
+    def _bundle(tmp_path: Path) -> dict:
+        chunk_dir = tmp_path / "chunks"
+        chunk_dir.mkdir()
+        (chunk_dir / "chunk-000.diff").write_text(
+            "diff --git a/a.py b/a.py", encoding="utf-8"
+        )
+        (chunk_dir / "chunk-001.diff").write_text(
+            "diff --git a/b.py b/b.py", encoding="utf-8"
+        )
+        return {
+            "bundle_dir": str(tmp_path),
+            "description": "fix the thing",
+            "project_root": "/proj",
+            "changed_files": [],
+            "diff_chunks": [
+                {
+                    "index": 0,
+                    "path": "chunks/chunk-000.diff",
+                    "files": ["a.py"],
+                    "mechanical_scan": {
+                        "schema_version": 2,
+                        "files": [{"file": "a.py", "checks_run": [], "findings": []}],
+                    },
+                },
+                {
+                    "index": 1,
+                    "path": "chunks/chunk-001.diff",
+                    "files": ["b.py"],
+                    "mechanical_scan": {"schema_version": 2, "files": []},
+                },
+            ],
+            "claimed_files": [
+                {"identifier": "README.md", "path": "README.md"},
+            ],
+        }
+
+    def test_reviewer_a_gets_claimed_files_and_findings(self, tmp_path: Path) -> None:
+        bundle = self._bundle(tmp_path)
+        derived = lr.derive_from_chunk_index(
+            bundle, 0, "reviewer_a_claude_md_compliance"
+        )
+        assert derived["chunk"] == tmp_path / "chunks" / "chunk-000.diff"
+        assert derived["files"] == ["a.py"]
+        assert derived["claimed_files"] == ["README.md"]
+        assert derived["mechanical_findings"] == [
+            {"file": "a.py", "checks_run": [], "findings": []}
+        ]
+        assert derived["description"] == "fix the thing"
+        assert derived["project_root"] == "/proj"
+
+    def test_reviewer_b_gets_findings_but_no_claimed_files(self, tmp_path: Path) -> None:
+        bundle = self._bundle(tmp_path)
+        derived = lr.derive_from_chunk_index(bundle, 0, "reviewer_b_diff_only_bugs")
+        assert derived["claimed_files"] == []
+        assert derived["mechanical_findings"] == [
+            {"file": "a.py", "checks_run": [], "findings": []}
+        ]
+
+    def test_reviewer_c_gets_neither(self, tmp_path: Path) -> None:
+        bundle = self._bundle(tmp_path)
+        derived = lr.derive_from_chunk_index(bundle, 0, "reviewer_c_introduced_code")
+        assert derived["claimed_files"] == []
+        assert derived["mechanical_findings"] is None
+
+    def test_an_empty_scan_still_passes_the_scan_flag_worth_of_data(
+        self, tmp_path: Path
+    ) -> None:
+        """Chunk 1's scan has no file records -- still [], never None, for a
+        mechanical-scan lane: an empty result differs from no scan."""
+        bundle = self._bundle(tmp_path)
+        derived = lr.derive_from_chunk_index(bundle, 1, "reviewer_b_diff_only_bugs")
+        assert derived["mechanical_findings"] == []
+
+    def test_out_of_range_index_is_a_clear_value_error(self, tmp_path: Path) -> None:
+        bundle = self._bundle(tmp_path)
+        with pytest.raises(ValueError, match="out of range"):
+            lr.derive_from_chunk_index(bundle, 5, "reviewer_b_diff_only_bugs")
+
+    def test_negative_index_is_a_clear_value_error(self, tmp_path: Path) -> None:
+        bundle = self._bundle(tmp_path)
+        with pytest.raises(ValueError, match="out of range"):
+            lr.derive_from_chunk_index(bundle, -1, "reviewer_b_diff_only_bugs")
+
+    def test_malformed_bundle_is_a_clear_value_error(self) -> None:
+        with pytest.raises(ValueError, match="diff_chunks must be an array"):
+            lr.derive_from_chunk_index({"diff_chunks": "nope"}, 0, "reviewer_b_diff_only_bugs")
+
+    def test_cli_parses_chunk_index_alone(self) -> None:
+        args = lr._parse_args([
+            "--lane", LANE, "--model", "m", "--bundle", "b.json", "--chunk-index", "0",
+        ])
+        assert args.chunk_index == 0
+        assert args.chunk is None
+
+    def test_cli_requires_bundle_with_chunk_index(self, capsys) -> None:
+        with pytest.raises(SystemExit) as excinfo:
+            lr._parse_args(["--lane", LANE, "--model", "m", "--chunk-index", "0"])
+        assert excinfo.value.code == 2
+        assert "requires --bundle" in capsys.readouterr().err
+
+    def test_cli_requires_chunk_or_chunk_index(self, capsys) -> None:
+        with pytest.raises(SystemExit) as excinfo:
+            lr._parse_args(["--lane", LANE, "--model", "m"])
+        assert excinfo.value.code == 2
+        assert "--chunk is required" in capsys.readouterr().err
+
+    @pytest.mark.parametrize(
+        "extra",
+        [
+            ["--chunk", "x"],
+            ["--file", "a.py"],
+            ["--claimed-file", "a.py"],
+            ["--description", "d"],
+            ["--mechanical-scan-ran"],
+            ["--mechanical-finding", "{}"],
+            ["--project-root", "/proj"],
+        ],
+    )
+    def test_cli_rejects_chunk_index_plus_an_explicit_derivable_flag(
+        self, capsys, extra: list[str]
+    ) -> None:
+        with pytest.raises(SystemExit) as excinfo:
+            lr._parse_args([
+                "--lane", LANE, "--model", "m",
+                "--bundle", "b.json", "--chunk-index", "0",
+                *extra,
+            ])
+        assert excinfo.value.code == 2
+        assert "conflicts with" in capsys.readouterr().err
+
+    def test_end_to_end_cli_dispatches_from_chunk_index_alone(
+        self, seam, tmp_path: Path, capsys
+    ) -> None:
+        bundle_data = self._bundle(tmp_path)
+        bundle_path = tmp_path / "bundle.json"
+        bundle_path.write_text(json.dumps(bundle_data), encoding="utf-8")
+        seam.selection = _transport([FakeResponse(ONE_ISSUE)])
+
+        code = lr.main([
+            "--lane", LANE, "--model", "my-endpoint",
+            "--bundle", str(bundle_path), "--chunk-index", "0",
+        ])
+
+        assert code == lr.EXIT_OK
+        out = json.loads(capsys.readouterr().out)
+        assert out["issues"][0]["file"] == "a.py"
+        prompt = seam.selection.backend.calls[0]["user"]
+        assert "Files in this chunk" in prompt
+        assert "- a.py" in prompt
+        assert "Change description: fix the thing" in prompt
+
+    def test_end_to_end_bad_index_exits_usage(self, tmp_path: Path, capsys) -> None:
+        bundle_path = tmp_path / "bundle.json"
+        bundle_path.write_text(json.dumps(self._bundle(tmp_path)), encoding="utf-8")
+
+        code = lr.main([
+            "--lane", LANE, "--model", "my-endpoint",
+            "--bundle", str(bundle_path), "--chunk-index", "99",
+        ])
+
+        assert code == lr.EXIT_USAGE
+        assert "out of range" in capsys.readouterr().err
+
+
 class TestTransportSdkPreflight:
     """The `openai` SDK is optional, so its absence must be a config error.
 

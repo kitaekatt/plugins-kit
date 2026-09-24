@@ -198,3 +198,74 @@ class TestFallback:
 
         assert mod.main(["--check", "--staged"]) == 1
         assert "could not read the index" in capsys.readouterr().err
+
+
+class TestOnlyFlag:
+    """`--only <plugin>` updates ONE plugin's entry, leaving every other entry
+    byte-identical -- for committing one plugin's bump while another session
+    holds an unstaged bump elsewhere in the shared tree.
+    """
+
+    def test_named_entry_updated(self, repo):
+        path, mod = repo
+        _plugin_json(path, "alpha", "1.5.0")
+        assert mod.main(["--only", "alpha"]) == 0
+        data = json.loads((path / ".claude-plugin" / "marketplace.json")
+                           .read_text(encoding="utf-8"))
+        versions = {p["name"]: p["version"] for p in data["plugins"]}
+        assert versions["alpha"] == "1.5.0"
+
+    def test_others_untouched_even_when_their_plugin_json_differs(self, repo):
+        """Another session's unstaged bump to beta must not leak into the
+        entry --only regenerates only alpha's entry, from marketplace.json's
+        existing beta entry rather than beta's current plugin.json.
+        """
+        path, mod = repo
+        _plugin_json(path, "alpha", "1.5.0")
+        _plugin_json(path, "beta", "9.9.9")  # in-flight, unstaged elsewhere
+        before = json.loads((path / ".claude-plugin" / "marketplace.json")
+                             .read_text(encoding="utf-8"))
+        beta_before = next(p for p in before["plugins"] if p["name"] == "beta")
+
+        assert mod.main(["--only", "alpha"]) == 0
+
+        after = json.loads((path / ".claude-plugin" / "marketplace.json")
+                            .read_text(encoding="utf-8"))
+        beta_after = next(p for p in after["plugins"] if p["name"] == "beta")
+        assert beta_after == beta_before
+        assert beta_after["version"] == "2.0.0"
+
+    def test_unknown_plugin_exits_nonzero_with_message(self, repo, capsys):
+        _, mod = repo
+        assert mod.main(["--only", "nonexistent-plugin"]) != 0
+        err = capsys.readouterr().err
+        assert "unknown plugin" in err
+        assert "nonexistent-plugin" in err
+
+    def test_full_regen_of_named_entry_matches_a_full_regen(self, repo):
+        """The named entry's projected content must equal what a full regen
+        would produce for it -- --only must not diverge in shape, only in
+        scope.
+        """
+        path, mod = repo
+        _plugin_json(path, "alpha", "1.5.0")
+
+        assert mod.main(["--only", "alpha"]) == 0
+        only_result = json.loads((path / ".claude-plugin" / "marketplace.json")
+                                  .read_text(encoding="utf-8"))
+        only_alpha = next(p for p in only_result["plugins"] if p["name"] == "alpha")
+
+        full_result = mod.regenerate()
+        full_alpha = next(p for p in full_result["plugins"] if p["name"] == "alpha")
+        assert only_alpha == full_alpha
+
+    def test_repeatable(self, repo):
+        path, mod = repo
+        _plugin_json(path, "alpha", "1.5.0")
+        _plugin_json(path, "beta", "2.5.0")
+        assert mod.main(["--only", "alpha", "--only", "beta"]) == 0
+        data = json.loads((path / ".claude-plugin" / "marketplace.json")
+                           .read_text(encoding="utf-8"))
+        versions = {p["name"]: p["version"] for p in data["plugins"]}
+        assert versions["alpha"] == "1.5.0"
+        assert versions["beta"] == "2.5.0"

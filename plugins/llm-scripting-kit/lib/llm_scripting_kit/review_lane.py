@@ -103,6 +103,116 @@ class LaneRunError(Exception):
     """The lane was dispatched and did not produce a usable result."""
 
 
+#: Lanes the generated skill prose hands claimed-file paths to today. Only
+#: reviewer_a reads CLAUDE.md currency against files a subject-lens reviewer
+#: claimed out of its chunk (plugins/git-kit/skills/git-code-review/SKILL.md
+#: step 6, scripts/gen_code_review_skills.py::LANE_ROUTING). Keep this set in
+#: lockstep with the skill prose it substitutes for -- it exists so
+#: --chunk-index reproduces byte-for-byte what an agent building the explicit
+#: flags by hand would have sent.
+_CLAIMED_FILE_LANES = frozenset({"reviewer_a_claude_md_compliance"})
+
+#: Lanes the generated skill prose hands mechanical-scan records to today.
+#: reviewer_c is deliberately excluded -- it never receives scan flags.
+_MECHANICAL_SCAN_LANES = frozenset(
+    {"reviewer_a_claude_md_compliance", "reviewer_b_diff_only_bugs"}
+)
+
+
+def _require_mapping(value: Any, what: str) -> Mapping[str, Any]:
+    if not isinstance(value, Mapping):
+        raise ValueError(f"{what} must be an object")
+    return value
+
+
+def derive_from_chunk_index(
+    bundle: Mapping[str, Any], chunk_index: int, lane: str
+) -> dict[str, Any]:
+    """Derive one chunk's CLI-equivalent lane inputs from a prepared bundle.
+
+    Reproduces, byte-for-byte, what the review skill's generated step 6
+    prose tells an agent to build by hand for an endpoint-dispatched lane:
+    the chunk's absolute diff path, its files, the claimed-file paths
+    reviewer_a alone receives, the mechanical-scan records reviewer_a and
+    reviewer_b alone receive, the change description, and the project root.
+    Raises ``ValueError`` (never a bare KeyError/TypeError) for any bundle
+    shape this cannot resolve, so a malformed or out-of-range bundle reads as
+    a clear configuration error rather than a traceback.
+    """
+    diff_chunks = bundle.get("diff_chunks")
+    if not isinstance(diff_chunks, list):
+        raise ValueError("bundle.diff_chunks must be an array")
+    if not diff_chunks:
+        raise ValueError("bundle.diff_chunks is empty; no chunk to select")
+    if not (0 <= chunk_index < len(diff_chunks)):
+        raise ValueError(
+            f"--chunk-index {chunk_index} is out of range for "
+            f"bundle.diff_chunks (0..{len(diff_chunks) - 1})"
+        )
+    entry = _require_mapping(
+        diff_chunks[chunk_index], f"bundle.diff_chunks[{chunk_index}]"
+    )
+
+    bundle_dir = bundle.get("bundle_dir")
+    if not isinstance(bundle_dir, str) or not bundle_dir:
+        raise ValueError("bundle.bundle_dir must be a non-empty string")
+    chunk_rel = entry.get("path")
+    if not isinstance(chunk_rel, str) or not chunk_rel:
+        raise ValueError(
+            f"bundle.diff_chunks[{chunk_index}].path must be a non-empty string"
+        )
+    chunk_path = Path(bundle_dir) / chunk_rel
+
+    files = entry.get("files", [])
+    if not isinstance(files, list) or not all(isinstance(f, str) for f in files):
+        raise ValueError(
+            f"bundle.diff_chunks[{chunk_index}].files must be an array of strings"
+        )
+
+    claimed_files: list[str] = []
+    if lane in _CLAIMED_FILE_LANES:
+        for i, claimed in enumerate(bundle.get("claimed_files") or []):
+            claimed = _require_mapping(claimed, f"bundle.claimed_files[{i}]")
+            identifier = claimed.get("identifier")
+            if not isinstance(identifier, str) or not identifier:
+                raise ValueError(
+                    f"bundle.claimed_files[{i}].identifier must be a "
+                    "non-empty string"
+                )
+            claimed_files.append(identifier)
+
+    mechanical_findings: Optional[list[Mapping[str, Any]]] = None
+    if lane in _MECHANICAL_SCAN_LANES:
+        scan = entry.get("mechanical_scan")
+        scan = scan if isinstance(scan, Mapping) else {}
+        scan_files = scan.get("files", [])
+        if not isinstance(scan_files, list):
+            raise ValueError(
+                f"bundle.diff_chunks[{chunk_index}].mechanical_scan.files "
+                "must be an array"
+            )
+        # The scan is passed even when empty -- an empty result differs from
+        # no scan, same rule the explicit --mechanical-scan-ran flag encodes.
+        mechanical_findings = scan_files
+
+    description = bundle.get("description", "") or ""
+    if not isinstance(description, str):
+        raise ValueError("bundle.description must be a string")
+
+    project_root = bundle.get("project_root")
+    if project_root is not None and not isinstance(project_root, str):
+        raise ValueError("bundle.project_root must be a string or null")
+
+    return {
+        "chunk": chunk_path,
+        "files": files,
+        "claimed_files": claimed_files,
+        "mechanical_findings": mechanical_findings,
+        "description": description,
+        "project_root": project_root,
+    }
+
+
 def _estimate_tokens(text: str) -> int:
     """Estimated prompt tokens for ``text``. See CHARS_PER_TOKEN."""
     return int(len(text) / CHARS_PER_TOKEN) + 1
@@ -450,7 +560,27 @@ def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
         help="the resolved profile's model value (an llm-scripting-kit endpoint id)",
     )
     parser.add_argument(
-        "--chunk", required=True, type=Path, help="path to the chunk .diff file"
+        "--chunk",
+        default=None,
+        type=Path,
+        help=(
+            "path to the chunk .diff file; required unless --chunk-index is "
+            "given"
+        ),
+    )
+    parser.add_argument(
+        "--chunk-index",
+        type=int,
+        default=None,
+        dest="chunk_index",
+        help=(
+            "index into bundle.diff_chunks; requires --bundle. Derives the "
+            "chunk path, files, claimed files, mechanical findings, "
+            "description and project root from the bundle -- conflicts with "
+            "--chunk, --file, --claimed-file, --description, "
+            "--mechanical-scan-ran, --mechanical-finding and --project-root, "
+            "each of which is then no longer needed"
+        ),
     )
     parser.add_argument(
         "--file",
@@ -497,6 +627,35 @@ def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
         "--timeout", type=float, default=DEFAULT_TIMEOUT_S, dest="timeout_s"
     )
     args = parser.parse_args(list(argv))
+    if args.chunk_index is not None:
+        if args.bundle is None:
+            parser.error("--chunk-index requires --bundle")
+        conflicting = [
+            flag
+            for flag, is_set in (
+                ("--chunk", args.chunk is not None),
+                ("--file", bool(args.files)),
+                ("--claimed-file", bool(args.claimed_files)),
+                ("--description", args.description != ""),
+                ("--mechanical-scan-ran", args.mechanical_scan_ran),
+                ("--mechanical-finding", bool(args.mechanical_findings)),
+                ("--project-root", args.project_root is not None),
+            )
+            if is_set
+        ]
+        if conflicting:
+            # Error on conflict rather than letting either side win silently:
+            # a caller that passes both almost certainly means one or the
+            # other, and guessing would make a coincidentally-matching value
+            # look identical to a bug that quietly discarded one of them.
+            parser.error(
+                "--chunk-index derives its values from --bundle and "
+                "conflicts with " + ", ".join(conflicting) + " -- pass "
+                "--chunk-index alone, or drop it and pass the explicit "
+                "flags instead"
+            )
+    elif args.chunk is None:
+        parser.error("--chunk is required unless --chunk-index is given")
     if not args.mechanical_scan_ran and not args.mechanical_findings:
         args.mechanical_findings = None
     return args
@@ -505,11 +664,6 @@ def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
 def main(argv: Sequence[str] | None = None) -> int:
     """CLI entry point. Prints the result envelope as JSON on success."""
     args = _parse_args(sys.argv[1:] if argv is None else argv)
-    try:
-        diff_text = args.chunk.read_text(encoding="utf-8", errors="replace")
-    except OSError as exc:
-        print(f"lane {args.lane}: cannot read chunk {args.chunk}: {exc}", file=sys.stderr)
-        return EXIT_USAGE
     try:
         bundle = load_bundle(args.bundle) if args.bundle else None
         governing_chains = (
@@ -530,21 +684,42 @@ def main(argv: Sequence[str] | None = None) -> int:
             raise ValueError(
                 "bundle.mechanical_check_phrases must be an object of string pairs"
             )
+        if args.chunk_index is not None:
+            assert bundle is not None  # enforced in _parse_args
+            derived = derive_from_chunk_index(bundle, args.chunk_index, args.lane)
+            chunk_path = derived["chunk"]
+            files = derived["files"]
+            claimed_files = derived["claimed_files"]
+            mechanical_findings = derived["mechanical_findings"]
+            description = derived["description"]
+            project_root = derived["project_root"]
+        else:
+            chunk_path = args.chunk
+            files = args.files
+            claimed_files = args.claimed_files
+            mechanical_findings = args.mechanical_findings
+            description = args.description
+            project_root = args.project_root
     except ValueError as exc:
         print(f"lane {args.lane}: {exc}", file=sys.stderr)
+        return EXIT_USAGE
+    try:
+        diff_text = chunk_path.read_text(encoding="utf-8", errors="replace")
+    except OSError as exc:
+        print(f"lane {args.lane}: cannot read chunk {chunk_path}: {exc}", file=sys.stderr)
         return EXIT_USAGE
     try:
         result = run_lane(
             lane=args.lane,
             model=args.model,
             diff_text=diff_text,
-            files=args.files,
-            description=args.description,
-            claimed_files=args.claimed_files,
-            mechanical_findings=args.mechanical_findings,
+            files=files,
+            description=description,
+            claimed_files=claimed_files,
+            mechanical_findings=mechanical_findings,
             mechanical_check_phrases=mechanical_check_phrases,
             claude_mds_by_file=governing_chains,
-            project_root=args.project_root,
+            project_root=project_root,
             max_output_tokens=args.max_output_tokens,
             timeout_s=args.timeout_s,
         )

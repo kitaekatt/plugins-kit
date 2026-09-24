@@ -17,20 +17,30 @@ The bootstrap plugin automatically handles all setup on session start. This docu
 
 These issues should be rare since bootstrap runs automatically. Check if something went wrong during session startup.
 
+### Config resolution order
+
+`lib/ue_runner_config.py::load_config` resolves config in this order: explicit
+`config_path` (isolates: replaces the global and project layers) > per-project
+config (`<project_root>/.local-data/plugins-kit/unreal-kit/config.yaml`; legacy
+`.local-data/unreal-kit/config.yaml` and `.claude/unreal-kit.yaml` are still
+read) > global config (`~/.claude/plugins/data/plugins-kit/unreal-kit/config.yaml`) >
+skill config (`ue_runner_config.yaml`) > shipped defaults (`defaults/config.yaml`) >
+hardcoded defaults.
+
 ### Config not found
 
 If `ue_runner.py` reports "uproject path not configured":
 - Bootstrap may have failed to auto-detect the project. Check bootstrap output at session start.
-- Run `"${BOOTSTRAP_PROJECT_PYTHON:-${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}}" "${CLAUDE_PLUGIN_ROOT}/skills/ue-python-api/scripts/ue_runner.py" --setup` to interactively pick the `.uproject` and write the per-project config. That is `--setup`'s only job — ini settings and host deps stay bootstrap's (it does not duplicate the rows above).
-- Or manually create `<project_root>/.local-data/plugins-kit/unreal-kit/config.yaml` with `uproject` and `engine_dir` fields. (The legacy `.local-data/unreal-kit/config.yaml` and `.claude/unreal-kit.yaml` paths are still read if present, but new files should use the new location.)
-- Legacy fallback: `~/.claude/plugins/data/plugins-kit/unreal-kit/config.yaml` is still checked if no per-project config is found.
+- Run `"${BOOTSTRAP_PROJECT_PYTHON:-${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}}" "${CLAUDE_PLUGIN_ROOT}/skills/ue-python-api/scripts/ue_runner.py" --setup` to interactively pick the `.uproject` and write the per-project config. That is `--setup`'s only job -- ini settings and host deps stay bootstrap's (it does not duplicate the rows above).
+- Or manually create `<project_root>/.local-data/plugins-kit/unreal-kit/config.yaml` with `uproject` and `engine_dir` fields. (The legacy `.local-data/unreal-kit/config.yaml` and `.claude/unreal-kit.yaml` paths are still read if present, but create new files at `.local-data/plugins-kit/unreal-kit/config.yaml`.)
+- Global config: `~/.claude/plugins/data/plugins-kit/unreal-kit/config.yaml` is deep-merged beneath any per-project config (see Config resolution order above), so fields it sets apply unless the project config overrides them.
 
 ### Remote execution not working
 
 If remote execution fails with "Editor not responding":
 - Verify `bRemoteExecution=True` is set in `<Project>/Config/UserEngine.ini`
 - The Editor must be restarted after ini changes take effect
-- Commandlet fallback will be used automatically — no action needed
+- Commandlet fallback will be used automatically -- no action needed
 
 ### Stubs missing
 

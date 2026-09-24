@@ -182,15 +182,13 @@ technique_skill:
             `sonnet`, `opus`, `haiku`, `fable` -- launches an Agent subagent with
             `model: <entry>`. Any other entry runs as a parallel Bash call to
             "${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" ${CLAUDE_PLUGIN_ROOT}/scripts/run_review_lane.py instead of launching an Agent for it, passing `--lane <reviewer
-            name>`, `--model <the entry>`, `--chunk <absolute chunk diff path>`, one
-            `--file` per repo-relative path in that chunk, `--description <the change
-            description>`, `--bundle <bundle.bundle_dir>/bundle.json`, and `--project-root
-            <bundle.project_root>` when the bundle has one. For reviewer_a and reviewer_b
-            ONLY, also pass `--mechanical-scan-ran` and
-            one `--mechanical-finding '<JSON object>'` per entry in
-            `diff_chunks[i].mechanical_scan.files`; pass no finding flags to reviewer_c.
-            The scan flag is required even when the list is empty, because an empty scan
-            result differs from no scan. Its stdout is a JSON envelope whose `issues` array is that lane's candidate
+            name>`, `--model <the entry>`, `--bundle <bundle.bundle_dir>/bundle.json`, and
+            `--chunk-index <i>` (that chunk's index in `bundle.diff_chunks`). The runner
+            reads the bundle itself and derives everything else -- the chunk diff path,
+            that chunk's files, the claimed-file paths reviewer_a alone is entitled to, the
+            mechanical-scan records reviewer_a and reviewer_b alone are entitled to, the
+            change description, and the project root -- so nothing else needs building by
+            hand. Its stdout is a JSON envelope whose `issues` array is that lane's candidate
             issues, in the same shape an Agent lane returns.
             Endpoint lanes and Agent lanes go out in the SAME message as one another; mixing
             the two dispatch mechanisms in one fan-out is normal and expected.
@@ -288,9 +286,9 @@ technique_skill:
             without that list reviewer_a reads the change as though the Markdown were
             never touched and reports a docs-currency rule as violated when the update is
             in fact present -- a false positive that is indistinguishable from a true one.
-            An endpoint-dispatched reviewer_a gets the same list via one `--claimed-file`
-            per path. Pass it for every lane that receives it; the other reviewers do not
-            take it.
+            An endpoint-dispatched reviewer_a gets the same list automatically -- the lane
+            runner reads it out of `bundle.claimed_files` itself when dispatched with
+            `--chunk-index`; the other reviewers do not receive it.
 
             Mechanical scan results -- reviewer_a and reviewer_b ONLY. Each chunk carries
             `diff_chunks[i].mechanical_scan`, shaped as `{schema_version: 2, files:
