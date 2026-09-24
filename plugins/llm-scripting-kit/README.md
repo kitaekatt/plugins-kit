@@ -200,7 +200,10 @@ its quota or credit halt, and the pinned AVAILABLE verdict would keep the spent
 entry `[default]` for the rest of the session. `record-halt` records the halt:
 for an entry that declares `conserve_usage`, it pins the entry OUT-OF-QUOTA
 under the current session key, and every later `describe` in the session shows
-it out of quota until its reset. The reset is `--resets-at` when given, else
+it out of quota until its reset. The halt spends the whole quota pool: every
+other entry that declares `conserve_usage` on the same harness account and
+pool (the entries `describe` labels "shares <pool> with") is pinned
+OUT-OF-QUOTA with it, so a sibling is not dispatched into the same spent pool. The reset is `--resets-at` when given, else
 the reset the pool reading reports (codex's "try again at" clause), else a
 five-hour latch. The session Re-select rule tells the agent to run it before
 re-selecting.

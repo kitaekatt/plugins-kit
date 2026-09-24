@@ -904,3 +904,91 @@ def test_record_observed_halt_without_a_session_key_writes_nothing(tmp_path):
     )
     assert result is None
     assert not cache.exists()
+
+
+# --- an observed halt spends the whole pool (drill finding F4) --------------
+#
+# Entries on the same harness account reading the same pool share one quota:
+# the halt one of them observed is a fact about all of them, so the write-back
+# covers every sibling -- the same set describe labels "shares <pool> with".
+
+
+def _pool_entries():
+    from llm_scripting_kit.model_endpoints import HARNESS_KIND, EndpointEntry
+
+    def entry(name, harness, spec):
+        return EndpointEntry(
+            id=name, base_url=None, model=f"model-{name}", kind=HARNESS_KIND,
+            harness=harness, conserve_usage=spec,
+        )
+
+    seven = ConserveSpec(pool="seven_day")
+    return {
+        "luna": entry("luna", "codex", seven),
+        "sol": entry("sol", "codex", ConserveSpec(pool="seven_day")),
+        "sol-5h": entry("sol-5h", "codex", ConserveSpec(pool="primary")),
+        "fable": entry("fable", "claude", ConserveSpec(pool="seven_day")),
+        "plain": entry("plain", "codex", None),
+    }
+
+
+def test_quota_pool_key_matches_same_harness_and_pool_only():
+    entries = _pool_entries()
+    key = usage_budget.quota_pool_key
+    luna, sol = entries["luna"], entries["sol"]
+    assert key(luna.harness, luna.conserve_usage) == key(sol.harness, sol.conserve_usage)
+    assert key("Codex", luna.conserve_usage) == key("codex", sol.conserve_usage)
+    assert key("codex", ConserveSpec(pool="primary")) != key("codex", luna.conserve_usage)
+    assert key("claude", luna.conserve_usage) != key("codex", luna.conserve_usage)
+    assert key("codex", None) is None
+    assert key(None, luna.conserve_usage) is None
+
+
+def test_record_observed_halt_with_entries_spends_every_sibling_on_the_pool(tmp_path, monkeypatch):
+    cache = tmp_path / "verdicts.json"
+    env = {"CLAUDE_CODE_SESSION_ID": "s1"}
+    entries = _pool_entries()
+    monkeypatch.setattr(
+        usage_budget, "evaluate",
+        lambda spec, harness, *, now=None: usage_budget.Budget(
+            status=STATUS_AVAILABLE, pool=spec.pool, detail="fresh",
+        ),
+    )
+    # Every paced entry is pinned AVAILABLE first, as a session's describe does.
+    for name in ("luna", "sol", "sol-5h", "fable"):
+        e = entries[name]
+        assert usage_budget.pinned_evaluate(
+            name, e.conserve_usage, e.harness, now=NOW, cache_path=cache, environ=env,
+        ).status == STATUS_AVAILABLE
+
+    written = usage_budget.record_observed_halt(
+        "luna", entries["luna"].conserve_usage, entries=entries,
+        resets_at=NOW + 3600, now=NOW, cache_path=cache, environ=env,
+    )
+    assert written.status == STATUS_OUT_OF_QUOTA
+
+    def read(name):
+        e = entries[name]
+        return usage_budget.pinned_evaluate(
+            name, e.conserve_usage, e.harness, now=NOW + 10, cache_path=cache, environ=env,
+        )
+
+    assert read("luna").status == STATUS_OUT_OF_QUOTA
+    assert (read("sol").status, read("sol").resets_at) == (STATUS_OUT_OF_QUOTA, NOW + 3600)
+    # A different pool on the same account, and the same pool name on another
+    # harness, are different quotas: their AVAILABLE pins stand.
+    assert read("sol-5h").status == STATUS_AVAILABLE
+    assert read("fable").status == STATUS_AVAILABLE
+    # An entry without conserve_usage has no verdict to write.
+    stored = json.loads(cache.read_text())["verdicts"]
+    assert "plain" not in stored
+
+
+def test_record_observed_halt_without_entries_writes_only_the_named_entry(tmp_path):
+    cache = tmp_path / "verdicts.json"
+    env = {"CLAUDE_CODE_SESSION_ID": "s1"}
+    usage_budget.record_observed_halt(
+        "luna", ConserveSpec(pool="seven_day"),
+        resets_at=NOW + 60, now=NOW, cache_path=cache, environ=env,
+    )
+    assert set(json.loads(cache.read_text())["verdicts"]) == {"luna"}

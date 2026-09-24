@@ -107,6 +107,7 @@ from .usage_budget import (
     evaluate_usage_budget,
     parse_conserve_usage,
     pinned_evaluate,
+    quota_pool_key,
     record_observed_halt,
 )
 from .completion import (
@@ -223,6 +224,7 @@ __all__ = [
     "parse_conserve_usage",
     "evaluate_usage_budget",
     "pinned_evaluate",
+    "quota_pool_key",
     "record_observed_halt",
     # the one API over a model declaration (describe / run)
     "CALLER_PROCESS",

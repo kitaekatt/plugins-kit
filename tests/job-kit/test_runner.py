@@ -1931,6 +1931,10 @@ import types as _types
 
 import llm_scripting_kit.models as lsk_models
 import llm_scripting_kit.usage_budget as lsk_usage_budget
+
+# Bound at import, before the autouse conftest fixture replaces it, so one
+# test can exercise the real write-back against a scratch cache.
+_REAL_RECORD_OBSERVED_HALT = lsk_usage_budget.record_observed_halt
 from llm_scripting_kit.completion import HALT_INSUFFICIENT_CREDIT, HALT_QUOTA
 
 
@@ -2017,8 +2021,52 @@ def test_a_quota_halt_records_out_of_quota_and_reselects_within_the_job(
     assert [attempt.endpoint for attempt in snapshot.attempts] == ["first", "second"]
     assert snapshot.attempts[0].halt_kind == kind
     assert written == [
-        ("first", entries["first"].conserve_usage, {"resets_at": 1_900_000_000})
+        (
+            "first",
+            entries["first"].conserve_usage,
+            {"entries": entries, "resets_at": 1_900_000_000},
+        )
     ]
+
+
+def test_a_quota_halt_spends_every_entry_sharing_the_pool(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Drill F4: the write-back covers the halted entry's pool siblings too."""
+    def codex(name: str, pool: str) -> _types.SimpleNamespace:
+        entry = _paced(name)
+        entry.harness = "codex"
+        entry.conserve_usage = lsk_usage_budget.ConserveSpec(pool=pool)
+        return entry
+
+    entries = {
+        "first": codex("first", "seven_day"),
+        "sibling": codex("sibling", "seven_day"),
+        "second": codex("second", "primary"),
+    }
+    _registry(monkeypatch, entries)
+    monkeypatch.setattr(lsk_usage_budget, "record_observed_halt", _REAL_RECORD_OBSERVED_HALT)
+    cache = tmp_path / "verdicts.json"
+    monkeypatch.setattr(lsk_usage_budget, "VERDICT_CACHE", cache)
+    monkeypatch.setenv("LLM_SCRIPTING_KIT_USAGE_SESSION", "job-kit-f4")
+    factory = _endpoint_factory(
+        {"first": ClassifyingBackend([QuotaExhausted()]), "second": ClassifyingBackend([None])}
+    )
+    job = replace(_job(tmp_path), models=("first", "second"), max_attempts=2)
+
+    snapshot = run_jobs(
+        [job], tmp_path / "pool.sqlite3",
+        capabilities_provider=_advertisement, backend_factory=factory,
+    )
+
+    assert snapshot.jobs[0].state is JobState.ACCEPTED
+    import json as _json
+
+    stored = _json.loads(cache.read_text())["verdicts"]
+    assert {name: v["budget"]["status"] for name, v in stored.items()} == {
+        "first": lsk_usage_budget.STATUS_OUT_OF_QUOTA,
+        "sibling": lsk_usage_budget.STATUS_OUT_OF_QUOTA,
+    }
 
 
 def test_a_quota_halt_on_an_unpaced_entry_writes_no_verdict(

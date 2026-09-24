@@ -941,15 +941,18 @@ def _record_quota_halt(job: Job, endpoint: str, exc: BaseException) -> None:
     Only an entry that declares ``conserve_usage`` has a pinned verdict; any
     other entry is excluded by the halt ledger alone. The reset time is the
     halt's own when it carried one, else llm-scripting-kit's bounded default.
+    Passing the registry spends every entry sharing the halted entry's quota
+    pool too, so a sibling on the same account is not dispatched into the
+    same spent pool.
     """
-    entry = _lsk_models.discover_model_entries(
+    entries = _lsk_models.discover_model_entries(
         project_root=str(job.declared_directory)
-    ).get(endpoint)
-    spec = getattr(entry, "conserve_usage", None)
+    )
+    spec = getattr(entries.get(endpoint), "conserve_usage", None)
     if spec is None:
         return
     _lsk_usage_budget.record_observed_halt(
-        endpoint, spec, resets_at=getattr(exc, "resets_at", None)
+        endpoint, spec, entries=entries, resets_at=getattr(exc, "resets_at", None)
     )
 
 

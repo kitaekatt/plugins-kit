@@ -196,6 +196,20 @@ def _entries() -> dict[str, EndpointEntry]:
     }
 
 
+def _sibling_entries() -> dict[str, EndpointEntry]:
+    """F4: a second entry on the same codex account and pool, and one on another pool."""
+    entries = _entries()
+    entries["codex-mini"] = EndpointEntry(
+        id="codex-mini", base_url=None, model="gpt-5.4-codex-mini", kind=HARNESS_KIND,
+        harness="codex", conserve_usage=SEVEN_DAY,
+    )
+    entries["codex-5h"] = EndpointEntry(
+        id="codex-5h", base_url=None, model="gpt-5.4-codex-5h", kind=HARNESS_KIND,
+        harness="codex", conserve_usage=usage_budget.ConserveSpec(pool="primary"),
+    )
+    return entries
+
+
 def _reach() -> Reachability:
     return Reachability(status=STATUS_REACHABLE, checked="cli-version", detail="drill")
 
@@ -208,17 +222,20 @@ class Drill:
     codex: CodexCliBackend
 
     def factory(self, claude: _ScriptedClaude):
-        backends = {"codex": self.codex, "opus": claude}
+        backends = {
+            "codex": self.codex, "codex-mini": self.codex, "codex-5h": self.codex,
+            "opus": claude,
+        }
 
         def make(name, **_kw):
             if name not in backends:
                 raise EndpointResolveError(f"unknown endpoint '{name}'")
-            model = _entries()[name].model
+            model = _sibling_entries()[name].model
             return _Selection(name, HARNESS_KIND, backends[name], model)
 
         return make
 
-    def dispatch(self, names, claude, *, workspace=None, max_attempts=3):
+    def dispatch(self, names, claude, *, workspace=None, max_attempts=3, entries=None):
         attempts: list[decl.Attempt] = []
         cwd = workspace if workspace is not None else self.root
         result = decl.run(
@@ -228,18 +245,20 @@ class Drill:
                 options=BackendOptions(cwd=cwd, timeout_s=30),
                 workspace=workspace,
             ),
-            entries=_entries(), backend_factory=self.factory(claude),
-            reachability_cache={"codex": _reach(), "opus": _reach()},
+            entries=entries if entries is not None else _entries(),
+            backend_factory=self.factory(claude),
+            reachability_cache={name: _reach() for name in names},
             max_attempts=max_attempts, on_attempt=attempts.append,
         )
         return result, attempts
 
-    def menu(self) -> decl.Ranking:
+    def menu(self, names=("codex", "opus"), entries=None) -> decl.Ranking:
         """What a later dispatch in the same session is shown."""
         return decl.describe(
-            ["codex", "opus"], caller="session", entries=_entries(),
+            list(names), caller="session",
+            entries=entries if entries is not None else _entries(),
             backend_factory=self.factory(_ScriptedClaude()),
-            reachability_cache={"codex": _reach(), "opus": _reach()},
+            reachability_cache={name: _reach() for name in names},
         )
 
 
@@ -428,6 +447,52 @@ def check_assertion_1_in_session(drill: Drill, monkeypatch) -> dict[str, Any]:
             "menu_after": after.render()}
 
 
+SIBLINGS = ("codex", "codex-mini", "codex-5h", "opus")
+
+
+def check_sibling_in_session(drill: Drill, monkeypatch) -> dict[str, Any]:
+    """F4: record-halt on one entry spends every entry sharing its pool."""
+    from llm_scripting_kit import cli
+
+    entries = _sibling_entries()
+    before = drill.menu(SIBLINGS, entries)
+    mini = next(e for e in before.rendered_entries if e.id == "codex-mini")
+    assert mini.usable and "codex" in mini.shares_quota_with, before.render()
+
+    monkeypatch.setattr(cli, "discover_model_entries", lambda **_kw: entries)
+    assert cli.main(["record-halt", "codex"]) == cli.EXIT_OK
+
+    after = drill.menu(SIBLINGS, entries)
+    states = {e.id: e for e in after.rendered_entries}
+    for name in ("codex", "codex-mini"):
+        assert states[name].usability == usage_budget.STATUS_OUT_OF_QUOTA, after.render()
+    # A different pool on the same account is a different quota.
+    assert states["codex-5h"].usable, after.render()
+    assert after.default is not None and after.default.id not in ("codex", "codex-mini"), after.render()
+    return {"menu_before": before.render(), "menu_after": after.render()}
+
+
+def check_sibling_run(drill: Drill, monkeypatch) -> dict[str, Any]:
+    """F4, process layer: run() does not spend a dispatch on a spent sibling."""
+    entries = _sibling_entries()
+    names = ["codex", "codex-mini", "opus"]
+    before = drill.menu(names, entries)
+    first = before.default.id if before.default is not None else None
+    assert first in ("codex", "codex-mini"), before.render()
+    sibling = "codex-mini" if first == "codex" else "codex"
+
+    monkeypatch.setenv("DRILL_CODEX_MODE", "quota")
+    claude = _ScriptedClaude()
+    result, attempts = drill.dispatch(names, claude, entries=entries)
+    assert [(a.entry, a.outcome) for a in attempts] == [
+        (first, "halted"), ("opus", "completed"),
+    ], [a.to_json() for a in attempts]
+    assert result.entry == "opus", result
+    spent = next(e for e in drill.menu(names, entries).rendered_entries if e.id == sibling)
+    assert spent.usability == usage_budget.STATUS_OUT_OF_QUOTA
+    return {"attempts": [a.to_json() for a in attempts]}
+
+
 # ---------------------------------------------------------------------------
 # The drill
 # ---------------------------------------------------------------------------
@@ -440,6 +505,14 @@ class TestRiskDrill:
 
     def test_assertion_1_in_session_halt_is_recorded_by_record_halt(self, drill, monkeypatch, capsys):
         evidence = check_assertion_1_in_session(drill, monkeypatch)
+        print(json.dumps(evidence, indent=2))
+
+    def test_assertion_1_in_session_halt_spends_the_shared_pool(self, drill, monkeypatch):
+        evidence = check_sibling_in_session(drill, monkeypatch)
+        print(json.dumps(evidence, indent=2))
+
+    def test_assertion_1_run_halt_spends_the_shared_pool(self, drill, monkeypatch):
+        evidence = check_sibling_run(drill, monkeypatch)
         print(json.dumps(evidence, indent=2))
 
     def test_assertion_2_wrong_exit_zero_result_is_a_task_failure(self, drill, monkeypatch):
@@ -474,6 +547,27 @@ class TestDrillGoesRed:
         monkeypatch.setattr(usage_budget, "record_observed_halt", lambda *a, **k: None)
         with pytest.raises(AssertionError):
             check_assertion_1_in_session(drill, monkeypatch)
+
+    @staticmethod
+    def _write_one_entry_only(monkeypatch):
+        real = usage_budget.record_observed_halt
+
+        def single(entry_id, spec, **kw):
+            kw.pop("entries", None)
+            return real(entry_id, spec, **kw)
+
+        monkeypatch.setattr(usage_budget, "record_observed_halt", single)
+        monkeypatch.setattr(decl, "record_observed_halt", single)
+
+    def test_1_sibling_in_session_red_when_one_entry_is_written(self, drill, monkeypatch):
+        self._write_one_entry_only(monkeypatch)
+        with pytest.raises(AssertionError, match="out of quota|OUT_OF_QUOTA|out-of-quota"):
+            check_sibling_in_session(drill, monkeypatch)
+
+    def test_1_sibling_run_red_when_one_entry_is_written(self, drill, monkeypatch):
+        self._write_one_entry_only(monkeypatch)
+        with pytest.raises(AssertionError, match=r"At index 1 diff: \('codex(-mini)?', 'halted'\)"):
+            check_sibling_run(drill, monkeypatch)
 
     def test_2_red_when_a_completed_run_is_re_routed(self, drill, monkeypatch):
         # A backend that validates and re-routes a wrong answer as a halt.

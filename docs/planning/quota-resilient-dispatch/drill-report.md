@@ -17,7 +17,7 @@ after step 4, and the report says the fixture was simulated").
 
 | Assertion | Process layer (A) | Session layer (B) |
 |---|---|---|
-| 1. Out-of-quota codex entry -> a usable entry is announced, with `<entry> failed: quota` as the reason | PASS | PASS (live agent, third attempt, 2026-09-24). See F4 for a sibling-entry gap. |
+| 1. Out-of-quota codex entry -> a usable entry is announced, with `<entry> failed: quota` as the reason | PASS | PASS (live agent, third attempt, 2026-09-24). See F4 for a sibling-entry gap, fixed in llm-scripting-kit 0.48.0. |
 | 2. A wrong result with exit 0 on a usable entry is a task failure and is NOT re-routed | PASS | PASS (live agent, third attempt). |
 | 3. A unit that halts after writing is re-run only after its workspace is reset | PASS | PASS (live agent, third attempt). |
 
@@ -419,22 +419,25 @@ exhaustion window, any non-zero codex exit is therefore classified as quota.
 While the pool really is spent this is the correct answer; it is recorded
 here only so a later reader does not mistake it for per-run evidence.
 
-**F4 (gap, session layer; not fixed). A recorded halt marks only the named
-entry, so a sibling entry on the same codex account stays `[default]`.**
-In the third attempt's assertion 1 run, after `record-halt luna` the closing
-render showed row 5 with luna out of quota, but rows 1 and 2 still read
-`sol  codex          available  n/a (no reading)   [default]`. The scratch
-verdict cache held `sol` pinned `available` (remaining 0.95) beside `luna`
-`out-of-quota`. Both entries draw on one codex account, so a later
-`cross-check` unit in the same session would default to `sol`, fail once,
-and re-select only after a second halt. Cause:
-`record_observed_halt` writes `verdicts[entry_id]` for the one entry it is
-given (`plugins/llm-scripting-kit/lib/llm_scripting_kit/usage_budget.py:873`,
-called per entry from `cli.py:532`), and `pinned_evaluate` returns the
-stored AVAILABLE verdict for every other entry without re-reading
-(`usage_budget.py:814-869`). The cost is one extra failed dispatch per
-sibling entry per session, not a wrong result. Not fixed here (the brief
-forbids shipped-code changes).
+**F4 (gap, session layer; FIXED in llm-scripting-kit 0.48.0 and job-kit
+0.9.0). A recorded halt marked only the named entry, so a sibling entry on
+the same codex account stayed `[default]`.** In the third attempt's
+assertion 1 run, after `record-halt luna` the closing render still showed
+`sol  codex          available  n/a (no reading)   [default]`, because
+`record_observed_halt` wrote the verdict for the one entry it was given and
+`pinned_evaluate` returned `sol`'s stored AVAILABLE verdict without
+re-reading; the cost was one extra failed dispatch per sibling entry per
+session. The fix: `usage_budget.quota_pool_key` (same harness account, same
+pool, same model-scoped label) is the one definition of a shared quota, used
+both by `describe` for its "shares <pool> with" label and by
+`record_observed_halt`, which, given the caller's `entries` registry, writes
+OUT-OF-QUOTA for every sibling that declares `conserve_usage`, each under its
+own spec. The `record-halt` verb, `run()` and job-kit's `_record_quota_halt`
+all pass the registry. The Stale-verdict rule is unchanged: a verdict still
+moves downward only on an observed halt. `test_risk_drill.py` pins it at both
+layers (`codex-mini` shares `codex`'s pool and goes out of quota, `codex-5h`
+on another pool stays usable, and `run()` makes no dispatch into the spent
+sibling), with paired red cases that write one entry only.
 
 ## Not run
 
@@ -443,5 +446,5 @@ forbids shipped-code changes).
 - The session layer through `claudx` itself: the third attempt loaded the
   dev plugins by `--plugin-dir` with a hookless bootstrap stub, so the
   bootstrap pass and its provisioning were not exercised.
-- A `cross-check` unit after a halt on a sibling entry (F4), which would
-  show the extra failed dispatch directly.
+- A live `cross-check` unit after a halt on a sibling entry (F4); the fix
+  is pinned by the process-layer and CLI drill cases only.

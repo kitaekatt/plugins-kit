@@ -511,10 +511,13 @@ def _cmd_record_halt(
     agent driving the harness for orchestrate or a review lane -- observes the
     halt instead, and this verb is its write-back, so a later ``describe`` in
     the same session reads the entry out of quota rather than the stale
-    AVAILABLE pin. An entry without ``conserve_usage`` has no verdict to move
+    AVAILABLE pin -- and so does every entry sharing its quota pool (same
+    harness account, same pool), which ``describe`` labels "shares <pool>
+    with". An entry without ``conserve_usage`` has no verdict to move
     and is a silent no-op; an unknown id is a usage error.
     """
-    entry = discover_model_entries(project_root=project_root).get(entry_id)
+    entries = discover_model_entries(project_root=project_root)
+    entry = entries.get(entry_id)
     if entry is None:
         raise EndpointResolveError(f"unknown entry '{entry_id}'")
     result: dict[str, Any] = {"entry": entry_id, "kind": kind, "recorded": False}
@@ -529,7 +532,10 @@ def _cmd_record_halt(
         reading = usage_budget.evaluate(spec, entry.harness)
         if reading.status == usage_budget.STATUS_OUT_OF_QUOTA:
             resets_at = reading.resets_at
-    budget = usage_budget.record_observed_halt(entry_id, spec, resets_at=resets_at)
+    # entries: every other entry sharing this quota pool is spent too.
+    budget = usage_budget.record_observed_halt(
+        entry_id, spec, entries=entries, resets_at=resets_at
+    )
     if budget is None:
         result["reason"] = "no session key; nothing is pinned to record against"
     else:

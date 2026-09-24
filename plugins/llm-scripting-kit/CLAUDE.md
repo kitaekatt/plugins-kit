@@ -188,6 +188,13 @@ for callers with no loop of their own. Four things are easy to break:
   AVAILABLE verdict keeps the spent entry `[default]` for the session (drill
   finding F1, `tests/llm-scripting-kit/test_risk_drill.py`).
 
+- **A halt spends the whole pool.** Every caller passes its registry as
+  `record_observed_halt(..., entries=...)`, which writes OUT-OF-QUOTA for
+  every entry sharing the halted entry's `quota_pool_key` (same harness
+  account, same pool) -- the same set `describe` labels "shares <pool>
+  with". Without it, each sibling costs one failed dispatch (drill finding
+  F4). A new caller that omits `entries` reintroduces that gap.
+
 The `usage` and `describe` verbs are the inspection surfaces for a check that
 is otherwise invisible.
 

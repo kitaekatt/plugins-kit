@@ -64,6 +64,7 @@ from .usage_budget import (
     ConserveSpec,
     evaluate,
     pinned_evaluate,
+    quota_pool_key,
     record_observed_halt,
 )
 
@@ -653,9 +654,10 @@ def describe(
     if not any(state.usable for state in ordered):
         raise NoUsableRoutingTarget(declared, ordered_dispositions, caller)
 
-    # Shared quota is information only (D3): same harness, same declared pool.
+    # Shared quota (D3): same harness account, same declared pool. The render
+    # labels it; an observed halt spends it for all of them (record_observed_halt).
     def pool_key(state: EntryState, spec: Any) -> Any:
-        return (state.harness, spec.pool, spec.display_name) if spec is not None else None
+        return quota_pool_key(state.harness, spec)
 
     specs = {c["name"]: c["spec"] for c in candidates}
     first_usable = next(state.id for state in ordered if state.usable)
@@ -808,7 +810,8 @@ def run(
     For callers with NO loop of their own. Each execution is reported through
     ``on_attempt`` and counted against ``max_attempts``, which limits
     executions only: reaching it is ``RUN_ATTEMPT_LIMIT``, never the floor.
-    A quota or credit halt writes the entry's verdict back
+    A quota or credit halt writes the entry's verdict back, and every entry
+    sharing its quota pool with it
     (:func:`~.usage_budget.record_observed_halt`, when it declares
     ``conserve_usage``); every classified halt and every launch failure
     excludes the entry for the rest of the run, and :func:`describe` is called
@@ -863,14 +866,18 @@ def run(
                 report(Attempt(chosen.id, number, chosen.pace, error=str(exc), outcome="failed"))
                 return RunResult(RUN_FAILED, chosen.id, None, tuple(attempts), f"task error: {exc}")
             if halt in _QUOTA_HALTS:
-                spec = getattr((entries or {}).get(chosen.id), "conserve_usage", None)
-                if spec is None and entries is None:
+                registry = entries
+                if registry is None:
                     from .models import discover_model_entries  # noqa: PLC0415
 
-                    found = discover_model_entries(project_root=root).get(chosen.id)
-                    spec = getattr(found, "conserve_usage", None)
+                    registry = discover_model_entries(project_root=root)
+                spec = getattr(registry.get(chosen.id), "conserve_usage", None)
                 if spec is not None:
-                    record_observed_halt(chosen.id, spec, resets_at=getattr(exc, "resets_at", None))
+                    # entries: the halt spends every entry sharing this pool.
+                    record_observed_halt(
+                        chosen.id, spec, entries=registry,
+                        resets_at=getattr(exc, "resets_at", None),
+                    )
             if launch:
                 cache[chosen.id] = Reachability(
                     status=STATUS_UNREACHABLE, checked="dispatch",
