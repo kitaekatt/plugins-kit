@@ -15,12 +15,13 @@ folder path to stdout on success; on failure the reason/findings go to
 stderr (and no partial folder is left behind).
 
 Read-op conventions (Step 3):
-- ``list`` prints stable, parseable task lines in two default sections:
-  ``Open tasks:`` (active/blocked) and ``Closed tasks:``. Each task line is
-  ``id  status  priority  last_update  title`` (two-space separated; absent
-  fields ``-``; ``last_update`` is the latest ISO date in dated ``log.md``
-  entries). Explicit ``--status`` prints only matching task lines. Discovery
-  notes go to stderr. Exit 0 even when empty.
+- ``list`` prints stable, parseable task lines in three default sections:
+  ``Open tasks:`` (active/blocked), ``Deferred tasks:`` (purposefully put on
+  hold, intended to be resumed later), and ``Closed tasks:``. Each task line
+  is ``id  status  priority  last_update  title`` (two-space separated;
+  absent fields ``-``; ``last_update`` is the latest ISO date in dated
+  ``log.md`` entries). Explicit ``--status`` prints only matching task lines.
+  Discovery notes go to stderr. Exit 0 even when empty.
 - ``show <ref>`` prints the selected task.yaml fields; non-zero with a
   reason on stderr when the ref is unresolvable or the folder is not
   readable locally (archived / orphaned / remote).
@@ -262,7 +263,11 @@ def _print_task_sections(
     indent: str = "",
 ) -> bool:
     printed = False
-    for heading, section in (("Open tasks:", sections["open"]), ("Closed tasks:", sections["closed"])):
+    for heading, section in (
+        ("Open tasks:", sections["open"]),
+        ("Deferred tasks:", sections["deferred"]),
+        ("Closed tasks:", sections["closed"]),
+    ):
         if not section:
             continue
         if printed:

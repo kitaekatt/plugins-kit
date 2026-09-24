@@ -188,6 +188,15 @@ class TestWorkLib:
         for fname in SCAFFOLD_FILES:
             assert (folder / fname).is_file(), fname
 
+    def test_deferred_status_does_not_block_work(self, tmp_path):
+        # deferred mirrors closed here deliberately: work has no status
+        # precondition, only a validate-findings gate (module docstring).
+        # A finding-free deferred task works the same as a finding-free
+        # closed one -- no bespoke deferred refusal.
+        make_task(tmp_path, "tmp/a", status="deferred")
+        result = state_ops.work("tmp/a", tmp_path)
+        assert result.canonical == "tmp/a"
+
     def test_dev_tasks_promotion_outside_git_succeeds(self, tmp_path):
         # Outside any git repo the script cannot verify VCS state (no git
         # dependency): validate emits only an advisory note, so promotion
@@ -308,6 +317,15 @@ class TestUpdateLib:
         assert result.validation.classification == "active"
         assert read_block(folder)["depends_on"] == ["tmp/gone"]
 
+    def test_status_deferred_accepted(self, tmp_path):
+        # deferred is a stored status like any other in the vocabulary --
+        # update just writes it, and re-validation classifies it clean.
+        folder = make_task(tmp_path, "tmp/a")
+        result = state_ops.update("tmp/a", tmp_path, status="deferred")
+        assert read_block(folder)["status"] == "deferred"
+        assert result.validation.classification == "deferred"
+        assert result.validation.clean
+
     def test_invalid_value_persists_fix_forward(self, tmp_path):
         # update is a write op; validate reports. A bad value persists and
         # surfaces as a finding (the fix-forward posture).
@@ -343,6 +361,15 @@ class TestCloseLib:
             state_ops.close("tmp/a", tmp_path)
         assert read_block(folder)["status"] == "closed"
 
+    def test_deferred_status_errors_same_as_closed(self, tmp_path):
+        # close's own precondition is unconditionally "status == active", so
+        # a deferred task is already rejected the same generic way a closed
+        # one is -- no special-casing needed for the new status.
+        folder = make_task(tmp_path, "tmp/a", status="deferred")
+        with pytest.raises(StateOpError, match="active"):
+            state_ops.close("tmp/a", tmp_path)
+        assert read_block(folder)["status"] == "deferred"
+
     def test_missing_folder_errors(self, tmp_path):
         with pytest.raises(StateOpError, match="no task folder"):
             state_ops.close("tmp/ghost", tmp_path)
@@ -362,6 +389,15 @@ class TestReopenLib:
         result = state_ops.reopen("tmp/a", tmp_path)
         assert read_block(folder)["status"] == "active"
         assert result.validation.classification == "active"
+
+    def test_deferred_to_active(self, tmp_path):
+        # deferred -> active needs no dedicated branch: reopen never
+        # inspects the prior stored status (module docstring).
+        folder = make_task(tmp_path, "tmp/a", status="deferred")
+        result = state_ops.reopen("tmp/a", tmp_path)
+        assert read_block(folder)["status"] == "active"
+        assert result.validation.classification == "active"
+        assert result.validation.clean
 
     def test_missing_folder_errors(self, tmp_path):
         with pytest.raises(StateOpError, match="cannot be reopened"):
@@ -558,6 +594,16 @@ class TestCloseReopenCLI:
 
     def test_reopen_prints_classification(self, tmp_path):
         folder = make_task(tmp_path, "tmp/a", status="closed")
+        proc = run_cli(
+            ["reopen", "tmp/a", "--root", str(tmp_path)],
+            tmp_path,
+        )
+        assert proc.returncode == 0, proc.stderr
+        assert proc.stdout.strip() == "active"
+        assert read_block(folder)["status"] == "active"
+
+    def test_reopen_from_deferred_prints_active(self, tmp_path):
+        folder = make_task(tmp_path, "tmp/a", status="deferred")
         proc = run_cli(
             ["reopen", "tmp/a", "--root", str(tmp_path)],
             tmp_path,

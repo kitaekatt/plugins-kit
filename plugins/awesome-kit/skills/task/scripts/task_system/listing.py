@@ -23,7 +23,7 @@ from .discovery import (
 
 
 SUMMARY_METADATA_KEYS = frozenset(("summary", "summary_fingerprint", "summary_updated"))
-SUMMARY_ELIGIBLE_STATUSES = frozenset(("active", "blocked", "closed"))
+SUMMARY_ELIGIBLE_STATUSES = frozenset(("active", "blocked", "closed", "deferred"))
 
 # Folded into summary_source_fingerprint's hashed material below. Bump this
 # whenever summary_ops's generation contract changes (system prompt wording,
@@ -263,15 +263,21 @@ def collect_listing(
 
 
 def section_views(views: tuple[TaskView, ...]) -> dict[str, list[TaskView]]:
-    """Group views without losing non-standard classifications."""
+    """Group views without losing non-standard classifications.
+
+    ``deferred`` (purposefully put on hold, intended to be resumed later) is
+    its own group -- neither ``open`` nor ``closed`` -- sectioned between
+    them by every caller (list's text output, the JSON/YAML projection, and
+    the review HTML)."""
     return {
         "open": [view for view in views if view.status in OPEN_CLASSIFICATIONS],
+        "deferred": [view for view in views if view.status == "deferred"],
         "closed": [view for view in views if view.status == "closed"],
         "other": [
             view
             for view in views
             if view.status not in OPEN_CLASSIFICATIONS
-            and view.status not in ("closed", "archived")
+            and view.status not in ("closed", "archived", "deferred")
         ],
     }
 

@@ -20,8 +20,11 @@ Classification outcomes:
   ``archived``; tmp path (local host or no host) + no folder otherwise is
   ``orphaned`` with the "orphaned tmp reference" warning.
 - otherwise the stored status from task.yaml (``active`` / ``blocked`` /
-  ``closed`` / ``archived``), except a non-empty ``blocked_by`` reads as
-  ``blocked`` regardless of the stored status.
+  ``closed`` / ``deferred`` / ``archived``), except a non-empty
+  ``blocked_by`` reads as ``blocked`` regardless of the stored status.
+  ``deferred`` -- a task purposefully put on hold, intended to be resumed
+  later -- classifies like ``closed``: a finding-free task reads straight
+  through as its stored status, no special-casing needed here.
 
 Minimal readings chosen in Step 1 (flagged in the implementation report):
 - Version-control detection is git-scoped but VCS-neutral in posture

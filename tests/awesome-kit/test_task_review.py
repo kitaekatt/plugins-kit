@@ -166,6 +166,38 @@ class TestTaskListingAndReview:
         assert yaml.safe_load(yaml_result.stdout)["schema_version"] == "1"
         assert "missing task.summary" in yaml_result.stderr
 
+    def test_list_text_has_deferred_section_between_open_and_closed(
+        self, tmp_path: Path
+    ) -> None:
+        make_task(tmp_path, "tmp/open-one", title="Open one", date="2026-09-20")
+        make_task(
+            tmp_path,
+            "tmp/on-hold",
+            title="On hold",
+            status="deferred",
+            summary="Deferred summary.",
+            date="2026-09-19",
+        )
+        make_task(
+            tmp_path,
+            "dev/tasks/closed",
+            title="Finished",
+            status="closed",
+            summary="Finished task.",
+            date="2026-09-21",
+        )
+
+        result = run_cli(["list", "--root", str(tmp_path)], tmp_path)
+        assert result.returncode == 0, result.stderr
+        stdout = result.stdout
+        assert "Open tasks:" in stdout
+        assert "Deferred tasks:" in stdout
+        assert "Closed tasks:" in stdout
+        # Section ordering: Open, then Deferred, then Closed.
+        assert stdout.index("Open tasks:") < stdout.index("Deferred tasks:")
+        assert stdout.index("Deferred tasks:") < stdout.index("Closed tasks:")
+        assert "tmp/on-hold  deferred  -  2026-09-19  On hold" in stdout
+
     def test_review_is_collapsible_sorted_escaped_and_excludes_archived(
         self, tmp_path: Path
     ) -> None:
@@ -234,6 +266,57 @@ class TestTaskListingAndReview:
         assert "role=\"tooltip\"" in html
         assert "Updates" not in html
         assert "missing task.summary" in result.stderr
+
+    def test_review_deferred_group_renders_between_open_and_closed(
+        self, tmp_path: Path
+    ) -> None:
+        make_task(
+            tmp_path,
+            "tmp/open-one",
+            title="Open one",
+            summary="Open summary.",
+            date="2026-09-20",
+        )
+        make_task(
+            tmp_path,
+            "tmp/on-hold",
+            title="On hold",
+            status="deferred",
+            summary="Deferred summary.",
+            date="2026-09-19",
+        )
+        make_task(
+            tmp_path,
+            "dev/tasks/closed",
+            title="Closed task",
+            status="closed",
+            summary="Closed summary.",
+            date="2026-09-18",
+        )
+        output = tmp_path / "review.html"
+        result = run_cli(
+            [
+                "review",
+                "--scope",
+                "project",
+                "--no-generate-missing-summaries",
+                "--no-open",
+                "--output",
+                str(output),
+                "--root",
+                str(tmp_path),
+            ],
+            tmp_path,
+        )
+        assert result.returncode == 0, result.stderr
+        html = output.read_text(encoding="utf-8")
+        assert "Deferred tasks" in html
+        assert html.count('<section class="task-section">') == 3
+        # Section ordering: Open, then Deferred, then Closed.
+        assert html.index("Open tasks") < html.index("Deferred tasks")
+        assert html.index("Deferred tasks") < html.index("Closed tasks")
+        assert "On hold" in html
+        assert '<span class="task-status status-deferred">deferred</span>' in html
 
     def test_invalid_task_missing_summary_is_non_actionable_but_stays_in_review(
         self, tmp_path: Path
@@ -597,6 +680,30 @@ class TestSummaryGeneration:
         for folder in (shared_folder, other_folder):
             block = yaml.safe_load((folder / "task.yaml").read_text(encoding="utf-8"))
             assert block["task"]["summary"] == "Generated summary."
+
+    def test_deferred_task_is_eligible_for_summary_generation(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # deferred joins active/blocked/closed in the summary-eligible set
+        # (listing.SUMMARY_ELIGIBLE_STATUSES, summary_ops.ELIGIBLE_STATUSES)
+        # -- a deferred task's missing summary is generated like any other
+        # eligible task's, not treated as "unavailable".
+        make_task(tmp_path, "tmp/on-hold", title="On hold", status="deferred")
+        current = listing.collect_listing("project", tmp_path)
+        view = current.views[0]
+        assert view.status == "deferred"
+        assert view.summary_status == "missing"
+
+        monkeypatch.setattr(
+            summary_ops,
+            "_complete",
+            lambda backend, view, root: "Generated summary.",
+        )
+        report = summary_ops.generate_missing_summaries(
+            current, tmp_path, backend=SimpleNamespace()
+        )
+        assert report.generated == ("tmp/on-hold",)
+        assert report.failed == ()
 
     def test_generation_does_not_recreate_disappeared_task_folder(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

@@ -11,8 +11,9 @@ is uniform.
 Readings chosen in Step 5 (flagged in the implementation report):
 
 - **archive precondition is the STORED status** (``status: active`` in
-  task.yaml), matching close's reading. A ``closed`` task errors with a
-  "reopen first" hint (spec 7.1); any other non-active status also errors.
+  task.yaml), matching close's reading. A ``closed`` or ``deferred`` task
+  errors with a "reopen first" hint (spec 7.1); any other non-active status
+  also errors.
 - **Non-tmp archive SUBMITS to version control, then removes** (spec 7.4,
   revised 2026-07-22): the durable record must be in version-control history
   before the folder can go. The task system has NO dependency on git --
@@ -70,8 +71,8 @@ Readings chosen in Step 5 (flagged in the implementation report):
   accepts stored status ``active`` OR ``archived`` -- ``archived`` because a
   still-present archived folder (a ``vcs_pending`` archive output, or the
   validate warning's "should have been deleted" case) is exactly what
-  delete finishes off; a ``closed`` task still errors with the
-  reopen-first hint. delete also reaches a PARKED folder under either root
+  delete finishes off; a ``closed`` or ``deferred`` task still errors with
+  the reopen-first hint. delete also reaches a PARKED folder under either root
   (``<location>/archived-tasks/<stub>``): it is the archived copy of the
   named task, so ``delete <ref>`` is how the user removes it. The
   commit-first guard does not apply to a parked folder -- it sits outside
@@ -270,7 +271,9 @@ def _archive_preflight(
     stored_status = data["task"].get("status")
     if stored_status not in allowed_statuses:
         hint = (
-            " -- reopen it first" if stored_status == "closed" else ""
+            " -- reopen it first"
+            if stored_status in ("closed", "deferred")
+            else ""
         )
         wanted = " or ".join(allowed_statuses)
         raise StateOpError(

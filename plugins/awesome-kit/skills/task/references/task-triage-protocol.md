@@ -54,7 +54,8 @@ Each brief must return:
 2. A verdict for every open item: `done`, `obsolete`, `open`, or `unclear`,
    with evidence.
 3. Remaining work, sized and stating its value.
-4. Two or three options with consequences.
+4. Two or three options with consequences, drawn from the dispositions in
+   step 4 (archive, close, defer, update, merge, reviewed-keep).
 5. Outcomes for the task's premises.
 
 The audit is complete only when every open item has a verdict and evidence,
@@ -84,15 +85,19 @@ applied ruling.
 1. **archive** -- run `task.py archive <ref>`. For `dev/tasks`, this commits
    the final state and removal.
 2. **close** -- run `task.py close <ref>`. Keep the task folder.
-3. **update** -- rotate the folder per `handoff-template.md`: remove done and
+3. **defer** -- run `task.py update <ref> --status deferred`. Keep the task
+   folder; commit and push the task repository. Use this for a task that is
+   purposefully put on hold, intended to be resumed later -- not done, not
+   abandoned, just not now. `task.py reopen <ref>` brings it back to active.
+4. **update** -- rotate the folder per `handoff-template.md`: remove done and
    obsolete items, fix stale claims, then run `task.py update <ref>`.
-4. **merge** -- copy durable documents into the absorbing task, such as a
+5. **merge** -- copy durable documents into the absorbing task, such as a
    `<topic>/` subfolder; add surviving items to its `task_items` block using
    the user's framing (for example, P1 active rather than deferred when the
    user says so); reference the item ids from its `CLAUDE.md` priorities;
    append a dated log bullet naming what was dropped and why; commit; then
    archive the source task.
-5. **reviewed-keep** -- run `task.py update <ref>` with no field edits. This
+6. **reviewed-keep** -- run `task.py update <ref>` with no field edits. This
    appends `refresh (no field edits)` so `list` shows the task as recently
    reviewed. Commit and push.
 

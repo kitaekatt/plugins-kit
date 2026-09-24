@@ -10,8 +10,12 @@ Readings chosen in Step 4 (flagged in the implementation report):
 
 - **work has no status precondition.** The spec gates ``work`` on validate
   findings only (errors AND warnings both block) plus the remote error; a
-  finding-free task whose stored status is ``closed``/``blocked``/``archived``
-  can be worked without ``reopen`` (spec 7.1 names no status pre for work).
+  finding-free task whose stored status is
+  ``closed``/``blocked``/``deferred``/``archived`` can be worked without
+  ``reopen`` (spec 7.1 names no status pre for work). ``deferred`` reads the
+  same way deliberately -- a bespoke work-time gate was considered and
+  declined in favor of the existing status-agnostic reading, which already
+  covers it.
 - **work does NOT create a folder unless asked.** A ref with no folder is an
   error: the overwhelmingly common cause is a mistyped path, and silently
   scaffolding an empty task there starts a session on work that does not
@@ -48,7 +52,9 @@ Readings chosen in Step 4 (flagged in the implementation report):
   only that the folder exists -- a folder parked at
   ``<location>/archived-tasks/<stub>`` counts and is restored to
   ``<location>/<stub>`` first, under either root); it re-validates and
-  reports findings.
+  reports findings. Unconditional means exactly that: reopen never inspects
+  the PRIOR stored status, so ``deferred -> active`` needs no separate case
+  -- it is the same write as ``closed -> active`` or ``archived -> active``.
 - **task.yaml read-modify-write** uses yaml.safe_load + safe_dump
   (sort_keys=False): unknown extra fields and the mapping's insertion order
   round-trip; YAML comments do not survive an edit (content, not bytes, is
