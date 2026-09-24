@@ -175,3 +175,29 @@ def test_wrapper_passes_through_to_shared_main(
     monkeypatch.setitem(sys.modules, "llm_scripting_kit.review_lane", review_lane)
 
     assert _run_wrapper(monkeypatch, package, review_lane) == 17
+
+
+def test_pass_through_prints_no_warning_prose(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Migration step 5: routing is silent on the success path.
+
+    The review skill chooses an entry with `llm-scripting-kit describe`
+    before it calls this wrapper, and skipping an entry is silent (model
+    declaration directions 13 and 16). So a lane that dispatches adds nothing
+    of the wrapper's own to stderr: stderr stays the channel for a refusal or
+    a failure, which the skill reports as a failed lane.
+    """
+    package = types.ModuleType("llm_scripting_kit")
+    package.__path__ = []
+    review_lane = types.ModuleType("llm_scripting_kit.review_lane")
+    review_lane.main = lambda: 0
+    monkeypatch.setitem(sys.modules, "llm_scripting_kit.review_lane", review_lane)
+    monkeypatch.setattr(
+        sys, "argv", [str(_SCRIPT), "--lane", "x", "--model", "sol", "--chunk", "z"]
+    )
+
+    assert _run_wrapper(monkeypatch, package, review_lane) == 0
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    assert captured.out == ""

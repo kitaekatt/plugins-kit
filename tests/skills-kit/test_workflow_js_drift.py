@@ -15,6 +15,8 @@ run `uv run python plugins/skills-kit/scripts/gen_workflow_js.py`, commit both.
 import importlib.util
 from pathlib import Path
 
+import pytest
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 GEN_PATH = REPO_ROOT / "plugins" / "skills-kit" / "scripts" / "gen_workflow_js.py"
 
@@ -168,6 +170,70 @@ class TestDetectTotalsChunkIsNotDeadCode:
             if needle in p.read_text(encoding="utf-8")
         ]
         assert offenders == []
+
+
+class TestRemediateModelDeclaration:
+    """K2 (migration step 7): the remediate lanes' model is a one-entry model
+    declaration, structurally validated by bootstrap_lib.model_declaration --
+    shape only, no known-id or usable-set expectation."""
+
+    def test_remediate_model_declaration_is_sonnet(self):
+        assert gen.REMEDIATE_MODEL_DECLARATION.ids == ("sonnet",)
+        assert gen.REMEDIATE_MODEL == "sonnet"
+
+    def test_rendered_remediate_lanes_carry_the_declared_model(self):
+        for lane, path in gen.remediate_targets().items():
+            rendered = gen.render_remediate(lane)
+            assert f"model: '{gen.REMEDIATE_MODEL}'," in rendered, lane
+
+    def test_validator_rejects_an_empty_declaration(self):
+        with pytest.raises(gen.model_declaration.DeclarationError):
+            gen.model_declaration.validate([])
+
+    def test_validator_rejects_a_duplicate_id(self):
+        with pytest.raises(gen.model_declaration.DeclarationError):
+            gen.model_declaration.validate(["sonnet", "sonnet"])
+
+
+class TestModelLiteralDrift:
+    """K1 (migration step 7): the 9 hand-written model literals in the
+    detect/classify/generate scripts are each a one-entry model declaration;
+    check_shared_chunks() (extended) asserts every literal equals its
+    declared id."""
+
+    def test_nine_literals_declared_across_six_files(self):
+        assert len(gen.MODEL_LITERAL_DECLARATIONS) == 6
+        text_counts = {
+            path: len(gen._MODEL_LITERAL_RE.findall(path.read_text(encoding="utf-8")))
+            for path in gen.MODEL_LITERAL_DECLARATIONS
+        }
+        assert sum(text_counts.values()) == 9
+
+    def test_check_model_literals_clean_on_shipped_files(self):
+        assert gen.check_model_literals() == []
+
+    def test_check_shared_chunks_now_covers_model_literals(self):
+        # check_shared_chunks is the extended function the brief names; it
+        # must fold in check_model_literals() rather than leaving it a
+        # separately-run sibling nobody calls.
+        assert gen.check_shared_chunks() == []
+
+    def test_a_drifted_literal_is_caught(self, tmp_path):
+        target = tmp_path / "claude-md-detect.js"
+        target.write_text("model: 'haiku',\n", encoding="utf-8")
+        declarations = {target: ["opus"]}
+        original = gen.MODEL_LITERAL_DECLARATIONS
+        gen.MODEL_LITERAL_DECLARATIONS = declarations
+        try:
+            problems = gen.check_model_literals()
+        finally:
+            gen.MODEL_LITERAL_DECLARATIONS = original
+        assert any("haiku" in p and "opus" in p for p in problems)
+
+    def test_declared_lists_validate_structurally(self):
+        for declared in gen.MODEL_LITERAL_DECLARATIONS.values():
+            declaration = gen.model_declaration.validate(declared)
+            assert len(declaration) == 1
 
 
 class TestReviewTotalsChunkCarriesSuppressedFindings:

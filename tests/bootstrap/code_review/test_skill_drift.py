@@ -69,6 +69,59 @@ class TestDispatchRulePresent:
             assert "Workflow tool" in body
 
 
+class TestDeclarationRouting:
+    """Migration step 5: route each reviewer's declaration by entry harness.
+
+    The skill calls `llm-scripting-kit describe`, prints its output (and so
+    its `Ranking.rule`) verbatim, chooses, and announces. It no longer reads
+    one model off the table by a closed alias set, and it carries no
+    non-routable warning prose.
+    """
+
+    @pytest.mark.parametrize("vcs", ["git", "p4"])
+    def test_multi_entry_declarations_go_through_describe(self, vcs: str) -> None:
+        body = " ".join(gen.render_skill(vcs).split())
+        assert "llm-scripting-kit describe <entry>... --caller session" in body
+        assert "`--self <id>`" in body
+        assert "print its stdout verbatim" in body
+        assert "announce the choice in the form that rule gives" in body
+
+    @pytest.mark.parametrize("vcs", ["git", "p4"])
+    def test_entries_dispatch_by_their_harness(self, vcs: str) -> None:
+        body = " ".join(gen.render_skill(vcs).split())
+        assert "Entry-harness rule" in body
+        assert "an entry whose describe line reads `claude/agent`" in body
+        assert "launches an Agent subagent with `model: <entry>`" in body
+        assert "model-kind rule" not in body
+
+    @pytest.mark.parametrize("vcs", ["git", "p4"])
+    def test_without_describe_core_ids_route_through_the_harness(self, vcs: str) -> None:
+        body = " ".join(gen.render_skill(vcs).split())
+        assert "`llm-scripting-kit` is not on PATH" in body
+        assert "rejects `describe` as an invalid choice" in body
+        assert "skip every other entry without comment" in body
+
+    @pytest.mark.parametrize("vcs", ["git", "p4"])
+    def test_stale_no_agent_fallback_gotcha_is_gone(self, vcs: str) -> None:
+        body = " ".join(gen.render_skill(vcs).split())
+        assert "has no Agent fallback" not in body
+        assert "Every `model` in the RESOLVED table is a single string" not in body
+
+    @pytest.mark.parametrize("vcs", ["git", "p4"])
+    def test_no_non_routable_warning_prose(self, vcs: str) -> None:
+        for text in (gen.render_skill(vcs), gen.render_configuration(vcs)):
+            flat = " ".join(text.split())
+            assert "skipped priority entry" not in flat
+            assert "entry it skipped" not in flat
+            assert "not routable here" not in flat
+
+    @pytest.mark.parametrize("vcs", ["git", "p4"])
+    def test_configuration_documents_the_shipped_declaration(self, vcs: str) -> None:
+        ref = gen.render_configuration(vcs)
+        assert "  - name: reviewer_c_introduced_code\n    model:\n    - sol\n    - opus\n" in ref
+        assert "peer:opus" not in ref.split("## Shipped defaults", 1)[1].split("\n## ", 1)[0]
+
+
 class TestMechanicalScanContract:
     def test_both_native_skills_require_contract_two_and_allow_masked_errors(self):
         for vcs in ("git", "p4"):

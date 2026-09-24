@@ -1,8 +1,9 @@
 """The engine exports BOOTSTRAP_PYTHON / BOOTSTRAP_PROJECT_PYTHON where it runs commands.
 
 These drive engine._main in-process (the harness from
-test_engine_ran_version.py: empty self_setup, isolated HOME) and
-layered_bootstrap.run_layered_bootstrap, so they observe the WIRING rather
+test_engine_ran_version.py: empty self_setup, isolated HOME), both as the
+hooks launch it and as `bootstrap run` launches it (--console
+--project-key _global_ --exit-status), so they observe the WIRING rather
 than the helper: a helper-level test stays green when the engine stops
 calling it. The conftest autouse fixture clears both names around every test.
 
@@ -34,6 +35,7 @@ from bootstrap_lib.interpreter_env import (
     standalone_python,
 )
 from bootstrap_lib.platform_detect import detect_os
+from bootstrap_lib.records import EVENTS_FILENAME
 
 from bootstrap.test_engine_ran_version import _fake_root
 from bootstrap.test_interpreter_env import (
@@ -108,6 +110,37 @@ def _run_main(tmp_path, monkeypatch, project, *extra):
     engine._main()
     log = data_dir / "bootstrap.log"
     return log.read_text(encoding="utf-8") if log.exists() else ""
+
+
+def _run_terminal(tmp_path, monkeypatch, project):
+    """One pass launched as `bootstrap run` launches it; returns the texts of
+    the pass record (console mode prints only actions, so the checks are read
+    from the record)."""
+    root = _fake_root(tmp_path, "0.120.0") if not (tmp_path / "plugin_root").exists() \
+        else str(tmp_path / "plugin_root")
+    data_dir = tmp_path / "data"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    iso_home = _home(tmp_path)
+    monkeypatch.setenv("HOME", str(iso_home))
+    monkeypatch.setenv("USERPROFILE", str(iso_home))
+    monkeypatch.setenv("PATH", os.environ.get("PATH", ""))
+    monkeypatch.setattr("sys.argv", [
+        "bootstrap_engine.py", "--plugin-root", root, "--data-dir", str(data_dir),
+        "--project-dir", str(project), "--project-key", "_global_",
+        "--console", "--exit-status",
+    ])
+    recorders = []
+    real = engine._new_recorder
+    monkeypatch.setattr(engine, "_new_recorder",
+                        lambda *a: recorders.append(real(*a)) or recorders[-1])
+    try:
+        engine._main()
+    finally:
+        for recorder in recorders:
+            recorder.flush()
+    events = data_dir / EVENTS_FILENAME
+    lines = events.read_text(encoding="utf-8").splitlines() if events.exists() else []
+    return [json.loads(line).get("text") or "" for line in lines if line.strip()]
 
 
 def _fake_venv_step(fail=False):
@@ -476,21 +509,14 @@ class TestOptOutComesFromProjectLayers:
         assert os.environ[PROJECT_VAR] == norm(venv_python)
         assert log.count(self.USER_NOTE) == 1, log
 
-    def test_layered_run_ignores_user_layer_opt_out(self, tmp_path, monkeypatch):
-        from bootstrap_lib.layered_bootstrap import run_layered_bootstrap
-        home = _home(tmp_path)
-        monkeypatch.setenv("HOME", str(home))
-        monkeypatch.setenv("USERPROFILE", str(home))
+    def test_terminal_run_ignores_user_layer_opt_out(self, tmp_path, monkeypatch):
         _write_user_layer(tmp_path, {"project_python": False})
         project = _project(tmp_path, {}, pyproject=False)
         venv_python = make_venv(project / ".venv")
-        plugin = tmp_path / "plugin"
-        plugin.mkdir()
-        data = tmp_path / "data"
-        data.mkdir()
-        result = run_layered_bootstrap(project, plugin, data, detect_os())
+        texts = _run_terminal(tmp_path, monkeypatch, project)
         assert os.environ[PROJECT_VAR] == norm(venv_python)
-        assert sum(self.USER_NOTE in str(d) for d in result.details) == 1
+        assert sum(self.USER_NOTE in t for t in texts) == 1, texts
+        assert not (tmp_path / "data" / RECORD_SUBDIR).exists()
 
 
 class TestStep3cShellHook:
@@ -642,85 +668,65 @@ class TestProcessInterpreterEnv:
                    for a in actions)
 
 
-class TestLayeredRunExports:
-    """`bootstrap run` / `profile set` never enter _main."""
+class TestTerminalRunExports:
+    """`bootstrap run` / `profile set` run the engine with --console
+    --project-key _global_: the same exports as a hook pass, and no record."""
 
     @pytest.fixture
-    def layered(self, tmp_path, monkeypatch):
-        home = _home(tmp_path)
-        data = tmp_path / "data"
-        data.mkdir()
-        plugin = tmp_path / "plugin"
-        plugin.mkdir()
-        monkeypatch.setenv("HOME", str(home))
-        monkeypatch.setenv("USERPROFILE", str(home))
+    def seen(self, monkeypatch):
         monkeypatch.setenv(PROJECT_VAR, "/inherited/project/python")
-        seen = []
+        calls = []
         real = engine._process_manifest
 
         def spy(*a, **k):
-            seen.append((os.environ.get(ENGINE_VAR), os.environ.get(PROJECT_VAR)))
+            calls.append((os.environ.get(ENGINE_VAR), os.environ.get(PROJECT_VAR)))
             return real(*a, **k)
 
         monkeypatch.setattr(engine, "_process_manifest", spy)
-        return plugin, data, seen
+        return calls
 
-    def _run(self, tmp_path, plugin, data, manifest=None):
-        from bootstrap_lib.layered_bootstrap import run_layered_bootstrap
-        project = tmp_path / "home" / "project"
-        if not project.exists():
-            project = _project(tmp_path, manifest or {"project_venv": PROJECT_VENV})
-        return run_layered_bootstrap(project, plugin, data, detect_os())
-
-    def test_layered_run_exports_engine_then_project_python(self, tmp_path, monkeypatch, layered):
-        plugin, data, seen = layered
+    def test_terminal_run_exports_engine_then_project_python(self, tmp_path, monkeypatch, seen):
         fake, targets = _fake_venv_step()
         monkeypatch.setattr(engine, "_process_venv_def", fake)
-        result = self._run(tmp_path, plugin, data)
+        project = _project(tmp_path, {"project_venv": PROJECT_VENV})
+        texts = _run_terminal(tmp_path, monkeypatch, project)
         engine_python = shell_path(sys.executable)
         # Manifest commands see the engine interpreter and the project DEFAULT
         # (no qualifying venv yet, so the engine interpreter too).
         assert seen == [(engine_python, _engine_default())]
-        assert result.failures == []
         expected = _expected_project_python(targets[0])
         assert os.environ.get(PROJECT_VAR) == expected
-        assert f"python: {ENGINE_VAR}={engine_python}" in result.checks
-        assert f"python: {PROJECT_VAR}={_engine_default()} (engine)" in result.checks
-        assert (f"project_venv: exported {PROJECT_VAR}={expected} (process)"
-                in result.checks)
-        assert not (data / RECORD_SUBDIR).exists()  # the CLI never records
+        assert f"python: {ENGINE_VAR}={engine_python}" in texts
+        assert any(f"project_venv: exported {PROJECT_VAR}={expected} (process)" in t
+                   for t in texts), texts
+        assert not (tmp_path / "data" / RECORD_SUBDIR).exists()  # _global_ never records
 
-    def test_layered_run_keeps_default_on_failure(self, tmp_path, monkeypatch, layered):
-        plugin, data, seen = layered
+    def test_terminal_run_keeps_default_on_failure(self, tmp_path, monkeypatch, seen):
         fake, targets = _fake_venv_step(fail=True)
         monkeypatch.setattr(engine, "_process_venv_def", fake)
-        result = self._run(tmp_path, plugin, data)
+        project = _project(tmp_path, {"project_venv": PROJECT_VENV})
+        with pytest.raises(SystemExit) as exited:
+            _run_terminal(tmp_path, monkeypatch, project)
+        assert exited.value.code == 1  # --exit-status: the pass reported a failure
         assert len(targets) == 1
-        assert len(result.failures) == 1
         assert os.environ.get(PROJECT_VAR) == _engine_default()
-        assert not any(f"exported {PROJECT_VAR}" in c for c in result.checks)
 
-    def test_layered_run_honours_opt_out_and_never_persists(self, tmp_path, monkeypatch, layered):
-        plugin, data, seen = layered
-        monkeypatch.delenv(ISOLATION_ENV, raising=False)
-        monkeypatch.setattr(engine, "_process_interpreter_env", _refuse_venv_step)
+    def test_terminal_run_honours_opt_out_and_writes_no_record(self, tmp_path, monkeypatch, seen):
         fake, targets = _fake_venv_step()
         monkeypatch.setattr(engine, "_process_venv_def", fake)
         project = _project(tmp_path, {"project_python": False,
                                       "project_venv": PROJECT_VENV})
         make_venv(project / ".venv")
-        result = self._run(tmp_path, plugin, data)
+        texts = _run_terminal(tmp_path, monkeypatch, project)
         assert len(targets) == 1
         assert seen == [(shell_path(sys.executable), None)]
         assert PROJECT_VAR not in os.environ
-        assert any(f"{PROJECT_VAR} not exported" in c for c in result.checks)
-        assert not (data / RECORD_SUBDIR).exists()
-        assert not (tmp_path / "home" / ".bashrc").exists()
+        assert any(f"{PROJECT_VAR} not exported" in t for t in texts), texts
+        assert not (tmp_path / "data" / RECORD_SUBDIR).exists()
 
-    def test_layered_run_logs_invalid_project_python(self, tmp_path, monkeypatch, layered):
-        plugin, data, seen = layered
+    def test_terminal_run_logs_invalid_project_python(self, tmp_path, monkeypatch, seen):
         project = _project(tmp_path, {"project_python": "tools/py.exe"}, pyproject=False)
         venv_python = make_venv(project / ".venv")
-        result = self._run(tmp_path, plugin, data)
+        texts = _run_terminal(tmp_path, monkeypatch, project)
         assert seen == [(shell_path(sys.executable), norm(venv_python))]
-        assert sum("accepts only false" in str(d) for d in result.details) == 1
+        assert sum("accepts only false" in t for t in texts) == 1, texts

@@ -23,6 +23,17 @@ import yaml
 import orchestration_guidance as og
 
 
+@pytest.fixture(autouse=True)
+def _forget_model_kit_imports():
+    """Drop llm_scripting_kit modules a test imported, so the next test's path
+    (describe or the reduced menu) is chosen by that test, not by import order."""
+    before = {name for name in sys.modules if name.startswith("llm_scripting_kit")}
+    yield
+    for name in [n for n in sys.modules if n.startswith("llm_scripting_kit")]:
+        if name not in before:
+            del sys.modules[name]
+
+
 # --------------------------------------------------------------------------
 # Merge semantics
 # --------------------------------------------------------------------------
@@ -240,20 +251,22 @@ class TestShippedDefaults:
             ["parallel-leaf", "known", "rule-applying"]
         )
 
-    def test_shipped_routing_uses_only_the_two_namespaces(self):
+    def test_shipped_routing_names_model_ids_without_prefixes(self):
         data = shipped()
         models = [model for row in data["routing"] for model in row["models"]]
         assert models == [
             "sol",
-            "agent:fable",
+            "fable",
             "sol",
-            "agent:sonnet",
-            "agent:sonnet",
+            "sonnet",
+            "sonnet",
             "luna",
+            "sonnet",
             "luna",
-            "agent:sonnet",
+            "sonnet",
+            "sonnet",
         ]
-        assert all(model.startswith("agent:") or ":" not in model for model in models)
+        assert all(":" not in model for model in models)
 
     def test_shipped_defaults_render_with_the_expected_sections(
         self, capsys, monkeypatch, tmp_path
@@ -302,22 +315,46 @@ class TestShippedDefaults:
             else:
                 assert not term.get("gloss"), term["id"]
 
-    def test_shipped_policy_mentions_no_codex_when_codex_is_absent(self, monkeypatch, tmp_path):
-        """The load-bearing requirement: no Codex content reaches the skill on a
-        machine without Codex -- not the backend, not its tiers, not a mention.
+    def test_shipped_policy_offers_no_codex_dispatch_when_codex_is_absent(
+        self, monkeypatch, tmp_path
+    ):
+        """No Codex MECHANICS reach the skill on a machine without Codex: no
+        backend section, no launch command, no codex target, no model a row
+        would dispatch to. A codex entry the registry declares may still be
+        listed as unreachable (it is real on this machine and may return) or
+        itemised by a floor, and nowhere else.
 
         The user and project layers are isolated deliberately: without that, a
         developer's own override file feeds into this guard and it starts
         passing or failing for reasons unrelated to the gating logic.
         """
+        _install_repo_harness_library(monkeypatch)
         monkeypatch.setattr(og.shutil, "which", lambda name: None)
         monkeypatch.setattr(og, "user_config_path", lambda: tmp_path / "no-user-config.yaml")
+        monkeypatch.setattr(
+            og,
+            "discover_model_definitions",
+            lambda _root: ({
+                "sol": {"id": "sol", "harness": "codex", "model": "gpt-5.6-sol"},
+                "luna": {"id": "luna", "harness": "codex", "model": "gpt-5.6-luna"},
+            }, []),
+        )
         config, provenance = og.resolve_config(tmp_path / "no-project")
-        text = og.render(config, provenance).lower()
-        assert "codex" not in text
-        assert "sol" not in text.split()
-        assert "terra" not in text
-        assert "## dispatch backends" in text  # the agent backend still renders
+        text = og.render(config, provenance)
+        lowered = text.lower()
+        assert "### codex" not in lowered
+        assert "codex exec" not in lowered
+        assert "codex/" not in lowered
+        assert "terra" not in lowered
+        assert "## dispatch backends" in lowered  # the agent backend still renders
+        cross_check = "\n".join(_row_lines_matching(text, "If `cross-check`"))
+        for line in text.splitlines():
+            if _has_word(line, "sol") or _has_word(line, "luna"):
+                assert "unreachable" in line or line in cross_check, line
+        # No row that a codex-less machine can serve stops on codex.
+        for needle in ("`fan-out`", "`rule-applying`"):
+            row = _row_lines_matching(text, needle)
+            assert "no usable model" not in row[0], needle
 
     def test_shipped_policy_mentions_no_opencode_when_opencode_is_absent(
         self, monkeypatch, tmp_path
@@ -556,8 +593,8 @@ def cfg(**over):
             "tests": [{"id": "axes", "text": "{known} or {open}."}],
         },
         "routing": [
-            {"shape": ["novel"], "models": ["agent:fable"]},
-            {"shape": [], "models": ["agent:sonnet"]},
+            {"shape": ["novel"], "models": ["fable"]},
+            {"shape": [], "models": ["sonnet"]},
         ],
         "backends": [{"id": "agent", "name": "Agent", "detect": {"always": True}}],
         "capacity": {"source": "none"},
@@ -577,7 +614,7 @@ class TestRender:
         assert "Layers applied: shipped" in text
 
     def test_unresolvable_model_is_not_rendered(self, layered):
-        layered("shipped", cfg(routing=[{"shape": ["novel"], "models": ["missing"]}]))
+        layered("shipped", cfg(routing=[{"shape": ["novel"], "models": ["missing", "fable"]}]))
         config, provenance = og.resolve_config(layered.project_root)
         text = og.render(config, provenance)
         assert "missing" not in text.split("\n---\n")[0]
@@ -608,7 +645,7 @@ class TestRender:
 
     def test_routing_row_with_unknown_shape_is_hidden(self, layered):
         layered("shipped", cfg(
-            routing=[{"shape": ["missing-shape"], "models": ["agent:fable"]}],
+            routing=[{"shape": ["missing-shape"], "models": ["fable"]}],
         ))
         config, provenance = og.resolve_config(layered.project_root)
         body = og.render(config, provenance).split("\n---\n")[0]
@@ -848,7 +885,7 @@ class TestShippedOpencodeBackend:
         )
         layered(
             "user",
-            {"routing": [{"shape": ["known"], "models": ["dusk", "agent:sonnet"]}]},
+            {"routing": [{"shape": ["known"], "models": ["dusk", "sonnet"]}]},
         )
         monkeypatch.setattr(
             og,
@@ -891,16 +928,16 @@ class TestShippedOpencodeBackend:
             "-m example/model --agent build --auto"
         )
         assert re.search(
-            r"llm-scripting-kit resolve\s+--endpoint <entry-id> "
+            r"llm-scripting-kit resolve\s+--models <entry-id> "
             r"--project-root <ABSOLUTE root>",
             rendered,
         )
         assert "**Not dispatchable.**" not in rendered
 
     def test_opencode_harness_model_survives_in_a_routing_row(self, rendered):
-        routing = re.split(r"^## \d+\. Routing\n", rendered, maxsplit=1, flags=re.M)[1]
-        routing = routing.split("\n## ", 1)[0]
-        assert "try **opencode/dusk**, then **sonnet**" in routing
+        assert _menu_ids(rendered, 1) == ["dusk", "sonnet"]
+        assert "opencode" in _entry_line(rendered, 1, "dusk")
+        assert "[default]" in _entry_line(rendered, 1, "dusk")
 
 
 class TestCommandTextProvider:
@@ -1043,23 +1080,24 @@ class TestCli:
         assert "shipped  applied" in out
         assert "default_tier: top" in out
 
-    def test_explain_uses_config_row_numbers_for_surviving_routes(self, capsys, layered):
+    def test_explain_uses_config_row_numbers(self, capsys, layered):
         layered(
             "shipped",
             cfg(
                 routing=[
                     {"shape": ["novel"], "models": ["missing"]},
-                    {"shape": ["open"], "models": ["agent:haiku"]},
-                    {"shape": [], "models": ["agent:sonnet"]},
+                    {"shape": ["open"], "models": ["haiku"]},
+                    {"shape": [], "models": ["sonnet"]},
                 ]
             ),
         )
         assert og.main(["--explain", "--project-root", str(layered.project_root)]) == 0
         out = capsys.readouterr().out
-        assert "routing  note      routing row 1:" in out
+        # Row 1 declares nothing usable: it carries the floor rather than
+        # vanishing, so the numbering below it stays the configured one.
+        assert "routing  row       1: novel -> no usable model (floor)" in out
         assert "routing  row       2: open -> haiku" in out
         assert "routing  row       3: default -> sonnet" in out
-        assert "routing  row       1: open -> haiku" not in out
 
     def test_broken_config_exits_nonzero_with_a_reason(self, capsys, layered, tmp_path):
         layered("shipped", {"default_tier": "workhorse"})
@@ -1094,20 +1132,19 @@ class TestOrderedElimination:
     def test_models_render_in_declared_priority_order(self, layered):
         layered(
             "shipped",
-            cfg(routing=[{"shape": ["novel"], "models": ["agent:fable", "agent:sonnet"]}]),
+            cfg(routing=[{"shape": ["novel"], "models": ["fable", "sonnet"]}]),
         )
         config, provenance = og.resolve_config(layered.project_root)
         text = og.render(config, provenance)
-        assert "1. If `novel`" in text
-        assert "try **fable**, then **sonnet**" in text
-        assert text.index("**fable**") < text.index("**sonnet**")
+        assert _row_lines(text, 1)[0].startswith("1. If `novel`")
+        assert _menu_ids(text, 1) == ["fable", "sonnet"]
+        assert "[default]" in _entry_line(text, 1, "fable")
 
     def test_first_matching_row_semantics_are_stated(self, layered):
         layered("shipped", cfg())
         config, provenance = og.resolve_config(layered.project_root)
         text = og.render(config, provenance)
         assert "first matching shape wins" in text
-        assert "launch or transport error" in text
 
     def test_blocks_render_in_principle_order(self, layered, monkeypatch):
         monkeypatch.setattr(og, "DEFAULTS_PATH", _shipped_path())
@@ -1211,7 +1248,7 @@ class TestNegativeGuards:
     def test_routing_guards_render(self, layered):
         layered("shipped", cfg(routing=[{
             "shape": ["novel"],
-            "models": ["agent:fable"],
+            "models": ["fable"],
             "guards": ["Keep this route explicit."],
         }]))
         config, provenance = og.resolve_config(layered.project_root)
@@ -1220,7 +1257,7 @@ class TestNegativeGuards:
     def test_routing_gate_renders(self, layered):
         layered("shipped", cfg(routing=[{
             "shape": ["novel"],
-            "models": ["agent:fable"],
+            "models": ["fable"],
             "gate": "write the reason before dispatch",
         }]))
         config, provenance = og.resolve_config(layered.project_root)
@@ -1302,6 +1339,7 @@ class TestCodexAbsentVariant:
 
     @pytest.fixture
     def variants(self, monkeypatch, tmp_path):
+        _install_repo_harness_library(monkeypatch)
         monkeypatch.setattr(og, "user_config_path", lambda: tmp_path / "none.yaml")
         monkeypatch.setattr(
             og,
@@ -1342,12 +1380,18 @@ class TestCodexAbsentVariant:
     def test_registry_model_is_skipped_when_codex_is_absent(self, without):
         assert "codex/sol" not in without
         assert "codex/luna" not in without
-        assert "agent:fable" not in without
         assert "fable" in without
 
-    def test_fan_out_row_is_skipped_without_a_surviving_model(self, without):
-        body = without.split("\n---\n")[0]
-        assert "If `fan-out`" not in body
+    def test_fan_out_row_defaults_to_its_claude_entry_without_codex(self, without):
+        row = _row_lines_matching(without, "If `fan-out`")
+        assert [line.split()[0] for line in row[1:]] == ["luna", "sonnet"]
+        assert "unreachable" in row[1]
+        assert "[default]" in row[2]
+
+    def test_a_codex_only_row_carries_the_floor_without_codex(self, without):
+        row = "\n".join(_row_lines_matching(without, "If `cross-check`"))
+        assert "no usable model here" in row
+        assert "sol: unreachable" in row
 
     def test_fan_out_collapse_test_survives_without_codex(self, without):
         assert "`fan-out`" in without
@@ -1367,13 +1411,12 @@ class TestCodexAbsentVariant:
             assert "not an independent reviewer" in text
             assert "defaults to TWO units" in text
 
-    def test_agent_member_survives_when_registry_model_is_skipped(self, without):
-        routing = re.split(r"^## \d+\. Routing\n", without, maxsplit=1, flags=re.M)[1]
-        routing = routing.split("\n## ", 1)[0]
-        assert re.search(
-            r"If `novel`(?: \([^)]*\))? \+ `load-bearing`(?: \([^)]*\))?: try \*\*fable\*\*\.",
-            routing,
-        )
+    def test_agent_member_is_the_default_when_the_registry_model_is_unreachable(self, without):
+        row = _row_lines_matching(without, "`load-bearing`")
+        entries = [line.split()[0] for line in row[1:] if not line.strip().startswith("- ")]
+        assert entries == ["fable", "sol"]
+        assert "[default]" in row[1]
+        assert "unreachable" in row[2]
 
     def test_model_specific_content_follows_surviving_routes(self, without, with_codex):
         assert "delegating plan cross-check to codex/sol (cross-check)" in with_codex
@@ -1397,10 +1440,11 @@ class TestRegistryOnlyHarnessIsNotRoutable:
 
     @pytest.fixture
     def rendered(self, monkeypatch, layered):
+        _install_repo_harness_library(monkeypatch)
         monkeypatch.setattr(og, "HARNESS_NAMES", og.HARNESS_NAMES | {"nova"})
         layered("shipped", cfg(routing=[
-            {"shape": ["novel"], "models": ["dawn", "agent:fable"]},
-            {"shape": [], "models": ["agent:sonnet"]},
+            {"shape": ["novel"], "models": ["dawn", "fable"]},
+            {"shape": [], "models": ["sonnet"]},
         ]))
         monkeypatch.setattr(
             og,
@@ -1422,30 +1466,33 @@ class TestRegistryOnlyHarnessIsNotRoutable:
         body = rendered.split("\n---\n")[0]
         assert "nova/dawn" not in body
 
-    def test_registry_only_skip_is_reported_inline_in_the_surviving_row(self, rendered):
-        routing = re.split(r"^## \d+\. Routing\n", rendered, maxsplit=1, flags=re.M)[1]
-        routing = routing.split("\n## ", 1)[0]
-        assert "`dawn` skipped; harness `nova` has no backends[] record" in routing
+    def test_registry_only_skip_is_silent(self, rendered):
+        assert not _has_word(rendered, "dawn")
+        assert "skipped" not in _routing_block(rendered)
 
     def test_the_row_survives_on_its_next_model(self, rendered):
-        assert "try **fable**" in rendered
+        assert _menu_ids(rendered, 1) == ["fable"]
 
-    def test_identity_section_is_marked_not_dispatchable(self, rendered):
-        assert "### Nova (`nova`)" in rendered
-        assert "**Not dispatchable.**" in rendered
-        assert "`dawn`" in rendered
+    def test_no_identity_section_names_the_unroutable_harness(self, rendered):
+        assert "### Nova" not in rendered
+        assert "Not dispatchable" not in rendered
 
-    def test_skip_note_names_the_missing_record(self, layered):
+    def test_the_floor_names_the_missing_record(self, layered, monkeypatch):
+        _install_repo_harness_library(monkeypatch)
         layered("shipped", cfg(routing=[{"shape": ["novel"], "models": ["dawn"]}]))
         config, _ = og.resolve_config(layered.project_root)
         entries = {"dawn": {"id": "dawn", "harness": "nova", "model": "some/model"}}
+        api, note = og.load_declaration_api()
+        assert note is None
         routes, notes = og.resolve_routing_models(
-            config, entries, {"nova": (True, "stubbed")}
+            config, entries, {"nova": (True, "stubbed")}, api=api
         )
-        assert routes == []
-        assert any("no backends[] record" in note for note in notes)
+        assert routes[0]["models"] == []
+        assert "dawn: unroutable" in routes[0]["floor"]
+        assert "no backends[] record" in routes[0]["floor"]
+        assert not any("dawn" in note for note in notes)
 
-    def test_a_backends_record_makes_the_harness_routable(self, layered):
+    def test_a_backends_record_makes_the_harness_routable(self, layered, monkeypatch):
         layered("shipped", cfg(
             routing=[{"shape": ["novel"], "models": ["dawn"]}],
             backends=[
@@ -1459,8 +1506,10 @@ class TestRegistryOnlyHarnessIsNotRoutable:
         ))
         config, _ = og.resolve_config(layered.project_root)
         entries = {"dawn": {"id": "dawn", "harness": "opencode", "model": "some/model"}}
+        _install_repo_harness_library(monkeypatch)
+        api, _ = og.load_declaration_api()
         routes, _ = og.resolve_routing_models(
-            config, entries, {"opencode": (True, "stubbed")}
+            config, entries, {"opencode": (True, "stubbed")}, api=api
         )
         assert routes and routes[0]["models"][0]["target"] == "opencode/dawn"
 
@@ -1474,16 +1523,19 @@ class TestRegistryOnlyHarnessIsNotRoutable:
         ))
         entries = {"dawn": {"id": "dawn", "harness": "opencode", "model": "some/model"}}
         monkeypatch.setattr(og, "adapter_command_text_provider", lambda *_args, **_kwargs: "opencode run")
+        _install_repo_harness_library(monkeypatch)
+        api, _ = og.load_declaration_api()
 
         config, _ = og.resolve_config(layered.project_root)
         routes, _ = og.resolve_routing_models(
-            config, entries, {"opencode": (True, "stubbed")}
+            config, entries, {"opencode": (True, "stubbed")}, api=api
         )
         assert routes and routes[0]["models"][0]["target"] == "opencode/dawn"
 
     def test_record_without_mechanics_is_not_routable_when_adapter_fails(
         self, layered, monkeypatch, capsys
     ):
+        _install_repo_harness_library(monkeypatch)
         layered("shipped", cfg(
             shape={
                 "title": "Shape",
@@ -1493,7 +1545,7 @@ class TestRegistryOnlyHarnessIsNotRoutable:
                     "without_backend": {"opencode": "Use the fallback route."},
                 }],
             },
-            routing=[{"shape": ["novel"], "models": ["dawn", "agent:fable"]}],
+            routing=[{"shape": ["novel"], "models": ["dawn", "fable"]}],
             backends=[
                 {"id": "agent", "detect": {"always": True}},
                 {"id": "opencode", "detect": {"always": True}},
@@ -1509,13 +1561,17 @@ class TestRegistryOnlyHarnessIsNotRoutable:
         config, provenance = og.resolve_config(layered.project_root)
         rendered = og.render(config, provenance)
         body = rendered.split("\n---\n")[0]
+        assert not _has_word(_routing_block(rendered), "dawn")
         assert "opencode/dawn" not in body
-        assert "try **fable**" in body
+        assert _menu_ids(rendered, 1) == ["fable"]
         assert "Use the fallback route." in body
 
+        # The skip is silent on every surface except the floor.
         assert og.main(["--explain", "--project-root", str(layered.project_root)]) == 0
         explained = capsys.readouterr().out
-        assert "no drivable dispatch mechanics" in explained
+        assert not any(
+            _has_word(line, "dawn") for line in explained.splitlines() if line.startswith("routing")
+        )
 
 
 class TestNoBareCodenames:
@@ -1529,57 +1585,42 @@ class TestNoBareCodenames:
 
 
 class TestRoutingRendering:
-    def test_fallthrough_uses_the_next_model_in_the_same_row(self, layered):
+    def test_a_row_lists_its_declared_models_in_order(self, layered):
         layered(
             "shipped",
-            cfg(routing=[{"shape": ["novel"], "models": ["agent:fable", "agent:sonnet"]}]),
+            cfg(routing=[{"shape": ["novel"], "models": ["fable", "sonnet"]}]),
         )
         config, provenance = og.resolve_config(layered.project_root)
         text = og.render(config, provenance)
-        assert "If `novel`" in text
-        assert "try **fable**, then **sonnet**" in text
-        assert "continue to the next model" in text
+        assert _row_lines(text, 1)[0].startswith("1. If `novel`")
+        assert _menu_ids(text, 1) == ["fable", "sonnet"]
 
-    def test_fallthrough_rule_is_rendered_once_in_the_routing_header(self, layered):
+    def test_the_menu_header_is_rendered_once(self, layered):
         layered(
             "shipped",
-            cfg(routing=[{"shape": ["novel"], "models": ["agent:fable", "agent:sonnet"]}]),
+            cfg(routing=[
+                {"shape": ["novel"], "models": ["fable", "sonnet"]},
+                {"shape": [], "models": ["sonnet"]},
+            ]),
         )
         config, provenance = og.resolve_config(layered.project_root)
-        text = og.render(config, provenance)
-        assert text.count("On a launch or transport error") == 1
-        assert "names the model immediately before the fallback" in text
-
-    def test_per_model_fallthrough_attribution_lines_are_not_rendered(self, layered):
-        layered(
-            "shipped",
-            cfg(
-                routing=[
-                    {
-                        "shape": ["novel"],
-                        "models": ["agent:fable", "agent:sonnet", "agent:haiku"],
-                    }
-                ]
-            ),
-        )
-        config, provenance = og.resolve_config(layered.project_root)
-        text = og.render(config, provenance)
-        assert "failed model from `fable`." not in text
-        assert "failed model from `sonnet`." not in text
+        block = _routing_block(og.render(config, provenance))
+        assert block.count("default is marked") == 1
 
     def test_empty_shape_is_the_default_route(self, layered):
-        layered("shipped", cfg(routing=[{"shape": [], "models": ["agent:haiku"]}]))
+        layered("shipped", cfg(routing=[{"shape": [], "models": ["haiku"]}]))
         config, provenance = og.resolve_config(layered.project_root)
         text = og.render(config, provenance)
-        assert "If anything: try **haiku**." in text
+        assert _row_lines(text, 1)[0] == "1. If anything:"
+        assert _menu_ids(text, 1) == ["haiku"]
 
-    def test_announcement_text_names_the_entry_and_fallthrough(self):
+    def test_announcement_text_names_the_entry_and_shape(self):
         assert og.announcement_text("the change", "codex/sol", ["novel"]) == (
             "delegating the change to codex/sol (novel)"
         )
-        assert og.announcement_text(
-            "the retry", "sonnet", [], fell_through_from="sol"
-        ) == "delegating the retry to sonnet (default; fell through from sol)"
+        assert og.announcement_text("the retry", "sonnet", []) == (
+            "delegating the retry to sonnet (default)"
+        )
 
 
 class TestAgentTypesAndAnnouncement:
@@ -1626,26 +1667,27 @@ class TestLayeringOverridesTheTree:
 
     def test_a_user_layer_replaces_the_routing_list(self, layered):
         layered("shipped", cfg())
-        replacement = {"routing": [{"shape": ["open"], "models": ["agent:haiku"]}]}
+        replacement = {"routing": [{"shape": ["open"], "models": ["haiku"]}]}
         layered("user", replacement)
         config, provenance = og.resolve_config(layered.project_root)
         assert config["routing"] == replacement["routing"]
         text = og.render(config, provenance)
-        assert "If `open`: try **haiku**." in text
-        assert "**fable**" not in text
+        assert _row_lines(text, 1)[0] == "1. If `open`:"
+        assert _menu_ids(text, 1) == ["haiku"]
+        assert not _has_word(_routing_block(text), "fable")
 
     def test_a_project_routing_list_wins_over_a_machine_list(self, layered):
         layered("shipped", cfg())
-        machine_routing = [{"shape": ["open"], "models": ["agent:haiku"]}]
-        project_routing = [{"shape": ["novel"], "models": ["agent:fable"]}]
+        machine_routing = [{"shape": ["open"], "models": ["haiku"]}]
+        project_routing = [{"shape": ["novel"], "models": ["fable"]}]
         layered("machine", {"routing": machine_routing})
         layered("project", {"routing": project_routing})
 
         config, provenance = og.resolve_config(layered.project_root)
         assert config["routing"] == project_routing
         text = og.render(config, provenance)
-        assert "try **fable**." in text
-        assert "If `open`: try **haiku**." not in text
+        assert _menu_ids(text, 1) == ["fable"]
+        assert "If `open`" not in _routing_block(text)
 
     def test_a_user_layer_patches_a_lexicon_gloss(self, layered):
         layered("shipped", cfg())
@@ -1729,7 +1771,7 @@ class TestProjectLayerCannotExecute:
     executable field from it would run that repo's chosen program on render."""
 
     def test_project_detect_command_is_stripped(self, layered):
-        layered("shipped", {"routing": [{"shape": [], "models": ["agent:sonnet"]}],
+        layered("shipped", {"routing": [{"shape": [], "models": ["sonnet"]}],
                             "backends": [{"id": "agent", "detect": {"always": True}}],
                             "capacity": {"source": "none"}})
         layered("project", {"backends": [{"id": "evil", "detect": {"command": ["calc.exe"]}}]})
@@ -1754,11 +1796,11 @@ class TestProjectLayerCannotExecute:
         assert config["capacity"]["command"] == ["my-probe"]
 
     def test_a_harmless_project_layer_is_untouched(self, layered):
-        layered("shipped", {"routing": [{"shape": [], "models": ["agent:sonnet"]}], "backends": [{"id": "agent"}],
+        layered("shipped", {"routing": [{"shape": [], "models": ["sonnet"]}], "backends": [{"id": "agent"}],
                             "capacity": {"source": "none"}})
-        layered("project", {"routing": [{"shape": [], "models": ["agent:haiku"]}]})
+        layered("project", {"routing": [{"shape": [], "models": ["haiku"]}]})
         config, provenance = og.resolve_config(layered.project_root)
-        assert config["routing"][0]["models"] == ["agent:haiku"]
+        assert config["routing"][0]["models"] == ["haiku"]
         assert not any("executable field" in s for _, _, s in provenance)
 
 
@@ -1781,30 +1823,43 @@ class TestHostileCapacityInput:
 
 
 class TestRoutingResolution:
-    def test_an_unknown_model_is_skipped_and_an_empty_row_is_dropped(self, layered):
+    def test_a_row_with_nothing_usable_keeps_its_place_with_the_floor(self, layered):
         config_data = cfg(
             routing=[
                 {"shape": ["novel"], "models": ["missing"]},
                 {"shape": ["open"], "models": ["also-missing"]},
-                {"shape": [], "models": ["agent:sonnet"]},
+                {"shape": [], "models": ["sonnet"]},
             ]
         )
         layered("shipped", config_data)
         config, _ = og.resolve_config(layered.project_root)
         routes, notes = og.resolve_routing_models(config, {}, {})
-        assert [route["shape"] for route in routes] == [[]]
-        assert any("missing" in note for note in notes)
-        assert any("no model resolves" in note for note in notes)
+        assert [route["shape"] for route in routes] == [["novel"], ["open"], []]
+        assert "missing: unroutable" in routes[0]["floor"]
+        assert routes[2]["floor"] is None
+        # Notes are for --explain and never name a skipped id.
+        assert not any("missing" in note for note in notes)
 
-    def test_only_agent_prefix_is_a_reserved_namespace(self, layered):
+    def test_every_prefix_including_agent_is_an_ordinary_id(self, layered):
+        """`agent:<id>` is no longer rewritten; it resolves like any other
+        unknown-prefixed id -- silently skipped, no note on any surface."""
         layered(
             "shipped",
-            cfg(routing=[{"shape": [], "models": ["codex:sol", "agent:sonnet"]}]),
+            cfg(routing=[{"shape": [], "models": ["codex:sol", "agent:sonnet", "sonnet"]}]),
         )
         config, _ = og.resolve_config(layered.project_root)
         routes, notes = og.resolve_routing_models(config, {}, {})
         assert [model["target"] for model in routes[0]["models"]] == ["sonnet"]
-        assert any("only `agent:`" in note for note in notes)
+        assert not any("codex:sol" in note for note in notes)
+        assert not any("agent:sonnet" in note for note in notes)
+        assert not any("`agent:" in note for note in notes)
+
+    def test_a_structurally_invalid_declaration_skips_the_row_with_a_note(self, layered):
+        layered("shipped", cfg(routing=[{"shape": [], "models": ["sonnet", "sonnet"]}]))
+        config, _ = og.resolve_config(layered.project_root)
+        routes, notes = og.resolve_routing_models(config, {}, {})
+        assert routes == []
+        assert any("routing row 1 skipped: models:" in note for note in notes)
 
 
 class TestStaleOverrideWarning:
@@ -2142,227 +2197,396 @@ class TestAppliedStatusDecoration:
         assert "machine" in applied
 
 
-# --- quota-aware routing --------------------------------------------------
+# --- model declarations: describe()'s filtered render ----------------------
+#
+# Routing rows are model declarations (plugins/bootstrap/skills/plugin-dev/
+# references/model-declaration.md). Each row's menu is llm-scripting-kit's
+# describe(caller="session") result, passed through: hidden entries
+# (unresolved, unroutable here) are skipped SILENTLY, out-of-quota and
+# unreachable entries stay visible, the rest is pace-ordered, and the rule
+# text is describe's own. Only the floor may name a hidden id.
+
+
+_CODEX_RECORD = {
+    "id": "codex",
+    "name": "Codex CLI",
+    "detect": {"always": True},
+    "command": "codex exec -m <MODEL> -",
+}
+_AGENT_RECORD = {"id": "agent", "name": "Agent", "detect": {"always": True}}
+
+
+def _seven_day():
+    return SimpleNamespace(pool="seven_day", display_name=None)
+
+
+def _entries(**extra):
+    base = {
+        "sol": {"id": "sol", "harness": "codex", "model": "gpt-5.6-sol", "effort": "high"},
+        "luna": {"id": "luna", "harness": "codex", "model": "gpt-5.6-luna"},
+        "dawn": {"id": "dawn", "harness": "nova", "model": "some/model"},
+        "or-mini": {
+            "id": "or-mini",
+            "kind": "transport",
+            "harness": None,
+            "model": "openai/gpt-mini",
+            "base_url": "https://example.invalid/v1",
+        },
+    }
+    base.update(extra)
+    return base
+
+
+def _routing_block(text):
+    block = re.split(r"^## \d+\. Routing\n", text, maxsplit=1, flags=re.M)[1]
+    return block.split("\n## ", 1)[0]
+
+
+def _row_lines(text, row):
+    """The lines of rendered row `row` (1-based), heading line included."""
+    block = _routing_block(text)
+    lines = block.splitlines()
+    start = next(i for i, line in enumerate(lines) if line.startswith(f"{row}. If "))
+    out = [lines[start]]
+    for line in lines[start + 1:]:
+        if not line.startswith(" "):
+            break
+        out.append(line)
+    return out
+
+
+def _row_lines_matching(text, needle):
+    """The lines of the first rendered row whose heading contains `needle`."""
+    block = _routing_block(text)
+    lines = block.splitlines()
+    start = next(
+        i for i, line in enumerate(lines) if re.match(r"^\d+\. If ", line) and needle in line
+    )
+    out = [lines[start]]
+    for line in lines[start + 1:]:
+        if not line.startswith(" "):
+            break
+        out.append(line)
+    return out
+
+
+def _menu_ids(text, row):
+    """Entry ids listed in a row's menu, in rendered order."""
+    ids = []
+    for line in _row_lines(text, row)[1:]:
+        stripped = line.strip()
+        if not stripped or stripped.startswith("- "):
+            continue
+        ids.append(stripped.split()[0])
+    return ids
+
+
+def _entry_line(text, row, entry_id):
+    return next(
+        line for line in _row_lines(text, row)[1:] if line.strip().split()[0] == entry_id
+    )
 
 
 @pytest.fixture
-def quota_routing_enabled(monkeypatch):
-    """Re-enable the quota pass that conftest turns off suite-wide.
+def declared(layered, monkeypatch):
+    """Render a routing config through the working describe().
 
-    conftest pins it off so no other test's assertions vary with the
-    developer's live balance; these tests are ABOUT that pass, so they turn it
-    back on and supply their own verdicts.
+    The entries are injected, reachability is seeded from the (stubbed)
+    backend detection, and quota reads are off unless a test enables them --
+    so no test here reads the developer's registry, balance, or PATH.
+    """
+    _install_repo_harness_library(monkeypatch)
+
+    def render(routing, *, entries=None, self_ref=None, backends=None, absent=(), **extra):
+        layered(
+            "shipped",
+            cfg(
+                routing=routing,
+                backends=backends or [_AGENT_RECORD, _CODEX_RECORD],
+                **extra,
+            ),
+        )
+        found = _entries() if entries is None else entries
+        monkeypatch.setattr(og, "discover_model_definitions", lambda _root: (found, []))
+        monkeypatch.setattr(
+            og,
+            "detect_backend",
+            lambda backend: (
+                (False, f"`{backend.get('id')}` not found on PATH")
+                if backend.get("id") in absent
+                else (True, "stubbed")
+            ),
+        )
+        config, provenance = og.resolve_config(layered.project_root)
+        return og.render(config, provenance, self_ref=self_ref)
+
+    return render
+
+
+@pytest.fixture
+def quota(monkeypatch):
+    """Enable the quota reads conftest turns off, with verdicts the test supplies.
+
+    `set(entry_id, pinned=..., fresh=...)` takes Budget-shaped status strings
+    and fractions; every other id reads as no-data.
     """
     monkeypatch.delenv("ORCHESTRATE_QUOTA_ROUTING", raising=False)
+    import llm_scripting_kit.declaration as declaration
+    from llm_scripting_kit.usage_budget import Budget
+
+    pinned: dict = {}
+    fresh: dict = {}
+
+    def pinned_evaluate(entry_id, spec, harness):
+        status, resets_at = pinned.get(entry_id, ("available", None))
+        return Budget(status=status, pool="seven_day", detail="stubbed", resets_at=resets_at)
+
+    def fresh_reading(entry_id, spec, harness):
+        remaining, window = fresh.get(entry_id, (None, None))
+        return Budget(
+            status="available", pool="seven_day", detail="stubbed",
+            remaining=remaining, window_remaining=window,
+        )
+
+    monkeypatch.setattr(declaration, "pinned_evaluate", pinned_evaluate)
+    monkeypatch.setattr(declaration, "_fresh_reading", fresh_reading)
+
+    def set_verdict(entry_id, *, status="available", resets_at=None, remaining=None, window=None):
+        pinned[entry_id] = (status, resets_at)
+        fresh[entry_id] = (remaining, window)
+
+    return set_verdict
 
 
-def _fake_quota_module(verdicts, *, entries=None, omit=()):
-    """A stand-in llm_scripting_kit exposing only the quota-selection surface.
-
-    `verdicts` maps endpoint id -> "available" | "under-quota" | "out-of-quota";
-    an id absent from it has no `conserve_usage` at all, which is the ordinary
-    never-opted-in endpoint.
-    """
-    module = ModuleType("llm_scripting_kit")
-
-    class Budget:
-        def __init__(self, status):
-            self.status = status
-
-        @property
-        def usable(self):
-            return self.status != "out-of-quota"
-
-        @property
-        def deprioritized(self):
-            return self.status == "under-quota"
-
-    class Candidate:
-        def __init__(self, endpoint, preference_index, budget=None):
-            self.endpoint = endpoint
-            self.preference_index = preference_index
-            self.budget = budget
-
-        @property
-        def usable(self):
-            return self.budget is None or self.budget.usable
-
-        @property
-        def deprioritized(self):
-            return self.budget is not None and self.budget.deprioritized
-
-    def rank_candidates(candidates):
-        usable = [c for c in candidates if c.usable]
-        disabled = [c for c in candidates if not c.usable]
-        usable.sort(key=lambda c: (1 if c.deprioritized else 0, c.preference_index))
-        return usable, disabled
-
-    known = entries if entries is not None else {
-        name: SimpleNamespace(conserve_usage=SimpleNamespace(pool="seven_day"), harness="claude")
-        for name in verdicts
-    }
-
-    module.Candidate = Candidate
-    module.rank_candidates = rank_candidates
-    module.pinned_evaluate = lambda entry_id, spec, harness: Budget(verdicts[entry_id])
-    module.discover_model_entries = lambda project_root=None: SimpleNamespace(
-        entries=known, notes=[]
-    )
-    for name in omit:
-        delattr(module, name)
-    return module
+def _has_word(text, word):
+    return re.search(rf"(?<![\w-]){re.escape(word)}(?![\w-])", text) is not None
 
 
-def _models(*ids):
-    return [{"id": i, "target": i, "kind": "agent"} for i in ids]
+class TestDeclarationRender:
+    def test_hidden_ids_are_skipped_silently(self, declared):
+        text = declared(
+            [{"shape": ["novel"], "models": ["ghost", "dawn", "or-mini", "fable", "sol"]}]
+        )
+        assert _menu_ids(text, 1) == ["fable", "sol"]
+        for hidden in ("ghost", "dawn", "or-mini"):
+            assert not _has_word(text, hidden), hidden
+        body = text.split("Layers applied:", 1)[0]  # the rest echoes tmp paths
+        assert "skipped" not in body
+        assert "not routable" not in body.lower()
+
+    def test_hidden_ids_are_absent_from_explain_too(self, declared, layered, capsys):
+        declared([{"shape": ["novel"], "models": ["ghost", "fable"]}])
+        assert og.main(["--explain", "--project-root", str(layered.project_root)]) == 0
+        explained = capsys.readouterr().out
+        routing_lines = [line for line in explained.splitlines() if line.startswith("routing")]
+        assert routing_lines
+        assert not any(_has_word(line, "ghost") for line in routing_lines)
+        assert "routing  row       1: novel -> fable" in explained
+
+    def test_out_of_quota_entry_stays_visible_with_its_reset_time(self, declared, quota):
+        resets_at = 1_790_000_000
+        entries = _entries(sol={
+            "id": "sol", "harness": "codex", "model": "gpt-5.6-sol",
+            "conserve_usage": _seven_day(),
+        })
+        quota("sol", status="out-of-quota", resets_at=resets_at)
+        text = declared([{"shape": ["novel"], "models": ["sol", "fable"]}], entries=entries)
+        assert _menu_ids(text, 1) == ["sol", "fable"]
+        when = time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime(resets_at))
+        assert f"out of quota until {when}" in _entry_line(text, 1, "sol")
+        assert "[default]" not in _entry_line(text, 1, "sol")
+        assert "[default]" in _entry_line(text, 1, "fable")
+        for retired in ("dropped", "moved back", "every model is out of quota"):
+            assert retired not in text
+
+    def test_rendered_subset_is_pace_ordered(self, declared, quota):
+        entries = _entries(
+            opus={"id": "opus", "harness": "claude", "model": "claude-opus",
+                  "conserve_usage": _seven_day()},
+            astra={"id": "astra", "harness": "codex", "model": "gpt-5.6-astra",
+                   "conserve_usage": SimpleNamespace(pool="primary", display_name=None)},
+        )
+        quota("opus", remaining=0.38, window=0.5)
+        quota("astra", remaining=0.6, window=0.5)
+        text = declared(
+            [{"shape": ["novel"], "models": ["ghost", "opus", "astra", "sonnet"]}],
+            entries=entries,
+        )
+        assert _menu_ids(text, 1) == ["astra", "opus", "sonnet"]
+        assert "[default]" in _entry_line(text, 1, "astra")
+        assert "pace 120%" in _entry_line(text, 1, "astra")
+        assert "pace 76%" in _entry_line(text, 1, "opus")
+
+    def test_rule_text_is_describes_own_and_rendered_once(self, declared):
+        import llm_scripting_kit.declaration as declaration
+
+        text = declared([
+            {"shape": ["novel"], "models": ["fable", "sol"]},
+            {"shape": [], "models": ["sonnet", "luna"]},
+        ])
+        block = _routing_block(text)
+        assert block.count(declaration.RULE_CHOICE_SESSION) == 1
+        assert block.count(declaration.RULE_TRIGGER_SESSION) == 1
+        # The rule follows every row, so it is read after the menu it governs.
+        assert block.index(declaration.RULE_CHOICE_SESSION) > block.index("2. If ")
+        for retired in ("try **", ", then **", "continue to the next model",
+                        "names the model immediately before the fallback"):
+            assert retired not in text
+
+    def test_author_is_marked_and_the_independence_rule_renders(self, declared):
+        import llm_scripting_kit.declaration as declaration
+
+        text = declared([{"shape": ["novel"], "models": ["fable", "sol"]}], self_ref="fable")
+        assert "[author]" in _entry_line(text, 1, "fable")
+        assert declaration.RULE_INDEPENDENCE in _routing_block(text)
+
+    def test_unreachable_entry_stays_visible_and_is_not_the_default(self, declared):
+        text = declared([{"shape": ["novel"], "models": ["sol", "fable"]}], absent=("codex",))
+        assert _menu_ids(text, 1) == ["sol", "fable"]
+        assert "unreachable" in _entry_line(text, 1, "sol")
+        assert "[default]" in _entry_line(text, 1, "fable")
+
+    def test_floor_itemises_every_declared_entry(self, declared):
+        text = declared(
+            [
+                {"shape": ["novel"], "models": ["ghost", "sol"]},
+                {"shape": [], "models": ["sonnet"]},
+            ],
+            absent=("codex",),
+        )
+        row = "\n".join(_row_lines(text, 1))
+        assert "no usable routing target" in row
+        assert "ghost: unresolved" in row
+        assert "sol: unreachable" in row
+        # The floor is the only surface that may name the hidden id.
+        outside = text.replace(row, "")
+        assert not _has_word(outside, "ghost")
+        # A floor row is not deleted: the unit must not fall through to a row
+        # chosen for a different shape.
+        assert _menu_ids(text, 2) == ["sonnet"]
+
+    def test_agent_prefix_is_an_ordinary_unresolved_id(self, declared, layered, capsys):
+        """`agent:<id>` is no longer accepted or rewritten (step 12 of the
+        declaration-format migration). It is now indistinguishable from any
+        other unresolved id: silently dropped from the rendered menu, no
+        note on `--explain`."""
+        text = declared([{"shape": ["novel"], "models": ["agent:fable", "sol"]}])
+        assert _menu_ids(text, 1) == ["sol"]
+        assert "agent:" not in text
+        assert og.main(["--explain", "--project-root", str(layered.project_root)]) == 0
+        out = capsys.readouterr().out
+        routing_lines = "\n".join(
+            line for line in out.splitlines() if line.startswith("routing")
+        )
+        assert "agent:fable" not in routing_lines
+        assert "fable" not in routing_lines
+        assert "is read as" not in out
+
+    def test_quota_opt_out_makes_no_reads(self, declared, monkeypatch):
+        import llm_scripting_kit.declaration as declaration
+
+        def forbidden(*_args, **_kwargs):
+            raise AssertionError("ORCHESTRATE_QUOTA_ROUTING=0 must not read quota")
+
+        monkeypatch.setenv("ORCHESTRATE_QUOTA_ROUTING", "0")
+        monkeypatch.setattr(declaration, "pinned_evaluate", forbidden)
+        monkeypatch.setattr(declaration, "_fresh_reading", forbidden)
+        entries = _entries(sol={
+            "id": "sol", "harness": "codex", "model": "gpt-5.6-sol",
+            "conserve_usage": _seven_day(),
+        })
+        text = declared([{"shape": ["novel"], "models": ["sol", "fable"]}], entries=entries)
+        assert _menu_ids(text, 1) == ["sol", "fable"]
+        assert not re.search(r"pace \d", _entry_line(text, 1, "sol"))
+
+    def test_requires_model_follows_usable_entries(self, declared):
+        announce = {
+            "title": "Announce",
+            "form": "delegating <what> to <target>",
+            "examples": [
+                {"id": "ex-sol", "requires_model": "sol",
+                 "text": "delegating x to codex/sol (novel)"},
+                {"id": "ex-fable", "requires_model": "fable",
+                 "text": "delegating y to fable (novel)"},
+            ],
+        }
+        routing = [{"shape": ["novel"], "models": ["fable", "sol"]}]
+        present = declared(routing, announce=announce)
+        assert "delegating x to codex/sol" in present
+        unreachable = declared(routing, announce=announce, absent=("codex",))
+        assert "delegating x to codex/sol" not in unreachable
+        assert "delegating y to fable" in unreachable
+
+    def test_the_two_band_quota_reorder_is_retired(self):
+        source = Path(og.__file__).read_text(encoding="utf-8")
+        assert not hasattr(og, "load_quota_ranker")
+        assert "rank_candidates" not in source
+        assert "moved back" not in source
 
 
-def test_an_out_of_quota_model_is_dropped_from_a_row(monkeypatch, tmp_path, quota_routing_enabled):
-    monkeypatch.setitem(
-        sys.modules,
-        "llm_scripting_kit",
-        _fake_quota_module({"opus": "out-of-quota", "sol": "available"}),
-    )
-    rank, notes = og.load_quota_ranker(tmp_path)
-    assert notes == []
-    ordered, row_notes = rank(_models("opus", "sol"))
-    assert [m["id"] for m in ordered] == ["sol"]
-    assert any("out of quota" in n for n in row_notes)
+class TestDeclarationRenderDegrades:
+    def test_without_the_library_rows_list_claude_models_only(self, layered, monkeypatch):
+        monkeypatch.setitem(sys.modules, "llm_scripting_kit", None)
+        layered("shipped", cfg(
+            routing=[
+                {"shape": ["novel"], "models": ["sol", "fable", "sonnet"]},
+                {"shape": [], "models": ["luna"]},
+            ],
+            backends=[_AGENT_RECORD, _CODEX_RECORD],
+        ))
+        config, provenance = og.resolve_config(layered.project_root)
+        text = og.render(config, provenance)
+        assert _menu_ids(text, 1) == ["fable", "sonnet"]
+        assert "[default]" in _entry_line(text, 1, "fable")
+        # A row with no Claude model reaches the floor rather than vanishing.
+        assert "no usable routing target" in "\n".join(_row_lines(text, 2))
+        degraded = text.split("**Degraded render.**", 1)[1]
+        assert "llm_scripting_kit" in degraded
+        assert "claude plugin install llm-scripting-kit@plugins-kit" in degraded
+        assert not _has_word(degraded, "sol")
+
+    def test_a_library_older_than_describe_is_diagnosed_apart_from_absence(
+        self, layered, monkeypatch
+    ):
+        layered("shipped", cfg(backends=[_AGENT_RECORD]))
+        monkeypatch.setitem(sys.modules, "llm_scripting_kit", None)
+        config, provenance = og.resolve_config(layered.project_root)
+        absent = og.render(config, provenance).split("**Degraded render.**", 1)[1]
+
+        stale = ModuleType("llm_scripting_kit")
+        monkeypatch.setitem(sys.modules, "llm_scripting_kit", stale)
+        too_old = og.render(config, provenance).split("**Degraded render.**", 1)[1]
+
+        assert "claude plugin install llm-scripting-kit@plugins-kit" in absent
+        assert "0.46.0" in too_old
+        assert "claude plugin update llm-scripting-kit@plugins-kit" in too_old
+        assert absent != too_old
 
 
-def test_an_under_quota_model_is_moved_back_not_dropped(monkeypatch, tmp_path, quota_routing_enabled):
-    # The Claude-first row that swaps to codex: the row's stated order stands
-    # unless quota says otherwise, and being behind pace costs position only.
-    monkeypatch.setitem(
-        sys.modules,
-        "llm_scripting_kit",
-        _fake_quota_module({"opus": "under-quota", "sol": "available"}),
-    )
-    rank, _ = og.load_quota_ranker(tmp_path)
-    ordered, row_notes = rank(_models("opus", "sol"))
-    assert [m["id"] for m in ordered] == ["sol", "opus"]
-    assert any("under quota" in n for n in row_notes)
-
-
-def test_the_stated_order_survives_when_quota_says_nothing(monkeypatch, tmp_path, quota_routing_enabled):
-    monkeypatch.setitem(
-        sys.modules,
-        "llm_scripting_kit",
-        _fake_quota_module({"opus": "available", "sol": "available"}),
-    )
-    rank, _ = og.load_quota_ranker(tmp_path)
-    ordered, row_notes = rank(_models("opus", "sol"))
-    assert [m["id"] for m in ordered] == ["opus", "sol"]
-    assert row_notes == []
-
-
-def test_a_model_that_never_opted_in_keeps_its_place(monkeypatch, tmp_path, quota_routing_enabled):
-    # `sol` has no conserve_usage here, so nothing may de-prioritize it -- and
-    # an endpoint absent from the registry entirely must not be dropped either.
-    monkeypatch.setitem(
-        sys.modules,
-        "llm_scripting_kit",
-        _fake_quota_module(
-            {"opus": "available"},
-            entries={"opus": SimpleNamespace(conserve_usage=SimpleNamespace(pool="seven_day"), harness="claude")},
+def test_out_of_quota_consult_seats_render_with_their_reset_time(layered, monkeypatch):
+    resets_at = 1_790_000_000
+    result = SimpleNamespace(
+        self=SimpleNamespace(endpoint="opus", band="strong"),
+        seats=(SimpleNamespace(relation="BESIDE", endpoint="sol", band="strong", harness="codex"),),
+        unclassified=(),
+        probe_unknown=(),
+        out_of_quota=(
+            SimpleNamespace(
+                relation="UP", endpoint="fable", band="frontier", harness="claude",
+                budget=SimpleNamespace(resets_at=resets_at),
+            ),
         ),
     )
-    rank, _ = og.load_quota_ranker(tmp_path)
-    ordered, _ = rank(_models("opus", "sol", "unregistered"))
-    assert [m["id"] for m in ordered] == ["opus", "sol", "unregistered"]
-
-
-def test_a_row_whose_models_are_all_spent_is_kept_and_reported(monkeypatch, tmp_path, quota_routing_enabled):
-    # Deleting the row would fall the unit through to a row chosen for a
-    # different shape, which is a worse outcome than reporting the exhaustion.
-    monkeypatch.setitem(
-        sys.modules,
-        "llm_scripting_kit",
-        _fake_quota_module({"opus": "out-of-quota", "sol": "out-of-quota"}),
-    )
-    rank, _ = og.load_quota_ranker(tmp_path)
-    config = {
-        "lexicon": [{"id": "blocking", "kind": "skill"}],
-        "routing": [{"shape": ["blocking"], "models": ["agent:opus"]}],
-    }
-    routes, notes = og.resolve_routing_models(config, {}, {}, set(), quota_rank=rank)
-    assert [m["id"] for r in routes for m in r["models"]] == ["opus"]
-    assert any("every model is out of quota" in n for n in notes)
-
-
-def test_a_missing_shared_library_degrades_with_a_disclosed_note(monkeypatch, tmp_path, quota_routing_enabled):
-    monkeypatch.setitem(sys.modules, "llm_scripting_kit", None)
-    rank, notes = og.load_quota_ranker(tmp_path)
-    assert rank is None
-    # The rendered policy is identical with and without the pass, so silence
-    # would let the reader take the printed order for a quota-aware one.
-    assert notes and "quota-aware routing skipped" in notes[0]
-
-
-def test_a_stale_shared_library_is_detected_by_capability(monkeypatch, tmp_path, quota_routing_enabled):
-    # An older linked copy imports cleanly and lacks the symbol; presence of
-    # the module is not the feature test.
-    monkeypatch.setitem(
-        sys.modules,
-        "llm_scripting_kit",
-        _fake_quota_module({"opus": "available"}, omit=("rank_candidates",)),
-    )
-    rank, notes = og.load_quota_ranker(tmp_path)
-    assert rank is None
-    assert notes and "predates quota-aware selection" in notes[0]
-
-
-def test_an_unreadable_verdict_never_drops_a_model(monkeypatch, tmp_path, quota_routing_enabled):
-    module = _fake_quota_module({"opus": "available", "sol": "available"})
-
-    def boom(entry_id, spec, harness):
-        raise RuntimeError("snapshot unreadable")
-
-    module.pinned_evaluate = boom
+    module = _fake_seats_module(lambda _self_ref, *, project_root: result)
     monkeypatch.setitem(sys.modules, "llm_scripting_kit", module)
-    rank, _ = og.load_quota_ranker(tmp_path)
-    ordered, row_notes = rank(_models("opus", "sol"))
-    assert [m["id"] for m in ordered] == ["opus", "sol"]
-    assert row_notes == []
-
-
-def test_a_drop_does_not_fake_a_move_note(monkeypatch, tmp_path, quota_routing_enabled):
-    # Dropping A shifts B to the front. B overtook nobody, so claiming it was
-    # "moved back" would be a false statement about the row.
-    monkeypatch.setitem(
-        sys.modules,
-        "llm_scripting_kit",
-        _fake_quota_module({"a": "out-of-quota", "b": "under-quota"}),
-    )
-    rank, _ = og.load_quota_ranker(tmp_path)
-    ordered, row_notes = rank(_models("a", "b"))
-    assert [m["id"] for m in ordered] == ["b"]
-    assert not any("moved back" in n for n in row_notes)
-
-
-def test_a_move_note_fires_only_when_a_later_peer_overtakes(
-    monkeypatch, tmp_path, quota_routing_enabled
-):
-    monkeypatch.setitem(
-        sys.modules,
-        "llm_scripting_kit",
-        _fake_quota_module({"a": "out-of-quota", "b": "available", "c": "under-quota"}),
-    )
-    rank, _ = og.load_quota_ranker(tmp_path)
-    ordered, row_notes = rank(_models("a", "b", "c"))
-    # c stayed behind b exactly as configured, so no move happened.
-    assert [m["id"] for m in ordered] == ["b", "c"]
-    assert not any("moved back" in n for n in row_notes)
-
-    monkeypatch.setitem(
-        sys.modules,
-        "llm_scripting_kit",
-        _fake_quota_module({"x": "under-quota", "y": "available"}),
-    )
-    rank, _ = og.load_quota_ranker(tmp_path)
-    ordered, row_notes = rank(_models("x", "y"))
-    assert [m["id"] for m in ordered] == ["y", "x"]
-    assert any("`x` moved back" in n for n in row_notes)
+    monkeypatch.setattr(og, "discover_model_definitions", lambda _root: ({}, []))
+    layered("shipped", cfg())
+    config, provenance = og.resolve_config(layered.project_root)
+    text = og.render(config, provenance, self_ref="opus")
+    section = text.split("## Consult seats\n", 1)[1].split("## Dispatch backends\n", 1)[0]
+    when = time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime(resets_at))
+    assert f"UP fable (frontier, claude) out of quota until {when}" in section
+    assert section.index("BESIDE sol") < section.index("UP fable")
 
 
 def test_invoked_orchestration_delegates_a_single_small_unit():

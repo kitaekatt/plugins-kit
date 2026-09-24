@@ -77,7 +77,7 @@ still use the variable forms above.
 |---|---|---|---|
 | Engine process, full pass, from pass start | yes | yes: normative rule without manifest knowledge at start; manifest-aware once the layered manifest loads; verified after the project venv step; recorded per project | Engine |
 | Engine process, always lane (throttled sessions) | yes | yes: the per-project record if one exists, else the normative rule | Engine |
-| `bootstrap run` / `bootstrap profile set` (terminal CLI) | yes | yes (normative rule; the record is not read -- the CLI cannot reproduce the hook's project key from a native cwd) | Bootstrap CLI |
+| `bootstrap run` / `bootstrap profile set` (terminal CLI) | yes | yes, as in a full pass for the exact working directory, except that the record is neither read nor written (`--project-key _global_`) -- the CLI cannot reproduce the hook's project key from a native cwd | Engine, launched by the Bootstrap CLI |
 | The fix queue (`fix_runner.py`) | yes (the runner's own interpreter) | popped -- not carried into the queue; the nested call-site form degrades correctly to `BOOTSTRAP_PYTHON` | Fix runner |
 | Claude session Bash tool calls -- every session, including throttled and `--resume` | yes (written by the SessionStart hook prelude, before any skip gate) | yes: the per-project record if present, else the normative rule from `$PWD`; the engine's own verified value is never overridden (the prelude writes only names that are still absent) | SessionStart hook |
 | A Bash tool call after `cd` to a different project, inside one session | the session's value (unchanged) | the session's value (unchanged) -- see "Gaps not covered" below | -- |

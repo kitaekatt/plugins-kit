@@ -298,7 +298,12 @@ cache entry. Run it with the plugin venv's Python; for example, on macOS/Linux:
   ${CLAUDE_PLUGIN_ROOT}/skills/orchestrate/scripts/dispatch.py --list
 ```
 
-Windows uses `.venv/Scripts/python.exe`. Its first printed line is the entry
+Windows uses `.venv/Scripts/python.exe`. A dispatch names its model with
+`--model <entry-id>`: the routing row's chosen id (for example `sol`), whose
+llm-scripting-kit registry entry must have harness `codex`. The script resolves
+it to the entry's model value and, when `--effort` is omitted, the entry's own
+effort. There is no default model. Without llm-scripting-kit the script refuses
+(exit 3) and names the plugin to install or update. Its first printed line is the entry
 directory handle, prefixed
 `CACHE HIT ` when served from cache; the finished run then prints the
 `result.md` path. A matching brief, model, effort, sandbox, absolute cwd, and

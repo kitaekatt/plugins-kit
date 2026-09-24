@@ -78,16 +78,14 @@ a reason to stop asking whether a vertical module has earned reuse.
 
 ## Backend selection is process-wide
 
-Backend selection is process-global (`CONTENT_PIPELINE_LLM_BACKEND`, with
-`CONTENT_PIPELINE_LLM_MODEL` overriding the requested model). The consequence
+Backend selection is process-global: one `CONTENT_PIPELINE_LLM_MODELS`
+declaration picks the entry, and its model, for the whole process. The consequence
 to state to a consumer: two pipelines that need different backends cannot share
 a process, and nothing at a call site signals that one of them got the other's
 backend, so a changed environment variable can move output quality with no
 local signal.
 
 A supplied `mock` wins unconditionally in `route()`, checked before
-`active_backend_name()` is even read: `route(mock=FakeBackend())` always
-returns the supplied instance, regardless of `CONTENT_PIPELINE_LLM_BACKEND`
-or which backend name is active. A test never has to call
-`set_active_backend("mock")` first to keep a routed call off a live
-transport.
+the declaration is even read: `route(mock=FakeBackend())` always returns the
+supplied instance, regardless of `CONTENT_PIPELINE_LLM_MODELS`. A test needs
+no environment setup to keep a routed call off a live transport.

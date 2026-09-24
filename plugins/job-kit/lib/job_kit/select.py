@@ -1,4 +1,4 @@
-"""Deterministic endpoint selection from the llm-scripting-kit advertisement."""
+"""Deterministic endpoint selection: the first usable entry of a pace-ordered declaration."""
 
 from __future__ import annotations
 
@@ -15,8 +15,9 @@ class SelectionError(Exception):
 
 # The version the FRONTIER symbol shipped in, not the oldest symbol's: the
 # message names a version the user can act on, so it has to be one that
-# actually carries everything probed below.
-_MIN_LLM_SCRIPTING_KIT_VERSION = "0.35.0"
+# actually carries everything probed below. describe() (llm-scripting-kit's
+# declaration API) is the frontier.
+_MIN_LLM_SCRIPTING_KIT_VERSION = "0.46.0"
 
 
 class SharedLibTooOldError(SelectionError, ImportError):
@@ -26,7 +27,9 @@ class SharedLibTooOldError(SelectionError, ImportError):
     linked against an llm-scripting-kit older than the one job-kit was
     written against. Raised at import time of job_kit.select so the failure
     names the owning plugin and the fix instead of surfacing as a bare
-    ImportError/AttributeError deep in a job run.
+    ImportError/AttributeError deep in a job run. An ABSENT llm-scripting-kit
+    is a different state with a different remedy (install, not update); the
+    package's ``__init__`` diagnoses that one.
     """
 
     def __init__(self, symbol: str, module: str) -> None:
@@ -42,18 +45,27 @@ class SharedLibTooOldError(SelectionError, ImportError):
 
 # A missing PACKAGE (unlinked or uninstalled shared lib) propagates as the
 # plain ModuleNotFoundError so the message names the package; only a present
-# module lacking a symbol is diagnosed as "too old".
+# package lacking a module or symbol is diagnosed as "too old".
 import importlib as _importlib
 
-_completion = _importlib.import_module("llm_scripting_kit.completion")
 
-# subjects_for_disallowed_tools is the FRONTIER symbol: it is the newest thing
-# job-kit uses from this library, added with the effect-based deny floor, so it
-# is what decides whether a linked copy is current enough. run.py imports it to
-# turn a deny floor into the guarantee subjects it asks for; without it a floored
-# run cannot state what it requires, so this is REQUIRED rather than optional and
-# the probe below is what makes the too-old state say so by name instead of
-# surfacing a bare ImportError from run.py's own import.
+def _require_module(name: str, symbols: tuple[str, ...]) -> object:
+    """Import ``name`` and probe it for ``symbols``, diagnosing a too-old lib."""
+    try:
+        module = _importlib.import_module(name)
+    except ModuleNotFoundError as exc:
+        if exc.name != name:
+            raise
+        raise SharedLibTooOldError(symbols[0], name) from exc
+    for symbol in symbols:
+        if not hasattr(module, symbol):
+            raise SharedLibTooOldError(symbol, name)
+    return module
+
+
+# subjects_for_disallowed_tools is the newest completion symbol: run.py uses it
+# to turn a deny floor into the guarantee subjects it asks for. HALT_QUOTA is
+# the halt kind a spent subscription pool is classified as.
 _REQUIRED_COMPLETION_SYMBOLS = (
     "BackendSelection",
     "Capabilities",
@@ -61,11 +73,19 @@ _REQUIRED_COMPLETION_SYMBOLS = (
     "create_backend",
     "match_capabilities",
     "subjects_for_disallowed_tools",
+    "HALT_QUOTA",
 )
-for _symbol in _REQUIRED_COMPLETION_SYMBOLS:
-    if not hasattr(_completion, _symbol):
-        raise SharedLibTooOldError(_symbol, "llm_scripting_kit.completion")
-del _symbol
+# describe is the FRONTIER symbol: selection is llm-scripting-kit's declaration
+# API, called with requirements, capabilities, backend_factory, exclude and a
+# run-scoped reachability_cache, all of which shipped with describe itself.
+_REQUIRED_DECLARATION_SYMBOLS = ("describe", "NoUsableRoutingTarget", "CALLER_PROCESS")
+_REQUIRED_USAGE_SYMBOLS = ("record_observed_halt",)
+
+_require_module("llm_scripting_kit.completion", _REQUIRED_COMPLETION_SYMBOLS)
+_declaration = _require_module(
+    "llm_scripting_kit.declaration", _REQUIRED_DECLARATION_SYMBOLS
+)
+_require_module("llm_scripting_kit.usage_budget", _REQUIRED_USAGE_SYMBOLS)
 
 from llm_scripting_kit.completion import (
     BackendSelection,
@@ -74,19 +94,35 @@ from llm_scripting_kit.completion import (
     create_backend,
     match_capabilities,
 )
-from llm_scripting_kit.models import EndpointResolveError
+
+NoUsableRoutingTarget = _declaration.NoUsableRoutingTarget
+_describe = _declaration.describe
+_CALLER_PROCESS = _declaration.CALLER_PROCESS
 
 
-class NoCompatibleEndpointError(SelectionError):
-    """No preferred endpoint matched the job requirements."""
+class NoCompatibleEndpointError(SelectionError, NoUsableRoutingTarget):
+    """The floor: no declared entry is usable for this job.
 
-    def __init__(self, job_id: str, endpoints: Sequence[str]) -> None:
+    It IS llm-scripting-kit's typed ``NoUsableRoutingTarget`` (so a caller
+    catching the floor catches it) and a job-kit ``SelectionError`` (so the
+    runner terminalizes the one job and keeps the rest of the run going). It
+    itemises every declared id and its disposition in declaration order, and
+    it is the only surface allowed to name an id that selection skipped.
+    """
+
+    def __init__(self, job_id: str, floor: NoUsableRoutingTarget) -> None:
         self.job_id = job_id
-        self.endpoints = tuple(endpoints)
-        super().__init__(
-            f"job {job_id!r} has no compatible endpoint in preference order "
-            f"{list(self.endpoints)!r}"
-        )
+        self.floor = floor
+        self.endpoints = tuple(floor.names)
+        NoUsableRoutingTarget.__init__(self, floor.names, floor.dispositions, floor.caller)
+        self.args = (f"job {job_id!r}: {floor}",)
+
+    def __str__(self) -> str:
+        return str(self.args[0])
+
+    def dispositions_text(self) -> str:
+        """The itemised floor lines, without the job prefix."""
+        return "\n".join("  " + d.describe_line() for d in self.dispositions)
 
 
 def requirements_match(capabilities: Capabilities, requirements: object) -> bool:
@@ -108,13 +144,87 @@ BackendFactory = Callable[..., BackendSelection]
 CapabilitiesProvider = Callable[[], Mapping[str, Capabilities]]
 
 
-def _make_selection(
-    factory: BackendFactory, endpoint: str, project_root: Optional[str | Path]
-) -> BackendSelection:
-    """Call the endpoint factory with the selected project root."""
-    if project_root is None:
-        return factory(endpoint)
-    return factory(endpoint, project_root=project_root)
+#: The requirement a job with none of its own still carries: an advertisement
+#: record for the resolved backend must EXIST. llm-scripting-kit's matcher
+#: treats an empty mapping as match-all and ``describe`` skips the lookup for
+#: it, but execution reads the same record (run.py ``_capabilities_for``) and
+#: job-kit has never dispatched to a backend nothing advertises. An empty
+#: ``params`` list matches every record and no absent one.
+_ADVERTISED = {"params": []}
+
+PaceReading = Mapping[str, object]
+
+
+def _memoized(
+    factory: BackendFactory,
+) -> tuple[BackendFactory, dict[str, BackendSelection]]:
+    """Wrap ``factory`` so the entry describe() resolved is the one dispatched."""
+    resolved: dict[str, BackendSelection] = {}
+
+    def wrapper(endpoint: str, **kwargs: object) -> BackendSelection:
+        selection = factory(endpoint, **kwargs)
+        resolved[endpoint] = selection
+        return selection
+
+    return wrapper, resolved
+
+
+def select_endpoint_with_readings(
+    job: Job,
+    *,
+    halted_endpoints: Collection[str] = (),
+    capabilities: Optional[Mapping[str, Capabilities]] = None,
+    capabilities_provider: Optional[CapabilitiesProvider] = None,
+    backend_factory: Optional[BackendFactory] = None,
+    project_root: Optional[str | Path] = None,
+    reachability_cache: Optional[dict] = None,
+) -> tuple[BackendSelection, tuple[PaceReading, ...]]:
+    """Select the first usable entry of the job's pace-ordered declaration.
+
+    Selection is llm-scripting-kit's ``describe(caller="process")`` over
+    ``job.models``: every declared id is classified (unresolved, requirements
+    mismatch, excluded, out of quota, unreachable, usable), the rendered
+    entries are ordered by pace, and the first usable one is taken. Skipping
+    is silent. ``halted_endpoints`` is passed as ``exclude``;
+    ``job.requirements`` (with a run's deny floor already applied by the
+    caller) is matched against ``capabilities`` keyed by the RESOLVED backend
+    name, the same record execution reads. ``reachability_cache`` is read
+    first and receives every probe, so a run-scoped mapping probes each entry
+    once per run.
+
+    Returns the selection and the pace readings of the rendered entries it was
+    chosen from (``{"id", "pace", "usable"}`` each, in pace order), which the
+    runner logs on the attempt. Raises :class:`NoCompatibleEndpointError`,
+    the typed floor, when no declared entry is usable.
+    """
+    advertised = dict(
+        capabilities
+        if capabilities is not None
+        else (capabilities_provider or adapter_capabilities)()
+    )
+    factory, resolved = _memoized(backend_factory or create_backend)
+    requirements = dict(job.requirements) or _ADVERTISED
+    try:
+        ranking = _describe(
+            list(job.models),
+            project_root=project_root,
+            caller=_CALLER_PROCESS,
+            requirements=requirements,
+            capabilities=advertised,
+            backend_factory=factory,
+            exclude=frozenset(halted_endpoints),
+            reachability_cache=reachability_cache,
+        )
+    except NoUsableRoutingTarget as floor:
+        raise NoCompatibleEndpointError(job.id, floor) from None
+    chosen = ranking.default
+    if chosen is None:  # pragma: no cover - describe() raises the floor instead
+        raise SelectionError(f"job {job.id!r}: describe returned no default entry")
+    readings = tuple(
+        {"id": entry.id, "pace": entry.pace, "usable": entry.usable}
+        for entry in ranking.rendered_entries
+    )
+    return resolved[chosen.id], readings
 
 
 def select_endpoint(
@@ -125,42 +235,22 @@ def select_endpoint(
     capabilities_provider: Optional[CapabilitiesProvider] = None,
     backend_factory: Optional[BackendFactory] = None,
     project_root: Optional[str | Path] = None,
+    reachability_cache: Optional[dict] = None,
 ) -> BackendSelection:
-    """Select the first compatible preferred endpoint.
+    """Select the first usable entry of the job's pace-ordered declaration.
 
-    The factory resolves endpoint names through llm-scripting-kit's registry;
-    the returned backend name keys the advertisement. A persistent halt for an
-    endpoint excludes it for later jobs in the same run. No scoring or retry is
-    performed.
+    See :func:`select_endpoint_with_readings`, which this wraps.
     """
-    advertised = dict(
-        capabilities
-        if capabilities is not None
-        else (capabilities_provider or adapter_capabilities)()
+    selection, _ = select_endpoint_with_readings(
+        job,
+        halted_endpoints=halted_endpoints,
+        capabilities=capabilities,
+        capabilities_provider=capabilities_provider,
+        backend_factory=backend_factory,
+        project_root=project_root,
+        reachability_cache=reachability_cache,
     )
-    factory = backend_factory or create_backend
-    halted = set(halted_endpoints)
-    for endpoint in job.endpoint_preference:
-        if endpoint in halted:
-            continue
-        try:
-            selection = _make_selection(factory, endpoint, project_root)
-        except EndpointResolveError:
-            continue
-        backend_name = getattr(selection.backend, "name", None)
-        if not isinstance(backend_name, str):
-            continue
-        # The advertisement is keyed by the RETURNED backend name only -- run.py's
-        # _capabilities_for looks it up the same way at execution time, with no
-        # fallback. An endpoint-keyed fallback here would let a stale or
-        # colliding endpoint-keyed record satisfy selection while execution
-        # finds no advertisement for the same backend, silently admitting a job
-        # whose requirements (including a deny-floor guarantee) were never
-        # actually checked against what runs it.
-        record = advertised.get(backend_name)
-        if record is not None and requirements_match(record, job.requirements):
-            return selection
-    raise NoCompatibleEndpointError(job.id, job.endpoint_preference)
+    return selection
 
 
 def choose_endpoint(
@@ -187,7 +277,9 @@ __all__ = [
     "SelectionError",
     "SharedLibTooOldError",
     "NoCompatibleEndpointError",
+    "NoUsableRoutingTarget",
     "requirements_match",
     "select_endpoint",
+    "select_endpoint_with_readings",
     "choose_endpoint",
 ]

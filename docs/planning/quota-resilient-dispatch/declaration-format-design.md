@@ -466,7 +466,10 @@ the reset time when the halt carries one, else `event time + 5h` (the 0.44.1
 rule). An AVAILABLE verdict still never flips on a re-read, so the
 guarantee the entry protects holds; only an actual failure moves it. A
 reset time passing already flips OUT-OF-QUOTA back to no-data, which covers
-a mid-session codex reset in the other direction.
+a mid-session codex reset in the other direction. Both callers write it:
+`run()` and job-kit on the halts they observe, and a session caller, which
+observes the halt itself, through the `llm-scripting-kit record-halt <entry>`
+verb that the session Re-select rule tells it to run (drill finding F1).
 
 ## Owner decisions (2026-09-16, plan.md directions 9-12)
 
@@ -541,7 +544,8 @@ the unit's own bug. The check: the announcement must carry the failure kind.
 The drill needs the next exhaustion OR a simulated halt as its fixture, and
 until it runs the risk check is UNRUN. It must dispatch a multi-entry row and
 confirm the announcement names a
-usable entry with "codex: out of quota" as the reason, while a deliberately
+usable entry with the failed entry and its kind as the reason, in the shipped
+`<entry> failed: <kind>` form (for example `sol failed: quota`), while a deliberately
 broken unit on a usable entry -- one that exits 0 with a wrong result -- is
 reported as a task failure and NOT re-routed, and a unit that halts after
 writing is re-run only after its workspace is reset or replaced.

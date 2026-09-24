@@ -7,12 +7,21 @@ The package consumes a small YAML document with one flat list of jobs::
         prompt:
           system: "You are a coding assistant."
           user: "Fix the lint errors."
-        endpoint_preference: [local-codex]
+        models: [local-codex]
         requirements:
           params: [cwd]
         directory: .
         contract:
           command: [python, -m, pytest, tests/lint]
+
+``models`` is the job's model declaration: an ordered list of llm-scripting-kit
+registry ids, in the one format specified by bootstrap's plugin-dev skill
+(``references/model-declaration.md``) and validated structurally by
+``bootstrap_lib.model_declaration``. A scalar is read as a one-element list.
+The pre-declaration keys ``endpoint_preference``, ``endpoint_preferences``,
+``endpoints`` and ``endpoint`` are no longer accepted (declaration-format
+migration step 12); a job file using one of them fails loading with an error
+naming ``models``.
 
 The job's directory is the declared working directory. Git repositories use
 that directory as the starting point for per-attempt isolation. A contract
@@ -309,13 +318,59 @@ class WorkspaceSpec:
         return result
 
 
+#: The pre-declaration spellings a job file may no longer use. Declared
+#: separately from the one accepted key (``models``) so a job written under
+#: one of these fails loading with a message naming the removed key rather
+#: than a bare "requires models".
+_LEGACY_DECLARATION_KEYS = (
+    "endpoint_preference",
+    "endpoint_preferences",
+    "endpoints",
+    "endpoint",
+)
+
+#: The bootstrap release that shipped ``bootstrap_lib.model_declaration``.
+_MODEL_DECLARATION_BOOTSTRAP = "0.129.0"
+
+
+def _parse_declaration(value: object) -> tuple[str, ...]:
+    """Validate a model declaration with the shared structural validator.
+
+    ``bootstrap_lib`` is a REQUIRED shared lib of job-kit (its bootstrap.json
+    links it, and bootstrap is a declared dependency of every plugin), so an
+    absent or too-old copy is diagnosed by name rather than surfacing as a
+    bare ImportError. It is imported here rather than at module load so that
+    importing ``job_kit`` never needs it.
+    """
+    try:
+        import bootstrap_lib  # noqa: F401
+    except ImportError as exc:
+        raise ImportError(
+            "job-kit validates model declarations with bootstrap_lib, which is "
+            "not linked into this environment: the plugins-kit:bootstrap plugin "
+            "has not provisioned job-kit here. Install or enable bootstrap "
+            "(`claude plugin install bootstrap@plugins-kit`) and start a new "
+            "session so it links job-kit's shared libs."
+        ) from exc
+    try:
+        from bootstrap_lib import model_declaration
+    except ImportError as exc:
+        raise ImportError(
+            "job-kit validates model declarations with bootstrap_lib."
+            "model_declaration, which the linked bootstrap_lib predates: update "
+            f"the bootstrap plugin to >= {_MODEL_DECLARATION_BOOTSTRAP} "
+            "(`claude plugin update bootstrap@plugins-kit`)."
+        ) from exc
+    return tuple(model_declaration.parse(value))
+
+
 @dataclass(frozen=True)
 class Job:
     """One heterogeneous job and its caller-supplied acceptance contract."""
 
     id: str
     prompt: Prompt
-    endpoint_preference: tuple[str, ...]
+    models: tuple[str, ...]
     contract: Contract
     requirements: Mapping[str, object] = field(default_factory=dict)
     directory: Optional[Path] = None
@@ -336,15 +391,14 @@ class Job:
                 raise ValueError("job contract must be a Contract or mapping")
             object.__setattr__(self, "contract", Contract.from_mapping(self.contract))
 
-        if isinstance(self.endpoint_preference, str):
-            endpoint_values: Sequence[str] = (self.endpoint_preference,)
-        else:
-            endpoint_values = self.endpoint_preference
-        endpoints = tuple(str(endpoint).strip() for endpoint in endpoint_values)
-        endpoints = tuple(endpoint for endpoint in endpoints if endpoint)
-        if not endpoints:
-            raise ValueError(f"job {job_id!r} requires endpoint_preference")
-        object.__setattr__(self, "endpoint_preference", endpoints)
+        declared = self.models
+        if isinstance(declared, Sequence) and not isinstance(declared, (str, list)):
+            declared = list(declared)
+        try:
+            models = _parse_declaration(declared)
+        except ValueError as exc:
+            raise type(exc)(f"job {job_id!r} models: {exc}") from exc
+        object.__setattr__(self, "models", models)
 
         if self.requirements is None:
             object.__setattr__(self, "requirements", {})
@@ -419,18 +473,18 @@ class Job:
             }
         prompt = Prompt.from_value(prompt_value)
 
-        endpoint_value: object = value.get(
-            "endpoint_preference",
-            value.get("endpoint_preferences", value.get("endpoints", value.get("endpoint"))),
-        )
-        if isinstance(endpoint_value, str):
-            endpoints = (endpoint_value,)
-        elif isinstance(endpoint_value, Sequence) and not isinstance(
-            endpoint_value, (bytes, bytearray)
-        ):
-            endpoints = tuple(str(item) for item in endpoint_value)
-        else:
-            raise ValueError(f"job {value.get('id')!r} requires endpoint_preference")
+        declared: object = value.get("models")
+        if declared is None:
+            legacy = next(
+                (key for key in _LEGACY_DECLARATION_KEYS if value.get(key) is not None),
+                None,
+            )
+            if legacy is not None:
+                raise ValueError(
+                    f"job {value.get('id')!r} uses the removed `{legacy}` key -- "
+                    "declare its model priority under `models` instead"
+                )
+            raise ValueError(f"job {value.get('id')!r} requires models")
 
         workspace = WorkspaceSpec.from_value(value.get("workspace"), base_dir=base_dir)
         directory = _resolve_directory(
@@ -457,7 +511,7 @@ class Job:
         return cls(
             id=str(value["id"]),
             prompt=prompt,
-            endpoint_preference=endpoints,
+            models=declared,
             contract=contract,
             requirements=requirements if requirements is not None else {},
             directory=directory,
@@ -471,7 +525,7 @@ class Job:
         result: dict[str, object] = {
             "id": self.id,
             "prompt": self.prompt.to_mapping(),
-            "endpoint_preference": list(self.endpoint_preference),
+            "models": list(self.models),
             "requirements": dict(self.requirements),
             "contract": self.contract.to_mapping(),
             "max_attempts": self.max_attempts,
@@ -693,8 +747,19 @@ class Attempt:
     workspace_removal_forced: bool = False
     reasoning: Optional[str] = None
     finish_reason: Optional[str] = None
+    # The rendered entries this attempt's endpoint was selected from, in pace
+    # order: ``{"id", "pace", "usable"}`` each. Together with the job's
+    # declared ``models`` list this is what makes an unattended choice
+    # explainable afterwards. ``None`` on rows written before it was logged.
+    pace_readings: Optional[tuple[Mapping[str, object], ...]] = None
 
     def __post_init__(self) -> None:
+        if self.pace_readings is not None:
+            object.__setattr__(
+                self,
+                "pace_readings",
+                tuple(dict(reading) for reading in self.pace_readings),
+            )
         object.__setattr__(self, "dropped_params", _optional_tuple(self.dropped_params))
         object.__setattr__(self, "forwarded_params", _optional_tuple(self.forwarded_params))
         object.__setattr__(
@@ -763,6 +828,11 @@ class Attempt:
             "workspace_removed_at": self.workspace_removed_at,
             "workspace_removal_forced": self.workspace_removal_forced,
             "acceptance": self.acceptance.to_mapping() if self.acceptance is not None else None,
+            "pace_readings": (
+                [dict(reading) for reading in self.pace_readings]
+                if self.pace_readings is not None
+                else None
+            ),
         }
         if self.id is not None:
             result["id"] = self.id

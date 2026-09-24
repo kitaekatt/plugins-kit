@@ -358,3 +358,31 @@ async def _test_spill_after_moves_on_to_the_next_tier(tmp_path, monkeypatch):
         assert second.headers["x-frontdoor-deployment"] == "t2"
         hold.set()
         assert (await first).headers["x-frontdoor-deployment"] == "t1"
+
+
+# ---------------------------------------------------------------------------
+# Migration step 3 (L6, O4): a front-door group is ONE declaration id
+# ---------------------------------------------------------------------------
+
+
+def test_a_front_door_group_is_one_declaration_id(tmp_path):
+    from llm_scripting_kit.declaration import describe
+    from llm_scripting_kit.reachability import Reachability
+
+    registry = _registry_from_text(
+        tmp_path,
+        "models:\n"
+        "  qwen38:\n"
+        "    base_url: http://frontdoor.invalid/v1\n"
+        "    model: qwen38\n"
+        + _deployment_yaml("box-a", 1, "2", group="qwen38")
+        + _deployment_yaml("box-b", 2, "null", group="qwen38"),
+    )
+    ranking = describe(
+        ["qwen38"], caller="process", entries=registry.entries,
+        reachability_cache={"qwen38": Reachability("reachable", "models-endpoint", "ok")},
+    )
+    # The group is not expanded into its deployments: in-group failover stays
+    # inside the front door, and selection sees one entry.
+    assert [e.id for e in ranking.rendered_entries] == ["qwen38"]
+    assert [d.id for d in ranking.dispositions] == ["qwen38"]

@@ -9,16 +9,18 @@ ensure-bootstrap SessionStart hook into a project (install_bootstrap_hook.py):
     bootstrap        Is a pass running right now? Says so -- and if one IS,
                      stays attached and streams it until it finishes.
                      `--json` is the non-blocking scripting form.
-    bootstrap run    Apply only the four user/project manifest layers.
-                     Refuse while another pass is running; attaching could
-                     inherit that pass's broader or different project scope.
+    bootstrap run    Run the full engine pass the hooks run -- marketplace
+                     refresh, plugin updates, every installed plugin's
+                     manifest, the four user/project layers -- now, in console
+                     mode, for the working directory. It is not throttled by
+                     the cooldown, so it is the force path. Refuse while
+                     another pass is running; attaching could inherit that
+                     pass's different project scope.
     bootstrap codex-hook
                      Run a synchronous full pass for a Codex SessionStart hook
                      and return Codex hook JSON with any project remediation.
     bootstrap reset  Clear the cooldown stamp so the NEXT session start runs a
-                     real pass. Not a pass itself -- it is the lever for the
-                     one case `run` does not cover, a layered bootstrap.json
-                     edit that must converge through a genuine SessionStart.
+                     real pass. Not a pass itself.
 
 Why the status probe is not "try to acquire and release": acquiring clears a
 stale lock and holds the mutex for an instant, so a mere status check could
@@ -364,16 +366,7 @@ def cmd_run(args) -> int:
             % (marketplace, marketplace, marketplace))
         return 2
 
-    runner = Path(plugin_root) / "scripts" / "bootstrap_run.py"
-    print("Bootstrap engine: %s" % plugin_root)
-    sys.stdout.flush()
-    # Launch the shared layered runner directly. The SessionStart wrapper
-    # provisions Python and plugins before dispatching its full engine pass;
-    # none of that is part of a terminal user/project manifest run.
-    return _stream_until_exit(
-        data_dir,
-        lambda: subprocess.Popen(_run_cmd(
-            runner, plugin_root, data_dir, Path.cwd(), args.forward)))
+    return _launch_pass(plugin_root, data_dir, Path.cwd(), args.forward)
 
 
 # --------------------------------------------------------------------------
@@ -403,9 +396,10 @@ def _bootstrap_engine_python() -> str:
 def cmd_codex_hook(args) -> int:
     """Run bootstrap as a synchronous Codex SessionStart hook.
 
-    This is deliberately separate from ``bootstrap run``: Codex needs the
-    complete plugin lifecycle, but it also needs the engine's non-background
-    SessionStart JSON on stdout. The hook is a best-effort adapter and always
+    It launches the same engine entry as ``bootstrap run``; it differs only
+    where Codex needs it to: the engine's SessionStart JSON on stdout instead
+    of console text, the canonical project root instead of the exact cwd, and
+    the project's interpreter record. The hook is a best-effort adapter and always
     returns success after emitting its context so a bootstrap defect cannot
     prevent Codex from opening the project.
     """
@@ -486,8 +480,24 @@ def _codex_context_response(context: str) -> dict:
     }
 
 
-def _run_cmd(runner, plugin_root, data_dir, project_dir, forward=()):
-    """The bootstrap_run.py argv, shared by `run` and `profile set`.
+#: The engine's record key for a terminal pass: it reads and writes no
+#: per-project interpreter record (interpreter_env.GLOBAL_KEY). The record is
+#: keyed by the SessionStart hook's hash of Claude's cwd, which a terminal cwd
+#: cannot reproduce; an empty --project-key would still hash the directory.
+TERMINAL_PROJECT_KEY = "_global_"
+
+#: Layer files a terminal pass reads for its project, printed before it runs.
+_LAYER_FILENAMES = ("bootstrap.json", "bootstrap.local.json")
+
+
+def _engine_cmd(plugin_root, data_dir, project_dir, forward=()):
+    """The engine argv shared by `run` and `profile set`.
+
+    The same entry point the hooks run (engine/bootstrap_engine.py, launched
+    as `codex-hook` launches it), in console mode. The differences from a hook
+    pass are these flags: --console (terminal output; no log writes or
+    lifecycle stamps), --project-key _global_ (no interpreter record) and
+    --exit-status (a pass with failures exits 1, a stand-down 2).
 
     `profile set` passes its OWN resolved `project_dir` here rather than
     `Path.cwd()` -- `cmd_run` converges the working directory unconditionally
@@ -495,11 +505,44 @@ def _run_cmd(runner, plugin_root, data_dir, project_dir, forward=()):
     converge the project it was written for, not wherever the shell happens
     to be sitting.
     """
+    runner = Path(plugin_root) / "engine" / "bootstrap_engine.py"
     return [
-        sys.executable, str(runner), "--plugin-root", plugin_root,
-        "--data-dir", data_dir, "--project-dir", str(project_dir),
-        "--console",
+        _bootstrap_engine_python(), str(runner),
+        "--plugin-root", plugin_root,
+        "--data-dir", data_dir,
+        "--project-dir", str(project_dir),
+        "--project-key", TERMINAL_PROJECT_KEY,
+        "--console", "--exit-status",
     ] + list(forward)
+
+
+def _launch_pass(plugin_root, data_dir, project_dir, forward=()) -> int:
+    """Run one engine pass for `project_dir`, stream it, return its exit code.
+
+    stdin is closed: a manifest command or custom script the pass runs must
+    not be able to prompt on, or hang waiting for, the caller's terminal.
+    """
+    print("Bootstrap engine: %s" % plugin_root)
+    home = Path(os.environ.get("HOME") or Path.home())
+    for directory in (home / ".claude", Path(project_dir) / ".claude"):
+        for filename in _LAYER_FILENAMES:
+            path = directory / filename
+            print("  %s: %s" % (path, "present" if path.is_file() else "absent"))
+    sys.stdout.flush()
+    code = _stream_until_exit(
+        data_dir,
+        lambda: subprocess.Popen(
+            _engine_cmd(plugin_root, data_dir, project_dir, forward),
+            stdin=subprocess.DEVNULL))
+    if code == 0:
+        print("Bootstrap pass completed.")
+    elif code == 1:
+        print("Bootstrap pass reported failures (exit 1).")
+    elif code == 2:
+        sys.stderr.write(
+            "bootstrap: no pass ran (exit 2) -- another pass may already be "
+            "running; retry after it finishes.\n")
+    return code
 
 
 def _stream_until_exit(data_dir: str, launch) -> int:
@@ -763,11 +806,10 @@ def _load_profile_state(project_dir):
 
     Calls ``bootstrap_lib.engine._load_layered_manifests_ex`` directly -- the
     engine's own resolver, so the CLI and a live bootstrap pass can never
-    disagree about what is selected. Deliberately called with NO ``data_dir``:
-    a profile command resolves the same effective manifest a terminal
-    ``bootstrap run`` would, and ``layered_bootstrap.py`` calls this same
-    function with no ``data_dir`` for exactly that reason -- a terminal run
-    excludes the deprecated ``<data_dir>/user-bootstrap.json`` legacy layer.
+    disagree about what is selected. Called with NO ``data_dir``, so the
+    deprecated ``<data_dir>/user-bootstrap.json`` legacy layer is left out of
+    the profile report. An engine pass (a hook or ``bootstrap run``) still
+    merges that layer at lowest priority and reports it as deprecated.
 
     Raises :class:`ProfileEngineMissing` -- never silently re-derives the
     layer list -- when the installed bootstrap plugin predates this helper.
@@ -955,15 +997,11 @@ def cmd_profile_set(args) -> int:
             "was found to converge it; run 'bootstrap run' manually.\n")
         return 1
 
-    runner = Path(plugin_root) / "scripts" / "bootstrap_run.py"
-    print("Bootstrap engine: %s" % plugin_root)
-    sys.stdout.flush()
-    # An EXPLICIT project_dir, not Path.cwd() -- cmd_run's converge always
-    # targets the working directory (F14), which is wrong here when
-    # --project-dir named a different project than the shell is sitting in.
-    return _stream_until_exit(
-        data_dir,
-        lambda: subprocess.Popen(_run_cmd(runner, plugin_root, data_dir, project_dir)))
+    # The same pass `bootstrap run` launches, for an EXPLICIT project_dir, not
+    # Path.cwd() -- cmd_run's converge always targets the working directory
+    # (F14), which is wrong here when --project-dir named a different project
+    # than the shell is sitting in.
+    return _launch_pass(plugin_root, data_dir, project_dir)
 
 
 def cmd_profile_clear(args) -> int:
@@ -1028,15 +1066,18 @@ def cmd_install_hook(args) -> int:
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(
         prog="bootstrap",
-        description="Inspect lifecycle passes, run user/project manifests, or reset cooldowns.")
+        description="Inspect lifecycle passes, run a full pass now, or reset cooldowns.")
     parser.add_argument("--plugin-root", default="",
                         help=argparse.SUPPRESS)  # supplied by the shim
     parser.add_argument("--json", action="store_true",
                         help="machine-readable status")
     sub = parser.add_subparsers(dest="command")
     sub.add_parser("run",
-                   help="apply the four user/project bootstrap manifest layers; "
-                        "refuse while another pass is running")
+                   help="run the full bootstrap pass the session hooks run "
+                        "(marketplace refresh, plugin updates, plugin and "
+                        "user/project manifests) for the working directory, "
+                        "ignoring the cooldown; refuse while another pass is "
+                        "running")
     # add_help=False so `bootstrap reset --help` reaches the lever this verb
     # delegates to and prints ITS flags, rather than argparse printing a
     # subcommand help that lists none of them.

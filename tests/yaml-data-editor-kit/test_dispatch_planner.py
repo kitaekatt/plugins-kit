@@ -173,9 +173,46 @@ def _planner_fixture(tmp_path: Path, profile_dir: Path, write: Writer, response:
 
 
 def test_no_configured_backend_returns_mechanical_plan_without_routing(tmp_path, profile_dir, write, monkeypatch):
-    monkeypatch.delenv("CONTENT_PIPELINE_LLM_BACKEND", raising=False)
+    monkeypatch.delenv("CONTENT_PIPELINE_LLM_MODELS", raising=False)
     planner, store, _ = _planner_fixture(tmp_path, profile_dir, write, "")
     assert planner.units(store)[0].id == "record:product/bolt"
+
+
+def test_legacy_backend_env_no_longer_triggers_the_live_path(tmp_path, profile_dir, write, monkeypatch):
+    """Migration step 12: CONTENT_PIPELINE_LLM_MODELS is the only routing
+    env. The removed CONTENT_PIPELINE_LLM_BACKEND switch neither routes nor
+    turns on the agentic path."""
+    monkeypatch.setenv("CONTENT_PIPELINE_LLM_BACKEND", "claude-cli")
+    monkeypatch.delenv("CONTENT_PIPELINE_LLM_MODELS", raising=False)
+    from yaml_data_editor_kit.dispatch import planner as planner_module
+
+    calls = []
+    monkeypatch.setattr(planner_module, "route", lambda **_kw: calls.append("route"))
+    planner, store, _ = _planner_fixture(tmp_path, profile_dir, write, "")
+    assert planner.units(store)[0].id == "record:product/bolt"
+    assert calls == []
+
+
+def test_models_env_alone_triggers_the_live_path(tmp_path, profile_dir, write, monkeypatch):
+    """Y1: CONTENT_PIPELINE_LLM_MODELS (the C1 declaration) turns on the
+    agentic path by itself."""
+    monkeypatch.setenv("CONTENT_PIPELINE_LLM_MODELS", "sol")
+    from yaml_data_editor_kit.dispatch import planner as planner_module
+
+    calls = []
+
+    def _fake_route(*, mock=None):
+        calls.append("route")
+        return MockBackend(
+            responses=['{"schema_version":"1","work_units":[{"comment_ids":["note"],"instruction":"x"}]}']
+        )
+
+    monkeypatch.setattr(planner_module, "route", _fake_route)
+    monkeypatch.setattr(planner_module, "routed_model", lambda *a, **k: "gpt-5.6-sol")
+    planner, store, _ = _planner_fixture(tmp_path, profile_dir, write, "")
+    units = planner.units(store)
+    assert calls == ["route"]
+    assert units and units[0].id.startswith("group:")
 
 
 def test_planner_prompt_is_canonical_json_with_anchored_slices(tmp_path, profile_dir, write):
@@ -330,7 +367,7 @@ def test_backend_or_budget_error_propagates_instead_of_falling_back(tmp_path, pr
 
 
 def test_live_backend_without_a_resolved_model_is_rejected_before_call(tmp_path, profile_dir, write, monkeypatch):
-    monkeypatch.setenv("CONTENT_PIPELINE_LLM_BACKEND", "custom")
+    monkeypatch.delenv("CONTENT_PIPELINE_LLM_MODELS", raising=False)
     class Backend:
         name = "custom"
     planner, store, _ = _planner_fixture(tmp_path, profile_dir, write, "", backend=Backend())
@@ -384,8 +421,8 @@ def test_resolved_rulings_are_sorted_and_guarded(tmp_path, profile_dir, write):
     assert [item["question_id"] for item in payload["rulings"]] == ["a", "z"] and all(item["guard"] for item in payload["rulings"])
 
 
-def test_injected_mock_wins_when_live_backend_environment_is_set(tmp_path, profile_dir, write, monkeypatch):
-    monkeypatch.setenv("CONTENT_PIPELINE_LLM_BACKEND", "openrouter")
+def test_injected_mock_wins_without_a_declaration(tmp_path, profile_dir, write, monkeypatch):
+    monkeypatch.delenv("CONTENT_PIPELINE_LLM_MODELS", raising=False)
     backend = MockBackend(responses=['{"schema_version":"1","work_units":[{"comment_ids":["note"],"instruction":"x"}]}'])
     planner, store, _ = _planner_fixture(tmp_path, profile_dir, write, "", backend=backend)
     assert planner.units(store)[0].id.startswith("group:") and len(backend.calls) == 1

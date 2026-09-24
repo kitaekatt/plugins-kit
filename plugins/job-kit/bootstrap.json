@@ -1,4 +1,6 @@
 {
+  "$comment": "requires_bootstrap is the call shape this plugin needs: job-kit validates a job's model declaration with bootstrap_lib.model_declaration.parse, and llm-scripting-kit's describe (which job-kit's selection calls) does the same; that module first shipped in bootstrap 0.129.0.",
+  "requires_bootstrap": "0.129.0",
   "tools": [
     {
       "name": "git"

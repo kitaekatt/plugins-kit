@@ -16,7 +16,7 @@ without depending on package layout.
 
 Usage:
     emit_audit_jobs.py <subject-dir> [--repo-root PATH] [--standards PATH]
-        [--endpoint NAME ...] [--report-dir PATH] [--max-parallel N]
+        [--models NAME ...] [--report-dir PATH] [--max-parallel N]
         [--limit N] [--out PATH|-]
 
 Each emitted job carries an `evidence_pack` record stating whether the md-audit
@@ -61,7 +61,12 @@ _DISCOVER_PATH = _SCRIPTS_DIR / "discover_project_doc.py"
 _CHECKER_PATH = _SCRIPTS_DIR / "check_project_doc_audit.py"
 _EVIDENCE_PACK_PATH = _SCRIPTS_DIR / "evidence_pack.py"
 
-DEFAULT_ENDPOINTS = ["sonnet", "opus", "luna"]
+# A model declaration (D1): a list of registry ids naming which model(s) may
+# do this unit of work. Migration step 7 (K3) renamed the CLI flag and the
+# emitted job field from the old endpoint vocabulary to this one; the
+# ADAPTER's admission concept (resolve_admitted_endpoints, adapter_applies,
+# admitted_endpoints below) is K4 and stays an endpoint allow-list, unchanged.
+DEFAULT_MODELS = ["sonnet", "opus", "luna"]
 DEFAULT_MAX_PARALLEL = 4
 
 # The md-audit evidence pack is an ADAPTER: task-specific context admitted for
@@ -171,7 +176,7 @@ def adapter_applies(endpoints: list[str], admitted_set: frozenset[str]) -> bool:
     if len(admitted) != len(endpoints):
         rejected = [name for name in endpoints if name not in admitted_set]
         raise MixedAdapterEndpointsError(
-            "endpoint_preference mixes adapter-admitted and non-admitted "
+            "models mixes adapter-admitted and non-admitted "
             f"endpoints: {endpoints} (admitted: {admitted}; not admitted: "
             f"{rejected}). The md-audit evidence pack is admitted only for "
             f"{sorted(admitted_set)} (configured under adapters: "
@@ -429,7 +434,7 @@ def build_job(
     standards_abs: Path,
     checker_abs: Path,
     python_abs: Path,
-    endpoints: list[str],
+    models: list[str],
     used_ids: set[str],
     criteria: set[str],
     taxonomy: dict[str, str],
@@ -494,7 +499,7 @@ def build_job(
     return {
         "id": job_id,
         "prompt": prompt,
-        "endpoint_preference": list(endpoints),
+        "models": list(models),
         "evidence_pack": evidence_record,
         # cwd is required only so the model can open the standards and subject
         # documents. When they are inlined there is nothing to open, and keeping
@@ -534,7 +539,7 @@ def build_job_file(
     subject_dir: Path,
     repo_root: Path,
     standards: Path,
-    endpoints: list[str],
+    models: list[str],
     max_parallel: int,
     limit: int | None,
 ) -> dict:
@@ -574,7 +579,7 @@ def build_job_file(
     # so a mixed list fails the emit rather than producing a half-adapted file.
     admitted_set = resolve_admitted_endpoints(repo_root)
     evidence_module = (
-        load_evidence_pack_module() if adapter_applies(endpoints, admitted_set) else None
+        load_evidence_pack_module() if adapter_applies(models, admitted_set) else None
     )
 
     python_abs = Path(sys.executable).resolve()
@@ -586,7 +591,7 @@ def build_job_file(
             standards_abs=standards,
             checker_abs=_CHECKER_PATH,
             python_abs=python_abs,
-            endpoints=endpoints,
+            models=models,
             used_ids=used_ids,
             criteria=criteria,
             taxonomy=taxonomy,
@@ -634,7 +639,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("subject_dir", type=Path)
     parser.add_argument("--repo-root", type=Path, default=None)
     parser.add_argument("--standards", type=Path, default=None)
-    parser.add_argument("--endpoint", action="append", default=None)
+    parser.add_argument("--models", action="append", default=None)
     parser.add_argument("--report-dir", type=Path, default=None)
     parser.add_argument("--max-parallel", type=int, default=DEFAULT_MAX_PARALLEL)
     parser.add_argument("--limit", type=int, default=None)
@@ -659,7 +664,7 @@ def main(argv: list[str] | None = None) -> int:
         args.standards.resolve() if args.standards else checker_module.DEFAULT_STANDARDS
     )
 
-    endpoints = args.endpoint if args.endpoint else list(DEFAULT_ENDPOINTS)
+    models = args.models if args.models else list(DEFAULT_MODELS)
     report_dir = (args.report_dir.resolve() if args.report_dir else Path.cwd() / "reports")
 
     try:
@@ -667,7 +672,7 @@ def main(argv: list[str] | None = None) -> int:
             subject_dir=subject_dir,
             repo_root=repo_root,
             standards=standards,
-            endpoints=endpoints,
+            models=models,
             max_parallel=args.max_parallel,
             limit=args.limit,
         )

@@ -4,7 +4,7 @@ The `orchestrate` skill's durable half (economics, procedure, anti-patterns)
 lives in SKILL.md. Its variable half is configuration, and this script renders
 an ordered routing policy plus machine data:
 
-    routing  ordered shape rows, with model priority and fallthrough
+    routing  ordered shape rows, each with its model-declaration menu (describe)
     machine  which dispatch backends exist here and how to drive them, and how
              much usage capacity is left
 
@@ -37,6 +37,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Tuple
 
 # Re-exec under awesome-kit's bootstrap-provisioned venv before importing
@@ -508,6 +509,13 @@ def window_rows(snapshot: Dict[str, Any], capacity: Dict[str, Any]) -> Tuple[Lis
 # --------------------------------------------------------------------------
 
 
+def format_reset_time(resets_at: Any) -> str:
+    """An absolute UTC reset time, in the form llm-scripting-kit renders."""
+    if not isinstance(resets_at, (int, float)):
+        return "an unknown time"
+    return time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime(resets_at))
+
+
 def fold(text: Any) -> str:
     """Collapse a YAML block scalar to a single line."""
     return " ".join(str(text).split()) if text is not None else ""
@@ -535,9 +543,25 @@ def live(records: Any) -> List[Dict[str, Any]]:
 # --------------------------------------------------------------------------
 
 
-AGENT_MODEL_NAMES = frozenset(("fable", "opus", "sonnet", "haiku"))
-AGENT_MODEL_PREFIX = "agent:"
+# A routing row's `models` is a model declaration: a list of registry ids
+# (plugins/bootstrap/skills/plugin-dev/references/model-declaration.md). The
+# core ids (fable, opus, sonnet, haiku) come from bootstrap_lib's validator,
+# not from a set restated here. The deprecated `agent:<id>` prefix predated
+# the format; the deprecation window has closed (declaration-format migration
+# step 12) and it is no longer accepted or rewritten -- an `agent:<id>` entry
+# is now an ordinary unknown id, resolving to nothing like any other
+# unrecognized prefix.
 HARNESS_NAMES = frozenset(("codex", "opencode"))
+CLAUDE_HARNESS = "claude"
+
+# The llm-scripting-kit release that shipped `describe` with the keywords
+# passed below, and the bootstrap release that shipped model_declaration.
+# awesome-kit's manifest has no install edge to llm-scripting-kit (the
+# renderer DEGRADES, dispatch.py REFUSES), so this floor is enforced by the
+# probes that read these constants, not by bootstrap.
+DECLARATION_FLOOR = "0.46.0"
+MODEL_DECLARATION_BOOTSTRAP = "0.129.0"
+_DESCRIBE_KEYWORDS = ("caller", "self_ref", "backend_factory", "reachability_cache", "entries")
 
 
 def _backend_id(backend: Mapping[str, Any]) -> str:
@@ -619,11 +643,21 @@ def discover_model_definitions(project_root: Path) -> Tuple[Dict[str, Dict[str, 
         ]
 
     notes = [str(note) for note in (getattr(discovery, "notes", []) or [])]
-    normalized: Dict[str, Dict[str, str]] = {}
+    normalized: Dict[str, Dict[str, Any]] = {}
     for raw_id, entry in entries.items():
         entry_id = str(raw_id)
         kind = _record_value(entry, "kind")
         if kind != harness_kind:
+            # Kept for routing classification only: a transport id in a row
+            # resolves (so the floor calls it unroutable, not unresolved) but
+            # has no agent loop. No backend section lists it.
+            normalized[entry_id] = {
+                "id": entry_id,
+                "kind": str(kind or ""),
+                "harness": None,
+                "model": _record_value(entry, "model"),
+                "entry": entry,
+            }
             continue
         harness = _record_value(entry, "harness")
         model = _record_value(entry, "model")
@@ -635,8 +669,10 @@ def discover_model_definitions(project_root: Path) -> Tuple[Dict[str, Dict[str, 
             continue
         normalized[entry_id] = {
             "id": entry_id,
+            "kind": harness_kind,
             "harness": harness,
             "model": model,
+            "entry": entry,
         }
         effort = _record_value(entry, "effort")
         if isinstance(effort, str) and effort:
@@ -667,8 +703,12 @@ def detect_harnesses(
     }
     result: Dict[str, Tuple[bool, str]] = {}
     for entry in model_entries.values():
+        if str(entry.get("kind") or "harness") != "harness":
+            continue
         harness = str(entry.get("harness"))
-        if harness in result:
+        # The Agent tool drives Claude entries in-session; there is no CLI
+        # backend to detect for them.
+        if harness in result or harness == CLAUDE_HARNESS:
             continue
         if harness not in HARNESS_NAMES:
             result[harness] = (False, f"unknown harness `{harness}`")
@@ -686,125 +726,346 @@ def detect_harnesses(
     return result
 
 
-def load_quota_ranker(project_root: Path):
-    """Return (rank, notes) -- a callable reordering a row's models by quota.
+class RoutingUnavailable(RuntimeError):
+    """The declaration validator this renderer requires is missing or too old."""
 
-    Rows state a PREFERENCE order; subscription quota reorders inside it. A
-    model whose pool is spent is DROPPED from the row (dispatching to it would
-    fail), and one merely being spent faster than its window elapses is moved
-    BEHIND its peers rather than removed. The stated order is the tiebreak
-    within each band, so a row's own reasoning -- a Claude lane first because
-    the orchestrator is stalled -- survives unless quota actually says
-    otherwise. That is what lets a Claude-first row swap to codex when Claude
-    is over budget and codex is not, without the row having to say so.
 
-    Evaluated ONCE per session: llm_scripting_kit pins each verdict against
-    the session id, so a row cannot change seats halfway through a session.
+def load_model_declaration() -> Any:
+    """Return ``bootstrap_lib.model_declaration``, the declaration-shape validator.
 
-    DEGRADES rather than refuses. The shared library is optional here, and its
-    absence must not silently reorder nothing while the rendered policy reads
-    as though quota had been applied -- so the caller receives a note it is
-    required to render. The probe targets `rank_candidates` and `Candidate`,
-    the newest symbols this function uses, because a stale linked copy can
-    import cleanly while predating them.
+    REQUIRED, not optional: routing rows are model declarations, and the
+    validator is what parses them and names the core ids. awesome-kit links
+    ``bootstrap_lib`` (its bootstrap.json ``shared_lib_imports``) and sets
+    ``requires_bootstrap`` to the release that shipped the module, so on a
+    provisioned venv this cannot fail. Absent and too-old are still diagnosed
+    apart, because a shared-lib link pins no version (plugins/CLAUDE.md).
     """
-    if os.environ.get("ORCHESTRATE_QUOTA_ROUTING", "").strip() == "0":
-        # A DELIBERATE opt-out, so it emits no note. The degradation notes
-        # disclose absence the reader did not choose; announcing a switch the
-        # reader set themselves would file their own decision under "degraded".
-        # Set by anything needing a policy render that does not vary with the
-        # machine's live subscription balance -- this repo's own tests are the
-        # motivating case, since without it every routing assertion turns on
-        # the developer's current quota.
-        return None, []
+    try:
+        import bootstrap_lib  # noqa: F401, PLC0415
+    except ImportError as exc:
+        raise RoutingUnavailable(
+            "routing rows not rendered: bootstrap_lib is not linked into this "
+            f"environment ({type(exc).__name__}); install or enable "
+            "plugins-kit:bootstrap and start a new session"
+        ) from exc
+    try:
+        from bootstrap_lib import model_declaration  # noqa: PLC0415
+    except ImportError:
+        model_declaration = None
+    if (
+        model_declaration is None
+        or not callable(getattr(model_declaration, "parse", None))
+        or not isinstance(getattr(model_declaration, "CORE_IDS", None), frozenset)
+    ):
+        raise RoutingUnavailable(
+            "routing rows not rendered: the linked bootstrap_lib predates "
+            f"model_declaration (first shipped in bootstrap {MODEL_DECLARATION_BOOTSTRAP}); "
+            "update with `claude plugin update bootstrap@plugins-kit` and start a new session"
+        )
+    return model_declaration
 
+
+def load_declaration_api() -> Tuple[Optional[SimpleNamespace], Optional[str]]:
+    """Return llm-scripting-kit's declaration API, or the note saying why not.
+
+    DEGRADES rather than refuses. Without the library the harness still
+    routes the Claude core ids, so each row lists the core ids it declares, in
+    declared order, and the note -- which the caller renders into the policy
+    -- says the menu is reduced. The probe targets ``describe`` and the
+    keyword arguments this renderer passes it, the newest call shape used
+    (llm-scripting-kit ``DECLARATION_FLOOR``): an older linked copy can
+    import cleanly while lacking them, and absence and staleness have
+    different remedies, so their messages differ.
+    """
+    reduced = (
+        "routing rows list only the Claude models the harness routes by itself "
+        "(fable, opus, sonnet, haiku), in declared order, without pace ordering "
+        "and without the choice and re-selection rule"
+    )
     try:
         import llm_scripting_kit as model_kit  # noqa: PLC0415
     except ImportError as exc:
-        return None, [
-            "quota-aware routing skipped: llm_scripting_kit unavailable "
-            f"({type(exc).__name__}); rows render in their configured order and "
-            "no model is de-prioritized or dropped for quota. Install the owning "
-            "plugin with `claude plugin install llm-scripting-kit@plugins-kit` "
+        return None, (
+            f"llm_scripting_kit unavailable ({type(exc).__name__}); {reduced}. Install "
+            "the owning plugin with `claude plugin install llm-scripting-kit@plugins-kit` "
             "and start a new session."
-        ]
+        )
 
-    rank_candidates = getattr(model_kit, "rank_candidates", None)
-    candidate_type = getattr(model_kit, "Candidate", None)
-    pinned_evaluate = getattr(model_kit, "pinned_evaluate", None)
-    discover = getattr(model_kit, "discover_model_entries", None)
-    if not callable(rank_candidates) or candidate_type is None or not callable(pinned_evaluate):
-        return None, [
-            "quota-aware routing skipped: the linked llm_scripting_kit predates "
-            "quota-aware selection (no `rank_candidates`), so rows render in their "
-            "configured order and no model is de-prioritized or dropped for quota. "
-            "Update it with `claude plugin update llm-scripting-kit@plugins-kit` "
-            "and start a new session."
-        ]
+    describe = getattr(model_kit, "describe", None)
+    parameters: Mapping[str, Any] = {}
+    if callable(describe):
+        try:
+            parameters = inspect.signature(describe).parameters
+        except (TypeError, ValueError):
+            parameters = {}
+    api = SimpleNamespace(
+        describe=describe,
+        no_usable=getattr(model_kit, "NoUsableRoutingTarget", None),
+        reachability=getattr(model_kit, "Reachability", None),
+        resolve_error=getattr(model_kit, "EndpointResolveError", None),
+        reachable=getattr(model_kit, "STATUS_REACHABLE", None),
+        unreachable=getattr(model_kit, "STATUS_UNREACHABLE", None),
+    )
+    if (
+        not callable(describe)
+        or any(name not in parameters for name in _DESCRIBE_KEYWORDS)
+        or not all(
+            isinstance(value, type)
+            for value in (api.no_usable, api.reachability, api.resolve_error)
+        )
+        or not api.reachable
+        or not api.unreachable
+    ):
+        return None, (
+            f"the linked llm_scripting_kit is older than {DECLARATION_FLOOR} (no "
+            "`describe` accepting the keywords this renderer passes); "
+            f"{reduced}. Update it with `claude plugin update "
+            "llm-scripting-kit@plugins-kit` and start a new session."
+        )
+    return api, None
 
+
+def _quota_reads_enabled() -> bool:
+    """False when ORCHESTRATE_QUOTA_ROUTING=0: no quota reads, no pace.
+
+    A DELIBERATE opt-out, so it emits no note. Set by anything needing a
+    render that does not vary with the machine's live subscription balance --
+    this repo's own tests are the motivating case.
+    """
+    return os.environ.get("ORCHESTRATE_QUOTA_ROUTING", "").strip() != "0"
+
+
+_ENTRY_FIELDS = (
+    "id", "base_url", "model", "kind", "harness", "effort", "tier", "family", "conserve_usage",
+)
+
+
+def _declaration_entries(
+    model_entries: Mapping[str, Any], core_ids: Iterable[str], *, quota: bool
+) -> Dict[str, Any]:
+    """The merged entry map ``describe`` classifies, built from one discovery.
+
+    Injected rather than re-discovered per row, so a render reads the registry
+    once. A core id the registry does not carry is added as the Claude
+    harness entry it always is (the harness defines it). With quota reads
+    off, ``conserve_usage`` is dropped, so ``describe`` makes no read at all.
+    """
+    result: Dict[str, Any] = {}
+    for raw_id, record in model_entries.items():
+        source = _record_value(record, "entry")
+        values = {}
+        for field in _ENTRY_FIELDS:
+            value = _record_value(record, field)
+            if value is None and source is not None:
+                value = getattr(source, field, None)
+            values[field] = value
+        values["id"] = str(values["id"] or raw_id)
+        values["kind"] = values["kind"] or "harness"
+        if not quota:
+            values["conserve_usage"] = None
+        result[str(raw_id)] = SimpleNamespace(**values)
+    for core_id in core_ids:
+        result.setdefault(
+            core_id,
+            SimpleNamespace(
+                id=core_id, base_url=None, model=core_id, kind="harness",
+                harness=CLAUDE_HARNESS, effort=None, tier=None, family=None,
+                conserve_usage=None,
+            ),
+        )
+    return result
+
+
+def _session_backend_factory(
+    entries: Mapping[str, Any], drivable: set, error_type: type
+) -> Callable[..., Any]:
+    """Resolve an id the way THIS policy can drive it in-session.
+
+    A harness entry routes only when the harness is the Agent tool's (Claude)
+    or has a ``backends[]`` record with dispatch mechanics: CLI presence
+    proves the tool exists, not that the policy can drive it. Anything else
+    raises the library's resolve error, which ``describe`` records as an
+    unroutable disposition -- hidden from the render, itemised only by the
+    floor.
+    """
+
+    def factory(name: str, project_root: Optional[str] = None) -> Any:
+        entry = entries.get(name)
+        if entry is None:
+            raise error_type(f"no model entry named {name!r}")
+        harness = str(getattr(entry, "harness", None) or "").lower()
+        kind = getattr(entry, "kind", None)
+        if kind == "harness" and harness != CLAUDE_HARNESS and harness not in drivable:
+            raise error_type(
+                f"harness {harness!r} has no backends[] record with dispatch mechanics"
+            )
+        return SimpleNamespace(backend=None, model=getattr(entry, "model", None), kind=kind)
+
+    return factory
+
+
+def _seed_reachability(
+    api: SimpleNamespace,
+    names: Iterable[str],
+    entries: Mapping[str, Any],
+    harness_status: Mapping[str, Tuple[bool, str]],
+    cache: Dict[str, Any],
+) -> None:
+    """Answer reachability from this render's own detection, not a live probe.
+
+    The Agent tool drives a Claude entry in-session, so it is reachable by
+    construction; a codex or opencode entry is as reachable as the backend
+    detection already run for this render says. One detection per render,
+    and ``describe`` finds every answer in the cache.
+    """
+    for name in names:
+        entry = entries.get(name)
+        if entry is None or name in cache or getattr(entry, "kind", None) != "harness":
+            continue
+        harness = str(getattr(entry, "harness", None) or "").lower()
+        if harness == CLAUDE_HARNESS:
+            cache[name] = api.reachability(
+                status=api.reachable, checked="agent-tool", detail="the Agent tool"
+            )
+        elif harness in harness_status:
+            ok, reason = harness_status[harness]
+            cache[name] = api.reachability(
+                status=api.reachable if ok else api.unreachable,
+                checked="cli-version",
+                detail=str(reason),
+            )
+
+
+def _target(entry_id: str, harness: Optional[str]) -> str:
+    """The announcement target: the bare id for Claude, `<harness>/<id>` otherwise."""
+    harness = str(harness or "").lower()
+    if not harness or harness == CLAUDE_HARNESS:
+        return entry_id
+    return f"{harness}/{entry_id}"
+
+
+def _drivable_harnesses(config: Dict[str, Any], routable_ids: set) -> set:
+    """Harness ids whose backends[] record carries dispatch mechanics.
+
+    Detection is NOT part of this: an undetected CLI with a record is
+    unreachable (visible, not usable), not unroutable (hidden).
+    """
+    drivable = set(routable_ids)
+    for backend in active(config.get("backends") or []):
+        if _backend_has_dispatch_mechanics(backend):
+            drivable.add(_backend_id(backend))
+    return drivable
+
+
+def _describe_row(
+    api: SimpleNamespace,
+    ids: List[str],
+    context: Mapping[str, Any],
+) -> Dict[str, Any]:
+    """One row's menu from ``describe``: rendered entries, header, rule, or floor."""
+    _seed_reachability(
+        api, ids, context["entries"], context["harness_status"], context["cache"]
+    )
     try:
-        entries = discover(project_root=str(project_root)).entries if callable(discover) else {}
-    except Exception as exc:  # noqa: BLE001 -- a stale shared lib degrades, never crashes
-        return None, [
-            "quota-aware routing skipped: model discovery failed "
-            f"({type(exc).__name__}: {exc}); rows render in their configured order."
-        ]
+        ranking = api.describe(
+            ids,
+            project_root=context["project_root"],
+            caller="session",
+            self_ref=context["self_ref"],
+            backend_factory=context["factory"],
+            reachability_cache=context["cache"],
+            entries=context["entries"],
+        )
+    except api.no_usable as exc:  # the floor: the only surface naming hidden ids
+        return {"models": [], "header": None, "rule": "", "floor": str(exc)}
+    lines = ranking.render().split("\n")
+    entries = list(ranking.rendered_entries)
+    models = [
+        {
+            "id": entry.id,
+            "target": _target(entry.id, entry.harness),
+            "harness": entry.harness,
+            "usable": bool(entry.usable),
+            "default": bool(entry.default),
+            "line": line,
+        }
+        for entry, line in zip(entries, lines[1 : 1 + len(entries)])
+    ]
+    return {"models": models, "header": lines[0], "rule": ranking.rule, "floor": None}
 
-    def rank(models: List[Dict[str, str]]) -> Tuple[List[Dict[str, str]], List[str]]:
-        candidates = []
-        for index, model in enumerate(models):
-            entry_id = str(model.get("id") or "")
-            entry = entries.get(entry_id)
-            spec = getattr(entry, "conserve_usage", None) if entry is not None else None
-            budget = None
-            if spec is not None:
-                try:
-                    budget = pinned_evaluate(entry_id, spec, getattr(entry, "harness", None))
-                except Exception:  # noqa: BLE001 -- a verdict that cannot be read is no verdict
-                    budget = None
-            candidates.append(candidate_type(endpoint=entry_id, preference_index=index, budget=budget))
-        ranked, disabled = rank_candidates(candidates)
-        by_id = {str(model.get("id")): model for model in models}
-        ordered = [by_id[c.endpoint] for c in ranked if c.endpoint in by_id]
-        row_notes = []
-        for c in disabled:
-            row_notes.append(f"`{c.endpoint}` dropped: out of quota")
-        for position, c in enumerate(ranked):
-            # "Moved back" means a peer the row listed LATER now precedes it --
-            # not merely that its index shifted. A drop earlier in the row
-            # shifts every later position, so comparing `position` against
-            # `preference_index` reports a move for a model that overtook
-            # nobody (row [A out-of-quota, B under-quota] leaves B leading the
-            # row at position 0 with preference_index 1).
-            if c.deprioritized and any(
-                other.preference_index > c.preference_index for other in ranked[:position]
-            ):
-                row_notes.append(f"`{c.endpoint}` moved back: under quota")
-        return ordered, row_notes
 
-    return rank, []
+def _reduced_row(ids: List[str], core_ids: frozenset, self_ref: Optional[str], reason: str) -> Dict[str, Any]:
+    """One row's menu without llm-scripting-kit: its core ids, in declared order."""
+    kept = [entry_id for entry_id in ids if entry_id in core_ids]
+    if not kept:
+        itemised = "\n".join(f"  {entry_id}: unroutable ({reason})" for entry_id in ids)
+        return {
+            "models": [],
+            "header": None,
+            "rule": "",
+            "floor": (
+                f"no usable routing target in [{', '.join(ids)}] for a session caller:\n"
+                f"{itemised}"
+            ),
+        }
+    width = max(len(entry_id) for entry_id in kept)
+    models = []
+    for index, entry_id in enumerate(kept):
+        marks = [mark for mark, on in (("[default]", index == 0), ("[author]", entry_id == self_ref)) if on]
+        line = f"  {entry_id:<{width}}  claude/agent"
+        if marks:
+            line += "   " + " ".join(marks)
+        models.append(
+            {
+                "id": entry_id,
+                "target": entry_id,
+                "harness": CLAUDE_HARNESS,
+                "usable": True,
+                "default": index == 0,
+                "line": line,
+            }
+        )
+    return {
+        "models": models,
+        "header": "Declared Claude models, in declared order: choose one; default is marked.",
+        "rule": "",
+        "floor": None,
+    }
 
 
 def resolve_routing_models(
     config: Dict[str, Any],
-    model_entries: Mapping[str, Mapping[str, str]],
+    model_entries: Mapping[str, Any],
     harness_status: Mapping[str, Tuple[bool, str]],
     routable_ids: Optional[set] = None,
-    quota_rank: Optional[Any] = None,
+    *,
+    api: Optional[SimpleNamespace] = None,
+    self_ref: Optional[str] = None,
+    project_root: Optional[Path] = None,
+    degraded: Optional[List[str]] = None,
 ) -> Tuple[List[Dict[str, Any]], List[str]]:
-    """Resolve routing rows, retaining order and model priority.
+    """Resolve each routing row's model declaration into its rendered menu.
 
-    Agent-tool names are a reserved namespace. Every other name is looked up
-    in the shared model registry and must resolve to a harness entry whose CLI
-    is present AND whose active backend yields drivable mechanics: a rendered
-    command, a record `command`, or dispatch prose. Invalid model members are
-    skipped individually; a row with no surviving models is omitted. When
-    `routable_ids` is omitted, this function derives it with the same detection
-    statuses and adapter-rendered commands used by `render()`.
+    A row's `models` is a model declaration. With llm-scripting-kit's
+    declaration API (`api`), the menu is ``describe(caller="session")``:
+    unresolved and unroutable ids are skipped SILENTLY -- no note on any
+    surface -- out-of-quota and unreachable entries stay visible, the menu
+    is pace-ordered, and the rule text is describe's own. Without it the
+    menu is the row's core ids in declared order. A row with nothing usable
+    carries the floor, which itemises every declared id; it is kept rather
+    than deleted, because deleting it would fall the unit through to a row
+    chosen for a different shape. `notes` are row-level configuration notes
+    for `--explain` and never name a hidden id.
     """
-    configured_backend_ids = {
-        _backend_id(backend) for backend in active(config.get("backends") or [])
-    }
+    notes: List[str] = []
+    try:
+        declaration = load_model_declaration()
+    except RoutingUnavailable as exc:
+        if degraded is not None and str(exc) not in degraded:
+            degraded.append(str(exc))
+        return [], [str(exc)]
+    core_ids = declaration.CORE_IDS
+
     if routable_ids is None:
         detected: List[Tuple[Dict[str, Any], bool, str]] = []
         for backend in active(config.get("backends") or []):
@@ -822,9 +1083,23 @@ def resolve_routing_models(
             detected, command_text_provider
         )
         routable_ids = _routable_backend_ids(detected, rendered_commands)
+
+    context: Optional[Dict[str, Any]] = None
+    if api is not None:
+        entries = _declaration_entries(model_entries, core_ids, quota=_quota_reads_enabled())
+        context = {
+            "entries": entries,
+            "harness_status": harness_status,
+            "cache": {},
+            "project_root": str(project_root) if project_root is not None else None,
+            "self_ref": self_ref,
+            "factory": _session_backend_factory(
+                entries, _drivable_harnesses(config, routable_ids), api.resolve_error
+            ),
+        }
+
     terms = Terms(config.get("lexicon"))
     routes: List[Dict[str, Any]] = []
-    notes: List[str] = []
     raw_rows = config.get("routing") or []
     if not isinstance(raw_rows, list):
         return [], ["routing skipped: expected a list"]
@@ -850,134 +1125,64 @@ def resolve_routing_models(
             )
             continue
 
-        raw_models = raw_row.get("models")
-        if not isinstance(raw_models, list):
-            notes.append(f"routing row {row_number} skipped: models must be a list")
+        try:
+            ids = declaration.parse(raw_row.get("models"))
+        except declaration.DeclarationError as exc:
+            notes.append(f"routing row {row_number} skipped: models: {exc}")
             continue
-        models: List[Dict[str, str]] = []
-        inline_notes: List[str] = []
-        for raw_model in raw_models:
-            if not isinstance(raw_model, str) or not raw_model:
-                notes.append(f"routing row {row_number}: invalid model name skipped")
-                continue
-            if raw_model.startswith(AGENT_MODEL_PREFIX):
-                entry_id = raw_model[len(AGENT_MODEL_PREFIX):]
-                if entry_id not in AGENT_MODEL_NAMES:
-                    notes.append(
-                        f"routing row {row_number}: `{raw_model}` skipped; unknown Agent-tool model"
-                    )
-                    continue
-                models.append({"id": entry_id, "target": entry_id, "kind": "agent"})
-                continue
-            if ":" in raw_model:
-                notes.append(
-                    f"routing row {row_number}: `{raw_model}` skipped; only `agent:` is a reserved namespace"
-                )
-                continue
-            entry = model_entries.get(raw_model)
-            if entry is None:
-                notes.append(
-                    f"routing row {row_number}: `{raw_model}` skipped; no harness model entry resolves"
-                )
-                continue
-            harness = str(entry.get("harness") or "")
-            available, reason = harness_status.get(
-                harness, (False, f"harness `{harness}` is not detected")
-            )
-            if not available:
-                notes.append(
-                    f"routing row {row_number}: `{raw_model}` skipped; {reason}"
-                )
-                continue
-            if harness not in configured_backend_ids:
+
+        row: Optional[Dict[str, Any]] = None
+        if context is not None:
+            try:
+                row = _describe_row(api, ids, context)
+            except Exception as exc:  # noqa: BLE001 -- a version-skewed library degrades
                 note = (
-                    f"`{raw_model}` skipped; harness `{harness}` has no "
-                    "backends[] record, so no dispatch mechanics render for it "
-                    "(see references/configuration.md)"
+                    "llm_scripting_kit describe() failed "
+                    f"({type(exc).__name__}: {exc}); routing rows list only the Claude "
+                    "models the harness routes by itself, in declared order"
                 )
-                notes.append(
-                    f"routing row {row_number}: {note}"
-                )
-                inline_notes.append(note)
-                continue
-            if harness not in routable_ids:
-                notes.append(
-                    f"routing row {row_number}: `{raw_model}` skipped; harness "
-                    f"`{harness}` has no drivable dispatch mechanics: no rendered "
-                    "command, `command`, or dispatch prose"
-                )
-                continue
-            models.append(
-                {
-                    "id": raw_model,
-                    "target": f"{harness}/{raw_model}",
-                    "kind": "harness",
-                    "harness": harness,
-                    "model": str(entry.get("model")),
-                }
+                if degraded is not None and note not in degraded:
+                    degraded.append(note)
+                row = None
+        if row is None:
+            reason = (
+                "llm_scripting_kit is unavailable here"
+                if api is None
+                else "llm_scripting_kit describe() failed here"
             )
-        if not models:
-            notes.append(f"routing row {row_number} skipped: no model resolves")
-            continue
-        if quota_rank is not None:
-            ordered, quota_notes = quota_rank(models)
-            for note in quota_notes:
-                notes.append(f"routing row {row_number}: {note}")
-                inline_notes.append(note)
-            # A row whose every model is out of quota keeps them. Emptying it
-            # would delete the row, and rows are not each other's fallbacks --
-            # first-match-wins means the unit would fall through to a LOWER row
-            # and be dispatched on seats chosen for a different shape entirely.
-            # Reporting the exhaustion and leaving the row intact is the honest
-            # outcome; the orchestrator can read it and decide.
-            if ordered:
-                models = ordered
-            else:
-                notes.append(
-                    f"routing row {row_number}: every model is out of quota; row kept as "
-                    "configured rather than deleted, because deleting it would fall the "
-                    "unit through to a row chosen for a different shape"
-                )
-                inline_notes.append("every model on this row is out of quota")
+            row = _reduced_row(ids, core_ids, self_ref, reason)
+
         routes.append(
             {
                 "number": row_number,
                 "shape": shape,
-                "models": models,
                 "gate": raw_row.get("gate"),
                 "guards": list(raw_row.get("guards") or []),
-                "inline_notes": inline_notes,
+                **row,
             }
         )
     return routes, notes
 
 
-def announcement_text(
-    what: str,
-    target: str,
-    shape_terms: Iterable[str],
-    fell_through_from: Optional[str] = None,
-) -> str:
-    """Build the stable dispatch announcement, including fallback context."""
+def announcement_text(what: str, target: str, shape_terms: Iterable[str]) -> str:
+    """Build the stable dispatch announcement."""
     terms = list(shape_terms)
     parenthetical = ", ".join(terms) if terms else "default"
-    if fell_through_from:
-        parenthetical += f"; fell through from {fell_through_from}"
     return f"delegating {what} to {target} ({parenthetical})"
 
 
 def _resolved_model_ids(routes: Iterable[Mapping[str, Any]]) -> set:
-    """Return the model ids that survive routing resolution."""
+    """The ids some row can dispatch to now (usable rendered entries)."""
     return {
         str(model["id"])
         for route in routes
         for model in (route.get("models") or [])
-        if isinstance(model, Mapping) and model.get("id")
+        if isinstance(model, Mapping) and model.get("id") and model.get("usable", True)
     }
 
 
 def _requires_resolved_models(record: Mapping[str, Any], resolved_models: set) -> bool:
-    """Whether a record's optional model dependencies all survived resolution."""
+    """Whether a record's optional model dependencies are all usable here."""
     required = record.get("requires_model")
     if required is None:
         return True
@@ -1098,34 +1303,47 @@ def render_routing(
     blocks: Blocks,
     out: List[str],
 ) -> None:
-    """Render the ordered shape list and its model priority."""
+    """Render the ordered shape rows, each with its model-declaration menu.
+
+    The menu header, each entry line, and the rule lines are llm-scripting-kit
+    ``describe`` output passed through verbatim: the choice, announcement and
+    re-selection rule is owned (and tested) there, never restated here. The
+    rule is identical for every row, so it renders once, after the rows.
+    """
     if not routes:
         return
     blocks.heading("Routing")
-    out.append(
-        "Evaluate rows in order; the first matching shape wins. Within a row, "
-        "try models in the order shown. On a launch or transport error, continue "
-        "to the next model; the fallback announcement names the model immediately "
-        "before the fallback."
-    )
+    out.append("Evaluate rows in order; the first matching shape wins.")
+    header = next((route.get("header") for route in routes if route.get("header")), None)
+    if header:
+        out.append(header)
     out.append("")
+    rules: List[str] = []
     for index, route in enumerate(routes, 1):
         shape = route.get("shape") or []
         shape_text = " + ".join(terms.term(term) for term in shape) if shape else "anything"
-        models = route.get("models") or []
-        targets = [f"**{model['target']}**" for model in models]
-        if len(targets) == 1:
-            dispatch = targets[0]
+        if route.get("floor"):
+            out.append(
+                f"{index}. If {shape_text}: no usable model here. A unit of this shape "
+                "stops; report this to the user:"
+            )
+            for line in str(route["floor"]).splitlines():
+                out.append(f"     {line}")
         else:
-            dispatch = ", then ".join(targets)
-        out.append(f"{index}. If {shape_text}: try {dispatch}.")
-        for note in route.get("inline_notes") or []:
-            out.append(f"   - {note}")
+            out.append(f"{index}. If {shape_text}:")
+            for model in route.get("models") or []:
+                out.append(f"   {model['line']}")
         if route.get("gate"):
             out.append(f"   - Gate: {terms.fill(route['gate'])}")
         for guard in route.get("guards") or []:
             out.append(f"   - {terms.fill(guard)}")
+        for line in str(route.get("rule") or "").splitlines():
+            if line and line not in rules:
+                rules.append(line)
     out.append("")
+    if rules:
+        out.extend(rules)
+        out.append("")
 
 
 def render_agent_types(
@@ -1536,7 +1754,6 @@ def render_backends(
     command_text_provider: Callable[[Dict[str, Any]], Optional[str]] = adapter_command_text_provider,
 ) -> None:
     model_entries = model_entries or {}
-    harness_status = harness_status or {}
     out.append("## Dispatch backends")
     out.append("")
     if not detected and not model_entries:
@@ -1551,7 +1768,6 @@ def render_backends(
     # dispatch to something that is not installed. `--explain` reports the
     # detection status for anyone who wants to know why a backend is missing.
     available = [(b, reason) for b, ok, reason in detected if ok]
-    rendered_ids = set()
 
     if not available:
         out.append("None of the configured backends detected on this machine.")
@@ -1559,7 +1775,6 @@ def render_backends(
 
     for backend, reason in available:
         bid = str(backend.get("id", "?"))
-        rendered_ids.add(bid)
         title = f"### {backend.get('name', bid)} (`{bid}`)"
         out.append(title)
         out.append("")
@@ -1599,27 +1814,11 @@ def render_backends(
                 out.append(f"- {fold(gotcha)}")
                 out.append("")
 
-    # A registry may name a supported harness for which the machine half has
-    # no hand-authored record. Show an identity-only section for that harness,
-    # using the same command detector as configured records. No dispatch
-    # command is invented here, and routing resolution skips its models: a
-    # backend a row prefers but nobody can drive is worse than an absent one.
-    for harness, (ok, reason) in harness_status.items():
-        if not ok or harness in rendered_ids:
-            continue
-        rendered_ids.add(harness)
-        out.append(f"### {harness.title()} (`{harness}`)")
-        out.append("")
-        out.append(f"*Detected: {reason}.*")
-        out.append("")
-        _render_model_entries(model_entries, harness, out)
-        out.append(
-            "**Not dispatchable.** This harness appears in the model registry but "
-            "has no `backends[]` record, so no launch mechanics exist here and "
-            "routing rows do not resolve its models. Add a `backends[]` record "
-            "(see references/configuration.md) to make it a dispatch target."
-        )
-        out.append("")
+    # A harness the model registry names but no backends[] record covers gets
+    # NO section: its models cannot be dispatched by this policy, so routing
+    # skips them silently (they are unroutable here), and a section saying so
+    # would be the non-routable notice the declaration format rules out.
+    # `--explain` still reports the harness's detection status.
 
 
 def render_capacity(config: Dict[str, Any], out: List[str]) -> None:
@@ -1711,6 +1910,16 @@ def render_consult_seats(
             )
     else:
         out.append("none reachable -- decide and say so")
+    # An out-of-quota seat stays visible with its reset time: it is real on
+    # this machine and usable again when its pool resets, and "no seat above
+    # me" must stay distinguishable from "the seat above me is spent".
+    for seat in getattr(result, "out_of_quota", ()) or ():
+        harness = getattr(seat, "harness", None) or "?"
+        resets_at = getattr(getattr(seat, "budget", None), "resets_at", None)
+        out.append(
+            f"{seat.relation} {seat.endpoint} ({seat.band}, {harness}) "
+            f"out of quota until {format_reset_time(resets_at)}"
+        )
     self_seat = result.self
     out.append(f"self: {self_seat.endpoint} ({self_seat.band})")
 
@@ -1808,17 +2017,21 @@ def render(
     )
     rendered_commands = _rendered_backend_command_texts(detected, command_text_provider)
     routable_backend_ids = _routable_backend_ids(detected, rendered_commands)
-    quota_rank, quota_notes = load_quota_ranker(project_root)
-    # Same rule as the degradation notes above: a policy rendered WITHOUT the
-    # quota pass looks identical to one rendered with it, so a skipped pass has
-    # to say so or the reader takes the printed order for a quota-aware one.
-    degradation_notes.extend(quota_notes)
+    declaration_api, declaration_note = load_declaration_api()
+    # Same rule as the degradation notes above: a menu reduced to the Claude
+    # core ids looks like a complete one, so the reduction has to say so. The
+    # note names the library, never a declared id -- a skipped id is silent.
+    if declaration_note:
+        degradation_notes.append(declaration_note)
     routes, _routing_notes = resolve_routing_models(
         config,
         model_entries,
         harness_status,
         routable_backend_ids,
-        quota_rank=quota_rank,
+        api=declaration_api,
+        self_ref=self_ref,
+        project_root=project_root,
+        degraded=degradation_notes,
     )
     render_decision_tree(config, routable_backend_ids, backend_names, out, routes)
     seat_result, seat_status, seat_detail = discover_consult_seats(
@@ -1962,16 +2175,20 @@ def main(argv: Optional[List[str]] = None) -> int:
             notes=command_notes,
         )
         rendered_commands = _rendered_backend_command_texts(detected, command_text_provider)
-        explain_quota_rank, explain_quota_notes = load_quota_ranker(project_root)
+        explain_api, explain_api_note = load_declaration_api()
+        explain_degraded: List[str] = []
         routes, routing_notes = resolve_routing_models(
             config,
             model_entries,
             harness_status,
             _routable_backend_ids(detected, rendered_commands),
-            quota_rank=explain_quota_rank,
+            api=explain_api,
+            self_ref=args.self_ref,
+            project_root=project_root,
+            degraded=explain_degraded,
         )
-        for note in explain_quota_notes:
-            print(f"quota    note      {note}")
+        for note in ([explain_api_note] if explain_api_note else []) + explain_degraded:
+            print(f"routing  degraded  {note}")
         for harness, (ok, reason) in harness_status.items():
             print(f"harness  {'available' if ok else 'MISSING':9} {harness}: {reason}")
         for note in model_notes:
@@ -1985,7 +2202,11 @@ def main(argv: Optional[List[str]] = None) -> int:
         )
         explain_consult_seats(seat_result, seat_status, seat_detail)
         for route in routes:
+            # Rendered entries only: a hidden id surfaces through the floor
+            # alone, never here.
             targets = ", ".join(model["target"] for model in route["models"])
+            if route.get("floor"):
+                targets = "no usable model (floor)"
             shape = "+".join(route["shape"]) or "default"
             print(f"routing  row       {route['number']}: {shape} -> {targets}")
         print()

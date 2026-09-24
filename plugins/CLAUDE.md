@@ -87,17 +87,21 @@ unconfigurable opinion whose test passes is a finding.
   task system whose retirement step is manual, and should either accept that or drive
   submission themselves; there is no half-working git path to be surprised by.
 
-- **job-kit selects deterministically from the caller's stated preference order.** No
-  scoring, no endpoint aliases, no learned or adaptive routing: a job names an ordered
-  endpoint preference, requirements filter it against llm-scripting-kit's advertisement,
-  and the first surviving entry runs. A user who wants "pick whichever is cheapest or
+- **job-kit selects deterministically: a run is explainable from the declared list plus
+  the logged pace readings.** No scoring, no learned or adaptive routing: a job's
+  `models` declaration is ranked by llm-scripting-kit's `describe(caller="process")` --
+  unusable entries skipped silently, paced entries ordered by pace, unpaced entries in
+  their declared places -- and the first usable entry runs. Every attempt row records the
+  pace readings it was selected from. A user who wants "pick whichever is cheapest or
   fastest right now" has no way to express it, and that is the point -- an UNATTENDED run
-  must be explainable from its inputs alone, because nobody is watching to notice that the
-  runner chose differently than last time. Judgment-driven routing is a session concern:
-  that user wants `awesome-kit:orchestrate`, whose whole job is deciding, not a runner
-  whose job is executing a decision already made. Within a run, job-kit only ever NARROWS
-  the stated order -- an endpoint that returned a persistent halt is excluded from later
-  jobs -- and the ledger records every exclusion.
+  must be explainable from what it recorded, because nobody is watching to notice that
+  the runner chose differently than last time. Judgment-driven routing is a session
+  concern: that user wants `awesome-kit:orchestrate`, whose whole job is deciding, not a
+  runner whose job is executing a decision already made. Within a run, job-kit only ever
+  NARROWS the declared list -- an endpoint that returned a persistent halt, a spent quota
+  included, is excluded from later attempts and jobs -- and the ledger records every
+  exclusion. When nothing usable remains, the job ends with the floor, which itemises
+  every declared id and its disposition; a skip reason appears nowhere else.
 
 - **A run-level deny floor is a selection REQUIREMENT, not a best-effort request.** When a
   run declares tools an endpoint must not be able to use, an endpoint whose advertisement
@@ -191,30 +195,36 @@ unconfigurable opinion whose test passes is a finding.
   cannot tell you which one caused a regression, and the config key would make that the
   cheapest thing to reach for. Widening the set further is a plugin change, not a line of
   YAML.
-- **A failed lane falls over only along the chain its own configuration named, and every
-  failover is disclosed.** A reviewer's `model` may be an ordered list; when the chosen
-  model fails at dispatch, the lane is re-dispatched on the next entry, and the rendered
-  review names the lane, the model that failed, and the model that actually produced the
-  review. A lane whose chain is exhausted is still a failed lane with its files marked
-  uncovered. What stays refused is the substitution nobody asked for: a lane configured
-  with a single model never silently acquires a second one, because the rendered review
-  looks identical either way and would then carry a false claim about what examined the
-  change. Disclosure is what separates the two -- a team that wants "finish the review
-  anyway" states the order it wants and can see, afterwards, which model each finding came
-  from.
+- **An unexplained lane failure re-selects through `describe`, and every re-selection is
+  disclosed.** A reviewer declaration may cover more than one entry; when a launch
+  failure is not explained by the entry-harness rule, the lane re-runs `llm-scripting-kit
+  describe` with the same arguments plus one `--exclude <entry>` per entry already
+  failed on, at most once per entry, and the rendered review carries every `route:` line
+  in a `## Lane routes` section. A lane whose describe exits 1 with no entry left is still
+  a failed lane with its files marked uncovered. What stays refused is the substitution
+  nobody asked for: a lane configured with a single model never silently acquires a
+  second one, because the rendered review looks identical either way and would then carry
+  a false claim about what examined the change. Disclosure is what separates the two -- a
+  team that wants "finish the review anyway" states the order it wants and can see,
+  afterwards, which model each finding came from.
 
-- **A `conserve_usage` verdict is pinned for the session and never re-evaluated
-  downward.** llm-scripting-kit computes a paced endpoint's availability once per session
-  key and reuses it; an UNDER-QUOTA or OUT-OF-QUOTA verdict is recomputed only once its
-  window resets, and an AVAILABLE one is never recomputed at all. A team could reasonably want live
-  re-evaluation -- a session running for days holds an `available` verdict computed against
-  numbers that have since moved -- and the only remedy we leave them is to start a new
-  session (or `llm-scripting-kit usage --no-pin`, which inspects without changing what
-  `seats` returns). We refuse the seam because the alternative is the failure the feature
-  exists to prevent: an endpoint that was usable when work was planned against it
-  disappearing mid-run, which strands that work with no signal a caller can act on. A
-  verdict that only ever improves within a session is a guarantee; one that can flip either
-  way is a race.
+- **A `conserve_usage` verdict is pinned for the session and re-evaluated downward ONLY
+  on an observed quota or credit halt.** llm-scripting-kit computes a paced endpoint's
+  availability once per session key and reuses it; an UNDER-QUOTA or OUT-OF-QUOTA verdict
+  is recomputed only once its window resets, and an AVAILABLE one is never recomputed from
+  a re-read. The one downward move is an actual failure: a dispatch that halts on quota or
+  credit writes OUT-OF-QUOTA for that entry until the halt's own reset time, or the event
+  time plus 5 hours when it carries none, and once that reset time passes the pinned
+  verdict expires and the next read evaluates the pool afresh (`usage_budget.pinned_evaluate`). A
+  team could reasonably want live re-evaluation -- a session running for days holds an
+  `available` verdict computed against numbers that have since moved -- and the only
+  remedy we leave them is to start a new session (or `llm-scripting-kit usage --no-pin`,
+  which inspects without changing what `seats` returns). We refuse the seam because the
+  alternative is the failure the feature exists to prevent: an endpoint that was usable
+  when work was planned against it disappearing mid-run on a re-read, which strands that
+  work with no signal a caller can act on. A verdict that moves down only when a dispatch
+  actually failed is a guarantee; one that can flip on any reading is a race. An entry
+  skipped for its verdict is skipped silently; only the floor names it.
 
 - **A shipped mechanical review check cannot be disabled.** The layered
   `mechanical_checks.yaml` configuration adds pattern checks. Duplicate IDs
@@ -430,11 +440,11 @@ optional-dependency section above defers to it.
 | Plugin | Imports from llm-scripting-kit | Owns above the seam | Published |
 |---|---|---|---|
 | content-pipeline-kit | `llm_scripting_kit.completion` (lazy/optional, via `content_pipeline.llm.platform` and `.llm.backends`) | Batch-run policy: retry, cost accounting, budgeting, concurrency, caching | Yes |
-| job-kit | `llm_scripting_kit.completion` (`BackendSelection`, `Capabilities`, `adapter_capabilities`, `create_backend`, `match_capabilities`) | Deterministic endpoint selection from a job's preference order and requirements | Yes |
-| workflow-kit | `llm_scripting_kit.completion.OpenRouterBackend` (via `scripts/openrouter_run.py`) | The `openrouter` node strategy: one non-Claude model call per workflow node | Yes |
-| awesome-kit (orchestrate) | `llm_scripting_kit` (harness-model discovery, lazy/optional, via `orchestration_guidance.py`) | Backend/model advisory text for the orchestrate skill's routing decisions | Yes |
+| job-kit | `llm_scripting_kit.completion` (`BackendSelection`, `Capabilities`, `adapter_capabilities`, `create_backend`, `match_capabilities`), `llm_scripting_kit.declaration` (`describe`, `NoUsableRoutingTarget`, `CALLER_PROCESS`), `llm_scripting_kit.usage_budget` (`record_observed_halt`) | Run policy over llm-scripting-kit's `describe(caller="process")` ranking: halt narrowing, attempts, and the ledger's pace-reading record | Yes |
+| workflow-kit | `llm_scripting_kit.declaration` (`run`, `RunRequest`, `NoUsableRoutingTarget`), `llm_scripting_kit.completion` (`create_transport_backend`, `BackendOptions`), and `default_declaration` (via `scripts/openrouter_run.py`); every `model:` declaration is validated with `bootstrap_lib.model_declaration` (via `workflow_kit_lib/declarations.py`), not llm-scripting-kit | The `openrouter` node strategy: one non-Claude call per workflow node over a declaration of transport entries, reporting the typed floor; agent-step routing of Claude core ids at compile time | Yes |
+| awesome-kit (orchestrate) | `llm_scripting_kit.discover_model_entries` and `describe(caller="session")` (lazy/optional, via `orchestration_guidance.py` and `dispatch.py`) | Each routing row ranked by `describe(caller="session")` and passed through verbatim (no local ranking); `dispatch.py` resolves `--model` through `discover_model_entries` and REFUSES (exit 3) without llm-scripting-kit | Yes |
 | bootstrap | `llm_scripting_kit.seats.discover_seats` (lazy/optional, via `bootstrap_lib.code_review.review_profiles`) | Peer-seat discovery for review profiles (a `peer:<name>` entry in a reviewer's ordered `model` priority list); it never talks to an LLM | Yes |
-| git-kit, p4-kit | `llm_scripting_kit.review_lane.main` via each kit's thin `scripts/run_review_lane.py` wrapper | Bootstrap setup and the REFUSE probe for the shared library; the lane's prompt lives in `bootstrap_lib.code_review.lane_prompts` and its guards in `llm_scripting_kit.review_lane` | Yes |
+| git-kit, p4-kit | `llm_scripting_kit.review_lane.main` via each kit's thin `scripts/run_review_lane.py` wrapper | The code-review skills rank each reviewer declaration through the `llm-scripting-kit describe` CLI (session caller) and dispatch by entry harness; bootstrap setup and the REFUSE probe for the shared library live here, and the lane's prompt lives in `bootstrap_lib.code_review.lane_prompts` and its guards in `llm_scripting_kit.review_lane` | Yes |
 | yaml-data-editor-kit | none directly -- reaches it via content-pipeline-kit's `content_pipeline` (the dispatch binding in `dispatch/`) | The editor's dispatch planner, not the completion transport | No (`published: false`) |
 
 The code-review kits are the one entry whose consumer is a thin wrapper around a

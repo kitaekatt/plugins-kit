@@ -47,9 +47,9 @@ One non-Claude model call via llm-scripting-kit's completion seam
 text to `$OUT`. The script does not build an `openai` client or call
 `chat.completions.create` itself -- the seam owns the transport, response
 normalization, and halt classification (auth / rate limit / insufficient
-credit); the script only resolves the model (alias/slug/default/defaultCheap)
-and reports the seam's result. workflow-kit reuses `llm_scripting_kit` (owned by
-the llm-scripting-kit plugin) WITHOUT declaring a dependency on that plugin -- it
+credit); the script hands the node's model declaration to llm-scripting-kit's
+declaration API (`llm_scripting_kit.declaration.run`) and reports the result. workflow-kit reuses `llm_scripting_kit` (owned by
+the llm-scripting-kit plugin, which its bootstrap.json installs automatically) and
 gets the library on its venv via the bootstrap shared-libs `.pth`. The one
 third-party dep the call needs, `openai`, IS declared by workflow-kit (its own
 `pyproject.toml`) -- the seam uses it internally; workflow-kit shares the source,
@@ -76,9 +76,9 @@ const runner = `"${venvPy}" "${args.pluginRoot}/scripts/openrouter_run.py"`
 const req = `./.workflow-kit/${args.runId}/req.txt`  // prompt written first (a script node or upstream)
 const out = `./.workflow-kit/${args.runId}/gpt.txt`
 const r = await wkOpenRouter(runner, {
-  // model omitted + cheap:true -> llm-scripting-kit's configured 'defaultCheap'.
-  // (Or pass model: 'qwen' for a registry alias, or a raw slug like
-  // 'qwen/qwen3-32b'. Omit cheap to use the configured 'default'.)
+  // model omitted + cheap:true -> the default entry's 'defaultCheap' model.
+  // (Or pass model: 'or-qwen', a transport entry id, or 'or-qwen,or-gpt-mini'
+  // to declare more than one. Omit cheap to use the entry's 'default'.)
   cheap: true,
   promptFile: req,
   system: 'You are a terse classifier.',
@@ -90,17 +90,29 @@ const r = await wkOpenRouter(runner, {
 ### Choosing the model
 
 Don't hardcode slugs. llm-scripting-kit owns a model **registry** in its
-`config.yaml` -- named models plus a `default` and a `defaultCheap` selector --
-resolved through bootstrap's layered config (shipped baseline, then the user
-file, then a per-project override; project wins). `wkOpenRouter`'s `spec`:
+`config.yaml`, resolved through bootstrap's layered config (shipped baseline,
+then the user file, then a per-project override; project wins). A node names
+registry ENTRIES -- a model declaration, in the one format bootstrap's
+plugin-dev `references/model-declaration.md` specifies. `wkOpenRouter`'s `spec`:
 
-- `model: 'qwen'` -- a registry alias, resolved to its slug.
-- `model: 'qwen/qwen3-32b'` -- a raw OpenRouter slug, used as-is.
-- omit `model` -- use the configured `default` (or `defaultCheap` with
-  `cheap: true`). This is the usual choice: pick the *role*, not the slug.
+- `model: 'or-qwen'` -- one transport entry. The OpenRouter models ship as
+  `or-qwen`, `or-gpt-mini` and `or-gemini-lite`; any OpenAI-compatible
+  transport entry you declare works the same way.
+- `model: 'or-qwen,or-gpt-mini'` -- a declaration of two entries. The first
+  usable one runs; a classified halt (auth, rate limit, spent credit or quota)
+  moves the node to the next. An id the node cannot dispatch -- a harness entry
+  such as `sol` or `opus`, or one the registry does not know -- is skipped
+  without comment. When no entry is usable, the node exits 2 and its status
+  file itemises every declared id and why it could not run.
+- omit `model` -- use the configured default declaration (llm-scripting-kit's
+  `default_endpoint`), and its `default` model, or `defaultCheap` with
+  `cheap: true`. This is the usual choice: pick the *role*, not the slug.
+- `model: 'qwen'` (an alias) or `model: 'qwen/qwen3-32b'` (a raw slug) -- not
+  an entry id. It resolves to no entry, so the node exits 2 with the itemised
+  status. Name the entry instead (`or-qwen`).
 
-Change the models or the default/defaultCheap once, in llm-scripting-kit's config,
-and every openrouter node across every plugin follows:
+Change the entries or the defaults once, in llm-scripting-kit's config, and
+every openrouter node across every plugin follows:
 
 - user (all projects): `~/.claude/plugins/data/plugins-kit/llm-scripting-kit/config.yaml`
 - per-project override: `<project_root>/.local-data/plugins-kit/llm-scripting-kit/config.yaml`
@@ -114,7 +126,9 @@ Provisioning:
 - `llm_scripting_kit` (owned by the llm-scripting-kit plugin) is published as a
   shared library by the bootstrap engine and linked onto workflow-kit's venv because workflow-kit
   declares `"shared_lib_imports": ["llm_scripting_kit"]` -- the runner imports it
-  directly, no path discovery, no dependency on the llm-scripting-kit plugin.
+  directly, with no path discovery. workflow-kit's bootstrap.json declares
+  llm-scripting-kit as a REQUIRED `install: "auto"` plugin edge, so bootstrap
+  installs the owning plugin.
 - `openai` is a declared workflow-kit dependency (`pyproject.toml` +
   `venv.check_imports`), so bootstrap installs it into workflow-kit's venv.
 

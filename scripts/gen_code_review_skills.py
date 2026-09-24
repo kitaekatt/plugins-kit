@@ -194,33 +194,65 @@ DISPATCH = """\
 
 
 # ===========================================================================
-# MODEL KIND (the user-configurable override).
+# LANE ROUTING (model-declaration migration step 5).
 # ---------------------------------------------------------------------------
-# A resolved profile's `model` has always been a free-form string consumed as
-# the Agent tool's model parameter. It now carries a SECOND meaning, which is
-# the whole override mechanism and needs no new configuration field: a value
-# that is NOT one of the Agent tool's own aliases is read as an
-# llm-scripting-kit endpoint id and dispatched through the completion seam.
+# A reviewer's resolved `model` plus its `model_fallbacks` is a model
+# declaration (bootstrap plugin-dev references/model-declaration.md). A
+# declaration with more than one entry is routed through llm-scripting-kit's
+# `describe`: the skill prints its output verbatim -- which carries
+# `Ranking.rule`, the choice and re-selection rule -- and does NOT restate
+# that rule, so the rule is tested once, where it is owned
+# (tests/llm-scripting-kit). Each chosen entry is dispatched by its HARNESS: a
+# `claude` entry is an Agent subagent, any other runs through the lane runner.
 #
-# Stated as a closed alias set rather than "looks like an endpoint" so a typo
-# ("sonnett") lands in the endpoint path and fails loudly with "no such
-# endpoint", instead of silently launching some default Agent.
+# The edge is DEGRADE: without `describe` the core ids (sonnet, opus, haiku,
+# fable -- routable by the harness alone) still route, and every other entry
+# is skipped without comment. Skipping is silent; only a declaration with no
+# usable entry left is reported, itemised, as a failed lane.
 #
-# There is deliberately NO fallback from a failed endpoint lane to an Agent
-# lane. A silent fallback returns a review the user reads as the configured
-# one, which is worse than no review at all: it is an unfalsifiable claim about
-# what reviewed the change.
+# Re-selection never reaches outside the declaration: a lane only ever runs on
+# an entry its own configuration named, and every choice from a multi-entry
+# declaration is announced and carried into the rendered review.
 # ===========================================================================
-MODEL_KIND = """\
-            Model-kind rule (per lane, mechanical -- read the value, do not interpret it):
-            each reviewer's `model` and each `validator_models[reason]` value from the
-            RESOLVED table is EITHER one of the Agent tool's aliases -- `sonnet`, `opus`,
-            `haiku`, `fable` -- OR an llm-scripting-kit endpoint id. An alias launches an
-            Agent subagent (the default path; the shipped table is
-            all aliases, so an unconfigured review behaves identically to before). Any other
-            value is an endpoint id: run that lane as a parallel Bash call to
+LANE_ROUTING = """\
+            Lane routing rule (per reviewer): a reviewer's DECLARATION is its resolved
+            `model` followed by its `model_fallbacks`, in that order, read off the RESOLVED
+            table. Validators are routed by step 7, not by this rule.
+            - A one-entry declaration has no menu and no announcement: dispatch its entry by
+              the entry-harness rule below.
+            - For each declaration with two or more entries, run
+              `llm-scripting-kit describe <entry>... --caller session` with the entries in
+              declared order, plus `--project-root <bundle.project_root>` when the bundle
+              has one, plus `--dispatchable transport` when the reviewer is not
+              `reviewer_a_claude_md_compliance` or `reviewer_c_introduced_code` (the lane
+              runner runs a transport entry for every other reviewer, so describe keeps
+              transports in that menu), plus `--self <id>` when one declared entry is the model you are
+              running on, so that entry is marked `[author]`. Run every such describe
+              before the fan-out, in one message. For each, print its stdout verbatim:
+              the menu, its `[default]` mark, and its `Rule:` and `Re-select:` lines (and
+              `Independence:` when present). Choose one usable entry as that printed rule
+              says, and announce the choice in the form that rule gives, with the
+              reviewer name as the unit. The same entry serves every chunk of that
+              reviewer. The menu shows only entries that are real on this machine; a
+              declared entry it leaves out is skipped, and you say nothing about it.
+            - When describe exits 1, its stderr is a JSON `error` itemising every declared
+              entry and its disposition: no entry is usable. That reviewer does not run;
+              report it in step 9 under `## Lane failures` with that itemised list, and mark
+              its coverage missing. Any other non-zero describe exit is reported the same
+              way, with its stderr.
+            - When `llm-scripting-kit` is not on PATH, or its argument parser rejects
+              `describe` as an invalid choice (a release older than 0.46.0), route without a
+              menu: take the declaration's `sonnet`, `opus`, `haiku` and `fable` entries in
+              declared order, dispatch the first, and skip every other entry without
+              comment. A declaration with none of those four does not run; report it in
+              step 9 under `## Lane failures`, naming each declared entry, and mark its
+              coverage missing.
+            Entry-harness rule (per lane, mechanical): an entry whose describe line reads
+            `claude/agent` -- or, on a one-entry declaration or the no-menu route, one of
+            `sonnet`, `opus`, `haiku`, `fable` -- launches an Agent subagent with
+            `model: <entry>`. Any other entry runs as a parallel Bash call to
             @LANE_TOOL@ instead of launching an Agent for it, passing `--lane <reviewer
-            name>`, `--model <the value>`, `--chunk <absolute chunk diff path>`, one
+            name>`, `--model <the entry>`, `--chunk <absolute chunk diff path>`, one
             `--file` per repo-relative path in that chunk, `--description <the change
             description>`, `--bundle <bundle.bundle_dir>/bundle.json`, and `--project-root
             <bundle.project_root>` when the bundle has one. For reviewer_a and reviewer_b
@@ -232,28 +264,23 @@ MODEL_KIND = """\
             issues, in the same shape an Agent lane returns.
             Endpoint lanes and Agent lanes go out in the SAME message as one another; mixing
             the two dispatch mechanisms in one fan-out is normal and expected.
-            A NON-ZERO exit is never an empty result. Before marking a lane failed,
+            A NON-ZERO exit is never an empty result. Before treating a lane as failed,
             apply the pre-dispatch launch-correction rule in references/configuration.md.
-            A non-zero exit the launch-correction rule does not explain is FAILOVER-ELIGIBLE
-            when the resolved reviewer record's `model_fallbacks` is non-empty: re-dispatch
-            the SAME lane on the next entry in `model_fallbacks`, by the dispatch mechanism
-            that entry implies -- an Agent alias launches an Agent, an endpoint id runs
-            through @LANE_TOOL@ exactly as the model-kind rule above prescribes for that
-            value's kind. Walk the chain in order, trying each entry AT MOST ONCE, until one
-            produces a schema-valid result or the chain is exhausted; do not retry an entry
-            already tried and do not skip ahead. Every failover is disclosed in step 9's
-            `## Lane failovers` section -- never silent, and never presented as though the
-            first-choice model produced the review.
-            A lane with an EMPTY `model_fallbacks` -- every validator lane, and any reviewer
-            configured with no fallback -- behaves exactly as before: do NOT retry it,
-            silently substitute an Agent, or treat absent output as "no issues found". Keep
-            the stderr line, report the failure in step 9, and mark coverage missing.
-            A lane whose `model_fallbacks` chain is EXHAUSTED (every entry tried and failed)
-            is a FAILED lane the same way: report it in step 9, name every model tried, and
-            mark coverage missing -- never treat absent output as "no issues found".
-            Only the lanes the runner supports may carry an endpoint id; it refuses
-            the rest by name and exits 2, which is a configuration error for the user to fix,
-            not something to work around.
+            For a failure that rule does not explain, follow the `Re-select:` line describe
+            printed: run describe again with the same arguments plus one `--exclude <entry>`
+            per entry this lane has already failed on, print its stdout verbatim, choose,
+            and announce as its rule says, with `<reviewer name> chunk <i>` as the unit and
+            the prior entry and its failure kind as the reason. Dispatch the chosen entry by
+            the entry-harness rule. Each entry is tried at most once per lane. On the
+            no-menu route, re-select the next of the four core entries in declared order
+            and announce it as `route: <reviewer name> chunk <i> -> <entry>; <prior entry>
+            failed: <kind>`. A one-entry declaration has nothing to re-select.
+            When describe exits 1 on a re-run, or no entry is left to try, the lane has no
+            usable entry left: report it in step 9 under `## Lane failures`, naming every
+            entry tried and why it failed, and mark coverage missing -- never treat absent
+            output as "no issues found".
+            The runner refuses a lane it does not support by name and exits 2, which is a
+            configuration error for the user to fix, not something to work around.
 
             Effort rule (per lane, mechanical -- applies to AGENT lanes only): a reviewer
             record in the RESOLVED table may carry an `effort` value alongside its `model`.
@@ -261,12 +288,12 @@ MODEL_KIND = """\
             instead of `general-purpose`. When it does not, use `general-purpose` and the lane
             inherits this session's effort -- the behavior every lane had before the field
             existed, which is why an unstated effort is never a silent change. The effort
-            agent binds ONLY the reasoning budget: pass the lane's resolved `model` at the
-            call site exactly as you would otherwise (a call-site model overrides an agent
-            definition's own) and pass the lane's canonical prompt verbatim as always, because
-            the agent adds no review criteria of its own.
+            agent binds ONLY the reasoning budget: pass the lane's chosen entry as `model`
+            at the call site exactly as you would otherwise (a call-site model overrides an
+            agent definition's own) and pass the lane's canonical prompt verbatim as always,
+            because the agent adds no review criteria of its own.
             `effort` does NOT reach an ENDPOINT lane: an endpoint's effort comes from its own
-            llm-scripting-kit configuration, so a record carrying both an endpoint id and an
+            llm-scripting-kit configuration, so a record carrying both an endpoint entry and an
             `effort` runs at the endpoint's configured effort. Note that in one line rather
             than reporting an effort the lane did not run at, and do not substitute an Agent
             to honour the field."""
@@ -525,10 +552,9 @@ LEDGER_GOTCHAS = """
 PROFILE_GOTCHAS = """
         - The `review_profiles` block above is SELECTION GUIDANCE AND RATIONALE ONLY. It carries no reviewer roster, model, or validator_models -- that executable table is resolved per review by @RENDER_TOOL@ (step 4), which merges the shipped bootstrap_lib defaults with any `~/.claude/config/review_profiles.yaml` (user) or `<project_root>/.claude/review_profiles.yaml` (project) override. Never merge those layers yourself and never hand-edit the resolved output.
         - The `profile` in steps 6-7 is always an entry from that RESOLVED table, never the guidance block. Match the guidance prose to decide which profile id fits the change, then read `reviewers` and `validator_models` off the resolved entry with that id.
-        - See references/configuration.md for the layer precedence, merge rules (profiles/reviewers merge by id/name; validator_models and other mappings deep-merge; `disabled: true` removes a record; plain lists like `data_only_extensions` replace), the shipped default table, what a `model` value may name, which lanes may take an endpoint id, what happens when an endpoint lane fails, and how a reviewer's ordered `model` priority list resolves a `peer:` entry (plus the `--explain-peer-seats` diagnostic).
-        - A `model` value is NOT always an Agent-tool model. The four aliases `sonnet`, `opus`, `haiku` and `fable` name the Agent tool; every other value is an llm-scripting-kit endpoint id and that lane runs through @LANE_TOOL@ instead (step 6's model-kind rule). Every `model` in the RESOLVED table is a single string -- the renderer has already picked one entry out of any priority list the configuration stated -- so this rule needs no extra case.
-        - A reviewer's configured `model` may be an ORDERED PRIORITY LIST rather than a single name, and an entry spelled `peer:<name>` asks the renderer to run that lane on a reachable PEER endpoint -- same tier as `<name>`, different model family -- when llm-scripting-kit is installed and current. The renderer evaluates the list and prints one resolved model, so the table you read already carries the chosen value, and the lane dispatches through @LANE_TOOL@ under the ordinary step-6 model-kind rule. Do not probe for a peer yourself, and do not treat a resolved peer endpoint as an override the user forgot to make.
-        - Apply references/configuration.md's pre-dispatch launch-correction rule before classifying a failed invocation. An actual failed endpoint lane has no Agent fallback: report it and mark coverage missing rather than claiming review by the configured model.
+        - See references/configuration.md for the layer precedence, merge rules (profiles/reviewers merge by id/name; validator_models and other mappings deep-merge; `disabled: true` removes a record; plain lists like `data_only_extensions` replace), the shipped default table, what a declaration entry may name, how a multi-entry declaration is routed, which lanes may take an endpoint entry, and what happens when a lane fails.
+        - A reviewer's `model` is a model DECLARATION -- the resolved `model` followed by its `model_fallbacks`. Each entry is dispatched by its harness under step 6's entry-harness rule -- a `claude` entry launches an Agent subagent, any other entry runs through @LANE_TOOL@.
+        - Apply references/configuration.md's pre-dispatch launch-correction rule before classifying a failed invocation.
         - A reviewer record may carry an `effort` (`low`, `medium`, `high`, `xhigh`, `max`) beside its `model`. It selects the DISPATCH TARGET, not a parameter: the Agent tool has no effort argument, so an effort-carrying lane goes to the `@KIT@:review-lane-<effort>` agent, whose frontmatter sets it. A lane with no `effort` keeps `general-purpose` and inherits this session's effort. Do not attempt to pass effort as an Agent argument, and do not read a lane's effort off the agent's page -- the RESOLVED table is the authority.
         - Effort and model are independent and BOTH are honoured: the profile's `model` goes at the CALL SITE, where it overrides whatever the effort agent's own frontmatter would imply. Never move a lane to a different model to obtain an effort level, and never move it to a different effort to obtain a model."""
 
@@ -638,18 +664,6 @@ technique_skill:
             `---` separator and layer provenance; parse only the YAML above the separator. Keep
             the resolved `profiles` list for steps 6 and 7. See references/configuration.md for
             the full layer/merge/override contract.
-            The renderer may also print `model-priority:` lines on STDERR. Each one names a
-            lane whose `model` was configured as a priority list, saying which entry the
-            renderer resolved -- a `peer:` entry that resolved to an endpoint, or a `peer:`
-            entry it skipped and the entry it ran instead. It is the only record of a `peer:`
-            entry that was probed and resolved, or probed and skipped. Keep every such line
-            and repeat it verbatim in the step-9 review header, under
-            `## Model-priority substitutions`. Never drop it, and never edit the resolved table
-            to undo it. Silence on stderr means either every lane took the first entry of its
-            list, or llm-scripting-kit was not available to probe a `peer:` entry at all --
-            that second case runs the next entry silently and is reported only by
-            `--explain-peer-seats`. Either way the resolved table states the model each lane
-            actually runs.
           tool: Read + @RENDER_TOOL@
         - n: 5
           action: |
@@ -688,7 +702,7 @@ technique_skill:
             uncertain. `profile` below is that resolved-table entry -- its `reviewers` and
             `validator_models` come from step 4, never hand-constructed.
 @DISPATCH@
-@MODEL_KIND@
+@LANE_ROUTING@
 @MD_DOMAIN_LAUNCH@
             Then launch one subagent per (reviewer @X@ chunk) pair in parallel via
             a single message with R @X@ K Agent calls, where R = len(profile.reviewers) and
@@ -755,17 +769,18 @@ technique_skill:
             chain. Endpoint envelopes already contain output from the same shared parser. A
             non-zero parser exit is a FAILED lane under the existing failure rule; never pass
             its unparsed issues to validators.
-          tool: Agent (per the model-kind rule, a lane whose model is an endpoint id runs as a Bash call to @LANE_TOOL@ instead)
+          tool: Bash (`llm-scripting-kit describe`) + Agent (per the entry-harness rule, a lane whose entry is not a `claude` entry runs as a Bash call to @LANE_TOOL@ instead)
           expected: JSON arrays of candidate issues from each launched reviewer (one array per (reviewer, chunk) lane), plus a recorded failure for any lane that exited non-zero.
         - n: 7
           action: |
             Launch one validator subagent per candidate issue, all in parallel via a single message.
             Use the selected profile's `validator_models[reason]` (from the RESOLVED table fetched
-            in step 4) to pick the model per issue. The model-kind rule from step 6 applies here
-            too, but no validator lane is endpoint-eligible: the runner refuses one and
-            exits 2, because the validator is the control that suppresses a weak reviewer's noise
-            and must not be replaced in the same change as a reviewer. An endpoint id in
-            `validator_models` is therefore a configuration error to report, not a lane to run.
+            in step 4) to pick the model per issue. It names one entry, one of `sonnet`, `opus`,
+            `haiku`, `fable`, and launches an Agent with that `model`. No validator lane is
+            endpoint-eligible: the runner refuses one and exits 2, because the validator is the
+            control that suppresses a weak reviewer's noise and must not be replaced in the same
+            change as a reviewer. Any other entry in `validator_models` is therefore a
+            configuration error to report, not a lane to run.
           tool: Agent
           expected: CONFIRMED or REJECTED per issue.
         - n: 8
@@ -784,25 +799,13 @@ technique_skill:
               rest of the review looks identical whether a lane ran or not, so without it a
               partial review is indistinguishable from a complete one. Never describe a
               failed lane's files as clean, and never re-run the lane on a model its own
-              configuration did not name -- a lane reaches this section only with an EMPTY
-              or EXHAUSTED `model_fallbacks`, so there is no entry left to try; report it
-              and let the user decide.
-            - When any lane FAILED OVER (a non-zero exit the launch-correction rule did not
-              explain was followed by a re-dispatch on a later `model_fallbacks` entry that
-              produced a schema-valid result), prepend a `## Lane failovers` section naming,
-              per failed-over lane: the lane, the model that failed and the runner's stderr
-              reason, and the model that actually produced the review. State once that these
-              files were reviewed by a different model than the configuration's first choice.
-              This is a disclosure, not a warning: the rendered review looks identical whether
-              the first entry or a later one ran, so the reader must never have to infer which
-              model actually reviewed their change.
-            - When the step-4 renderer printed any `model-priority:` line on stderr,
-              prepend a `## Model-priority substitutions` section carrying each line verbatim.
-              Such a lane ran on a model chosen from a priority list rather than on a single
-              configured name, and the rendered review looks identical either way, so omitting
-              this would let the reader believe a model reviewed their change that never saw
-              it. This is a disclosure, not a warning: resolving the list is the configured
-              behaviour and nothing needs fixing.
+              declaration did not name -- a lane reaches this section only when its
+              declaration has no usable entry left; report it and let the user decide.
+            - When any reviewer's declaration had two or more entries, prepend a
+              `## Lane routes` section carrying every `route:` line announced in step 6,
+              verbatim, re-selections included. This is a disclosure, not a warning: the
+              rendered review looks identical whichever entry ran, so the reader must never
+              have to infer which model actually reviewed their change.
             - When `bundle.submit_gates` is non-empty, prepend a `## Submit checklist`
               section, each gate carrying its step-5 verdict and the evidence for it.
 @STEP9_TAIL@
@@ -871,8 +874,8 @@ technique_skill:
       scope: CLAUDE.md compliance only, restricted to the files in one chunk
       input: "absolute path to ONE chunk .diff file, the @FILEPATHS@ of the files in that chunk, the per-file CLAUDE.md mapping restricted to those files, the full text of each relevant CLAUDE.md (read in step 4), and the paths of every claimed file (paths only -- their content belongs to the subject-lens reviewer)"
       canonical_prompt_note: |
-        This lane can run EITHER as an Agent subagent or, when its resolved `model` is an
-        endpoint id, as a plain completion (see the step-6 model-kind rule). Both paths must
+        This lane can run EITHER as an Agent subagent or, when its chosen entry is not a
+        `claude` entry, as a plain completion (see the step-6 entry-harness rule). Both paths must
         review by the same standard, so the prompt below is the single source: it is rendered
         here from bootstrap_lib.code_review.lane_prompts, which is also what the endpoint
         runner sends. When launching this lane as an Agent, use it as the subagent's
@@ -889,8 +892,8 @@ technique_skill:
       scope: obvious bugs visible in one chunk's diff alone
       input: "absolute path to ONE chunk .diff file, the @FILEPATHS@ of the files in that chunk, and the @CHANGE_DESC@"
       canonical_prompt_note: |
-        This lane can run EITHER as an Agent subagent or, when its resolved `model` is an
-        endpoint id, as a plain completion (see the step-6 model-kind rule). Both paths must
+        This lane can run EITHER as an Agent subagent or, when its chosen entry is not a
+        `claude` entry, as a plain completion (see the step-6 entry-harness rule). Both paths must
         review by the same standard, so the prompt below is the single source: it is rendered
         here from bootstrap_lib.code_review.lane_prompts, which is also what the endpoint
         runner sends. When launching this lane as an Agent, use it as the subagent's
@@ -907,8 +910,8 @@ technique_skill:
       scope: bugs/security/logic problems in the introduced code that need broader context, restricted to one chunk's files
       input: "absolute path to ONE chunk .diff file, the @FILEPATHS@ of the files in that chunk, local paths for those files, and the @CHANGE_DESC@"
       canonical_prompt_note: |
-        This lane can run EITHER as an Agent subagent or, when its resolved `model` is an
-        endpoint id, as a plain completion (see the step-6 model-kind rule). Both paths must
+        This lane can run EITHER as an Agent subagent or, when its chosen entry is not a
+        `claude` entry, as a plain completion (see the step-6 entry-harness rule). Both paths must
         review by the same standard, so the prompt below is the single source: it is rendered
         here from bootstrap_lib.code_review.lane_prompts, which is also what the endpoint
         runner sends. When launching this lane as an Agent, use it as the subagent's
@@ -1221,7 +1224,7 @@ GIT_CHECKLIST = f"""\
         - Validators launched in parallel (single message, N Agent calls), models picked from the profile's validator_models
         - Filtered to confirmed-only
         - Launch rationale line emitted once (file-type-driven; md_trivial variant when the change is all-mechanical)
-        - A FAILED lane's non-empty `model_fallbacks` walked in order, at most once per entry, until a schema-valid result or an exhausted chain; every failover disclosed via the `## Lane failovers` section (lane, failed model + stderr reason, model that actually reviewed), never presented as the first-choice model's review; an exhausted chain still reports a `## Lane failures` entry with coverage missing
+        - Every multi-entry reviewer declaration routed through `llm-scripting-kit describe` (stdout printed verbatim, choice announced as a `route:` line) or, without describe, through its core entries; a FAILED lane re-selected per the printed `Re-select:` line, each entry at most once; every `route:` line carried into the `## Lane routes` section; a lane with no usable entry left still reports a `## Lane failures` entry with coverage missing
         - md-domain subject-lens pass launched for the NON-TRIVIAL bundle.claimed_files when skills-kit md-domain is available (or claimed files folded back into the generic review on version-skew fallback); skipped silently when md-domain is absent
         - Trivial claimed files (prepare's `trivial` flag) reported via the `## Mechanical checks (audit skipped)` section, never as an audit or DIFF-CLEAN; nothing written to the ledger for them; whole review skipped when every claimed file is trivial and there are no generic diff chunks
         - Machine-emitted artifacts (bundle.machine_emitted_files) reported via the `## Machine-emitted artifacts (not reviewed)` section, naming each file's exclusion axis (content banner or declared plugin-write path) and the rule that matched, never as an audit or DIFF-CLEAN; review of machine-emitted output belongs on the generator
@@ -1241,7 +1244,7 @@ P4_CHECKLIST = f"""\
         - Validators launched in parallel (single message, N Agent calls), models picked from the profile's validator_models
         - Filtered to confirmed-only
         - Launch rationale line emitted once (file-type-driven; md_trivial variant when the change is all-mechanical)
-        - A FAILED lane's non-empty `model_fallbacks` walked in order, at most once per entry, until a schema-valid result or an exhausted chain; every failover disclosed via the `## Lane failovers` section (lane, failed model + stderr reason, model that actually reviewed), never presented as the first-choice model's review; an exhausted chain still reports a `## Lane failures` entry with coverage missing
+        - Every multi-entry reviewer declaration routed through `llm-scripting-kit describe` (stdout printed verbatim, choice announced as a `route:` line) or, without describe, through its core entries; a FAILED lane re-selected per the printed `Re-select:` line, each entry at most once; every `route:` line carried into the `## Lane routes` section; a lane with no usable entry left still reports a `## Lane failures` entry with coverage missing
         - md-domain subject-lens pass launched for the NON-TRIVIAL bundle.claimed_files when skills-kit md-domain is available (or claimed files folded back into the generic review on version-skew fallback); skipped silently when md-domain is absent
         - Trivial claimed files (prepare's `trivial` flag) reported via the `## Mechanical checks (audit skipped)` section, never as an audit or DIFF-CLEAN; nothing written to the ledger for them; whole review skipped when every claimed file is trivial and there are no generic diff chunks
         - Machine-emitted artifacts (bundle.machine_emitted_files) reported via the `## Machine-emitted artifacts (not reviewed)` section, naming each file's exclusion axis (content banner or declared plugin-write path) and the rule that matched, never as an audit or DIFF-CLEAN; review of machine-emitted output belongs on the generator
@@ -1540,7 +1543,7 @@ FRAGMENTS = {
 # contributor regions, and the glyphs.
 _SHARED = {
     "DISPATCH": DISPATCH,
-    "MODEL_KIND": MODEL_KIND,
+    "LANE_ROUTING": LANE_ROUTING,
     # The canonical reviewer prompts, rendered from the module the endpoint
     # runner imports so the two dispatch paths cannot state different rules.
     # Indented to sit under `canonical_prompt: |` in the subagents block.
@@ -1578,9 +1581,9 @@ _SHARED = {
 
 _SKILL_TOKEN_ORDER = [
     "DISPATCH",  # multi-line, contains no other @tokens@; substitute first
-    # Model-kind rule: shared body carrying a nested @LANE_TOOL@ -- substitute
-    # the block first, then that token resolves below.
-    "MODEL_KIND",
+    # Lane routing rule: shared body carrying nested @LANE_TOOL@ and @KIT@ --
+    # substitute the block first, then those tokens resolve below.
+    "LANE_ROUTING",
     "REVIEWER_A_PROMPT", "REVIEWER_B_PROMPT", "REVIEWER_C_PROMPT",  # rendered prompt text, no nested @tokens@
     "MD_DOMAIN_LAUNCH", "MD_DOMAIN_REPORT",  # shared, no nested @tokens@
     "GENERATED_REPORT",  # shared, no nested @tokens@
@@ -2195,7 +2198,7 @@ profiles:
     model: opus
   - name: reviewer_c_introduced_code
     model:
-    - peer:opus
+    - sol
     - opus
   validator_models:
     bug: opus
@@ -2249,34 +2252,67 @@ no way to spell "unset" -- to return a lane to session-inherited effort, remove 
 `effort` from that record by disabling and restating the reviewer, or state the level you
 actually want.
 
-## What a `model` value may name
+## What a declaration entry may name
 
-A resolved `model` -- whether a reviewer's or a `validator_models` reason's -- is one of two
-things, and which one it is decides how that lane is dispatched:
+A reviewer's `model` is a MODEL DECLARATION: one id, or an ordered list of ids, in the shared
+format specified in the bootstrap plugin's `skills/plugin-dev/references/model-declaration.md`.
+An empty list, or a list naming the same id twice, is a configuration error at resolve time. The
+renderer prints each reviewer's first entry as `model` and the rest, in order, as
+`model_fallbacks`; `@SKILL_NAME@` joins the two back into the declaration it routes. A
+`validator_models` value may be written as a one-element list, but never names more than one
+id -- a validator is never endpoint-eligible, so it has nothing to choose between.
 
-| Value | Dispatch |
+Each entry is an id in the llm-scripting-kit model registry, and which harness serves it decides
+how that lane is dispatched:
+
+| Entry | Dispatch |
 |---|---|
-| `sonnet`, `opus`, `haiku`, `fable` | an Agent subagent (the default) |
-| anything else | an llm-scripting-kit endpoint id, run through `@LANE_TOOL@` |
+| a `claude` harness entry: `sonnet`, `opus`, `haiku`, `fable` | an Agent subagent with that `model` |
+| any other entry (a codex or opencode harness entry, or a transport endpoint) | a Bash call to `@LANE_TOOL@` with `--model <entry>` |
 
-Every model the shipped table can resolve to is an Agent alias, so a review with no user or
-project override dispatches every lane as an Agent subagent -- unless a `peer:` entry resolves
-for the one lane that states one (below). Naming an endpoint id is the whole override
-mechanism -- there is no separate field to set, because `model` was already a free-form
-value resolved through the three layers above.
+`sonnet`, `opus`, `haiku` and `fable` are routable without llm-scripting-kit, because the Agent
+tool itself defines them. Every other id is resolved by llm-scripting-kit, so it may name a CLI
+harness or an OpenAI-compatible transport -- whatever that plugin's configuration and your
+`~/.claude/config/model-endpoints.yaml` declare. Endpoint ids are private to your fleet; the
+example below uses a placeholder. Naming such an id is the whole override mechanism -- there is
+no separate field to set.
 
-A reviewer's `model` may also be an ORDERED PRIORITY LIST. A `validator_models` value may be
-written as a one-element list, but never names more than one model -- a validator is never
-endpoint-eligible, so it has nothing to fall back to. The list is described in its own section
-below; the renderer always prints ONE resolved string per lane,
-so everything on this page about dispatching a `model` reads the resolved value.
+### How a multi-entry declaration is routed
 
-An endpoint id is resolved by llm-scripting-kit (`create_backend`), so it may name an
-OpenAI-compatible transport or a CLI harness -- whatever that plugin's configuration and
-your `~/.claude/config/model-endpoints.yaml` declare. Endpoint ids are private to your
-fleet; the example below uses a placeholder.
+For a reviewer whose declaration has two or more entries, the skill runs
 
-### Which lanes may take an endpoint id
+    llm-scripting-kit describe <entry>... --caller session [--project-root <root>] [--dispatchable transport] [--self <id>]
+
+and prints its output verbatim: the entries this machine can use or will be able to use, in pace
+order, the one marked `[default]`, and the rule text that says how to choose, how to announce
+the choice, and when to re-select. The skill follows that printed rule rather than restating
+it, so the rule you read in a review is the rule llm-scripting-kit applied. `--self` names the
+model the reviewing session runs on; describe marks that entry `[author]`, and its rule
+prefers a non-author entry.
+
+describe leaves out every entry this machine cannot run: an id the registry does not know, an
+entry this caller cannot drive, and an excluded one. A left-out entry is skipped without
+comment. `--caller session` is the in-session caller kind, and by itself it drives only harness
+entries. `--dispatchable transport` tells describe this caller can also run transport
+endpoints, through `@LANE_TOOL@`, so they stay in the menu. The skill passes it for every
+reviewer except `reviewer_a_claude_md_compliance` and `reviewer_c_introduced_code`, the two
+lanes the runner binds only to a harness entry (see "Which lanes may take an endpoint entry"
+below); for those two a transport endpoint is left out of the menu. Out-of-quota and unreachable
+entries stay in the menu, with their reset time or state, because they are real on this
+machine; they are not usable until that changes. When no entry is usable, describe exits 1
+with a JSON error that itemises every declared entry, left-out ones included, and the skill
+reports that lane as failed.
+
+A one-entry declaration has no menu and no announcement: its entry is dispatched by the table
+above.
+
+When `llm-scripting-kit` is not installed, or is a release older than 0.46.0 that has no
+`describe`, the skill routes on the declaration's `sonnet`, `opus`, `haiku` and `fable`
+entries in declared order and skips every other entry without comment. A declaration with none
+of those four does not run, and the review reports that lane as failed with each declared
+entry named.
+
+### Which lanes may take an endpoint entry
 
 The three REVIEWER lanes -- the set is `ENDPOINT_ELIGIBLE_LANES` in
 `bootstrap_lib.code_review.lane_prompts`, which is the authority; this prose is not. The
@@ -2292,7 +2328,7 @@ Eligibility is not the only gate. `reviewer_a_claude_md_compliance` and
 declaring `harness:` rather than `base_url:` -- and refuses a plain-completion (`transport`)
 endpoint rather than produce a reviewer that hallucinates context it cannot fetch.
 
-### When an endpoint lane fails
+### When a lane fails
 
 **Pre-dispatch launch-correction rule (all reviewer lanes).** Correct a local invocation
 error and retry the same intended lane only with positive evidence that no reviewer process
@@ -2312,31 +2348,26 @@ authorize changing the resolved profile, bypassing capability gates, or retrying
 a preferred verdict. If the invocation cannot be corrected within these bounds, report
 the failure and missing coverage.
 
-**Disclosed failover.** A lane's resolved reviewer record may carry `model_fallbacks`: the
-ordered list of models still runnable for that lane after the chosen one (an unresolved `peer:`
-entry is already omitted; a resolved one appears as its endpoint id). When a non-zero exit is
-not explained by the launch-correction rule above and `model_fallbacks` is non-empty, the skill
-re-dispatches the SAME lane on the next entry -- by the dispatch mechanism that entry implies,
-an Agent alias launching an Agent and an endpoint id running through the lane runner -- and
-keeps walking the chain, trying each entry at most once, until one produces a schema-valid
-result or the chain is exhausted. This is never silent: the rendered review carries a
-`## Lane failovers` section naming the model that failed with the runner's stderr reason and the
-model that actually produced the review, and states once that these files were reviewed by a
-different model than the configuration's first choice. A lane with an EMPTY `model_fallbacks` --
-every validator, and a reviewer configured with no fallback -- has nothing to fail over to.
+**Re-selection.** A failure the launch-correction rule does not explain is handled by the
+re-selection rule describe printed for that declaration. The skill runs describe again with one
+`--exclude <entry>` per entry the lane has already failed on, prints that output, chooses,
+and announces the choice with the prior entry and its failure kind as the reason. Each entry is
+tried at most once per lane, and a lane only ever runs on an entry its own declaration named.
+Every choice from a multi-entry declaration, first choice and re-selections alike, is
+announced as a `route:` line, and the rendered review carries a `## Lane routes` section with
+every such line, so you can always see which model reviewed which files.
 
-An actual lane failure is reported and the review renders without it, with that lane's coverage
-marked missing in a `## Lane failures` section. This happens when a lane has no `model_fallbacks`
-to try, or when every entry in its chain has been tried and failed. There is deliberately no
-fallback beyond the configured chain to an unlisted Agent: a silent substitution outside what the
-configuration named would hand back a review you read as having run on a model you configured,
-which is a false claim about what actually reviewed your change. Causes are the endpoint being
-unreachable or halted, a chunk that does not fit its context window, or output that is not a
-valid issue array after one repair attempt -- the stderr line says which.
+A lane reaches `## Lane failures` only when no usable entry of its declaration is left. The
+review then renders without that lane, with its coverage marked missing. That happens when a
+one-entry declaration's lane fails, when describe exits 1, or when every usable entry has been
+tried and failed. Causes are the endpoint being unreachable or out of quota, a chunk that does
+not fit its context window, or output that is not a valid issue array after one repair attempt
+-- the stderr line says which.
 
 ### Worked endpoint override
 
-To run the diff-only bug reviewer on a local endpoint for every project, add to
+To run the diff-only bug reviewer on a local endpoint for every project, and keep the shipped
+model as the entry that runs whenever the endpoint cannot, add to
 `~/.claude/config/review_profiles.yaml`:
 
 ```yaml
@@ -2344,123 +2375,14 @@ profiles:
 - id: code
   reviewers:
   - name: reviewer_b_diff_only_bugs
-    model: my-local-endpoint
+    model: [my-local-endpoint, opus]
 ```
 
 `my-local-endpoint` is a placeholder: use an id your llm-scripting-kit configuration or
 `~/.claude/config/model-endpoints.yaml` actually declares. Everything else about the review
-is unchanged -- the other two reviewers and all validators stay on their Agent models
-(except that `reviewer_c_introduced_code` still resolves its shipped `peer:opus` entry when
-llm-scripting-kit reports a reachable BESIDE seat, below), so the endpoint reviewer's findings
-still pass through the same validation.
-
-## Model priority lists: running a reviewer on a peer seat
-
-A reviewer's `model` may be an ordered list instead of a single name:
-
-```yaml
-- name: reviewer_c_introduced_code
-  model:
-  - peer:opus
-  - opus
-```
-
-The entries are evaluated IN ORDER and the first one that RESOLVES becomes that lane's model.
-There are two kinds of entry:
-
-| Entry | Resolves to | When |
-|---|---|---|
-| `<name>` | itself -- an Agent alias or an endpoint id | always |
-| `peer:<name>` | a reachable PEER endpoint of `<name>` | only when llm-scripting-kit is installed, current, and reports one |
-
-A PEER is a seat in the SAME tier as `<name>` but a DIFFERENT model family. The point is
-independence. A second reviewer reading the same change on the same family largely agrees with
-the first, so the lane that looks for problems the author introduced is the one worth moving
-off-family. The shipped table states `[peer:opus, opus]` for `reviewer_c_introduced_code` in
-the `code` profile, and a plain string everywhere else.
-
-A single string is exactly a one-entry list, so `model: sonnet` means what it always meant.
-Both `model` and `validator_models` values use the shared model-declaration format, specified
-in the bootstrap plugin's `skills/plugin-dev/references/model-declaration.md`: an empty list,
-or a list naming the same entry twice, is a configuration error at resolve time.
-`model: peer:opus` is legal too -- it simply has nothing to fall back to, so it is a
-configuration error whenever no seat is reachable (below).
-
-The list is a PLAIN list under the merge rules above, which is the whole reason it is shaped
-this way: a higher layer's `model` REPLACES it wholesale. `model: fable` in your user layer
-means fable, with no peer probe and no leftover preference inherited from the shipped record.
-
-### What actually happens
-
-For a `peer:<name>` entry the renderer asks llm-scripting-kit
-(`llm_scripting_kit.seats.discover_seats`) for the seats around `<name>`, takes the first
-reachable `BESIDE` seat, and writes that seat's endpoint id into the lane's `model` in the
-table it prints. Nothing downstream changes: the value is an endpoint id, so the lane
-dispatches through `@LANE_TOOL@` under the ordinary model-kind rule, and the agent-loop
-constraint above still applies -- a `BESIDE` seat is always a harness endpoint, which is what
-this lane needs.
-
-A resolved `peer:` entry is announced on STDERR, one line per lane, naming the profile, the
-lane, the entry, the endpoint that resolved it, and the mechanism:
-
-    model-priority: profile 'code' lane 'reviewer_c_introduced_code' runs on llm-scripting-kit
-    endpoint 'sol' -- priority entry 'peer:opus' resolved to a reachable BESIDE seat (same
-    tier, different model family) reported by llm_scripting_kit.seats.discover_seats.
-
-(Wrapped here for width; it is emitted as a single line.) `@SKILL_NAME@` carries that line
-into the review header, so a review never claims to have run on a model it did not use.
-
-When llm-scripting-kit IS present and the probe ran but no reachable `BESIDE` seat exists, the
-skip is announced the same way, naming the entry that was skipped and the entry that ran
-instead:
-
-    model-priority: profile 'code' lane 'reviewer_c_introduced_code' skipped priority entry
-    'peer:opus' (no reachable BESIDE seat) and runs on 'opus'.
-
-so a reader is told the lane took a later entry rather than left to assume the first one ran.
-
-### The rest of the list becomes runtime failover
-
-Resolving `model` picks the FIRST entry that resolves and prints it as the lane's model in the
-resolved table; the entries after it are not discarded. They are carried into the same table's
-record as `model_fallbacks` -- an ordered list of the models still runnable for that lane after
-the chosen one (an unresolved `peer:` entry is already omitted; a resolved one appears as its
-endpoint id; an empty list means the chosen entry was the last one, or `model` was never a
-list). `model_fallbacks` is what the skill walks at REVIEW TIME when the chosen model's lane
-actually fails -- see "When an endpoint lane fails" above for the walk-the-chain mechanics and
-the `## Lane failovers` disclosure. Configuring an ordered list therefore does two things at
-once: it picks which model runs, and it names what the skill may fail over to if that one does
-not produce a result. Every failover is disclosed in the rendered review; there is never a
-silent substitution beyond what the list named.
-
-### When no entry resolves
-
-A list of `peer:` entries with no plain name after them is a configuration error when nothing
-is reachable: the renderer exits non-zero naming the profile, the lane, and the list, and
-prints no table. Put a plain name last -- it always resolves -- unless you genuinely want the
-review to stop rather than run off-peer.
-
-### When llm-scripting-kit is not there
-
-This is an OPTIONAL edge. A `peer:` entry does not resolve, the next entry does, and the
-rendered table states the model that will run -- so it stays true as read and there is NOTHING
-to disclose. Accordingly the renderer says nothing at all -- absent, too old, and left over
-from an uninstall are all silent, and no review ever tells you to go install a plugin you did
-not ask for.
-
-Those states are still told apart, in a diagnostic channel rather than in the review:
-
-    @RENDER_TOOL@ --project-root <project root> --explain-peer-seats
-
-prints, on stderr, whether the plugin is absent (with the `claude plugin install` command) or
-present but predating `llm_scripting_kit.seats.discover_seats`, which first shipped in
-llm-scripting-kit 0.28.0 (with the `claude plugin update` command). A discovery call that
-raises is reported there too. None of it changes the table.
-
-The renderer never fails a review over a probe: no probe error, owner exception, or unexpected
-result shape escapes it, and every one of them falls through to the next entry. The probe runs
-fresh on each render and its result is never cached between reviews, so removing the plugin
-takes effect on the very next review.
+is unchanged -- the other reviewers and all validators keep their shipped declarations, so the
+endpoint reviewer's findings still pass through the same validation. Stating the endpoint alone,
+`model: my-local-endpoint`, makes it a one-entry declaration: the lane runs there or fails.
 
 ## Worked override example
 
@@ -2478,9 +2400,9 @@ profiles:
 Only the changed reviewer needs restating -- `reviewer_a_claude_md_compliance` and
 `reviewer_b_diff_only_bugs` keep their shipped models via the by-name merge, and `selection`
 and `validator_models` are untouched because the patch omits them. The scalar `model` REPLACES
-the shipped `[peer:opus, opus]` list outright, so this lane is pinned to Sonnet and no peer is
-probed for. To keep the peer preference on a different tier, state the list you want instead:
-`model: [peer:sonnet, sonnet]`.
+the shipped `[sol, opus]` list outright, so this lane is pinned to Sonnet with nothing to choose
+between. To keep a cross-family entry ahead of it, state the list you want instead:
+`model: [luna, sonnet]`.
 
 ## Inspecting the resolved table
 
@@ -2489,9 +2411,6 @@ probed for. To keep the peer preference on a different tier, state the list you 
 prints the merged `profiles` table as YAML, then a `---` separator, then which layers were
 applied and (for any absent override) the path that would create it. This is the same
 resolution step 4 of `@SKILL_NAME@` performs -- never merge the layers by hand.
-
-Add `--explain-peer-seats` to see why a `peer:` entry did not resolve. That output is
-diagnostics, never part of the table.
 """
 
 CONFIGURATION_FRAGMENTS = {

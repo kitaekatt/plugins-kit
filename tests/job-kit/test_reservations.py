@@ -29,7 +29,7 @@ def _job(directory: Path, *, max_attempts: int = 2) -> Job:
     return Job(
         id="job",
         prompt=Prompt(user="run"),
-        endpoint_preference=("fake",),
+        models=("fake",),
         directory=directory,
         max_attempts=max_attempts,
         workspace=WorkspaceSpec(isolate=True),
@@ -292,6 +292,12 @@ def test_sigkill_at_each_boundary(tmp_path: Path) -> None:
         from job_kit.run import run_jobs
         from job_kit.store import JobStore
         import job_kit.workspace as workspace_module
+        import llm_scripting_kit.declaration as lsk_declaration
+        import llm_scripting_kit.models as lsk_models
+
+        # Keep selection off the developer's registry and CLIs, as conftest does.
+        lsk_models.discover_model_entries = lambda **_: {}
+        lsk_declaration.check_many = lambda *_a, **_k: {}
 
         boundary = os.environ["JOB_KIT_CRASH_BOUNDARY"]
         db_path = Path(os.environ["JOB_KIT_CRASH_DB"])
@@ -355,7 +361,7 @@ def test_sigkill_at_each_boundary(tmp_path: Path) -> None:
             return BackendSelection(endpoint, "fake", Backend(), "model")
 
         job = Job(
-            id="job", prompt=Prompt(user="run"), endpoint_preference=("fake",),
+            id="job", prompt=Prompt(user="run"), models=("fake",),
             directory=repository, max_attempts=2,
             workspace=WorkspaceSpec(isolate=True),
             contract=Contract(command=("true",), directory=repository),
@@ -380,6 +386,7 @@ def test_sigkill_at_each_boundary(tmp_path: Path) -> None:
                     (
                         str(repo_root / "plugins" / "job-kit" / "lib"),
                         str(repo_root / "plugins" / "llm-scripting-kit" / "lib"),
+                        str(repo_root / "plugins" / "bootstrap"),
                     )
                 ),
             }

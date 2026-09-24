@@ -94,11 +94,10 @@ reference_skill:
         1. Download/activation (new plugin files onto disk) -- `claude plugin
            marketplace update <mkt>` + `claude plugin update`. No restart.
         2. Provisioning (bootstrap applying the manifest -- ini writes, venvs, PATH,
-           config merges) -- bootstrap run applies user/project declarations
-           only (see bootstrap_cli_lever). Installed plugins' own requirements
-           are handled by Claude's normal lifecycle. A healthy-machine full
-           console pass uses hooks/sessionstart/session-bootstrap.sh --console
-           in Claude's supported runtime, exempt from both skip gates.
+           config merges) -- `bootstrap run` does 1 and 2 in one pass: it runs
+           the SessionStart hook's own engine pass (marketplace refresh, plugin
+           updates, every plugin manifest, the user/project layers) now,
+           exempt from both skip gates (see bootstrap_cli_lever).
            bootstrap reset clears the throttle for a genuine SessionStart.
         3. Code loading (new hooks/skills REGISTERING in the current session) -- the
            only residue a manual run cannot converge; this is what /reload-plugins or a
@@ -120,40 +119,43 @@ reference_skill:
           never a remediation step for layers 1-2.
     - id: bootstrap_cli_lever
       summary: >-
-        bootstrap run applies only the four user/project bootstrap.json and
-        bootstrap.local.json layers. Bare bootstrap reports and follows running
-        lifecycle passes; --json is non-blocking. bootstrap reset clears the
-        next-session throttle through bootstrap-reset-cooldown.
-      keywords: [bootstrap CLI, bootstrap run, user manifests, project manifests, working directory, manifest scope, bootstrap reset, running pass, BOOTSTRAP_MARKETPLACE, BOOTSTRAP_PLUGIN_ROOT]
+        bootstrap run runs the SessionStart hook's own engine pass now, for the
+        working directory: marketplace refresh, plugin updates, every installed
+        plugin's manifest and the four user/project layers. The cooldown does
+        not throttle it, so it is the force path. Bare bootstrap reports and
+        follows running lifecycle passes; --json is non-blocking. bootstrap
+        reset clears the next-session throttle through bootstrap-reset-cooldown.
+      keywords: [bootstrap CLI, bootstrap run, force a pass, apply published update, marketplace refresh, plugin update, user manifests, project manifests, working directory, manifest scope, bootstrap reset, running pass, BOOTSTRAP_MARKETPLACE, BOOTSTRAP_PLUGIN_ROOT]
       detail: |
-        Terminal run scope, lowest to highest priority:
+        Execution: scripts/bootstrap.sh -> scripts/bootstrap_cli.py ->
+        engine/bootstrap_engine.py --console --project-key _global_
+        --exit-status, the entry the SessionStart and Codex hooks run. Every
+        declared marketplace is refreshed before any plugin version check
+        (engine Step 3c-mkt), so a version published since the last pass is
+        installed in this same pass.
+
+        Project layers come from the exact working directory, with no parent
+        or Git-root search; the CLI prints the four candidate layer paths:
         1. ~/.claude/bootstrap.json
         2. ~/.claude/bootstrap.local.json
         3. <working-directory>/.claude/bootstrap.json
         4. <working-directory>/.claude/bootstrap.local.json
-        Missing files are skipped; later conflicts win under shared merge rules.
-        A parse error stops provisioning. The working directory is used exactly,
-        with no parent or Git-root search. The CLI prints all four candidate paths.
 
-        The runner composes shared manifest handlers without plugin discovery,
-        legacy user-bootstrap.json, env.json personalization, self-provisioning,
-        or implicit project setup. Explicit plugins/marketplaces declarations in
-        the four layers still install or update their declared entries; installed
-        plugins' own manifests are not added to this run. Claude's automatic
-        lifecycle retains its full plugin-provisioning scope.
+        Differences from a hook pass, each required by the terminal: console
+        output (no bootstrap.log, engine version stamps, pending display file,
+        or fix-all queue); no cooldown consumed or reset; no per-project
+        interpreter record (_global_ key); no Codex project hook generated;
+        stdin closed; exit 1 when the pass reports failures.
 
-        run refuses with exit code 2 while another pass holds the shared lock;
-        it never attaches to a pass with a potentially different scope. Success
-        is 0; manifest/provisioning failure is 1. It leaves session cooldowns,
-        plugin lifecycle version stamps, and env.json state unchanged.
+        run refuses with exit code 2 while another pass holds the shared lock
+        (and the engine exits 2 if it loses that race); it never attaches to a
+        pass with a potentially different scope. Success is 0.
         Bare status still follows a running pass; --json never blocks.
+        bootstrap profile set converges through the same pass.
 
-        Execution: scripts/bootstrap.sh -> scripts/bootstrap_cli.py ->
-        scripts/bootstrap_run.py -> bootstrap_lib.layered_bootstrap.
         BOOTSTRAP_PLUGIN_ROOT selects the engine tree; otherwise the highest
         cached bootstrap version is preferred, then the marketplace clone.
         Multiple bootstrap data marketplaces require BOOTSTRAP_MARKETPLACE.
-        These engine/data choices do not broaden the four-layer manifest scope.
         The CLI needs an existing Python; Claude's normal lifecycle provisions it.
 
         Full command reference: references/bootstrap-cli.md.
@@ -162,8 +164,9 @@ reference_skill:
           from src/ checks src/.claude instead.
         - Bare bootstrap follows another pass, while bootstrap run refuses it.
           Retry run after that pass finishes.
-        - bootstrap run does not provision installed plugins' own requirements.
-          Use Claude's normal lifecycle for full plugin provisioning.
+        - bootstrap run is a live pass, not a read-only probe. It installs,
+          updates and rewrites registry state like a hook pass, so snapshot a
+          broken machine's state before running it there.
     - id: cooldown_reset_request
       summary: >-
         A request about the cooldown ITSELF asks only for the skip stamps to be deleted -- it
@@ -272,30 +275,39 @@ reference_skill:
         - The first session after setting a pin can race Claude Code's auto-updater once (it may pull before bootstrap re-pins); self-heals on the next pass.
     - id: plugin_autoupdate_propagation
       summary: >-
-        Two different flags govern updates -- bootstrap's `alwaysUpdate` refreshes the
-        marketplace CLONE; Claude Code's `autoUpdate` bumps installed PLUGIN versions.
-        A marketplace needs `autoUpdate: true` for its plugins to actually move;
-        `alwaysUpdate` alone leaves installed versions stuck.
-      keywords: [plugin not updating, stuck version, version not updating, autoUpdate, alwaysUpdate, extraKnownMarketplaces, known_marketplaces.json, plugin update, /plugin update, plugin marketplace update, publish not applying, installed_plugins.json, plugin-versions.sh, consumer update, auto-update plugins, marketplace not refreshing, restart not updating, reload-plugins]
+        Two mechanisms move installed versions. Bootstrap's plugins phase updates
+        every plugin that has a `plugins[]` entry (declared, or self-registered for
+        each bootstrap-dependent plugin), in the same pass as its `alwaysUpdate`
+        marketplace refresh. Claude Code's `autoUpdate` moves the rest.
+        `alwaysUpdate` alone refreshes only the CLONE.
+      keywords: [plugin not updating, stuck version, version not updating, autoUpdate, alwaysUpdate, extraKnownMarketplaces, known_marketplaces.json, plugin update, /plugin update, plugin marketplace update, publish not applying, installed_plugins.json, plugin-versions.sh, consumer update, auto-update plugins, marketplace not refreshing, restart not updating, reload-plugins, bootstrap run, one pass late]
       detail: |
-        Two independent mechanisms, often confused -- a plugin can be published and
-        still never reach a machine because the wrong one is set:
+        Independent mechanisms, often confused -- a plugin can be published and
+        still never reach a machine because the wrong one is relied on:
 
         - `alwaysUpdate` (a bootstrap.json `marketplaces[]` entry, engine-side): every
-          session bootstrap `git`-refreshes the marketplace CLONE at
-          ~/.claude/plugins/marketplaces/<name>. This freshens the LISTING
-          (marketplace.json) only -- it does NOT bump installed plugin versions.
+          pass bootstrap `git`-refreshes the marketplace CLONE at
+          ~/.claude/plugins/marketplaces/<name>. By itself this freshens the LISTING
+          (marketplace.json) only.
+        - A `plugins[]` entry (engine-side): the plugins phase compares the installed
+          version with that listing and runs `claude plugin update` when it is
+          behind. Every marketplace refresh of the pass runs before the first such
+          check (engine Step 3c-mkt), so a version published since the last pass is
+          installed in that same pass. Bootstrap self-registers each
+          bootstrap-dependent plugin as an `install: "manual"` entry in
+          ~/.claude/bootstrap.local.json, so those plugins are covered.
+          `bootstrap run` runs this pass on demand, ignoring the cooldown.
         - `autoUpdate: true` (a `known_marketplaces.json` field, Claude-Code-side):
           CC's own auto-updater, at session start, refreshes the clone AND bumps any
           installed plugin behind the listing -- rewriting installed_plugins.json and
-          moving the plugin's cache version dir. THIS is what moves installed versions.
+          moving the plugin's cache version dir. This moves plugins that have no
+          `plugins[]` entry anywhere.
 
-        So for a marketplace's plugins to auto-update, the marketplace needs
+        For a plugin with no `plugins[]` entry to auto-update, the marketplace needs
         `autoUpdate: true`. The clean, source-controlled place to set it is an
         `extraKnownMarketplaces` block in a project (or user) settings.json -- mirror an
         existing entry. A bootstrap.json `marketplaces` entry with only `alwaysUpdate`
-        keeps the clone fresh but the plugins stay pinned -- the common "I declared the
-        marketplace but my plugin won't update" trap.
+        and no `plugins[]` entry keeps the clone fresh but that plugin stays put.
 
         Publish != consumer activation. Publishing (version bump + push to the cache
         source branch) makes a version AVAILABLE on the remote. A consumer machine
@@ -538,7 +550,8 @@ reference_skill:
       path: references/bootstrap-cli.md
       keywords: [bootstrap command, bootstrap CLI, bootstrap run, bootstrap codex-hook, Codex SessionStart, Codex additionalContext, bootstrap --json, is a pass running, run bootstrap from a terminal, without starting Claude, tail a pass, attach to a running pass, stream the pass, events.watch, blocks, exit codes, BOOTSTRAP_MARKETPLACE, BOOTSTRAP_PLUGIN_ROOT, dev checkout, worktree, ~/.local/bin lever, command not found, cooldown exempt, bootstrap profile, profile set, profile clear, profile status, PowerShell, cmd.exe, bootstrap.cmd, returns instantly with no output, Windows shim]
       summary: >-
-        The bootstrap PATH command -- four-layer run scope, busy-pass refusal,
+        The bootstrap PATH command -- full-pass run scope and how it differs
+        from a hook pass, busy-pass refusal,
         status following, cooldown behavior, exit codes, engine/data discovery,
         runtime prerequisites, the Windows `.cmd` shims for cmd.exe and
         PowerShell, and the `profile` / `profile set` / `profile clear`

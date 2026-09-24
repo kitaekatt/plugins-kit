@@ -152,7 +152,7 @@ def _job(tmp_path: Path, job_id: str = "job", exit_code: int = 0) -> Job:
     return Job(
         id=job_id,
         prompt=Prompt(system="instructions", user=job_id),
-        endpoint_preference=("fake-endpoint",),
+        models=("fake-endpoint",),
         directory=tmp_path,
         contract=Contract(command=(sys.executable, "-c", code), directory=tmp_path),
     )
@@ -163,7 +163,7 @@ def _contract_job(tmp_path: Path, job_id: str, command: tuple[str, ...]) -> Job:
     return Job(
         id=job_id,
         prompt=Prompt(system="instructions", user=job_id),
-        endpoint_preference=("fake-endpoint",),
+        models=("fake-endpoint",),
         directory=tmp_path,
         contract=Contract(command=command, directory=tmp_path),
     )
@@ -576,7 +576,7 @@ def test_job_file_floor_reaches_the_run(tmp_path: Path) -> None:
 jobs:
   - id: file-floor
     prompt: run
-    endpoint_preference: [fake-endpoint]
+    models: [fake-endpoint]
     directory: .
     contract:
       command: [true]
@@ -976,7 +976,7 @@ def test_persistent_halt_falls_back_to_the_next_preference(
 
     job = replace(
         _job(tmp_path),
-        endpoint_preference=("first", "second"),
+        models=("first", "second"),
         max_attempts=2,
     )
     snapshot = run_jobs(
@@ -990,7 +990,9 @@ def test_persistent_halt_falls_back_to_the_next_preference(
     assert [attempt.attempt_no for attempt in snapshot.attempts] == [1, 2]
     assert [attempt.endpoint for attempt in snapshot.attempts] == ["first", "second"]
     assert first_backend.calls and second_backend.calls
-    assert factory_calls == ["first", "second"]
+    # describe() classifies every declared id that is not excluded, once per
+    # selection: both on the first attempt, then only "second" after the halt.
+    assert factory_calls == ["first", "second", "second"]
 
 
 def test_openai_connection_failure_rotates_to_the_next_preference(
@@ -1011,7 +1013,7 @@ def test_openai_connection_failure_rotates_to_the_next_preference(
 
     job = replace(
         _job(tmp_path),
-        endpoint_preference=("first", "second"),
+        models=("first", "second"),
         max_attempts=2,
     )
     snapshot = run_jobs(
@@ -1051,11 +1053,11 @@ def test_unreachable_blip_does_not_exclude_later_jobs(
 
     blip = replace(
         _job(tmp_path, "blip"),
-        endpoint_preference=("first", "second"),
+        models=("first", "second"),
         max_attempts=2,
     )
     later = replace(
-        _job(tmp_path, "later"), endpoint_preference=("first",), max_attempts=1
+        _job(tmp_path, "later"), models=("first",), max_attempts=1
     )
 
     snapshot = run_jobs(
@@ -1097,7 +1099,7 @@ def test_confirmed_unreachable_probe_excludes_later_jobs(
         return BackendSelection(endpoint, "fake", backend, "fake-model")
 
     jobs = [
-        replace(_job(tmp_path, job_id), endpoint_preference=("first",), max_attempts=1)
+        replace(_job(tmp_path, job_id), models=("first",), max_attempts=1)
         for job_id in ("probe-1", "probe-2", "later")
     ]
     snapshot = run_jobs(
@@ -1148,7 +1150,7 @@ def test_concurrent_unreachable_failures_are_one_probe(
 
     jobs = [
         replace(
-            _job(tmp_path, job_id), endpoint_preference=("first",), max_attempts=1
+            _job(tmp_path, job_id), models=("first",), max_attempts=1
         )
         for job_id in (*sorted(first_jobs), "later")
     ]
@@ -1190,7 +1192,7 @@ def test_unreachable_exclusion_is_recomputed_on_resume(
         return BackendSelection(endpoint, "fake", backend, "fake-model")
 
     jobs = [
-        replace(_job(tmp_path, job_id), endpoint_preference=("first",), max_attempts=1)
+        replace(_job(tmp_path, job_id), models=("first",), max_attempts=1)
         for job_id in ("probe-1", "probe-2", "later")
     ]
     store = JobStore(tmp_path / "resume-probe.sqlite3")
@@ -1260,7 +1262,7 @@ def test_openai_timeout_is_our_deadline_not_an_unreachable_endpoint(
 
     job = replace(
         _job(tmp_path),
-        endpoint_preference=("first", "second"),
+        models=("first", "second"),
         max_attempts=2,
     )
     snapshot = run_jobs(
@@ -1306,7 +1308,7 @@ def test_running_out_of_endpoints_halts_after_a_recorded_attempt(
     backend = SequenceBackend([HaltError(HALT_RATE_LIMIT, "quota")])
     job = replace(
         _job(tmp_path),
-        endpoint_preference=("only-endpoint",),
+        models=("only-endpoint",),
         max_attempts=3,
     )
 
@@ -1423,7 +1425,10 @@ def test_unroutable_job_is_terminal_with_reason_and_survives_resume(
         backend_factory=unroutable_factory,
     )
     record = snapshot.jobs[0]
-    reason = "job 'unroutable' has no compatible endpoint in preference order ['fake-endpoint']"
+    reason = (
+        "job 'unroutable': no usable routing target in [fake-endpoint] for a "
+        "process caller:\n  fake-endpoint: requirements-mismatch (adapter 'fake')"
+    )
     assert record.state is JobState.UNROUTABLE
     assert record.error == reason
     assert snapshot.to_mapping()["jobs"][0]["error"] == reason
@@ -1572,7 +1577,7 @@ def _pool_job(
     return Job(
         id=job_id,
         prompt=Prompt(system="instructions", user=job_id),
-        endpoint_preference=endpoints,
+        models=endpoints,
         directory=tmp_path,
         contract=Contract(command=(sys.executable, "-c", code), directory=tmp_path),
         max_attempts=max_attempts,
@@ -1642,13 +1647,23 @@ def test_a_halt_narrows_endpoints_for_later_dispatches_without_cancelling(
 ) -> None:
     """A halt excludes an endpoint at dispatch time and cancels nothing running."""
     released = threading.Event()
+    second_in_flight = threading.Event()
 
     def halting_first() -> BaseException:
-        """Halt the first job so its endpoint is excluded from later ones."""
+        """Halt the first job so its endpoint is excluded from later ones.
+
+        The halt waits until the second job is in flight on the same endpoint.
+        Without that rendezvous the first job can halt, and its halt be
+        recorded, before the second worker has selected at all -- the second
+        job then legitimately sees the narrowed order and the "in-flight
+        attempt is not cancelled" claim is never exercised.
+        """
+        second_in_flight.wait(timeout=30)
         return HaltError(HALT_RATE_LIMIT, "rate limited")
 
     def hold_until_third_dispatch() -> None:
         """Occupy the second pool slot until the third job has been dispatched."""
+        second_in_flight.set()
         released.wait(timeout=30)
         return None
 
@@ -1905,3 +1920,285 @@ def test_replace_attempt_acceptance_changes_only_acceptance(tmp_path: Path) -> N
     assert updated is not attempt
     assert updated.acceptance == new_acceptance
     assert replace(updated, acceptance=attempt.acceptance) == attempt
+
+
+# ---------------------------------------------------------------------------
+# Quota halts, the floor, the attempt limit, and the logged pace readings
+# ---------------------------------------------------------------------------
+
+import json
+import types as _types
+
+import llm_scripting_kit.models as lsk_models
+import llm_scripting_kit.usage_budget as lsk_usage_budget
+from llm_scripting_kit.completion import HALT_INSUFFICIENT_CREDIT, HALT_QUOTA
+
+
+class QuotaExhausted(RuntimeError):
+    """The shape CodexCliBackend raises after a quota re-read."""
+
+    def __init__(self, kind: str = HALT_QUOTA, resets_at: int | None = 1_900_000_000) -> None:
+        super().__init__("codex exec failed (exit 1)")
+        self.halt_kind = kind
+        self.resets_at = resets_at
+
+
+class ClassifyingBackend(SequenceBackend):
+    """Report the raise site's halt kind, as the codex backend does."""
+
+    def classify_halt(self, exc: BaseException) -> str | None:
+        return getattr(exc, "halt_kind", None)
+
+
+def _paced(name: str) -> _types.SimpleNamespace:
+    return _types.SimpleNamespace(
+        kind="fake",
+        harness=None,
+        model="fake-model",
+        family=None,
+        tier=None,
+        base_url=None,
+        conserve_usage=_types.SimpleNamespace(pool=f"pool-{name}", display_name=None),
+    )
+
+
+def _registry(monkeypatch: pytest.MonkeyPatch, entries: dict[str, object]) -> None:
+    """Serve ``entries`` as the merged registry, every pinned verdict usable."""
+    import llm_scripting_kit.declaration as lsk_declaration
+
+    monkeypatch.setattr(lsk_models, "discover_model_entries", lambda **_: dict(entries))
+    monkeypatch.setattr(
+        lsk_declaration,
+        "pinned_evaluate",
+        lambda name, spec, harness: _types.SimpleNamespace(
+            usable=True, status="available", detail="", resets_at=None
+        ),
+    )
+    monkeypatch.setattr(
+        lsk_declaration,
+        "_fresh_reading",
+        lambda name, spec, harness: _types.SimpleNamespace(
+            remaining=0.9 if name == "first" else 0.5, window_remaining=1.0
+        ),
+    )
+
+
+def _written(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, object, dict]]:
+    written: list[tuple[str, object, dict]] = []
+
+    def record(entry_id: str, spec: object, **kwargs: object) -> None:
+        written.append((entry_id, spec, kwargs))
+
+    monkeypatch.setattr(lsk_usage_budget, "record_observed_halt", record)
+    return written
+
+
+@pytest.mark.parametrize("kind", [HALT_QUOTA, HALT_INSUFFICIENT_CREDIT])
+def test_a_quota_halt_records_out_of_quota_and_reselects_within_the_job(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kind: str
+) -> None:
+    """The halted entry's verdict is written back and the next usable entry runs."""
+    entries = {"first": _paced("first"), "second": _paced("second")}
+    _registry(monkeypatch, entries)
+    written = _written(monkeypatch)
+    first = ClassifyingBackend([QuotaExhausted(kind)])
+    second = ClassifyingBackend([None])
+    factory = _endpoint_factory({"first": first, "second": second})
+    job = replace(_job(tmp_path), models=("first", "second"), max_attempts=2)
+
+    snapshot = run_jobs(
+        [job],
+        tmp_path / "quota.sqlite3",
+        capabilities_provider=_advertisement,
+        backend_factory=factory,
+    )
+
+    assert snapshot.jobs[0].state is JobState.ACCEPTED
+    assert [attempt.endpoint for attempt in snapshot.attempts] == ["first", "second"]
+    assert snapshot.attempts[0].halt_kind == kind
+    assert written == [
+        ("first", entries["first"].conserve_usage, {"resets_at": 1_900_000_000})
+    ]
+
+
+def test_a_quota_halt_on_an_unpaced_entry_writes_no_verdict(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Only an entry declaring conserve_usage has a verdict to write back."""
+    written = _written(monkeypatch)
+    first = ClassifyingBackend([QuotaExhausted()])
+    second = ClassifyingBackend([None])
+    factory = _endpoint_factory({"first": first, "second": second})
+    job = replace(_job(tmp_path), models=("first", "second"), max_attempts=2)
+
+    snapshot = run_jobs(
+        [job],
+        tmp_path / "unpaced.sqlite3",
+        capabilities_provider=_advertisement,
+        backend_factory=factory,
+    )
+
+    assert snapshot.jobs[0].state is JobState.ACCEPTED
+    assert snapshot.attempts[0].halt_kind == HALT_QUOTA
+    assert written == []
+
+
+def test_a_quota_halt_excludes_the_entry_from_later_jobs(
+    tmp_path: Path,
+) -> None:
+    """A spent pool narrows the run like every other persistent halt."""
+    first = ClassifyingBackend([QuotaExhausted()])
+    second = ClassifyingBackend([None, None])
+    factory = _endpoint_factory({"first": first, "second": second})
+    jobs = [
+        replace(_job(tmp_path, "a"), models=("first", "second"), max_attempts=2),
+        replace(_job(tmp_path, "b"), models=("first", "second")),
+    ]
+
+    snapshot = run_jobs(
+        jobs,
+        tmp_path / "narrow.sqlite3",
+        capabilities_provider=_advertisement,
+        backend_factory=factory,
+    )
+
+    assert [(a.job_id, a.endpoint) for a in snapshot.attempts] == [
+        ("a", "first"),
+        ("a", "second"),
+        ("b", "second"),
+    ]
+    assert len(first.calls) == 1
+
+
+def test_a_quota_halt_with_nothing_usable_left_propagates_the_itemised_floor(
+    tmp_path: Path,
+) -> None:
+    """Attempts remain but no usable entry does: the job carries the floor."""
+    backend = ClassifyingBackend([QuotaExhausted()])
+    job = replace(_job(tmp_path), models=("only",), max_attempts=3)
+
+    snapshot = run_jobs(
+        [job],
+        tmp_path / "floor.sqlite3",
+        capabilities_provider=_advertisement,
+        backend_factory=_factory_for(backend),
+    )
+
+    record = snapshot.jobs[0]
+    assert record.state is JobState.HALTED
+    assert record.error is not None
+    assert "no usable routing target" in record.error
+    assert "only: excluded" in record.error
+    assert "attempt limit reached" not in record.error
+    assert len(backend.calls) == 1
+
+
+def test_a_quota_halt_on_the_last_attempt_is_the_attempt_limit_not_the_floor(
+    tmp_path: Path,
+) -> None:
+    """max_attempts bounds executions; spending it is never reported as the floor."""
+    first = ClassifyingBackend([QuotaExhausted()])
+    second = ClassifyingBackend([None])
+    factory = _endpoint_factory({"first": first, "second": second})
+    job = replace(_job(tmp_path), models=("first", "second"), max_attempts=1)
+
+    snapshot = run_jobs(
+        [job],
+        tmp_path / "limit.sqlite3",
+        capabilities_provider=_advertisement,
+        backend_factory=factory,
+    )
+
+    record = snapshot.jobs[0]
+    assert record.state is JobState.HALTED
+    assert record.error is not None
+    assert "attempt limit reached" in record.error
+    assert "no usable routing target" not in record.error
+    assert second.calls == []
+
+
+def test_each_attempt_logs_the_pace_readings_it_was_selected_from(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A run is explainable from the declared list plus the logged pace readings."""
+    _registry(monkeypatch, {"first": _paced("first"), "second": _paced("second")})
+    backend = FakeBackend()
+    db_path = tmp_path / "paces.sqlite3"
+    job = replace(_job(tmp_path), models=("second", "first"))
+
+    snapshot = run_jobs(
+        [job],
+        db_path,
+        run_id="paces",
+        capabilities_provider=_advertisement,
+        backend_factory=_factory_for(backend),
+    )
+
+    attempt = snapshot.attempts[0]
+    assert attempt.endpoint == "first"
+    expected = (
+        {"id": "first", "pace": 0.9, "usable": True},
+        {"id": "second", "pace": 0.5, "usable": True},
+    )
+    assert attempt.pace_readings == expected
+    reloaded = JobStore(db_path).snapshot("paces").attempts[0]
+    assert reloaded.pace_readings == expected
+    assert attempt.to_mapping()["pace_readings"] == [dict(r) for r in expected]
+
+
+def test_a_hidden_id_never_reaches_a_non_floor_surface(tmp_path: Path) -> None:
+    """Skip is silent: an unresolved id appears in no attempt, reading or job record."""
+    backend = FakeBackend()
+    factory = _endpoint_factory({"fake-endpoint": backend}, missing=("ghost-id",))
+    job = replace(_job(tmp_path), models=("ghost-id", "fake-endpoint"))
+
+    snapshot = run_jobs(
+        [job],
+        tmp_path / "silent.sqlite3",
+        capabilities_provider=_advertisement,
+        backend_factory=factory,
+    )
+
+    assert snapshot.jobs[0].state is JobState.ACCEPTED
+    rendered = json.dumps(
+        {
+            "attempts": [attempt.to_mapping() for attempt in snapshot.attempts],
+            "jobs": [
+                {"state": job.state.value, "error": job.error} for job in snapshot.jobs
+            ],
+        }
+    )
+    assert "ghost-id" not in rendered
+
+
+def test_a_quota_halt_reported_as_response_data_also_writes_back(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A transport that reports the halt in its response, not by raising, counts too."""
+    from llm_scripting_kit.completion import ERROR
+    from llm_scripting_kit.completion.types import ResponseError
+
+    entries = {"first": _paced("first"), "second": _paced("second")}
+    _registry(monkeypatch, entries)
+    written = _written(monkeypatch)
+    halted = LLMResponse(
+        text="",
+        model="fake-model",
+        status=ERROR,
+        error=ResponseError(code=HALT_QUOTA, message="pool spent"),
+    )
+    first = SequenceBackend([halted])
+    second = SequenceBackend([None])
+    factory = _endpoint_factory({"first": first, "second": second})
+    job = replace(_job(tmp_path), models=("first", "second"), max_attempts=2)
+
+    snapshot = run_jobs(
+        [job],
+        tmp_path / "response-quota.sqlite3",
+        capabilities_provider=_advertisement,
+        backend_factory=factory,
+    )
+
+    assert snapshot.attempts[0].halt_kind == HALT_QUOTA
+    assert [attempt.endpoint for attempt in snapshot.attempts] == ["first", "second"]
+    assert [entry for entry, _, _ in written] == ["first"]

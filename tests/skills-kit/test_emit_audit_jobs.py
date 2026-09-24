@@ -63,7 +63,7 @@ def document() -> dict:
         subject_dir=SUBJECT_DIR.resolve(),
         repo_root=REPO_ROOT,
         standards=checker.DEFAULT_STANDARDS,
-        endpoints=["sonnet", "opus", "luna"],
+        models=["sonnet", "opus", "luna"],
         max_parallel=4,
         limit=None,
     )
@@ -141,9 +141,9 @@ class TestJobShape:
         for job in document["jobs"]:
             assert job["directory"] == str(REPO_ROOT)
 
-    def test_endpoint_preference_matches_input(self, document: dict):
+    def test_models_matches_input(self, document: dict):
         for job in document["jobs"]:
-            assert job["endpoint_preference"] == ["sonnet", "opus", "luna"]
+            assert job["models"] == ["sonnet", "opus", "luna"]
 
     def test_file_level_deny_floor_present(self, document: dict):
         assert "Write" in document["disallowed_tools"]
@@ -270,7 +270,7 @@ class TestLimit:
             subject_dir=SUBJECT_DIR.resolve(),
             repo_root=REPO_ROOT,
             standards=checker.DEFAULT_STANDARDS,
-            endpoints=["sonnet"],
+            models=["sonnet"],
             max_parallel=1,
             limit=1,
         )
@@ -313,7 +313,7 @@ class TestEmptySubjectSkipped:
             subject_dir=docs,
             repo_root=repo,
             standards=checker.DEFAULT_STANDARDS,
-            endpoints=["sonnet"],
+            models=["sonnet"],
             max_parallel=1,
             limit=None,
         )
@@ -332,12 +332,12 @@ def _tiny_repo(tmp_path: Path) -> Path:
     return docs
 
 
-def _emit(docs: Path, repo: Path, endpoints: list[str]) -> dict:
+def _emit(docs: Path, repo: Path, models: list[str]) -> dict:
     return emit.build_job_file(
         subject_dir=docs,
         repo_root=repo,
         standards=checker.DEFAULT_STANDARDS,
-        endpoints=endpoints,
+        models=models,
         max_parallel=1,
         limit=None,
     )
@@ -530,7 +530,7 @@ class TestAdapterAttachment:
     def test_default_endpoints_do_not_attach(self, tmp_path: Path) -> None:
         assert (
             emit.adapter_applies(
-                list(emit.DEFAULT_ENDPOINTS), emit.resolve_admitted_endpoints(tmp_path)
+                list(emit.DEFAULT_MODELS), emit.resolve_admitted_endpoints(tmp_path)
             )
             is False
         )
@@ -615,7 +615,7 @@ class TestEmptyContractTableFailsLoudly:
                 subject_dir=docs,
                 repo_root=tmp_path,
                 standards=standards,
-                endpoints=["sonnet"],
+                models=["sonnet"],
                 max_parallel=1,
                 limit=None,
             )

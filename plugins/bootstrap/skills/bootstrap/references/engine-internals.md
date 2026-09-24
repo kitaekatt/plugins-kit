@@ -144,7 +144,7 @@ has a `--project-dir`, and no layer failed to parse. Implementation:
 `tools`, `git_config`, `project_venv`, `project_npm` and the project's
 check/fix entries all see the updated tree in the same pass, and a moved HEAD
 reloads the layered manifest so a changed `.claude/bootstrap.json` applies
-too. `layered_bootstrap.run_layered_bootstrap` mirrors it for `bootstrap run`.
+too. `bootstrap run` runs this same engine step.
 
 Every outcome is a quiet (always-logged) entry with its full diagnostics. An
 update or a blocked update also yields one notice line, rendered at Step 4d
@@ -155,6 +155,50 @@ they never hear about is the failure the feature prevents. The notice is an
 limit cannot cut the classification off. Only a malformed declaration is a
 failure dict; a blocked update never is. The outcome table and the gate
 contract: manifest-reference.md, `project_git_pull`.
+
+### Step 3c-mkt: marketplace barrier -- every refresh before any version check
+
+`engine._marketplace_barrier` settles every `marketplaces[]` entry of the
+pass before the first plugins phase runs: the layered manifest's entries,
+then each enabled plugin manifest's, in Step 4 order. Bootstrap's own
+`alwaysUpdate` entry for its marketplace is one of them. It runs after
+self-setup, registry repair and Step 3c-pull, and before Step 3c processes
+the layered manifest.
+
+The barrier exists because, without it, the layered plugins phase (Step 3c)
+compares installed versions against a marketplace clone that Step 4 refreshes
+only afterwards: a published update reports "up to date" and applies one
+pass late, by the SessionStart hook, `bootstrap codex-hook` and
+`bootstrap run` alike. The barrier ensures one pass refreshes the clone and
+updates the plugin.
+
+Rules the barrier keeps:
+
+- **Same order, same pin precedence.** The manifests are processed in the
+  order the in-order phases would process them, so a layered `pin` still
+  wins over a plugin manifest's `alwaysUpdate`
+  (`_pinned_marketplaces_this_run`).
+- **Tools before marketplaces.** Without a resolvable `claude` CLI the
+  barrier does nothing. On a fresh extension-only machine the CLI arrives
+  through bootstrap's own `tools` phase in Step 4, and each manifest's
+  marketplaces phase then runs in its normal Step 4 order.
+- **Once per pass.** A marketplace the barrier processed is recorded in
+  `_marketplace_pass["settled"]`; a later marketplaces phase logs
+  `settled earlier this pass` for it instead of fetching again or reporting a
+  failure twice. A plugin that Step 3c installs mid-pass is not in the
+  barrier's plugin set, so its manifest's marketplaces run in order in
+  Step 4b.
+- **Pass-wide unusable set.** A marketplace the barrier could not add, with
+  no clone on disk, is recorded in `_marketplace_pass["unusable"]`. Every
+  later plugins phase skips installs from it, whichever manifest declares
+  the plugins.
+- A plugin manifest that fails to parse, is not an object, or whose
+  `requires_bootstrap` this engine does not meet is skipped by the barrier;
+  its Step 4 processing reports it. Barrier entries appear in bootstrap's
+  own section, prefixed `config:` or `<plugin>:`.
+
+`_main` resets `_marketplace_pass` on entry and exit. Regression tests:
+`tests/bootstrap/test_marketplace_barrier.py`.
 
 ### Step 3c1: interpreter export, persistence, and shell integration
 
@@ -199,8 +243,8 @@ Full contract: references/python-interpreter.md.
 Resolution and application happen together, at LOAD time, before Step 3c
 ever runs: `bootstrap_lib.engine._load_layered_manifests_ex` calls
 `bootstrap_lib.profiles.resolve_layers` while building the merged manifest --
-the function both the SessionStart lifecycle and `bootstrap run` call to load
-the four layered manifests. The manifest Step 3c's `_process_manifest` then
+the function every engine pass (a hook or `bootstrap run`) and `bootstrap
+profile` call to load the four layered manifests. The manifest Step 3c's `_process_manifest` then
 processes already has the selected profile's chain overlaid onto it, so a
 profile can add or change `project_venv`/`project_npm` before Step 3d
 processes either section. `_load_layered_manifests` is a thin wrapper over
@@ -227,11 +271,11 @@ entry and a `profile_invalid` failure (deliberately without
 force a full pass every session fleet-wide until a hand-authored manifest is
 fixed); each warning (a `profile` key ignored outside the two local layers,
 or a selected name that is not declared) becomes a visible `action` entry;
-and an applied chain becomes one verbose-only `ok` entry. `bootstrap run`
-(`layered_bootstrap.run_layered_bootstrap`) reports the same state through its
-own `actions`/`checks`/`failures` lists and additionally prints `profile:
-none selected -- run 'bootstrap profile'` for `unselected`/`unknown` -- it
-never prompts, since there is no session to ask in.
+and an applied chain becomes one verbose-only `ok` entry. A `--console` pass
+(which `bootstrap run` is) reports the same entries and additionally prints
+`profile: none selected -- run 'bootstrap profile'` for
+`unselected`/`unknown` -- it never prompts, since there is no session to ask
+in.
 
 **Prompt gating.** A promptable status (`unselected` or `unknown`) may cause
 the SessionStart lifecycle to ask the user which profile to use, gated by
@@ -265,8 +309,8 @@ alongside the rest of a pass's response, and every `emit_*` path writes
 `bootstrap_display.pending` with `_write_atomic` -- a plain overwrite, not the
 absent-only write some other pending-file producers use. If a second pass
 completes in the same session before the first pass's pending file has been
-read by a prompt (for example, two projects bootstrapping close together, or
-a manually triggered `bootstrap run` racing the background lifecycle pass),
+read by a prompt (for example, two projects bootstrapping close together;
+`bootstrap run` is a console pass and writes no pending file),
 the second pass's `bootstrap_display.pending` replaces the first's, and an
 unread profile-prompt directive is lost along with it. The 10-minute
 directory-wide guard in `should_prompt` bounds how often this can recur for
@@ -506,11 +550,13 @@ bootstrap anywhere, and remediation would have to move to `bootstrap-stuck-fix`.
 ### Step 4 Processing Order
 
 Plugins are processed in a deterministic order:
-1. **Bootstrap plugin** (`plugins-kit:bootstrap`) — ensures marketplace updates happen first
+1. **Bootstrap plugin** (`plugins-kit:bootstrap`)
 2. **Same-marketplace plugins** (other plugins from plugins-kit) — alphabetically
 3. **Other marketplace plugins** — alphabetically
 
-This ordering ensures marketplace updates complete before dependent plugins check versions.
+Marketplace refreshes do not depend on this order: Step 3c-mkt settles every
+declared marketplace before any plugins phase. The Step 3c-mkt barrier uses
+the same order, so pin precedence between manifests is unchanged.
 
 ### Step 4b: Phase 2 Re-scan
 
@@ -899,7 +945,7 @@ The lock is **engine-wide, not per-project** -- concurrent passes from *differen
 
 **Stale-lock recovery.** A crashed or killed holder's lock is recovered, not permanently wedged: on contention, `_try_acquire` reads the recorded PID and checks liveness (`os.kill(pid, 0)` POSIX, `OpenProcess` Windows); a dead PID makes the lock stale and it is unlinked and re-claimed through the same exclusive-create path (never a non-exclusive overwrite, which would let two racers both believe they won). The exclusive create is necessary and was not sufficient: the removal is a rename-aside-then-inspect, and until bootstrap 0.120.1 its retry loop re-issued the rename without re-reading the owner, so a loser whose attempt raced would rename away the WINNER's freshly created lock and both callers would acquire. The owner is now re-read before every attempt, a vanished path ends the steal rather than being retried, only a Windows sharing violation is retried, and a wrongly-taken lock is restored with an exclusive link so it cannot overwrite a lock a third racer took while the path stood empty. A lock whose PID is alive but whose file has aged past a generous ceiling is *also* treated as stale, guarding against the PID-reuse case (an unrelated new process recycling the dead holder's PID number) wedging the lock forever.
 
-**Reading the lock without taking it.** `proc_lock.lock_holder(data_dir)` answers "is a pass running right now?" as a pure read -- it returns the holder's PID, the lock file's age, and the epoch the holder recorded, or `None`. It exists for the `bootstrap` PATH lever's status verb and for `bootstrap run`'s decision to attach rather than launch a second pass. Deliberately NOT expressed as try-acquire-then-release: acquiring clears a stale lock and holds the mutex for an instant, so a mere status probe could make a genuine launcher stand down. It applies exactly the staleness rules `_try_acquire` applies (dead PID, or a live PID whose lock has aged past the ceiling, both read as "not running"), so the query and the acquisition can never disagree; an unparseable lock younger than the in-flight grace window reads as running with a `None` PID, because some process is mid-claim.
+**Reading the lock without taking it.** `proc_lock.lock_holder(data_dir)` answers "is a pass running right now?" as a pure read -- it returns the holder's PID, the lock file's age, and the epoch the holder recorded, or `None`. It exists for the `bootstrap` PATH lever's status verb and for `bootstrap run`'s decision to refuse rather than launch a second pass. Deliberately NOT expressed as try-acquire-then-release: acquiring clears a stale lock and holds the mutex for an instant, so a mere status probe could make a genuine launcher stand down. It applies exactly the staleness rules `_try_acquire` applies (dead PID, or a live PID whose lock has aged past the ceiling, both read as "not running"), so the query and the acquisition can never disagree; an unparseable lock younger than the in-flight grace window reads as running with a `None` PID, because some process is mid-claim.
 
 **Elevation is the one caller that releases early.** The `--fix-all` flow's `_spawn_recheck_pass` synchronously spawns a full second `bootstrap_engine.py` process with the *same* `--data-dir` and waits on it -- while the parent is still inside its own `engine_lock()`. Without intervention the child would see the parent's still-alive PID as the lock holder and stand down without running its post-elevation re-check. `_spawn_recheck_pass` calls `proc_lock.release_lock(data_dir)` immediately before spawning; it is safe because the parent has no more work after the child exits (the caller returns immediately), and `release_lock` only removes the lock file if it still records the caller's own PID -- it can never touch a lock some other process has since legitimately acquired. That holds because it goes through the same `_remove_if_owned` the steal path uses, and it is exactly what the pre-0.120.1 blind retry loop broke.
 
@@ -987,7 +1033,7 @@ bootstrap operation.
 - **The `claude` CLI (whole phase).** `_phase_marketplaces` and `_phase_plugins` both shell out to it for every entry, so they call `resolve_claude_cli()` once up front and stand down together when it returns `None`.
 - **An unusable marketplace (the installs that depend on it).** When a `marketplace add` fails *and* `check_marketplace_exists` still reports the marketplace absent, `_report_marketplace_add_failure` records the name on `ctx.unusable_marketplaces`; `_phase_plugins` then declines the *install* for any not-yet-installed entry whose ref names it, emitting one `action` line per marketplace after the loop. Those installs are not merely un-reported, they are **not attempted** — each is a CLI spawn and a network round-trip against a host that already refused us.
 
-  Three constraints, each learned by getting it wrong. **The scope is the install, not the entry:** everything else the loop does for a declared plugin — disabling it, fixing its scope, enabling it at one — is local settings work that succeeds whether or not the marketplace is reachable, and an earlier revision that dropped the whole entry meant an `enabled: false` declaration silently never took effect while the line reported only a skip. **The key is "unusable", not "the add failed":** an add can fail while a clone from an earlier session is still on disk and still able to serve installs, and a failed `alwaysUpdate` refresh of a present marketplace is never a cascade root. **The match is exact-name on the marketplace half** of the `<marketplace>:<plugin>` ref, not a prefix test — it misses when the manifest's `name` differs from the name the CLI registers, or when the marketplace and the plugins were declared in different manifest layers (each layer gets its own context), and both misses degrade to the previous per-entry behaviour rather than to a wrong skip.
+  Three constraints, each learned by getting it wrong. **The scope is the install, not the entry:** everything else the loop does for a declared plugin -- disabling it, fixing its scope, enabling it at one -- is local settings work that succeeds whether or not the marketplace is reachable, and an earlier revision that dropped the whole entry meant an `enabled: false` declaration silently never took effect while the line reported only a skip. **The key is "unusable", not "the add failed":** an add can fail while a clone from an earlier session is still on disk and still able to serve installs, and a failed `alwaysUpdate` refresh of a present marketplace is never a cascade root. **The match is exact-name on the marketplace half** of the `<marketplace>:<plugin>` ref, not a prefix test -- it misses when the manifest's `name` differs from the name the CLI registers, and that miss degrades to the previous per-entry behaviour rather than to a wrong skip. A marketplace declared in a different manifest from its plugins is covered: the Step 3c-mkt barrier records an unusable marketplace pass-wide (`_marketplace_pass["unusable"]`), and `_phase_plugins` reads that set as well as its own context's.
 
 The rule it encodes: **the phase that owns a precondition owns its report.** The tools phase already emits the actionable failure for `claude`; a per-entry failure here would add nothing but volume, and each one would be an offer to retry an operation with a known-false precondition. Before this gate, a manifest with ten plugins produced ten identical failures and a fix-all prompt asking permission to attempt all ten — with the single line naming the actual cause printed *below* its own consequences. The outcome is still logged; what is suppressed is the *fan-out*, not the outcome, exactly as with `quiet_entries`.
 

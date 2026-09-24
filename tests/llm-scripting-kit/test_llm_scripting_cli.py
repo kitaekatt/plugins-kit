@@ -170,7 +170,7 @@ def test_resolve_emits_selection(monkeypatch, capsys):
     backend = FakeBackend()
     monkeypatch.setattr(cli, "create_backend", lambda *_, **__: _selection(backend))
 
-    assert cli.main(["resolve", "--endpoint", "chosen"]) == 0
+    assert cli.main(["resolve", "--models", "chosen"]) == 0
     payload = json.loads(capsys.readouterr().out)
     assert payload == {
         "backend": "fake", "effort": "high", "endpoint": "chosen",
@@ -607,3 +607,256 @@ def test_frontdoor_verb_forwards_leading_options(monkeypatch, tmp_path):
     monkeypatch.setattr(frontdoor_mod, "main", fake_main)
     assert cli_mod.main(["frontdoor", "--check", "--port", "4001"]) == 0
     assert seen["argv"] == ["--check", "--port", "4001"]
+
+
+# ---------------------------------------------------------------------------
+# Migration step 3: describe, --models (L3, L4); step 12 removed `choose`
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def declared(monkeypatch):
+    """Fake the factory and the probe: `good` resolves, anything else does not."""
+    from llm_scripting_kit import declaration
+    from llm_scripting_kit.models import EndpointResolveError
+
+    made = []
+
+    def create_backend(name=None, **kwargs):
+        made.append((name, kwargs.get("model")))
+        if name not in ("good", "other"):
+            raise EndpointResolveError(f"unknown endpoint '{name}'")
+        return BackendSelection(name, "harness", FakeBackend(LLMResponse(text="ok", model="m")), kwargs.get("model") or f"{name}-model", "high")
+
+    monkeypatch.setattr(cli, "create_backend", create_backend)
+    monkeypatch.setattr(
+        declaration, "check_many",
+        lambda entries, **_kw: {n: Reachability(STATUS_REACHABLE, "cli-version", "ok") for n in entries},
+    )
+    return made
+
+
+def test_describe_renders_the_rendered_subset_and_the_rule(declared, capsys):
+    assert cli.main(["describe", "typo", "good", "--caller", "process"]) == cli.EXIT_OK
+    out = capsys.readouterr().out
+    assert "good" in out and "[default]" in out
+    assert "typo" not in out  # hidden, and silently so
+    assert "Rule:" in out
+
+
+def test_describe_json_carries_rendered_entries(declared, capsys):
+    assert cli.main(["describe", "typo", "good", "--caller", "process", "--json"]) == cli.EXIT_OK
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["default"] == "good"
+    assert [e["id"] for e in payload["rendered_entries"]] == ["good"]
+
+
+def test_describe_floor_exits_one_with_the_itemised_error(declared, capsys):
+    assert cli.main(["describe", "typo", "nope", "--caller", "process"]) == cli.EXIT_FAILURE
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    error = json.loads(captured.err)["error"]
+    assert error["kind"] == "no-usable-routing-target"
+    assert [d["id"] for d in error["dispositions"]] == ["typo", "nope"]
+
+
+def test_describe_defaults_to_the_session_caller(declared, capsys):
+    # sonnet is a shipped core claude entry; in session it drives the Agent tool.
+    assert cli.main(["describe", "sonnet", "--json"]) == cli.EXIT_OK
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["caller"] == "session"
+    assert payload["rendered_entries"][0]["drive"] == "agent"
+
+
+def test_describe_exclude_and_self(declared, capsys):
+    assert cli.main([
+        "describe", "good", "other", "--caller", "process",
+        "--exclude", "good", "--self", "other", "--json",
+    ]) == cli.EXIT_OK
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["default"] == "other"
+    assert payload["rendered_entries"][0]["is_self"] is True
+
+
+def test_choose_is_not_a_command(declared, capsys):
+    """Migration step 12 removed the `choose` alias; `describe` replaces it."""
+    with pytest.raises(SystemExit) as exc:
+        cli.main(["choose", "--prefer", "typo,good", "--caller", "process", "--json"])
+    assert exc.value.code == 2
+    assert "invalid choice: 'choose'" in capsys.readouterr().err
+
+
+def test_resolve_models_takes_the_first_usable_entry(declared, capsys):
+    assert cli.main(["resolve", "--models", "typo,good,other"]) == cli.EXIT_OK
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["endpoint"] == "good"
+
+
+@pytest.mark.parametrize("argv", [
+    ["resolve", "--endpoint", "good"],
+    ["complete", "--endpoint", "good", "--prompt", "hi"],
+])
+def test_endpoint_alias_of_models_is_removed(declared, capsys, argv):
+    """Migration step 12 removed the `--endpoint` alias of `--models`."""
+    with pytest.raises(SystemExit) as exc:
+        cli.main(argv)
+    assert exc.value.code == 2
+    assert "--endpoint" in capsys.readouterr().err
+    assert declared == []  # nothing was resolved
+
+
+def test_resolve_model_stays_a_per_entry_override(declared, capsys):
+    assert cli.main(["resolve", "--models", "good", "--model", "pinned-slug"]) == cli.EXIT_OK
+    assert json.loads(capsys.readouterr().out)["model"] == "pinned-slug"
+
+
+def test_resolve_models_floor_is_exit_one(declared, capsys):
+    assert cli.main(["resolve", "--models", "typo"]) == cli.EXIT_FAILURE
+    assert json.loads(capsys.readouterr().err)["error"]["kind"] == "no-usable-routing-target"
+
+
+def test_complete_models_dispatches_the_first_usable_entry(declared, capsys):
+    assert cli.main(["complete", "--models", "typo,good", "--prompt", "hi"]) == cli.EXIT_OK
+    assert json.loads(capsys.readouterr().out)["endpoint"] == "good"
+
+
+def test_describe_json_names_no_hidden_id(declared, capsys):
+    assert cli.main([
+        "describe", "typo-id", "other", "good", "--caller", "process",
+        "--exclude", "other", "--json",
+    ]) == cli.EXIT_OK
+    out = capsys.readouterr().out
+    assert "typo-id" not in out and "other" not in out
+    assert json.loads(out)["default"] == "good"
+
+
+def test_describe_text_names_no_hidden_id(declared, capsys):
+    assert cli.main(["describe", "typo-id", "good", "--caller", "process"]) == cli.EXIT_OK
+    assert "typo-id" not in capsys.readouterr().out
+
+
+def _project_with_transport(tmp_path):
+    """A project config layer declaring one transport entry and nothing else."""
+    root = tmp_path / "proj"
+    layer = root / ".local-data" / "plugins-kit" / "llm-scripting-kit"
+    layer.mkdir(parents=True)
+    (layer / "config.yaml").write_text(
+        "endpoints:\n"
+        "  lane-transport:\n"
+        "    base_url: http://127.0.0.1:1/v1\n"
+        "    key_env: null\n"
+        "    model: served-model\n",
+        encoding="utf-8",
+    )
+    return root
+
+
+def test_describe_dispatchable_transport_keeps_a_transport_for_a_session_caller(
+    declared, capsys, tmp_path
+):
+    root = _project_with_transport(tmp_path)
+    assert cli.main([
+        "describe", "lane-transport", "sonnet", "--project-root", str(root),
+        "--dispatchable", "transport", "--json",
+    ]) == cli.EXIT_OK
+    payload = json.loads(capsys.readouterr().out)
+    assert [e["id"] for e in payload["rendered_entries"]] == ["lane-transport", "sonnet"]
+    assert payload["default"] == "lane-transport"
+
+
+def test_describe_without_dispatchable_still_hides_the_transport(declared, capsys, tmp_path):
+    root = _project_with_transport(tmp_path)
+    assert cli.main([
+        "describe", "lane-transport", "sonnet", "--project-root", str(root), "--json",
+    ]) == cli.EXIT_OK
+    payload = json.loads(capsys.readouterr().out)
+    assert [e["id"] for e in payload["rendered_entries"]] == ["sonnet"]
+
+
+# ---------------------------------------------------------------------------
+# record-halt: an in-session caller writes an observed quota halt back (F1)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def paced(declared, monkeypatch, tmp_path):
+    """A paced codex entry and an unpaced opus entry, scratch quota state."""
+    from llm_scripting_kit import models, usage_budget
+    from llm_scripting_kit.model_endpoints import HARNESS_KIND, EndpointEntry
+
+    entries = models.ModelDiscovery({
+        "codex": EndpointEntry(
+            id="codex", base_url=None, model="gpt-codex", kind=HARNESS_KIND,
+            harness="codex", conserve_usage=usage_budget.ConserveSpec(pool="seven_day"),
+        ),
+        "opus": EndpointEntry(
+            id="opus", base_url=None, model="claude-opus", kind=HARNESS_KIND,
+            harness="claude",
+        ),
+    })
+    monkeypatch.setattr(cli, "discover_model_entries", lambda **_kw: entries)
+    monkeypatch.setattr(models, "discover_model_entries", lambda **_kw: entries)
+    verdicts = tmp_path / "usage-verdicts.json"
+    sessions = tmp_path / "codex-sessions"
+    sessions.mkdir()
+    monkeypatch.setattr(usage_budget, "VERDICT_CACHE", verdicts)
+    monkeypatch.setattr(usage_budget, "CODEX_SESSIONS_DIR", sessions)
+    monkeypatch.setenv("LLM_SCRIPTING_KIT_USAGE_SESSION", "record-halt-session")
+    return verdicts
+
+
+def _describe_json(capsys, *ids):
+    assert cli.main(["describe", *ids, "--json"]) == cli.EXIT_OK
+    return json.loads(capsys.readouterr().out)
+
+
+def test_record_halt_marks_a_paced_entry_out_of_quota_for_the_session(paced, capsys):
+    before = _describe_json(capsys, "codex", "opus")
+    assert before["default"] == "codex"
+
+    assert cli.main(["record-halt", "codex", "--resets-at", "4102444800"]) == cli.EXIT_OK
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["recorded"] is True and payload["entry"] == "codex"
+    assert payload["kind"] == "quota"
+    assert payload["budget"]["status"] == "out-of-quota"
+    assert payload["budget"]["resets_at"] == 4102444800
+    stored = json.loads(paced.read_text())
+    assert stored["session_key"] == "record-halt-session"
+    assert stored["verdicts"]["codex"]["budget"]["status"] == "out-of-quota"
+
+    after = _describe_json(capsys, "codex", "opus")
+    codex = next(e for e in after["rendered_entries"] if e["id"] == "codex")
+    assert codex["usability"] == "out-of-quota"
+    assert after["default"] == "opus"
+
+
+def test_record_halt_without_a_reset_latches_one(paced, capsys):
+    assert cli.main(["record-halt", "codex", "--kind", "credit"]) == cli.EXIT_OK
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["recorded"] is True and payload["kind"] == "credit"
+    assert payload["budget"]["resets_at"] > 0
+
+
+def test_record_halt_is_a_silent_no_op_for_an_unpaced_entry(paced, capsys):
+    assert cli.main(["record-halt", "opus"]) == cli.EXIT_OK
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["recorded"] is False
+    assert "conserve_usage" in payload["reason"]
+    assert not paced.exists()
+
+
+def test_record_halt_without_a_session_key_writes_nothing(paced, capsys, monkeypatch):
+    monkeypatch.delenv("LLM_SCRIPTING_KIT_USAGE_SESSION")
+    monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
+    assert cli.main(["record-halt", "codex"]) == cli.EXIT_OK
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["recorded"] is False
+    assert "session" in payload["reason"]
+    assert not paced.exists()
+
+
+def test_record_halt_unknown_entry_is_a_usage_error(paced, capsys):
+    assert cli.main(["record-halt", "no-such-entry"]) == cli.EXIT_USAGE
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "no-such-entry" in json.loads(captured.err)["error"]["message"]

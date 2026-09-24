@@ -591,3 +591,38 @@ class TestFleetConfigLayer:
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
         cfg = load_model_config()
         assert "conserve_usage" not in cfg["endpoints"]["fable"]
+
+
+class TestReservedCoreIds:
+    """R8: a shadowed core id is classified at runtime, never refused at load."""
+
+    def test_a_config_layer_turning_opus_into_a_transport_is_shadowed(self, no_registry):
+        from llm_scripting_kit import DEFAULT_MODEL_CONFIG
+        from llm_scripting_kit.declaration import (
+            DISPOSITION_SHADOWED_CORE,
+            NoUsableRoutingTarget,
+            describe,
+        )
+        import copy
+
+        config = copy.deepcopy(DEFAULT_MODEL_CONFIG)
+        config["endpoints"]["opus"] = {"base_url": "http://opus.invalid/v1", "model": "x"}
+        entries = discover_model_entries(config=config)  # loads without error
+        with pytest.raises(NoUsableRoutingTarget) as excinfo:
+            describe(["opus"], caller="process", entries=entries, reachability_cache={})
+        assert excinfo.value.dispositions[0].disposition == DISPOSITION_SHADOWED_CORE
+        assert "opus" in str(excinfo.value)
+
+    def test_a_partial_layer_carrying_only_conserve_usage_is_not_shadowed(self, no_registry):
+        # The owner's fleet layer states only conserve_usage for opus; merged
+        # over the shipped entry it is still a Claude harness entry.
+        from llm_scripting_kit import load_model_config
+        from llm_scripting_kit.declaration import check_registry_entry
+
+        fleet = no_registry / ".claude" / "config" / "llm-scripting-kit.yaml"
+        fleet.parent.mkdir(parents=True)
+        fleet.write_text("endpoints:\n  opus:\n    conserve_usage: {pool: seven_day}\n")
+        merged = discover_model_entries(config=load_model_config())["opus"]
+        assert merged.conserve_usage is not None
+        assert merged.harness == "claude"
+        assert check_registry_entry("opus", merged) is None

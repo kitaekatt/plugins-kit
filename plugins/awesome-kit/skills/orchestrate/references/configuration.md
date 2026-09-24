@@ -74,65 +74,70 @@ routing:
 - shape: [cross-check]
   models: [sol]
 - shape: [novel, load-bearing]
-  models: [agent:fable, sol]
+  models: [fable, sol]
   gate: write the justification before dispatch
   guards:
   - Keep the high-cost route for work that meets its bar.
 - shape: [fan-out]
-  models: [luna]
+  models: [luna, sonnet]
 - shape: []
-  models: [agent:sonnet]
+  models: [sonnet]
 ```
 
-Rows are evaluated in declaration order. The first matching shape wins. Models within one row
-are tried in declaration order; a launch or transport error falls through to the next model.
-The empty shape is the default row.
+Rows are evaluated in declaration order. The first matching shape wins. The empty shape is the
+default row.
 
-### Subscription quota reorders within a row
+A row's `models` is a model declaration: a list of model ids in preference order, in the one
+format every plugin in this marketplace uses (bootstrap's plugin-dev skill,
+`references/model-declaration.md`). The core ids `fable`, `opus`, `sonnet`, and `haiku` are the
+Claude harness's own, driven by the Agent tool. Every other id resolves against the model
+entries exposed by `llm-scripting-kit`. The harness belongs to the resolved entry, not to the
+id: a registry entry named `sol` whose harness is Codex is announced as `codex/sol`. The
+former `agent:<id>` prefix is not accepted -- an `agent:<id>` entry is an ordinary unknown
+id and resolves to nothing, like any other unrecognized prefix.
 
-A row states a PREFERENCE order; a model's subscription quota reorders inside it. When an
-endpoint opts in through llm-scripting-kit's `conserve_usage`, its verdict has two different
-effects on the row:
+### How a row's menu is rendered
 
-- **out of quota** (the pool is spent) -- the model is DROPPED from the row. Dispatching to it
-  would fail.
-- **under quota** (spending faster than the window elapses) -- the model is MOVED BEHIND the
-  peers on its row that are not behind pace. It stays available.
+With `llm-scripting-kit` 0.46.0 or later, each row's menu is that library's `describe` output
+for an in-session caller:
 
-The stated order is the tiebreak within each band, so a row's own reasoning survives unless
-quota actually says otherwise. That is what lets a row whose first model is deliberately a
-Claude lane swap to a Codex one while Claude is over budget, without the row having to say so.
-A model that never opted in is never de-prioritized or dropped by this.
+- An id that resolves to nothing, or that this policy cannot drive, is left out of the render
+  without comment. A registry id is drivable only when its harness has an active
+  `backends[]` record that yields an adapter-rendered command, a record `command`, or
+  dispatch prose; CLI presence proves the tool exists, not that the policy can drive it.
+- An entry whose subscription pool is spent (llm-scripting-kit `conserve_usage`) stays listed
+  as out of quota until its reset time and is not usable until then. An entry whose harness
+  CLI is not detected stays listed as unreachable.
+- Entries with a pace reading (quota remaining divided by window remaining) are re-sorted,
+  highest pace first; entries without one keep their declared places. The first usable entry
+  is marked `[default]`, and an entry matching `--self` is marked `[author]`.
+- The `Rule:`, `Re-select:`, and `Independence:` lines under the rows are printed by
+  llm-scripting-kit; they say how to choose, announce, and re-select.
 
-Verdicts are evaluated ONCE per session and pinned, so a row cannot change seats halfway
-through a session. A row whose models are ALL out of quota keeps them rather than being
-deleted: rows are not each other's fallbacks, and removing one would fall the unit through to
-a row chosen for a different shape.
+Quota verdicts are evaluated once per session and pinned; only an observed quota halt moves
+one down.
 
-When llm-scripting-kit is absent or predates quota-aware selection, the pass is skipped, every
-row renders in its configured order, and the rendered policy says so under **Degraded render**
--- a skipped pass is otherwise indistinguishable from one that found nothing to change.
-Setting `ORCHESTRATE_QUOTA_ROUTING=0` turns the pass off deliberately and emits no note; use it
-when a policy render must not vary with the machine's live balance.
+A row with no usable entry renders the floor instead of a menu: it names every declared id
+and why it cannot run here. The row is kept rather than deleted, because deleting it would
+send the unit to a row chosen for a different shape. A unit that matches it stops, and the
+floor goes to the user.
 
-There are exactly two model namespaces:
+When `llm-scripting-kit` is absent or older than 0.46.0, each row lists only its core ids, in
+declared order, without pace ordering or rule lines, and the rendered policy says so under
+**Degraded render**. Setting `ORCHESTRATE_QUOTA_ROUTING=0` turns quota reads off deliberately
+and emits no note: no entry shows a pace or an out-of-quota status. Use it when a policy
+render must not vary with the machine's live balance.
 
-- `agent:<name>` is reserved for the Agent tool's fixed menu: `fable`, `opus`, `sonnet`, and
-  `haiku`.
-- Every other name is unprefixed and resolves against the model entries exposed by
-  `llm-scripting-kit`. The harness belongs to the resolved entry, not to the configuration
-  name. A registry entry named `sol` is announced as `codex/sol` when its harness is Codex.
+### Launch corrections and re-selection
 
-An unknown model, an unknown `agent:` member, or a model whose harness is unavailable is
-skipped within its row. A registry model whose harness has no active `backends[]` record is
-also skipped: CLI presence proves the tool exists, not that the policy can drive it. A
-configured record is routable only when it yields a rendered command, a record `command`, or
-dispatch prose. If adapter rendering fails and the record has neither `command` nor `dispatch`,
-the model is skipped. Such a harness renders as an identity-only section marked **Not
-dispatchable**; add a `backends[]` record with drivable mechanics to make it a routing target.
-A row with no surviving models is skipped. If the shared library is absent, all registry rows
-disappear and Agent-tool rows remain. A harness section appears only when its CLI resolves
-through the command detector; model-server liveness is not used as a presence test.
+Correct a local invocation error and relaunch the SAME entry only with positive evidence that
+no worker started and no provider request was sent: a shell quoting error, a wrong flag, or a
+path the launcher rejected before dispatch. Keep the same entry, effort, and brief. A non-zero
+exit alone is not that evidence. Every other dispatch failure -- a non-zero exit, an Agent-tool
+error, a launch that produced no output -- is handled by the `Re-select:` line the rendered
+policy prints: choose another usable entry of the same row and announce the prior entry with
+its failure kind. A unit that ran to completion and returned a wrong or schema-invalid result
+is a task failure, not a re-selection trigger.
 
 Do not add a `command` field to routing. The machine record's existing `command` text is read
 through the renderer's command-text provider, so harness-specific command construction has one
@@ -161,8 +166,8 @@ to tune when implementation is split; do not copy the whole `shape.tests` list. 
 `[parallel-leaf, known, rule-applying]` row routes each admitted leaf independently. Higher
 priority rows keep `unverifiable` or `mutating` leaves on a stronger worker. To use a local
 implementation worker, replace the complete `routing` list and put its discovered
-llm-scripting-kit model-entry id first in that row; keep a fallback model for machines where
-the entry or harness is absent.
+llm-scripting-kit model-entry id first in that row; keep a second model in the row for machines
+where the entry or harness is absent.
 
 ## `review_overlap`
 
@@ -185,10 +190,11 @@ plain string remains renderable as a compact effort block.
 delegating <what> to <target> (<the matched row's shape terms>)
 ```
 
-The target is the Agent-tool model name for an `agent:` member and `<harness>/<entry-id>` for
-a registry member. The empty shape uses `(default)`. A fallback appends
-`; fell through from <id>` inside the parenthetical. Examples may set
-`requires_backend: <id>` to disappear when that backend is absent.
+The target is the id for a core id and `<harness>/<entry-id>` for a registry entry. The empty
+shape uses `(default)`. A choice from a multi-entry row, and every re-selection, is also
+announced with the `route:` line the rendered rule gives. Examples may set
+`requires_backend: <id>` to disappear when that backend is absent, and `requires_model: <id>`
+(or a list) to disappear unless that entry is usable in some row.
 
 ## `backends[]`
 
@@ -223,8 +229,9 @@ closed and omits the backend.
 
 The optional `llm_scripting_kit` dependency is feature-detected. An importable stale or
 version-skewed copy is insufficient: the renderer requires the model-discovery callable and
-the harness entry-kind markers. A missing feature causes registry rows and their model section
-to disappear while Agent-tool rows continue to work.
+the harness entry-kind markers. A missing feature drops registry entries from every row and
+removes their model section; the Agent-tool core ids still render, and a row left with no core
+id renders the floor.
 
 Consult seats use a separate degradation ladder: no `llm-scripting-kit` -> no section;
 `llm-scripting-kit` without `discover_seats` (< 0.28.0) -> no section; entries without tier

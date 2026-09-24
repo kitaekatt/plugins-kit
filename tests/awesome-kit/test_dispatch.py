@@ -8,6 +8,7 @@ from pathlib import Path
 import shlex
 import sys
 import time
+from types import ModuleType, SimpleNamespace
 
 # bootstrap_lib is a shared library linked onto awesome-kit's provisioned venv
 # via a .pth file; a bare pytest run has no such link, so the repo checkout's
@@ -18,7 +19,31 @@ _BOOTSTRAP_DIR = str(_REPO_ROOT / "plugins" / "bootstrap")
 if _BOOTSTRAP_DIR not in sys.path:
     sys.path.insert(0, _BOOTSTRAP_DIR)
 
+import pytest
+
 import dispatch
+
+
+def _registry_module(entries=None, *, omit_discover=False):
+    """A stand-in llm_scripting_kit exposing the model registry dispatch reads."""
+    module = ModuleType("llm_scripting_kit")
+    found = entries if entries is not None else {
+        "sol": SimpleNamespace(kind="harness", harness="codex", model="gpt-5.6-sol", effort="high"),
+        "luna": SimpleNamespace(kind="harness", harness="codex", model="gpt-5.6-luna", effort="medium"),
+        "fable": SimpleNamespace(kind="harness", harness="claude", model="fable", effort=None),
+        "or-mini": SimpleNamespace(kind="transport", harness=None, model="openai/gpt-mini", effort=None),
+    }
+    if not omit_discover:
+        module.discover_model_entries = lambda project_root=None: SimpleNamespace(
+            entries=found, notes=[]
+        )
+    return module
+
+
+@pytest.fixture(autouse=True)
+def model_registry(monkeypatch):
+    """Every dispatch resolves --model through this registry unless a test swaps it."""
+    monkeypatch.setitem(sys.modules, "llm_scripting_kit", _registry_module())
 
 
 def _brief(tmp_path: Path, text: bytes = b"do the unit\n", name: str = "brief.md") -> Path:
@@ -34,7 +59,7 @@ def _run_args(tmp_path: Path, brief: Path, cache: Path, *extra: str) -> list[str
         "--brief",
         str(brief),
         "--model",
-        "gpt-5.6-sol",
+        "sol",
         "--effort",
         "high",
         "--cwd",
@@ -312,7 +337,9 @@ def test_list_accepts_cwd_and_finds_what_a_dispatch_from_that_cwd_cached(tmp_pat
         return dispatch.subprocess.CompletedProcess(argv, 0)
 
     monkeypatch.setattr(dispatch.subprocess, "run", fake_run)
-    assert dispatch.main(["--label", "unit", "--brief", str(brief), "--cwd", str(project)]) == 0
+    assert dispatch.main(
+        ["--label", "unit", "--brief", str(brief), "--model", "sol", "--cwd", str(project)]
+    ) == 0
     capsys.readouterr()
 
     elsewhere = tmp_path / "elsewhere"
@@ -321,3 +348,76 @@ def test_list_accepts_cwd_and_finds_what_a_dispatch_from_that_cwd_cached(tmp_pat
     assert dispatch.main(["--list", "--cwd", str(project)]) == 0
     lines = capsys.readouterr().out.strip().splitlines()
     assert len(lines) == 1
+
+
+# --- --model is a model-declaration id (orchestrate routing names it) ------
+
+
+def _print_only(tmp_path, capsys, *extra):
+    brief = _brief(tmp_path)
+    args = [
+        "--label", "unit", "--brief", str(brief), "--cwd", str(tmp_path),
+        "--cache-dir", str(tmp_path / "cache"), "--print-only", *extra,
+    ]
+    code = dispatch.main(args)
+    return code, capsys.readouterr()
+
+
+def test_model_is_an_entry_id_resolved_to_its_codex_model(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(dispatch.codex_lib, "resolve_cli", lambda name: ("codex",))
+    code, captured = _print_only(tmp_path, capsys, "--model", "luna")
+    assert code == 0
+    argv = captured.out.splitlines()[1]
+    assert "-m gpt-5.6-luna" in argv
+    # With no --effort, the entry's own default effort applies.
+    assert "-c model_reasoning_effort=medium" in argv
+
+
+def test_an_explicit_effort_wins_over_the_entry_default(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(dispatch.codex_lib, "resolve_cli", lambda name: ("codex",))
+    code, captured = _print_only(tmp_path, capsys, "--model", "luna", "--effort", "low")
+    assert code == 0
+    assert "-c model_reasoning_effort=low" in captured.out.splitlines()[1]
+
+
+def test_there_is_no_hardcoded_default_model(tmp_path, capsys):
+    assert not hasattr(dispatch, "DEFAULT_MODEL")
+    with pytest.raises(SystemExit) as exited:
+        _print_only(tmp_path, capsys)
+    assert exited.value.code == 2
+    assert "--model" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("entry_id", ["fable", "or-mini", "gpt-5.6-sol", "ghost"])
+def test_an_id_without_a_codex_entry_is_refused(tmp_path, capsys, entry_id):
+    with pytest.raises(SystemExit) as exited:
+        _print_only(tmp_path, capsys, "--model", entry_id)
+    assert exited.value.code == 2
+    err = capsys.readouterr().err
+    assert entry_id in err
+    assert "luna, sol" in err
+
+
+def test_an_absent_model_library_refuses_and_names_the_owner(tmp_path, monkeypatch, capsys):
+    monkeypatch.setitem(sys.modules, "llm_scripting_kit", None)
+    code, captured = _print_only(tmp_path, capsys, "--model", "sol")
+    assert code == dispatch.EXIT_REFUSED
+    assert "claude plugin install llm-scripting-kit@plugins-kit" in captured.err
+    assert not (tmp_path / "cache").exists() or not any((tmp_path / "cache").iterdir())
+
+
+LLM_FLOOR = "0.46.0"
+
+
+def test_a_too_old_model_library_is_diagnosed_apart_from_absence(tmp_path, monkeypatch, capsys):
+    monkeypatch.setitem(sys.modules, "llm_scripting_kit", _registry_module(omit_discover=True))
+    code, captured = _print_only(tmp_path, capsys, "--model", "sol")
+    assert code == dispatch.EXIT_REFUSED
+    assert "claude plugin update llm-scripting-kit@plugins-kit" in captured.err
+    assert "claude plugin install" not in captured.err
+    assert LLM_FLOOR in captured.err
+
+
+def test_list_needs_no_model_library(tmp_path, monkeypatch, capsys):
+    monkeypatch.setitem(sys.modules, "llm_scripting_kit", None)
+    assert dispatch.main(["--list", "--cache-dir", str(tmp_path / "none")]) == 0

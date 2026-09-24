@@ -57,29 +57,31 @@ beside the bash script runs it under Git for Windows bash.
 ```bash
 bootstrap          # is a pass running? if so, wait for it and stream it
 bootstrap --json   # report only, never blocking (the scripting form)
-bootstrap run      # apply only user/project bootstrap.json and bootstrap.local.json
+bootstrap run      # run the full bootstrap pass now, for the working directory
 bootstrap codex-hook  # synchronous Codex SessionStart adapter
 bootstrap reset    # clear this project's cooldown (--all, --status, --project)
 ```
 
-`bootstrap run` applies four layers: user, user-local, working-directory project,
-and project-local. It prints each candidate path, skips missing files, and uses
-the shared merge rules. There is no parent-directory search. It processes no
-installed plugin manifests, legacy user manifest, or env.json personalization.
-Plugin and marketplace entries explicitly declared in the four layers still run.
+`bootstrap run` runs the same engine pass as the SessionStart hook: it
+refreshes declared marketplaces, updates declared plugins to newly published
+versions, and processes every installed plugin's manifest, the four
+user/project layers, and env.json personalization. The project is the exact
+working directory, with no parent-directory search. It prints each candidate
+layer path before the pass starts.
+
+`bootstrap run` is not throttled by the cooldown, so it is the way to apply a
+published update now. It does not consume or reset the cooldown, and it writes
+no engine version stamps, log file, or per-project interpreter record. Its output
+goes to the terminal. It exits 0 on a clean pass and 1 when the pass reports
+failures.
 
 A running pass makes `bootstrap run` refuse with exit code 2, because attaching
-could inherit a different manifest scope. Bare `bootstrap` still follows a
+could inherit a different project scope. Bare `bootstrap` still follows a
 running pass. A launched terminal run streams its own checks and actions.
 
-`bootstrap run` needs no cooldown reset and does not consume one: it leaves
-Claude's session schedule and plugin lifecycle stamps unchanged. Claude's
-automatic lifecycle retains its full plugin-provisioning scope.
-
 `bootstrap reset` is the other half: it runs no pass, it clears the cooldown
-stamp and the session-id guard so the NEXT session start is a real pass. That
-is what a layered `bootstrap.json` edit needs, and it is the right move on a
-machine where bootstrap seems to be doing nothing. It is the same lever as the
+stamp and the session-id guard so the NEXT session start is a real pass. It is
+the right move on a machine where bootstrap seems to be doing nothing. It is the same lever as the
 `bootstrap-reset-cooldown` command, which keeps its own name on PATH; all of
 its flags, `--help` included, pass straight through.
 

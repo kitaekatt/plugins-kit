@@ -28,8 +28,10 @@
 #
 # The DECISION half (resolution, lexicon, shape, routing, agent_types, effort,
 # announce, review_overlap) is hand-written configuration. `routing` is the ordered policy;
-# names with the `agent:` prefix use the Agent tool's fixed menu, and every
-# other name resolves against llm-scripting-kit.
+# each row's `models` is a model declaration: a list of model ids in preference
+# order (bootstrap plugin-dev references/model-declaration.md). The core ids
+# fable, opus, sonnet and haiku are the Claude harness's own; every other id
+# resolves against llm-scripting-kit.
 #
 # The MACHINE half (backends, capacity) is not derived -- it is what this
 # machine has and how to drive it.
@@ -323,7 +325,8 @@ shape:
       the primary review, routed as usual, plus a {cross-check} child carrying the same brief,
       routed by the ordered rows. Skipping the child needs a named reason -- cheap to unwind,
       or nobody would act on a disagreement. If the highest-cost model is unavailable the
-      primary falls through and the child still dispatches. Announce each separately.
+      primary review takes another usable entry of its row and the child still dispatches.
+      Announce each separately.
     without_backend:
       codex: >-
         With a single model family there is no second-family child -- dispatch the primary
@@ -344,7 +347,7 @@ routing:
 - shape: [cross-check]
   models: [sol]
 - shape: [novel, load-bearing]
-  models: [agent:fable, sol]
+  models: [fable, sol]
   gate: >-
     write "qualifies on <criteria>; <why the broader route is the wrong seat>". If it cannot be
     written, the unit does not qualify.
@@ -352,18 +355,18 @@ routing:
   - fable draws from a different usage pool; a pool does not degrade gracefully when spent, it stops.
   - Never choose a cheaper model for a unit that meets the fable bar to harvest the discount.
 - shape: [parallel-leaf, unverifiable]
-  models: [agent:sonnet]
+  models: [sonnet]
 - shape: [parallel-leaf, mutating]
-  models: [agent:sonnet]
+  models: [sonnet]
 - shape: [parallel-leaf, known, rule-applying]
-  models: [luna]
+  models: [luna, sonnet]
   guards:
   - This row routes one admitted leaf, never the whole batch. Dispatch every runnable leaf on
     the current frontier separately at low or medium effort.
 - shape: [fan-out]
-  models: [luna]
+  models: [luna, sonnet]
 - shape: []
-  models: [agent:sonnet]
+  models: [sonnet]
 
 # ---------------------------------------------------------------------------
 # Agent type
@@ -442,7 +445,8 @@ announce:
   form: delegating <what> to <target> (<the matched row's shape terms>)
   rule: >-
     Terms only, no free prose. Use the matched routing row's shape terms; an empty shape uses
-    `default`. A fallback model appends `; fell through from <id>` inside the parenthetical.
+    `default`. A choice from a multi-entry row, and every re-selection, is also announced
+    with the `route:` line the Routing block's rule gives.
   examples:
   - id: ex-default
     requires_model: sonnet
@@ -456,9 +460,6 @@ announce:
   - id: ex-migration
     requires_model: luna
     text: delegating per-file API migration to codex/luna (fan-out)
-  - id: ex-fallback
-    requires_model: sol
-    text: delegating architecture review fallback to codex/sol (novel, load-bearing; fell through from fable)
 
 # ===========================================================================
 # MACHINE HALF -- not derived from the principles. What this machine has and
@@ -608,8 +609,8 @@ backends:
       concurrency: >-
         No harness-wide limit is documented. A locally hosted model entry can
         use a hand-started server that SERIALIZES concurrent requests. Obey
-        its routing guard. A dead server is a transport error that
-        intentionally falls through to the next model.
+        its routing guard. A dead server fails the dispatch; re-select
+        another usable entry of the row by the Routing block's rule.
       returns: >-
         No `-o` flag: the answer is stdout. Capture it in `result.md`. Capture
         stderr in `log.txt`. Judge the run by the result file.
@@ -628,7 +629,7 @@ backends:
       The rendered command uses one discovered entry as an example. Before
       every launch, take `<entry-id>` from the chosen
       `opencode/<entry-id>` target and run `llm-scripting-kit resolve
-      --endpoint <entry-id> --project-root <ABSOLUTE root>`. Replace the
+      --models <entry-id> --project-root <ABSOLUTE root>`. Replace the
       displayed `-m` value with the returned `model`. Remove any displayed
       `--variant`, then add `--variant <effort>` only when the returned
       `effort` is non-null. Never reuse the example model for another target.
@@ -659,8 +660,9 @@ backends:
         process exit code. The log is diagnostic evidence, not the answer.
       - >-
         A locally hosted model entry can be backed by a serializing server
-        started by hand. Respect its declared concurrency. A dead server
-        falling through to the next model is intended behaviour.
+        started by hand. Respect its declared concurrency. When the server
+        is down, re-selecting another usable entry of the row is intended
+        behaviour.
 
 # ---------------------------------------------------------------------------
 # Capacity -- best-effort awareness of remaining usage.

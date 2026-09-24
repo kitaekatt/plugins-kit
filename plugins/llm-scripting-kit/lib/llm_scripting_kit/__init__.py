@@ -85,17 +85,13 @@ from .models import (
     EndpointResolveError,
     ModelDiscovery,
     ModelResolveError,
+    default_declaration,
     default_endpoint_name,
     discover_model_entries,
+    is_model_alias,
     load_model_config,
     resolve_endpoint,
     resolve_model,
-)
-from .quota_selection import (
-    Candidate,
-    QuotaSelection,
-    choose_endpoint,
-    rank_candidates,
 )
 from .usage_budget import (
     STATUS_AVAILABLE,
@@ -138,6 +134,22 @@ from .completion import (
     classify_openai_exception,
     match_capabilities,
 )
+from .declaration import (
+    CALLER_PROCESS,
+    CALLER_SESSION,
+    Attempt,
+    DeclarationSupportError,
+    Disposition,
+    EntryState,
+    NoUsableRoutingTarget,
+    Ranking,
+    RunRequest,
+    RunResult,
+    check_registry_entry,
+    describe,
+    order_by_pace,
+    run,
+)
 
 __all__ = [
     "API_KEY_ENV",
@@ -172,8 +184,10 @@ __all__ = [
     "EndpointResolveError",
     "ModelDiscovery",
     "ModelResolveError",
+    "default_declaration",
     "default_endpoint_name",
     "discover_model_entries",
+    "is_model_alias",
     "load_model_config",
     "resolve_endpoint",
     "resolve_model",
@@ -210,11 +224,21 @@ __all__ = [
     "evaluate_usage_budget",
     "pinned_evaluate",
     "record_observed_halt",
-    # quota-aware selection over a caller's preference order
-    "Candidate",
-    "QuotaSelection",
-    "choose_endpoint",
-    "rank_candidates",
+    # the one API over a model declaration (describe / run)
+    "CALLER_PROCESS",
+    "CALLER_SESSION",
+    "Attempt",
+    "DeclarationSupportError",
+    "Disposition",
+    "EntryState",
+    "NoUsableRoutingTarget",
+    "Ranking",
+    "RunRequest",
+    "RunResult",
+    "check_registry_entry",
+    "describe",
+    "order_by_pace",
+    "run",
     # harness adapters
     "CODEX_EFFORT_MENU",
     "HarnessAdapter",

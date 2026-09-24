@@ -195,7 +195,7 @@ def _job(
     return Job(
         id=job_id,
         prompt=Prompt(user=job_id),
-        endpoint_preference=("fake-endpoint",),
+        models=("fake-endpoint",),
         directory=directory,
         workspace=workspace,
         contract=Contract(command=command, directory=directory),
