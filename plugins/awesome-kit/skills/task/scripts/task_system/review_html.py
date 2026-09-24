@@ -19,11 +19,6 @@ def _text(value: Any, fallback: str = "-") -> str:
     return escape(str(value))
 
 
-def _task_sort_key(task: dict[str, Any]) -> tuple[bool, str]:
-    last_update = task.get("last_update")
-    return (last_update is not None, last_update or "")
-
-
 def _task_key(task: dict[str, Any]) -> str:
     return str(task.get("key") or task.get("id") or "")
 
@@ -84,7 +79,6 @@ def _render_project(
         for key in project.get("tasks", [])
         if key in tasks_by_key
     ]
-    project_tasks.sort(key=_task_sort_key, reverse=True)
     sections = project.get("sections") or {}
     rendered_sections = []
     for name in ("open", "closed", "other"):
@@ -93,7 +87,6 @@ def _render_project(
             for key in sections.get(name, [])
             if key in tasks_by_key
         ]
-        task_list.sort(key=_task_sort_key, reverse=True)
         cards = "".join(_render_task(task) for task in task_list)
         if not task_list:
             continue
@@ -114,7 +107,9 @@ def _render_project(
         + _text(project.get("root"))
         + '</span><span class="count">'
         + str(len(project_tasks))
-        + " task(s)</span></summary>"
+        + " task(s)</span><span class=\"project-date\">"
+        + _text(project.get("last_update"))
+        + "</span></summary>"
         '<div class="project-body">'
         + "".join(rendered_sections)
         + "</div></details>"
@@ -172,7 +167,7 @@ def render_review_html(data: dict[str, Any]) -> str:
             "main { max-width:1180px; margin:0 auto; padding:8px 12px 16px; } h1 { font-size:1.2em; line-height:1.25; margin:0 0 2px; } h2,h3 { display:flex; gap:6px; align-items:center; border-bottom:1px solid var(--line); padding-bottom:3px; margin:8px 0 4px; } h4 { margin:8px 0 3px; }",
             ".subtitle,.muted,.empty { color:var(--muted); } .count { font-size:.8em; color:var(--muted); font-weight:normal; }",
             ".diagnostics { border:1px solid var(--warn); background:color-mix(in srgb,var(--warn) 12%,transparent); padding:4px 8px; margin:4px 0; border-radius:4px; } .diagnostics ul { margin:2px 0 0; padding-left:16px; } .diagnostic-code { color:var(--warn); font-family:ui-monospace,monospace; margin-right:6px; }",
-            ".project-card { background:var(--panel); border:1px solid var(--line); border-radius:4px; margin:2px 0; } .project-card[open] { border-color:var(--accent); } .project-row { cursor:pointer; list-style:none; display:grid; grid-template-columns:10px minmax(0,auto) auto minmax(0,1fr); gap:6px; align-items:center; padding:1px 5px; min-height:1.5em; } .project-row::-webkit-details-marker { display:none; } .project-row::before { content:'>'; color:var(--muted); font-size:.75em; } .project-card[open] > .project-row::before { content:'v'; } .project-title { font-weight:700; } .project-root { color:var(--muted); font:12px ui-monospace,monospace; overflow-wrap:anywhere; } .project-row .count { justify-self:start; white-space:nowrap; } .project-body { border-top:1px solid var(--line); padding:0 6px 6px; }",
+            ".project-card { background:var(--panel); border:1px solid var(--line); border-radius:4px; margin:2px 0; } .project-card[open] { border-color:var(--accent); } .project-row { cursor:pointer; list-style:none; display:grid; grid-template-columns:10px minmax(0,auto) auto minmax(0,1fr) auto; gap:6px; align-items:center; padding:1px 5px; min-height:1.5em; } .project-row::-webkit-details-marker { display:none; } .project-row::before { content:'>'; color:var(--muted); font-size:.75em; } .project-card[open] > .project-row::before { content:'v'; } .project-title { font-weight:700; } .project-root { color:var(--muted); font:12px ui-monospace,monospace; overflow-wrap:anywhere; } .project-row .count { justify-self:start; white-space:nowrap; } .project-date { color:var(--muted); font-size:.85em; white-space:nowrap; } .project-body { border-top:1px solid var(--line); padding:0 6px 6px; }",
             ".task-section h3 { font-size:1em; }",
             ".task-card { position:relative; background:color-mix(in srgb,var(--panel) 82%,var(--bg)); border:1px solid var(--line); border-radius:4px; margin:2px 0; } .task-row { display:grid; grid-template-columns:minmax(0,1fr) minmax(120px,auto) auto auto; gap:6px; align-items:center; padding:3px 6px; } .task-name-wrap { position:relative; min-width:0; } .task-title { font-weight:650; cursor:help; } .task-title:focus-visible { outline:1px solid var(--accent); outline-offset:2px; } .summary-card { display:none; position:absolute; z-index:5; top:calc(100% + 5px); left:0; width:min(420px,calc(100vw - 32px)); padding:9px 11px; border:1px solid var(--accent); border-radius:4px; background:var(--panel); box-shadow:0 4px 14px #0006; white-space:normal; overflow-wrap:anywhere; } .task-name-wrap:hover .summary-card, .task-title:focus + .summary-card { display:block; } .task-card.missing .summary-card { border-color:var(--bad); } .task-card.unavailable .summary-card { border-color:var(--warn); } .task-id-group { display:flex; align-items:center; gap:6px; min-width:0; } .task-id-copy { appearance:none; border:0; background:transparent; color:var(--muted); font:12px ui-monospace,monospace; padding:0; text-align:left; overflow-wrap:anywhere; cursor:pointer; } .task-id-copy:hover { color:var(--accent); text-decoration:underline; } .task-id-copy:focus-visible { outline:1px solid var(--accent); outline-offset:2px; } .copy-feedback { color:var(--good); font-size:11px; white-space:nowrap; } .copy-feedback[data-state=error] { color:var(--bad); } .task-status { font-size:12px; padding:2px 7px; border-radius:99px; border:1px solid var(--line); } .status-active,.status-blocked { color:var(--accent); } .status-closed { color:var(--good); } .task-date { color:var(--muted); white-space:nowrap; font-size:12px; } .empty { padding:4px 6px; margin:2px 0; }",
             "@media (max-width:700px) { .project-row { grid-template-columns:10px minmax(0,1fr) auto; } .project-root { grid-column:2 / -1; grid-row:2; } .project-row .count { grid-column:3; grid-row:1; justify-self:end; } .task-row { grid-template-columns:minmax(0,1fr) auto; } .task-name-wrap { grid-column:1 / -1; } .task-id-group { grid-column:1; grid-row:2; } .task-status { grid-column:1; grid-row:3; width:max-content; } .task-date { grid-column:2; grid-row:3; } .copy-feedback { color:var(--good); } }",

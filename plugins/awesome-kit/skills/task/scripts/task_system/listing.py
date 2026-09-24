@@ -7,7 +7,7 @@ import json
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 import yaml
 
@@ -74,6 +74,7 @@ class ProjectGroup:
     name: str
     root: Path
     views: tuple[TaskView, ...]
+    last_update: str | None
 
 
 def _read_text(path: Path) -> str:
@@ -263,28 +264,40 @@ def section_views(views: tuple[TaskView, ...]) -> dict[str, list[TaskView]]:
 
 
 def project_groups(listing: TaskListing) -> tuple[ProjectGroup, ...]:
-    """Group tasks by their selected project owner."""
+    """Group tasks by project, most recently updated project first.
+
+    A project's last update is the newest last_update among its open tasks;
+    projects with no dated open task sort last, then by name.
+    """
     groups: dict[tuple[str, Path], list[TaskView]] = {}
     for view in listing.views:
         groups.setdefault((view.project_name, view.project_root), []).append(view)
-    ordered_groups = sorted(
-        groups.items(),
-        key=lambda item: (item[0][0].casefold(), item[0][0], str(item[0][1])),
-    )
-    ordered_groups.sort(
-        key=lambda item: max(
-            (
-                view.last_update or view.summary_updated or ""
-                for view in item[1]
-            ),
-            default=None,
+    projects = [
+        ProjectGroup(
+            name=name,
+            root=root,
+            views=tuple(views),
+            last_update=project_last_update(views),
         )
-        or "",
+        for (name, root), views in groups.items()
+    ]
+    projects.sort(key=lambda group: (group.name.casefold(), group.name, str(group.root)))
+    projects.sort(
+        key=lambda group: (group.last_update is not None, group.last_update or ""),
         reverse=True,
     )
-    return tuple(
-        ProjectGroup(name=name, root=root, views=tuple(views))
-        for (name, root), views in ordered_groups
+    return tuple(projects)
+
+
+def project_last_update(views: Iterable[TaskView]) -> str | None:
+    """Return the newest last_update among open tasks, or None."""
+    return max(
+        (
+            view.last_update
+            for view in views
+            if view.status in OPEN_CLASSIFICATIONS and view.last_update
+        ),
+        default=None,
     )
 
 
@@ -344,6 +357,7 @@ def listing_data(listing: TaskListing) -> dict[str, Any]:
             {
                 "name": project.name,
                 "root": str(project.root),
+                "last_update": project.last_update,
                 "tasks": [task_key(listing, view) for view in project.views],
                 "sections": {
                     name: [task_key(listing, view) for view in views]

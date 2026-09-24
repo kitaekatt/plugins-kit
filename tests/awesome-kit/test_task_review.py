@@ -295,7 +295,7 @@ class TestTaskListingAndReview:
         assert "status-invalid" in html
         assert "Existing summary remains visible." in html
 
-    def test_project_groups_sort_by_activity_with_summary_date_fallback(
+    def test_project_groups_sort_by_newest_open_task_activity(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         devroot = tmp_path / "devroot"
@@ -321,21 +321,39 @@ class TestTaskListingAndReview:
             title="zeta undated task",
             summary="Current summary.",
         )
+        # Closed-task activity does not advance a project's last update.
+        make_task(
+            devroot / "alpha",
+            "dev/tasks/closed",
+            title="alpha closed task",
+            status="closed",
+            summary="Closed summary.",
+            date="2026-09-24",
+        )
         monkeypatch.setenv("DEVROOT", str(devroot))
         _configure_project_directories(tmp_path, monkeypatch, ["${DEVROOT}"])
 
         collected = listing.collect_listing("all", devroot / "alpha")
         groups = listing.project_groups(collected)
+        # A summary date is not activity: beta has no dated open task.
         expected_order = [
             "zeta",
-            "beta",
             "delta",
             "alpha",
+            "beta",
             "gamma",
         ]
         assert [group.name for group in groups] == expected_order
+        assert [group.last_update for group in groups] == [
+            "2026-09-23",
+            "2026-09-22",
+            "2026-09-20",
+            None,
+            None,
+        ]
         data = listing.listing_data(collected)
         assert [project["name"] for project in data["projects"]] == expected_order
+        assert data["projects"][0]["last_update"] == "2026-09-23"
         beta_view = next(view for view in collected.views if view.project_name == "beta")
         assert beta_view.last_update is None
         assert beta_view.summary_updated == "2026-09-22"
