@@ -67,7 +67,7 @@ task:
   type: hand-off                  # which task type (selects schema, vocab, closure policy)
   title: "Re-terminate the My Office closet cat6a run"
   summary: "Re-terminate and validate the damaged office closet cable run."
-  status: active                  # active | blocked | closed | archived  (type-defined vocabulary)
+  status: active                  # active | blocked | closed | deferred | archived  (type-defined vocabulary)
   priority: P2                    # type-defined scale (default P1..P3, P1 highest)
   description: |                  # freeform; readable + updatable
     Data path on the closet run is dead. Re-terminate and re-test to rated speed.
@@ -85,7 +85,7 @@ task:
 | `_schema_version` | string | yes | `"1"`. Dispatches the validator. |
 | `type` | string | yes | Registered type name. Default/only: `hand-off`. Selects schema + vocab + closure policy. |
 | `title` | string | yes | One-line human title. Non-empty. |
-| `status` | enum | yes | One of the type's `state_vocabulary` (default: `active` / `blocked` / `closed` / `archived`). |
+| `status` | enum | yes | One of the type's `state_vocabulary` (default: `active` / `blocked` / `closed` / `deferred` / `archived`). |
 | `priority` | string | no | Matches the type's priority pattern (default `^P[1-3]$`, P1 highest). |
 | `description` | string | no | Freeform multi-line. |
 | `summary` | string | no | One-line review summary: problem it solves; how it is being solved; where it stands now (semicolon-separated, <=240 chars total, <=80 per section). Missing/stale summaries are diagnostics; generated values carry provenance metadata. |
@@ -99,6 +99,8 @@ task:
 Notes:
 - `abstract` / `invalid` / `orphaned` / `remote` / `gone` are **computed** states (§4), never stored.
 - **Schemas are floors, not ceilings** — a type may add load-bearing fields beyond this set.
+- **`deferred`** marks a task purposefully put on hold, intended to be resumed later. It is neither
+  open nor closed: `list`/`review` section it separately from both, and `reopen` returns it to `active`.
 
 ### 2.3 Reference
 
@@ -164,7 +166,7 @@ scaffolding:                 # init creates these in the folder
   - log.md                   #   on-demand history
   - task.yaml                #   the structured record (§2.2)
 schema: task@1               # the task.yaml field contract in §2.2
-state_vocabulary: [active, blocked, closed, archived]
+state_vocabulary: [active, blocked, closed, deferred, archived]
 priority_pattern: "^P[1-3]$" # P1 highest
 closure_policy:
   close:    "status = closed; keep folder"
@@ -254,6 +256,7 @@ decides whether a task is `active`, `invalid`, or `remote`. The lifecycle diagra
 | `active` | stored | A **valid, initialized** task. The output of `init`, and of `update` when validation passes. The resting/live state. |
 | `invalid` | computed (validate) | Fails validation. Must be **fixed forward** — no back-compat, no recovery — then re-validated. |
 | `blocked` | stored | A valid task with unmet `depends_on` / `blocked_by`. Clears back to `active`. *(In the spec; omitted from the lifecycle diagram for clarity.)* |
+| `deferred` | stored | Purposefully put on hold, intended to be resumed later. Neither open nor closed; `reopen` clears it back to `active`. |
 | `closed` | stored | Work done; folder retained (not yet archived). |
 | `archived` | stored / computed | Terminal. tmp: folder marked + **parked** at `tmp/archived-tasks/<stub>` (user-purgeable; a parked folder also reads as `archived` via the tri-state below). non-tmp: final state submitted to version control, folder **deleted** (version control is the record; git is automated, other VCS agent-driven) -- except where git ignores EVERY file in the folder, which parks it at `dev/tasks/archived-tasks/<stub>` for the same reason tmp parks (no commit can carry it, so it is local scratch); a folder git holds only PARTLY is kept in place. Either way the result reads as `archived` via the tri-state below. |
 | `orphaned` | computed | A **tmp** reference (local host) whose folder is absent — cleaned up without a proper archive. A defect. *(In the spec; omitted from the lifecycle diagram.)* |
@@ -315,13 +318,13 @@ inference exception.
 | `work <ref>` | script | Work the explicitly named task. **Errors if the folder doesn't exist** (a mistyped path must not scaffold a task); `--init` opts into the promotion. Emits one initialization block -- the baseline skills merged with the task's `skills_to_invoke`, plus `agent_hint` and the dispatch directive (section 7.1). **Gated by `validate`** (section 9). |
 | `update <ref>` | script | Upsert: `init` if absent, otherwise refresh the folder's state. Appends one dated entry to `log.md` and writes `task.yaml` field edits (`status`, `priority`, `description`, `depends_on`, `blocked_by`, ...). **The script never rewrites `plan.md`; rotation is the agent's hand-off discipline.** **Re-runs `validate`, classifying the task `active` / `invalid` / `remote`** (section 9). |
 | `close <ref>` | script | Mark `status: closed`; **keeps** the folder (reopen-able). Acts on an `active` task. |
-| `reopen <ref>` | script | Reverse a terminal state back to `active`. **Allowed only if the folder still exists** -- incl. an `archived` folder parked at `<location>/archived-tasks/<stub>` under either root, which is **restored** to `<location>/<stub>` first. A task with no folder (and nothing parked) cannot be reopened -- it is gone. |
-| `archive <ref>` | script | **Operates on an `active` task** (`active -> archived`); to archive a `closed` task, `reopen` it first. **Durable-outputs check first (section 2.7):** every declared path must exist outside the folder, else refuse; absent field -> note, proceed. Per closure policy - **version control is the record** (git is the automated case; no dependency on git): **non-tmp in a git repo** -> commit the final state (status + log entry), delete the folder, commit the removal (two folder-scoped commits); **non-tmp outside git** -> no git command runs; record the final state, keep the folder (`vcs_pending`), agent submits with the workspace's VCS (e.g. `p4 submit`) then runs `delete`; **non-tmp where git ignores EVERY file** -> no commit is possible, so record the final state and move the folder to `dev/tasks/archived-tasks/<stub>` (`vcs_ignored`); **non-tmp where git holds SOME of it and ignores the rest** -> record the final state and keep the folder IN PLACE (`vcs_ignored`, nothing parked -- moving it would take tracked files off their tracked paths with no commit); **tmp** -> set `status: archived`, move the folder to `tmp/archived-tasks/<stub>`. An occupied parking spot refuses, before any write. |
+| `reopen <ref>` | script | Reverse a terminal state (`closed`, `deferred`, or a parked `archived` folder) back to `active`. **Allowed only if the folder still exists** -- incl. an `archived` folder parked at `<location>/archived-tasks/<stub>` under either root, which is **restored** to `<location>/<stub>` first. A task with no folder (and nothing parked) cannot be reopened -- it is gone. |
+| `archive <ref>` | script | **Operates on an `active` task** (`active -> archived`); to archive a `closed` or `deferred` task, `reopen` it first. **Durable-outputs check first (section 2.7):** every declared path must exist outside the folder, else refuse; absent field -> note, proceed. Per closure policy - **version control is the record** (git is the automated case; no dependency on git): **non-tmp in a git repo** -> commit the final state (status + log entry), delete the folder, commit the removal (two folder-scoped commits); **non-tmp outside git** -> no git command runs; record the final state, keep the folder (`vcs_pending`), agent submits with the workspace's VCS (e.g. `p4 submit`) then runs `delete`; **non-tmp where git ignores EVERY file** -> no commit is possible, so record the final state and move the folder to `dev/tasks/archived-tasks/<stub>` (`vcs_ignored`); **non-tmp where git holds SOME of it and ignores the rest** -> record the final state and keep the folder IN PLACE (`vcs_ignored`, nothing parked -- moving it would take tracked files off their tracked paths with no commit); **tmp** -> set `status: archived`, move the folder to `tmp/archived-tasks/<stub>`. An occupied parking spot refuses, before any write. |
 | `delete <ref>` | script | Operates on an `active` **or `archived`** task (a still-present archived folder -- the `vcs_pending` output, or a folder PARKED at `<location>/archived-tasks/<stub>`, named by its live ref -- is what delete finishes off). **Git-dirty guard** where git can verify (a dirty `dev/tasks` folder refuses; delete never auto-commits; outside a git repo, and on a parked folder, the agent owns VCS state), **and delete the folder even when it is tmp**. Removes the working folder unconditionally. |
 | `move <ref> <dest>` | script | Relocate the folder (commonly `tmp/<stub>` → `dev/tasks/<stub>`) **and rewrite every reference** to the new path (§7.2). |
 | `status <ref>` | **inference** | Summarize a task — works on **any** task. Resolves the task's classification via `validate`, then **summarizes** in a **background agent** to preserve context. |
 | `list [--scope ...]` | script | Enumerate tasks in a scope (§8) through the shared listing projection. The default text output is backward-compatible; JSON/YAML include summaries, update history, and diagnostics. List does not write or invoke inference. |
-| `review [--scope ...]` | script + model-assisted maintenance | Build a self-contained collapsible HTML review from the shared listing projection, omitting archived tasks and separating open/closed sections. By default, Codex Luna generates missing or stale summaries for eligible local tasks before rendering; `--no-generate-missing-summaries` preserves gaps for inspection; `--generate-missing-summaries` is the explicit form of the default. |
+| `review [--scope ...]` | script + model-assisted maintenance | Build a self-contained collapsible HTML review from the shared listing projection, omitting archived tasks and separating open/deferred/closed sections. By default, Codex Luna generates missing or stale summaries for eligible local tasks before rendering; `--no-generate-missing-summaries` preserves gaps for inspection; `--generate-missing-summaries` is the explicit form of the default. |
 | `show <ref>` | script | Render one task's selected `task.yaml` fields. Cheap, no inference. |
 | `items <ref>` | script | Enumerate the task's open items (the plan.md `task_items` unit, §2.6): one line per item — `id  state  priority  title` — sorted by priority then block order; `--state`/`--priority` filter. Ref is required. Cheap, no inference. |
 | `validate <ref>` | script | Check the folder/`task.yaml` against the type schema **and the `task_items` unit** (§2.6). Emits errors and warnings. **All warnings originate here.** Gates `work` (§9). |
@@ -361,8 +364,8 @@ inference exception.
   `<location>/archived-tasks/<stub>` under either root, which is **restored** to
   `<location>/<stub>` first (**a missing folder with nothing parked cannot be reopened** --
   error). Set `status: active`; re-validate.
-- **`archive <ref>`** — Pre: folder exists, `status: active` (to archive a `closed` task, `reopen` first
-  — else error). Then: tmp → `status: archived`, **move** the folder to `tmp/archived-tasks/<stub>`
+- **`archive <ref>`** -- Pre: folder exists, `status: active` (to archive a `closed` or `deferred` task,
+  `reopen` first -- else error). Then: tmp -> `status: archived`, **move** the folder to `tmp/archived-tasks/<stub>`
   (occupied parking spot → refuse); non-tmp → **version control is the record**: in a **git repo**,
   write the final state (`status: archived` + dated log entry), **commit** it, **delete** the folder,
   **commit** the removal — two commits pathspec-limited to the task folder, never removing the folder
@@ -378,7 +381,7 @@ inference exception.
   relocate tracked files off their tracked paths with no commit, and the disposition names both what
   git ignores and what git holds.
 - **`delete <ref>`** — Pre: folder exists, `status: active` **or `archived`** (a still-present archived
-  folder is what delete finishes off; `closed` → reopen-first hint). **Git-dirty guard** where git can
+  folder is what delete finishes off; `closed`/`deferred` -> reopen-first hint). **Git-dirty guard** where git can
   verify (non-tmp folder git sees as **dirty** → refuse — delete never auto-commits; use `archive`);
   outside a git repo no git check applies. Then ensure the folder is removed **even when tmp**
   (unconditional).
@@ -392,7 +395,7 @@ inference exception.
 - **`list [--scope user|project|skill|file <target>] [--status … --priority … --format text|json|yaml]`** — Discovery (§8) →
   resolve → classify each via `validate` → **dedupe by canonical path** → project `id`/`title`/`status`/
   `priority`, summary metadata, and update history through the shared listing projection. Remote tasks are listed as opaque (`@host`, status unresolved). Text is the legacy projection; JSON/YAML are versioned and include diagnostics. Script-only; no inference or writes.
-- **`review [--scope all|user|project|skill|file <target>] [--output PATH|-] [--no-open] [--generate-missing-summaries | --no-generate-missing-summaries]`** -- Discovery (section 8) and the shared listing projection produce the source data. By default, eligible local active/blocked/closed tasks with missing or stale `task.summary` values are summarized through Codex Luna with a read-only, no-network sandbox and persisted through `update` with a source fingerprint. Summary-maintenance log entries do not advance activity. The renderer writes self-contained HTML with one collapsible card per task, Open/Closed sections, newest activity first, and escaped values. In all scope, projects are ordered by their newest open-task activity (summary dates and closed tasks excluded), newest first; projects without a dated open task sort last by name. Each task row dims with age: full brightness up to 4 hours since its `last_activity`, fading linearly to 33% at 120 hours and beyond (undated tasks are dimmest). Archived tasks are absent. Missing, stale, and unavailable summaries have distinct visible treatments; model failures are reported on stderr and the HTML is still written. `--output -` emits HTML to stdout, otherwise a temporary file is opened in the browser unless `--no-open` is set.
+- **`review [--scope all|user|project|skill|file <target>] [--output PATH|-] [--no-open] [--generate-missing-summaries | --no-generate-missing-summaries]`** -- Discovery (section 8) and the shared listing projection produce the source data. By default, eligible local active/blocked/deferred/closed tasks with missing or stale `task.summary` values are summarized through Codex Luna with a read-only, no-network sandbox and persisted through `update` with a source fingerprint. Summary-maintenance log entries do not advance activity. The renderer writes self-contained HTML with one collapsible card per task, Open/Deferred/Closed sections, newest activity first, and escaped values. In all scope, projects are ordered by their newest open-task activity (summary dates and closed tasks excluded), newest first; projects without a dated open task sort last by name. Each task row dims with age: full brightness up to 4 hours since its `last_activity`, fading linearly to 33% at 120 hours and beyond (undated tasks are dimmest). Archived tasks are absent. Missing, stale, and unavailable summaries have distinct visible treatments; model failures are reported on stderr and the HTML is still written. `--output -` emits HTML to stdout, otherwise a temporary file is opened in the browser unless `--no-open` is set.
 - **`show <ref>`** — Resolve → print selected `task.yaml` fields. Cheap, no inference.
 - **`validate <ref>`** — §9. Emit errors + warnings; classify `active`/`invalid`/`remote`. Exit `0` iff
   no findings.
@@ -491,7 +494,7 @@ Two crawl modes, both script-driven:
    (b) reference scan -- every `refs[].path` in a `task_list:` block in the doc set.
 3. **Canonicalize + dedupe** by path (§2.3): one entry per task even if folder-found *and* referenced,
    or referenced from many docs.
-4. **Classify each** via `validate`: `active`/`blocked`/`closed`/`archived` (read from `task.yaml`), or
+4. **Classify each** via `validate`: `active`/`blocked`/`closed`/`deferred`/`archived` (read from `task.yaml`), or
    computed `remote` (tmp + host mismatch — opaque, not read) / `orphaned` (tmp ref, local, no folder).
 5. **Project + filter:** emit `id`(path), `status`, `priority`, `last_update`, `title`; apply
    `--status`/`--priority` filters. A dated `log.md` entry is `- YYYY-MM-DD HH:MM: <detail>`
@@ -499,8 +502,8 @@ Two crawl modes, both script-driven:
    `last_update` is the latest ISO date in dated `log.md` entries, or `-` when no dated entry
    exists; the structured projection also carries `last_activity`, the latest entry's
    `YYYY-MM-DD HH:MM`, which orders tasks and projects. Folderless-non-tmp refs read as `archived`. With no
-   `--status`, active/blocked and closed classifications are emitted; the CLI presents them in
-   separate Open tasks and Closed tasks sections. An explicit `--status` lists that classification,
+   `--status`, active/blocked, deferred, and closed classifications are emitted; the CLI presents
+   them in separate Open tasks, Deferred tasks, and Closed tasks sections. An explicit `--status` lists that classification,
     including archived and other non-working states. The shared projection also reads `task.summary`,
     computes summary freshness from a source fingerprint, and reports missing/stale/unavailable
     summaries as non-blocking diagnostics. `review` groups the projection into collapsible HTML and
@@ -526,8 +529,8 @@ forward.
 **Classification (the outcome):**
 - **`remote`** — tmp path + `host` ≠ current host. Short-circuits: not read or further validated locally.
 - **`invalid`** — any **error** below.
-- **`active`/`blocked`/`closed`/`archived`** — no errors; `status` read from `task.yaml` (`blocked` when
-  `blocked_by` is non-empty).
+- **`active`/`blocked`/`closed`/`deferred`/`archived`** -- no errors; `status` read from `task.yaml`
+  (`blocked` when `blocked_by` is non-empty).
 
 **Errors (block; task is `invalid`):**
 

@@ -60,6 +60,38 @@ def test_projects_keep_listing_order_and_omit_empty_sections() -> None:
     assert "No tasks in this section." not in html
 
 
+def test_deferred_section_renders_between_open_and_closed() -> None:
+    opened = _task("opened", project="alpha", last_update="2026-09-20")
+    held = _task("held", project="alpha", last_update="2026-09-19")
+    held["status"] = "deferred"
+    finished = _task("finished", project="alpha", last_update="2026-09-18")
+    finished["status"] = "closed"
+    data = {
+        "scope": "project",
+        "tasks": [opened, held, finished],
+        "projects": [
+            {
+                "name": "alpha",
+                "root": "projects/alpha",
+                "tasks": ["opened", "held", "finished"],
+                "sections": {
+                    "open": ["opened"],
+                    "deferred": ["held"],
+                    "closed": ["finished"],
+                    "other": [],
+                },
+            },
+        ],
+    }
+
+    html = render_review_html(data)
+
+    assert "Deferred tasks" in html
+    assert html.index("Open tasks") < html.index("Deferred tasks")
+    assert html.index("Deferred tasks") < html.index("Closed tasks")
+    assert '<span class="task-status status-deferred">deferred</span>' in html
+
+
 def test_task_name_hover_and_focus_reveal_only_the_summary() -> None:
     task = _task(
         "projector",

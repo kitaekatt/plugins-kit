@@ -38,7 +38,7 @@ class TaskType:
 HAND_OFF = TaskType(
     name="hand-off",
     scaffolding=("CLAUDE.md", "plan.md", "log.md", "task.yaml"),
-    state_vocabulary=("active", "blocked", "closed", "archived"),
+    state_vocabulary=("active", "blocked", "closed", "deferred", "archived"),
     priority_pattern=r"^P[1-3]$",
     item_state_vocabulary=("available", "in-flight", "blocked-user", "deferred"),
     schema=TASK_SCHEMA,

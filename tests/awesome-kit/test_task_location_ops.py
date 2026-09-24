@@ -344,6 +344,14 @@ class TestArchiveLib:
             location_ops.archive_task("tmp/a", tmp_path)
         assert read_block(folder)["status"] == "closed"
 
+    def test_deferred_task_errors_reopen_first(self, tmp_path):
+        # archive mirrors close/delete's treatment of a deferred task:
+        # not active -> refuse, with the same reopen-first hint closed gets.
+        folder = make_task(tmp_path, "tmp/a", status="deferred")
+        with pytest.raises(StateOpError, match="reopen"):
+            location_ops.archive_task("tmp/a", tmp_path)
+        assert read_block(folder)["status"] == "deferred"
+
     def test_git_ignored_folder_records_and_parks_folder(self, git_root):
         # A project may deliberately gitignore its task root, keeping task
         # folders as local scratch. Git is present and CAN see the folder,
@@ -616,6 +624,13 @@ class TestDeleteLib:
         # status-active precondition (delete = archive + unconditional
         # removal, spec 7.1).
         folder = make_task(tmp_path, "tmp/a", status="closed")
+        with pytest.raises(StateOpError, match="reopen"):
+            location_ops.delete_task("tmp/a", tmp_path)
+        assert folder.is_dir()
+
+    def test_deferred_task_errors_reopen_first(self, tmp_path):
+        # delete mirrors archive's (and close's) treatment of deferred.
+        folder = make_task(tmp_path, "tmp/a", status="deferred")
         with pytest.raises(StateOpError, match="reopen"):
             location_ops.delete_task("tmp/a", tmp_path)
         assert folder.is_dir()

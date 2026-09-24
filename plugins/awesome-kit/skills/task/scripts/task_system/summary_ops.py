@@ -23,7 +23,7 @@ SUMMARY_EFFORT = "medium"
 SUMMARY_TIMEOUT_S = 180.0
 SUMMARY_MAX_CHARS = 240
 SUMMARY_SECTION_MAX_CHARS = 80
-ELIGIBLE_STATUSES = frozenset(("active", "blocked", "closed"))
+ELIGIBLE_STATUSES = frozenset(("active", "blocked", "closed", "deferred"))
 SUMMARY_WORKERS = 4
 
 

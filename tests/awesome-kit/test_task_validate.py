@@ -128,6 +128,14 @@ class TestClassificationOutcomes:
         make_task(tmp_path, "tmp/foo", status="closed")
         assert v("tmp/foo", tmp_path).classification == "closed"
 
+    def test_stored_deferred_status(self, tmp_path):
+        # deferred classifies straight through like closed: a finding-free
+        # task's stored status IS its classification, no special-casing.
+        make_task(tmp_path, "tmp/foo", status="deferred")
+        result = v("tmp/foo", tmp_path)
+        assert result.classification == "deferred"
+        assert result.clean
+
     def test_tmp_archived_folder_kept_no_warning(self, tmp_path):
         # tmp archive keeps the folder + marks it; only NON-tmp archived
         # folders warn.
