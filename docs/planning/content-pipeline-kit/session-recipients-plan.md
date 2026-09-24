@@ -1197,7 +1197,9 @@ breaking surface is confined to A-cleanup, and within it:
   (preparation fails before side effects, reporting all collisions, with a
   documented ID-derivation recipe); explicit driver/backend/model on the run
   rather than the process-global `CONTENT_PIPELINE_LLM_BACKEND` router, which
-  remains the compatibility default for direct calls.
+  was removed in migration step 12c (commits dc7c8bc0, 4ad89c1c;
+  content-pipeline-kit 0.25.0) -- `CONTENT_PIPELINE_LLM_MODELS` is the only
+  routing env.
 - **Versioned contracts:** the JSON envelope and adapter identity are public
   compatibility surfaces; incompatible resume is refused, never guessed.
 - Every consumer-visible change ships with the coupled plugin manifest and
