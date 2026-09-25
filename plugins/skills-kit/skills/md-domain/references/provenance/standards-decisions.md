@@ -267,4 +267,60 @@ claude_md:
         Follow-up: SR-1's aptness blindness and the unmeasured consequence bar are
         limitations (a) and above, not action items.
       added: "2026-08-09"
+    - id: potential_defects_broadened_v1_to_v2
+      keywords: [CLAUDE-potential-defects.md, potential defects schema, source field, verified field, why_deferred, why_not_ambient, schema v2, deferred defect, admission route, hazard-durability, deferred-defects.md]
+      summary: "potential_defects schema amended v1 -> v2: the sidecar's purpose broadened from a single coverage-lane hazard-durability residue to a general known-defects-deliberately-deferred pattern admitting several routes (coverage-lane, triage, review, ordinary work). File-level status dropped for per-entry source + verified; why_not_ambient renamed why_deferred."
+      detail: |
+        Surface: two verbatim user rulings. Purpose: "The purpose of this
+        pattern is to record known defects/gotchas that are severe enough
+        that they should be addressed, but which we are not addressing at
+        this time." Placement: "The rule is there needs to be a CLAUDE.md in
+        the same directory that references it. Create this file in the most
+        relevant directory associated with each defect."
+        Finding: the prior "hand-off" section in capability-boundaries.md
+        scoped the pattern to exactly one route (a coverage run's
+        hazard-durability rejection), stated as "the one place md-domain
+        emits anything defect-shaped" and gated by "admission to it requires
+        this criterion to have rejected the fact first." Its schema matched
+        that narrow scope and nothing wider: file-level `status: unverified`
+        and entry-level `why_not_ambient` both assumed every entry arrived
+        the same way, for the same reason, at the coverage lane's hand. Both
+        assumptions are false once triage, review, and ordinary-work
+        observations are admitted on the same footing -- entries can arrive
+        from different processes, at different times, with independent
+        verification states.
+        Follow-up: the primary definition moved to the dedicated
+        `references/deferred-defects.md` (capability-boundaries.md no longer
+        fit once the pattern stopped being scoped to the
+        md-domain/code-review/code-audit split; it keeps only the
+        code-audit-consumption fact and points to deferred-defects.md for the
+        file's own contract). Schema changes, each minimal: `status` dropped
+        (file-wide, but verification is a per-entry fact, not a file-wide
+        one); `source` added per entry (deliberately open free text --
+        `coverage-lane:hazard-durability`, `triage`, `review`,
+        `ordinary-work`, or any other named process; the set of processes
+        that can responsibly defer a real defect is open-ended, so a closed
+        enum would either reject a legitimate route or invite a false fit
+        into the nearest existing tag); `verified` added per entry (boolean,
+        `false` at creation always -- flipping it is the code-audit
+        capability's job, never the reporter's); `why_not_ambient` renamed
+        `why_deferred` (the old name presumed every entry was rejected FROM a
+        CLAUDE.md draft, true only for the coverage-lane route -- for every
+        other route there was no draft to reject the fact from, only a
+        defect noticed and set aside); `_schema_version` moved "1" -> "2" so
+        a v1-only reader does not silently misread a v2 file. The coverage
+        lane's own route (hazard-durability, coverage-standards.md;
+        generation-lane.md's write mechanics; claude-md-generate.js's
+        agent-result schema) kept its narrow, still-true description with the
+        old exclusivity language ("the one place," "requires this criterion
+        to have rejected the fact first") removed, since other routes now
+        exist alongside it. Placement enforcement: the coverage lane's write
+        instructions were tightened so a sidecar is never written without a
+        co-located CLAUDE.md carrying the required pointer in the same turn
+        -- a non-empty `potentialDefects` now takes the null branch off the
+        table for that directory, forcing a pointer-only CLAUDE.md when the
+        directory's own code otherwise earns no ambient cost. Current-state
+        contract: deferred-defects.md.
+      origin: User-directed broadening of the CLAUDE-potential-defects.md pattern from the coverage-lane-only release valve to a general deferred-known-defects pattern with multiple admission routes.
+      added: "2026-09-25"
 ```

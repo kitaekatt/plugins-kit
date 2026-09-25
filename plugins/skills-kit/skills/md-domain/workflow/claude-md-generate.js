@@ -334,7 +334,8 @@ const DOC_SCHEMA = {
     // sneak it into the document -- that rewrite is the same scope-widening
     // mistake as writing the transient state directly. UNVERIFIED and never a
     // finding: see coverage-standards.md (hazard-durability) and
-    // capability-boundaries.md ("The hand-off: CLAUDE-potential-defects.md").
+    // deferred-defects.md (the sidecar's full definition, schema, and other
+    // admission routes -- this lane's write is one route among several).
     potentialDefects: {
       type: 'array',
       items: {
@@ -518,11 +519,14 @@ const APPLY_SCHEMA = {
     path: { type: 'string' },
     created: { type: 'boolean' },
     sections: { type: 'array', items: { type: 'string' } },
-    // OPTIONAL, same shape as DOC_SCHEMA's. The create path had no surface for
-    // this before -- a null-branch subject's potentialDefects come from the
-    // composition step (lanePrompt), which normally writes the sidecar itself,
-    // but the field is mirrored here so an apply/create turn can report one too
-    // if it is the step that ends up with a directory to write into.
+    // OPTIONAL, same shape as DOC_SCHEMA's. By construction a subject reaching
+    // createPrompt (t.r.written === false, writtenFalseReason 'null-branch') never
+    // carries a non-empty potentialDefects: the compose step's own null-branch
+    // instruction takes potentialDefects non-empty OFF the null branch, so that
+    // subject already wrote its own CLAUDE.md with the required pointer and never
+    // reaches this path with written false. The field is mirrored here defensively,
+    // for schema symmetry with DOC_SCHEMA, not because this path is expected to
+    // populate it.
     potentialDefects: {
       type: 'array',
       items: {
@@ -866,37 +870,51 @@ const lanePrompt = (s, root, writtenChildren) => {
     'not run. whyNotAmbient is the one-sentence hazard-durability verdict: why this is a ' +
     'transient defect state rather than a durable invariant.\n' +
     'IF potentialDefects IS NON-EMPTY, WRITE THE SIDECAR FILE YOURSELF, in this same turn: ' +
-    root + '/CLAUDE-potential-defects.md. This is independent of whether you also write a ' +
-    'CLAUDE.md this turn -- write it even on the null branch. Check first whether that file ' +
-    'already exists; if it does, do NOT overwrite it and do NOT merge into it -- leave it ' +
-    'untouched and say so in notes. Otherwise write it as: a short prose header stating these ' +
-    'are unverified possible defects noticed while documenting this directory, that this is ' +
-    'NOT a findings list and NOT a code review, and that verification and removal belong to ' +
-    'the code-audit capability described in ../capability-boundaries.md -- then one YAML ' +
-    'block with root key potential_defects, _schema_version "1", status unverified, and ' +
-    'entries: one object per potentialDefects item plus a stable id (pd-1, pd-2, ...). If you ' +
-    'also write a CLAUDE.md this turn, it may carry a ONE-LINE pointer to the sidecar file and ' +
-    'NO entry content -- the sidecar is never a composition input, so a defect claim can never ' +
-    'hoist upward into ambient guidance.\n\n' +
+    root + '/CLAUDE-potential-defects.md. Check first whether that file already exists; if ' +
+    'it does, do NOT overwrite it and do NOT merge into it -- leave it untouched and say so ' +
+    'in notes. Otherwise write it as: a short prose header stating these are known defects ' +
+    'noticed while documenting this directory that are severe enough to fix but are not ' +
+    'being addressed now, that this is NOT a findings list and NOT a code review, and that ' +
+    'verifying, retiring, or triaging any entry belongs to the code-audit capability ' +
+    'described in ../capability-boundaries.md -- then one YAML block with root key ' +
+    'potential_defects, _schema_version "2", and entries: one object per potentialDefects item ' +
+    'plus a stable id (pd-1, pd-2, ...), source set to the constant ' +
+    '"coverage-lane:hazard-durability", verified set to false, and whyNotAmbient written into ' +
+    'the file as why_deferred (full schema and the other admission routes into this same file: ' +
+    '../deferred-defects.md).\n' +
+    'A SIDECAR IS NEVER WRITTEN WITHOUT A CO-LOCATED POINTER, IN THE SAME TURN. The CLAUDE.md ' +
+    'you write for this directory this turn MUST carry the ONE-LINE pointer to the sidecar ' +
+    'file and NO entry content -- REQUIRED whenever potentialDefects is non-empty, never ' +
+    'optional, and this is true even when the directory would otherwise take the null branch ' +
+    '(see "THE NULL BRANCH" below). The sidecar itself is still never a composition input, so ' +
+    'a defect claim can never hoist upward into ambient guidance regardless of the pointer.\n\n' +
     'THE BOUNDARY YOU MUST NOT CROSS. md-domain INFORMS code review; it does not perform ' +
     'it. Reading the code is in scope ONLY as a source of insight for the document that ' +
     'will be ambient for it. Do NOT identify code defects, do NOT propose fixes, and do NOT ' +
     'edit any file other than the one CLAUDE.md you are writing, EXCEPT the ' +
-    'CLAUDE-potential-defects.md sidecar above -- that file is the one sanctioned release ' +
-    'valve for a severe hazard that hazard-durability rejected, and writing an entry into it is ' +
-    'not identifying a defect for review, it is recording an unverified possibility for a ' +
-    'capability that does not exist yet. A run that returns a defect LIST, or that edits any ' +
-    'other file, has done the wrong work.\n\n' +
+    'CLAUDE-potential-defects.md sidecar above -- that file is this lane\'s one sanctioned ' +
+    'route in, reserved for a severe hazard that hazard-durability rejected (other routes exist ' +
+    'and are not this lane\'s concern), and writing an entry into it is not identifying a ' +
+    'defect for review, it is recording an unverified possibility for a capability that does ' +
+    'not exist yet. A run that returns a defect LIST, or that edits any other file, has done ' +
+    'the wrong work.\n\n' +
     'DOCUMENTING A HAZARD CAN FOSSILIZE A BUG. Before writing a hazard into ambient prose, ' +
     'ask whether the honest remedy is a code fix or a loud failure. If you judge so, say ' +
     'it in notes -- not in the document, and do not fix it yourself.\n\n' +
-    'THE NULL BRANCH IS A REAL RESULT. If nothing in this directory earns ambient cost at ' +
-    'this scope level, write NO file, set written false, set writtenFalseReason to ' +
-    'null-branch, and say why in notes. That is an admissible outcome, not a failure -- but ' +
-    'it must be RECORDED, never left implicit. Note that a null branch does NOT discard ' +
-    'your hoist candidates: a verified hoist still belongs at this depth, and the apply ' +
-    'step creates a document for it. Propose them as you would otherwise.\n\n' +
-    'ASCII only. Write exactly one file and touch nothing else. Do not stage, commit, or ' +
+    'THE NULL BRANCH IS A REAL RESULT, BUT ONLY WHEN potentialDefects IS ALSO EMPTY. If ' +
+    'nothing in this directory earns ambient cost at this scope level AND potentialDefects ' +
+    'is empty, write NO file, set written false, set writtenFalseReason to null-branch, and ' +
+    'say why in notes. That is an admissible outcome, not a failure -- but it must be ' +
+    'RECORDED, never left implicit. If potentialDefects is NON-EMPTY, the null branch is not ' +
+    'available for this directory: write a CLAUDE.md yourself, in this same turn, holding at ' +
+    'minimum the required pointer above (plus whatever local content actually earned ambient ' +
+    'cost, if any) -- set written true and writtenFalseReason to n/a, the same as any other ' +
+    'document this step writes; a pointer-only document is a legitimate document, not a null ' +
+    'branch wearing a file. Note that a null branch does NOT discard your hoist candidates: a ' +
+    'verified hoist still belongs at this depth, and the apply step creates a document for ' +
+    'it. Propose them as you would otherwise.\n\n' +
+    'ASCII only. Write the CLAUDE.md and, only when potentialDefects is non-empty, the ' +
+    'sidecar above -- no other file. Do not stage, commit, or ' +
     'create or switch any git branch.\n\n' +
     'Return the structured object.'
 }
@@ -1467,8 +1485,8 @@ const totals = perSubject.reduce((acc, r) => {
   // hoist some child must first have written down. Counted separately because
   // folding it into `dropped` is how it would go quiet.
   acc.escalated += (r.droppedCandidates || []).filter((d) => d.escalateToAncestor).length
-  // potentialDefects is the hazard-durability release valve (capability-boundaries.md,
-  // "The hand-off"). defectFiles counts subjects, not files-actually-created-by-this-run:
+  // potentialDefects is the hazard-durability admission route into the sidecar
+  // (deferred-defects.md). defectFiles counts subjects, not files-actually-created-by-this-run:
   // a subject with a non-empty array ends this run with a CLAUDE-potential-defects.md in
   // its directory either way, whether freshly written or already present and left alone
   // per the prompt's leave-pre-existing-file-untouched instruction (the pre-existing case

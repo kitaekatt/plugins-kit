@@ -306,10 +306,22 @@ subject returns at least one entry -- no file is written when there are none,
 because an empty one would read as a clean bill of health nothing established.
 The sidecar is NEVER a composition input: a parent's second input is its
 children's CLAUDE.md files only, so a defect claim recorded there can never
-hoist upward and become ambient guidance for anyone above it. A CLAUDE.md may
-carry a one-line pointer to its sidecar and no entry content. Full contract --
-the properties, the file shape, and the capability that consumes it --
-../capability-boundaries.md.
+hoist upward and become ambient guidance for anyone above it.
+
+**A sidecar is never written without a co-located CLAUDE.md carrying its
+pointer, in the same turn.** The directory's CLAUDE.md MUST carry the
+one-line pointer to its sidecar and no entry content -- required, not
+optional. This is why a non-empty `potentialDefects` takes the null branch
+off the table for that directory: a directory whose own code earns no other
+ambient cost still writes a CLAUDE.md holding just the pointer, rather than
+leaving the sidecar with nothing in the same directory to reference it. The
+compose step (the same call that would otherwise judge the null branch) is
+the one that writes this pointer-only document, since the apply/create step
+downstream is gated on verified hoists, not on `potentialDefects`, and would
+never reach a directory that has none. This lane's write is one of several
+admission routes into the sidecar, tagged `source: coverage-lane:hazard-durability`.
+Full contract -- the properties and file shape: ../deferred-defects.md. The
+capability that consumes it: ../capability-boundaries.md.
 
 **Where this sits in the spine.** Parent composition is a case WITHIN steps 1-5,
 not a replacement for them. Step 1 still confirms the artifact is a `claude-md`.
