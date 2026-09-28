@@ -42,7 +42,15 @@ reexec_under_plugin_venv("awesome-kit")
 # lacking it is that old or older.
 try:
     import bootstrap_lib.codex as codex_lib  # noqa: E402
-except ImportError:
+except ImportError as exc:
+    # Print the real exception before the canonical message: an ImportError
+    # here is usually an unprovisioned venv, but it can also be a symptom of
+    # something else (e.g. a PermissionError surfacing as an ImportError for
+    # an unrelated name), and the canonical text alone would hide that.
+    print(
+        f"[awesome-kit] underlying error: {type(exc).__name__}: {exc}",
+        file=sys.stderr,
+    )
     require_bootstrap(
         "awesome-kit", feature="codex dispatch", missing="bootstrap_lib", force=True
     )

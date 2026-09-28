@@ -51,7 +51,15 @@ reexec_under_plugin_venv("awesome-kit")
 
 try:
     import yaml  # noqa: E402
-except ImportError:
+except ImportError as exc:
+    # Print the real exception before the canonical message: an ImportError
+    # here is usually an unprovisioned venv, but it can also be a symptom of
+    # something else (e.g. a PermissionError surfacing as an ImportError for
+    # an unrelated name), and the canonical text alone would hide that.
+    print(
+        f"[awesome-kit] underlying error: {type(exc).__name__}: {exc}",
+        file=sys.stderr,
+    )
     from bootstrap_guard import require_bootstrap  # noqa: E402
 
     require_bootstrap(

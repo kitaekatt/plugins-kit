@@ -183,6 +183,180 @@ class TestSync:
         assert calls == []
 
 
+# --- staging directory: no protected/non-inheriting Windows ACL ----------
+
+class TestStageDirAcl:
+    """A directory bootstrap installs must inherit its parent's ACL so any
+    principal granted access via an inherited ACE (e.g. Authenticated Users,
+    or a Codex sandbox identity) can read it. ``tempfile.mkdtemp`` creates its
+    directory via ``os.mkdir(path, 0o700)``; on Windows (CPython >= 3.12.4,
+    the CVE-2024-4030 fix) that explicit owner-only mode produces a PROTECTED
+    ACL -- only SYSTEM, Administrators, and OWNER RIGHTS, inheritance from the
+    parent disabled -- instead of inheriting the parent's ACL, and
+    ``os.replace`` preserves a directory's ACL across the atomic swap into the
+    durable destination. See ``shared_lib._make_stage_dir`` for the full
+    mechanism and how this was verified on a real Windows machine.
+    """
+
+    def test_make_stage_dir_never_calls_tempfile_mkdtemp(self, tmp_path, monkeypatch):
+        # shared_lib must not import tempfile at all -- mkdtemp is exactly the
+        # call that reproduces the protected-ACL bug on Windows.
+        assert not hasattr(shared_lib, "tempfile")
+
+        entry_dir = str(tmp_path / "entry")
+        os.makedirs(entry_dir)
+        calls = []
+        real_mkdir = os.mkdir
+
+        def spy_mkdir(path, *args, **kwargs):
+            calls.append((path, args, kwargs))
+            return real_mkdir(path, *args, **kwargs)
+
+        monkeypatch.setattr(shared_lib.os, "mkdir", spy_mkdir)
+
+        stage = shared_lib._make_stage_dir(entry_dir)
+
+        assert calls, "must create the stage dir via os.mkdir"
+        path, args, kwargs = calls[0]
+        assert path == stage
+        # No explicit mode: an explicit 0o700 is exactly what triggers the
+        # Windows ACL-hardening path this function exists to avoid.
+        assert args == () and kwargs == {}, (args, kwargs)
+        assert os.path.isdir(stage)
+        assert os.path.dirname(stage) == entry_dir
+
+    def test_make_stage_dir_retries_on_name_collision(self, tmp_path, monkeypatch):
+        entry_dir = str(tmp_path / "entry")
+        os.makedirs(entry_dir)
+        fixed = iter(["dup", "dup", "unique"])
+        monkeypatch.setattr(shared_lib.uuid, "uuid4", lambda: type("U", (), {"hex": next(fixed)})())
+
+        first = shared_lib._make_stage_dir(entry_dir)
+        assert os.path.basename(first) == ".stage-dup"
+
+        # uuid4() re-fed "dup" then "unique": the collision with `first` must
+        # be retried rather than raised.
+        fixed2 = iter(["dup", "unique"])
+        monkeypatch.setattr(shared_lib.uuid, "uuid4", lambda: type("U", (), {"hex": next(fixed2)})())
+        second = shared_lib._make_stage_dir(entry_dir)
+        assert os.path.basename(second) == ".stage-unique"
+
+    @staticmethod
+    def _broaden_acl(path):
+        """Grant an extra principal ("Everyone") on `path` beyond the narrow
+        SYSTEM/Administrators/Owner set.
+
+        Needed because pytest's own `tmp_path` root is itself created via
+        `tempfile.mkdtemp` (verified separately: it carries only
+        SYSTEM/Administrators/OWNER RIGHTS, no inherited entries) -- so
+        WITHOUT this, any directory nested under `tmp_path` already starts
+        from that same narrow set, and CPython's Windows ACL-hardening for
+        `os.mkdir(path, 0o700)` only kicks in when the inherited ACL is
+        WIDER than owner-only. A test that stayed inside `tmp_path` as-is
+        would pass whether or not the bug this class guards against was
+        present -- verified: the reproduction below returns nothing with
+        `Everyone` on the vulnerable code path, and the parent-matching set
+        on the fixed one.
+        """
+        subprocess.run(
+            ["icacls", path, "/grant", "Everyone:(OI)(CI)(RX)"],
+            capture_output=True, text=True, check=True,
+        )
+
+    @pytest.mark.skipif(sys.platform != "win32", reason="ACL semantics are Windows-specific")
+    def test_stage_dir_inherits_a_broadened_parent_acl_on_windows(self, tmp_path):
+        entry_dir = str(tmp_path / "entry")
+        os.makedirs(entry_dir)
+        self._broaden_acl(entry_dir)
+
+        stage = shared_lib._make_stage_dir(entry_dir)
+
+        proc = subprocess.run(["icacls", stage], capture_output=True, text=True, check=True)
+        # The protected ACL tempfile.mkdtemp produces on Windows carries
+        # neither the inherited "Everyone" ACE nor any "(I)" marker at all.
+        assert "Everyone" in proc.stdout, proc.stdout
+        assert "(I)" in proc.stdout, proc.stdout
+
+    @pytest.mark.skipif(sys.platform != "win32", reason="ACL semantics are Windows-specific")
+    def test_published_package_inherits_a_broadened_shared_root_acl_on_windows(self, tmp_path):
+        """End-to-end regression: before this fix, the published package
+        directory (after the mkdtemp-staged os.replace swap) carried the
+        protected, non-inheriting ACL instead of shared_root's -- dropping
+        any principal, such as a sandboxed process's identity, that only had
+        access via an inherited ACE."""
+        plugin_root = tmp_path / "plugin"
+        _make_pkg(str(plugin_root / "lib"), "mylib")
+        shared_root = tmp_path / "_shared_libs"
+        shared_root.mkdir()
+        self._broaden_acl(str(shared_root))
+
+        shared_lib.sync_shared_lib("mylib", "lib", str(plugin_root), str(shared_root))
+
+        dest_pkg = os.path.join(str(shared_root), "mylib", "mylib")
+        proc = subprocess.run(["icacls", dest_pkg], capture_output=True, text=True, check=True)
+        assert "Everyone" in proc.stdout, proc.stdout
+
+
+# --- one-time repair: old-format stamp forces exactly one re-sync --------
+
+class TestStagingFormatRepair:
+    """Directories installed by the OLD staging mechanism (protected ACL, no
+    stamp version) must be re-synced once so they get rebuilt under the fixed
+    mechanism. `_CACHE_STAMP_VERSION` is folded into the skip-cache stamp
+    written to `.src.sha256`; an old-format stamp (a bare content hash, no
+    "<version>:" prefix -- exactly what a machine bootstrapped before this fix
+    has on disk) never matches the freshly computed one, so the entry
+    re-publishes exactly once. After that, the new stamp format caches
+    normally like any other unchanged source.
+
+    Chosen over an ACL probe at sync time (shelling out to icacls, Windows-only,
+    expensive on every pass) or a separate marker file (new on-disk state to
+    keep in sync with the hash file): folding a version into the existing
+    stamp reuses the mechanism already responsible for "should this re-sync",
+    costs one extra sync on a platform that was never affected (POSIX), and
+    needs no new file or engine wiring.
+    """
+
+    def test_old_format_stamp_forces_one_resync_then_caches_again(self, tmp_path):
+        plugin_root = tmp_path / "plugin"
+        pkg = _make_pkg(str(plugin_root / "lib"), "mylib", value=1)
+        shared_root = str(tmp_path / "_shared_libs")
+
+        # Publish once under the current mechanism, then roll the on-disk
+        # stamp back to the OLD (pre-fix) format: a bare content hash with no
+        # version prefix.
+        shared_lib.sync_shared_lib("mylib", "lib", str(plugin_root), shared_root)
+        hash_file = os.path.join(shared_root, "mylib", ".src.sha256")
+        bare_hash = shared_lib._hash_tree(pkg)
+        with open(hash_file, "w", encoding="utf-8") as f:
+            f.write(bare_hash + "\n")
+
+        # An old-format stamp must not read as cached, even though the
+        # source is unchanged.
+        r1 = shared_lib.sync_shared_lib("mylib", "lib", str(plugin_root), shared_root)
+        assert r1.status == "published"
+
+        stamped = open(hash_file, encoding="utf-8").read().strip()
+        assert stamped == shared_lib._cache_stamp(bare_hash)
+
+        # Re-stamped in the new format -> caches normally again.
+        r2 = shared_lib.sync_shared_lib("mylib", "lib", str(plugin_root), shared_root)
+        assert r2.status == "cached"
+
+    def test_current_format_stamp_still_caches(self, tmp_path):
+        """Control: an up-to-date stamp (current mechanism, unchanged source)
+        must still short-circuit -- the version fold must not force a resync
+        on every pass."""
+        plugin_root = tmp_path / "plugin"
+        _make_pkg(str(plugin_root / "lib"), "mylib")
+        shared_root = str(tmp_path / "_shared_libs")
+
+        shared_lib.sync_shared_lib("mylib", "lib", str(plugin_root), shared_root)
+        r = shared_lib.sync_shared_lib("mylib", "lib", str(plugin_root), shared_root)
+
+        assert r.status == "cached"
+
+
 # --- link_shared_lib (.pth registration) ---------------------------------
 
 class TestLink:

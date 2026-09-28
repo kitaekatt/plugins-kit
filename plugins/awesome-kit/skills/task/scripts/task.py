@@ -158,10 +158,18 @@ try:
     from task_system.task_items import read_task_items, sort_items  # noqa: E402
     from task_system.types import DEFAULT_TYPE_NAME, get_type  # noqa: E402
     from task_system.validate import validate_ref  # noqa: E402
-except ImportError:
+except ImportError as exc:
     # Safety net for the installed-but-not-yet-provisioned window: the failed
     # import is itself proof the provisioned venv (shared libs + pyyaml) is
-    # not available here.
+    # not available here. The canonical message below assumes an absent venv,
+    # but the ImportError can also be a symptom of something else entirely
+    # (e.g. a PermissionError inside a dependency surfacing as an ImportError
+    # for an unrelated name) -- print the real exception first so that case
+    # stays diagnosable instead of being swallowed by the canonical text.
+    print(
+        f"[awesome-kit] underlying error: {type(exc).__name__}: {exc}",
+        file=sys.stderr,
+    )
     from bootstrap_guard import require_bootstrap
 
     require_bootstrap(
