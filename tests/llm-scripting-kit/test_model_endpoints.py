@@ -475,3 +475,56 @@ models:
         assert [(d.id, d.disposition) for d in excinfo.value.dispositions] == [
             ("local-box", "unroutable"), ("sonet", "unresolved"),
         ]
+
+
+class TestFrontdoorAndBillingMarkers:
+    def test_invalid_frontdoor_is_noted_false_and_keeps_default_entry(self, fake_home):
+        _write_convention(
+            fake_home,
+            "default: alpha\nmodels:\n  alpha:\n    base_url: http://alpha/v1\n"
+            "    model: alpha\n    frontdoor: 'yes'\n",
+        )
+        reg = load_endpoint_registry()
+        assert reg.default_id == "alpha"
+        assert reg.entries["alpha"].frontdoor is False
+        assert any("frontdoor" in n and "alpha" in n for n in reg.notes)
+
+    def test_frontdoor_true_and_omitted(self, fake_home):
+        _write_convention(
+            fake_home,
+            "models:\n  fd:\n    base_url: http://fd/v1\n    model: grp\n    frontdoor: true\n"
+            "  plain:\n    base_url: http://p/v1\n    model: m\n",
+        )
+        reg = load_endpoint_registry()
+        assert reg.entries["fd"].frontdoor is True
+        assert reg.entries["plain"].frontdoor is False
+        assert reg.notes == []
+
+    def test_billing_modes_parse(self, fake_home):
+        _write_convention(
+            fake_home,
+            "models:\n"
+            "  a:\n    base_url: http://a/v1\n    model: m\n    billing: {mode: unmetered}\n"
+            "  b:\n    base_url: http://b/v1\n    model: m\n    billing: {mode: provider-reported}\n"
+            "  c:\n    base_url: http://c/v1\n    model: m\n",
+        )
+        reg = load_endpoint_registry()
+        assert reg.entries["a"].billing_mode == "unmetered"
+        assert reg.entries["b"].billing_mode == "provider-reported"
+        assert reg.entries["c"].billing_mode is None
+
+    def test_invalid_billing_is_noted_and_unset(self, fake_home):
+        _write_convention(
+            fake_home,
+            "models:\n"
+            "  a:\n    base_url: http://a/v1\n    model: m\n    billing: {mode: free}\n"
+            "  b:\n    base_url: http://b/v1\n    model: m\n    billing: nope\n"
+            "  c:\n    base_url: http://c/v1\n    model: m\n    billing: {}\n",
+        )
+        reg = load_endpoint_registry()
+        assert set(reg.entries) == {"a", "b", "c"}  # entries retained
+        assert reg.entries["a"].billing_mode is None
+        assert reg.entries["b"].billing_mode is None
+        assert reg.entries["c"].billing_mode is None
+        assert any("'a'" in n and "billing" in n for n in reg.notes)
+        assert any("'b'" in n and "billing" in n for n in reg.notes)

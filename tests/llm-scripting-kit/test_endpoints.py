@@ -626,3 +626,26 @@ class TestReservedCoreIds:
         assert merged.conserve_usage is not None
         assert merged.harness == "claude"
         assert check_registry_entry("opus", merged) is None
+
+
+class TestRegistryMarkersResolve:
+    def test_resolve_endpoint_carries_frontdoor_and_billing(self, tmp_path, monkeypatch):
+        home = tmp_path / "home"
+        home.mkdir()
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.setenv("USERPROFILE", str(home))
+        path = tmp_path / "reg.yaml"
+        path.write_text(
+            "models:\n  fd:\n    base_url: http://fd/v1\n    model: grp\n"
+            "    frontdoor: true\n    billing: {mode: unmetered}\n"
+            "  plain:\n    base_url: http://p/v1\n    model: m\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setenv("MODEL_ENDPOINTS_REGISTRY", str(path))
+        fd = resolve_endpoint("fd", config=CUSTOM_CFG)
+        assert fd["frontdoor"] is True and fd["billing_mode"] == "unmetered"
+        plain = resolve_endpoint("plain", config=CUSTOM_CFG)
+        assert plain["frontdoor"] is False and plain["billing_mode"] is None
+        # config-declared endpoints carry the keys too, unmarked
+        cfg = resolve_endpoint("local-vllm", config=CUSTOM_CFG)
+        assert cfg["frontdoor"] is False and cfg["billing_mode"] is None

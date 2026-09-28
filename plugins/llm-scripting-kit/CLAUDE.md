@@ -420,6 +420,40 @@ caller exactly as the seam rule says. Keys for keyed deployments resolve through
 `api_key.get_api_key`, so the hosting machine needs the secrets layer, not an
 exported env var.
 
+**Marker and billing are explicit metadata, never inferred.** `frontdoor: true`
+(strict boolean) on a transport entry says only that its `base_url` is a front
+door and its `model` names the group; it is not derived from `routing`, ids,
+hosts, ports, or `/v1/models`. An invalid value is noted, treated as false, and
+the entry (even the default) is kept. `billing.mode` (`unmetered` or
+`provider-reported`) is separate and entry-local: `unmetered` is an explicit
+USD zero, `provider-reported` declares native `usage.cost` is USD, omission
+declares neither. `key_env` stays independent of both. Both keys surface in the
+`endpoints` JSON (`frontdoor`, and `billing` when set) and in
+`models.resolve_endpoint()` (`frontdoor`, `billing_mode`).
+
+**Reported cost has one read point and a trust gate.** The front door strips
+upstream `usage.cost` / `usage.cost_source` unless the serving deployment is
+`provider-reported`, and injects `cost: 0.0` + `cost_source: registry-unmetered`
+only for `unmetered`. `OpenRouterBackend` reads native `usage.cost` once and
+accepts it only for a `frontdoor: true` or `provider-reported` endpoint (an
+unmarked provider cannot opt in via response content). The paired
+`LLMResponse.reported_cost_usd` / `reported_cost_source` are both present or
+both `None`, finite and non-negative; invalid values are ignored, never coerced
+to zero. Streaming is not normalized.
+
+**Backend health is a preference with a fallback, inside one budget.**
+`GET /health` is liveness only (never an upstream probe). `GET /health/backends?budget_ms=N`
+(protocol 1) probes the app's OWN loaded registry entries (`account.probe_entry`,
+explicit timeout, never the 2 s default and never a re-load from disk), and
+`reachability.check_transport` asks it only for a `frontdoor: true` entry. The
+health socket gets `HEALTH_SHARE` of the client timeout, the requested inner
+budget is strictly below that socket budget, and the `/models` fallback gets only
+what is left, so health plus fallback never exceed the caller's one timeout.
+Anything other than a decisive `reachable`/`unreachable` group verdict falls back.
+Do not make the front door's group aggregate the only signal: a group with an
+uncapped paid tier reads `reachable` even when local deployments are down, so the
+per-deployment statuses stay visible in the detail.
+
 **The seam is RUN-ONCE by default: one request, at most one invocation.**
 `retry_max_attempts` defaults to 1, so the claude retry is opt-in and
 `LLMResponse.attempts` above 1 is evidence of a caller's own policy rather than

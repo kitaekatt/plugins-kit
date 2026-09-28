@@ -297,3 +297,62 @@ class TestProbeEndpoint:
         assert probe.ok is False
         assert "SOME_LOCAL_KEY" in probe.detail
         mock_open.assert_not_called()
+
+
+class TestProbeEntry:
+    """The resolved-entry probe: no name resolution, explicit timeout, injected key."""
+
+    def _entry(self, **kw):
+        from llm_scripting_kit.model_endpoints import EndpointEntry
+
+        values = dict(id="dep", base_url="http://dep.invalid:8080/v1", model="m")
+        values.update(kw)
+        return EndpointEntry(**values)
+
+    def test_timeout_has_no_implicit_default(self):
+        from llm_scripting_kit.account import probe_entry
+
+        with pytest.raises(TypeError):
+            probe_entry(self._entry())  # type: ignore[call-arg]
+
+    def test_keyless_entry_is_probed_with_the_explicit_timeout(self):
+        from llm_scripting_kit.account import probe_entry
+
+        with patch("urllib.request.urlopen") as mock_open:
+            mock_open.return_value = _ok_response({})
+            probe = probe_entry(self._entry(), timeout=1.25)
+        assert probe.ok is True and probe.decisive is True
+        assert mock_open.call_args[1]["timeout"] == 1.25
+        req = mock_open.call_args[0][0]
+        assert req.full_url == "http://dep.invalid:8080/v1/models"
+        assert "Authorization" not in req.headers
+
+    def test_keyed_entry_uses_the_injected_key_resolver(self):
+        from llm_scripting_kit.account import probe_entry
+
+        with patch("urllib.request.urlopen") as mock_open:
+            mock_open.return_value = _ok_response({})
+            probe = probe_entry(
+                self._entry(key_env="DEP_KEY"), timeout=1.0, key_resolver=lambda: "sekret"
+            )
+        assert probe.ok is True
+        assert mock_open.call_args[0][0].headers["Authorization"] == "Bearer sekret"
+        assert "sekret" not in probe.detail
+
+    def test_missing_key_is_not_a_decisive_verdict(self):
+        from llm_scripting_kit.account import probe_entry
+
+        with patch("urllib.request.urlopen") as mock_open:
+            probe = probe_entry(
+                self._entry(key_env="DEP_KEY"), timeout=1.0, key_resolver=lambda: None
+            )
+        assert probe.ok is False and probe.decisive is False
+        mock_open.assert_not_called()
+
+    def test_network_failure_is_decisive(self):
+        from llm_scripting_kit.account import probe_entry
+
+        with patch("urllib.request.urlopen", side_effect=urllib.error.URLError("refused")):
+            probe = probe_entry(self._entry(), timeout=1.0)
+        assert probe.ok is False and probe.decisive is True
+        assert "refused" in probe.detail

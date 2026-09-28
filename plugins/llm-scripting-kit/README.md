@@ -467,6 +467,68 @@ to the next tier. Run it with `llm-scripting-kit frontdoor ...` or
 one process's memory. `--check` prints tiers and lists transport entries that
 are not tagged.
 
+#### Marking a front door and declaring billing
+
+Two independent, additive keys on a transport entry in the model-endpoints
+registry (llm-scripting-kit versions before 0.51.0 ignore them):
+
+```yaml
+models:
+  qwen38:
+    base_url: http://HOST:4000/v1
+    model: qwen3.8              # the routing group to query
+    frontdoor: true             # strict boolean; omitted means false
+    billing:
+      mode: unmetered           # or provider-reported; omitted declares neither
+```
+
+- `frontdoor: true` says only that `base_url` is an llm-scripting-kit front
+  door and `model` names its routing group. It is never inferred from
+  `routing`, ids, hosts, or ports, and it implies nothing about auth,
+  billing, or availability. An invalid value is noted in the registry notes,
+  treated as false, and the entry is kept.
+- `billing.mode: unmetered` is an explicit marginal USD zero.
+  `provider-reported` declares that the endpoint's native `usage.cost` is USD.
+  An invalid `billing` value is noted and ignored. A front-door group entry
+  does not carry `unmetered`; the serving deployment decides.
+- Both appear in the `endpoints` JSON (`frontdoor`, and `billing` when set) and
+  in `resolve_endpoint()` (`frontdoor`, `billing_mode`).
+
+#### Reported cost
+
+`LLMResponse` carries `reported_cost_usd` and `reported_cost_source`
+(`provider` or `registry-unmetered`); both are set together or both are `None`.
+`None` means unknown, never zero. The OpenAI-compatible transport reads a
+native `usage.cost` once, and accepts it only when the endpoint is
+`frontdoor: true` or declares `billing.mode: provider-reported`; an unmarked
+provider cannot opt itself in through response content. The front door decides
+what it stands behind for a non-streaming response: it forwards an upstream
+`usage.cost` only when the serving deployment declares `provider-reported`,
+otherwise strips any upstream `usage.cost` / `usage.cost_source`, and injects
+`usage.cost: 0.0` with `usage.cost_source: registry-unmetered` for an
+`unmetered` deployment. The validated amount and source go to the access log.
+Streaming responses are not normalized. A direct call to an `unmetered`
+endpoint does not synthesize a zero; only the front door injects it.
+
+#### `GET /health/backends`
+
+`/health` stays process liveness. `/health/backends` (protocol 1) probes every
+deployment of the loaded registry concurrently with `GET <base>/models`, never
+a completion, and reports per-deployment and per-group status
+(`reachable` / `unreachable` / `unknown`). A group is `reachable` when any
+deployment is, `unreachable` when every deployment decisively is, else
+`unknown`. `?budget_ms=<int>` sets the per-backend probe budget: missing,
+non-integer or non-positive values use 1500 ms, and larger values are clamped
+to 4000 ms.
+
+`probe` and `endpoints --verify` prefer this answer for a `frontdoor: true`
+entry (`checked: frontdoor-backends`), inside one client budget: the health
+request gets a share of `--timeout`, asks the server for a strictly smaller
+inner budget, and any remaining budget funds the ordinary `GET /models`
+fallback (`checked: frontdoor-backends+models-fallback`) when health is
+unavailable, malformed, on an unsupported protocol, missing the group, or
+`unknown`. Unmarked entries always use `GET /models`.
+
 ### `swapper` -- operator lifecycle over a llama-swap swapper (operator-only)
 
 `llm-scripting-kit swapper` manages a running llama-swap model swapper; it is

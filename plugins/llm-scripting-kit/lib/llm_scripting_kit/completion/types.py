@@ -8,6 +8,7 @@ only one transport, documented as ignored elsewhere) so the
 """
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Mapping, Optional, Protocol, Tuple, runtime_checkable
@@ -65,6 +66,27 @@ class EmptyCompletionError(RuntimeError):
         self.reasoning = reasoning
         self.finish_reason = finish_reason
         self.output_tokens = output_tokens
+
+
+#: ``reported_cost_source`` values. The source says WHY the amount is
+#: authoritative, not which host served the call.
+COST_SOURCE_PROVIDER = "provider"
+COST_SOURCE_REGISTRY_UNMETERED = "registry-unmetered"
+COST_SOURCES = (COST_SOURCE_PROVIDER, COST_SOURCE_REGISTRY_UNMETERED)
+
+
+def valid_reported_cost(value: Any) -> Optional[float]:
+    """The value as a USD amount, or None when it is not a valid one.
+
+    Booleans, strings, NaN, infinity and negative numbers are ignored -- never
+    coerced to zero -- because a wrong zero reads as "free" downstream.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    amount = float(value)
+    if not math.isfinite(amount) or amount < 0:
+        return None
+    return amount
 
 
 @dataclass(frozen=True)
@@ -169,6 +191,14 @@ class LLMResponse:
       came back as text.
     - ``started_at`` / ``ended_at`` -- ISO-8601 UTC timestamps bracketing the
       live call (``None`` on a cache hit, where no live call happened).
+    - ``reported_cost_usd`` / ``reported_cost_source`` -- an AUTHORITATIVE USD
+      amount for this call and the reason it is authoritative
+      (:data:`COST_SOURCE_PROVIDER` or :data:`COST_SOURCE_REGISTRY_UNMETERED`).
+      Both are present or both are ``None``; a present amount is finite and
+      non-negative. ``None`` means UNKNOWN, never zero: an unmarked endpoint's
+      native ``usage.cost`` is ignored, and a call with no reported cost is
+      priced by whatever estimator the consumer holds. See
+      :func:`valid_reported_cost`.
 
     A note for anyone adding another field here, learned from ``total_tokens``
     above: think about what a consumer will SUM or COUNT. None of the fields
@@ -197,6 +227,8 @@ class LLMResponse:
     structured: Optional[Any] = None
     started_at: Optional[str] = None
     ended_at: Optional[str] = None
+    reported_cost_usd: Optional[float] = None
+    reported_cost_source: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -289,6 +321,10 @@ __all__ = [
     "BackendOptions",
     "LLMBackend",
     "ResponseError",
+    "COST_SOURCE_PROVIDER",
+    "COST_SOURCE_REGISTRY_UNMETERED",
+    "COST_SOURCES",
+    "valid_reported_cost",
     "COMPLETED",
     "TIMEOUT",
     "ERROR",

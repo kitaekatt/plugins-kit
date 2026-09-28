@@ -9,6 +9,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
+from ..account import probe_entry
+from ..completion.types import (
+    COST_SOURCE_PROVIDER,
+    COST_SOURCE_REGISTRY_UNMETERED,
+    valid_reported_cost,
+)
 from ..model_endpoints import (
     EndpointEntry,
     EndpointRegistry,
@@ -29,6 +35,34 @@ class RuntimeDeployment:
     @property
     def routing(self) -> Any:
         return self.entry.routing
+
+
+#: ``GET /health/backends?budget_ms=<int>``: the per-backend probe budget the
+#: caller asks for, in integer milliseconds. Clamped to the maximum; a missing,
+#: non-integer or non-positive value uses the default.
+BACKEND_BUDGET_DEFAULT_MS = 1500
+BACKEND_BUDGET_MAX_MS = 4000
+BACKEND_HEALTH_PROTOCOL = 1
+
+
+def _parse_budget_ms(raw: Optional[str]) -> int:
+    """The per-backend probe budget in ms, from the raw query value."""
+    try:
+        value = int(raw) if raw is not None and raw.strip().lstrip("+-").isdigit() else None
+    except ValueError:
+        value = None
+    if value is None or value <= 0:
+        return BACKEND_BUDGET_DEFAULT_MS
+    return min(value, BACKEND_BUDGET_MAX_MS)
+
+
+def _group_verdict(statuses: list[str]) -> str:
+    """reachable if any deployment is; unreachable only if every one decisively is."""
+    if "reachable" in statuses:
+        return "reachable"
+    if statuses and all(status == "unreachable" for status in statuses):
+        return "unreachable"
+    return "unknown"
 
 
 def _iso_now() -> str:
@@ -95,6 +129,50 @@ def _usage_from_json(body: bytes) -> tuple[Optional[int], Optional[int]]:
     except (ValueError, TypeError):
         return None, None
     return usage.get("prompt_tokens"), usage.get("completion_tokens")
+
+
+def _apply_cost_policy(
+    content: bytes, entry: EndpointEntry
+) -> tuple[bytes, Optional[float], Optional[str]]:
+    """Decide which reported cost this front door stands behind (amendment R1).
+
+    The serving deployment's ``billing.mode`` is the only authority. An upstream
+    ``usage.cost`` is forwarded ONLY for ``provider-reported``; otherwise it and
+    any ``usage.cost_source`` are stripped. ``unmetered`` then injects an
+    explicit ``usage.cost: 0.0`` with ``usage.cost_source: registry-unmetered``.
+    Returns the (possibly rewritten) body plus the validated amount and source
+    for the access log. A body that is not a JSON object passes through as is.
+    """
+    try:
+        body = json.loads(content)
+    except (ValueError, TypeError):
+        return content, None, None
+    if not isinstance(body, dict):
+        return content, None, None
+    mode = entry.billing_mode
+    usage = body.get("usage")
+    if not isinstance(usage, dict):
+        if mode != "unmetered":
+            return content, None, None
+        usage = {}
+        body["usage"] = usage
+    changed = "cost_source" in usage
+    usage.pop("cost_source", None)
+    if mode == "provider-reported":
+        amount = valid_reported_cost(usage.get("cost"))
+        source = COST_SOURCE_PROVIDER if amount is not None else None
+    else:
+        changed = "cost" in usage or changed
+        usage.pop("cost", None)
+        amount = source = None
+        if mode == "unmetered":
+            usage["cost"] = 0.0
+            usage["cost_source"] = COST_SOURCE_REGISTRY_UNMETERED
+            amount, source = 0.0, COST_SOURCE_REGISTRY_UNMETERED
+            changed = True
+    if not changed:
+        return content, amount, source
+    return json.dumps(body).encode("utf-8"), amount, source
 
 
 def _normalize_body(body: dict[str, Any], entry: EndpointEntry) -> tuple[dict[str, Any], Optional[str]]:
@@ -261,6 +339,8 @@ def create_app(
         prompt_tokens: Optional[int] = None
         completion_tokens: Optional[int] = None
         error: Optional[str] = None
+        reported_cost: Optional[float] = None
+        cost_source: Optional[str] = None
         while True:
             if all(deployment.entry.id in excluded for deployment in groups[group]):
                 if deployment is not None:
@@ -322,6 +402,10 @@ def create_app(
                     excluded.add(deployment.entry.id)
                     continue
                 error = None
+                if status < 400:
+                    content, reported_cost, cost_source = _apply_cost_policy(
+                        content, deployment.entry
+                    )
                 return Response(content=content, status_code=status, media_type=response.headers.get("content-type"), headers=_header_value(deployment.entry))
             except Exception as exc:
                 # httpx timeouts stringify to "" -- keep the class name so the
@@ -338,7 +422,7 @@ def create_app(
             finally:
                 if not stream and acquired and deployment is not None:
                     await release(deployment, user)
-                    _log(deployment, user, group, body, status, started, prompt_tokens, completion_tokens, stream, error, log_path)
+                    _log(deployment, user, group, body, status, started, prompt_tokens, completion_tokens, stream, error, log_path, reported_cost, cost_source)
 
     @app.get("/v1/models")
     async def models() -> Any:
@@ -347,6 +431,48 @@ def create_app(
     @app.get("/health")
     async def health() -> Any:
         return {"status": "ok", "spill_after_s": spill_after, "deployments": [_deployment_json(d) for ds in groups.values() for d in ds]}
+
+    @app.get("/health/backends")
+    async def health_backends(budget_ms: Optional[str] = None) -> Any:
+        """Per-deployment reachability of THIS app's registry (protocol 1).
+
+        Issues only ``GET <deployment base>/models`` (never a completion), all
+        deployments concurrently, each bounded by the explicit budget. The
+        historical ``last_error`` is not a verdict and is not consulted.
+        """
+        timeout = _parse_budget_ms(budget_ms) / 1000.0
+
+        async def probe(deployment: RuntimeDeployment) -> dict[str, Any]:
+            entry = deployment.entry
+            resolver = (lambda d=deployment: _deployment_key(d)) if entry.key_env else None
+            try:
+                result = await asyncio.to_thread(
+                    probe_entry, entry, timeout=timeout, key_resolver=resolver
+                )
+                if result.ok:
+                    status = "reachable"
+                elif result.decisive and result.resolved:
+                    status = "unreachable"
+                else:
+                    status = "unknown"
+                detail = result.detail
+            except Exception as exc:  # noqa: BLE001 -- a failed check is "unknown", never "down"
+                status, detail = "unknown", f"{type(exc).__name__}: {exc}".rstrip(": ")
+            return {"id": entry.id, "status": status, "checked": "models-endpoint", "detail": detail}
+
+        ordered = [(group, d) for group, ds in groups.items() for d in ds]
+        results = await asyncio.gather(*(probe(d) for _, d in ordered))
+        report: dict[str, Any] = {}
+        for (group, _), item in zip(ordered, results):
+            report.setdefault(group, {"status": "unknown", "deployments": []})["deployments"].append(item)
+        for value in report.values():
+            value["status"] = _group_verdict([d["status"] for d in value["deployments"]])
+        return {
+            "protocol": BACKEND_HEALTH_PROTOCOL,
+            "frontdoor_status": "ok",
+            "checked_at": _iso_now(),
+            "groups": report,
+        }
 
     @app.get("/who")
     async def who() -> Any:
@@ -363,9 +489,13 @@ def _deployment_json(deployment: RuntimeDeployment, *, include_users: bool = Fal
     return value
 
 
-def _log(deployment: RuntimeDeployment, user: Optional[str], group: str, body: dict[str, Any], status: Optional[int], started: float, prompt_tokens: Optional[int], completion_tokens: Optional[int], stream: bool, error: Optional[str], path: Path) -> None:
+def _log(deployment: RuntimeDeployment, user: Optional[str], group: str, body: dict[str, Any], status: Optional[int], started: float, prompt_tokens: Optional[int], completion_tokens: Optional[int], stream: bool, error: Optional[str], path: Path, reported_cost: Optional[float] = None, cost_source: Optional[str] = None) -> None:
     routing = deployment.routing
-    _append_access(path, {"ts": _iso_now(), "user": user, "group": group, "deployment": deployment.entry.id, "api_base": deployment.entry.base_url, "model": deployment.entry.model, "order": routing.order, "status": status, "latency_ms": int((time.monotonic() - started) * 1000), "prompt_tokens": prompt_tokens, "completion_tokens": completion_tokens, "stream": stream, "error": error})
+    record: dict[str, Any] = {"ts": _iso_now(), "user": user, "group": group, "deployment": deployment.entry.id, "api_base": deployment.entry.base_url, "model": deployment.entry.model, "order": routing.order, "status": status, "latency_ms": int((time.monotonic() - started) * 1000), "prompt_tokens": prompt_tokens, "completion_tokens": completion_tokens, "stream": stream, "error": error}
+    if reported_cost is not None and cost_source is not None:
+        record["reported_cost_usd"] = reported_cost
+        record["reported_cost_source"] = cost_source
+    _append_access(path, record)
 
 
 def _parser() -> argparse.ArgumentParser:
