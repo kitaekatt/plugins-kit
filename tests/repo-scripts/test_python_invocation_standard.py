@@ -735,6 +735,10 @@ _PYTHON_ALLOWLIST: dict[str, AllowlistEntry] = {
     "plugins/llm-scripting-kit/lib/llm_scripting_kit/frontdoor/server.py": AllowlistEntry(
         'prog="python -m llm_scripting_kit.frontdoor"',
         "argparse prog= display string, not an invocation"),
+    "plugins/llm-scripting-kit/lib/llm_scripting_kit/swapper.py": AllowlistEntry(
+        'name.lower().startswith("python")',
+        "process-name classification (psutil name of an mlx_lm.server "
+        "host process), not an interpreter spawn"),
     "plugins/pdf-kit/custom_bootstrap.py": AllowlistEntry(
         'data_dir / ".venv" / "Scripts" / "python.exe",',
         "resolves the plugin-data venv python path, then subprocess.run "

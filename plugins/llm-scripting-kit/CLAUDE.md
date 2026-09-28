@@ -35,6 +35,62 @@ unsuffixed name always means the NInfer path. All bind localhost by default;
 broader network exposure is an explicit host override. They all default to port
 8080, so only one can serve at a time.
 
+## `swapper`: operator lifecycle over a llama-swap swapper
+
+`llm-scripting-kit swapper` (`lib/llm_scripting_kit/swapper.py`, process
+mechanics in `_swapper_process.py`) is a **CLI operator tool, not a client
+API.** A pipeline or script that wants a model already resolves it through
+the registry and the completion seam ("Scope: one call, made correctly"
+below); this group is for the person (or the launcher script) managing the
+swapper process itself. `--help` on any subcommand is the detailed
+reference; this section states only what a reader would otherwise have to
+reverse-engineer from the source.
+
+`running`, `terminate` and `unload` take exactly one of `--endpoint NAME` (a
+configured model-endpoints registry entry) or `--url URL`; `strays` scans the
+local process table and takes no target. Every verb except `guard-launch`
+takes `--format json|text` (default `json`); `guard-launch`'s only argument
+is `--caller-pid`. Exit codes are shared across the group: `0` success (or, for `strays`,
+none found); `1` an operation failure, a safety refusal, a missing resident
+model, or (for `strays`) strays found; `2` a usage/configuration error,
+including aiming `terminate` or `unload` at a non-loopback target; `3`
+reserved for `guard-launch`'s explicit `LaunchRefused` only -- never reused by
+another verb, because the launcher that calls it must tell an unambiguous
+refusal apart from an uncaught exception, which exits `1` like any other; `5`
+the inspection itself could not run to a verdict (access denied, or `psutil`
+unavailable), never conflated with "not found" or "unreachable".
+
+`terminate` and `unload` verify the target through the local process table
+before signalling anything (loopback-only, exact same-user `llama-swap`
+listener, direct child, port match, `create_time` re-checked immediately
+before the signal) -- see the six numbered safety rules in `swapper.py`'s
+module docstring. Signals never target a PID by name or command-line pattern.
+
+`unload` is **operator-only and never a client action**: it stops every
+resident model with no drain of in-flight requests, which is why the CLI
+requires both `--all` and `--accept-no-drain` even for one call -- neither
+flag has a default that lets the operation proceed silently.
+
+`strays` reports recognized model-server processes (`ninfer-serve`,
+`llama-server`; `mlx_lm.server` by argv only, since its process name is
+Python) with no swapper ancestor -- residency that bypassed the launcher
+guard below, or survived a swapper that exited. It detects and refuses; it
+does not kill anything.
+
+`guard-launch` is the facade `model-server.sh` calls immediately before
+`exec`, so a manual launch cannot bypass an active same-user swapper. It is
+**fail-open by contract**: only `LaunchRefused` (exit `3`) blocks the launch.
+Every other outcome -- no Python interpreter found, the guard script missing,
+`psutil` unavailable (`InspectionIndeterminate`, exit `5`), any other nonzero
+exit, or an uncaught exception (exit `1`, indistinguishable on purpose from a
+refusal the guard never issued) -- makes `model-server.sh` warn on stderr and
+proceed with the launch. A broken guard must never stop llama-swap's own
+children from starting; the asymmetry is why `LaunchRefused` alone carries
+exit `3` while every sibling `SwapperError` maps to `1` or `2`.
+`LLM_SCRIPTING_KIT_LAUNCH_GUARD=off` skips the guard entirely (no interpreter
+call, no warning) for a team that wants a manual launch beside an active
+swapper on purpose; default and every other value is on.
+
 ## Reachability is not configuration, and it is never a completion
 
 `endpoints` lists what is CONFIGURED and is pure static data -- always
@@ -393,6 +449,8 @@ claude_md:
       - "the front door: the `frontdoor` verb and launcher, the transport-only
         `routing:` keys, fill-then-spill ordering, the single-worker constraint
         and `--check`"
+      - "the `swapper` CLI group: its process-safety rules, exit codes, and
+        the fail-open launcher guard"
     excludes:
       - codex dispatch mechanics (orchestrate's codex-dispatch.md)
       - codex dispatch mechanics and endpoint compatibility (awesome-kit's

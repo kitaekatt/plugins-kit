@@ -39,6 +39,14 @@ from .reachability import (
 from . import usage_budget
 from .declaration import DeclarationSupportError, NoUsableRoutingTarget, describe
 from .seats import discover_seats
+from .swapper import (
+    SwapperClient,
+    SwapperError,
+    check_launch_allowed,
+    find_strays,
+    resolve_swapper_url,
+    terminate_model,
+)
 from .request_protocol import (
     PROTOCOL_VERSION,
     ProtocolError,
@@ -111,6 +119,20 @@ def _add_models_arg(parser: argparse.ArgumentParser) -> None:
             "Model declaration: registry ids, comma-separated or repeated. The "
             "first usable entry of the pace-ordered list is used."
         ),
+    )
+
+
+def _add_swapper_target_arg(parser: argparse.ArgumentParser) -> None:
+    """``--endpoint`` or ``--url``, exactly one -- the swapper this verb targets."""
+    target = parser.add_mutually_exclusive_group(required=True)
+    target.add_argument("--endpoint", help="A configured model-endpoints registry entry naming the swapper.")
+    target.add_argument("--url", help="The swapper's base URL directly.")
+
+
+def _add_swapper_format_arg(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--format", choices=("json", "text"), default="json",
+        help="Output format (default json).",
     )
 
 
@@ -315,6 +337,52 @@ def _parser() -> argparse.ArgumentParser:
     # front door's own parser, because argparse.REMAINDER on a subparser's sole
     # positional drops a leading option (`frontdoor --check` would not parse).
     sub.add_parser("frontdoor", help="Run the OpenAI-compatible fill-first front door.", add_help=False)
+
+    swapper_cmd = sub.add_parser("swapper", help="Manage a llama-swap local model swapper.")
+    swapper_sub = swapper_cmd.add_subparsers(dest="swapper_action", required=True)
+
+    swapper_running = swapper_sub.add_parser("running", help="List models currently resident on the swapper.")
+    _add_swapper_target_arg(swapper_running)
+    _add_swapper_format_arg(swapper_running)
+
+    swapper_terminate = swapper_sub.add_parser(
+        "terminate", help="SIGTERM (then SIGKILL on timeout) the verified server for one model."
+    )
+    swapper_terminate.add_argument("model", help="The model name as reported by /running.")
+    _add_swapper_target_arg(swapper_terminate)
+    swapper_terminate.add_argument(
+        "--grace-seconds", type=float, default=10.0,
+        help="Seconds to wait after SIGTERM before escalating to SIGKILL (default 10).",
+    )
+    _add_swapper_format_arg(swapper_terminate)
+
+    swapper_unload = swapper_sub.add_parser("unload", help="Unload every model resident on the swapper.")
+    _add_swapper_target_arg(swapper_unload)
+    swapper_unload.add_argument(
+        "--all", action="store_true", required=True,
+        help="Confirm unloading every resident model (required).",
+    )
+    swapper_unload.add_argument(
+        "--accept-no-drain", action="store_true", required=True,
+        help="Confirm in-flight requests are not drained before unload (required).",
+    )
+    _add_swapper_format_arg(swapper_unload)
+
+    swapper_strays = swapper_sub.add_parser(
+        "strays", help="Report recognized model servers with no swapper ancestor."
+    )
+    _add_swapper_format_arg(swapper_strays)
+
+    swapper_guard_launch = swapper_sub.add_parser(
+        "guard-launch",
+        help=(
+            "Refuse (exit 3) a manual launch beside an active same-user "
+            "swapper. Quiet on success."
+        ),
+    )
+    swapper_guard_launch.add_argument(
+        "--caller-pid", type=int, required=True, help="The launching process's PID."
+    )
     return parser
 
 
@@ -353,6 +421,8 @@ def main(argv: Optional[list[str]] = None) -> int:
             return EXIT_OK
         if args.cmd == "complete":
             return _cmd_complete(args)
+        if args.cmd == "swapper":
+            return _cmd_swapper(args)
     except NoUsableRoutingTarget as floor:
         # The floor is the one selection error: loud, itemised, and a
         # failure rather than a usage error -- a reset window can clear it.
@@ -595,6 +665,143 @@ def _cmd_seats(
             )
         return EXIT_INDETERMINATE
     return EXIT_OK
+
+
+# ---------------------------------------------------------------------------
+# swapper: a thin facade over llm_scripting_kit.swapper. Every exception the
+# library raises carries its own `exit_code` (1, 2, 3 or 5), so this CLI maps
+# errors by reading that attribute rather than by re-deciding it per verb.
+# LaunchRefused is exit 3, not 1 -- a distinct code from every other
+# EXIT_FAILURE-mapped SwapperError, because guard-launch's caller
+# (model-server.sh) must fail OPEN on an uncaught exception (which exits 1
+# like any other unhandled Python error) and can only refuse a launch on an
+# EXPLICIT, unambiguous refusal.
+# ---------------------------------------------------------------------------
+
+#: Bumped only if the swapper verbs' JSON shape changes incompatibly.
+SWAPPER_PROTOCOL_VERSION = 1
+
+
+def _swapper_error_kind(exc: SwapperError) -> str:
+    """The exception's class name as a kebab-case ``error.kind`` string.
+
+    A mechanical name transform, not a per-exception decision: it is what
+    keeps the CLI from having to know each swapper exception individually.
+    ``NonLocalTargetError`` -> ``non-local-target``,
+    ``InspectionIndeterminate`` -> ``inspection-indeterminate``.
+    """
+    name = type(exc).__name__
+    if name.endswith("Error"):
+        name = name[: -len("Error")]
+    out: list[str] = []
+    for ch in name:
+        if ch.isupper() and out:
+            out.append("-")
+        out.append(ch.lower())
+    return "".join(out)
+
+
+def _swapper_client(args: argparse.Namespace) -> SwapperClient:
+    url = resolve_swapper_url(endpoint=args.endpoint, url=args.url)
+    return SwapperClient(url)
+
+
+def _cmd_swapper_running(args: argparse.Namespace) -> int:
+    client = _swapper_client(args)
+    models = client.running()
+    if args.format == "text":
+        for m in models:
+            print(f"{m.model}\t{m.state}\t{m.proxy}")
+    else:
+        _json({
+            "protocol": SWAPPER_PROTOCOL_VERSION,
+            "endpoint": client.base_url,
+            "models": [dataclasses.asdict(m) for m in models],
+        })
+    return EXIT_OK
+
+
+def _cmd_swapper_terminate(args: argparse.Namespace) -> int:
+    client = _swapper_client(args)
+    result = terminate_model(client, args.model, grace_s=args.grace_seconds)
+    if args.format == "text":
+        note = " (escalated to SIGKILL)" if result.escalated else ""
+        print(f"{args.model}: sent {result.signal} to pid {result.process.pid}{note}")
+    else:
+        _json({
+            "protocol": SWAPPER_PROTOCOL_VERSION,
+            "endpoint": client.base_url,
+            "model": args.model,
+            "pid": result.process.pid,
+            "swapper_pid": result.process.swapper_pid,
+            "signal": result.signal,
+            "escalated": result.escalated,
+        })
+    return EXIT_OK
+
+
+def _cmd_swapper_unload(args: argparse.Namespace) -> int:
+    client = _swapper_client(args)
+    unloaded = client.unload_all()
+    if args.format == "text":
+        if not unloaded:
+            print("no models were resident")
+        for m in unloaded:
+            print(f"unloaded {m.model}")
+    else:
+        _json({
+            "protocol": SWAPPER_PROTOCOL_VERSION,
+            "endpoint": client.base_url,
+            "unloaded": [dataclasses.asdict(m) for m in unloaded],
+        })
+    return EXIT_OK
+
+
+def _cmd_swapper_strays(args: argparse.Namespace) -> int:
+    strays = find_strays()
+    if args.format == "text":
+        if not strays:
+            print("no strays found")
+        for rec in strays:
+            print(f"{rec.pid}\t{rec.name}\towner={rec.owner}")
+    else:
+        _json({
+            "protocol": SWAPPER_PROTOCOL_VERSION,
+            "strays": [dataclasses.asdict(rec) for rec in strays],
+        })
+    # Contract: 0 when none are found, 1 when strays are found -- the same
+    # "operation failure, safety refusal, or strays found" bucket every other
+    # swapper verb's EXIT_FAILURE means.
+    return EXIT_FAILURE if strays else EXIT_OK
+
+
+def _cmd_swapper_guard_launch(args: argparse.Namespace) -> int:
+    """Quiet on success. A refusal raises ``LaunchRefused`` (exit 3), caught
+    by ``_cmd_swapper``, which is the only exit code its caller
+    (model-server.sh) treats as a refusal."""
+    check_launch_allowed(caller_pid=args.caller_pid)
+    return EXIT_OK
+
+
+def _cmd_swapper(args: argparse.Namespace) -> int:
+    try:
+        if args.swapper_action == "running":
+            return _cmd_swapper_running(args)
+        if args.swapper_action == "terminate":
+            return _cmd_swapper_terminate(args)
+        if args.swapper_action == "unload":
+            return _cmd_swapper_unload(args)
+        if args.swapper_action == "strays":
+            return _cmd_swapper_strays(args)
+        if args.swapper_action == "guard-launch":
+            return _cmd_swapper_guard_launch(args)
+    except SwapperError as exc:
+        _json(
+            {"error": {"kind": _swapper_error_kind(exc), "message": str(exc)}},
+            stream=sys.stderr,
+        )
+        return exc.exit_code
+    return EXIT_USAGE
 
 
 # Which adapter family serves an endpoint. Mirrors create_backend's harness

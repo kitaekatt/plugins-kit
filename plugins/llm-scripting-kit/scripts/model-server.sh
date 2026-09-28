@@ -3,6 +3,8 @@
 
 set -euo pipefail
 
+readonly script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 readonly profile="${1:-}"
 if [[ -z "$profile" ]]; then
     printf 'Usage: model-server.sh <qwen36|qwen38|qwen38l> [--help|--print-command] [SERVER_ARGS...]\n' >&2
@@ -194,5 +196,78 @@ if [[ "${1:-}" == "--print-command" ]]; then
     printf '\n'
     exit 0
 fi
+
+# --- launch guard ------------------------------------------------------------
+# Reached only for a real launch -- --help and --print-command both returned
+# above. Ask the library-backed swapper guard
+# (llm_scripting_kit.swapper.check_launch_allowed, via its CLI facade,
+# `llm-scripting-kit swapper guard-launch`) whether launching here would
+# bypass an active same-user llama-swap.
+#
+# FAIL OPEN on anything but an explicit refusal: a broken guard must never
+# stop llama-swap from launching its own children (this repo's CLAUDE.md,
+# decision record for unit swapper-cli-u3).
+#   - exit 0 (LaunchRefused not raised; quiet on success) -> proceed.
+#   - exit 3 (LaunchRefused -- the ONLY code that means "explicitly
+#     refused") -> refuse; do not exec.
+#   - anything else -- including exit 1, which is what an UNCAUGHT Python
+#     exception also produces (so 1 can never mean "refused" here), no
+#     Python interpreter (checked below, before any invocation), the CLI
+#     script missing (Python's own "can't open file" is exit 2),
+#     InspectionIndeterminate (5; covers a missing psutil -- see
+#     _swapper_process.PsutilInspector, which converts that ImportError
+#     itself rather than letting it escape uncaught), or any other nonzero
+#     exit -- warns once and proceeds.
+#
+# LLM_SCRIPTING_KIT_LAUNCH_GUARD=off skips this function entirely -- no
+# interpreter call, no warning -- for a team that wants a manual launch
+# beside an active swapper on purpose (spare VRAM, an intentional second
+# server). Default is on; any other value, or leaving it unset, is on.
+guard_launch() {
+    local caller_pid="$1"
+    if [[ "${LLM_SCRIPTING_KIT_LAUNCH_GUARD:-on}" == "off" ]]; then
+        return 0
+    fi
+    local data_dir="${HOME}/.claude/plugins/data/plugins-kit/llm-scripting-kit"
+    local default_py
+    case "$(uname -s 2>/dev/null || printf '%s' Unknown)" in
+        MINGW*|MSYS*|CYGWIN*) default_py="$data_dir/.venv/Scripts/python.exe" ;;
+        *)                    default_py="$data_dir/.venv/bin/python" ;;
+    esac
+    # Same override name and same venv-first resolution frontdoor.sh uses --
+    # no PATH/BOOTSTRAP_PYTHON fallback chain here on purpose: a missing
+    # interpreter is exactly the "guard cannot run" case above, decided
+    # locally rather than by interpreting some other script's exit code.
+    local python_bin="${LLM_SCRIPTING_KIT_PYTHON:-$default_py}"
+    local cli_script="${LLM_SCRIPTING_KIT_CLI:-$script_dir/llm_scripting_kit_cli.py}"
+    if [[ ! -x "$python_bin" ]]; then
+        printf 'model-server.sh: launch guard skipped (no Python interpreter at %s); proceeding without it\n' \
+            "$python_bin" >&2
+        return 0
+    fi
+    local guard_output
+    local guard_status
+    if guard_output="$("$python_bin" "$cli_script" swapper guard-launch --caller-pid "$caller_pid" 2>&1)"; then
+        guard_status=0
+    else
+        guard_status=$?
+    fi
+    case "$guard_status" in
+        0)
+            return 0
+            ;;
+        3)
+            printf 'model-server.sh: launch refused by the swapper guard:\n%s\n' "$guard_output" >&2
+            exit 1
+            ;;
+        *)
+            printf 'model-server.sh: swapper launch guard did not complete cleanly (exit %s); proceeding without it: %s\n' \
+                "$guard_status" "$(printf '%s' "$guard_output" | tr '\n' ' ')" >&2
+            return 0
+            ;;
+    esac
+}
+
+guard_launch "$$"
 
 exec "${command[@]}" "$@"

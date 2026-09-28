@@ -181,10 +181,11 @@ standards_set:
         rewritten as an invariant to get it in. That rewrite is a scope
         widening, the same operation that turns a true observation into a false
         ambient claim. The overflow file exists so this rejection stops
-        destroying information; it is a release valve, not an output, and
-        admission to it requires this criterion to have rejected the fact
-        first. Contract, format, and the consuming capability:
-        ../capability-boundaries.md.
+        destroying information; this criterion's rejection is this file's
+        own route into it (source: coverage-lane:hazard-durability), one of
+        several the sidecar admits. Format, placement, and the full schema:
+        ../deferred-defects.md. The capability that eventually verifies an
+        entry: ../capability-boundaries.md.
 
     - id: loud-failure-excluded
       statement: >-

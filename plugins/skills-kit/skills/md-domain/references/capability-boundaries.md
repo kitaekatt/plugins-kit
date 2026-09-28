@@ -86,87 +86,22 @@ reason the pointer is a required part of the design rather than a courtesy:
 without it the file is discoverable only by a tool that already knows to look
 for it, which is precisely the coupling the split avoids.
 
-Until it exists, the records described below accumulate unread. That is the
-intended failure mode -- an unread queue is recoverable, whereas a fact
-destroyed at the moment it was noticed is not.
+Until it exists, the records described in `deferred-defects.md` accumulate
+unread. That is the intended failure mode -- an unread queue is recoverable,
+whereas a fact destroyed at the moment it was noticed is not.
 
 ## The hand-off: `CLAUDE-potential-defects.md`
 
-The one place md-domain emits anything defect-shaped, and it is a RELEASE VALVE
-rather than an output.
-
-**STATUS: the criteria route here, the lane does not write the file yet.**
-`standards/coverage-standards.md` carries the admission rule
-(`hazard-durability`) and the boundary statement, so a coverage run is directed
-to this destination. The generation lane's write step is not implemented, so
-until it is, a run has nowhere to put what the criteria tell it to record --
-treat an absent CLAUDE-potential-defects.md as "not implemented", never as "no
-defects observed".
-
-A candidate fact is sometimes rejected from a CLAUDE.md by `hazard-durability`
--- it describes a defect's transient state, which written as ambient prose
-would fossilize into a false instruction the moment the defect is fixed. That
-rejection is correct and it destroys information. The valve is where the
-rejected observation goes instead.
-
-Its properties are deliberate, and each one keeps this from becoming a code
-audit by accretion:
-
-- **Admission is a residue of a rejection.** An entry exists only because a
-  named criterion rejected the fact from the CLAUDE.md. There is no
-  defect-hunting pass; only what was encountered while reading the directory's
-  own direct code is eligible.
-- **Entries are UNVERIFIED, and say so.** They are possible defects. Verifying
-  them is the consuming audit's responsibility, and paying to verify findings
-  that may never be acted on is the cost this split exists to avoid.
-- **`observed` is separated from `suspected`.** The observation is cheap to
-  state truly; the inference is where confident falsehood enters. Separating
-  them keeps an unverified entry honest rather than merely fast.
-- **It is REFERENCED, never ambient.** A CLAUDE.md may carry a one-line pointer
-  and no entry content. The file is not a composition input, so a defect claim
-  cannot hoist upward and become ambient guidance.
-- **No file when there are no entries.** An empty one implies a clean bill of
-  health that nothing established. An ABSENT file means "nothing was recorded",
-  never "nothing is wrong here".
-
-The format, in full -- a short prose header stating what the file is, then one
-YAML block. Using the one observation this rule has actually produced:
-
-```yaml
-potential_defects:
-  _schema_version: "1"
-  status: unverified
-  entries:
-    - id: pd-1
-      anchor: docs/parity_ref/capture_web.mjs:3
-      observed: >-
-        Imports playwright-core. It appears in neither package.json nor
-        package-lock.json, and is absent from node_modules. The file's own
-        header asserts it is "already in node_modules transitively".
-      suspected: >-
-        The script cannot run as checked in, and the documented remedy
-        (npx playwright install chromium) fetches the browser binary rather
-        than the package.
-      checked: >-
-        Nothing beyond the four reads above. Not executed.
-      why_not_ambient: >-
-        hazard-durability -- transient defect state; written as ambient prose
-        it would fossilize into a false instruction once fixed.
-```
-
-`observed` states only what was seen and must be true as written. `suspected`
-carries every inference, and is where a wrong entry is expected to be wrong.
-`checked` records what was actually done, and "nothing beyond the read above"
-is a complete and honest answer. `why_not_ambient` names the criterion that
-rejected the fact, which is what keeps the file a residue of a decision rather
-than a second output channel.
-
-**The field names differ on purpose across the boundary, and this is not
-drift.** The lane's agent-result schema carries `whyNotAmbient` in camelCase,
-alongside its neighbours `writtenFalseReason` and `candidatesRead`; the emitted
-FILE carries `why_not_ambient`, alongside every other YAML block in this skill.
-The writing agent translates one to the other. Do not "fix" either side to
-match the other without changing both.
+`CLAUDE-potential-defects.md` is a known-defects-deliberately-deferred sidecar
+whose primary definition, placement rule, admission routes, and YAML schema
+live in `deferred-defects.md` -- read that document, not this one, for the
+file's contract. What belongs here is narrower: the one admission route this
+capability-boundary discussion produces (a coverage run's `hazard-durability`
+rejection, detailed in `standards/coverage-standards.md`), and the fact that
+**verifying, retiring, or triaging any entry -- from any admission route -- is
+the code-audit capability's job, not md-domain's**, per the table above. Until
+code audit exists, entries accumulate unread by design; an entry is a
+recorded possibility, never a finding.
 
 ## The test, when it is not obvious
 

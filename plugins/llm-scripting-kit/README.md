@@ -467,6 +467,49 @@ to the next tier. Run it with `llm-scripting-kit frontdoor ...` or
 one process's memory. `--check` prints tiers and lists transport entries that
 are not tagged.
 
+### `swapper` -- operator lifecycle over a llama-swap swapper (operator-only)
+
+`llm-scripting-kit swapper` manages a running llama-swap model swapper; it is
+an operator tool, not something a client script calls to get a completion.
+`--help` on each subcommand is the detailed reference:
+
+```bash
+llm-scripting-kit swapper running --endpoint local
+llm-scripting-kit swapper terminate qwen38 --endpoint local [--grace-seconds 10]
+llm-scripting-kit swapper unload --endpoint local --all --accept-no-drain
+llm-scripting-kit swapper strays
+```
+
+`running`, `terminate` and `unload` take exactly one of `--endpoint NAME` or
+`--url URL`; `strays` scans the local process table and takes no target.
+Every verb except `guard-launch` takes `--format json|text` (default
+`json`); `guard-launch`'s only argument is `--caller-pid`. Shared exit codes: `0` success (or, for
+`strays`, none found); `1` an operation failure, a safety refusal, a missing
+resident model, or strays found; `2` a usage/configuration error, including a
+non-loopback `terminate`/`unload` target; `3` reserved for the launch guard's
+explicit refusal (see below); `5` the local process inspection could not run
+to a verdict (for example, `psutil` is unavailable) -- never reported as
+"not found" or "down".
+
+`terminate` and `unload` act only on verified local processes -- a loopback
+target, an exact same-user `llama-swap` listener, a direct child on the
+model's port, with its identity re-checked immediately before the signal is
+sent. `unload` stops **every** resident model with **no drain** of in-flight
+requests, so it is never a client action: the CLI requires both `--all` and
+`--accept-no-drain` to run it even once. `strays` reports recognized model
+servers with no swapper ancestor and does not kill them.
+
+`guard-launch` is the facade `model-server.sh` calls right before it execs a
+local model server, so a manual launch cannot silently bypass an active
+same-user swapper. It **fails open**: it refuses the launch only on exit `3`
+(an explicit refusal); any other outcome -- including exit `1` from an
+uncaught error, or the guard being unable to run at all -- makes
+`model-server.sh` print a warning and proceed with the launch anyway. A
+broken guard must never be able to stop llama-swap's own children from
+starting. `LLM_SCRIPTING_KIT_LAUNCH_GUARD=off` skips the guard entirely (no
+interpreter call, no warning) for a team that wants a manual launch beside an
+active swapper on purpose; default and every other value is on.
+
 ## When not to use
 
 If you just export `OPENROUTER_API_KEY` yourself and have a single consumer,
