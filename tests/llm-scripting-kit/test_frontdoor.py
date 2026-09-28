@@ -386,3 +386,223 @@ def test_a_front_door_group_is_one_declaration_id(tmp_path):
     # inside the front door, and selection sees one entry.
     assert [e.id for e in ranking.rendered_entries] == ["qwen38"]
     assert [d.id for d in ranking.dispositions] == ["qwen38"]
+
+
+# ---------------------------------------------------------------------------
+# Reported cost: the front door decides trust (U2, amendment R1)
+# ---------------------------------------------------------------------------
+
+
+_REAL_ASYNC_CLIENT = httpx.AsyncClient  # before any test patches it
+
+
+def _billing_registry(tmp_path: Path, billing: str):
+    line = f"    billing: {{mode: {billing}}}\n" if billing else ""
+    return _registry_from_text(
+        tmp_path,
+        "models:\n  qwen:\n    base_url: http://up/v1\n    model: qwen-real\n"
+        "    routing: {group: qwen, order: 1}\n" + line,
+    )
+
+
+def _run_cost(tmp_path, monkeypatch, billing, upstream_usage):
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    real = _REAL_ASYNC_CLIENT
+
+    async def go():
+        class FakeClient:
+            async def post(self, url, *, json, headers):
+                body = {"choices": []}
+                if upstream_usage is not None:
+                    body["usage"] = dict(upstream_usage)
+                return httpx.Response(200, json=body)
+
+            async def aclose(self):
+                pass
+
+        log = tmp_path / "access.jsonl"
+        app = create_app(_billing_registry(tmp_path, billing), access_log=log)
+        async with real(
+            transport=httpx.ASGITransport(app=app), base_url="http://frontdoor"
+        ) as client:
+            monkeypatch.setattr(httpx, "AsyncClient", lambda *a, **k: FakeClient())
+            response = await client.post(
+                "/v1/chat/completions", json={"model": "qwen", "user": "u"}
+            )
+        record = json.loads(log.read_text(encoding="utf-8").splitlines()[-1])
+        return response.json(), record
+
+    return asyncio.run(go())
+
+
+def test_frontdoor_injects_explicit_unmetered_zero_with_source(tmp_path, monkeypatch):
+    body, record = _run_cost(
+        tmp_path, monkeypatch, "unmetered", {"prompt_tokens": 3, "completion_tokens": 2}
+    )
+    assert body["usage"]["cost"] == 0.0
+    assert body["usage"]["cost_source"] == "registry-unmetered"
+    assert body["usage"]["prompt_tokens"] == 3  # existing usage untouched
+    assert record["reported_cost_usd"] == 0.0
+    assert record["reported_cost_source"] == "registry-unmetered"
+
+
+def test_frontdoor_strips_upstream_cost_unless_provider_reported(tmp_path, monkeypatch):
+    spoof = {"prompt_tokens": 3, "cost": 9.5, "cost_source": "registry-unmetered"}
+    # no billing declared: the upstream claim is stripped, nothing injected
+    body, record = _run_cost(tmp_path, monkeypatch, "", spoof)
+    assert "cost" not in body["usage"] and "cost_source" not in body["usage"]
+    assert "reported_cost_usd" not in record
+    # unmetered: the upstream claim is replaced by the registry's explicit zero
+    body, record = _run_cost(tmp_path / "b", monkeypatch, "unmetered", spoof)
+    assert body["usage"]["cost"] == 0.0
+    assert body["usage"]["cost_source"] == "registry-unmetered"
+    # provider-reported: the upstream cost passes through unchanged
+    body, record = _run_cost(tmp_path / "c", monkeypatch, "provider-reported", spoof)
+    assert body["usage"]["cost"] == 9.5
+    assert "cost_source" not in body["usage"]  # upstream cannot pick the source label
+    assert record["reported_cost_usd"] == 9.5
+    assert record["reported_cost_source"] == "provider"
+
+
+def test_frontdoor_ignores_invalid_provider_cost_for_the_log(tmp_path, monkeypatch):
+    body, record = _run_cost(
+        tmp_path, monkeypatch, "provider-reported", {"prompt_tokens": 3, "cost": -1}
+    )
+    assert "reported_cost_usd" not in record
+
+
+# ---------------------------------------------------------------------------
+# /health/backends (U3)
+# ---------------------------------------------------------------------------
+
+
+def _fake_probe_factory(statuses: dict, calls: list):
+    from llm_scripting_kit.account import EndpointProbe
+
+    def fake(entry, *, timeout, key_resolver=None, project_root=None):
+        calls.append((entry.id, entry.base_url, timeout))
+        status = statuses[entry.id]
+        if status == "reachable":
+            return EndpointProbe(True, entry.id, entry.base_url, "ok")
+        if status == "unreachable":
+            return EndpointProbe(False, entry.id, entry.base_url, "unreachable: refused")
+        return EndpointProbe(False, entry.id, entry.base_url, "no API key resolved", decisive=False)
+
+    return fake
+
+
+def _health_registry(tmp_path: Path):
+    return _group_registry(
+        tmp_path,
+        _deployment_yaml("local", 1, "2")
+        + _deployment_yaml("paid", 2, "null")
+        + _deployment_yaml("other", 1, "null", group="second"),
+    )
+
+
+def _get_health(app, query: str = ""):
+    async def go():
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://frontdoor"
+        ) as client:
+            return (await client.get("/health/backends" + query)).json()
+
+    return asyncio.run(go())
+
+
+def test_health_backends_uses_supplied_registry_and_reports_each_deployment(
+    tmp_path, monkeypatch
+):
+    from llm_scripting_kit.frontdoor import server as server_mod
+
+    # A DIFFERENT registry on disk: the route must not reload from it.
+    decoy = tmp_path / "decoy"
+    decoy.mkdir()
+    decoy_path = decoy / "models.yaml"
+    decoy_path.write_text(
+        "models:\n  decoy:\n    base_url: http://decoy/v1\n    model: d\n"
+        "    routing: {group: qwen, order: 1}\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("MODEL_ENDPOINTS_REGISTRY", str(decoy_path))
+    registry = _health_registry(tmp_path)
+    calls: list = []
+    monkeypatch.setattr(
+        server_mod, "probe_entry",
+        _fake_probe_factory({"local": "unreachable", "paid": "reachable", "other": "unknown"}, calls),
+    )
+    body = _get_health(create_app(registry), "?budget_ms=900")
+    assert body["protocol"] == 1 and body["frontdoor_status"] == "ok"
+    assert body["checked_at"]
+    qwen = body["groups"]["qwen"]
+    assert qwen["status"] == "reachable"  # any reachable deployment
+    by_id = {d["id"]: d for d in qwen["deployments"]}
+    assert by_id["local"]["status"] == "unreachable"
+    assert by_id["paid"]["status"] == "reachable"
+    assert all(d["checked"] == "models-endpoint" for d in qwen["deployments"])
+    assert body["groups"]["second"]["status"] == "unknown"
+    # entries came from the supplied registry, never the decoy, with an
+    # explicit timeout on every probe (never the 2 s default implicitly)
+    assert sorted(c[0] for c in calls) == ["local", "other", "paid"]
+    assert {c[2] for c in calls} == {0.9}
+    # no credential or key text leaks into the report
+    assert "Bearer" not in json.dumps(body)
+
+
+def test_health_backends_group_aggregation(tmp_path, monkeypatch):
+    from llm_scripting_kit.frontdoor import server as server_mod
+
+    registry = _health_registry(tmp_path)
+    for statuses, qwen in (
+        ({"local": "unreachable", "paid": "unreachable", "other": "unreachable"}, "unreachable"),
+        ({"local": "unreachable", "paid": "unknown", "other": "reachable"}, "unknown"),
+        ({"local": "reachable", "paid": "unknown", "other": "reachable"}, "reachable"),
+    ):
+        monkeypatch.setattr(server_mod, "probe_entry", _fake_probe_factory(statuses, []))
+        assert _get_health(create_app(registry))["groups"]["qwen"]["status"] == qwen
+
+
+def test_health_endpoint_is_unchanged_liveness(tmp_path):
+    body = asyncio.run(_liveness(tmp_path))
+    assert body["status"] == "ok" and "groups" not in body
+
+
+async def _liveness(tmp_path):
+    app = create_app(_health_registry(tmp_path))
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://frontdoor") as client:
+        return (await client.get("/health")).json()
+
+
+def test_health_backends_budget_ms_is_clamped_and_defaulted(tmp_path, monkeypatch):
+    from llm_scripting_kit.frontdoor import server as server_mod
+
+    registry = _health_registry(tmp_path)
+    seen: list = []
+    monkeypatch.setattr(
+        server_mod, "probe_entry",
+        _fake_probe_factory({"local": "reachable", "paid": "reachable", "other": "reachable"}, seen),
+    )
+    app = create_app(registry)
+    cases = {
+        "?budget_ms=750": 0.75,
+        "?budget_ms=4000": 4.0,
+        "?budget_ms=999999": 4.0,  # clamped to the documented maximum
+        "": 1.5,  # missing -> server default
+        "?budget_ms=abc": 1.5,
+        "?budget_ms=1.5": 1.5,
+        "?budget_ms=0": 1.5,
+        "?budget_ms=-20": 1.5,
+    }
+    for query, expected in cases.items():
+        seen.clear()
+        _get_health(app, query)
+        assert {c[2] for c in seen} == {expected}, query
+    assert server_mod.BACKEND_BUDGET_MAX_MS == 4000
+    assert server_mod.BACKEND_BUDGET_DEFAULT_MS == 1500
+
+
+def test_frontdoor_strips_null_upstream_cost_keys(tmp_path, monkeypatch):
+    usage = {"prompt_tokens": 3, "cost": None, "cost_source": None}
+    body, _record = _run_cost(tmp_path, monkeypatch, "", usage)
+    assert "cost" not in body["usage"] and "cost_source" not in body["usage"]
+    assert body["usage"]["prompt_tokens"] == 3

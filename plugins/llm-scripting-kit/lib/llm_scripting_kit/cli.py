@@ -826,6 +826,10 @@ def _entry_json(entry: Any) -> dict[str, Any]:
         result.update({"harness": entry.harness, "effort": entry.effort})
     else:
         result.update({"base_url": entry.base_url, "key_env": entry.key_env})
+        result["frontdoor"] = bool(getattr(entry, "frontdoor", False))
+        billing_mode = getattr(entry, "billing_mode", None)
+        if billing_mode is not None:
+            result["billing"] = {"mode": billing_mode}
     conserve = getattr(entry, "conserve_usage", None)
     if conserve is not None:
         result["conserve_usage"] = conserve.to_json()

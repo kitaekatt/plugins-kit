@@ -562,3 +562,43 @@ def test_every_adapter_reports_the_same_truthfulness_surface():
         "structured", "started_at", "ended_at",
     ):
         assert field in LLMResponse.__dataclass_fields__
+
+
+# ---------------------------------------------------------------------------
+# Reported cost fields: absent stays None, never zero (U2)
+# ---------------------------------------------------------------------------
+
+
+def test_missing_provider_cost_stays_none(tmp_path, monkeypatch):
+    path = tmp_path / "reg.yaml"
+    path.write_text(
+        "models:\n  paid:\n    base_url: http://paid.invalid/v1\n    model: pm\n"
+        "    billing: {mode: provider-reported}\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("MODEL_ENDPOINTS_REGISTRY", str(path))
+
+    class Usage:
+        prompt_tokens = 3
+        completion_tokens = 2
+        prompt_tokens_details = None
+
+    class Choice:
+        message = SimpleNamespace(content="hi", reasoning_content=None)
+        finish_reason = "stop"
+
+    class Client:
+        chat = SimpleNamespace(
+            completions=SimpleNamespace(
+                create=lambda **kw: SimpleNamespace(choices=[Choice()], usage=Usage())
+            )
+        )
+
+    resp = OpenRouterBackend(endpoint="paid", client=Client()).complete(
+        "s", "u", model="a/slug"
+    )
+    assert resp.reported_cost_usd is None
+    assert resp.reported_cost_source is None
+    # defaults on the dataclass itself: both absent, together
+    bare = LLMResponse(text="", model="m")
+    assert (bare.reported_cost_usd, bare.reported_cost_source) == (None, None)

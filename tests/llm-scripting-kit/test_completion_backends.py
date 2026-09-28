@@ -688,3 +688,135 @@ def test_openrouter_user_identity_default_and_override(monkeypatch):
     assert fake.kwargs["user"] == "caller"
     backend.complete("s", "u", model="provider/m", options=BackendOptions(client_id=""))
     assert "user" not in fake.kwargs
+
+
+# ---------------------------------------------------------------------------
+# Reported cost: the endpoint trust gate (U2)
+# ---------------------------------------------------------------------------
+
+
+class _CostUsage:
+    """Usage block carrying an arbitrary native ``cost`` (attribute form)."""
+
+    def __init__(self, **extra):
+        self.prompt_tokens = 10
+        self.completion_tokens = 5
+        self.prompt_tokens_details = None
+        for key, value in extra.items():
+            setattr(self, key, value)
+
+
+class _CostResponse:
+    choices = [_FakeChoice()]
+
+    def __init__(self, usage):
+        self.usage = usage
+
+
+class _CostClient:
+    def __init__(self, usage):
+        self._usage = usage
+        self.chat = type("C", (), {"completions": self})()
+
+    def create(self, **kwargs):
+        return _CostResponse(self._usage)
+
+
+def _cost_registry(tmp_path, monkeypatch, body):
+    path = tmp_path / "reg.yaml"
+    path.write_text("models:\n" + body, encoding="utf-8")
+    monkeypatch.setenv("MODEL_ENDPOINTS_REGISTRY", str(path))
+
+
+_COST_REGISTRY = (
+    "  fd:\n    base_url: http://fd.invalid/v1\n    model: grp\n    frontdoor: true\n"
+    "  paid:\n    base_url: http://paid.invalid/v1\n    model: pm\n"
+    "    key_env: PAID_KEY\n    billing: {mode: provider-reported}\n"
+    "  plain:\n    base_url: http://plain.invalid/v1\n    model: pm\n"
+    "  local:\n    base_url: http://local.invalid/v1\n    model: pm\n"
+    "    billing: {mode: unmetered}\n"
+)
+
+
+def _complete(endpoint, usage):
+    return OpenRouterBackend(endpoint=endpoint, client=_CostClient(usage)).complete(
+        "s", "u", model="a/slug"
+    )
+
+
+class TestReportedCostTrustGate:
+    def test_provider_reported_mode_accepts_native_usage_cost(self, tmp_path, monkeypatch):
+        _cost_registry(tmp_path, monkeypatch, _COST_REGISTRY)
+        resp = _complete("paid", _CostUsage(cost=0.0125))
+        assert resp.reported_cost_usd == 0.0125
+        assert resp.reported_cost_source == "provider"
+
+    def test_marked_frontdoor_accepts_native_cost_and_preserves_registry_source(
+        self, tmp_path, monkeypatch
+    ):
+        _cost_registry(tmp_path, monkeypatch, _COST_REGISTRY)
+        resp = _complete("fd", _CostUsage(cost=0.0, cost_source="registry-unmetered"))
+        assert (resp.reported_cost_usd, resp.reported_cost_source) == (0.0, "registry-unmetered")
+        resp = _complete("fd", _CostUsage(cost=0.5))
+        assert (resp.reported_cost_usd, resp.reported_cost_source) == (0.5, "provider")
+        # an unknown source label is not preserved
+        resp = _complete("fd", _CostUsage(cost=0.5, cost_source="made-up"))
+        assert resp.reported_cost_source == "provider"
+
+    def test_unmarked_provider_native_cost_is_ignored(self, tmp_path, monkeypatch):
+        _cost_registry(tmp_path, monkeypatch, _COST_REGISTRY)
+        for endpoint in ("plain", "local", None):
+            resp = _complete(endpoint, _CostUsage(cost=0.0, cost_source="registry-unmetered"))
+            assert resp.reported_cost_usd is None, endpoint
+            assert resp.reported_cost_source is None, endpoint
+
+    @pytest.mark.parametrize(
+        "bad", [True, False, "0.5", float("nan"), float("inf"), -0.01, None, [1]]
+    )
+    def test_invalid_native_cost_is_ignored_never_zero(self, tmp_path, monkeypatch, bad):
+        _cost_registry(tmp_path, monkeypatch, _COST_REGISTRY)
+        resp = _complete("paid", _CostUsage(cost=bad))
+        assert resp.reported_cost_usd is None
+        assert resp.reported_cost_source is None
+
+    def test_dict_usage_and_model_extra_forms_are_read(self, tmp_path, monkeypatch):
+        _cost_registry(tmp_path, monkeypatch, _COST_REGISTRY)
+
+        class Extra:
+            prompt_tokens = 1
+            completion_tokens = 1
+            prompt_tokens_details = None
+            model_extra = {"cost": 0.75}
+
+        assert _complete("paid", Extra()).reported_cost_usd == 0.75
+        resp = _complete(
+            "paid",
+            {"prompt_tokens": 1, "completion_tokens": 1, "cost": 0.5},
+        )
+        assert resp.reported_cost_usd == 0.5
+
+    def test_openai_sdk_retains_non_standard_usage_cost(self, tmp_path, monkeypatch):
+        """The SDK's own response model keeps `usage.cost` readable."""
+        chat = pytest.importorskip("openai.types.chat")
+        _cost_registry(tmp_path, monkeypatch, _COST_REGISTRY)
+        completion = chat.ChatCompletion.model_validate(
+            {
+                "id": "x", "object": "chat.completion", "created": 1, "model": "m",
+                "choices": [
+                    {"index": 0, "finish_reason": "stop",
+                     "message": {"role": "assistant", "content": "hi"}}
+                ],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 2,
+                          "total_tokens": 3, "cost": 0.25},
+            }
+        )
+
+        class Client:
+            chat = type("C", (), {"completions": None})()
+
+        client = Client()
+        client.chat.completions = type("K", (), {"create": lambda self, **kw: completion})()
+        resp = OpenRouterBackend(endpoint="paid", client=client).complete(
+            "s", "u", model="a/slug"
+        )
+        assert resp.reported_cost_usd == 0.25

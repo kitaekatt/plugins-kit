@@ -39,6 +39,10 @@ the schema can grow additively)::
         reasoning_effort: <effort>          # optional per-entry default
         key_env: <ENV VAR>                  # optional; omitted = keyless
         key_file: <path>                    # optional bare-value credential file
+        frontdoor: true                     # optional; base_url IS an llm-scripting-kit
+                                            #   front door and `model` names its group
+        billing:                            # optional; transport entries only
+          mode: unmetered                   # unmetered | provider-reported
         routing:                            # optional; transport entries only
           group: <front-door model name>
           order: 1                          # lower tiers fill first
@@ -124,6 +128,8 @@ class EndpointEntry:
     conserve_usage: Optional[ConserveSpec] = None
     routing: Optional["RoutingConfig"] = None
     key_file: Optional[str] = None
+    frontdoor: bool = False
+    billing_mode: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -311,6 +317,58 @@ def parse_routing(
     )
 
 
+#: Accepted ``billing.mode`` values. ``unmetered`` is an explicit marginal USD
+#: zero; ``provider-reported`` declares that the endpoint's native
+#: ``usage.cost`` carries USD semantics. Omission declares neither.
+BILLING_MODES = ("unmetered", "provider-reported")
+
+
+def parse_frontdoor(
+    raw: Mapping[str, object], *, source: str, entry_id: str, notes: list[str]
+) -> bool:
+    """Parse the strict-boolean ``frontdoor`` marker.
+
+    Omitted is False. An invalid value is noted and treated as False; the entry
+    is retained so a typo cannot make a registry (or its default) unusable. The
+    marker is never inferred from routing, ids, hosts, or ports.
+    """
+    if "frontdoor" not in raw:
+        return False
+    value = raw["frontdoor"]
+    if isinstance(value, bool):
+        return value
+    notes.append(
+        f"{source}: entry '{entry_id}' has invalid 'frontdoor' ({value!r}); "
+        "expected true or false; treated as false"
+    )
+    return False
+
+
+def parse_billing_mode(
+    raw: Mapping[str, object], *, source: str, entry_id: str, notes: list[str]
+) -> Optional[str]:
+    """Parse optional ``billing.mode``; invalid metadata is noted and ignored."""
+    if "billing" not in raw or raw["billing"] is None:
+        return None
+    value = raw["billing"]
+    if not isinstance(value, dict):
+        notes.append(f"{source}: entry '{entry_id}' has invalid 'billing'; ignored")
+        return None
+    for key in value:
+        if key != "mode":
+            notes.append(f"{source}: entry '{entry_id}' billing key '{key}' ignored")
+    if "mode" not in value:
+        notes.append(f"{source}: entry '{entry_id}' billing declares no 'mode'; ignored")
+        return None
+    mode = value["mode"]
+    if not isinstance(mode, str) or mode not in BILLING_MODES:
+        notes.append(
+            f"{source}: entry '{entry_id}' billing has invalid 'mode' ({mode!r}); ignored"
+        )
+        return None
+    return mode
+
+
 def _resolve_registry_path(env: Mapping[str, str]) -> "tuple[Path, bool]":
     """Return (path, explicit) -- ``explicit`` when the override chose it."""
     override = (env.get(REGISTRY_ENV) or "").strip()
@@ -465,6 +523,12 @@ def load_endpoint_registry(
                 routing=parse_routing(
                     raw, source=f"model-endpoints registry '{path}'", entry_id=key, notes=notes
                 ),
+                frontdoor=parse_frontdoor(
+                    raw, source=f"model-endpoints registry '{path}'", entry_id=key, notes=notes
+                ),
+                billing_mode=parse_billing_mode(
+                    raw, source=f"model-endpoints registry '{path}'", entry_id=key, notes=notes
+                ),
             )
         except EndpointMetadataError:
             raise
@@ -551,6 +615,9 @@ __all__ = [
     "RoutingConfig",
     "parse_classification_fields",
     "parse_routing",
+    "parse_frontdoor",
+    "parse_billing_mode",
+    "BILLING_MODES",
     "load_endpoint_registry",
     "resolve_registry_entry",
 ]

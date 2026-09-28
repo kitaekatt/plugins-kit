@@ -418,3 +418,18 @@ class TestIsModelAlias:
         from llm_scripting_kit import is_model_alias
 
         assert is_model_alias(name, config=DEFAULT_MODEL_CONFIG) is expected
+
+
+class TestConfigEndpointMetadataNotes:
+    def test_config_endpoint_invalid_frontdoor_is_noted(self):
+        from llm_scripting_kit import discover_model_entries
+        from llm_scripting_kit.model_endpoints import EndpointRegistry
+
+        cfg = {
+            "endpoints": {
+                "fd": {"base_url": "http://fd/v1", "model": "grp", "frontdoor": "yes"}
+            }
+        }
+        found = discover_model_entries(config=cfg, registry=EndpointRegistry())
+        assert found["fd"].frontdoor is False
+        assert any("frontdoor" in n and "fd" in n for n in found.notes)

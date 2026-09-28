@@ -365,3 +365,168 @@ class TestCheckMany:
     def test_to_json_shape(self):
         r = Reachability(status=STATUS_REACHABLE, checked="models-endpoint", detail="ok")
         assert r.to_json() == {"status": "reachable", "checked": "models-endpoint", "detail": "ok"}
+
+
+# ---------------------------------------------------------------------------
+# Marked front doors: backend-health preference within ONE client deadline (U3)
+# ---------------------------------------------------------------------------
+
+import json as _json_mod  # noqa: E402
+
+import pytest as _pytest  # noqa: E402
+
+
+@_pytest.fixture
+def marked_registry(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    path = tmp_path / "reg.yaml"
+    path.write_text(
+        "models:\n"
+        "  fd:\n    base_url: http://fd.invalid:4000/v1\n    model: grp\n    frontdoor: true\n"
+        "  plain:\n    base_url: http://plain.invalid:8000/v1\n    model: grp\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("MODEL_ENDPOINTS_REGISTRY", str(path))
+    return path
+
+
+def _health_body(status="reachable", group="grp", protocol=1):
+    return _json_mod.dumps(
+        {
+            "protocol": protocol,
+            "frontdoor_status": "ok",
+            "checked_at": "2026-09-28T00:00:00+00:00",
+            "groups": {
+                group: {
+                    "status": status,
+                    "deployments": [
+                        {"id": "local", "status": "unreachable", "checked": "models-endpoint", "detail": "refused"},
+                        {"id": "paid", "status": "reachable", "checked": "models-endpoint", "detail": "ok"},
+                    ],
+                }
+            },
+        }
+    ).encode()
+
+
+class _Recorder:
+    """Records every leg's timeout and burns it on a fake clock."""
+
+    def __init__(self, health=None, health_exc=None, fallback=None):
+        self.now = 0.0
+        self.health = health
+        self.health_exc = health_exc
+        self.fallback = fallback or EndpointProbe(
+            ok=True, endpoint="fd", base_url="http://fd.invalid:4000/v1", detail="ok"
+        )
+        self.legs = []  # (kind, timeout)
+        self.health_url = None
+
+    def clock(self):
+        return self.now
+
+    def fetch_health(self, url, *, label, key_env, timeout, project_root):
+        self.legs.append(("health", timeout))
+        self.health_url = url
+        self.now += timeout  # worst case: the leg burns its whole socket budget
+        if self.health_exc is not None:
+            return b"", self.health_exc
+        return self.health, None
+
+    def probe(self, name, *, timeout, project_root):
+        self.legs.append(("models", timeout))
+        self.now += timeout
+        return self.fallback
+
+
+def _install(monkeypatch, rec):
+    monkeypatch.setattr(reach_mod, "_fetch_health", rec.fetch_health)
+    monkeypatch.setattr(reach_mod, "probe_endpoint", rec.probe)
+    monkeypatch.setattr(reach_mod, "_monotonic", rec.clock)
+
+
+class TestMarkedFrontdoorBackendHealth:
+    def test_marked_frontdoor_prefers_decisive_backend_health(self, marked_registry, monkeypatch):
+        rec = _Recorder(health=_health_body("unreachable"))
+        _install(monkeypatch, rec)
+        result = check_transport("fd", timeout=5.0)
+        assert result.status == STATUS_UNREACHABLE
+        assert result.checked == "frontdoor-backends"
+        # per-deployment truth stays visible in the detail
+        assert "local=unreachable" in result.detail and "paid=reachable" in result.detail
+        assert [kind for kind, _ in rec.legs] == ["health"]  # no /models leg
+        assert rec.health_url.startswith("http://fd.invalid:4000/health/backends?budget_ms=")
+        assert "/v1/" not in rec.health_url
+        ok = _Recorder(health=_health_body("reachable"))
+        _install(monkeypatch, ok)
+        assert check_transport("fd", timeout=5.0).status == STATUS_REACHABLE
+
+    def test_unmarked_entry_never_asks_for_backend_health(self, marked_registry, monkeypatch):
+        rec = _Recorder(health=_health_body("unreachable"))
+        rec.fallback = EndpointProbe(ok=True, endpoint="plain", base_url="x", detail="ok")
+        _install(monkeypatch, rec)
+        result = check_transport("plain", timeout=5.0)
+        assert result.checked == "models-endpoint"
+        assert rec.legs == [("models", 5.0)]
+
+    @pytest.mark.parametrize(
+        "kind",
+        ["unknown", "exception", "malformed", "protocol", "missing-group"],
+    )
+    def test_marked_frontdoor_unknown_health_falls_back_within_one_deadline(
+        self, marked_registry, monkeypatch, kind
+    ):
+        import urllib.error
+
+        health, exc = _health_body("unknown"), None
+        if kind == "exception":
+            health, exc = None, urllib.error.URLError("404")
+        elif kind == "malformed":
+            health = b"<html>not json</html>"
+        elif kind == "protocol":
+            health = _health_body("reachable", protocol=99)
+        elif kind == "missing-group":
+            health = _health_body("reachable", group="other")
+        rec = _Recorder(health=health, health_exc=exc)
+        _install(monkeypatch, rec)
+        result = check_transport("fd", timeout=5.0)
+        assert result.status == STATUS_REACHABLE  # the /models fallback answered
+        assert result.checked == "frontdoor-backends+models-fallback"
+        assert [k for k, _ in rec.legs] == ["health", "models"]
+        assert sum(t for _, t in rec.legs) <= 5.0 + 1e-9
+        assert all(t > 0 for _, t in rec.legs)
+
+    @pytest.mark.parametrize("outer", [0.05, 0.2, 1.0, 2.0, 5.0, 30.0])
+    def test_backend_health_inner_timeout_is_strictly_less_than_outer_budget(
+        self, marked_registry, monkeypatch, outer
+    ):
+        rec = _Recorder(health=_health_body("reachable"))
+        _install(monkeypatch, rec)
+        check_transport("fd", timeout=outer)
+        budget_ms = int(rec.health_url.rsplit("budget_ms=", 1)[1])
+        (kind, socket_timeout), = rec.legs
+        assert kind == "health"
+        assert budget_ms >= 1
+        assert budget_ms / 1000.0 < socket_timeout <= outer
+
+    def test_health_plus_fallback_never_exceeds_one_client_budget(
+        self, marked_registry, monkeypatch
+    ):
+        for outer in (0.5, 1.0, 5.0, 12.0):
+            rec = _Recorder(health=_health_body("unknown"))
+            _install(monkeypatch, rec)
+            check_transport("fd", timeout=outer)
+            assert [k for k, _ in rec.legs] == ["health", "models"]
+            assert sum(t for _, t in rec.legs) <= outer + 1e-9, (outer, rec.legs)
+
+    def test_no_positive_inner_budget_skips_health_and_uses_models(
+        self, marked_registry, monkeypatch
+    ):
+        rec = _Recorder(health=_health_body("unreachable"))
+        _install(monkeypatch, rec)
+        result = check_transport("fd", timeout=0.001)
+        assert [k for k, _ in rec.legs] == ["models"]
+        assert result.checked == "models-endpoint"

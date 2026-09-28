@@ -25,7 +25,7 @@ import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Optional
 
 from .constants import BASE_URL
 
@@ -235,6 +235,12 @@ class EndpointProbe:
     ``reachability.check_transport`` reads this to report STATUS_UNKNOWN
     ("I could not check") rather than STATUS_UNREACHABLE ("I checked and it
     is down") for the ``resolved=False`` case.
+
+    ``decisive`` is False when no request was sent because a required
+    credential could not be found: the endpoint was neither seen up nor seen
+    down. :func:`probe_entry` consumers (the front door's backend health) map
+    that to ``unknown``; :func:`probe_endpoint` keeps its long-standing
+    ok=False reporting for the same case.
     """
 
     ok: bool
@@ -242,6 +248,7 @@ class EndpointProbe:
     base_url: Optional[str]
     detail: str
     resolved: bool = True
+    decisive: bool = True
 
 
 def probe_endpoint(
@@ -279,32 +286,114 @@ def probe_endpoint(
         return EndpointProbe(
             ok=False, endpoint=label, base_url=None, detail="endpoint has no base_url"
         )
+    return _probe_target(
+        label, base_url, ep.get("key_env"),
+        timeout=timeout, project_root=project_root, key_resolver=None,
+    )
 
+
+def probe_entry(
+    entry: Any,
+    *,
+    timeout: float,
+    key_resolver: Optional[Callable[[], Optional[str]]] = None,
+    project_root: Optional[str] = None,
+) -> EndpointProbe:
+    """``GET {base_url}/models`` for an ALREADY-RESOLVED registry entry. Never raises.
+
+    The counterpart of :func:`probe_endpoint` for a caller that holds the
+    entry itself -- the front door probing the deployments of the registry it
+    loaded, which must not be re-resolved by name against a possibly different
+    registry on disk. ``timeout`` is required: a caller composing several
+    bounded legs owns the budget, so it is never defaulted implicitly.
+
+    ``key_resolver`` supplies the credential for a keyed entry (default: the
+    layered ``get_api_key`` lookup by entry id). A keyed entry whose key does
+    not resolve reports ``ok=False, decisive=False``: nothing was sent, so the
+    endpoint is neither seen up nor seen down.
+    """
+    result = _probe_target(
+        entry.id, entry.base_url, entry.key_env,
+        timeout=timeout, project_root=project_root, key_resolver=key_resolver,
+    )
+    return result
+
+
+def _auth_headers(
+    label: str,
+    key_env: Optional[str],
+    *,
+    project_root: Optional[str],
+    key_resolver: Optional[Callable[[], Optional[str]]],
+) -> "tuple[Dict[str, str], Optional[str]]":
+    """``(headers, None)`` for an endpoint, or ``({}, why)`` when its key is missing.
+
+    A keyless endpoint (``key_env`` None) gets no Authorization header. The
+    failure text names the variable, never a key.
+    """
     headers: Dict[str, str] = {}
-    key_env = ep.get("key_env")
-    if key_env is not None:
-        from .api_key import get_api_key  # noqa: PLC0415 -- avoids a cycle
+    if key_env is None:
+        return headers, None
+    try:
+        if key_resolver is not None:
+            key = key_resolver()
+        else:
+            from .api_key import get_api_key  # noqa: PLC0415 -- avoids a cycle
 
-        try:
-            result = get_api_key(
+            key = get_api_key(
                 Path(project_root) if project_root is not None else None,
                 endpoint=label,
-            )
-        except Exception as e:  # noqa: BLE001
-            return EndpointProbe(
-                ok=False,
-                endpoint=label,
-                base_url=base_url,
-                detail=f"cannot resolve key {key_env}: {e}",
-            )
-        if not result.key:
-            return EndpointProbe(
-                ok=False,
-                endpoint=label,
-                base_url=base_url,
-                detail=f"no API key resolved ({key_env} unset)",
-            )
-        headers["Authorization"] = f"Bearer {result.key}"
+            ).key
+    except Exception as e:  # noqa: BLE001
+        return {}, f"cannot resolve key {key_env}: {e}"
+    if not key:
+        return {}, f"no API key resolved ({key_env} unset)"
+    headers["Authorization"] = f"Bearer {key}"
+    return headers, None
+
+
+def get_authenticated(
+    url: str,
+    *,
+    label: str,
+    key_env: Optional[str],
+    timeout: float,
+    project_root: Optional[str] = None,
+) -> "tuple[bytes, Optional[BaseException]]":
+    """One bounded ``GET`` carrying the endpoint's credential, if it has one.
+
+    Returns ``(body, None)`` or ``(b"", exc)`` exactly like the shared ``_get``
+    seam; an unresolvable key is returned as a ``PermissionError`` naming the
+    variable. Never raises.
+    """
+    headers, failure = _auth_headers(
+        label, key_env, project_root=project_root, key_resolver=None
+    )
+    if failure is not None:
+        return b"", PermissionError(failure)
+    try:
+        return _get(url, headers, timeout)
+    except Exception as e:  # noqa: BLE001 -- a malformed URL etc.
+        return b"", e
+
+
+def _probe_target(
+    label: str,
+    base_url: str,
+    key_env: Optional[str],
+    *,
+    timeout: float,
+    project_root: Optional[str],
+    key_resolver: Optional[Callable[[], Optional[str]]],
+) -> EndpointProbe:
+    """The shared body of :func:`probe_endpoint` and :func:`probe_entry`."""
+    headers, failure = _auth_headers(
+        label, key_env, project_root=project_root, key_resolver=key_resolver
+    )
+    if failure is not None:
+        return EndpointProbe(
+            ok=False, endpoint=label, base_url=base_url, detail=failure, decisive=False
+        )
 
     try:
         _raw, exc = _get(f"{base_url}/models", headers, timeout)

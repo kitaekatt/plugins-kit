@@ -860,3 +860,67 @@ def test_record_halt_unknown_entry_is_a_usage_error(paced, capsys):
     captured = capsys.readouterr()
     assert captured.out == ""
     assert "no-such-entry" in json.loads(captured.err)["error"]["message"]
+
+
+def test_frontdoor_marker_is_projected_but_routing_never_implies_it(
+    tmp_path, monkeypatch, capsys
+):
+    from llm_scripting_kit.models import resolve_endpoint
+
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    reg = tmp_path / "reg.yaml"
+    reg.write_text(
+        "models:\n"
+        "  fd:\n    base_url: http://fd.invalid/v1\n    model: grp\n"
+        "    frontdoor: true\n    billing: {mode: provider-reported}\n"
+        "  routed:\n    base_url: http://routed.invalid/v1\n    model: grp\n"
+        "    routing: {group: grp, order: 1}\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("MODEL_ENDPOINTS_REGISTRY", str(reg))
+
+    assert cli.main(["endpoints"]) == cli.EXIT_OK
+    eps = json.loads(capsys.readouterr().out)["endpoints"]
+    assert eps["fd"]["frontdoor"] is True
+    assert eps["fd"]["billing"] == {"mode": "provider-reported"}
+    # routing (and a group-like model id) never implies the marker
+    assert eps["routed"]["frontdoor"] is False
+    assert "billing" not in eps["routed"]
+    assert resolve_endpoint("fd")["frontdoor"] is True
+    assert resolve_endpoint("routed")["frontdoor"] is False
+
+
+def test_probe_of_a_marked_frontdoor_reports_backend_health_and_names_it(
+    tmp_path, monkeypatch, capsys
+):
+    from llm_scripting_kit import reachability as reach_mod
+
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    reg = tmp_path / "reg.yaml"
+    reg.write_text(
+        "models:\n  fd:\n    base_url: http://fd.invalid:4000/v1\n    model: grp\n"
+        "    frontdoor: true\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("MODEL_ENDPOINTS_REGISTRY", str(reg))
+    body = json.dumps(
+        {
+            "protocol": 1, "frontdoor_status": "ok", "checked_at": "t",
+            "groups": {"grp": {"status": "unreachable", "deployments": [
+                {"id": "local", "status": "unreachable", "checked": "models-endpoint", "detail": "refused"},
+            ]}},
+        }
+    ).encode()
+    monkeypatch.setattr(reach_mod, "_fetch_health", lambda url, **kw: (body, None))
+
+    assert cli.main(["probe", "--endpoint", "fd"]) == cli.EXIT_FAILURE
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["reachability"]["checked"] == "frontdoor-backends"
+    assert payload["reachability"]["status"] == "unreachable"
+    assert payload["frontdoor"] is True

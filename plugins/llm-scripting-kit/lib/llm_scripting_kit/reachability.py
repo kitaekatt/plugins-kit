@@ -39,14 +39,16 @@ verb (one endpoint, exit code is the answer). Same code, two surfaces.
 """
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
+import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
-from .account import probe_endpoint
+from .account import get_authenticated, probe_endpoint
 from .harness_adapters import resolve_opencode_cli
 
 DEFAULT_VERIFY_TIMEOUT_S = 5.0
@@ -73,6 +75,21 @@ not check" and "I checked and it is down" are different facts, and a caller
 gating on a boolean-shaped reading must not be able to conflate them."""
 
 _KNOWN_HARNESSES = ("claude", "codex", "opencode")
+
+_monotonic = time.monotonic
+"""The clock the client deadline is measured on. A module attribute so a test
+can drive the deadline arithmetic deterministically."""
+
+HEALTH_SHARE = 0.6
+"""Fraction of the one client budget the backend-health preference may spend
+on its socket. The rest is held for the ``/models`` fallback."""
+
+BACKEND_HEALTH_PROTOCOL = 1
+BACKEND_BUDGET_MAX_MS = 4000
+"""Mirrors the front door's documented clamp on ``budget_ms``."""
+
+CHECKED_BACKENDS = "frontdoor-backends"
+CHECKED_BACKENDS_FALLBACK = "frontdoor-backends+models-fallback"
 
 
 @dataclass(frozen=True)
@@ -135,11 +152,118 @@ def check_transport(
     attempted, so it is :data:`STATUS_UNKNOWN` ("I could not check"), never
     :data:`STATUS_UNREACHABLE` ("I checked and it is down").
     """
+    deadline = _monotonic() + timeout
+    endpoint = _marked_frontdoor(name, project_root)
+    if endpoint is None:
+        return _models_verdict(name, timeout, project_root, "models-endpoint")
+
+    # A MARKED front door: prefer its decisive per-backend answer, inside the
+    # ONE client budget. The health leg gets a share of it; the inner budget
+    # the server is asked to honor is strictly below that leg's socket budget
+    # so the server answers before the socket gives up; whatever remains funds
+    # the ordinary /models fallback.
+    health_timeout = timeout * HEALTH_SHARE
+    inner_ms = min(
+        int((health_timeout - min(0.25, health_timeout / 4.0)) * 1000),
+        BACKEND_BUDGET_MAX_MS,
+    )
+    if inner_ms < 1:
+        return _models_verdict(name, timeout, project_root, "models-endpoint")
+    verdict = _frontdoor_backend_verdict(
+        endpoint, health_timeout, inner_ms, project_root
+    )
+    if verdict is not None:
+        return verdict
+    remaining = deadline - _monotonic()
+    if remaining <= 0:
+        return Reachability(
+            status=STATUS_UNKNOWN,
+            checked=CHECKED_BACKENDS_FALLBACK,
+            detail="backend health was not decisive and no budget remained for /models",
+        )
+    return _models_verdict(name, remaining, project_root, CHECKED_BACKENDS_FALLBACK)
+
+
+def _models_verdict(
+    name: str, timeout: float, project_root: Optional[str], checked: str
+) -> Reachability:
+    """The ordinary ``GET /models`` verdict, labelled with the method that ran."""
     result = probe_endpoint(name, timeout=timeout, project_root=project_root)
     if not result.resolved:
-        return Reachability(status=STATUS_UNKNOWN, checked="models-endpoint", detail=result.detail)
+        return Reachability(status=STATUS_UNKNOWN, checked=checked, detail=result.detail)
     status = STATUS_REACHABLE if result.ok else STATUS_UNREACHABLE
-    return Reachability(status=status, checked="models-endpoint", detail=result.detail)
+    return Reachability(status=status, checked=checked, detail=result.detail)
+
+
+def _marked_frontdoor(name: str, project_root: Optional[str]) -> Optional[Dict[str, Any]]:
+    """The resolved endpoint when it is explicitly ``frontdoor: true``, else None.
+
+    An endpoint that does not resolve is not marked here: the ordinary path
+    reports that as its own STATUS_UNKNOWN.
+    """
+    from .models import resolve_endpoint  # noqa: PLC0415 -- avoids a cycle
+
+    try:
+        ep = resolve_endpoint(name, project_root=project_root)
+    except Exception:  # noqa: BLE001 -- the ordinary path reports the defect
+        return None
+    return ep if ep.get("frontdoor") is True else None
+
+
+def _fetch_health(
+    url: str, *, label: str, key_env: Optional[str], timeout: float, project_root: Optional[str]
+) -> "tuple[bytes, Optional[BaseException]]":
+    """The single network seam of the health preference (a test patches this)."""
+    return get_authenticated(
+        url, label=label, key_env=key_env, timeout=timeout, project_root=project_root
+    )
+
+
+def _frontdoor_backend_verdict(
+    ep: Dict[str, Any], socket_timeout: float, inner_ms: int, project_root: Optional[str]
+) -> Optional[Reachability]:
+    """A decisive verdict from ``/health/backends``, or None to fall back.
+
+    Only ``reachable`` and ``unreachable`` for the endpoint's own group are
+    decisive. A failed request, malformed or unsupported body, missing group,
+    or an ``unknown`` group all return None.
+    """
+    base = str(ep.get("base_url") or "").rstrip("/")
+    if base.endswith("/v1"):
+        base = base[: -len("/v1")]
+    models = ep.get("models") or {}
+    selector = models.get(ep.get("default")) or models.get(ep.get("name")) or {}
+    group = selector.get("slug") if isinstance(selector, dict) else None
+    if not base or not isinstance(group, str) or not group:
+        return None
+    raw, exc = _fetch_health(
+        f"{base}/health/backends?budget_ms={inner_ms}",
+        label=str(ep.get("name") or ""),
+        key_env=ep.get("key_env"),
+        timeout=socket_timeout,
+        project_root=project_root,
+    )
+    if exc is not None:
+        return None
+    try:
+        body = json.loads(raw)
+        if body.get("protocol") != BACKEND_HEALTH_PROTOCOL:
+            return None
+        entry = (body.get("groups") or {}).get(group)
+        status = entry.get("status")
+        deployments = entry.get("deployments") or []
+        summary = ", ".join(
+            f"{d['id']}={d['status']}" for d in deployments if isinstance(d, dict)
+        )
+    except (ValueError, TypeError, AttributeError, KeyError):
+        return None
+    if status not in (STATUS_REACHABLE, STATUS_UNREACHABLE):
+        return None
+    return Reachability(
+        status=status,
+        checked=CHECKED_BACKENDS,
+        detail=f"group {group}: {status}" + (f" ({summary})" if summary else ""),
+    )
 
 
 def check_harness(harness: Optional[str], *, timeout: float = DEFAULT_VERIFY_TIMEOUT_S) -> Reachability:

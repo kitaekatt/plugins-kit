@@ -64,7 +64,9 @@ from .model_endpoints import (
     _optional_str,
     _require_str,
     harness_entry_message,
+    parse_billing_mode,
     parse_classification_fields,
+    parse_frontdoor,
 )
 from .usage_budget import ConserveSpec
 
@@ -446,9 +448,38 @@ def _config_conserve(
     return _conserve_spec(ep, source="layered model config", entry_id=ep_name)
 
 
+def _config_frontdoor(
+    ep_name: str, ep: Mapping[str, object], notes: Optional[list[str]] = None
+) -> bool:
+    """The ``frontdoor`` marker of a config-declared endpoint; invalid -> False.
+
+    Parse notes are appended to ``notes`` when the caller supplies one (merged
+    discovery); the resolve path returns a plain dict and has no note channel.
+    """
+    return parse_frontdoor(
+        ep,
+        source="layered model config",
+        entry_id=ep_name,
+        notes=notes if notes is not None else [],
+    )
+
+
+def _config_billing_mode(
+    ep_name: str, ep: Mapping[str, object], notes: Optional[list[str]] = None
+) -> Optional[str]:
+    """The ``billing.mode`` of a config-declared endpoint; invalid -> None."""
+    return parse_billing_mode(
+        ep,
+        source="layered model config",
+        entry_id=ep_name,
+        notes=notes if notes is not None else [],
+    )
+
+
 def _config_model_entry(
     ep_name: str,
     ep: Mapping[str, object],
+    notes: Optional[list[str]] = None,
 ) -> Optional[EndpointEntry]:
     """Turn a direct config model declaration into the common entry shape.
 
@@ -495,6 +526,8 @@ def _config_model_entry(
         tier=tier,
         family=family,
         conserve_usage=_config_conserve(ep_name, ep),
+        frontdoor=_config_frontdoor(ep_name, ep, notes),
+        billing_mode=_config_billing_mode(ep_name, ep, notes),
     )
 
 
@@ -544,6 +577,8 @@ def _registry_endpoint(ep_name: str) -> Optional[dict]:
             {"reasoning_effort": entry.reasoning_effort} if entry.reasoning_effort else {}
         ),
         "context_window": entry.context_window,
+        "frontdoor": entry.frontdoor,
+        "billing_mode": entry.billing_mode,
     }
 
 
@@ -556,7 +591,9 @@ def resolve_endpoint(
     """Resolve a named endpoint to its effective settings.
 
     Returns a dict with keys ``name``, ``base_url``, ``key_env``, ``key_file``,
-    ``models``, ``default``, ``defaultCheap``, and ``account_check``. Fields the endpoint
+    ``models``, ``default``, ``defaultCheap``, ``account_check``, ``frontdoor`` (strict
+    bool, default False) and ``billing_mode`` (None, ``unmetered`` or
+    ``provider-reported``). Fields the endpoint
     omits inherit the top-level ``models`` / ``default`` / ``defaultCheap``, so a
     pre-endpoints config (top-level registry only) resolves the default
     ``openrouter`` endpoint from its constants + that registry.
@@ -694,6 +731,8 @@ def resolve_endpoint(
         "default": default_sel,
         "defaultCheap": default_cheap_sel,
         "account_check": account_check,
+        "frontdoor": _config_frontdoor(ep_name, ep),
+        "billing_mode": _config_billing_mode(ep_name, ep),
     }
 
 
@@ -746,7 +785,7 @@ def discover_model_entries(
                 )
                 continue
             config_ids.add(key)
-            entry = _config_model_entry(key, raw)
+            entry = _config_model_entry(key, raw, notes)
         except EndpointMetadataError:
             raise
         except EndpointResolveError as exc:

@@ -57,12 +57,37 @@ from .results import (
     derive_forwarded_params,
     utc_now_iso,
 )
-from .types import BackendOptions, EmptyCompletionError, LLMResponse
+from .types import (
+    COST_SOURCE_PROVIDER,
+    COST_SOURCE_REGISTRY_UNMETERED,
+    BackendOptions,
+    EmptyCompletionError,
+    LLMResponse,
+    valid_reported_cost,
+)
 
 
 # ---------------------------------------------------------------------------
 # OpenRouter (OpenAI-compatible HTTP) backend
 # ---------------------------------------------------------------------------
+
+
+def _usage_field(usage: Any, key: str) -> Any:
+    """A non-standard usage field, from whichever representation carries it.
+
+    The OpenAI SDK's usage model keeps unknown keys as attributes and in
+    ``model_extra``; a plain mapping carries them as keys.
+    """
+    if usage is None:
+        return None
+    if isinstance(usage, dict):
+        return usage.get(key)
+    value = getattr(usage, key, None)
+    if value is None:
+        extra = getattr(usage, "model_extra", None)
+        if isinstance(extra, dict):
+            value = extra.get(key)
+    return value
 
 
 @dataclass
@@ -90,6 +115,46 @@ class OpenRouterBackend:
     _build_lock: "threading.Lock" = field(
         default_factory=threading.Lock, init=False, repr=False, compare=False
     )
+    _cost_trusted: Optional[bool] = field(
+        default=None, init=False, repr=False, compare=False
+    )
+
+    def _trusts_native_cost(self) -> bool:
+        """Whether this endpoint's native ``usage.cost`` is authoritative USD.
+
+        True only for a registry/config entry marked ``frontdoor: true`` (the
+        front door has already decided which cost it will stand behind) or one
+        declaring ``billing.mode: provider-reported``. Nothing in a response
+        can opt an endpoint in. Resolved lazily, once, and only when a response
+        actually carries a native cost, so ordinary calls pay no config read.
+        """
+        if self._cost_trusted is None:
+            from ..models import resolve_endpoint  # noqa: PLC0415
+
+            try:
+                ep = resolve_endpoint(
+                    self.endpoint,
+                    project_root=str(self.project_root)
+                    if self.project_root is not None
+                    else None,
+                )
+                trusted = bool(ep.get("frontdoor")) or (
+                    ep.get("billing_mode") == "provider-reported"
+                )
+            except Exception:  # noqa: BLE001 -- an unresolvable endpoint is untrusted
+                trusted = False
+            self._cost_trusted = trusted
+        return self._cost_trusted
+
+    def _reported_cost(self, usage: Any) -> "tuple[Optional[float], Optional[str]]":
+        """Read native ``usage.cost`` once; (None, None) unless valid AND trusted."""
+        amount = valid_reported_cost(_usage_field(usage, "cost"))
+        if amount is None or not self._trusts_native_cost():
+            return None, None
+        source = _usage_field(usage, "cost_source")
+        if source != COST_SOURCE_REGISTRY_UNMETERED:
+            source = COST_SOURCE_PROVIDER
+        return amount, source
 
     def _ensure_client(self) -> Any:
         """Return the shared client, building it at most once.
@@ -272,6 +337,7 @@ class OpenRouterBackend:
         if not cache_hit_tokens:
             cache_hit_tokens = int(getattr(usage, "prompt_cache_hit_tokens", 0) or 0)
 
+        reported_cost_usd, reported_cost_source = self._reported_cost(usage)
         return LLMResponse(
             text=text,
             model=resolved_model,
@@ -283,6 +349,8 @@ class OpenRouterBackend:
             wall_ms=wall_ms,
             attempts=1,
             from_cache=False,
+            reported_cost_usd=reported_cost_usd,
+            reported_cost_source=reported_cost_source,
             dropped_params=derive_dropped_params(self.capabilities, opts),
             forwarded_params=derive_forwarded_params(self.capabilities, opts),
             # This adapter emits no execution control: it builds an HTTP request,
