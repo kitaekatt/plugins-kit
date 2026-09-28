@@ -1,23 +1,23 @@
-# Task System — Design Specification
+# Task System -- Design Specification
 
 **Status:** Design reference. This document specifies the intended entities, relationships, and
-operations. **Implementation may supersede it** — where code and this document disagree, the code
+operations. **Implementation may supersede it** -- where code and this document disagree, the code
 is authoritative and this document should be updated or retired.
 
 **Date:** 2026-06-09
 **Companion artifacts:**
-- [`diagrams/task-lifecycle.html`](diagrams/task-lifecycle.html) — lifecycle (states × operations-as-inputs)
-- [`diagrams/task-entities.html`](diagrams/task-entities.html) — entity/relationship map (cardinalities + invariants)
-- [`diagrams/task-work-sequence.html`](diagrams/task-work-sequence.html) — `work` operation sequence
-- [`diagrams/task-discovery.html`](diagrams/task-discovery.html) — discovery / scoped-list dataflow
-- [`diagrams/task-move.html`](diagrams/task-move.html) — location & move workflow
+- [`diagrams/task-lifecycle.html`](diagrams/task-lifecycle.html) -- lifecycle (states x operations-as-inputs)
+- [`diagrams/task-entities.html`](diagrams/task-entities.html) -- entity/relationship map (cardinalities + invariants)
+- [`diagrams/task-work-sequence.html`](diagrams/task-work-sequence.html) -- `work` operation sequence
+- [`diagrams/task-discovery.html`](diagrams/task-discovery.html) -- discovery / scoped-list dataflow
+- [`diagrams/task-move.html`](diagrams/task-move.html) -- location & move workflow
 - The two prior systems this derives from are recorded in a maintainer-only
   exploration document, kept in the plugins-kit repository rather than shipped
   with this skill; it is development history and resolves against nothing in a
   consumer's install.
 
 **Location.** This design package lives with the skill it evolves:
-`plugins/awesome-kit/skills/task/design/`. The task system **evolves the hand-off skill** — the task
+`plugins/awesome-kit/skills/task/design/`. The task system **evolves the hand-off skill** -- the task
 folder *is* the generalized hand-off folder.
 
 **Governing idea.** The **embedded-YAML typed-unit** model from skills-kit: structured records
@@ -29,7 +29,7 @@ living inside markdown documents, discoverable by script.
 
 A **task** is a unit of work that, once started, owns a **folder**. The folder is the single source
 of truth for the task. Tasks are **referenced** from any markdown document (a skill, a reference
-doc, a CLAUDE.md); a reference is just a pointer — status is always read from the folder's YAML
+doc, a CLAUDE.md); a reference is just a pointer -- status is always read from the folder's YAML
 record. Tasks are worked by explicit reference; multiple agents can work different tasks in the same repository.
 
 Every task is always named explicitly by ref. There is no implicit "current task" because several agents work in the same repository on different tasks concurrently, so any ambient selection would silently make one agent's ref-less command act on another agent's task.
@@ -38,7 +38,7 @@ The system never reimplements what it can derive. State, durability, and discove
 **where the folder is** and **whether it exists**, not of bookkeeping that can drift.
 
 Design posture: **no backward compatibility, no error recovery.** A malformed task is fixed before
-work proceeds — there is no migration path or graceful degradation.
+work proceeds -- there is no migration path or graceful degradation.
 
 ---
 
@@ -51,14 +51,14 @@ The materialized task. A directory (the generalized hand-off folder) created whe
 
 - **Default type layout** (`hand-off`): `CLAUDE.md` (auto-loaded orientation), `plan.md`
   (intra-task step list), `log.md` (on-demand history), and **`task.yaml`** (the structured record).
-- **Identity = the folder path.** See §5.
-- **Source of truth.** All structured task state lives in `task.yaml`. See §6.
+- **Identity = the folder path.** See section 5.
+- **Source of truth.** All structured task state lives in `task.yaml`. See section 6.
 
-### 2.2 `task.yaml` — the structured record
+### 2.2 `task.yaml` -- the structured record
 
 The canonical, script-readable/writable record. Lives at the root of the task folder. This is what
 `show`, `list`, `review`, `update`, and `validate` read and write. Fields below are the **default
-(`hand-off`) type**; the field set and vocabularies are **type-defined** (see §2.5).
+(`hand-off`) type**; the field set and vocabularies are **type-defined** (see section 2.5).
 
 ```yaml
 # task.yaml  (default "hand-off" type)
@@ -97,14 +97,14 @@ task:
 | `skills_to_invoke` | list[string] | no | Skills loaded when the task is worked (the self-documenting-task pattern). This is the task's *additional* set: `work` emits `BASELINE_SKILLS` ahead of it, so the always-required skills need not (and should not) be restated here. |
 
 Notes:
-- `abstract` / `invalid` / `orphaned` / `remote` / `gone` are **computed** states (§4), never stored.
-- **Schemas are floors, not ceilings** — a type may add load-bearing fields beyond this set.
+- `abstract` / `invalid` / `orphaned` / `remote` / `gone` are **computed** states (section 4), never stored.
+- **Schemas are floors, not ceilings** -- a type may add load-bearing fields beyond this set.
 - **`deferred`** marks a task purposefully put on hold, intended to be resumed later. It is neither
   open nor closed: `list`/`review` section it separately from both, and `reopen` returns it to `active`.
 
 ### 2.3 Reference
 
-A pointer to a task folder, embedded in a markdown document. **Carries no task metadata** — to learn
+A pointer to a task folder, embedded in a markdown document. **Carries no task metadata** -- to learn
 a task's status you resolve the reference and read its `task.yaml`.
 
 ```yaml
@@ -116,18 +116,18 @@ ref:
 
 | Field | Type | Required | Rule |
 |---|---|---|---|
-| `path` | string | yes | The folder path = the task id (§5). `dev/tasks/<stub>` is **project-relative**; `tmp/<stub>` is machine-local. |
-| `host` | string | no | Short hostname (`hostname -s`). Only meaningful for tmp paths. Non-matching `host` + tmp ⇒ **remote** (§7.3). |
+| `path` | string | yes | The folder path = the task id (section 5). `dev/tasks/<stub>` is **project-relative**; `tmp/<stub>` is machine-local. |
+| `host` | string | no | Short hostname (`hostname -s`). Only meaningful for tmp paths. Non-matching `host` + tmp => **remote** (section 7.3). |
 
-- A reference is **inert text** until resolved: discovery (§8) collects reference paths, then reads
+- A reference is **inert text** until resolved: discovery (section 8) collects reference paths, then reads
   each folder's `task.yaml` for state.
 - Path canonicalization: paths are normalized (resolve `.`/`..`, project-relative form for `dev/tasks`)
   before equality/dedupe comparisons.
 
-### 2.4 `task_list` — embedded reference list (association)
+### 2.4 `task_list` -- embedded reference list (association)
 
 A `task_list:` typed-unit embedded in a document is just a list of references. **Embedding a
-reference in a document associates that task with the document** — this is how "tasks in this skill"
+reference in a document associates that task with the document** -- this is how "tasks in this skill"
 or "tasks in this domain" is expressed. The unit carries paths (+ optional host), nothing more.
 
 ```yaml
@@ -138,11 +138,11 @@ task_list:
     - { path: tmp/spike-ipv6-diag, host: macbook }   # remote if not on macbook
 ```
 
-A task may be referenced from **multiple** documents; `list` dedupes by canonical path (§8).
+A task may be referenced from **multiple** documents; `list` dedupes by canonical path (section 8).
 
 - `task_list` is a **typed unit** (a top-level YAML key with a registered schema) embedded in a fenced
   YAML block, per the skills-kit embedded-YAML model. Schema: `{ refs: list[ref] }`, `refs` may be empty.
-- Discovery (§8) scans documents for `task_list:` blocks and unions their `refs`. A document with no
+- Discovery (section 8) scans documents for `task_list:` blocks and unions their `refs`. A document with no
   `task_list` contributes nothing; the documents *are* the registry.
 
 ### 2.5 Task Type
@@ -151,10 +151,10 @@ The pluggable **config bundle** that defines what varies between kinds of task. 
 (`hand-off`, the default); the architecture allows more.
 
 A type defines four things:
-- **scaffolding template** — which files `init` creates and their shape;
-- **embedded-YAML schema** — the `task.yaml` contract `validate` checks against;
-- **state vocabulary** — the legal `status` values;
-- **closure policy** — what `close` / `archive` / `delete` physically do.
+- **scaffolding template** -- which files `init` creates and their shape;
+- **embedded-YAML schema** -- the `task.yaml` contract `validate` checks against;
+- **state vocabulary** -- the legal `status` values;
+- **closure policy** -- what `close` / `archive` / `delete` physically do.
 
 **The default `hand-off` type (the only registered type in v1):**
 
@@ -164,8 +164,8 @@ scaffolding:                 # init creates these in the folder
   - CLAUDE.md                #   8-section continuation prompt (the hand-off template)
   - plan.md                  #   accomplished + forward-overview (intra-task task list)
   - log.md                   #   on-demand history
-  - task.yaml                #   the structured record (§2.2)
-schema: task@1               # the task.yaml field contract in §2.2
+  - task.yaml                #   the structured record (section 2.2)
+schema: task@1               # the task.yaml field contract in section 2.2
 state_vocabulary: [active, blocked, closed, deferred, archived]
 priority_pattern: "^P[1-3]$" # P1 highest
 closure_policy:
@@ -176,14 +176,14 @@ closure_policy:
 
 **Type registration.** A type is identified by the `type:` field in `task.yaml`. v1 ships exactly one
 type (`hand-off`), resolved by name from a built-in registry. The registry-extension mechanism (how a
-consumer declares a new type) is **deferred** — out of scope for v1; the `type` field reserves the
-seam. (Removed from "open questions" — v1 is single-type by decision, not by omission.)
+consumer declares a new type) is **deferred** -- out of scope for v1; the `type` field reserves the
+seam. (Removed from "open questions" -- v1 is single-type by decision, not by omission.)
 
 
-### 2.6 `task_items` — the item enumeration (added 2026-07-09)
+### 2.6 `task_items` -- the item enumeration (added 2026-07-09)
 
 An **item** (accepted synonym "work item") is the enumerable unit of next work *within* a task.
-The `task_items:` typed unit — a fenced YAML block in the folder's `plan.md`, one per task — is the
+The `task_items:` typed unit -- a fenced YAML block in the folder's `plan.md`, one per task -- is the
 single home for the task's open items (`id` / `title` / `state` / optional `priority` reusing the
 type's pattern / optional `note`). States are the in-flight triage buckets promoted to contract:
 `available` / `in-flight` / `blocked-user` / `deferred`; **completion is removal** from the block.
@@ -193,10 +193,10 @@ sub-task entity: an item needing identity/lifecycle outside its plan is promoted
 is the pre-contract warning). Full contract, evidence, and rationale:
 [`task-items-design.md`](task-items-design.md).
 
-### 2.7 `durable_outputs` — documents that outlive the task
+### 2.7 `durable_outputs` -- documents that outlive the task
 
 A task folder is a **working surface**, not a home for documentation the work outlives. Archiving a
-`dev/tasks` folder commits the final state, deletes the folder, and commits the removal — so a
+`dev/tasks` folder commits the final state, deletes the folder, and commits the removal -- so a
 load-bearing document living only in the folder becomes a deleted file: undiscoverable, unindexed,
 findable only by someone who already knows it existed.
 
@@ -208,12 +208,12 @@ means task-local by declaration.**
 The structural point is that the judgment and the check sit at **different times**. The declaration
 is made at authoring time, when the author still knows the answer; `archive` only confirms
 mechanically that a declaration already made still holds. That separation is what lets archive **ask
-the user nothing** — verification is existence + containment + outside-the-folder, never an
+the user nothing** -- verification is existence + containment + outside-the-folder, never an
 assessment of what a document is. An absent field yields a note, never a refusal, so folders
 predating the field stay archivable.
 
 **The one-breath authoring test, the placement rule, and the deliberate non-goals are owned by**
-[`../references/handoff-template.md`](../references/handoff-template.md), "Durable outputs" — the
+[`../references/handoff-template.md`](../references/handoff-template.md), "Durable outputs" -- the
 SSOT for authors. This section defines only the field and its place in the model.
 
 ---
@@ -233,11 +233,11 @@ depends_on / blocked_by  ----(reference paths)---->  other Task Folders
 ```
 
 Key invariants:
-- **The folder is the source of truth.** References and `task_list` entries hold no status — they
+- **The folder is the source of truth.** References and `task_list` entries hold no status -- they
   point; the folder's `task.yaml` answers.
-- **Id = path.** Therefore `move` (which changes the path) must rewrite every reference (§7.2).
-- **No folder ⇒ not a live task.** What that means depends on the path (§4).
-- **Project list is computed**, never stored (§8).
+- **Id = path.** Therefore `move` (which changes the path) must rewrite every reference (section 7.2).
+- **No folder => not a live task.** What that means depends on the path (section 4).
+- **Project list is computed**, never stored (section 8).
 
 ---
 
@@ -252,16 +252,16 @@ decides whether a task is `active`, `invalid`, or `remote`. The lifecycle diagra
 
 | State | Origin | Meaning |
 |---|---|---|
-| `abstract` | computed | Referenced but **not initialized** — no folder yet. `init`/`work` materializes it. |
+| `abstract` | computed | Referenced but **not initialized** -- no folder yet. `init`/`work` materializes it. |
 | `active` | stored | A **valid, initialized** task. The output of `init`, and of `update` when validation passes. The resting/live state. |
-| `invalid` | computed (validate) | Fails validation. Must be **fixed forward** — no back-compat, no recovery — then re-validated. |
+| `invalid` | computed (validate) | Fails validation. Must be **fixed forward** -- no back-compat, no recovery -- then re-validated. |
 | `blocked` | stored | A valid task with unmet `depends_on` / `blocked_by`. Clears back to `active`. *(In the spec; omitted from the lifecycle diagram for clarity.)* |
 | `deferred` | stored | Purposefully put on hold, intended to be resumed later. Neither open nor closed; `reopen` clears it back to `active`. |
 | `closed` | stored | Work done; folder retained (not yet archived). |
 | `archived` | stored / computed | Terminal. tmp: folder marked + **parked** at `tmp/archived-tasks/<stub>` (user-purgeable; a parked folder also reads as `archived` via the tri-state below). non-tmp: final state submitted to version control, folder **deleted** (version control is the record; git is automated, other VCS agent-driven) -- except where git ignores EVERY file in the folder, which parks it at `dev/tasks/archived-tasks/<stub>` for the same reason tmp parks (no commit can carry it, so it is local scratch); a folder git holds only PARTLY is kept in place. Either way the result reads as `archived` via the tri-state below. |
-| `orphaned` | computed | A **tmp** reference (local host) whose folder is absent — cleaned up without a proper archive. A defect. *(In the spec; omitted from the lifecycle diagram.)* |
+| `orphaned` | computed | A **tmp** reference (local host) whose folder is absent -- cleaned up without a proper archive. A defect. *(In the spec; omitted from the lifecycle diagram.)* |
 | `remote` | computed (validate) | A **tmp** reference tagged with a non-matching `host`. Assumed to exist there; not locally resolvable. |
-| `gone` | computed | No folder **and** no reference anywhere — vanished completely (no tombstone). |
+| `gone` | computed | No folder **and** no reference anywhere -- vanished completely (no tombstone). |
 
 **`validate` classifies into three outcomes:** `active` (valid local), `invalid` (fails), or `remote`
 (tmp + host mismatch).
@@ -276,7 +276,7 @@ decides whether a task is `active`, `invalid`, or `remote`. The lifecycle diagra
 | tmp path, host = me / unset | absent | `orphaned` (defect) |
 | tmp path, host = other | n/a | `remote` (assumed valid on `host`) |
 
-A task with **no folder and no reference anywhere** does not exist — it has vanished completely
+A task with **no folder and no reference anywhere** does not exist -- it has vanished completely
 (there is no tombstone).
 
 ---
@@ -287,20 +287,20 @@ A task with **no folder and no reference anywhere** does not exist — it has va
 - The **stub** (the folder's base name) is a convenience handle and is **not** guaranteed unique
   (two folders in different locations may share a name). Operations that take a stub must disambiguate
   when more than one folder matches.
-- Because the id is the path, **relocating a task changes its id** — which is why `move` rewrites
-  references (§7.2).
+- Because the id is the path, **relocating a task changes its id** -- which is why `move` rewrites
+  references (section 7.2).
 
 ---
 
 ## 6. Source of truth
 
 - **The folder is authoritative.** task.yaml for the task-level record; plan.md's `task_items`
-  unit for the item-level enumeration (§2.6). Nothing outside the folder carries task OR item state.
-- References and `task_list` entries are **pure associations** — they never duplicate status, so they
+  unit for the item-level enumeration (section 2.6). Nothing outside the folder carries task OR item state.
+- References and `task_list` entries are **pure associations** -- they never duplicate status, so they
   cannot drift from the folder.
 - `show` / `list` resolve references to folders and project selected `task.yaml` fields. This is
-  **100% script-driven** — the content of YAML fields, no inference.
-- `status` (the operation, §7.1) is the exception: it **summarizes** a task and runs in a
+  **100% script-driven** -- the content of YAML fields, no inference.
+- `status` (the operation, section 7.1) is the exception: it **summarizes** a task and runs in a
   **background agent** to preserve context. It is inference, not a field read.
 
 ---
@@ -314,62 +314,62 @@ inference exception.
 
 | Verb | Kind | Semantics |
 |---|---|---|
-| `init` | script | Create the folder + scaffolding for a new task, seeded from current request context. Establishes identity (path), location (§7.4), and type. **Its output is always a valid `active` task — `init` cannot produce an `invalid` one.** |
+| `init` | script | Create the folder + scaffolding for a new task, seeded from current request context. Establishes identity (path), location (section 7.4), and type. **Its output is always a valid `active` task -- `init` cannot produce an `invalid` one.** |
 | `work <ref>` | script | Work the explicitly named task. **Errors if the folder doesn't exist** (a mistyped path must not scaffold a task); `--init` opts into the promotion. Emits one initialization block -- the baseline skills merged with the task's `skills_to_invoke`, plus `agent_hint` and the dispatch directive (section 7.1). **Gated by `validate`** (section 9). |
 | `update <ref>` | script | Upsert: `init` if absent, otherwise refresh the folder's state. Appends one dated entry to `log.md` and writes `task.yaml` field edits (`status`, `priority`, `description`, `depends_on`, `blocked_by`, ...). **The script never rewrites `plan.md`; rotation is the agent's hand-off discipline.** **Re-runs `validate`, classifying the task `active` / `invalid` / `remote`** (section 9). |
 | `close <ref>` | script | Mark `status: closed`; **keeps** the folder (reopen-able). Acts on an `active` task. |
 | `reopen <ref>` | script | Reverse a terminal state (`closed`, `deferred`, or a parked `archived` folder) back to `active`. **Allowed only if the folder still exists** -- incl. an `archived` folder parked at `<location>/archived-tasks/<stub>` under either root, which is **restored** to `<location>/<stub>` first. A task with no folder (and nothing parked) cannot be reopened -- it is gone. |
 | `archive <ref>` | script | **Operates on an `active` task** (`active -> archived`); to archive a `closed` or `deferred` task, `reopen` it first. **Durable-outputs check first (section 2.7):** every declared path must exist outside the folder, else refuse; absent field -> note, proceed. Per closure policy - **version control is the record** (git is the automated case; no dependency on git): **non-tmp in a git repo** -> commit the final state (status + log entry), delete the folder, commit the removal (two folder-scoped commits); **non-tmp outside git** -> no git command runs; record the final state, keep the folder (`vcs_pending`), agent submits with the workspace's VCS (e.g. `p4 submit`) then runs `delete`; **non-tmp where git ignores EVERY file** -> no commit is possible, so record the final state and move the folder to `dev/tasks/archived-tasks/<stub>` (`vcs_ignored`); **non-tmp where git holds SOME of it and ignores the rest** -> record the final state and keep the folder IN PLACE (`vcs_ignored`, nothing parked -- moving it would take tracked files off their tracked paths with no commit); **tmp** -> set `status: archived`, move the folder to `tmp/archived-tasks/<stub>`. An occupied parking spot refuses, before any write. |
 | `delete <ref>` | script | Operates on an `active` **or `archived`** task (a still-present archived folder -- the `vcs_pending` output, or a folder PARKED at `<location>/archived-tasks/<stub>`, named by its live ref -- is what delete finishes off). **Git-dirty guard** where git can verify (a dirty `dev/tasks` folder refuses; delete never auto-commits; outside a git repo, and on a parked folder, the agent owns VCS state), **and delete the folder even when it is tmp**. Removes the working folder unconditionally. |
-| `move <ref> <dest>` | script | Relocate the folder (commonly `tmp/<stub>` → `dev/tasks/<stub>`) **and rewrite every reference** to the new path (§7.2). |
-| `status <ref>` | **inference** | Summarize a task — works on **any** task. Resolves the task's classification via `validate`, then **summarizes** in a **background agent** to preserve context. |
-| `list [--scope ...]` | script | Enumerate tasks in a scope (§8) through the shared listing projection. The default text output is backward-compatible; JSON/YAML include summaries, update history, and diagnostics. List does not write or invoke inference. |
+| `move <ref> <dest>` | script | Relocate the folder (commonly `tmp/<stub>` -> `dev/tasks/<stub>`) **and rewrite every reference** to the new path (section 7.2). |
+| `status <ref>` | **inference** | Summarize a task -- works on **any** task. Resolves the task's classification via `validate`, then **summarizes** in a **background agent** to preserve context. |
+| `list [--scope ...]` | script | Enumerate tasks in a scope (section 8) through the shared listing projection. The default text output is backward-compatible; JSON/YAML include summaries, update history, and diagnostics. List does not write or invoke inference. |
 | `review [--scope ...]` | script + model-assisted maintenance | Build a self-contained collapsible HTML review from the shared listing projection, omitting archived tasks and separating open/deferred/closed sections. By default, Codex Luna generates missing or stale summaries for eligible local tasks before rendering; `--no-generate-missing-summaries` preserves gaps for inspection; `--generate-missing-summaries` is the explicit form of the default. |
 | `show <ref>` | script | Render one task's selected `task.yaml` fields. Cheap, no inference. |
-| `items <ref>` | script | Enumerate the task's open items (the plan.md `task_items` unit, §2.6): one line per item — `id  state  priority  title` — sorted by priority then block order; `--state`/`--priority` filter. Ref is required. Cheap, no inference. |
-| `validate <ref>` | script | Check the folder/`task.yaml` against the type schema **and the `task_items` unit** (§2.6). Emits errors and warnings. **All warnings originate here.** Gates `work` (§9). |
+| `items <ref>` | script | Enumerate the task's open items (the plan.md `task_items` unit, section 2.6): one line per item -- `id  state  priority  title` -- sorted by priority then block order; `--state`/`--priority` filter. Ref is required. Cheap, no inference. |
+| `validate <ref>` | script | Check the folder/`task.yaml` against the type schema **and the `task_items` unit** (section 2.6). Emits errors and warnings. **All warnings originate here.** Gates `work` (section 9). |
 
-**Common conventions.** `<ref>` is a path or a stub (stub resolved via §5; ambiguous stub -> error listing candidates). Script verbs exit `0` on success, non-zero on failure/block, and print findings to stderr.
+**Common conventions.** `<ref>` is a path or a stub (stub resolved via section 5; ambiguous stub -> error listing candidates). Script verbs exit `0` on success, non-zero on failure/block, and print findings to stderr.
 
 #### Per-verb contracts
 
-- **`init <stub|desc> [--dest tmp|dev/tasks] [--type hand-off]`** — *create.*
-  Pre: target path `<dest>/<stub>` (default dest `tmp`) does not already exist (else error — use `update`).
-  Steps: scaffold the type's files (§2.5); seed `task.yaml` (`type`, `title`/`description` from context,
+- **`init <stub|desc> [--dest tmp|dev/tasks] [--type hand-off]`** -- *create.*
+  Pre: target path `<dest>/<stub>` (default dest `tmp`) does not already exist (else error -- use `update`).
+  Steps: scaffold the type's files (section 2.5); seed `task.yaml` (`type`, `title`/`description` from context,
   `status: active`); seed `CLAUDE.md`/`plan.md`/`log.md` from the hand-off template; run `validate`.
-  Invariant: **output is always a valid `active` task** — if scaffolding can't validate, `init` fails
+  Invariant: **output is always a valid `active` task** -- if scaffolding can't validate, `init` fails
   (it never leaves an `invalid` task). Writes: the folder. Output: the path.
-- **`work <ref>`** — *work explicitly named task.*
+- **`work <ref>`** -- *work explicitly named task.*
   Pre: resolve `<ref>`; if **no folder**, ERROR unless `--init` was passed, in which case auto-`init`
   at that path (promotion). Run `validate`; **any
   error OR warning BLOCKS** (exit non-zero, print findings). A **remote** task cannot be worked locally
-  (error). Steps: emit **one initialization block** — a header line, then the
+  (error). Steps: emit **one initialization block** -- a header line, then the
   merged skill set (`state_ops.BASELINE_SKILLS`, then the task's `skills_to_invoke`, order-preserving
   and deduped) as `Skill(...)` calls, then `agent_hint` if present, then the closing dispatch
   directive. Writes the folder only on an opted-in auto-init.
   **Why merged script-side:** adherence tracks what the script emits, not what prose requires. Before
-  this, `orchestrate` lived only in the skill's prose while the task's own skills were emitted lines —
+  this, `orchestrate` lived only in the skill's prose while the task's own skills were emitted lines --
   producing the predictable partial failure (invoke the declared skills, skip orchestrate, implement
   inline). One emitted list makes the rule "invoke every `Skill(...)` line printed"; the closing
   directive is what converts a loaded `orchestrate` into an actual dispatch.
 
-- **`update <ref> [field edits]`** — *upsert + refresh.*
-  Ref is required. Pre: if no folder → `init` (upsert). Steps: apply `task.yaml` field edits
+- **`update <ref> [field edits]`** -- *upsert + refresh.*
+  Ref is required. Pre: if no folder -> `init` (upsert). Steps: apply `task.yaml` field edits
   (`status`/`priority`/`description`/`depends_on`/`blocked_by`); append one dated entry to `log.md`;
   run `validate` -> classify `active`/`invalid`/`remote`. Writes: `task.yaml` and one dated line in
   `log.md`; that dated `log.md` line is the script's only document write. It never rewrites `plan.md`.
   Rotation is the AGENT's discipline under the hand-off template. Output: classification + findings.
-- **`close <ref>`** — Pre: folder exists, `status: active`. Set `status: closed`; **keep** folder.
+- **`close <ref>`** -- Pre: folder exists, `status: active`. Set `status: closed`; **keep** folder.
 - **`reopen <ref>`** -- Pre: folder exists -- incl. an `archived` folder parked at
   `<location>/archived-tasks/<stub>` under either root, which is **restored** to
   `<location>/<stub>` first (**a missing folder with nothing parked cannot be reopened** --
   error). Set `status: active`; re-validate.
 - **`archive <ref>`** -- Pre: folder exists, `status: active` (to archive a `closed` or `deferred` task,
   `reopen` first -- else error). Then: tmp -> `status: archived`, **move** the folder to `tmp/archived-tasks/<stub>`
-  (occupied parking spot → refuse); non-tmp → **version control is the record**: in a **git repo**,
+  (occupied parking spot -> refuse); non-tmp -> **version control is the record**: in a **git repo**,
   write the final state (`status: archived` + dated log entry), **commit** it, **delete** the folder,
-  **commit** the removal — two commits pathspec-limited to the task folder, never removing the folder
-  before its final state is committed; **outside a git repo**, run **no git command** — write the final
+  **commit** the removal -- two commits pathspec-limited to the task folder, never removing the folder
+  before its final state is committed; **outside a git repo**, run **no git command** -- write the final
   state, **keep** the folder (`vcs_pending`), and leave submission to the agent/user who knows the
   workspace's VCS (e.g. `p4 submit`), finished by `delete`. Where git ignores **every file** in the
   folder, no commit is possible now or ever, so the folder is local scratch in fact: write the final
@@ -380,24 +380,24 @@ inference exception.
   final state and **keep** the folder in place (`vcs_ignored`, nothing parked): moving it would
   relocate tracked files off their tracked paths with no commit, and the disposition names both what
   git ignores and what git holds.
-- **`delete <ref>`** — Pre: folder exists, `status: active` **or `archived`** (a still-present archived
+- **`delete <ref>`** -- Pre: folder exists, `status: active` **or `archived`** (a still-present archived
   folder is what delete finishes off; `closed`/`deferred` -> reopen-first hint). **Git-dirty guard** where git can
-  verify (non-tmp folder git sees as **dirty** → refuse — delete never auto-commits; use `archive`);
+  verify (non-tmp folder git sees as **dirty** -> refuse -- delete never auto-commits; use `archive`);
   outside a git repo no git check applies. Then ensure the folder is removed **even when tmp**
   (unconditional).
-- **`move <ref> <dest>`** — Pre: folder exists **locally** (not remote). Steps: relocate folder
-  `old → <dest>/<stub>`; scan project-scope documents for the old path; **rewrite every reference** to
+- **`move <ref> <dest>`** -- Pre: folder exists **locally** (not remote). Steps: relocate folder
+  `old -> <dest>/<stub>`; scan project-scope documents for the old path; **rewrite every reference** to
   the new path (project-relative when `dest` is `dev/tasks`).
-  Writes: folder location and N documents. (§7.2)
+  Writes: folder location and N documents. (section 7.2)
 
-- **`status <ref>`** — *(inference)* Resolve + `validate` to classify, then a **background agent**
+- **`status <ref>`** -- *(inference)* Resolve + `validate` to classify, then a **background agent**
   summarizes `task.yaml` + `plan.md`/`log.md`. Works on **any** task. The only inference verb.
-- **`list [--scope user|project|skill|file <target>] [--status … --priority … --format text|json|yaml]`** — Discovery (§8) →
-  resolve → classify each via `validate` → **dedupe by canonical path** → project `id`/`title`/`status`/
+- **`list [--scope user|project|skill|file <target>] [--status ... --priority ... --format text|json|yaml]`** -- Discovery (section 8) ->
+  resolve -> classify each via `validate` -> **dedupe by canonical path** -> project `id`/`title`/`status`/
   `priority`, summary metadata, and update history through the shared listing projection. Remote tasks are listed as opaque (`@host`, status unresolved). Text is the legacy projection; JSON/YAML are versioned and include diagnostics. Script-only; no inference or writes.
 - **`review [--scope all|user|project|skill|file <target>] [--output PATH|-] [--no-open] [--generate-missing-summaries | --no-generate-missing-summaries]`** -- Discovery (section 8) and the shared listing projection produce the source data. By default, eligible local active/blocked/deferred/closed tasks with missing or stale `task.summary` values are summarized through Codex Luna with a read-only, no-network sandbox and persisted through `update` with a source fingerprint. Summary-maintenance log entries do not advance activity. The renderer writes self-contained HTML with one collapsible card per task, Open/Deferred/Closed sections, newest activity first, and escaped values. In all scope, projects are ordered by their newest open-task activity (summary dates and closed tasks excluded), newest first; projects without a dated open task sort last by name. Each task row dims with age: full brightness up to 4 hours since its `last_activity`, fading linearly to 33% at 120 hours and beyond (undated tasks are dimmest). Archived tasks are absent. Missing, stale, and unavailable summaries have distinct visible treatments; model failures are reported on stderr and the HTML is still written. `--output -` emits HTML to stdout, otherwise a temporary file is opened in the browser unless `--no-open` is set.
-- **`show <ref>`** — Resolve → print selected `task.yaml` fields. Cheap, no inference.
-- **`validate <ref>`** — §9. Emit errors + warnings; classify `active`/`invalid`/`remote`. Exit `0` iff
+- **`show <ref>`** -- Resolve -> print selected `task.yaml` fields. Cheap, no inference.
+- **`validate <ref>`** -- section 9. Emit errors + warnings; classify `active`/`invalid`/`remote`. Exit `0` iff
   no findings.
 
 ### 7.2 `move` rewrites references
@@ -406,7 +406,7 @@ Because **id = path**, moving a folder changes its id. `move` therefore:
 1. relocates the folder, then
 2. scans every document for references to the old path and rewrites them to the new path.
 
-A move that skipped step 2 would leave **orphaned references** — interpreted as `archived` if they
+A move that skipped step 2 would leave **orphaned references** -- interpreted as `archived` if they
 point at a (now-absent) non-tmp folder, or `orphaned` if they point at an absent tmp folder. Both are
 defects `move` exists to prevent.
 
@@ -416,10 +416,10 @@ A reference with a `host` that does not match the current host, pointing at a **
 **remote task**. The folder is **assumed to exist** on `host`; it is not verified or fetched.
 
 Local behavior on a remote task:
-- `list` shows it as `<path> @host — remote, status not locally resolvable` (its `task.yaml` can't be read).
+- `list` shows it as `<path> @host -- remote, status not locally resolvable` (its `task.yaml` can't be read).
 - `work` / `validate` / `move` / `close` / `update` cannot act on it locally (the folder isn't here).
 
-A remote task is effectively a **read-only existence pointer** locally — "work for this is happening
+A remote task is effectively a **read-only existence pointer** locally -- "work for this is happening
 on `host`." (v1 does not attempt SSH/remote fetch.)
 
 ### 7.4 Location and durability
@@ -432,28 +432,28 @@ Durability is a **per-task location choice**, not a system-wide mode:
 | `dev/tasks/<stub>` | version-controlled (git automated; other VCS agent-driven) | durable, auditable work |
 
 `move` promotes/demotes between them and rewrites references. Git-tracked documents may reference tmp
-tasks via the optional `host` parameter (§7.3).
+tasks via the optional `host` parameter (section 7.3).
 
 **Uncommitted-archive guard (revised 2026-07-22).** `archive` deletes a non-tmp folder on the
 assumption version-control history is the record. A `dev/tasks/<stub>` deleted without a submitted
 record would be lost. Original resolution: `validate` warns and `archive` refuses until the user
-commits. Revision — with the principle that **the task system has no dependency on git** (version
+commits. Revision -- with the principle that **the task system has no dependency on git** (version
 control is the record; git is merely the VCS the scripts can detect and automate):
 
-- **In a git repo**, `archive` **records the final state itself** — it writes `status: archived` + a
+- **In a git repo**, `archive` **records the final state itself** -- it writes `status: archived` + a
   dated log entry, commits, deletes the folder, and commits the removal (both commits pathspec-limited
   to the task folder, so unrelated staged work never rides along), never removing the folder before
   the final-state commit succeeds.
-- **Outside a git repo**, the scripts run **no git command** and pass no judgment — the workspace may
+- **Outside a git repo**, the scripts run **no git command** and pass no judgment -- the workspace may
   use Perforce or another VCS the agent understands. `archive` records the final state and **keeps**
   the folder (`vcs_pending`); the agent submits it with the workspace's VCS, then `delete` (which
   accepts `status: archived` and applies no git check outside a repo, nor on a parked folder)
   removes it.
-- `delete` keeps the refuse-when-dirty guard **where git can verify it** (it never auto-commits — it
+- `delete` keeps the refuse-when-dirty guard **where git can verify it** (it never auto-commits -- it
   is the no-ceremony removal verb).
-- The **`validate` warning** for a git-dirty `dev/tasks` folder remains (warnings gate `work`, §9);
+- The **`validate` warning** for a git-dirty `dev/tasks` folder remains (warnings gate `work`, section 9);
   outside a git repo it is an advisory **note** ("version-control state unverified"), never a blocking
-  warning — a Perforce-backed workspace must not be permanently gated by a git check.
+  warning -- a Perforce-backed workspace must not be permanently gated by a git check.
 
 ---
 
@@ -461,7 +461,7 @@ control is the record; git is merely the VCS the scripts can detect and automate
 
 Two crawl modes, both script-driven:
 
-1. **By folder (primary).** Discover `task.yaml` files under the known roots (`dev/tasks/`, tmp) — the
+1. **By folder (primary).** Discover `task.yaml` files under the known roots (`dev/tasks/`, tmp) -- the
    authoritative enumeration of live tasks.
 2. **By reference (scoped association).** Read the `task_list` references embedded in a given document
    set to get the tasks *associated with* that scope.
@@ -471,31 +471,31 @@ Two crawl modes, both script-driven:
 | Scope | Set crawled |
 |---|---|
 | `user` | user-level task roots (`~/.claude/{tmp,dev/tasks}`) |
-| `project` | the project's task roots (`<project>/{tmp,dev/tasks}`) — **always computed**, never a stored master list |
+| `project` | the project's task roots (`<project>/{tmp,dev/tasks}`) -- **always computed**, never a stored master list |
 | `skill` | one skill's `SKILL.md` **plus its `references/`** |
 | `file` | a single document |
 
 **Algorithm (`list`/`review --scope <s> [target]`):**
-1. **Resolve scope → roots + document set:**
-   - `user` → roots `~/.claude/{dev/tasks,tmp}`-equivalent; docs = `*.md` under those roots.
-   - `project` → roots `<project>/dev/tasks` + `<project>/tmp`; docs = `*.md` **under those roots only**,
+1. **Resolve scope -> roots + document set:**
+   - `user` -> roots `~/.claude/{dev/tasks,tmp}`-equivalent; docs = `*.md` under those roots.
+   - `project` -> roots `<project>/dev/tasks` + `<project>/tmp`; docs = `*.md` **under those roots only**,
      excluding the parked `<root>/archived-tasks/` subtree under either root (parity with the folder crawl).
-   - `skill <name>` → docs = that skill's `SKILL.md` **plus its `references/*.md`**; roots as project.
-   - `file <path>` → docs = that one file; roots as project.
+   - `skill <name>` -> docs = that skill's `SKILL.md` **plus its `references/*.md`**; roots as project.
+   - `file <path>` -> docs = that one file; roots as project.
 
    **Why `project`/`user` do not crawl the whole tree.** An embedded `task_list:` block is
    indistinguishable from an *example* of one, so a whole-tree crawl reports the format's own
-   documentation as live tasks — §2.4's sample block did exactly that in the repo that develops this
+   documentation as live tasks -- section 2.4's sample block did exactly that in the repo that develops this
    skill, yielding three phantom tasks with no folders behind them. Association is therefore **explicit
    rather than implicit**: a `task_list` embedded outside the task roots is reached by naming its
    document (`--scope skill <name>` / `--scope file <path>`), not by an ambient scan.
 2. **Collect candidate paths:** union of (a) folder crawl -- every `task.yaml` under the roots, taken as
    its folder path, **skipping the parked `<root>/archived-tasks/` subtree under either root**; and
    (b) reference scan -- every `refs[].path` in a `task_list:` block in the doc set.
-3. **Canonicalize + dedupe** by path (§2.3): one entry per task even if folder-found *and* referenced,
+3. **Canonicalize + dedupe** by path (section 2.3): one entry per task even if folder-found *and* referenced,
    or referenced from many docs.
 4. **Classify each** via `validate`: `active`/`blocked`/`closed`/`deferred`/`archived` (read from `task.yaml`), or
-   computed `remote` (tmp + host mismatch — opaque, not read) / `orphaned` (tmp ref, local, no folder).
+   computed `remote` (tmp + host mismatch -- opaque, not read) / `orphaned` (tmp ref, local, no folder).
 5. **Project + filter:** emit `id`(path), `status`, `priority`, `last_update`, `title`; apply
    `--status`/`--priority` filters. A dated `log.md` entry is `- YYYY-MM-DD HH:MM: <detail>`
    (local time; seconds, when present, are dropped; a date-only entry reads as 12:00).
@@ -510,10 +510,10 @@ Two crawl modes, both script-driven:
     sorts each displayed section by latest activity descending.
 
 **Dedupe:** a task referenced from multiple documents appears **once**, keyed by canonical folder path.
-References carry no metadata to merge — the folder's `task.yaml` is the single record.
+References carry no metadata to merge -- the folder's `task.yaml` is the single record.
 
 The home-domain `issues.md` is one ordinary embedding host under this model; there is **no canonical
-stored master list**. The project view is the computed `list --scope project` — which enumerates the
+stored master list**. The project view is the computed `list --scope project` -- which enumerates the
 task roots. An embedding host that lives outside them (a skill doc, a domain `issues.md`) is queried
 by naming it: `list --scope file <path>` or `--scope skill <name>`.
 
@@ -522,13 +522,13 @@ by naming it: `list --scope file <path>` or `--scope skill <name>`.
 ## 9. Validation
 
 `validate <ref>` checks a task against its **type schema** and the structural rules, classifies it, and
-emits findings. It is a **gate on `work`** — **both errors and warnings block** (you cannot work a task
+emits findings. It is a **gate on `work`** -- **both errors and warnings block** (you cannot work a task
 with any open finding). **All warnings originate here.** No back-compat, no recovery: findings are fixed
 forward.
 
 **Classification (the outcome):**
-- **`remote`** — tmp path + `host` ≠ current host. Short-circuits: not read or further validated locally.
-- **`invalid`** — any **error** below.
+- **`remote`** -- tmp path + `host` != current host. Short-circuits: not read or further validated locally.
+- **`invalid`** -- any **error** below.
 - **`active`/`blocked`/`closed`/`deferred`/`archived`** -- no errors; `status` read from `task.yaml`
   (`blocked` when `blocked_by` is non-empty).
 
@@ -542,7 +542,7 @@ forward.
 | missing scaffolding | a file the type's `scaffolding` requires is absent |
 | unknown `type` | `type:` names no registered type |
 
-**Errors from the `task_items` unit (§2.6; block; task is `invalid`):** unparseable/schema-failing
+**Errors from the `task_items` unit (section 2.6; block; task is `invalid`):** unparseable/schema-failing
 block, state outside the item vocabulary, priority outside the type pattern, non-kebab or duplicate
 `id`, more than one block, or a block outside plan.md.
 
@@ -550,24 +550,24 @@ block, state outside the item vocabulary, priority outside the type pattern, non
 
 | Condition | Detail |
 |---|---|
-| non-tmp `status: archived` folder | version control is the record — submit any pending state, then `delete` the folder (a `vcs_pending` archive awaiting its finishing `delete` sits in exactly this state) |
-| uncommitted `dev/tasks` folder | git sees unsaved durable work; commit it — `archive` commits the final state itself, `delete` refuses until committed. Outside a git repo this is an advisory *note* ("version-control state unverified"), not a warning (§7.4) |
+| non-tmp `status: archived` folder | version control is the record -- submit any pending state, then `delete` the folder (a `vcs_pending` archive awaiting its finishing `delete` sits in exactly this state) |
+| uncommitted `dev/tasks` folder | git sees unsaved durable work; commit it -- `archive` commits the final state itself, `delete` refuses until committed. Outside a git repo this is an advisory *note* ("version-control state unverified"), not a warning (section 7.4) |
 | dangling `depends_on`/`blocked_by` | references a path with no resolvable task |
-| orphaned tmp reference | a tmp ref (local host) whose folder is absent (§4) |
-| no `task_items` block in plan.md | pre-contract folder; prompts the one-time forward conversion (§2.6) |
+| orphaned tmp reference | a tmp ref (local host) whose folder is absent (section 4) |
+| no `task_items` block in plan.md | pre-contract folder; prompts the one-time forward conversion (section 2.6) |
 | stale item reference in CLAUDE.md | a backticked hyphenated id under Immediate Priorities matching no item |
-| oversized document | a top-level `*.md` over its line ceiling (CLAUDE.md/plan.md 400, other docs 800; log.md and `log-*.md` exempt — the history sink rotation targets). The finding names the largest `##` sections; the fix is decomposition per the rotation strategy, not trimming (2026-07-20) |
+| oversized document | a top-level `*.md` over its line ceiling (CLAUDE.md/plan.md 400, other docs 800; log.md and `log-*.md` exempt -- the history sink rotation targets). The finding names the largest `##` sections; the fix is decomposition per the rotation strategy, not trimming (2026-07-20) |
 
-**Notes (advisory third tier, added 2026-07-20; NOT findings — never gate, never affect exit codes):**
+**Notes (advisory third tier, added 2026-07-20; NOT findings -- never gate, never affect exit codes):**
 approaching-budget (a doc past its healthy target: CLAUDE.md 250 lines, plan.md 300),
-dominant-section (a single `##` section over half of a 150+-line CLAUDE.md/plan.md — the accretion
+dominant-section (a single `##` section over half of a 150+-line CLAUDE.md/plan.md -- the accretion
 pattern caught before the ceiling), and session-diary (more than 3 `**YYYY-MM-DD` narrative markers in
 CLAUDE.md). Thresholds and remedies: the task skill's `references/handoff-template.md`, "Document size
 budgets"; constants at the top of `scripts/task_system/validate.py`.
 
 **Reuse of audit machinery.** `validate` is intended to run the **same typed-unit schema validation**
 skills-kit uses for embedded YAML (the `task`/`task_list` units registered as schemas). The wiring is a
-**shared library** — `skills_kit_lib` exposed via bootstrap `shared_libs` and imported by awesome-kit.
+**shared library** -- `skills_kit_lib` exposed via bootstrap `shared_libs` and imported by awesome-kit.
 The **rules above are the contract** regardless of how validation is wired.
 
 ---
