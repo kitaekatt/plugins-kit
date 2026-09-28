@@ -40,7 +40,6 @@ import os
 import shutil
 import subprocess
 import sys
-import tempfile
 import uuid
 from typing import NamedTuple, Optional
 
@@ -51,6 +50,20 @@ class SharedLibResult(NamedTuple):
     name: str
     status: str   # "cached" | "published" | "linked" | "skipped" | "failed"
     message: str
+
+
+# Bump whenever the STAGING mechanism's semantics change materially enough
+# that a directory installed under the old mechanism needs one guaranteed
+# re-sync (not just a normal content change). Folded into the skip-cache
+# stamp below: an old stamp (no "<version>:" prefix, or an older version)
+# never matches the freshly computed one, so `sync_shared_lib` re-publishes
+# exactly once, then converges normally on the new format. See the
+# _make_stage_dir docstring for the version-2 case this exists to repair.
+_CACHE_STAMP_VERSION = "2"
+
+
+def _cache_stamp(content_hash: str) -> str:
+    return f"{_CACHE_STAMP_VERSION}:{content_hash}"
 
 
 def find_standalone_python() -> Optional[str]:
@@ -173,6 +186,44 @@ def _verify_import(python: str, name: str) -> bool:
     return proc.returncode == 0
 
 
+def _make_stage_dir(entry_dir: str) -> str:
+    """Create a uniquely named staging directory beside the published package,
+    inheriting ``entry_dir``'s ACL on Windows instead of ``tempfile.mkdtemp``'s
+    protected one.
+
+    ``tempfile.mkdtemp`` creates its directory via ``os.mkdir(path, 0o700)``.
+    On Windows, CPython >= 3.12.4 (the CVE-2024-4030 fix) maps that explicit
+    owner-only mode to a PROTECTED ACL -- only SYSTEM, Administrators, and
+    OWNER RIGHTS, with inheritance from the parent disabled -- instead of the
+    normal behavior of inheriting the parent directory's ACL. Verified on this
+    machine: ``os.mkdir(path)`` (default mode) inherits the parent's ACL;
+    ``os.mkdir(path, 0o700)`` reproduces the protected ACL exactly like
+    ``mkdtemp``. ``shutil.copytree`` creates the copied subtree under this
+    directory with plain ``os.makedirs`` (default mode), so everything copied
+    into the stage inherits from THIS directory -- and ``os.replace`` (the
+    atomic swap below) preserves a directory's ACL across the rename, so a
+    protected stage's ACL would otherwise survive into the durable
+    destination. That is exactly the bug this function avoids: a shared-lib
+    directory installed with the protected ACL is unreadable to any principal
+    that only has access via an inherited ACE on the parent (e.g. a sandboxed
+    process running as a different identity), even though the parent's own
+    ACL is fine.
+
+    Mirrors ``tempfile.mkdtemp``'s collision-retry loop, but never passes an
+    explicit mode -- POSIX gets the ordinary umask-filtered default, which
+    stays private under a typical 022/077 umask without the Windows-specific
+    hardening this function exists to sidestep.
+    """
+    for _ in range(100):
+        candidate = os.path.join(entry_dir, f".stage-{uuid.uuid4().hex}")
+        try:
+            os.mkdir(candidate)
+        except FileExistsError:
+            continue
+        return candidate
+    raise OSError(f"could not create a unique staging directory under {entry_dir}")
+
+
 def sync_shared_lib(
     name: str,
     src: str,
@@ -198,13 +249,14 @@ def sync_shared_lib(
     hash_file = os.path.join(entry_dir, ".src.sha256")
 
     current = _hash_tree(src_pkg)
-    if os.path.isdir(dest_pkg) and _read_text(hash_file) == current:
+    stamp = _cache_stamp(current)
+    if os.path.isdir(dest_pkg) and _read_text(hash_file) == stamp:
         return SharedLibResult(name, "cached", f"synced (cached, {dest_pkg})")
 
     stage_root = None
     try:
         os.makedirs(entry_dir, exist_ok=True)
-        stage_root = tempfile.mkdtemp(prefix=".stage-", dir=entry_dir)
+        stage_root = _make_stage_dir(entry_dir)
         stage_pkg = os.path.join(stage_root, name)
         shutil.copytree(
             src_pkg,
@@ -243,7 +295,7 @@ def sync_shared_lib(
         shutil.rmtree(stage_root, ignore_errors=True)
         stage_root = None
         with open(hash_file, "w", encoding="utf-8") as f:
-            f.write(current + "\n")
+            f.write(stamp + "\n")
     except OSError as exc:
         return SharedLibResult(name, "failed", f"failed to publish {name}: {exc}")
     finally:
