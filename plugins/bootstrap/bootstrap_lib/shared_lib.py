@@ -210,9 +210,11 @@ def _make_stage_dir(entry_dir: str) -> str:
     ACL is fine.
 
     Mirrors ``tempfile.mkdtemp``'s collision-retry loop, but never passes an
-    explicit mode -- POSIX gets the ordinary umask-filtered default, which
-    stays private under a typical 022/077 umask without the Windows-specific
-    hardening this function exists to sidestep.
+    explicit mode -- POSIX gets the ordinary umask-filtered default (0755
+    under a typical 022 umask), matching what the published package tree
+    already has. No explicit mode is passed because an explicit owner-only
+    mode is exactly what triggers the Windows hardening this function exists
+    to sidestep.
     """
     for _ in range(100):
         candidate = os.path.join(entry_dir, f".stage-{uuid.uuid4().hex}")

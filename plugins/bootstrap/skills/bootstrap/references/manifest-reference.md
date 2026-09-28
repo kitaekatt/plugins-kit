@@ -382,6 +382,8 @@ These two keys let one plugin reuse another plugin's first-party Python library 
 
 For each entry the engine syncs the package source to a **stable, version-independent** location, `~/.claude/plugins/data/plugins-kit/_shared_libs/<name>/<name>/` (a clean re-sync that prunes deleted/renamed modules, content-hash cached); the owner verifies that the published copy imports once per republish in its own venv, and writes a `<name>.pth` (pointing at `_shared_libs/<name>/`) into the **standalone Python's** site-packages. A consumer's cached link is not re-verified each pass; its own `venv.check_imports` guards its environment.
 
+**Invariant: staging must not narrow published access.** A published package must remain traversable/readable by every principal that can traverse/read the marketplace data root; staging must not replace inherited access with a protected owner-only ACL. On Windows, CPython >= 3.12.4 maps `tempfile.mkdtemp`'s explicit `0o700` mode to a protected ACL, and `os.replace` preserves that ACL across the atomic swap into the published location, so a sandboxed principal that only inherits access via the parent's ACEs (e.g. a Codex worker) cannot read the package -- staging instead uses `_make_stage_dir` (`bootstrap_lib/shared_lib.py`), which inherits the parent directory's ACL. Windows regression coverage: `tests/bootstrap/test_shared_lib.py::TestStageDirAcl`.
+
 **Consumer side — `shared_lib_imports`** (a plugin that wants the library on its own venv):
 
 ```json
