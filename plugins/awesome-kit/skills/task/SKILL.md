@@ -8,7 +8,7 @@ description: Use when creating, listing, working, closing, archiving, or moving 
 
 # Task
 
-Dispatch surface for the task system: one CLI (`scripts/task.py`) exposing 13
+Dispatch surface for the task system: one CLI (`scripts/task.py`) exposing 14
 verbs over file-backed task folders. This skill routes a natural-language task
 request ("start a task for X", "what tasks are open here?", "what can I work
 on in this task?", "archive the closet task") to the right verb invocation
