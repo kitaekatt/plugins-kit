@@ -794,22 +794,21 @@ def test_legacy_routing_names_are_removed(name):
 
 @pytest.mark.parametrize("value", ["claude-cli", "codex-cli", "opencode-cli", "model-endpoint", "mock"])
 def test_legacy_backend_env_no_longer_routes(monkeypatch, value):
-    """CONTENT_PIPELINE_LLM_MODELS is the only routing env: the old backend
-    switch is ignored, silently, and the default entry (openrouter) runs."""
-    import warnings
+    """The old backend switch selects nothing, and setting it is refused
+    rather than ignored (see test_review_fix_d_routing)."""
+    from content_pipeline.llm.platform import ConfigurationError
 
     monkeypatch.setenv("CONTENT_PIPELINE_LLM_BACKEND", value)
-    with warnings.catch_warnings(record=True) as caught:
-        warnings.simplefilter("always")
-        result = route()
-    assert type(result) is OpenRouterBackend
-    assert not any(issubclass(w.category, DeprecationWarning) for w in caught)
+    with pytest.raises(ConfigurationError):
+        route()
 
 
 def test_legacy_model_env_no_longer_substitutes(monkeypatch):
+    from content_pipeline.llm.platform import ConfigurationError
+
     monkeypatch.setenv("CONTENT_PIPELINE_LLM_MODEL", "claude-sonnet-4-6")
-    assert routed_model("deepseek/deepseek-v4", backend_name="claude-cli") == "deepseek/deepseek-v4"
-    assert routed_model("openai/gpt-5", backend_name="opencode-cli") == "openai/gpt-5"
+    with pytest.raises(ConfigurationError):
+        routed_model("deepseek/deepseek-v4", backend_name="claude-cli")
 
 
 def test_legacy_endpoint_env_is_not_read(monkeypatch):

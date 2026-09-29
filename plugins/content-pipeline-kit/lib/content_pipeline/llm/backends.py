@@ -912,6 +912,41 @@ def _backend_for_entry(entry: Any) -> Any:
     return ModelEndpointBackend(endpoint=entry.id)
 
 
+REMOVED_ROUTING_ENVS = (
+    "CONTENT_PIPELINE_LLM_BACKEND",
+    "CONTENT_PIPELINE_LLM_MODEL",
+    "CONTENT_PIPELINE_LLM_ENDPOINT",
+)
+"""Routing settings that no longer route anything. Setting one without
+:data:`MODELS_ENV` is refused (:func:`_refuse_removed_routing_env`) rather
+than ignored, because ignoring it silently moves the run to the default
+entry -- a metered API when a subscription backend was meant -- and changes
+every response-cache key."""
+
+
+def _refuse_removed_routing_env() -> None:
+    """Raise :class:`~content_pipeline.llm.platform.ConfigurationError` when a
+    removed routing env is set and :data:`MODELS_ENV` is not.
+
+    Runs before the declaration is read, any network probe, or any cache
+    lookup. A blank value counts as unset. When :data:`MODELS_ENV` is set the
+    leftover names are inert and pass silently: the operator has already
+    chosen the replacement, and a per-call warning would repeat on every
+    routed call.
+    """
+    if declared_model_names() is not None:
+        return
+    stale = [n for n in REMOVED_ROUTING_ENVS if os.environ.get(n, "").strip()]
+    if stale:
+        raise platform.ConfigurationError(
+            f"{', '.join(stale)} no longer select a backend or model. "
+            f"Unset {'it' if len(stale) == 1 else 'them'} and set {MODELS_ENV} "
+            "to a comma-separated list of llm-scripting-kit model ids instead "
+            f"(for example {MODELS_ENV}=<entry id>); without it the run would "
+            "silently use the default OpenRouter entry."
+        )
+
+
 def route(
     *,
     openrouter: Optional[Any] = None,
@@ -930,10 +965,13 @@ def route(
     being returned: a registry server is up only if somebody started it, so
     a dead one refuses here rather than once per unit. Unset, the default
     entry runs: the supplied ``openrouter`` instance, else a new
-    :class:`OpenRouterBackend`.
+    :class:`OpenRouterBackend`. A removed routing env set without
+    :data:`MODELS_ENV` raises ``ConfigurationError`` instead (a supplied
+    ``mock`` is still returned first).
     """
     if mock is not None:
         return mock
+    _refuse_removed_routing_env()
     if declared_model_names() is not None:
         backend = _backend_for_entry(_resolve_declared_entry())
         # PROBE ONLY THE SELECTED ENTRY, and only here. One ping per route()
@@ -966,6 +1004,7 @@ def routed_model(requested_model: str, *, backend_name: Optional[str] = None) ->
     returned id is what lands on ``LLMResponse.model`` and therefore on
     audit records.
     """
+    _refuse_removed_routing_env()
     if declared_model_names() is not None:
         entry = _resolve_declared_entry()
         return entry.model or requested_model
@@ -991,6 +1030,7 @@ __all__ = [
     "ModelEndpointBackend",
     "MockBackend",
     "MODELS_ENV",
+    "REMOVED_ROUTING_ENVS",
     "OPENCODE_FILESYSTEM_POSTURE",
     "route",
     "routed_model",

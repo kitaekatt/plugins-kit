@@ -791,6 +791,15 @@ class LLMUnavailableError(Exception):
     """
 
 
+class ConfigurationError(Exception):
+    """The process environment asks for something routing no longer supports.
+
+    Raised at selection time, before any network call or cache lookup, so a
+    stale setting fails once and loudly instead of silently changing which
+    backend serves the run.
+    """
+
+
 class BudgetExceededError(Exception):
     """Raised when a request exceeds an input-token or running-cost budget.
 
@@ -1496,6 +1505,7 @@ __all__ = [
     "HaltError",
     "HALT_UNREACHABLE",
     "LLMUnavailableError",
+    "ConfigurationError",
     "classify_halt_text",
     "classify_openai_exception",
     "is_likely_reasoning_exhaustion",
