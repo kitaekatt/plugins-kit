@@ -37,6 +37,9 @@ the schema can grow additively)::
         name: <human label>                 # optional
         context_window: <tokens>            # optional
         reasoning_effort: <effort>          # optional per-entry default
+        effort_style: <style>               # optional; how THIS server takes an effort:
+                                            #   top-level | ninfer | chat_template_kwargs
+                                            #   | unsupported (see "Effort delivery")
         key_env: <ENV VAR>                  # optional; omitted = keyless
         key_file: <path>                    # optional bare-value credential file
         frontdoor: true                     # optional; base_url IS an llm-scripting-kit
@@ -48,6 +51,7 @@ the schema can grow additively)::
           order: 1                          # lower tiers fill first
           max_parallel: <int>               # omitted = uncapped
           effort_style: top-level           # top-level | ninfer | chat_template_kwargs
+                                            #   | unsupported; omitted = top-level
       <harness entry id>:
         harness: <harness name>             # required instead of base_url
         model: <model id>                   # required, what the harness drives
@@ -59,6 +63,19 @@ Entry ids are the endpoint names: ``llm_scripting_kit.models.resolve_endpoint``
 injects each entry as a named endpoint, so ``resolve_endpoint("<entry id>")``
 resolves it. The DEFAULT entry has no magic endpoint name -- it is reached
 through this module's API, ``resolve_registry_entry(None)``.
+
+Effort delivery (vocabulary: :mod:`llm_scripting_kit.effort`). A DIRECT call to
+a transport entry resolves its effort style in this order
+(:func:`resolve_effort_style`): the entry's own ``effort_style``; else
+``top-level`` when ``frontdoor: true`` (the front door accepts top-level); else
+a ``routing.effort_style`` the entry DECLARED; else none, and the effort is not
+sent. A declared-but-invalid style resolves to none and does not fall through:
+a typo never picks a wire format. The front door, forwarding to a deployment,
+uses the entry's ``effort_style`` when declared and otherwise
+``routing.effort_style``, whose omission still means ``top-level``
+(:func:`deployment_effort_style`). ``load_endpoint_registry`` rejects a
+transport entry whose ``reasoning_effort`` has no deliverable style, and notes
+an entry whose two declared styles disagree.
 """
 
 from __future__ import annotations
@@ -68,6 +85,15 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, Mapping, Optional
 
+from .effort import (
+    EFFORT_STYLES,
+    SOURCE_ENDPOINT,
+    SOURCE_FRONTDOOR,
+    SOURCE_NONE,
+    SOURCE_ROUTING,
+    TOP_LEVEL,
+    EffortDelivery,
+)
 from .usage_budget import ConserveConfigError, ConserveSpec, parse_conserve_usage
 
 #: Environment variable overriding the registry path.
@@ -111,6 +137,9 @@ class EndpointEntry:
     The first fields retain the original transport-entry order so callers that
     construct an ``EndpointEntry`` positionally keep working.  A harness entry
     has ``base_url`` set to None and carries its harness-specific fields.
+
+    ``effort_style`` is the entry-level effort style; None with
+    ``effort_style_declared`` True means the key was present but invalid.
     """
 
     id: str
@@ -130,16 +159,25 @@ class EndpointEntry:
     key_file: Optional[str] = None
     frontdoor: bool = False
     billing_mode: Optional[str] = None
+    effort_style: Optional[str] = None
+    effort_style_declared: bool = False
 
 
 @dataclass(frozen=True)
 class RoutingConfig:
-    """Optional front-door routing metadata for a transport entry."""
+    """Optional front-door routing metadata for a transport entry.
+
+    ``effort_style`` keeps its ``top-level`` default when the key is omitted
+    (``effort_style_declared`` False) -- the front door's long-standing
+    behavior. A declared-but-invalid value is None: no wire format is guessed.
+    """
 
     group: str
     order: int = 1
     max_parallel: Optional[int] = None
-    effort_style: str = "top-level"  # top-level | ninfer (top-level, high->xhigh) | chat_template_kwargs
+    # top-level | ninfer (top-level, high->xhigh) | chat_template_kwargs | unsupported
+    effort_style: Optional[str] = TOP_LEVEL
+    effort_style_declared: bool = False
 
 
 @dataclass(frozen=True)
@@ -306,15 +344,122 @@ def parse_routing(
             f"{source}: entry '{entry_id}' routing has invalid 'max_parallel'; treated as uncapped"
         )
         max_parallel = None
-    effort_style = value.get("effort_style", "top-level")
-    if effort_style not in ("top-level", "chat_template_kwargs", "ninfer"):
+    declared = "effort_style" in value
+    effort_style: Optional[str] = value.get("effort_style", TOP_LEVEL)
+    if effort_style not in EFFORT_STYLES:
         notes.append(
-            f"{source}: entry '{entry_id}' routing has invalid 'effort_style'; defaulted to top-level"
+            f"{source}: entry '{entry_id}' routing has invalid 'effort_style' "
+            f"({effort_style!r}); expected one of {', '.join(EFFORT_STYLES)}; "
+            "no effort is sent through this deployment"
         )
-        effort_style = "top-level"
+        effort_style = None
     return RoutingConfig(
-        group=group.strip(), order=order, max_parallel=max_parallel, effort_style=effort_style
+        group=group.strip(),
+        order=order,
+        max_parallel=max_parallel,
+        effort_style=effort_style,
+        effort_style_declared=declared,
     )
+
+
+def parse_effort_style(
+    raw: Mapping[str, object], *, source: str, entry_id: str, notes: list[str]
+) -> "tuple[Optional[str], bool]":
+    """Parse the entry-level ``effort_style``; return ``(style, declared)``.
+
+    Omitted is ``(None, False)``. An invalid value is noted and returned as
+    ``(None, True)`` -- declared, and deliberately resolving to no style.
+    """
+    if "effort_style" not in raw:
+        return None, False
+    value = raw["effort_style"]
+    if value not in EFFORT_STYLES:
+        notes.append(
+            f"{source}: entry '{entry_id}' has invalid 'effort_style' ({value!r}); "
+            f"expected one of {', '.join(EFFORT_STYLES)}; no effort is sent to it"
+        )
+        return None, True
+    return str(value), True
+
+
+def effort_delivery(
+    *,
+    effort_style: Optional[str],
+    effort_style_declared: bool,
+    frontdoor: bool,
+    routing: Optional[RoutingConfig],
+) -> EffortDelivery:
+    """The effort style a DIRECT call uses, from an entry's raw fields.
+
+    Order: entry ``effort_style`` (a declared-invalid one resolves to None and
+    stops here) > ``frontdoor: true`` as top-level > a DECLARED
+    ``routing.effort_style`` > none. An omitted routing style is the front
+    door's default, not a statement about the server, so it is not used here.
+    """
+    if effort_style_declared or effort_style is not None:
+        return EffortDelivery(effort_style, SOURCE_ENDPOINT)
+    if frontdoor:
+        return EffortDelivery(TOP_LEVEL, SOURCE_FRONTDOOR)
+    if routing is not None and routing.effort_style_declared:
+        return EffortDelivery(routing.effort_style, SOURCE_ROUTING)
+    return EffortDelivery(None, SOURCE_NONE)
+
+
+def resolve_effort_style(entry: EndpointEntry) -> EffortDelivery:
+    """How a direct call to ``entry`` delivers an effort. See :func:`effort_delivery`.
+
+    A harness entry has no wire of its own here and resolves to none.
+    """
+    if entry.kind != TRANSPORT_KIND:
+        return EffortDelivery(None, SOURCE_NONE)
+    return effort_delivery(
+        effort_style=entry.effort_style,
+        effort_style_declared=entry.effort_style_declared,
+        frontdoor=entry.frontdoor,
+        routing=entry.routing,
+    )
+
+
+def deployment_effort_style(entry: EndpointEntry) -> Optional[str]:
+    """The style the FRONT DOOR uses when forwarding to ``entry`` as a deployment.
+
+    The entry's own ``effort_style`` when declared (None if invalid), else
+    ``routing.effort_style`` -- ``top-level`` when routing omits it, None when
+    routing declares an invalid one -- else None.
+    """
+    if entry.effort_style_declared or entry.effort_style is not None:
+        return entry.effort_style
+    if entry.routing is not None:
+        return entry.routing.effort_style
+    return None
+
+
+def effort_notes(entry: EndpointEntry, *, source: str) -> list[str]:
+    """Validate strict effort declarations and return remaining registry notes."""
+    notes: list[str] = []
+    if entry.kind != TRANSPORT_KIND:
+        return notes
+    if entry.reasoning_effort is not None and not resolve_effort_style(entry).deliverable:
+        raise EndpointRegistryError(
+            f"{source}: entry '{entry.id}' declares reasoning_effort "
+            f"'{entry.reasoning_effort}' but resolves no deliverable effort style; "
+            "declare an effort_style (top-level | ninfer | chat_template_kwargs), "
+            "or remove reasoning_effort (or set effort_style: unsupported and "
+            "remove reasoning_effort)"
+        )
+    routing = entry.routing
+    if (
+        entry.effort_style is not None
+        and routing is not None
+        and routing.effort_style_declared
+        and routing.effort_style is not None
+        and routing.effort_style != entry.effort_style
+    ):
+        notes.append(
+            f"{source}: entry '{entry.id}' effort_style '{entry.effort_style}' "
+            f"overrides its routing effort_style '{routing.effort_style}'"
+        )
+    return notes
 
 
 #: Accepted ``billing.mode`` values. ``unmetered`` is an explicit marginal USD
@@ -386,7 +531,8 @@ def load_endpoint_registry(
     Raises:
         EndpointRegistryError: a dangling override path, an unparseable file,
             or a file whose top-level schema/default is invalid. Individual
-            entry defects are recorded in ``EndpointRegistry.notes``.
+            entry defects are recorded in ``EndpointRegistry.notes``, except a
+            declared effort with no deliverable style, which is an error.
     """
     env = os.environ if environ is None else environ
     path, explicit = _resolve_registry_path(env)
@@ -488,6 +634,9 @@ def load_endpoint_registry(
             tier, family = parse_classification_fields(
                 raw, source=f"model-endpoints registry '{path}'", entry_id=key
             )
+            effort_style, effort_style_declared = parse_effort_style(
+                raw, source=f"model-endpoints registry '{path}'", entry_id=key, notes=notes
+            )
             entries[key] = EndpointEntry(
                 id=key,
                 base_url=_require_str(
@@ -529,11 +678,17 @@ def load_endpoint_registry(
                 billing_mode=parse_billing_mode(
                     raw, source=f"model-endpoints registry '{path}'", entry_id=key, notes=notes
                 ),
+                effort_style=effort_style,
+                effort_style_declared=effort_style_declared,
             )
         except EndpointMetadataError:
             raise
         except EndpointRegistryError as exc:
             notes.append(f"{exc}; entry skipped")
+            continue
+        notes.extend(
+            effort_notes(entries[key], source=f"model-endpoints registry '{path}'")
+        )
 
     default_id = data.get("default")
     if default_id is not None:
@@ -617,6 +772,11 @@ __all__ = [
     "parse_routing",
     "parse_frontdoor",
     "parse_billing_mode",
+    "parse_effort_style",
+    "effort_delivery",
+    "resolve_effort_style",
+    "deployment_effort_style",
+    "effort_notes",
     "BILLING_MODES",
     "load_endpoint_registry",
     "resolve_registry_entry",

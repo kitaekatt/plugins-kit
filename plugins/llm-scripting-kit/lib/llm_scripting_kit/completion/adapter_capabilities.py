@@ -61,9 +61,10 @@ def _dropped(honored: object) -> tuple:
 # -- openrouter (OpenAI-compatible HTTP) -----------------------------------
 #
 # OpenRouterBackend.complete builds chat-completions kwargs directly. It reads
-# temperature, max_tokens, timeout_s, user_cache_prefix, client_id and extras, and nothing
-# else -- notably NOT cwd, effort or allowed_tools, which is why cwd is not a
-# core param of this seam.
+# temperature, max_tokens, timeout_s, user_cache_prefix, client_id and extras
+# unconditionally, and effort only for an endpoint whose effort style delivers
+# it (the conditional params below) -- never cwd or allowed_tools, which is
+# why cwd is not a core param of this seam.
 
 _OPENROUTER_PARAMS = {
     "max_tokens": ParamCapability(
@@ -107,10 +108,30 @@ _OPENROUTER_PARAMS = {
     ),
 }
 
+#: Params openrouter emits only for an endpoint whose profile enables them.
+#: ``effort`` stays in the family record's dropped_params -- the truth for an
+#: endpoint nothing is known about -- and
+#: ``endpoint_profile.endpoint_capabilities`` moves it into ``params`` with the
+#: concrete emission once an endpoint resolves a delivering effort style.
+_OPENROUTER_CONDITIONAL_PARAMS = {
+    "effort": ParamCapability(
+        type="string",
+        emits="reasoning_effort | chat_template_kwargs.reasoning_effort",
+        note=(
+            "emitted only for a transport entry that resolves a delivering "
+            "effort_style (entry effort_style, frontdoor: true, or a declared "
+            "routing.effort_style); an effort already in extras (top-level or "
+            "chat_template_kwargs) wins verbatim and an explicit null there "
+            "sends none; the ninfer style maps high to xhigh"
+        ),
+    ),
+}
+
 OPENROUTER_CAPABILITIES = Capabilities(
     adapter="openrouter",
     params=_OPENROUTER_PARAMS,
     dropped_params=_dropped(_OPENROUTER_PARAMS),
+    conditional_params=_OPENROUTER_CONDITIONAL_PARAMS,
     execution_controls=(),
     # A transport adapter exposes no tools, so there is no filesystem write to
     # deny and nothing that could turn one back on. The strongest form of the

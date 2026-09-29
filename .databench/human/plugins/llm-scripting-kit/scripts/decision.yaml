@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "directory": "plugins/llm-scripting-kit/scripts",
+  "decision": "none",
+  "source_sha": "d642dc44dffe37b69d41ac2687e8f8c69810c9e6",
+  "input_sha256": "2e2cf0999b4c816a85ab8484c624755eca89739a577b7f53a250d90cf83468c3",
+  "input_shape_sha256": "990196c4ef25231242de635e26fccf22143666182730527e4a762000ad67c30c",
+  "dirty": false,
+  "identity": "",
+  "instructions": "",
+  "references": []
+}

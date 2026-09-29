@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "directory": "plugins/content-pipeline-kit/lib/content_pipeline/vcs",
+  "decision": "none",
+  "source_sha": "a7555b43ddb88eb2e0ebdfa0075b743eb2e51532",
+  "dirty": false,
+  "identity": "",
+  "instructions": "",
+  "references": []
+}

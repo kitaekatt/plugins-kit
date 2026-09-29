@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "directory": "plugins/awesome-kit/skills/task/scripts/task_system",
+  "decision": "page",
+  "source_sha": "643f12d9369feb782fb2867f160070afe82005e9",
+  "generation_spec_sha256": "fc236b0086521fffedc696039900f19579336e4ef8fb657ad60e3dcdf8747288",
+  "dirty": false,
+  "identity": "The task-system implementation: the typed-unit schemas, task type registry and reference resolution backing the task CLI verbs, plus the discovery, validation, list and review logic those verbs share.",
+  "instructions": "",
+  "references": []
+}

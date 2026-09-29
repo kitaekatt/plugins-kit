@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "directory": "plugins/llm-scripting-kit/lib/llm_scripting_kit/completion",
+  "decision": "none",
+  "source_sha": "4a71b609c52338fbe1336a0609af8c561a30e24e",
+  "input_sha256": "edbb951bd03352de9259f9d36689f489025c00fb4426201cd23cc0581aaa818b",
+  "input_shape_sha256": "74d4f7f09b0a86141387abf4d00b8abebe533e8691f579396fc0edfb08756170",
+  "dirty": false,
+  "identity": "",
+  "instructions": "",
+  "references": []
+}

@@ -264,7 +264,9 @@ class BackendOptions:
       message, used for a second prompt-cache breakpoint (OpenRouter only).
       When set it also participates in the response-cache key so distinct
       prefixes never collide on one cached response.
-    - ``effort`` -- thinking-budget flag (claude-cli only).
+    - ``effort`` -- reasoning-effort level. A harness that takes one passes
+      it as its own effort flag; ``ModelEndpointBackend`` places it in the
+      selected entry's effort style and defaults it from the entry.
     - ``allowed_tools`` -- claude-cli ``--allowedTools`` value. ``None`` means
       a pure completion (no tools).
     - ``cwd`` -- claude-cli working directory.
@@ -925,8 +927,8 @@ def build_cache_key(
     difference is a real input difference the provider would see).
 
     A backend that resolves an EFFECTIVE option value the caller did not
-    explicitly set (e.g. ``ModelEndpointBackend`` defaulting
-    ``extras["reasoning_effort"]`` from its registry entry) must expose that
+    explicitly set (e.g. ``ModelEndpointBackend`` placing its registry
+    entry's reasoning effort in that entry's wire style) must expose that
     resolution back to the caller -- see ``LLMBackend.effective_options`` --
     so the value this function hashes is the one that actually reaches the
     provider, not the caller's pre-resolution options.

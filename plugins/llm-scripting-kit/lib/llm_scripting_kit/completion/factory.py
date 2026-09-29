@@ -15,21 +15,32 @@ from ..models import (
     resolve_endpoint,
     resolve_model,
 )
+from .adapter_capabilities import OPENROUTER_CAPABILITIES
 from .backends import ClaudeCliBackend, OpenRouterBackend
+from .capabilities import Capabilities
 from .codex_backend import CodexCliBackend
+from .endpoint_profile import endpoint_capabilities, profile_from_resolved
 from .opencode_backend import OpencodeCliBackend
 from .types import LLMBackend
 
 
 @dataclass(frozen=True)
 class BackendSelection:
-    """A configured backend plus the model and defaults it should receive."""
+    """A configured backend plus the model and defaults it should receive.
+
+    ``effort`` is the entry's DECLARED default (a harness ``effort`` or a
+    transport ``reasoning_effort``); whether a transport delivers it is in
+    ``capabilities``, which is the adapter record specialized to this endpoint
+    (the family record for a harness, or for a transport that delivers no
+    effort). None only for a selection built without the factory.
+    """
 
     endpoint: str
     kind: str
     backend: LLMBackend
     model: str
     effort: Optional[str] = None
+    capabilities: Optional[Capabilities] = None
 
 
 def _harness_entry(
@@ -98,6 +109,7 @@ def create_backend(
             backend=backend,
             model=selected_model,
             effort=entry.effort,
+            capabilities=getattr(backend, "capabilities", None),
         )
 
     resolved = resolve_endpoint(name, config=config, project_root=root)
@@ -110,6 +122,9 @@ def create_backend(
         backend=OpenRouterBackend(endpoint=name, project_root=Path(root) if root else None),
         model=selected_model,
         effort=(resolved.get("request_defaults") or {}).get("reasoning_effort"),
+        capabilities=endpoint_capabilities(
+            OPENROUTER_CAPABILITIES, profile_from_resolved(resolved, endpoint=name)
+        ),
     )
 
 

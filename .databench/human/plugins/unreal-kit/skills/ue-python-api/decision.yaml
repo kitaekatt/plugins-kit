@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "directory": "plugins/unreal-kit/skills/ue-python-api",
+  "decision": "page",
+  "source_sha": "24e90d313c30674622e8ab576591130eb753a473",
+  "generation_spec_sha256": "0805933a1de089dc951a33d702e9d57d569f0584732b017cd3600742a34ba321",
+  "dirty": false,
+  "identity": "Unreal Engine Python API skill and host-side runner, launcher, and configuration for script execution.",
+  "instructions": "",
+  "references": []
+}

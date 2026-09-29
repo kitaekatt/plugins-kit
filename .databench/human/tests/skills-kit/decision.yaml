@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "directory": "tests/skills-kit",
+  "decision": "page",
+  "source_sha": "d6aa073df75b1c14c4d9c8682f853b26f460efcc",
+  "generation_spec_sha256": "0805933a1de089dc951a33d702e9d57d569f0584732b017cd3600742a34ba321",
+  "dirty": false,
+  "identity": "Skills-kit pytest suite for schema validation, audit behavior, discovery and coverage scripts, and the golden corpus.",
+  "instructions": "",
+  "references": []
+}

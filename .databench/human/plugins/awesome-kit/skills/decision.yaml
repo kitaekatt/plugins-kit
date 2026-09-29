@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "directory": "plugins/awesome-kit/skills",
+  "decision": "page",
+  "source_sha": "1d479f028f5f2bf653a1e46db69554aae181ef72",
+  "generation_spec_sha256": "0805933a1de089dc951a33d702e9d57d569f0584732b017cd3600742a34ba321",
+  "dirty": false,
+  "identity": "awesome-kit skills: the debug-context, recap, and verbose-updates interaction skills plus the plugin-ecosystem poster generator",
+  "instructions": "",
+  "references": []
+}

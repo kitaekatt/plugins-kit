@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "directory": "plugins/skills-kit/skills/md-domain/references/provenance",
+  "decision": "none",
+  "source_sha": "8b7703103d66ed91d4577b183e5b7e5f2dfffe36",
+  "input_sha256": "6933efc5791cee1fe75b0abfefdcc0791baa64e423ed7362b0b8f555f1b88155",
+  "input_shape_sha256": "a3d7f1576f225ffcfac6b7311df15ffca36617705bdbea685445c3288cdbbbdb",
+  "dirty": false,
+  "identity": "",
+  "instructions": "",
+  "references": []
+}

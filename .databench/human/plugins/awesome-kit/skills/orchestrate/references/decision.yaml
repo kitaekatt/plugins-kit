@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "directory": "plugins/awesome-kit/skills/orchestrate/references",
+  "decision": "page",
+  "source_sha": "f5bdfa137b741bfaab3fc63afe423e67f0540abc",
+  "generation_spec_sha256": "fc236b0086521fffedc696039900f19579336e4ef8fb657ad60e3dcdf8747288",
+  "dirty": false,
+  "identity": "Reference set for the orchestrate skill: policy configuration, controlled vocabulary, backend dispatch, and routing tuning",
+  "instructions": "",
+  "references": []
+}

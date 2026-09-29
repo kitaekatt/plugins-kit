@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "directory": "plugins/bootstrap/bootstrap_lib",
+  "decision": "none",
+  "source_sha": "376c1329759f42d2b362be9c7ad4c333befa06bb",
+  "input_sha256": "868e4c6cb587f1590122bd27a29eae711d0fa7753a7c53ddf9fd20d184339bd8",
+  "input_shape_sha256": "b6cc42467849cca94f5db8849cb76235b5b6dd8e6b2e3cf3410399c1245f2d1b",
+  "dirty": false,
+  "identity": "",
+  "instructions": "",
+  "references": []
+}

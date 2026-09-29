@@ -1,0 +1,489 @@
+<!doctype html>
+<html lang="en">
+<head>
+<!-- human-html: {"generated_by":"md-domain","source_sha":"9a57413d3efe0f71d67adbd61f0c74fe009dce91","directory":"scripts","kind":"page"} -->
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>Repo-level scripts that run plugins-kit commit gates, marketplace publishing, development tests, sync diagnostics, code-review skill rendering, and the reviewer_b bakeoff</title>
+<style data-human-html-style>
+/* human-html shared style asset -- SA-1.
+ *
+ * The single source of truth for human-html page styling. Every generated page
+ * inlines these exact bytes in one <style data-human-html-style> element
+ * (PC-4); the host viewer imports the same resource for matching chrome
+ * (HV-3). Do not copy these values anywhere else -- a second copy is the
+ * visual drift this asset exists to prevent.
+ *
+ * Dark only, seeded from the host viewer's established dark theme. ASCII only.
+ */
+
+:root {
+  color-scheme: dark;
+
+  --hh-background: #080b10;
+  --hh-text: #d7deea;
+  --hh-heading: #f3f6fb;
+  --hh-muted: #8b98aa;
+  --hh-surface: rgba(15,19,27,.88);
+  --hh-border: #3d4a5e;
+  --hh-link: #5789f4;
+  --hh-link-hover: #7ea3ff;
+  --hh-accent: #4f82f7;
+
+  --hh-font-size: 15px;
+  --hh-line-height: 1.72;
+  --hh-font-body: Inter, ui-sans-serif, system-ui, sans-serif;
+  --hh-font-mono: JetBrains Mono, ui-monospace, monospace;
+
+  --hh-space-1: .35rem;
+  --hh-space-2: .75rem;
+  --hh-space-3: 1rem;
+  --hh-space-4: 1.5rem;
+  --hh-space-5: 2rem;
+  --hh-radius: 6px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  background: var(--hh-background);
+}
+
+body {
+  margin: 0;
+  padding: var(--hh-space-5) var(--hh-space-3);
+  background: var(--hh-background);
+  color: var(--hh-text);
+  font-family: var(--hh-font-body);
+  font-size: var(--hh-font-size);
+  line-height: var(--hh-line-height);
+  -webkit-text-size-adjust: 100%;
+}
+
+main {
+  display: grid;
+  gap: var(--hh-space-5);
+  width: 100%;
+  min-width: 0;
+}
+
+main > header,
+section,
+article,
+.hh-panel {
+  display: grid;
+  gap: var(--hh-space-2);
+  min-width: 0;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  color: var(--hh-heading);
+  line-height: 1.25;
+  margin: 0;
+  font-weight: 600;
+  text-wrap: balance;
+}
+
+h1 {
+  font-size: 1.75rem;
+}
+
+h2 {
+  font-size: 1.3rem;
+}
+
+h3 {
+  font-size: 1.1rem;
+}
+
+p,
+ul,
+ol,
+dl,
+table,
+pre,
+blockquote {
+  margin: 0;
+}
+
+ul,
+ol {
+  padding-left: 1.4em;
+}
+
+li + li {
+  margin-top: var(--hh-space-1);
+}
+
+a {
+  color: var(--hh-link);
+  text-decoration-line: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: .18em;
+}
+
+a:hover,
+a:focus {
+  color: var(--hh-link-hover);
+}
+
+a:focus-visible {
+  outline: 2px solid var(--hh-accent);
+  outline-offset: 2px;
+}
+
+small,
+.hh-muted,
+[data-human-html-muted] {
+  color: var(--hh-muted);
+}
+
+strong {
+  color: var(--hh-heading);
+  font-weight: 600;
+}
+
+hr {
+  border: 0;
+  border-top: 1px solid var(--hh-border);
+  margin: var(--hh-space-5) 0;
+}
+
+code,
+kbd,
+samp,
+pre {
+  font-family: var(--hh-font-mono);
+  font-size: .92em;
+}
+
+code {
+  background: var(--hh-surface);
+  border: 1px solid var(--hh-border);
+  border-radius: 4px;
+  padding: .1em .35em;
+  overflow-wrap: anywhere;
+}
+
+pre {
+  background: var(--hh-surface);
+  border: 1px solid var(--hh-border);
+  border-radius: var(--hh-radius);
+  padding: var(--hh-space-3);
+  max-width: 100%;
+  min-width: 0;
+  overflow: auto;
+  white-space: pre;
+}
+
+pre code {
+  background: none;
+  border: 0;
+  padding: 0;
+  overflow-wrap: normal;
+}
+
+blockquote {
+  border-left: 3px solid var(--hh-accent);
+  padding-left: var(--hh-space-3);
+  color: var(--hh-muted);
+}
+
+dl {
+  display: grid;
+  grid-template-columns: minmax(7rem, .22fr) minmax(0, 1fr);
+  gap: var(--hh-space-1) var(--hh-space-3);
+}
+
+dt {
+  color: var(--hh-heading);
+  font-weight: 600;
+}
+
+dd {
+  min-width: 0;
+  margin: 0;
+}
+
+dt:not(:first-of-type),
+dt:not(:first-of-type) + dd {
+  border-top: 1px solid var(--hh-border);
+  padding-top: var(--hh-space-2);
+}
+
+table {
+  border-collapse: collapse;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  display: block;
+  overflow-x: auto;
+}
+
+th,
+td {
+  border: 1px solid var(--hh-border);
+  padding: .45em .7em;
+  text-align: left;
+  vertical-align: top;
+}
+
+th {
+  color: var(--hh-heading);
+  background: var(--hh-surface);
+  font-weight: 600;
+}
+
+section,
+article,
+.hh-panel {
+  background: transparent;
+}
+
+.hh-panel {
+  background: var(--hh-surface);
+  border: 1px solid var(--hh-border);
+  border-radius: var(--hh-radius);
+  padding: var(--hh-space-3);
+}
+
+[data-human-html-chrome="nav"] {
+  border-bottom: 1px solid var(--hh-border);
+  padding-bottom: var(--hh-space-4);
+  margin-bottom: var(--hh-space-4);
+  font-size: .95em;
+  color: var(--hh-muted);
+}
+
+[data-human-html-chrome="nav"] ul {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 18rem), 1fr));
+  gap: var(--hh-space-2) var(--hh-space-5);
+  list-style: none;
+  margin: 0;
+  padding-left: 0;
+}
+
+[data-human-html-chrome="nav"] li {
+  min-width: 0;
+  margin: 0;
+}
+
+[data-human-html-chrome="nav"] a {
+  display: grid;
+  gap: var(--hh-space-1);
+  min-width: 0;
+  color: var(--hh-link);
+  text-decoration: none;
+}
+
+[data-human-html-chrome="nav"] a:hover,
+[data-human-html-chrome="nav"] a:focus {
+  color: var(--hh-link-hover);
+}
+
+.hh-nav-label {
+  color: currentColor;
+  font-weight: 600;
+  line-height: 1.3;
+  text-decoration-line: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: .18em;
+  overflow-wrap: anywhere;
+}
+
+.hh-nav-identity {
+  color: var(--hh-muted);
+  line-height: 1.45;
+}
+
+/* The human-page card marker (PC-2). A card whose target is another
+ * `index.html` carries this icon; a card pointing at anything else does not,
+ * so the two card kinds stay distinguishable at a glance.
+ *
+ * The icon is a data URI, never a file beside the page and never a remote
+ * asset, so the page renders with nothing fetched (NF-1, PC-6). The `xmlns`
+ * inside the SVG is an XML namespace identifier, not a location: no browser
+ * requests it, and CK-1's URL rules apply to `href` and `src` attributes, not
+ * to a CSS background.
+ *
+ * The icon sits in its own grid column so the label's underline never runs
+ * beneath it, and it scales with the label, so it stays legible at phone
+ * width where the card list collapses to one column.
+ */
+[data-human-html-chrome="nav"] a[href="index.html"],
+[data-human-html-chrome="nav"] a[href="human.html"],
+[data-human-html-chrome="nav"] a[href$="/index.html"],
+[data-human-html-chrome="nav"] a[href$="/human.html"] {
+  grid-template-columns: 1.1em minmax(0, 1fr);
+}
+
+[data-human-html-chrome="nav"] a[href="index.html"]::before,
+[data-human-html-chrome="nav"] a[href="human.html"]::before,
+[data-human-html-chrome="nav"] a[href$="/index.html"]::before,
+[data-human-html-chrome="nav"] a[href$="/human.html"]::before {
+  content: "";
+  grid-column: 1;
+  grid-row: 1;
+  align-self: center;
+  width: 1.1em;
+  height: 1.1em;
+  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cg fill='%235789f4'%3E%3Ccircle cx='8' cy='4.3' r='3.1'/%3E%3Cpath d='M1.5 15.3c0-3.6 2.9-6.3 6.5-6.3s6.5 2.7 6.5 6.3z'/%3E%3C/g%3E%3C/svg%3E") center / contain no-repeat;
+}
+
+[data-human-html-chrome="nav"] a[href="index.html"] .hh-nav-label,
+[data-human-html-chrome="nav"] a[href="human.html"] .hh-nav-label,
+[data-human-html-chrome="nav"] a[href$="/index.html"] .hh-nav-label,
+[data-human-html-chrome="nav"] a[href$="/human.html"] .hh-nav-label {
+  grid-column: 2;
+  grid-row: 1;
+}
+
+[data-human-html-chrome="nav"] a[href="index.html"] .hh-nav-identity,
+[data-human-html-chrome="nav"] a[href="human.html"] .hh-nav-identity,
+[data-human-html-chrome="nav"] a[href$="/index.html"] .hh-nav-identity,
+[data-human-html-chrome="nav"] a[href$="/human.html"] .hh-nav-identity {
+  grid-column: 2;
+  grid-row: 2;
+}
+
+img,
+svg {
+  max-width: 100%;
+  height: auto;
+}
+
+::selection {
+  background: var(--hh-accent);
+  color: var(--hh-background);
+}
+
+@media (max-width: 40rem) {
+  body {
+    padding: var(--hh-space-4) var(--hh-space-2);
+  }
+
+  [data-human-html-chrome="nav"] ul,
+  dl {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  dt:not(:first-of-type) {
+    padding-top: var(--hh-space-2);
+  }
+
+  dt + dd {
+    border-top: 0;
+    padding-top: 0;
+  }
+}
+</style>
+</head>
+<body>
+<nav data-human-html-chrome="nav" aria-label="Orientation pages">
+<ul></ul>
+</nav>
+<main>
+<h1>Repo-level scripts that run plugins-kit commit gates, marketplace publishing, development tests, sync diagnostics, code-review skill rendering, and the reviewer_b bakeoff</h1>
+<p>This is the maintenance machinery around the plugins-kit marketplace: what a commit, a release, or a dev session passes through before it reaches a consumer. Nearly every tool here judges the git index, not the working tree, because the tree is shared with concurrent sessions. The pieces fall into jobs: commit gates, the publish pipeline, working-copy test harnesses, drift diagnostics, a template renderer for the code-review skills, and a bakeoff measuring one reviewer lane. When a gate blocks you, that script's header carries the reasoning, the escape hatch, and the degraded-mode behavior.</p>
+<h2>Where to start</h2>
+<p>Open <a href="pre-commit-version-check.sh"><code>pre-commit-version-check.sh</code></a> first: it chains the consistency checks that run at commit time, and its header states the layering rule -- escapable advice at commit time, unbypassable preflight at publish time -- that organizes the directory. For a release, go straight to <a href="publish.py"><code>publish.py</code></a>, the source of truth for the four-step release flow.</p>
+<h2>Routes</h2>
+<ul>
+<li><strong>Commit gate chain:</strong> <a href="pre-commit-version-check.sh"><code>pre-commit-version-check.sh</code></a> runs, in order, <a href="regen_marketplace.py"><code>regen_marketplace.py</code></a>, <a href="check-staged-version-bump.sh"><code>check-staged-version-bump.sh</code></a>, <a href="check_pyproject_sync.py"><code>check_pyproject_sync.py</code></a>, <a href="check_bootstrap_dependency.py"><code>check_bootstrap_dependency.py</code></a>, and <a href="check_agent_directives.py"><code>check_agent_directives.py</code></a> against the staged index.</li>
+<li><strong>Ship a publish:</strong> stage the version bump, then <a href="regen_marketplace.py"><code>regen_marketplace.py</code></a> -> <a href="publish.py"><code>publish.py</code></a> (preflight, regenerate, push dev, fast-forward master, verify).</li>
+<li><strong>Point the machine at the working copy:</strong> <a href="dev-tree.py"><code>dev-tree.py</code></a> dev, run a session, <a href="dev-tree.py"><code>dev-tree.py</code></a> normal; status says which mode is active, and restore is lossless.</li>
+<li><strong>Bakeoff the reviewer lane:</strong> <a href="review-bakeoff/run_bakeoff.py"><code>review-bakeoff/run_bakeoff.py</code></a> run for endpoint arms, prompts then ingest for Agent arms, then score.</li>
+</ul>
+<h2>Commit-time gates</h2>
+<ul>
+<li><a href="_gitindex.py"><code>_gitindex.py</code></a> -- the shared helper the Python gates import: index-aware, commit-scoped git reads, with a loud worktree fallback instead of a silent pass.</li>
+<li><a href="pre-commit-version-check.sh"><code>pre-commit-version-check.sh</code></a> -- the chain that runs the marketplace regen and the four consistency checks against the staged index; reports every failure at once, not one per attempt.</li>
+<li><a href="check-staged-version-bump.sh"><code>check-staged-version-bump.sh</code></a> -- blocks a commit leaving a plugin's version equal to the value at the last publish point; it asks about the end state, not this commit's diff.</li>
+<li><a href="check_pyproject_sync.py"><code>check_pyproject_sync.py</code></a> -- blocks a stated pyproject version that disagrees with the authoritative plugin manifest; the gate that closed a five-release drift.</li>
+<li><a href="check_bootstrap_dependency.py"><code>check_bootstrap_dependency.py</code></a> -- blocks a plugin manifest missing the bootstrap dependency; the rule is universal so the whole fleet can rely on bootstrap.</li>
+<li><a href="check_agent_directives.py"><code>check_agent_directives.py</code></a> -- greps shipped plugin text for phrasings the agent-directive standards forbid; a line that quotes a banned phrase to prohibit it carries an inline allow marker.</li>
+<li><a href="precommit_guard.py"><code>precommit_guard.py</code></a> -- the separate, unforgiving leak guard wired to every commit outside this chain: refuses project-derived or machine-emitted data, oversized blobs, and bootstrap write targets that escape the plugin root.</li>
+</ul>
+<h2>Publishing</h2>
+<ul>
+<li><a href="publish.py"><code>publish.py</code></a> -- the four-step release: unbypassable preflight, regenerate derived artifacts, push dev, fast-forward master (a projection when partial or dev-only plugins are in play), verify; also the publish-point oracle the bump check calls.</li>
+<li><a href="regen_marketplace.py"><code>regen_marketplace.py</code></a> -- rebuilds the marketplace manifest from the per-plugin manifests; --check --staged feeds the pre-commit chain, and --only commits one entry without sweeping other sessions' bumps.</li>
+</ul>
+<h2>Running plugins from the working copy</h2>
+<ul>
+<li><a href="claude_plugin_test.py"><code>claude_plugin_test.py</code></a> -- launches a Claude Code session on this working copy without rewriting the machine-global registry; --print previews where a run would write, and the header names three observed escapes to read before deleting its data root.</li>
+<li><a href="claudx_plugin_dirs.py"><code>claudx_plugin_dirs.py</code></a> -- prints the plugin directories the current project has enabled, one per line on stdout.</li>
+<li><a href="dev-tree.py"><code>dev-tree.py</code></a> -- the machine-global switch: dev repoints the install registry at this working copy, normal restores from its backup, status reports the mode.</li>
+</ul>
+<h2>Sync diagnostics</h2>
+<ul>
+<li><a href="cache_status.py"><code>cache_status.py</code></a> -- file-content diff between local source and plugin cache per installed plugin; differs is expected on a dev branch, and --detailed lists the divergent files.</li>
+<li><a href="plugin-versions.sh"><code>plugin-versions.sh</code></a> -- one report lining up version strings across local repo, marketplace clone, install registry, and cache.</li>
+</ul>
+<h2>Code-review skill rendering</h2>
+<ul>
+<li><a href="gen_code_review_skills.py"><code>gen_code_review_skills.py</code></a> -- renders the git-kit and p4-kit code-review skills and their agents from one template; --check is the drift guard the test suite pins.</li>
+</ul>
+<h2>On-demand model validation</h2>
+<ul>
+<li><a href="check_model_dispatch.py"><code>check_model_dispatch.py</code></a> -- proves the orchestration policy's model ids and config keys actually dispatch via live CLI calls; on demand by design, so nothing runs it automatically.</li>
+</ul>
+<h2>reviewer_b bakeoff</h2>
+<ul>
+<li><a href="review-bakeoff/README.md"><code>review-bakeoff/README.md</code></a> -- the runbook: run for endpoint arms, prompts and ingest for Agent arms, then score; results are untracked scratch output.</li>
+<li><a href="review-bakeoff/SPEC.md"><code>review-bakeoff/SPEC.md</code></a> -- the on-disk contract: corpus layout, the one-planted-bug matching rule, four metrics; the decoy false-positive rate is the headline.</li>
+<li><a href="review-bakeoff/run_bakeoff.py"><code>review-bakeoff/run_bakeoff.py</code></a> -- the runner and scorer; endpoint arms dispatch through the git-kit lane runner, Agent arms go out as prompts and back in as issue arrays.</li>
+<li><a href="review-bakeoff/corpus"><code>review-bakeoff/corpus</code></a> -- 24 self-contained cases, each a YAML spec plus the exact diff the lane receives; positives plant one bug, decoys must not elicit anything.</li>
+</ul>
+</main>
+<script>
+if (window.parent !== window) {
+  window.parent.postMessage({
+    type: "human-html:announce",
+    version: 1,
+    directory: "scripts",
+    file: "index.html",
+    kind: "page",
+    source_sha: "9a57413d3efe0f71d67adbd61f0c74fe009dce91"
+  }, "*");
+  document.addEventListener("click", function (event) {
+    if (event.defaultPrevented || event.button !== 0) return;
+    if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    var el = event.target;
+    while (el && el.nodeName !== "A") el = el.parentNode;
+    if (!el) return;
+    var href = el.getAttribute("href");
+    if (!href) return;
+    if (href.charAt(0) === "#" || href.charAt(0) === "/") return;
+    if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(href)) return;
+    var target = href.split("#")[0].split("?")[0];
+    if (!target) return;
+    if (/(^|\/)human(\.[^/]+)?\.html$/.test(target)) return;
+    var parts = "scripts".split("/");
+    if (parts.length === 1 && parts[0] === ".") parts = [];
+    var segs = target.split("/");
+    for (var i = 0; i < segs.length; i++) {
+      if (segs[i] === "" || segs[i] === ".") continue;
+      if (segs[i] === "..") { parts.pop(); continue; }
+      parts.push(segs[i]);
+    }
+    event.preventDefault();
+    window.parent.postMessage({
+      type: "human-html:navigate",
+      version: 1,
+      path: parts.join("/")
+    }, "*");
+  });
+}
+</script>
+</body>
+</html>

@@ -45,7 +45,7 @@ from typing import Any, Callable, Dict, Iterable, List, Mapping, MutableMapping,
 
 from .completion.halt import HALT_INSUFFICIENT_CREDIT, HALT_QUOTA
 from .completion.types import BackendOptions
-from .model_endpoints import HARNESS_KIND, TRANSPORT_KIND, EndpointRegistryError
+from .model_endpoints import HARNESS_KIND, TRANSPORT_KIND, EndpointEntry, EndpointRegistryError
 from .models import EndpointResolveError, claude_cli_alias
 from .reachability import (
     DEFAULT_VERIFY_TIMEOUT_S,
@@ -484,7 +484,10 @@ def describe(
     seam: every resolvable entry routes). ``requirements`` is matched with
     ``completion.match_capabilities`` against ``capabilities`` (default: the
     shipped advertisement) keyed by the RESOLVED backend's name, the same
-    lookup job-kit's execution makes. ``backend_factory`` resolves an id
+    lookup job-kit's execution makes; a ``Capabilities`` record is first
+    specialized to a transport entry's own profile (``completion
+    .endpoint_capabilities``), so ``params: ["effort"]`` matches exactly the
+    transport entries that deliver an effort. ``backend_factory`` resolves an id
     (a raised ``EndpointResolveError`` means it does not); without one an id
     resolves through the merged entry map, falling back to ``create_backend``
     for ids the map does not carry (the legacy ``openrouter`` wrapper).
@@ -520,7 +523,13 @@ def describe(
     excluded = set(exclude)
     matcher = None
     if requirements:
-        from .completion import adapter_capabilities, match_capabilities  # noqa: PLC0415
+        from .completion import (  # noqa: PLC0415
+            Capabilities,
+            adapter_capabilities,
+            endpoint_capabilities,
+            match_capabilities,
+            profile_from_entry,
+        )
 
         advertised = dict(capabilities if capabilities is not None else adapter_capabilities())
         matcher = match_capabilities
@@ -578,6 +587,15 @@ def describe(
         if matcher is not None:
             adapter = backend_name if isinstance(backend_name, str) else _adapter_name(kind, harness)
             record = advertised.get(adapter) if adapter else None
+            if (
+                isinstance(record, Capabilities)
+                and kind == TRANSPORT_KIND
+                and isinstance(merged, EndpointEntry)
+            ):
+                # The family record is the truth for an unknown endpoint; this
+                # entry's own profile can enable a conditional param (effort on
+                # an entry that resolves a delivering effort style).
+                record = endpoint_capabilities(record, profile_from_entry(merged))
             if record is None or not matcher(record, requirements):
                 settle(DISPOSITION_REQUIREMENTS_MISMATCH, f"adapter {adapter!r}")
                 continue

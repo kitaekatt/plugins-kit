@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "directory": "docs/planning/content-pipeline-kit",
+  "decision": "none",
+  "source_sha": "470eb3b9fc5f459172a30feea525131d49b4cea7",
+  "input_sha256": "865b894160a191596d141d0127082008656b8a5c8eea3f517a96e29e3b4bbc98",
+  "input_shape_sha256": "f3bd73988355f869badf458141b810c641e4d8eec3dcda9dc168ca8b1a517aa0",
+  "dirty": false,
+  "identity": "",
+  "instructions": "",
+  "references": []
+}

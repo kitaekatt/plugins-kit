@@ -606,3 +606,150 @@ def test_frontdoor_strips_null_upstream_cost_keys(tmp_path, monkeypatch):
     body, _record = _run_cost(tmp_path, monkeypatch, "", usage)
     assert "cost" not in body["usage"] and "cost_source" not in body["usage"]
     assert body["usage"]["prompt_tokens"] == 3
+
+
+# ---------------------------------------------------------------------------
+# _normalize_body characterization: the effort translation is byte-identical
+# across the shared-vocabulary refactor. Each expected body is the literal
+# output of the pre-refactor implementation, KEY ORDER INCLUDED (the upstream
+# request is ``json.dumps`` of this dict, so order is part of the wire).
+# ---------------------------------------------------------------------------
+
+_NB_BODIES = {
+    "none": {"model": "g", "messages": [], "user": "u1"},
+    "top_high": {"model": "g", "messages": [], "reasoning_effort": "high"},
+    "top_medium": {"model": "g", "messages": [], "reasoning_effort": "medium"},
+    "top_null": {"model": "g", "messages": [], "reasoning_effort": None},
+    "nested_high_extra": {
+        "model": "g", "messages": [],
+        "chat_template_kwargs": {"enable_thinking": True, "reasoning_effort": "high"},
+    },
+    "nested_only": {"model": "g", "messages": [], "chat_template_kwargs": {"reasoning_effort": "low"}},
+    "both": {
+        "model": "g", "messages": [], "reasoning_effort": "low",
+        "chat_template_kwargs": {"reasoning_effort": "high", "x": 1},
+    },
+    "top_null_nested_high": {
+        "model": "g", "messages": [], "reasoning_effort": None,
+        "chat_template_kwargs": {"reasoning_effort": "high"},
+    },
+    "ctk_not_dict": {"model": "g", "messages": [], "reasoning_effort": "high", "chat_template_kwargs": "raw"},
+    "ctk_other_only": {
+        "model": "g", "messages": [], "reasoning_effort": "high",
+        "chat_template_kwargs": {"enable_thinking": False},
+    },
+}
+
+_NB_GOLDEN = [
+    ("top-level", "none", {"model": "real", "messages": []}, "u1"),
+    ("top-level", "top_high", {"model": "real", "messages": [], "reasoning_effort": "high"}, None),
+    ("top-level", "top_medium", {"model": "real", "messages": [], "reasoning_effort": "medium"}, None),
+    ("top-level", "top_null", {"model": "real", "messages": []}, None),
+    ("top-level", "nested_high_extra", {"model": "real", "messages": [], "chat_template_kwargs": {"enable_thinking": True}, "reasoning_effort": "high"}, None),
+    ("top-level", "nested_only", {"model": "real", "messages": [], "chat_template_kwargs": {}, "reasoning_effort": "low"}, None),
+    ("top-level", "both", {"model": "real", "messages": [], "chat_template_kwargs": {"reasoning_effort": "high", "x": 1}, "reasoning_effort": "low"}, None),
+    ("top-level", "top_null_nested_high", {"model": "real", "messages": [], "chat_template_kwargs": {}, "reasoning_effort": "high"}, None),
+    ("top-level", "ctk_not_dict", {"model": "real", "messages": [], "chat_template_kwargs": "raw", "reasoning_effort": "high"}, None),
+    ("top-level", "ctk_other_only", {"model": "real", "messages": [], "chat_template_kwargs": {"enable_thinking": False}, "reasoning_effort": "high"}, None),
+    ("ninfer", "none", {"model": "real", "messages": []}, "u1"),
+    ("ninfer", "top_high", {"model": "real", "messages": [], "reasoning_effort": "xhigh"}, None),
+    ("ninfer", "top_medium", {"model": "real", "messages": [], "reasoning_effort": "medium"}, None),
+    ("ninfer", "top_null", {"model": "real", "messages": []}, None),
+    ("ninfer", "nested_high_extra", {"model": "real", "messages": [], "chat_template_kwargs": {"enable_thinking": True}, "reasoning_effort": "xhigh"}, None),
+    ("ninfer", "nested_only", {"model": "real", "messages": [], "chat_template_kwargs": {}, "reasoning_effort": "low"}, None),
+    ("ninfer", "both", {"model": "real", "messages": [], "chat_template_kwargs": {"reasoning_effort": "high", "x": 1}, "reasoning_effort": "low"}, None),
+    ("ninfer", "top_null_nested_high", {"model": "real", "messages": [], "chat_template_kwargs": {}, "reasoning_effort": "xhigh"}, None),
+    ("ninfer", "ctk_not_dict", {"model": "real", "messages": [], "chat_template_kwargs": "raw", "reasoning_effort": "xhigh"}, None),
+    ("ninfer", "ctk_other_only", {"model": "real", "messages": [], "chat_template_kwargs": {"enable_thinking": False}, "reasoning_effort": "xhigh"}, None),
+    ("chat_template_kwargs", "none", {"model": "real", "messages": []}, "u1"),
+    ("chat_template_kwargs", "top_high", {"model": "real", "messages": [], "chat_template_kwargs": {"reasoning_effort": "high"}}, None),
+    ("chat_template_kwargs", "top_medium", {"model": "real", "messages": [], "chat_template_kwargs": {"reasoning_effort": "medium"}}, None),
+    ("chat_template_kwargs", "top_null", {"model": "real", "messages": []}, None),
+    ("chat_template_kwargs", "nested_high_extra", {"model": "real", "messages": [], "chat_template_kwargs": {"enable_thinking": True, "reasoning_effort": "high"}}, None),
+    ("chat_template_kwargs", "nested_only", {"model": "real", "messages": [], "chat_template_kwargs": {"reasoning_effort": "low"}}, None),
+    ("chat_template_kwargs", "both", {"model": "real", "messages": [], "chat_template_kwargs": {"reasoning_effort": "low", "x": 1}}, None),
+    ("chat_template_kwargs", "top_null_nested_high", {"model": "real", "messages": [], "chat_template_kwargs": {"reasoning_effort": "high"}}, None),
+    ("chat_template_kwargs", "ctk_not_dict", {"model": "real", "messages": [], "chat_template_kwargs": {"reasoning_effort": "high"}}, None),
+    ("chat_template_kwargs", "ctk_other_only", {"model": "real", "messages": [], "chat_template_kwargs": {"enable_thinking": False, "reasoning_effort": "high"}}, None),
+    (None, "none", {"model": "real", "messages": []}, "u1"),
+    (None, "top_high", {"model": "real", "messages": []}, None),
+    (None, "top_medium", {"model": "real", "messages": []}, None),
+    (None, "top_null", {"model": "real", "messages": []}, None),
+    (None, "nested_high_extra", {"model": "real", "messages": [], "chat_template_kwargs": {"enable_thinking": True}}, None),
+    (None, "nested_only", {"model": "real", "messages": [], "chat_template_kwargs": {}}, None),
+    (None, "both", {"model": "real", "messages": [], "chat_template_kwargs": {"reasoning_effort": "high", "x": 1}}, None),
+    (None, "top_null_nested_high", {"model": "real", "messages": [], "chat_template_kwargs": {}}, None),
+    (None, "ctk_not_dict", {"model": "real", "messages": [], "chat_template_kwargs": "raw"}, None),
+    (None, "ctk_other_only", {"model": "real", "messages": [], "chat_template_kwargs": {"enable_thinking": False}}, None),
+]
+
+
+@pytest.mark.parametrize(
+    "style,body_name,expected,expected_user",
+    _NB_GOLDEN,
+    ids=[f"{row[0]}-{row[1]}" for row in _NB_GOLDEN],
+)
+def test_normalize_body_effort_translation_is_byte_identical(
+    style, body_name, expected, expected_user
+) -> None:
+    """``style`` None is a transport entry with no ``routing:`` block."""
+    import copy
+
+    from llm_scripting_kit.frontdoor.server import _normalize_body
+    from llm_scripting_kit.model_endpoints import EndpointEntry, RoutingConfig
+
+    routing = RoutingConfig(group="g", effort_style=style) if style else None
+    entry = EndpointEntry(id="d", base_url="http://d/v1", model="real", routing=routing)
+    body = copy.deepcopy(_NB_BODIES[body_name])
+    before = copy.deepcopy(body)
+    forwarded, user = _normalize_body(body, entry)
+    assert json.dumps(forwarded) == json.dumps(expected)
+    assert user == expected_user
+    assert body == before  # the inbound body is never mutated
+
+
+def _deployment(tmp_path: Path, extra: str):
+    registry = _registry_from_text(
+        tmp_path,
+        "models:\n  d:\n    base_url: http://d/v1\n    model: real\n" + extra,
+    )
+    return registry.entries["d"]
+
+
+@pytest.mark.parametrize(
+    "extra,inbound,expected",
+    [
+        # Spillover to a routing deployment that declares no style: top-level,
+        # exactly as before the entry-level style existed.
+        ("    routing: {group: g, order: 3}\n", {"reasoning_effort": "high"}, {"reasoning_effort": "high"}),
+        # The entry-level style overrides the routing style.
+        (
+            "    effort_style: chat_template_kwargs\n    routing: {group: g, effort_style: ninfer}\n",
+            {"reasoning_effort": "high"},
+            {"chat_template_kwargs": {"reasoning_effort": "high"}},
+        ),
+        # `unsupported` strips the effort from either inbound channel.
+        ("    routing: {group: g, effort_style: unsupported}\n", {"reasoning_effort": "high"}, {}),
+        (
+            "    effort_style: unsupported\n    routing: {group: g}\n",
+            {"chat_template_kwargs": {"reasoning_effort": "low", "x": 1}},
+            {"chat_template_kwargs": {"x": 1}},
+        ),
+        # A declared-invalid routing style guesses no wire format.
+        ("    routing: {group: g, effort_style: nope}\n", {"reasoning_effort": "high"}, {}),
+        # A nested inbound effort is relocated to the deployment's style.
+        (
+            "    routing: {group: g, effort_style: ninfer}\n",
+            {"chat_template_kwargs": {"reasoning_effort": "high"}},
+            {"chat_template_kwargs": {}, "reasoning_effort": "xhigh"},
+        ),
+    ],
+    ids=["routing-no-style", "endpoint-overrides-routing", "unsupported-top", "unsupported-nested",
+         "invalid-routing", "nested-relocated"],
+)
+def test_normalize_body_uses_the_deployment_effort_style(tmp_path, extra, inbound, expected):
+    from llm_scripting_kit.frontdoor.server import _normalize_body
+
+    entry = _deployment(tmp_path, extra)
+    forwarded, _user = _normalize_body({"model": "g", **inbound}, entry)
+    assert forwarded == {"model": "real", **expected}

@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "directory": "plugins/yaml-data-editor-kit/lib/yaml_data_editor_kit/comments",
+  "decision": "page",
+  "source_sha": "d0256375ceacc5ba2a5319ac52e0bbaac31e1ddd",
+  "generation_spec_sha256": "fc236b0086521fffedc696039900f19579336e4ef8fb657ad60e3dcdf8747288",
+  "dirty": false,
+  "identity": "The anchor and comment model that stores guarded units of intent over a loaded corpus.",
+  "instructions": "",
+  "references": []
+}

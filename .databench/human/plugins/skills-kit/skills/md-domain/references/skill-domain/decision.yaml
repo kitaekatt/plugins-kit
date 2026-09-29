@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "directory": "plugins/skills-kit/skills/md-domain/references/skill-domain",
+  "decision": "page",
+  "source_sha": "1d479f028f5f2bf653a1e46db69554aae181ef72",
+  "generation_spec_sha256": "a539448e68fbbc8be485dfd60dc62d25ee41602a5cc2dc704720c7c7e226caa9",
+  "dirty": false,
+  "identity": "Skill-domain reference documentation for skill-authoring contracts, vocabulary, and audit tools.",
+  "instructions": "",
+  "references": []
+}

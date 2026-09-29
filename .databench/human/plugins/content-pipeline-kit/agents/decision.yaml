@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "directory": "plugins/content-pipeline-kit/agents",
+  "decision": "none",
+  "source_sha": "2b4cfb504460cc60ad28f2cd4f9e6e5454de0b7f",
+  "input_sha256": "56583abd065649c8b292e0f9bd6162fba9e2a6918524fc310654333e257dc5b5",
+  "input_shape_sha256": "7a78a37520e4cac64b71ebcf4854dee1d8ce2bfeb8769ec65b1db96c338a0dce",
+  "dirty": false,
+  "identity": "",
+  "instructions": "",
+  "references": []
+}

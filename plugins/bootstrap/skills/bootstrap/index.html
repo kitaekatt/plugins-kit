@@ -1,0 +1,601 @@
+<!doctype html>
+<html lang="en">
+<head>
+<!-- human-html: {"generated_by":"md-domain","source_sha":"8245f70589c3295ff9931641350d23209fdfbbbc","directory":"plugins/bootstrap/skills/bootstrap","kind":"page"} -->
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>Bootstrap skill reference for engine behavior, manifest configuration, CLI commands, and remediation</title>
+<style data-human-html-style>
+/* human-html shared style asset -- SA-1.
+ *
+ * The single source of truth for human-html page styling. Every generated page
+ * inlines these exact bytes in one <style data-human-html-style> element
+ * (PC-4); the host viewer imports the same resource for matching chrome
+ * (HV-3). Do not copy these values anywhere else -- a second copy is the
+ * visual drift this asset exists to prevent.
+ *
+ * Dark only, seeded from the host viewer's established dark theme. ASCII only.
+ */
+
+:root {
+  color-scheme: dark;
+
+  --hh-background: #080b10;
+  --hh-text: #d7deea;
+  --hh-heading: #f3f6fb;
+  --hh-muted: #8b98aa;
+  --hh-surface: rgba(15,19,27,.88);
+  --hh-border: #3d4a5e;
+  --hh-link: #5789f4;
+  --hh-link-hover: #7ea3ff;
+  --hh-accent: #4f82f7;
+
+  --hh-font-size: 15px;
+  --hh-line-height: 1.72;
+  --hh-font-body: Inter, ui-sans-serif, system-ui, sans-serif;
+  --hh-font-mono: JetBrains Mono, ui-monospace, monospace;
+
+  --hh-space-1: .35rem;
+  --hh-space-2: .75rem;
+  --hh-space-3: 1rem;
+  --hh-space-4: 1.5rem;
+  --hh-space-5: 2rem;
+  --hh-radius: 6px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  background: var(--hh-background);
+}
+
+body {
+  margin: 0;
+  padding: var(--hh-space-5) var(--hh-space-3);
+  background: var(--hh-background);
+  color: var(--hh-text);
+  font-family: var(--hh-font-body);
+  font-size: var(--hh-font-size);
+  line-height: var(--hh-line-height);
+  -webkit-text-size-adjust: 100%;
+}
+
+main {
+  display: grid;
+  gap: var(--hh-space-5);
+  width: 100%;
+  min-width: 0;
+}
+
+main > header,
+section,
+article,
+.hh-panel {
+  display: grid;
+  gap: var(--hh-space-2);
+  min-width: 0;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  color: var(--hh-heading);
+  line-height: 1.25;
+  margin: 0;
+  font-weight: 600;
+  text-wrap: balance;
+}
+
+h1 {
+  font-size: 1.75rem;
+}
+
+h2 {
+  font-size: 1.3rem;
+}
+
+h3 {
+  font-size: 1.1rem;
+}
+
+p,
+ul,
+ol,
+dl,
+table,
+pre,
+blockquote {
+  margin: 0;
+}
+
+ul,
+ol {
+  padding-left: 1.4em;
+}
+
+li + li {
+  margin-top: var(--hh-space-1);
+}
+
+a {
+  color: var(--hh-link);
+  text-decoration-line: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: .18em;
+}
+
+a:hover,
+a:focus {
+  color: var(--hh-link-hover);
+}
+
+a:focus-visible {
+  outline: 2px solid var(--hh-accent);
+  outline-offset: 2px;
+}
+
+small,
+.hh-muted,
+[data-human-html-muted] {
+  color: var(--hh-muted);
+}
+
+strong {
+  color: var(--hh-heading);
+  font-weight: 600;
+}
+
+hr {
+  border: 0;
+  border-top: 1px solid var(--hh-border);
+  margin: var(--hh-space-5) 0;
+}
+
+code,
+kbd,
+samp,
+pre {
+  font-family: var(--hh-font-mono);
+  font-size: .92em;
+}
+
+code {
+  background: var(--hh-surface);
+  border: 1px solid var(--hh-border);
+  border-radius: 4px;
+  padding: .1em .35em;
+  overflow-wrap: anywhere;
+}
+
+pre {
+  background: var(--hh-surface);
+  border: 1px solid var(--hh-border);
+  border-radius: var(--hh-radius);
+  padding: var(--hh-space-3);
+  max-width: 100%;
+  min-width: 0;
+  overflow: auto;
+  white-space: pre;
+}
+
+pre code {
+  background: none;
+  border: 0;
+  padding: 0;
+  overflow-wrap: normal;
+}
+
+blockquote {
+  border-left: 3px solid var(--hh-accent);
+  padding-left: var(--hh-space-3);
+  color: var(--hh-muted);
+}
+
+dl {
+  display: grid;
+  grid-template-columns: minmax(7rem, .22fr) minmax(0, 1fr);
+  gap: var(--hh-space-1) var(--hh-space-3);
+}
+
+dt {
+  color: var(--hh-heading);
+  font-weight: 600;
+}
+
+dd {
+  min-width: 0;
+  margin: 0;
+}
+
+dt:not(:first-of-type),
+dt:not(:first-of-type) + dd {
+  border-top: 1px solid var(--hh-border);
+  padding-top: var(--hh-space-2);
+}
+
+table {
+  border-collapse: collapse;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  display: block;
+  overflow-x: auto;
+}
+
+th,
+td {
+  border: 1px solid var(--hh-border);
+  padding: .45em .7em;
+  text-align: left;
+  vertical-align: top;
+}
+
+th {
+  color: var(--hh-heading);
+  background: var(--hh-surface);
+  font-weight: 600;
+}
+
+section,
+article,
+.hh-panel {
+  background: transparent;
+}
+
+.hh-panel {
+  background: var(--hh-surface);
+  border: 1px solid var(--hh-border);
+  border-radius: var(--hh-radius);
+  padding: var(--hh-space-3);
+}
+
+[data-human-html-chrome="nav"] {
+  border-bottom: 1px solid var(--hh-border);
+  padding-bottom: var(--hh-space-4);
+  margin-bottom: var(--hh-space-4);
+  font-size: .95em;
+  color: var(--hh-muted);
+}
+
+[data-human-html-chrome="nav"] ul {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 18rem), 1fr));
+  gap: var(--hh-space-2) var(--hh-space-5);
+  list-style: none;
+  margin: 0;
+  padding-left: 0;
+}
+
+[data-human-html-chrome="nav"] li {
+  min-width: 0;
+  margin: 0;
+}
+
+[data-human-html-chrome="nav"] a {
+  display: grid;
+  gap: var(--hh-space-1);
+  min-width: 0;
+  color: var(--hh-link);
+  text-decoration: none;
+}
+
+[data-human-html-chrome="nav"] a:hover,
+[data-human-html-chrome="nav"] a:focus {
+  color: var(--hh-link-hover);
+}
+
+.hh-nav-label {
+  color: currentColor;
+  font-weight: 600;
+  line-height: 1.3;
+  text-decoration-line: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: .18em;
+  overflow-wrap: anywhere;
+}
+
+.hh-nav-identity {
+  color: var(--hh-muted);
+  line-height: 1.45;
+}
+
+/* The human-page card marker (PC-2). A card whose target is another
+ * `index.html` carries this icon; a card pointing at anything else does not,
+ * so the two card kinds stay distinguishable at a glance.
+ *
+ * The icon is a data URI, never a file beside the page and never a remote
+ * asset, so the page renders with nothing fetched (NF-1, PC-6). The `xmlns`
+ * inside the SVG is an XML namespace identifier, not a location: no browser
+ * requests it, and CK-1's URL rules apply to `href` and `src` attributes, not
+ * to a CSS background.
+ *
+ * The icon sits in its own grid column so the label's underline never runs
+ * beneath it, and it scales with the label, so it stays legible at phone
+ * width where the card list collapses to one column.
+ */
+[data-human-html-chrome="nav"] a[href="index.html"],
+[data-human-html-chrome="nav"] a[href="human.html"],
+[data-human-html-chrome="nav"] a[href$="/index.html"],
+[data-human-html-chrome="nav"] a[href$="/human.html"] {
+  grid-template-columns: 1.1em minmax(0, 1fr);
+}
+
+[data-human-html-chrome="nav"] a[href="index.html"]::before,
+[data-human-html-chrome="nav"] a[href="human.html"]::before,
+[data-human-html-chrome="nav"] a[href$="/index.html"]::before,
+[data-human-html-chrome="nav"] a[href$="/human.html"]::before {
+  content: "";
+  grid-column: 1;
+  grid-row: 1;
+  align-self: center;
+  width: 1.1em;
+  height: 1.1em;
+  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cg fill='%235789f4'%3E%3Ccircle cx='8' cy='4.3' r='3.1'/%3E%3Cpath d='M1.5 15.3c0-3.6 2.9-6.3 6.5-6.3s6.5 2.7 6.5 6.3z'/%3E%3C/g%3E%3C/svg%3E") center / contain no-repeat;
+}
+
+[data-human-html-chrome="nav"] a[href="index.html"] .hh-nav-label,
+[data-human-html-chrome="nav"] a[href="human.html"] .hh-nav-label,
+[data-human-html-chrome="nav"] a[href$="/index.html"] .hh-nav-label,
+[data-human-html-chrome="nav"] a[href$="/human.html"] .hh-nav-label {
+  grid-column: 2;
+  grid-row: 1;
+}
+
+[data-human-html-chrome="nav"] a[href="index.html"] .hh-nav-identity,
+[data-human-html-chrome="nav"] a[href="human.html"] .hh-nav-identity,
+[data-human-html-chrome="nav"] a[href$="/index.html"] .hh-nav-identity,
+[data-human-html-chrome="nav"] a[href$="/human.html"] .hh-nav-identity {
+  grid-column: 2;
+  grid-row: 2;
+}
+
+img,
+svg {
+  max-width: 100%;
+  height: auto;
+}
+
+::selection {
+  background: var(--hh-accent);
+  color: var(--hh-background);
+}
+
+@media (max-width: 40rem) {
+  body {
+    padding: var(--hh-space-4) var(--hh-space-2);
+  }
+
+  [data-human-html-chrome="nav"] ul,
+  dl {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  dt:not(:first-of-type) {
+    padding-top: var(--hh-space-2);
+  }
+
+  dt + dd {
+    border-top: 0;
+    padding-top: 0;
+  }
+}
+</style>
+</head>
+<body>
+<nav data-human-html-chrome="nav" aria-label="Orientation pages">
+  <ul>
+    <li><a href="../../index.html"><span class="hh-nav-label">bootstrap</span> <span class="hh-nav-identity">Bootstrap plugin that prepares user machines for marketplace plugins by installing tools, Python environments, and configuration, and exposes its command, hooks, shell resolvers, maintenance scripts, and plugin-development skill.</span></a></li>
+    <li>
+      <a href="SKILL.md">
+        <span class="hh-nav-label">SKILL.md</span>
+        <span class="hh-nav-identity">The skill file: the fact set an agent loads the moment a bootstrap question arrives.</span>
+      </a>
+    </li>
+    <li>
+      <a href="references/manifest-reference.md">
+        <span class="hh-nav-label">manifest-reference.md</span>
+        <span class="hh-nav-identity">The manifest schema and per-field reference; the lookup for any configuration question.</span>
+      </a>
+    </li>
+  </ul>
+</nav>
+<main>
+<h1>Bootstrap skill reference for engine behavior, manifest configuration, CLI commands, and remediation</h1>
+<p>
+This directory is the bootstrap plugin's reference skill: what the engine does on
+session start, how manifests configure it, which terminal commands drive a pass, and how
+remediation is decided. The skill file holds the fact set an agent answers from directly,
+and a companion set of long-form documents holds the mechanics, one document per subject,
+cross-referenced by name. Healthy bootstrap is silent, so most questions here start from a
+log line, a fix-all message, or a state file rather than from output. Pick the document
+that matches what you are debugging and follow its cross-references instead of browsing.
+</p>
+
+<h2>Where to start</h2>
+<p>
+Open <a href="SKILL.md"><code>SKILL.md</code></a> first: its facts are what the agent
+loads on demand, and each one names the long-form document that carries the mechanics. If
+the subject is already clear, go straight to the matching group below.
+</p>
+
+<h2>Routes</h2>
+<ul>
+<li>
+<strong>Converge an update by hand:</strong> which layer a change goes live in, per the
+measured tables in
+<a href="references/plugin-reload-lifecycle.md"><code>references/plugin-reload-lifecycle.md</code></a>;
+then whether the engine version has caught up, per the update-lifecycle fact in
+<a href="SKILL.md"><code>SKILL.md</code></a>; then the force-pass and reset commands,
+<code>bootstrap run</code> and <code>bootstrap reset</code>, in
+<a href="references/bootstrap-cli.md"><code>references/bootstrap-cli.md</code></a>.
+</li>
+<li>
+<strong>Decide escalate versus defer:</strong> the rule and the API in
+<a href="references/deferred-requirements.md"><code>references/deferred-requirements.md</code></a>;
+when the missing precondition is a plugin, the install mechanics continue in
+<a href="references/action-triggered-install.md"><code>references/action-triggered-install.md</code></a>.
+</li>
+<li>
+<strong>Author a plugin's manifest:</strong> the config section for user settings in
+<a href="references/plugin-setup-pattern.md"><code>references/plugin-setup-pattern.md</code></a>;
+the field forms in
+<a href="references/manifest-reference.md"><code>references/manifest-reference.md</code></a>;
+then the download-versus-system rubric in
+<a href="references/dependency-philosophy.md"><code>references/dependency-philosophy.md</code></a>
+for every tool entry.
+</li>
+</ul>
+
+<h2>The skill's fact set</h2>
+<ul>
+<li>
+<a href="SKILL.md"><code>SKILL.md</code></a>: the load-bearing fact set: session-start
+outcomes, single-session update convergence, the force-pass lever, the cooldown-reset
+protocol, and the two remediation phases. Open it first for any bootstrap question; every
+fact names the document that holds its mechanics.
+</li>
+</ul>
+
+<h2>Engine behavior and lifecycle</h2>
+<ul>
+<li>
+<a href="references/engine-internals.md"><code>references/engine-internals.md</code></a>:
+how a pass runs: the detached hook, the engine phases in order, the pending-file display
+relay with its age stamp, registry self-repair, and the single-instance lock. Open it when
+the question is what the engine did.
+</li>
+<li>
+<a href="references/plugin-reload-lifecycle.md"><code>references/plugin-reload-lifecycle.md</code></a>:
+which change went live after an edit or an update: code content, registration, and
+re-firing each go live differently, with the measured tables that settle the folklore.
+Open it before advising a restart or a plugin reload.
+</li>
+</ul>
+
+<h2>Manifest and configuration</h2>
+<ul>
+<li>
+<a href="references/manifest-reference.md"><code>references/manifest-reference.md</code></a>:
+the manifest schema and per-field reference: every phase key, merge and layering rules,
+environment exports, and the config section. Open it when writing or debugging a manifest
+entry.
+</li>
+<li>
+<a href="references/dependency-philosophy.md"><code>references/dependency-philosophy.md</code></a>:
+why the engine downloads some tools and defers to system installs for others, with the
+rubric applied to the common tools. Open it before choosing a download block over an
+install command.
+</li>
+<li>
+<a href="references/plugin-setup-pattern.md"><code>references/plugin-setup-pattern.md</code></a>:
+how a plugin declares user-specific settings through the manifest config section, plus the
+legacy setup CLI it replaces. Open it when a plugin needs API keys, preferences, or paths.
+</li>
+</ul>
+
+<h2>Terminal commands and interpreters</h2>
+<ul>
+<li>
+<a href="references/bootstrap-cli.md"><code>references/bootstrap-cli.md</code></a>: every
+verb of the terminal command: status and follow, forced run, reset, profile selection and
+state, and the interpreter resolvers, with exit codes. Open it for anything run from a
+terminal.
+</li>
+<li>
+<a href="references/python-interpreter.md"><code>references/python-interpreter.md</code></a>:
+the interpreter contract: which surfaces get <code>BOOTSTRAP_PYTHON</code> versus
+<code>BOOTSTRAP_PROJECT_PYTHON</code>, the copy-ready call-site expressions, and the
+opt-outs. Open it when a script or terminal cannot find the right interpreter.
+</li>
+</ul>
+
+<h2>Remediation</h2>
+<ul>
+<li>
+<a href="references/remediation-reference.md"><code>references/remediation-reference.md</code></a>:
+check method and remediation for every condition category, the UX ladder that ranks every
+surfacing, and the AUTO versus ASK decision with its structural exceptions. Open it when a
+fix-all message needs explaining.
+</li>
+</ul>
+
+<h2>Patterns for plugin authors</h2>
+<ul>
+<li>
+<a href="references/deferred-requirements.md"><code>references/deferred-requirements.md</code></a>:
+the escalate-versus-defer rule for preconditions only some capability needs: the API, the
+handoff file the point of need reads, and the consumption protocol. Open it when writing a
+custom check.
+</li>
+<li>
+<a href="references/action-triggered-install.md"><code>references/action-triggered-install.md</code></a>:
+the plugin-install instance of deferral: declare the plugin manual, preflight at the
+moment of need, install on consent, and retry without a restart. Open it when wiring an
+optional plugin dependency.
+</li>
+<li>
+<a href="references/library-consumption.md"><code>references/library-consumption.md</code></a>:
+every way a Python process reaches a shared library, which modes are supported, and why
+the pip route is not. Open it when a consumer outside the plugin world needs one.
+</li>
+<li>
+<a href="references/durable-project-data.md"><code>references/durable-project-data.md</code></a>:
+where a plugin writes its own data: the durable and ephemeral project locations,
+user-scoped data, and the rule that keeps writes out of source checkouts. Open it when
+choosing a path for generated artifacts.
+</li>
+<li>
+<a href="references/fleet-management.md"><code>references/fleet-management.md</code></a>:
+how an administrator lands bootstrap on every machine through the <code>ensure-bootstrap</code>
+hook, with the opt-out and the re-run contract. Open it when a fresh clone lacks bootstrap.
+</li>
+</ul>
+</main>
+<script>
+if (window.parent !== window) {
+  window.parent.postMessage({
+    type: "human-html:announce",
+    version: 1,
+    directory: "plugins/bootstrap/skills/bootstrap",
+    file: "index.html",
+    kind: "page",
+    source_sha: "8245f70589c3295ff9931641350d23209fdfbbbc"
+  }, "*");
+  document.addEventListener("click", function (event) {
+    if (event.defaultPrevented || event.button !== 0) return;
+    if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    var el = event.target;
+    while (el && el.nodeName !== "A") el = el.parentNode;
+    if (!el) return;
+    var href = el.getAttribute("href");
+    if (!href) return;
+    if (href.charAt(0) === "#" || href.charAt(0) === "/") return;
+    if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(href)) return;
+    var target = href.split("#")[0].split("?")[0];
+    if (!target) return;
+    if (/(^|\/)human(\.[^/]+)?\.html$/.test(target)) return;
+    var parts = "plugins/bootstrap/skills/bootstrap".split("/");
+    if (parts.length === 1 && parts[0] === ".") parts = [];
+    var segs = target.split("/");
+    for (var i = 0; i < segs.length; i++) {
+      if (segs[i] === "" || segs[i] === ".") continue;
+      if (segs[i] === "..") { parts.pop(); continue; }
+      parts.push(segs[i]);
+    }
+    event.preventDefault();
+    window.parent.postMessage({
+      type: "human-html:navigate",
+      version: 1,
+      path: parts.join("/")
+    }, "*");
+  });
+}
+</script>
+</body>
+</html>

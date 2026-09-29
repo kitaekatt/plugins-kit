@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "directory": "plugins/pdf-kit",
+  "decision": "page",
+  "source_sha": "5e9f1a59e18dbe28ff46a9f041fc7b19d368e9fa",
+  "generation_spec_sha256": "0805933a1de089dc951a33d702e9d57d569f0584732b017cd3600742a34ba321",
+  "dirty": false,
+  "identity": "The pdf-kit plugin that converts local HTML files to PDFs through headless Chromium.",
+  "instructions": "",
+  "references": []
+}

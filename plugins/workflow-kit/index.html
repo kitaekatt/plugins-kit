@@ -1,0 +1,494 @@
+<!doctype html>
+<html lang="en">
+<head>
+<!-- human-html: {"generated_by":"md-domain","source_sha":"4ad89c1c0cc5eddc26b1f5334302f4e7e379544b","directory":"plugins/workflow-kit","kind":"page"} -->
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>Workflow Kit plugin that adds a declarative .workflow.yaml compiler plus script and OpenRouter node strategies to the native Workflow tool</title>
+<style data-human-html-style>
+/* human-html shared style asset -- SA-1.
+ *
+ * The single source of truth for human-html page styling. Every generated page
+ * inlines these exact bytes in one <style data-human-html-style> element
+ * (PC-4); the host viewer imports the same resource for matching chrome
+ * (HV-3). Do not copy these values anywhere else -- a second copy is the
+ * visual drift this asset exists to prevent.
+ *
+ * Dark only, seeded from the host viewer's established dark theme. ASCII only.
+ */
+
+:root {
+  color-scheme: dark;
+
+  --hh-background: #080b10;
+  --hh-text: #d7deea;
+  --hh-heading: #f3f6fb;
+  --hh-muted: #8b98aa;
+  --hh-surface: rgba(15,19,27,.88);
+  --hh-border: #3d4a5e;
+  --hh-link: #5789f4;
+  --hh-link-hover: #7ea3ff;
+  --hh-accent: #4f82f7;
+
+  --hh-font-size: 15px;
+  --hh-line-height: 1.72;
+  --hh-font-body: Inter, ui-sans-serif, system-ui, sans-serif;
+  --hh-font-mono: JetBrains Mono, ui-monospace, monospace;
+
+  --hh-space-1: .35rem;
+  --hh-space-2: .75rem;
+  --hh-space-3: 1rem;
+  --hh-space-4: 1.5rem;
+  --hh-space-5: 2rem;
+  --hh-radius: 6px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  background: var(--hh-background);
+}
+
+body {
+  margin: 0;
+  padding: var(--hh-space-5) var(--hh-space-3);
+  background: var(--hh-background);
+  color: var(--hh-text);
+  font-family: var(--hh-font-body);
+  font-size: var(--hh-font-size);
+  line-height: var(--hh-line-height);
+  -webkit-text-size-adjust: 100%;
+}
+
+main {
+  display: grid;
+  gap: var(--hh-space-5);
+  width: 100%;
+  min-width: 0;
+}
+
+main > header,
+section,
+article,
+.hh-panel {
+  display: grid;
+  gap: var(--hh-space-2);
+  min-width: 0;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  color: var(--hh-heading);
+  line-height: 1.25;
+  margin: 0;
+  font-weight: 600;
+  text-wrap: balance;
+}
+
+h1 {
+  font-size: 1.75rem;
+}
+
+h2 {
+  font-size: 1.3rem;
+}
+
+h3 {
+  font-size: 1.1rem;
+}
+
+p,
+ul,
+ol,
+dl,
+table,
+pre,
+blockquote {
+  margin: 0;
+}
+
+ul,
+ol {
+  padding-left: 1.4em;
+}
+
+li + li {
+  margin-top: var(--hh-space-1);
+}
+
+a {
+  color: var(--hh-link);
+  text-decoration-line: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: .18em;
+}
+
+a:hover,
+a:focus {
+  color: var(--hh-link-hover);
+}
+
+a:focus-visible {
+  outline: 2px solid var(--hh-accent);
+  outline-offset: 2px;
+}
+
+small,
+.hh-muted,
+[data-human-html-muted] {
+  color: var(--hh-muted);
+}
+
+strong {
+  color: var(--hh-heading);
+  font-weight: 600;
+}
+
+hr {
+  border: 0;
+  border-top: 1px solid var(--hh-border);
+  margin: var(--hh-space-5) 0;
+}
+
+code,
+kbd,
+samp,
+pre {
+  font-family: var(--hh-font-mono);
+  font-size: .92em;
+}
+
+code {
+  background: var(--hh-surface);
+  border: 1px solid var(--hh-border);
+  border-radius: 4px;
+  padding: .1em .35em;
+  overflow-wrap: anywhere;
+}
+
+pre {
+  background: var(--hh-surface);
+  border: 1px solid var(--hh-border);
+  border-radius: var(--hh-radius);
+  padding: var(--hh-space-3);
+  max-width: 100%;
+  min-width: 0;
+  overflow: auto;
+  white-space: pre;
+}
+
+pre code {
+  background: none;
+  border: 0;
+  padding: 0;
+  overflow-wrap: normal;
+}
+
+blockquote {
+  border-left: 3px solid var(--hh-accent);
+  padding-left: var(--hh-space-3);
+  color: var(--hh-muted);
+}
+
+dl {
+  display: grid;
+  grid-template-columns: minmax(7rem, .22fr) minmax(0, 1fr);
+  gap: var(--hh-space-1) var(--hh-space-3);
+}
+
+dt {
+  color: var(--hh-heading);
+  font-weight: 600;
+}
+
+dd {
+  min-width: 0;
+  margin: 0;
+}
+
+dt:not(:first-of-type),
+dt:not(:first-of-type) + dd {
+  border-top: 1px solid var(--hh-border);
+  padding-top: var(--hh-space-2);
+}
+
+table {
+  border-collapse: collapse;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  display: block;
+  overflow-x: auto;
+}
+
+th,
+td {
+  border: 1px solid var(--hh-border);
+  padding: .45em .7em;
+  text-align: left;
+  vertical-align: top;
+}
+
+th {
+  color: var(--hh-heading);
+  background: var(--hh-surface);
+  font-weight: 600;
+}
+
+section,
+article,
+.hh-panel {
+  background: transparent;
+}
+
+.hh-panel {
+  background: var(--hh-surface);
+  border: 1px solid var(--hh-border);
+  border-radius: var(--hh-radius);
+  padding: var(--hh-space-3);
+}
+
+[data-human-html-chrome="nav"] {
+  border-bottom: 1px solid var(--hh-border);
+  padding-bottom: var(--hh-space-4);
+  margin-bottom: var(--hh-space-4);
+  font-size: .95em;
+  color: var(--hh-muted);
+}
+
+[data-human-html-chrome="nav"] ul {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 18rem), 1fr));
+  gap: var(--hh-space-2) var(--hh-space-5);
+  list-style: none;
+  margin: 0;
+  padding-left: 0;
+}
+
+[data-human-html-chrome="nav"] li {
+  min-width: 0;
+  margin: 0;
+}
+
+[data-human-html-chrome="nav"] a {
+  display: grid;
+  gap: var(--hh-space-1);
+  min-width: 0;
+  color: var(--hh-link);
+  text-decoration: none;
+}
+
+[data-human-html-chrome="nav"] a:hover,
+[data-human-html-chrome="nav"] a:focus {
+  color: var(--hh-link-hover);
+}
+
+.hh-nav-label {
+  color: currentColor;
+  font-weight: 600;
+  line-height: 1.3;
+  text-decoration-line: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: .18em;
+  overflow-wrap: anywhere;
+}
+
+.hh-nav-identity {
+  color: var(--hh-muted);
+  line-height: 1.45;
+}
+
+/* The human-page card marker (PC-2). A card whose target is another
+ * `index.html` carries this icon; a card pointing at anything else does not,
+ * so the two card kinds stay distinguishable at a glance.
+ *
+ * The icon is a data URI, never a file beside the page and never a remote
+ * asset, so the page renders with nothing fetched (NF-1, PC-6). The `xmlns`
+ * inside the SVG is an XML namespace identifier, not a location: no browser
+ * requests it, and CK-1's URL rules apply to `href` and `src` attributes, not
+ * to a CSS background.
+ *
+ * The icon sits in its own grid column so the label's underline never runs
+ * beneath it, and it scales with the label, so it stays legible at phone
+ * width where the card list collapses to one column.
+ */
+[data-human-html-chrome="nav"] a[href="index.html"],
+[data-human-html-chrome="nav"] a[href="human.html"],
+[data-human-html-chrome="nav"] a[href$="/index.html"],
+[data-human-html-chrome="nav"] a[href$="/human.html"] {
+  grid-template-columns: 1.1em minmax(0, 1fr);
+}
+
+[data-human-html-chrome="nav"] a[href="index.html"]::before,
+[data-human-html-chrome="nav"] a[href="human.html"]::before,
+[data-human-html-chrome="nav"] a[href$="/index.html"]::before,
+[data-human-html-chrome="nav"] a[href$="/human.html"]::before {
+  content: "";
+  grid-column: 1;
+  grid-row: 1;
+  align-self: center;
+  width: 1.1em;
+  height: 1.1em;
+  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cg fill='%235789f4'%3E%3Ccircle cx='8' cy='4.3' r='3.1'/%3E%3Cpath d='M1.5 15.3c0-3.6 2.9-6.3 6.5-6.3s6.5 2.7 6.5 6.3z'/%3E%3C/g%3E%3C/svg%3E") center / contain no-repeat;
+}
+
+[data-human-html-chrome="nav"] a[href="index.html"] .hh-nav-label,
+[data-human-html-chrome="nav"] a[href="human.html"] .hh-nav-label,
+[data-human-html-chrome="nav"] a[href$="/index.html"] .hh-nav-label,
+[data-human-html-chrome="nav"] a[href$="/human.html"] .hh-nav-label {
+  grid-column: 2;
+  grid-row: 1;
+}
+
+[data-human-html-chrome="nav"] a[href="index.html"] .hh-nav-identity,
+[data-human-html-chrome="nav"] a[href="human.html"] .hh-nav-identity,
+[data-human-html-chrome="nav"] a[href$="/index.html"] .hh-nav-identity,
+[data-human-html-chrome="nav"] a[href$="/human.html"] .hh-nav-identity {
+  grid-column: 2;
+  grid-row: 2;
+}
+
+img,
+svg {
+  max-width: 100%;
+  height: auto;
+}
+
+::selection {
+  background: var(--hh-accent);
+  color: var(--hh-background);
+}
+
+@media (max-width: 40rem) {
+  body {
+    padding: var(--hh-space-4) var(--hh-space-2);
+  }
+
+  [data-human-html-chrome="nav"] ul,
+  dl {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  dt:not(:first-of-type) {
+    padding-top: var(--hh-space-2);
+  }
+
+  dt + dd {
+    border-top: 0;
+    padding-top: 0;
+  }
+}
+</style>
+</head>
+<body>
+<nav data-human-html-chrome="nav" aria-label="Orientation pages">
+  <ul>
+    <li><a href="../index.html"><span class="hh-nav-label">plugins</span> <span class="hh-nav-identity">The Claude Code plugin collection: installable plugins including git and Perforce review, secrets provisioning, statusline display, cache reporting, markdown auditing, stuck-bootstrap remediation, and prototype skills.</span></a></li>
+<li><a href="workflow_kit_lib/index.html"><span class="hh-nav-label">workflow_kit_lib</span> <span class="hh-nav-identity">Workflow Kit library that validates workflow YAML and compiles it to Claude Code Workflow tool scripts</span></a></li>
+  </ul>
+</nav>
+<main>
+  <h1>Workflow Kit plugin that adds a declarative .workflow.yaml compiler plus script and OpenRouter node strategies to the native Workflow tool</h1>
+  <p>This plugin layers declarative workflow authoring and two cheap node strategies on top of Claude Code's native Workflow tool and never reimplements execution. A human authors a durable workflow as a YAML file; deterministic Python validates it and compiles it to a native script that only the native tool runs. Hand-written scripts get the same power through node strategies: a deterministic shell command, or a non-Claude model call, run by one small haiku agent that returns only file metadata, so payloads travel on disk and bypass model context. The layout follows that split: a skill that indexes the format docs, two runner scripts, one executor agent, and a matched example set.</p>
+
+  <h2>Where to start</h2>
+  <p>Start with <a href="skills/workflow-kit/SKILL.md"><code>skills/workflow-kit/SKILL.md</code></a>: it indexes the reference docs by task and carries the plugin-venv python path and the exact compile, validate, and run commands. For the shape before the rules, open <a href="examples/review-changes.workflow.yaml"><code>examples/review-changes.workflow.yaml</code></a> instead.</p>
+
+  <h2>Routes</h2>
+  <ul>
+    <li><strong>Compile and run a workflow:</strong> read <a href="skills/workflow-kit/references/workflow-yaml.md"><code>skills/workflow-kit/references/workflow-yaml.md</code></a>, compile with <a href="scripts/compile_workflow.py"><code>scripts/compile_workflow.py</code></a> using <code>-o</code>, then hand the compiled path and args to the native Workflow tool.</li>
+    <li><strong>Validate only:</strong> run <a href="scripts/compile_workflow.py"><code>scripts/compile_workflow.py</code></a> with <code>--validate-only</code>; exit 0 means OK, exit 1 prints the located error.</li>
+    <li><strong>Wire a node strategy by hand:</strong> read <a href="skills/workflow-kit/references/node-strategies.md"><code>skills/workflow-kit/references/node-strategies.md</code></a>, paste <a href="skills/workflow-kit/references/preamble.js"><code>skills/workflow-kit/references/preamble.js</code></a> into the native script, and let its helper run <a href="scripts/openrouter_run.py"><code>scripts/openrouter_run.py</code></a> under the plugin venv python.</li>
+  </ul>
+
+  <h2>The skill index</h2>
+  <ul>
+    <li><a href="skills/workflow-kit/SKILL.md"><code>skills/workflow-kit/SKILL.md</code></a> - the task index for the plugin: coverage, the plugin-venv python path, and the exact commands. Open it first when a task lands.</li>
+  </ul>
+
+  <h2>The workflow format and node docs</h2>
+  <ul>
+    <li><a href="skills/workflow-kit/references/workflow-yaml.md"><code>skills/workflow-kit/references/workflow-yaml.md</code></a> - the declarative YAML format (v1), the compile, validate, run, and scaffold procedures, and the reserved inputs node steps expect. Open it when authoring or debugging a workflow.</li>
+    <li><a href="skills/workflow-kit/references/contract.md"><code>skills/workflow-kit/references/contract.md</code></a> - the node contract: payloads write to $OUT and only exit code, size, and hash come back, so routing rides the small status, never the file body. Open it when placing a step's output.</li>
+    <li><a href="skills/workflow-kit/references/node-strategies.md"><code>skills/workflow-kit/references/node-strategies.md</code></a> - the script and openrouter command templates, the model-declaration rules, and when a node strategy is the wrong tool. Open it when adding a deterministic or non-Claude step.</li>
+    <li><a href="skills/workflow-kit/references/preamble.js"><code>skills/workflow-kit/references/preamble.js</code></a> - the helpers you paste into a hand-written native script to build the node calls, inlined because such scripts cannot import. Open it when wiring nodes outside the compiler.</li>
+  </ul>
+
+  <h2>The compiler and the node runner</h2>
+  <ul>
+    <li><a href="scripts/compile_workflow.py"><code>scripts/compile_workflow.py</code></a> - the CLI that validates a declarative workflow and emits the native script, or validates only. Open it when a compile error needs reading.</li>
+    <li><a href="scripts/openrouter_run.py"><code>scripts/openrouter_run.py</code></a> - the runner behind every openrouter node: one non-Claude model call through the llm-scripting-kit declaration API, reply written to $OUT with a small status file beside it. Open it when a model call fails.</li>
+  </ul>
+  <p>The library both scripts import for the real validation and compilation lives in the sibling workflow_kit_lib directory, which has its own page; go there for the format rules themselves.</p>
+
+  <h2>The node executor</h2>
+  <ul>
+    <li><a href="agents/workflow-kit-agent.md"><code>agents/workflow-kit-agent.md</code></a> - the haiku agent that runs a node's single shell command verbatim, never reads the output file, and returns only its metadata. Open it when a node's behaviour is in question.</li>
+  </ul>
+
+  <h2>Worked examples</h2>
+  <ul>
+    <li><a href="examples/node-strategies.workflow.yaml"><code>examples/node-strategies.workflow.yaml</code></a> - the declarative twin of the hand-written example below: a script node and an openrouter node feed one reasoning node. Open it to see the shape before authoring your own.</li>
+    <li><a href="examples/node-strategies.example.js"><code>examples/node-strategies.example.js</code></a> - the same workflow hand-written as a native script with the preamble inlined. Open it to see what the compiler generates.</li>
+    <li><a href="examples/review-changes.workflow.yaml"><code>examples/review-changes.workflow.yaml</code></a> - a multi-step review that pipelines three dimensions and fans out over findings in parallel. The reference for schemas, pipelines, and fan-out.</li>
+    <li><a href="examples/scripts/wordcount.py"><code>examples/scripts/wordcount.py</code></a> - the tiny deterministic script the example nodes run, stdlib only. A minimal script-strategy payload to imitate.</li>
+  </ul>
+
+  <h2>Packaging and provisioning</h2>
+  <ul>
+    <li><a href=".claude-plugin/plugin.json"><code>.claude-plugin/plugin.json</code></a> - the marketplace manifest: name, version, description, keywords, and the bootstrap dependency. How the plugin is published.</li>
+    <li><a href="bootstrap.json"><code>bootstrap.json</code></a> - the provisioning edges: requires bootstrap 0.129.0, auto-installs the llm-scripting-kit plugin, and declares the shared imports linked onto the plugin venv. Open it when the venv or a shared import is missing.</li>
+    <li><a href="pyproject.toml"><code>pyproject.toml</code></a> - the Python package metadata: version, the pyyaml and openai dependencies, and the package layout. Open it when a dependency question comes up.</li>
+    <li><a href="README.md"><code>README.md</code></a> - the human-facing summary of what the plugin does and why payloads bypass model context. Hand it to someone new.</li>
+    <li><a href=".gitignore"><code>.gitignore</code></a> - keeps compiled workflow scripts out of version control, since they regenerate from the YAML. Open it when a stray generated file shows up.</li>
+  </ul>
+</main>
+<script>
+if (window.parent !== window) {
+  window.parent.postMessage({
+    type: "human-html:announce",
+    version: 1,
+    directory: "plugins/workflow-kit",
+    file: "index.html",
+    kind: "page",
+    source_sha: "4ad89c1c0cc5eddc26b1f5334302f4e7e379544b"
+  }, "*");
+  document.addEventListener("click", function (event) {
+    if (event.defaultPrevented || event.button !== 0) return;
+    if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    var el = event.target;
+    while (el && el.nodeName !== "A") el = el.parentNode;
+    if (!el) return;
+    var href = el.getAttribute("href");
+    if (!href) return;
+    if (href.charAt(0) === "#" || href.charAt(0) === "/") return;
+    if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(href)) return;
+    var target = href.split("#")[0].split("?")[0];
+    if (!target) return;
+    if (/(^|\/)human(\.[^/]+)?\.html$/.test(target)) return;
+    var parts = "plugins/workflow-kit".split("/");
+    if (parts.length === 1 && parts[0] === ".") parts = [];
+    var segs = target.split("/");
+    for (var i = 0; i < segs.length; i++) {
+      if (segs[i] === "" || segs[i] === ".") continue;
+      if (segs[i] === "..") { parts.pop(); continue; }
+      parts.push(segs[i]);
+    }
+    event.preventDefault();
+    window.parent.postMessage({
+      type: "human-html:navigate",
+      version: 1,
+      path: parts.join("/")
+    }, "*");
+  });
+}
+</script>
+</body>
+</html>

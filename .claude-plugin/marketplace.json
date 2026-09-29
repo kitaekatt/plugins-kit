@@ -9,7 +9,7 @@
     {
       "name": "unreal-kit",
       "description": "Unreal Engine automation: Python API for asset inspection and data extraction; MCP server for live Editor authoring (actors, Blueprints, materials, PIE)",
-      "version": "0.15.1",
+      "version": "0.15.2",
       "author": {
         "name": "Christina"
       },
@@ -35,7 +35,7 @@
     {
       "name": "bootstrap",
       "description": "Installs each plugin's tools, Python venvs, and config automatically at session start.",
-      "version": "0.134.0",
+      "version": "0.134.1",
       "author": {
         "name": "Christina"
       },
@@ -45,7 +45,7 @@
     {
       "name": "p4-kit",
       "description": "Multi-agent code review for pending Perforce changelists (/p4-code-review) -- auto-shelves, reviews, cleans up.",
-      "version": "0.60.0",
+      "version": "0.60.1",
       "author": {
         "name": "Christina"
       },
@@ -71,7 +71,7 @@
     {
       "name": "skills-kit",
       "description": "Author and audit every md file a project loads or ships -- CLAUDE.md, SKILL.md, project docs, and their cross-references -- for placement, cohesion, and drift.",
-      "version": "0.80.0",
+      "version": "0.80.1",
       "author": {
         "name": "Christina"
       },
@@ -97,7 +97,7 @@
     {
       "name": "awesome-kit",
       "description": "Provides plugin-ecosystem, task, orchestrate, recap, debug-context, and verbose-updates skills for plugin browsing, task tracking, delegated work, response distillation, answering why-did-you questions from context, and progress communication.",
-      "version": "0.66.0",
+      "version": "0.66.1",
       "author": {
         "name": "Christina"
       },
@@ -111,7 +111,7 @@
     {
       "name": "llm-scripting-kit",
       "description": "LLM access for scripts and pipelines: credentials, endpoint/model resolution, local Qwen server profiles, and one completion seam over HTTP, Claude, Codex, and OpenCode.",
-      "version": "0.53.0",
+      "version": "0.55.0",
       "author": {
         "name": "Christina"
       },
@@ -124,7 +124,7 @@
     {
       "name": "hue-kit",
       "description": "Manage Philips Hue scenes as editable YAML -- bridge sync, dry-run apply, HTML report.",
-      "version": "0.14.1",
+      "version": "0.14.2",
       "author": {
         "name": "Christina"
       },
@@ -150,7 +150,7 @@
     {
       "name": "content-pipeline-kit",
       "description": "Library + skills for LLM-in-the-loop batch content pipelines.",
-      "version": "0.28.1",
+      "version": "0.29.0",
       "author": {
         "name": "Christina"
       },
@@ -163,7 +163,7 @@
     {
       "name": "secrets-kit",
       "description": "Fleet secrets provisioning: materialize age-encrypted credentials from a private repo onto each machine, declaratively. One passphrase-protected identity per fleet, unlocked once per machine; blobs encrypt to the public key so adding or rotating a secret never needs the passphrase. Session-start convergence + CLI.",
-      "version": "0.8.35",
+      "version": "0.8.36",
       "author": {
         "name": "Christina"
       },
@@ -176,7 +176,7 @@
     {
       "name": "workflow-kit",
       "description": "Incremental, native-preserving improvements on the native Workflow tool: a declarative .workflow.yaml compiler plus node strategies (deterministic script + OpenRouter model calls) that run as cheap, context-light nodes via a file-passing contract. Experimental.",
-      "version": "0.8.0",
+      "version": "0.8.1",
       "author": {
         "name": "Christina"
       },
@@ -189,7 +189,7 @@
     {
       "name": "pdf-kit",
       "description": "Convert HTML files to PDFs with CSS and JavaScript fidelity via headless Chromium.",
-      "version": "0.1.1",
+      "version": "0.1.2",
       "author": {
         "name": "Christina"
       },
@@ -202,7 +202,7 @@
     {
       "name": "job-kit",
       "description": "Durable execution for heterogeneous agent jobs through a bounded worker pool, with advertisement-based endpoint selection and command-shaped acceptance.",
-      "version": "0.9.0",
+      "version": "0.9.1",
       "author": {
         "name": "Christina"
       },

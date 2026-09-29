@@ -412,6 +412,41 @@ orchestrator can halt-and-resume identically regardless of provider. The seam
 types and the runner are stdlib-only; only `OpenRouterBackend` reaches for the
 `openai` SDK, and only lazily.
 
+#### Reasoning effort on transport entries
+
+`OpenRouterBackend` sends `BackendOptions.effort` (and the registry's
+`reasoning_effort` default, which the factory, the `complete` verb and
+`declaration.run` fill into it) only to a transport entry that resolves an
+effort style. The style says where this server takes the effort:
+
+| `effort_style` | What goes on the wire |
+|---|---|
+| `top-level` | `reasoning_effort: <effort>` |
+| `ninfer` | top-level, with `high` sent as `xhigh` |
+| `chat_template_kwargs` | `chat_template_kwargs: {reasoning_effort: <effort>}` |
+| `unsupported` | nothing |
+
+A direct call resolves the style from, in order: the entry's own
+`effort_style`; `top-level` for a `frontdoor: true` entry; a
+`routing.effort_style` the entry declares; otherwise none, and the effort is
+not sent. An invalid value resolves to none and is noted; it never guesses a
+wire format. An effort the caller already put in `extras` (top-level
+`reasoning_effort`, or `chat_template_kwargs.reasoning_effort`) wins and is
+sent verbatim; when both are present the top-level one wins and the nested
+duplicate is removed. `extras: {reasoning_effort: null}` is the per-call
+opt-out: no effort is sent.
+
+`llm-scripting-kit resolve` reports `effort` (the value a call would send,
+null when the entry cannot deliver it), `declared_effort` and
+`effort_delivery`; `endpoints` reports `reasoning_effort` and
+`effort_delivery` for each transport entry. Registry loading rejects a
+transport entry whose declared `reasoning_effort` has no style that can deliver
+it. The openrouter capability record
+keeps `effort` in `dropped_params` (the truth for an unknown endpoint) and
+names it under `conditional_params`; `BackendSelection.capabilities` and
+`OpenRouterBackend.endpoint_capabilities()` are the record specialized to one
+endpoint.
+
 The `claude-cli` backend needs the `claude` executable on PATH, and the
 `opencode-cli` backend needs `opencode` on PATH. The former is already
 provisioned via the `bootstrap` dependency (which declares `claude` as a tool);
@@ -460,7 +495,8 @@ verify / rotate / diagnose flows.
 
 The optional front door exposes configured OpenAI-compatible transport entries
 as one local `/v1/chat/completions` endpoint. Add a transport-only `routing:`
-mapping with a `group`, optional `order`, `max_parallel`, and `effort_style`;
+mapping with a `group`, optional `order`, `max_parallel`, and `effort_style`
+(omitted means `top-level`; an entry-level `effort_style` overrides it);
 callers send the group as `model`. Lower orders fill first, then requests spill
 to the next tier. Run it with `llm-scripting-kit frontdoor ...` or
 `scripts/frontdoor.sh`; the launcher selects the plugin venv Python and supports

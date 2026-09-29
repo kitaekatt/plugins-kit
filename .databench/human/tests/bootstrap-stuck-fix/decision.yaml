@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "directory": "tests/bootstrap-stuck-fix",
+  "decision": "none",
+  "source_sha": "9788efe211b5a0a5711eb0ab84570b03139205db",
+  "dirty": false,
+  "identity": "",
+  "instructions": "",
+  "references": []
+}

@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "directory": "plugins/llm-scripting-kit/lib/llm_scripting_kit/frontdoor",
+  "decision": "none",
+  "source_sha": "ee45a7767ca165c2bba632a729d1cea561172c79",
+  "input_sha256": "bfe580cf26fd9b01751c0e929daf8aac49b1c49930bd1a33515692a2e4f0ab3c",
+  "input_shape_sha256": "8b40d267557431d745bbbd669454979598cd7ffaf761752f6980f4ab54b75ce1",
+  "dirty": false,
+  "identity": "",
+  "instructions": "",
+  "references": []
+}

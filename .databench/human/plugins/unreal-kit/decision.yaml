@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "directory": "plugins/unreal-kit",
+  "decision": "page",
+  "source_sha": "a129b0ad7aa6d94cd8b7f74b1ab08ea011db00bc",
+  "generation_spec_sha256": "0805933a1de089dc951a33d702e9d57d569f0584732b017cd3600742a34ba321",
+  "dirty": false,
+  "identity": "Unreal Engine automation plugin for Claude: plugin manifest, bootstrap provisioning, defaults, hooks, and host-side Unreal scripts.",
+  "instructions": "",
+  "references": []
+}

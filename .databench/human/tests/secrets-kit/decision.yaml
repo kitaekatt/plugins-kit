@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "directory": "tests/secrets-kit",
+  "decision": "page",
+  "source_sha": "d02865743f3c67c97c338e4e95fcf5fa0887a315",
+  "generation_spec_sha256": "0805933a1de089dc951a33d702e9d57d569f0584732b017cd3600742a34ba321",
+  "dirty": false,
+  "identity": "Secrets-kit plugin test suite for convergence, destination safety, pre-commit guards, repository operations, manifest validation, and operation locks",
+  "instructions": "",
+  "references": []
+}

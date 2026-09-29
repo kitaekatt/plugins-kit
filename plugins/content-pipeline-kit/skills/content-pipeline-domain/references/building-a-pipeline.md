@@ -243,9 +243,16 @@ Two things differ from the other transports:
   selected entry is pinged, and only there. A server that dies mid-run surfaces
   as a `HALT_UNREACHABLE` halt on the failing call.
 - **Reasoning effort defaults per entry.** Set it per call via
-  `options.extras["reasoning_effort"]` (`none|low|medium|high|xhigh`); omit it
-  and the entry's own default applies; pass an explicit `None` to send nothing
-  and let the server decide. The plugin ships no effort value of its own.
+  `options.effort` (`none|low|medium|high|xhigh`); omit it and the entry's own
+  `reasoning_effort` applies. Either one is sent in the entry's effort style
+  (`top-level`, `ninfer`, which sends `high` as `xhigh`, or
+  `chat_template_kwargs`); an entry that resolves no style is sent no effort.
+  `llm-scripting-kit resolve --models <entry>` reports the style under
+  `effort_delivery`. An effort in `options.extras` --
+  `extras["reasoning_effort"]`, or nested under
+  `extras["chat_template_kwargs"]` -- is sent verbatim instead; an explicit
+  `None` there sends nothing and lets the server decide. The plugin ships no
+  effort value of its own.
 
 **Does your unit need a harness at all?** This backend is a plain completions
 call, and that is the right shape BECAUSE pipeline units are pure

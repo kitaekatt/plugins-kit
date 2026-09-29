@@ -1,0 +1,547 @@
+<!doctype html>
+<html lang="en">
+<head>
+<!-- human-html: {"generated_by":"md-domain","source_sha":"8245f70589c3295ff9931641350d23209fdfbbbc","directory":"plugins/bootstrap/bootstrap_lib","kind":"page"} -->
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>Bootstrap plugin shared library that processes manifests, runs tool and environment checks, and defers fixes that need user attention.</title>
+<style data-human-html-style>
+/* human-html shared style asset -- SA-1.
+ *
+ * The single source of truth for human-html page styling. Every generated page
+ * inlines these exact bytes in one <style data-human-html-style> element
+ * (PC-4); the host viewer imports the same resource for matching chrome
+ * (HV-3). Do not copy these values anywhere else -- a second copy is the
+ * visual drift this asset exists to prevent.
+ *
+ * Dark only, seeded from the host viewer's established dark theme. ASCII only.
+ */
+
+:root {
+  color-scheme: dark;
+
+  --hh-background: #080b10;
+  --hh-text: #d7deea;
+  --hh-heading: #f3f6fb;
+  --hh-muted: #8b98aa;
+  --hh-surface: rgba(15,19,27,.88);
+  --hh-border: #3d4a5e;
+  --hh-link: #5789f4;
+  --hh-link-hover: #7ea3ff;
+  --hh-accent: #4f82f7;
+
+  --hh-font-size: 15px;
+  --hh-line-height: 1.72;
+  --hh-font-body: Inter, ui-sans-serif, system-ui, sans-serif;
+  --hh-font-mono: JetBrains Mono, ui-monospace, monospace;
+
+  --hh-space-1: .35rem;
+  --hh-space-2: .75rem;
+  --hh-space-3: 1rem;
+  --hh-space-4: 1.5rem;
+  --hh-space-5: 2rem;
+  --hh-radius: 6px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  background: var(--hh-background);
+}
+
+body {
+  margin: 0;
+  padding: var(--hh-space-5) var(--hh-space-3);
+  background: var(--hh-background);
+  color: var(--hh-text);
+  font-family: var(--hh-font-body);
+  font-size: var(--hh-font-size);
+  line-height: var(--hh-line-height);
+  -webkit-text-size-adjust: 100%;
+}
+
+main {
+  display: grid;
+  gap: var(--hh-space-5);
+  width: 100%;
+  min-width: 0;
+}
+
+main > header,
+section,
+article,
+.hh-panel {
+  display: grid;
+  gap: var(--hh-space-2);
+  min-width: 0;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  color: var(--hh-heading);
+  line-height: 1.25;
+  margin: 0;
+  font-weight: 600;
+  text-wrap: balance;
+}
+
+h1 {
+  font-size: 1.75rem;
+}
+
+h2 {
+  font-size: 1.3rem;
+}
+
+h3 {
+  font-size: 1.1rem;
+}
+
+p,
+ul,
+ol,
+dl,
+table,
+pre,
+blockquote {
+  margin: 0;
+}
+
+ul,
+ol {
+  padding-left: 1.4em;
+}
+
+li + li {
+  margin-top: var(--hh-space-1);
+}
+
+a {
+  color: var(--hh-link);
+  text-decoration-line: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: .18em;
+}
+
+a:hover,
+a:focus {
+  color: var(--hh-link-hover);
+}
+
+a:focus-visible {
+  outline: 2px solid var(--hh-accent);
+  outline-offset: 2px;
+}
+
+small,
+.hh-muted,
+[data-human-html-muted] {
+  color: var(--hh-muted);
+}
+
+strong {
+  color: var(--hh-heading);
+  font-weight: 600;
+}
+
+hr {
+  border: 0;
+  border-top: 1px solid var(--hh-border);
+  margin: var(--hh-space-5) 0;
+}
+
+code,
+kbd,
+samp,
+pre {
+  font-family: var(--hh-font-mono);
+  font-size: .92em;
+}
+
+code {
+  background: var(--hh-surface);
+  border: 1px solid var(--hh-border);
+  border-radius: 4px;
+  padding: .1em .35em;
+  overflow-wrap: anywhere;
+}
+
+pre {
+  background: var(--hh-surface);
+  border: 1px solid var(--hh-border);
+  border-radius: var(--hh-radius);
+  padding: var(--hh-space-3);
+  max-width: 100%;
+  min-width: 0;
+  overflow: auto;
+  white-space: pre;
+}
+
+pre code {
+  background: none;
+  border: 0;
+  padding: 0;
+  overflow-wrap: normal;
+}
+
+blockquote {
+  border-left: 3px solid var(--hh-accent);
+  padding-left: var(--hh-space-3);
+  color: var(--hh-muted);
+}
+
+dl {
+  display: grid;
+  grid-template-columns: minmax(7rem, .22fr) minmax(0, 1fr);
+  gap: var(--hh-space-1) var(--hh-space-3);
+}
+
+dt {
+  color: var(--hh-heading);
+  font-weight: 600;
+}
+
+dd {
+  min-width: 0;
+  margin: 0;
+}
+
+dt:not(:first-of-type),
+dt:not(:first-of-type) + dd {
+  border-top: 1px solid var(--hh-border);
+  padding-top: var(--hh-space-2);
+}
+
+table {
+  border-collapse: collapse;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  display: block;
+  overflow-x: auto;
+}
+
+th,
+td {
+  border: 1px solid var(--hh-border);
+  padding: .45em .7em;
+  text-align: left;
+  vertical-align: top;
+}
+
+th {
+  color: var(--hh-heading);
+  background: var(--hh-surface);
+  font-weight: 600;
+}
+
+section,
+article,
+.hh-panel {
+  background: transparent;
+}
+
+.hh-panel {
+  background: var(--hh-surface);
+  border: 1px solid var(--hh-border);
+  border-radius: var(--hh-radius);
+  padding: var(--hh-space-3);
+}
+
+[data-human-html-chrome="nav"] {
+  border-bottom: 1px solid var(--hh-border);
+  padding-bottom: var(--hh-space-4);
+  margin-bottom: var(--hh-space-4);
+  font-size: .95em;
+  color: var(--hh-muted);
+}
+
+[data-human-html-chrome="nav"] ul {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 18rem), 1fr));
+  gap: var(--hh-space-2) var(--hh-space-5);
+  list-style: none;
+  margin: 0;
+  padding-left: 0;
+}
+
+[data-human-html-chrome="nav"] li {
+  min-width: 0;
+  margin: 0;
+}
+
+[data-human-html-chrome="nav"] a {
+  display: grid;
+  gap: var(--hh-space-1);
+  min-width: 0;
+  color: var(--hh-link);
+  text-decoration: none;
+}
+
+[data-human-html-chrome="nav"] a:hover,
+[data-human-html-chrome="nav"] a:focus {
+  color: var(--hh-link-hover);
+}
+
+.hh-nav-label {
+  color: currentColor;
+  font-weight: 600;
+  line-height: 1.3;
+  text-decoration-line: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: .18em;
+  overflow-wrap: anywhere;
+}
+
+.hh-nav-identity {
+  color: var(--hh-muted);
+  line-height: 1.45;
+}
+
+/* The human-page card marker (PC-2). A card whose target is another
+ * `index.html` carries this icon; a card pointing at anything else does not,
+ * so the two card kinds stay distinguishable at a glance.
+ *
+ * The icon is a data URI, never a file beside the page and never a remote
+ * asset, so the page renders with nothing fetched (NF-1, PC-6). The `xmlns`
+ * inside the SVG is an XML namespace identifier, not a location: no browser
+ * requests it, and CK-1's URL rules apply to `href` and `src` attributes, not
+ * to a CSS background.
+ *
+ * The icon sits in its own grid column so the label's underline never runs
+ * beneath it, and it scales with the label, so it stays legible at phone
+ * width where the card list collapses to one column.
+ */
+[data-human-html-chrome="nav"] a[href="index.html"],
+[data-human-html-chrome="nav"] a[href="human.html"],
+[data-human-html-chrome="nav"] a[href$="/index.html"],
+[data-human-html-chrome="nav"] a[href$="/human.html"] {
+  grid-template-columns: 1.1em minmax(0, 1fr);
+}
+
+[data-human-html-chrome="nav"] a[href="index.html"]::before,
+[data-human-html-chrome="nav"] a[href="human.html"]::before,
+[data-human-html-chrome="nav"] a[href$="/index.html"]::before,
+[data-human-html-chrome="nav"] a[href$="/human.html"]::before {
+  content: "";
+  grid-column: 1;
+  grid-row: 1;
+  align-self: center;
+  width: 1.1em;
+  height: 1.1em;
+  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cg fill='%235789f4'%3E%3Ccircle cx='8' cy='4.3' r='3.1'/%3E%3Cpath d='M1.5 15.3c0-3.6 2.9-6.3 6.5-6.3s6.5 2.7 6.5 6.3z'/%3E%3C/g%3E%3C/svg%3E") center / contain no-repeat;
+}
+
+[data-human-html-chrome="nav"] a[href="index.html"] .hh-nav-label,
+[data-human-html-chrome="nav"] a[href="human.html"] .hh-nav-label,
+[data-human-html-chrome="nav"] a[href$="/index.html"] .hh-nav-label,
+[data-human-html-chrome="nav"] a[href$="/human.html"] .hh-nav-label {
+  grid-column: 2;
+  grid-row: 1;
+}
+
+[data-human-html-chrome="nav"] a[href="index.html"] .hh-nav-identity,
+[data-human-html-chrome="nav"] a[href="human.html"] .hh-nav-identity,
+[data-human-html-chrome="nav"] a[href$="/index.html"] .hh-nav-identity,
+[data-human-html-chrome="nav"] a[href$="/human.html"] .hh-nav-identity {
+  grid-column: 2;
+  grid-row: 2;
+}
+
+img,
+svg {
+  max-width: 100%;
+  height: auto;
+}
+
+::selection {
+  background: var(--hh-accent);
+  color: var(--hh-background);
+}
+
+@media (max-width: 40rem) {
+  body {
+    padding: var(--hh-space-4) var(--hh-space-2);
+  }
+
+  [data-human-html-chrome="nav"] ul,
+  dl {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  dt:not(:first-of-type) {
+    padding-top: var(--hh-space-2);
+  }
+
+  dt + dd {
+    border-top: 0;
+    padding-top: 0;
+  }
+}
+</style>
+</head>
+<body>
+<nav data-human-html-chrome="nav" aria-label="Orientation pages">
+<ul>
+<li><a href="../index.html"><span class="hh-nav-label">bootstrap</span> <span class="hh-nav-identity">Bootstrap plugin that prepares user machines for marketplace plugins by installing tools, Python environments, and configuration, and exposes its command, hooks, shell resolvers, maintenance scripts, and plugin-development skill.</span></a></li>
+<li><a href="code_review/index.html"><span class="hh-nav-label">code_review</span> <span class="hh-nav-identity">Shared VCS-neutral code-review pipeline for p4-kit and git-kit</span></a></li>
+<li><a href="managed_state/index.html"><span class="hh-nav-label">managed_state</span> <span class="hh-nav-identity">Harness-independent declarative state management and safe symlink convergence for bootstrap projects.</span></a></li>
+</ul>
+</nav>
+<main>
+<h1>Bootstrap plugin shared library that processes manifests, runs tool and environment checks, and defers fixes that need user attention.</h1>
+<p>This directory holds the Python modules behind the bootstrap plugin's session pass. The pass checks the machine: tools, PATH, environment, and manifests. It installs whatever it can without a terminal and defers the rest into a queue a user runs with consent. Modules are organized by job rather than call graph, and every check follows the same shape: a side-effect-free check, an idempotent fix, an authoritative re-check.</p>
+
+<h2>Where to start</h2>
+<p>Open <a href="engine.py"><code>engine.py</code></a> first: it sequences the whole pass and its docstrings name what each phase calls. For a behavior, go to the module named for that job below; the check/fix pair is the unit you will edit.</p>
+
+<h2>Routes</h2>
+<ul>
+<li>Session-start pass: the shell hook stamps a cooldown, <a href="harvest.py"><code>harvest.py</code></a> relaunches <a href="engine.py"><code>engine.py</code></a>, which runs the phases under <a href="proc_lock.py"><code>proc_lock.py</code></a> and appends the verdict with <a href="log.py"><code>log.py</code></a>.</li>
+<li>Deferring a fix: a check attaches an elevation descriptor, <a href="fix_queue.py"><code>fix_queue.py</code></a> collects them into the queue, and <a href="fix_runner.py"><code>fix_runner.py</code></a> executes it once a terminal is available.</li>
+<li>Delivery of a verdict: the pass writes a pending display file, and <a href="display_relay.py"><code>display_relay.py</code></a> stamps its age and emits it at the next prompt.</li>
+</ul>
+
+<h2>The pass</h2>
+<ul>
+<li><a href="engine.py"><code>engine.py</code></a>: the pass itself: lock, phase order, crash containment, hook response.</li>
+<li><a href="harvest.py"><code>harvest.py</code></a>: relaunches a pass when one did not run.</li>
+<li><a href="proc_lock.py"><code>proc_lock.py</code></a>: the engine-wide lock every launcher stands down behind.</li>
+<li><a href="stamps.py"><code>stamps.py</code></a>: pass stamps and per-project cooldowns.</li>
+<li><a href="log.py"><code>log.py</code></a>: appends to the per-plugin bootstrap log.</li>
+<li><a href="session_env.py"><code>session_env.py</code></a>: buffers the session env-file block, written once per pass.</li>
+</ul>
+<p>The code_review and managed_state subpackages have their own pages.</p>
+
+<h2>Manifest loading</h2>
+<ul>
+<li><a href="manifest_merge.py"><code>manifest_merge.py</code></a>: the deep merge layered manifests and the env gate share.</li>
+<li><a href="manifest_lint.py"><code>manifest_lint.py</code></a>: validates a manifest before a pass trusts it.</li>
+<li><a href="plugin_resolve.py"><code>plugin_resolve.py</code></a>: resolves plugin references to install locations.</li>
+</ul>
+
+<h2>Tool checks</h2>
+<ul>
+<li><a href="tool_check.py"><code>tool_check.py</code></a>: check-first resolution and the re-check that decides a tool is present.</li>
+<li><a href="tool_paths.py"><code>tool_paths.py</code></a>: where an installed tool lands and its env var.</li>
+</ul>
+
+<h2>Package backends</h2>
+<ul>
+<li><a href="apt.py"><code>apt.py</code></a>: Ubuntu installs; defers, never prompts, without passwordless sudo.</li>
+<li><a href="brew.py"><code>brew.py</code></a>: macOS formula and cask installs; brew itself is detected only.</li>
+<li><a href="scoop.py"><code>scoop.py</code></a>: Windows userspace installs.</li>
+<li><a href="npm_check.py"><code>npm_check.py</code></a> and <a href="pypi_check.py"><code>pypi_check.py</code></a>: node and Python package installs.</li>
+<li><a href="git_dep_check.py"><code>git_dep_check.py</code></a>: dependencies checked out from git.</li>
+<li><a href="downloader.py"><code>downloader.py</code></a>: sha256-verified binaries into the local bin.</li>
+</ul>
+
+<h2>Tool environments</h2>
+<ul>
+<li><a href="venv_check.py"><code>venv_check.py</code></a>: per-plugin virtualenvs: provision, export, re-exec.</li>
+<li><a href="interpreter_env.py"><code>interpreter_env.py</code></a>: the interpreter a plugin's venv should use.</li>
+<li><a href="python_stub_check.py"><code>python_stub_check.py</code></a>: finds a WindowsApps python stub that shadows a real interpreter.</li>
+</ul>
+
+<h2>Paths</h2>
+<ul>
+<li><a href="path_check.py"><code>path_check.py</code></a>: adds and removes PATH entries in shell config and the registry.</li>
+<li><a href="path_prune.py"><code>path_prune.py</code></a>: finds dead PATH entries and queues a consent task to delete them.</li>
+</ul>
+
+<h2>Environment and machine identity</h2>
+<ul>
+<li><a href="env_manifest.py"><code>env_manifest.py</code></a>: the layered env.json files, the machine registry, and the phase gate.</li>
+<li><a href="env_features.py"><code>env_features.py</code></a>: check/fix pairs for symlinks, shell rc blocks, macOS defaults.</li>
+<li><a href="env_var_check.py"><code>env_var_check.py</code></a>: persists env vars to rc or registry and exports them live.</li>
+<li><a href="platform_detect.py"><code>platform_detect.py</code></a>: which OS the pass runs on.</li>
+</ul>
+
+<h2>Deferring and delivery</h2>
+<ul>
+<li><a href="fix_queue.py"><code>fix_queue.py</code></a>: collects elevation descriptors into the queue; cheap work first, downloads last.</li>
+<li><a href="fix_runner.py"><code>fix_runner.py</code></a>: the one place with a terminal: plan, then the queue.</li>
+<li><a href="display_relay.py"><code>display_relay.py</code></a>: stamps a pending verdict with its age at delivery.</li>
+</ul>
+
+<h2>Codex integration</h2>
+<ul>
+<li><a href="codex.py"><code>codex.py</code></a>: Codex CLI detection and the one sanctioned exec argv.</li>
+<li><a href="codex_hook.py"><code>codex_hook.py</code></a>: installs the project-local Codex hook and pre-checks source-control ignores.</li>
+<li><a href="agent_skills_check.py"><code>agent_skills_check.py</code></a>: links the project's Claude skills where Codex reads them.</li>
+</ul>
+
+<h2>Plugin config</h2>
+<ul>
+<li><a href="config.py"><code>config.py</code></a>: bootstrap's own config: load, migrate, save.</li>
+<li><a href="config_check.py"><code>config_check.py</code></a>: init, validate, and autodetect a plugin's config.</li>
+<li><a href="config_resolve.py"><code>config_resolve.py</code></a>: merges shipped defaults, user, and project layers; a bad layer errors loudly.</li>
+</ul>
+
+<h2>Marketplace and registry</h2>
+<ul>
+<li><a href="marketplace_lifecycle.py"><code>marketplace_lifecycle.py</code></a>: the largest module: marketplace and plugin install and update.</li>
+<li><a href="registry_repair.py"><code>registry_repair.py</code></a>: repairs the plugin registry when it drifts.</li>
+</ul>
+
+<h2>Vendored into other plugins</h2>
+<ul>
+<li><a href="bootstrap_guard.py"><code>bootstrap_guard.py</code></a>: vendored into other plugins: provision check, and a re-exec into the plugin venv before the import.</li>
+<li><a href="path_repair.py"><code>path_repair.py</code></a>: also vendored: PATH repair for plugin scripts.</li>
+</ul>
+<p>Both stay stdlib-only and never import the package; a drift test keeps copies in sync.</p>
+
+<h2>Shared plumbing</h2>
+<ul>
+<li><a href="atomic_write.py"><code>atomic_write.py</code></a>: the one atomic write: temp file next to destination, then rename.</li>
+</ul>
+</main>
+<script>
+if (window.parent !== window) {
+  window.parent.postMessage({
+    type: "human-html:announce",
+    version: 1,
+    directory: "plugins/bootstrap/bootstrap_lib",
+    file: "index.html",
+    kind: "page",
+    source_sha: "8245f70589c3295ff9931641350d23209fdfbbbc"
+  }, "*");
+  document.addEventListener("click", function (event) {
+    if (event.defaultPrevented || event.button !== 0) return;
+    if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    var el = event.target;
+    while (el && el.nodeName !== "A") el = el.parentNode;
+    if (!el) return;
+    var href = el.getAttribute("href");
+    if (!href) return;
+    if (href.charAt(0) === "#" || href.charAt(0) === "/") return;
+    if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(href)) return;
+    var target = href.split("#")[0].split("?")[0];
+    if (!target) return;
+    if (/(^|\/)human(\.[^/]+)?\.html$/.test(target)) return;
+    var parts = "plugins/bootstrap/bootstrap_lib".split("/");
+    if (parts.length === 1 && parts[0] === ".") parts = [];
+    var segs = target.split("/");
+    for (var i = 0; i < segs.length; i++) {
+      if (segs[i] === "" || segs[i] === ".") continue;
+      if (segs[i] === "..") { parts.pop(); continue; }
+      parts.push(segs[i]);
+    }
+    event.preventDefault();
+    window.parent.postMessage({
+      type: "human-html:navigate",
+      version: 1,
+      path: parts.join("/")
+    }, "*");
+  });
+}
+</script>
+</body>
+</html>

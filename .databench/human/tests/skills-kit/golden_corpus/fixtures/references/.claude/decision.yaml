@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "directory": "tests/skills-kit/golden_corpus/fixtures/references/.claude",
+  "decision": "none",
+  "source_sha": "d0cedb005fa0b762ae9f2513fc30d24997892002",
+  "dirty": false,
+  "identity": "",
+  "instructions": "",
+  "references": []
+}

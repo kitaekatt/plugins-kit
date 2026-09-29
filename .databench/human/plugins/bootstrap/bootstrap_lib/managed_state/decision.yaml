@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "directory": "plugins/bootstrap/bootstrap_lib/managed_state",
+  "decision": "page",
+  "source_sha": "446de4db4bb09b296abee38e0d36ae28a0a3b8c7",
+  "generation_spec_sha256": "fc236b0086521fffedc696039900f19579336e4ef8fb657ad60e3dcdf8747288",
+  "dirty": false,
+  "identity": "Harness-independent declarative state management and safe symlink convergence for bootstrap projects.",
+  "instructions": "",
+  "references": []
+}

@@ -602,3 +602,43 @@ def test_missing_provider_cost_stays_none(tmp_path, monkeypatch):
     # defaults on the dataclass itself: both absent, together
     bare = LLMResponse(text="", model="m")
     assert (bare.reported_cost_usd, bare.reported_cost_source) == (None, None)
+
+
+# ---------------------------------------------------------------------------
+# openrouter effort: the per-call report follows the effort plan
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def ninfer_entry(tmp_path, monkeypatch):
+    path = tmp_path / "reg.yaml"
+    path.write_text(
+        "models:\n"
+        "  gpu:\n    base_url: http://gpu.invalid/v1\n    model: m\n"
+        "    routing: {group: q, effort_style: ninfer}\n"
+        "  plain:\n    base_url: http://plain.invalid/v1\n    model: m\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("MODEL_ENDPOINTS_REGISTRY", str(path))
+
+
+@pytest.mark.parametrize(
+    "endpoint,extras,dropped_has_effort,forwarded",
+    [
+        ("gpu", None, False, ()),  # translated
+        ("gpu", {"reasoning_effort": "low"}, True, ("extras.reasoning_effort",)),  # overridden
+        ("gpu", {"reasoning_effort": None}, True, ()),  # suppressed: not on the wire
+        ("plain", None, True, ()),  # undeliverable
+    ],
+    ids=["translated", "overridden", "suppressed", "undeliverable"],
+)
+def test_openrouter_effort_report_follows_the_plan(
+    ninfer_entry, endpoint, extras, dropped_has_effort, forwarded
+):
+    backend = OpenRouterBackend(endpoint=endpoint, client=_FakeClient())
+    opts = BackendOptions(effort="medium", extras=extras)
+    resp = backend.complete("s", "u", model="test/slug", options=opts)
+    assert ("effort" in resp.dropped_params) is dropped_has_effort
+    assert resp.forwarded_params == forwarded
+    # the no-call report the CLI failure envelope uses agrees with the call
+    assert backend.params_report(opts) == (resp.dropped_params, resp.forwarded_params)

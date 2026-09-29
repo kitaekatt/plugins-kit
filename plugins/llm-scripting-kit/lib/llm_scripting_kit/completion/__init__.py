@@ -83,6 +83,14 @@ from .types import (
     ResponseError,
 )
 from .factory import BackendSelection, create_backend, create_transport_backend
+from .endpoint_profile import (
+    EndpointProfile,
+    endpoint_capabilities,
+    profile_from_entry,
+    profile_from_resolved,
+    resolve_endpoint_profile,
+)
+from ..effort import EffortDelivery, EffortPlan, plan_effort
 from .opencode_backend import (
     DEFAULT_OPENCODE_TIMEOUT_S,
     OPENCODE_FILESYSTEM_POSTURE,
@@ -125,6 +133,15 @@ __all__ = [
     "BackendSelection",
     "create_backend",
     "create_transport_backend",
+    # per-endpoint specialization and the effort vocabulary
+    "EndpointProfile",
+    "endpoint_capabilities",
+    "profile_from_entry",
+    "profile_from_resolved",
+    "resolve_endpoint_profile",
+    "EffortDelivery",
+    "EffortPlan",
+    "plan_effort",
     # halt taxonomy
     "HALT_AUTH",
     "HALT_RATE_LIMIT",

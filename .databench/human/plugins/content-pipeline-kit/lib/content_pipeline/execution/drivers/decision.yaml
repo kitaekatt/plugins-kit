@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "directory": "plugins/content-pipeline-kit/lib/content_pipeline/execution/drivers",
+  "decision": "none",
+  "source_sha": "7d8b7237f3bdc477231e04c9ae1899a0f9098f19",
+  "input_sha256": "268e804dad26820afcaac970d07a0369a48c93f9d7d78e3387fc688d5af1294c",
+  "input_shape_sha256": "242915c93e12fb925600132cb039ad091eb90f1be5ea10d2fdfac6c2f0b4229e",
+  "dirty": false,
+  "identity": "",
+  "instructions": "",
+  "references": []
+}

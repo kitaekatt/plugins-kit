@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "directory": "plugins/bootstrap/skills/bootstrap/references",
+  "decision": "none",
+  "source_sha": "376c1329759f42d2b362be9c7ad4c333befa06bb",
+  "input_sha256": "d6131f0ec7ea1246536a76fe3b0e046a601d52cd1f9d6518a25b171555c1bdbe",
+  "input_shape_sha256": "a002cdb2c481ed5379e8985d319424749e550e35055bba9c2019e6194793f869",
+  "dirty": false,
+  "identity": "",
+  "instructions": "",
+  "references": []
+}

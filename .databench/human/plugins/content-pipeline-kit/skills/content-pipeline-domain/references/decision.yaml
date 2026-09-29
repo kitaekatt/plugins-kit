@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "directory": "plugins/content-pipeline-kit/skills/content-pipeline-domain/references",
+  "decision": "none",
+  "source_sha": "5ad4961d56fe3430fec8d02d42fa72654350c693",
+  "input_sha256": "7562db26fb1d14d5a3ff096eaa931f5f1dcdde6948ea5dd6e012b0542484386a",
+  "input_shape_sha256": "95991f9ed5890b84b667600d496d07dbf96fcc23b842b9f4016d5ecfd6d5840b",
+  "dirty": false,
+  "identity": "",
+  "instructions": "",
+  "references": []
+}

@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "directory": "plugins/p4-kit/scripts",
+  "decision": "page",
+  "source_sha": "9a57413d3efe0f71d67adbd61f0c74fe009dce91",
+  "generation_spec_sha256": "0805933a1de089dc951a33d702e9d57d569f0584732b017cd3600742a34ba321",
+  "dirty": false,
+  "identity": "p4-kit plugin scripts for bootstrap guarding, legacy-config cleanup, and Perforce code-review preparation, dispatch, and profile rendering.",
+  "instructions": "",
+  "references": []
+}

@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "directory": "plugins/awesome-kit/skills/task/scripts",
+  "decision": "none",
+  "source_sha": "7c12b3c7b5a44d90cdcf4fbc07c9661c6fe68fd7",
+  "input_sha256": "c763eec8cc0a36b40d122ddf9e07a47f81b5b5b0d83d31f8f9a221675c95c055",
+  "input_shape_sha256": "108439754912e49e13ef816dd9dc2441113b7736131160a9e9e77c4e40a29d76",
+  "dirty": false,
+  "identity": "",
+  "instructions": "",
+  "references": []
+}

@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "directory": "plugins/llm-scripting-kit/references",
+  "decision": "none",
+  "source_sha": "2f2532136f2f62895f1f9fd18d72a088c6ed9845",
+  "dirty": false,
+  "identity": "",
+  "instructions": "",
+  "references": []
+}

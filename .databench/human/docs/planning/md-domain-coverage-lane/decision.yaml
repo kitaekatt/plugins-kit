@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "directory": "docs/planning/md-domain-coverage-lane",
+  "decision": "page",
+  "source_sha": "e855325b47bca0fe8f0edc2484e695805d323355",
+  "dirty": false,
+  "identity": "Planning documents that design, measure, and validate md-domain CLAUDE.md coverage and generation.",
+  "instructions": "",
+  "references": []
+}

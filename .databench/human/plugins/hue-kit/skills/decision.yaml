@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "directory": "plugins/hue-kit/skills",
+  "decision": "none",
+  "source_sha": "faf86b32fb3e0626afc5138710bc336c9d1e1992",
+  "dirty": false,
+  "identity": "",
+  "instructions": "",
+  "references": []
+}
