@@ -15,6 +15,7 @@ already raises; it does not re-implement provider-error classification.
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass, field
 from typing import Any, Callable, List, Optional, Sequence, Tuple
 
@@ -110,7 +111,33 @@ class SweepResult:
         return self.halted is not None
 
 
+_DEPRECATION_MSG = (
+    "guarded_sweep is a deprecated untracked loop helper: it keeps no durable "
+    "run record and its halt semantics are frozen. Use the tracked path "
+    "instead: content_pipeline.execution.controller.prepare_run, "
+    "content_pipeline.execution.drivers.inline.run_wave, "
+    "content_pipeline.execution.controller.finalize_run, and "
+    "content_pipeline.execution.controller.unfinished_units to recover the "
+    "unfinished set after a halt."
+)
+
+
 def guarded_sweep(
+    units: Sequence[Any],
+    worker: Callable[[Any], Any],
+    *,
+    isolate_errors: bool = True,
+) -> SweepResult:
+    """Deprecated: run ``worker`` over ``units``, halting on the first hard-stop.
+
+    Emits a ``DeprecationWarning`` once per call, then delegates to the
+    private ``_guarded_sweep`` (whose docstring describes the behavior).
+    """
+    warnings.warn(_DEPRECATION_MSG, DeprecationWarning, stacklevel=2)
+    return _guarded_sweep(units, worker, isolate_errors=isolate_errors)
+
+
+def _guarded_sweep(
     units: Sequence[Any],
     worker: Callable[[Any], Any],
     *,

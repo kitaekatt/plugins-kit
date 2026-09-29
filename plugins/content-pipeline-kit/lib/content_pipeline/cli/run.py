@@ -1,6 +1,6 @@
 """Command adapters over ``execution`` -- argv parsing only, no execution logic.
 
-Per the plan's placement rule (A-min.1: "command adapters only -- the
+Per the placement rule ("command adapters only -- the
 execution logic lives under ``execution/``"), every handler here does the
 same three things and nothing else: parse ``argv`` into positional values and
 ``--flag=value`` options, call exactly one
@@ -41,7 +41,7 @@ verbs need which of them.
    ``enumerate_worker_invocations``) has no practical way to compose a shell
    redirect into stdin, but writing a small JSON file with the Write tool and
    naming it in an otherwise-constant argv string is exactly what keeps a
-   pre-authorized allowlist entry possible (P5) -- see that module's
+   pre-authorized allowlist entry possible (pre-computable allowlisted invocations) -- see that module's
    docstring.
 3. **Positional argv (discouraged, kept for back-compat).** A positional
    argument that is neither absent, ``-``, nor ``@``-prefixed is treated as
@@ -56,8 +56,8 @@ envelope's ``payload["text"]`` BEFORE the envelope reaches
 ``execution/protocol.py`` itself, which still knows nothing about files; this
 module owns the splice, same as it owns envelope sourcing. It exists because
 a worker's ``submit`` envelope carries a fencing token only known at runtime
-(so it cannot be part of a pre-allowlisted, deterministic invocation string --
-P5) while the answer TEXT can be arbitrarily long and is exactly the kind of
+(so it cannot be part of a pre-allowlisted, deterministic invocation string)
+while the answer TEXT can be arbitrarily long and is exactly the kind of
 content that does not belong in a command line at all. Splitting the two --
 ``@<path>`` for the small, worker-authored envelope; ``--text-file=`` for the
 large, freeform answer -- keeps both inputs out of argv while letting the
@@ -72,7 +72,7 @@ file, never a bare traceback.
 **The spliced file is FENCED, and the fence is checked here.** The answer
 path is deliberately generation-neutral (see
 ``execution/drivers/claude_bg.py``'s ``answer_path_for``: no ``worker_id``,
-because P5 allowlisting needs the path computable before the run), so two
+because allowlisting needs the path computable before the run), so two
 successive dispatches of one unit write the SAME file -- and a session left
 alive by an earlier dispatch can overwrite it while a newer worker is
 running. Fencing the envelope's TOKEN alone does not catch that: the newer
@@ -86,6 +86,18 @@ envelope, a current artifact under a stale envelope, and an artifact with
 no fence line at all are each refused with a typed reply -- never spliced
 and never treated as unfenced-and-fine. Only the first line is interpreted,
 so answer text that itself contains the prefix passes through untouched.
+
+**A worker-shaped file name bounds the envelope body.** A worker authors the
+body of the file an allowlisted ``@<path>`` invocation names, so an
+``@<path>`` whose file name has the worker shape
+(``<run>__<unit>.<verb>.json``; ``<run>__<unit>__<worker>.claim.json``) is
+dispatched only when the body's ``verb`` is the verb in the name and its
+run/unit (and worker, for claim) ids reproduce that name
+(``workerpack.envelope_file_mismatch``); otherwise the reply is
+``EnvelopeIdentityError``. A worker file therefore cannot carry
+``finalize``/``resume``/``pause``/``prepare`` or address another unit. Files
+with other names, stdin, and literal argv are not checked -- an orchestrator
+uses those, and the worker's allowlist never names them.
 
 **Why stdin is preferred, not merely tidier.** With the envelope in argv,
 every unit produces a DIFFERENT command string (the JSON payload varies per
@@ -198,7 +210,7 @@ def build_commands(
         (``""``) when ``--models=<declaration>`` is supplied: the declaration
         is resolved through
         :func:`~content_pipeline.llm.backends.declared_backend_and_model`
-        (llm-scripting-kit's ``describe``, the D3 routing layer), and the
+        (llm-scripting-kit's ``describe``, the routing layer), and the
         CHOSEN entry's drive name and model are stored on the
         :class:`~content_pipeline.execution.model.RunRecord` instead of a
         caller-guessed label (C2, R23: an empty declaration or one with no
@@ -410,6 +422,7 @@ def build_commands(
 
         def protocol(args: List[str]) -> Any:
             positional, flags = _split_flags(args)
+            envelope_file: Optional[str] = None
             if not positional or positional[0] == "-":
                 # Preferred form (see module docstring): stdin, decoded as
                 # UTF-8 explicitly -- never the platform default, which on
@@ -436,6 +449,7 @@ def build_commands(
                     }
             elif positional[0].startswith("@"):
                 path = positional[0][1:]
+                envelope_file = path
                 try:
                     envelope_text = Path(path).read_text(encoding="utf-8")
                 except FileNotFoundError:
@@ -467,6 +481,16 @@ def build_commands(
                     "ok": False,
                     "error": {"type": "MalformedEnvelopeError", "message": f"invalid JSON: {exc}"},
                 }
+
+            if envelope_file is not None:
+                from content_pipeline.execution.workerpack import envelope_file_mismatch
+
+                mismatch = envelope_file_mismatch(envelope_file, envelope)
+                if mismatch is not None:
+                    return {
+                        "ok": False,
+                        "error": {"type": "EnvelopeIdentityError", "message": mismatch},
+                    }
 
             if "text-file" in flags:
                 # Worker-lane companion to '@<path>' (see module docstring):

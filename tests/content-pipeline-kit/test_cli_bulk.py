@@ -12,6 +12,9 @@ from content_pipeline.cli.bulk import run_bulk
 from content_pipeline.llm.platform import HALT_RATE_LIMIT, PipelineHaltError
 
 
+pytestmark = pytest.mark.filterwarnings("ignore::DeprecationWarning")
+
+
 def test_warm_runs_once_before_worker():
     events = []
     run_bulk(

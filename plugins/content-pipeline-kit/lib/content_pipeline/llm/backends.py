@@ -7,10 +7,12 @@ Six backends implement :class:`~content_pipeline.llm.platform.LLMBackend`:
   entry in the model-endpoints registry, typically a locally hosted keyless
   server. Unlike the others its availability is NOT assumed: :func:`route`
   pings the selected entry before returning it.
-- :class:`ClaudeCliBackend` -- the local ``claude -p`` CLI (subscription-billed,
-  no per-call metering).
-- :class:`CodexCliBackend` -- the local ``codex exec`` CLI (subscription-billed,
-  no per-call metering).
+- :class:`ClaudeCliBackend` -- the local ``claude -p`` CLI (billed under the
+  operator's subscription rather than per call; the response carries no
+  metered charge, so the run's cost comes from ``platform.response_cost``).
+- :class:`CodexCliBackend` -- the local ``codex exec`` CLI (billed under the
+  operator's subscription rather than per call; cost is derived as for
+  ``ClaudeCliBackend``).
 - :class:`OpencodeCliBackend` -- the local ``opencode run`` CLI, with stdout as
   the answer and a mandatory wall-clock timeout.
 - :class:`MockBackend` -- deterministic, scriptable responses. The always-wins
@@ -329,8 +331,12 @@ class ClaudeCliBackend(_LazyDelegate):
     Spawns the CLI in pure-completion mode (JSON output, no tools by default),
     enforces a per-call timeout, retries transient 5xx envelopes, and maps
     rate-limit / auth markers to a hard stop -- all inside
-    ``llm_scripting_kit.completion.ClaudeCliBackend``. Cost is flat zero (the CLI
-    bills at its own subscription, not per call).
+    ``llm_scripting_kit.completion.ClaudeCliBackend``. The CLI is billed
+    under the operator's subscription rather than per call (the billing
+    model, not a measured cost); ``platform.response_cost`` returns the
+    response's reported cost when it carries a valid one, otherwise an
+    estimate from the pricing table, otherwise ``None`` (unknown). It never
+    returns a synthetic zero for a live response.
 
     Config fields forward to the delegate; ``runner`` is the subprocess seam
     (``None`` uses the shared lib's battle-tested ``run_claude_streaming``). The
@@ -670,7 +676,7 @@ class MockBackend:
     ``classify_halt`` maps a raised entry to a halt kind when its message
     carries a marker, so a scripted ``PipelineHaltError``-shaped exception halts,
     or when it carries a truthy ``halt_kind`` attribute (a CodexRunError-shaped
-    exception, D6 / migration step 10) -- reported verbatim, exactly like the
+    exception; migration step 10) -- reported verbatim, exactly like the
     real ``CodexCliBackend.classify_halt``, with no import of
     ``llm_scripting_kit`` (this backend stays hermetic). Every
     call's kwargs are recorded on ``self.calls``.
@@ -756,7 +762,7 @@ class MockBackend:
             return exc.kind
         halt_kind = getattr(exc, "halt_kind", None)
         if halt_kind:
-            # A scripted CodexRunError-shaped exception (D6, migration step
+            # A scripted CodexRunError-shaped exception (migration step
             # 10) carries its own verdict -- report it verbatim, exactly like
             # the real CodexCliBackend.classify_halt does, without importing
             # llm_scripting_kit (MockBackend stays hermetic: no network, no
@@ -774,7 +780,7 @@ MODELS_ENV = "CONTENT_PIPELINE_LLM_MODELS"
 registry ids (``bootstrap_lib.model_declaration``'s format; see bootstrap's
 ``plugin-dev`` skill, ``references/model-declaration.md``) naming which
 model(s) may serve a completion in this process. It is the only routing env.
-Resolved through ``llm_scripting_kit.declaration.describe`` (the D3 routing
+Resolved through ``llm_scripting_kit.declaration.describe`` (the routing
 layer) via :func:`resolve_declaration`, so quota pacing, reachability, and the
 itemised :class:`~llm_scripting_kit.declaration.NoUsableRoutingTarget` floor
 apply exactly as they do for every other declaration-driven caller. Unset
@@ -906,6 +912,41 @@ def _backend_for_entry(entry: Any) -> Any:
     return ModelEndpointBackend(endpoint=entry.id)
 
 
+REMOVED_ROUTING_ENVS = (
+    "CONTENT_PIPELINE_LLM_BACKEND",
+    "CONTENT_PIPELINE_LLM_MODEL",
+    "CONTENT_PIPELINE_LLM_ENDPOINT",
+)
+"""Routing settings that no longer route anything. Setting one without
+:data:`MODELS_ENV` is refused (:func:`_refuse_removed_routing_env`) rather
+than ignored, because ignoring it silently moves the run to the default
+entry -- a metered API when a subscription backend was meant -- and changes
+every response-cache key."""
+
+
+def _refuse_removed_routing_env() -> None:
+    """Raise :class:`~content_pipeline.llm.platform.ConfigurationError` when a
+    removed routing env is set and :data:`MODELS_ENV` is not.
+
+    Runs before the declaration is read, any network probe, or any cache
+    lookup. A blank value counts as unset. When :data:`MODELS_ENV` is set the
+    leftover names are inert and pass silently: the operator has already
+    chosen the replacement, and a per-call warning would repeat on every
+    routed call.
+    """
+    if declared_model_names() is not None:
+        return
+    stale = [n for n in REMOVED_ROUTING_ENVS if os.environ.get(n, "").strip()]
+    if stale:
+        raise platform.ConfigurationError(
+            f"{', '.join(stale)} no longer select a backend or model. "
+            f"Unset {'it' if len(stale) == 1 else 'them'} and set {MODELS_ENV} "
+            "to a comma-separated list of llm-scripting-kit model ids instead "
+            f"(for example {MODELS_ENV}=<entry id>); without it the run would "
+            "silently use the default OpenRouter entry."
+        )
+
+
 def route(
     *,
     openrouter: Optional[Any] = None,
@@ -924,10 +965,13 @@ def route(
     being returned: a registry server is up only if somebody started it, so
     a dead one refuses here rather than once per unit. Unset, the default
     entry runs: the supplied ``openrouter`` instance, else a new
-    :class:`OpenRouterBackend`.
+    :class:`OpenRouterBackend`. A removed routing env set without
+    :data:`MODELS_ENV` raises ``ConfigurationError`` instead (a supplied
+    ``mock`` is still returned first).
     """
     if mock is not None:
         return mock
+    _refuse_removed_routing_env()
     if declared_model_names() is not None:
         backend = _backend_for_entry(_resolve_declared_entry())
         # PROBE ONLY THE SELECTED ENTRY, and only here. One ping per route()
@@ -960,6 +1004,7 @@ def routed_model(requested_model: str, *, backend_name: Optional[str] = None) ->
     returned id is what lands on ``LLMResponse.model`` and therefore on
     audit records.
     """
+    _refuse_removed_routing_env()
     if declared_model_names() is not None:
         entry = _resolve_declared_entry()
         return entry.model or requested_model
@@ -985,6 +1030,7 @@ __all__ = [
     "ModelEndpointBackend",
     "MockBackend",
     "MODELS_ENV",
+    "REMOVED_ROUTING_ENVS",
     "OPENCODE_FILESYSTEM_POSTURE",
     "route",
     "routed_model",

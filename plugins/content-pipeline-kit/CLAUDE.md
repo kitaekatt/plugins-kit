@@ -97,6 +97,8 @@ a process, and nothing at a call site signals that one of them got the other's
 backend, so a changed environment variable can move output quality with no
 local signal.
 
+Only `CONTENT_PIPELINE_LLM_MODELS` routes. `_BACKEND`/`_MODEL`/`_ENDPOINT` raise `ConfigurationError` when set without it (`llm/backends.py::_refuse_removed_routing_env`; details in `skills/content-pipeline-domain/references/building-a-pipeline.md`).
+
 A supplied `mock` wins unconditionally in `route()`, checked before
 the declaration is even read: `route(mock=FakeBackend())` always returns the
 supplied instance, regardless of `CONTENT_PIPELINE_LLM_MODELS`. A test needs

@@ -41,6 +41,7 @@ _SUBPACKAGES = [
     "content_pipeline.pipeline",
     "content_pipeline.pipeline.stage",
     "content_pipeline.pipeline.single_pass",
+    "content_pipeline.pipeline.gate",
     "content_pipeline.pipeline.convergence_loop",
     "content_pipeline.pipeline.workunit",
     "content_pipeline.deliver",

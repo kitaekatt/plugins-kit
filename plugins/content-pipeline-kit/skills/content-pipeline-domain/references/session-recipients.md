@@ -25,15 +25,17 @@ on your own entry point:
 -> {"ok": false, "error": {"type": "...", "message": "..."}}
 ```
 
-The verbs a worker uses are `read`, `submit`, and `fail`. `claim` is the
+The verbs a background worker uses are `read`, `submit`, and `fail`. In the
+background lane, `claim` is the
 DISPATCHER's: it claims each unit before launching that unit's session and
 passes the resulting fencing token to the worker in its launch prompt, so a
-worker never claims anything and a session left alive by an earlier dispatch
-cannot take the claim back after a reclaim. `renew` is the dispatcher's too
--- D5 makes the dispatcher the renewer in the background lane
+background worker never claims anything and a session left alive by an earlier dispatch
+cannot take the claim back after a reclaim (in the workflow lane the agent
+claims its own unit; see `workflow-lane.md`). `renew` is the dispatcher's too
+-- the background lane makes the dispatcher the renewer in the background lane
 (`supervise_tick` calls the store's lease-renew method itself, on a schedule,
 while a worker session is alive), so a worker session never runs it.
-`prepare`, `status`, `pause`, `resume`, `finalize`, `claim`, and `renew` are
+In the background lane, `prepare`, `status`, `pause`, `resume`, `finalize`, `claim`, and `renew` are
 all the orchestrator's. Every failure -- a malformed envelope, an
 unknown verb, a version mismatch, or an exception a verb raises -- comes back
 as a typed `{"ok": false, "error": ...}` reply, never a raw traceback and
@@ -76,25 +78,36 @@ sessions, beyond the fields every adapter already needs (`unit_for`,
 - **`environment`** -- a declaration of which environment variables and
   working directory a worker process must see to behave correctly (required
   variables, forbidden variables, and variables that should carry the
-  worker's working directory). This is checked twice: once when the run is
+  worker's working directory). Path values compare equal when identical or,
+  on Windows, when they differ only in letter case or separator spelling; a
+  Git Bash POSIX spelling of a drive path still refuses. This is checked twice: once when the run is
   created, against the orchestrating process's own environment, and once on
-  every worker verb, against the worker process's actual environment. A
+  every worker verb except `fail` (see below), against the worker process's actual environment. A
   worker whose environment disagrees with what the run was created against is
   refused outright rather than allowed to resolve against the wrong project
   root silently -- that refusal is deliberate, because a background worker
   runs in a genuinely separate process and has no other way to prove it is
   the same project the run was prepared against.
 
-  Know what that refusal does and does not buy you now that the dispatcher
-  claims. It still refuses every worker verb -- `read`, `submit`, `fail` --
+  Know what that refusal does and does not buy you given that the dispatcher
+  claims. It refuses the dispatcher's `claim` and `renew` and the worker verbs
+  `read` and `submit`,
   so a mismatched worker can never get output ACCEPTED, which is the part
-  that matters. What it no longer prevents is the SPEND: the unit is claimed
-  and the session launched before any worker verb runs, so a mismatched
-  worker consumes a session and holds the lease until its `read` is refused.
-  Previously the mismatch was caught at the worker's own `claim` and the unit
-  stayed pending. The dispatcher settles that dispatch and the unit is
-  reclaimable once the lease expires, so nothing is stranded -- but a
-  misdeclared environment now costs sessions rather than being free.
+  that matters. `fail` is exempt: a worker that diagnosed its own environment
+  as wrong must still be able to report it, and the run's adapter-version
+  check still applies to it. What the refusal does not prevent is the SPEND:
+  the unit is claimed and the session launched before any worker verb runs,
+  so a mismatched worker consumes a session before its `read` is refused.
+  When the worker then reports through `fail` with the envelope's terminal
+  flag set, the unit ends FAILED, and a FAILED unit has no reset path: redoing
+  it needs a new run. Without a `fail`, the unit is reclaimable once the lease
+  expires. A systemic mismatch therefore costs one session per dispatched
+  unit until a breaker trips: `dispatch_wave` halts the run
+  (`HALT_REPEATED_FAILURE`) once `systemic_failure_halt_threshold` units
+  (default 3; `0` or `None` disables) settle `worker_failed` with the code
+  `env_mismatch` on their fail envelope, and `resume_run` clears the halt.
+  Failures without that code are never counted, whatever their text -- check
+  the environment declaration on the first failure.
 - **`expected_unit_seconds`** (or a per-unit variant) -- your best estimate of
   how long one unit's worker session runs. This sizes the lease the
   dispatcher renews while a worker is active. Declaring nothing is safe --
@@ -141,6 +154,34 @@ as file CONTENT: the envelopes the worker authors, and the fence line of its
 answer file. Nothing that has to be allowlisted ahead of time ever varies
 with it.
 
+The permission mode does not stand in for that allowlist (live probe, claude
+CLI 2.1.284, 2026-09-29). Under `auto`, a `claude --bg` worker ran `rm -rf` on
+a directory outside its working directory without asking, so `auto` is not a
+safety boundary for an unattended worker. It refused a `git push --force` by
+stopping to ask: the session parked in agents state `blocked` until someone
+answered, so a refused action costs a hung worker, which `dispatch_wave`
+settles as `blocked`. `--permission-mode default` alone is not strict either:
+the worker inherits user-level settings, and a broad allow list there let
+ordinary commands run unattended. Adding `--setting-sources project` isolates
+the worker from user-level settings, and a command outside the allowlist then
+parks the session `blocked` (waitingFor "permission prompt"). What ran
+unattended: `--permission-mode default --setting-sources project
+--allowedTools "Bash(<exact command>)" Write`, one `Bash(...)` entry per
+literal invocation. Pass these through `extra_launch_args`; the driver places
+`--` between them and the prompt, which matters because `--allowedTools` is
+variadic and would otherwise consume the prompt. `acceptEdits` auto-approved
+both a Write and a `touch`, so it is looser than `default`.
+
+`--setting-sources project` and the shipped `pipeline-worker` agent do not
+combine when the plugin is enabled only in user settings (live probe, claude
+CLI 2.1.284, 2026-09-29): `--agent content-pipeline-kit:pipeline-worker` printed
+`warning: no agent named 'content-pipeline-kit:pipeline-worker' -- spawning with
+default template` and launched anyway, exit code unchanged. The warning goes to
+the launcher's output, which `dispatch_wave` reports as `launch_stderr` only on
+a failed launch, so do not expect to see it. Whether enabling the plugin in the
+project's own settings restores the agent under `--setting-sources project` was
+not probed.
+
 Build your worker's allowlist from those six computed strings, not from a
 broader grant (e.g. "any invocation of my protocol mount"). A broad grant
 reopens exactly the gap the enumerated-invocation design closes: a worker
@@ -180,6 +221,13 @@ authorizing it belong to the same generation of the unit.
 
 ## Resuming a halted or interrupted run
 
+A halted run (rate limit, auth, operator pause) resumes only through
+`execution.controller.resume_run(store, run_id)` (the mount's `resume` verb),
+once the halt condition has cleared. Dispatching again does not clear it: the
+next claim on a halted run is refused. After `resume_run`, prepare and
+dispatch again in either lane.
+
+
 A run can be interrupted between recording that a unit's apply started and
 recording that it succeeded -- a crash mid-finalize, a killed dispatcher
 process. Resuming a run with any unit left in that in-between state is
@@ -205,6 +253,40 @@ file can carry stale or partial content, so its mere existence tells you
 nothing about whether the write that mattered actually completed. Build
 reconciliation from your data's own shape, not from VCS bookkeeping.
 
+## What bounds a worker's verbs
+
+A worker writes the body of an envelope file, and the dispatcher fixes the
+file name. When a `protocol @<path>` file has a worker-shaped name
+(`*.claim.json`, the dispatcher's claim in the background lane and the
+agent's own in the workflow lane; `*.read.json`, `*.submit.json`,
+`*.fail.json`), the body's
+verb and ids must agree with that name, or the call is refused with
+`EnvelopeIdentityError`. A body naming another verb (`finalize`, `resume`,
+`pause`, `prepare`) or another unit therefore cannot run from a worker file.
+Files with any other name are not checked; the allowlist still limits which
+paths a worker may invoke.
+
+## The launch directory must be trusted
+
+`dispatch_wave` runs `claude --bg` in its `cwd` argument, else the directory
+the run's adapter environment records, else the dispatcher's own working
+directory. Observed on claude CLI 2.1.284: when that directory is not a
+trusted workspace, the launch exits 1 with `Workspace not trusted. Run
+`claude` in <dir> once and accept the trust prompt, then retry.` and spawns no
+session.
+
+`preflight` does not check trust. During confirmation, the dispatcher renews
+its run lease; if that lease is lost, it stops and removes the identified
+session and ends the wave with `aborted_reason == "dispatcher_lease_lost"`
+without attaching it. Otherwise, `dispatch_unit` finds no session within
+`launch_confirm_seconds`, releases the claim, settles the dispatch as
+`launch_failed`, and raises `LaunchMisconfigurationError`; `dispatch_wave` then
+stops with `aborted_reason == "launch_misconfiguration"` and launches nothing.
+The launcher's stderr excerpt (which carries the trust message) and exit code
+reach the caller in the exception message ("launcher said (rc=...): ...") and
+in the report's `launch_stderr` and `launch_rc`. Remedy: run `claude` once in that directory,
+accept the trust prompt, and dispatch again.
+
 ## Which worker your dispatch runs
 
 Every worker the dispatcher launches is governed by its **launch prompt**,
@@ -220,12 +302,16 @@ where you select an agent definition: this plugin's shipped
 discipline), or one you write yourself. The default is empty, so the
 dispatcher selects no agent unless you ask for one.
 
-Know one thing before you rely on it: whether agent-selecting flags compose
-with a background launch, rather than being accepted and dropped, has not
-been established. The launcher exits 0 either way, so the only way to tell is
-to observe what a worker actually does. Treat an agent definition as a way to
-strengthen a worker's discipline, and the launch prompt as the constraint you
-can count on.
+Know one thing before you rely on it: an agent-selecting flag can be accepted
+and dropped. It composed in one probe (live probe, claude CLI 2.1.238,
+2026-08-21: `--agent content-pipeline-kit:pipeline-worker` with
+`--append-system-prompt-file` on `claude --bg`; the worker reported only the
+agent's tools, Bash and Write, and echoed a marker from the appended file). It
+was dropped in another (see the `--setting-sources project` paragraph above).
+The launcher exits 0 either way, so for your CLI version and settings, observe
+what a worker actually does. Treat an agent definition as a way to strengthen
+a worker's discipline, and the launch prompt as the constraint you can count
+on.
 
 ## Rules to carry into your own worker prompt or agent definition
 

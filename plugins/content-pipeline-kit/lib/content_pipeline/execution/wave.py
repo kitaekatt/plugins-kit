@@ -11,25 +11,25 @@ claimable for this run" -- for the two work-unit shapes
   ``max_wave_size``.
 - **Graph strategies** are treated as strictly ordinal-sequential: only one
   unit may ever be in flight at a time, so the ready wave is empty or exactly
-  one unit -- the lowest-ordinal ``PENDING`` unit whose immediate
-  predecessor (the previous unit by ordinal) is ``SKIPPED``, or is
+  one unit -- the lowest-ordinal ``PENDING`` unit whose nearest
+  non-``SKIPPED`` predecessor (looking back past every ``SKIPPED`` unit) is
   ``ACCEPTED`` *and has been applied* (its last apply-kind attempt is
-  ``AttemptKind.APPLY_SUCCEEDED`` -- see "Apply-awareness" below). The first
-  unit (no predecessor) is vacuously ready when it is ``PENDING``.
+  ``AttemptKind.APPLY_SUCCEEDED`` -- see "Apply-awareness" below). A unit
+  with no non-``SKIPPED`` predecessor (it is first, or every earlier unit was
+  skipped) is vacuously ready when it is ``PENDING``.
 
-A predecessor in state ``SKIPPED`` (A-min.2 -- a gate or freshness check
-decided that unit will never be generated, see ``execution.controller``) is
-actually a STRONGER signal than ``ACCEPTED``, not an equivalent one: it
-satisfies the successor unconditionally, with no apply-kind check at all,
-because a ``SKIPPED`` unit never carries an ``accepted_text`` and
-``finalize_run`` never applies a ``SKIPPED`` unit -- there is simply no apply
-for the successor to wait on. An ``ACCEPTED`` predecessor, by contrast, only
-satisfies the successor once its apply has actually succeeded (below). A skip
-is not a broken link, it is a unit the run intentionally will not produce, so
-it must not permanently block everything ordinally after it the way a
-``FAILED`` predecessor does below.
+A ``SKIPPED`` unit (a gate or freshness check decided that unit will never
+be generated, see ``execution.controller``) is transparent to the graph
+rule: it never carries an ``accepted_text`` and ``finalize_run`` never applies
+it, so there is nothing to wait on, and it is neither a dependency nor a
+broken link. The rule looks past it to the nearest earlier unit that is not
+``SKIPPED`` and judges the successor by that unit's state. A skip therefore
+never releases a successor over an earlier unit that is still in flight,
+accepted but unapplied, or terminally ``FAILED``. An ``ACCEPTED``
+predecessor only satisfies the successor once its apply has actually
+succeeded (below).
 
-Deliberate corner case, not spelled out by the plan of record: a terminally
+Deliberate corner case, not spelled out elsewhere: a terminally
 ``FAILED`` predecessor blocks the chain from ever becoming ready past it. Once
 the lowest-ordinal ``PENDING`` unit's predecessor is ``FAILED`` (a terminal
 state, per ``execution.model.TERMINAL_STATES``), that unit -- and by
@@ -37,6 +37,14 @@ construction everything after it -- can never become ready again through this
 function, because ``FAILED`` never transitions back to ``ACCEPTED`` or
 ``SKIPPED``. This is a fail-closed choice: a graph pipeline with a broken link
 stalls rather than skipping ahead.
+
+An expired claim is reclaimable, so :func:`ready_wave` can be asked to treat
+it as ready (``reclaim_at``): the lowest unit that is ``CLAIMED`` with a lease
+at or before ``reclaim_at`` is released like a ``PENDING`` unit, under the
+same predecessor rule. A unit behind a LIVE claim is never released. The
+worker's own ``claim`` performs the reclaim (fence + 1, EXPIRE attempt), so
+the bounded-reclaim limit still applies. Without ``reclaim_at`` only
+``PENDING`` units are ready.
 
 This module treats ANY ``GraphWalkStrategy`` instance as sequential/dependent,
 never conditioning on whether ``context_of`` is set. An ordered walk with no
@@ -49,7 +57,7 @@ The graph path additionally requires apply-awareness (2026-08-17, closing the
 ``UnappliedPredecessorError`` refusal): an ``ACCEPTED`` predecessor satisfies
 its successor only once its last apply-kind attempt is
 ``AttemptKind.APPLY_SUCCEEDED``. ``ACCEPTED`` means only that the text was
-accepted into the store at submit time (D1); it does not mean
+accepted into the store at submit time (submit-time acceptance is authoritative); it does not mean
 ``finalize_run`` has applied it. Without this, ``ready_wave`` ->
 ``run_wave`` (accept) -> ``ready_wave`` would release the successor before
 its predecessor's payload has landed, even though ``prepare_run`` refuses
@@ -102,7 +110,7 @@ apply-kind attempt is ``APPLY_STARTED`` with no following
 ``APPLY_SUCCEEDED``). This function withholds the successor forever in that
 state too -- it is not a deadlock, but nothing on THIS module's path
 recovers it. ``finalize_run`` recovers it: either by re-applying, or, when
-the adapter supplies a ``reconcile`` hook (D6), by confirming the apply
+the adapter supplies a ``reconcile`` hook (apply_unknown fails closed), by confirming the apply
 already landed without re-invoking ``adapter.apply``. See
 ``execution.controller``'s ``ApplyUnknownError`` and ``finalize_run``
 docstring for the mechanics.
@@ -125,7 +133,7 @@ from content_pipeline.pipeline.workunit import GraphWalkStrategy, WorkUnitStrate
 class UnsafeGraphParallelismError(ExecutionError):
     """A ``max_wave_size`` greater than 1 was requested against a graph strategy.
 
-    Graph strategies are strictly ordinal-sequential (D1's one-unit-wave
+    Graph strategies are strictly ordinal-sequential (the one-unit-wave
     consequence for store-dependent validators): a wave of more than one unit
     would let two dependent units be claimed concurrently, which the sequential
     contract never allows. Raised eagerly -- before any store read -- so a
@@ -158,13 +166,17 @@ def ready_wave(
     strategy: WorkUnitStrategy,
     *,
     max_wave_size: Optional[int] = None,
+    reclaim_at: Optional[float] = None,
 ) -> List[UnitRecord]:
     """Return the units currently claimable for ``run_id`` under ``strategy``.
 
     See the module docstring for the flat vs. graph semantics. ``max_wave_size``
     caps a flat wave's length; against a graph strategy, any ``max_wave_size``
     greater than 1 raises :class:`UnsafeGraphParallelismError` immediately,
-    before any store read.
+    before any store read. ``reclaim_at`` (graph strategies only) is a clock
+    reading: a ``CLAIMED`` unit whose lease expired at or before it counts as
+    ready (see the module docstring); ``None`` keeps ``PENDING``-only
+    readiness.
 
     **Graph strategies only:** an empty return is NOT proof the run is
     complete -- it may mean the next unit is blocked on a predecessor that is
@@ -179,7 +191,7 @@ def ready_wave(
     if is_graph_strategy(strategy):
         if max_wave_size is not None and max_wave_size > 1:
             raise UnsafeGraphParallelismError(max_wave_size)
-        return _graph_ready_wave(store, run_id)
+        return _graph_ready_wave(store, run_id, reclaim_at)
     return _flat_ready_wave(store, run_id, max_wave_size)
 
 
@@ -256,9 +268,19 @@ class _PendingLookup(NamedTuple):
     predecessor_state: Optional[UnitState]
     predecessor_id: Optional[str]
     predecessor_last_apply_kind: Optional[AttemptKind]
+    predecessor_lease_expires_at: Optional[float] = None
 
 
-def _next_pending(store, run_id: str) -> _PendingLookup:
+def _reclaimable(unit: UnitRecord, reclaim_at: Optional[float]) -> bool:
+    return (
+        reclaim_at is not None
+        and unit.state is UnitState.CLAIMED
+        and unit.lease_expires_at is not None
+        and unit.lease_expires_at <= reclaim_at
+    )
+
+
+def _next_pending(store, run_id: str, reclaim_at: Optional[float] = None) -> _PendingLookup:
     """Walk ``run_id``'s units in ordinal order and locate the lowest-ordinal
     ``PENDING`` one, alongside its immediate predecessor's context.
 
@@ -279,26 +301,37 @@ def _next_pending(store, run_id: str) -> _PendingLookup:
     units = sorted(all_units, key=lambda u: u.ordinal)
     attempts_by_unit = _attempts_by_unit(attempts)
 
-    predecessor_state: Optional[UnitState] = None
-    predecessor_id: Optional[str] = None
+    predecessor: Optional[UnitRecord] = None
     for unit in units:
-        if unit.state is UnitState.PENDING:
+        if unit.state is UnitState.PENDING or _reclaimable(unit, reclaim_at):
+            if predecessor is None:
+                return _PendingLookup(unit, None, None, None)
             last_apply_kind = (
-                _last_apply_kind(attempts_by_unit.get(predecessor_id, []))
-                if predecessor_state is UnitState.ACCEPTED
+                _last_apply_kind(attempts_by_unit.get(predecessor.unit_id, []))
+                if predecessor.state is UnitState.ACCEPTED
                 else None
             )
-            return _PendingLookup(unit, predecessor_state, predecessor_id, last_apply_kind)
-        predecessor_state = unit.state
-        predecessor_id = unit.unit_id
-    return _PendingLookup(None, predecessor_state, predecessor_id, None)
+            return _PendingLookup(
+                unit,
+                predecessor.state,
+                predecessor.unit_id,
+                last_apply_kind,
+                predecessor.lease_expires_at,
+            )
+        if unit.state is not UnitState.SKIPPED:
+            predecessor = unit
+    if predecessor is None:
+        return _PendingLookup(None, None, None, None)
+    return _PendingLookup(None, predecessor.state, predecessor.unit_id, None)
 
 
-def _graph_ready_wave(store, run_id: str) -> List[UnitRecord]:
-    lookup = _next_pending(store, run_id)
+def _graph_ready_wave(
+    store, run_id: str, reclaim_at: Optional[float] = None
+) -> List[UnitRecord]:
+    lookup = _next_pending(store, run_id, reclaim_at)
     if lookup.unit is None:
         return []
-    if lookup.predecessor_state is None or lookup.predecessor_state is UnitState.SKIPPED:
+    if lookup.predecessor_state is None:
         return [lookup.unit]
     if (
         lookup.predecessor_state is UnitState.ACCEPTED
@@ -308,7 +341,9 @@ def _graph_ready_wave(store, run_id: str) -> List[UnitRecord]:
     return []
 
 
-def graph_block_reason(store, run_id: str, strategy: WorkUnitStrategy) -> Optional[str]:
+def graph_block_reason(
+    store, run_id: str, strategy: WorkUnitStrategy, *, at: Optional[float] = None
+) -> Optional[str]:
     """Diagnose why a graph-strategy :func:`ready_wave` is returning ``[]``.
 
     Companion to :func:`~content_pipeline.execution.controller.unfinished_units`
@@ -331,6 +366,9 @@ def graph_block_reason(store, run_id: str, strategy: WorkUnitStrategy) -> Option
       ``adapter.reconcile`` hook as the fix (see the module docstring's
       "Escape hatch for ``apply_unknown``").
     - a terminally ``FAILED`` predecessor -- names the block as permanent.
+    - a ``CLAIMED`` predecessor whose lease expired at or before ``at`` --
+      names it as expired and reclaimable rather than in flight (``at`` is
+      the caller's clock reading; without it every claim reads as live).
     - any other non-terminal predecessor state (e.g. ``CLAIMED``) -- names
       the state as still in flight.
 
@@ -346,7 +384,7 @@ def graph_block_reason(store, run_id: str, strategy: WorkUnitStrategy) -> Option
         return None  # no PENDING unit at all; nothing to diagnose
     predecessor_state = lookup.predecessor_state
     predecessor_id = lookup.predecessor_id
-    if predecessor_state is None or predecessor_state is UnitState.SKIPPED:
+    if predecessor_state is None:
         return None  # actually ready; nothing to diagnose
     if predecessor_state is UnitState.FAILED:
         return (
@@ -375,6 +413,17 @@ def graph_block_reason(store, run_id: str, strategy: WorkUnitStrategy) -> Option
             f"unit {unit.unit_id!r} is blocked: predecessor "
             f"{predecessor_id!r} is ACCEPTED but not yet applied -- "
             "call finalize_run to apply it"
+        )
+    if (
+        predecessor_state is UnitState.CLAIMED
+        and at is not None
+        and lookup.predecessor_lease_expires_at is not None
+        and lookup.predecessor_lease_expires_at <= at
+    ):
+        return (
+            f"unit {unit.unit_id!r} is blocked: predecessor "
+            f"{predecessor_id!r} is claimed but its lease expired; it is "
+            "reclaimable and the next wave will re-offer it"
         )
     return (
         f"unit {unit.unit_id!r} is blocked: predecessor "

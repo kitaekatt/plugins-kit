@@ -95,19 +95,19 @@ drivers are clients of the same durable claim/submit state. The run plane is
 **Three loops disagree about execution and stopping.** `run_single_pass` owns
 gates, freshness, generation, and apply, and catches every `Exception` from
 `generate` -- including `HaltError` -- reducing it to an error string
-(`pipeline/single_pass.py:204-215`, verified), even though its docstring says the
+(the generate `except Exception` block in `run_single_pass`, verified), even though its docstring says the
 bulk driver decides whether an error class halts
-(`pipeline/single_pass.py:149-152`, verified; the type is erased before any
+(the `run_single_pass` docstring, verified; the type is erased before any
 driver sees it). `guarded_sweep` separately catches the typed halt and stops,
 computing `remaining = units[index + 1:]` -- a suffix that excludes the
-triggering unit from both done and remaining (`cli/budget.py:132-145`, verified),
+triggering unit from both done and remaining (the `remaining = units[index + 1 :]` suffix in `_guarded_sweep`, verified),
 though `BudgetStop.unit_id` does retain the trigger's identity
 (`cli/budget.py:39-55`, verified). `run_bulk` copies the sweep's result fields
 into a third type (`cli/bulk.py:29-45`). There is no single truthful halt
 contract, and the suffix model cannot represent concurrent completion at all.
 
 **Durability is fragmented, so status is impossible to reconstruct.** Run truth
-lives in in-memory result objects (`pipeline/single_pass.py:92-103`;
+lives in in-memory result objects (`UnitOutcome` in `pipeline/single_pass.py`;
 `cli/budget.py:91-106`; `cli/bulk.py:29-45`) and an in-memory `CostBudget.spent`
 (`llm/platform.py:428-449`, verified). The persistent facilities nearby solve
 different problems -- `ResponseCache` is cross-run answer reuse with a
@@ -175,7 +175,7 @@ unspecified and creates the flipped-verdict state above.
 **Decision.** The existing untracked entry points -- `run_single_pass`,
 `guarded_sweep`, `run_bulk` called without a run store -- keep today's behavior
 byte-for-byte until their eventual removal, including the `HaltError`-swallowed-
-to-`UnitOutcome.ERROR` behavior (`pipeline/single_pass.py:204-215`) and suffix
+to-`UnitOutcome.ERROR` behavior (the generate `except Exception` block in `run_single_pass`) and suffix
 `remaining`. The corrected semantics (typed halt stops claiming; set-based
 unfinished including the trigger) exist only on the tracked path. **`call_llm`
 and `submit_validated` remain first-class, fully supported untracked surfaces
@@ -1077,8 +1077,8 @@ overconfident flat-zero billing comments in both plugins' Claude-CLI backends.
 `Gate`/`run_gates` relocation: `pipeline/single_pass.py` is the module this
 phase's halt/resume corrections and untracked-loop deprecation (items 1 and 5)
 churn hardest, and it is also where `Gate`/`run_gates` live today, imported
-directly (not re-derived) by `execution/controller.py:147` -- verified the
-only importer outside `single_pass.py` itself. The direct-import reasoning in
+directly (not re-derived) by `execution.controller` and `execution.protocol`,
+the two importers outside `single_pass.py` itself. The direct-import reasoning in
 `controller.py`'s "The gate seam" docstring stays correct as stated: it argues
 against redefining an equivalent local shape, not against relocating the one
 true shape. So `Gate` and `run_gates` move to a leaf module,
@@ -1090,6 +1090,35 @@ and moving it before this phase's churn begins would be relocation for its
 own sake.
 
 **Shippable:** each item independently; none gates B or C.
+
+**Status of the items (2026-09-29).**
+
+- (1) Done. `run_single_pass`, `guarded_sweep` and `run_bulk` each emit one
+  `DeprecationWarning` per call, pointing at `prepare_run`, `run_wave`,
+  `finalize_run` and `unfinished_units`; `run_bulk` delegates to a private
+  `_guarded_sweep` so it warns once. Behavior is otherwise unchanged. The
+  `cli` package docstring's dependency claims are corrected.
+- (2) Done. The build guide's step 10 carries the deprecation, the
+  `[trigger] + remaining` migration note (`BudgetStop` carries the trigger
+  unit; `unfinished_units` already includes it), and the tracked halt contract
+  (`record_halt`, `run_wave`, `resume_run`).
+- (3) Decided not to do (orchestrator, 2026-09-29). `cli/run.py` is already a
+  pure argv adapter over `execution`; consumers import `cli.run`,
+  `cli.scaffold` and `cli.budget.BudgetStop`; the only run-control logic left
+  in `cli/` is the deprecated helpers, and moving them under `execution/`
+  would co-locate frozen untracked halt semantics with the tracked ones.
+- (4) Transport drift resolved. The flat-zero billing comment in
+  content-pipeline-kit's `llm/backends.py` now describes what
+  `platform.response_cost` does (reported cost, else a pricing-table
+  estimate, else `None`). llm-scripting-kit's `completion/backends.py` repeats
+  the flat-zero claim; that copy is left for the llm-effort work.
+- (5) Still open. D7 needs both known consumers migrated, or six months after
+  the deprecation release; `loc.py` still calls `guarded_sweep`. The window
+  starts at the release carrying (1), content-pipeline-kit 0.27.0, which is
+  not yet published.
+- (6) Done. `Gate` and `run_gates` live in `pipeline/gate.py`;
+  `pipeline/single_pass.py` re-exports both, and the aliases are tested by
+  `test_pipeline_gate_aliases.py`.
 
 ## Platform assumptions
 

@@ -64,6 +64,7 @@ from content_pipeline.execution.model import (
     UnitState,
 )
 from content_pipeline.execution.store import ExecutionStore
+from test_execution_driver_claude_bg_banner import real_launch_response
 from test_support.claude_bg_fakes import (
     FakeRunner,
     _advancing_clock_from,
@@ -124,20 +125,34 @@ def test_resolve_executable_falls_back_to_path(monkeypatch):
 
 def test_launch_bg_argv_is_positional_prompt_never_dash_p():
     runner = FakeRunner()
-    runner.script(("claude", "--bg"), ("backgrounded * abc123", "", 0))
+    runner.script(("claude", "--bg"), real_launch_response())
     cli = _cli(runner)
     cli.launch_bg("do the thing")
     argv, kwargs = runner.calls[-1]
-    assert argv == ["claude", "--bg", "do the thing"]
+    assert argv == ["claude", "--bg", "--", "do the thing"]
 
 
 def test_launch_bg_extra_args_come_before_the_positional_prompt():
     runner = FakeRunner()
-    runner.script(("claude", "--bg"), ("backgrounded * abc123", "", 0))
+    runner.script(("claude", "--bg"), real_launch_response())
     cli = _cli(runner)
     cli.launch_bg("prompt text", extra_args=["--permission-mode", "manual"])
     argv, _ = runner.calls[-1]
-    assert argv == ["claude", "--bg", "--permission-mode", "manual", "prompt text"]
+    assert argv == ["claude", "--bg", "--permission-mode", "manual", "--", "prompt text"]
+
+
+def test_launch_bg_ends_variadic_extra_args_before_the_prompt_separator():
+    runner = FakeRunner()
+    runner.script(("claude", "--bg"), real_launch_response())
+    cli = _cli(runner)
+    prompt = "worker prompt"
+    cli.launch_bg(
+        prompt,
+        extra_args=("--allowedTools", "Bash(git --version)", "Write"),
+    )
+    argv, _ = runner.calls[-1]
+    assert argv[-1] == prompt
+    assert argv[-2] == "--"
 
 
 def test_agents_json_default_requests_all_sessions():
@@ -481,7 +496,7 @@ def test_preflight_passes_when_bg_dash_p_is_rejected():
 
 def test_preflight_refuses_when_bg_dash_p_exits_zero():
     runner = _healthy_runner()
-    runner.script(("claude", "--bg", "-p"), ("backgrounded * xyz", "", 0))
+    runner.script(("claude", "--bg", "-p"), real_launch_response())
     cli = _cli(runner)
     with pytest.raises(PreflightError):
         preflight(cli, env={})
@@ -489,7 +504,7 @@ def test_preflight_refuses_when_bg_dash_p_exits_zero():
 
 def test_preflight_refuses_when_bg_dash_p_appears_to_have_spawned():
     runner = _healthy_runner()
-    runner.script(("claude", "--bg", "-p"), ("backgrounded * xyz", "some conflict text", 1))
+    runner.script(("claude", "--bg", "-p"), real_launch_response(stderr="some conflict text", rc=1))
     cli = _cli(runner)
     with pytest.raises(PreflightError):
         preflight(cli, env={})
@@ -1211,7 +1226,7 @@ def test_dispatch_unit_confirms_via_observed_transition_not_via_banner(tmp_path)
     store = _seeded_dispatch_store(tmp_path)
     wc = _worker_command(tmp_path)
     runner = FakeRunner()
-    runner.script(("claude", "--bg"), ("backgrounded * a1b2c3d4", "", 0))
+    runner.script(("claude", "--bg"), real_launch_response("a1b2c3d4"))
     runner.script(
         ("claude", "agents", "--json"),
         (json.dumps([_bg_record(id="a1b2c3d4", session_id="sess-xyz", state="working")]), "", 0),
@@ -1245,7 +1260,7 @@ def test_dispatch_unit_holds_the_claim_before_the_launch(tmp_path):
     store = _seeded_dispatch_store(tmp_path)
     wc = _worker_command(tmp_path)
     runner = FakeRunner()
-    runner.script(("claude", "--bg"), ("backgrounded * a1b2c3d4", "", 0))
+    runner.script(("claude", "--bg"), real_launch_response("a1b2c3d4"))
     runner.script(
         ("claude", "agents", "--json"),
         (json.dumps([_bg_record(id="a1b2c3d4", session_id="sess-xyz", state="working")]), "", 0),
@@ -1302,7 +1317,7 @@ def test_dispatch_unit_captures_the_fence_by_construction_never_by_re_reading(tm
     store = _seeded_dispatch_store(tmp_path)
     wc = _worker_command(tmp_path)
     runner = FakeRunner()
-    runner.script(("claude", "--bg"), ("backgrounded * a1b2c3d4", "", 0))
+    runner.script(("claude", "--bg"), real_launch_response("a1b2c3d4"))
     runner.script(
         ("claude", "agents", "--json"),
         (json.dumps([_bg_record(id="a1b2c3d4", session_id="sess-xyz", state="working")]), "", 0),
@@ -1347,7 +1362,7 @@ def test_dispatch_unit_captures_the_fence_by_construction_never_by_re_reading(tm
 def test_dispatch_unit_duplicate_suppression_bites_before_any_launch_spend(tmp_path):
     store = _seeded_dispatch_store(tmp_path)
     wc = _worker_command(tmp_path)
-    runner = FakeRunner(default=("backgrounded * aaaaaaaa", "", 0))
+    runner = FakeRunner(default=real_launch_response("aaaaaaaa"))
     cli = _cli(runner)
     unit = _pending_unit(store, "run-1", "u0")
 
@@ -1368,7 +1383,7 @@ def test_dispatch_unit_state_failed_within_window_is_launch_misconfiguration(tmp
     store = _seeded_dispatch_store(tmp_path)
     wc = _worker_command(tmp_path)
     runner = FakeRunner()
-    runner.script(("claude", "--bg"), ("backgrounded * badbad01", "", 0))
+    runner.script(("claude", "--bg"), real_launch_response("badbad01"))
     runner.script(
         ("claude", "agents", "--json"),
         (json.dumps([_bg_record(id="badbad01", session_id="sess-bad", state="failed")]), "", 0),
@@ -1396,7 +1411,7 @@ def test_launch_misconfiguration_releases_the_dispatcher_held_claim(tmp_path):
     store = _seeded_dispatch_store(tmp_path)
     wc = _worker_command(tmp_path)
     runner = FakeRunner()
-    runner.script(("claude", "--bg"), ("backgrounded * badbad01", "", 0))
+    runner.script(("claude", "--bg"), real_launch_response("badbad01"))
     runner.script(
         ("claude", "agents", "--json"),
         (json.dumps([_bg_record(id="badbad01", session_id="sess-bad", state="failed")]), "", 0),
@@ -1427,7 +1442,7 @@ def test_dispatch_unit_never_appearing_is_launch_misconfiguration(tmp_path):
     store = _seeded_dispatch_store(tmp_path)
     wc = _worker_command(tmp_path)
     runner = FakeRunner()
-    runner.script(("claude", "--bg"), ("backgrounded * ffffffff", "", 0))
+    runner.script(("claude", "--bg"), real_launch_response("ffffffff"))
     runner.script(("claude", "agents", "--json"), ("[]", "", 0))  # never shows up
     cli = _cli(runner)
     unit = _pending_unit(store, "run-1", "u0")
@@ -1525,7 +1540,7 @@ def test_dispatch_unit_attach_failure_still_rms_even_when_stop_raises(tmp_path):
         argv = list(argv)
         calls.append(argv)
         if argv[1:2] == ["--bg"] and argv[2:3] != ["-p"]:
-            return ("backgrounded * a1b2c3d4", "", 0)
+            return real_launch_response("a1b2c3d4")
         if argv[1:3] == ["agents", "--json"]:
             return (
                 json.dumps([_bg_record(id="a1b2c3d4", session_id="sess-xyz", state="working")]),
@@ -2212,7 +2227,7 @@ def test_dispatch_wave_aborts_when_the_dispatcher_lease_is_lost(tmp_path, monkey
     store = _seeded_dispatch_store(tmp_path)
     wc = _worker_command(tmp_path)
     runner = _healthy_runner()
-    runner.script(("claude", "--bg"), ("backgrounded * abc12345", "", 0))
+    runner.script(("claude", "--bg"), real_launch_response("abc12345"))
     runner.script(
         ("claude", "agents", "--json"),
         (json.dumps([_bg_record(id="abc12345", session_id="sess-1", state="working")]), "", 0),
@@ -2244,6 +2259,133 @@ def test_dispatch_wave_aborts_when_the_dispatcher_lease_is_lost(tmp_path, monkey
     assert report.aborted_reason == "dispatcher_lease_lost"
     run = store.get_run("run-1")
     assert run.dispatcher_id == "rival-dispatcher"  # the rival's takeover held
+
+
+def test_dispatch_wave_slow_launch_can_lose_lease_before_attach(tmp_path, monkeypatch):
+    """REPRODUCTION: the launch itself can consume most of the lease.
+
+    With the DEFAULT confirmation window, the original dispatcher raises
+    ``NoOpenDispatchError`` when a rival settles the row before attachment.
+    """
+    store = _seeded_dispatch_store(tmp_path)
+    wc = _worker_command(tmp_path)
+    monkeypatch.setattr(claude_bg, "_mint_worker_id", lambda: "our-dispatcher")
+    clock = {"t": 1000.0}
+    launched = {"done": False}
+    agents_calls = {"n": 0}
+    lifecycle_calls = []
+    own_acquires = []
+    real_acquire = store.acquire_dispatcher_lease
+
+    def _record_acquire(run_id, dispatcher_id, **kwargs):
+        result = real_acquire(run_id, dispatcher_id, **kwargs)
+        if dispatcher_id == "our-dispatcher":
+            own_acquires.append(result)
+        return result
+
+    monkeypatch.setattr(store, "acquire_dispatcher_lease", _record_acquire)
+    base_runner = _healthy_runner()
+
+    class _SlowLaunchRunner(FakeRunner):
+        def __call__(self, argv, **kwargs):
+            if len(argv) >= 2 and argv[1] == "--bg" and argv[2:3] != ["-p"]:
+                launched["done"] = True
+                clock["t"] += 70.0
+                return real_launch_response("abc12345")
+            if list(argv)[1:3] == ["agents", "--json"]:
+                if not launched["done"]:
+                    return super().__call__(argv, **kwargs)
+                agents_calls["n"] += 1
+                if agents_calls["n"] == 1:
+                    return ("[]", "", 0)
+                # The launch took 70 seconds. A slow confirmation poll now
+                # crosses either the original or a renewed dispatcher lease.
+                clock["t"] = 1195.0
+                assert store.acquire_dispatcher_lease(
+                    "run-1", "rival-dispatcher", lease_seconds=120.0, at=clock["t"]
+                ) is not None
+                unit = store.get_unit("run-1", "u0")
+                store.fail_unit("run-1", "u0", unit.fencing_token, at=clock["t"])
+                store.settle_dispatch(
+                    "run-1", "u0", outcome="orphaned_preconfirmation", at=clock["t"]
+                )
+                return (
+                    json.dumps([_bg_record(id="abc12345", session_id="sess-1", state="working")]),
+                    "",
+                    0,
+                    )
+            if len(argv) >= 2 and argv[1] in ("stop", "rm") and "--help" not in argv:
+                lifecycle_calls.append(list(argv))
+                return ("ok", "", 0)
+            return super().__call__(argv, **kwargs)
+
+    runner = _SlowLaunchRunner(scripts=base_runner.scripts)
+
+    report = dispatch_wave(
+        store,
+        "run-1",
+        store.list_units("run-1"),
+        RunAdapter(),
+        cli=_cli(runner),
+        worker_command=wc,
+        max_agents=1,
+        launch_confirm_seconds=claude_bg.DEFAULT_LAUNCH_CONFIRM_SECONDS,
+        sleep_fn=lambda seconds: None,
+        clock_fn=lambda: clock["t"],
+    )
+    assert report.aborted_reason == "dispatcher_lease_lost"
+    assert agents_calls["n"] == 2
+    assert len(own_acquires) >= 3
+    assert [argv[1] for argv in lifecycle_calls] == ["stop", "rm"]
+    assert all(argv[2] == "abc12345" for argv in lifecycle_calls)
+
+
+def test_dispatch_wave_slow_launch_renews_and_attaches_while_lease_is_ours(tmp_path, monkeypatch):
+    """ACCEPT: a slow launch remains safe when renewal keeps ownership."""
+    store = _seeded_dispatch_store(tmp_path)
+    wc = _worker_command(tmp_path)
+    monkeypatch.setattr(claude_bg, "_mint_worker_id", lambda: "our-dispatcher")
+    clock = {"t": 1000.0}
+    launched = {"done": False}
+    base_runner = _healthy_runner()
+
+    class _SlowLaunchRunner(FakeRunner):
+        def __call__(self, argv, **kwargs):
+            if len(argv) >= 2 and argv[1] == "--bg" and argv[2:3] != ["-p"]:
+                launched["done"] = True
+                clock["t"] += 70.0
+                return real_launch_response("abc12345")
+            if list(argv)[1:3] == ["agents", "--json"] and launched["done"]:
+                return (json.dumps([_bg_record(id="abc12345", session_id="sess-1", state="done")]), "", 0)
+            return super().__call__(argv, **kwargs)
+
+    runner = _SlowLaunchRunner(scripts=base_runner.scripts)
+    report = dispatch_wave(
+        store, "run-1", store.list_units("run-1"), RunAdapter(), cli=_cli(runner),
+        worker_command=wc, max_agents=1,
+        sleep_fn=lambda seconds: None,
+        clock_fn=lambda: clock["t"],
+    )
+    assert report.dispatched == ("u0",)
+    assert report.settled["u0"] == "done_unaccepted"
+    assert store.open_dispatches("run-1") == []
+
+
+def test_dispatch_wave_default_fast_launch_still_completes(tmp_path):
+    store = _seeded_dispatch_store(tmp_path)
+    runner = _healthy_runner()
+    runner.script(("claude", "--bg"), real_launch_response("abc12345"))
+    runner.script(
+        ("claude", "agents", "--json"),
+        (json.dumps([_bg_record(id="abc12345", session_id="sess-1", state="done")]), "", 0),
+    )
+    report = dispatch_wave(
+        store, "run-1", store.list_units("run-1"), RunAdapter(), cli=_cli(runner),
+        worker_command=_worker_command(tmp_path), sleep_fn=lambda seconds: None,
+        clock_fn=lambda: 1000.0,
+    )
+    assert report.dispatched == ("u0",)
+    assert report.settled["u0"] == "done_unaccepted"
 
 
 def test_dispatch_wave_dispatcher_can_reacquire_its_own_expired_lease(tmp_path, monkeypatch):
@@ -2292,7 +2434,7 @@ def test_dispatch_wave_launch_misconfiguration_aborts_whole_loop(tmp_path):
     store = _seeded_dispatch_store(tmp_path, unit_ids=("u0", "u1"))
     wc = _worker_command(tmp_path)
     runner = _healthy_runner()
-    runner.script(("claude", "--bg"), ("backgrounded * baaaaaad", "", 0))
+    runner.script(("claude", "--bg"), real_launch_response("baaaaaad"))
     runner.script(
         ("claude", "agents", "--json"),
         (json.dumps([_bg_record(id="baaaaaad", session_id="sess-bad", state="failed")]), "", 0),
@@ -2325,7 +2467,7 @@ def test_dispatch_wave_report_and_argv_never_carry_unit_content(tmp_path, monkey
     monkeypatch.setattr(claude_bg, "classify_settled_failure", lambda *a, **k: None)
 
     runner = _healthy_runner()
-    runner.script(("claude", "--bg"), ("backgrounded * c0ffee01", "", 0))
+    runner.script(("claude", "--bg"), real_launch_response("c0ffee01"))
     runner.script(
         ("claude", "agents", "--json"),
         [
@@ -2377,7 +2519,7 @@ def test_dispatch_wave_happy_path_dispatches_and_observes_acceptance(tmp_path):
     wc = _worker_command(tmp_path)
 
     runner = _healthy_runner()
-    runner.script(("claude", "--bg"), ("backgrounded * abc12345", "", 0))
+    runner.script(("claude", "--bg"), real_launch_response("abc12345"))
     runner.script(
         ("claude", "agents", "--json"),
         [
@@ -2430,7 +2572,7 @@ def test_dispatch_wave_returns_a_report_when_an_accept_lands_inside_the_renew_wi
     wc = _worker_command(tmp_path)
 
     runner = _healthy_runner()
-    runner.script(("claude", "--bg"), ("backgrounded * abc12345", "", 0))
+    runner.script(("claude", "--bg"), real_launch_response("abc12345"))
     runner.script(
         ("claude", "agents", "--json"),
         [
@@ -2483,7 +2625,7 @@ def _dispatch_one_and_capture_launch_argv(tmp_path, **wave_kwargs):
     wc = _worker_command(tmp_path)
 
     runner = _healthy_runner()
-    runner.script(("claude", "--bg"), ("backgrounded * abc12345", "", 0))
+    runner.script(("claude", "--bg"), real_launch_response("abc12345"))
     runner.script(
         ("claude", "agents", "--json"),
         [
@@ -2524,13 +2666,14 @@ def test_dispatch_wave_forwards_extra_launch_args_to_the_launcher(tmp_path):
     """The seam: a consumer selects the shipped worker agent (or any other
     launch flag) by passing `extra_launch_args` to `dispatch_wave`, which
     reaches `ClaudeCli.launch_bg` unaltered and in order, ahead of the
-    positional prompt."""
+    positional prompt, after the end-of-options separator."""
     argv = _dispatch_one_and_capture_launch_argv(
         tmp_path, extra_launch_args=("--agent", "pipeline-worker")
     )
     assert argv[:4] == ["claude", "--bg", "--agent", "pipeline-worker"]
-    assert len(argv) == 5
-    assert argv[4].startswith("Run id: run-1\n")
+    assert argv[4] == "--"
+    assert len(argv) == 6
+    assert argv[5].startswith("Run id: run-1\n")
 
 
 def test_dispatch_wave_forwards_a_model_flag_through_extra_launch_args(tmp_path):
@@ -2557,14 +2700,15 @@ def test_dispatch_wave_docstring_states_the_model_declaration_contract():
 
 
 def test_dispatch_wave_default_launch_argv_is_byte_identical_without_the_seam(tmp_path):
-    """REFUSAL DIRECTION: passing no seam argument must launch exactly what
-    the driver launched before the seam existed -- [exe, "--bg", prompt] and
-    nothing else. The driver must never select an agent on its own: whether
-    `--agent` composes with `--bg` at all is not established."""
+    """REFUSAL DIRECTION: passing no seam argument must launch exactly
+    [exe, "--bg", "--", prompt] and nothing else. The driver must never
+    select an agent on its own: whether `--agent` composes with `--bg` at
+    all is not established."""
     argv = _dispatch_one_and_capture_launch_argv(tmp_path)
     assert argv[:2] == ["claude", "--bg"]
-    assert len(argv) == 3
-    assert argv[2].startswith("Run id: run-1\n")
+    assert argv[2] == "--"
+    assert len(argv) == 4
+    assert argv[3].startswith("Run id: run-1\n")
 
 
 # ---------------------------------------------------------------------------
@@ -2702,7 +2846,7 @@ def _wave_with_one_healthy_launch(store, tmp_path, accept_unit_id, *, clock_fn=N
     worker that accepts `accept_unit_id` out of the launch prompt."""
     wc = _worker_command(tmp_path)
     runner = _healthy_runner()
-    runner.script(("claude", "--bg"), ("backgrounded * abc12345", "", 0))
+    runner.script(("claude", "--bg"), real_launch_response("abc12345"))
     runner.script(
         ("claude", "agents", "--json"),
         [

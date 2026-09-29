@@ -37,14 +37,14 @@ Accepted text and the apply outcomes (A-min.2)
 
 ``UnitRecord.accepted_text`` is the durable text recorded by
 :meth:`~content_pipeline.execution.store.ExecutionStore.accept_unit` at
-submit time (plan D1: "the verdict is recorded durably with the accepted
+submit time ("the verdict is recorded durably with the accepted
 text"). ``execution.controller.finalize_run`` re-parses it mechanically via
 the adapter's ``parse_fn`` -- it never re-validates and never flips a verdict.
 
 Whether a unit's apply has run is NOT a ``units`` column -- it is derived from
 the append-only attempts log via the :data:`AttemptKind.APPLY_STARTED` /
 :data:`AttemptKind.APPLY_SUCCEEDED` pair a finalize records around each
-adapter ``apply`` call (plan D6). A unit whose last apply-related attempt is
+adapter ``apply`` call (apply_unknown fails closed). A unit whose last apply-related attempt is
 ``APPLY_STARTED`` with no following ``APPLY_SUCCEEDED`` is ``apply_unknown``;
 resuming finalize with any unit in that state refuses to proceed unless the
 adapter supplies a reconciliation hook (fail closed). An adapter may also
@@ -55,6 +55,7 @@ anything; that outcome is terminal on the apply axis while the unit remains
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from enum import Enum
 from typing import Mapping, Optional
@@ -89,6 +90,50 @@ TERMINAL_STATES = (UnitState.ACCEPTED, UnitState.FAILED, UnitState.SKIPPED)
 # single_pass`` -- a dependency ``status`` deliberately does not carry).
 SKIP_ERROR_PREFIX = "skip:"
 
+# The run-halt kind a dispatcher sets when several units of one wave
+# terminally failed with a systemic failure code (see FAILURE_CODES).
+# ``resume_run`` clears it like any other halt.
+HALT_REPEATED_FAILURE = "repeated_failure"
+
+# Fixed failure codes a worker may attach to its ``fail`` envelope (payload
+# member ``code``; absent is valid). ``env_mismatch``: the worker's verb was
+# refused because its environment disagrees with the run's, so every worker
+# launched the same way fails the same way. The set is closed: the protocol
+# refuses any other value.
+FAILURE_CODE_ENV_MISMATCH = "env_mismatch"
+FAILURE_CODES = (FAILURE_CODE_ENV_MISMATCH,)
+# Codes whose repetition across units points at the run's setup, not at the
+# units; the dispatcher's breaker counts only these.
+SYSTEMIC_FAILURE_CODES = (FAILURE_CODE_ENV_MISMATCH,)
+
+_ERROR_TEXT_LIMIT = 500  # the store's cap on a recorded error text
+
+
+def encode_failure(code: str, detail: str) -> str:
+    """The error text recording a coded failure: a JSON object
+    ``{"code": ..., "detail": ...}`` no longer than the store's cap, with
+    the detail shortened so the text always stays parseable."""
+    detail = str(detail)
+    while True:
+        text = json.dumps({"code": code, "detail": detail}, sort_keys=True)
+        if len(text) <= _ERROR_TEXT_LIMIT or not detail:
+            return text
+        detail = detail[: max(0, len(detail) - (len(text) - _ERROR_TEXT_LIMIT))]
+
+
+def failure_code(error: Optional[str]) -> Optional[str]:
+    """The known failure code recorded in an attempt's error text, or
+    ``None`` (no code, unparseable text, or an unknown code)."""
+    if not error:
+        return None
+    try:
+        value = json.loads(error)
+    except (TypeError, ValueError):
+        return None
+    if isinstance(value, dict) and value.get("code") in FAILURE_CODES:
+        return value["code"]
+    return None
+
 
 class AttemptKind(str, Enum):
     """What one recorded attempt/event row represents."""
@@ -98,9 +143,9 @@ class AttemptKind(str, Enum):
     RENEW = "renew"
     ACCEPT = "accept"
     FAIL = "fail"
-    SUPERSEDED = "superseded"  # a fenced-out accept/fail: recorded, never applied (invariant 4)
-    APPLY_STARTED = "apply_started"  # finalize is about to call the adapter's apply (D6)
-    APPLY_SUCCEEDED = "apply_succeeded"  # the adapter's apply returned without raising (D6)
+    SUPERSEDED = "superseded"  # a fenced-out accept/fail: recorded, never applied
+    APPLY_STARTED = "apply_started"  # finalize is about to call the adapter's apply (apply_unknown fails closed)
+    APPLY_SUCCEEDED = "apply_succeeded"  # the adapter's apply returned without raising (apply_unknown fails closed)
     APPLY_REJECTED = "apply_rejected"  # the adapter declined before any side effect
 
 
@@ -119,12 +164,12 @@ class RunRecord:
 
     ``driver`` / ``backend`` / ``model`` / ``adapter_version`` are recorded
     explicitly rather than inferred, so an incompatible resume can refuse
-    instead of guessing (the plan's D1 adapter-identity requirement, recorded
+    instead of guessing (the adapter-identity requirement, recorded
     here even though adapter refusal itself is a later-phase concern).
 
-    There is deliberately no ``paused`` field: operator pause/resume is D4's
-    A-min.2 concern (the plan assigns pause/halt run-control semantics
-    together in phase A-min.2). A-min.1 ships only halt, and halt alone.
+    There is deliberately no ``paused`` field: operator pause/resume belongs with the
+    halt rule (pause and halt run-control semantics ship together in
+    A-min.2). A-min.1 ships only halt, and halt alone.
 
     ``environment`` (item 5's anchor) is the environment snapshot taken at
     create-run time (``execution.adapter.WorkerEnvironment.snapshot()``), in
@@ -132,7 +177,7 @@ class RunRecord:
     no snapshot was recorded (an adapter-less create, or a mount whose
     adapter declared nothing) -- treated as an empty recorded snapshot by
     ``execution.adapter.require_compatible_environment``. Never enters the
-    status digest (invariant 6).
+    status digest (the status digest carries no prompts or payloads).
 
     ``dispatcher_id`` / ``dispatcher_lease_expires_at`` / ``dispatcher_fence``
     (B1) are the run-level LAUNCHER-ELECTION lease -- a distinct lease from a
@@ -255,7 +300,7 @@ class ApplyRejected(ExecutionError):
 
     Adapters MUST raise this exception only when they know that no external
     write, commit, or other delivery side effect occurred. If apply may have
-    partly landed, the adapter MUST raise another exception so D6 leaves the
+    partly landed, the adapter MUST raise another exception so finalize leaves the
     ``APPLY_STARTED`` outcome available for reconciliation. The reason is
     capped because it is persisted in the attempts error column.
     """
@@ -280,7 +325,7 @@ class DuplicateUnitError(ExecutionError):
 
 
 class RunHaltedError(ExecutionError):
-    """A claim was attempted against a halted run (D4: halt blocks claims)."""
+    """A claim was attempted against a halted run (halt blocks claims)."""
 
     def __init__(self, run_id: str, kind: str) -> None:
         self.run_id = run_id
@@ -302,7 +347,7 @@ class NotClaimedError(ExecutionError):
 
 class NotAcceptedError(ExecutionError):
     """An apply-started/apply-succeeded record was attempted against a unit
-    that is not ACCEPTED (finalize only ever applies accepted units, D1/D6)."""
+    that is not ACCEPTED (finalize only ever applies accepted units)."""
 
 
 class StaleFenceError(ExecutionError):

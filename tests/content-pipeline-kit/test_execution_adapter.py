@@ -693,3 +693,64 @@ def test_resolve_expected_unit_seconds_per_unit_callable_needs_a_unit():
         unit_seconds_for=lambda u: 999.0,
     )
     assert adapter.resolve_expected_unit_seconds(None) == 100.0
+
+
+# -- require_cwd and the cwd_var companion on a case-insensitive host ----------
+
+_CASE_INSENSITIVE_HOST = os.path.normcase("A") == os.path.normcase("a")
+
+
+def test_require_cwd_correct_case_accepts(monkeypatch):
+    monkeypatch.setattr(os, "getcwd", lambda: FAKE_CWD)
+    WorkerEnvironment(require_cwd=True).check({"__cwd__": FAKE_CWD}, run_id="run-1")
+
+
+def test_require_cwd_different_case_follows_the_host_filesystem(monkeypatch):
+    """Windows echoes the caller's chdir casing back from getcwd, so a
+    different-case spelling of the same directory accepts there. On POSIX,
+    where case distinguishes paths, it refuses."""
+    monkeypatch.setattr(os, "getcwd", lambda: FAKE_CWD.upper())
+    env = WorkerEnvironment(require_cwd=True)
+    if _CASE_INSENSITIVE_HOST:
+        env.check({"__cwd__": FAKE_CWD}, run_id="run-1")
+    else:
+        with pytest.raises(WorkerEnvironmentMismatchError):
+            env.check({"__cwd__": FAKE_CWD}, run_id="run-1")
+
+
+def test_require_cwd_genuinely_different_directory_refuses(monkeypatch):
+    monkeypatch.setattr(os, "getcwd", lambda: FAKE_CWD)
+    with pytest.raises(WorkerEnvironmentMismatchError):
+        WorkerEnvironment(require_cwd=True).check(
+            {"__cwd__": "D:/dev/other-project/main"}, run_id="run-1"
+        )
+
+
+def test_require_cwd_git_bash_spelling_still_refuses(monkeypatch):
+    monkeypatch.setattr(os, "getcwd", lambda: FAKE_CWD)
+    with pytest.raises(WorkerEnvironmentMismatchError):
+        WorkerEnvironment(require_cwd=True).check(
+            {"__cwd__": "/d/dev/example-project/main"}, run_id="run-1"
+        )
+
+
+def test_pwd_declared_as_required_and_cwd_var_accepts_a_different_case_recording(monkeypatch):
+    """The companion trap: the child's PWD is rewritten to the RECORDED cwd
+    and then compared against the recorded PWD, so a case difference between
+    the two recordings must not refuse where the filesystem ignores case."""
+    monkeypatch.setattr(os, "getcwd", lambda: FAKE_CWD.upper())
+    monkeypatch.setenv("PWD", FAKE_CWD.upper())
+    env = WorkerEnvironment(required_vars=("PWD",), cwd_vars=("PWD",))
+    if _CASE_INSENSITIVE_HOST:
+        env.check({"PWD": FAKE_CWD}, run_id="run-1")
+    else:
+        with pytest.raises(WorkerEnvironmentMismatchError):
+            env.check({"PWD": FAKE_CWD}, run_id="run-1")
+
+
+def test_a_required_var_not_declared_as_a_cwd_var_stays_exact(monkeypatch):
+    monkeypatch.setenv("APP_ROOT", FAKE_CWD.upper())
+    with pytest.raises(WorkerEnvironmentMismatchError):
+        WorkerEnvironment(required_vars=("APP_ROOT",)).check(
+            {"APP_ROOT": FAKE_CWD}, run_id="run-1"
+        )

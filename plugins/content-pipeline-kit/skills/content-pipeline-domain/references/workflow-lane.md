@@ -72,6 +72,23 @@ the only one consistent with how `N` was chosen in the first place. A
 pack's `ordinal` field carries the stored ordinal for reporting only; it
 plays no role in lane assignment.
 
+## Invoking the script
+
+Run it by its registered name: `Workflow({name:
+"content-pipeline-kit:run-ready-wave", args: <the args>})`. The name resolves
+the installed plugin's own copy of the script, so the call is the same from
+a consumer project, a `--plugin-dir` session, and a plugins-kit checkout.
+Never pass a `scriptPath`: the Workflow tool refuses a path inside the plugin
+cache, and a repository-relative path resolves only inside a plugins-kit
+checkout.
+
+Halt and drain are the invoking session's job, not the script's. A halted
+run yields an empty wave from `build_wave_args`; call
+`execution.controller.resume_run` once the halt condition has cleared, then
+assemble again. A unit left CLAIMED by a dead agent is reaped by the next
+`build_wave_args` once its lease has expired, and not before. See the
+`workflow-pipeline` skill's "Halted runs and empty waves".
+
 ## The args contract
 
 `run-ready-wave.js` receives `args` as a **JSON string**, per the Workflow

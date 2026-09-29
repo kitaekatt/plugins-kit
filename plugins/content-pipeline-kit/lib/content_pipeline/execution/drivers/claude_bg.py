@@ -1,8 +1,6 @@
 """The Claude-background-session driver (B1).
 
-**Scope, steps 1-11.** Per the plan's B1 sequencing
-(``docs/planning/content-pipeline-kit/session-recipients-plan.md``, "Phase B
--- Claude background sessions"), this module ships:
+**Scope, steps 1-11.** This module ships:
 
 1. :class:`ClaudeCli` -- the ``claude`` process seam. Every argv this module
    ever builds funnels through ``ClaudeCli.runner``, its SOLE process
@@ -17,7 +15,7 @@
    docstring for why this matters).
 5. :class:`WorkerCommand`, :func:`envelope_path_for`, :func:`worker_envelopes_for`,
    :func:`enumerate_worker_invocations`, :func:`build_launch_prompt` -- the
-   enumerated invocation set (P5, six entries: three ``protocol @<path>``
+   enumerated invocation set (six entries: three ``protocol @<path>``
    invocations plus three Write-tool targets) and the launch prompt built
    from it. Every worker verb goes through ``cli.run.build_commands``'s
    ``protocol`` command with a ``@<path>`` JSON envelope -- never the flag
@@ -39,13 +37,13 @@
    envelope's own ``fencing_token`` and refuses on any mismatch. The path
    stays generation-neutral (see :func:`answer_path_for`), so the token
    lives in runtime FILE CONTENT and never in an enumerated command string
-   (P5).
+   (pre-computable allowlisted invocations).
 6. :func:`dispatch_unit` -- launch one unit, confirmed by an OBSERVED state
-   transition (P11), never by the launcher's exit code or banner.
+   transition (observed-transition rule), never by the launcher's exit code or banner.
 7. :class:`SessionRecord`, :class:`ParseResult`, :func:`parse_agents_json` --
-   the schema-tolerant reconciler (P4).
+   the schema-tolerant reconciler (agents --json record shape).
 8. :func:`supervise_tick` -- status classification, lease renewal, and stall
-   detection (D5, P12, P13) for every currently open dispatch.
+   detection (this lane's dispatcher is the renewer; agents --json is the authoritative status channel) for every currently open dispatch.
 9. :func:`reclaimable_units`, :func:`reclaim_attempt_count` -- driver-local
    reclaim selection and the bounded-reclaim rule.
 10. :func:`classify_settled_failure` -- halt classification for a SETTLED
@@ -53,12 +51,16 @@
     logs``.
 11. :func:`dispatch_wave` -- the bounded dispatch loop over all of the above.
 
-Command construction (P3) -- read before adding a method
+Command construction (claude --bg command shape) -- read before adding a method
 ------------------------------------------------------------------------------
+Background launches use ``[exe, "--bg", *extra_args, "--", prompt]``. The
+end-of-options separator protects the positional prompt from variadic flags
+such as ``--allowedTools`` and from prompts that start with ``-``.
+
 The lifecycle verbs (``stop``, ``rm``, ``respawn`` -- and ``logs``,
 deliberately never given a method here, see below) are **top-level**:
 ``claude <verb> <id>``. ``claude agents <verb> <id>`` is silently accepted
-(exit 0) and does NOTHING (P3) -- an undocumented, unstable platform shape
+(exit 0) and does NOTHING (claude --bg command shape) -- an undocumented, unstable platform shape
 this module must never emit as a dispatch command. The token ``"agents"``
 therefore appears in exactly ONE argv shape this module builds for real
 dispatch: :meth:`ClaudeCli.agents_json`'s ``[exe, "agents", "--json"]`` /
@@ -70,7 +72,7 @@ a dispatch command and is not covered by the invariant above.
 Why no ``logs`` method
 ------------------------
 ``claude logs <id>`` is a live-daemon-only channel: it fails once the
-session's daemon has exited (P13's ``\\\\.\\pipe\\cc-daemon-*-control``
+session's daemon has exited (the daemon-only channel: ``\\\\.\\pipe\\cc-daemon-*-control``
 observation). A later halt-classification path for a SETTLED unit must read
 the session transcript or per-job state instead, never ``claude logs`` --
 and the cheapest way to guarantee that later code never takes the wrong
@@ -119,11 +121,16 @@ from content_pipeline.execution.controller import record_halt
 from content_pipeline.execution.model import (
     AlreadyClaimedError,
     AttemptKind,
+    HALT_REPEATED_FAILURE,
+    SYSTEMIC_FAILURE_CODES,
+    failure_code,
     ExecutionError,
+    NoOpenDispatchError,
     NotClaimedError,
     RunHaltedError,
     RunRecord,
     StaleDispatcherLeaseError,
+    StaleFenceError,
     TerminalStateError,
     UnitRecord,
     UnitState,
@@ -154,7 +161,7 @@ from content_pipeline.llm.platform import HALT_AUTH, HALT_RATE_LIMIT, PipelineHa
 
 # The names above live in workerpack.py and are re-imported here as
 # module-level aliases -- claude_bg.X is workerpack.X for every one of them
-# (tests/content-pipeline-kit/test_workerpack_aliases.py). They moved there
+# (a test pins the aliasing). They moved there
 # so the workflow lane (workflows/run-ready-wave.js and its Python pack
 # builder) can build a worker's invocation set and reap abandoned units
 # without importing this driver module. Do not redefine any of them below;
@@ -236,7 +243,7 @@ def _default_runner(
 
     Never exercised by this module's own test suite -- every test supplies
     its own ``runner`` (a fake, scripted callable); see
-    ``tests/content-pipeline-kit/test_execution_driver_claude_bg.py``'s
+    the suite's
     "no test reaches a real subprocess" guard, which patches THIS name to a
     raising stub and asserts nothing in the suite still reaches it. The
     encoding behavior itself is pinned by a test that patches
@@ -309,11 +316,14 @@ class ClaudeCli:
         cwd: Optional[str] = None,
         timeout: Optional[float] = None,
     ) -> Tuple[str, str, int]:
-        """``claude --bg [extra_args...] <prompt>``. ``prompt`` is positional
-        (P3): a background session takes no ``-p``, and mixing the two is a
-        hard usage error (see :func:`preflight` step 6)."""
+        """``claude --bg [extra_args...] -- <prompt>``. ``prompt`` is positional
+        (claude --bg command shape): a background session takes no ``-p``, and
+        mixing the two is a hard usage error (see :func:`preflight` step 6). The
+        ``--`` separator keeps a variadic flag such as ``--allowedTools`` from
+        consuming the prompt, and a prompt starting with ``-`` from being read as
+        a flag."""
         exe = self.resolve_executable()
-        argv = [exe, "--bg", *extra_args, prompt]
+        argv = [exe, "--bg", *extra_args, "--", prompt]
         return self._invoke(argv, env=env, cwd=cwd, timeout=timeout)
 
     def agents_json(
@@ -325,7 +335,7 @@ class ClaudeCli:
     ) -> Tuple[str, str, int]:
         """``claude agents --json [--all]`` -- the ONE argv shape in this
         module that carries the ``"agents"`` token (see the module
-        docstring's "Command construction (P3)" section)."""
+        docstring's "Command construction (claude --bg command shape)" section)."""
         exe = self.resolve_executable()
         argv = [exe, "agents", "--json"]
         if all_sessions:
@@ -341,7 +351,7 @@ class ClaudeCli:
         timeout: Optional[float] = None,
     ) -> Tuple[str, str, int]:
         """``claude <verb> <session_id>`` -- TOP-LEVEL, never
-        ``claude agents <verb> <session_id>`` (P3)."""
+        ``claude agents <verb> <session_id>`` (claude --bg command shape)."""
         exe = self.resolve_executable()
         argv = [exe, verb, session_id]
         return self._invoke(argv, env=env, timeout=timeout)
@@ -476,11 +486,11 @@ def preflight(
             f"{type(agents_sample).__name__}"
         )
 
-    # 5. Assert each lifecycle verb behaves (P3). For stop|logs|rm|respawn:
+    # 5. Assert each lifecycle verb behaves (claude --bg command shape). For stop|logs|rm|respawn:
     # `claude <verb> --help` must be verb-specific -- not byte-identical to
     # `claude agents --help`, and naming the verb. Then the negative half:
     # `claude agents stop --help` must BE the plain `agents` help (the
-    # silent P3 shape). If that stops holding, the platform changed and this
+    # silent command shape). If that stops holding, the platform changed and this
     # says so loudly.
     verb_help: Dict[str, str] = {}
     agents_help_stdout, _agents_help_stderr, _agents_help_rc = cli._invoke(
@@ -494,7 +504,7 @@ def preflight(
             raise PreflightError(
                 f"`claude {verb} --help` is byte-identical to `claude agents "
                 "--help`; the top-level lifecycle verb no longer appears to "
-                "exist as a distinct command (P3 has changed)"
+                "exist as a distinct command (the lifecycle-verbs-are-top-level assumption has changed)"
             )
         if verb.lower() not in text.lower():
             raise PreflightError(
@@ -509,7 +519,7 @@ def preflight(
         raise PreflightError(
             "`claude agents stop --help` no longer matches plain `claude "
             "agents --help` -- the platform's documented silent-no-op shape "
-            "(P3) has changed; command construction assumptions must be "
+            "(the lifecycle-verbs-are-top-level assumption) has changed; command construction assumptions must be "
             "re-verified before dispatching"
         )
 
@@ -519,7 +529,7 @@ def preflight(
     if bg_rc == 0:
         raise PreflightError(
             "`claude --bg -p x` exited 0; expected a hard usage-error "
-            "refusal (P3: --bg takes a positional prompt, never -p)"
+            "refusal (--bg takes a positional prompt, never -p)"
         )
     if "backgrounded" in bg_text.lower():
         raise PreflightError(
@@ -640,7 +650,7 @@ def compose_worker_environment(
 
 
 # ---------------------------------------------------------------------------
-# Step 5 -- launch prompt and the enumerated invocation set (P5)
+# Step 5 -- launch prompt and the enumerated invocation set (pre-computable allowlisted invocations)
 # ---------------------------------------------------------------------------
 
 
@@ -665,13 +675,13 @@ def build_launch_prompt(
     outcome to achieve -- the 2026-08-17 probe stalled on a shell redirect
     the worker composed itself to satisfy an instruction phrased as an
     outcome (``echo ... > file``), and no allowlist author would have
-    enumerated it (P5). Unit content never appears here: the worker fetches
+    enumerated it (pre-computable allowlisted invocations). Unit content never appears here: the worker fetches
     its own prepared request via the ``read`` invocation at runtime.
 
     ``fencing_token`` is the token the DISPATCHER's own claim returned
     (:func:`dispatch_unit` claims before launching). It reaches the worker
     here, in the prompt, and nowhere else -- never in an enumerated
-    invocation string, which must stay pre-computable for P5 allowlisting.
+    invocation string, which must stay pre-computable for allowlisting.
     The worker substitutes it into the ``submit``/``fail`` envelope
     templates and writes it as the fence line of its answer artifact.
 
@@ -741,7 +751,10 @@ def build_launch_prompt(
         "the same way as step 3 -- write EXACTLY the template below, "
         "substituting ONLY <FENCING_TOKEN> and <FAILURE_DETAIL_JSON> (the "
         "latter with one nonempty JSON string literal describing what went "
-        f"wrong), to exactly this path (no other path):\n   {write_fail_cmd}\n"
+        "wrong; if a read or submit reply refused you with error type "
+        "WorkerEnvironmentMismatchError, also add the payload member "
+        "\"code\": \"env_mismatch\", and never add it otherwise), to exactly "
+        f"this path (no other path):\n   {write_fail_cmd}\n"
         f"   Template:\n{fail_template}\n"
         f"   Then report failure:\n   {fail_cmd}\n"
     )
@@ -754,7 +767,7 @@ def build_launch_prompt(
 
 class AgentsJsonParseError(ExecutionError):
     """``agents --json`` output could not be parsed under the schema-tolerant
-    contract (P4): not JSON, not a list, an element that is not an object, or
+    contract (agents --json record shape): not JSON, not a list, an element that is not an object, or
     a ``kind == "background"`` element missing a required field."""
 
 
@@ -763,11 +776,11 @@ _REQUIRED_SESSION_FIELDS: Tuple[str, ...] = ("kind", "id", "sessionId", "state")
 
 @dataclass(frozen=True)
 class SessionRecord:
-    """One ``kind == "background"`` record from ``agents --json`` (P4).
+    """One ``kind == "background"`` record from ``agents --json`` (agents --json record shape).
 
     ``id`` is the short id the launch banner prints and top-level lifecycle
     verbs (``claude stop|rm|respawn <id>``) take. ``session_id`` is the
-    Claude session id (``sessionId`` in the raw JSON) -- D5's "identity is
+    Claude session id (``sessionId`` in the raw JSON) -- the rule "identity is
     the Claude session ID, never the PID" -- and the per-job state file lives
     at ``~/.claude/jobs/<id>/state.json`` (keyed on the SHORT id, not
     ``session_id``; see :func:`classify_settled_failure`).
@@ -775,12 +788,12 @@ class SessionRecord:
     ``started_at_ms`` carries the raw epoch-MILLISECONDS value exactly as
     read; :attr:`started_at_seconds` is a distinctly named float-seconds
     computed property, so a call site can never be ambiguous about which
-    unit either attribute is in (P4's "startedAt is epoch milliseconds"
+    unit either attribute is in (the "startedAt is epoch milliseconds"
     note).
 
     ``pid``/``status``/``waiting_for`` are OPTIONAL: never required of a
     worker record, and never a background-vs-interactive discriminator --
-    ``kind`` is the only one (P4).
+    ``kind`` is the only one (agents --json record shape).
     """
 
     kind: str
@@ -811,7 +824,7 @@ class ParseResult:
 
 
 def parse_agents_json(text: str) -> ParseResult:
-    """Parse ``claude agents --json --all`` output, schema-tolerant (P4).
+    """Parse ``claude agents --json --all`` output, schema-tolerant (agents --json record shape).
 
     Order is load-bearing (see the module's B1 assignment):
 
@@ -877,12 +890,12 @@ def parse_agents_json(text: str) -> ParseResult:
 
 
 # ---------------------------------------------------------------------------
-# Step 6 -- dispatch one unit, confirmed by an observed transition (P11)
+# Step 6 -- dispatch one unit, confirmed by an observed transition (observed-transition rule)
 # ---------------------------------------------------------------------------
 
 
 class LaunchMisconfigurationError(ExecutionError):
-    """A single launch never reached a confirmed background state (P11): the
+    """A single launch never reached a confirmed background state (observed-transition rule): the
     session either appeared as ``state: "failed"`` inside the confirmation
     window, or never appeared at all. Per the module's B1 assignment, the
     unit was never claimed by this launch, so no ``fail_unit`` is recorded
@@ -892,16 +905,39 @@ class LaunchMisconfigurationError(ExecutionError):
     (:func:`dispatch_wave`) aborts the whole dispatch loop rather than
     spending N sessions to learn the same thing N times."""
 
-    def __init__(self, run_id: str, unit_id: str, worker_id: str, short_id: Optional[str]) -> None:
+    def __init__(
+        self,
+        run_id: str,
+        unit_id: str,
+        worker_id: str,
+        short_id: Optional[str],
+        launch_stderr: str = "",
+        launch_rc: Optional[int] = None,
+    ) -> None:
         self.run_id = run_id
         self.unit_id = unit_id
         self.worker_id = worker_id
         self.short_id = short_id
+        # A one-line, length-bounded excerpt of the launcher's stderr (the
+        # `claude --bg` process's own diagnostic, for example an untrusted
+        # directory). Never unit content.
+        self.launch_stderr = launch_stderr
+        self.launch_rc = launch_rc
+        reason = f"; launcher said (rc={launch_rc}): {launch_stderr}" if launch_stderr else ""
         super().__init__(
             f"run {run_id!r} unit {unit_id!r}: launch for worker {worker_id!r} "
             f"never reached a confirmed background state (short id observed: "
-            f"{short_id!r}); classified as a launch misconfiguration"
+            f"{short_id!r}); classified as a launch misconfiguration{reason}"
         )
+
+
+LAUNCH_STDERR_EXCERPT_CHARS = 300
+
+
+def _stderr_excerpt(text: Optional[str]) -> str:
+    """The launcher's stderr as one whitespace-collapsed line, bounded to
+    :data:`LAUNCH_STDERR_EXCERPT_CHARS`."""
+    return " ".join((text or "").split())[:LAUNCH_STDERR_EXCERPT_CHARS]
 
 
 DEFAULT_LAUNCH_CONFIRM_SECONDS = 60.0
@@ -932,9 +968,9 @@ _BG_LAUNCH_BANNER_RE = re.compile(r"backgrounded\s+\S+\s+([0-9a-fA-F]{8,})")
 def _parse_launch_session_id(stdout: str) -> Optional[str]:
     """Best-effort extraction of the short session id from a ``claude --bg``
     launch banner (``"backgrounded"``, U+00B7, then the id -- or historically
-    ``"backgrounded * a47add3f"``, P3). Used only to know WHICH ``agents
+    ``"backgrounded * a47add3f"``). Used only to know WHICH ``agents
     --json`` record to watch -- never as evidence the launch succeeded
-    (P11: the banner and exit code are discarded as evidence of success; a
+    (observed-transition rule: the banner and exit code are discarded as evidence of success; a
     bad flag surfaces only asynchronously as ``state: "failed"``).
     """
     if not stdout:
@@ -947,7 +983,7 @@ def _mint_worker_id() -> str:
     return f"claude-bg-{uuid.uuid4().hex[:12]}"
 
 
-def _end_session(cli: "ClaudeCli", short_id: str, *, env: Optional[Mapping[str, str]]) -> None:
+def _end_session(cli: "ClaudeCli", short_id: str, *, env: Optional[Mapping[str, str]]) -> bool:
     """Best-effort ``stop`` then ``rm`` of one background session, module-
     private and shared by every cleanup path in this driver (dispatch
     launch failure/abort, a settled ``worker_failed``/``session_lingering``/
@@ -957,15 +993,23 @@ def _end_session(cli: "ClaudeCli", short_id: str, *, env: Optional[Mapping[str, 
     ``rm``, so this is two separate ``try``/``except`` blocks, not one
     wrapping both. Neither return code nor exception establishes that the
     session actually ended -- this is hygiene, not a guarantee (see the
-    callers' own docstrings for what, if anything, closes the gap)."""
+    callers' own docstrings for what, if anything, closes the gap).
+
+    Returns ``True`` when the session is reported LEAKED: ``rm`` raised or
+    returned a nonzero code, so the session record may still exist. ``rm`` is
+    the judge because it is the step that removes the record; a failing
+    ``stop`` alone (an already-finished session cannot be stopped) does not
+    count. The return value never changes control flow -- callers that do
+    not surface leaks ignore it."""
     try:
         cli.stop(short_id, env=env)
     except Exception:  # noqa: BLE001 -- best-effort cleanup
         pass
     try:
-        cli.rm(short_id, env=env)
+        _out, _err, rc = cli.rm(short_id, env=env)
     except Exception:  # noqa: BLE001 -- best-effort cleanup
-        pass
+        return True
+    return rc != 0
 
 
 @dataclass
@@ -1003,6 +1047,10 @@ class OpenDispatch:
     fencing_token: int
     claimed_by: Optional[str]
     terminal_since: Optional[float] = None
+
+
+class _DispatcherLeaseLostError(RuntimeError):
+    """The wave no longer owns its dispatcher lease during confirmation."""
 
 
 def _release_claim_and_settle(
@@ -1063,9 +1111,10 @@ def dispatch_unit(
     poll_interval_s: float = DEFAULT_LAUNCH_POLL_INTERVAL_S,
     sleep_fn: Callable[[float], None] = time.sleep,
     clock_fn: Callable[[], float] = time.time,
+    dispatcher_lease_renew_fn: Optional[Callable[[], bool]] = None,
     at: Optional[float] = None,
 ) -> OpenDispatch:
-    """Dispatch ONE unit and confirm it, per P11.
+    """Dispatch ONE unit and confirm it, per the observed-transition rule.
 
     ``worker_id`` is minted BEFORE launch (author ruling) when not supplied.
     ``store.record_dispatch`` is called BEFORE ``cli.launch_bg`` -- duplicate
@@ -1078,7 +1127,7 @@ def dispatch_unit(
     same unit cannot re-claim it after a reclaim has re-dispatched it under
     a fresh ``worker_id``; that zombie's token is stale, so its ``submit``
     and ``fail`` fail closed with ``StaleFenceError`` -- the duplicated
-    spend invariant 4 already accepts, not lost work.
+    spend the design already accepts, not lost work.
 
     On :class:`LaunchMisconfigurationError` the claim taken here is
     RELEASED (a non-terminal ``store.fail_unit``, returning the unit to
@@ -1115,6 +1164,11 @@ def dispatch_unit(
     corpse is ``rm``'d (best-effort; an ``rm`` failure never masks the
     misconfiguration).
 
+    When called by :func:`dispatch_wave`, the dispatcher lease is renewed
+    immediately after launch and after each confirmation poll. Losing that
+    fenced lease aborts this dispatch before attachment; any identified
+    session is stopped and removed by the common cleanup path.
+
     The returned :class:`OpenDispatch` carries the claim's OWN
     ``fencing_token`` and ``worker_id`` -- what :func:`supervise_tick` later
     checks before EVER renewing this unit's lease.
@@ -1146,6 +1200,9 @@ def dispatch_unit(
     # so nothing could ever recover it: `dispatch_wave`'s exit cleanup only
     # settles dispatches it is TRACKING, and this one never got that far.
     matched: Optional[SessionRecord] = None
+    short_id: Optional[str] = None
+    launch_stderr = ""
+    launch_rc: Optional[int] = None
     try:
         # A before-launch snapshot of the same `agents --json` listing the
         # confirmation poll below already uses. It exists for the banner-less
@@ -1168,14 +1225,20 @@ def dispatch_unit(
         prompt = build_launch_prompt(
             worker_command, run_id, unit.unit_id, worker_id, claim.fencing_token
         )
-        launch_stdout, _launch_stderr, _launch_rc = cli.launch_bg(
+        launch_stdout, raw_launch_stderr, launch_rc = cli.launch_bg(
             prompt, extra_args=extra_launch_args, env=env, cwd=cwd
         )
+        launch_stderr = _stderr_excerpt(raw_launch_stderr)
         short_id = _parse_launch_session_id(launch_stdout)
+
+        if dispatcher_lease_renew_fn is not None and not dispatcher_lease_renew_fn():
+            raise _DispatcherLeaseLostError
 
         deadline = clock_fn() + launch_confirm_seconds
         while True:
             poll_stdout, _poll_stderr, poll_rc = cli.agents_json(all_sessions=True, env=env)
+            if dispatcher_lease_renew_fn is not None and not dispatcher_lease_renew_fn():
+                raise _DispatcherLeaseLostError
             if poll_rc == 0:
                 try:
                     parsed = parse_agents_json(poll_stdout)
@@ -1216,13 +1279,16 @@ def dispatch_unit(
             )
             if matched is not None:
                 _end_session(cli, matched.id, env=env)
-            raise LaunchMisconfigurationError(run_id, unit.unit_id, worker_id, short_id)
+            raise LaunchMisconfigurationError(
+                run_id, unit.unit_id, worker_id, short_id, launch_stderr, launch_rc
+            )
         store.attach_dispatch_session(run_id, unit.unit_id, matched.session_id)
     except LaunchMisconfigurationError:
         raise  # already released and settled by the branch above
     except BaseException:
-        if matched is not None:
-            _end_session(cli, matched.id, env=env)
+        identified_id = matched.id if matched is not None else short_id
+        if identified_id is not None:
+            _end_session(cli, identified_id, env=env)
         _release_claim_and_settle(
             store, run_id, unit.unit_id, claim.fencing_token,
             session_id=matched.session_id if matched is not None else None, at=at
@@ -1265,7 +1331,7 @@ def _tail_scan_transcript(path: Path, *, max_lines: int = DEFAULT_TRANSCRIPT_TAI
 
 
 def _read_job_state_text_fields(job_id: str, *, jobs_root: Optional[Path] = None) -> str:
-    """``needs``/``detail``/``output.result`` -- TEXT fields only (P13);
+    """``needs``/``detail``/``output.result`` -- TEXT fields only (agents --json is the authoritative status channel);
     never a field that drives a progress/status decision."""
     root = jobs_root if jobs_root is not None else (Path.home() / ".claude" / "jobs")
     path = root / job_id / "state.json"
@@ -1297,14 +1363,14 @@ def classify_settled_failure(
     jobs_root: Optional[Path] = None,
 ) -> Optional[str]:
     """Halt classification for a SETTLED (no longer running) background
-    session -- never ``claude logs`` (that channel is live-daemon-only, P13,
+    session -- never ``claude logs`` (that channel is live-daemon-only,
     and :class:`ClaudeCli` ships no ``logs`` method by construction).
 
     Two sources, each behind a tolerant parse that can NEVER raise out of
     this function (the whole body is wrapped): the session transcript for
     ``session_id`` (located under ``~/.claude/projects/*/``, tail-scanned),
     then -- when ``job_id`` is supplied -- ``~/.claude/jobs/<job_id>/state.json``'s
-    TEXT fields only (``detail``, ``needs``, ``output.result`` -- P13: this
+    TEXT fields only (``detail``, ``needs``, ``output.result`` -- this
     file's own ``state`` field may disagree with ``agents --json`` and must
     never be read here or anywhere a status decision is made).
 
@@ -1332,18 +1398,28 @@ def _classify_and_maybe_halt(
     store: ExecutionStore, run_id: str, open_dispatch: OpenDispatch, *, at: Optional[float]
 ) -> Optional[str]:
     """Classify a settled dispatch's failure and, on ``rate_limit``/``auth``,
-    call :func:`~content_pipeline.execution.controller.record_halt` (D4).
+    call :func:`~content_pipeline.execution.controller.record_halt` (the shared halt response).
     Returns the classified kind, or ``None`` for an ordinary unit failure."""
     kind = classify_settled_failure(open_dispatch.session_id, job_id=open_dispatch.id)
     if kind in (HALT_RATE_LIMIT, HALT_AUTH):
         exc = PipelineHaltError(kind, detail=f"classified from settled session {open_dispatch.session_id!r}")
-        record_halt(store, run_id, open_dispatch.unit_id, open_dispatch.fencing_token, exc, at=at)
+        try:
+            record_halt(store, run_id, open_dispatch.unit_id, open_dispatch.fencing_token, exc, at=at)
+        except (TerminalStateError, NotClaimedError, StaleFenceError):
+            # The worker's accept (or a reclaim) landed between the tick's
+            # read of the unit and this release. ``record_halt`` sets the
+            # run halt BEFORE it releases the claim, so the halt is already
+            # recorded; only the release is refused because the unit no
+            # longer belongs to this dispatch. Nothing is left to undo, and
+            # the refusal must not escape the tick and abandon every other
+            # in-flight dispatch.
+            pass
         return kind
     return None
 
 
 # ---------------------------------------------------------------------------
-# Step 8 -- status classification, renewal, stall detection (D5, P12, P13)
+# Step 8 -- status classification, renewal, stall detection
 # ---------------------------------------------------------------------------
 
 # How long a dispatch whose unit is already TERMINAL may keep its slot while
@@ -1361,8 +1437,9 @@ class TickResult:
 
     renewed: Tuple[str, ...]
     settled: Dict[str, str]  # unit_id -> outcome
-    dropped: Tuple[str, ...]  # unit_id -- fence/claimant drift, slot freed with no store write
+    dropped: Tuple[str, ...]  # unit_id -- fence/claimant drift, or dispatch row already settled elsewhere
     halted: Optional[str]
+    leaked_sessions: Tuple[str, ...] = ()  # short ids whose stop/rm cleanup did not remove the session
 
 
 def supervise_tick(
@@ -1377,7 +1454,7 @@ def supervise_tick(
     at: Optional[float] = None,
 ) -> TickResult:
     """ONE ``agents --json --all`` call serving every tracked open dispatch
-    (D5, P12, P13).
+    (this lane's dispatcher is the renewer; agents --json is the authoritative status channel).
 
     Per open dispatch:
 
@@ -1404,21 +1481,30 @@ def supervise_tick(
       :func:`dispatch_wave`.
     - ``blocked`` (any reason) -- STOP renewing, with NO grace (ruling 1: a
       background session has been observed blocked for 19 days with nothing
-      timing it out, P12; renewing on ``blocked`` renews forever). Best-effort
+      timing it out; renewing on ``blocked`` renews forever). Best-effort
       ``stop`` + ``rm`` first, then the dispatch is settled
       (``outcome="blocked"``) so the unit becomes reclaimable once its lease
-      naturally expires (D5) -- this dispatcher never calls ``fail_unit``
+      naturally expires (lane-specific lease rules) -- this dispatcher never calls ``fail_unit``
       for it. The ``stop``/``rm`` are hygiene only; their return codes are
       not inspected, so they do not establish that the session ended.
-    - ``failed``/``stopped`` -- stop renewing, settle, classify (step 10).
+    - ``failed``/``stopped`` -- stop renewing, settle, classify (step 10),
+      except when the unit is already ACCEPTED: the session ended after its
+      work was accepted, so there is no failure to classify and no halt.
     - ``done`` with the unit ACCEPTED -- the happy path: settle
       ``outcome="accepted"``, no classification.
     - ``done`` with the unit NOT accepted -- stop renewing, settle, classify.
     - Absent from ``--all`` -- stop renewing, settle (``outcome="missing"``),
       classify (best-effort, using the last-known session/job ids).
 
+    A dispatch whose row is already settled (another dispatcher adopted and
+    closed it) is DROPPED rather than settled again. A halt classification
+    whose claim release is refused because the unit is no longer this
+    dispatch's (accepted or reclaimed inside the read-then-release window)
+    still reports the halt, which was recorded first. Sessions whose ``rm``
+    did not succeed are listed in ``TickResult.leaked_sessions``.
+
     No branch here reads ``~/.claude/jobs/<id>/state.json`` for a status
-    decision (P13); :func:`classify_settled_failure` reads it for TEXT
+    decision (agents --json is the authoritative status channel); :func:`classify_settled_failure` reads it for TEXT
     fields only, and only after a dispatch has already been settled from
     ``agents --json`` state.
     """
@@ -1440,7 +1526,25 @@ def supervise_tick(
     renewed: List[str] = []
     settled: Dict[str, str] = {}
     dropped: List[str] = []
+    leaked: List[str] = []
     halted: Optional[str] = None
+
+    def _end(open_dispatch: OpenDispatch) -> None:
+        if _end_session(cli, open_dispatch.id, env=env):
+            leaked.append(open_dispatch.id)
+
+    def _settle(unit_id: str, outcome: str) -> bool:
+        """Settle the open dispatch row. ``False`` (and the unit DROPPED)
+        when the row is already settled: another dispatcher adopted and
+        closed it after this one's lease lapsed, so it is no longer this
+        dispatcher's to settle or to classify."""
+        try:
+            store.settle_dispatch(run_id, unit_id, outcome=outcome, at=now)
+        except NoOpenDispatchError:
+            dropped.append(unit_id)
+            return False
+        settled[unit_id] = outcome
+        return True
 
     for unit_id, open_dispatch in open_dispatches.items():
         current_unit = store.get_unit(run_id, unit_id)
@@ -1455,9 +1559,8 @@ def supervise_tick(
                 None,
             )
             if latest_fail is not None and latest_fail.fencing_token == open_dispatch.fencing_token:
-                _end_session(cli, open_dispatch.id, env=env)
-                store.settle_dispatch(run_id, unit_id, outcome="worker_failed", at=now)
-                settled[unit_id] = "worker_failed"
+                _end(open_dispatch)
+                _settle(unit_id, "worker_failed")
                 continue
         if (
             current_unit is None
@@ -1470,10 +1573,9 @@ def supervise_tick(
         session = sessions_by_session_id.get(open_dispatch.session_id)
 
         if session is None:
-            store.settle_dispatch(run_id, unit_id, outcome="missing", at=now)
-            settled[unit_id] = "missing"
-            kind = _classify_and_maybe_halt(store, run_id, open_dispatch, at=now)
-            halted = halted or kind
+            if _settle(unit_id, "missing") and current_unit.state is not UnitState.ACCEPTED:
+                kind = _classify_and_maybe_halt(store, run_id, open_dispatch, at=now)
+                halted = halted or kind
             continue
 
         state = session.state
@@ -1547,9 +1649,8 @@ def supervise_tick(
                 # leaked. Both calls are best-effort -- an unreachable
                 # daemon must not stop the settle below, which is what frees
                 # the slot and closes the dispatch row.
-                _end_session(cli, open_dispatch.id, env=env)
-                store.settle_dispatch(run_id, unit_id, outcome="session_lingering", at=now)
-                settled[unit_id] = "session_lingering"
+                _end(open_dispatch)
+                _settle(unit_id, "session_lingering")
                 # No classify_settled_failure: the unit is ACCEPTED. This is
                 # a session that overstayed, not a failure to explain.
                 continue
@@ -1568,35 +1669,38 @@ def supervise_tick(
             # to die is still left running. Handling the return codes is a
             # separate piece of work; do not read these two calls as a
             # guarantee that the session is gone.
-            _end_session(cli, open_dispatch.id, env=env)
-            store.settle_dispatch(run_id, unit_id, outcome="blocked", at=now)
-            settled[unit_id] = "blocked"
+            _end(open_dispatch)
+            _settle(unit_id, "blocked")
             # No classify_settled_failure here: a stalled worker is not a
-            # settled FAILURE, and D5's "no grace" rule is about the RENEWAL
+            # settled FAILURE, and the "no grace" rule is about the RENEWAL
             # stopping, not about diagnosing why -- there is nothing failed
             # to explain yet.
         elif state == "done":
             if current_unit.state is UnitState.ACCEPTED:
-                store.settle_dispatch(run_id, unit_id, outcome="accepted", at=now)
-                settled[unit_id] = "accepted"
-            else:
-                store.settle_dispatch(run_id, unit_id, outcome="done_unaccepted", at=now)
-                settled[unit_id] = "done_unaccepted"
+                _settle(unit_id, "accepted")
+            elif _settle(unit_id, "done_unaccepted"):
                 kind = _classify_and_maybe_halt(store, run_id, open_dispatch, at=now)
                 halted = halted or kind
         elif state in ("failed", "stopped"):
-            store.settle_dispatch(run_id, unit_id, outcome=state, at=now)
-            settled[unit_id] = state
-            kind = _classify_and_maybe_halt(store, run_id, open_dispatch, at=now)
-            halted = halted or kind
+            # An ACCEPTED unit has nothing to explain: the session ended
+            # after the worker's work was accepted, so a halt classified from
+            # its transcript would halt the run over a unit that succeeded.
+            if _settle(unit_id, state) and current_unit.state is not UnitState.ACCEPTED:
+                kind = _classify_and_maybe_halt(store, run_id, open_dispatch, at=now)
+                halted = halted or kind
         else:
             # An unrecognized state (a future platform addition): stop
             # renewing and settle rather than silently renewing forever on
             # an unknown value.
-            store.settle_dispatch(run_id, unit_id, outcome=f"unknown:{state}", at=now)
-            settled[unit_id] = f"unknown:{state}"
+            _settle(unit_id, f"unknown:{state}")
 
-    return TickResult(renewed=tuple(renewed), settled=settled, dropped=tuple(dropped), halted=halted)
+    return TickResult(
+        renewed=tuple(renewed),
+        settled=settled,
+        dropped=tuple(dropped),
+        halted=halted,
+        leaked_sessions=tuple(leaked),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1642,6 +1746,23 @@ DEFAULT_BATCH_SIZE = 25
 # DEFAULT_MAX_RECLAIMS_PER_UNIT moved to workerpack.py -- re-imported above.
 DEFAULT_DISPATCH_POLL_INTERVAL_S = 15.0
 DEFAULT_DISPATCHER_LEASE_SECONDS = 120.0
+DEFAULT_SYSTEMIC_FAILURE_HALT_THRESHOLD = 3
+
+
+def _latest_fail_code(store: ExecutionStore, run_id: str, unit_id: str) -> Optional[str]:
+    """The known failure code on ``unit_id``'s latest FAIL attempt, or ``None``."""
+    for attempt in reversed(store.list_attempts(run_id, unit_id)):
+        if attempt.kind is AttemptKind.FAIL:
+            return failure_code(attempt.error)
+    return None
+
+
+def _own_claim_fence(store: ExecutionStore, run_id: str, unit_id: str, worker_id: str) -> Optional[int]:
+    """The fencing token of ``worker_id``'s latest CLAIM of ``unit_id``."""
+    for attempt in reversed(store.list_attempts(run_id, unit_id)):
+        if attempt.kind is AttemptKind.CLAIM and attempt.worker_id == worker_id:
+            return attempt.fencing_token
+    return None
 
 # The wave-level liveness bound: how long dispatch_wave may observe NO
 # progress at all -- nothing dispatched, renewed, settled, or dropped --
@@ -1665,12 +1786,27 @@ class DispatchReport:
     dispatcher_acquired: bool
     dispatched: Tuple[str, ...] = ()
     accepted: Tuple[str, ...] = ()
+    """Units this call dispatched or recovered whose store state is ACCEPTED
+    when their dispatch ended, whatever the dispatch outcome recorded in
+    ``settled`` (a worker that accepts and then lingers or blocks settles as
+    ``session_lingering`` / ``blocked`` yet is listed here). The store is the
+    truth; ``settled`` describes the session."""
     settled: Dict[str, str] = field(default_factory=dict)
     failed_exhausted: Tuple[str, ...] = ()
     recovered: Tuple[str, ...] = ()
     halted: Optional[str] = None
     status_digests: Tuple[Dict[str, Any], ...] = ()
     aborted_reason: Optional[str] = None
+    leaked_sessions: Tuple[str, ...] = ()
+    """Short ids of background sessions the dispatcher tried to end and whose
+    ``rm`` failed or raised; they may still be running and need a manual
+    ``claude stop`` / ``claude rm``."""
+    launch_stderr: Optional[str] = None
+    """Set with ``aborted_reason="launch_misconfiguration"``: a one-line
+    excerpt (at most :data:`LAUNCH_STDERR_EXCERPT_CHARS` characters) of the
+    launcher's own stderr, which is where the CLI states why it refused."""
+    launch_rc: Optional[int] = None
+    """Set with ``launch_stderr``: the launcher's exit code."""
 
 
 def dispatch_wave(
@@ -1685,11 +1821,11 @@ def dispatch_wave(
     batch_size: int = DEFAULT_BATCH_SIZE,
     poll_interval_s: float = DEFAULT_DISPATCH_POLL_INTERVAL_S,
     launch_confirm_seconds: float = DEFAULT_LAUNCH_CONFIRM_SECONDS,
-    lease_seconds: Optional[float] = None,
     max_reclaims_per_unit: int = DEFAULT_MAX_RECLAIMS_PER_UNIT,
     extra_launch_args: Sequence[str] = (),
     terminal_exit_grace_seconds: float = DEFAULT_TERMINAL_EXIT_GRACE_SECONDS,
     stall_timeout_seconds: float = DEFAULT_WAVE_STALL_SECONDS,
+    systemic_failure_halt_threshold: Optional[int] = DEFAULT_SYSTEMIC_FAILURE_HALT_THRESHOLD,
     at: Optional[float] = None,
     env: Optional[Mapping[str, str]] = None,
     cwd: Optional[str] = None,
@@ -1701,14 +1837,15 @@ def dispatch_wave(
     positional, policy keyword-only, an injectable ``at``.
 
     ``max_agents`` and ``batch_size`` are the two configurable dispatch
-    settings (both pass the plugin-opinion razor per the plan: protecting
+    settings (both pass the plugin-opinion razor: protecting
     interactive quota versus maximizing throughput is a genuine power-user
     preference).
 
     ``extra_launch_args`` is the LAUNCH-ARGS SEAM: a sequence of ``claude``
     flags forwarded verbatim, in order, to :func:`dispatch_unit` and thence
     to :meth:`ClaudeCli.launch_bg`, which places them between ``--bg`` and
-    the positional prompt. It is how a consumer selects a worker agent --
+    the end-of-options separator before the positional prompt. It is how a
+    consumer selects a worker agent --
     e.g. ``extra_launch_args=("--agent", "pipeline-worker")`` for the agent
     definition this plugin ships, or its own agent name -- and how any other
     launch flag (a permission mode, a system-prompt file) reaches the
@@ -1726,10 +1863,10 @@ def dispatch_wave(
     compose with ``--bg`` or are silently dropped is NOT established (the
     flags are known to exist and background sessions are known to load
     plugin skills; composition with ``--bg`` has never been observed, and
-    per P11 it could only be judged by a worker's behavior, never by the
+    per the observed-transition rule it could only be judged by a worker's behavior, never by the
     launcher's exit code, which is 0 either way). Selecting an agent by
     default would therefore ship a possible silent no-op. With the default
-    the launch argv is exactly ``[exe, "--bg", prompt]``, and the launch
+    the launch argv is exactly ``[exe, "--bg", "--", prompt]``, and the launch
     prompt built by :func:`build_launch_prompt` is self-contained: it names
     the run, unit, worker and answer path, enumerates the exact invocations
     the worker may run, and carries the no-shell-construct rule. A worker
@@ -1793,7 +1930,36 @@ def dispatch_wave(
     as progress, so a genuinely long-running unit re-arms the bound on every
     tick and is never cut off. Stall time is measured on ``clock_fn``, not
     on ``at``, so pinning ``at`` for reproducible writes does not disarm it.
+
+    REPEATED-FAILURE BREAKER. ``systemic_failure_halt_threshold`` (default
+    :data:`DEFAULT_SYSTEMIC_FAILURE_HALT_THRESHOLD`; ``0`` or ``None``
+    disables it; a negative or non-integer value raises ``ValueError``)
+    halts the RUN with kind
+    :data:`~content_pipeline.execution.model.HALT_REPEATED_FAILURE` once that
+    many units settled as ``worker_failed`` (by this call or adopted from an
+    earlier dispatcher) carry a systemic failure code
+    (:data:`~content_pipeline.execution.model.SYSTEMIC_FAILURE_CODES`, today
+    ``env_mismatch``) on their fail envelope. A worker environment that
+    disagrees with the run's makes every session fail the same way, and a
+    terminal failure has no reset, so continuing would spend one session per
+    remaining unit. Failures without a code, or with any other code, never
+    count, whatever their text. Units not yet dispatched stay PENDING;
+    ``resume_run`` clears the halt. The halt detail carries the count only.
+
+    LEASE. The dispatcher lease is re-acquired before each launch and renewed
+    after launch plus during confirmation, so a slow launch cannot outlast
+    it; if another dispatcher holds it the wave ends with
+    ``aborted_reason="dispatcher_lease_lost"``.
     """
+    if systemic_failure_halt_threshold is not None and (
+        isinstance(systemic_failure_halt_threshold, bool)
+        or not isinstance(systemic_failure_halt_threshold, int)
+        or systemic_failure_halt_threshold < 0
+    ):
+        raise ValueError(
+            "systemic_failure_halt_threshold must be a non-negative integer or None, "
+            f"got {systemic_failure_halt_threshold!r}"
+        )
     if cli is None:
         cli = ClaudeCli()
 
@@ -1826,6 +1992,7 @@ def dispatch_wave(
     open_dispatches: Dict[str, OpenDispatch] = {}
     dispatched: List[str] = []
     accepted: List[str] = []
+    leaked_sessions: List[str] = []
     settled_all: Dict[str, str] = {}
     claim_refused: Set[str] = set()
     failed_exhausted: List[str] = []
@@ -1833,9 +2000,52 @@ def dispatch_wave(
     halted: Optional[str] = None
     status_digests: List[Dict[str, Any]] = []
     aborted_reason: Optional[str] = None
+    report_launch_stderr: Optional[str] = None
+    report_launch_rc: Optional[int] = None
+    systemic_failures = 0
 
     def _now() -> float:
         return clock_fn() if at is None else at
+
+    def _trip_breaker() -> Optional[str]:
+        """Halt the run once systemic failures reach the threshold. Returns
+        the halt kind, or ``None`` when it did not trip (or a halt is set)."""
+        if (
+            halted is None
+            and systemic_failure_halt_threshold
+            and systemic_failures >= systemic_failure_halt_threshold
+        ):
+            store.set_halt(
+                run_id,
+                kind=HALT_REPEATED_FAILURE,
+                detail=f"{systemic_failures} units terminally failed with a systemic failure code",
+                at=_now(),
+            )
+            return HALT_REPEATED_FAILURE
+        return None
+
+    def _note_accepted(unit_id: str) -> None:
+        """List ``unit_id`` as accepted when the STORE says so, regardless of
+        how its dispatch ended."""
+        if unit_id in accepted:
+            return
+        unit_now = store.get_unit(run_id, unit_id)
+        if unit_now is not None and unit_now.state is UnitState.ACCEPTED:
+            accepted.append(unit_id)
+
+    def _renew_dispatcher_for_launch() -> bool:
+        """Renew the wave lease during one launch's confirmation window."""
+        nonlocal fence
+        refreshed = store.acquire_dispatcher_lease(
+            run_id,
+            dispatcher_id,
+            lease_seconds=DEFAULT_DISPATCHER_LEASE_SECONDS,
+            at=clock_fn(),
+        )
+        if refreshed is None:
+            return False
+        fence = refreshed
+        return True
 
     # Adopt durable launches before selecting candidates. This closes the
     # process-death gap: an attached session remains supervised by the next
@@ -1865,17 +2075,26 @@ def dispatch_wave(
             store.settle_dispatch(run_id, record.unit_id, outcome="missing", at=_now())
             settled_all[record.unit_id] = "missing"
             continue
-        if unit.claimed_by != record.worker_id:
+        # A terminal write clears claimed_by, so a unit this dispatch's own
+        # worker finished no longer names it: recognize it by the fencing
+        # token of that worker's claim instead.
+        own_terminal = unit.state in (UnitState.ACCEPTED, UnitState.FAILED) and (
+            unit.fencing_token == _own_claim_fence(store, run_id, record.unit_id, record.worker_id)
+        )
+        if unit.claimed_by != record.worker_id and not own_terminal:
             store.settle_dispatch(run_id, record.unit_id, outcome="superseded", at=_now())
             settled_all[record.unit_id] = "superseded"
             continue
         if unit.state is UnitState.ACCEPTED:
             store.settle_dispatch(run_id, record.unit_id, outcome="accepted", at=_now())
             settled_all[record.unit_id] = "accepted"
+            accepted.append(record.unit_id)
             continue
         if unit.state is UnitState.FAILED:
             store.settle_dispatch(run_id, record.unit_id, outcome="worker_failed", at=_now())
             settled_all[record.unit_id] = "worker_failed"
+            if _latest_fail_code(store, run_id, record.unit_id) in SYSTEMIC_FAILURE_CODES:
+                systemic_failures += 1
             continue
         open_dispatches[record.unit_id] = OpenDispatch(
             unit_id=record.unit_id,
@@ -1887,6 +2106,7 @@ def dispatch_wave(
         )
         recovered.append(record.unit_id)
 
+    halted = _trip_breaker() or halted
     last_progress_at = clock_fn()
 
     try:
@@ -1958,6 +2178,16 @@ def dispatch_wave(
                             continue
                         failed_exhausted.append(unit.unit_id)
                         continue
+                    # A refill can launch several units in a row, each taking
+                    # up to `launch_confirm_seconds`; the lease is otherwise
+                    # renewed only once per tick, after the whole refill.
+                    refreshed = store.acquire_dispatcher_lease(
+                        run_id, dispatcher_id, lease_seconds=DEFAULT_DISPATCHER_LEASE_SECONDS, at=_now()
+                    )
+                    if refreshed is None:
+                        aborted_reason = "dispatcher_lease_lost"
+                        break
+                    fence = refreshed
                     try:
                         opened = dispatch_unit(
                             store,
@@ -1973,9 +2203,12 @@ def dispatch_wave(
                             sleep_fn=sleep_fn,
                             clock_fn=clock_fn,
                             at=tick_now,
+                            dispatcher_lease_renew_fn=_renew_dispatcher_for_launch,
                         )
-                    except LaunchMisconfigurationError:
+                    except LaunchMisconfigurationError as launch_exc:
                         aborted_reason = "launch_misconfiguration"
+                        report_launch_stderr = launch_exc.launch_stderr
+                        report_launch_rc = launch_exc.launch_rc
                         break
                     except RunHaltedError as exc:
                         # The RUN is halted, so no further claim can succeed
@@ -1994,7 +2227,7 @@ def dispatch_wave(
                         # A ROUTINE race, not an error: between candidate
                         # selection and this claim, the unit went terminal
                         # or was claimed by someone else -- exactly the
-                        # duplicate-spend case invariant 4 accepts. Before
+                        # duplicate-spend case the design accepts. Before
                         # the dispatcher claimed, this refusal happened
                         # inside the worker and never reached the wave.
                         # The unit is no longer dispatchable BY THIS WAVE;
@@ -2005,6 +2238,9 @@ def dispatch_wave(
                         claim_refused.add(unit.unit_id)
                         settled_all.setdefault(unit.unit_id, "claim_failed")
                         continue
+                    except (_DispatcherLeaseLostError, NoOpenDispatchError):
+                        aborted_reason = "dispatcher_lease_lost"
+                        break
                     open_dispatches[opened.unit_id] = opened
                     dispatched.append(opened.unit_id)
                     if len(dispatched) % batch_size == 0:
@@ -2029,8 +2265,13 @@ def dispatch_wave(
             for unit_id, outcome in tick.settled.items():
                 open_dispatches.pop(unit_id, None)
                 settled_all[unit_id] = outcome
-                if outcome == "accepted":
-                    accepted.append(unit_id)
+                _note_accepted(unit_id)
+                if (
+                    outcome == "worker_failed"
+                    and _latest_fail_code(store, run_id, unit_id) in SYSTEMIC_FAILURE_CODES
+                ):
+                    systemic_failures += 1
+            leaked_sessions.extend(sid for sid in tick.leaked_sessions if sid not in leaked_sessions)
             for unit_id in tick.dropped:
                 open_dispatches.pop(unit_id, None)
                 # A DROPPED dispatch's row must be settled here, not just
@@ -2052,6 +2293,7 @@ def dispatch_wave(
                     settled_all[unit_id] = "dropped"
             if tick.halted is not None:
                 halted = tick.halted
+            halted = _trip_breaker() or halted
 
             # acquire_dispatcher_lease alone both extends and bumps the fence
             # for the SAME holder (its own contract: it fails, returning
@@ -2088,7 +2330,8 @@ def dispatch_wave(
                 sleep_fn(poll_interval_s)
     finally:
         for unit_id, opened in list(open_dispatches.items()):
-            _end_session(cli, opened.id, env=env)
+            if _end_session(cli, opened.id, env=env) and opened.id not in leaked_sessions:
+                leaked_sessions.append(opened.id)
             # Settle what was just stopped. An open dispatch row makes its
             # unit permanently unreclaimable, so abandoning one here (only
             # reachable on an abort path -- a normal exit leaves nothing
@@ -2099,6 +2342,7 @@ def dispatch_wave(
                 pass
             else:
                 settled_all.setdefault(unit_id, "wave_exit")
+                _note_accepted(unit_id)
         try:
             store.release_dispatcher_lease(run_id, dispatcher_id, fence, at=_now())
         except StaleDispatcherLeaseError:
@@ -2117,6 +2361,9 @@ def dispatch_wave(
         halted=halted,
         status_digests=tuple(status_digests),
         aborted_reason=aborted_reason,
+        leaked_sessions=tuple(leaked_sessions),
+        launch_stderr=report_launch_stderr,
+        launch_rc=report_launch_rc,
     )
 
 
@@ -2130,6 +2377,8 @@ __all__ = [
     "ClaudeCli",
     "ClaudeExecutableNotFoundError",
     "DispatchReport",
+    "DEFAULT_SYSTEMIC_FAILURE_HALT_THRESHOLD",
+    "LAUNCH_STDERR_EXCERPT_CHARS",
     "LaunchMisconfigurationError",
     "OpenDispatch",
     "ParseResult",

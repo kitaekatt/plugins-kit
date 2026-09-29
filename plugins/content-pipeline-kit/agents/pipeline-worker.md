@@ -42,7 +42,7 @@ Step 2 writes the fence line your launch prompt gives you, then your answer
 text verbatim on the following lines. Steps 3 and 5 write a JSON protocol
 envelope from a template your launch prompt gives you verbatim. For submission,
 replace only `<FENCING_TOKEN>`. For failure, replace `<FENCING_TOKEN>` and
-`<FAILURE_DETAIL_JSON>` with one nonempty JSON string literal. Nothing else in
+`<FAILURE_DETAIL_JSON>` with one nonempty JSON string literal. If a `read` or `submit` reply refused you with error type `WorkerEnvironmentMismatchError` (your environment disagrees with the run's), add one more member to the payload: `"code": "env_mismatch"`. Add it for no other reason; an absent code is normal. Nothing else in
 either template may change. Two Write targets, not one: your answer file, and
 (separately) your submission or failure envelope.
 

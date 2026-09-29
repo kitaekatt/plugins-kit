@@ -3,7 +3,7 @@ _schema_version: 1
 name: background-pipeline
 author: christina
 skill-type: technique-skill
-description: Use when orchestrating a content-pipeline run through Claude background sessions -- prepare, dispatch, batch-boundary status, and finalize. Do NOT use for the worker's own one-unit procedure (see execute-work-unit) or for the synchronous inline driver.
+description: Use when orchestrating a content-pipeline run through Claude background sessions. Do NOT use for a worker's own unit (execute-work-unit) or the inline driver.
 ---
 
 # Background Pipeline
@@ -15,6 +15,59 @@ as the dispatcher. It drives
 wave, and never runs unit content through its own context -- only ids,
 outcomes, and status digests, the same invariant the driver itself upholds
 (`DispatchReport` and `compute_status` are both content-free by construction).
+
+## Contract
+
+```yaml
+technique_skill:
+  _schema_version: "1"
+  trigger_model: auto
+  identity: Drive one content-pipeline run through Claude background sessions from a single dispatching Claude Code session, without reading unit content.
+  scope:
+    covers:
+      - preparing a wave through the consumer's protocol mount
+      - dispatching the wave with dispatch_wave and reading its DispatchReport
+      - reading status digests at batch boundaries
+      - finalizing accepted units and resuming a halted run
+    excludes:
+      - a worker's own one-unit procedure (use execute-work-unit)
+      - the synchronous inline driver
+      - the Workflow-tool lane (use workflow-pipeline)
+  techniques:
+    - id: run_background_wave
+      name: Run a prepared wave through background sessions
+      keywords: [background pipeline, dispatch_wave, claude --bg, finalize_run, DispatchReport, batch boundary, halted run]
+      goal: Every unit of the prepared wave is settled and every accepted unit's output is applied through the adapter.
+      steps:
+        - n: 1
+          action: Prepare the wave through the consumer's own protocol mount; the consumer's policy decides which units are ready and stale.
+          tool: execution.protocol.build_handlers (prepare verb) or execution.controller.prepare_run
+        - n: 2
+          action: Dispatch the wave in one call that runs the full bounded loop (preflight, dispatcher election, launches up to max_agents, lease renewal, reclaim of dead workers).
+          tool: content_pipeline.execution.drivers.claude_bg.dispatch_wave
+          input: "store, run_id, wave, adapter, worker_command=..., max_agents=..., batch_size=..."
+          expected: The call returns when the wave is exhausted or the run halts, with a DispatchReport.
+        - n: 3
+          action: Read DispatchReport.status_digests at batch boundaries; a digest carries counts and outcomes only.
+          tool: DispatchReport.status_digests
+        - n: 4
+          action: Once dispatch settles, finalize so every accepted unit's output lands through the adapter's apply.
+          tool: content_pipeline.execution.controller.finalize_run
+          input: "store, run_id, adapter"
+          on_failure: "A halted run parks at step 2. dispatch_wave does not clear a halt: once the halt condition has cleared, call controller.resume_run(store, run_id), then prepare and dispatch again."
+      checklist:
+        - "Wave prepared through the consumer's mount"
+        - "dispatch_wave returned; aborted_reason read"
+        - "Status digests read, no unit content ingested"
+        - "finalize_run applied the accepted units"
+      gotchas:
+        - Never read a unit's prompt, a worker's answer text, or a validator's full feedback into the orchestrating session; only ids, outcomes, and status digests.
+        - DispatchReport.accepted reflects store state; a unit settled as blocked or session_lingering can still be accepted and is finalized. Read settled for how the session ended.
+        - An abort (aborted_reason set) is not a halt. A halt parks until resume_run clears it; an abort means this call stopped, and the reason says whether to investigate the environment or call again.
+        - Do not build a pre-emptive quota gate that parses rate-limits.json to decide whether to dispatch; the reactive halt path is the contract.
+        - Flags passed through extra_launch_args may or may not compose with a background launch; the launcher exits 0 either way, so observe what a worker actually does.
+        - Storage engine, fresh-per-unit contexts, and single-dispatcher election are correctness decisions with no setting.
+```
 
 ## The four stages
 
@@ -46,14 +99,53 @@ outcomes, and status digests, the same invariant the driver itself upholds
    consumer-visible side effect.
 
 A halted run (rate-limit, auth, or an operator pause) stops cleanly at stage 2
-and parks: resume it later by calling `dispatch_wave` again once the halt
-condition has cleared (see `content_pipeline.execution.controller.resume_run`).
+and parks. `dispatch_wave` never clears a halt: its next claim on a halted run
+raises `RunHaltedError` and the wave returns `halted` at once. Once the halt
+condition has cleared (the quota window reopened, the credential fixed), call
+`execution.controller.resume_run(store, run_id)` (the mount's `resume` verb)
+and then run stages 1 and 2 again -- prepare selects the units still pending,
+including the one the halt returned to `PENDING`. Read the run's remaining
+work with `execution.controller.unfinished_units(store, run_id)`; a unit left
+CLAIMED by a dead session becomes reclaimable when its lease expires, and
+`dispatch_wave` reclaims it.
 A halt stops new claims immediately, but a submission that arrives after the
 halt with a valid fencing token is still accepted exactly as if no halt had
 happened -- a stale fence is rejected regardless. Lease renewal also differs
 by lane during a halt: in the background lane the Python dispatcher renews a
 worker's lease while its session is live, so a unit only becomes reclaimable
 once a dead session's lease actually expires.
+
+## Prerequisite: the launch directory must be a trusted workspace
+
+`dispatch_wave` launches each worker with `claude --bg` in a working
+directory: its `cwd` argument when given, else the working directory the
+run's adapter environment records, else the dispatcher process's own. That
+directory must already be a trusted workspace for the Claude CLI. Observed on
+claude CLI 2.1.284: `claude --bg <prompt>` launched from a directory that is
+not trusted exits 1 with the stderr `Workspace not trusted. Run `claude` in
+<dir> once and accept the trust prompt, then retry.` and starts no session.
+
+`preflight` does not check trust, so it passes. The failure surfaces at the
+first launch. During launch confirmation, the dispatcher renews its run lease;
+if another dispatcher takes it, the wave stops with
+`aborted_reason == "dispatcher_lease_lost"` and does not attach the session.
+Otherwise, the dispatcher finds no session within `launch_confirm_seconds`, releases the unit's claim, settles
+the dispatch as `launch_failed`, and stops the wave with
+`aborted_reason == "launch_misconfiguration"` (`LaunchMisconfigurationError`
+inside `dispatch_unit`). Nothing is dispatched. The launcher's own words reach
+you: `DispatchReport.launch_stderr` holds a one-line excerpt of its stderr (at
+most 300 characters) and `DispatchReport.launch_rc` its exit code; the same two
+values are `launch_stderr` / `launch_rc` on the raised error. Neither carries
+unit content. On that abort, read `launch_stderr` and check the launch
+directory's trust first.
+
+Remedy: run `claude` once in the launch directory, accept the trust prompt,
+then call `dispatch_wave` again.
+
+Trust is per exact directory. A subdirectory of a trusted directory is not
+trusted, and `claude --bg` launched from it fails with "Workspace not trusted"
+(live probe, claude CLI 2.1.284, 2026-09-29). Launch from the exact directory
+that was trusted.
 
 ## Configurable: `max_agents` and `batch_size`
 
@@ -71,9 +163,9 @@ differently from run to run:
 
 Pass both directly to `dispatch_wave(..., max_agents=N, batch_size=M)`.
 
-## Two timing settings, and when to move them
+## Timing settings, and when to move them
 
-Both have defaults that suit an ordinary run; move them only for the reasons
+Both timing settings have defaults that suit an ordinary run; move them only for the reasons
 below, and never as a way to make a hanging wave finish sooner.
 
 - `terminal_exit_grace_seconds` (default 300) -- how long a worker whose unit
@@ -91,6 +183,26 @@ below, and never as a way to make a hanging wave finish sooner.
   your workers can be genuinely silent for longer than the default between
   ticks.
 
+## The repeated-failure breaker
+
+`systemic_failure_halt_threshold` (default 3; `0` or `None` disables it; a
+negative or non-integer value raises `ValueError`) halts the run when that many
+units settled as `worker_failed` carry a systemic failure code. A worker
+environment that disagrees with the run's makes every session fail the same
+way, and a terminal failure has no reset, so without the breaker each remaining
+unit costs a session.
+
+A worker attaches the code itself: its fail envelope may carry an optional
+payload member `"code"` from a closed set (`model.SYSTEMIC_FAILURE_CODES`), whose only member is `"env_mismatch"` (its
+verb was refused by the environment check). The protocol refuses any other
+value and accepts an absent code, and the code is recorded in the attempt's
+error text as `{"code": ..., "detail": ...}`. Failures without a systemic code
+never count, however alike their text; units adopted from an earlier
+dispatcher's open rows count too. The halt kind is `repeated_failure`, the
+report's `halted` shows it, and undispatched units stay `PENDING`. Fix the
+cause, call `resume_run`, then prepare and dispatch again; the units already
+failed stay failed.
+
 ## Selecting a worker agent
 
 `dispatch_wave` also takes `extra_launch_args` -- a sequence of `claude`
@@ -104,13 +216,29 @@ know before you rely on it. First, a worker is governed by its launch prompt
 regardless: the prompt built for each unit names the run id, unit id, worker
 id, and answer path, enumerates the exact invocations the worker may run, and
 states the rule against composing a shell construct to satisfy a step.
-Second, whether agent-selecting flags compose with a background launch rather
-than being accepted and dropped has not been established -- the launcher
-exits 0 either way, so the only way to tell is to observe what a worker
-actually does. Treat an agent definition as extra discipline on top of the
-launch prompt, not as a substitute for it.
+Second, an agent-selecting flag can be accepted and dropped. It composed with
+`claude --bg` on claude CLI 2.1.238 (live probe, 2026-08-21) and was dropped
+under `--setting-sources project` with the plugin enabled only in user
+settings (2026-09-29; see the reference below). The launcher exits 0 either
+way and `dispatch_wave` surfaces its output only on a failed launch, so
+observe what a worker actually does. Treat an agent definition as extra discipline on top of the
+launch prompt, not as a substitute for it. The same seam carries permission
+flags; see "The allowlist your worker needs" in the content-pipeline-domain
+`session-recipients.md` reference.
 
 ## Reading the report
+
+`DispatchReport.accepted` lists every unit this call dispatched or recovered
+whose STORE state is accepted when its dispatch ended -- whatever `settled`
+says. A worker that accepts and then blocks or lingers settles as `blocked` or
+`session_lingering` and is still listed in `accepted`, because `settled`
+describes the session and the store holds the truth about the unit. Read
+`accepted` for what finalize will apply; read `settled` for how each session
+ended.
+
+`DispatchReport.leaked_sessions` lists the short ids of sessions the
+dispatcher tried to end and whose `rm` failed or raised. They may still be
+running; stop and remove them by hand (`claude stop <id>`, `claude rm <id>`).
 
 `DispatchReport.settled` maps a unit id to how its dispatch ended. The
 vocabulary a consumer will actually see:
@@ -120,7 +248,9 @@ vocabulary a consumer will actually see:
 - `done_unaccepted` -- the session ended without an accepted submission.
 - `blocked` -- the session is waiting on something (commonly a permission
   prompt) with nothing timing it out. The dispatcher stops renewing
-  immediately, so the unit becomes reclaimable once its lease expires.
+  immediately, so the unit becomes reclaimable once its lease expires. If the
+  unit was already accepted, it is also listed in `accepted` and is not
+  reclaimed.
 - `missing` -- the session vanished from the session listing.
 - `session_lingering` -- the unit was accepted but the worker's session
   outstayed `terminal_exit_grace_seconds`; the dispatcher ended it with
@@ -139,25 +269,28 @@ vocabulary a consumer will actually see:
 - `claim_refused` -- an exhausted unit the dispatcher went to fail had been
   re-claimed with a live lease, so it is no longer abandoned and not this
   dispatcher's to fail. Skipped for the rest of this wave.
+- `worker_failed` -- the worker reported terminal failure; the unit is
+  terminally FAILED and its FAIL attempt stays available for handoff.
 - `wave_exit` -- the wave stopped while this dispatch was still open, so the
   dispatcher closed it on the way out. Every dispatch this call opened is
   settled before `dispatch_wave` returns, including on an abort: a dispatch
   left open would make its unit permanently unreclaimable in later waves.
+
+`DispatchReport.halted` is a halt kind: `rate_limit`, `auth`, an operator
+`pause`, or `repeated_failure` (the breaker above). `launch_stderr` and
+`launch_rc` are set only on a `launch_misconfiguration` abort.
 
 `DispatchReport.aborted_reason` is set when the loop stopped early rather
 than exhausting the wave: `launch_misconfiguration` (a launch never reached
 an observed running state -- its own dispatch is recorded as `launch_failed`,
 and the wave stops rather than repeating a launch every later unit would fail
 the same way), `dispatcher_lease_lost` (another
-dispatcher took the run), `dispatcher_lease_held_by_another_dispatcher` (this
+dispatcher took the run; the lease is re-acquired before every launch, so slow
+launches alone do not lose it), `dispatcher_lease_held_by_another_dispatcher` (this
 call never started, and launched nothing), or `wave_stalled` (nothing
 progressed for `stall_timeout_seconds`). An abort is not a halt: a halted run
-parks and resumes, while an abort means this call stopped and its reason
+parks until `resume_run` clears the halt, while an abort means this call stopped and its reason
 tells you whether to investigate the environment or simply call again.
-
-`worker_failed` means that the worker reported terminal failure detail. The
-unit is terminally `FAILED`, and its FAIL attempt remains available for handoff.
-`DispatchReport.recovered` lists units adopted from durable open dispatch rows.
 
 ## Not configurable, and why
 

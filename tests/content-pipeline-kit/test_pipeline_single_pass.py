@@ -21,6 +21,9 @@ from content_pipeline.pipeline.single_pass import (
 from content_pipeline.pipeline.workunit import WorkUnit
 
 
+pytestmark = pytest.mark.filterwarnings("ignore::DeprecationWarning")
+
+
 def _units(*ids):
     return [WorkUnit(id=i) for i in ids]
 

@@ -9,13 +9,13 @@ imports and re-exports it unchanged, so every existing import path
 (``from content_pipeline.execution.controller import RunAdapter``) and every
 existing call site (:func:`~content_pipeline.execution.drivers.inline.run_wave`,
 :func:`~content_pipeline.execution.controller.finalize_run`) keeps working
-with no signature change -- only new, optional, trailing fields (the plan's
-"Honour... widen, do not break existing callers" instruction). Both call
+with no signature change -- only new, optional, trailing fields (widen, do
+not break existing callers). Both call
 sites still share the identical ``parse_fn`` field for the same reason as
-before: D1's "finalize re-parses with the SAME function the driver submitted
-under" requirement holds BY CONSTRUCTION, not by convention.
+before: the requirement that finalize re-parses with the SAME function the driver
+submitted under holds BY CONSTRUCTION, not by convention.
 
-Five responsibilities (plan of record, phase A-min.3)
+Five responsibilities
 ----------------------------------------------------------
 1. **Reconstruct a unit by id** -- :attr:`RunAdapter.unit_for`. Unchanged
    from A-min.2.
@@ -28,14 +28,14 @@ Five responsibilities (plan of record, phase A-min.3)
    Reuses :class:`content_pipeline.llm.platform.ValidationSpec` -- the SAME
    type :func:`~content_pipeline.llm.platform.submit_validated` builds
    internally and :func:`~content_pipeline.llm.platform.evaluate_submission`
-   consumes (plan D1) -- rather than inventing a second, adapter-local type
+   consumes (submit-time acceptance is authoritative) -- rather than inventing a second, adapter-local type
    for the identical contract; that module's own docstring names this
    widening and explicitly declines to replace itself with it.
 4. **Apply a payload** -- :attr:`RunAdapter.apply`. Unchanged from A-min.2.
 5. **Optionally reconcile an ``apply_unknown``** -- :attr:`RunAdapter.reconcile`.
-   Unchanged from A-min.2 (D6, fail closed absent this hook).
+   Unchanged from A-min.2 (fail closed absent this hook).
 
-Adapter identity/version and incompatible resume (D1)
+Adapter identity/version and incompatible resume
 -----------------------------------------------------------
 :attr:`RunAdapter.adapter_version` is the consumer's own identity/version tag
 for ITS adapter code (parser, prompt builder, validators) -- distinct from,
@@ -43,9 +43,9 @@ and compared against, ``RunRecord.adapter_version``, the value the run was
 created with (``store.create_run(..., adapter_version=...)``). They are
 expected to be the identical string for a given adapter build.
 :func:`require_compatible_adapter` raises :class:`AdapterVersionMismatchError`
-when they disagree, BEFORE any unit is touched -- the plan's "adapter
-identity/version is recorded in the run... an incompatible resume is
-refused" requirement. This check is NOT run automatically by
+when they disagree, BEFORE any unit is touched -- the rule that adapter
+identity/version is recorded in the run and an incompatible resume is
+refused. This check is NOT run automatically by
 :func:`~content_pipeline.execution.controller.prepare_run` or
 :func:`~content_pipeline.execution.controller.finalize_run` (their A-min.2
 behavior, and the tests that pin it, are unchanged) -- it is invoked by
@@ -53,7 +53,7 @@ behavior, and the tests that pin it, are unchanged) -- it is invoked by
 out-of-process entry points a resumed worker actually calls through.
 
 ``parse_fn`` MUST be deterministic and store-independent for tracked runs
-(D1's adapter contract, restated from ``execution.controller``): finalize
+(the adapter contract, restated from ``execution.controller``): finalize
 re-runs it on text recorded at submit time, potentially long after and in a
 different process.
 """
@@ -95,7 +95,7 @@ class PreparedRequest:
 
 class AdapterVersionMismatchError(ExecutionError):
     """Raised by :func:`require_compatible_adapter` when ``adapter.adapter_version``
-    disagrees with the run's recorded ``RunRecord.adapter_version`` (D1: an
+    disagrees with the run's recorded ``RunRecord.adapter_version`` (an
     incompatible resume is refused, never guessed)."""
 
     def __init__(self, run_id: str, run_adapter_version: str, adapter_version: str) -> None:
@@ -106,7 +106,7 @@ class AdapterVersionMismatchError(ExecutionError):
             f"run {run_id!r} was created with adapter_version "
             f"{run_adapter_version!r}, but this adapter reports "
             f"{adapter_version!r}; refusing to resume with a mismatched "
-            "adapter (D1) rather than guess it is compatible"
+            "adapter (adapter identity and version are recorded in the run) rather than guess it is compatible"
         )
 
 
@@ -151,6 +151,19 @@ def _to_native_flavour(value: str) -> str:
         drive, rest = match.groups()
         value = f"{drive.upper()}:\\{rest.replace('/', chr(92))}"
     return os.path.normcase(os.path.normpath(value))
+
+
+def _same_path_text(recorded: str, actual: str) -> bool:
+    """Path-text equality under the host filesystem's own case rules:
+    identical strings, or ``os.path.normcase``-equal ones. On Windows
+    ``normcase`` folds case and separators, so a different-case spelling of
+    the same directory (the OS echoes back the caller's chdir casing)
+    compares equal; on POSIX it is the identity, so paths differing only in
+    case stay different. Never normalizes structure (a trailing separator
+    still differs), never touches the filesystem, and never converts a Git
+    Bash POSIX spelling (``/d/dev/x``) to a drive path, so that flavour
+    mismatch still refuses."""
+    return recorded == actual or os.path.normcase(recorded) == os.path.normcase(actual)
 
 
 def _same_location_different_flavour(recorded: str, actual: str) -> bool:
@@ -302,8 +315,9 @@ class WorkerEnvironment:
     see :meth:`check`). ``forbidden_vars`` -- NAMES only, never values; a
     worker process must not have any of these set (non-empty) at all.
     ``require_cwd`` -- the worker's ``os.getcwd()`` must equal the run's
-    recorded ``os.getcwd()`` (worker-side, exact string equality, same as
-    ``required_vars``).
+    recorded ``os.getcwd()`` (worker-side; exact string equality on POSIX,
+    case- and separator-insensitive on a case-insensitive host such as
+    Windows, where the OS echoes back the caller's chdir casing).
 
     ``cwd_vars`` -- names whose value is meant to REPRESENT the working
     directory (the canonical example: ``PWD``), enforced in TWO places: by
@@ -366,9 +380,12 @@ class WorkerEnvironment:
     def check(self, recorded: Mapping[str, str], *, run_id: str = "") -> None:
         """Refuse (:class:`WorkerEnvironmentMismatchError`) when the CURRENT
         process's environment disagrees with ``recorded`` (the run's stored
-        snapshot). Exact string equality throughout for ``required_vars`` /
-        ``require_cwd`` -- never resolved-location equality (DECIDED, module
-        docstring). A default ``WorkerEnvironment()`` (nothing declared) is
+        snapshot). String equality for ``required_vars`` / ``require_cwd`` --
+        exact for an ordinary var, path-text equality (``_same_path_text``:
+        case- and separator-insensitive on a case-insensitive host such as
+        Windows, identity on POSIX) for a var also named in ``cwd_vars`` and
+        for ``require_cwd`` -- never resolved-location equality against the
+        recorded value (DECIDED, module docstring). A default ``WorkerEnvironment()`` (nothing declared) is
         always a no-op, regardless of ``recorded``'s content.
 
         Deliberate asymmetry, worth restating so a later reader does not
@@ -377,7 +394,7 @@ class WorkerEnvironment:
         change since the run was created. ``cwd_vars``, below, compares this
         worker against ITS OWN ``os.getcwd()`` -- is THIS worker in the right
         place, regardless of what was recorded. Different questions, so
-        different comparisons: the former is exact string equality against
+        different comparisons: the former is string equality against
         ``recorded``; the latter is resolved-location equality against this
         process's own cwd, via the same ``_resolve_against_cwd`` helper
         :func:`require_creatable_environment` uses at create-run time.
@@ -385,7 +402,16 @@ class WorkerEnvironment:
         for name in self.required_vars:
             recorded_value = recorded.get(name, "")
             actual_value = os.environ.get(name, "")
-            if recorded_value != actual_value:
+            # A name also declared in ``cwd_vars`` holds a path, so its
+            # spelling may differ in case or separators on a case-insensitive
+            # host (a caller's chdir casing is echoed back by the OS).
+            # Any other required var is exact string equality.
+            same = (
+                _same_path_text(recorded_value, actual_value)
+                if name in self.cwd_vars
+                else recorded_value == actual_value
+            )
+            if not same:
                 raise WorkerEnvironmentMismatchError(
                     run_id=run_id,
                     var_name=name,
@@ -395,7 +421,7 @@ class WorkerEnvironment:
         if self.require_cwd:
             recorded_cwd = recorded.get(_RESERVED_CWD_KEY, "")
             actual_cwd = os.getcwd()
-            if recorded_cwd != actual_cwd:
+            if not _same_path_text(recorded_cwd, actual_cwd):
                 raise WorkerEnvironmentMismatchError(
                     run_id=run_id,
                     var_name=_RESERVED_CWD_KEY,
@@ -527,19 +553,19 @@ class RunAdapter:
     unchanged):
 
     - ``parse_fn`` -- ``text -> payload``. Called mechanically on the durably
-      recorded ``accepted_text``; never re-validates (D1). THE SAME callable
+      recorded ``accepted_text``; never re-validates (submit-time acceptance is authoritative). THE SAME callable
       a ``backend``-path ``run_wave`` call (or a protocol ``submit`` verb)
       evaluated the response under -- not a second, independently-supplied
-      copy (D1's re-parse requirement).
+      copy (the re-parse requirement).
     - ``apply`` -- ``(unit_id, payload) -> None``. The consumer's delivery
       side effect (e.g. a ``deliver.*`` write). It may raise
       ``execution.model.ApplyRejected`` only when it guarantees that no
-      side effect occurred; any uncertain outcome must remain D6
+      side effect occurred; any uncertain outcome must remain apply_unknown
       ``apply_unknown``.
     - ``reconcile`` -- optional ``unit_id -> bool``. Answers "did this
       unit's apply already land" for a unit found ``apply_unknown``. Absent
       means finalize refuses to proceed past any ``apply_unknown`` unit
-      (D6, fail closed).
+      (fail closed).
 
     A-min.3 widenings (new, optional, trailing fields -- see the module
     docstring; every A-min.2 caller that never sets these observes no
@@ -629,7 +655,7 @@ class RunAdapter:
         Uses ``validation_spec_for`` when supplied. Otherwise composes one
         from ``parse_fn``, ``validators``, and ``validation_context`` -- the
         SAME three inputs ``submit_validated`` already threads into its own
-        internally-built ``ValidationSpec`` (plan D1), so a protocol
+        internally-built ``ValidationSpec`` (submit-time acceptance is authoritative), so a protocol
         ``submit`` verb judges a response exactly as the inline driver's
         ``backend`` path would have. Raises ``ValueError`` when neither
         ``validation_spec_for`` nor ``parse_fn`` is supplied.
@@ -649,7 +675,7 @@ class RunAdapter:
 
 
 def require_compatible_adapter(run: RunRecord, adapter: RunAdapter) -> None:
-    """Refuse an incompatible resume (D1).
+    """Refuse an incompatible resume (adapter identity and version are recorded in the run).
 
     Compares ``adapter.adapter_version`` against ``run.adapter_version`` --
     equal (including both ``""``, the "identity not tracked" default) passes;

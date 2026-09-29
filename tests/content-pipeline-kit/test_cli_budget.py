@@ -19,6 +19,9 @@ from content_pipeline.llm.platform import HALT_AUTH, HALT_RATE_LIMIT, PipelineHa
 
 # -- preflight ----------------------------------------------------------------
 
+pytestmark = pytest.mark.filterwarnings("ignore::DeprecationWarning")
+
+
 def test_preflight_reraises_halt_as_budget_stop():
     def probe():
         raise PipelineHaltError(HALT_AUTH, "logged out")

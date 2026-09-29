@@ -14,7 +14,7 @@ generalized to :func:`run_bulk(units, worker, *, warm=..., ...)`. The bare
 cache; instead the WARM callable owns whatever priming the consumer needs
 (seeding a ``ResponseCache`` directory, loading a shared glossary), and the
 WORKER owns the per-unit call -- so this module stays free of any cache
-substrate. Halt handling is delegated to ``cli.budget.guarded_sweep`` when the
+substrate. Halt handling is delegated to ``cli.budget``'s sweep when the
 caller opts in (``guard_halts=True``, the default); with ``guard_halts=False``
 this module imports :class:`~content_pipeline.llm.platform.PipelineHaltError`
 only to re-raise it ahead of the unguarded loop's generic per-unit error
@@ -24,10 +24,11 @@ ordinary unit error to a bare ``except Exception``.
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass, field
 from typing import Any, Callable, List, Optional, Sequence, Tuple
 
-from content_pipeline.cli.budget import BudgetStop, SweepResult, guarded_sweep
+from content_pipeline.cli.budget import BudgetStop, SweepResult, _guarded_sweep
 from content_pipeline.llm.platform import PipelineHaltError
 
 
@@ -58,6 +59,17 @@ class BulkResult:
         return len(self.done)
 
 
+_DEPRECATION_MSG = (
+    "run_bulk is a deprecated untracked loop helper: it keeps no durable run "
+    "record and its halt semantics are frozen. Use the tracked path instead: "
+    "content_pipeline.execution.controller.prepare_run, "
+    "content_pipeline.execution.drivers.inline.run_wave, "
+    "content_pipeline.execution.controller.finalize_run, and "
+    "content_pipeline.execution.controller.unfinished_units to recover the "
+    "unfinished set after a halt."
+)
+
+
 def run_bulk(
     units: Sequence[Any],
     worker: Callable[[Any], Any],
@@ -80,7 +92,11 @@ def run_bulk(
     Returns a :class:`BulkResult`. A resume run passes ``result.remaining`` (or
     re-runs everything -- already-warm work is a cache hit, so re-processing is
     cheap by construction).
+
+    Deprecated: emits one ``DeprecationWarning`` per call (the internal sweep
+    does not warn a second time).
     """
+    warnings.warn(_DEPRECATION_MSG, DeprecationWarning, stacklevel=2)
     result = BulkResult()
 
     if warm is not None:
@@ -88,7 +104,7 @@ def run_bulk(
         result.warmed = True
 
     if guard_halts:
-        sweep: SweepResult = guarded_sweep(
+        sweep: SweepResult = _guarded_sweep(
             units, worker, isolate_errors=isolate_errors
         )
         result.done = sweep.done

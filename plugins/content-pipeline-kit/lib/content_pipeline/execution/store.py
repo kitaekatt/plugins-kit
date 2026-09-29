@@ -2,12 +2,12 @@
 
 The store is the ONLY place run truth lives. Everything above it -- a
 prepare/finalize controller, a worker protocol, a driver -- is a later phase;
-this module owns just the primitives the plan settles for A-min.1: run
+this module owns just the primitives A-min.1 settles: run
 identity, unit registration, atomic claims with monotonically increasing
 fencing tokens, lease expiry, and an append-only attempt/event log with
 nullable usage.
 
-Operational posture (settled by the plan, not redesigned here):
+Operational posture (not redesigned here):
 
 - **WAL journal mode** -- set on every connection (idempotent; the mode
   persists in the database file once set, but a connection freshly opened
@@ -49,7 +49,7 @@ additionally records a payload-free
 :class:`~content_pipeline.execution.model.AttemptKind.SUPERSEDED` attempt row
 (worker, presented token, timestamp) before raising, so a fenced-out
 submission is a visible, durable fact -- not a silently discarded one
-(invariant 4).
+(a fenced-out late submission is superseded, never applied).
 """
 
 from __future__ import annotations
@@ -96,7 +96,7 @@ _ERROR_TRUNCATE = 500  # a defensive cap; error text is operational, not content
 # comment for why the split is per-lane rather than one adapter-declared
 # lease. The factor rests on ONE measurement (213s, the CHEAP case: no
 # retry, no contention) and an asymmetric error (an undersized lease
-# destroys a healthy unit after two reclaim-then-fail cycles, D5's "workflow
+# destroys a healthy unit after two reclaim-then-fail cycles, the "workflow
 # lane has no renewer" gap; an oversized one merely holds a slot longer).
 # 2.0 x 213s = 426s sits comfortably under the consumer's own 900s ceiling
 # for the same operation. This is a single named module constant precisely
@@ -294,7 +294,7 @@ _MIGRATIONS: List[List[str]] = [
 def _row_to_run(row: sqlite3.Row) -> RunRecord:
     # `environment` (item 5) may be absent from `row` when this method runs
     # against a database whose migrations have not yet applied that step
-    # (see the migration-truncation test in test_execution_store.py) --
+    # (as the migration-truncation test exercises) --
     # tolerate a missing column the same way a genuinely older reader would
     # have to, rather than raising a bare sqlite3.Row IndexError.
     raw_environment = row["environment"] if "environment" in row.keys() else None
@@ -784,9 +784,17 @@ class ExecutionStore:
         at: float,
         worker_id: Optional[str] = None,
         fencing_token: Optional[int] = None,
-        error: Optional[str] = None,
+        error: Union[str, Mapping, Sequence, None] = None,
         usage: Optional[UsageRecord] = None,
     ) -> None:
+        if error is not None and not isinstance(error, str):
+            # A structured failure detail (a JSON object or list from a
+            # worker) is stored as its JSON text, so the fail is recorded
+            # rather than refused; the same length cap applies below.
+            try:
+                error = json.dumps(error, sort_keys=True, default=str)
+            except (TypeError, ValueError):
+                error = str(error)
         conn.execute(
             "INSERT INTO attempts(run_id, unit_id, kind, at, worker_id, fencing_token, error, "
             "input_tokens, output_tokens, cache_hit_tokens) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -822,7 +830,7 @@ class ExecutionStore:
         the reclaim is visible in the log). A CLAIMED unit with a live lease
         raises :class:`AlreadyClaimedError`; a terminal unit raises
         :class:`TerminalStateError`; a halted run raises
-        :class:`RunHaltedError` (D4: halt blocks new claims, never a
+        :class:`RunHaltedError` (halt blocks new claims, never a
         fenced-valid submission already in flight).
         """
         now = time.time() if at is None else at
@@ -939,15 +947,15 @@ class ExecutionStore:
         usage: Optional[UsageRecord] = None,
         at: Optional[float] = None,
     ) -> None:
-        """Terminally accept a unit (D4: valid-fence acceptance ignores halt).
+        """Terminally accept a unit (a valid-fence acceptance ignores halt).
 
         Deliberately does not consult the run's halt state -- a submission
         carrying a valid fencing token is completed, paid-for work and is
-        recorded exactly as if no halt existed (D4). Only a STALE fencing
+        recorded exactly as if no halt existed (halt blocks claims, never valid-fence submissions). Only a STALE fencing
         token is rejected, regardless of halt state.
 
-        The fencing check happens FIRST, before any state check (invariant 4
-        / defect fix): a presented token that does not match the unit's
+        The fencing check happens FIRST, before any state check (a late
+        fenced-out submission is superseded, never applied): a presented token that does not match the unit's
         current token is a fenced-out late submission -- it always raises
         :class:`StaleFenceError`, even when the unit is now ACCEPTED (by the
         winning claimant) or otherwise not the state a naive check would
@@ -973,7 +981,7 @@ class ExecutionStore:
         # WHILE still inside `self._writer()` would trigger that context
         # manager's own rollback (see `_writer`'s docstring) and undo the
         # very row this path exists to make durable -- exactly the
-        # discard-on-reject bug invariant 4 requires NOT happen.
+        # discard-on-reject bug the fencing rule requires NOT happen.
         stale: Optional[Tuple[int, int]] = None  # (presented, current)
         with self._writer() as conn:
             self._require_run(conn, run_id)
@@ -1026,7 +1034,7 @@ class ExecutionStore:
         unit_id: str,
         fencing_token: int,
         *,
-        error: str = "",
+        error: Union[str, Mapping, Sequence] = "",
         terminal: bool = False,
         terminal_state: UnitState = UnitState.FAILED,
         usage: Optional[UsageRecord] = None,
@@ -1143,7 +1151,7 @@ class ExecutionStore:
     def record_apply_started(
         self, run_id: str, unit_id: str, *, at: Optional[float] = None
     ) -> None:
-        """Record that finalize is about to call the adapter's apply (D6).
+        """Record that finalize is about to call the adapter's apply (apply_unknown fails closed).
 
         Requires the unit to be ACCEPTED; raises :class:`NotAcceptedError`
         otherwise -- finalize only ever applies accepted units. See
@@ -1155,7 +1163,7 @@ class ExecutionStore:
     def record_apply_succeeded(
         self, run_id: str, unit_id: str, *, at: Optional[float] = None
     ) -> None:
-        """Record that the adapter's apply returned without raising (D6).
+        """Record that the adapter's apply returned without raising (apply_unknown fails closed).
 
         Same ACCEPTED requirement and no-fencing rationale as
         :meth:`record_apply_started` -- see :meth:`_record_apply_event`.

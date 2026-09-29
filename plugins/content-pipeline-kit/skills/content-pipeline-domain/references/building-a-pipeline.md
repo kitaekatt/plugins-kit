@@ -20,17 +20,26 @@ Two shapes ship, in `pipeline`:
 
 - **`single_pass.run_single_pass`** -- the regenerate-on-stale, two-phase
   generate/apply shape. Each unit is classified for freshness, generated once
-  if stale, then applied. This is where most pipelines start.
+  if stale, then applied. `run_single_pass` is the minimal teaching and test
+  harness for this shape: a deprecated untracked loop (it emits a
+  `DeprecationWarning`, keeps no durable run record, and its halt behavior is
+  frozen). A production pipeline runs the same shape through the tracked path,
+  `ExecutionStore.register_units` + `execution.controller.prepare_run` + `execution.drivers.inline.run_wave` +
+  `execution.controller.finalize_run` (see "Deprecated loop helpers" in step
+  10); the gate, freshness and generate seams are the same on both.
 - **`convergence_loop.run`** -- the `grade -> select -> apply -> fill` cycle,
   driven to a `CONVERGED` / `STALLED` verdict. Use it only when a unit needs
   multiple candidate values graded against a signal before a winner is picked.
 
-Pick single-pass unless you genuinely iterate candidates against a grader.
+Pick the single-pass shape unless you genuinely iterate candidates against a grader.
 Convergence-loop is heavier (a candidate store, a grading stage, a progress
 measure) and pays off only when "generate once and apply" cannot express the
 work. The product-copy generator that writes one blurb per product is
 single-pass; a variant that generates three blurbs per product and grades
 them for tone before selecting is convergence-loop.
+
+The snippet below is the minimal harness form of the shape, for learning and
+tests; do not build a production pipeline on it.
 
 ```python
 from content_pipeline.pipeline import single_pass
@@ -235,7 +244,7 @@ backend for its first usable entry: a `claude`, `codex` or `opencode` harness
 entry gets that CLI backend, the `openrouter` entry gets `OpenRouterBackend`,
 and any other transport entry gets `ModelEndpointBackend`. Unset, it returns
 `OpenRouterBackend`. A supplied `mock` always wins so tests never reach a live
-transport. `CONTENT_PIPELINE_LLM_MODELS` is the only routing env.
+transport. `CONTENT_PIPELINE_LLM_MODELS` is the only routing setting. `CONTENT_PIPELINE_LLM_BACKEND`, `CONTENT_PIPELINE_LLM_MODEL` and `CONTENT_PIPELINE_LLM_ENDPOINT` select nothing; if one is set while `CONTENT_PIPELINE_LLM_MODELS` is not, routing raises `ConfigurationError` naming it, rather than falling back to OpenRouter. When `CONTENT_PIPELINE_LLM_MODELS` is set, any of those three is ignored.
 
 ### The model-endpoint backend
 
@@ -437,10 +446,13 @@ Add, as needed:
   re-raises an auth/credit halt as `BudgetStop` before any unit runs;
   `guarded_sweep(units, worker)` halts the sweep cleanly on the first
   `PipelineHaltError` (429/401), recording done/remaining for a resume.
+  **`guarded_sweep` is deprecated** (see "Deprecated loop helpers" below);
+  `BudgetStop`, `SweepResult`, `preflight_check` and `check_response` are not.
 - **`cli.bulk`** -- `run_bulk(units, worker, warm=...)`, the two-phase
   cache-warm bulk worker. The `warm` callable owns cache priming; the worker
-  phase composes `guarded_sweep`, so a halt stops cleanly with partial
-  progress.
+  phase runs the same sweep as `guarded_sweep`, so a halt stops cleanly with
+  partial progress. **`run_bulk` is deprecated**; it emits one warning per
+  call.
 - **`cli.unsupported`** -- the sticky-stub registry. An `UnsupportedRegistry`
   (passed by the caller, persistable) records a unit as structurally
   unsupported once, so a pipeline that cannot handle a unit's shape stops
@@ -450,7 +462,66 @@ Add, as needed:
   `mark_unsupported` (process-global state does not round-trip).
 
 Wire the sticky gate into `run_single_pass` via its `mark_unsupported` hook
-and a `Gate(name, predicate, sticky=True)`.
+and a `Gate(name, predicate, sticky=True)`. `Gate` and `run_gates` live in
+`pipeline.gate` (also importable from `pipeline.single_pass`); the tracked
+`prepare_run` takes the same `gates` and `mark_unsupported` arguments.
+
+### Deprecated loop helpers
+
+`single_pass.run_single_pass`, `cli.budget.guarded_sweep` and
+`cli.bulk.run_bulk` each emit a `DeprecationWarning` once per call (a
+`run_bulk` call warns once, not twice). They keep no durable run record and
+their behavior is otherwise unchanged. The tracked path is:
+
+1. `ExecutionStore.create_run`, then `ExecutionStore.register_units(run_id,
+   unit_ids)` -- the store records the run and its units (the CLI's
+   `create-run` and `register-units` commands do the same). `prepare_run`
+   does NOT register units: on a run with none registered, a flat strategy
+   returns an empty wave and does nothing, and a graph strategy whose
+   `order()` yields ids raises `GraphOrderMismatchError`.
+2. `execution.controller.prepare_run` -- evaluate gates and freshness over
+   the registered units and return the wave.
+3. `execution.drivers.inline.run_wave` -- claim and generate a wave.
+4. `execution.controller.finalize_run` -- apply what was accepted.
+5. `execution.controller.unfinished_units` -- the units without a terminal
+   state, after a halt or at the end.
+
+**Draining a run.** Repeating prepare and run until the wave is empty is not
+enough, because an empty wave has causes other than completion. When a wave
+comes back empty, finalize, then read the run: if it is halted, clear the
+halt with `execution.controller.resume_run` once its condition has cleared
+(a halted run yields no claims, so looping without it never makes progress);
+if `unfinished_units` still lists a unit in the CLAIMED state, it is held
+by an earlier crashed or refused attempt and is not offered again by default.
+Pass `reclaim_at=time.time()` to `prepare_run`: a unit whose lease has
+expired is then offered again and `run_wave` reclaims it (fence + 1). A live
+lease, or a unit under an open dispatch, is never offered, and a unit already
+reclaimed twice is failed terminally as `reclaim_exhausted`. Otherwise wait
+out the lease, or stop and report it; if the run is not halted
+and `unfinished_units` is empty, it is complete. Cap the loop, and stop when
+one full pass changes nothing.
+
+**Migrating a `BudgetStop` caller.** `guarded_sweep` records the tripping unit
+as `BudgetStop.unit_id` and builds `remaining` as the units AFTER it, so a
+caller resuming from the stop must rebuild the full unfinished set as
+`[trigger] + remaining`. On the tracked path there is no such reassembly:
+`unfinished_units(store, run_id)` returns every unit without a terminal state,
+in original ordinal order, and the halt-triggering unit is already in it
+(it was returned to `PENDING`). Read that set instead of `[trigger] +
+remaining`.
+
+**The tracked halt contract.** When generating a unit raises
+`PipelineHaltError` (from `generate` itself, or from the backend inside
+`submit_validated`), `run_wave` calls `controller.record_halt`: the run is
+marked halted with the halt kind and detail, and the triggering unit goes back
+to `PENDING` -- unfinished work, not a permanent failure. `run_wave` then
+stops claiming units and returns the ids it accepted before the halt. A
+halted run refuses new claims (a later `run_wave` on it claims nothing) until
+`controller.resume_run` clears the halt. Units already accepted stay
+accepted, and a claim already in flight with a valid fencing token can still
+be accepted. Any other exception from `generate` propagates out of `run_wave`
+and leaves that unit `CLAIMED` until its lease expires. Halt kinds are the
+`PipelineHaltError.kind` values, plus `"pause"` for an operator pause.
 
 ## 11. Add the audit spec + Recorder (opt-in)
 
@@ -492,6 +563,8 @@ from content_pipeline.llm.backends import MockBackend
 from content_pipeline.vcs.null_vcs import NullVcs
 
 backend = MockBackend(responses=["generated blurb"])
+# run_single_pass is deprecated (step 10): it warns, but stays a compact
+# in-memory harness for tests.
 outcomes = single_pass.run_single_pass(
     units, freshness_of=classify_unit,
     generate=lambda u: generate_with(backend, u),
