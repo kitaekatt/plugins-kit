@@ -46,7 +46,7 @@ from typing import Any, Callable, Dict, Iterable, List, Mapping, MutableMapping,
 from .completion.halt import HALT_INSUFFICIENT_CREDIT, HALT_QUOTA
 from .completion.types import BackendOptions
 from .model_endpoints import HARNESS_KIND, TRANSPORT_KIND, EndpointRegistryError
-from .models import EndpointResolveError
+from .models import EndpointResolveError, claude_cli_alias
 from .reachability import (
     DEFAULT_VERIFY_TIMEOUT_S,
     STATUS_UNKNOWN,
@@ -609,6 +609,10 @@ def describe(
     if self_ref is not None:
         self_entry = entries.get(self_ref)
         self_model = getattr(self_entry, "model", None) or self_ref
+        if self_entry is None and not any(
+            c["model"] == self_model for c in candidates
+        ):
+            self_model = claude_cli_alias(self_ref) or self_model
 
     states: List[EntryState] = []
     for c in candidates:

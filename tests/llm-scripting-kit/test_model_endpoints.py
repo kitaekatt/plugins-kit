@@ -383,7 +383,7 @@ class TestShippedCoreEntries:
         haiku = discover_model_entries(config=DEFAULT_MODEL_CONFIG)["haiku"]
         assert haiku.kind == "harness"
         assert haiku.harness == "claude"
-        assert haiku.model == "claude-haiku-4-5"
+        assert haiku.model == "haiku"
         assert haiku.tier == 1
         assert haiku.family == "anthropic"
         assert haiku.base_url is None

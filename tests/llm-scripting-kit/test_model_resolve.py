@@ -80,6 +80,15 @@ class TestBaselineSync:
         on_disk = yaml.safe_load(yaml_path.read_text(encoding="utf-8"))
         assert on_disk == DEFAULT_MODEL_CONFIG
 
+    def test_shipped_claude_entries_name_the_cli_alias(self):
+        """A dated id (claude-opus-5) keeps serving that release after an upgrade."""
+        claude = {
+            name: entry["model"]
+            for name, entry in DEFAULT_MODEL_CONFIG["endpoints"].items()
+            if entry.get("harness") == "claude"
+        }
+        assert claude == {name: name for name in ("haiku", "sonnet", "opus", "fable")}
+
 
 class TestResolveModelFromConfig:
     CFG = {

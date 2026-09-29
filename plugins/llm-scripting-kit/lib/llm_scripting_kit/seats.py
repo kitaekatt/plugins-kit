@@ -12,7 +12,7 @@ from .model_endpoints import (
     EndpointRegistry,
     EndpointRegistryError,
 )
-from .models import discover_model_entries, load_model_config
+from .models import claude_cli_alias, discover_model_entries, load_model_config
 from .reachability import (
     DEFAULT_VERIFY_TIMEOUT_S,
     STATUS_REACHABLE,
@@ -146,6 +146,12 @@ def _resolve_self(self_ref: str, entries: dict[str, EndpointEntry]) -> EndpointE
         entry for entry in entries.values()
         if entry.kind == HARNESS_KIND and entry.model == self_ref
     ]
+    alias = claude_cli_alias(self_ref)
+    if not matches and alias is not None:
+        matches = [
+            entry for entry in entries.values()
+            if entry.kind == HARNESS_KIND and entry.model == alias
+        ]
     if not matches:
         raise SeatResolutionError(f"unknown self endpoint or model '{self_ref}'")
     if len(matches) > 1:

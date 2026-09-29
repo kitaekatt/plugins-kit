@@ -149,24 +149,28 @@ endpoints:
   # Claude reachable in principle and unusable in practice. Effort is a
   # per-call mapped param on this adapter, so none is set here. haiku completes
   # the core id set (fable, opus, sonnet, haiku), each a claude entry.
+  # `model` is the Claude CLI ALIAS, never a dated id: `claude -p --model opus`
+  # resolves to the current Opus, while a dated id such as claude-opus-5 keeps
+  # serving that release after an upgrade. Pin a dated id in a user layer only
+  # to hold a release deliberately.
   haiku:
     harness: claude
-    model: claude-haiku-4-5
+    model: haiku
     tier: 1
     family: anthropic
   sonnet:
     harness: claude
-    model: claude-sonnet-5
+    model: sonnet
     tier: 2
     family: anthropic
   opus:
     harness: claude
-    model: claude-opus-5
+    model: opus
     tier: 3
     family: anthropic
   fable:
     harness: claude
-    model: claude-fable-5
+    model: fable
     tier: 4
     family: anthropic
 

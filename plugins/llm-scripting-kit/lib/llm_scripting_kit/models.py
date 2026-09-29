@@ -145,20 +145,23 @@ DEFAULT_MODEL_CONFIG = {
         # haiku completes the core id set (bootstrap_lib.model_declaration
         # CORE_IDS): every core id is a shipped claude entry, so a declaration
         # naming it resolves on every machine.
+        # `model` is the Claude CLI ALIAS, never a dated id: `claude -p --model
+        # opus` resolves to the current Opus, while a dated id such as
+        # claude-opus-5 keeps serving that release after an upgrade.
         "haiku": {
-            "harness": "claude", "model": "claude-haiku-4-5",
+            "harness": "claude", "model": "haiku",
             "tier": 1, "family": "anthropic",
         },
         "sonnet": {
-            "harness": "claude", "model": "claude-sonnet-5",
+            "harness": "claude", "model": "sonnet",
             "tier": 2, "family": "anthropic",
         },
         "opus": {
-            "harness": "claude", "model": "claude-opus-5",
+            "harness": "claude", "model": "opus",
             "tier": 3, "family": "anthropic",
         },
         "fable": {
-            "harness": "claude", "model": "claude-fable-5",
+            "harness": "claude", "model": "fable",
             "tier": 4, "family": "anthropic",
         },
     },
@@ -175,6 +178,18 @@ DEFAULT_MODEL_CONFIG = {
 CONFIG_PLUGIN = "llm-scripting-kit"
 CONFIG_MARKETPLACE = "plugins-kit"
 CONFIG_FILE = "config.yaml"
+
+
+def claude_cli_alias(model_id: str) -> Optional[str]:
+    """The Claude CLI alias a dated model id belongs to, else None.
+
+    Shipped claude entries name the alias (``opus``) so they track upgrades,
+    while a running session reports its dated id (``claude-opus-5-5``).
+    """
+    parts = model_id.split("-")
+    if len(parts) >= 3 and parts[0] == "claude":
+        return parts[1]
+    return None
 
 
 class ModelResolveError(Exception):
