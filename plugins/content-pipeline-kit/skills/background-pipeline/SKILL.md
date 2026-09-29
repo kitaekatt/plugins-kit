@@ -97,8 +97,9 @@ technique_skill:
    every accepted unit through the adapter's `apply`. Finalize is the only
    place a unit's output actually lands; nothing before it writes a
    consumer-visible side effect. If finalize is interrupted, run it again: it
-   applies every accepted unit without a recorded apply success, including an
-   interrupted one (listed in the digest's `apply_started_unit_ids`), so the
+   applies every accepted unit with no recorded apply outcome (neither
+   succeeded nor rejected), including an interrupted one (listed in the
+   digest's `apply_started_unit_ids`), so the
    adapter's `apply` must be repeat-safe -- it sets an end state, never
    appends.
 

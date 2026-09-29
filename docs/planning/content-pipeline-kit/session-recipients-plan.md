@@ -80,7 +80,10 @@ it is the risk this decision knowingly carries.
 ## Architectural assessment
 
 Carried forward from the code-level analysis; every line citation here was
-re-verified against source.
+re-verified against source. These citations describe the source as it stood
+before content-pipeline-kit 0.28.0 (commit 6fd94fcf^), where the cited modules
+and symbols (`cli/bulk.py`, `run_single_pass`, `_guarded_sweep`,
+`UnitOutcome`, `SweepResult`) were removed.
 
 **The seam that fits is a run, not a wider backend.** `LLMBackend` is a coherent
 one-call transport protocol: `complete(system, user, *, model, options) ->

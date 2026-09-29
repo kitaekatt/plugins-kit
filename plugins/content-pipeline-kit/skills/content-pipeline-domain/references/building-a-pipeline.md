@@ -2,9 +2,10 @@
 
 A stepped procedure for building a NEW pipeline on `content_pipeline`. Each
 step names the sub-package it composes from, states the decision it forces,
-and shows the real API. Steps 1-6 build a minimal working pipeline; steps
-7-11 add the opt-in guardrails (each is a component you register only when
-you want its signal -- a minimal pipeline needs none of them).
+and shows the real API. Steps 1-6 plus the tracked run loop (see "The tracked
+path" in step 10) build a minimal working pipeline; the rest of steps 7-11
+add the opt-in guardrails (each is a component you register only when you
+want its signal -- a minimal pipeline needs none of them).
 
 Illustrative domains used throughout, both neutral: a **product-copy
 generator** that regenerates catalog blurbs by mutating authored rows in
