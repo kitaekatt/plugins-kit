@@ -62,7 +62,9 @@ def _bootstrap_commands() -> tuple[str, str]:
     home = os.environ.get("HOME") or os.path.expanduser("~")
     unix = shlex.quote(os.path.join(home, ".local", "bin", "bootstrap"))
     windows = os.path.join(home, ".local", "bin", "bootstrap.cmd")
-    return unix + " " + HOOK_MARKER.split(" ", 1)[1], '"%s" %s' % (
+    # PowerShell must pass literal path quotes to cmd; triple quotes also work
+    # when Codex invokes this command through cmd.exe directly.
+    return unix + " " + HOOK_MARKER.split(" ", 1)[1], 'cmd.exe /d /c call """%s""" %s' % (
         windows, HOOK_MARKER.split(" ", 1)[1])
 
 
