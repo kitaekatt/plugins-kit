@@ -176,21 +176,20 @@ both a Write and a `touch`, so it is looser than `default`.
 combine when the plugin is enabled only in user settings (live probe, claude
 CLI 2.1.284, 2026-09-29): `--agent content-pipeline-kit:pipeline-worker` printed
 `warning: no agent named 'content-pipeline-kit:pipeline-worker' -- spawning with
-default template` and launched anyway, exit code unchanged. The warning goes to
+default template`, and the launcher exited 0, but the session then failed
+without running (see the isolation probes below). The warning goes to
 the launcher's output, which `dispatch_wave` reports as `launch_stderr` only on
-a failed launch, so do not expect to see it. Enabling the plugin in the
-project's own settings did not restore the agent (live probe, claude CLI 2.1.284,
-2026-09-29): with `{"enabledPlugins": {"content-pipeline-kit@plugins-kit": true}}`
-in the launch folder's `.claude/settings.json`, two launches printed the same
-`no agent named` warning. The sessions' logs could not be read, so what the
-sessions then did is unobserved.
-Adding `--plugin-dir <installed plugin root>` to the strict launch (installed
-content-pipeline-kit 0.27.0, claude CLI 2.1.284, 2026-09-29) also did not keep
-the agent: `--bg` accepts the flag, but the launch printed the same `no agent
-named` warning, and the session then reported state `failed` in
-`claude agents --json --all`, with no transcript written. `claude logs` again
-failed with `connect ENOENT \\.\pipe\cc-daemon-*-control`, and no transcript
-existed to read instead.
+a failed launch, so do not expect to see it. Isolation probes (live, claude CLI 2.1.284,
+2026-09-29, launch folder trusted for `--bg`): plain `--bg` works;
+`--agent content-pipeline-kit:pipeline-worker` alone resolves the agent and the
+session sees only Bash and Write; `--setting-sources project` alone works. The
+combination drops the agent: the launch printed the `no agent named` warning,
+`claude agents --json --all` reported state `failed`, no transcript was written,
+and `claude logs` failed with `connect ENOENT \\.\pipe\cc-daemon-*-control`. The
+earlier `logs` ENOENT and `failed` observations came only from launches using the
+combination (one also with `--plugin-dir`, two with the plugin enabled in the
+folder's project settings); no launch without the combination was observed
+failing.
 
 Build your worker's allowlist from those six computed strings, not from a
 broader grant (e.g. "any invocation of my protocol mount"). A broad grant
@@ -320,7 +319,8 @@ and dropped. It composed in one probe (live probe, claude CLI 2.1.238,
 2026-08-21: `--agent content-pipeline-kit:pipeline-worker` with
 `--append-system-prompt-file` on `claude --bg`; the worker reported only the
 agent's tools, Bash and Write, and echoed a marker from the appended file). It
-was dropped in another (see the `--setting-sources project` paragraph above).
+was dropped, and the session failed, when combined with `--setting-sources
+project` (see the paragraph above).
 The launcher exits 0 either way, so for your CLI version and settings, observe
 what a worker actually does. Treat an agent definition as a way to strengthen
 a worker's discipline, and the launch prompt as the constraint you can count
