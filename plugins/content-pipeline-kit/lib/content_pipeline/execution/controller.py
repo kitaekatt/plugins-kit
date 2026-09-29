@@ -8,7 +8,9 @@ Two entry points bracket a run:
   :func:`~content_pipeline.execution.wave.ready_wave`).
 - :func:`finalize_run` -- applies every ``ACCEPTED`` unit's recorded text,
   serially, in ordinal order, recording ``apply_started``/``apply_succeeded``
-  around each call (apply_unknown fails closed). It never re-adjudicates a verdict
+  around each call. Apply is convergent: an interrupted apply (a trailing
+  ``apply_started``) is simply applied again by the next finalize, so
+  ``RunAdapter.apply`` must be safe to repeat. It never re-adjudicates a verdict
   (submit-time acceptance is authoritative): the adapter's ``parse_fn`` is called mechanically to recover
   the payload object from the durably recorded ``accepted_text``, and no
   validator ever runs again.
@@ -36,7 +38,7 @@ unchanged, so every existing import (``from content_pipeline.execution.controlle
 import RunAdapter``) and every existing call site --
 :func:`~content_pipeline.execution.drivers.inline.run_wave` (``unit_for``,
 ``system_for``, ``user_for``, ``parse_fn``, ``validators``) and
-:func:`finalize_run` (``parse_fn``, ``apply``, ``reconcile``) -- keeps working
+:func:`finalize_run` (``parse_fn``, ``apply``) -- keeps working
 with no signature change, exactly as that module's own docstring promised
 ("widenings -- new fields, not signature changes"). ``finalize_run`` resolves
 its parse function via ``adapter.resolve_validation_spec(adapter.unit_for(unit_id)).parse_fn``
@@ -158,25 +160,6 @@ DEFAULT_PREPARE_WORKER_ID = "prepare"
 DEFAULT_FINALIZE_WORKER_ID = "finalize"
 
 
-class ApplyUnknownError(ExecutionError):
-    """Finalize refuses to proceed while any unit is ``apply_unknown`` (apply_unknown fails closed).
-
-    Raised when the adapter supplies no ``reconcile`` hook (fail closed) --
-    or when ``reconcile`` is supplied but this unit still resolves to
-    ``apply_unknown`` after asking it (i.e. ``reconcile`` returned ``False``
-    and finalize chose to re-apply rather than silently proceeding without
-    ever closing the record -- see :func:`finalize_run`).
-    """
-
-    def __init__(self, unit_id: str) -> None:
-        self.unit_id = unit_id
-        super().__init__(
-            f"unit {unit_id!r} is apply_unknown (an APPLY_STARTED attempt with "
-            "no following APPLY_SUCCEEDED) and the adapter supplies no "
-            "reconcile hook; finalize refuses to proceed (fail closed)"
-        )
-
-
 class MissingAcceptedTextError(ExecutionError):
     """Finalize refuses an ACCEPTED unit with no recorded ``accepted_text`` (fail closed).
 
@@ -187,8 +170,7 @@ class MissingAcceptedTextError(ExecutionError):
     a unit could be marked applied with no payload ever having existed.
     Raised before ``adapter.parse_fn`` is called and before
     ``record_apply_started`` -- so ``adapter.apply`` is never invoked, and no
-    apply-attempt row is written, for a unit refused this way. Mirrors
-    :class:`ApplyUnknownError`'s refusal shape.
+    apply-attempt row is written, for a unit refused this way.
     """
 
     def __init__(self, unit_id: str) -> None:
@@ -255,30 +237,18 @@ class UnappliedPredecessorError(ExecutionError):
     before computing or returning a wave, so no caller ever observes a wave
     computed in that state.
 
-    Distinct from ``apply_unknown`` (an ``APPLY_STARTED`` attempt with no
-    following ``APPLY_SUCCEEDED``, e.g. a crash mid-apply): this exception's
-    message does not say "apply never started", because that would
-    misdescribe ``apply_unknown``, which needs a materially different
-    recovery -- ``finalize_run`` with an ``adapter.reconcile`` hook, not
-    merely "run finalize_run" (which alone raises ``ApplyUnknownError`` for
-    that case). See :class:`ApplyUnknownError`.
+    The recovery is the same whether finalize never ran for the unit or an
+    earlier apply was interrupted (a trailing ``APPLY_STARTED``): rerun
+    :func:`finalize_run`, which applies the unit again (apply is convergent).
     """
 
-    def __init__(self, run_id: str, unit_id: str, *, apply_unknown: bool = False) -> None:
+    def __init__(self, run_id: str, unit_id: str) -> None:
         self.run_id = run_id
         self.unit_id = unit_id
-        self.apply_unknown = apply_unknown
-        if apply_unknown:
-            detail = (
-                "the last apply is unresolved; use finalize_run with an "
-                "adapter.reconcile hook"
-            )
-        else:
-            detail = "finalize has not run for this unit"
         super().__init__(
             f"run {run_id!r}: unit {unit_id!r} is ACCEPTED but its last "
-            "apply-kind attempt is not APPLY_SUCCEEDED; "
-            f"{detail} -- prepare_run refuses to compute a wave until the "
+            "apply-kind attempt is not APPLY_SUCCEEDED; rerun finalize_run "
+            "-- prepare_run refuses to compute a wave until the "
             "predecessor is settled (the one-unit-wave guarantee)"
         )
 
@@ -289,7 +259,6 @@ class ApplyRejectedPredecessorError(UnappliedPredecessorError):
     def __init__(self, run_id: str, unit_id: str) -> None:
         self.run_id = run_id
         self.unit_id = unit_id
-        self.apply_unknown = False
         ExecutionError.__init__(
             self,
             f"run {run_id!r}: unit {unit_id!r} is ACCEPTED but its apply was "
@@ -387,11 +356,7 @@ def _validate_no_unapplied_accepted(
         if last_apply_kind is not AttemptKind.APPLY_SUCCEEDED:
             if last_apply_kind is AttemptKind.APPLY_REJECTED:
                 raise ApplyRejectedPredecessorError(run_id, unit.unit_id)
-            raise UnappliedPredecessorError(
-                run_id,
-                unit.unit_id,
-                apply_unknown=last_apply_kind is AttemptKind.APPLY_STARTED,
-            )
+            raise UnappliedPredecessorError(run_id, unit.unit_id)
 
 
 def prepare_run(
@@ -601,22 +566,25 @@ def finalize_run(
     scanning :meth:`~content_pipeline.execution.store.ExecutionStore.list_attempts`
     for the last apply-kind attempt per unit (see :func:`_last_apply_kind`):
 
-    - No apply-kind attempt -- not yet applied; apply now.
     - Last is ``APPLY_SUCCEEDED`` or ``APPLY_REJECTED`` -- terminal on the
       apply axis; skipped (never replayed).
-    - Last is ``APPLY_STARTED`` with no following ``APPLY_SUCCEEDED`` --
-      ``apply_unknown``. Refuses via :class:`ApplyUnknownError` unless
-      ``adapter.reconcile`` is supplied. When it is: ``reconcile(unit_id)``
-      returning ``True`` means the apply already landed -- record
-      ``apply_succeeded`` and move on WITHOUT calling ``apply`` again (reconciliation:
-      never risk a duplicate side effect once reconciliation confirms it
-      landed). Returning ``False`` means it did not land -- fall through to
-      a normal re-apply (a fresh ``apply_started``/``apply_succeeded`` pair),
-      since only the record, not the side effect, was confirmed absent.
+    - No apply-kind attempt, or last is ``APPLY_STARTED`` (an earlier apply
+      was interrupted before its success was recorded) -- apply now: record
+      a fresh ``apply_started``, call ``adapter.apply``, record
+      ``apply_succeeded``.
 
-    Returns the ids of units whose ``adapter.apply`` was actually invoked
-    during THIS call -- a reconciled-as-landed unit is not included, since
-    its side effect was not (re)run here.
+    Convergent, not exactly-once: after an interruption ``adapter.apply`` may
+    be called a second time for the same unit and payload. The adapter
+    contract (``RunAdapter.apply``) requires it to set the complete desired
+    end state -- upsert keyed data, find-or-create external objects tagged
+    with the run id -- so a repeat leaves one durable end state. Only
+    :class:`~content_pipeline.execution.model.ApplyRejected` is caught (a
+    refusal with no side effect, recorded terminal); any other exception
+    propagates with the unit's last attempt still ``APPLY_STARTED``, and the
+    next finalize applies it again.
+
+    Returns the ids of units whose ``adapter.apply`` returned successfully
+    during THIS call.
 
     Never re-adjudicates a verdict (submit-time acceptance is authoritative): the parse function
     resolved via ``adapter.resolve_validation_spec(adapter.unit_for(unit_id)).parse_fn``
@@ -647,14 +615,9 @@ def finalize_run(
         if last_kind is AttemptKind.APPLY_REJECTED:
             continue  # refused without a side effect; terminal disposition
 
-        if last_kind is AttemptKind.APPLY_STARTED:
-            if adapter.reconcile is None:
-                raise ApplyUnknownError(unit.unit_id)
-            landed = adapter.reconcile(unit.unit_id)
-            if landed:
-                store.record_apply_succeeded(run_id, unit.unit_id, at=at)
-                continue
-            # Not landed: fall through to a fresh apply below.
+        # None or APPLY_STARTED: apply (again). A trailing APPLY_STARTED is
+        # an interrupted apply; repeat-safe apply converges on the same end
+        # state.
 
         if unit.accepted_text is None:
             raise MissingAcceptedTextError(unit.unit_id)
@@ -771,7 +734,6 @@ def resume_run(store: ExecutionStore, run_id: str) -> None:
 
 __all__ = [
     "ApplyRejected",
-    "ApplyUnknownError",
     "ApplyRejectedPredecessorError",
     "GraphOrderMismatchError",
     "MissingAcceptedTextError",

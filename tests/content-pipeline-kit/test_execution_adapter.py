@@ -754,3 +754,10 @@ def test_a_required_var_not_declared_as_a_cwd_var_stays_exact(monkeypatch):
         WorkerEnvironment(required_vars=("APP_ROOT",)).check(
             {"APP_ROOT": FAKE_CWD}, run_id="run-1"
         )
+
+
+def test_reconcile_field_was_removed_and_is_refused_at_construction():
+    """0.28.0 removed ``RunAdapter.reconcile``: an adapter still passing it
+    must fail loudly instead of having a hook silently ignored."""
+    with pytest.raises(TypeError):
+        RunAdapter(reconcile=lambda unit_id: False)

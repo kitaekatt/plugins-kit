@@ -44,10 +44,10 @@ the adapter's ``parse_fn`` -- it never re-validates and never flips a verdict.
 Whether a unit's apply has run is NOT a ``units`` column -- it is derived from
 the append-only attempts log via the :data:`AttemptKind.APPLY_STARTED` /
 :data:`AttemptKind.APPLY_SUCCEEDED` pair a finalize records around each
-adapter ``apply`` call (apply_unknown fails closed). A unit whose last apply-related attempt is
-``APPLY_STARTED`` with no following ``APPLY_SUCCEEDED`` is ``apply_unknown``;
-resuming finalize with any unit in that state refuses to proceed unless the
-adapter supplies a reconciliation hook (fail closed). An adapter may also
+adapter ``apply`` call. A unit whose last apply-related attempt is
+``APPLY_STARTED`` with no following ``APPLY_SUCCEEDED`` had its apply
+interrupted; the next finalize applies it again, which is safe because the
+adapter contract requires ``apply`` to be repeat-safe (convergent). An adapter may also
 record ``APPLY_REJECTED`` when it declines the side effect before writing
 anything; that outcome is terminal on the apply axis while the unit remains
 ``ACCEPTED``.
@@ -144,8 +144,8 @@ class AttemptKind(str, Enum):
     ACCEPT = "accept"
     FAIL = "fail"
     SUPERSEDED = "superseded"  # a fenced-out accept/fail: recorded, never applied
-    APPLY_STARTED = "apply_started"  # finalize is about to call the adapter's apply (apply_unknown fails closed)
-    APPLY_SUCCEEDED = "apply_succeeded"  # the adapter's apply returned without raising (apply_unknown fails closed)
+    APPLY_STARTED = "apply_started"  # finalize is about to call the adapter's apply (a trailing one is retried)
+    APPLY_SUCCEEDED = "apply_succeeded"  # the adapter's apply returned without raising
     APPLY_REJECTED = "apply_rejected"  # the adapter declined before any side effect
 
 
@@ -301,7 +301,8 @@ class ApplyRejected(ExecutionError):
     Adapters MUST raise this exception only when they know that no external
     write, commit, or other delivery side effect occurred. If apply may have
     partly landed, the adapter MUST raise another exception so finalize leaves the
-    ``APPLY_STARTED`` outcome available for reconciliation. The reason is
+    ``APPLY_STARTED`` outcome in place and the next finalize applies the unit
+    again (repeat-safe apply converges on the same end state). The reason is
     capped because it is persisted in the attempts error column.
     """
 

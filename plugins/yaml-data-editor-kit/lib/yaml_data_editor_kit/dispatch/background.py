@@ -132,7 +132,6 @@ def _make_adapter(plan: DispatchPlan, run_dir: Path) -> Any:
     base.unit_for = unit_for
     base.validation_spec_for = validation
     base.apply = apply
-    base.reconcile = lambda unit_id: False
     return base
 
 

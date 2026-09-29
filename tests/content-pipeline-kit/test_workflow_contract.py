@@ -843,7 +843,7 @@ def test_the_claim_envelope_carries_exactly_the_claim_handlers_payload():
     """
     envelope = json.loads(claim_envelope_text(RUN_ID, "unit-a", "worker-a"))
     assert envelope["verb"] == "claim"
-    assert envelope["protocol_version"] == "1"
+    assert envelope["protocol_version"] == "2"
     assert set(envelope["payload"]) == {"run_id", "unit_id", "worker_id"}
     assert envelope["payload"] == {
         "run_id": RUN_ID,

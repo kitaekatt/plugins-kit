@@ -190,15 +190,20 @@ self-reported, and a self-report can lie or drift from what the store
 actually recorded -- see `../content-pipeline-domain/references/workflow-lane.md` for the channels that
 stay open even after the per-agent schema is value-bounded. Reconcile against
 the run's real state through the mount (the `status` verb, or the
-consumer's own equivalent; its apply counts and the apply-rejected and
-apply-unknown unit ids show outcomes on the apply axis) before treating any unit as settled; never act on
-the returned counts alone.
+consumer's own equivalent; its apply counts and the
+`apply_rejected_unit_ids` and `apply_started_unit_ids` lists show outcomes on
+the apply axis) before treating any unit as settled; never act on
+the returned counts alone. The mount speaks protocol version `"2"`; it refuses
+a `"1"` envelope.
 
 Once reconciled, finalize exactly as `background-pipeline` stage 4 does --
 `execution.controller.finalize_run(store, run_id, adapter)` -- so that every
 accepted unit's output actually lands. The protocol `finalize` reply lists
 the unit ids whose apply was rejected under `rejected`; read it rather than
-assuming every accepted unit landed. A halted or partially-settled wave
+assuming every accepted unit landed. A unit in `apply_started_unit_ids` had
+its apply interrupted; running finalize again applies it again, which is safe
+because the adapter's `apply` must be repeat-safe (it sets an end state and
+never appends). A halted or partially-settled wave
 means going around again: if the run is halted, clear the halt with
 `execution.controller.resume_run` once its condition has cleared (a
 fresh assembly cannot succeed before that); then re-run the preconditions

@@ -4,8 +4,8 @@ Pins the A-min.2 prepare/finalize lifecycle: terminal skips recorded via
 claim + terminal fail_unit(terminal_state=UnitState.SKIPPED), ``skip:...``
 error strings, unfinished_units as a set with holes and the halt-triggering
 unit included, deterministic serial finalize order, finalize idempotence,
-apply_unknown refusal absent a reconciliation hook, and the fail-closed
-refusal of an ACCEPTED unit with no recorded accepted_text.
+convergent replay of an interrupted apply, and the fail-closed refusal of an
+ACCEPTED unit with no recorded accepted_text.
 """
 
 from __future__ import annotations
@@ -13,7 +13,6 @@ from __future__ import annotations
 import pytest
 
 from content_pipeline.execution.controller import (
-    ApplyUnknownError,
     ApplyRejectedPredecessorError,
     GraphOrderMismatchError,
     MissingAcceptedTextError,
@@ -244,7 +243,7 @@ def test_prepare_run_second_call_raises_on_accepted_but_unapplied_predecessor(tm
 
     assert exc_info.value.run_id == "run-1"
     assert exc_info.value.unit_id == "u0"
-    assert "finalize has not run" in str(exc_info.value)
+    assert "rerun finalize_run" in str(exc_info.value)
 
 
 def test_prepare_run_proceeds_when_predecessor_was_finalized_between_waves(tmp_path):
@@ -387,7 +386,7 @@ def test_finalize_run_records_apply_started_and_succeeded(tmp_path):
     assert kinds.index("apply_started") < kinds.index("apply_succeeded")
 
 
-# -- finalize_run: idempotence and apply_unknown --------------------------------
+# -- finalize_run: idempotence and convergent replay ----------------------------
 
 
 def test_finalize_run_is_idempotent_never_replays_a_successful_apply(tmp_path):
@@ -478,7 +477,7 @@ def test_finalize_run_applies_healthy_unit_alongside_rejected_unit(tmp_path):
     assert store.list_attempts("run-1", "u1")[-1].kind is AttemptKind.APPLY_SUCCEEDED
 
 
-def test_finalize_run_preserves_d6_for_non_rejection_apply_error(tmp_path):
+def test_finalize_run_leaves_non_rejection_apply_error_retryable(tmp_path):
     store = _seeded_store(tmp_path, unit_ids=("u0",))
     claim = store.claim_unit("run-1", "u0", "w")
     store.accept_unit("run-1", "u0", claim.fencing_token, text="t")
@@ -496,6 +495,53 @@ def test_finalize_run_preserves_d6_for_non_rejection_apply_error(tmp_path):
     )
 
 
+def test_finalize_run_retries_partial_convergent_apply(tmp_path):
+    """Convergent apply (D6): an apply interrupted after its write leaves the
+    unit's last apply attempt APPLY_STARTED. The next finalize applies it
+    again; a repeat-safe (upsert) apply leaves the identical end state, and
+    the unit then reads as applied."""
+    store = _seeded_store(tmp_path, unit_ids=("u0",))
+    claim = store.claim_unit("run-1", "u0", "w")
+    store.accept_unit("run-1", "u0", claim.fencing_token, text="new")
+
+    rows = {}
+    calls = []
+
+    def upsert_then_crash_once(unit_id, payload):
+        calls.append(unit_id)
+        rows[payload["line_id"]] = payload["value"]  # upsert keyed by line id
+        if len(calls) == 1:
+            raise RuntimeError("interrupted after the write")
+
+    adapter = RunAdapter(
+        parse_fn=lambda text: {"line_id": "L1", "value": text},
+        apply=upsert_then_crash_once,
+    )
+
+    with pytest.raises(RuntimeError, match="interrupted"):
+        finalize_run(store, "run-1", adapter)
+    first_end_state = repr(rows)
+    assert rows == {"L1": "new"}
+    assert store.list_attempts("run-1", "u0")[-1].kind is AttemptKind.APPLY_STARTED
+
+    assert finalize_run(store, "run-1", adapter) == ["u0"]
+    assert calls == ["u0", "u0"]
+    assert repr(rows) == first_end_state
+    apply_kinds = [
+        attempt.kind
+        for attempt in store.list_attempts("run-1", "u0")
+        if attempt.kind.value.startswith("apply_")
+    ]
+    assert apply_kinds == [
+        AttemptKind.APPLY_STARTED,
+        AttemptKind.APPLY_STARTED,
+        AttemptKind.APPLY_SUCCEEDED,
+    ]
+
+    assert finalize_run(store, "run-1", adapter) == []
+    assert calls == ["u0", "u0"]
+
+
 def test_prepare_run_distinguishes_rejected_graph_predecessor(tmp_path):
     store = _seeded_store(tmp_path, unit_ids=("u0", "u1"))
     claim = store.claim_unit("run-1", "u0", "w")
@@ -509,55 +555,6 @@ def test_prepare_run_distinguishes_rejected_graph_predecessor(tmp_path):
     assert isinstance(raised.value, UnappliedPredecessorError)
     assert "apply was refused" in str(raised.value)
     assert "plan another run" in str(raised.value)
-
-
-def test_finalize_run_refuses_on_apply_unknown_absent_reconciliation(tmp_path):
-    store = _seeded_store(tmp_path, unit_ids=("u0",))
-    claim = store.claim_unit("run-1", "u0", "w")
-    store.accept_unit("run-1", "u0", claim.fencing_token, text="t")
-    store.record_apply_started("run-1", "u0")  # crash before apply_succeeded
-
-    adapter = RunAdapter(parse_fn=lambda t: t, apply=lambda uid, payload: None)
-    with pytest.raises(ApplyUnknownError):
-        finalize_run(store, "run-1", adapter)
-
-
-def test_finalize_run_apply_unknown_reconciled_as_landed_skips_reapply(tmp_path):
-    store = _seeded_store(tmp_path, unit_ids=("u0",))
-    claim = store.claim_unit("run-1", "u0", "w")
-    store.accept_unit("run-1", "u0", claim.fencing_token, text="t")
-    store.record_apply_started("run-1", "u0")
-
-    apply_calls = []
-    adapter = RunAdapter(
-        parse_fn=lambda t: t,
-        apply=lambda uid, payload: apply_calls.append(uid),
-        reconcile=lambda uid: True,
-    )
-    applied = finalize_run(store, "run-1", adapter)
-
-    assert applied == []  # apply() itself was never (re)invoked
-    assert apply_calls == []
-    kinds = [a.kind.value for a in store.list_attempts("run-1", "u0")]
-    assert kinds.count("apply_succeeded") == 1
-
-
-def test_finalize_run_apply_unknown_reconciled_as_not_landed_reapplies(tmp_path):
-    store = _seeded_store(tmp_path, unit_ids=("u0",))
-    claim = store.claim_unit("run-1", "u0", "w")
-    store.accept_unit("run-1", "u0", claim.fencing_token, text="t")
-    store.record_apply_started("run-1", "u0")
-
-    apply_calls = []
-    adapter = RunAdapter(
-        parse_fn=lambda t: t,
-        apply=lambda uid, payload: apply_calls.append(uid),
-        reconcile=lambda uid: False,
-    )
-    applied = finalize_run(store, "run-1", adapter)
-
-    assert applied == ["u0"]
-    assert apply_calls == ["u0"]
 
 
 # -- finalize_run: fail closed on a None accepted_text (finding 3) ---------------
@@ -600,12 +597,12 @@ def test_finalize_run_refuses_accepted_unit_with_no_recorded_text(tmp_path):
 # wrong implementation specifically -- see the inline comments.
 
 
-def test_finalize_run_treats_started_succeeded_started_as_apply_unknown(tmp_path):
+def test_finalize_run_replays_started_succeeded_started(tmp_path):
     """A crash during RE-apply: started, succeeded, started (no closing
-    succeeded) must read as apply_unknown, NOT as applied. A wrong "any
-    APPLY_SUCCEEDED in the log wins" implementation would see the
-    APPLY_SUCCEEDED row and treat this unit as already applied -- silently
-    skipping the crashed re-apply instead of refusing."""
+    succeeded) must read as an interrupted apply, NOT as applied, so the
+    next finalize applies it again. A wrong "any APPLY_SUCCEEDED in the log
+    wins" implementation would see the APPLY_SUCCEEDED row and treat this
+    unit as already applied -- silently skipping the interrupted re-apply."""
     store = _seeded_store(tmp_path, unit_ids=("u0",))
     claim = store.claim_unit("run-1", "u0", "w")
     store.accept_unit("run-1", "u0", claim.fencing_token, text="t")
@@ -613,9 +610,13 @@ def test_finalize_run_treats_started_succeeded_started_as_apply_unknown(tmp_path
     store.record_apply_succeeded("run-1", "u0", at=2.0)
     store.record_apply_started("run-1", "u0", at=3.0)  # crashed before a second succeeded
 
-    adapter = RunAdapter(parse_fn=lambda t: t, apply=lambda uid, payload: None)
-    with pytest.raises(ApplyUnknownError):
-        finalize_run(store, "run-1", adapter)
+    apply_calls = []
+    adapter = RunAdapter(
+        parse_fn=lambda t: t, apply=lambda uid, payload: apply_calls.append(uid)
+    )
+    assert finalize_run(store, "run-1", adapter) == ["u0"]
+    assert apply_calls == ["u0"]
+    assert store.list_attempts("run-1", "u0")[-1].kind is AttemptKind.APPLY_SUCCEEDED
 
 
 def test_finalize_run_treats_two_starts_then_one_succeeded_as_applied(tmp_path):

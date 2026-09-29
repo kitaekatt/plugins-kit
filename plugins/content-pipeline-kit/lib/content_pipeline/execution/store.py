@@ -1151,7 +1151,7 @@ class ExecutionStore:
     def record_apply_started(
         self, run_id: str, unit_id: str, *, at: Optional[float] = None
     ) -> None:
-        """Record that finalize is about to call the adapter's apply (apply_unknown fails closed).
+        """Record that finalize is about to call the adapter's apply.
 
         Requires the unit to be ACCEPTED; raises :class:`NotAcceptedError`
         otherwise -- finalize only ever applies accepted units. See
@@ -1163,15 +1163,16 @@ class ExecutionStore:
     def record_apply_succeeded(
         self, run_id: str, unit_id: str, *, at: Optional[float] = None
     ) -> None:
-        """Record that the adapter's apply returned without raising (apply_unknown fails closed).
+        """Record that the adapter's apply returned without raising.
 
         Same ACCEPTED requirement and no-fencing rationale as
         :meth:`record_apply_started` -- see :meth:`_record_apply_event`.
         Recording this twice (e.g. a retried finalize pass) simply appends a
         second attempt row; it is not itself the idempotence mechanism.
-        Finalize idempotence is derived by scanning the attempt log for an
-        APPLY_STARTED with no following APPLY_SUCCEEDED (``apply_unknown``,
-        per the model module docstring), not enforced by this method.
+        Finalize idempotence is derived by scanning the attempt log for the
+        LAST apply-kind attempt (a trailing APPLY_STARTED is an interrupted
+        apply that the next finalize applies again, per the model module
+        docstring), not enforced by this method.
         """
         self._record_apply_event(run_id, unit_id, AttemptKind.APPLY_SUCCEEDED, at=at)
 

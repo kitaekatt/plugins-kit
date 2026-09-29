@@ -216,7 +216,6 @@ def dispatch(
         unit_for=unit_for,
         validation_spec_for=validation_spec_for_unit,
         apply=apply,
-        reconcile=lambda unit_id: False,
     )
 
 

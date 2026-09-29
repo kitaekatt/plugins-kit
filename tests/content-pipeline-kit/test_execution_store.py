@@ -957,13 +957,13 @@ def test_record_apply_succeeded_twice_appends_two_attempts_and_does_not_error(tm
     assert len(succeeded) == 2
 
 
-def test_record_apply_unknown_run_raises(tmp_path):
+def test_record_apply_started_unknown_run_raises(tmp_path):
     store = _new_store(tmp_path)
     with pytest.raises(UnknownRunError):
         store.record_apply_started("no-such-run", "u0")
 
 
-def test_record_apply_unknown_unit_raises(tmp_path):
+def test_record_apply_started_unknown_unit_raises(tmp_path):
     store = _seeded_store(tmp_path)
     with pytest.raises(UnknownUnitError):
         store.record_apply_started("run-1", "does-not-exist")

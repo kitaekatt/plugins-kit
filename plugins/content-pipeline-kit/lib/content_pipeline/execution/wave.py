@@ -104,16 +104,14 @@ A run with an empty wave and no unfinished units is done; a run with an
 empty wave and any unfinished unit is blocked -- most often on an unapplied
 ``ACCEPTED`` predecessor, diagnosable with :func:`graph_block_reason` below.
 
-Escape hatch for ``apply_unknown``: a crash between ``record_apply_started``
-and ``record_apply_succeeded`` leaves a unit ``apply_unknown`` (its last
-apply-kind attempt is ``APPLY_STARTED`` with no following
-``APPLY_SUCCEEDED``). This function withholds the successor forever in that
-state too -- it is not a deadlock, but nothing on THIS module's path
-recovers it. ``finalize_run`` recovers it: either by re-applying, or, when
-the adapter supplies a ``reconcile`` hook (apply_unknown fails closed), by confirming the apply
-already landed without re-invoking ``adapter.apply``. See
-``execution.controller``'s ``ApplyUnknownError`` and ``finalize_run``
-docstring for the mechanics.
+An interrupted apply: a crash between ``record_apply_started`` and
+``record_apply_succeeded`` leaves a unit whose last apply-kind attempt is
+``APPLY_STARTED`` with no following ``APPLY_SUCCEEDED``. This function
+withholds the successor in that state too, but only until the next
+``finalize_run``: finalize applies the unit again (``RunAdapter.apply`` is
+repeat-safe by contract), records ``APPLY_SUCCEEDED``, and the successor is
+released. See ``execution.controller``'s ``finalize_run`` docstring for the
+mechanics.
 """
 
 from __future__ import annotations
@@ -361,10 +359,9 @@ def graph_block_reason(
 
     - an ``ACCEPTED`` predecessor not yet applied -- names ``finalize_run``
       as the fix.
-    - an ``apply_unknown`` predecessor (``APPLY_STARTED`` with no following
-      ``APPLY_SUCCEEDED``) -- names ``finalize_run`` with an
-      ``adapter.reconcile`` hook as the fix (see the module docstring's
-      "Escape hatch for ``apply_unknown``").
+    - a predecessor whose apply was interrupted (``APPLY_STARTED`` with no
+      following ``APPLY_SUCCEEDED``) -- names rerunning ``finalize_run`` as
+      the fix (see the module docstring's "An interrupted apply").
     - a terminally ``FAILED`` predecessor -- names the block as permanent.
     - a ``CLAIMED`` predecessor whose lease expired at or before ``at`` --
       names it as expired and reclaimable rather than in flight (``at`` is
@@ -399,10 +396,8 @@ def graph_block_reason(
         if last is AttemptKind.APPLY_STARTED:
             return (
                 f"unit {unit.unit_id!r} is blocked: predecessor "
-                f"{predecessor_id!r} is apply_unknown (an "
-                "APPLY_STARTED attempt with no following "
-                "APPLY_SUCCEEDED) -- finalize_run with an "
-                "adapter.reconcile hook can recover it"
+                f"{predecessor_id!r} previous apply has no recorded "
+                "success; rerun finalize_run"
             )
         if last is AttemptKind.APPLY_REJECTED:
             return (

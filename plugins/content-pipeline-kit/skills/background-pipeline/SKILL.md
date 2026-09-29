@@ -96,7 +96,11 @@ technique_skill:
    call `execution.controller.finalize_run(store, run_id, adapter)` to apply
    every accepted unit through the adapter's `apply`. Finalize is the only
    place a unit's output actually lands; nothing before it writes a
-   consumer-visible side effect.
+   consumer-visible side effect. If finalize is interrupted, run it again: it
+   applies every accepted unit without a recorded apply success, including an
+   interrupted one (listed in the digest's `apply_started_unit_ids`), so the
+   adapter's `apply` must be repeat-safe -- it sets an end state, never
+   appends.
 
 A halted run (rate-limit, auth, or an operator pause) stops cleanly at stage 2
 and parks. `dispatch_wave` never clears a halt: its next claim on a halted run

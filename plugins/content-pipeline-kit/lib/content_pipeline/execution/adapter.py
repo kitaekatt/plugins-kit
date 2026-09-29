@@ -15,7 +15,7 @@ sites still share the identical ``parse_fn`` field for the same reason as
 before: the requirement that finalize re-parses with the SAME function the driver
 submitted under holds BY CONSTRUCTION, not by convention.
 
-Five responsibilities
+Four responsibilities
 ----------------------------------------------------------
 1. **Reconstruct a unit by id** -- :attr:`RunAdapter.unit_for`. Unchanged
    from A-min.2.
@@ -31,9 +31,12 @@ Five responsibilities
    consumes (submit-time acceptance is authoritative) -- rather than inventing a second, adapter-local type
    for the identical contract; that module's own docstring names this
    widening and explicitly declines to replace itself with it.
-4. **Apply a payload** -- :attr:`RunAdapter.apply`. Unchanged from A-min.2.
-5. **Optionally reconcile an ``apply_unknown``** -- :attr:`RunAdapter.reconcile`.
-   Unchanged from A-min.2 (fail closed absent this hook).
+4. **Apply a payload, repeat-safely** -- :attr:`RunAdapter.apply`. ``apply``
+   SETS an end state; it never appends. Finalize applies every accepted unit
+   whose apply has no recorded success, so an interrupted apply is simply
+   applied again: ``apply`` must be safe to repeat for the same run, unit,
+   and payload (upsert rows by a stable key; find-or-create any external
+   container, such as a changelist, tagged with the run id).
 
 Adapter identity/version and incompatible resume
 -----------------------------------------------------------
@@ -527,7 +530,7 @@ def require_creatable_environment(
 @dataclass
 class RunAdapter:
     """The consumer's full worker-facing contract -- see the module
-    docstring's "Five responsibilities" section for which field covers which
+    docstring's "Four responsibilities" section for which field covers which
     A-min.3 responsibility.
 
     Production fields (consumed by ``drivers.inline.run_wave``,
@@ -558,14 +561,15 @@ class RunAdapter:
       evaluated the response under -- not a second, independently-supplied
       copy (the re-parse requirement).
     - ``apply`` -- ``(unit_id, payload) -> None``. The consumer's delivery
-      side effect (e.g. a ``deliver.*`` write). It may raise
+      side effect (e.g. a ``deliver.*`` write). It MUST be safe to repeat:
+      for the same run, unit, and payload it sets the complete desired end
+      state -- upsert keyed data, find-or-create stable external objects
+      tagged with the run id -- and never appends duplicates. Finalize calls
+      it again for any unit whose last apply attempt is ``APPLY_STARTED``
+      (an interrupted apply). It may raise
       ``execution.model.ApplyRejected`` only when it guarantees that no
-      side effect occurred; any uncertain outcome must remain apply_unknown
-      ``apply_unknown``.
-    - ``reconcile`` -- optional ``unit_id -> bool``. Answers "did this
-      unit's apply already land" for a unit found ``apply_unknown``. Absent
-      means finalize refuses to proceed past any ``apply_unknown`` unit
-      (fail closed).
+      side effect occurred; any other exception propagates and leaves the
+      unit retryable by the next finalize.
 
     A-min.3 widenings (new, optional, trailing fields -- see the module
     docstring; every A-min.2 caller that never sets these observes no
@@ -604,7 +608,6 @@ class RunAdapter:
     parse_fn: Optional[Callable[[str], Any]] = None
     validators: Sequence[contract.Validator] = field(default_factory=tuple)
     apply: Optional[Callable[[str, Any], None]] = None
-    reconcile: Optional[Callable[[str], bool]] = None
     build_request: Optional[Callable[[WorkUnit], PreparedRequest]] = None
     validation_spec_for: Optional[Callable[[WorkUnit], ValidationSpec]] = None
     validation_context: Any = None

@@ -40,9 +40,9 @@ Submodules:
   the store; ``drivers.inline`` is the A-min.2 concurrency-one driver, and
   imports ``controller`` for ``RunAdapter``/``record_halt``.
 - ``adapter`` -- :class:`~content_pipeline.execution.adapter.RunAdapter` (A-min.3):
-  the consumer's full five-responsibility worker-facing contract (reconstruct
+  the consumer's full four-responsibility worker-facing contract (reconstruct
   unit by id, build a prepared request, provide a ``ValidationSpec``, apply a
-  payload, optionally reconcile an ``apply_unknown``), plus
+  payload repeat-safely), plus
   ``require_compatible_adapter`` for the incompatible-resume refusal. This is
   the canonical home of ``RunAdapter`` as of A-min.3 -- ``controller.py``
   imports and re-exports it unchanged (widened in place, not duplicated; see

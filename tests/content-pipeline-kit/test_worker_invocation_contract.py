@@ -82,7 +82,7 @@ def _submit_envelope_text(fencing_token: int) -> str:
 
     return json.dumps(
         {
-            "protocol_version": "1",
+            "protocol_version": "2",
             "verb": "submit",
             "payload": {
                 "run_id": RUN_ID,

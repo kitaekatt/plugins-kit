@@ -385,7 +385,7 @@ def test_an_envelope_with_no_fencing_token_cannot_splice_a_text_file(tmp_path):
     envelope_path.write_text(
         json.dumps(
             {
-                "protocol_version": "1",
+                "protocol_version": "2",
                 "verb": "submit",
                 "payload": {"run_id": RUN_ID, "unit_id": UNIT_ID, "worker_id": "worker-B"},
             }

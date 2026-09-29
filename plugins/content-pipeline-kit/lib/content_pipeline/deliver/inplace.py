@@ -38,6 +38,16 @@ Three generalizations, each domain-free:
   exactly the marked rows, returning the exact set of mutated row ids. The
   source ``revert.py`` do-no-harm revert.
 
+Repeat safety under a ``RunAdapter``: ``execution.controller.finalize_run``
+applies an interrupted unit again, so ``RunAdapter.apply`` must be safe to
+repeat. :func:`apply_inplace` already is: it rebuilds marked rows from the
+store, so a second call with the same store and rows yields the same rows.
+:func:`deliver_changeset` is not repeat-safe on its own: called with no
+``changeset`` it mints a new one every time. An adapter that delivers through
+it must find or create ONE changeset tagged with the run id (a lookup this
+module does not provide; it is the adapter's) and pass that stable handle as
+``changeset=`` on every attempt.
+
 The row shape is entirely the caller's: an :class:`InplaceSpec` supplies the
 callables that read a row's id / value-presence / marker field and that
 produce a mutated row. This module never imports ``vcs`` -- a ``VcsBackend`` is

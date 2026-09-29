@@ -46,7 +46,7 @@ def env(tmp_path):
 
 def _write(path, verb, payload):
     with open(path, "w", encoding="utf-8") as fh:
-        fh.write(json.dumps({"protocol_version": "1", "verb": verb, "payload": payload}))
+        fh.write(json.dumps({"protocol_version": "2", "verb": verb, "payload": payload}))
 
 
 def test_worker_submit_file_cannot_carry_finalize(env):
@@ -134,7 +134,7 @@ def test_other_file_names_and_stdin_are_unrestricted(env, tmp_path):
     other = tmp_path / "orchestrator.json"
     _write(str(other), "status", {"run_id": RUN})
     assert commands["protocol"].handler([f"@{other}"])["ok"] is True
-    literal = json.dumps({"protocol_version": "1", "verb": "resume", "payload": {"run_id": RUN}})
+    literal = json.dumps({"protocol_version": "2", "verb": "resume", "payload": {"run_id": RUN}})
     assert commands["protocol"].handler([literal])["ok"] is True
 
 
