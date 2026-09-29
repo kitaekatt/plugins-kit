@@ -20,8 +20,11 @@ For lifecycle operations, use `qwen-switch start qwen36|qwen38|qwen38l` to
 replace the managed server on the selected profile's port and wait for the
 profile's exact OpenAI model id. Use `qwen-switch status` to report the managed
 resident profile. It composes `model-server.sh`; it does not duplicate any
-profile arguments. It refuses to terminate a port occupant unless `lsof` and
-`ps` identify it as `ninfer-serve` or `llama-server`.
+profile arguments. Before launch it runs the plugin-relative sibling
+`bin/llm-scripting-kit swapper terminate-listener --port PORT --accept-replace`
+(by path, never from PATH, since an older installed shim may lack the verb) and
+aborts the start on a non-zero exit. The script itself sends no signals; `lsof`
+and `ps` are used only for readiness and `status`.
 
 Each profile preserves its measured GPU settings while keeping paths and ports
 overridable through environment variables. `qwen36` resolves NInfer from
@@ -77,6 +80,33 @@ Python) with no swapper ancestor -- residency that bypassed the launcher
 guard below, or survived a swapper that exited. It detects and refuses; it
 does not kill anything.
 
+`terminate-listener --port PORT --accept-replace` is the one explicit
+replacement verb (`swapper.terminate_listener`), used by `qwen-switch start`.
+It is not for a llama-swap child and not automatic reaping: private service
+wrappers own pre-start reaping, `strays` stays detect-only, and clients and
+probes never kill. Rules a reader would otherwise reverse-engineer: records
+whose KNOWN owner differs from the caller are dropped before any listener
+inspection (same shape as `find_strays`), so root or another user cannot block
+it through unreadable sockets, while an unknown-owner or unreadable same-owner
+candidate refuses as indeterminate (exit `5`; on macOS, owner-`None`
+AccessDenied records can therefore make it refuse, and a zombie process reads
+the same way). "Free" needs BOTH the bind check and a scan of same-user listener sockets
+that finds none on any address or family, because a bind check alone can pass
+beside a listener bound to one specific address or only to IPv6 (macOS,
+Windows); an unreadable scan is never free. A free port is a no-op; an occupied port with no recognized
+same-owner listener, an unrecognized or second listener, or a llama-swap
+descendant refuses before any signal. Recognition is `classify_server`, the
+`strays` set. It snapshots PID and create time, rechecks, sends SIGTERM (grace
+default 20 s, longer than `terminate` because model servers unload weights), and
+sends SIGKILL only when the same PID and create time still exist. Success
+requires the same two-part free test (`_swapper_process.port_is_free`: loopback
+connect plus IPv4 and IPv6 binds, and an empty listener scan); otherwise it
+refuses without signalling again. Another user's listener is invisible to the
+scan, so only the bind check covers it. Tests never signal a real
+process: the library tests use a fake inspector and an injected `port_free`,
+and the `qwen-switch` integration tests run in a temporary plugin-shaped tree
+with a stub sibling CLI.
+
 `guard-launch` is the facade `model-server.sh` calls immediately before
 `exec`, so a manual launch cannot bypass an active same-user swapper. It is
 **fail-open by contract**: only `LaunchRefused` (exit `3`) blocks the launch.
@@ -90,6 +120,48 @@ exit `3` while every sibling `SwapperError` maps to `1` or `2`.
 `LLM_SCRIPTING_KIT_LAUNCH_GUARD=off` skips the guard entirely (no interpreter
 call, no warning) for a team that wants a manual launch beside an active
 swapper on purpose; default and every other value is on.
+
+## `acceptance`: proofs that must be able to go red
+
+`llm-scripting-kit acceptance swapper|frontdoor`
+(`swapper_acceptance.py`, `frontdoor/acceptance.py`) asserts a deployment
+through its HTTP surface only (`/v1/models`, `/running`, `/health/backends`,
+`/v1/chat/completions`, the `x-frontdoor-deployment` header), never through
+host process access. Exit `0` passed, `1` an assertion failed (an unreachable
+target included), `2` usage or configuration.
+
+- **Never-evict needs a constructed overlap.** Alternating rounds cannot test
+  greediness: each waits for the previous one. The overlap check runs a long
+  request, demands the other model mid-flight, and fails both when the second
+  model becomes resident early and when the overlap did not occur (the busy
+  model was never observed resident, finished before the demand, or was never
+  sampled while both were pending). A pass without the second condition would
+  be vacuous.
+- **Paid rule.** A tier is paid unless the registry declares
+  `billing.mode: unmetered`; an undeclared tier is paid (fail closed), because
+  `key_env` and hostnames do not distinguish owner-funded from metered. Without
+  `--paid`, the spill-group fill burst is sized to the capped capacity of
+  unpaid tiers preceding the first paid tier, and the paid spill leg is
+  reported as skipped; under `--quick` it and the queue-overfull leg are not run
+  at all. The run plans no
+  request onto a paid tier and fails if one answered, but concurrent front-door
+  traffic from other callers can still spill a burst request onto an uncapped
+  paid tier; run it when the front door is otherwise idle. The queue-overfull leg sends one request past the queue group's
+  total cap; that request queues on the group's capped tiers and does not
+  spill. Every leg is refused, sending nothing, when a tier it needs is not
+  `reachable` in `/health/backends`, and both queue legs are refused without
+  `--paid` when any queue-group tier is paid (an uncapped queue tier is a
+  configuration error, exit 2).
+- **Tier shape comes from data.** Order, cap and billing come from the supplied
+  registry through `load_endpoint_registry`; deployment ids must equal
+  `/health/backends` for the group. Nothing fleet-specific is a literal in this
+  library. `--expect-tier1-cap` swaps only the first spill-group level's
+  expected count, so a wrong value must go red.
+- Tests use stdlib fake servers. Each of
+  `test_swapper_acceptance_constructed_overlap_detects_eviction`,
+  `test_frontdoor_acceptance_wrong_tier1_cap_exits_one` and
+  `test_frontdoor_paid_spill_requires_paid_flag` was shown to fail with its
+  assertion removed; keep that discipline when editing them.
 
 ## Reachability is not configuration, and it is never a completion
 

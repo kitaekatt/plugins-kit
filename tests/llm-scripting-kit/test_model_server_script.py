@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -279,8 +280,17 @@ def _switch_env(tmp_path: Path) -> dict[str, str]:
 
 def test_qwen_switch_starts_existing_profile_and_waits_for_matching_model(tmp_path: Path) -> None:
     env = _switch_env(tmp_path)
+    # Real launcher and script, but a stub sibling CLI: the real one would
+    # inspect (and could signal) whatever listens on the port of the machine
+    # running the tests.
+    tree = tmp_path / "plugin"
+    shutil.copytree(PLUGIN / "scripts", tree / "scripts")
+    (tree / "bin").mkdir()
+    stub = tree / "bin" / "llm-scripting-kit"
+    stub.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    stub.chmod(0o755)
     result = subprocess.run(
-        ["bash", str(PLUGIN / "bin" / "qwen-switch"), "start", "qwen36"],
+        ["bash", str(tree / "scripts" / "qwen-switch.sh"), "start", "qwen36"],
         text=True,
         capture_output=True,
         check=False,
@@ -581,3 +591,80 @@ def test_removing_the_guard_call_lets_a_refusal_through(tmp_path: Path) -> None:
         "stub would have refused -- if this fails, the real file's check "
         "is not what is preventing exec in test_refusing_guard_prevents_exec"
     )
+
+
+# ===========================================================================
+# U6: qwen-switch start delegates listener replacement to the plugin-relative
+# sibling CLI. It never resolves llm-scripting-kit from PATH and contains no
+# signalling of its own.
+# ===========================================================================
+
+
+def _plugin_tree(tmp_path: Path, cli_exit: int = 0) -> tuple[Path, Path, Path]:
+    """A temporary plugin-shaped tree: real qwen-switch.sh, a stub launcher, and
+    a sibling bin/llm-scripting-kit recording its argv. Returns (script,
+    sibling_log, launched_marker)."""
+    tree = tmp_path / "plugin"
+    (tree / "scripts").mkdir(parents=True)
+    (tree / "bin").mkdir()
+    script = tree / "scripts" / "qwen-switch.sh"
+    script.write_text((PLUGIN / "scripts" / "qwen-switch.sh").read_text(encoding="utf-8"), encoding="utf-8")
+    script.chmod(0o755)
+    pid_file = tmp_path / "server.pid"
+    launched = tmp_path / "launched"
+    launcher = tree / "scripts" / "model-server.sh"
+    launcher.write_text(
+        "#!/bin/sh\n"
+        f"echo $$ > '{pid_file}'\n"
+        f"echo launched > '{launched}'\n",
+        encoding="utf-8",
+    )
+    launcher.chmod(0o755)
+    sibling_log = tmp_path / "sibling.argv"
+    sibling = tree / "bin" / "llm-scripting-kit"
+    sibling.write_text(
+        "#!/bin/sh\n"
+        f"echo \"$@\" >> '{sibling_log}'\n"
+        f"exit {cli_exit}\n",
+        encoding="utf-8",
+    )
+    sibling.chmod(0o755)
+    return script, sibling_log, launched
+
+
+def _switch_start(tmp_path: Path, script: Path) -> subprocess.CompletedProcess[str]:
+    env = _switch_env(tmp_path)
+    decoy_log = tmp_path / "decoy.argv"
+    decoy = tmp_path / "tools" / "llm-scripting-kit"
+    decoy.write_text(f"#!/bin/sh\necho \"$@\" >> '{decoy_log}'\nexit 0\n", encoding="utf-8")
+    decoy.chmod(0o755)
+    merged = {**os.environ, **env}
+    for key in [k for k in merged if k.startswith(("QWEN36_", "QWEN38_")) and k != "QWEN36_ARTIFACT"]:
+        del merged[key]
+    return subprocess.run(
+        ["bash", str(script), "start", "qwen36"],
+        text=True, capture_output=True, check=False, env=merged,
+    )
+
+
+def test_qwen_switch_start_uses_sibling_cli_and_contains_no_signal_commands(tmp_path: Path) -> None:
+    import re
+
+    script, sibling_log, launched = _plugin_tree(tmp_path)
+    result = _switch_start(tmp_path, script)
+    assert result.returncode == 0, result.stderr
+    assert sibling_log.read_text().splitlines() == [
+        "swapper terminate-listener --port 8080 --accept-replace"
+    ]
+    assert not (tmp_path / "decoy.argv").exists(), "llm-scripting-kit must not resolve from PATH"
+    assert launched.exists()
+    text = PLUGIN.joinpath("scripts", "qwen-switch.sh").read_text(encoding="utf-8")
+    assert not re.search(r"\bkill\b|\bpkill\b|\bkillall\b|-TERM\b|-KILL\b", text)
+
+
+def test_qwen_switch_start_aborts_without_launching_when_the_sibling_cli_refuses(tmp_path: Path) -> None:
+    script, sibling_log, launched = _plugin_tree(tmp_path, cli_exit=1)
+    result = _switch_start(tmp_path, script)
+    assert result.returncode != 0
+    assert sibling_log.exists()
+    assert not launched.exists(), "the launcher must not run after a refusal"

@@ -296,8 +296,9 @@ registry from this plugin, so keys are set up once and consumed everywhere.
   llama.cpp profile for the same model as a comparable second backend. Claude
   calls it through `${CLAUDE_PLUGIN_ROOT}`; `qwen36-server`, `qwen38-server`,
   and `qwen38l-server` are thin PATH adapters for interactive shells. Use
-  `qwen-switch start qwen36|qwen38|qwen38l` to replace the resident server and
-  wait for its matching model id, or `qwen-switch status` to inspect it.
+  `qwen-switch start qwen36|qwen38|qwen38l` to replace the resident server (the
+  listener is stopped by the plugin CLI `swapper terminate-listener`, never by
+  the script) and wait for its matching model id, or `qwen-switch status` to inspect it.
 
 ## API
 
@@ -540,6 +541,7 @@ llm-scripting-kit swapper running --endpoint local
 llm-scripting-kit swapper terminate qwen38 --endpoint local [--grace-seconds 10]
 llm-scripting-kit swapper unload --endpoint local --all --accept-no-drain
 llm-scripting-kit swapper strays
+llm-scripting-kit swapper terminate-listener --port PORT --accept-replace
 ```
 
 `running`, `terminate` and `unload` take exactly one of `--endpoint NAME` or
@@ -561,6 +563,26 @@ requests, so it is never a client action: the CLI requires both `--all` and
 `--accept-no-drain` to run it even once. `strays` reports recognized model
 servers with no swapper ancestor and does not kill them.
 
+`terminate-listener` is the explicit replacement operation `qwen-switch start`
+uses; it is not a llama-swap child action and not automatic reaping. Its
+`--accept-replace` flag is mandatory (a missing flag is a usage error, exit
+`2`). A free port is a successful no-op. Otherwise exactly one same-user
+recognized server (`ninfer-serve`, `llama-server`, or `mlx_lm.server`, not
+running under llama-swap) must hold the port, and every same-user process must
+be readable, or it refuses before signalling. Processes whose owner is known to
+differ from the caller are skipped without inspecting their sockets. The server
+gets SIGTERM, and SIGKILL only if the same PID and create time outlive
+`--grace-seconds` (default 20). The port must then be free by both an independent bind check and a scan of
+same-user listener sockets on any address or family (a bind check alone can
+pass beside a listener bound to one specific address or only to IPv6); a port
+that is still occupied is refused, and a replacement listener is never
+signalled. An unreadable scan is never treated as free. On macOS, a process record whose owner
+cannot be read (access denied) could be the caller's, so it can make the verb
+refuse as indeterminate (exit `5`). The JSON result carries `protocol`, `port`,
+`action` (`none` or `terminated`), `pid`, `create_time`, `signal` and
+`escalated`. Private service wrappers own automatic pre-start reaping; this
+library owns only explicit operator replacement.
+
 `guard-launch` is the facade `model-server.sh` calls right before it execs a
 local model server, so a manual launch cannot silently bypass an active
 same-user swapper. It **fails open**: it refuses the launch only on exit `3`
@@ -571,6 +593,53 @@ broken guard must never be able to stop llama-swap's own children from
 starting. `LLM_SCRIPTING_KIT_LAUNCH_GUARD=off` skips the guard entirely (no
 interpreter call, no warning) for a team that wants a manual launch beside an
 active swapper on purpose; default and every other value is on.
+
+### `acceptance` -- host-neutral acceptance runs
+
+`llm-scripting-kit acceptance` proves a running deployment through its HTTP
+surface only, so it works against a local or remote host:
+
+```bash
+llm-scripting-kit acceptance swapper --url URL --rounds N [--format text|json]
+llm-scripting-kit acceptance frontdoor --url URL --registry PATH \
+  --spill-group GROUP --queue-group GROUP [--quick] [--paid] \
+  [--expect-tier1-cap N] [--format text|json]
+```
+
+Exit `0`: every assertion passed. `1`: an assertion failed, including a target
+that did not answer. `2`: a usage or configuration error (bad arguments, an
+unreadable registry, an unknown group, a queue group with an uncapped tier).
+
+`swapper` asserts, per round of 1-6 varying concurrent requests, exact
+arithmetic answers and that `/running` shows only the round's model. It then
+runs a constructed never-evict overlap: a long request on one model, a demand
+for the other model while it runs, and a failure if the second model becomes
+resident before the first request finishes. A run whose overlap could not be
+constructed fails instead of passing vacuously. `--settle-seconds` and
+`--poll-seconds` tune the sampling.
+
+`frontdoor` reads each group's deployments from `GET /health/backends` and each
+tier's order, cap and billing from the `--registry` you name; the two must
+agree. Legs: fill (every unpaid tier before the first paid tier serves exactly
+its cap, in order), queue-fill, paid spill, and queue-overfull (one request
+past the queue group's total cap must return 200, never 429/503, and one
+capped deployment must serve past its cap). Each request states two operands
+and asks for their product after a counting task, so the exact-answer check
+tests arithmetic. The serving deployment comes from the `x-frontdoor-deployment`
+header. `--quick` runs the fill legs only. `--expect-tier1-cap N` replaces the
+expected first-tier count for the spill group; a wrong value must exit `1`.
+
+A tier is paid unless the registry declares `billing.mode: unmetered` for it.
+Without `--paid`, the spill-group fill burst never exceeds the capped capacity
+of unpaid tiers that precede the first paid tier, and the paid spill leg is
+reported as skipped; under `--quick` it and the queue-overfull leg are not run at all. The queue-overfull leg sends one request past the queue
+group's total cap; it queues on that group's capped tiers rather than
+spilling. A leg is refused, sending nothing, when a tier it needs is not
+`reachable` in `/health/backends`, and both queue legs are refused when a
+queue-group tier is paid. Without `--paid` the run plans no request onto a paid tier
+and fails if a paid tier answered, but concurrent front-door traffic from other
+callers can still spill a burst request onto an uncapped paid tier, so run it
+when the front door is otherwise idle.
 
 ## When not to use
 

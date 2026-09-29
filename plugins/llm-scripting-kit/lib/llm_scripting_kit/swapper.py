@@ -589,6 +589,210 @@ def find_strays(
     return tuple(strays)
 
 
+# ---------------------------------------------------------------------------
+# Explicit listener replacement
+# ---------------------------------------------------------------------------
+
+#: Seconds a replaced server gets after SIGTERM before SIGKILL. Longer than
+#: terminate_model's default because a model server unloads weights on exit.
+LISTENER_GRACE_S = 20.0
+
+
+@dataclass(frozen=True)
+class ListenerReplacement:
+    """Outcome of :func:`terminate_listener`.
+
+    ``action`` is ``"none"`` when the port was already free (every other
+    field is empty) and ``"terminated"`` when the recognized server on it was
+    stopped and the port verified free.
+    """
+
+    port: int
+    action: str
+    pid: Optional[int]
+    create_time: Optional[float]
+    signal: Optional[str]
+    escalated: bool
+
+
+def _scan_port_listeners(insp: "Inspector", port: int):
+    """Same-owner processes listening on ``port``, plus unreadable candidates.
+
+    Owner-first, like :func:`find_strays`: a record whose KNOWN owner differs
+    from the caller is dropped before any per-process listener inspection, so
+    another user's or root's unreadable sockets cannot block. A candidate with
+    an unknown owner could be the caller's, so it is inspected and, when that
+    fails, reported as unreadable.
+    """
+    owner = insp.current_owner()
+    procs = insp.processes()
+    by_pid = {p.pid: p for p in procs}
+    listeners = []
+    unreadable = []
+    for rec in procs:
+        if rec.owner is not None and rec.owner != owner:
+            continue
+        try:
+            addrs = insp.listen_addrs(rec.pid)
+        except ProcessNotFound:
+            continue
+        except InspectionIndeterminate:
+            unreadable.append(rec.pid)
+            continue
+        if any(p == port for _, p in addrs):
+            listeners.append(rec)
+    return by_pid, listeners, unreadable
+
+
+def _sole_recognized_listener(insp: "Inspector", port: int) -> "ProcessRecord":
+    """The one recognized, non-swapper-child server on ``port``, else refuse."""
+    by_pid, listeners, unreadable = _scan_port_listeners(insp, port)
+    if unreadable:
+        raise InspectionIndeterminate(
+            f"cannot rule out PID(s) {', '.join(map(str, unreadable))} as listeners "
+            f"on port {port}; nothing was signalled"
+        )
+    if not listeners:
+        raise SafetyRefusal(
+            f"port {port} is occupied but no same-user process is recognized as "
+            "listening on it; nothing was signalled"
+        )
+    for rec in listeners:
+        kind = classify_server(rec)
+        if kind is None:
+            raise InspectionIndeterminate(
+                f"cannot classify the listener on port {port} (PID {rec.pid}); "
+                "nothing was signalled"
+            )
+        if kind is False:
+            raise SafetyRefusal(
+                f"port {port} is held by PID {rec.pid} ({rec.name}), which is not a "
+                f"recognized model server; nothing was signalled"
+            )
+    if len(listeners) > 1:
+        pids = ", ".join(str(r.pid) for r in listeners)
+        raise SafetyRefusal(f"several servers listen on port {port}: {pids}")
+    target = listeners[0]
+    if _has_swapper_ancestor(insp, target, by_pid):
+        raise SafetyRefusal(
+            f"PID {target.pid} on port {port} runs under {SWAPPER_NAME}; use the "
+            "swapper's own unload or terminate instead"
+        )
+    return target
+
+
+def terminate_listener(
+    port: int,
+    *,
+    grace_s: float = LISTENER_GRACE_S,
+    kill_wait_s: float = 5.0,
+    settle_s: float = 3.0,
+    inspector: Optional["Inspector"] = None,
+    port_free: Optional[Callable[[int], bool]] = None,
+) -> ListenerReplacement:
+    """Stop the recognized model server on ``port`` so another can start.
+
+    An explicit operator action, not automatic reaping. "Free" means BOTH the
+    bind check (``port_free``) passes AND a scan of same-user listener sockets
+    finds none on any address or family; a bind check alone can pass beside a
+    listener bound to one specific address or to IPv6. A free port is a no-op.
+    An unreadable scan is never free and raises before any signal. Otherwise
+    exactly one same-user recognized server (``ninfer-serve``, ``llama-server``
+    or ``mlx_lm.server``, not under llama-swap) must hold the port and every
+    same-user candidate must be readable; anything else raises before a signal
+    is sent. The server gets SIGTERM, and SIGKILL only when the same PID and
+    create_time outlive ``grace_s``. Success requires the same two-part free
+    test within ``settle_s``; if it is not met, the call refuses without
+    signalling again. Another user's listener is invisible to the scan, so only
+    the bind check covers it (and only where the platform refuses the bind).
+    """
+    from ._swapper_process import (  # noqa: PLC0415
+        SIGKILL,
+        SIGTERM,
+        port_is_free,
+    )
+
+    if not 1 <= port <= 65535:
+        raise SwapperUsageError(f"port must be 1-65535, got {port}")
+    if grace_s < 0 or kill_wait_s < 0 or settle_s < 0:
+        raise SwapperUsageError("grace, kill-wait and settle seconds must be >= 0")
+    bind_free = port_free if port_free is not None else port_is_free
+    insp = inspector if inspector is not None else _default_inspector()
+
+    # A bind check alone can read free beside a listener bound to one specific
+    # address or only to IPv6, so "free" also needs a listener scan (any
+    # address, any family) that finds nothing. An unreadable scan is never
+    # free: it raises before any signal.
+    if bind_free(port):
+        _, holders, unreadable = _scan_port_listeners(insp, port)
+        if unreadable:
+            raise InspectionIndeterminate(
+                f"cannot rule out PID(s) {', '.join(map(str, unreadable))} as listeners "
+                f"on port {port}; nothing was signalled"
+            )
+        if not holders:
+            return ListenerReplacement(port, "none", None, None, None, False)
+    target = _sole_recognized_listener(insp, port)
+    pid, created = target.pid, target.create_time
+
+    try:
+        now = insp.process(pid)
+        if now.create_time != created:
+            raise ProcessNotFound(f"PID {pid} was reused (create_time changed)")
+        if classify_server(now) is not True or not any(
+            p == port for _, p in insp.listen_addrs(pid)
+        ):
+            raise ProcessNotFound(f"PID {pid} no longer looks like the server on {port}")
+        insp.signal(pid, created, SIGTERM)
+    except ProcessNotFound as exc:
+        raise ProcessChangedError(f"not signalled: {exc}") from exc
+
+    sig, escalated = SIGTERM, False
+    if not insp.wait_gone(pid, created, grace_s):
+        try:
+            still = insp.process(pid).create_time == created
+        except ProcessNotFound:
+            still = False
+        if still:
+            try:
+                insp.signal(pid, created, SIGKILL)
+            except ProcessNotFound:
+                still = False
+        if still:
+            if not insp.wait_gone(pid, created, kill_wait_s):
+                raise TerminationFailed(f"PID {pid} survived SIGTERM and SIGKILL")
+            sig, escalated = SIGKILL, True
+
+    deadline = time.monotonic() + settle_s
+    while True:
+        clear = bind_free(port)
+        holders, unreadable = [], []
+        try:
+            _, holders, unreadable = _scan_port_listeners(insp, port)
+        except InspectionIndeterminate as exc:
+            clear, scan_error = False, str(exc)
+        else:
+            scan_error = None
+            clear = clear and not holders and not unreadable
+        if clear:
+            break
+        if time.monotonic() >= deadline:
+            if scan_error is not None:
+                detail = scan_error
+            else:
+                detail = "held by PID(s) " + (
+                    ", ".join(str(r.pid) for r in holders) or "none identified"
+                )
+                if unreadable:
+                    detail += f"; unreadable PID(s) {', '.join(map(str, unreadable))}"
+            raise SafetyRefusal(
+                f"port {port} is still occupied after stopping PID {pid} ({detail}); "
+                "nothing further was signalled"
+            )
+        time.sleep(0.25)
+    return ListenerReplacement(port, "terminated", pid, created, sig, escalated)
+
+
 def check_launch_allowed(
     *, caller_pid: Optional[int] = None, inspector: Optional["Inspector"] = None
 ) -> None:
@@ -663,5 +867,8 @@ __all__ = [
     "terminate_model",
     "classify_server",
     "find_strays",
+    "ListenerReplacement",
+    "LISTENER_GRACE_S",
+    "terminate_listener",
     "check_launch_allowed",
 ]

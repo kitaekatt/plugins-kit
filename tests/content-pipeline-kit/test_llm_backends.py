@@ -823,3 +823,48 @@ def test_route_takes_only_the_mock_and_openrouter_seams():
     import inspect
 
     assert list(inspect.signature(route).parameters) == ["openrouter", "mock"]
+
+
+def test_response_adapter_carries_reported_cost_pair_and_drops_invalid() -> None:
+    class _Resp:
+        text = "x"
+        model = "m"
+        input_tokens = 1
+        output_tokens = 2
+        cache_hit_tokens = 0
+        wall_ms = 5
+        attempts = 1
+        from_cache = False
+        reported_cost_usd = 0.25
+        reported_cost_source = "provider"
+
+    adapted = backends._from_completion_response(_Resp())
+    assert adapted.reported_cost_usd == 0.25
+    assert adapted.reported_cost_source == "provider"
+
+    # An older shared lib has neither field: unknown, not zero.
+    class _Older:
+        text = "x"
+        model = "m"
+        input_tokens = 1
+        output_tokens = 2
+        cache_hit_tokens = 0
+        wall_ms = 5
+        attempts = 1
+        from_cache = False
+
+    old = backends._from_completion_response(_Older())
+    assert old.reported_cost_usd is None
+    assert old.reported_cost_source is None
+
+    for amount, source in [
+        (True, "provider"), (-0.1, "provider"), (float("nan"), "provider"),
+        (float("inf"), "provider"), ("1", "provider"), (0.1, None), (None, "provider"),
+    ]:
+        class _Bad(_Older):
+            reported_cost_usd = amount
+            reported_cost_source = source
+
+        got = backends._from_completion_response(_Bad())
+        assert got.reported_cost_usd is None
+        assert got.reported_cost_source is None

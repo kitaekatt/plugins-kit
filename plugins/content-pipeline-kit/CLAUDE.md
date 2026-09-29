@@ -76,6 +76,18 @@ loud: at that same date one consumer was maintaining its convergence loop in
 three variants while a generic implementation sat unused here. The seam is not
 a reason to stop asking whether a vertical module has earned reuse.
 
+## Cost accounting prefers reported cost
+
+`response_cost` (in `llm/platform.py`) returns zero for a cache hit, then the
+authoritative `reported_cost_usd` of a live response, then the pricing-table
+estimate, and `None` (unknown, never zero) when there is neither and
+`pricing=None` was passed. `call_llm` therefore charges a reported cost with no
+pricing table; the budget cap is reachable that way.
+`backends._from_completion_response` reads the pair with `getattr` (older
+llm-scripting-kit) and drops an invalid or one-sided pair. `ResponseCache`
+stores both fields as provenance; entries written without them still load.
+Exception charges stay estimator-based. User docs: `README.md`.
+
 ## Backend selection is process-wide
 
 Backend selection is process-global: one `CONTENT_PIPELINE_LLM_MODELS`

@@ -467,3 +467,83 @@ def test_guard_launch_takes_no_target(capsys):
 )
 def test_swapper_error_kind_is_kebab_case_of_the_class_name(exc, expected_kind):
     assert cli._swapper_error_kind(exc) == expected_kind
+
+
+# ---------------------------------------------------------------------------
+# terminate-listener
+# ---------------------------------------------------------------------------
+
+
+def _replacement(action="terminated", pid=900, signal="SIGTERM", escalated=False):
+    from llm_scripting_kit.swapper import ListenerReplacement
+
+    return ListenerReplacement(
+        port=8080, action=action, pid=pid, create_time=12.5 if pid else None,
+        signal=signal if pid else None, escalated=escalated,
+    )
+
+
+def test_terminate_listener_requires_accept_replace(monkeypatch, capsys):
+    monkeypatch.setattr(
+        cli, "terminate_listener",
+        lambda *a, **k: pytest.fail("must not run without --accept-replace"),
+    )
+    with pytest.raises(SystemExit) as exc:
+        cli.main(["swapper", "terminate-listener", "--port", "8080"])
+    assert exc.value.code == 2
+
+
+def test_terminate_listener_requires_port(capsys):
+    with pytest.raises(SystemExit) as exc:
+        cli.main(["swapper", "terminate-listener", "--accept-replace"])
+    assert exc.value.code == 2
+
+
+def test_terminate_listener_json_shape(monkeypatch, capsys):
+    seen = {}
+
+    def fake(port, **kw):
+        seen.update(port=port, **kw)
+        return _replacement()
+
+    monkeypatch.setattr(cli, "terminate_listener", fake)
+    rc = cli.main(["swapper", "terminate-listener", "--port", "8080", "--accept-replace"])
+    assert rc == cli.EXIT_OK
+    payload = json.loads(capsys.readouterr().out)
+    assert payload == {
+        "protocol": cli.SWAPPER_PROTOCOL_VERSION,
+        "port": 8080,
+        "action": "terminated",
+        "pid": 900,
+        "create_time": 12.5,
+        "signal": "SIGTERM",
+        "escalated": False,
+    }
+    assert seen["port"] == 8080 and seen["grace_s"] == 20.0
+
+
+def test_terminate_listener_free_port_text(monkeypatch, capsys):
+    monkeypatch.setattr(cli, "terminate_listener", lambda *a, **k: _replacement("none", None))
+    rc = cli.main([
+        "swapper", "terminate-listener", "--port", "8080", "--accept-replace",
+        "--format", "text",
+    ])
+    assert rc == cli.EXIT_OK
+    assert "free" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize(
+    "exc,code,kind",
+    [
+        (SafetyRefusal("occupied"), cli.EXIT_FAILURE, "safety-refusal"),
+        (InspectionIndeterminate("denied"), cli.EXIT_INDETERMINATE, "inspection-indeterminate"),
+    ],
+)
+def test_terminate_listener_errors_map_to_exit_codes(monkeypatch, capsys, exc, code, kind):
+    def boom(*a, **k):
+        raise exc
+
+    monkeypatch.setattr(cli, "terminate_listener", boom)
+    rc = cli.main(["swapper", "terminate-listener", "--port", "8080", "--accept-replace"])
+    assert rc == code
+    assert json.loads(capsys.readouterr().err)["error"]["kind"] == kind
