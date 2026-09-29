@@ -201,13 +201,36 @@ def test_constructs_without_the_shared_lib():
 
 
 # --- reasoning-effort precedence --------------------------------------------
+#
+# Two branches, chosen by `backends._effort_seam()`: against an
+# llm-scripting-kit exporting `plan_effort` / `resolve_endpoint_profile` the
+# delegate places the effort itself (the adapter hands it `effort` and the
+# caller's extras untouched); against an older one the adapter injects a
+# top-level `extras["reasoning_effort"]` (legacy). Neither branch is left to
+# test ordering: every test below pins the one it exercises.
 
 
-def _capturing(monkeypatch, backend, entry_effort):
+@pytest.fixture
+def new_seam():
+    """The real shared lib's effort seam (llm-scripting-kit >= 0.54.0)."""
+    _make_shared_lib_importable()
+    seam = backends._effort_seam()
+    assert seam is not None
+    return seam
+
+
+@pytest.fixture
+def legacy_seam(monkeypatch):
+    """A shared lib predating plan_effort: the legacy injection applies."""
+    monkeypatch.setattr(backends, "_effort_seam", lambda: None)
+
+
+def _capturing(monkeypatch, backend, entry_effort, style=None):
     seen = {}
 
     class _Delegate:
         def complete(self, system, user, *, model, options):
+            seen["effort"] = getattr(options, "effort", None)
             seen["extras"] = dict(getattr(options, "extras", {}) or {})
 
             class R:
@@ -220,20 +243,73 @@ def _capturing(monkeypatch, backend, entry_effort):
             return R()
 
     monkeypatch.setattr(backend, "_backend", lambda: _Delegate())
-    monkeypatch.setattr(backend, "_entry_reasoning_effort", lambda: entry_effort)
+    monkeypatch.setattr(backend, "_entry_reasoning_effort", lambda: (entry_effort, style))
     monkeypatch.setattr(backends, "_from_completion_response", lambda r: r)
     monkeypatch.setattr(backends, "_to_completion_options", lambda o: o)
     return seen
 
 
-def test_entry_default_supplies_effort_when_caller_says_nothing(monkeypatch):
+def test_entry_default_is_handed_to_the_delegate_as_effort(monkeypatch, new_seam):
+    b = ModelEndpointBackend(endpoint="qwen38")
+    seen = _capturing(monkeypatch, b, "medium", "ninfer")
+    b.complete("s", "u", model="m")
+    assert seen["effort"] == "medium"
+    assert seen["extras"] == {}  # the delegate places it; nothing is injected
+
+
+def test_caller_effort_beats_the_entry_default(monkeypatch, new_seam):
+    b = ModelEndpointBackend(endpoint="qwen38")
+    seen = _capturing(monkeypatch, b, "medium", "ninfer")
+    b.complete("s", "u", model="m", options=BackendOptions(effort="low"))
+    assert seen["effort"] == "low"
+
+
+@pytest.mark.parametrize(
+    "extras",
+    [
+        {"reasoning_effort": "xhigh"},
+        {"reasoning_effort": None},
+        {"chat_template_kwargs": {"reasoning_effort": None}},
+    ],
+)
+def test_caller_extras_reach_the_delegate_unchanged(monkeypatch, new_seam, extras):
+    """Explicit extras -- an explicit None included -- are the delegate's to
+    apply, so the adapter forwards them as given rather than pre-applying."""
+    b = ModelEndpointBackend(endpoint="qwen38")
+    seen = _capturing(monkeypatch, b, "medium", "ninfer")
+    b.complete("s", "u", model="m", options=BackendOptions(extras=extras))
+    assert seen["extras"] == extras
+    assert seen["effort"] == "medium"
+
+
+def test_no_entry_default_hands_the_delegate_no_effort(monkeypatch, new_seam):
+    b = ModelEndpointBackend(endpoint="qwen38")
+    seen = _capturing(monkeypatch, b, None, "ninfer")
+    b.complete("s", "u", model="m")
+    assert seen["effort"] is None
+    assert seen["extras"] == {}
+
+
+@pytest.mark.parametrize("branch", ["new_seam", "legacy_seam"])
+def test_caller_extras_are_not_mutated(monkeypatch, request, branch):
+    """The adapter copies extras -- a caller's dict must survive the call."""
+    request.getfixturevalue(branch)
+    b = ModelEndpointBackend(endpoint="qwen38")
+    _capturing(monkeypatch, b, "medium", "chat_template_kwargs")
+    mine = {"chat_template_kwargs": {"enable_thinking": True}}
+    b.complete("s", "u", model="m", options=BackendOptions(extras=mine))
+    b.effective_options(BackendOptions(extras=mine))
+    assert mine == {"chat_template_kwargs": {"enable_thinking": True}}
+
+
+def test_legacy_entry_default_is_injected_top_level(monkeypatch, legacy_seam):
     b = ModelEndpointBackend(endpoint="qwen38")
     seen = _capturing(monkeypatch, b, "medium")
     b.complete("s", "u", model="m")
-    assert seen["extras"]["reasoning_effort"] == "medium"
+    assert seen["extras"] == {"reasoning_effort": "medium"}
 
 
-def test_caller_effort_beats_the_entry_default(monkeypatch):
+def test_legacy_caller_extras_beat_the_entry_default(monkeypatch, legacy_seam):
     b = ModelEndpointBackend(endpoint="qwen38")
     seen = _capturing(monkeypatch, b, "medium")
     b.complete("s", "u", model="m",
@@ -241,7 +317,7 @@ def test_caller_effort_beats_the_entry_default(monkeypatch):
     assert seen["extras"]["reasoning_effort"] == "xhigh"
 
 
-def test_explicit_none_suppresses_the_parameter_entirely(monkeypatch):
+def test_legacy_explicit_none_suppresses_the_parameter(monkeypatch, legacy_seam):
     """An explicit None is a caller OPT-OUT -- the server's own default wins.
 
     Distinct from omitting the key, which takes the entry default instead."""
@@ -252,37 +328,243 @@ def test_explicit_none_suppresses_the_parameter_entirely(monkeypatch):
     assert "reasoning_effort" not in seen["extras"]
 
 
-def test_no_entry_default_sends_nothing(monkeypatch):
+def test_legacy_no_entry_default_sends_nothing(monkeypatch, legacy_seam):
     b = ModelEndpointBackend(endpoint="qwen38")
     seen = _capturing(monkeypatch, b, None)
     b.complete("s", "u", model="m")
     assert "reasoning_effort" not in seen["extras"]
 
 
-def test_caller_extras_are_not_mutated(monkeypatch):
-    """The adapter copies extras -- a caller's dict must survive the call."""
-    b = ModelEndpointBackend(endpoint="qwen38")
-    _capturing(monkeypatch, b, "medium")
-    mine = {}
-    b.complete("s", "u", model="m", options=BackendOptions(extras=mine))
-    assert mine == {}
+# --- the import guard -------------------------------------------------------
+
+
+def test_effort_seam_is_the_shared_libs_own_functions(new_seam):
+    from llm_scripting_kit.completion import plan_effort, resolve_endpoint_profile
+
+    assert new_seam == (plan_effort, resolve_endpoint_profile)
+
+
+def test_effort_seam_is_absent_against_an_older_shared_lib(monkeypatch):
+    """A linked llm-scripting-kit predating plan_effort -> legacy, not a crash."""
+    import sys
+    import types
+
+    older = types.ModuleType("llm_scripting_kit.completion")
+    older.BackendOptions = object  # present in every release; the probe ignores it
+    monkeypatch.setitem(sys.modules, "llm_scripting_kit.completion", older)
+    assert backends._effort_seam() is None
+
+
+def test_effort_seam_is_absent_without_the_shared_lib(monkeypatch):
+    import sys
+
+    monkeypatch.setitem(sys.modules, "llm_scripting_kit", None)
+    monkeypatch.setitem(sys.modules, "llm_scripting_kit.completion", None)
+    assert backends._effort_seam() is None
+
+
+# --- wire parity: effective_options().extras IS the delegate's extra_body ---
+#
+# Drives the REAL llm_scripting_kit OpenRouterBackend (built by the adapter)
+# against a fake OpenAI client, over a real registry file with one entry per
+# effort-style shape. The cache key is built from effective_options(), so this
+# is what makes the key a function of the wire.
+
+_PARITY_REGISTRY = (
+    "models:\n"
+    "  u3-ninfer:\n    base_url: http://ninfer.invalid/v1\n    model: ninfer-m\n"
+    "    reasoning_effort: medium\n"
+    "    routing: {group: u3, order: 1, effort_style: ninfer}\n"
+    "  u3-ctk:\n    base_url: http://ctk.invalid/v1\n    model: ctk-m\n"
+    "    reasoning_effort: medium\n"
+    "    routing: {group: u3, order: 2, effort_style: chat_template_kwargs}\n"
+    "  u3-frontdoor:\n    base_url: http://fd.invalid/v1\n    model: fd-m\n"
+    "    reasoning_effort: medium\n    frontdoor: true\n"
+    "  u3-nostyle:\n    base_url: http://plain.invalid/v1\n    model: plain-m\n"
+    "    reasoning_effort: medium\n"
+    "  u3-nodefault:\n    base_url: http://nodef.invalid/v1\n    model: nodef-m\n"
+    "    routing: {group: u3, order: 3, effort_style: ninfer}\n"
+)
+
+_PARITY_ENTRIES = ["u3-ninfer", "u3-ctk", "u3-frontdoor", "u3-nostyle", "u3-nodefault"]
+
+_PARITY_OPTIONS = {
+    "nothing": {},
+    "effort": {"effort": "high"},
+    "extras-value": {"extras": {"reasoning_effort": "low"}},
+    "extras-null": {"extras": {"reasoning_effort": None}},
+    "effort+extras-value": {"effort": "high", "extras": {"reasoning_effort": "low"}},
+    "effort+extras-null": {"effort": "high", "extras": {"reasoning_effort": None}},
+    "nested-value": {"extras": {"chat_template_kwargs": {"reasoning_effort": "low"}}},
+    "nested-null": {"extras": {"chat_template_kwargs": {"reasoning_effort": None,
+                                                        "enable_thinking": True}}},
+    "both-channels": {"effort": "high", "extras": {
+        "reasoning_effort": None, "chat_template_kwargs": {"reasoning_effort": "low"}}},
+    "unrelated-extras": {"effort": "high",
+                         "extras": {"chat_template_kwargs": {"enable_thinking": True}}},
+}
+
+
+class _FakeCompletions:
+    def __init__(self, sink):
+        self._sink = sink
+
+    def create(self, **kwargs):
+        import types
+
+        self._sink.append(kwargs)
+        message = types.SimpleNamespace(content="ok", reasoning_content=None)
+        choice = types.SimpleNamespace(message=message, finish_reason="stop")
+        usage = types.SimpleNamespace(
+            prompt_tokens=1, completion_tokens=1, prompt_tokens_details=None
+        )
+        return types.SimpleNamespace(choices=[choice], usage=usage)
+
+
+class _FakeClient:
+    def __init__(self):
+        import types
+
+        self.sink = []
+        self.chat = types.SimpleNamespace(completions=_FakeCompletions(self.sink))
+
+
+def _isolate_home(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+
+
+@pytest.fixture
+def parity_registry(tmp_path, monkeypatch):
+    """A hermetic registry and HOME for the real delegate; returns the project root."""
+    _isolate_home(tmp_path, monkeypatch)
+    path = _write_registry(tmp_path, _PARITY_REGISTRY)
+    monkeypatch.setenv("MODEL_ENDPOINTS_REGISTRY", str(path))
+    return tmp_path
+
+
+def _wire(entry, project_root, options):
+    client = _FakeClient()
+    b = ModelEndpointBackend(endpoint=entry, project_root=project_root, client=client)
+    b.complete("s", "u", model="test/slug", options=options)
+    (sent,) = client.sink
+    return b, sent
+
+
+@pytest.mark.parametrize("case", sorted(_PARITY_OPTIONS))
+@pytest.mark.parametrize("entry", _PARITY_ENTRIES)
+def test_effective_extras_equal_the_extra_body_on_the_wire(
+    parity_registry, new_seam, entry, case
+):
+    options = BackendOptions(**_PARITY_OPTIONS[case])
+    b, sent = _wire(entry, parity_registry, options)
+    assert b.effective_options(options).extras == sent.get("extra_body", {})
+
+
+@pytest.mark.parametrize(
+    "entry, expected",
+    [
+        ("u3-ninfer", {"reasoning_effort": "medium"}),
+        ("u3-ctk", {"chat_template_kwargs": {"reasoning_effort": "medium"}}),
+        ("u3-frontdoor", {"reasoning_effort": "medium"}),
+        ("u3-nostyle", {}),
+        ("u3-nodefault", {}),
+    ],
+)
+def test_entry_default_is_sent_in_the_entrys_style(parity_registry, new_seam, entry, expected):
+    _b, sent = _wire(entry, parity_registry, BackendOptions())
+    assert sent.get("extra_body", {}) == expected
+
+
+def test_ninfer_translates_high_to_xhigh_on_the_wire(parity_registry, new_seam):
+    _b, sent = _wire("u3-ninfer", parity_registry, BackendOptions(effort="high"))
+    assert sent["extra_body"] == {"reasoning_effort": "xhigh"}
+
+
+def test_effective_options_keeps_the_callers_effort(parity_registry, new_seam):
+    """Cleared, it would move the key for a byte-identical wire request (a
+    caller effort overridden by explicit extras); kept, the key moves only
+    where the wire does -- see test_review_fix_d_cache_key.py."""
+    b = ModelEndpointBackend(endpoint="u3-ninfer", project_root=parity_registry)
+    options = BackendOptions(effort="high", extras={"reasoning_effort": "low"})
+    assert b.effective_options(options).effort == "high"
+    assert b.effective_options(BackendOptions()).effort is None
+
+
+def test_legacy_effective_options_inject_top_level_whatever_the_style(
+    parity_registry, legacy_seam
+):
+    _make_shared_lib_importable()  # the legacy registry read is real
+    for entry in ("u3-ninfer", "u3-ctk", "u3-frontdoor", "u3-nostyle"):
+        b = ModelEndpointBackend(endpoint=entry, project_root=parity_registry)
+        assert b.effective_options(BackendOptions()).extras == {"reasoning_effort": "medium"}
+
+
+# --- harness refusal survives the new seam ----------------------------------
+
+
+def _harness_registry(tmp_path, monkeypatch, default):
+    _isolate_home(tmp_path, monkeypatch)
+    path = _write_registry(
+        tmp_path,
+        "version: 1\n"
+        f"default: {default}\n"
+        "models:\n"
+        "  local:\n"
+        "    base_url: http://local.invalid/v1\n"
+        "    model: local-model\n"
+        "    reasoning_effort: medium\n"
+        "  opencode:\n"
+        "    harness: opencode\n"
+        "    model: openai/gpt-5\n",
+    )
+    monkeypatch.setenv("MODEL_ENDPOINTS_REGISTRY", str(path))
+
+
+@pytest.mark.parametrize("branch", ["new_seam", "legacy_seam"])
+def test_default_harness_refusal_reaches_the_cache_key_path(
+    monkeypatch, tmp_path, request, branch
+):
+    """call_llm calls effective_options before the cache lookup; a default
+    harness must still be refused by kind there, not keyed as a transport."""
+    _make_shared_lib_importable()
+    request.getfixturevalue(branch)
+    _harness_registry(tmp_path, monkeypatch, "opencode")
+    with pytest.raises(Exception, match="harness entry"):
+        ModelEndpointBackend(project_root=tmp_path).effective_options(BackendOptions())
+
+
+def test_explicit_harness_is_refused_when_driven(monkeypatch, tmp_path, new_seam):
+    """An explicitly selected harness keys without error (it resolves no
+    effort) and is refused by kind by the delegate as soon as it is driven --
+    the same two outcomes the legacy path produces."""
+    _harness_registry(tmp_path, monkeypatch, "local")
+    b = ModelEndpointBackend(endpoint="opencode", project_root=tmp_path)
+    assert b.effective_options(BackendOptions()).extras == {}
+    with pytest.raises(Exception, match="harness entry"):
+        b.complete("s", "u", model="m")
 
 
 # --- effective_options / cache-key collision --------------------------------
 
 
-def test_effective_options_exposes_the_entry_default_reasoning_effort(monkeypatch):
+def test_effective_options_exposes_the_entry_default_reasoning_effort(monkeypatch, new_seam):
     """The seam platform.build_cache_key needs: the registry default is
     resolved by the backend, downstream of where a caller would otherwise
     build its cache key -- so the key must be built from THIS, not from the
     caller's raw options."""
     b = ModelEndpointBackend(endpoint="qwen38")
-    monkeypatch.setattr(b, "_entry_reasoning_effort", lambda: "medium")
+    monkeypatch.setattr(b, "_entry_reasoning_effort", lambda: ("medium", "top-level"))
     resolved = b.effective_options(BackendOptions())
     assert resolved.extras["reasoning_effort"] == "medium"
 
 
-def test_call_llm_cache_key_distinguishes_entries_by_effective_effort(monkeypatch, tmp_path):
+@pytest.mark.parametrize("branch", ["new_seam", "legacy_seam"])
+def test_call_llm_cache_key_distinguishes_entries_by_effective_effort(
+    monkeypatch, request, branch
+):
     """REFUTES the hypothesis that ``name`` (constant across every entry --
     see test_name_is_constant_so_cache_keys_stay_stable) already keeps two
     entries serving the same model id, with different registry-declared
@@ -291,10 +573,11 @@ def test_call_llm_cache_key_distinguishes_entries_by_effective_effort(monkeypatc
     response would be served back for entry B."""
     from content_pipeline.llm import platform
 
+    request.getfixturevalue(branch)
     a = ModelEndpointBackend(endpoint="entry-a")
     b = ModelEndpointBackend(endpoint="entry-b")
-    monkeypatch.setattr(a, "_entry_reasoning_effort", lambda: "low")
-    monkeypatch.setattr(b, "_entry_reasoning_effort", lambda: "high")
+    monkeypatch.setattr(a, "_entry_reasoning_effort", lambda: ("low", "top-level"))
+    monkeypatch.setattr(b, "_entry_reasoning_effort", lambda: ("high", "top-level"))
     assert a.name == b.name == "model-endpoint"  # the collision precondition
 
     key_a = platform.build_cache_key(

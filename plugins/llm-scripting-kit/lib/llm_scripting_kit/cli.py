@@ -24,9 +24,13 @@ from .completion import (
     create_backend,
     derive_dropped_params,
     derive_forwarded_params,
+    profile_from_entry,
+    profile_from_resolved,
+    resolve_endpoint_profile,
     utc_now_iso,
 )
 from .constants import USER_ENV_FILE
+from .effort import remap_effort
 from .env_file import read_env_file, write_env_file
 from .model_endpoints import EndpointRegistryError
 from .reachability import (
@@ -553,10 +557,13 @@ def _collect_endpoint_entries(
             endpoint = resolve_endpoint(str(name), config=config, project_root=project_root)
         except EndpointResolveError:
             continue
+        profile = profile_from_resolved(endpoint, endpoint=str(name))
         values[str(name)] = {
             "kind": "transport", "base_url": endpoint["base_url"],
             "key_env": endpoint["key_env"], "default_model": endpoint.get("default"),
             "adapter": "openrouter",
+            "reasoning_effort": profile.declared_effort,
+            "effort_delivery": profile.effort.to_json(),
         }
     for name, entry in discovery.items():
         values.setdefault(name, _entry_json(entry))
@@ -947,6 +954,12 @@ def _entry_json(entry: Any) -> dict[str, Any]:
         billing_mode = getattr(entry, "billing_mode", None)
         if billing_mode is not None:
             result["billing"] = {"mode": billing_mode}
+        # The declared default and whether a direct call can deliver it; the
+        # openrouter family record keeps `effort` dropped for an endpoint
+        # nothing is known about, so this is the per-endpoint half.
+        profile = profile_from_entry(entry)
+        result["reasoning_effort"] = profile.declared_effort
+        result["effort_delivery"] = profile.effort.to_json()
     conserve = getattr(entry, "conserve_usage", None)
     if conserve is not None:
         result["conserve_usage"] = conserve.to_json()
@@ -971,17 +984,55 @@ def _cmd_models(endpoint: Optional[str], project_root: Optional[str]) -> int:
     return EXIT_OK
 
 
+def _effort_report(selection: Any, project_root: Optional[str]) -> "tuple[Optional[str], dict]":
+    """``(delivered effort, effort_delivery)`` for a selection's declared default.
+
+    A transport delivers through its endpoint's effort style, so the delivered
+    value is post-remap and None when no style delivers it. A harness delivers
+    through its adapter's ``effort`` param when the adapter advertises one.
+    """
+    declared = getattr(selection, "effort", None)
+    if selection.kind == "harness":
+        record = getattr(selection, "capabilities", None) or getattr(
+            selection.backend, "capabilities", None
+        )
+        param = record.params.get("effort") if record is not None else None
+        delivery = {
+            "deliverable": param is not None,
+            "emits": param.emits if param is not None else None,
+            "style": None,
+            "source": "adapter",
+        }
+        return (declared if param is not None else None), delivery
+    profile_of = getattr(selection.backend, "endpoint_profile", None)
+    profile = (
+        profile_of()
+        if callable(profile_of)
+        else resolve_endpoint_profile(selection.endpoint, project_root=project_root)
+    )
+    delivered = None
+    if declared is not None and profile.effort.deliverable:
+        delivered = remap_effort(declared, profile.effort.style)
+    return delivered, profile.effort.to_json()
+
+
 def _cmd_resolve(
     declared: Optional[list[str]], model: Optional[str], cheap: bool, project_root: Optional[str]
 ) -> int:
     """Resolve the first usable entry of ``--models`` (or the default endpoint).
 
     ``--model`` stays a per-entry override applied to whichever entry is chosen.
+    ``effort`` is the value a call without its own effort would put on the
+    wire (post-remap; null when the entry cannot deliver it),
+    ``declared_effort`` is the registry default, and ``effort_delivery`` says
+    how the endpoint takes an effort.
     """
     endpoint = _first_usable(declared, project_root) if declared else None
     selection = create_backend(endpoint, model=model, cheap=cheap, project_root=project_root)
+    delivered, delivery = _effort_report(selection, project_root)
     _json({"endpoint": selection.endpoint, "kind": selection.kind, "backend": selection.backend.name,
-           "model": selection.model, "effort": selection.effort})
+           "model": selection.model, "effort": delivered,
+           "declared_effort": selection.effort, "effort_delivery": delivery})
     return EXIT_OK
 
 
@@ -1140,7 +1191,9 @@ def _cmd_complete(args: argparse.Namespace) -> int:
             wall_ms=int((time.monotonic() - started_monotonic) * 1000),
             # Dropped params do not depend on the outcome: the adapter would not
             # have read them either way, so this is as true of a failed call as
-            # of a completed one.
+            # of a completed one. An adapter with a per-call report (the
+            # effort plan) answers for itself, so an overridden, suppressed or
+            # translated effort is reported exactly as a completed call would.
             dropped_params=_dropped_for(selection.backend, options),
             forwarded_params=_forwarded_for(selection.backend, options),
             started_at=started_at,
@@ -1162,6 +1215,18 @@ def _cmd_complete(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def _params_report(backend: Any, options: BackendOptions) -> Optional[tuple]:
+    """The adapter's own ``(dropped, forwarded)`` report for ``options``, if it has one.
+
+    ``OpenRouterBackend.params_report`` derives both from the call's effort
+    plan -- the same derivation its successful response uses -- so the family
+    record's blanket "effort is dropped" never contradicts an endpoint that
+    delivered it, and a suppressed extras key is never reported as forwarded.
+    """
+    report = getattr(backend, "params_report", None)
+    return report(options) if callable(report) else None
+
+
 def _dropped_for(backend: Any, options: BackendOptions) -> tuple:
     """Params this request would have had dropped, or () if unknowable.
 
@@ -1169,6 +1234,9 @@ def _dropped_for(backend: Any, options: BackendOptions) -> tuple:
     but the backend here is whatever the factory produced, and a caller-injected
     or test backend need not carry one.
     """
+    report = _params_report(backend, options)
+    if report is not None:
+        return report[0]
     capabilities = getattr(backend, "capabilities", None)
     if capabilities is None:
         return ()
@@ -1182,6 +1250,9 @@ def _forwarded_for(backend: Any, options: BackendOptions) -> tuple:
     failed call for the same reason: whether the adapter validates a param does
     not depend on how the call came out.
     """
+    report = _params_report(backend, options)
+    if report is not None:
+        return report[1]
     capabilities = getattr(backend, "capabilities", None)
     if capabilities is None:
         return ()

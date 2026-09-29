@@ -893,3 +893,81 @@ def test_session_reselect_rule_tells_the_agent_to_record_a_quota_halt():
     assert "llm-scripting-kit record-halt <entry>" in rule
     assert rule.index("record-halt") < rule.index("--exclude")
     assert "quota or credit halt" in rule
+
+
+# ---------------------------------------------------------------------------
+# Effort on transport entries: describe() matches params:["effort"] per entry,
+# and run() delivers the registry default through the real transport.
+# ---------------------------------------------------------------------------
+
+_EFFORT_REGISTRY = (
+    "models:\n"
+    "  gpu:\n    base_url: http://gpu.invalid/v1\n    model: gpu-m\n"
+    "    reasoning_effort: high\n"
+    "    routing: {group: q, order: 1, effort_style: ninfer}\n"
+    "  plain:\n    base_url: http://plain.invalid/v1\n    model: plain-m\n"
+    "    reasoning_effort: medium\n"
+)
+
+
+@pytest.fixture
+def effort_registry(tmp_path, monkeypatch):
+    path = tmp_path / "reg.yaml"
+    path.write_text(_EFFORT_REGISTRY, encoding="utf-8")
+    monkeypatch.setenv("MODEL_ENDPOINTS_REGISTRY", str(path))
+    from llm_scripting_kit.model_endpoints import load_endpoint_registry
+
+    return load_endpoint_registry().entries
+
+
+class TestEffortRequirements:
+    def test_describe_matches_only_the_entry_that_delivers_effort(self, quota, effort_registry):
+        ranking = decl.describe(
+            ["plain", "gpu"], caller="process", entries=effort_registry,
+            requirements={"params": ["effort"]},
+            backend_factory=lambda name, **_: _Selection(
+                name, TRANSPORT_KIND, _ScriptedBackend("openrouter", []), f"{name}-m"
+            ),
+            reachability_cache={"gpu": _reach(), "plain": _reach()},
+        )
+        assert [e.id for e in ranking.rendered_entries] == ["gpu"]
+        assert ranking.default.id == "gpu"
+
+    def test_describe_rejects_a_no_style_entry(self, quota, effort_registry):
+        with pytest.raises(decl.NoUsableRoutingTarget) as excinfo:
+            decl.describe(
+                ["plain"], caller="process", entries=effort_registry,
+                requirements={"params": ["effort"]},
+                backend_factory=lambda name, **_: _Selection(
+                    name, TRANSPORT_KIND, _ScriptedBackend("openrouter", []), f"{name}-m"
+                ),
+                reachability_cache={"plain": _reach()},
+            )
+        assert excinfo.value.dispositions[0].disposition == "requirements-mismatch"
+
+    def test_run_delivers_the_selection_effort_on_the_wire(self, quota, effort_registry, monkeypatch):
+        from types import SimpleNamespace
+
+        from llm_scripting_kit import client as client_mod
+
+        sent = []
+
+        def create(**kwargs):
+            sent.append(kwargs)
+            return SimpleNamespace(
+                choices=[SimpleNamespace(
+                    message=SimpleNamespace(content="ok", reasoning_content=None),
+                    finish_reason="stop",
+                )],
+                usage=None,
+            )
+
+        fake = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create)))
+        monkeypatch.setattr(client_mod, "make_openai_client", lambda **_: fake)
+        result = decl.run(
+            ["gpu"], decl.RunRequest(system="s", prompt="p"),
+            entries=effort_registry, reachability_cache={"gpu": _reach()},
+        )
+        assert result.status == decl.RUN_COMPLETED
+        assert sent[0]["extra_body"] == {"reasoning_effort": "xhigh"}
+        assert "effort" not in result.response.dropped_params

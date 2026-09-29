@@ -63,10 +63,13 @@ from .model_endpoints import (
     _conserve_spec,
     _optional_str,
     _require_str,
+    effort_delivery,
     harness_entry_message,
     parse_billing_mode,
     parse_classification_fields,
+    parse_effort_style,
     parse_frontdoor,
+    resolve_effort_style,
 )
 from .usage_budget import ConserveSpec
 
@@ -491,6 +494,18 @@ def _config_billing_mode(
     )
 
 
+def _config_effort_style(
+    ep_name: str, ep: Mapping[str, object], notes: Optional[list[str]] = None
+) -> "tuple[Optional[str], bool]":
+    """The entry-level ``effort_style`` of a config endpoint: ``(style, declared)``."""
+    return parse_effort_style(
+        ep,
+        source="layered model config",
+        entry_id=ep_name,
+        notes=notes if notes is not None else [],
+    )
+
+
 def _config_model_entry(
     ep_name: str,
     ep: Mapping[str, object],
@@ -528,6 +543,7 @@ def _config_model_entry(
     # here -- this helper feeds merged model DISCOVERY, which has no api_key
     # consumer; key_file only matters where a key is actually resolved.
     tier, family = _config_classification(ep_name, ep)
+    effort_style, effort_style_declared = _config_effort_style(ep_name, ep, notes)
     return EndpointEntry(
         id=ep_name,
         base_url=_config_required_str(ep_name, ep, kind=kind, key="base_url"),
@@ -543,6 +559,8 @@ def _config_model_entry(
         conserve_usage=_config_conserve(ep_name, ep),
         frontdoor=_config_frontdoor(ep_name, ep, notes),
         billing_mode=_config_billing_mode(ep_name, ep, notes),
+        effort_style=effort_style,
+        effort_style_declared=effort_style_declared,
     )
 
 
@@ -552,6 +570,8 @@ def _registry_endpoint(ep_name: str) -> Optional[dict]:
     Returns an endpoint dict in the shape ``resolve_endpoint`` returns, with two
     additive keys existing callers ignore: ``request_defaults`` (the entry's
     per-request defaults, e.g. its ``reasoning_effort``) and ``context_window``.
+    ``effort_style`` / ``effort_style_source`` are the entry's direct-call
+    effort delivery (``model_endpoints.resolve_effort_style``).
 
     A registry that exists but cannot be read raises EndpointResolveError with
     the parse detail -- a present-but-broken registry must never read as an
@@ -579,6 +599,7 @@ def _registry_endpoint(ep_name: str) -> Optional[dict]:
             f"endpoint '{ep_name}' has an invalid {entry.kind} entry without a "
             "transport base_url"
         )
+    delivery = resolve_effort_style(entry)
     return {
         "name": entry.id,
         "base_url": entry.base_url,
@@ -594,6 +615,8 @@ def _registry_endpoint(ep_name: str) -> Optional[dict]:
         "context_window": entry.context_window,
         "frontdoor": entry.frontdoor,
         "billing_mode": entry.billing_mode,
+        "effort_style": delivery.style,
+        "effort_style_source": delivery.source,
     }
 
 
@@ -607,8 +630,11 @@ def resolve_endpoint(
 
     Returns a dict with keys ``name``, ``base_url``, ``key_env``, ``key_file``,
     ``models``, ``default``, ``defaultCheap``, ``account_check``, ``frontdoor`` (strict
-    bool, default False) and ``billing_mode`` (None, ``unmetered`` or
-    ``provider-reported``). Fields the endpoint
+    bool, default False), ``billing_mode`` (None, ``unmetered`` or
+    ``provider-reported``), and ``effort_style`` / ``effort_style_source`` (how a
+    direct call delivers a reasoning effort; see
+    ``model_endpoints.effort_delivery`` -- style None means it is not sent).
+    Fields the endpoint
     omits inherit the top-level ``models`` / ``default`` / ``defaultCheap``, so a
     pre-endpoints config (top-level registry only) resolves the default
     ``openrouter`` endpoint from its constants + that registry.
@@ -748,7 +774,24 @@ def resolve_endpoint(
         "account_check": account_check,
         "frontdoor": _config_frontdoor(ep_name, ep),
         "billing_mode": _config_billing_mode(ep_name, ep),
+        **_config_effort_keys(ep_name, ep),
     }
+
+
+def _config_effort_keys(ep_name: str, ep: Mapping[str, object]) -> dict:
+    """``effort_style`` / ``effort_style_source`` for a config-declared endpoint.
+
+    Config endpoints carry no ``routing:``, so the order reduces to the entry's
+    own style, then ``frontdoor: true`` as top-level, then none.
+    """
+    style, declared = _config_effort_style(ep_name, ep)
+    delivery = effort_delivery(
+        effort_style=style,
+        effort_style_declared=declared,
+        frontdoor=_config_frontdoor(ep_name, ep),
+        routing=None,
+    )
+    return {"effort_style": delivery.style, "effort_style_source": delivery.source}
 
 
 def discover_model_entries(

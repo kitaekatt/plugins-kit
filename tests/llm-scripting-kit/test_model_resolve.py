@@ -442,3 +442,20 @@ class TestConfigEndpointMetadataNotes:
         found = discover_model_entries(config=cfg, registry=EndpointRegistry())
         assert found["fd"].frontdoor is False
         assert any("frontdoor" in n and "fd" in n for n in found.notes)
+
+    def test_config_endpoint_effort_style_parses_and_invalid_is_noted(self):
+        from llm_scripting_kit import discover_model_entries
+        from llm_scripting_kit.model_endpoints import EndpointRegistry, resolve_effort_style
+
+        cfg = {
+            "endpoints": {
+                "ok": {"base_url": "http://ok/v1", "model": "m", "effort_style": "ninfer"},
+                "bad": {"base_url": "http://bad/v1", "model": "m", "effort_style": "xx",
+                        "frontdoor": True},
+            }
+        }
+        found = discover_model_entries(config=cfg, registry=EndpointRegistry())
+        assert resolve_effort_style(found["ok"]).style == "ninfer"
+        # declared-invalid resolves to none, NOT to the frontdoor's top-level
+        assert resolve_effort_style(found["bad"]).style is None
+        assert any("effort_style" in n and "bad" in n for n in found.notes)

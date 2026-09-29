@@ -66,6 +66,28 @@ _UNSET = object()
 :meth:`ModelEndpointBackend._entry_reasoning_effort`)."""
 
 
+def _effort_seam() -> Optional[Any]:
+    """llm-scripting-kit's effort translation, or None when the linked copy predates it.
+
+    Returns ``(plan_effort, resolve_endpoint_profile)`` from
+    ``llm_scripting_kit.completion`` (llm-scripting-kit 0.54.0 and later), the
+    same functions its ``OpenRouterBackend`` uses to put an effort on the wire,
+    so :class:`ModelEndpointBackend` keys its cache off exactly what the
+    delegate sends. An older (or absent) shared lib exports neither symbol; the
+    caller then keeps its legacy top-level injection, which is what that older
+    delegate sends. Both symbols first shipped together, so importing both is
+    the probe for the newest one used here.
+    """
+    try:
+        from llm_scripting_kit.completion import (  # noqa: PLC0415
+            plan_effort,
+            resolve_endpoint_profile,
+        )
+    except ImportError:
+        return None
+    return plan_effort, resolve_endpoint_profile
+
+
 def _is_connection_error(exc: BaseException) -> bool:
     """True when ``exc`` means the endpoint could not be reached at all.
 
@@ -572,66 +594,126 @@ class ModelEndpointBackend(_LazyDelegate):
             project_root=str(self.project_root) if self.project_root else None,
         )
 
-    def _entry_reasoning_effort(self) -> Optional[str]:
-        """The selected entry's declared ``reasoning_effort``, or None.
+    def _entry_reasoning_effort(self) -> "tuple[Optional[str], Optional[str]]":
+        """``(declared reasoning_effort, effort style)`` of the selected entry.
 
-        Cached on the instance, including the None result -- a registry without
+        The declared value is the entry's ``reasoning_effort`` default, or None.
+        The style is how a direct call to the entry delivers an effort
+        (``top-level``, ``ninfer``, ``chat_template_kwargs``), or None when it
+        delivers none; it comes from llm-scripting-kit's
+        ``resolve_endpoint_profile``, the resolution its ``OpenRouterBackend``
+        makes for the same entry, so the cache key cannot drift from the wire.
+        Against a shared lib that predates it (see :func:`_effort_seam`) the
+        style is always None and the default is read from the registry entry.
+
+        Cached on the instance, including a None result -- a registry without
         the field must not re-read the file on every call. Ordinary lookup
-        failures resolve to None; a harness refusal is preserved so callers do
-        not receive a misleading transport error.
+        failures resolve to ``(None, None)``; a harness refusal is preserved so
+        callers do not receive a misleading transport error.
         """
         if self._effort is not _UNSET:
             return self._effort
-        effort: Optional[str] = None
-        try:
-            from llm_scripting_kit.model_endpoints import (  # noqa: PLC0415
-                resolve_registry_entry,
-            )
+        seam = _effort_seam()
+        result: "tuple[Optional[str], Optional[str]]" = (None, None)
+        if seam is not None:
+            # _entry_id raises a default-harness refusal and swallows the rest;
+            # resolve_endpoint_profile never raises (an explicitly selected
+            # harness resolves no effort, and the delegate refuses it on use).
+            # An unresolved id (None) is passed on as-is: the delegate is built
+            # with that same id, so both resolve the same endpoint.
+            profile = seam[1](self._entry_id(), project_root=self.project_root)
+            result = (profile.declared_effort, profile.effort.style)
+        else:
+            try:
+                from llm_scripting_kit.model_endpoints import (  # noqa: PLC0415
+                    resolve_registry_entry,
+                )
 
-            effort = resolve_registry_entry(self._entry_id()).reasoning_effort
-        except Exception as exc:  # noqa: BLE001 -- a missing default is not an error
-            if _is_harness_refusal(exc):
-                raise
-            effort = None
-        self._effort = effort
-        return effort
+                result = (resolve_registry_entry(self._entry_id()).reasoning_effort, None)
+            except Exception as exc:  # noqa: BLE001 -- a missing default is not an error
+                if _is_harness_refusal(exc):
+                    raise
+        self._effort = result
+        return result
 
-    def effective_options(self, options: Optional[BackendOptions] = None) -> BackendOptions:
-        """Resolve ``options`` to what actually reaches the provider.
+    def _legacy_effective_options(self, opts: BackendOptions) -> BackendOptions:
+        """Top-level ``extras["reasoning_effort"]`` injection, style-blind.
 
-        Defaults ``extras["reasoning_effort"]`` from the selected registry
-        entry when the caller left it unset -- see :meth:`complete`'s
-        precedence rule. This is the seam :func:`platform.build_cache_key`
-        needs: the registry default is resolved HERE, inside the backend,
-        which is downstream of where a caller builds its cache key, so a
-        caller that hashes its own pre-resolution options would key two
-        entries with different registry defaults identically even though
-        they serve different completions. Any caller building a cache key --
-        or otherwise needing the options that will actually be sent -- should
-        call this first when the backend exposes it (duck-typed via
-        ``getattr``; a backend that resolves nothing beyond the caller's own
-        options need not implement it).
-
-        Precedence, highest first:
-
-        1. ``options.extras["reasoning_effort"]`` -- an explicit level, or an
-           explicit ``None`` to suppress the parameter entirely and let the
-           server's own default win;
-        2. the selected registry entry's ``reasoning_effort``;
-        3. neither -- the parameter is not sent, so the server decides.
-
-        The plugin ships no effort value of its own; the fleet default lives in
-        the private registry, per entry.
+        What an llm-scripting-kit without ``plan_effort`` sends: it ignores
+        ``options.effort`` and forwards ``extras`` verbatim, so the entry
+        default has to ride in ``extras`` to reach the wire at all.
         """
-        opts = options or BackendOptions()
         extras = dict(opts.extras or {})
         if "reasoning_effort" not in extras:
-            default = self._entry_reasoning_effort()
+            default, _style = self._entry_reasoning_effort()
             if default:
                 extras["reasoning_effort"] = default
         elif extras["reasoning_effort"] is None:
             extras.pop("reasoning_effort")
         return replace(opts, extras=extras)
+
+    def _delegate_options(self, opts: BackendOptions) -> BackendOptions:
+        """``opts`` with ``effort`` defaulted from the entry; ``extras`` untouched.
+
+        The delegate's ``plan_effort`` applies the precedence (see
+        :meth:`effective_options`), so the caller's extras -- an explicit
+        ``None`` included -- are forwarded as given.
+        """
+        if opts.effort is not None:
+            return opts
+        default, _style = self._entry_reasoning_effort()
+        return replace(opts, effort=default) if default is not None else opts
+
+    def effective_options(self, options: Optional[BackendOptions] = None) -> BackendOptions:
+        """Resolve ``options`` to what actually reaches the provider.
+
+        Returns ``options`` with ``extras`` replaced by exactly the extra body
+        the delegate sends: the entry's effort placed in the entry's effort
+        style, or the caller's own effort, or nothing. This is the seam
+        :func:`platform.build_cache_key` needs: the registry default and the
+        endpoint's wire style are resolved HERE, inside the backend, which is
+        downstream of where a caller builds its cache key, so a caller that
+        hashes its own pre-resolution options would key two entries with
+        different registry defaults identically even though they serve
+        different completions. Any caller building a cache key -- or otherwise
+        needing the options that will actually be sent -- should call this
+        first when the backend exposes it (duck-typed via ``getattr``; a
+        backend that resolves nothing beyond the caller's own options need not
+        implement it).
+
+        ``effort`` is returned as the caller passed it, not cleared, so a key
+        stays equal to the one earlier releases computed wherever the extra
+        body is unchanged. The key therefore changes exactly where the wire
+        does.
+
+        Precedence, highest first (llm-scripting-kit's ``plan_effort``):
+
+        1. the caller's ``extras`` name an effort, top-level
+           (``extras["reasoning_effort"]``) or nested
+           (``extras["chat_template_kwargs"]["reasoning_effort"]``); the
+           top-level one wins when both are present. A value is sent verbatim;
+           an explicit ``None`` suppresses the parameter entirely and lets the
+           server's own default win;
+        2. ``options.effort``, else the selected registry entry's
+           ``reasoning_effort``, placed in the entry's effort style (NInfer
+           maps ``high`` to ``xhigh``); an entry that resolves no style sends
+           none;
+        3. neither -- the parameter is not sent, so the server decides.
+
+        The plugin ships no effort value of its own; the fleet default lives in
+        the private registry, per entry. Against a shared lib that predates
+        ``plan_effort`` this falls back to that release's behavior: the entry
+        default injected as a top-level ``extras["reasoning_effort"]``
+        whatever the entry's style.
+        """
+        opts = options or BackendOptions()
+        seam = _effort_seam()
+        if seam is None:
+            return self._legacy_effective_options(opts)
+        _default, style = self._entry_reasoning_effort()
+        sent = self._delegate_options(opts)
+        plan = seam[0](sent.extras, sent.effort, style)
+        return replace(opts, extras=dict(plan.extra_body))
 
     def complete(
         self,
@@ -643,11 +725,17 @@ class ModelEndpointBackend(_LazyDelegate):
     ) -> LLMResponse:
         """Complete, defaulting reasoning effort from the registry entry.
 
-        See :meth:`effective_options` for the precedence rule this applies.
+        The delegate receives ``effort`` (the caller's, else the entry's) and
+        the caller's ``extras`` unchanged, and places the effort itself; see
+        :meth:`effective_options` for the precedence it applies.
         """
-        opts = self.effective_options(options)
+        opts = options or BackendOptions()
+        if _effort_seam() is None:
+            sent = self._legacy_effective_options(opts)
+        else:
+            sent = self._delegate_options(opts)
         resp = self._backend().complete(
-            system, user, model=model, options=_to_completion_options(opts)
+            system, user, model=model, options=_to_completion_options(sent)
         )
         return _from_completion_response(resp)
 

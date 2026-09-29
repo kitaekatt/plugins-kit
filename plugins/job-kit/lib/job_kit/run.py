@@ -60,6 +60,7 @@ from .select import (
 )
 import llm_scripting_kit.models as _lsk_models
 import llm_scripting_kit.usage_budget as _lsk_usage_budget
+import llm_scripting_kit.completion as _completion
 from llm_scripting_kit.completion import subjects_for_disallowed_tools
 from llm_scripting_kit.completion.capabilities import FILESYSTEM_WRITE
 from .store import DuplicateJobError, JobStore, StoreError, UnknownRunError
@@ -471,11 +472,22 @@ def _exception_attempt(
     # Job-kit owns this deadline, so its timeout is retryable, not a provider halt.
     halt_kind = _halt_for_exception(selection.backend, exc)
     status = TIMEOUT if _is_own_deadline(exc) else ERROR
-    dropped = (
-        derive_dropped_params(capabilities, options)
-        if capabilities is not None
-        else None
-    )
+    params_report = getattr(selection.backend, "params_report", None)
+    if callable(params_report):
+        dropped, forwarded = params_report(options)
+    else:
+        report_capabilities = selection.capabilities or capabilities
+        dropped = (
+            derive_dropped_params(report_capabilities, options)
+            if report_capabilities is not None
+            else None
+        )
+        derive_forwarded = getattr(_completion, "derive_forwarded_params", None)
+        forwarded = (
+            derive_forwarded(report_capabilities, options)
+            if selection.capabilities is not None and callable(derive_forwarded)
+            else None
+        )
     message = (
         exc.detail
         if isinstance(exc, HaltError)
@@ -496,7 +508,7 @@ def _exception_attempt(
         error=AttemptError(code=halt_kind or "execution", message=message),
         halt_kind=halt_kind,
         dropped_params=dropped,
-        forwarded_params=None,
+        forwarded_params=forwarded,
         execution_controls_applied=None,
         usage=None,
         response_text="",

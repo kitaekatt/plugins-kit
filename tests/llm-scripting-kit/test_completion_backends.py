@@ -820,3 +820,119 @@ class TestReportedCostTrustGate:
             "s", "u", model="a/slug"
         )
         assert resp.reported_cost_usd == 0.25
+
+
+# ---------------------------------------------------------------------------
+# Effort translation (OpenRouterBackend + the endpoint's effort style)
+# ---------------------------------------------------------------------------
+
+_EFFORT_REGISTRY = (
+    "models:\n"
+    "  gpu:\n    base_url: http://gpu.invalid/v1\n    model: gpu-m\n"
+    "    reasoning_effort: medium\n"
+    "    routing: {group: q, order: 1, effort_style: ninfer}\n"
+    "  mac:\n    base_url: http://mac.invalid/v1\n    model: mac-m\n"
+    "    routing: {group: q, order: 2, effort_style: chat_template_kwargs}\n"
+    "  plain:\n    base_url: http://plain.invalid/v1\n    model: plain-m\n"
+    "  paid:\n    base_url: http://paid.invalid/v1\n    model: paid-m\n"
+    "    routing: {group: q, order: 3}\n"
+    "  fd:\n    base_url: http://fd.invalid/v1\n    model: q\n    frontdoor: true\n"
+)
+
+
+@pytest.fixture
+def effort_registry(tmp_path, monkeypatch):
+    reg = tmp_path / "effort-reg.yaml"
+    reg.write_text(_EFFORT_REGISTRY, encoding="utf-8")
+    monkeypatch.setenv("MODEL_ENDPOINTS_REGISTRY", str(reg))
+    return reg
+
+
+def _effort_call(endpoint, **opts):
+    client = _FakeClient()
+    resp = OpenRouterBackend(endpoint=endpoint, client=client).complete(
+        "s", "u", model="test/slug", options=BackendOptions(**opts)
+    )
+    return client.sink[0], resp
+
+
+class TestOpenRouterEffort:
+    def test_ninfer_style_sends_top_level(self, effort_registry):
+        kwargs, resp = _effort_call("gpu", effort="medium")
+        assert kwargs["extra_body"] == {"reasoning_effort": "medium"}
+        assert "effort" not in resp.dropped_params
+        assert resp.forwarded_params == ()
+
+    def test_ninfer_maps_high_to_xhigh(self, effort_registry):
+        kwargs, _ = _effort_call("gpu", effort="high")
+        assert kwargs["extra_body"] == {"reasoning_effort": "xhigh"}
+
+    def test_chat_template_kwargs_style_nests(self, effort_registry):
+        kwargs, resp = _effort_call(
+            "mac", effort="medium", extras={"chat_template_kwargs": {"enable_thinking": True}}
+        )
+        assert kwargs["extra_body"] == {
+            "chat_template_kwargs": {"enable_thinking": True, "reasoning_effort": "medium"}
+        }
+        assert "effort" not in resp.dropped_params
+        assert resp.forwarded_params == ("extras.chat_template_kwargs",)
+
+    def test_frontdoor_entry_sends_top_level(self, effort_registry):
+        kwargs, _ = _effort_call("fd", effort="high")
+        assert kwargs["extra_body"] == {"reasoning_effort": "high"}
+
+    def test_explicit_extras_win_verbatim(self, effort_registry):
+        kwargs, resp = _effort_call("gpu", effort="medium", extras={"reasoning_effort": "high"})
+        assert kwargs["extra_body"] == {"reasoning_effort": "high"}  # no remap
+        assert "effort" in resp.dropped_params  # overridden, so not delivered
+        assert resp.forwarded_params == ("extras.reasoning_effort",)
+
+    def test_explicit_none_suppresses(self, effort_registry):
+        kwargs, resp = _effort_call("gpu", effort="medium", extras={"reasoning_effort": None})
+        assert "extra_body" not in kwargs
+        assert "effort" in resp.dropped_params
+        assert resp.forwarded_params == ()
+
+    @pytest.mark.parametrize("endpoint", ["plain", "paid"])
+    def test_no_style_entry_keeps_effort_off_the_wire(self, effort_registry, endpoint):
+        kwargs, resp = _effort_call(endpoint, effort="medium")
+        assert "extra_body" not in kwargs
+        assert "effort" in resp.dropped_params
+
+    def test_no_effort_resolves_no_endpoint_profile(self, effort_registry, monkeypatch):
+        def _boom(self):  # pragma: no cover - asserted not to run
+            raise AssertionError("an effort-less call must not resolve the profile")
+
+        monkeypatch.setattr(OpenRouterBackend, "endpoint_profile", _boom)
+        kwargs, _resp = _effort_call("gpu")
+        assert "extra_body" not in kwargs
+        kwargs, _resp = _effort_call("gpu", extras={"top_k": 20})
+        assert kwargs["extra_body"] == {"top_k": 20}
+
+    def test_effort_and_native_cost_share_one_resolution(self, effort_registry, monkeypatch):
+        from llm_scripting_kit import models as models_mod
+
+        real = models_mod.resolve_endpoint
+        calls = []
+
+        def counting(*a, **k):
+            if "config" not in k:  # resolve_model's own lookup passes config=
+                calls.append(a)
+            return real(*a, **k)
+
+        monkeypatch.setattr(models_mod, "resolve_endpoint", counting)
+        client = _FakeClient()
+        backend = OpenRouterBackend(endpoint="gpu", client=client)
+        opts = BackendOptions(effort="medium")
+        backend.complete("s", "u", model="test/slug", options=opts)
+        backend.complete("s", "u", model="test/slug", options=opts)
+        assert backend._trusts_native_cost() is False
+        assert len(calls) == 1
+
+    def test_endpoint_capabilities_specializes_the_family_record(self, effort_registry):
+        caps = OpenRouterBackend(endpoint="gpu").endpoint_capabilities()
+        assert caps.params["effort"].emits == "reasoning_effort"
+        assert "effort" not in caps.dropped_params
+        assert caps.endpoint == "gpu"
+        plain = OpenRouterBackend(endpoint="plain").endpoint_capabilities()
+        assert plain is OpenRouterBackend.capabilities
