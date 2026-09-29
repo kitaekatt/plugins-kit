@@ -469,13 +469,20 @@ behaviour. Say so when documenting this layer rather than letting "four
 transports behind one `complete()`" imply more than it delivers.
 
 It does not own the concerns of a RUN OF MANY CALLS. Response caching, cost
-accounting, budget guarding, batching, concurrency, rate limiting, and
-structured-output enforcement all belong to the caller. Those are policy, not
-transport: what a cache is keyed on, what a budget is measured against, how many
-calls may run at once, and what a valid output looks like are questions the
-calling pipeline can answer and a transport cannot, so answering them here would
-mean guessing once on behalf of every caller. Holding that altitude is also what
-keeps this layer stdlib-only apart from a lazy `openai` import, so a consumer
+accounting, budget guarding, batching, concurrency, and rate limiting all
+belong to the caller. Those are policy, not transport: what a cache is keyed on,
+what a budget is measured against, and how many calls may run at once are
+questions the calling pipeline can answer and a transport cannot, so answering
+them here would mean guessing once on behalf of every caller. Output validity is
+split the same way. The seam enforces a contract the CALLER declares: the caller
+answers what a valid output looks like by declaring an `OutputContract` (a JSON
+Schema and a policy), and the transport only checks the returned object against
+that declaration; it never invents a schema. What to do with a structurally
+valid object -- semantic or domain validation, retry, caching -- stays with the
+caller. A declared contract is refused before dispatch until an adapter
+advertises a policy for it. Holding that altitude is also what keeps this layer
+stdlib-only apart from a lazy `openai` import (the schema validator is a stdlib
+JSON Schema subset in `completion/json_schema.py`), so a consumer
 driving only `claude-cli` installs no SDK. content-pipeline-kit's
 `lib/content_pipeline/llm/platform.py` is the in-fleet implementation of the
 layer above.

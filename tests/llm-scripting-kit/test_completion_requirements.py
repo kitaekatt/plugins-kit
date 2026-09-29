@@ -152,6 +152,56 @@ def test_structured_output_matches_by_mapping() -> None:
     assert match_capabilities(caps, {"structured_output": {"mode": "none"}}) is False
 
 
+def test_structured_output_policies_require_every_listed_policy() -> None:
+    """A contract's requirement is matched by the unchanged list branch:
+    every listed policy must be advertised."""
+    from llm_scripting_kit.completion import (
+        POLICY_NATIVE_REQUIRED,
+        POLICY_TEXT_ONLY,
+        POLICY_VALIDATED_RESULT,
+        OutputContract,
+        contract_requirements,
+    )
+
+    caps = Capabilities(
+        adapter="fake",
+        structured_output=StructuredOutputCapability(
+            policies=(POLICY_VALIDATED_RESULT, POLICY_TEXT_ONLY),
+            contract_delivery="prompt",
+            contract_emits="messages[system]",
+        ),
+    )
+    schema = {"type": "object"}
+    validated = OutputContract("c", POLICY_VALIDATED_RESULT, schema)
+    native = OutputContract("c", POLICY_NATIVE_REQUIRED, schema)
+    text = OutputContract("c", POLICY_TEXT_ONLY)
+    assert match_capabilities(caps, contract_requirements(validated)) is True
+    assert match_capabilities(caps, contract_requirements(text)) is True
+    assert match_capabilities(caps, contract_requirements(native)) is False
+    assert (
+        match_capabilities(
+            caps,
+            {"structured_output": {"policies": [POLICY_VALIDATED_RESULT, POLICY_TEXT_ONLY]}},
+        )
+        is True
+    )
+
+
+def test_record_without_policies_fails_a_policy_requirement() -> None:
+    """An old serialized record carries no ``policies`` key; it must fail the
+    match rather than be read as satisfying a contract."""
+    old = Capabilities(
+        adapter="fake",
+        structured_output=StructuredOutputCapability(mode="native", result="parsed"),
+    ).to_json()
+    assert "policies" not in old["structured_output"]
+    for policy in ("native-required", "validated-result", "text-only"):
+        assert (
+            match_capabilities(old, {"structured_output": {"policies": [policy]}})
+            is False
+        )
+
+
 def test_structured_output_absent_fails() -> None:
     # structured_output always serializes to a mapping, but a caller-provided
     # advertisement mapping missing the key must fail closed.

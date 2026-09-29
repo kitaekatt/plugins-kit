@@ -231,12 +231,32 @@ class ExecutionControl:
 
 @dataclass(frozen=True)
 class StructuredOutputCapability:
-    """Whether a caller schema reaches the target, and how the result comes back."""
+    """Whether a caller schema reaches the target, and how the result comes back.
+
+    ``mode``, ``request_param`` and ``result`` describe the LEGACY
+    per-transport schema path (a schema passed through ``extras``).
+
+    The output-contract fields describe the provider-independent path
+    (``BackendOptions.output_contract``, see :mod:`.contract`):
+
+    - ``policies`` -- the contract policies this adapter satisfies. A contract
+      whose policy is not listed is refused before dispatch, so an empty tuple
+      means every contract is refused.
+    - ``contract_delivery`` -- ``native`` or ``prompt``: the channel a schema
+      contract reaches the target through.
+    - ``contract_emits`` -- the concrete element that delivery produces,
+      falsifiable exactly as :attr:`ExecutionControl.emits` is.
+
+    Each is serialized only when set, so a record without them is unchanged.
+    """
 
     mode: str = NONE
     request_param: Optional[str] = None
     result: str = TEXT_RESULT
     note: str = ""
+    policies: Tuple[str, ...] = ()
+    contract_delivery: Optional[str] = None
+    contract_emits: Optional[str] = None
 
     def to_json(self) -> Dict[str, Any]:
         result: Dict[str, Any] = {"mode": self.mode, "result": self.result}
@@ -244,6 +264,12 @@ class StructuredOutputCapability:
             result["request_param"] = self.request_param
         if self.note:
             result["note"] = self.note
+        if self.policies:
+            result["policies"] = list(self.policies)
+        if self.contract_delivery is not None:
+            result["contract_delivery"] = self.contract_delivery
+        if self.contract_emits is not None:
+            result["contract_emits"] = self.contract_emits
         return result
 
 

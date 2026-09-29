@@ -132,6 +132,33 @@ def test_record_is_json_serializable(cap):
     json.dumps(cap.to_json())
 
 
+@pytest.mark.parametrize("cap", list(ADAPTER_CAPABILITIES.values()), ids=lambda c: c.adapter)
+def test_output_contract_is_read_by_every_adapter_not_dropped(cap):
+    """Every adapter READS output_contract -- it refuses an unlisted policy
+    before dispatch -- so reporting it as dropped would say the contract went
+    nowhere when it in fact stopped the call. ``_dropped()`` derives from the
+    dataclass, so without an explicit params entry the field would land in
+    dropped_params silently and the honored-or-dropped test would stay green.
+    """
+    assert "output_contract" in cap.params
+    assert cap.params["output_contract"].type == "output-contract"
+    assert "output_contract" not in cap.dropped_params
+
+
+@pytest.mark.parametrize("cap", list(ADAPTER_CAPABILITIES.values()), ids=lambda c: c.adapter)
+def test_no_adapter_advertises_an_output_contract_policy_yet(cap):
+    """Every record refuses every contract until an adapter delivers one.
+
+    An empty ``policies`` is the truthful state while no adapter validates a
+    contract's answer; listing a policy is what enables it, and that change
+    must come with its delivery and its conformance tests.
+    """
+    assert cap.structured_output.policies == ()
+    assert cap.structured_output.contract_delivery is None
+    assert cap.structured_output.contract_emits is None
+    assert "policies" not in cap.to_json()["structured_output"]
+
+
 # -- openrouter ------------------------------------------------------------
 
 
@@ -617,15 +644,34 @@ def _digest(payload) -> str:
     return hashlib.sha256(json.dumps(payload).encode()).hexdigest()
 
 
+def _without_output_contract_param(payload):
+    """The payload minus the one param every record gained with output contracts.
+
+    ``params.output_contract`` is the only addition since the digests above
+    were taken (it is asserted separately below), so removing it must restore
+    each record byte for byte -- which keeps these digests guarding everything
+    else in the record.
+    """
+    assert payload["params"].pop("output_contract") == {
+        "type": "output-contract",
+        "handling": "mapped",
+        "note": (
+            "read and refused before dispatch unless structured_output.policies "
+            "lists the contract's policy"
+        ),
+    }
+    return payload
+
+
 @pytest.mark.parametrize("adapter", ["claude-cli", "codex-cli", "opencode-cli"])
 def test_harness_family_records_serialize_byte_identically(adapter):
-    payload = ADAPTER_CAPABILITIES[adapter].to_json()
+    payload = _without_output_contract_param(ADAPTER_CAPABILITIES[adapter].to_json())
     assert "conditional_params" not in payload and "endpoint" not in payload
     assert _digest(payload) == _PRE_CONDITIONAL_DIGESTS[adapter]
 
 
 def test_openrouter_family_record_only_gains_conditional_effort():
-    payload = OPENROUTER_CAPABILITIES.to_json()
+    payload = _without_output_contract_param(OPENROUTER_CAPABILITIES.to_json())
     conditional = payload.pop("conditional_params")
     assert _digest(payload) == _PRE_CONDITIONAL_DIGESTS["openrouter"]
     assert set(conditional) == {"effort"}

@@ -58,6 +58,25 @@ def _dropped(honored: object) -> tuple:
     return tuple(name for name in _ALL_OPTION_FIELDS if name not in honored)
 
 
+def _output_contract_param() -> ParamCapability:
+    """``output_contract`` as every adapter handles it: READ, then refused
+    before dispatch unless the record lists the contract's policy.
+
+    A refused param is still a read one, so it belongs in ``params`` and not in
+    ``dropped_params`` -- "dropped" means "not read", and reporting a contract
+    as dropped would tell a caller it went nowhere when in fact it stopped the
+    call. Which policies an adapter satisfies is its
+    ``structured_output.policies``.
+    """
+    return ParamCapability(
+        type="output-contract",
+        note=(
+            "read and refused before dispatch unless structured_output.policies "
+            "lists the contract's policy"
+        ),
+    )
+
+
 # -- openrouter (OpenAI-compatible HTTP) -----------------------------------
 #
 # OpenRouterBackend.complete builds chat-completions kwargs directly. It reads
@@ -106,6 +125,7 @@ _OPENROUTER_PARAMS = {
             "them"
         ),
     ),
+    "output_contract": _output_contract_param(),
 }
 
 #: Params openrouter emits only for an endpoint whose profile enables them.
@@ -219,6 +239,7 @@ _CLAUDE_PARAMS = {
     "log_prefix": ParamCapability(
         type="string", default="[llm]", emits="runner log_prefix"
     ),
+    "output_contract": _output_contract_param(),
 }
 
 CLAUDE_CAPABILITIES = Capabilities(
@@ -349,6 +370,7 @@ _CODEX_PARAMS = {
     "extras.output_schema": ParamCapability(
         type="absolute-path", emits="--output-schema"
     ),
+    "output_contract": _output_contract_param(),
 }
 
 CODEX_CAPABILITIES = Capabilities(
@@ -462,6 +484,7 @@ _OPENCODE_PARAMS = {
     "log_prefix": ParamCapability(
         type="string", default="[llm]", emits="runner log_prefix"
     ),
+    "output_contract": _output_contract_param(),
 }
 
 OPENCODE_CAPABILITIES = Capabilities(

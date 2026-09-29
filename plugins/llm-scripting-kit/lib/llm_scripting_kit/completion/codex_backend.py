@@ -45,6 +45,7 @@ from . import halt
 from .claude_runner import run_cli_streaming
 from .adapter_capabilities import CODEX_CAPABILITIES
 from .capabilities import Capabilities
+from .contract import prepare_contract
 from .prompt_fold import fold_prompt
 from .results import (
     check_applied_controls,
@@ -267,6 +268,9 @@ class CodexCliBackend:
         behind.
         """
         opts = options or BackendOptions()
+        # Before any temp file, argv or runner call: a contract this record
+        # does not list is refused here, with nothing spawned.
+        prepare_contract(self.capabilities, opts)
         timeout_s = (
             opts.timeout_s if opts.timeout_s is not None else self.default_timeout_s
         )

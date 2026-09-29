@@ -52,6 +52,7 @@ from .adapter_capabilities import (
 )
 from ..effort import OUTCOME_TRANSLATED, EffortPlan, plan_effort
 from .capabilities import Capabilities
+from .contract import prepare_contract
 from .endpoint_profile import (
     EndpointProfile,
     endpoint_capabilities,
@@ -303,6 +304,9 @@ class OpenRouterBackend:
         on the static prefix; otherwise it is a plain string.
         """
         opts = options or BackendOptions()
+        # Before the client is built or the model resolved: a contract this
+        # record does not list is refused here, with nothing sent.
+        prepare_contract(self.capabilities, opts)
         client = self.client if self.client is not None else self._ensure_client()
         resolved_model = self._resolve_model(model)
 
@@ -540,6 +544,9 @@ class ClaudeCliBackend:
         # accepted for protocol compatibility and ignored. Tests stub this
         # backend via ``runner=`` (and optionally ``executable=``).
         opts = options or BackendOptions()
+        # Before argv is built or the runner invoked: a contract this record
+        # does not list is refused here, with nothing spawned.
+        prepare_contract(self.capabilities, opts)
         timeout_s = (
             opts.timeout_s if opts.timeout_s is not None else self.default_timeout_s
         )
