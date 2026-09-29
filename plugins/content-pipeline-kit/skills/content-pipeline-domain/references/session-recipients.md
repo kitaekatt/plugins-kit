@@ -184,6 +184,13 @@ project's own settings did not restore the agent (live probe, claude CLI 2.1.284
 in the launch folder's `.claude/settings.json`, two launches printed the same
 `no agent named` warning. The sessions' logs could not be read, so what the
 sessions then did is unobserved.
+Adding `--plugin-dir <installed plugin root>` to the strict launch (installed
+content-pipeline-kit 0.27.0, claude CLI 2.1.284, 2026-09-29) also did not keep
+the agent: `--bg` accepts the flag, but the launch printed the same `no agent
+named` warning, and the session then reported state `failed` in
+`claude agents --json --all`, with no transcript written. `claude logs` again
+failed with `connect ENOENT \\.\pipe\cc-daemon-*-control`, and no transcript
+existed to read instead.
 
 Build your worker's allowlist from those six computed strings, not from a
 broader grant (e.g. "any invocation of my protocol mount"). A broad grant
