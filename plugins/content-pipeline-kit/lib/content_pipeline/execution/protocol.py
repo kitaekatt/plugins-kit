@@ -14,12 +14,12 @@ Envelope shape and versioning
 ----------------------------------
 One JSON object in, one JSON object out::
 
-    {"protocol_version": "1", "verb": "claim", "payload": {...}}
+    {"protocol_version": "2", "verb": "claim", "payload": {...}}
     -> {"ok": true, "result": {...}}
     -> {"ok": false, "error": {"type": "...", "message": "..."}}
 
 ``protocol_version`` is a single string constant per installed library
-version (:data:`PROTOCOL_VERSION`, currently ``"1"``) -- not the plugin
+version (:data:`PROTOCOL_VERSION`, currently ``"2"``) -- not the plugin
 version, not the adapter version (see ``execution.adapter``'s
 ``AdapterVersionMismatchError`` for that, a distinct compatibility axis: the
 WIRE FORMAT versus the CONSUMER'S PARSER/PROMPT code). A mismatched
@@ -29,6 +29,12 @@ envelope shape is a breaking change to every out-of-process worker at once,
 so guessing compatibility is exactly the failure the adapter-identity
 refusal already rejects for the adapter axis; the wire axis gets the same
 discipline.
+
+Version ``"2"`` changed the ``status`` reply: the apply state of an
+interrupted apply is ``apply_started`` (it was ``apply_unknown``), and the
+digest field listing those units is ``apply_started_unit_ids`` (it was
+``apply_unknown_unit_ids``). ``finalize`` no longer refuses on such a unit;
+it applies it again (apply is convergent). A ``"1"`` envelope is refused.
 
 :func:`dispatch` never lets an :class:`Exception` escape across this
 boundary. Every failure -- a malformed envelope, an unknown verb, a version
@@ -107,7 +113,7 @@ from content_pipeline.pipeline.single_pass import Gate
 from content_pipeline.pipeline.workunit import WorkUnit, WorkUnitStrategy
 from content_pipeline.validate import contract
 
-PROTOCOL_VERSION = "1"
+PROTOCOL_VERSION = "2"
 
 VERBS = (
     "prepare",

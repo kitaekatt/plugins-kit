@@ -786,7 +786,7 @@ class TestNullBranchHoistsAreNotDiscarded:
         assert "if (hasDocument) acc.written++" in src
         assert "if (hasDocument && !(r.verifications || []).length) acc.unverified++" in src
         assert "record.sections = applied.sections || []" in src
-        assert "record.path = applied.path || (r.root + '/CLAUDE.md')" in src
+        assert "record.path = applied.path || docOf(r.root)" in src
 
     def test_the_retired_diagnostic_has_a_successor(self):
         """unappliedNote is what caught this defect and it stops firing once the

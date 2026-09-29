@@ -105,8 +105,8 @@ existing tests at each step:
    now, not per-backend code. Tests run against `NullVcs`.
 6. **`cli` last** -- the facade is ported last because it composes everything
    below it. Decompose the monolithic command function onto `cli.scaffold`
-   dispatch, with `cli.budget` / `cli.bulk` / `cli.unsupported` for the
-   halt-guard, bulk-warm, and sticky-stub concerns. The thin per-command
+   dispatch, with `cli.budget` / `cli.unsupported` for the
+   halt-guard and sticky-stub concerns. The thin per-command
    handlers are the only substantial project-side CLI code that remains.
 
 `roundtrip` and `audit` port whenever their prerequisites (`store`;

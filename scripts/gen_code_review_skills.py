@@ -355,7 +355,9 @@ MD_DOMAIN_LAUNCH = """\
             launches the reviewer subagents (or the reviewer Workflow, per the dispatch rule above), ALSO
             run md-domain's headless detect lanes for the NON-TRIVIAL claimed
             files, routed THREE ways by basename (plus one path-shape rule) -- at
-            most THREE lane groups total: (a) every claimed file named `CLAUDE.md` -> the
+            most THREE lane groups total: (a) every claimed file named `CLAUDE.md`, or `AGENTS.md` when it is ACTIVE (its directory has no
+            `CLAUDE.md`; a claimed `AGENTS.md` whose directory has a `CLAUDE.md` is SHADOWED: drop it from
+            every md-domain lane and audit it nowhere) -> the
             `audit_claude_md` lane's `skills/md-domain/workflow/claude-md-detect.js`; (b) every claimed
             file named `SKILL.md` OR sitting inside a `*/skills/<name>/references/` folder -> the
             `audit_skill` lane's `skills/md-domain/workflow/skill-detect.js`
@@ -364,7 +366,7 @@ MD_DOMAIN_LAUNCH = """\
             lane's `skills/md-domain/workflow/project-doc-detect.js` (only if any). Pass `review: true`
             and, per claimed
             file, `preImagePath` = its `pre_image` from the bundle (null for an add), with the per-lane
-            `files[]` fields (CLAUDE.md: role / dimension / parentPath / ancestorClaudeMdPaths; SKILL.md
+            `files[]` fields (CLAUDE.md / active AGENTS.md: role / dimension / parentPath / ancestorClaudeMdPaths; SKILL.md
             and skill reference: ancestorClaudeMdPaths; project-doc: ancestorClaudeMdPaths), plus
             `mechanicalScan` = the claimed entry's sole `mechanical_scan.files[0]` record. Pass
             `mechanicalCheckPhrases` = `bundle.mechanical_check_phrases` once at the top level of
@@ -426,8 +428,8 @@ MD_DOMAIN_REPORT = """\
 # Appended to both gotcha blocks (plain text -- no f-string braces).
 MD_DOMAIN_GOTCHAS = """
         - md-domain findings are a SEPARATE, labeled section -- never interleave them with the code-review issue list. They come from md-domain's detect lanes (a subject-lens reviewer), not from the generic reviewer/validator subagents, so they are not filtered by the validators.
-        - The claim decision happens ONCE, at the step-2 probe: md-domain available -> `--claim '**/*.md'` (one glob covering CLAUDE.md, SKILL.md, a skill's `references/*.md`, and generic docs); md-domain absent -> no `--claim`. Claiming a skill's `references/*.md` assumes the INSTALLED audit_skill lane owns that subject shape; these kits declare no version constraint on skills-kit, so step 6 probes for it by capability and the skill-reference skew tier re-adds the exclusion when it is missing. Do not run prepare a second time just to add claims -- the only re-runs are the version-skew FALLBACKS (broad skew re-runs WITHOUT `--claim`; project-doc-only skew re-runs with `--claim '**/CLAUDE.md' --claim '**/SKILL.md' --claim '**/skills/*/references/*.md'`; skill-reference skew re-adds the `!**/skills/*/references/*.md` exclusion as a compatibility shim).
-        - Claimed `.md` files route THREE ways in step 6 -- `CLAUDE.md` -> the `audit_claude_md` lane; `SKILL.md` OR a file inside a `*/skills/<name>/references/` folder -> the `audit_skill` lane (its two subject shapes); every other `.md` -> the `audit_project_doc` lane (full routing table in references/md-domain-review.md; `.md.html` is never claimed). Never claim a shape no lane can audit: a declined file comes back NOT-AUDITED, which a caller can misread as a pass.
+        - The claim decision happens ONCE, at the step-2 probe: md-domain available -> `--claim '**/*.md'` (one glob covering CLAUDE.md, AGENTS.md, SKILL.md, a skill's `references/*.md`, and generic docs); md-domain absent -> no `--claim`. Claiming a skill's `references/*.md` assumes the INSTALLED audit_skill lane owns that subject shape; these kits declare no version constraint on skills-kit, so step 6 probes for it by capability and the skill-reference skew tier re-adds the exclusion when it is missing. Do not run prepare a second time just to add claims -- the only re-runs are the version-skew FALLBACKS (broad skew re-runs WITHOUT `--claim`; project-doc-only skew re-runs with `--claim '**/CLAUDE.md' --claim '**/AGENTS.md' --claim '**/SKILL.md' --claim '**/skills/*/references/*.md'`; skill-reference skew re-adds the `!**/skills/*/references/*.md` exclusion as a compatibility shim).
+        - Claimed `.md` files route THREE ways in step 6 -- `CLAUDE.md` (or an active `AGENTS.md`) -> the `audit_claude_md` lane; a shadowed `AGENTS.md` is dropped; `SKILL.md` OR a file inside a `*/skills/<name>/references/` folder -> the `audit_skill` lane (its two subject shapes); every other `.md` -> the `audit_project_doc` lane (full routing table in references/md-domain-review.md; `.md.html` is never claimed). Never claim a shape no lane can audit: a declined file comes back NOT-AUDITED, which a caller can misread as a pass.
         - A `NOT-AUDITED` verdict from a lane is NOT a pass. It means the lane declined the file as outside its criteria and read nothing. Render it as its own line, never fold it into the clean count, and never let it satisfy a submit gate -- treat it like the `## Mechanical checks (audit skipped)` section: an honest "not reviewed", not a result. Seeing one on a claimed file means the claim routing sent a file somewhere that cannot audit it; report that rather than accepting the verdict.
         - When skills-kit md-domain is absent the whole mechanism degrades silently: no `--claim`, no claimed_files, no md-domain section -- the md files get thin generic data_only coverage. Note the degradation in one line; do not treat it as an error.
         - The triviality gate is pure-mechanical and decided by prepare_review (per-claimed-file `trivial` / `trivial_reasons`); the skill never re-judges it. A TRIVIAL claimed file is reported via the mechanical-checks line and is NEVER sent to a detect lane or written to the ledger. When EVERY claimed file is trivial and there are no generic diff chunks, the whole audit is skipped -- render the `## Mechanical checks (audit skipped)` section, never a DIFF-CLEAN verdict, and never present the skip as an audit. A user or author asking for the full review overrides the gate.
@@ -652,7 +654,8 @@ technique_skill:
 @STEP3@
         - n: 4
           action: |
-            Read every CLAUDE.md path in unique_claude_mds. Subagents do not need to re-read.
+            Read every path in unique_claude_mds (CLAUDE.md, or AGENTS.md where a directory has no
+            CLAUDE.md -- the bundle already applies that precedence). Subagents do not need to re-read.
             Also resolve the EXECUTABLE review-profile table -- profile ids, reviewer rosters,
             per-reviewer models, and validator_models -- by running @RENDER_TOOL@ with
             `--project-root <bundle.project_root>` (omit the flag when bundle.project_root is
@@ -1625,7 +1628,7 @@ SUBMIT_GATES_TEMPLATE = """\
 
 ## Authoring format
 
-Add this block to any CLAUDE.md (root, subdirectory, or both):
+Add this block to any CLAUDE.md (root, subdirectory, or both), or to an AGENTS.md in a directory that has no CLAUDE.md (a directory with both reads only CLAUDE.md):
 
 ```
 **Submit gate:** <imperative -- what the author must do>.
@@ -1642,14 +1645,14 @@ Scope path semantics:
 - Contains glob characters: fnmatch-style glob, anchored to the @SG_ANCHOR@. `*` matches anything including `/`; `?` matches one character.
 - Case-insensitive on Windows, case-sensitive elsewhere.
 
-Multiple gates per CLAUDE.md allowed; blocks must be separated by a blank line. Malformed blocks (missing `Applies to:`, empty scope list) are skipped with a one-line stderr warning -- never silently dropped.
+Multiple gates per instruction file allowed; blocks must be separated by a blank line. Malformed blocks (missing `Applies to:`, empty scope list) are skipped with a one-line stderr warning -- never silently dropped.
 """
 
 SUBMIT_GATES_FRAGMENTS = {
     "git": {
         "SG_HEADER": (
-            "The CLAUDE.md-author-facing guide for writing submit-gate blocks. Submit gates are "
-            "path-scoped pre-push reminders authored in CLAUDE.md files; `git-code-review` detects "
+            "The CLAUDE.md/AGENTS.md-author-facing guide for writing submit-gate blocks. Submit gates are "
+            "path-scoped pre-push reminders authored in CLAUDE.md or AGENTS.md files; `git-code-review` detects "
             "them deterministically (via `prepare_review.py`, the same parser as `p4-code-review`) "
             "and surfaces them verbatim at review time when at least one file in the range falls "
             "within a gate's scope. This doc covers only how to author them; detection and rendering "
@@ -1659,8 +1662,8 @@ SUBMIT_GATES_FRAGMENTS = {
     },
     "p4": {
         "SG_HEADER": (
-            "The CLAUDE.md-author-facing guide for writing submit-gate blocks. Submit gates are "
-            "path-scoped pre-submit reminders authored in CLAUDE.md files; `p4-code-review` detects "
+            "The CLAUDE.md/AGENTS.md-author-facing guide for writing submit-gate blocks. Submit gates are "
+            "path-scoped pre-submit reminders authored in CLAUDE.md or AGENTS.md files; `p4-code-review` detects "
             "them deterministically (via `prepare_review.py`) and surfaces them verbatim at review "
             "time when at least one file in the CL falls within a gate's scope. This doc covers only "
             "how to author them; detection and rendering are described in the `submit_gates` block "
@@ -1688,7 +1691,7 @@ MD_DOMAIN_REVIEW_TEMPLATE = """\
 
 When skills-kit's md-domain skill is available in the session, `@SKILL_NAME@` treats it
 as the SUBJECT-lens reviewer for EVERY changed Markdown file -- `**/*.md`, which is CLAUDE.md,
-SKILL.md, a skill's `references/*.md`, and generic project docs alike (`.md.html` Markdeep files
+an active AGENTS.md (its directory has no CLAUDE.md), SKILL.md, a skill's `references/*.md`, and generic project docs alike (`.md.html` Markdeep files
 are NOT `.md` and stay with the generic reviewers). Those files are CLAIMED out of the generic
 reviewer fan-out (prepare_review.py's `--claim '**/*.md'` flag) and audited
 by md-domain's headless per-artifact detect lanes (`workflow/*-detect.js`)
@@ -1779,7 +1782,8 @@ a subject shape this skill claims. Check the tiers in order and take the FIRST t
 - **project-doc-only skew** -- `claude-md-detect.js` and `skill-detect.js` are present but ONLY
   `project-doc-detect.js` is missing (a skills-kit that predates
   project-doc review): emit a one-line warning and RE-RUN prepare_review.py with
-  `--claim '**/CLAUDE.md' --claim '**/SKILL.md' --claim '**/skills/*/references/*.md'`. CLAUDE.md,
+  `--claim '**/CLAUDE.md' --claim '**/AGENTS.md' --claim '**/SKILL.md' --claim '**/skills/*/references/*.md'`.
+  CLAUDE.md, AGENTS.md,
   SKILL.md and skill references all keep their specialist coverage -- `skill-detect.js` is intact
   in this skew, so both of its subject shapes stay claimed; only the generic `.md` docs rejoin the
   generic review. (Do NOT write the references glob as
@@ -1813,7 +1817,10 @@ Do not rerun prepare_review.py for a transport failure. Use the manual invocatio
 At most three, in the SAME message that launches the reviewer fan-out (or the reviewer Workflow).
 Route by basename first; the ONE path-shape rule is the skill-reference case in (b):
 
-1. **`audit_claude_md` lane** -- one call for every claimed file whose basename is `CLAUDE.md`.
+1. **`audit_claude_md` lane** -- one call for every claimed file whose basename is `CLAUDE.md`, or
+   `AGENTS.md` when active. An `AGENTS.md` is ACTIVE only when its directory has no `CLAUDE.md`
+   (CLAUDE.md takes precedence); a claimed `AGENTS.md` sitting beside a `CLAUDE.md` is SHADOWED
+   and is dropped from ALL three lanes -- never audited as a claude-md and never as a project doc.
    `scriptPath = <root>/skills/md-domain/workflow/claude-md-detect.js`, `args` =
    `{ files: [...], mechanicalCheckPhrases: bundle.mechanical_check_phrases, review: true, refs: { criteria: <root>/skills/md-domain/references/standards/claude-md-standards.md, codeDirFilter: <root>/skills/md-domain/references/standards/claude-md-standards.md, densityCriteria: <root>/skills/md-domain/references/standards/claude-md-standards.md, pluginRoot: <root>, venvPython: <venvPython> } }` (one standards doc backs all three refs -- the code-directory dimension and the density lens are sections of it).
 2. **`audit_skill` lane** -- one call for every claimed file that is EITHER (a) named `SKILL.md`
@@ -1866,7 +1873,7 @@ each affected file. Incomplete coverage cannot satisfy a submit gate.
 Build `files[]` from the NON-TRIVIAL claimed files only (per the triviality gate above); trivial
 files never reach a detect lane. Each claimed-file entry carries `local` (absolute path), `pre_image` (absolute path to the
 materialized before-image via @PREIMAGE_ORIGIN@, or `null` for an add), and `claude_mds` (the
-nearest-ancestor-first CLAUDE.md chain, which for a CLAUDE.md subject INCLUDES the subject itself
+nearest-ancestor-first CLAUDE.md (or active AGENTS.md) chain, which for such a subject INCLUDES the subject itself
 as its first element).
 
 Derive, per claimed file:
@@ -1888,10 +1895,10 @@ Workflow call. Each lane renders ids through this map and falls back to the bare
 producer supplies an unknown check. The scan answers only its mechanical questions; it does not
 audit the file, satisfy the specialist lane, or change a NOT-AUDITED verdict.
 
-For a **CLAUDE.md** file (`audit_claude_md` lane `files[]`):
+For a **CLAUDE.md** or active **AGENTS.md** file (`audit_claude_md` lane `files[]`):
 - `path` = `local`.
 - `role` = `"child"` when `ancestorClaudeMdPaths` is non-empty, else `"root"` (a standalone file
-  with no ancestor CLAUDE.md audits as its natural role). Use `"local"` for a `CLAUDE.local.md`.
+  with no ancestor instruction file audits as its natural role). Use `"local"` for a `CLAUDE.local.md`.
 - `dimension` = call the shipped classifier for this file and use its stdout (`"classic"` or
   `"code-directory"`) verbatim. Run it with the already-resolved skills-kit interpreter and root:
 

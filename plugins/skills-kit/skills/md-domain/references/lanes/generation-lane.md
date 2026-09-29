@@ -58,6 +58,8 @@ otherwise has to get right by hand every time:
   wording a hoist so it is true as stated at a new depth, de-duplicating against
   the chain -- is silently under- or over-powered.
 
+The caller supplies one input the lane cannot derive: the instruction-file path per directory. The caller MUST pass the `documentPaths` object from `scripts/discover_composition.py <root> --json` unchanged as `input.documentPaths` of `claude-md-generate.js`. It maps each composition subject to its resolved file (CLAUDE.md, else AGENTS.md; a new document is `<dir>/CLAUDE.md`), so a directory that holds only an AGENTS.md is edited in place instead of receiving a second, competing CLAUDE.md. Omitting it silently falls back to `<dir>/CLAUDE.md` everywhere.
+
 Single-document generation still needs no lane.
 
 Load this together with exactly one standards doc, selected by the dispatch
@@ -179,7 +181,7 @@ and it has TWO inputs:
 1. **The directory's own direct code.** Non-recursive: the code files sitting
    directly in it, never its descendants' files. This is what a coverage report
    for the directory carries.
-2. **Every child directory's CLAUDE.md, already written.** Reading the child
+2. **Every child directory's CLAUDE.md, already written** (or its AGENTS.md when the child has no CLAUDE.md -- discovery's `documentPaths` names the resolved file per directory, and a new document is written at `<dir>/CLAUDE.md`; precedence: `../standards/claude-md-standards.md` section 1.0). Reading the child
    documents is the second input, not an optional enrichment. A composition that
    skips it produces a document whose only content is the parent's own thin layer
    of direct code, which is strictly worse than what a recursive subject would
@@ -244,8 +246,8 @@ not hoist -- it stays in the children.
 **A hoisted fact leaves duplication behind.** Once the parent carries it, each
 child's copy is a near-verbatim restatement of an ancestor instruction that
 already loads ambient, which is a C-1 finding
-(`../standards/claude-md-standards.md:84-94`), and the sibling copies are the C-2
-case the hoist answers (`:96-104`). Removing them is part of the hoist, not a
+(`../standards/claude-md-standards.md`, C-1 "Parent-child duplication"), and the sibling copies are the C-2
+("Sibling duplication") case the hoist answers. Removing them is part of the hoist, not a
 later tidy-up -- and because one run writes one document, it is one further run of
 this procedure per child document.
 
@@ -305,7 +307,7 @@ the same turn that would otherwise drop the observation, and only when that
 subject returns at least one entry -- no file is written when there are none,
 because an empty one would read as a clean bill of health nothing established.
 The sidecar is NEVER a composition input: a parent's second input is its
-children's CLAUDE.md files only, so a defect claim recorded there can never
+children's instruction files only (CLAUDE.md, or AGENTS.md where a child has no CLAUDE.md), so a defect claim recorded there can never
 hoist upward and become ambient guidance for anyone above it.
 
 **A sidecar is never written without a co-located CLAUDE.md carrying its

@@ -76,7 +76,8 @@ def apply_states(units: List[Any], attempts: List[Any]) -> Dict[str, str]:
     The state is derived from the unit's LAST apply-kind attempt, the same
     rule ``finalize_run`` uses: ``not_applied`` (none), ``applied``
     (succeeded), ``apply_rejected`` (the adapter declined with no side
-    effect), or ``apply_unknown`` (started, never finished). ``attempts``
+    effect), or ``apply_started`` (started, no recorded success yet -- the
+    next finalize applies it again). ``attempts``
     may hold other kinds; they are ignored.
     """
     last: Dict[str, AttemptKind] = {}
@@ -87,7 +88,7 @@ def apply_states(units: List[Any], attempts: List[Any]) -> Dict[str, str]:
         None: "not_applied",
         AttemptKind.APPLY_SUCCEEDED: "applied",
         AttemptKind.APPLY_REJECTED: "apply_rejected",
-        AttemptKind.APPLY_STARTED: "apply_unknown",
+        AttemptKind.APPLY_STARTED: "apply_started",
     }
     return {u.unit_id: names[last.get(u.unit_id)] for u in units if u.state is UnitState.ACCEPTED}
 
@@ -149,11 +150,11 @@ class RunStatus:
     halted_at: Optional[float]
     # Apply-axis outcome per ACCEPTED unit (an accepted unit stays terminal
     # on the unit axis whatever its apply did): counts for not_applied /
-    # applied / apply_rejected / apply_unknown, plus the ids of the two
+    # applied / apply_rejected / apply_started, plus the ids of the two
     # states an operator must act on. Ids only -- never the adapter's reason.
     apply_counts: Dict[str, int] = field(default_factory=dict)
     apply_rejected_unit_ids: List[str] = field(default_factory=list)
-    apply_unknown_unit_ids: List[str] = field(default_factory=list)
+    apply_started_unit_ids: List[str] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
         """A plain-dict rendering suitable for YAML output (``cli.run``)."""
@@ -192,7 +193,7 @@ def compute_status(
     unit_apply_states = apply_states(units, all_attempts)
     apply_counts = {
         state: sum(1 for v in unit_apply_states.values() if v == state)
-        for state in ("not_applied", "applied", "apply_rejected", "apply_unknown")
+        for state in ("not_applied", "applied", "apply_rejected", "apply_started")
     }
 
     counts: Counter = Counter(u.state.value for u in units)
@@ -312,8 +313,8 @@ def compute_status(
         apply_rejected_unit_ids=[
             u for u, v in unit_apply_states.items() if v == "apply_rejected"
         ][:MAX_APPLY_UNIT_IDS],
-        apply_unknown_unit_ids=[
-            u for u, v in unit_apply_states.items() if v == "apply_unknown"
+        apply_started_unit_ids=[
+            u for u, v in unit_apply_states.items() if v == "apply_started"
         ][:MAX_APPLY_UNIT_IDS],
     )
 

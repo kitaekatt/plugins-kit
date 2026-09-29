@@ -41,7 +41,7 @@ def _send_fail(store, commands, wc, **extra):
                "terminal": True, "error": "cwd differs from the run's"}
     payload.update(extra)
     with open(path, "w", encoding="utf-8") as fh:
-        fh.write(json.dumps({"protocol_version": "1", "verb": "fail", "payload": payload}))
+        fh.write(json.dumps({"protocol_version": "2", "verb": "fail", "payload": payload}))
     return commands["protocol"].handler(["@" + path])
 
 

@@ -27,7 +27,7 @@
 //              parentPath: string|null, kind?: string } ],
 //     (kind is the caller's artifact classification. "claude-md" -> apply the
 //     criteria; any OTHER explicit value -> decline with NOT-AUDITED; ABSENT ->
-//     the lane self-applies the CLAUDE.md / CLAUDE.local.md basename shape test
+//     the lane self-applies the CLAUDE.md / CLAUDE.local.md / active AGENTS.md basename shape test
 //     and declines on a non-match. See the decline contract in
 //     references/lanes/audit-lane.md step 2a.)
 //   review: boolean  (REVIEW MODE. When true, each finding is additionally
@@ -200,7 +200,7 @@ function lanePrompt(f) {
     ? `NOTE: the caller classified this target as \`${f.kind}\`, NOT a CLAUDE.md. ${declineInstruction}`
     : f.kind === 'claude-md'
       ? `This is a genuine CLAUDE.md -- apply all the criteria below.`
-      : `No \`kind\` signal was provided (typical for a review-mode subject-lens call, where the caller does not classify). Run the artifact-shape test YOURSELF FIRST: this lane audits files whose BASENAME is \`CLAUDE.md\` or \`CLAUDE.local.md\`. A \`SKILL.md\`, a \`references/*.md\` under a skill, or any other standalone document is NOT one -- if the basename is neither: ${declineInstruction} Otherwise treat it as a genuine CLAUDE.md and apply all the criteria below.`
+      : `No \`kind\` signal was provided (typical for a review-mode subject-lens call, where the caller does not classify). Run the artifact-shape test YOURSELF FIRST: this lane audits files whose BASENAME is \`CLAUDE.md\` or \`CLAUDE.local.md\`, or \`AGENTS.md\` in a directory that has NO \`CLAUDE.md\` (an active AGENTS.md is an instruction file exactly like CLAUDE.md; an AGENTS.md beside a CLAUDE.md is shadowed and is NOT audited). A \`SKILL.md\`, a \`references/*.md\` under a skill, or any other standalone document is NOT one -- if the basename is neither: ${declineInstruction} Otherwise treat it as a genuine CLAUDE.md and apply all the criteria below.`
 
   const densityClause = density
     ? `The OPT-IN density lens is requested. After the checks above, ALSO read the density criteria at ${refs.densityCriteria} and run the DD-1..DD-4 lens. Overriding rule: density != deletion -- every finding must route the tokens somewhere (tighten in place / extract to a named reference / merge a duplicate); if you cannot name the destination, do not raise the finding. DD-1 density_in_place (over-worded but correctly-placed section -> taxonomy L_verbose_in_place, tighten IN PLACE, honor carve-outs for teaching examples / load-bearing nuance / labeled safety rails); DD-2 extract_to_reference (self-contained on-demand block taxing every reader -> taxonomy M_extract_to_reference, move to a reference + leave a one-line pointer; distinct from A wrong-scope and finer than C whole-file split); DD-3 intra_file_redundancy (same fact repeated within THIS file -> taxonomy N_intra_file_redundancy; NOT B, which is across the role chain); DD-4 value_earns_tokens (classic-file generalization of the CD-5 value filter -> taxonomy O_low_value_verbose; do NOT run on a code-directory file, where CD-5/J already owns value). Emit ALL density findings under group "Density", severity JUDGMENT, disposition IMPROVE -- the density lens is the opt-in improvement lens (trims of true content passing the one-line test / structural moves), it NEVER produces FAIL and never changes the verdict. Each remediation names the destination (tighten | extract->ref | merge) and an approximate token-savings figure.`

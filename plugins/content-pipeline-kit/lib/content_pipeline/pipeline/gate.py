@@ -1,9 +1,8 @@
 """The pre-generation gate shape: :class:`Gate` and :func:`run_gates`.
 
 A gate returns a reason to stop or ``None`` to pass; the first firing gate
-short-circuits. Both the untracked ``single_pass.run_single_pass`` loop and the
-tracked ``execution.controller.prepare_run`` consume this shape, so it lives in
-its own module that imports nothing from ``single_pass``.
+short-circuits. The tracked ``execution.controller.prepare_run`` consumes this shape, and
+it lives in its own module that imports nothing from ``single_pass``.
 ``pipeline.single_pass`` re-exports both names, so
 ``from content_pipeline.pipeline.single_pass import Gate, run_gates`` keeps
 working.

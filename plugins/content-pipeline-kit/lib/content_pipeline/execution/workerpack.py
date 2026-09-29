@@ -64,6 +64,7 @@ from content_pipeline.execution.model import (
     UnitRecord,
     UnitState,
 )
+from content_pipeline.execution.protocol import PROTOCOL_VERSION
 from content_pipeline.execution.store import ExecutionStore
 from content_pipeline.execution.wave import is_graph_strategy, ready_wave
 from content_pipeline.pipeline.workunit import WorkUnitStrategy
@@ -279,7 +280,7 @@ def _envelope_payload_text(verb: str, run_id: str, unit_id: str, worker_id: str)
     """
     if verb == "read":
         envelope = {
-            "protocol_version": "1",
+            "protocol_version": PROTOCOL_VERSION,
             "verb": verb,
             "payload": {"run_id": run_id, "unit_id": unit_id, "worker_id": worker_id},
         }
@@ -289,7 +290,7 @@ def _envelope_payload_text(verb: str, run_id: str, unit_id: str, worker_id: str)
     if verb == "submit":
         return (
             "{\n"
-            '  "protocol_version": "1",\n'
+            f'  "protocol_version": {json.dumps(PROTOCOL_VERSION)},\n'
             f"  \"verb\": {json.dumps(verb)},\n"
             '  "payload": {\n'
             f"    \"run_id\": {json.dumps(run_id)},\n"
@@ -303,7 +304,7 @@ def _envelope_payload_text(verb: str, run_id: str, unit_id: str, worker_id: str)
     # unquoted so the worker supplies one JSON string literal via json.dumps.
     return (
         "{\n"
-        '  "protocol_version": "1",\n'
+        f'  "protocol_version": {json.dumps(PROTOCOL_VERSION)},\n'
         f"  \"verb\": {json.dumps(verb)},\n"
         '  "payload": {\n'
         f"    \"run_id\": {json.dumps(run_id)},\n"
@@ -538,7 +539,7 @@ def claim_envelope_text(run_id: str, unit_id: str, worker_id: str) -> str:
     ``_claim``'s ``_resolve_lease_seconds`` -- this lane never sends one, so
     the mount's own derivation/explicit ``lease_seconds`` governs)."""
     envelope = {
-        "protocol_version": "1",
+        "protocol_version": PROTOCOL_VERSION,
         "verb": "claim",
         "payload": {"run_id": run_id, "unit_id": unit_id, "worker_id": worker_id},
     }

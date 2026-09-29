@@ -81,7 +81,7 @@ def _last_attempt_error(store: ExecutionStore, run_id: str, unit_id: str) -> str
 
 def _fail_envelope(*, run_id="r1", unit_id="u0", fencing_token=1, error_text: str) -> dict:
     return {
-        "protocol_version": "1",
+        "protocol_version": "2",
         "verb": "fail",
         "payload": {
             "run_id": run_id,
@@ -258,7 +258,7 @@ def test_protocol_handlers_mapping_is_used_without_building_default_handlers(sto
 
     commands = build_commands(store, protocol_handlers={"custom": handler})
     _set_stdin(monkeypatch, json.dumps({
-        "protocol_version": "1",
+        "protocol_version": "2",
         "verb": "custom",
         "payload": {"value": "ok"},
     }))

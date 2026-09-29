@@ -45,6 +45,7 @@ from .markdown_heuristics import (
     strip_code_fences,
     type_signals,
 )
+from .instruction_files import is_active_instruction_file
 from .schema_engine import validate
 from .schema_registry import (
     PORTABLE_UNIT_ROOTS,
@@ -1050,6 +1051,12 @@ def audit(skill_md_path: Path, resolved: "ResolvedStandards | None" = None) -> d
 
     if skill_md_path.name.lower() == "claude.md":
         return audit_claude_md(skill_md_path, content, resolved)
+    if skill_md_path.name.lower() == "agents.md":
+        # An AGENTS.md is an instruction file only when its directory has no
+        # CLAUDE.md; a shadowed one is not audited.
+        if is_active_instruction_file(skill_md_path):
+            return audit_claude_md(skill_md_path, content, resolved)
+        return {"error": f"not audited: {skill_md_path} is shadowed by a CLAUDE.md in the same directory"}
 
     skill_dir = skill_md_path.parent
 

@@ -417,7 +417,8 @@ Scope. Project-standard compliance only. Every issue you report uses the reason
 the rule, you do not have a finding.
 
 Governing standards. The standards live in CLAUDE.md files inside this
-repository. For each file in the diff, the governing CLAUDE.md files are the
+repository; a directory with no CLAUDE.md but an AGENTS.md uses the AGENTS.md
+as its CLAUDE.md, and an AGENTS.md beside a CLAUDE.md is ignored. For each file in the diff, the governing CLAUDE.md files are the
 one in that file's own directory and every CLAUDE.md in a parent directory up
 to the repository root. A CLAUDE.md that does not share a path with the file
 being reviewed does not govern it -- never cross-apply a rule between

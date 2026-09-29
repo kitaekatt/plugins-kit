@@ -451,9 +451,9 @@ the context that produced them is a self-check, and Step 3b is what the phrase
 The following settled rules remain part of the assessment contract:
 
 - It reuses the AUTHORING direction's existing observation kinds
-  (`claude-md-standards.md:385-390`), which already define what is worth writing
+  (`claude-md-standards.md` section 3.2, "High-value observation kinds, per shape"), which already define what is worth writing
   up. The gap was never a missing vocabulary; it is that the audit direction
-  refuses to look (`:431-433`, "a validator over existing claims, not a gotcha
+  refuses to look (section 3.6, "Audit direction: the CD criteria", "a validator over existing claims, not a gotcha
   crawler").
 - Every finding is JUDGMENT severity. Nothing here is mechanical.
 - A fact already carried by an ambient claim that RESOLVES is not a candidate.

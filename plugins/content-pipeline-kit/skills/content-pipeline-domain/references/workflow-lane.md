@@ -8,11 +8,11 @@ onto that lane -- the mount owner, not the session orchestrating a run (that
 procedure is `Skill(content-pipeline-kit:workflow-pipeline)`).
 
 Both lanes speak the same protocol described in `session-recipients.md` --
-the same `{"protocol_version": "1", "verb": ..., "payload": ...}` envelope
+the same `{"protocol_version": "2", "verb": ..., "payload": ...}` envelope
 in, the same typed `{"ok": ...}` reply out, the same `WorkerCommand`,
 `environment`, and `expected_unit_seconds` adapter fields. Everything in
 that reference about the protocol, the allowlist principle, the fence line,
-and reconciliation on resume applies here unchanged. What differs is who
+and repeat-safe apply on resume applies here unchanged. What differs is who
 claims, who renews, and how a run is assembled.
 
 ## How this lane differs from the background lane

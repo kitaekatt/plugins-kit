@@ -256,7 +256,7 @@ class TestShippedDefaults:
         models = [model for row in data["routing"] for model in row["models"]]
         assert models == [
             "sol",
-            "fable",
+            "opus",
             "sol",
             "sonnet",
             "sonnet",
@@ -1414,7 +1414,7 @@ class TestCodexAbsentVariant:
     def test_agent_member_is_the_default_when_the_registry_model_is_unreachable(self, without):
         row = _row_lines_matching(without, "`load-bearing`")
         entries = [line.split()[0] for line in row[1:] if not line.strip().startswith("- ")]
-        assert entries == ["fable", "sol"]
+        assert entries == ["opus", "sol"]
         assert "[default]" in row[1]
         assert "unreachable" in row[2]
 
@@ -2677,3 +2677,13 @@ class TestOneOrchestrationContract:
         assert "no eligible worker" in rationale
         assert "plan or decision under review" in lexicon
         assert "optional coordination and read-only work" in lexicon
+
+
+def test_shipped_defaults_never_route_to_fable():
+    """fable stays configurable, but no shipped row or example selects it."""
+    data = shipped()
+    assert all("fable" not in row["models"] for row in data["routing"])
+    assert all(
+        example.get("requires_model") != "fable"
+        for example in data["announce"]["examples"]
+    )

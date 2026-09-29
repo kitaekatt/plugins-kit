@@ -231,8 +231,8 @@ class TestMdDomainContributorPresent:
             # ...and the reference doc carries the long form of both tiers
             ref = gen.render_md_domain_review(vcs)
             assert "WITHOUT any `--claim` flags" in ref
-            assert "--claim '**/CLAUDE.md' --claim '**/SKILL.md'" in ref
-            assert "--claim '**/CLAUDE.md' --claim '**/SKILL.md'" in body
+            assert "--claim '**/CLAUDE.md' --claim '**/AGENTS.md' --claim '**/SKILL.md'" in ref
+            assert "--claim '**/CLAUDE.md' --claim '**/AGENTS.md' --claim '**/SKILL.md'" in body
 
     def test_skill_references_are_claimed_and_routed_to_the_skill_lane(self):
         """The 2026-07-28 carve-out is RETIRED, and both halves must move together.

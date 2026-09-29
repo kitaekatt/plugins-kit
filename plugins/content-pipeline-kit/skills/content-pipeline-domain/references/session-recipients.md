@@ -11,7 +11,7 @@ instead of the smaller one a `-p` call draws from. This reference is for a
 developer wiring a project's own content-pipeline run onto that transport --
 what a session recipient is, how to mount the protocol it speaks, what your
 `RunAdapter` must declare, the allowlist your worker needs, and the
-reconciliation obligation that comes with resuming a run.
+repeat-safe apply that lets an interrupted run resume.
 
 ## The protocol a session recipient speaks
 
@@ -20,7 +20,7 @@ versioned JSON protocol -- one envelope in, one envelope out -- that you mount
 on your own entry point:
 
 ```json
-{"protocol_version": "1", "verb": "read", "payload": {"run_id": "...", "unit_id": "..."}}
+{"protocol_version": "2", "verb": "read", "payload": {"run_id": "...", "unit_id": "..."}}
 -> {"ok": true, "result": {...}}
 -> {"ok": false, "error": {"type": "...", "message": "..."}}
 ```
@@ -178,9 +178,12 @@ CLI 2.1.284, 2026-09-29): `--agent content-pipeline-kit:pipeline-worker` printed
 `warning: no agent named 'content-pipeline-kit:pipeline-worker' -- spawning with
 default template` and launched anyway, exit code unchanged. The warning goes to
 the launcher's output, which `dispatch_wave` reports as `launch_stderr` only on
-a failed launch, so do not expect to see it. Whether enabling the plugin in the
-project's own settings restores the agent under `--setting-sources project` was
-not probed.
+a failed launch, so do not expect to see it. Enabling the plugin in the
+project's own settings did not restore the agent (live probe, claude CLI 2.1.284,
+2026-09-29): with `{"enabledPlugins": {"content-pipeline-kit@plugins-kit": true}}`
+in the launch folder's `.claude/settings.json`, two launches printed the same
+`no agent named` warning. The sessions' logs could not be read, so what the
+sessions then did is unobserved.
 
 Build your worker's allowlist from those six computed strings, not from a
 broader grant (e.g. "any invocation of my protocol mount"). A broad grant
@@ -230,28 +233,31 @@ dispatch again in either lane.
 
 A run can be interrupted between recording that a unit's apply started and
 recording that it succeeded -- a crash mid-finalize, a killed dispatcher
-process. Resuming a run with any unit left in that in-between state is
-refused by default: the library will not silently re-apply a unit whose apply
-may already have landed, because doing so risks a duplicate external side
-effect (a duplicate file write, a duplicate changelist edit) with no way to
-tell afterward that it happened twice.
+process. The status digest lists such units in `apply_started_unit_ids`.
+Recovery is to run finalize again: it applies every accepted unit whose last
+apply outcome is neither succeeded nor rejected, so the interrupted unit is
+applied a second time.
 
-To resume past that state safely, your adapter must supply a reconciliation
-hook: given a unit id, answer "did this unit's apply already land." Whether
-that question is answerable cheaply depends on your write shape, not on
-which version-control system you use. A deterministic read-modify-write of a
-single keyed record (a CSV row, a database row) is easy to reconcile: compare
-the record's current values against what the payload would have written, and
-you have your answer with no version-control query at all. A whole-file
-rewrite generally has no such marker and should stay fail-closed -- supply no
-reconciliation hook, and accept that a run interrupted mid-apply needs a
-human to look at the affected units before it can resume.
+That is safe only because your adapter's `apply` must be repeat-safe. For the
+same run, unit, and payload it sets the complete desired end state; it never
+appends:
 
-Do not treat your version-control system's own state (a file open for edit,
-a pending changelist) as a reconciliation signal by itself: an open-for-edit
-file can carry stale or partial content, so its mere existence tells you
-nothing about whether the write that mattered actually completed. Build
-reconciliation from your data's own shape, not from VCS bookkeeping.
+- Upsert keyed data. A CSV or database row is written by its stable key (a
+  line id), so a second write of the same payload leaves the same row.
+- Rewrite a whole file from the payload, writing only when the content
+  differs. `deliver.inplace.apply_inplace` already works this way.
+- Find or create any external container, such as a changelist, by a tag that
+  carries the run id, so a repeat reuses the container the first attempt
+  created instead of opening a second one. `deliver.inplace.deliver_changeset`
+  mints a new changeset when it is given none, so under an adapter pass it
+  the found-or-created run-tagged changeset through `changeset=`.
+
+Raise `execution.model.ApplyRejected` only when you know no side effect
+occurred; that outcome is terminal and finalize does not retry it. Any other
+exception leaves the unit retryable by the next finalize. There is no
+reconciliation hook: `RunAdapter.reconcile` was removed in 0.28.0. An adapter that still
+passes `reconcile=` fails at construction with `TypeError`; make its `apply`
+repeat-safe and drop the argument.
 
 ## What bounds a worker's verbs
 

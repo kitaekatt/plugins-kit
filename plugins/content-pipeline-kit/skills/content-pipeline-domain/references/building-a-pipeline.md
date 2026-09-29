@@ -2,9 +2,10 @@
 
 A stepped procedure for building a NEW pipeline on `content_pipeline`. Each
 step names the sub-package it composes from, states the decision it forces,
-and shows the real API. Steps 1-6 build a minimal working pipeline; steps
-7-11 add the opt-in guardrails (each is a component you register only when
-you want its signal -- a minimal pipeline needs none of them).
+and shows the real API. Steps 1-6 plus the tracked run loop (see "The tracked
+path" in step 10) build a minimal working pipeline; the rest of steps 7-11
+add the opt-in guardrails (each is a component you register only when you
+want its signal -- a minimal pipeline needs none of them).
 
 Illustrative domains used throughout, both neutral: a **product-copy
 generator** that regenerates catalog blurbs by mutating authored rows in
@@ -16,17 +17,14 @@ package re-exports nothing eagerly -- import the submodule you need.
 
 ## 1. Pick the pipeline shape
 
-Two shapes ship, in `pipeline`:
+Two shapes ship:
 
-- **`single_pass.run_single_pass`** -- the regenerate-on-stale, two-phase
-  generate/apply shape. Each unit is classified for freshness, generated once
-  if stale, then applied. `run_single_pass` is the minimal teaching and test
-  harness for this shape: a deprecated untracked loop (it emits a
-  `DeprecationWarning`, keeps no durable run record, and its halt behavior is
-  frozen). A production pipeline runs the same shape through the tracked path,
-  `ExecutionStore.register_units` + `execution.controller.prepare_run` + `execution.drivers.inline.run_wave` +
-  `execution.controller.finalize_run` (see "Deprecated loop helpers" in step
-  10); the gate, freshness and generate seams are the same on both.
+- **The regenerate-on-stale, two-phase generate/apply shape** -- each unit is
+  classified for freshness, generated once if stale, then applied. It runs on
+  the tracked path: `ExecutionStore.register_units` +
+  `execution.controller.prepare_run` + `execution.drivers.inline.run_wave` +
+  `execution.controller.finalize_run` (see "The tracked path" in step 10). The
+  gate, freshness and generate seams plug into `prepare_run`.
 - **`convergence_loop.run`** -- the `grade -> select -> apply -> fill` cycle,
   driven to a `CONVERGED` / `STALLED` verdict. Use it only when a unit needs
   multiple candidate values graded against a signal before a winner is picked.
@@ -37,24 +35,6 @@ measure) and pays off only when "generate once and apply" cannot express the
 work. The product-copy generator that writes one blurb per product is
 single-pass; a variant that generates three blurbs per product and grades
 them for tone before selecting is convergence-loop.
-
-The snippet below is the minimal harness form of the shape, for learning and
-tests; do not build a production pipeline on it.
-
-```python
-from content_pipeline.pipeline import single_pass
-
-outcomes = single_pass.run_single_pass(
-    units,
-    freshness_of=classify_unit,     # WorkUnit -> FreshnessState  (step 4)
-    generate=generate_unit,         # WorkUnit -> candidate       (step 5/6)
-    apply=apply_unit,               # (WorkUnit, candidate) -> None (step 7)
-)
-```
-
-`run_single_pass` catches `generate` / `apply` exceptions per unit and
-surfaces them as an `ERROR` `UnitOutcome`, so one bad unit never aborts the
-sweep -- the bulk driver (step 10) decides whether an error class should halt.
 
 For convergence-loop, `run(store, grade=, select=, apply=, fill=, measure=,
 max_cycles=)` drives the four stages in the fixed order grade -> select ->
@@ -444,15 +424,9 @@ Add, as needed:
 
 - **`cli.budget`** -- the preflight / hard-stop guard. `preflight_check(probe)`
   re-raises an auth/credit halt as `BudgetStop` before any unit runs;
-  `guarded_sweep(units, worker)` halts the sweep cleanly on the first
-  `PipelineHaltError` (429/401), recording done/remaining for a resume.
-  **`guarded_sweep` is deprecated** (see "Deprecated loop helpers" below);
-  `BudgetStop`, `SweepResult`, `preflight_check` and `check_response` are not.
-- **`cli.bulk`** -- `run_bulk(units, worker, warm=...)`, the two-phase
-  cache-warm bulk worker. The `warm` callable owns cache priming; the worker
-  phase runs the same sweep as `guarded_sweep`, so a halt stops cleanly with
-  partial progress. **`run_bulk` is deprecated**; it emits one warning per
-  call.
+  `check_response` raises `PipelineHaltError` on a hard-stop response text.
+  The tracked `run_wave` records a halt itself (see "The tracked halt
+  contract" below).
 - **`cli.unsupported`** -- the sticky-stub registry. An `UnsupportedRegistry`
   (passed by the caller, persistable) records a unit as structurally
   unsupported once, so a pipeline that cannot handle a unit's shape stops
@@ -461,17 +435,15 @@ Add, as needed:
   the record. Prefer an explicit registry over the module-level
   `mark_unsupported` (process-global state does not round-trip).
 
-Wire the sticky gate into `run_single_pass` via its `mark_unsupported` hook
+Wire the sticky gate into `prepare_run` via its `mark_unsupported` hook
 and a `Gate(name, predicate, sticky=True)`. `Gate` and `run_gates` live in
-`pipeline.gate` (also importable from `pipeline.single_pass`); the tracked
-`prepare_run` takes the same `gates` and `mark_unsupported` arguments.
+`pipeline.gate` (also importable from `pipeline.single_pass`).
 
-### Deprecated loop helpers
+### The tracked path
 
-`single_pass.run_single_pass`, `cli.budget.guarded_sweep` and
-`cli.bulk.run_bulk` each emit a `DeprecationWarning` once per call (a
-`run_bulk` call warns once, not twice). They keep no durable run record and
-their behavior is otherwise unchanged. The tracked path is:
+The untracked loop helpers `single_pass.run_single_pass`,
+`cli.budget.guarded_sweep` and `cli.bulk.run_bulk` were removed in
+content-pipeline-kit 0.28.0. A caller migrating off them uses the tracked path:
 
 1. `ExecutionStore.create_run`, then `ExecutionStore.register_units(run_id,
    unit_ids)` -- the store records the run and its units (the CLI's
@@ -501,14 +473,13 @@ out the lease, or stop and report it; if the run is not halted
 and `unfinished_units` is empty, it is complete. Cap the loop, and stop when
 one full pass changes nothing.
 
-**Migrating a `BudgetStop` caller.** `guarded_sweep` records the tripping unit
-as `BudgetStop.unit_id` and builds `remaining` as the units AFTER it, so a
-caller resuming from the stop must rebuild the full unfinished set as
+**Migrating a `BudgetStop` caller.** The removed `guarded_sweep` recorded the
+tripping unit as `BudgetStop.unit_id` and built `remaining` as the units AFTER
+it, so a resuming caller had to rebuild the unfinished set as
 `[trigger] + remaining`. On the tracked path there is no such reassembly:
 `unfinished_units(store, run_id)` returns every unit without a terminal state,
 in original ordinal order, and the halt-triggering unit is already in it
-(it was returned to `PENDING`). Read that set instead of `[trigger] +
-remaining`.
+(it was returned to `PENDING`).
 
 **The tracked halt contract.** When generating a unit raises
 `PipelineHaltError` (from `generate` itself, or from the backend inside
@@ -554,24 +525,9 @@ LLM-free).
 Every test that exercises pipeline logic scripts a `MockBackend` (step 6) and
 a `NullVcs` (step 7), so the whole pipeline runs deterministically with no
 real LLM call and no real VCS mutation. Because `freshness` is pure, `store`
-is data-only, and the LLM and VCS seams are injected, a full single-pass run
-is testable end to end in memory:
-
-```python
-from content_pipeline.pipeline import single_pass
-from content_pipeline.llm.backends import MockBackend
-from content_pipeline.vcs.null_vcs import NullVcs
-
-backend = MockBackend(responses=["generated blurb"])
-# run_single_pass is deprecated (step 10): it warns, but stays a compact
-# in-memory harness for tests.
-outcomes = single_pass.run_single_pass(
-    units, freshness_of=classify_unit,
-    generate=lambda u: generate_with(backend, u),
-    apply=lambda u, c: apply_with(NullVcs(), u, c),
-)
-assert [o.disposition for o in outcomes] == [single_pass.Disposition.GENERATED]
-```
+is data-only, and the LLM and VCS seams are injected, a full run through the
+tracked inline driver (`prepare_run`, `run_wave`, `finalize_run`) is testable
+end to end in memory.
 
 Reserve `OpenRouterBackend` / `ClaudeCliBackend` and a real `GitVcs` for
 actual runs.

@@ -561,7 +561,7 @@ class TestFleetConfigLayer:
         # shipped harness/model are still there rather than replaced.
         assert cfg["endpoints"]["fable"]["conserve_usage"] == {"pool": "seven_day"}
         assert cfg["endpoints"]["fable"]["harness"] == "claude"
-        assert cfg["endpoints"]["fable"]["model"] == "claude-fable-5"
+        assert cfg["endpoints"]["fable"]["model"] == "fable"
 
     def test_the_machine_layer_outranks_the_fleet_layer(self, tmp_path, monkeypatch):
         # Same reasoning as settings.local.json over settings.json: a

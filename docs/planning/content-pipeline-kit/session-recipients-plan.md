@@ -80,7 +80,10 @@ it is the risk this decision knowingly carries.
 ## Architectural assessment
 
 Carried forward from the code-level analysis; every line citation here was
-re-verified against source.
+re-verified against source. These citations describe the source as it stood
+before content-pipeline-kit 0.28.0 (commit 6fd94fcf^), where the cited modules
+and symbols (`cli/bulk.py`, `run_single_pass`, `_guarded_sweep`,
+`UnitOutcome`, `SweepResult`) were removed.
 
 **The seam that fits is a run, not a wider backend.** `LLMBackend` is a coherent
 one-call transport protocol: `complete(system, user, *, model, options) ->
@@ -303,25 +306,37 @@ constant.
 `renew` verb. Rejected for the workflow lane (unreliable from a reasoning
 agent); retained as the mechanism the *dispatcher* uses in the background lane.
 
-### D6. `apply_unknown` fails closed; the library ships reconciliation for its own deliver modes
+### D6. Apply is convergent and retryable after interruption
 
-**Decision.** Finalize records `apply_started` before and `apply_succeeded`
-after each unit's apply. A crash between them leaves the unit `apply_unknown`.
-Resume with any `apply_unknown` unit **refuses to proceed** unless the adapter
-provides a reconciliation hook that answers "did this apply land". The library
-ships default reconciliation for its own `deliver` modes, whose marker-protected
-writes make landing mechanically checkable (`deliver/inplace.py:170-391` --
-**inferred** from the marker design; confirming that every shipped deliver mode
-supports it is an A-min.3 implementation task, and any mode that cannot stays
-fail-closed).
+**Decision.** Finalize records `apply_started` before calling
+`RunAdapter.apply` and `apply_succeeded` after it returns. `apply` must set
+the complete desired end state and be safe to repeat for the same run, unit,
+and payload: upsert keyed data and find-or-create stable external objects,
+never append duplicates. Finalize retries every accepted unit whose last apply
+outcome is neither `APPLY_SUCCEEDED` nor `APPLY_REJECTED`. `ApplyRejected`
+remains terminal and is valid only when no side effect occurred. There is no
+reconciliation hook or `apply_unknown` state.
 
 **Reason.** Exactly-once external side effects across a crash are unattainable
-without consumer idempotency; the synchronous path has the same crash window
-with zero recording. The tri-state narrows and names the window; a warning that
-lets resume proceed would let a duplicate apply happen silently.
+without consumer idempotency, so the contract asks the consumer for the
+property replay actually needs: convergence, one end state however many times
+apply runs. With it, recovery from any interruption is the same action --
+run finalize again -- and needs no extra state, error type, or per-consumer
+hook.
 
-**Rejected alternative.** Warn-and-continue. Rejected: it converts a named
-window into a silent one.
+**Rejected alternative.** The earlier D6: an interrupted apply read as
+`apply_unknown`, finalize refused on it (`ApplyUnknownError`), and an optional
+adapter `reconcile` hook answered "did this apply land". Rejected: it added a
+state, a typed error, and a hook per consumer, and a whole-file-rewrite
+consumer still needed a human before a run could resume.
+
+**Superseded 2026-09-29.** The earlier decision ("`apply_unknown` fails closed;
+the library ships reconciliation for its own deliver modes") was replaced by
+the user's ruling: "i do think it's important to be able to interrupt runs,
+start them again, and have the result be consistent. I want to make sure we
+aren't building endless amounts of error handling though. I like simple
+elegant solutions that survive interruption." The finding below is kept as the
+history of that earlier decision.
 
 **Later empirical finding, 2026-08-17 -- evidence, not a change to this
 decision.** A read-only scoping pass over two real consumers shows the
@@ -348,6 +363,11 @@ telemetry, and nothing establishes they run the warning release even once before
 a breaking one. Under this plan's sequencing the question loses urgency --
 deprecation sits in A-cleanup and gates nothing.
 
+**Note (2026-09-29).** The user waived this evidence rule and ruled the helpers
+removable in 0.28.0: "I'm comfortable removing this now, I am the only
+consumer, I'll fix it as I go." The decision text above is unchanged; the
+waiver rests on there being one consumer, who accepts the break.
+
 ## Invariants
 
 One-line contracts, enforced by A-min tests and restated in the protocol
@@ -357,12 +377,16 @@ reference:
    claim; a stale token is rejected with a typed error.
 2. Halt blocks new claims; it never rejects a submission carrying a valid
    fencing token.
-3. Finalize is idempotent: given `apply_started`/`apply_succeeded` records,
-   re-running finalize applies each unit at most once and refuses on
-   `apply_unknown` absent reconciliation.
+3. Finalize is convergent: it skips only `APPLY_SUCCEEDED` and
+   `APPLY_REJECTED`; every other accepted unit is applied again in ordinal
+   order, and repeat-safe `RunAdapter.apply` produces the same durable end
+   state after interruption.
 4. Lease expiry of a still-live worker can duplicate spend, never side effects:
    apply happens only inside serial finalize, and a fenced-out late submission
-   is recorded as superseded, not applied.
+   is recorded as superseded, not applied. "Never side effects" means never a
+   second durable effect, not one apply call: after an interruption finalize
+   may call apply twice for one unit (invariant 3), and repeat-safe apply
+   leaves one end state.
 5. Submit-time acceptance is authoritative; finalize never re-adjudicates a
    verdict.
 6. The status digest never contains prompts, unit payloads, or full outputs.
@@ -466,9 +490,9 @@ pipelines.
 unfinished; holes in the unfinished set; resume without replaying accepted
 units; stable finalize order; one-unit dependent waves; flat readiness; refusal
 of unsafe graph parallelism; D3 key-equality regression; D4 post-halt
-valid-fence submission accepted, stale-fence rejected; finalize idempotence and
-`apply_unknown` refusal. All existing legacy-loop tests remain untouched and
-green.
+valid-fence submission accepted, stale-fence rejected; finalize idempotence and,
+under D6 as revised 2026-09-29, convergent replay of an interrupted apply. All
+existing legacy-loop tests remain untouched and green.
 
 **Exit criterion.** Equivalent three-unit legacy and tracked inline runs produce
 equivalent applied content and identical cache keys; a forced halt leaves an
@@ -484,14 +508,15 @@ submit | fail | renew | status | pause | resume | finalize` -- as mountable
 handlers a consumer wires onto its own entry point (the no-console-script
 boundary holds; `cli.scaffold.dispatch` remains the human-facing helper). A
 `RunAdapter` protocol: reconstruct unit by ID, build a prepared request,
-provide the `ValidationSpec`, apply a payload, and optionally reconcile an
-`apply_unknown` (D6); adapter identity/version recorded in the run, incompatible
+provide the `ValidationSpec`, and apply a payload repeat-safely (D6); adapter
+identity/version recorded in the run, incompatible
 resume refused. `evaluate_submission(text, spec)` extracted from
 `submit_validated`, which now calls it -- byte-compatible feedback and rejection
 ordering, verified by existing tests. `ResponseCache.store` becomes atomic
 (same-directory temp file + `os.replace`), replacing the direct `write_text`
-(`llm/platform.py:542-545`). Default reconciliation for the shipped `deliver`
-modes where the marker design supports it (D6).
+(`llm/platform.py:542-545`). No library-supplied apply reconciliation: D6
+(revised 2026-09-29) makes apply convergent instead, and the shipped `deliver`
+modes document how an adapter stays repeat-safe over them.
 
 **Security posture.** Trusted policy (adapter import path, database path) is
 local configuration supplied by the consumer's own entry point; unit content is
@@ -508,7 +533,7 @@ domain references.
 **Tests.** Every verb; malformed envelopes; version incompatibility refusal;
 claim fencing across subprocesses; validation/feedback parity with
 `submit_validated`; Windows paths; concurrent cache writers; interrupted temp
-writes; deliver-mode reconciliation; subprocess tests proving fresh invocations
+writes; repeat-safe delivery; subprocess tests proving fresh invocations
 share only durable state.
 
 **Exit criterion.** Several short-lived local processes claim, read, submit,
@@ -909,9 +934,9 @@ only. Named pass/fail items:
 6. **Apply through finalize, against a consumer with a real external side
    effect.** Added 2026-08-17 because the light tests of P14 covered the
    transport only: no cell exercised an apply with a version control side
-   effect, so finalize's `apply_started`/`apply_succeeded` recording, D6's
-   fail-closed behavior, and reconciliation have never been observed against
-   anything but a sandboxed side-copy. This is the gate item the transport
+   effect, so finalize's `apply_started`/`apply_succeeded` recording and
+   D6's convergent replay of an interrupted apply have never been observed
+   against anything but a sandboxed side-copy. This is the gate item the transport
    evidence does not touch, and it is why first-pass-dialog is the B gate
    consumer.
 
@@ -1112,10 +1137,13 @@ own sake.
   `platform.response_cost` does (reported cost, else a pricing-table
   estimate, else `None`). llm-scripting-kit's `completion/backends.py` repeats
   the flat-zero claim; that copy is left for the llm-effort work.
-- (5) Still open. D7 needs both known consumers migrated, or six months after
-  the deprecation release; `loc.py` still calls `guarded_sweep`. The window
-  starts at the release carrying (1), content-pipeline-kit 0.27.0, which is
-  not yet published.
+- (5) Done (2026-09-29). `run_single_pass`, `guarded_sweep` and `run_bulk`
+  are removed in content-pipeline-kit 0.28.0, with their tests. The user
+  waived D7's evidence rule as the only consumer (see D7's note). `cli.budget`
+  keeps `BudgetStop`, `preflight_check` and `check_response`;
+  `pipeline/single_pass.py` keeps `run`, `seed_for` and the `Gate` /
+  `run_gates` aliases. `loc.py`'s `guarded_sweep` call in the consuming
+  repository breaks and is the consumer's to migrate.
 - (6) Done. `Gate` and `run_gates` live in `pipeline/gate.py`;
   `pipeline/single_pass.py` re-exports both, and the aliases are tested by
   `test_pipeline_gate_aliases.py`.
@@ -1207,12 +1235,23 @@ invented the banner string themselves and so agreed with the bug.
 ## Breaking changes and migration
 
 Under this sequencing, **A-min, B, and C contain no breaking changes.** The
-breaking surface is confined to A-cleanup, and within it:
+breaking surface is confined to A-cleanup and to the 0.28.0 items below, and
+within it:
 
 - **Untracked loop helpers** (`run_single_pass`, `guarded_sweep`, `run_bulk`
-  without a store): behavior frozen (D2), deprecation warnings added in
-  A-cleanup, removal keyed to D7's evidence rule. `call_llm` and
-  `submit_validated` are not deprecated and remain first-class.
+  without a store): behavior frozen (D2), then removed in 0.28.0 (commit
+  6fd94fcf) under the user's waiver of D7's evidence rule, recorded under D7.
+  `call_llm` and `submit_validated` are not deprecated and remain first-class.
+- **0.28.0, convergent apply (D6, revised 2026-09-29):**
+  - `RunAdapter.apply` must be repeat-safe: it sets an end state (upsert rows
+    by key; find-or-create a changelist tagged with the run id) and never
+    appends. Finalize applies an interrupted unit again.
+  - `ApplyUnknownError` and the `apply_unknown` state are removed; finalize no
+    longer refuses on an interrupted apply. `RunAdapter.reconcile` is removed:
+    a caller passing it gets a constructor `TypeError`.
+  - Protocol version `"2"`: the `status` reply's apply state `apply_unknown`
+    is `apply_started`, and `apply_unknown_unit_ids` is
+    `apply_started_unit_ids`. A `"1"` envelope is refused.
 - **Halt semantics:** corrected only on the tracked path -- a typed
   `HaltError` stops claiming and appears in run status with an unfinished set;
   it is never reduced to `UnitOutcome.ERROR` there. Consumers opting into
@@ -1292,7 +1331,8 @@ user can weigh it, and none changes a decision:
    `deliver/inplace.py:170-391` mechanics in detail, and the projection/
    changeset modes may not support it. D6 therefore promises reconciliation
    only where the marker design supports it, with fail-closed as the floor --
-   which weakens "most consumers never write the hook" to an aim.
+   which weakens "most consumers never write the hook" to an aim. Superseded
+   2026-09-29: D6 no longer promises reconciliation; apply is convergent.
 3. **"Finalize re-parses mechanically" leans on an unstated property.**
    `parse_fn` is arbitrary consumer code; the re-parse is mechanical only if
    `parse_fn` is deterministic and store-independent. The plan converts that
@@ -1311,12 +1351,13 @@ Genuinely open -- not settled by this plan, and none blocks A-min:
    codec instead of raw text plus deterministic re-parse? D1 makes re-parse the
    contract; a codec would relax the `parse_fn` determinism requirement and can
    be added compatibly later.
-2. What idempotency guarantee can the first real consumer provide for apply,
-   and does its deliver mode fall inside D6's shipped reconciliation? Partly
-   answered 2026-08-17 for two consumers (see the finding recorded under D6):
-   the answer tracks the write shape, cheap for a keyed per-row write and absent
-   for a whole-file rewrite. Still open in general, and still unexercised
-   against a real external side effect -- B2 item 6.
+2. Can the first real consumer make its apply repeat-safe, as D6 requires?
+   Partly answered 2026-08-17 for two consumers (see the finding recorded under
+   D6): the answer tracks the write shape. A keyed per-row write converges as an
+   upsert; a whole-file rewrite converges when it is a pure function of the
+   payload, and its version-control container must be found or created by run
+   id rather than minted per attempt. Still open in general, and still
+   unexercised against a real external side effect -- B2 item 6.
 3. Who owns the default database location convention and a cleanup command --
    the library documents a recipe today; does a consumer pattern justify more?
 4. Does status need cost aggregation beyond nullable per-attempt usage, and

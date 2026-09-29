@@ -113,6 +113,24 @@ def test_dispatch_refuses_protocol_version_mismatch(tmp_path):
     assert result["error"]["type"] == "ProtocolVersionError"
 
 
+def test_dispatch_refuses_a_protocol_v1_envelope(tmp_path):
+    """Protocol v2 renamed the status digest's apply_unknown state and
+    apply_unknown_unit_ids field; a v1 client must be refused, not silently
+    handed the v2 schema. The accept side is the v2 envelopes workerpack
+    emits, exercised end to end by test_worker_invocation_roundtrip.py and
+    test_workflow_contract.py."""
+    assert PROTOCOL_VERSION == "2"
+    store = _seeded_store(tmp_path)
+    handlers = build_handlers(store, _adapter(), strategy=FLAT_STRATEGY)
+    result = dispatch(_envelope("status", {"run_id": "run-1"}, version="1"), handlers)
+    assert result["ok"] is False
+    assert result["error"]["type"] == "ProtocolVersionError"
+    accepted = dispatch(_envelope("status", {"run_id": "run-1"}, version="2"), handlers)
+    assert accepted["ok"] is True
+    assert "apply_started_unit_ids" in accepted["result"]
+    assert "apply_unknown_unit_ids" not in accepted["result"]
+
+
 def test_dispatch_never_raises_it_always_returns_a_typed_reply(tmp_path):
     """The core 'refused loudly, not a traceback' contract: a handler
     exception (here, an unknown run) is caught by dispatch and rendered,

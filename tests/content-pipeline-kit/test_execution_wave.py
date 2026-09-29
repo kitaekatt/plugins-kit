@@ -209,7 +209,7 @@ def test_graph_readiness_re_withholds_after_apply_started_follows_apply_succeede
     """Attempts ordered [claim, accept, apply_succeeded, apply_started] --
     a LATER APPLY_STARTED after an APPLY_SUCCEEDED must RE-withhold the
     successor, because the true last apply-kind attempt is APPLY_STARTED
-    (apply_unknown), not APPLY_SUCCEEDED.
+    (an interrupted apply), not APPLY_SUCCEEDED.
 
     This pins two things the shipped code already gets right and a wrong
     implementation can get wrong independently:
@@ -332,7 +332,7 @@ def test_graph_block_reason_names_unapplied_accepted_predecessor(tmp_path):
     assert "finalize_run" in reason
 
 
-def test_graph_block_reason_names_apply_unknown_predecessor(tmp_path):
+def test_graph_block_reason_names_interrupted_apply_predecessor(tmp_path):
     store = _seeded_store(tmp_path)
     r0 = store.claim_unit("run-1", "u0", "worker-1")
     store.accept_unit("run-1", "u0", r0.fencing_token)
@@ -340,8 +340,9 @@ def test_graph_block_reason_names_apply_unknown_predecessor(tmp_path):
 
     reason = graph_block_reason(store, "run-1", GRAPH_STRATEGY)
     assert reason is not None
-    assert "apply_unknown" in reason
-    assert "reconcile" in reason
+    assert "previous apply has no recorded success" in reason
+    assert "rerun finalize_run" in reason
+    assert "reconcile" not in reason
 
 
 def test_graph_block_reason_names_terminally_failed_predecessor(tmp_path):

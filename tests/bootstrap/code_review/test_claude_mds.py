@@ -33,6 +33,21 @@ class TestCollectClaudeMds:
         assert Path(result[0]).read_text() == "src rule\n"
         assert Path(result[1]).read_text() == "root rule\n"
 
+    def test_agents_md_fallback_and_shadowing(self, tmp_path):
+        (tmp_path / "AGENTS.md").write_text("root agents\n")
+        sub = tmp_path / "src"
+        sub.mkdir()
+        (sub / "CLAUDE.md").write_text("src claude\n")
+        (sub / "AGENTS.md").write_text("src agents (shadowed)\n")
+        target = sub / "file.cpp"
+        target.write_text("code\n")
+
+        result = pr.collect_claude_mds(target, tmp_path)
+        assert [Path(p).read_text() for p in result] == [
+            "src claude\n",
+            "root agents\n",
+        ]
+
     def test_no_claude_md(self, tmp_path):
         sub = tmp_path / "src"
         sub.mkdir()

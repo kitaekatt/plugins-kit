@@ -55,7 +55,7 @@ failure mode that the term had been excluding before removing it.
 ```yaml
 routing:
 - shape: [novel, load-bearing]
-  models: [fable, sol]
+  models: [opus, sol]
 ```
 
 ### Moving a row
