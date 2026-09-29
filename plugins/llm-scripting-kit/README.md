@@ -439,8 +439,9 @@ opt-out: no effort is sent.
 `llm-scripting-kit resolve` reports `effort` (the value a call would send,
 null when the entry cannot deliver it), `declared_effort` and
 `effort_delivery`; `endpoints` reports `reasoning_effort` and
-`effort_delivery` for each transport entry and notes an entry whose
-`reasoning_effort` no style can deliver. The openrouter capability record
+`effort_delivery` for each transport entry. Registry loading rejects a
+transport entry whose declared `reasoning_effort` has no style that can deliver
+it. The openrouter capability record
 keeps `effort` in `dropped_params` (the truth for an unknown endpoint) and
 names it under `conditional_params`; `BackendSelection.capabilities` and
 `OpenRouterBackend.endpoint_capabilities()` are the record specialized to one

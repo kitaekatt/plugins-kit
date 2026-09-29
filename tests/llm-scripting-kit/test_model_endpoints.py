@@ -26,6 +26,7 @@ models:
     model: alpha-27b
     context_window: 262144
     reasoning_effort: medium
+    effort_style: top-level
   beta:
     base_url: http://beta.invalid:8080/v1
     model: beta-9b
@@ -668,12 +669,25 @@ class TestEffortResolutionOrder:
         assert resolve_effort_style(reg.entries["h"]).source == "none"
 
 
-class TestEffortWarnings:
-    def test_reasoning_effort_without_a_style_warns_once(self, tmp_path):
-        reg = _load_text(tmp_path, "models:\n" + _entry_yaml("a", "    reasoning_effort: medium\n"))
-        assert len(reg.notes) == 1
-        assert "'a'" in reg.notes[0] and "reasoning_effort 'medium'" in reg.notes[0]
-        assert "a" in reg.entries  # a warning, never a failure
+class TestEffortValidation:
+    def test_reasoning_effort_without_a_deliverable_style_is_an_error(self, tmp_path):
+        with pytest.raises(EndpointRegistryError) as exc:
+            _load_text(tmp_path, "models:\n" + _entry_yaml("a", "    reasoning_effort: medium\n"))
+        message = str(exc.value)
+        assert "entry 'a'" in message
+        assert "reasoning_effort 'medium'" in message
+        assert "declare an effort_style" in message
+        assert "remove reasoning_effort" in message
+
+    def test_reasoning_effort_with_a_delivering_style_loads(self, tmp_path):
+        reg = _load_text(
+            tmp_path,
+            "models:\n" + _entry_yaml(
+                "a", "    reasoning_effort: medium\n    effort_style: top-level\n"
+            ),
+        )
+        assert reg.entries["a"].reasoning_effort == "medium"
+        assert reg.notes == []
 
     def test_conflicting_declared_styles_warn(self, tmp_path):
         reg = _load_text(
@@ -686,9 +700,9 @@ class TestEffortWarnings:
         assert len(reg.notes) == 1
         assert "overrides its routing effort_style 'ninfer'" in reg.notes[0]
 
-    def test_current_fleet_shaped_registry_warns_only_for_the_unstyled_entry(self, tmp_path):
+    def test_current_fleet_shaped_registry_loads_with_deliverable_effort(self, tmp_path):
         """Mirrors the fleet registry's shapes: only the 64K entry, which
-        declares reasoning_effort but no style and no routing, warns."""
+        declares reasoning_effort with an explicit delivering style."""
         reg = _load_text(
             tmp_path,
             "default: fd\nmodels:\n"
@@ -697,7 +711,10 @@ class TestEffortWarnings:
                 "    reasoning_effort: medium\n"
                 "    routing: {group: q, order: 2, max_parallel: 1, effort_style: chat_template_kwargs}\n",
             )
-            + _entry_yaml("m5-64k", "    reasoning_effort: medium\n")
+            + _entry_yaml(
+                "m5-64k",
+                "    reasoning_effort: medium\n    effort_style: chat_template_kwargs\n",
+            )
             + _entry_yaml(
                 "gpu",
                 "    reasoning_effort: medium\n"
@@ -708,5 +725,4 @@ class TestEffortWarnings:
             + _entry_yaml("fd", "    frontdoor: true\n    reasoning_effort: medium\n")
             + "  h:\n    harness: opencode\n    model: p/m\n",
         )
-        assert len(reg.notes) == 1, reg.notes
-        assert "'m5-64k'" in reg.notes[0]
+        assert reg.notes == []

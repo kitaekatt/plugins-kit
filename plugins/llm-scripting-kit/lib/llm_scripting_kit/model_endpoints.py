@@ -73,9 +73,9 @@ sent. A declared-but-invalid style resolves to none and does not fall through:
 a typo never picks a wire format. The front door, forwarding to a deployment,
 uses the entry's ``effort_style`` when declared and otherwise
 ``routing.effort_style``, whose omission still means ``top-level``
-(:func:`deployment_effort_style`). ``load_endpoint_registry`` notes -- never
-fails on -- a transport entry whose ``reasoning_effort`` no style can deliver,
-and an entry whose two declared styles disagree.
+(:func:`deployment_effort_style`). ``load_endpoint_registry`` rejects a
+transport entry whose ``reasoning_effort`` has no deliverable style, and notes
+an entry whose two declared styles disagree.
 """
 
 from __future__ import annotations
@@ -435,16 +435,17 @@ def deployment_effort_style(entry: EndpointEntry) -> Optional[str]:
 
 
 def effort_notes(entry: EndpointEntry, *, source: str) -> list[str]:
-    """Registry warnings about ``entry``'s effort declaration (never errors)."""
+    """Validate strict effort declarations and return remaining registry notes."""
     notes: list[str] = []
     if entry.kind != TRANSPORT_KIND:
         return notes
     if entry.reasoning_effort is not None and not resolve_effort_style(entry).deliverable:
-        notes.append(
+        raise EndpointRegistryError(
             f"{source}: entry '{entry.id}' declares reasoning_effort "
-            f"'{entry.reasoning_effort}' but resolves no deliverable effort style, so a "
-            "direct call does not send it; declare effort_style (top-level, ninfer or "
-            "chat_template_kwargs)"
+            f"'{entry.reasoning_effort}' but resolves no deliverable effort style; "
+            "declare an effort_style (top-level | ninfer | chat_template_kwargs), "
+            "or remove reasoning_effort (or set effort_style: unsupported and "
+            "remove reasoning_effort)"
         )
     routing = entry.routing
     if (
@@ -530,7 +531,8 @@ def load_endpoint_registry(
     Raises:
         EndpointRegistryError: a dangling override path, an unparseable file,
             or a file whose top-level schema/default is invalid. Individual
-            entry defects are recorded in ``EndpointRegistry.notes``.
+            entry defects are recorded in ``EndpointRegistry.notes``, except a
+            declared effort with no deliverable style, which is an error.
     """
     env = os.environ if environ is None else environ
     path, explicit = _resolve_registry_path(env)

@@ -212,6 +212,7 @@ models:
     model: alpha-27b
     context_window: 262144
     reasoning_effort: medium
+    effort_style: top-level
   keyed:
     base_url: https://vendor.invalid/v1
     model: vendor-1
@@ -672,7 +673,7 @@ class TestResolveEndpointEffortStyle:
             "    routing: {group: q, effort_style: ninfer}\n"
             "  own:\n    base_url: http://o/v1\n    model: m\n    effort_style: chat_template_kwargs\n"
             "  fd:\n    base_url: http://fd/v1\n    model: q\n    frontdoor: true\n"
-            "  plain:\n    base_url: http://p/v1\n    model: m\n    reasoning_effort: medium\n",
+            "  plain:\n    base_url: http://p/v1\n    model: m\n",
         )
         gpu = resolve_endpoint("gpu", config=CUSTOM_CFG)
         assert (gpu["effort_style"], gpu["effort_style_source"]) == ("ninfer", "routing")
@@ -683,7 +684,7 @@ class TestResolveEndpointEffortStyle:
         assert (fd["effort_style"], fd["effort_style_source"]) == ("top-level", "frontdoor")
         plain = resolve_endpoint("plain", config=CUSTOM_CFG)
         assert (plain["effort_style"], plain["effort_style_source"]) == (None, "none")
-        assert plain["request_defaults"] == {"reasoning_effort": "medium"}
+        assert plain["request_defaults"] == {}
 
     def test_config_declared_endpoints_carry_the_keys(self):
         cfg = {

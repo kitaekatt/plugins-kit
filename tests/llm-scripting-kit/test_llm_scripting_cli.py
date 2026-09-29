@@ -202,7 +202,6 @@ _EFFORT_REGISTRY = (
     "    reasoning_effort: medium\n"
     "    routing: {group: q, order: 2, effort_style: chat_template_kwargs}\n"
     "  mac-64k:\n    base_url: http://mac.invalid/v1\n    model: mac-64k-m\n"
-    "    reasoning_effort: medium\n"
     "  fd:\n    base_url: http://fd.invalid/v1\n    model: q\n    frontdoor: true\n"
     "    reasoning_effort: medium\n"
 )
@@ -277,13 +276,13 @@ def test_resolve_undeliverable_entry_reports_null_effort(effort_registry, capsys
     assert cli.main(["resolve", "--models", "mac-64k"]) == 0
     payload = json.loads(capsys.readouterr().out)
     assert payload["effort"] is None
-    assert payload["declared_effort"] == "medium"
+    assert payload["declared_effort"] is None
     assert payload["effort_delivery"] == {
         "deliverable": False, "emits": None, "style": None, "source": "none",
     }
 
 
-def test_endpoints_reports_effort_delivery_and_the_registry_note(effort_registry, capsys):
+def test_endpoints_reports_effort_delivery_without_a_registry_note(effort_registry, capsys):
     assert cli.main(["endpoints"]) == cli.EXIT_OK
     payload = json.loads(capsys.readouterr().out)
     eps = payload["endpoints"]
@@ -292,8 +291,7 @@ def test_endpoints_reports_effort_delivery_and_the_registry_note(effort_registry
     assert eps["mac"]["effort_delivery"]["emits"] == "chat_template_kwargs.reasoning_effort"
     assert eps["fd"]["effort_delivery"]["source"] == "frontdoor"
     assert eps["mac-64k"]["effort_delivery"]["deliverable"] is False
-    effort_notes = [n for n in payload["notes"] if "reasoning_effort" in n]
-    assert len(effort_notes) == 1 and "'mac-64k'" in effort_notes[0]
+    assert not [n for n in payload["notes"] if "reasoning_effort" in n]
     # The family record keeps effort dropped and names it conditional.
     openrouter = payload["capabilities"]["openrouter"]
     assert "effort" in openrouter["dropped_params"]
@@ -341,11 +339,11 @@ def test_complete_chat_template_kwargs_entry_nests_the_default(effort_registry, 
     assert wire.calls[0]["extra_body"] == {"chat_template_kwargs": {"reasoning_effort": "medium"}}
 
 
-def test_complete_undeliverable_entry_sends_no_effort(effort_registry, wire, capsys):
+def test_complete_entry_without_declared_effort_sends_no_effort(effort_registry, wire, capsys):
     assert cli.main(["complete", "--models", "mac-64k", "--prompt", "p"]) == 0
     assert "extra_body" not in wire.calls[0]
     response = json.loads(capsys.readouterr().out)["response"]
-    assert "effort" in response["dropped_params"]
+    assert "effort" not in response["dropped_params"]
 
 
 @pytest.mark.parametrize(

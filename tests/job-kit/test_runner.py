@@ -568,6 +568,47 @@ def test_runner_carries_forwarded_params_through_acceptance(
     assert attempt.finish_reason == "stop"
 
 
+def test_exception_attempt_uses_backend_params_report(tmp_path: Path) -> None:
+    """A transport's translated effort is not recorded as dropped on failure."""
+    backend = FakeBackend(error=RuntimeError("transport failed"))
+    backend.params_report = lambda options: ((), ())
+    job = replace(_job(tmp_path), options={"effort": "high"})
+    capabilities = lambda: {
+        "fake": Capabilities(adapter="fake", dropped_params=("effort",))
+    }
+
+    snapshot = run_jobs(
+        [job],
+        tmp_path / "exception-params-report.sqlite3",
+        capabilities_provider=capabilities,
+        backend_factory=_factory_for(backend),
+    )
+
+    assert snapshot.attempts[0].dropped_params == ()
+    assert snapshot.attempts[0].forwarded_params == ()
+
+
+def test_exception_attempt_without_params_report_keeps_family_derivation(
+    tmp_path: Path,
+) -> None:
+    """Older backends retain the family capability fallback on failure."""
+    backend = FakeBackend(error=RuntimeError("transport failed"))
+    job = replace(_job(tmp_path), options={"effort": "high"})
+    capabilities = lambda: {
+        "fake": Capabilities(adapter="fake", dropped_params=("effort",))
+    }
+
+    snapshot = run_jobs(
+        [job],
+        tmp_path / "exception-family-report.sqlite3",
+        capabilities_provider=capabilities,
+        backend_factory=_factory_for(backend),
+    )
+
+    assert snapshot.attempts[0].dropped_params == ("effort",)
+    assert snapshot.attempts[0].forwarded_params is None
+
+
 def test_job_file_floor_reaches_the_run(tmp_path: Path) -> None:
     """The top-level job-file floor reaches the seam and the run ledger."""
     jobs_path = tmp_path / "jobs.yaml"

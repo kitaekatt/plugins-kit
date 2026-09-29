@@ -426,6 +426,10 @@ registry `reasoning_effort` default into `opts.effort`. `resolve` reports
 `effort_delivery`; `endpoints` reports `reasoning_effort` and `effort_delivery`
 per transport entry.
 
+Registry loading rejects a transport entry that declares `reasoning_effort`
+without a deliverable `effort_style`; invalid styles and conflicting declared
+styles remain registry notes.
+
 That inequality is no longer folklore: **each adapter ADVERTISES it.** Every
 backend class carries a `capabilities: ClassVar[Capabilities]`
 (`completion/adapter_capabilities.py`), naming the params it honors, the ones it
