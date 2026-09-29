@@ -24,7 +24,7 @@ Two shapes ship, in `pipeline`:
   harness for this shape: a deprecated untracked loop (it emits a
   `DeprecationWarning`, keeps no durable run record, and its halt behavior is
   frozen). A production pipeline runs the same shape through the tracked path,
-  `execution.controller.prepare_run` + `execution.drivers.inline.run_wave` +
+  `ExecutionStore.register_units` + `execution.controller.prepare_run` + `execution.drivers.inline.run_wave` +
   `execution.controller.finalize_run` (see "Deprecated loop helpers" in step
   10); the gate, freshness and generate seams are the same on both.
 - **`convergence_loop.run`** -- the `grade -> select -> apply -> fill` cycle,
@@ -244,7 +244,7 @@ backend for its first usable entry: a `claude`, `codex` or `opencode` harness
 entry gets that CLI backend, the `openrouter` entry gets `OpenRouterBackend`,
 and any other transport entry gets `ModelEndpointBackend`. Unset, it returns
 `OpenRouterBackend`. A supplied `mock` always wins so tests never reach a live
-transport. `CONTENT_PIPELINE_LLM_MODELS` is the only routing env.
+transport. `CONTENT_PIPELINE_LLM_MODELS` is the only routing setting. `CONTENT_PIPELINE_LLM_BACKEND`, `CONTENT_PIPELINE_LLM_MODEL` and `CONTENT_PIPELINE_LLM_ENDPOINT` select nothing; if one is set while `CONTENT_PIPELINE_LLM_MODELS` is not, routing raises `ConfigurationError` naming it, rather than falling back to OpenRouter. When `CONTENT_PIPELINE_LLM_MODELS` is set, any of those three is ignored.
 
 ### The model-endpoint backend
 
@@ -473,12 +473,31 @@ and a `Gate(name, predicate, sticky=True)`. `Gate` and `run_gates` live in
 `run_bulk` call warns once, not twice). They keep no durable run record and
 their behavior is otherwise unchanged. The tracked path is:
 
-1. `execution.controller.prepare_run` -- register the units (gates and
-   freshness are applied here).
-2. `execution.drivers.inline.run_wave` -- claim and generate a wave.
-3. `execution.controller.finalize_run` -- apply what was accepted.
-4. `execution.controller.unfinished_units` -- the units without a terminal
+1. `ExecutionStore.create_run`, then `ExecutionStore.register_units(run_id,
+   unit_ids)` -- the store records the run and its units (the CLI's
+   `create-run` and `register-units` commands do the same). `prepare_run`
+   does NOT register units: on a run with none registered, a flat strategy
+   returns an empty wave and does nothing, and a graph strategy whose
+   `order()` yields ids raises `GraphOrderMismatchError`.
+2. `execution.controller.prepare_run` -- evaluate gates and freshness over
+   the registered units and return the wave.
+3. `execution.drivers.inline.run_wave` -- claim and generate a wave.
+4. `execution.controller.finalize_run` -- apply what was accepted.
+5. `execution.controller.unfinished_units` -- the units without a terminal
    state, after a halt or at the end.
+
+**Draining a run.** Repeating prepare and run until the wave is empty is not
+enough, because an empty wave has causes other than completion. When a wave
+comes back empty, finalize, then read the run: if it is halted, clear the
+halt with `execution.controller.resume_run` once its condition has cleared
+(a halted run yields no claims, so looping without it never makes progress);
+if `unfinished_units` still lists a unit in the CLAIMED state, it is held
+by an earlier crashed or refused attempt and is not offered again until its
+lease has expired and it has been reclaimed -- the inline driver does not
+reclaim it, so wait out the lease and use a driver that reaps (the
+background or workflow lane), or stop and report it; if the run is not halted
+and `unfinished_units` is empty, it is complete. Cap the loop, and stop when
+one full pass changes nothing.
 
 **Migrating a `BudgetStop` caller.** `guarded_sweep` records the tripping unit
 as `BudgetStop.unit_id` and builds `remaining` as the units AFTER it, so a

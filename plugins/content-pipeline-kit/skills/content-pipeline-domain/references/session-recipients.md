@@ -76,25 +76,33 @@ sessions, beyond the fields every adapter already needs (`unit_for`,
 - **`environment`** -- a declaration of which environment variables and
   working directory a worker process must see to behave correctly (required
   variables, forbidden variables, and variables that should carry the
-  worker's working directory). This is checked twice: once when the run is
+  worker's working directory). Path values compare equal when identical or,
+  on Windows, when they differ only in letter case or separator spelling; a
+  Git Bash POSIX spelling of a drive path still refuses. This is checked twice: once when the run is
   created, against the orchestrating process's own environment, and once on
-  every worker verb, against the worker process's actual environment. A
+  every worker verb except `fail` (see below), against the worker process's actual environment. A
   worker whose environment disagrees with what the run was created against is
   refused outright rather than allowed to resolve against the wrong project
   root silently -- that refusal is deliberate, because a background worker
   runs in a genuinely separate process and has no other way to prove it is
   the same project the run was prepared against.
 
-  Know what that refusal does and does not buy you now that the dispatcher
-  claims. It still refuses every worker verb -- `read`, `submit`, `fail` --
+  Know what that refusal does and does not buy you given that the dispatcher
+  claims. It refuses the dispatcher's `claim` and `renew` and the worker verbs
+  `read` and `submit`,
   so a mismatched worker can never get output ACCEPTED, which is the part
-  that matters. What it no longer prevents is the SPEND: the unit is claimed
-  and the session launched before any worker verb runs, so a mismatched
-  worker consumes a session and holds the lease until its `read` is refused.
-  Previously the mismatch was caught at the worker's own `claim` and the unit
-  stayed pending. The dispatcher settles that dispatch and the unit is
-  reclaimable once the lease expires, so nothing is stranded -- but a
-  misdeclared environment now costs sessions rather than being free.
+  that matters. `fail` is exempt: a worker that diagnosed its own environment
+  as wrong must still be able to report it, and the run's adapter-version
+  check still applies to it. What the refusal does not prevent is the SPEND:
+  the unit is claimed and the session launched before any worker verb runs,
+  so a mismatched worker consumes a session before its `read` is refused.
+  When the worker then reports through `fail` with the envelope's terminal
+  flag set, the unit ends FAILED, and a FAILED unit has no reset path: redoing
+  it needs a new run. Without a `fail`, the unit is reclaimable once the lease
+  expires. A systemic mismatch therefore costs one session per dispatched
+  unit, and no circuit breaker halts the wave on repeated identical
+  `worker_failed` errors -- check the environment declaration on the first
+  failure rather than letting the wave drain.
 - **`expected_unit_seconds`** (or a per-unit variant) -- your best estimate of
   how long one unit's worker session runs. This sizes the lease the
   dispatcher renews while a worker is active. Declaring nothing is safe --
@@ -180,6 +188,13 @@ authorizing it belong to the same generation of the unit.
 
 ## Resuming a halted or interrupted run
 
+A halted run (rate limit, auth, operator pause) resumes only through
+`execution.controller.resume_run(store, run_id)` (the mount's `resume` verb),
+once the halt condition has cleared. Dispatching again does not clear it: the
+next claim on a halted run is refused. After `resume_run`, prepare and
+dispatch again in either lane.
+
+
 A run can be interrupted between recording that a unit's apply started and
 recording that it succeeded -- a crash mid-finalize, a killed dispatcher
 process. Resuming a run with any unit left in that in-between state is
@@ -204,6 +219,19 @@ a pending changelist) as a reconciliation signal by itself: an open-for-edit
 file can carry stale or partial content, so its mere existence tells you
 nothing about whether the write that mattered actually completed. Build
 reconciliation from your data's own shape, not from VCS bookkeeping.
+
+## What bounds a worker's verbs
+
+A worker writes the body of an envelope file, and the dispatcher fixes the
+file name. When a `protocol @<path>` file has a worker-shaped name
+(`*.claim.json`, the dispatcher's claim in the background lane and the
+agent's own in the workflow lane; `*.read.json`, `*.submit.json`,
+`*.fail.json`), the body's
+verb and ids must agree with that name, or the call is refused with
+`EnvelopeIdentityError`. A body naming another verb (`finalize`, `resume`,
+`pause`, `prepare`) or another unit therefore cannot run from a worker file.
+Files with any other name are not checked; the allowlist still limits which
+paths a worker may invoke.
 
 ## Which worker your dispatch runs
 

@@ -9,8 +9,8 @@ description: Use when orchestrating a content-pipeline run via the Workflow tool
 # Workflow Pipeline
 
 The orchestration procedure for driving a content-pipeline run's worker units
-through the native Workflow tool, with `plugins/content-pipeline-kit/workflows/run-ready-wave.js`
-as the compiled script and the Workflow tool's own `agent()`/`parallel()`
+through the native Workflow tool, with the registered workflow
+`content-pipeline-kit:run-ready-wave` as the script and the Workflow tool's own `agent()`/`parallel()`
 primitives providing concurrency. There is no separate dispatcher process in
 this lane: the Workflow tool cannot be invoked from inside a subagent, so the
 top-level Claude Code session that is reading this skill IS the orchestrator,
@@ -35,16 +35,17 @@ technique_skill:
     covers:
       - verifying the four preconditions before spending an agent
       - assembling a wave with build_wave_args
-      - invoking run-ready-wave.js through the Workflow tool
+      - invoking the registered workflow content-pipeline-kit:run-ready-wave through the Workflow tool
+      - clearing a halt with resume_run before assembling a wave
       - reconciling the advisory aggregate against the store and finalizing
     excludes:
       - a worker's own one-unit procedure (use execute-work-unit)
       - the Claude background-session driver (use background-pipeline)
-      - continuing a run with resumeFromRunId
+      - continuing a run with the Workflow tool's resumeFromRunId
   techniques:
     - id: run_workflow_wave
       name: Run one wave through the Workflow tool
-      keywords: [workflow pipeline, run-ready-wave.js, build_wave_args, Workflow tool, advisory aggregate, finalize_run]
+      keywords: [workflow pipeline, run-ready-wave, resume_run, build_wave_args, Workflow tool, advisory aggregate, finalize_run]
       goal: One wave is executed by workflow agents, reconciled against the store, and its accepted units finalized.
       preconditions:
         - The run exists and is prepared through the consumer's protocol mount.
@@ -54,26 +55,27 @@ technique_skill:
           action: Verify all four preconditions before spending an agent -- run prepared, build_wave_args lease refusal passed, launching session's allowlist covers every per-unit command and Write target, environment preflight (first unit's readCmd run by hand) returned ok true.
           on_failure: A WorkerEnvironmentMismatchError or an ok false reply stops the invocation; do not proceed to wave assembly.
         - n: 2
-          action: Assemble the wave with build_wave_args, passing the same strategy and max_wave_size the run's prepare_run call was given, and use its output as-is. An empty wave means go straight to finalize.
+          action: "Assemble the wave with build_wave_args, passing the same strategy and max_wave_size the run's prepare_run call was given, and use its output as-is. An empty wave has three causes, so read the run before acting: a halted run (resume_run first, once the halt condition has cleared, then assemble again), units still CLAIMED under a live lease (wait for the lease to expire; assembly reaps expired claims first), or nothing left (go to finalize)."
           tool: content_pipeline.execution.workerpack.build_wave_args
-          expected: A JSON-serializable args object for run-ready-wave.js.
+          expected: A JSON-serializable args object for the run-ready-wave workflow.
         - n: 3
-          action: Invoke the Workflow tool from the top-level session against run-ready-wave.js with that args object.
+          action: "Invoke the Workflow tool from the top-level session by registered name, Workflow({name: \"content-pipeline-kit:run-ready-wave\", args: <the args object>}). Do not pass a script path."
           tool: Workflow
-          input: plugins/content-pipeline-kit/workflows/run-ready-wave.js
+          input: 'name "content-pipeline-kit:run-ready-wave" with the args object from step 2'
         - n: 4
           action: Treat the returned aggregate (counts, units, advisory true) as advisory and reconcile against the run's real state through the mount's status verb before treating any unit as settled.
         - n: 5
-          action: Finalize so every accepted unit's output lands. A halted or partially settled wave means a fresh invocation from step 1, never a resume.
+          action: Finalize so every accepted unit's output lands. A halted or partially settled wave means a fresh invocation from step 1, never a Workflow-tool resume; a halted run also needs controller.resume_run(store, run_id) once its halt condition has cleared, before step 2 can return a wave.
           tool: content_pipeline.execution.controller.finalize_run
           input: "store, run_id, adapter"
       checklist:
         - "Four preconditions verified"
-        - "Wave assembled by build_wave_args (empty wave -> skip to finalize)"
-        - "Workflow tool invoked from the top-level session"
+        - "Wave assembled by build_wave_args (empty wave -> check halted, then claimed, then finalize)"
+        - "Workflow tool invoked by registered name from the top-level session"
         - "Aggregate reconciled against the store"
         - "finalize_run applied the accepted units"
       gotchas:
+        - build_wave_args returns an empty wave for a halted run, and only controller.resume_run clears the halt; finalizing over a halted run with units pending ends the run halted.
         - Do not call resumeFromRunId to continue a pipeline run; it replays a cached self-report, not live state. Re-entry is a fresh invocation with a new batchId and fresh worker ids.
         - The aggregate is a self-report and can drift from the store; never act on its counts alone.
         - The background lane's clean unattended run is not evidence that the allowlist is covered; a workflow agent runs inside this session's grant.
@@ -128,21 +130,54 @@ store, run id, adapter, `WorkerCommand`, and `max_agents`, plus the same
 wave, and a flat mount's `max_wave_size` caps it -- without them the wave is
 every pending unit. It performs reap-first candidate selection (expired-lease
 reclaim ahead of pending-unit selection), narrows it to the wave the strategy
-admits, returns an empty wave for a halted run, mints a fresh Python-side `batchId`, pre-writes the `read` and
+admits, returns an empty wave for a halted run (it never clears the halt -- see
+"Halted runs and empty waves" below), mints a fresh Python-side `batchId`, pre-writes the `read` and
 worker-scoped `claim` envelopes, and returns the JSON-serializable `args`
-object `run-ready-wave.js` expects. This skill does not restate that
+object the `run-ready-wave` workflow expects. This skill does not restate that
 function's logic or hand-compose a wave pack -- point at
 `build_wave_args` and use its output as-is. If it returns no units (an empty
-wave), that means the run has nothing left to assemble a wave for; go
-straight to finalize rather than invoking the Workflow tool with an empty
-`units` array (the script throws on that input rather than returning a
-silent no-op aggregate).
+wave), do not invoke the Workflow tool with an empty `units` array (the
+script throws on that input rather than returning a silent no-op
+aggregate); read the run first, as the next section describes.
+
+## Halted runs and empty waves
+
+An empty wave does not mean the run is done. Read the run's state through
+the mount's `status` verb (or `store.get_run(run_id).halted`) and
+`execution.controller.unfinished_units(store, run_id)`:
+
+- **The run is halted** (rate limit, auth, or an operator pause). Nothing
+  in this lane clears a halt: `build_wave_args` keeps returning an empty
+  wave and every agent claim would be refused. Once the halt condition has
+  cleared, call `execution.controller.resume_run(store, run_id)` (the mount's
+  `resume` verb), then assemble again. Finalizing without resuming leaves the
+  run halted with units pending.
+- **Not halted, unit(s) still CLAIMED.** An agent died or was refused after
+  claiming. Assembly reaps a claim only once its lease has expired, so wait
+  for the lease and call `build_wave_args` again; it re-offers an expired
+  claim in flat and graph runs alike, and a live claim is never reaped early.
+  For a graph run, `execution.wave.graph_block_reason(store, run_id,
+  strategy, at=<now>)` names the claimed predecessor and says whether its
+  lease has expired (reclaimable, re-offered by the next wave) or it is still
+  in flight; without `at` every claim reads as live. A flat run has no block
+  reason; read `unfinished_units` instead.
+- **Not halted, `unfinished_units` empty.** Every unit is terminal; go to
+  finalize.
+
+A run that loops "assemble, empty wave, assemble" without any of these
+changing is stuck; stop and report the run's `unfinished_units` rather than
+looping.
 
 ## Invocation
 
 Invoke the native Workflow tool, from the top-level session only, against
-`plugins/content-pipeline-kit/workflows/run-ready-wave.js` with the `args`
-object `build_wave_args` produced. Nothing about this step happens inside a
+registered name, `Workflow({name: "content-pipeline-kit:run-ready-wave",
+args: <the args object>})`, with the `args` object `build_wave_args`
+produced. The name resolves the installed plugin's own script, so the same
+call works from a consumer project, a `--plugin-dir` session, and a
+plugins-kit checkout. Do not pass a `scriptPath`: the Workflow tool refuses a
+path inside the plugin cache, and a repository-relative path exists only
+inside a plugins-kit checkout. Nothing about this step happens inside a
 subagent -- the Workflow tool is unavailable there, which is the same reason
 this skill exists as a top-level-session procedure rather than a background
 one.
@@ -155,13 +190,19 @@ self-reported, and a self-report can lie or drift from what the store
 actually recorded -- see `../content-pipeline-domain/references/workflow-lane.md` for the channels that
 stay open even after the per-agent schema is value-bounded. Reconcile against
 the run's real state through the mount (the `status` verb, or the
-consumer's own equivalent) before treating any unit as settled; never act on
+consumer's own equivalent; its apply counts and the apply-rejected and
+apply-unknown unit ids show outcomes on the apply axis) before treating any unit as settled; never act on
 the returned counts alone.
 
 Once reconciled, finalize exactly as `background-pipeline` stage 4 does --
 `execution.controller.finalize_run(store, run_id, adapter)` -- so that every
-accepted unit's output actually lands. A halted or partially-settled wave
-means going around again: re-run the preconditions above, call
+accepted unit's output actually lands. The protocol `finalize` reply lists
+the unit ids whose apply was rejected under `rejected`; read it rather than
+assuming every accepted unit landed. A halted or partially-settled wave
+means going around again: if the run is halted, clear the halt with
+`execution.controller.resume_run` once its condition has cleared (a
+fresh assembly cannot succeed before that); then re-run the preconditions
+above, call
 `build_wave_args` again (it reaps first, so an abandoned unit from the
 previous wave is a normal candidate), and invoke a fresh wave. There is no
 lighter-weight "continue where it left off" step in this lane.

@@ -54,7 +54,7 @@ technique_skill:
           action: Once dispatch settles, finalize so every accepted unit's output lands through the adapter's apply.
           tool: content_pipeline.execution.controller.finalize_run
           input: "store, run_id, adapter"
-          on_failure: A halted run parks at step 2; call dispatch_wave again once the halt condition has cleared (see resume_run).
+          on_failure: "A halted run parks at step 2. dispatch_wave does not clear a halt: once the halt condition has cleared, call controller.resume_run(store, run_id), then prepare and dispatch again."
       checklist:
         - "Wave prepared through the consumer's mount"
         - "dispatch_wave returned; aborted_reason read"
@@ -63,7 +63,7 @@ technique_skill:
       gotchas:
         - Never read a unit's prompt, a worker's answer text, or a validator's full feedback into the orchestrating session; only ids, outcomes, and status digests.
         - DispatchReport.accepted reflects store state; a unit settled as blocked or session_lingering can still be accepted and is finalized. Read settled for how the session ended.
-        - An abort (aborted_reason set) is not a halt. A halt parks and resumes; an abort means this call stopped, and the reason says whether to investigate the environment or call again.
+        - An abort (aborted_reason set) is not a halt. A halt parks until resume_run clears it; an abort means this call stopped, and the reason says whether to investigate the environment or call again.
         - Do not build a pre-emptive quota gate that parses rate-limits.json to decide whether to dispatch; the reactive halt path is the contract.
         - Flags passed through extra_launch_args may or may not compose with a background launch; the launcher exits 0 either way, so observe what a worker actually does.
         - Storage engine, fresh-per-unit contexts, and single-dispatcher election are correctness decisions with no setting.
@@ -99,8 +99,15 @@ technique_skill:
    consumer-visible side effect.
 
 A halted run (rate-limit, auth, or an operator pause) stops cleanly at stage 2
-and parks: resume it later by calling `dispatch_wave` again once the halt
-condition has cleared (see `content_pipeline.execution.controller.resume_run`).
+and parks. `dispatch_wave` never clears a halt: its next claim on a halted run
+raises `RunHaltedError` and the wave returns `halted` at once. Once the halt
+condition has cleared (the quota window reopened, the credential fixed), call
+`execution.controller.resume_run(store, run_id)` (the mount's `resume` verb)
+and then run stages 1 and 2 again -- prepare selects the units still pending,
+including the one the halt returned to `PENDING`. Read the run's remaining
+work with `execution.controller.unfinished_units(store, run_id)`; a unit left
+CLAIMED by a dead session becomes reclaimable when its lease expires, and
+`dispatch_wave` reclaims it.
 A halt stops new claims immediately, but a submission that arrives after the
 halt with a valid fencing token is still accepted exactly as if no halt had
 happened -- a stale fence is rejected regardless. Lease renewal also differs
@@ -219,7 +226,7 @@ the same way), `dispatcher_lease_lost` (another
 dispatcher took the run), `dispatcher_lease_held_by_another_dispatcher` (this
 call never started, and launched nothing), or `wave_stalled` (nothing
 progressed for `stall_timeout_seconds`). An abort is not a halt: a halted run
-parks and resumes, while an abort means this call stopped and its reason
+parks until `resume_run` clears the halt, while an abort means this call stopped and its reason
 tells you whether to investigate the environment or simply call again.
 
 `worker_failed` means that the worker reported terminal failure detail. The
