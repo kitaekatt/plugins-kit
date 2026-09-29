@@ -60,6 +60,7 @@ Public surface:
 from __future__ import annotations
 
 import json
+import math
 import os
 import sys
 import tempfile
@@ -142,6 +143,11 @@ class LLMResponse:
     - ``reasoning`` / ``finish_reason`` -- optional transport diagnostics,
       retained so empty responses can be logged without reaching through the
       adapter boundary.
+    - ``reported_cost_usd`` / ``reported_cost_source`` -- an AUTHORITATIVE USD
+      amount for the live call and why it is authoritative. Both present or
+      both ``None``; ``None`` means UNKNOWN, never zero. Survives the response
+      cache as provenance, but a cache hit costs nothing on the current run
+      (see :func:`response_cost`).
     """
 
     text: str
@@ -165,6 +171,28 @@ class LLMResponse:
     # Trailing fields preserve existing positional construction sites.
     reasoning: str = ""
     finish_reason: Optional[str] = None
+    reported_cost_usd: Optional[float] = None
+    reported_cost_source: Optional[str] = None
+
+
+def valid_reported_cost(
+    amount: Any, source: Any
+) -> tuple[Optional[float], Optional[str]]:
+    """The ``(amount, source)`` pair when both are valid, else ``(None, None)``.
+
+    The pair is all-or-nothing. An amount must be a finite, non-negative real
+    number (not a bool, not a string); a source must be a non-empty string.
+    Anything else is unknown, never coerced to zero -- a wrong zero reads as
+    "free" and would let a budget overspend.
+    """
+    if isinstance(amount, bool) or not isinstance(amount, (int, float)):
+        return None, None
+    value = float(amount)
+    if not math.isfinite(value) or value < 0:
+        return None, None
+    if not isinstance(source, str) or not source:
+        return None, None
+    return value, source
 
 
 class EmptyCompletionError(RuntimeError):
@@ -662,16 +690,28 @@ def response_cost(
     model: str,
     response: LLMResponse,
     *,
-    pricing: Mapping[str, Any],
-) -> float:
-    """USD charged for one ``response`` on THIS run.
+    pricing: Optional[Mapping[str, Any]],
+) -> Optional[float]:
+    """USD charged for one ``response`` on THIS run, or ``None`` when unknown.
 
-    Cache-served responses (``from_cache``) cost nothing on this run -- the
-    spend happened on the original live call. Live responses are priced from
-    their token counts via :func:`estimate_cost`.
+    In order: a cache-served response (``from_cache``) costs nothing on this
+    run -- the spend happened on the original live call, and its reported-cost
+    provenance does not change that. A live response with a valid authoritative
+    reported cost costs exactly that. Otherwise the token counts are priced via
+    :func:`estimate_cost` against ``pricing`` (an unknown model still raises
+    :class:`KeyError`). With no reported cost and ``pricing=None`` passed
+    explicitly the cost is unknown and ``None`` is returned, never a synthetic
+    zero.
     """
     if response.from_cache:
         return 0.0
+    reported, _ = valid_reported_cost(
+        response.reported_cost_usd, response.reported_cost_source
+    )
+    if reported is not None:
+        return reported
+    if pricing is None:
+        return None
     return estimate_cost(
         model,
         response.input_tokens,
@@ -934,6 +974,9 @@ class ResponseCache:
             data = json.loads(path.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, ValueError, OSError):
             return None
+        reported_cost, reported_source = valid_reported_cost(
+            data.get("reported_cost_usd"), data.get("reported_cost_source")
+        )
         return LLMResponse(
             text=data["text"],
             model=data["model"],
@@ -956,6 +999,9 @@ class ResponseCache:
             ended_at=None,
             reasoning=data.get("reasoning", ""),
             finish_reason=data.get("finish_reason"),
+            # Provenance only: response_cost() charges a cache hit nothing.
+            reported_cost_usd=reported_cost,
+            reported_cost_source=reported_source,
         )
 
     def store(self, key: str, response: LLMResponse) -> bool:
@@ -1009,6 +1055,8 @@ class ResponseCache:
             "ended_at": response.ended_at,
             "reasoning": response.reasoning,
             "finish_reason": response.finish_reason,
+            "reported_cost_usd": response.reported_cost_usd,
+            "reported_cost_source": response.reported_cost_source,
         }
         target = self._path(key)
         fd, tmp_name = tempfile.mkstemp(
@@ -1172,10 +1220,9 @@ def call_llm(
         )
         if not candidate.text.strip():
             try:
-                if pricing is not None:
-                    cost = response_cost(candidate.model, candidate, pricing=pricing)
-                    if cost_budget is not None:
-                        cost_budget.charge(cost, identifier=identifier or model)
+                cost = response_cost(candidate.model, candidate, pricing=pricing)
+                if cost is not None and cost_budget is not None:
+                    cost_budget.charge(cost, identifier=identifier or model)
             finally:
                 print(
                     _empty_completion_line(
@@ -1204,10 +1251,9 @@ def call_llm(
         break
     assert response is not None, last_exc  # loop either breaks or raises
 
-    if pricing is not None:
-        cost = response_cost(response.model, response, pricing=pricing)
-        if cost_budget is not None:
-            cost_budget.charge(cost, identifier=identifier or model)
+    cost = response_cost(response.model, response, pricing=pricing)
+    if cost is not None and cost_budget is not None:
+        cost_budget.charge(cost, identifier=identifier or model)
 
     if cache is not None and cache_key is not None and not response.from_cache:
         cache.store(cache_key, response)
@@ -1457,6 +1503,7 @@ __all__ = [
     "load_pricing",
     "estimate_cost",
     "response_cost",
+    "valid_reported_cost",
     "model_alias",
     "BudgetExceededError",
     "estimate_request_tokens",

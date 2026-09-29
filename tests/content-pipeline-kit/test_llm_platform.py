@@ -1068,3 +1068,105 @@ def test_store_concurrent_writers_never_produce_a_corrupt_file(tmp_path):
     assert data["text"] in contents  # exactly one writer's payload won
     leftovers = [p.name for p in tmp_path.iterdir() if p.name != "shared-key.json"]
     assert leftovers == []
+
+
+# --- reported cost (authoritative, pairs with llm_scripting_kit) -------------
+
+
+def test_response_cost_prefers_reported_cost_then_estimator_and_cache_hit_is_zero():
+    reported = LLMResponse(
+        text="x", model="test/model", input_tokens=1000, output_tokens=500,
+        reported_cost_usd=0.25, reported_cost_source="provider",
+    )
+    # A live reported cost beats the estimate, with or without a table.
+    assert response_cost("test/model", reported, pricing=PRICING) == 0.25
+    assert response_cost("test/model", reported, pricing=None) == 0.25
+    # A reported cost on a model absent from the table does not raise.
+    assert response_cost("nope/model", reported, pricing=PRICING) == 0.25
+    # A cache hit keeps provenance but costs nothing on this run.
+    hit = LLMResponse(
+        text="x", model="test/model", from_cache=True,
+        reported_cost_usd=0.25, reported_cost_source="provider",
+    )
+    assert response_cost("test/model", hit, pricing=PRICING) == 0.0
+    assert response_cost("test/model", hit, pricing=None) == 0.0
+    # No reported cost: the estimator applies, and an unknown model still raises.
+    plain = LLMResponse(text="x", model="test/model", input_tokens=1000)
+    assert response_cost("test/model", plain, pricing=PRICING) == pytest.approx(
+        estimate_cost("test/model", 1000, 0, pricing=PRICING)
+    )
+    with pytest.raises(KeyError):
+        response_cost("nope/model", plain, pricing=PRICING)
+
+
+def test_missing_reported_cost_is_not_zero_without_pricing():
+    plain = LLMResponse(text="x", model="m", input_tokens=10, output_tokens=5)
+    assert response_cost("m", plain, pricing=None) is None
+    # Invalid or one-sided metadata is ignored, never coerced to zero.
+    for amount, source in [
+        (True, "provider"), (-1.0, "provider"), (float("nan"), "provider"),
+        (float("inf"), "provider"), ("0.1", "provider"),
+        (0.1, None), (None, "provider"),
+    ]:
+        bad = LLMResponse(
+            text="x", model="m", reported_cost_usd=amount, reported_cost_source=source
+        )
+        assert response_cost("m", bad, pricing=None) is None
+    # An explicit zero is a real amount (registry-unmetered), not unknown.
+    free = LLMResponse(
+        text="x", model="m", reported_cost_usd=0.0,
+        reported_cost_source="registry-unmetered",
+    )
+    assert response_cost("m", free, pricing=None) == 0.0
+
+
+def test_call_llm_charges_reported_cost_without_pricing():
+    backend = MockBackend(
+        responses=[LLMResponse(
+            text="ok", model="m", input_tokens=10, output_tokens=5,
+            reported_cost_usd=0.4, reported_cost_source="provider",
+        )]
+    )
+    budget = CostBudget(limit=1.0)
+    call_llm(backend, "s", "u", model="m", cost_budget=budget)
+    assert budget.spent == pytest.approx(0.4)
+
+    # Without reported cost or pricing nothing is charged.
+    plain_budget = CostBudget(limit=1.0)
+    call_llm(MockBackend(responses=["ok"]), "s", "u", model="m", cost_budget=plain_budget)
+    assert plain_budget.spent == 0.0
+
+    # The cap is reachable from reported cost alone.
+    tight = CostBudget(limit=0.1)
+    with pytest.raises(BudgetExceededError):
+        call_llm(
+            MockBackend(responses=[LLMResponse(
+                text="ok", model="m", reported_cost_usd=0.4,
+                reported_cost_source="provider",
+            )]),
+            "s", "u", model="m", cost_budget=tight,
+        )
+
+
+def test_response_cache_round_trips_reported_cost_provenance(tmp_path: Path) -> None:
+    cache = ResponseCache(tmp_path)
+    live = LLMResponse(
+        text="hello", model="m",
+        reported_cost_usd=0.5, reported_cost_source="provider",
+    )
+    assert cache.store("k", live) is True
+    got = cache.lookup("k")
+    assert got is not None
+    assert got.reported_cost_usd == 0.5
+    assert got.reported_cost_source == "provider"
+    assert got.from_cache is True
+    assert response_cost("m", got, pricing=None) == 0.0
+
+    # An entry written without the fields (an older cache) still loads.
+    (tmp_path / "old.json").write_text(
+        json.dumps({"text": "t", "model": "m"}), encoding="utf-8"
+    )
+    old = cache.lookup("old")
+    assert old is not None
+    assert old.reported_cost_usd is None
+    assert old.reported_cost_source is None

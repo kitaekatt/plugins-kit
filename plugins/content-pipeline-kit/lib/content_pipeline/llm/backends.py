@@ -48,7 +48,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence
 
 from content_pipeline.llm import platform
-from content_pipeline.llm.platform import BackendOptions, LLMResponse
+from content_pipeline.llm.platform import BackendOptions, LLMResponse, valid_reported_cost
 
 # The message a live backend raises when the shared lib is missing. The
 # openrouter / model-endpoint / claude-cli / codex-cli / opencode-cli transports
@@ -181,6 +181,10 @@ def _from_completion_response(resp: Any) -> LLMResponse:
     with no version pin, so the two can legitimately be out of step here. The
     same compatibility rule applies to every truthfulness field below.
     """
+    reported_cost, reported_source = valid_reported_cost(
+        getattr(resp, "reported_cost_usd", None),
+        getattr(resp, "reported_cost_source", None),
+    )
     return LLMResponse(
         text=resp.text,
         model=resp.model,
@@ -206,6 +210,11 @@ def _from_completion_response(resp: Any) -> LLMResponse:
         structured=getattr(resp, "structured", None),
         started_at=getattr(resp, "started_at", None),
         ended_at=getattr(resp, "ended_at", None),
+        # An older shared lib has neither field: unknown, never zero. The pair
+        # is re-validated here so a malformed or one-sided value cannot reach
+        # the budget as a coerced zero.
+        reported_cost_usd=reported_cost,
+        reported_cost_source=reported_source,
     )
 
 
