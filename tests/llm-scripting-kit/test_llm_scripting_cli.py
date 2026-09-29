@@ -924,3 +924,37 @@ def test_probe_of_a_marked_frontdoor_reports_backend_health_and_names_it(
     assert payload["reachability"]["checked"] == "frontdoor-backends"
     assert payload["reachability"]["status"] == "unreachable"
     assert payload["frontdoor"] is True
+
+
+# --- acceptance verbs: usage errors exit 2 -----------------------------------
+
+
+@pytest.mark.parametrize("argv", [
+    ["acceptance"],
+    ["acceptance", "swapper", "--rounds", "2"],
+    ["acceptance", "swapper", "--url", "http://127.0.0.1:1"],
+    ["acceptance", "swapper", "--url", "http://127.0.0.1:1", "--rounds", "many"],
+    ["acceptance", "frontdoor", "--url", "http://127.0.0.1:1"],
+    ["acceptance", "frontdoor", "--url", "http://127.0.0.1:1", "--registry", "r.yaml",
+     "--spill-group", "a"],
+])
+def test_acceptance_argparse_usage_errors_exit_two(argv):
+    with pytest.raises(SystemExit) as info:
+        cli.main(argv)
+    assert info.value.code == cli.EXIT_USAGE
+
+
+def test_acceptance_swapper_rejects_bad_rounds_and_url_with_exit_two(capsys):
+    assert cli.main(["acceptance", "swapper", "--url", "http://127.0.0.1:1", "--rounds", "0"]) == cli.EXIT_USAGE
+    assert cli.main(["acceptance", "swapper", "--url", "not-a-url", "--rounds", "1"]) == cli.EXIT_USAGE
+    assert '"configuration"' in capsys.readouterr().err
+
+
+def test_acceptance_frontdoor_config_errors_exit_two(tmp_path, capsys):
+    base = ["acceptance", "frontdoor", "--url", "http://127.0.0.1:1",
+            "--spill-group", "a", "--queue-group", "b"]
+    assert cli.main(base + ["--registry", str(tmp_path / "absent.yaml")]) == cli.EXIT_USAGE
+    registry = tmp_path / "r.yaml"
+    registry.write_text("models:\n  x:\n    base_url: http://h/v1\n    model: m\n", encoding="utf-8")
+    assert cli.main(base + ["--registry", str(registry)]) == cli.EXIT_USAGE
+    assert cli.main(base + ["--registry", str(registry), "--expect-tier1-cap", "-2"]) == cli.EXIT_USAGE

@@ -91,6 +91,44 @@ exit `3` while every sibling `SwapperError` maps to `1` or `2`.
 call, no warning) for a team that wants a manual launch beside an active
 swapper on purpose; default and every other value is on.
 
+## `acceptance`: proofs that must be able to go red
+
+`llm-scripting-kit acceptance swapper|frontdoor`
+(`swapper_acceptance.py`, `frontdoor/acceptance.py`) asserts a deployment
+through its HTTP surface only (`/v1/models`, `/running`, `/health/backends`,
+`/v1/chat/completions`, the `x-frontdoor-deployment` header), never through
+host process access. Exit `0` passed, `1` an assertion failed (an unreachable
+target included), `2` usage or configuration.
+
+- **Never-evict needs a constructed overlap.** Alternating rounds cannot test
+  greediness: each waits for the previous one. The overlap check runs a long
+  request, demands the other model mid-flight, and fails both when the second
+  model becomes resident early and when the overlap did not occur (the busy
+  model was never observed resident, finished before the demand, or was never
+  sampled while both were pending). A pass without the second condition would
+  be vacuous.
+- **Paid rule.** A tier is paid unless the registry declares
+  `billing.mode: unmetered`; an undeclared tier is paid (fail closed), because
+  `key_env` and hostnames do not distinguish owner-funded from metered. Without
+  `--paid`, the spill-group fill burst is sized to the capped capacity of
+  unpaid tiers preceding the first paid tier, and the paid spill leg is
+  skipped. The queue-overfull leg sends one request past the queue group's
+  total cap; that request queues on the group's capped tiers and does not
+  spill. Every leg is refused, sending nothing, when a tier it needs is not
+  `reachable` in `/health/backends`, and both queue legs are refused without
+  `--paid` when any queue-group tier is paid (an uncapped queue tier is a
+  configuration error, exit 2).
+- **Tier shape comes from data.** Order, cap and billing come from the supplied
+  registry through `load_endpoint_registry`; deployment ids must equal
+  `/health/backends` for the group. Nothing fleet-specific is a literal in this
+  library. `--expect-tier1-cap` swaps only the first spill-group level's
+  expected count, so a wrong value must go red.
+- Tests use stdlib fake servers. Each of
+  `test_swapper_acceptance_constructed_overlap_detects_eviction`,
+  `test_frontdoor_acceptance_wrong_tier1_cap_exits_one` and
+  `test_frontdoor_paid_spill_requires_paid_flag` was shown to fail with its
+  assertion removed; keep that discipline when editing them.
+
 ## Reachability is not configuration, and it is never a completion
 
 `endpoints` lists what is CONFIGURED and is pure static data -- always

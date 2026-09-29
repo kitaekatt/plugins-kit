@@ -572,6 +572,51 @@ starting. `LLM_SCRIPTING_KIT_LAUNCH_GUARD=off` skips the guard entirely (no
 interpreter call, no warning) for a team that wants a manual launch beside an
 active swapper on purpose; default and every other value is on.
 
+### `acceptance` -- host-neutral acceptance runs
+
+`llm-scripting-kit acceptance` proves a running deployment through its HTTP
+surface only, so it works against a local or remote host:
+
+```bash
+llm-scripting-kit acceptance swapper --url URL --rounds N [--format text|json]
+llm-scripting-kit acceptance frontdoor --url URL --registry PATH \
+  --spill-group GROUP --queue-group GROUP [--quick] [--paid] \
+  [--expect-tier1-cap N] [--format text|json]
+```
+
+Exit `0`: every assertion passed. `1`: an assertion failed, including a target
+that did not answer. `2`: a usage or configuration error (bad arguments, an
+unreadable registry, an unknown group, a queue group with an uncapped tier).
+
+`swapper` asserts, per round of 1-6 varying concurrent requests, exact
+arithmetic answers and that `/running` shows only the round's model. It then
+runs a constructed never-evict overlap: a long request on one model, a demand
+for the other model while it runs, and a failure if the second model becomes
+resident before the first request finishes. A run whose overlap could not be
+constructed fails instead of passing vacuously. `--settle-seconds` and
+`--poll-seconds` tune the sampling.
+
+`frontdoor` reads each group's deployments from `GET /health/backends` and each
+tier's order, cap and billing from the `--registry` you name; the two must
+agree. Legs: fill (every unpaid tier before the first paid tier serves exactly
+its cap, in order), queue-fill, paid spill, and queue-overfull (one request
+past the queue group's total cap must return 200, never 429/503, and one
+capped deployment must serve past its cap). Each request states two operands
+and asks for their product after a counting task, so the exact-answer check
+tests arithmetic. The serving deployment comes from the `x-frontdoor-deployment`
+header. `--quick` runs the fill legs only. `--expect-tier1-cap N` replaces the
+expected first-tier count for the spill group; a wrong value must exit `1`.
+
+A tier is paid unless the registry declares `billing.mode: unmetered` for it.
+Without `--paid`, the spill-group fill burst never exceeds the capped capacity
+of unpaid tiers that precede the first paid tier, and the paid spill leg is
+reported as skipped. The queue-overfull leg sends one request past the queue
+group's total cap; it queues on that group's capped tiers rather than
+spilling. A leg is refused, sending nothing, when a tier it needs is not
+`reachable` in `/health/backends`, and both queue legs are refused when a
+queue-group tier is paid. `--paid` is the only opt-in for spending on a paid
+tier.
+
 ## When not to use
 
 If you just export `OPENROUTER_API_KEY` yourself and have a single consumer,

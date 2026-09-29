@@ -383,7 +383,77 @@ def _parser() -> argparse.ArgumentParser:
     swapper_guard_launch.add_argument(
         "--caller-pid", type=int, required=True, help="The launching process's PID."
     )
+
+    acceptance = sub.add_parser(
+        "acceptance",
+        help="Host-neutral acceptance runs (exit 0 passed, 1 assertion failed, 2 usage/config).",
+    )
+    acceptance_sub = acceptance.add_subparsers(dest="acceptance_action", required=True)
+    acc_swapper = acceptance_sub.add_parser(
+        "swapper", help="Residency, exact answers and constructed never-evict overlap on a llama-swap."
+    )
+    acc_swapper.add_argument("--url", required=True, help="The swapper's base URL.")
+    acc_swapper.add_argument("--rounds", type=int, required=True, help="Alternating rounds (at least 1).")
+    acc_swapper.add_argument(
+        "--settle-seconds", type=float, default=3.0,
+        help="Seconds into a round before residency is asserted (default 3).",
+    )
+    acc_swapper.add_argument(
+        "--poll-seconds", type=float, default=1.0, help="/running polling interval (default 1)."
+    )
+    _add_acceptance_format_arg(acc_swapper)
+    acc_front = acceptance_sub.add_parser(
+        "frontdoor", help="Fill/spill, deployment attribution and queue-not-reject on a front door."
+    )
+    acc_front.add_argument("--url", required=True, help="The front door's base URL.")
+    acc_front.add_argument("--registry", required=True, help="The model-endpoints registry the front door serves.")
+    acc_front.add_argument("--spill-group", required=True, help="Routing group used for the fill/spill legs.")
+    acc_front.add_argument(
+        "--queue-group", required=True,
+        help="Routing group whose tiers are all capped, used for the queue-not-reject legs.",
+    )
+    acc_front.add_argument("--quick", action="store_true", help="Fill legs only.")
+    acc_front.add_argument(
+        "--paid", action="store_true",
+        help="Allow legs that spill to a paid tier (a tier is paid unless the registry declares billing.mode: unmetered).",
+    )
+    acc_front.add_argument(
+        "--expect-tier1-cap", type=int, default=None,
+        help="Counterfactual: expect this many requests on the spill group's first tier; a wrong value exits 1.",
+    )
+    _add_acceptance_format_arg(acc_front)
     return parser
+
+
+def _add_acceptance_format_arg(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--format", choices=("text", "json"), default="text", help="Output format (default text)."
+    )
+
+
+def _cmd_acceptance(args: argparse.Namespace) -> int:
+    from .swapper_acceptance import AcceptanceConfigError, run_swapper_acceptance  # noqa: PLC0415
+
+    try:
+        if args.acceptance_action == "swapper":
+            report = run_swapper_acceptance(
+                args.url, args.rounds, settle_s=args.settle_seconds, poll_s=args.poll_seconds
+            )
+        else:
+            from .frontdoor.acceptance import run_frontdoor_acceptance  # noqa: PLC0415
+
+            report = run_frontdoor_acceptance(
+                args.url, args.registry, spill_group=args.spill_group, queue_group=args.queue_group,
+                quick=args.quick, paid=args.paid, expect_tier1_cap=args.expect_tier1_cap,
+            )
+    except AcceptanceConfigError as exc:
+        _json({"error": {"kind": "configuration", "message": str(exc)}}, stream=sys.stderr)
+        return EXIT_USAGE
+    if args.format == "json":
+        _json(report.to_json())
+    else:
+        print(report.to_text())
+    return report.exit_code
 
 
 def main(argv: Optional[list[str]] = None) -> int:
@@ -423,6 +493,8 @@ def main(argv: Optional[list[str]] = None) -> int:
             return _cmd_complete(args)
         if args.cmd == "swapper":
             return _cmd_swapper(args)
+        if args.cmd == "acceptance":
+            return _cmd_acceptance(args)
     except NoUsableRoutingTarget as floor:
         # The floor is the one selection error: loud, itemised, and a
         # failure rather than a usage error -- a reset window can clear it.
