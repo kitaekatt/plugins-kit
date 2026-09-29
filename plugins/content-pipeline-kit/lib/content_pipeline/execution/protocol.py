@@ -501,7 +501,15 @@ def build_handlers(
     def _fail(payload: Mapping[str, Any]) -> Any:
         run_id = _require(payload, "run_id")
         unit_id = _require(payload, "unit_id")
-        _require_compatible_run(run_id)
+        # `fail` is the one worker verb exempt from the ENVIRONMENT check. A
+        # worker that diagnosed its own environment as wrong (a mismatched
+        # cwd or required variable) must still be able to report that
+        # failure; refusing the report with the same environment check would
+        # leave the dispatcher with a unit it can only time out. The
+        # adapter-version check stays: a mismatched adapter could mis-record
+        # the failure against a run it does not understand.
+        run = _get_run_or_raise(store, run_id)
+        require_compatible_adapter(run, adapter)
         fencing_token = _require_fencing_token(payload)
         terminal = _require_bool_flag(payload, "terminal", default=False)
         store.fail_unit(

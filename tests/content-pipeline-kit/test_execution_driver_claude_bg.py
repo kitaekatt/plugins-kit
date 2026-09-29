@@ -64,6 +64,7 @@ from content_pipeline.execution.model import (
     UnitState,
 )
 from content_pipeline.execution.store import ExecutionStore
+from test_execution_driver_claude_bg_banner import real_launch_response
 from test_support.claude_bg_fakes import (
     FakeRunner,
     _advancing_clock_from,
@@ -124,7 +125,7 @@ def test_resolve_executable_falls_back_to_path(monkeypatch):
 
 def test_launch_bg_argv_is_positional_prompt_never_dash_p():
     runner = FakeRunner()
-    runner.script(("claude", "--bg"), ("backgrounded * abc123", "", 0))
+    runner.script(("claude", "--bg"), real_launch_response())
     cli = _cli(runner)
     cli.launch_bg("do the thing")
     argv, kwargs = runner.calls[-1]
@@ -133,7 +134,7 @@ def test_launch_bg_argv_is_positional_prompt_never_dash_p():
 
 def test_launch_bg_extra_args_come_before_the_positional_prompt():
     runner = FakeRunner()
-    runner.script(("claude", "--bg"), ("backgrounded * abc123", "", 0))
+    runner.script(("claude", "--bg"), real_launch_response())
     cli = _cli(runner)
     cli.launch_bg("prompt text", extra_args=["--permission-mode", "manual"])
     argv, _ = runner.calls[-1]
@@ -481,7 +482,7 @@ def test_preflight_passes_when_bg_dash_p_is_rejected():
 
 def test_preflight_refuses_when_bg_dash_p_exits_zero():
     runner = _healthy_runner()
-    runner.script(("claude", "--bg", "-p"), ("backgrounded * xyz", "", 0))
+    runner.script(("claude", "--bg", "-p"), real_launch_response())
     cli = _cli(runner)
     with pytest.raises(PreflightError):
         preflight(cli, env={})
@@ -489,7 +490,7 @@ def test_preflight_refuses_when_bg_dash_p_exits_zero():
 
 def test_preflight_refuses_when_bg_dash_p_appears_to_have_spawned():
     runner = _healthy_runner()
-    runner.script(("claude", "--bg", "-p"), ("backgrounded * xyz", "some conflict text", 1))
+    runner.script(("claude", "--bg", "-p"), real_launch_response(stderr="some conflict text", rc=1))
     cli = _cli(runner)
     with pytest.raises(PreflightError):
         preflight(cli, env={})
@@ -1211,7 +1212,7 @@ def test_dispatch_unit_confirms_via_observed_transition_not_via_banner(tmp_path)
     store = _seeded_dispatch_store(tmp_path)
     wc = _worker_command(tmp_path)
     runner = FakeRunner()
-    runner.script(("claude", "--bg"), ("backgrounded * a1b2c3d4", "", 0))
+    runner.script(("claude", "--bg"), real_launch_response("a1b2c3d4"))
     runner.script(
         ("claude", "agents", "--json"),
         (json.dumps([_bg_record(id="a1b2c3d4", session_id="sess-xyz", state="working")]), "", 0),
@@ -1245,7 +1246,7 @@ def test_dispatch_unit_holds_the_claim_before_the_launch(tmp_path):
     store = _seeded_dispatch_store(tmp_path)
     wc = _worker_command(tmp_path)
     runner = FakeRunner()
-    runner.script(("claude", "--bg"), ("backgrounded * a1b2c3d4", "", 0))
+    runner.script(("claude", "--bg"), real_launch_response("a1b2c3d4"))
     runner.script(
         ("claude", "agents", "--json"),
         (json.dumps([_bg_record(id="a1b2c3d4", session_id="sess-xyz", state="working")]), "", 0),
@@ -1302,7 +1303,7 @@ def test_dispatch_unit_captures_the_fence_by_construction_never_by_re_reading(tm
     store = _seeded_dispatch_store(tmp_path)
     wc = _worker_command(tmp_path)
     runner = FakeRunner()
-    runner.script(("claude", "--bg"), ("backgrounded * a1b2c3d4", "", 0))
+    runner.script(("claude", "--bg"), real_launch_response("a1b2c3d4"))
     runner.script(
         ("claude", "agents", "--json"),
         (json.dumps([_bg_record(id="a1b2c3d4", session_id="sess-xyz", state="working")]), "", 0),
@@ -1347,7 +1348,7 @@ def test_dispatch_unit_captures_the_fence_by_construction_never_by_re_reading(tm
 def test_dispatch_unit_duplicate_suppression_bites_before_any_launch_spend(tmp_path):
     store = _seeded_dispatch_store(tmp_path)
     wc = _worker_command(tmp_path)
-    runner = FakeRunner(default=("backgrounded * aaaaaaaa", "", 0))
+    runner = FakeRunner(default=real_launch_response("aaaaaaaa"))
     cli = _cli(runner)
     unit = _pending_unit(store, "run-1", "u0")
 
@@ -1368,7 +1369,7 @@ def test_dispatch_unit_state_failed_within_window_is_launch_misconfiguration(tmp
     store = _seeded_dispatch_store(tmp_path)
     wc = _worker_command(tmp_path)
     runner = FakeRunner()
-    runner.script(("claude", "--bg"), ("backgrounded * badbad01", "", 0))
+    runner.script(("claude", "--bg"), real_launch_response("badbad01"))
     runner.script(
         ("claude", "agents", "--json"),
         (json.dumps([_bg_record(id="badbad01", session_id="sess-bad", state="failed")]), "", 0),
@@ -1396,7 +1397,7 @@ def test_launch_misconfiguration_releases_the_dispatcher_held_claim(tmp_path):
     store = _seeded_dispatch_store(tmp_path)
     wc = _worker_command(tmp_path)
     runner = FakeRunner()
-    runner.script(("claude", "--bg"), ("backgrounded * badbad01", "", 0))
+    runner.script(("claude", "--bg"), real_launch_response("badbad01"))
     runner.script(
         ("claude", "agents", "--json"),
         (json.dumps([_bg_record(id="badbad01", session_id="sess-bad", state="failed")]), "", 0),
@@ -1427,7 +1428,7 @@ def test_dispatch_unit_never_appearing_is_launch_misconfiguration(tmp_path):
     store = _seeded_dispatch_store(tmp_path)
     wc = _worker_command(tmp_path)
     runner = FakeRunner()
-    runner.script(("claude", "--bg"), ("backgrounded * ffffffff", "", 0))
+    runner.script(("claude", "--bg"), real_launch_response("ffffffff"))
     runner.script(("claude", "agents", "--json"), ("[]", "", 0))  # never shows up
     cli = _cli(runner)
     unit = _pending_unit(store, "run-1", "u0")
@@ -1525,7 +1526,7 @@ def test_dispatch_unit_attach_failure_still_rms_even_when_stop_raises(tmp_path):
         argv = list(argv)
         calls.append(argv)
         if argv[1:2] == ["--bg"] and argv[2:3] != ["-p"]:
-            return ("backgrounded * a1b2c3d4", "", 0)
+            return real_launch_response("a1b2c3d4")
         if argv[1:3] == ["agents", "--json"]:
             return (
                 json.dumps([_bg_record(id="a1b2c3d4", session_id="sess-xyz", state="working")]),
@@ -2212,7 +2213,7 @@ def test_dispatch_wave_aborts_when_the_dispatcher_lease_is_lost(tmp_path, monkey
     store = _seeded_dispatch_store(tmp_path)
     wc = _worker_command(tmp_path)
     runner = _healthy_runner()
-    runner.script(("claude", "--bg"), ("backgrounded * abc12345", "", 0))
+    runner.script(("claude", "--bg"), real_launch_response("abc12345"))
     runner.script(
         ("claude", "agents", "--json"),
         (json.dumps([_bg_record(id="abc12345", session_id="sess-1", state="working")]), "", 0),
@@ -2292,7 +2293,7 @@ def test_dispatch_wave_launch_misconfiguration_aborts_whole_loop(tmp_path):
     store = _seeded_dispatch_store(tmp_path, unit_ids=("u0", "u1"))
     wc = _worker_command(tmp_path)
     runner = _healthy_runner()
-    runner.script(("claude", "--bg"), ("backgrounded * baaaaaad", "", 0))
+    runner.script(("claude", "--bg"), real_launch_response("baaaaaad"))
     runner.script(
         ("claude", "agents", "--json"),
         (json.dumps([_bg_record(id="baaaaaad", session_id="sess-bad", state="failed")]), "", 0),
@@ -2325,7 +2326,7 @@ def test_dispatch_wave_report_and_argv_never_carry_unit_content(tmp_path, monkey
     monkeypatch.setattr(claude_bg, "classify_settled_failure", lambda *a, **k: None)
 
     runner = _healthy_runner()
-    runner.script(("claude", "--bg"), ("backgrounded * c0ffee01", "", 0))
+    runner.script(("claude", "--bg"), real_launch_response("c0ffee01"))
     runner.script(
         ("claude", "agents", "--json"),
         [
@@ -2377,7 +2378,7 @@ def test_dispatch_wave_happy_path_dispatches_and_observes_acceptance(tmp_path):
     wc = _worker_command(tmp_path)
 
     runner = _healthy_runner()
-    runner.script(("claude", "--bg"), ("backgrounded * abc12345", "", 0))
+    runner.script(("claude", "--bg"), real_launch_response("abc12345"))
     runner.script(
         ("claude", "agents", "--json"),
         [
@@ -2430,7 +2431,7 @@ def test_dispatch_wave_returns_a_report_when_an_accept_lands_inside_the_renew_wi
     wc = _worker_command(tmp_path)
 
     runner = _healthy_runner()
-    runner.script(("claude", "--bg"), ("backgrounded * abc12345", "", 0))
+    runner.script(("claude", "--bg"), real_launch_response("abc12345"))
     runner.script(
         ("claude", "agents", "--json"),
         [
@@ -2483,7 +2484,7 @@ def _dispatch_one_and_capture_launch_argv(tmp_path, **wave_kwargs):
     wc = _worker_command(tmp_path)
 
     runner = _healthy_runner()
-    runner.script(("claude", "--bg"), ("backgrounded * abc12345", "", 0))
+    runner.script(("claude", "--bg"), real_launch_response("abc12345"))
     runner.script(
         ("claude", "agents", "--json"),
         [
@@ -2702,7 +2703,7 @@ def _wave_with_one_healthy_launch(store, tmp_path, accept_unit_id, *, clock_fn=N
     worker that accepts `accept_unit_id` out of the launch prompt."""
     wc = _worker_command(tmp_path)
     runner = _healthy_runner()
-    runner.script(("claude", "--bg"), ("backgrounded * abc12345", "", 0))
+    runner.script(("claude", "--bg"), real_launch_response("abc12345"))
     runner.script(
         ("claude", "agents", "--json"),
         [

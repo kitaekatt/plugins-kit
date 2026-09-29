@@ -120,10 +120,12 @@ from content_pipeline.execution.model import (
     AlreadyClaimedError,
     AttemptKind,
     ExecutionError,
+    NoOpenDispatchError,
     NotClaimedError,
     RunHaltedError,
     RunRecord,
     StaleDispatcherLeaseError,
+    StaleFenceError,
     TerminalStateError,
     UnitRecord,
     UnitState,
@@ -947,7 +949,7 @@ def _mint_worker_id() -> str:
     return f"claude-bg-{uuid.uuid4().hex[:12]}"
 
 
-def _end_session(cli: "ClaudeCli", short_id: str, *, env: Optional[Mapping[str, str]]) -> None:
+def _end_session(cli: "ClaudeCli", short_id: str, *, env: Optional[Mapping[str, str]]) -> bool:
     """Best-effort ``stop`` then ``rm`` of one background session, module-
     private and shared by every cleanup path in this driver (dispatch
     launch failure/abort, a settled ``worker_failed``/``session_lingering``/
@@ -957,15 +959,23 @@ def _end_session(cli: "ClaudeCli", short_id: str, *, env: Optional[Mapping[str, 
     ``rm``, so this is two separate ``try``/``except`` blocks, not one
     wrapping both. Neither return code nor exception establishes that the
     session actually ended -- this is hygiene, not a guarantee (see the
-    callers' own docstrings for what, if anything, closes the gap)."""
+    callers' own docstrings for what, if anything, closes the gap).
+
+    Returns ``True`` when the session is reported LEAKED: ``rm`` raised or
+    returned a nonzero code, so the session record may still exist. ``rm`` is
+    the judge because it is the step that removes the record; a failing
+    ``stop`` alone (an already-finished session cannot be stopped) does not
+    count. The return value never changes control flow -- callers that do
+    not surface leaks ignore it."""
     try:
         cli.stop(short_id, env=env)
     except Exception:  # noqa: BLE001 -- best-effort cleanup
         pass
     try:
-        cli.rm(short_id, env=env)
+        _out, _err, rc = cli.rm(short_id, env=env)
     except Exception:  # noqa: BLE001 -- best-effort cleanup
-        pass
+        return True
+    return rc != 0
 
 
 @dataclass
@@ -1337,7 +1347,17 @@ def _classify_and_maybe_halt(
     kind = classify_settled_failure(open_dispatch.session_id, job_id=open_dispatch.id)
     if kind in (HALT_RATE_LIMIT, HALT_AUTH):
         exc = PipelineHaltError(kind, detail=f"classified from settled session {open_dispatch.session_id!r}")
-        record_halt(store, run_id, open_dispatch.unit_id, open_dispatch.fencing_token, exc, at=at)
+        try:
+            record_halt(store, run_id, open_dispatch.unit_id, open_dispatch.fencing_token, exc, at=at)
+        except (TerminalStateError, NotClaimedError, StaleFenceError):
+            # The worker's accept (or a reclaim) landed between the tick's
+            # read of the unit and this release. ``record_halt`` sets the
+            # run halt BEFORE it releases the claim, so the halt is already
+            # recorded; only the release is refused because the unit no
+            # longer belongs to this dispatch. Nothing is left to undo, and
+            # the refusal must not escape the tick and abandon every other
+            # in-flight dispatch.
+            pass
         return kind
     return None
 
@@ -1361,8 +1381,9 @@ class TickResult:
 
     renewed: Tuple[str, ...]
     settled: Dict[str, str]  # unit_id -> outcome
-    dropped: Tuple[str, ...]  # unit_id -- fence/claimant drift, slot freed with no store write
+    dropped: Tuple[str, ...]  # unit_id -- fence/claimant drift, or dispatch row already settled elsewhere
     halted: Optional[str]
+    leaked_sessions: Tuple[str, ...] = ()  # short ids whose stop/rm cleanup did not remove the session
 
 
 def supervise_tick(
@@ -1410,12 +1431,21 @@ def supervise_tick(
       naturally expires (D5) -- this dispatcher never calls ``fail_unit``
       for it. The ``stop``/``rm`` are hygiene only; their return codes are
       not inspected, so they do not establish that the session ended.
-    - ``failed``/``stopped`` -- stop renewing, settle, classify (step 10).
+    - ``failed``/``stopped`` -- stop renewing, settle, classify (step 10),
+      except when the unit is already ACCEPTED: the session ended after its
+      work was accepted, so there is no failure to classify and no halt.
     - ``done`` with the unit ACCEPTED -- the happy path: settle
       ``outcome="accepted"``, no classification.
     - ``done`` with the unit NOT accepted -- stop renewing, settle, classify.
     - Absent from ``--all`` -- stop renewing, settle (``outcome="missing"``),
       classify (best-effort, using the last-known session/job ids).
+
+    A dispatch whose row is already settled (another dispatcher adopted and
+    closed it) is DROPPED rather than settled again. A halt classification
+    whose claim release is refused because the unit is no longer this
+    dispatch's (accepted or reclaimed inside the read-then-release window)
+    still reports the halt, which was recorded first. Sessions whose ``rm``
+    did not succeed are listed in ``TickResult.leaked_sessions``.
 
     No branch here reads ``~/.claude/jobs/<id>/state.json`` for a status
     decision (P13); :func:`classify_settled_failure` reads it for TEXT
@@ -1440,7 +1470,25 @@ def supervise_tick(
     renewed: List[str] = []
     settled: Dict[str, str] = {}
     dropped: List[str] = []
+    leaked: List[str] = []
     halted: Optional[str] = None
+
+    def _end(open_dispatch: OpenDispatch) -> None:
+        if _end_session(cli, open_dispatch.id, env=env):
+            leaked.append(open_dispatch.id)
+
+    def _settle(unit_id: str, outcome: str) -> bool:
+        """Settle the open dispatch row. ``False`` (and the unit DROPPED)
+        when the row is already settled: another dispatcher adopted and
+        closed it after this one's lease lapsed, so it is no longer this
+        dispatcher's to settle or to classify."""
+        try:
+            store.settle_dispatch(run_id, unit_id, outcome=outcome, at=now)
+        except NoOpenDispatchError:
+            dropped.append(unit_id)
+            return False
+        settled[unit_id] = outcome
+        return True
 
     for unit_id, open_dispatch in open_dispatches.items():
         current_unit = store.get_unit(run_id, unit_id)
@@ -1455,9 +1503,8 @@ def supervise_tick(
                 None,
             )
             if latest_fail is not None and latest_fail.fencing_token == open_dispatch.fencing_token:
-                _end_session(cli, open_dispatch.id, env=env)
-                store.settle_dispatch(run_id, unit_id, outcome="worker_failed", at=now)
-                settled[unit_id] = "worker_failed"
+                _end(open_dispatch)
+                _settle(unit_id, "worker_failed")
                 continue
         if (
             current_unit is None
@@ -1470,10 +1517,9 @@ def supervise_tick(
         session = sessions_by_session_id.get(open_dispatch.session_id)
 
         if session is None:
-            store.settle_dispatch(run_id, unit_id, outcome="missing", at=now)
-            settled[unit_id] = "missing"
-            kind = _classify_and_maybe_halt(store, run_id, open_dispatch, at=now)
-            halted = halted or kind
+            if _settle(unit_id, "missing") and current_unit.state is not UnitState.ACCEPTED:
+                kind = _classify_and_maybe_halt(store, run_id, open_dispatch, at=now)
+                halted = halted or kind
             continue
 
         state = session.state
@@ -1547,9 +1593,8 @@ def supervise_tick(
                 # leaked. Both calls are best-effort -- an unreachable
                 # daemon must not stop the settle below, which is what frees
                 # the slot and closes the dispatch row.
-                _end_session(cli, open_dispatch.id, env=env)
-                store.settle_dispatch(run_id, unit_id, outcome="session_lingering", at=now)
-                settled[unit_id] = "session_lingering"
+                _end(open_dispatch)
+                _settle(unit_id, "session_lingering")
                 # No classify_settled_failure: the unit is ACCEPTED. This is
                 # a session that overstayed, not a failure to explain.
                 continue
@@ -1568,35 +1613,38 @@ def supervise_tick(
             # to die is still left running. Handling the return codes is a
             # separate piece of work; do not read these two calls as a
             # guarantee that the session is gone.
-            _end_session(cli, open_dispatch.id, env=env)
-            store.settle_dispatch(run_id, unit_id, outcome="blocked", at=now)
-            settled[unit_id] = "blocked"
+            _end(open_dispatch)
+            _settle(unit_id, "blocked")
             # No classify_settled_failure here: a stalled worker is not a
             # settled FAILURE, and D5's "no grace" rule is about the RENEWAL
             # stopping, not about diagnosing why -- there is nothing failed
             # to explain yet.
         elif state == "done":
             if current_unit.state is UnitState.ACCEPTED:
-                store.settle_dispatch(run_id, unit_id, outcome="accepted", at=now)
-                settled[unit_id] = "accepted"
-            else:
-                store.settle_dispatch(run_id, unit_id, outcome="done_unaccepted", at=now)
-                settled[unit_id] = "done_unaccepted"
+                _settle(unit_id, "accepted")
+            elif _settle(unit_id, "done_unaccepted"):
                 kind = _classify_and_maybe_halt(store, run_id, open_dispatch, at=now)
                 halted = halted or kind
         elif state in ("failed", "stopped"):
-            store.settle_dispatch(run_id, unit_id, outcome=state, at=now)
-            settled[unit_id] = state
-            kind = _classify_and_maybe_halt(store, run_id, open_dispatch, at=now)
-            halted = halted or kind
+            # An ACCEPTED unit has nothing to explain: the session ended
+            # after the worker's work was accepted, so a halt classified from
+            # its transcript would halt the run over a unit that succeeded.
+            if _settle(unit_id, state) and current_unit.state is not UnitState.ACCEPTED:
+                kind = _classify_and_maybe_halt(store, run_id, open_dispatch, at=now)
+                halted = halted or kind
         else:
             # An unrecognized state (a future platform addition): stop
             # renewing and settle rather than silently renewing forever on
             # an unknown value.
-            store.settle_dispatch(run_id, unit_id, outcome=f"unknown:{state}", at=now)
-            settled[unit_id] = f"unknown:{state}"
+            _settle(unit_id, f"unknown:{state}")
 
-    return TickResult(renewed=tuple(renewed), settled=settled, dropped=tuple(dropped), halted=halted)
+    return TickResult(
+        renewed=tuple(renewed),
+        settled=settled,
+        dropped=tuple(dropped),
+        halted=halted,
+        leaked_sessions=tuple(leaked),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1665,12 +1713,21 @@ class DispatchReport:
     dispatcher_acquired: bool
     dispatched: Tuple[str, ...] = ()
     accepted: Tuple[str, ...] = ()
+    """Units this call dispatched or recovered whose store state is ACCEPTED
+    when their dispatch ended, whatever the dispatch outcome recorded in
+    ``settled`` (a worker that accepts and then lingers or blocks settles as
+    ``session_lingering`` / ``blocked`` yet is listed here). The store is the
+    truth; ``settled`` describes the session."""
     settled: Dict[str, str] = field(default_factory=dict)
     failed_exhausted: Tuple[str, ...] = ()
     recovered: Tuple[str, ...] = ()
     halted: Optional[str] = None
     status_digests: Tuple[Dict[str, Any], ...] = ()
     aborted_reason: Optional[str] = None
+    leaked_sessions: Tuple[str, ...] = ()
+    """Short ids of background sessions the dispatcher tried to end and whose
+    ``rm`` failed or raised; they may still be running and need a manual
+    ``claude stop`` / ``claude rm``."""
 
 
 def dispatch_wave(
@@ -1685,7 +1742,6 @@ def dispatch_wave(
     batch_size: int = DEFAULT_BATCH_SIZE,
     poll_interval_s: float = DEFAULT_DISPATCH_POLL_INTERVAL_S,
     launch_confirm_seconds: float = DEFAULT_LAUNCH_CONFIRM_SECONDS,
-    lease_seconds: Optional[float] = None,
     max_reclaims_per_unit: int = DEFAULT_MAX_RECLAIMS_PER_UNIT,
     extra_launch_args: Sequence[str] = (),
     terminal_exit_grace_seconds: float = DEFAULT_TERMINAL_EXIT_GRACE_SECONDS,
@@ -1826,6 +1882,7 @@ def dispatch_wave(
     open_dispatches: Dict[str, OpenDispatch] = {}
     dispatched: List[str] = []
     accepted: List[str] = []
+    leaked_sessions: List[str] = []
     settled_all: Dict[str, str] = {}
     claim_refused: Set[str] = set()
     failed_exhausted: List[str] = []
@@ -1836,6 +1893,15 @@ def dispatch_wave(
 
     def _now() -> float:
         return clock_fn() if at is None else at
+
+    def _note_accepted(unit_id: str) -> None:
+        """List ``unit_id`` as accepted when the STORE says so, regardless of
+        how its dispatch ended."""
+        if unit_id in accepted:
+            return
+        unit_now = store.get_unit(run_id, unit_id)
+        if unit_now is not None and unit_now.state is UnitState.ACCEPTED:
+            accepted.append(unit_id)
 
     # Adopt durable launches before selecting candidates. This closes the
     # process-death gap: an attached session remains supervised by the next
@@ -1872,6 +1938,7 @@ def dispatch_wave(
         if unit.state is UnitState.ACCEPTED:
             store.settle_dispatch(run_id, record.unit_id, outcome="accepted", at=_now())
             settled_all[record.unit_id] = "accepted"
+            accepted.append(record.unit_id)
             continue
         if unit.state is UnitState.FAILED:
             store.settle_dispatch(run_id, record.unit_id, outcome="worker_failed", at=_now())
@@ -2029,8 +2096,8 @@ def dispatch_wave(
             for unit_id, outcome in tick.settled.items():
                 open_dispatches.pop(unit_id, None)
                 settled_all[unit_id] = outcome
-                if outcome == "accepted":
-                    accepted.append(unit_id)
+                _note_accepted(unit_id)
+            leaked_sessions.extend(sid for sid in tick.leaked_sessions if sid not in leaked_sessions)
             for unit_id in tick.dropped:
                 open_dispatches.pop(unit_id, None)
                 # A DROPPED dispatch's row must be settled here, not just
@@ -2088,7 +2155,8 @@ def dispatch_wave(
                 sleep_fn(poll_interval_s)
     finally:
         for unit_id, opened in list(open_dispatches.items()):
-            _end_session(cli, opened.id, env=env)
+            if _end_session(cli, opened.id, env=env) and opened.id not in leaked_sessions:
+                leaked_sessions.append(opened.id)
             # Settle what was just stopped. An open dispatch row makes its
             # unit permanently unreclaimable, so abandoning one here (only
             # reachable on an abort path -- a normal exit leaves nothing
@@ -2099,6 +2167,7 @@ def dispatch_wave(
                 pass
             else:
                 settled_all.setdefault(unit_id, "wave_exit")
+                _note_accepted(unit_id)
         try:
             store.release_dispatcher_lease(run_id, dispatcher_id, fence, at=_now())
         except StaleDispatcherLeaseError:
@@ -2117,6 +2186,7 @@ def dispatch_wave(
         halted=halted,
         status_digests=tuple(status_digests),
         aborted_reason=aborted_reason,
+        leaked_sessions=tuple(leaked_sessions),
     )
 
 

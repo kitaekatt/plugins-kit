@@ -112,6 +112,18 @@ launch prompt, not as a substitute for it.
 
 ## Reading the report
 
+`DispatchReport.accepted` lists every unit this call dispatched or recovered
+whose STORE state is accepted when its dispatch ended -- whatever `settled`
+says. A worker that accepts and then blocks or lingers settles as `blocked` or
+`session_lingering` and is still listed in `accepted`, because `settled`
+describes the session and the store holds the truth about the unit. Read
+`accepted` for what finalize will apply; read `settled` for how each session
+ended.
+
+`DispatchReport.leaked_sessions` lists the short ids of sessions the
+dispatcher tried to end and whose `rm` failed or raised. They may still be
+running; stop and remove them by hand (`claude stop <id>`, `claude rm <id>`).
+
 `DispatchReport.settled` maps a unit id to how its dispatch ended. The
 vocabulary a consumer will actually see:
 
@@ -120,7 +132,9 @@ vocabulary a consumer will actually see:
 - `done_unaccepted` -- the session ended without an accepted submission.
 - `blocked` -- the session is waiting on something (commonly a permission
   prompt) with nothing timing it out. The dispatcher stops renewing
-  immediately, so the unit becomes reclaimable once its lease expires.
+  immediately, so the unit becomes reclaimable once its lease expires. If the
+  unit was already accepted, it is also listed in `accepted` and is not
+  reclaimed.
 - `missing` -- the session vanished from the session listing.
 - `session_lingering` -- the unit was accepted but the worker's session
   outstayed `terminal_exit_grace_seconds`; the dispatcher ended it with

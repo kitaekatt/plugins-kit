@@ -81,6 +81,19 @@ REAL_LAUNCH_STDOUT = (
 # fidelity to the real triple.
 REAL_LAUNCH_STDERR = "Starting background service" + chr(0xFFFD) + "\n"
 REAL_LAUNCH_RC = 0
+REAL_LAUNCH_SHORT_ID = "f77605d2"
+
+
+def real_launch_response(short_id=REAL_LAUNCH_SHORT_ID, stderr=None, rc=None):
+    """The pinned real ``claude --bg`` (stdout, stderr, rc) triple with the
+    session id swapped for ``short_id``. Every scripted launch elsewhere in
+    the driver tests routes through this, so a launch response is always the
+    real multi-line shape the driver receives, never a one-line invention."""
+    return (
+        REAL_LAUNCH_STDOUT.replace(REAL_LAUNCH_SHORT_ID, short_id),
+        REAL_LAUNCH_STDERR if stderr is None else stderr,
+        REAL_LAUNCH_RC if rc is None else rc,
+    )
 
 
 def test_parses_the_real_middle_dot_banner():

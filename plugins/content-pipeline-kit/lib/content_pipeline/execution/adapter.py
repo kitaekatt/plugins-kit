@@ -153,6 +153,19 @@ def _to_native_flavour(value: str) -> str:
     return os.path.normcase(os.path.normpath(value))
 
 
+def _same_path_text(recorded: str, actual: str) -> bool:
+    """Path-text equality under the host filesystem's own case rules:
+    identical strings, or ``os.path.normcase``-equal ones. On Windows
+    ``normcase`` folds case and separators, so a different-case spelling of
+    the same directory (the OS echoes back the caller's chdir casing)
+    compares equal; on POSIX it is the identity, so paths differing only in
+    case stay different. Never normalizes structure (a trailing separator
+    still differs), never touches the filesystem, and never converts a Git
+    Bash POSIX spelling (``/d/dev/x``) to a drive path, so that flavour
+    mismatch still refuses."""
+    return recorded == actual or os.path.normcase(recorded) == os.path.normcase(actual)
+
+
 def _same_location_different_flavour(recorded: str, actual: str) -> bool:
     """True when ``recorded`` and ``actual`` differ as raw strings, EXACTLY
     ONE of them looks like a Git Bash POSIX-style drive path
@@ -302,8 +315,9 @@ class WorkerEnvironment:
     see :meth:`check`). ``forbidden_vars`` -- NAMES only, never values; a
     worker process must not have any of these set (non-empty) at all.
     ``require_cwd`` -- the worker's ``os.getcwd()`` must equal the run's
-    recorded ``os.getcwd()`` (worker-side, exact string equality, same as
-    ``required_vars``).
+    recorded ``os.getcwd()`` (worker-side; exact string equality on POSIX,
+    case- and separator-insensitive on a case-insensitive host such as
+    Windows, where the OS echoes back the caller's chdir casing).
 
     ``cwd_vars`` -- names whose value is meant to REPRESENT the working
     directory (the canonical example: ``PWD``), enforced in TWO places: by
@@ -385,7 +399,16 @@ class WorkerEnvironment:
         for name in self.required_vars:
             recorded_value = recorded.get(name, "")
             actual_value = os.environ.get(name, "")
-            if recorded_value != actual_value:
+            # A name also declared in ``cwd_vars`` holds a path, so its
+            # spelling may differ in case or separators on a case-insensitive
+            # host (a caller's chdir casing is echoed back by the OS).
+            # Any other required var is exact string equality.
+            same = (
+                _same_path_text(recorded_value, actual_value)
+                if name in self.cwd_vars
+                else recorded_value == actual_value
+            )
+            if not same:
                 raise WorkerEnvironmentMismatchError(
                     run_id=run_id,
                     var_name=name,
@@ -395,7 +418,7 @@ class WorkerEnvironment:
         if self.require_cwd:
             recorded_cwd = recorded.get(_RESERVED_CWD_KEY, "")
             actual_cwd = os.getcwd()
-            if recorded_cwd != actual_cwd:
+            if not _same_path_text(recorded_cwd, actual_cwd):
                 raise WorkerEnvironmentMismatchError(
                     run_id=run_id,
                     var_name=_RESERVED_CWD_KEY,

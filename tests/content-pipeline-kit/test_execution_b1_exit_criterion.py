@@ -81,6 +81,7 @@ from content_pipeline.execution.store import ExecutionStore
 # established: FakeRunner's argv-prefix scripting, the preflight-passing
 # script set, and the background-record shape.
 from test_execution_driver_claude_bg import FakeRunner, _bg_record, _healthy_runner
+from test_execution_driver_claude_bg_banner import real_launch_response
 
 RUN_ID = "run-1"
 POLL_INTERVAL = 100.0  # the simulation step; see "Time is injected" above
@@ -213,7 +214,7 @@ class World:
         if self.on_launch is not None:
             self.on_launch(record)
         self._observe()
-        return (f"backgrounded * {short_id}", "", 0)
+        return real_launch_response(short_id)
 
     # -- helpers used by the timeline -------------------------------------
 

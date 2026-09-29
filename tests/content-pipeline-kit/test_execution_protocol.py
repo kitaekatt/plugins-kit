@@ -1000,3 +1000,73 @@ def test_explicit_mount_lease_seconds_still_wins_over_a_derived_one(tmp_path):
     assert result["ok"] is True
     expires = result["result"]["lease_expires_at"]
     assert 100 - 2 <= expires - before <= 100 + 2
+
+
+# -- a worker whose environment is wrong can still report the failure --------
+
+
+def _env_mismatched_worker(tmp_path, monkeypatch):
+    """A run created under APP_ROOT=proj, a claim taken while the worker's
+    environment still matched, and then the environment diagnosed as wrong."""
+    from content_pipeline.execution.adapter import WorkerEnvironment
+
+    monkeypatch.setenv("APP_ROOT", "D:/dev/proj")
+    store = _new_store(tmp_path)
+    _run_with_env(store, "run-1", {"APP_ROOT": "D:/dev/proj"})
+    store.register_units("run-1", ["u0"])
+    adapter = RunAdapter(
+        user_for=lambda u: f"user:{u.id}",
+        parse_fn=lambda t: t,
+        apply=lambda uid, payload: None,
+        environment=WorkerEnvironment(required_vars=("APP_ROOT",)),
+    )
+    handlers = build_handlers(store, adapter, strategy=FLAT_STRATEGY)
+    claimed = dispatch(
+        _envelope("claim", {"run_id": "run-1", "unit_id": "u0", "worker_id": "w1"}), handlers
+    )
+    token = claimed["result"]["fencing_token"]
+    monkeypatch.setenv("APP_ROOT", "D:/dev/wrong")
+    return store, handlers, token
+
+
+def test_fail_verb_is_accepted_from_an_environment_mismatched_worker(tmp_path, monkeypatch):
+    store, handlers, token = _env_mismatched_worker(tmp_path, monkeypatch)
+    result = dispatch(
+        _envelope(
+            "fail",
+            {"run_id": "run-1", "unit_id": "u0", "fencing_token": token,
+             "error": "environment guard refused", "terminal": True},
+        ),
+        handlers,
+    )
+    assert result["ok"] is True
+    assert store.get_unit("run-1", "u0").state is UnitState.FAILED
+
+
+def test_other_worker_verbs_still_refuse_the_mismatched_environment(tmp_path, monkeypatch):
+    store, handlers, token = _env_mismatched_worker(tmp_path, monkeypatch)
+    for verb, payload in (
+        ("read", {"run_id": "run-1", "unit_id": "u0"}),
+        ("renew", {"run_id": "run-1", "unit_id": "u0", "fencing_token": token}),
+        ("submit", {"run_id": "run-1", "unit_id": "u0", "fencing_token": token, "text": "x"}),
+    ):
+        result = dispatch(_envelope(verb, payload), handlers)
+        assert result["ok"] is False, verb
+        assert result["error"]["type"] == "WorkerEnvironmentMismatchError", verb
+
+
+def test_fail_verb_still_refuses_an_incompatible_adapter_version(tmp_path):
+    store = _seeded_store(tmp_path, unit_ids=("u0",), adapter_version="v1")
+    claimed = dispatch(
+        _envelope("claim", {"run_id": "run-1", "unit_id": "u0", "worker_id": "w1"}),
+        build_handlers(store, _adapter(adapter_version="v1"), strategy=FLAT_STRATEGY),
+    )
+    token = claimed["result"]["fencing_token"]
+    handlers_v2 = build_handlers(store, _adapter(adapter_version="v2"), strategy=FLAT_STRATEGY)
+    result = dispatch(
+        _envelope("fail", {"run_id": "run-1", "unit_id": "u0", "fencing_token": token}),
+        handlers_v2,
+    )
+    assert result["ok"] is False
+    assert result["error"]["type"] == "AdapterVersionMismatchError"
+    assert store.get_unit("run-1", "u0").state is UnitState.CLAIMED
