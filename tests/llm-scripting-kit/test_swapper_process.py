@@ -317,3 +317,41 @@ def test_real_signal_refuses_wrong_create_time_then_terminates(child):
     assert insp.wait_gone(pid, ct, 0.3) is False, "a mismatched create_time must not signal"
     insp.signal(pid, ct, spm.SIGTERM)
     assert insp.wait_gone(pid, ct, 10.0) is True
+
+
+# ---------------------------------------------------------------------------
+# port_is_free: the independent bind check (real loopback sockets only)
+# ---------------------------------------------------------------------------
+
+
+def test_port_is_free_sees_a_live_listener_and_a_released_port():
+    import socket
+
+    srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    srv.bind(("127.0.0.1", 0))
+    srv.listen(1)
+    port = srv.getsockname()[1]
+    try:
+        assert spm.port_is_free(port) is False
+    finally:
+        srv.close()
+    assert spm.port_is_free(port) is True
+
+
+def test_port_is_free_sees_an_ipv6_loopback_listener():
+    import socket
+
+    if not socket.has_ipv6:
+        pytest.skip("no IPv6 on this host")
+    srv = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
+    try:
+        srv.bind(("::1", 0))
+    except OSError:
+        srv.close()
+        pytest.skip("IPv6 loopback unavailable")
+    srv.listen(1)
+    port = srv.getsockname()[1]
+    try:
+        assert spm.port_is_free(port) is False
+    finally:
+        srv.close()

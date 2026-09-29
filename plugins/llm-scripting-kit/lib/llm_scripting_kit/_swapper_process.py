@@ -26,7 +26,9 @@ Error vocabulary, shared by every inspector:
 
 from __future__ import annotations
 
+import errno
 import os
+import socket
 import sys
 import time
 from dataclasses import dataclass
@@ -247,6 +249,58 @@ class PsutilInspector:
             time.sleep(_WAIT_POLL_S)
 
 
+def port_is_free(port: int) -> bool:
+    """Bind and connect probes for TCP ``port``: necessary, not sufficient.
+
+    Does not consult the process table. The port is occupied when a loopback
+    connect (IPv4, or IPv6 where available) succeeds, when binding the IPv4
+    loopback or wildcard address fails, or when binding the IPv6 wildcard fails
+    with an address-in-use or permission error. ``SO_REUSEADDR`` is set off
+    Windows, so sockets in TIME_WAIT do not read as a live listener.
+
+    A True result does NOT prove the port is unused: a listener bound only to
+    one specific non-loopback address, or only to IPv6, can leave every probe
+    here succeeding on some platforms (macOS, Windows). Callers that must know
+    the port is clear also scan listener sockets, as
+    :func:`llm_scripting_kit.swapper.terminate_listener` does.
+    """
+    hosts = ["127.0.0.1"] + (["::1"] if socket.has_ipv6 else [])
+    for host in hosts:
+        try:
+            with socket.create_connection((host, port), timeout=0.5):
+                return False
+        except OSError:
+            pass
+    for host in ("127.0.0.1", "0.0.0.0"):
+        probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            if sys.platform != "win32":
+                probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            probe.bind((host, port))
+        except OSError:
+            return False
+        finally:
+            probe.close()
+    if socket.has_ipv6:
+        try:
+            probe6 = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
+        except OSError:
+            return True
+        try:
+            if sys.platform != "win32":
+                probe6.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            probe6.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1)
+            probe6.bind(("::", port))
+        except OSError as exc:
+            # Only "in use" and "denied" mean occupied; an absent or disabled
+            # IPv6 stack says nothing about the port.
+            if exc.errno in (errno.EADDRINUSE, errno.EACCES):
+                return False
+        finally:
+            probe6.close()
+    return True
+
+
 __all__ = [
     "SIGTERM",
     "SIGKILL",
@@ -256,4 +310,5 @@ __all__ = [
     "Inspector",
     "PsutilInspector",
     "normalize_name",
+    "port_is_free",
 ]

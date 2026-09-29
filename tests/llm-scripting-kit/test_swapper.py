@@ -84,6 +84,7 @@ class FakeInspector:
         self.signals = []
         self.exits_on = {"SIGTERM"}  # signals after which wait_gone reports gone
         self.process_calls = 0
+        self.listen_calls = []
         self.on_process_call = {}  # call number -> callable(self)
         self.on_signal = {}  # signal -> callable(self), run before recording
 
@@ -103,6 +104,7 @@ class FakeInspector:
         return tuple(self.procs.values())
 
     def listen_addrs(self, pid):
+        self.listen_calls.append(pid)
         if pid in self.denied:
             raise sw.InspectionIndeterminate(f"denied {pid}")
         if pid not in self.procs:
@@ -119,7 +121,11 @@ class FakeInspector:
         self.signals.append((pid, sig))
 
     def wait_gone(self, pid, create_time, timeout_s):
-        return bool(self.signals) and self.signals[-1][1] in self.exits_on
+        gone = bool(self.signals) and self.signals[-1][1] in self.exits_on
+        if gone:  # an exited process leaves the table with its sockets
+            self.procs.pop(pid, None)
+            self.listens.pop(pid, None)
+        return gone
 
 
 def standard_table(**overrides):
@@ -716,3 +722,246 @@ def test_urllib_transport_posts_unload_with_empty_body(monkeypatch):
     monkeypatch.setattr(sw.urllib.request, "urlopen", fake_urlopen)
     sw._urllib_transport("POST", f"{SWAP_URL}{sw.UNLOAD_PATH}", 1.0)
     assert seen == [("POST", f"{SWAP_URL}/api/models/unload", b"")]
+
+
+# ---------------------------------------------------------------------------
+# terminate_listener: explicit replacement of the server on one port
+# ---------------------------------------------------------------------------
+
+REPL_PORT = 8080
+STRAY_PID = 900
+
+
+def _flags(*values):
+    """A port_free stub returning ``values`` in order, then the last forever."""
+    seq = list(values)
+    calls = []
+
+    def port_free(port):
+        calls.append(port)
+        return seq.pop(0) if len(seq) > 1 else seq[0]
+
+    port_free.calls = calls
+    return port_free
+
+
+def repl_table(name="ninfer-serve", cmdline=None):
+    procs = [
+        rec(1, 0, "init", owner="0"),
+        rec(STRAY_PID, 1, name, cmdline=cmdline),
+    ]
+    return FakeInspector(procs, {STRAY_PID: {("0.0.0.0", REPL_PORT)}})
+
+
+def test_terminate_listener_free_port_is_a_noop():
+    insp = repl_table()
+    insp.listens = {}
+    res = sw.terminate_listener(REPL_PORT, inspector=insp, port_free=_flags(True))
+    assert res.action == "none" and res.pid is None
+    assert insp.signals == []
+
+
+def test_terminate_listener_terms_the_one_recognized_server():
+    insp = repl_table()
+    res = sw.terminate_listener(
+        REPL_PORT, inspector=insp, port_free=_flags(False, True), settle_s=0
+    )
+    assert insp.signals == [(STRAY_PID, "SIGTERM")]
+    assert res.action == "terminated" and res.pid == STRAY_PID
+    assert res.signal == "SIGTERM" and res.escalated is False
+
+
+@pytest.mark.parametrize(
+    "name,cmdline",
+    [
+        ("llama-server", None),
+        ("python3", ("python3", "-m", "mlx_lm.server", "--port", "8080")),
+    ],
+)
+def test_terminate_listener_recognizes_every_server_kind(name, cmdline):
+    insp = repl_table(name=name, cmdline=cmdline)
+    res = sw.terminate_listener(
+        REPL_PORT, inspector=insp, port_free=_flags(False, True), settle_s=0
+    )
+    assert res.pid == STRAY_PID and insp.signals == [(STRAY_PID, "SIGTERM")]
+
+
+def test_terminate_listener_skips_other_owner_before_listener_inspection():
+    """Another owner's process is discarded on its KNOWN owner alone, so an
+    unreadable listener table there (root, another user) cannot block."""
+    insp = repl_table()
+    insp.procs[50] = rec(50, 1, "sshd", owner="0")
+    insp.denied.add(50)
+    res = sw.terminate_listener(
+        REPL_PORT, inspector=insp, port_free=_flags(False, True), settle_s=0
+    )
+    assert 50 not in insp.listen_calls
+    assert res.pid == STRAY_PID
+
+
+def test_terminate_listener_unknown_owner_candidate_that_is_unreadable_refuses():
+    insp = repl_table()
+    insp.procs[60] = ProcessRecord(
+        pid=60, ppid=None, name=None, owner=None, create_time=0.0, cmdline=None
+    )
+    insp.denied.add(60)
+    with pytest.raises(sw.InspectionIndeterminate):
+        sw.terminate_listener(REPL_PORT, inspector=insp, port_free=_flags(False))
+    assert insp.signals == []
+
+
+def test_terminate_listener_refuses_unrecognized_same_owner_listener():
+    insp = repl_table(name="nginx")
+    with pytest.raises(sw.SafetyRefusal):
+        sw.terminate_listener(REPL_PORT, inspector=insp, port_free=_flags(False))
+    assert insp.signals == []
+
+
+def test_terminate_listener_refuses_when_occupied_but_no_same_owner_listener():
+    insp = repl_table()
+    insp.listens = {}
+    with pytest.raises(sw.SafetyRefusal):
+        sw.terminate_listener(REPL_PORT, inspector=insp, port_free=_flags(False))
+    assert insp.signals == []
+
+
+def test_terminate_listener_refuses_unreadable_same_owner_process_before_signalling():
+    insp = repl_table()
+    insp.procs[70] = rec(70, 1, "helper")
+    insp.denied.add(70)
+    with pytest.raises(sw.InspectionIndeterminate):
+        sw.terminate_listener(REPL_PORT, inspector=insp, port_free=_flags(False))
+    assert insp.signals == []
+
+
+def test_terminate_listener_refuses_two_recognized_listeners():
+    insp = repl_table()
+    insp.procs[901] = rec(901, 1, "llama-server")
+    insp.listens[901] = {("127.0.0.1", REPL_PORT)}
+    with pytest.raises(sw.SafetyRefusal):
+        sw.terminate_listener(REPL_PORT, inspector=insp, port_free=_flags(False))
+    assert insp.signals == []
+
+
+def test_terminate_listener_refuses_a_swapper_child():
+    insp = repl_table()
+    insp.procs[STRAY_PID] = rec(STRAY_PID, 279, "ninfer-serve")
+    insp.procs[279] = rec(279, 1, "llama-swap")
+    with pytest.raises(sw.SafetyRefusal):
+        sw.terminate_listener(REPL_PORT, inspector=insp, port_free=_flags(False))
+    assert insp.signals == []
+
+
+def test_terminate_listener_refuses_occupied_port_after_term_without_recognized_listener():
+    """TERM succeeds, but an unrecognized process now holds the port: refuse,
+    and never signal the replacement."""
+    insp = repl_table()
+
+    def wait_gone(pid, ct, timeout_s):
+        insp.procs.pop(STRAY_PID)
+        insp.procs[950] = rec(950, 1, "nginx")
+        insp.listens = {950: {("0.0.0.0", REPL_PORT)}}
+        return True
+
+    insp.wait_gone = wait_gone
+    with pytest.raises(sw.SafetyRefusal):
+        sw.terminate_listener(
+            REPL_PORT, inspector=insp, port_free=_flags(False), settle_s=0
+        )
+    assert insp.signals == [(STRAY_PID, "SIGTERM")]
+
+
+def test_terminate_listener_escalates_to_kill_only_for_same_pid_and_create_time():
+    insp = repl_table()
+    insp.exits_on = {"SIGKILL"}
+    res = sw.terminate_listener(
+        REPL_PORT, inspector=insp, port_free=_flags(False, True), grace_s=0, settle_s=0
+    )
+    assert insp.signals == [(STRAY_PID, "SIGTERM"), (STRAY_PID, "SIGKILL")]
+    assert res.signal == "SIGKILL" and res.escalated is True
+
+
+def test_terminate_listener_does_not_kill_a_reused_pid():
+    insp = repl_table()
+
+    def wait_gone(pid, ct, timeout_s):
+        # The verified server exited and the PID was reused by a stranger.
+        insp.procs[pid] = rec(pid, 1, "nginx", create_time=ct + 500.0)
+        insp.listens.pop(pid, None)
+        return False
+
+    insp.wait_gone = wait_gone
+    res = sw.terminate_listener(
+        REPL_PORT, inspector=insp, port_free=_flags(False, True), grace_s=0, settle_s=0
+    )
+    assert insp.signals == [(STRAY_PID, "SIGTERM")]
+    assert res.escalated is False
+
+
+def test_terminate_listener_fails_when_server_survives_kill():
+    insp = repl_table()
+    insp.exits_on = set()
+    with pytest.raises(sw.TerminationFailed):
+        sw.terminate_listener(
+            REPL_PORT, inspector=insp, port_free=_flags(False), grace_s=0
+        )
+    assert [s for _, s in insp.signals] == ["SIGTERM", "SIGKILL"]
+
+
+def test_terminate_listener_refuses_when_identity_changes_before_signal():
+    insp = repl_table()
+    insp.on_process_call[1] = lambda i: i.procs.__setitem__(
+        STRAY_PID, rec(STRAY_PID, 1, "ninfer-serve", create_time=9999.0)
+    )
+    with pytest.raises(sw.ProcessChangedError):
+        sw.terminate_listener(REPL_PORT, inspector=insp, port_free=_flags(False))
+    assert insp.signals == []
+
+
+@pytest.mark.parametrize("port", [0, -1, 70000])
+def test_terminate_listener_rejects_invalid_port(port):
+    with pytest.raises(sw.SwapperUsageError):
+        sw.terminate_listener(port, inspector=repl_table(), port_free=_flags(True))
+
+
+# -- "free" needs the bind check AND an empty listener scan ------------------
+
+
+def _holds_after_exit(insp):
+    """wait_gone reports the server gone but its listener stays in the table."""
+    insp.wait_gone = lambda pid, ct, timeout_s: True
+
+
+@pytest.mark.parametrize("ip", ["192.0.2.10", "::1", "::"])
+def test_terminate_listener_sees_listener_on_non_loopback_address(ip):
+    """A bind check that reads free must not hide a recognized server that is
+    LISTENing on one specific (LAN or IPv6) address."""
+    insp = repl_table()
+    insp.listens = {STRAY_PID: {(ip, REPL_PORT)}}
+    res = sw.terminate_listener(
+        REPL_PORT, inspector=insp, port_free=_flags(True), settle_s=0
+    )
+    assert insp.signals == [(STRAY_PID, "SIGTERM")]
+    assert res.action == "terminated" and res.pid == STRAY_PID
+
+
+def test_terminate_listener_settle_scan_overrides_a_free_bind_check():
+    """After TERM the bind check says free, but the scan still finds the
+    listener: success must not be reported."""
+    insp = repl_table()
+    insp.listens = {STRAY_PID: {("192.0.2.10", REPL_PORT)}}
+    _holds_after_exit(insp)
+    with pytest.raises(sw.SafetyRefusal):
+        sw.terminate_listener(
+            REPL_PORT, inspector=insp, port_free=_flags(True), settle_s=0
+        )
+    assert insp.signals == [(STRAY_PID, "SIGTERM")]
+
+
+def test_terminate_listener_free_bind_with_unreadable_scan_is_indeterminate():
+    insp = repl_table()
+    insp.procs[70] = rec(70, 1, "helper")
+    insp.denied.add(70)
+    with pytest.raises(sw.InspectionIndeterminate):
+        sw.terminate_listener(REPL_PORT, inspector=insp, port_free=_flags(True))
+    assert insp.signals == []

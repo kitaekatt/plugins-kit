@@ -13,8 +13,9 @@ usage() {
         'Usage: qwen-switch start <qwen36|qwen38|qwen38l> [SERVER_ARGS...]' \
         '       qwen-switch status' \
         '' \
-        'start stops the identified server on the requested profile port, starts' \
-        'the existing profile launcher detached, and waits for its model id.' \
+        'start replaces the identified server on the requested profile port through' \
+        '"llm-scripting-kit swapper terminate-listener", starts the existing profile' \
+        'launcher detached, and waits for its model id.' \
         'status reports the identified server on each configured local port.'
 }
 
@@ -83,45 +84,11 @@ profile_for_pid() {
     esac
 }
 
-stop_pid() {
-    local pid="$1"
-    local name
-    name="$(process_name "$pid")"
-    case "$name" in
-        ninfer-serve|llama-server) ;;
-        *)
-            printf 'qwen-switch: refusing to terminate pid %s (%s is not a managed server)\n' "$pid" "${name:-unknown}" >&2
-            return 1
-            ;;
-    esac
-    kill -TERM "$pid" 2>/dev/null || true
-    local remaining=20
-    while kill -0 "$pid" 2>/dev/null; do
-        if [[ "$remaining" -le 0 ]]; then
-            kill -KILL "$pid" 2>/dev/null || true
-            break
-        fi
-        sleep 1
-        remaining=$((remaining - 1))
-    done
-}
-
-stop_listeners() {
-    local port="$1"
-    local pid
-    local found=0
-    while IFS= read -r pid; do
-        [[ -n "$pid" ]] || continue
-        found=1
-        if ! is_server_pid "$pid"; then
-            printf 'qwen-switch: refusing to replace port %s; pid %s is not ninfer-serve or llama-server\n' "$port" "$pid" >&2
-            return 1
-        fi
-        stop_pid "$pid"
-    done <<EOF
-$(listener_pids "$port")
-EOF
-    return 0
+# Listener replacement is owned by the plugin CLI, which verifies identity and
+# process ownership before signalling. The sibling shim is called by path, never
+# from PATH: an older installed shim may lack the verb.
+replace_listener() {
+    "$script_dir/../bin/llm-scripting-kit" swapper terminate-listener --port "$1" --accept-replace >&2
 }
 
 readiness_body() {
@@ -178,7 +145,10 @@ start_profile() {
     case "$port" in
         ''|*[!0-9]*) printf 'qwen-switch: invalid port for %s: %s\n' "$profile" "$port" >&2; return 2 ;;
     esac
-    stop_listeners "$port"
+    replace_listener "$port" || {
+        printf 'qwen-switch: not starting %s; port %s was not freed\n' "$profile" "$port" >&2
+        return 1
+    }
     mkdir -p "$data_dir"
     log_file="$data_dir/qwen-switch-$profile.log"
     if command -v setsid >/dev/null 2>&1; then

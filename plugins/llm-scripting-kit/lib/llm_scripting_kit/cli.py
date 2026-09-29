@@ -40,11 +40,13 @@ from . import usage_budget
 from .declaration import DeclarationSupportError, NoUsableRoutingTarget, describe
 from .seats import discover_seats
 from .swapper import (
+    LISTENER_GRACE_S,
     SwapperClient,
     SwapperError,
     check_launch_allowed,
     find_strays,
     resolve_swapper_url,
+    terminate_listener,
     terminate_model,
 )
 from .request_protocol import (
@@ -372,6 +374,26 @@ def _parser() -> argparse.ArgumentParser:
         "strays", help="Report recognized model servers with no swapper ancestor."
     )
     _add_swapper_format_arg(swapper_strays)
+
+    swapper_terminate_listener = swapper_sub.add_parser(
+        "terminate-listener",
+        help=(
+            "Explicit replacement: stop the one recognized model server "
+            "listening on a local port so another can start."
+        ),
+    )
+    swapper_terminate_listener.add_argument(
+        "--port", type=int, required=True, help="The local TCP port to free."
+    )
+    swapper_terminate_listener.add_argument(
+        "--accept-replace", action="store_true", required=True,
+        help="Confirm the listener on the port may be terminated (required).",
+    )
+    swapper_terminate_listener.add_argument(
+        "--grace-seconds", type=float, default=LISTENER_GRACE_S,
+        help=f"Seconds to wait after SIGTERM before SIGKILL (default {LISTENER_GRACE_S:g}).",
+    )
+    _add_swapper_format_arg(swapper_terminate_listener)
 
     swapper_guard_launch = swapper_sub.add_parser(
         "guard-launch",
@@ -847,6 +869,27 @@ def _cmd_swapper_strays(args: argparse.Namespace) -> int:
     return EXIT_FAILURE if strays else EXIT_OK
 
 
+def _cmd_swapper_terminate_listener(args: argparse.Namespace) -> int:
+    result = terminate_listener(args.port, grace_s=args.grace_seconds)
+    if args.format == "text":
+        if result.action == "none":
+            print(f"port {result.port} is free; nothing to terminate")
+        else:
+            note = " (escalated to SIGKILL)" if result.escalated else ""
+            print(f"port {result.port}: sent {result.signal} to pid {result.pid}{note}; port is free")
+    else:
+        _json({
+            "protocol": SWAPPER_PROTOCOL_VERSION,
+            "port": result.port,
+            "action": result.action,
+            "pid": result.pid,
+            "create_time": result.create_time,
+            "signal": result.signal,
+            "escalated": result.escalated,
+        })
+    return EXIT_OK
+
+
 def _cmd_swapper_guard_launch(args: argparse.Namespace) -> int:
     """Quiet on success. A refusal raises ``LaunchRefused`` (exit 3), caught
     by ``_cmd_swapper``, which is the only exit code its caller
@@ -865,6 +908,8 @@ def _cmd_swapper(args: argparse.Namespace) -> int:
             return _cmd_swapper_unload(args)
         if args.swapper_action == "strays":
             return _cmd_swapper_strays(args)
+        if args.swapper_action == "terminate-listener":
+            return _cmd_swapper_terminate_listener(args)
         if args.swapper_action == "guard-launch":
             return _cmd_swapper_guard_launch(args)
     except SwapperError as exc:
