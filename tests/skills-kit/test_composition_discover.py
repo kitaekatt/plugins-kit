@@ -334,7 +334,7 @@ class TestBuildSubjectShape:
 
         assert set(subject) == {
             "root", "rootExclusion", "compositionSubjects", "coverageSubjects",
-            "codeFreeCompositionSubjects", "claudeMdPaths", "skipped",
+            "codeFreeCompositionSubjects", "documentPaths", "claudeMdPaths", "skipped",
             "noisePruned",
         }
 

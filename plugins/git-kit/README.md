@@ -18,11 +18,11 @@ diff":
   a normalized anchor, not line numbers), so re-reviewing the same change at
   the same baseline does not re-raise them. Serious findings are never
   suppressed, and the ledger goes stale on its own when the baseline moves.
-- **CLAUDE.md-convention-aware review.** A dedicated reviewer checks the diff
+- **CLAUDE.md-convention-aware review (AGENTS.md where a directory has no CLAUDE.md).** A dedicated reviewer checks the diff
   against ancestor CLAUDE.md files, and may flag a project-rule violation
   only when it can quote the rule verbatim.
 - **Path-scoped submit gates.** `Submit gate:` blocks authored in CLAUDE.md
-  files become a confirmation checklist when the range touches their scope.
+  (or AGENTS.md) files become a confirmation checklist when the range touches their scope.
   Advisory, not enforcement.
 - **Cost routing.** A `data_only` profile handles docs/config-only diffs with
   two Sonnet reviewers (CLAUDE.md compliance, surface-level bugs) and Sonnet

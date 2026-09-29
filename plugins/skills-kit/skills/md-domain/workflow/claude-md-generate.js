@@ -42,6 +42,10 @@
 //                 ambientClaudeMdPaths: string[],   // HINT ONLY -- the agent derives its own
 //                 skipNote: string|null } ],        // set => null branch, no document
 //   finishedDocuments: string[]|undefined,           // dirs done by an EARLIER run
+//   documentPaths: { [dir: string]: string }|undefined, // discover_composition.py's
+//                 // documentPaths: each directory's resolved instruction file (CLAUDE.md,
+//                 // else AGENTS.md when the directory has no CLAUDE.md). A subject may
+//                 // instead carry documentPath. Absent -> <dir>/CLAUDE.md.
 //
 // TWO INPUTS ARE DERIVED AGENT-SIDE RATHER THAN TRUSTED FROM THE CALLER, and both
 // for the same reason: the workflow script has no filesystem access, the agent
@@ -579,6 +583,21 @@ const subjectRoots = subjects.map((s) => norm(s.root))
 // They are TOPOLOGY ONLY. Their content still reaches the parent by the same route
 // as any other child -- the agent reads the document off disk -- so this adds no
 // caller-supplied content and no second source of truth.
+// Instruction-document path per directory. Precedence rule: CLAUDE.md wins, AGENTS.md
+// stands in only when the directory has no CLAUDE.md (claude-md-standards.md); the
+// discovery script resolves it, this table carries the answer. A directory with no
+// entry gets <dir>/CLAUDE.md, the path a new document is created at.
+const documentPathByRoot = new Map()
+if (input.documentPaths && typeof input.documentPaths === 'object') {
+  for (const [dir, path] of Object.entries(input.documentPaths)) {
+    documentPathByRoot.set(norm(dir), String(path))
+  }
+}
+for (const s of subjects) {
+  if (s.documentPath) documentPathByRoot.set(norm(s.root), String(s.documentPath))
+}
+const docOf = (root) => documentPathByRoot.get(norm(root)) || (norm(root) + '/CLAUDE.md')
+
 const finishedDocuments = Array.isArray(input.finishedDocuments)
   ? input.finishedDocuments.map(norm)
   : []
@@ -655,7 +674,8 @@ const chainClauseFor = (s) => {
       chain.map((p) => '  - ' + p).join('\n')
     : ''
   return 'DERIVE YOUR OWN AMBIENT CHAIN FIRST, BEFORE ANYTHING ELSE. Walk UP from this ' +
-    'directory to the repository root, collecting every CLAUDE.md you find on the way ' +
+    'directory to the repository root, collecting each directory\'s CLAUDE.md, or its AGENTS.md when that directory has no CLAUDE.md ' +
+    '(an AGENTS.md beside a CLAUDE.md is ignored), on the way ' +
     '(stop at the directory containing .git). Those, root-most first, are the documents ' +
     'ambient for this code. Do not assume the set; look.\n\n' +
     'Read every one. Do NOT restate a fact an ancestor already carries -- that is a C-1 ' +
@@ -685,8 +705,8 @@ const lanePrompt = (s, root, writtenChildren) => {
 
   const compositionClause = writtenChildren.length
     ? '\nCOMPOSITION -- THIS DIRECTORY HAS CHILDREN, AND THEIR DOCUMENTS ARE YOUR SECOND INPUT.\n' +
-      'Read every one of these finished CLAUDE.md files in full:\n' +
-      writtenChildren.map((p) => '  - ' + p + '/CLAUDE.md').join('\n') +
+      'Read every one of these finished instruction files (CLAUDE.md or AGENTS.md) in full:\n' +
+      writtenChildren.map((p) => '  - ' + docOf(p)).join('\n') +
       '\n\nThis is not optional enrichment. A composition that skips it produces a document ' +
       'containing only this directory thin layer of direct code, which is strictly worse ' +
       'than the recursive subject it replaced.\n\n' +
@@ -934,7 +954,7 @@ const verifyPrompt = (r) => {
   // candidates are settled against their own claimedOver either way, so the branch
   // costs nothing and removes an invitation to go looking for a missing file.
   const documentClause = r.written
-    ? 'Its document, already written: ' + (r.path || (r.root + '/CLAUDE.md')) + '\n\n' +
+    ? 'Its document, already written: ' + (r.path || docOf(r.root)) + '\n\n' +
       'A composition of this directory proposed the candidates below. NONE of them is in ' +
       'the document, and none may be put there by you. Your entire job is to return one ' +
       'disposition per candidate id.\n\n'
@@ -992,7 +1012,7 @@ const applyPrompt = (r, verified) => {
   return 'Add VERIFIED hoists to an existing CLAUDE.md. Add exactly these and nothing ' +
     'else.\n\n' +
     'Directory: ' + r.root + '\n' +
-    'Document to edit: ' + (r.path || (r.root + '/CLAUDE.md')) + '\n\n' +
+    'Document to edit: ' + (r.path || docOf(r.root)) + '\n\n' +
     'Each entry below was proposed by this directory own composition and then checked ' +
     'against the files it named. The wording is SETTLED: write each sentence as given. ' +
     'Rewording it here would put an unverified claim into the document under a verified ' +
@@ -1027,7 +1047,7 @@ const createPrompt = (s, r, verified) => {
   return 'CREATE a code-directory CLAUDE.md holding exactly these VERIFIED hoists, and ' +
     'nothing else.\n\n' +
     'Directory: ' + r.root + '\n' +
-    'Document to create: ' + (r.path || (r.root + '/CLAUDE.md')) + '\n\n' +
+    'Document to create: ' + (r.path || docOf(r.root)) + '\n\n' +
     'THIS DIRECTORY HAS NO DOCUMENT YET, AND THAT IS THE EXPECTED STATE. Its composition ' +
     'assessed its own direct code and found nothing that earned ambient cost -- a real ' +
     'result, not a failure. What it DID find is the hoists below: facts drawn from its ' +
@@ -1361,7 +1381,7 @@ for (let w = 0; w < waves.length; w++) {
       // A created document exists, so the record must say where it is and what is
       // in it -- otherwise perSubject reports a null branch over a file on disk and
       // every downstream count reads that report rather than the disk.
-      record.path = applied.path || (r.root + '/CLAUDE.md')
+      record.path = applied.path || docOf(r.root)
       record.sections = applied.sections || []
     }
     if (applied && applied.notes && applied.notes.length) {

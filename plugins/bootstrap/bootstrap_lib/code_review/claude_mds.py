@@ -26,6 +26,8 @@ import sys
 from pathlib import Path
 from typing import Optional
 
+from bootstrap_lib.instruction_files import resolve_instruction_file
+
 
 _SUBMIT_GATE_MARKER = re.compile(r"^\*\*Submit gate:\*\*\s*(.*)$", re.IGNORECASE)
 _APPLIES_TO_LINE = re.compile(r"^Applies to\b.*?:\s*$", re.IGNORECASE)
@@ -36,6 +38,9 @@ _HEADING_LINE = re.compile(r"^#{1,6}\s")
 
 def collect_claude_mds(file_path: Path, workspace_root: Optional[Path]) -> list[str]:
     """Walk parents of file_path collecting CLAUDE.md ancestors.
+
+    Per directory the instruction file is CLAUDE.md, or AGENTS.md when the
+    directory has no CLAUDE.md (an AGENTS.md beside a CLAUDE.md is ignored).
 
     Stops at workspace_root (inclusive) if provided, otherwise at filesystem root.
     Returns absolute paths, ordered nearest-ancestor first.
@@ -50,8 +55,8 @@ def collect_claude_mds(file_path: Path, workspace_root: Optional[Path]) -> list[
     seen: set[str] = set()
     current = file_path.parent
     while True:
-        candidate = current / "CLAUDE.md"
-        if candidate.is_file():
+        candidate = resolve_instruction_file(current)
+        if candidate is not None:
             ap = str(candidate)
             if ap not in seen:
                 found.append(ap)

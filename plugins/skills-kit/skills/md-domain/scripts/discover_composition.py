@@ -53,6 +53,7 @@ if str(_SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS_DIR))
 
 from discover_coverage import root_exclusion, walk_tree  # noqa: E402
+from skills_kit_lib.instruction_files import resolve_instruction_file  # noqa: E402
 
 
 def composition_subjects(leaves: list[Path], root: Path) -> list[Path]:
@@ -80,6 +81,13 @@ def composition_subjects(leaves: list[Path], root: Path) -> list[Path]:
     return sorted(subjects, key=str)
 
 
+def document_path(directory: Path) -> Path:
+    """The instruction document for a composition subject: the resolved file
+    (CLAUDE.md, else AGENTS.md), or <directory>/CLAUDE.md when neither exists
+    (the path a newly generated document is written to)."""
+    return resolve_instruction_file(directory) or (directory / "CLAUDE.md")
+
+
 def build_subject(root: Path) -> dict:
     """Assemble the composition subject set for one named tree root."""
     root = root.resolve()
@@ -94,6 +102,7 @@ def build_subject(root: Path) -> dict:
         "codeFreeCompositionSubjects": [
             str(p) for p in subjects if str(p) not in leaf_set
         ],
+        "documentPaths": {str(p): str(document_path(p)) for p in subjects},
         "claudeMdPaths": [str(p) for p in claude_mds],
         "skipped": skipped,
         "noisePruned": noise_pruned,

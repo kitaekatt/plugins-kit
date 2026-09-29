@@ -106,8 +106,9 @@ For each target, also capture `ancestorClaudeMdPaths` (the ancestor-convention
 check input): starting from the target's PARENT directory, walk up one directory
 at a time until and including the workspace root (the cwd when there is no
 enclosing project, otherwise the nearest ancestor containing a `.git` entry),
-stat `<dir>/CLAUDE.md` at each level, and collect every one that exists,
-ordered NEAREST-ANCESTOR FIRST, EXCLUDING the target itself. Empty when nothing
+at each level collect `<dir>/CLAUDE.md`, or `<dir>/AGENTS.md` when that
+directory has no CLAUDE.md (precedence: `../standards/claude-md-standards.md`
+section 1.0; a shadowed AGENTS.md is skipped), ordered NEAREST-ANCESTOR FIRST, EXCLUDING the target itself. Empty when nothing
 sits above it.
 
 ONCE per run (not per file), resolve the configurable standards via the plugin venv:
@@ -249,10 +250,12 @@ Per-lane shape tests:
   criteria set to each (skill-standards.md sections 1-9 vs section 10). A
   `CLAUDE.md` or a standalone project doc is neither, and is declined.
   Accepted `kind` values: `skill` and `skill_reference`.
-- `audit_claude_md` -- the file is named `CLAUDE.md` or `CLAUDE.local.md`.
+- `audit_claude_md` -- the file is named `CLAUDE.md` or `CLAUDE.local.md`, or is an
+  `AGENTS.md` in a directory with no `CLAUDE.md` (precedence rule:
+  `../standards/claude-md-standards.md` section 1.0; a shadowed AGENTS.md is not audited).
 - `audit_project_doc` -- the file is a project-level document: NOT inside a
   `*/skills/*/references/` folder (that is a `skill_reference`, and it routes
-  to `audit_skill`) and NOT a `CLAUDE.md` / `SKILL.md` (those are
+  to `audit_skill`) and NOT a `CLAUDE.md` / `AGENTS.md` / `SKILL.md` (those are
   `other_claude_artifact`).
 - `audit_references` -- no decline branch: the scanner's subject is the corpus,
   not a nominated file.

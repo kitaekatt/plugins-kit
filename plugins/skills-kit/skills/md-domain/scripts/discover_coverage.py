@@ -82,6 +82,7 @@ if str(_SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS_DIR))
 
 from discover_claude_md import CODE_DATA_EXT, _MD_LIKE  # noqa: E402
+from skills_kit_lib.instruction_files import resolve_instruction_file  # noqa: E402
 # The ambient chain stops at the PROJECT root, which is not the same question as
 # the claude-md audit lane's git boundary: a Perforce workspace has no .git
 # anywhere, so a git-only walk would report "no project" for every directory in
@@ -273,7 +274,8 @@ def is_code_file(path: Path) -> bool:
 
 
 def ambient_chain(directory: Path) -> list[Path]:
-    """Return the CLAUDE.md files ambient for `directory`, root-most first.
+    """Return the CLAUDE.md files ambient for `directory`, root-most first
+    (a directory's AGENTS.md stands in when it has no CLAUDE.md).
 
     Walks from `directory` itself upward to the PROJECT root, collecting
     CLAUDE.md at each level. The walk stops at the nearest project marker
@@ -286,8 +288,8 @@ def ambient_chain(directory: Path) -> list[Path]:
     chain: list[Path] = []
     current = directory
     while True:
-        candidate = current / "CLAUDE.md"
-        if candidate.is_file():
+        candidate = resolve_instruction_file(current)
+        if candidate is not None:
             chain.append(candidate)
         if project_root is not None and current == project_root:
             break
@@ -550,7 +552,10 @@ def walk_tree(root: Path) -> tuple[list[Path], list[Path], list[dict], int]:
                 visited.add(target)
                 descend(entry, depth + 1)
             elif entry.is_file():
-                if name == "CLAUDE.md":
+                if name == "CLAUDE.md" or (
+                    name == "AGENTS.md" and not (directory / "CLAUDE.md").is_file()
+                ):
+                    # AGENTS.md counts only when the directory has no CLAUDE.md.
                     claude_mds.append(entry)
                 elif is_code_file(entry):
                     if entry in ignored:

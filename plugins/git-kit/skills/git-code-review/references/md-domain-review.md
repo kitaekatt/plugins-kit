@@ -3,7 +3,7 @@
 
 When skills-kit's md-domain skill is available in the session, `git-code-review` treats it
 as the SUBJECT-lens reviewer for EVERY changed Markdown file -- `**/*.md`, which is CLAUDE.md,
-SKILL.md, a skill's `references/*.md`, and generic project docs alike (`.md.html` Markdeep files
+an active AGENTS.md (its directory has no CLAUDE.md), SKILL.md, a skill's `references/*.md`, and generic project docs alike (`.md.html` Markdeep files
 are NOT `.md` and stay with the generic reviewers). Those files are CLAIMED out of the generic
 reviewer fan-out (prepare_review.py's `--claim '**/*.md'` flag) and audited
 by md-domain's headless per-artifact detect lanes (`workflow/*-detect.js`)
@@ -94,7 +94,8 @@ a subject shape this skill claims. Check the tiers in order and take the FIRST t
 - **project-doc-only skew** -- `claude-md-detect.js` and `skill-detect.js` are present but ONLY
   `project-doc-detect.js` is missing (a skills-kit that predates
   project-doc review): emit a one-line warning and RE-RUN prepare_review.py with
-  `--claim '**/CLAUDE.md' --claim '**/SKILL.md' --claim '**/skills/*/references/*.md'`. CLAUDE.md,
+  `--claim '**/CLAUDE.md' --claim '**/AGENTS.md' --claim '**/SKILL.md' --claim '**/skills/*/references/*.md'`.
+  CLAUDE.md, AGENTS.md,
   SKILL.md and skill references all keep their specialist coverage -- `skill-detect.js` is intact
   in this skew, so both of its subject shapes stay claimed; only the generic `.md` docs rejoin the
   generic review. (Do NOT write the references glob as
@@ -128,7 +129,10 @@ Do not rerun prepare_review.py for a transport failure. Use the manual invocatio
 At most three, in the SAME message that launches the reviewer fan-out (or the reviewer Workflow).
 Route by basename first; the ONE path-shape rule is the skill-reference case in (b):
 
-1. **`audit_claude_md` lane** -- one call for every claimed file whose basename is `CLAUDE.md`.
+1. **`audit_claude_md` lane** -- one call for every claimed file whose basename is `CLAUDE.md`, or
+   `AGENTS.md` when active. An `AGENTS.md` is ACTIVE only when its directory has no `CLAUDE.md`
+   (CLAUDE.md takes precedence); a claimed `AGENTS.md` sitting beside a `CLAUDE.md` is SHADOWED
+   and is dropped from ALL three lanes -- never audited as a claude-md and never as a project doc.
    `scriptPath = <root>/skills/md-domain/workflow/claude-md-detect.js`, `args` =
    `{ files: [...], mechanicalCheckPhrases: bundle.mechanical_check_phrases, review: true, refs: { criteria: <root>/skills/md-domain/references/standards/claude-md-standards.md, codeDirFilter: <root>/skills/md-domain/references/standards/claude-md-standards.md, densityCriteria: <root>/skills/md-domain/references/standards/claude-md-standards.md, pluginRoot: <root>, venvPython: <venvPython> } }` (one standards doc backs all three refs -- the code-directory dimension and the density lens are sections of it).
 2. **`audit_skill` lane** -- one call for every claimed file that is EITHER (a) named `SKILL.md`
@@ -181,7 +185,7 @@ each affected file. Incomplete coverage cannot satisfy a submit gate.
 Build `files[]` from the NON-TRIVIAL claimed files only (per the triviality gate above); trivial
 files never reach a detect lane. Each claimed-file entry carries `local` (absolute path), `pre_image` (absolute path to the
 materialized before-image via `git show <range-base>:<path>`, or `null` for an add), and `claude_mds` (the
-nearest-ancestor-first CLAUDE.md chain, which for a CLAUDE.md subject INCLUDES the subject itself
+nearest-ancestor-first CLAUDE.md (or active AGENTS.md) chain, which for such a subject INCLUDES the subject itself
 as its first element).
 
 Derive, per claimed file:
@@ -203,10 +207,10 @@ Workflow call. Each lane renders ids through this map and falls back to the bare
 producer supplies an unknown check. The scan answers only its mechanical questions; it does not
 audit the file, satisfy the specialist lane, or change a NOT-AUDITED verdict.
 
-For a **CLAUDE.md** file (`audit_claude_md` lane `files[]`):
+For a **CLAUDE.md** or active **AGENTS.md** file (`audit_claude_md` lane `files[]`):
 - `path` = `local`.
 - `role` = `"child"` when `ancestorClaudeMdPaths` is non-empty, else `"root"` (a standalone file
-  with no ancestor CLAUDE.md audits as its natural role). Use `"local"` for a `CLAUDE.local.md`.
+  with no ancestor instruction file audits as its natural role). Use `"local"` for a `CLAUDE.local.md`.
 - `dimension` = call the shipped classifier for this file and use its stdout (`"classic"` or
   `"code-directory"`) verbatim. Run it with the already-resolved skills-kit interpreter and root:
 
