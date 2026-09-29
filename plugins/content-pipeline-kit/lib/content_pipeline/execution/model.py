@@ -55,6 +55,7 @@ anything; that outcome is terminal on the apply axis while the unit remains
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from enum import Enum
 from typing import Mapping, Optional
@@ -88,6 +89,50 @@ TERMINAL_STATES = (UnitState.ACCEPTED, UnitState.FAILED, UnitState.SKIPPED)
 # it without importing ``controller`` (which itself imports ``pipeline.
 # single_pass`` -- a dependency ``status`` deliberately does not carry).
 SKIP_ERROR_PREFIX = "skip:"
+
+# The run-halt kind a dispatcher sets when several units of one wave
+# terminally failed with a systemic failure code (see FAILURE_CODES).
+# ``resume_run`` clears it like any other halt.
+HALT_REPEATED_FAILURE = "repeated_failure"
+
+# Fixed failure codes a worker may attach to its ``fail`` envelope (payload
+# member ``code``; absent is valid). ``env_mismatch``: the worker's verb was
+# refused because its environment disagrees with the run's, so every worker
+# launched the same way fails the same way. The set is closed: the protocol
+# refuses any other value.
+FAILURE_CODE_ENV_MISMATCH = "env_mismatch"
+FAILURE_CODES = (FAILURE_CODE_ENV_MISMATCH,)
+# Codes whose repetition across units points at the run's setup, not at the
+# units; the dispatcher's breaker counts only these.
+SYSTEMIC_FAILURE_CODES = (FAILURE_CODE_ENV_MISMATCH,)
+
+_ERROR_TEXT_LIMIT = 500  # the store's cap on a recorded error text
+
+
+def encode_failure(code: str, detail: str) -> str:
+    """The error text recording a coded failure: a JSON object
+    ``{"code": ..., "detail": ...}`` no longer than the store's cap, with
+    the detail shortened so the text always stays parseable."""
+    detail = str(detail)
+    while True:
+        text = json.dumps({"code": code, "detail": detail}, sort_keys=True)
+        if len(text) <= _ERROR_TEXT_LIMIT or not detail:
+            return text
+        detail = detail[: max(0, len(detail) - (len(text) - _ERROR_TEXT_LIMIT))]
+
+
+def failure_code(error: Optional[str]) -> Optional[str]:
+    """The known failure code recorded in an attempt's error text, or
+    ``None`` (no code, unparseable text, or an unknown code)."""
+    if not error:
+        return None
+    try:
+        value = json.loads(error)
+    except (TypeError, ValueError):
+        return None
+    if isinstance(value, dict) and value.get("code") in FAILURE_CODES:
+        return value["code"]
+    return None
 
 
 class AttemptKind(str, Enum):

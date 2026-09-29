@@ -73,7 +73,7 @@ technique_skill:
           action: Run the submit invocation; on rejection with feedback, revise the answer file (fence line included) and run it again without rewriting the envelope.
           tool: "<argv> protocol @<submit envelope path> --text-file=<answer path>"
         - n: 5
-          action: On exhaustion, write the fail envelope (substituting <FENCING_TOKEN> and <FAILURE_DETAIL_JSON>), run the fail invocation, and stop.
+          action: 'On exhaustion, write the fail envelope (substituting <FENCING_TOKEN> and <FAILURE_DETAIL_JSON>; add "code": "env_mismatch" only when the environment check refused your verb), run the fail invocation, and stop.'
           tool: "<argv> protocol @<fail envelope path>"
           on_failure: Never fabricate an answer to close the unit out.
       checklist:
@@ -114,7 +114,7 @@ session ever launches, since its content needs no runtime information); the
 by writing the library's own template text and substituting only the literal
 `<FENCING_TOKEN>` placeholder with the fencing token its launch prompt names.
 For `fail`, also replace `<FAILURE_DETAIL_JSON>` with one nonempty JSON string
-literal.
+literal. If a `read` or `submit` reply refused you with error type `WorkerEnvironmentMismatchError` (your environment disagrees with the run's), add one more member to the payload: `"code": "env_mismatch"`. Add it for no other reason; an absent code is normal.
 The mount dispatches an envelope file only when its body carries the verb and
 the run/unit ids in the file's name; change nothing else in the template.
 -- see step 3 of the procedure below.
@@ -187,7 +187,8 @@ author yourself, at the points below.
    "give up cleanly" other than step 5.
 5. **On exhaustion, report failure** -- if you cannot produce an answer the
    validators accept, author your failure envelope the same way as step 3
-   (substituting only `<FENCING_TOKEN>` and `<FAILURE_DETAIL_JSON>`), then run
+   (substituting only `<FENCING_TOKEN>` and `<FAILURE_DETAIL_JSON>`, plus the
+   one `code` member when the environment check refused your verb), then run
    the `fail` invocation, and stop. Never fabricate an answer to close the unit
    out instead.
 

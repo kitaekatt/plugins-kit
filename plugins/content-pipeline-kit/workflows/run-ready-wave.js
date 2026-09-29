@@ -180,7 +180,10 @@ function briefFor(u) {
     "not covered above), author your failure envelope the same way as step " +
     "5 -- write EXACTLY the template below, substituting ONLY " +
     "<FENCING_TOKEN> and <FAILURE_DETAIL_JSON> (the latter with one " +
-    "nonempty JSON string literal describing what went wrong), to exactly " +
+    "nonempty JSON string literal describing what went wrong; if a read " +
+    "or submit reply refused you with error type " +
+    "WorkerEnvironmentMismatchError, also add the payload member " +
+    "\"code\": \"env_mismatch\", and never add it otherwise), to exactly " +
     "this path (no other path):\n   " +
     u.writeFailPath + "\n" +
     "   Template:\n" + u.failTemplate + "\n" +

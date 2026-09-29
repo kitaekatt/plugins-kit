@@ -117,6 +117,9 @@ from content_pipeline.execution.controller import record_halt
 from content_pipeline.execution.model import (
     AlreadyClaimedError,
     AttemptKind,
+    HALT_REPEATED_FAILURE,
+    SYSTEMIC_FAILURE_CODES,
+    failure_code,
     ExecutionError,
     NoOpenDispatchError,
     NotClaimedError,
@@ -741,7 +744,10 @@ def build_launch_prompt(
         "the same way as step 3 -- write EXACTLY the template below, "
         "substituting ONLY <FENCING_TOKEN> and <FAILURE_DETAIL_JSON> (the "
         "latter with one nonempty JSON string literal describing what went "
-        f"wrong), to exactly this path (no other path):\n   {write_fail_cmd}\n"
+        "wrong; if a read or submit reply refused you with error type "
+        "WorkerEnvironmentMismatchError, also add the payload member "
+        "\"code\": \"env_mismatch\", and never add it otherwise), to exactly "
+        f"this path (no other path):\n   {write_fail_cmd}\n"
         f"   Template:\n{fail_template}\n"
         f"   Then report failure:\n   {fail_cmd}\n"
     )
@@ -892,16 +898,39 @@ class LaunchMisconfigurationError(ExecutionError):
     (:func:`dispatch_wave`) aborts the whole dispatch loop rather than
     spending N sessions to learn the same thing N times."""
 
-    def __init__(self, run_id: str, unit_id: str, worker_id: str, short_id: Optional[str]) -> None:
+    def __init__(
+        self,
+        run_id: str,
+        unit_id: str,
+        worker_id: str,
+        short_id: Optional[str],
+        launch_stderr: str = "",
+        launch_rc: Optional[int] = None,
+    ) -> None:
         self.run_id = run_id
         self.unit_id = unit_id
         self.worker_id = worker_id
         self.short_id = short_id
+        # A one-line, length-bounded excerpt of the launcher's stderr (the
+        # `claude --bg` process's own diagnostic, for example an untrusted
+        # directory). Never unit content.
+        self.launch_stderr = launch_stderr
+        self.launch_rc = launch_rc
+        reason = f"; launcher said (rc={launch_rc}): {launch_stderr}" if launch_stderr else ""
         super().__init__(
             f"run {run_id!r} unit {unit_id!r}: launch for worker {worker_id!r} "
             f"never reached a confirmed background state (short id observed: "
-            f"{short_id!r}); classified as a launch misconfiguration"
+            f"{short_id!r}); classified as a launch misconfiguration{reason}"
         )
+
+
+LAUNCH_STDERR_EXCERPT_CHARS = 300
+
+
+def _stderr_excerpt(text: Optional[str]) -> str:
+    """The launcher's stderr as one whitespace-collapsed line, bounded to
+    :data:`LAUNCH_STDERR_EXCERPT_CHARS`."""
+    return " ".join((text or "").split())[:LAUNCH_STDERR_EXCERPT_CHARS]
 
 
 DEFAULT_LAUNCH_CONFIRM_SECONDS = 60.0
@@ -1154,6 +1183,8 @@ def dispatch_unit(
     # so nothing could ever recover it: `dispatch_wave`'s exit cleanup only
     # settles dispatches it is TRACKING, and this one never got that far.
     matched: Optional[SessionRecord] = None
+    launch_stderr = ""
+    launch_rc: Optional[int] = None
     try:
         # A before-launch snapshot of the same `agents --json` listing the
         # confirmation poll below already uses. It exists for the banner-less
@@ -1176,9 +1207,10 @@ def dispatch_unit(
         prompt = build_launch_prompt(
             worker_command, run_id, unit.unit_id, worker_id, claim.fencing_token
         )
-        launch_stdout, _launch_stderr, _launch_rc = cli.launch_bg(
+        launch_stdout, raw_launch_stderr, launch_rc = cli.launch_bg(
             prompt, extra_args=extra_launch_args, env=env, cwd=cwd
         )
+        launch_stderr = _stderr_excerpt(raw_launch_stderr)
         short_id = _parse_launch_session_id(launch_stdout)
 
         deadline = clock_fn() + launch_confirm_seconds
@@ -1224,7 +1256,9 @@ def dispatch_unit(
             )
             if matched is not None:
                 _end_session(cli, matched.id, env=env)
-            raise LaunchMisconfigurationError(run_id, unit.unit_id, worker_id, short_id)
+            raise LaunchMisconfigurationError(
+                run_id, unit.unit_id, worker_id, short_id, launch_stderr, launch_rc
+            )
         store.attach_dispatch_session(run_id, unit.unit_id, matched.session_id)
     except LaunchMisconfigurationError:
         raise  # already released and settled by the branch above
@@ -1688,6 +1722,23 @@ DEFAULT_BATCH_SIZE = 25
 # DEFAULT_MAX_RECLAIMS_PER_UNIT moved to workerpack.py -- re-imported above.
 DEFAULT_DISPATCH_POLL_INTERVAL_S = 15.0
 DEFAULT_DISPATCHER_LEASE_SECONDS = 120.0
+DEFAULT_SYSTEMIC_FAILURE_HALT_THRESHOLD = 3
+
+
+def _latest_fail_code(store: ExecutionStore, run_id: str, unit_id: str) -> Optional[str]:
+    """The known failure code on ``unit_id``'s latest FAIL attempt, or ``None``."""
+    for attempt in reversed(store.list_attempts(run_id, unit_id)):
+        if attempt.kind is AttemptKind.FAIL:
+            return failure_code(attempt.error)
+    return None
+
+
+def _own_claim_fence(store: ExecutionStore, run_id: str, unit_id: str, worker_id: str) -> Optional[int]:
+    """The fencing token of ``worker_id``'s latest CLAIM of ``unit_id``."""
+    for attempt in reversed(store.list_attempts(run_id, unit_id)):
+        if attempt.kind is AttemptKind.CLAIM and attempt.worker_id == worker_id:
+            return attempt.fencing_token
+    return None
 
 # The wave-level liveness bound: how long dispatch_wave may observe NO
 # progress at all -- nothing dispatched, renewed, settled, or dropped --
@@ -1726,6 +1777,12 @@ class DispatchReport:
     """Short ids of background sessions the dispatcher tried to end and whose
     ``rm`` failed or raised; they may still be running and need a manual
     ``claude stop`` / ``claude rm``."""
+    launch_stderr: Optional[str] = None
+    """Set with ``aborted_reason="launch_misconfiguration"``: a one-line
+    excerpt (at most :data:`LAUNCH_STDERR_EXCERPT_CHARS` characters) of the
+    launcher's own stderr, which is where the CLI states why it refused."""
+    launch_rc: Optional[int] = None
+    """Set with ``launch_stderr``: the launcher's exit code."""
 
 
 def dispatch_wave(
@@ -1744,6 +1801,7 @@ def dispatch_wave(
     extra_launch_args: Sequence[str] = (),
     terminal_exit_grace_seconds: float = DEFAULT_TERMINAL_EXIT_GRACE_SECONDS,
     stall_timeout_seconds: float = DEFAULT_WAVE_STALL_SECONDS,
+    systemic_failure_halt_threshold: Optional[int] = DEFAULT_SYSTEMIC_FAILURE_HALT_THRESHOLD,
     at: Optional[float] = None,
     env: Optional[Mapping[str, str]] = None,
     cwd: Optional[str] = None,
@@ -1847,7 +1905,35 @@ def dispatch_wave(
     as progress, so a genuinely long-running unit re-arms the bound on every
     tick and is never cut off. Stall time is measured on ``clock_fn``, not
     on ``at``, so pinning ``at`` for reproducible writes does not disarm it.
+
+    REPEATED-FAILURE BREAKER. ``systemic_failure_halt_threshold`` (default
+    :data:`DEFAULT_SYSTEMIC_FAILURE_HALT_THRESHOLD`; ``0`` or ``None``
+    disables it; a negative or non-integer value raises ``ValueError``)
+    halts the RUN with kind
+    :data:`~content_pipeline.execution.model.HALT_REPEATED_FAILURE` once that
+    many units settled as ``worker_failed`` (by this call or adopted from an
+    earlier dispatcher) carry a systemic failure code
+    (:data:`~content_pipeline.execution.model.SYSTEMIC_FAILURE_CODES`, today
+    ``env_mismatch``) on their fail envelope. A worker environment that
+    disagrees with the run's makes every session fail the same way, and a
+    terminal failure has no reset, so continuing would spend one session per
+    remaining unit. Failures without a code, or with any other code, never
+    count, whatever their text. Units not yet dispatched stay PENDING;
+    ``resume_run`` clears the halt. The halt detail carries the count only.
+
+    LEASE. The dispatcher lease is re-acquired before each launch, so a
+    refill of slow launches cannot outlast it; if another dispatcher holds
+    it the wave ends with ``aborted_reason="dispatcher_lease_lost"``.
     """
+    if systemic_failure_halt_threshold is not None and (
+        isinstance(systemic_failure_halt_threshold, bool)
+        or not isinstance(systemic_failure_halt_threshold, int)
+        or systemic_failure_halt_threshold < 0
+    ):
+        raise ValueError(
+            "systemic_failure_halt_threshold must be a non-negative integer or None, "
+            f"got {systemic_failure_halt_threshold!r}"
+        )
     if cli is None:
         cli = ClaudeCli()
 
@@ -1888,9 +1974,29 @@ def dispatch_wave(
     halted: Optional[str] = None
     status_digests: List[Dict[str, Any]] = []
     aborted_reason: Optional[str] = None
+    report_launch_stderr: Optional[str] = None
+    report_launch_rc: Optional[int] = None
+    systemic_failures = 0
 
     def _now() -> float:
         return clock_fn() if at is None else at
+
+    def _trip_breaker() -> Optional[str]:
+        """Halt the run once systemic failures reach the threshold. Returns
+        the halt kind, or ``None`` when it did not trip (or a halt is set)."""
+        if (
+            halted is None
+            and systemic_failure_halt_threshold
+            and systemic_failures >= systemic_failure_halt_threshold
+        ):
+            store.set_halt(
+                run_id,
+                kind=HALT_REPEATED_FAILURE,
+                detail=f"{systemic_failures} units terminally failed with a systemic failure code",
+                at=_now(),
+            )
+            return HALT_REPEATED_FAILURE
+        return None
 
     def _note_accepted(unit_id: str) -> None:
         """List ``unit_id`` as accepted when the STORE says so, regardless of
@@ -1929,7 +2035,13 @@ def dispatch_wave(
             store.settle_dispatch(run_id, record.unit_id, outcome="missing", at=_now())
             settled_all[record.unit_id] = "missing"
             continue
-        if unit.claimed_by != record.worker_id:
+        # A terminal write clears claimed_by, so a unit this dispatch's own
+        # worker finished no longer names it: recognize it by the fencing
+        # token of that worker's claim instead.
+        own_terminal = unit.state in (UnitState.ACCEPTED, UnitState.FAILED) and (
+            unit.fencing_token == _own_claim_fence(store, run_id, record.unit_id, record.worker_id)
+        )
+        if unit.claimed_by != record.worker_id and not own_terminal:
             store.settle_dispatch(run_id, record.unit_id, outcome="superseded", at=_now())
             settled_all[record.unit_id] = "superseded"
             continue
@@ -1941,6 +2053,8 @@ def dispatch_wave(
         if unit.state is UnitState.FAILED:
             store.settle_dispatch(run_id, record.unit_id, outcome="worker_failed", at=_now())
             settled_all[record.unit_id] = "worker_failed"
+            if _latest_fail_code(store, run_id, record.unit_id) in SYSTEMIC_FAILURE_CODES:
+                systemic_failures += 1
             continue
         open_dispatches[record.unit_id] = OpenDispatch(
             unit_id=record.unit_id,
@@ -1952,6 +2066,7 @@ def dispatch_wave(
         )
         recovered.append(record.unit_id)
 
+    halted = _trip_breaker() or halted
     last_progress_at = clock_fn()
 
     try:
@@ -2023,6 +2138,16 @@ def dispatch_wave(
                             continue
                         failed_exhausted.append(unit.unit_id)
                         continue
+                    # A refill can launch several units in a row, each taking
+                    # up to `launch_confirm_seconds`; the lease is otherwise
+                    # renewed only once per tick, after the whole refill.
+                    refreshed = store.acquire_dispatcher_lease(
+                        run_id, dispatcher_id, lease_seconds=DEFAULT_DISPATCHER_LEASE_SECONDS, at=_now()
+                    )
+                    if refreshed is None:
+                        aborted_reason = "dispatcher_lease_lost"
+                        break
+                    fence = refreshed
                     try:
                         opened = dispatch_unit(
                             store,
@@ -2039,8 +2164,10 @@ def dispatch_wave(
                             clock_fn=clock_fn,
                             at=tick_now,
                         )
-                    except LaunchMisconfigurationError:
+                    except LaunchMisconfigurationError as launch_exc:
                         aborted_reason = "launch_misconfiguration"
+                        report_launch_stderr = launch_exc.launch_stderr
+                        report_launch_rc = launch_exc.launch_rc
                         break
                     except RunHaltedError as exc:
                         # The RUN is halted, so no further claim can succeed
@@ -2095,6 +2222,11 @@ def dispatch_wave(
                 open_dispatches.pop(unit_id, None)
                 settled_all[unit_id] = outcome
                 _note_accepted(unit_id)
+                if (
+                    outcome == "worker_failed"
+                    and _latest_fail_code(store, run_id, unit_id) in SYSTEMIC_FAILURE_CODES
+                ):
+                    systemic_failures += 1
             leaked_sessions.extend(sid for sid in tick.leaked_sessions if sid not in leaked_sessions)
             for unit_id in tick.dropped:
                 open_dispatches.pop(unit_id, None)
@@ -2117,6 +2249,7 @@ def dispatch_wave(
                     settled_all[unit_id] = "dropped"
             if tick.halted is not None:
                 halted = tick.halted
+            halted = _trip_breaker() or halted
 
             # acquire_dispatcher_lease alone both extends and bumps the fence
             # for the SAME holder (its own contract: it fails, returning
@@ -2185,6 +2318,8 @@ def dispatch_wave(
         status_digests=tuple(status_digests),
         aborted_reason=aborted_reason,
         leaked_sessions=tuple(leaked_sessions),
+        launch_stderr=report_launch_stderr,
+        launch_rc=report_launch_rc,
     )
 
 
@@ -2198,6 +2333,8 @@ __all__ = [
     "ClaudeCli",
     "ClaudeExecutableNotFoundError",
     "DispatchReport",
+    "DEFAULT_SYSTEMIC_FAILURE_HALT_THRESHOLD",
+    "LAUNCH_STDERR_EXCERPT_CHARS",
     "LaunchMisconfigurationError",
     "OpenDispatch",
     "ParseResult",

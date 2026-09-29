@@ -75,6 +75,7 @@ no-op'ing.
 
 from __future__ import annotations
 
+import json
 import math
 from typing import Any, Callable, Dict, Mapping, Optional, Sequence
 
@@ -91,7 +92,9 @@ from content_pipeline.execution.controller import (
 )
 from content_pipeline.execution.status import APPLY_KINDS, apply_states
 from content_pipeline.execution.model import (
+    FAILURE_CODES,
     ExecutionError,
+    encode_failure,
     UnitRecord,
     UnknownRunError,
     UsageRecord,
@@ -513,11 +516,22 @@ def build_handlers(
         require_compatible_adapter(run, adapter)
         fencing_token = _require_fencing_token(payload)
         terminal = _require_bool_flag(payload, "terminal", default=False)
+        error = payload.get("error", "")
+        if payload.get("code") is not None:
+            # An optional fixed failure code, recorded structurally so a
+            # dispatcher can tell a systemic failure from a unit's own.
+            code = payload["code"]
+            if not isinstance(code, str) or code not in FAILURE_CODES:
+                raise MalformedEnvelopeError(
+                    f"payload 'code' must be one of {list(FAILURE_CODES)} or absent, got {code!r}"
+                )
+            detail = error if isinstance(error, str) else json.dumps(error, sort_keys=True, default=str)
+            error = encode_failure(code, detail)
         store.fail_unit(
             run_id,
             unit_id,
             fencing_token,
-            error=payload.get("error", ""),
+            error=error,
             terminal=terminal,
             usage=_usage_from_payload(payload),
         )

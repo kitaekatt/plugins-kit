@@ -126,12 +126,14 @@ not trusted exits 1 with the stderr `Workspace not trusted. Run `claude` in
 <dir> once and accept the trust prompt, then retry.` and starts no session.
 
 `preflight` does not check trust, so it passes. The failure surfaces at the
-first launch, and the dispatcher discards the launcher's exit code and
-stderr, so the message above never reaches the report. The dispatcher finds
-no session within `launch_confirm_seconds`, releases the unit's claim, settles
+first launch. The dispatcher finds no session within `launch_confirm_seconds`, releases the unit's claim, settles
 the dispatch as `launch_failed`, and stops the wave with
 `aborted_reason == "launch_misconfiguration"` (`LaunchMisconfigurationError`
-inside `dispatch_unit`). Nothing is dispatched. On that abort, check the launch
+inside `dispatch_unit`). Nothing is dispatched. The launcher's own words reach
+you: `DispatchReport.launch_stderr` holds a one-line excerpt of its stderr (at
+most 300 characters) and `DispatchReport.launch_rc` its exit code; the same two
+values are `launch_stderr` / `launch_rc` on the raised error. Neither carries
+unit content. On that abort, read `launch_stderr` and check the launch
 directory's trust first.
 
 Remedy: run `claude` once in the launch directory, accept the trust prompt,
@@ -153,9 +155,9 @@ differently from run to run:
 
 Pass both directly to `dispatch_wave(..., max_agents=N, batch_size=M)`.
 
-## Two timing settings, and when to move them
+## Timing settings, and when to move them
 
-Both have defaults that suit an ordinary run; move them only for the reasons
+Both timing settings have defaults that suit an ordinary run; move them only for the reasons
 below, and never as a way to make a hanging wave finish sooner.
 
 - `terminal_exit_grace_seconds` (default 300) -- how long a worker whose unit
@@ -172,6 +174,26 @@ below, and never as a way to make a hanging wave finish sooner.
   this bound continuously -- it is never cut off by it. Raise this only if
   your workers can be genuinely silent for longer than the default between
   ticks.
+
+## The repeated-failure breaker
+
+`systemic_failure_halt_threshold` (default 3; `0` or `None` disables it; a
+negative or non-integer value raises `ValueError`) halts the run when that many
+units settled as `worker_failed` carry a systemic failure code. A worker
+environment that disagrees with the run's makes every session fail the same
+way, and a terminal failure has no reset, so without the breaker each remaining
+unit costs a session.
+
+A worker attaches the code itself: its fail envelope may carry an optional
+payload member `"code"` from a closed set (`model.SYSTEMIC_FAILURE_CODES`), whose only member is `"env_mismatch"` (its
+verb was refused by the environment check). The protocol refuses any other
+value and accepts an absent code, and the code is recorded in the attempt's
+error text as `{"code": ..., "detail": ...}`. Failures without a systemic code
+never count, however alike their text; units adopted from an earlier
+dispatcher's open rows count too. The halt kind is `repeated_failure`, the
+report's `halted` shows it, and undispatched units stay `PENDING`. Fix the
+cause, call `resume_run`, then prepare and dispatch again; the units already
+failed stay failed.
 
 ## Selecting a worker agent
 
@@ -235,25 +257,28 @@ vocabulary a consumer will actually see:
 - `claim_refused` -- an exhausted unit the dispatcher went to fail had been
   re-claimed with a live lease, so it is no longer abandoned and not this
   dispatcher's to fail. Skipped for the rest of this wave.
+- `worker_failed` -- the worker reported terminal failure; the unit is
+  terminally FAILED and its FAIL attempt stays available for handoff.
 - `wave_exit` -- the wave stopped while this dispatch was still open, so the
   dispatcher closed it on the way out. Every dispatch this call opened is
   settled before `dispatch_wave` returns, including on an abort: a dispatch
   left open would make its unit permanently unreclaimable in later waves.
+
+`DispatchReport.halted` is a halt kind: `rate_limit`, `auth`, an operator
+`pause`, or `repeated_failure` (the breaker above). `launch_stderr` and
+`launch_rc` are set only on a `launch_misconfiguration` abort.
 
 `DispatchReport.aborted_reason` is set when the loop stopped early rather
 than exhausting the wave: `launch_misconfiguration` (a launch never reached
 an observed running state -- its own dispatch is recorded as `launch_failed`,
 and the wave stops rather than repeating a launch every later unit would fail
 the same way), `dispatcher_lease_lost` (another
-dispatcher took the run), `dispatcher_lease_held_by_another_dispatcher` (this
+dispatcher took the run; the lease is re-acquired before every launch, so slow
+launches alone do not lose it), `dispatcher_lease_held_by_another_dispatcher` (this
 call never started, and launched nothing), or `wave_stalled` (nothing
 progressed for `stall_timeout_seconds`). An abort is not a halt: a halted run
 parks until `resume_run` clears the halt, while an abort means this call stopped and its reason
 tells you whether to investigate the environment or simply call again.
-
-`worker_failed` means that the worker reported terminal failure detail. The
-unit is terminally `FAILED`, and its FAIL attempt remains available for handoff.
-`DispatchReport.recovered` lists units adopted from durable open dispatch rows.
 
 ## Not configurable, and why
 
