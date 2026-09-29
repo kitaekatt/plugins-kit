@@ -476,7 +476,7 @@ def test_seats_result_shape_is_unchanged_by_step_three():
     ]
 
 
-@pytest.mark.parametrize("self_ref", ["opus", "claude-opus-5"])
+@pytest.mark.parametrize("self_ref", ["opus", "claude-opus-5-5"])
 def test_describe_marks_the_author_by_id_or_model_like_seats(self_ref):
     from llm_scripting_kit import DEFAULT_MODEL_CONFIG, discover_model_entries
     from llm_scripting_kit.declaration import describe
@@ -492,3 +492,12 @@ def test_describe_marks_the_author_by_id_or_model_like_seats(self_ref):
     assert marked == ["opus"]
     assert "[author]" in ranking.render()
     assert "prefer a non-author entry" in ranking.rule
+
+
+@pytest.mark.parametrize("self_ref", ["opus", "claude-opus-5-5"])
+def test_resolve_self_maps_a_dated_claude_id_to_its_alias_entry(self_ref):
+    from llm_scripting_kit import DEFAULT_MODEL_CONFIG, discover_model_entries
+    from llm_scripting_kit.seats import _resolve_self
+
+    entries = discover_model_entries(config=DEFAULT_MODEL_CONFIG)
+    assert _resolve_self(self_ref, entries).id == "opus"

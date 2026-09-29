@@ -347,13 +347,14 @@ routing:
 - shape: [cross-check]
   models: [sol]
 - shape: [novel, load-bearing]
-  models: [fable, sol]
+  models: [opus, sol]
   gate: >-
     write "qualifies on <criteria>; <why the broader route is the wrong seat>". If it cannot be
     written, the unit does not qualify.
   guards:
-  - fable draws from a different usage pool; a pool does not degrade gracefully when spent, it stops.
-  - Never choose a cheaper model for a unit that meets the fable bar to harvest the discount.
+  - opus draws on the orchestrating session's usage pool; a pool does not degrade gracefully when spent, it stops.
+  - Never choose a cheaper model for a unit that meets this row's bar to harvest the discount.
+  - fable is not routed by default. A layer that wants it names it in this row's `models`.
 - shape: [parallel-leaf, unverifiable]
   models: [sonnet]
 - shape: [parallel-leaf, mutating]
@@ -419,15 +420,15 @@ effort:
     Claude-side, effort is NOT dialable per call: the Agent tool has no effort parameter,
     agents inherit from their type or the session, and it is settable per call only through
     Workflow's `agent()` `opts.effort`. So a Claude-side effort decision is an input to routing,
-    not a knob to turn afterwards. Where it IS settable on fable, set `max` -- work that reaches
-    that model is dangerous in more than one way, and deliberation is the
+    not a knob to turn afterwards. Where it IS settable for a {novel} + {load-bearing} unit, set `max` -- work that reaches
+    that row is dangerous in more than one way, and deliberation is the
     main quality control left.
   up_effort_note: >-
-    Try higher effort before a higher-cost model -- opus at `xhigh` before reaching for fable at all -- WHERE
+    Try higher effort before a higher-cost model -- sonnet at `xhigh` before reaching for opus -- WHERE
     effort is dialable (a CLI backend's effort setting, Workflow `agent()`). Via the Agent
     tool there is no per-call effort control for an Agent-tool opus dispatch: it inherits the session's effort
     and does not count as the higher-effort attempt. That move is
-    for units that do NOT meet fable's bar; a unit already meeting it goes there directly.
+    for units that do NOT meet the {novel} + {load-bearing} bar; a unit already meeting it goes there directly.
   raise_when:
   - ambiguous, or several plausible approaches where picking wrong is expensive
   - you cannot verify the result cheaply
@@ -455,8 +456,8 @@ announce:
     requires_model: sol
     text: delegating plan cross-check to codex/sol (cross-check)
   - id: ex-review
-    requires_model: fable
-    text: delegating architecture review to fable (novel, load-bearing)
+    requires_model: opus
+    text: delegating architecture review to opus (novel, load-bearing)
   - id: ex-migration
     requires_model: luna
     text: delegating per-file API migration to codex/luna (fan-out)

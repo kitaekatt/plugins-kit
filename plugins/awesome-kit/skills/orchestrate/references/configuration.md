@@ -74,7 +74,7 @@ routing:
 - shape: [cross-check]
   models: [sol]
 - shape: [novel, load-bearing]
-  models: [fable, sol]
+  models: [opus, sol]
   gate: write the justification before dispatch
   guards:
   - Keep the high-cost route for work that meets its bar.
