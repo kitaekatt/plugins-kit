@@ -3,10 +3,11 @@
 Writes generated content to a standalone projection artifact alongside (not
 inside) the authored source -- the append-only counterpart to ``inplace``'s
 in-place mutation. A write never overwrites the previous artifact directly; it
-first moves the existing file to a ``.bak`` sibling, so rollback is a rename,
-never a content reconstruction. After writing, the artifact is reloaded and
-validated; a reload failure restores the ``.bak`` so a bad write never leaves a
-corrupt artifact in place. Human-authored data is never overwritten -- the
+writes and validates a temporary sibling, copies the existing file to a ``.bak``
+sibling, then swaps the temporary in with ``os.replace``, so rollback is a
+rename, never a content reconstruction. A serialize or reload failure removes
+the temporary file and leaves the artifact and ``.bak`` untouched, so an
+interrupted write never leaves a partial artifact in place. Human-authored data is never overwritten -- the
 projection is a separate artifact the pipeline owns wholesale.
 
 Generalizes the localization append-only projection writers. The serialization
@@ -22,6 +23,7 @@ units. How that list becomes the on-disk bytes stays project-side.
 from __future__ import annotations
 
 import os
+import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
@@ -62,52 +64,52 @@ def apply_projection(
 ) -> ProjectionResult:
     """Write ``content`` to ``artifact_path``, preserving the prior version.
 
+    Interruption-safe: the target is only ever replaced by ``os.replace`` of a
+    fully written and validated file, so a crash leaves the old artifact or the
+    new one, never a partial one. Re-running with the same input converges.
+
     Steps:
 
-    1. **Back up** -- if the artifact already exists, move it to
-       ``<path><backup_suffix>`` (replacing any stale backup) so the previous
-       version is recoverable by a rename.
-    2. **Write** -- ``serialize(path, content)`` produces the new artifact.
-    3. **Reload-validate** -- when ``load`` is given, reload the artifact (and,
-       when ``validate`` is given, assert ``validate(reloaded)``). On any
-       failure: when a ``.bak`` was made, it is restored over the artifact
-       (``result.rolled_back = True``); when there was no prior artifact (a
-       first write), the corrupt new artifact is removed instead, so a bad
-       write never leaves anything in place either way. The exception is
-       re-raised as-is, with this attempt's :class:`ProjectionResult`
-       attached to it as ``exc.result`` -- the function never returns on this
-       path, so that is the only way a caller observes ``rolled_back`` (or
-       the no-backup removal).
+    1. **Write** -- ``serialize(tmp, content)`` produces the new artifact in a
+       temporary file in the SAME directory as the target.
+    2. **Reload-validate** -- when ``load`` is given, reload the temporary file
+       (and, when ``validate`` is given, assert ``validate(reloaded)``). On any
+       failure the temporary file is removed and the target and any existing
+       ``.bak`` are left untouched (``result.rolled_back`` is True when a prior
+       artifact exists, since it is still in place). The exception is
+       re-raised as-is with this attempt's :class:`ProjectionResult` attached
+       as ``exc.result`` -- the function never returns on this path.
+    3. **Back up** -- if the artifact already exists, COPY it to
+       ``<path><backup_suffix>`` (replacing any stale backup); the original
+       stays in place until the swap.
+    4. **Swap** -- ``os.replace(tmp, path)``.
 
-    Never overwrites the ``.bak`` content-blind: a first write (no prior
-    artifact) creates no backup. Returns a :class:`ProjectionResult`.
+    A first write (no prior artifact) creates no backup. Returns a
+    :class:`ProjectionResult`.
     """
     path = Path(artifact_path)
     backup: Optional[Path] = None
     if path.exists():
         backup = path.with_name(path.name + backup_suffix)
-        os.replace(path, backup)
-
     result = ProjectionResult(path=path, backup=backup)
+
+    tmp = path.with_name(f"{path.stem}.tmp{path.suffix}")
     try:
-        serialize(path, content)
+        serialize(tmp, content)
         if load is not None:
-            reloaded = load(path)
+            reloaded = load(tmp)
             if validate is not None and not validate(reloaded):
                 raise ValueError(
                     f"projection reload validation failed for {path.name}"
                 )
     except Exception as exc:
-        if backup is not None and backup.exists():
-            # Restore the previous artifact from the backup.
-            os.replace(backup, path)
-            result.rolled_back = True
-        elif path.exists():
-            # No prior artifact existed (a first write): the corrupt new
-            # artifact must not be left in place either.
-            path.unlink()
+        tmp.unlink(missing_ok=True)
+        result.rolled_back = backup is not None
         exc.result = result  # noqa: B010 -- the only way to expose this result
         raise
+    if backup is not None:
+        shutil.copy2(path, backup)
+    os.replace(tmp, path)
     result.written = True
     return result
 

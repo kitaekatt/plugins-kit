@@ -137,3 +137,34 @@ def test_aggregate_folds_pairs_by_artifact():
 def test_aggregate_preserves_input_order():
     agg = aggregate_projections([("a", 1), ("a", 2), ("a", 3)])
     assert agg["a"] == [1, 2, 3]
+
+
+# -- interruption safety ------------------------------------------------------
+
+def test_serializer_dying_midway_leaves_target_and_bak_untouched(tmp_path):
+    art = tmp_path / "proj.json"
+    apply_projection(art, {"v": 1}, serialize=_json_serialize)
+    apply_projection(art, {"v": 2}, serialize=_json_serialize)
+    bak = tmp_path / "proj.json.bak"
+    before_art, before_bak = art.read_bytes(), bak.read_bytes()
+
+    def dying_serialize(path, content):
+        path.write_text('{"v": ', encoding="utf-8")
+        raise RuntimeError("process died")
+
+    with pytest.raises(RuntimeError):
+        apply_projection(art, {"v": 3}, serialize=dying_serialize)
+    assert art.read_bytes() == before_art
+    assert bak.read_bytes() == before_bak
+    assert sorted(p.name for p in tmp_path.iterdir()) == [
+        "proj.json",
+        "proj.json.bak",
+    ]
+
+
+def test_identical_runs_produce_byte_identical_targets(tmp_path):
+    art = tmp_path / "proj.json"
+    apply_projection(art, {"a": [1, 2], "b": "x"}, serialize=_json_serialize)
+    first = art.read_bytes()
+    apply_projection(art, {"a": [1, 2], "b": "x"}, serialize=_json_serialize)
+    assert art.read_bytes() == first
