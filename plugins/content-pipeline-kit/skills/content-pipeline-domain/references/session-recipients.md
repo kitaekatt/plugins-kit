@@ -178,9 +178,12 @@ CLI 2.1.284, 2026-09-29): `--agent content-pipeline-kit:pipeline-worker` printed
 `warning: no agent named 'content-pipeline-kit:pipeline-worker' -- spawning with
 default template` and launched anyway, exit code unchanged. The warning goes to
 the launcher's output, which `dispatch_wave` reports as `launch_stderr` only on
-a failed launch, so do not expect to see it. Whether enabling the plugin in the
-project's own settings restores the agent under `--setting-sources project` was
-not probed.
+a failed launch, so do not expect to see it. Enabling the plugin in the
+project's own settings did not restore the agent (live probe, claude CLI 2.1.284,
+2026-09-29): with `{"enabledPlugins": {"content-pipeline-kit@plugins-kit": true}}`
+in the launch folder's `.claude/settings.json`, two launches printed the same
+`no agent named` warning. The sessions' logs could not be read, so what the
+sessions then did is unobserved.
 
 Build your worker's allowlist from those six computed strings, not from a
 broader grant (e.g. "any invocation of my protocol mount"). A broad grant
