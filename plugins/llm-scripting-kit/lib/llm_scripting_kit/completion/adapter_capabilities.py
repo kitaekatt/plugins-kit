@@ -81,6 +81,12 @@ _OPENROUTER_PARAMS = {
         emits="timeout",
         note="omitted from the request entirely when None",
     ),
+    "max_retries": ParamCapability(
+        type="integer",
+        default=None,
+        emits="client.with_options(max_retries=...)",
+        note="SDK retries per call; unset keeps the client default of 2",
+    ),
     "user_cache_prefix": ParamCapability(
         type="string",
         default="",

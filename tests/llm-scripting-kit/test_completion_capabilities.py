@@ -602,12 +602,14 @@ def test_codex_extra_keys_match_the_advertisement():
 # The digests are sha256(json.dumps(record.to_json())) of each family record as
 # llm-scripting-kit 0.53.0 serialized it. The harness records must not move at
 # all; openrouter may differ ONLY by the added `conditional_params` key.
+# Re-pinned in 0.56.0: the new BackendOptions.max_retries field joins every
+# record's dropped_params (harnesses) or params (openrouter) and nothing else.
 
 _PRE_CONDITIONAL_DIGESTS = {
-    "claude-cli": "4c45176d9465b035fa6cb67fa130a1d072b387a98a7a0f6f683b5ef942d20aef",
-    "codex-cli": "d92754c127616a71ec29bf51f47bea11ae014d89e2e1e2f062721b1baba1fe45",
-    "opencode-cli": "5da7421996e12913e5bb8633a1cdd98462b5ae16d9328f5c1f6895ab428ddc7b",
-    "openrouter": "48974b5178183adf014e82980c0f878078e74f160552be9567f253a551a43358",
+    "claude-cli": "a27c473c1c2f724b12491fb92fdb810bedf7ce4421d1af5b20c4c9c6183516b0",
+    "codex-cli": "519b7ece167c305ae18695afc6c5b04d3d774603b9b1082b94e7cd865d6a7771",
+    "opencode-cli": "3b7f34739e47bc612f6311defd3661aca96f51e0c9dcb4b4bf95ca3c824542d7",
+    "openrouter": "559129a60425838d9708a95b523c1e1976e6513cf315d253e42517050b1ce4c9",
 }
 
 

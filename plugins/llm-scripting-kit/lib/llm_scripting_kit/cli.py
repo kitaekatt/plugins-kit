@@ -325,6 +325,11 @@ def _parser() -> argparse.ArgumentParser:
     complete.add_argument("--max-tokens", type=int)
     complete.add_argument("--temperature", type=float)
     complete.add_argument("--timeout", type=float)
+    complete.add_argument(
+        "--max-retries",
+        type=_non_negative_int,
+        help="OpenAI-compatible endpoints: SDK retries per call (default 2; 0 disables).",
+    )
     complete.add_argument("--effort")
     complete.add_argument("--cwd", type=Path)
     complete.add_argument("--format", choices=("json", "text"), default="json")
@@ -1062,6 +1067,7 @@ _COMPLETE_CALL_FLAGS = (
     "max_tokens",
     "temperature",
     "timeout",
+    "max_retries",
     "effort",
     "cwd",
 )
@@ -1097,6 +1103,7 @@ def _request_from_flags(args: argparse.Namespace) -> "tuple[str, str, Any, Backe
         max_tokens=flag("max_tokens"),
         temperature=flag("temperature"),
         timeout_s=args.timeout,
+        max_retries=args.max_retries,
         effort=args.effort or selection.effort,
         cwd=args.cwd,
         log_prefix=f"[{selection.endpoint}]",
@@ -1144,6 +1151,16 @@ def _request_from_protocol(
         log_prefix=f"[{selection.endpoint}]",
     )
     return request.system, request.prompt, selection, options
+
+
+def _non_negative_int(text: str) -> int:
+    try:
+        value = int(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"invalid non-negative integer: {text!r}") from None
+    if value < 0:
+        raise argparse.ArgumentTypeError(f"must be >= 0, got {value}")
+    return value
 
 
 def _cmd_complete(args: argparse.Namespace) -> int:

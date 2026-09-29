@@ -363,6 +363,18 @@ class OpenRouterBackend:
 
         started_at = utc_now_iso()
         start = time.monotonic()
+        if opts.max_retries is not None:
+            if (
+                isinstance(opts.max_retries, bool)
+                or not isinstance(opts.max_retries, int)
+                or opts.max_retries < 0
+            ):
+                raise ValueError(
+                    f"max_retries must be a non-negative integer, got {opts.max_retries!r}"
+                )
+            # The client is shared across calls; the SDK scopes the override
+            # to a copy, so this call's setting never leaks to another.
+            client = client.with_options(max_retries=opts.max_retries)
         response = client.chat.completions.create(**create_kwargs)
         wall_ms = int((time.monotonic() - start) * 1000)
         ended_at = utc_now_iso()

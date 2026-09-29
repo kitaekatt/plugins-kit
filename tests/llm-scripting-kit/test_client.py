@@ -60,3 +60,21 @@ class TestDefaultEndpointFollowsConfiguredDefault:
         client_mod.make_openai_client()
         assert fake_openai["base_url"] == client_mod.BASE_URL
         assert fake_openai["api_key"] == "from-env"
+
+
+class TestMaxRetries:
+    def test_default_is_the_sdk_default_stated_explicitly(self, monkeypatch, fake_openai):
+        monkeypatch.setenv("OPENROUTER_API_KEY", "k")
+        client_mod.make_openai_client()
+        assert fake_openai["max_retries"] == 2
+
+    def test_zero_reaches_the_sdk_client(self, monkeypatch, fake_openai):
+        monkeypatch.setenv("OPENROUTER_API_KEY", "k")
+        client_mod.make_openai_client(max_retries=0)
+        assert fake_openai["max_retries"] == 0
+
+    @pytest.mark.parametrize("bad", [-1, True, 1.5])
+    def test_invalid_is_rejected(self, monkeypatch, fake_openai, bad):
+        monkeypatch.setenv("OPENROUTER_API_KEY", "k")
+        with pytest.raises(ValueError):
+            client_mod.make_openai_client(max_retries=bad)
