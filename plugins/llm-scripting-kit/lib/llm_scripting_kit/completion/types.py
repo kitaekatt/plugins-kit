@@ -256,6 +256,9 @@ class BackendOptions:
 
     - ``timeout_s`` -- per-call wall-clock cap. ``None`` uses the backend
       default.
+    - ``max_retries`` -- OpenAI-compatible transport only: SDK-level automatic
+      retries for this call (0 disables them). ``None`` keeps the client's
+      default of 2. Non-negative integer.
     - ``temperature`` -- optional sampling control. ``None`` omits it so the
       server/model default can follow its mode; an explicit value is sent.
     - ``cache_salt`` -- per-attempt salt for malformed-response retry loops so a
@@ -306,6 +309,7 @@ class BackendOptions:
     max_tokens: int = 4096
     temperature: Optional[float] = None
     timeout_s: Optional[float] = None
+    max_retries: Optional[int] = None
     cache_salt: int = 0
     user_cache_prefix: str = ""
     effort: Optional[str] = None

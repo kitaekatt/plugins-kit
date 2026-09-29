@@ -23,6 +23,13 @@ usable entry of the pace-ordered list (see `describe` below), and `--model`
 overrides the model id of whichever entry is chosen. `resolve` and `complete`
 take no `--endpoint` flag; name one entry as `--models NAME`.
 
+`complete --max-retries N` sets the OpenAI SDK's automatic retries for that one
+call on OpenAI-compatible endpoints (default 2, the SDK default; `0` turns them
+off; a negative value is refused). Pass `0` when the caller runs its own backoff,
+so one failed request surfaces at once instead of after hidden SDK retries. The
+CLI transports (Claude, Codex, OpenCode) ignore it and report it in
+`dropped_params`. A `--request-file` request sets it as `options.max_retries`.
+
 Discovery and completion commands emit JSON by default. `complete --format
 text` prints only the response text. Exit codes are `0` for success, `1` for a
 runtime failure, `2` for invalid input/configuration, `3` for a classified

@@ -392,6 +392,33 @@ class TestOpenRouterBackend:
         )
         assert client.sink[0]["timeout"] == 42
 
+    def test_max_retries_unset_leaves_the_client_untouched(self):
+        client = _FakeClient()  # has no with_options: unset must not call it
+        OpenRouterBackend(client=client).complete("s", "u", model="test/slug")
+        assert "max_retries" not in client.sink[0]
+
+    def test_max_retries_zero_scopes_the_client_for_the_call(self):
+        seen = []
+
+        class _Scoped(_FakeClient):
+            def with_options(self, **kwargs):
+                seen.append(kwargs)
+                return self
+
+        client = _Scoped()
+        OpenRouterBackend(client=client).complete(
+            "s", "u", model="test/slug", options=BackendOptions(max_retries=0),
+        )
+        assert seen == [{"max_retries": 0}]
+        assert len(client.sink) == 1
+
+    @pytest.mark.parametrize("bad", [-1, True, 1.5])
+    def test_max_retries_invalid_is_rejected(self, bad):
+        with pytest.raises(ValueError):
+            OpenRouterBackend(client=_FakeClient()).complete(
+                "s", "u", model="test/slug", options=BackendOptions(max_retries=bad),
+            )
+
     def test_max_tokens_and_temperature_thread_through(self):
         client = _FakeClient()
         OpenRouterBackend(client=client).complete(
@@ -651,7 +678,7 @@ class TestKeylessClientBuild:
         captured = {}
 
         class _FakeOpenAI:
-            def __init__(self, *, api_key, base_url):
+            def __init__(self, *, api_key, base_url, max_retries):
                 captured["api_key"] = api_key
                 captured["base_url"] = base_url
 

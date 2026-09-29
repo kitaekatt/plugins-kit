@@ -17,12 +17,18 @@ from .constants import BASE_URL
 # credential the user has to manage.
 KEYLESS_API_KEY = "keyless"
 
+# The OpenAI SDK's own default retry count, stated explicitly so the kit's
+# behavior does not silently follow an SDK change. A caller that runs its own
+# backoff passes a smaller value (0 disables SDK-level retries).
+DEFAULT_MAX_RETRIES = 2
+
 
 def make_openai_client(
     api_key: Optional[str] = None,
     *,
     project_root: Optional[Path] = None,
     endpoint: Optional[str] = None,
+    max_retries: int = DEFAULT_MAX_RETRIES,
 ) -> Any:
     """Return an ``openai.OpenAI`` client configured for an endpoint.
 
@@ -34,6 +40,10 @@ def make_openai_client(
             (``openrouter`` at ``BASE_URL``) -- identical to previous behavior.
             A KEYLESS endpoint (one resolving with ``key_env`` None) skips key
             resolution and passes ``KEYLESS_API_KEY``, which the server ignores.
+
+        max_retries: SDK-level automatic retries per request (connection
+            errors, 408/409/429/5xx). Default 2 (the SDK default); must be
+            a non-negative integer.
 
     Returns:
         An ``openai.OpenAI`` instance with ``base_url`` set to the endpoint's
@@ -74,6 +84,9 @@ def make_openai_client(
             )
         api_key = result.key
 
+    if isinstance(max_retries, bool) or not isinstance(max_retries, int) or max_retries < 0:
+        raise ValueError(f"max_retries must be a non-negative integer, got {max_retries!r}")
+
     try:
         from openai import OpenAI  # noqa: PLC0415
     except ImportError as e:
@@ -83,4 +96,4 @@ def make_openai_client(
             "or declare the 'sdk' extra in the consuming project."
         ) from e
 
-    return OpenAI(api_key=api_key, base_url=base_url)
+    return OpenAI(api_key=api_key, base_url=base_url, max_retries=max_retries)
