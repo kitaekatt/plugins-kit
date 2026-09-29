@@ -3,8 +3,12 @@
 import json
 import importlib.util
 import os
+import shlex
+import shutil
 import subprocess
 from pathlib import Path
+
+import pytest
 
 from bootstrap_lib import codex, codex_hook, engine
 
@@ -35,6 +39,36 @@ def _git_project(tmp_path):
 
 
 class TestCodexHookInstall:
+    @pytest.mark.skipif(os.name != "nt", reason="Windows shell execution contract")
+    @pytest.mark.parametrize("home_name", ["home", "home with spaces"])
+    @pytest.mark.parametrize("shell", ["powershell.exe", "cmd.exe"])
+    def test_windows_command_executes_launcher(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+        home_name: str, shell: str,
+    ) -> None:
+        executable = shutil.which(shell)
+        if executable is None:
+            pytest.skip(f"{shell} is unavailable")
+        home = tmp_path / home_name
+        launcher = home / ".local" / "bin" / "bootstrap.cmd"
+        launcher.parent.mkdir(parents=True)
+        launcher.write_text(
+            "@echo off\necho hook-argument:%1\nexit /b 0\n", encoding="ascii",
+        )
+        monkeypatch.setenv("HOME", str(home))
+        command = codex_hook._hook_entry()["commandWindows"]
+        arguments = (
+            [executable, "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command]
+            if shell == "powershell.exe" else f'"{executable}" /d /s /c "{command}"'
+        )
+
+        result = subprocess.run(
+            arguments, capture_output=True, text=True, timeout=15,
+        )
+
+        assert result.returncode == 0, result.stderr
+        assert result.stdout.strip() == "hook-argument:codex-hook"
+
     def test_writes_session_start_hook_and_preserves_existing_hooks(self, tmp_path, monkeypatch):
         project = _git_project(tmp_path)
         codex_dir = project / ".codex"
@@ -61,7 +95,9 @@ class TestCodexHookInstall:
             for hook in group["hooks"]
         ]
         assert "other-hook" in commands
-        assert any(c.endswith("bootstrap codex-hook") for c in commands)
+        expected_launcher = tmp_path / "home" / ".local" / "bin" / "bootstrap"
+        assert any(shlex.split(command) == [str(expected_launcher), "codex-hook"]
+                   for command in commands)
         assert any(group["matcher"] == "^(startup|resume)$"
                    for group in session_hooks)
 
@@ -73,6 +109,38 @@ class TestCodexHookInstall:
 
         assert first.changed is True
         assert second.changed is False
+
+    @pytest.mark.parametrize("legacy", [False, True])
+    def test_windows_only_hook_is_replaced_and_rerun_is_idempotent(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, legacy: bool,
+    ) -> None:
+        project = _git_project(tmp_path)
+        home = tmp_path / "home with spaces"
+        monkeypatch.setenv("HOME", str(home))
+        windows_command = codex_hook._bootstrap_commands()[1]
+        launcher = home / ".local" / "bin" / "bootstrap.cmd"
+        old_command = f'"{launcher}" codex-hook' if legacy else windows_command
+        hooks_path = project / ".codex" / "hooks.json"
+        hooks_path.parent.mkdir()
+        unrelated_hook = {
+            "type": "command", "commandWindows": "echo bootstrap codex-hook",
+        }
+        hooks_path.write_text(json.dumps({
+            "hooks": {"SessionStart": [{"hooks": [
+                {"type": "command", "commandWindows": old_command}, unrelated_hook,
+            ]}]},
+        }), encoding="utf-8")
+
+        first = codex_hook.ensure_codex_hook(str(project))
+        second = codex_hook.ensure_codex_hook(str(project))
+
+        hooks = [
+            hook for group in json.loads(hooks_path.read_text(encoding="utf-8"))[
+                "hooks"]["SessionStart"] for hook in group["hooks"]
+        ]
+        assert first.changed is True
+        assert second.changed is False
+        assert hooks == [unrelated_hook, codex_hook._hook_entry()]
 
     def test_marker_like_text_in_unrelated_command_is_preserved(self, tmp_path):
         project = _git_project(tmp_path)
@@ -100,10 +168,11 @@ class TestCodexHookInstall:
         hooks_path.parent.mkdir()
         hooks_path.write_text("{}\n", encoding="utf-8")
         os.chmod(hooks_path, 0o640)
+        original_mode = os.stat(hooks_path).st_mode & 0o777
 
         codex_hook.ensure_codex_hook(str(project))
 
-        assert (os.stat(hooks_path).st_mode & 0o777) == 0o640
+        assert (os.stat(hooks_path).st_mode & 0o777) == original_mode
 
 
 class TestCodexIgnoreContext:
