@@ -25,15 +25,17 @@ on your own entry point:
 -> {"ok": false, "error": {"type": "...", "message": "..."}}
 ```
 
-The verbs a worker uses are `read`, `submit`, and `fail`. `claim` is the
+The verbs a background worker uses are `read`, `submit`, and `fail`. In the
+background lane, `claim` is the
 DISPATCHER's: it claims each unit before launching that unit's session and
 passes the resulting fencing token to the worker in its launch prompt, so a
-worker never claims anything and a session left alive by an earlier dispatch
-cannot take the claim back after a reclaim. `renew` is the dispatcher's too
+background worker never claims anything and a session left alive by an earlier dispatch
+cannot take the claim back after a reclaim (in the workflow lane the agent
+claims its own unit; see `workflow-lane.md`). `renew` is the dispatcher's too
 -- the background lane makes the dispatcher the renewer in the background lane
 (`supervise_tick` calls the store's lease-renew method itself, on a schedule,
 while a worker session is alive), so a worker session never runs it.
-`prepare`, `status`, `pause`, `resume`, `finalize`, `claim`, and `renew` are
+In the background lane, `prepare`, `status`, `pause`, `resume`, `finalize`, `claim`, and `renew` are
 all the orchestrator's. Every failure -- a malformed envelope, an
 unknown verb, a version mismatch, or an exception a verb raises -- comes back
 as a typed `{"ok": false, "error": ...}` reply, never a raw traceback and
@@ -232,6 +234,23 @@ verb and ids must agree with that name, or the call is refused with
 `pause`, `prepare`) or another unit therefore cannot run from a worker file.
 Files with any other name are not checked; the allowlist still limits which
 paths a worker may invoke.
+
+## The launch directory must be trusted
+
+`dispatch_wave` runs `claude --bg` in its `cwd` argument, else the directory
+the run's adapter environment records, else the dispatcher's own working
+directory. Observed on claude CLI 2.1.284: when that directory is not a
+trusted workspace, the launch exits 1 with `Workspace not trusted. Run
+`claude` in <dir> once and accept the trust prompt, then retry.` and spawns no
+session.
+
+`preflight` does not check trust. `dispatch_unit` discards the launcher's exit
+code and stderr, finds no session within `launch_confirm_seconds`, releases
+the claim, settles the dispatch as `launch_failed`, and raises
+`LaunchMisconfigurationError`; `dispatch_wave` then stops with
+`aborted_reason == "launch_misconfiguration"` and launches nothing. The trust
+message itself is not surfaced. Remedy: run `claude` once in that directory,
+accept the trust prompt, and dispatch again.
 
 ## Which worker your dispatch runs
 

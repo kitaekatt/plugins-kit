@@ -3,7 +3,7 @@ _schema_version: 1
 name: execute-work-unit
 author: christina
 skill-type: technique-skill
-description: Use when acting as a content-pipeline background worker completing exactly one work unit through a consumer's protocol mount. Do NOT use for orchestrating a whole run (see background-pipeline) or for any interactive, non-worker use of the pipeline.
+description: Use when acting as a content-pipeline background worker completing one work unit. Do NOT use for orchestrating a run (background-pipeline) or interactive use.
 ---
 
 # Execute Work Unit
@@ -37,6 +37,55 @@ no allowlist author would have enumerated that construct in advance, so
 nothing authorized it and nothing could complete it. Every invocation below
 must therefore be run **exactly as written**, never approximated,
 paraphrased, or reconstructed via a different shell mechanism.
+
+## Contract
+
+```yaml
+technique_skill:
+  _schema_version: "1"
+  trigger_model: auto
+  identity: Complete exactly one already-claimed content-pipeline work unit as a background worker, running only the exact invocations the launch prompt gives.
+  scope:
+    covers:
+      - reading the prepared request for one unit
+      - writing the fenced answer file and the submit and fail envelopes
+      - submitting the answer, revising on rejection, and reporting failure on exhaustion
+    excludes:
+      - orchestrating a whole run (use background-pipeline)
+      - claiming a unit, which the dispatcher does before launch
+      - any interactive, non-worker use of the pipeline
+  techniques:
+    - id: complete_one_work_unit
+      name: Complete one work unit through the protocol mount
+      keywords: [work unit, background worker, fencing token, submit envelope, fail envelope, launch prompt, protocol mount]
+      goal: The unit's answer is submitted and accepted through the mount, or a terminal failure is reported; nothing is fabricated.
+      steps:
+        - n: 1
+          action: Run the read invocation from the launch prompt to get the prepared request.
+          tool: "<argv> protocol @<read envelope path>"
+        - n: 2
+          action: Write the answer to the answer path named in the launch prompt, with the fence line content-pipeline-fence:<token> as the first line.
+          tool: Write
+        - n: 3
+          action: Write the submit envelope template from the launch prompt to its named path, substituting only <FENCING_TOKEN>.
+          tool: Write
+        - n: 4
+          action: Run the submit invocation; on rejection with feedback, revise the answer file (fence line included) and run it again without rewriting the envelope.
+          tool: "<argv> protocol @<submit envelope path> --text-file=<answer path>"
+        - n: 5
+          action: On exhaustion, write the fail envelope (substituting <FENCING_TOKEN> and <FAILURE_DETAIL_JSON>), run the fail invocation, and stop.
+          tool: "<argv> protocol @<fail envelope path>"
+          on_failure: Never fabricate an answer to close the unit out.
+      checklist:
+        - "read invocation run; unit content came only from it"
+        - "answer file starts with the fence line"
+        - "submit envelope written with only the token substituted"
+        - "submit accepted, or fail invocation run after exhaustion"
+      gotchas:
+        - Run each invocation exactly as the launch prompt states it; never compose a redirect, pipe, or other shell construct to satisfy a step.
+        - There is no claim invocation; the fencing token comes only from the launch prompt.
+        - Do not read this skill's example run, unit, and worker ids as your own values.
+```
 
 ## Where the exact invocations come from
 

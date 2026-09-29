@@ -115,6 +115,28 @@ by lane during a halt: in the background lane the Python dispatcher renews a
 worker's lease while its session is live, so a unit only becomes reclaimable
 once a dead session's lease actually expires.
 
+## Prerequisite: the launch directory must be a trusted workspace
+
+`dispatch_wave` launches each worker with `claude --bg` in a working
+directory: its `cwd` argument when given, else the working directory the
+run's adapter environment records, else the dispatcher process's own. That
+directory must already be a trusted workspace for the Claude CLI. Observed on
+claude CLI 2.1.284: `claude --bg <prompt>` launched from a directory that is
+not trusted exits 1 with the stderr `Workspace not trusted. Run `claude` in
+<dir> once and accept the trust prompt, then retry.` and starts no session.
+
+`preflight` does not check trust, so it passes. The failure surfaces at the
+first launch, and the dispatcher discards the launcher's exit code and
+stderr, so the message above never reaches the report. The dispatcher finds
+no session within `launch_confirm_seconds`, releases the unit's claim, settles
+the dispatch as `launch_failed`, and stops the wave with
+`aborted_reason == "launch_misconfiguration"` (`LaunchMisconfigurationError`
+inside `dispatch_unit`). Nothing is dispatched. On that abort, check the launch
+directory's trust first.
+
+Remedy: run `claude` once in the launch directory, accept the trust prompt,
+then call `dispatch_wave` again.
+
 ## Configurable: `max_agents` and `batch_size`
 
 These are the only two settings this skill treats as a genuine power-user
