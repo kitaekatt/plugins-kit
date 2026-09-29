@@ -18,11 +18,67 @@ for every wave, start to finish.
 
 This is the workflow lane's counterpart to `background-pipeline`'s four
 stages, but the shapes differ enough that they are not interchangeable
-procedures for the same loop -- read `references/workflow-lane.md` (in
+procedures for the same loop -- read `../content-pipeline-domain/references/workflow-lane.md` (in
 `content-pipeline-domain`) for why: the agent claims its own unit rather than
 the orchestrator claiming on its behalf, there is no renewer and no
 dispatcher lease, and re-entry after an interruption is always a fresh
 invocation rather than a resume.
+
+## Contract
+
+```yaml
+technique_skill:
+  _schema_version: "1"
+  trigger_model: auto
+  identity: Drive one content-pipeline wave through the native Workflow tool from the top-level Claude Code session, then reconcile and finalize.
+  scope:
+    covers:
+      - verifying the four preconditions before spending an agent
+      - assembling a wave with build_wave_args
+      - invoking run-ready-wave.js through the Workflow tool
+      - reconciling the advisory aggregate against the store and finalizing
+    excludes:
+      - a worker's own one-unit procedure (use execute-work-unit)
+      - the Claude background-session driver (use background-pipeline)
+      - continuing a run with resumeFromRunId
+  techniques:
+    - id: run_workflow_wave
+      name: Run one wave through the Workflow tool
+      keywords: [workflow pipeline, run-ready-wave.js, build_wave_args, Workflow tool, advisory aggregate, finalize_run]
+      goal: One wave is executed by workflow agents, reconciled against the store, and its accepted units finalized.
+      preconditions:
+        - The run exists and is prepared through the consumer's protocol mount.
+        - The session is the top-level Claude Code session; the Workflow tool is unavailable inside a subagent.
+      steps:
+        - n: 1
+          action: Verify all four preconditions before spending an agent -- run prepared, build_wave_args lease refusal passed, launching session's allowlist covers every per-unit command and Write target, environment preflight (first unit's readCmd run by hand) returned ok true.
+          on_failure: A WorkerEnvironmentMismatchError or an ok false reply stops the invocation; do not proceed to wave assembly.
+        - n: 2
+          action: Assemble the wave with build_wave_args, passing the same strategy and max_wave_size the run's prepare_run call was given, and use its output as-is. An empty wave means go straight to finalize.
+          tool: content_pipeline.execution.workerpack.build_wave_args
+          expected: A JSON-serializable args object for run-ready-wave.js.
+        - n: 3
+          action: Invoke the Workflow tool from the top-level session against run-ready-wave.js with that args object.
+          tool: Workflow
+          input: plugins/content-pipeline-kit/workflows/run-ready-wave.js
+        - n: 4
+          action: Treat the returned aggregate (counts, units, advisory true) as advisory and reconcile against the run's real state through the mount's status verb before treating any unit as settled.
+        - n: 5
+          action: Finalize so every accepted unit's output lands. A halted or partially settled wave means a fresh invocation from step 1, never a resume.
+          tool: content_pipeline.execution.controller.finalize_run
+          input: "store, run_id, adapter"
+      checklist:
+        - "Four preconditions verified"
+        - "Wave assembled by build_wave_args (empty wave -> skip to finalize)"
+        - "Workflow tool invoked from the top-level session"
+        - "Aggregate reconciled against the store"
+        - "finalize_run applied the accepted units"
+      gotchas:
+        - Do not call resumeFromRunId to continue a pipeline run; it replays a cached self-report, not live state. Re-entry is a fresh invocation with a new batchId and fresh worker ids.
+        - The aggregate is a self-report and can drift from the store; never act on its counts alone.
+        - The background lane's clean unattended run is not evidence that the allowlist is covered; a workflow agent runs inside this session's grant.
+        - Never ingest unit content into the orchestrating session; the args going in and the aggregate coming out exclude it.
+```
 
 ## Preconditions -- verify all four before spending a single agent
 
@@ -36,7 +92,7 @@ invocation rather than a resume.
    mount declares neither a finite-positive explicit `lease_seconds` nor a
    positive `resolve_expected_unit_seconds` for every selected unit. If it
    raises, that is the wave telling you it cannot be sized safely -- fix the
-   mount's declaration (see `session-recipients.md`'s `expected_unit_seconds`
+   mount's declaration (see `../content-pipeline-domain/references/session-recipients.md`'s `expected_unit_seconds`
    guidance) rather than working around the refusal.
 3. **The launching session's own allowlist covers every per-unit string the
    wave is about to use.** Each unit in the pack carries four command strings
@@ -54,7 +110,7 @@ invocation rather than a resume.
 4. **The environment preflight has returned `{"ok": true}`.** Run the first
    unit's `readCmd` verbatim through the mount, by hand, before invoking the
    Workflow tool at all. This mirrors the `read`/`submit`/`fail` environment
-   check every worker verb performs (`session-recipients.md`'s `environment`
+   check every worker verb performs (`../content-pipeline-domain/references/session-recipients.md`'s `environment`
    field), but the workflow lane has no `compose_worker_environment` step of
    its own to catch a mismatch early -- `_require_compatible_run` fires on
    every worker verb including the wave's own `claim` calls, so without this
@@ -96,7 +152,7 @@ one.
 The returned aggregate (`counts`, `units`, `advisory: true`) is
 **advisory, not authoritative.** It is built from what each agent
 self-reported, and a self-report can lie or drift from what the store
-actually recorded -- see `references/workflow-lane.md` for the channels that
+actually recorded -- see `../content-pipeline-domain/references/workflow-lane.md` for the channels that
 stay open even after the per-agent schema is value-bounded. Reconcile against
 the run's real state through the mount (the `status` verb, or the
 consumer's own equivalent) before treating any unit as settled; never act on

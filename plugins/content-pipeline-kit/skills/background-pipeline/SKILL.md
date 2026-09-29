@@ -3,7 +3,7 @@ _schema_version: 1
 name: background-pipeline
 author: christina
 skill-type: technique-skill
-description: Use when orchestrating a content-pipeline run through Claude background sessions -- prepare, dispatch, batch-boundary status, and finalize. Do NOT use for the worker's own one-unit procedure (see execute-work-unit) or for the synchronous inline driver.
+description: Use when orchestrating a content-pipeline run through Claude background sessions. Do NOT use for a worker's own unit (execute-work-unit) or the inline driver.
 ---
 
 # Background Pipeline
@@ -15,6 +15,59 @@ as the dispatcher. It drives
 wave, and never runs unit content through its own context -- only ids,
 outcomes, and status digests, the same invariant the driver itself upholds
 (`DispatchReport` and `compute_status` are both content-free by construction).
+
+## Contract
+
+```yaml
+technique_skill:
+  _schema_version: "1"
+  trigger_model: auto
+  identity: Drive one content-pipeline run through Claude background sessions from a single dispatching Claude Code session, without reading unit content.
+  scope:
+    covers:
+      - preparing a wave through the consumer's protocol mount
+      - dispatching the wave with dispatch_wave and reading its DispatchReport
+      - reading status digests at batch boundaries
+      - finalizing accepted units and resuming a halted run
+    excludes:
+      - a worker's own one-unit procedure (use execute-work-unit)
+      - the synchronous inline driver
+      - the Workflow-tool lane (use workflow-pipeline)
+  techniques:
+    - id: run_background_wave
+      name: Run a prepared wave through background sessions
+      keywords: [background pipeline, dispatch_wave, claude --bg, finalize_run, DispatchReport, batch boundary, halted run]
+      goal: Every unit of the prepared wave is settled and every accepted unit's output is applied through the adapter.
+      steps:
+        - n: 1
+          action: Prepare the wave through the consumer's own protocol mount; the consumer's policy decides which units are ready and stale.
+          tool: execution.protocol.build_handlers (prepare verb) or execution.controller.prepare_run
+        - n: 2
+          action: Dispatch the wave in one call that runs the full bounded loop (preflight, dispatcher election, launches up to max_agents, lease renewal, reclaim of dead workers).
+          tool: content_pipeline.execution.drivers.claude_bg.dispatch_wave
+          input: "store, run_id, wave, adapter, worker_command=..., max_agents=..., batch_size=..."
+          expected: The call returns when the wave is exhausted or the run halts, with a DispatchReport.
+        - n: 3
+          action: Read DispatchReport.status_digests at batch boundaries; a digest carries counts and outcomes only.
+          tool: DispatchReport.status_digests
+        - n: 4
+          action: Once dispatch settles, finalize so every accepted unit's output lands through the adapter's apply.
+          tool: content_pipeline.execution.controller.finalize_run
+          input: "store, run_id, adapter"
+          on_failure: A halted run parks at step 2; call dispatch_wave again once the halt condition has cleared (see resume_run).
+      checklist:
+        - "Wave prepared through the consumer's mount"
+        - "dispatch_wave returned; aborted_reason read"
+        - "Status digests read, no unit content ingested"
+        - "finalize_run applied the accepted units"
+      gotchas:
+        - Never read a unit's prompt, a worker's answer text, or a validator's full feedback into the orchestrating session; only ids, outcomes, and status digests.
+        - DispatchReport.accepted reflects store state; a unit settled as blocked or session_lingering can still be accepted and is finalized. Read settled for how the session ended.
+        - An abort (aborted_reason set) is not a halt. A halt parks and resumes; an abort means this call stopped, and the reason says whether to investigate the environment or call again.
+        - Do not build a pre-emptive quota gate that parses rate-limits.json to decide whether to dispatch; the reactive halt path is the contract.
+        - Flags passed through extra_launch_args may or may not compose with a background launch; the launcher exits 0 either way, so observe what a worker actually does.
+        - Storage engine, fresh-per-unit contexts, and single-dispatcher election are correctness decisions with no setting.
+```
 
 ## The four stages
 
