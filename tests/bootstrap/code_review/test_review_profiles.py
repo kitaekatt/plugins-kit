@@ -532,6 +532,7 @@ def test_the_rendered_table_carries_the_fallback_chain(tmp_path: Path) -> None:
         "name": "reviewer_c_introduced_code",
         "model": "luna",
         "model_fallbacks": ["sonnet"],
+        "effort": "high",
     }
 
 
@@ -636,11 +637,11 @@ def test_the_projection_only_ever_carries_a_resolved_string(tmp_path: Path) -> N
                 assert reviewer["effort"] in rp.EFFORT_LEVELS
 
 
-def test_shipped_effort_is_low_on_the_compliance_lane_only(tmp_path: Path) -> None:
-    """The compliance lane is the only lane shipped at a stated effort.
+def test_shipped_effort_is_stated_on_every_reviewer_lane(tmp_path: Path) -> None:
+    """Every shipped reviewer lane states its effort, scaled to the lane's depth.
 
-    Every other lane omits `effort` and so inherits the session's level, which
-    is the behavior all lanes had before the field existed.
+    An unstated lane would inherit the session's level, so a review started
+    from a high-effort session would run every lane at that level.
     """
     resolved = rp.apply_model_priority(_resolved(tmp_path))
     projection = rp.canonical_projection(resolved)
@@ -653,7 +654,10 @@ def test_shipped_effort_is_low_on_the_compliance_lane_only(tmp_path: Path) -> No
     }
     assert stated == {
         ("data_only", "reviewer_a_claude_md_compliance"): "low",
+        ("data_only", "reviewer_b_diff_only_bugs"): "low",
         ("code", "reviewer_a_claude_md_compliance"): "low",
+        ("code", "reviewer_b_diff_only_bugs"): "medium",
+        ("code", "reviewer_c_introduced_code"): "high",
     }
 
 

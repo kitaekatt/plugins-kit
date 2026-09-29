@@ -14,6 +14,7 @@ profiles:
     effort: low
   - name: reviewer_b_diff_only_bugs
     model: sonnet
+    effort: low
   validator_models:
     bug: sonnet
     claude_md: sonnet
@@ -25,10 +26,12 @@ profiles:
     effort: low
   - name: reviewer_b_diff_only_bugs
     model: opus
+    effort: medium
   - name: reviewer_c_introduced_code
     model:
     - sol
     - opus
+    effort: high
   validator_models:
     bug: opus
     claude_md: sonnet

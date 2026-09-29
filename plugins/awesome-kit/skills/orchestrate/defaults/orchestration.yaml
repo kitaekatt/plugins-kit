@@ -398,7 +398,9 @@ effort:
   title: Effort
   intro: >-
     Decided separately, after routing. Scale, low to high: `low`, `medium`, `high`, `xhigh`,
-    `max`.
+    `max`. Default by shape: a {known} + {rule-applying} unit takes `low`; a unit with no
+    other mark takes `medium`; a {load-bearing} or {unverifiable} unit takes `high`; a
+    {novel} + {load-bearing} unit takes `xhigh`.
   backend_notes:
   - id: codex-dial
     backend: codex
@@ -420,15 +422,16 @@ effort:
     Claude-side, effort is NOT dialable per call: the Agent tool has no effort parameter,
     agents inherit from their type or the session, and it is settable per call only through
     Workflow's `agent()` `opts.effort`. So a Claude-side effort decision is an input to routing,
-    not a knob to turn afterwards. Where it IS settable for a {novel} + {load-bearing} unit, set `max` -- work that reaches
+    not a knob to turn afterwards. Where it IS settable for a {novel} + {load-bearing} unit, set `xhigh` -- work that reaches
     that row is dangerous in more than one way, and deliberation is the
     main quality control left.
   up_effort_note: >-
-    Try higher effort before a higher-cost model -- sonnet at `xhigh` before reaching for opus -- WHERE
-    effort is dialable (a CLI backend's effort setting, Workflow `agent()`). Via the Agent
-    tool there is no per-call effort control for an Agent-tool opus dispatch: it inherits the session's effort
-    and does not count as the higher-effort attempt. That move is
-    for units that do NOT meet the {novel} + {load-bearing} bar; a unit already meeting it goes there directly.
+    Raise effort one step before switching model, and never past `high` on sonnet: a unit that
+    needs more than sonnet at `high` goes to opus. That ladder applies WHERE effort is dialable
+    (a CLI backend's effort setting, Workflow `agent()`). Via the Agent tool there is no
+    per-call effort control for an Agent-tool opus dispatch: it inherits the session's effort
+    and does not count as the higher-effort attempt. A unit already at the {novel} +
+    {load-bearing} bar goes to opus directly, at `xhigh`.
   raise_when:
   - ambiguous, or several plausible approaches where picking wrong is expensive
   - you cannot verify the result cheaply
