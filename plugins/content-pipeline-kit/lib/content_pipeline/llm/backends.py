@@ -7,10 +7,12 @@ Six backends implement :class:`~content_pipeline.llm.platform.LLMBackend`:
   entry in the model-endpoints registry, typically a locally hosted keyless
   server. Unlike the others its availability is NOT assumed: :func:`route`
   pings the selected entry before returning it.
-- :class:`ClaudeCliBackend` -- the local ``claude -p`` CLI (subscription-billed,
-  no per-call metering).
-- :class:`CodexCliBackend` -- the local ``codex exec`` CLI (subscription-billed,
-  no per-call metering).
+- :class:`ClaudeCliBackend` -- the local ``claude -p`` CLI (billed under the
+  operator's subscription rather than per call; the response carries no
+  metered charge, so the run's cost comes from ``platform.response_cost``).
+- :class:`CodexCliBackend` -- the local ``codex exec`` CLI (billed under the
+  operator's subscription rather than per call; cost is derived as for
+  ``ClaudeCliBackend``).
 - :class:`OpencodeCliBackend` -- the local ``opencode run`` CLI, with stdout as
   the answer and a mandatory wall-clock timeout.
 - :class:`MockBackend` -- deterministic, scriptable responses. The always-wins
@@ -329,8 +331,12 @@ class ClaudeCliBackend(_LazyDelegate):
     Spawns the CLI in pure-completion mode (JSON output, no tools by default),
     enforces a per-call timeout, retries transient 5xx envelopes, and maps
     rate-limit / auth markers to a hard stop -- all inside
-    ``llm_scripting_kit.completion.ClaudeCliBackend``. Cost is flat zero (the CLI
-    bills at its own subscription, not per call).
+    ``llm_scripting_kit.completion.ClaudeCliBackend``. The CLI is billed
+    under the operator's subscription rather than per call (the billing
+    model, not a measured cost); ``platform.response_cost`` returns the
+    response's reported cost when it carries a valid one, otherwise an
+    estimate from the pricing table, otherwise ``None`` (unknown). It never
+    returns a synthetic zero for a live response.
 
     Config fields forward to the delegate; ``runner`` is the subprocess seam
     (``None`` uses the shared lib's battle-tested ``run_claude_streaming``). The

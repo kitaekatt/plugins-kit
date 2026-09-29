@@ -8,7 +8,9 @@ apply cycle, driven to a verdict by ``llm.convergence`` -- built as a seam
 in the core phases but implemented last, in the pre-port phase, so it is
 never speculative. ``workunit`` is the pluggable work-unit strategy: a
 graph-walk (structural cadence) or a flat-chunk split, selected per
-pipeline.
+pipeline. ``gate`` holds the ``Gate`` / ``run_gates`` pre-generation gate
+shape shared by ``single_pass`` (which re-exports it) and the tracked
+``execution.controller``.
 
 Deviations from the skeleton / source systems
 ---------------------------------------------

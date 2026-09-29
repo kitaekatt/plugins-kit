@@ -74,14 +74,13 @@ The gate seam: a direct import, not a re-derived shape
 --------------------------------------------------------
 
 ``prepare_run`` runs gates through
-:class:`content_pipeline.pipeline.single_pass.Gate` and
-:func:`content_pipeline.pipeline.single_pass.run_gates` directly, rather than
-redefining an equivalent local shape. ``pipeline/single_pass.py`` is
-read-only for A-min.2 (no edits, no behavior change to the untracked
-``run_single_pass`` loop), but importing its ``Gate`` dataclass and
-``run_gates`` helper is not an edit -- it is reuse, and it is the only way a
-consumer's existing gate list (already built against that exact shape) works
-unchanged against the tracked path. Redefining an equivalent local
+:class:`content_pipeline.pipeline.gate.Gate` and
+:func:`content_pipeline.pipeline.gate.run_gates` directly, rather than
+redefining an equivalent local shape. ``pipeline/gate.py`` holds the shape
+and imports nothing from ``pipeline/single_pass.py``, which re-exports both
+names for its own loop and for existing importers. Reusing the shape is the
+only way a consumer's existing gate list (already built against that exact
+shape) works unchanged against the tracked path. Redefining an equivalent local
 ``Gate``/`run_gates`` would fork the shape for no benefit and cost every
 consumer a second, subtly-different gate protocol to satisfy. This import is
 why this package's docstring can no longer claim "depends on no other
@@ -152,7 +151,7 @@ from content_pipeline.execution.wave import (
 )
 from content_pipeline.freshness.classify import FreshnessState, needs_generation
 from content_pipeline.llm.platform import PipelineHaltError
-from content_pipeline.pipeline.single_pass import Gate, run_gates
+from content_pipeline.pipeline.gate import Gate, run_gates
 from content_pipeline.pipeline.workunit import WorkUnit, WorkUnitStrategy
 
 DEFAULT_PREPARE_WORKER_ID = "prepare"
@@ -463,7 +462,7 @@ def prepare_run(
     For each matched ``PENDING`` unit, in the order ``store.list_units``
     returns (ordinal order):
 
-    1. Run ``gates`` via :func:`~content_pipeline.pipeline.single_pass.run_gates`.
+    1. Run ``gates`` via :func:`~content_pipeline.pipeline.gate.run_gates`.
        A firing gate records a terminal skip (see module docstring for the
        error-string convention) and, if ``sticky``, also calls
        ``mark_unsupported(unit_id, reason)`` when supplied.

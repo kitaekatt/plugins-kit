@@ -65,7 +65,7 @@ not ``from content_pipeline.execution import ExecutionStore``.
 ``content_pipeline.execution`` itself) -- a consumer can still adopt just the
 durable run store without pulling in anything else. But ``wave.py`` imports
 ``content_pipeline.pipeline.workunit`` (the work-unit strategy shapes),
-``controller.py`` additionally imports ``content_pipeline.pipeline.single_pass``
+``controller.py`` additionally imports ``content_pipeline.pipeline.gate``
 (the ``Gate`` / ``run_gates`` seam) and ``content_pipeline.freshness.classify``,
 and ``drivers/inline.py`` imports ``content_pipeline.llm.platform`` (to call
 through to ``LLMBackend`` / ``submit_validated``) and ``controller.py``

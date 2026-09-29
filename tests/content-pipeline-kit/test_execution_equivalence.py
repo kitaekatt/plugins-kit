@@ -44,6 +44,8 @@ read-only here: driven as a consumer would, never edited.
 
 from __future__ import annotations
 
+import pytest
+
 from content_pipeline.execution.controller import RunAdapter, finalize_run, prepare_run
 from content_pipeline.execution.drivers.inline import run_wave
 from content_pipeline.execution.model import UnitState
@@ -51,6 +53,9 @@ from content_pipeline.execution.store import ExecutionStore
 from content_pipeline.freshness.classify import FreshnessState
 from content_pipeline.pipeline.single_pass import Disposition, run_single_pass
 from content_pipeline.pipeline.workunit import FlatChunkStrategy, WorkUnit
+
+
+pytestmark = pytest.mark.filterwarnings("ignore::DeprecationWarning")
 
 
 def _text_for(unit_id: str) -> str:
