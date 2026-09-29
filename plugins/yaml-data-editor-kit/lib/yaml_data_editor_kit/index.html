@@ -1,0 +1,483 @@
+<!doctype html>
+<html lang="en">
+<head>
+<!-- human-html: {"generated_by":"md-domain","source_sha":"4ad89c1c0cc5eddc26b1f5334302f4e7e379544b","directory":"plugins/yaml-data-editor-kit/lib/yaml_data_editor_kit","kind":"page"} -->
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>The YAML data editor kit for schema validation, anchored-comment dispatch, and the Databench editor boundary.</title>
+<style data-human-html-style>
+/* human-html shared style asset -- SA-1.
+ *
+ * The single source of truth for human-html page styling. Every generated page
+ * inlines these exact bytes in one <style data-human-html-style> element
+ * (PC-4); the host viewer imports the same resource for matching chrome
+ * (HV-3). Do not copy these values anywhere else -- a second copy is the
+ * visual drift this asset exists to prevent.
+ *
+ * Dark only, seeded from the host viewer's established dark theme. ASCII only.
+ */
+
+:root {
+  color-scheme: dark;
+
+  --hh-background: #080b10;
+  --hh-text: #d7deea;
+  --hh-heading: #f3f6fb;
+  --hh-muted: #8b98aa;
+  --hh-surface: rgba(15,19,27,.88);
+  --hh-border: #3d4a5e;
+  --hh-link: #5789f4;
+  --hh-link-hover: #7ea3ff;
+  --hh-accent: #4f82f7;
+
+  --hh-font-size: 15px;
+  --hh-line-height: 1.72;
+  --hh-font-body: Inter, ui-sans-serif, system-ui, sans-serif;
+  --hh-font-mono: JetBrains Mono, ui-monospace, monospace;
+
+  --hh-space-1: .35rem;
+  --hh-space-2: .75rem;
+  --hh-space-3: 1rem;
+  --hh-space-4: 1.5rem;
+  --hh-space-5: 2rem;
+  --hh-radius: 6px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  background: var(--hh-background);
+}
+
+body {
+  margin: 0;
+  padding: var(--hh-space-5) var(--hh-space-3);
+  background: var(--hh-background);
+  color: var(--hh-text);
+  font-family: var(--hh-font-body);
+  font-size: var(--hh-font-size);
+  line-height: var(--hh-line-height);
+  -webkit-text-size-adjust: 100%;
+}
+
+main {
+  display: grid;
+  gap: var(--hh-space-5);
+  width: 100%;
+  min-width: 0;
+}
+
+main > header,
+section,
+article,
+.hh-panel {
+  display: grid;
+  gap: var(--hh-space-2);
+  min-width: 0;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  color: var(--hh-heading);
+  line-height: 1.25;
+  margin: 0;
+  font-weight: 600;
+  text-wrap: balance;
+}
+
+h1 {
+  font-size: 1.75rem;
+}
+
+h2 {
+  font-size: 1.3rem;
+}
+
+h3 {
+  font-size: 1.1rem;
+}
+
+p,
+ul,
+ol,
+dl,
+table,
+pre,
+blockquote {
+  margin: 0;
+}
+
+ul,
+ol {
+  padding-left: 1.4em;
+}
+
+li + li {
+  margin-top: var(--hh-space-1);
+}
+
+a {
+  color: var(--hh-link);
+  text-decoration-line: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: .18em;
+}
+
+a:hover,
+a:focus {
+  color: var(--hh-link-hover);
+}
+
+a:focus-visible {
+  outline: 2px solid var(--hh-accent);
+  outline-offset: 2px;
+}
+
+small,
+.hh-muted,
+[data-human-html-muted] {
+  color: var(--hh-muted);
+}
+
+strong {
+  color: var(--hh-heading);
+  font-weight: 600;
+}
+
+hr {
+  border: 0;
+  border-top: 1px solid var(--hh-border);
+  margin: var(--hh-space-5) 0;
+}
+
+code,
+kbd,
+samp,
+pre {
+  font-family: var(--hh-font-mono);
+  font-size: .92em;
+}
+
+code {
+  background: var(--hh-surface);
+  border: 1px solid var(--hh-border);
+  border-radius: 4px;
+  padding: .1em .35em;
+  overflow-wrap: anywhere;
+}
+
+pre {
+  background: var(--hh-surface);
+  border: 1px solid var(--hh-border);
+  border-radius: var(--hh-radius);
+  padding: var(--hh-space-3);
+  max-width: 100%;
+  min-width: 0;
+  overflow: auto;
+  white-space: pre;
+}
+
+pre code {
+  background: none;
+  border: 0;
+  padding: 0;
+  overflow-wrap: normal;
+}
+
+blockquote {
+  border-left: 3px solid var(--hh-accent);
+  padding-left: var(--hh-space-3);
+  color: var(--hh-muted);
+}
+
+dl {
+  display: grid;
+  grid-template-columns: minmax(7rem, .22fr) minmax(0, 1fr);
+  gap: var(--hh-space-1) var(--hh-space-3);
+}
+
+dt {
+  color: var(--hh-heading);
+  font-weight: 600;
+}
+
+dd {
+  min-width: 0;
+  margin: 0;
+}
+
+dt:not(:first-of-type),
+dt:not(:first-of-type) + dd {
+  border-top: 1px solid var(--hh-border);
+  padding-top: var(--hh-space-2);
+}
+
+table {
+  border-collapse: collapse;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  display: block;
+  overflow-x: auto;
+}
+
+th,
+td {
+  border: 1px solid var(--hh-border);
+  padding: .45em .7em;
+  text-align: left;
+  vertical-align: top;
+}
+
+th {
+  color: var(--hh-heading);
+  background: var(--hh-surface);
+  font-weight: 600;
+}
+
+section,
+article,
+.hh-panel {
+  background: transparent;
+}
+
+.hh-panel {
+  background: var(--hh-surface);
+  border: 1px solid var(--hh-border);
+  border-radius: var(--hh-radius);
+  padding: var(--hh-space-3);
+}
+
+[data-human-html-chrome="nav"] {
+  border-bottom: 1px solid var(--hh-border);
+  padding-bottom: var(--hh-space-4);
+  margin-bottom: var(--hh-space-4);
+  font-size: .95em;
+  color: var(--hh-muted);
+}
+
+[data-human-html-chrome="nav"] ul {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 18rem), 1fr));
+  gap: var(--hh-space-2) var(--hh-space-5);
+  list-style: none;
+  margin: 0;
+  padding-left: 0;
+}
+
+[data-human-html-chrome="nav"] li {
+  min-width: 0;
+  margin: 0;
+}
+
+[data-human-html-chrome="nav"] a {
+  display: grid;
+  gap: var(--hh-space-1);
+  min-width: 0;
+  color: var(--hh-link);
+  text-decoration: none;
+}
+
+[data-human-html-chrome="nav"] a:hover,
+[data-human-html-chrome="nav"] a:focus {
+  color: var(--hh-link-hover);
+}
+
+.hh-nav-label {
+  color: currentColor;
+  font-weight: 600;
+  line-height: 1.3;
+  text-decoration-line: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: .18em;
+  overflow-wrap: anywhere;
+}
+
+.hh-nav-identity {
+  color: var(--hh-muted);
+  line-height: 1.45;
+}
+
+/* The human-page card marker (PC-2). A card whose target is another
+ * `index.html` carries this icon; a card pointing at anything else does not,
+ * so the two card kinds stay distinguishable at a glance.
+ *
+ * The icon is a data URI, never a file beside the page and never a remote
+ * asset, so the page renders with nothing fetched (NF-1, PC-6). The `xmlns`
+ * inside the SVG is an XML namespace identifier, not a location: no browser
+ * requests it, and CK-1's URL rules apply to `href` and `src` attributes, not
+ * to a CSS background.
+ *
+ * The icon sits in its own grid column so the label's underline never runs
+ * beneath it, and it scales with the label, so it stays legible at phone
+ * width where the card list collapses to one column.
+ */
+[data-human-html-chrome="nav"] a[href="index.html"],
+[data-human-html-chrome="nav"] a[href="human.html"],
+[data-human-html-chrome="nav"] a[href$="/index.html"],
+[data-human-html-chrome="nav"] a[href$="/human.html"] {
+  grid-template-columns: 1.1em minmax(0, 1fr);
+}
+
+[data-human-html-chrome="nav"] a[href="index.html"]::before,
+[data-human-html-chrome="nav"] a[href="human.html"]::before,
+[data-human-html-chrome="nav"] a[href$="/index.html"]::before,
+[data-human-html-chrome="nav"] a[href$="/human.html"]::before {
+  content: "";
+  grid-column: 1;
+  grid-row: 1;
+  align-self: center;
+  width: 1.1em;
+  height: 1.1em;
+  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cg fill='%235789f4'%3E%3Ccircle cx='8' cy='4.3' r='3.1'/%3E%3Cpath d='M1.5 15.3c0-3.6 2.9-6.3 6.5-6.3s6.5 2.7 6.5 6.3z'/%3E%3C/g%3E%3C/svg%3E") center / contain no-repeat;
+}
+
+[data-human-html-chrome="nav"] a[href="index.html"] .hh-nav-label,
+[data-human-html-chrome="nav"] a[href="human.html"] .hh-nav-label,
+[data-human-html-chrome="nav"] a[href$="/index.html"] .hh-nav-label,
+[data-human-html-chrome="nav"] a[href$="/human.html"] .hh-nav-label {
+  grid-column: 2;
+  grid-row: 1;
+}
+
+[data-human-html-chrome="nav"] a[href="index.html"] .hh-nav-identity,
+[data-human-html-chrome="nav"] a[href="human.html"] .hh-nav-identity,
+[data-human-html-chrome="nav"] a[href$="/index.html"] .hh-nav-identity,
+[data-human-html-chrome="nav"] a[href$="/human.html"] .hh-nav-identity {
+  grid-column: 2;
+  grid-row: 2;
+}
+
+img,
+svg {
+  max-width: 100%;
+  height: auto;
+}
+
+::selection {
+  background: var(--hh-accent);
+  color: var(--hh-background);
+}
+
+@media (max-width: 40rem) {
+  body {
+    padding: var(--hh-space-4) var(--hh-space-2);
+  }
+
+  [data-human-html-chrome="nav"] ul,
+  dl {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  dt:not(:first-of-type) {
+    padding-top: var(--hh-space-2);
+  }
+
+  dt + dd {
+    border-top: 0;
+    padding-top: 0;
+  }
+}
+</style>
+</head>
+<body>
+<nav data-human-html-chrome="nav">
+<ul>
+<li><a href="../../index.html"><span class="hh-nav-label">yaml-data-editor-kit</span> <span class="hh-nav-identity">The plugin-level documentation and packaging for the YAML data editor kit, covering the dialect spec, architecture notes, dispatch binding, and editor research.</span></a></li>
+<li><a href="comments/index.html"><span class="hh-nav-label">comments</span> <span class="hh-nav-identity">The anchor and comment model that stores guarded units of intent over a loaded corpus.</span></a></li>
+</ul>
+</nav>
+<main>
+<h1>The YAML data editor kit for schema validation, anchored-comment dispatch, and the Databench editor boundary.</h1>
+<p>This package is the library half of the YAML data editor kit, and it is deliberately project-independent. It reads a directory of YAML data files against a declared dialect profile, so every record carries a type, an identity, and a field-by-field check. A dispatch layer then turns anchored editorial comments into planned work units and executes them inline or as a background wave, refusing any write whose anchored slice has changed in the meantime. One small module exists only to say where the human editor stops being this package's concern. The comment model that carries the anchored intent has its own page one level down, and the plugin-level documentation sits one level up.</p>
+<h2>Where to start</h2>
+<p>Open <a href="dispatch/request.py"><code>dispatch/request.py</code></a> first: the dispatch request YAML is the file seam the editor hands this package, and it names the corpus, the comment store, the run directory, and the driver a run receives. If your work is the dialect rather than execution, open <a href="schema/loader.py"><code>schema/loader.py</code></a> instead, because its fail-closed key checks define what a legal declaration is.</p>
+<h2>Routes</h2>
+<ul>
+<li>Check a corpus: <a href="schema/loader.py"><code>schema/loader.py</code></a> -&gt; <a href="schema/corpus.py"><code>schema/corpus.py</code></a> -&gt; <a href="schema/validate.py"><code>schema/validate.py</code></a>, profile into records into findings.</li>
+<li>Run the inline lane: <a href="dispatch/request.py"><code>dispatch/request.py</code></a> -&gt; <a href="dispatch/planner.py"><code>dispatch/planner.py</code></a> -&gt; <a href="dispatch/run.py"><code>dispatch/run.py</code></a>, a validated request through planned units to the run's attributed store.</li>
+<li>Run the staged background lane: <a href="dispatch/background.py"><code>dispatch/background.py</code></a>, with each worker entering through <a href="dispatch/worker_mount.py"><code>dispatch/worker_mount.py</code></a>, and back to <a href="dispatch/background.py"><code>dispatch/background.py</code></a> for status and finalize.</li>
+<li>Turn a worker ambiguity into an open question: <a href="dispatch/worker_mount.py"><code>dispatch/worker_mount.py</code></a> fail handler into <a href="dispatch/protocol.py"><code>dispatch/protocol.py</code></a>.</li>
+</ul>
+<h2>Declaring and checking record shapes</h2>
+<ul>
+<li><a href="schema/__init__.py"><code>schema/__init__.py</code></a> - The two entry points a caller imports: profile loading and corpus validation.</li>
+<li><a href="schema/loader.py"><code>schema/loader.py</code></a> - Reads type, view, and source documents into the profile; an unknown key is an error, so a typo cannot silently drop a check.</li>
+<li><a href="schema/model.py"><code>schema/model.py</code></a> - The object model a loaded profile becomes; open it when reading or extending a declaration's vocabulary.</li>
+<li><a href="schema/corpus.py"><code>schema/corpus.py</code></a> - Reads the data files a profile names into addressable records, and settles which source owns each file and key.</li>
+<li><a href="schema/validate.py"><code>schema/validate.py</code></a> - Checks every record against its type and returns findings that name the file, the record, and the field.</li>
+<li><a href="schema/merge.py"><code>schema/merge.py</code></a> - The merge algebra for extensible types: how a child record combines with its ancestors, with cycles refused.</li>
+<li><a href="schema/adapter.py"><code>schema/adapter.py</code></a> - Reads a foreign schema-as-data declaration through a type's adapter, for corpora that keep their own schemas as data.</li>
+<li><a href="schema/errors.py"><code>schema/errors.py</code></a> - The two failure channels: an exception for a broken declaration, collected diagnostics for data missing a legal one.</li>
+</ul>
+<h2>Turning anchored comments into applied edits</h2>
+<ul>
+<li><a href="dispatch/__init__.py"><code>dispatch/__init__.py</code></a> - The package facade; its import guard turns a missing content_pipeline dependency into one message that names the remedy.</li>
+<li><a href="dispatch/request.py"><code>dispatch/request.py</code></a> - Loads the file-backed request that starts a run; every problem is a diagnostic, and paths resolve from the request file.</li>
+<li><a href="dispatch/planner.py"><code>dispatch/planner.py</code></a> - Groups open instruction comments into work units, mechanically by anchor or, when a backend is configured, through a model that merges whole units.</li>
+<li><a href="dispatch/run.py"><code>dispatch/run.py</code></a> - The inline lane: plans units, executes them through content-pipeline-kit, and writes the machine slice of the run's attributed store.</li>
+<li><a href="dispatch/background.py"><code>dispatch/background.py</code></a> - The staged background API, prepare through finalize; the run directory is reserved atomically so a failed prepare cannot strand a path.</li>
+<li><a href="dispatch/state.py"><code>dispatch/state.py</code></a> - The durable, digest-authenticated dispatch plan a background run reconstructs from; tampered units or paths are rejected on load.</li>
+<li><a href="dispatch/worker_mount.py"><code>dispatch/worker_mount.py</code></a> - The worker-side protocol mount: claim, read, submit, fail, each re-authenticated against the plan and rechecked for freshness.</li>
+<li><a href="dispatch/protocol.py"><code>dispatch/protocol.py</code></a> - Turns a worker's terminal ambiguity failure into an open question comment, idempotently, so an interrupted worker cannot lose it.</li>
+<li><a href="dispatch/units.py"><code>dispatch/units.py</code></a> - The shared prompt and response-validation source; when the inline lane and a worker disagree about a response, this file decides.</li>
+<li><a href="dispatch/adapter.py"><code>dispatch/adapter.py</code></a> - Derives the execution adapter from a durable plan, so a background run replays with the same unit identity and prompts.</li>
+</ul>
+<h2>The editor boundary</h2>
+<ul>
+<li><a href="editor/__init__.py"><code>editor/__init__.py</code></a> - Code-free on purpose: Databench owns the browser surface, this kit ships no editor, and new work goes to the dialect or to the comment model's page.</li>
+</ul>
+<h2>Package root</h2>
+<ul>
+<li><a href="__init__.py"><code>__init__.py</code></a> - One docstring line: the dialect, the comment model, dispatch, and the editor boundary.</li>
+</ul>
+</main>
+<script>
+if (window.parent !== window) {
+  window.parent.postMessage({
+    type: "human-html:announce",
+    version: 1,
+    directory: "plugins/yaml-data-editor-kit/lib/yaml_data_editor_kit",
+    file: "index.html",
+    kind: "page",
+    source_sha: "4ad89c1c0cc5eddc26b1f5334302f4e7e379544b"
+  }, "*");
+  document.addEventListener("click", function (event) {
+    if (event.defaultPrevented || event.button !== 0) return;
+    if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    var el = event.target;
+    while (el && el.nodeName !== "A") el = el.parentNode;
+    if (!el) return;
+    var href = el.getAttribute("href");
+    if (!href) return;
+    if (href.charAt(0) === "#" || href.charAt(0) === "/") return;
+    if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(href)) return;
+    var target = href.split("#")[0].split("?")[0];
+    if (!target) return;
+    if (/(^|\/)human(\.[^/]+)?\.html$/.test(target)) return;
+    var parts = "plugins/yaml-data-editor-kit/lib/yaml_data_editor_kit".split("/");
+    if (parts.length === 1 && parts[0] === ".") parts = [];
+    var segs = target.split("/");
+    for (var i = 0; i < segs.length; i++) {
+      if (segs[i] === "" || segs[i] === ".") continue;
+      if (segs[i] === "..") { parts.pop(); continue; }
+      parts.push(segs[i]);
+    }
+    event.preventDefault();
+    window.parent.postMessage({
+      type: "human-html:navigate",
+      version: 1,
+      path: parts.join("/")
+    }, "*");
+  });
+}
+</script>
+</body>
+</html>

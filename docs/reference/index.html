@@ -1,0 +1,494 @@
+<!doctype html>
+<html lang="en">
+<head>
+<!-- human-html: {"generated_by":"md-domain","source_sha":"e634345b81bd87b36a71df1ad07bcfd5ec3822c7","directory":"docs/reference","kind":"page"} -->
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>plugins-kit maintainer reference for design rationale, standards, publish procedure, test guidance, and terminology records.</title>
+<style data-human-html-style>
+/* human-html shared style asset -- SA-1.
+ *
+ * The single source of truth for human-html page styling. Every generated page
+ * inlines these exact bytes in one <style data-human-html-style> element
+ * (PC-4); the host viewer imports the same resource for matching chrome
+ * (HV-3). Do not copy these values anywhere else -- a second copy is the
+ * visual drift this asset exists to prevent.
+ *
+ * Dark only, seeded from the host viewer's established dark theme. ASCII only.
+ */
+
+:root {
+  color-scheme: dark;
+
+  --hh-background: #080b10;
+  --hh-text: #d7deea;
+  --hh-heading: #f3f6fb;
+  --hh-muted: #8b98aa;
+  --hh-surface: rgba(15,19,27,.88);
+  --hh-border: #3d4a5e;
+  --hh-link: #5789f4;
+  --hh-link-hover: #7ea3ff;
+  --hh-accent: #4f82f7;
+
+  --hh-font-size: 15px;
+  --hh-line-height: 1.72;
+  --hh-font-body: Inter, ui-sans-serif, system-ui, sans-serif;
+  --hh-font-mono: JetBrains Mono, ui-monospace, monospace;
+
+  --hh-space-1: .35rem;
+  --hh-space-2: .75rem;
+  --hh-space-3: 1rem;
+  --hh-space-4: 1.5rem;
+  --hh-space-5: 2rem;
+  --hh-radius: 6px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  background: var(--hh-background);
+}
+
+body {
+  margin: 0;
+  padding: var(--hh-space-5) var(--hh-space-3);
+  background: var(--hh-background);
+  color: var(--hh-text);
+  font-family: var(--hh-font-body);
+  font-size: var(--hh-font-size);
+  line-height: var(--hh-line-height);
+  -webkit-text-size-adjust: 100%;
+}
+
+main {
+  display: grid;
+  gap: var(--hh-space-5);
+  width: 100%;
+  min-width: 0;
+}
+
+main > header,
+section,
+article,
+.hh-panel {
+  display: grid;
+  gap: var(--hh-space-2);
+  min-width: 0;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  color: var(--hh-heading);
+  line-height: 1.25;
+  margin: 0;
+  font-weight: 600;
+  text-wrap: balance;
+}
+
+h1 {
+  font-size: 1.75rem;
+}
+
+h2 {
+  font-size: 1.3rem;
+}
+
+h3 {
+  font-size: 1.1rem;
+}
+
+p,
+ul,
+ol,
+dl,
+table,
+pre,
+blockquote {
+  margin: 0;
+}
+
+ul,
+ol {
+  padding-left: 1.4em;
+}
+
+li + li {
+  margin-top: var(--hh-space-1);
+}
+
+a {
+  color: var(--hh-link);
+  text-decoration-line: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: .18em;
+}
+
+a:hover,
+a:focus {
+  color: var(--hh-link-hover);
+}
+
+a:focus-visible {
+  outline: 2px solid var(--hh-accent);
+  outline-offset: 2px;
+}
+
+small,
+.hh-muted,
+[data-human-html-muted] {
+  color: var(--hh-muted);
+}
+
+strong {
+  color: var(--hh-heading);
+  font-weight: 600;
+}
+
+hr {
+  border: 0;
+  border-top: 1px solid var(--hh-border);
+  margin: var(--hh-space-5) 0;
+}
+
+code,
+kbd,
+samp,
+pre {
+  font-family: var(--hh-font-mono);
+  font-size: .92em;
+}
+
+code {
+  background: var(--hh-surface);
+  border: 1px solid var(--hh-border);
+  border-radius: 4px;
+  padding: .1em .35em;
+  overflow-wrap: anywhere;
+}
+
+pre {
+  background: var(--hh-surface);
+  border: 1px solid var(--hh-border);
+  border-radius: var(--hh-radius);
+  padding: var(--hh-space-3);
+  max-width: 100%;
+  min-width: 0;
+  overflow: auto;
+  white-space: pre;
+}
+
+pre code {
+  background: none;
+  border: 0;
+  padding: 0;
+  overflow-wrap: normal;
+}
+
+blockquote {
+  border-left: 3px solid var(--hh-accent);
+  padding-left: var(--hh-space-3);
+  color: var(--hh-muted);
+}
+
+dl {
+  display: grid;
+  grid-template-columns: minmax(7rem, .22fr) minmax(0, 1fr);
+  gap: var(--hh-space-1) var(--hh-space-3);
+}
+
+dt {
+  color: var(--hh-heading);
+  font-weight: 600;
+}
+
+dd {
+  min-width: 0;
+  margin: 0;
+}
+
+dt:not(:first-of-type),
+dt:not(:first-of-type) + dd {
+  border-top: 1px solid var(--hh-border);
+  padding-top: var(--hh-space-2);
+}
+
+table {
+  border-collapse: collapse;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  display: block;
+  overflow-x: auto;
+}
+
+th,
+td {
+  border: 1px solid var(--hh-border);
+  padding: .45em .7em;
+  text-align: left;
+  vertical-align: top;
+}
+
+th {
+  color: var(--hh-heading);
+  background: var(--hh-surface);
+  font-weight: 600;
+}
+
+section,
+article,
+.hh-panel {
+  background: transparent;
+}
+
+.hh-panel {
+  background: var(--hh-surface);
+  border: 1px solid var(--hh-border);
+  border-radius: var(--hh-radius);
+  padding: var(--hh-space-3);
+}
+
+[data-human-html-chrome="nav"] {
+  border-bottom: 1px solid var(--hh-border);
+  padding-bottom: var(--hh-space-4);
+  margin-bottom: var(--hh-space-4);
+  font-size: .95em;
+  color: var(--hh-muted);
+}
+
+[data-human-html-chrome="nav"] ul {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 18rem), 1fr));
+  gap: var(--hh-space-2) var(--hh-space-5);
+  list-style: none;
+  margin: 0;
+  padding-left: 0;
+}
+
+[data-human-html-chrome="nav"] li {
+  min-width: 0;
+  margin: 0;
+}
+
+[data-human-html-chrome="nav"] a {
+  display: grid;
+  gap: var(--hh-space-1);
+  min-width: 0;
+  color: var(--hh-link);
+  text-decoration: none;
+}
+
+[data-human-html-chrome="nav"] a:hover,
+[data-human-html-chrome="nav"] a:focus {
+  color: var(--hh-link-hover);
+}
+
+.hh-nav-label {
+  color: currentColor;
+  font-weight: 600;
+  line-height: 1.3;
+  text-decoration-line: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: .18em;
+  overflow-wrap: anywhere;
+}
+
+.hh-nav-identity {
+  color: var(--hh-muted);
+  line-height: 1.45;
+}
+
+/* The human-page card marker (PC-2). A card whose target is another
+ * `index.html` carries this icon; a card pointing at anything else does not,
+ * so the two card kinds stay distinguishable at a glance.
+ *
+ * The icon is a data URI, never a file beside the page and never a remote
+ * asset, so the page renders with nothing fetched (NF-1, PC-6). The `xmlns`
+ * inside the SVG is an XML namespace identifier, not a location: no browser
+ * requests it, and CK-1's URL rules apply to `href` and `src` attributes, not
+ * to a CSS background.
+ *
+ * The icon sits in its own grid column so the label's underline never runs
+ * beneath it, and it scales with the label, so it stays legible at phone
+ * width where the card list collapses to one column.
+ */
+[data-human-html-chrome="nav"] a[href="index.html"],
+[data-human-html-chrome="nav"] a[href="human.html"],
+[data-human-html-chrome="nav"] a[href$="/index.html"],
+[data-human-html-chrome="nav"] a[href$="/human.html"] {
+  grid-template-columns: 1.1em minmax(0, 1fr);
+}
+
+[data-human-html-chrome="nav"] a[href="index.html"]::before,
+[data-human-html-chrome="nav"] a[href="human.html"]::before,
+[data-human-html-chrome="nav"] a[href$="/index.html"]::before,
+[data-human-html-chrome="nav"] a[href$="/human.html"]::before {
+  content: "";
+  grid-column: 1;
+  grid-row: 1;
+  align-self: center;
+  width: 1.1em;
+  height: 1.1em;
+  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cg fill='%235789f4'%3E%3Ccircle cx='8' cy='4.3' r='3.1'/%3E%3Cpath d='M1.5 15.3c0-3.6 2.9-6.3 6.5-6.3s6.5 2.7 6.5 6.3z'/%3E%3C/g%3E%3C/svg%3E") center / contain no-repeat;
+}
+
+[data-human-html-chrome="nav"] a[href="index.html"] .hh-nav-label,
+[data-human-html-chrome="nav"] a[href="human.html"] .hh-nav-label,
+[data-human-html-chrome="nav"] a[href$="/index.html"] .hh-nav-label,
+[data-human-html-chrome="nav"] a[href$="/human.html"] .hh-nav-label {
+  grid-column: 2;
+  grid-row: 1;
+}
+
+[data-human-html-chrome="nav"] a[href="index.html"] .hh-nav-identity,
+[data-human-html-chrome="nav"] a[href="human.html"] .hh-nav-identity,
+[data-human-html-chrome="nav"] a[href$="/index.html"] .hh-nav-identity,
+[data-human-html-chrome="nav"] a[href$="/human.html"] .hh-nav-identity {
+  grid-column: 2;
+  grid-row: 2;
+}
+
+img,
+svg {
+  max-width: 100%;
+  height: auto;
+}
+
+::selection {
+  background: var(--hh-accent);
+  color: var(--hh-background);
+}
+
+@media (max-width: 40rem) {
+  body {
+    padding: var(--hh-space-4) var(--hh-space-2);
+  }
+
+  [data-human-html-chrome="nav"] ul,
+  dl {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  dt:not(:first-of-type) {
+    padding-top: var(--hh-space-2);
+  }
+
+  dt + dd {
+    border-top: 0;
+    padding-top: 0;
+  }
+}
+</style>
+</head>
+<body>
+<nav data-human-html-chrome="nav">
+  <ul>
+    <li><a href="../index.html"><span class="hh-nav-label">docs</span> <span class="hh-nav-identity">Documents plugins-kit bootstrap operations, historical architecture, CLI gotchas, and plugin proposals</span></a></li>
+  </ul>
+</nav>
+<main>
+<h1>plugins-kit maintainer reference for design rationale, standards, publish procedure, test guidance, and terminology records.</h1>
+<p>This directory holds the maintainer-facing reference documents for the plugins marketplace: the working behind the one-line rules, standards, and procedures the repo root points at instead of carrying inline. Each document exists because its rule needed room for the rationale, the verdicts, and the evidence that survive outside a session transcript. They are grouped by the job they do - standards shipped text must meet, rationale that re-derives a decision before you re-propose it, publish and test procedure, dated measurement records, and lookup tables. One habit separates the useful reads: the dated records and incident logs are frozen against the tree they measured, so open them as evidence, never as live guidance.</p>
+<h2>Where to start</h2>
+<p>Open <a href="plugin-opinion-razor.md"><code>plugin-opinion-razor.md</code></a> first. Most of the questions this directory answers - will this opinion earn a seam, will this shipped text stand - resolve through its scenario test, and it sets the evidentiary posture the rest of the reference assumes.</p>
+<h2>Routes</h2>
+<ul>
+<li>Screen a new model-task adapter: <a href="adapters.md"><code>adapters.md</code></a> for the ground rule and admission bar, then <a href="adapters-negative-results.md"><code>adapters-negative-results.md</code></a> to check the candidate against everything that already did not pay.</li>
+<li>Trace how a term was settled: <a href="terminology/terminology-audit.md"><code>terminology/terminology-audit.md</code></a> for the divergence table, then <a href="terminology/rename-spec.md"><code>terminology/rename-spec.md</code></a> for the packets that convert the decisions into edits.</li>
+</ul>
+<h2>Standards shipped text must meet</h2>
+<ul>
+<li><a href="plugin-opinion-razor.md"><code>plugin-opinion-razor.md</code></a> - the scenario test that decides whether a workflow opinion earns a config seam, with detection greps and worked examples in both directions. Open before shipping an opinion, or when asked why one is hardcoded.</li>
+<li><a href="agent-directive-standards.md"><code>agent-directive-standards.md</code></a> - the true, checkable, non-suppressive test for instructions plugins ship into a consumer's session, plus the sweep verdicts. Open when authoring hook output, skill instructions, or subagent prompts.</li>
+</ul>
+<h2>Design rationale and boundaries</h2>
+<ul>
+<li><a href="first-run-experience.md"><code>first-run-experience.md</code></a> - the preset-plus-interview pattern for capturing first-run settings, and why the count settles at two presets. Open when adding a first-run question or a new preset.</li>
+<li><a href="orchestrate-codex-boundaries.md"><code>orchestrate-codex-boundaries.md</code></a> - the standing rationale behind the two root one-line rules on orchestrate's capabilities record and silent codex dispatch failures. Read before re-proposing either design.</li>
+<li><a href="shared-lib-architecture.md"><code>shared-lib-architecture.md</code></a> - six review findings on the bootstrap shared-library mechanism, each with a status line that outlives this summary. Open when touching that code.</li>
+<li><a href="task-folders.md"><code>task-folders.md</code></a> - why the tasks root is a link into the private task repository, the guard that keeps git from staging private content, and the CLI misreporting bug. Open for missing task folders or odd task CLI results.</li>
+<li><a href="code-review-mechanical-surface.md"><code>code-review-mechanical-surface.md</code></a> - which reviewer-lane criteria a script can answer at full recall and which genuinely need a model. Open when deciding how far the deterministic code-review scan should extend.</li>
+</ul>
+<h2>Publish procedure</h2>
+<ul>
+<li><a href="publish-reconcile.md"><code>publish-reconcile.md</code></a> - the publish flow, the partial-release projection, the master-only-content reconciliation, and the safe-publish gotcha explanations. Open when publishing or clearing a refusal; the flow is scripted, so the doc cannot drift from what runs.</li>
+</ul>
+<h2>Test guidance</h2>
+<ul>
+<li><a href="testing.md"><code>testing.md</code></a> - the parallelism measurements behind the explicit -n rule, the load-failure patterns, and the containment limits of the test harness. Open for pytest worker choices or failures that appear only under load.</li>
+<li><a href="vacuous-checks.md"><code>vacuous-checks.md</code></a> - the three shapes of tests and guards that pass without checking anything, and the revert check that exposes them. Open when a green result feels unearned, or before trusting a new drift guard.</li>
+</ul>
+<h2>Model-task adapters</h2>
+<ul>
+<li><a href="adapters.md"><code>adapters.md</code></a> - the provisional reference for building model-task adapters: the corpus-independence ground rule, the empirical admission bar, the artifact contract, and the enforcement seam. Open before building or admitting an adapter.</li>
+<li><a href="adapters-negative-results.md"><code>adapters-negative-results.md</code></a> - the catalog of adapter candidates that did not pay, each entry naming which of the four meanings applies. Open before spending a run on a candidate that feels new.</li>
+</ul>
+<h2>Dated records and worked incidents</h2>
+<ul>
+<li><a href="md-audit-lane-precision-2026-09-03.md"><code>md-audit-lane-precision-2026-09-03.md</code></a> - a dated precision measurement of the audit lane, frozen against the 2026-09-03 tree. Open as the before-picture when re-measuring after a criteria change; its citations are not to be repointed.</li>
+<li><a href="shared-tree-git-discipline.md"><code>shared-tree-git-discipline.md</code></a> - worked incidents from concurrent sessions touching the shared tree's index and branches, with the staging exception worked out. Open when a staging or merge refusal looks like another session's work.</li>
+</ul>
+<h2>Lookup tables</h2>
+<ul>
+<li><a href="claude-code-plugin-platform.md"><code>claude-code-plugin-platform.md</code></a> - static platform facts: the hook JSON contract, the attended-session variables, the on-disk plugin cache and registry layout. Open when you need a shape without reading code; the upstream docs win on conflict.</li>
+<li><a href="reusable-libraries.md"><code>reusable-libraries.md</code></a> - the index of the bootstrap shared libraries, their entry points, and when to consume one. Open before building project-local machinery, to pick an existing library first.</li>
+</ul>
+<h2>Terminology records</h2>
+<ul>
+<li><a href="terminology/rename-spec.md"><code>terminology/rename-spec.md</code></a> - executable packets that convert the ratified terminology decisions into token-level edits, keyed on tokens rather than line numbers. Open to apply or verify the rename; a second application is a no-op.</li>
+<li><a href="terminology/terminology-audit.md"><code>terminology/terminology-audit.md</code></a> - the divergence table the spec executes, with path and line evidence against the pre-rename tree. Open to see why a term was settled the way it was.</li>
+</ul>
+<h2>Plugin maintenance notes</h2>
+<ul>
+<li><a href="unreal-kit-maintenance.md"><code>unreal-kit-maintenance.md</code></a> - the vendored-helper rule for unreal-kit runtime files: keep the copies byte-identical to their bootstrap originals, and how to extend the redirector filter. Open when a vendored helper changes.</li>
+</ul>
+</main>
+<script>
+if (window.parent !== window) {
+  window.parent.postMessage({
+    type: "human-html:announce",
+    version: 1,
+    directory: "docs/reference",
+    file: "index.html",
+    kind: "page",
+    source_sha: "e634345b81bd87b36a71df1ad07bcfd5ec3822c7"
+  }, "*");
+  document.addEventListener("click", function (event) {
+    if (event.defaultPrevented || event.button !== 0) return;
+    if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    var el = event.target;
+    while (el && el.nodeName !== "A") el = el.parentNode;
+    if (!el) return;
+    var href = el.getAttribute("href");
+    if (!href) return;
+    if (href.charAt(0) === "#" || href.charAt(0) === "/") return;
+    if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(href)) return;
+    var target = href.split("#")[0].split("?")[0];
+    if (!target) return;
+    if (/(^|\/)human(\.[^/]+)?\.html$/.test(target)) return;
+    var parts = "docs/reference".split("/");
+    if (parts.length === 1 && parts[0] === ".") parts = [];
+    var segs = target.split("/");
+    for (var i = 0; i < segs.length; i++) {
+      if (segs[i] === "" || segs[i] === ".") continue;
+      if (segs[i] === "..") { parts.pop(); continue; }
+      parts.push(segs[i]);
+    }
+    event.preventDefault();
+    window.parent.postMessage({
+      type: "human-html:navigate",
+      version: 1,
+      path: parts.join("/")
+    }, "*");
+  });
+}
+</script>
+</body>
+</html>

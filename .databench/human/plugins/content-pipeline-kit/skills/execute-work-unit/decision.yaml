@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "directory": "plugins/content-pipeline-kit/skills/execute-work-unit",
+  "decision": "none",
+  "source_sha": "2b4cfb504460cc60ad28f2cd4f9e6e5454de0b7f",
+  "input_sha256": "f6b600d10a8b3aded6c25ebc0e731d802f0706d1a2b4498d93dfb4c71d81ec37",
+  "input_shape_sha256": "bf04081dec6bd256b284c9ca335ef415ec9cdedc6717cd55f805cb302febb30b",
+  "dirty": false,
+  "identity": "",
+  "instructions": "",
+  "references": []
+}

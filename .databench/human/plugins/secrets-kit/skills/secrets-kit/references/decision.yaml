@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "directory": "plugins/secrets-kit/skills/secrets-kit/references",
+  "decision": "none",
+  "source_sha": "fd0ccdcb9c17ae0119fc9a9662f5192a0c445d33",
+  "dirty": false,
+  "identity": "",
+  "instructions": "",
+  "references": []
+}

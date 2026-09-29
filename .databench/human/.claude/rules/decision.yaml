@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "directory": ".claude/rules",
+  "decision": "none",
+  "source_sha": "9127a83dfeb17b7d7030c76aaaeec6a38e38d537",
+  "dirty": false,
+  "identity": "",
+  "instructions": "",
+  "references": []
+}

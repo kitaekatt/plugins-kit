@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "directory": "plugins/content-pipeline-kit/skills/workflow-pipeline",
+  "decision": "none",
+  "source_sha": "1b9ca4fcabfea8add8b760fcd354235c6d9a83c5",
+  "input_sha256": "bf986863efd2366c41b8a33d2c44a978c28f4b8287791d0ba46c865ba173ba96",
+  "input_shape_sha256": "126a0d65b454612ac9706729d94642df221b37d5723b5ed7b97127c01b2674ff",
+  "dirty": false,
+  "identity": "",
+  "instructions": "",
+  "references": []
+}

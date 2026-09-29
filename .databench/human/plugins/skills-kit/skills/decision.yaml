@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "directory": "plugins/skills-kit/skills",
+  "decision": "page",
+  "source_sha": "8b7703103d66ed91d4577b183e5b7e5f2dfffe36",
+  "generation_spec_sha256": "0805933a1de089dc951a33d702e9d57d569f0584732b017cd3600742a34ba321",
+  "input_sha256": "f5a65484150f4054320b07b9d7a5d0868d58a256d7587ce3f4c0f24499f95ebe",
+  "input_shape_sha256": "712f1a73fcd2275ab15368020a53b87051187100255befeeb458f8d3a27559cf",
+  "dirty": false,
+  "identity": "The skills-kit skills for auditing and producing markdown, encoding insights into persistent artifacts, teaching the materialized-insight pattern, and reviewing sessions for documentation updates, and the workflow scripts that implement md-domain's dispatch lanes",
+  "instructions": "",
+  "references": []
+}

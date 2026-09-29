@@ -1,0 +1,566 @@
+<!doctype html>
+<html lang="en">
+<head>
+<!-- human-html: {"generated_by":"md-domain","source_sha":"1d479f028f5f2bf653a1e46db69554aae181ef72","directory":"plugins/skills-kit/skills/md-domain/references/skill-domain","kind":"page"} -->
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>Skill-domain reference documentation for skill-authoring contracts, vocabulary, and audit tools.</title>
+<style data-human-html-style>
+/* human-html shared style asset -- SA-1.
+ *
+ * The single source of truth for human-html page styling. Every generated page
+ * inlines these exact bytes in one <style data-human-html-style> element
+ * (PC-4); the host viewer imports the same resource for matching chrome
+ * (HV-3). Do not copy these values anywhere else -- a second copy is the
+ * visual drift this asset exists to prevent.
+ *
+ * Dark only, seeded from the host viewer's established dark theme. ASCII only.
+ */
+
+:root {
+  color-scheme: dark;
+
+  --hh-background: #080b10;
+  --hh-text: #d7deea;
+  --hh-heading: #f3f6fb;
+  --hh-muted: #8b98aa;
+  --hh-surface: rgba(15,19,27,.88);
+  --hh-border: #3d4a5e;
+  --hh-link: #5789f4;
+  --hh-link-hover: #7ea3ff;
+  --hh-accent: #4f82f7;
+
+  --hh-font-size: 15px;
+  --hh-line-height: 1.72;
+  --hh-font-body: Inter, ui-sans-serif, system-ui, sans-serif;
+  --hh-font-mono: JetBrains Mono, ui-monospace, monospace;
+
+  --hh-space-1: .35rem;
+  --hh-space-2: .75rem;
+  --hh-space-3: 1rem;
+  --hh-space-4: 1.5rem;
+  --hh-space-5: 2rem;
+  --hh-radius: 6px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  background: var(--hh-background);
+}
+
+body {
+  margin: 0;
+  padding: var(--hh-space-5) var(--hh-space-3);
+  background: var(--hh-background);
+  color: var(--hh-text);
+  font-family: var(--hh-font-body);
+  font-size: var(--hh-font-size);
+  line-height: var(--hh-line-height);
+  -webkit-text-size-adjust: 100%;
+}
+
+main {
+  display: grid;
+  gap: var(--hh-space-5);
+  width: 100%;
+  min-width: 0;
+}
+
+main > header,
+section,
+article,
+.hh-panel {
+  display: grid;
+  gap: var(--hh-space-2);
+  min-width: 0;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  color: var(--hh-heading);
+  line-height: 1.25;
+  margin: 0;
+  font-weight: 600;
+  text-wrap: balance;
+}
+
+h1 {
+  font-size: 1.75rem;
+}
+
+h2 {
+  font-size: 1.3rem;
+}
+
+h3 {
+  font-size: 1.1rem;
+}
+
+p,
+ul,
+ol,
+dl,
+table,
+pre,
+blockquote {
+  margin: 0;
+}
+
+ul,
+ol {
+  padding-left: 1.4em;
+}
+
+li + li {
+  margin-top: var(--hh-space-1);
+}
+
+a {
+  color: var(--hh-link);
+  text-decoration-line: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: .18em;
+}
+
+a:hover,
+a:focus {
+  color: var(--hh-link-hover);
+}
+
+a:focus-visible {
+  outline: 2px solid var(--hh-accent);
+  outline-offset: 2px;
+}
+
+small,
+.hh-muted,
+[data-human-html-muted] {
+  color: var(--hh-muted);
+}
+
+strong {
+  color: var(--hh-heading);
+  font-weight: 600;
+}
+
+hr {
+  border: 0;
+  border-top: 1px solid var(--hh-border);
+  margin: var(--hh-space-5) 0;
+}
+
+code,
+kbd,
+samp,
+pre {
+  font-family: var(--hh-font-mono);
+  font-size: .92em;
+}
+
+code {
+  background: var(--hh-surface);
+  border: 1px solid var(--hh-border);
+  border-radius: 4px;
+  padding: .1em .35em;
+  overflow-wrap: anywhere;
+}
+
+pre {
+  background: var(--hh-surface);
+  border: 1px solid var(--hh-border);
+  border-radius: var(--hh-radius);
+  padding: var(--hh-space-3);
+  max-width: 100%;
+  min-width: 0;
+  overflow: auto;
+  white-space: pre;
+}
+
+pre code {
+  background: none;
+  border: 0;
+  padding: 0;
+  overflow-wrap: normal;
+}
+
+blockquote {
+  border-left: 3px solid var(--hh-accent);
+  padding-left: var(--hh-space-3);
+  color: var(--hh-muted);
+}
+
+dl {
+  display: grid;
+  grid-template-columns: minmax(7rem, .22fr) minmax(0, 1fr);
+  gap: var(--hh-space-1) var(--hh-space-3);
+}
+
+dt {
+  color: var(--hh-heading);
+  font-weight: 600;
+}
+
+dd {
+  min-width: 0;
+  margin: 0;
+}
+
+dt:not(:first-of-type),
+dt:not(:first-of-type) + dd {
+  border-top: 1px solid var(--hh-border);
+  padding-top: var(--hh-space-2);
+}
+
+table {
+  border-collapse: collapse;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  display: block;
+  overflow-x: auto;
+}
+
+th,
+td {
+  border: 1px solid var(--hh-border);
+  padding: .45em .7em;
+  text-align: left;
+  vertical-align: top;
+}
+
+th {
+  color: var(--hh-heading);
+  background: var(--hh-surface);
+  font-weight: 600;
+}
+
+section,
+article,
+.hh-panel {
+  background: transparent;
+}
+
+.hh-panel {
+  background: var(--hh-surface);
+  border: 1px solid var(--hh-border);
+  border-radius: var(--hh-radius);
+  padding: var(--hh-space-3);
+}
+
+[data-human-html-chrome="nav"] {
+  border-bottom: 1px solid var(--hh-border);
+  padding-bottom: var(--hh-space-4);
+  margin-bottom: var(--hh-space-4);
+  font-size: .95em;
+  color: var(--hh-muted);
+}
+
+[data-human-html-chrome="nav"] ul {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 18rem), 1fr));
+  gap: var(--hh-space-2) var(--hh-space-5);
+  list-style: none;
+  margin: 0;
+  padding-left: 0;
+}
+
+[data-human-html-chrome="nav"] li {
+  min-width: 0;
+  margin: 0;
+}
+
+[data-human-html-chrome="nav"] a {
+  display: grid;
+  gap: var(--hh-space-1);
+  min-width: 0;
+  color: var(--hh-link);
+  text-decoration: none;
+}
+
+[data-human-html-chrome="nav"] a:hover,
+[data-human-html-chrome="nav"] a:focus {
+  color: var(--hh-link-hover);
+}
+
+.hh-nav-label {
+  color: currentColor;
+  font-weight: 600;
+  line-height: 1.3;
+  text-decoration-line: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: .18em;
+  overflow-wrap: anywhere;
+}
+
+.hh-nav-identity {
+  color: var(--hh-muted);
+  line-height: 1.45;
+}
+
+/* The human-page card marker (PC-2). A card whose target is another
+ * `index.html` carries this icon; a card pointing at anything else does not,
+ * so the two card kinds stay distinguishable at a glance.
+ *
+ * The icon is a data URI, never a file beside the page and never a remote
+ * asset, so the page renders with nothing fetched (NF-1, PC-6). The `xmlns`
+ * inside the SVG is an XML namespace identifier, not a location: no browser
+ * requests it, and CK-1's URL rules apply to `href` and `src` attributes, not
+ * to a CSS background.
+ *
+ * The icon sits in its own grid column so the label's underline never runs
+ * beneath it, and it scales with the label, so it stays legible at phone
+ * width where the card list collapses to one column.
+ */
+[data-human-html-chrome="nav"] a[href="index.html"],
+[data-human-html-chrome="nav"] a[href="human.html"],
+[data-human-html-chrome="nav"] a[href$="/index.html"],
+[data-human-html-chrome="nav"] a[href$="/human.html"] {
+  grid-template-columns: 1.1em minmax(0, 1fr);
+}
+
+[data-human-html-chrome="nav"] a[href="index.html"]::before,
+[data-human-html-chrome="nav"] a[href="human.html"]::before,
+[data-human-html-chrome="nav"] a[href$="/index.html"]::before,
+[data-human-html-chrome="nav"] a[href$="/human.html"]::before {
+  content: "";
+  grid-column: 1;
+  grid-row: 1;
+  align-self: center;
+  width: 1.1em;
+  height: 1.1em;
+  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cg fill='%235789f4'%3E%3Ccircle cx='8' cy='4.3' r='3.1'/%3E%3Cpath d='M1.5 15.3c0-3.6 2.9-6.3 6.5-6.3s6.5 2.7 6.5 6.3z'/%3E%3C/g%3E%3C/svg%3E") center / contain no-repeat;
+}
+
+[data-human-html-chrome="nav"] a[href="index.html"] .hh-nav-label,
+[data-human-html-chrome="nav"] a[href="human.html"] .hh-nav-label,
+[data-human-html-chrome="nav"] a[href$="/index.html"] .hh-nav-label,
+[data-human-html-chrome="nav"] a[href$="/human.html"] .hh-nav-label {
+  grid-column: 2;
+  grid-row: 1;
+}
+
+[data-human-html-chrome="nav"] a[href="index.html"] .hh-nav-identity,
+[data-human-html-chrome="nav"] a[href="human.html"] .hh-nav-identity,
+[data-human-html-chrome="nav"] a[href$="/index.html"] .hh-nav-identity,
+[data-human-html-chrome="nav"] a[href$="/human.html"] .hh-nav-identity {
+  grid-column: 2;
+  grid-row: 2;
+}
+
+img,
+svg {
+  max-width: 100%;
+  height: auto;
+}
+
+::selection {
+  background: var(--hh-accent);
+  color: var(--hh-background);
+}
+
+@media (max-width: 40rem) {
+  body {
+    padding: var(--hh-space-4) var(--hh-space-2);
+  }
+
+  [data-human-html-chrome="nav"] ul,
+  dl {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  dt:not(:first-of-type) {
+    padding-top: var(--hh-space-2);
+  }
+
+  dt + dd {
+    border-top: 0;
+    padding-top: 0;
+  }
+}
+</style>
+</head>
+<body>
+<nav data-human-html-chrome="nav" aria-label="Orientation pages">
+  <ul>
+    <li><a href="../index.html"><span class="hh-nav-label">references</span> <span class="hh-nav-identity">The md-domain skill reference documentation for audit framework, standards, lane procedures, authoring patterns, and provenance records</span></a></li>
+  </ul>
+</nav>
+<main>
+<h1>Skill-domain reference documentation for skill-authoring contracts, vocabulary, and audit tools.</h1>
+<p>
+This is the reference layer behind the md-domain skill: the contracts a
+SKILL.md must satisfy, the canonical vocabulary those contracts use, the
+structural patterns a multi-area skill adopts, and the machine checks that
+verify all of it. A term book pins the vocabulary, a framework document
+states the per-type contracts and the audit procedure, a set of authoring
+patterns covers routing and sub-area configuration, and a small library of
+command-line tools does the deterministic part of an audit. Two worked
+pieces show the checks on real material, including the friction they fed
+back into the framework. Read the vocabulary before the contracts: every
+contract row and audit verdict in this directory uses its terms without
+redefining them.
+</p>
+<h2>Where to start</h2>
+<p>
+Open <a href="glossary.md"><code>glossary.md</code></a> first: it pins every
+term the contracts and audits in this directory use. Then
+<a href="framework.md"><code>framework.md</code></a> when you need the
+contract itself or the audit procedure.
+</p>
+<h2>Routes</h2>
+<ul>
+  <li>
+    <strong>Audit a skill:</strong>
+    <a href="framework.md"><code>framework.md</code></a>
+    -&gt;
+    <a href="scripts.md"><code>scripts.md</code></a>
+    -&gt;
+    <a href="example-audit.md"><code>example-audit.md</code></a>
+    -- the contract rows, the checks that verify them, a finished audit to
+    compare against.
+  </li>
+  <li>
+    <strong>Author a domain-skill:</strong>
+    <a href="glossary.md"><code>glossary.md</code></a>
+    -&gt;
+    <a href="framework.md"><code>framework.md</code></a>
+    -&gt;
+    <a href="domain-layering.md"><code>domain-layering.md</code></a>
+    -- terms first, then the type's contract and assembly order, then the
+    routing surface it exposes.
+  </li>
+  <li>
+    <strong>Read the corpus reports:</strong>
+    <a href="report-usage.md"><code>report-usage.md</code></a>
+    -&gt;
+    <a href="scripts.md"><code>scripts.md</code></a>
+    -- the subcommand reference, then the shared discovery both report views
+    run on.
+  </li>
+</ul>
+<h2>Vocabulary</h2>
+<ul>
+  <li>
+    <a href="glossary.md"><code>glossary.md</code></a>
+    -- canonical terms for skill authoring: the material, the conventions,
+    the design principles, and the six skill types. Open it to pin down a
+    word before arguing about a contract row.
+  </li>
+</ul>
+<h2>Type contracts</h2>
+<ul>
+  <li>
+    <a href="framework.md"><code>framework.md</code></a>
+    -- the per-type contracts, the universal frontmatter rules, the
+    conditional-requirement grammar, and the audit procedure. Open it before
+    authoring or auditing anything here.
+  </li>
+  <li>
+    <a href="schema-fixtures.md"><code>schema-fixtures.md</code></a>
+    -- the smallest legal instance block for every contract, kept valid by a
+    corpus check on each run. Open it to copy a skeleton that passes.
+  </li>
+</ul>
+<h2>Authoring patterns</h2>
+<ul>
+  <li>
+    <a href="domain-layering.md"><code>domain-layering.md</code></a>
+    -- the routing surface for a domain-skill with several sub-areas: the
+    greeting menu, argument dispatch, and overview detection. Open it when
+    decomposing a large knowledge area.
+  </li>
+  <li>
+    <a href="patterns-actions.md"><code>patterns-actions.md</code></a>
+    -- deterministic multi-step workflows as ordered steps with captured
+    values between them. Open it when a recipe must run the same steps in
+    the same order.
+  </li>
+  <li>
+    <a href="subdomain-schema.md"><code>subdomain-schema.md</code></a>
+    -- the configuration a sub-area carries: canonical state terms,
+    operations, scope axes, and readback phrasing. Open it when a sub-area
+    needs a fixed vocabulary.
+  </li>
+</ul>
+<h2>Audit tooling</h2>
+<ul>
+  <li>
+    <a href="scripts.md"><code>scripts.md</code></a>
+    -- the three per-skill command-line utilities for auditing,
+    classifying, and tagging a skill, plus the shared discovery and
+    structural detectors behind them. Open it when running or extending a
+    check.
+  </li>
+  <li>
+    <a href="report-usage.md"><code>report-usage.md</code></a>
+    -- the full reference for the roster and hierarchy report subcommands:
+    arguments, locations scanned, row formats. Open it for the exact flag
+    set.
+  </li>
+</ul>
+<h2>Worked examples</h2>
+<ul>
+  <li>
+    <a href="example-audit.md"><code>example-audit.md</code></a>
+    -- a complete audit of a real skill against the discipline-skill
+    contract, preserved as an artifact. Open it to see a verdict play out,
+    including the friction it fed back into the framework.
+  </li>
+  <li>
+    <a href="example-verification.md"><code>example-verification.md</code></a>
+    -- the pre-ship pass for shell examples in a SKILL.md, built from two
+    real bugs it surfaced. Open it before shipping any skill with
+    copy-paste commands.
+  </li>
+</ul>
+</main>
+<script>
+if (window.parent !== window) {
+  window.parent.postMessage({
+    type: "human-html:announce",
+    version: 1,
+    directory: "plugins/skills-kit/skills/md-domain/references/skill-domain",
+    file: "index.html",
+    kind: "page",
+    source_sha: "1d479f028f5f2bf653a1e46db69554aae181ef72"
+  }, "*");
+  document.addEventListener("click", function (event) {
+    if (event.defaultPrevented || event.button !== 0) return;
+    if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    var el = event.target;
+    while (el && el.nodeName !== "A") el = el.parentNode;
+    if (!el) return;
+    var href = el.getAttribute("href");
+    if (!href) return;
+    if (href.charAt(0) === "#" || href.charAt(0) === "/") return;
+    if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(href)) return;
+    var target = href.split("#")[0].split("?")[0];
+    if (!target) return;
+    if (/(^|\/)human(\.[^/]+)?\.html$/.test(target)) return;
+    var parts = "plugins/skills-kit/skills/md-domain/references/skill-domain".split("/");
+    if (parts.length === 1 && parts[0] === ".") parts = [];
+    var segs = target.split("/");
+    for (var i = 0; i < segs.length; i++) {
+      if (segs[i] === "" || segs[i] === ".") continue;
+      if (segs[i] === "..") { parts.pop(); continue; }
+      parts.push(segs[i]);
+    }
+    event.preventDefault();
+    window.parent.postMessage({
+      type: "human-html:navigate",
+      version: 1,
+      path: parts.join("/")
+    }, "*");
+  });
+}
+</script>
+</body>
+</html>

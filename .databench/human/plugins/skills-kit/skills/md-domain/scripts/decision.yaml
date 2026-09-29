@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "directory": "plugins/skills-kit/skills/md-domain/scripts",
+  "decision": "page",
+  "source_sha": "d6aa073df75b1c14c4d9c8682f853b26f460efcc",
+  "generation_spec_sha256": "fc236b0086521fffedc696039900f19579336e4ef8fb657ad60e3dcdf8747288",
+  "dirty": false,
+  "identity": "md-domain Python scripts that discover audit subjects, emit audit jobs, build evidence packs, check audit reports and skill references, and render skill reports",
+  "instructions": "",
+  "references": []
+}

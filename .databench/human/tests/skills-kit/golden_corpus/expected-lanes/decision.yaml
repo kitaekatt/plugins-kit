@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "directory": "tests/skills-kit/golden_corpus/expected-lanes",
+  "decision": "none",
+  "source_sha": "1de2c32397b05b34a84c087440d0bcb5108fa95d",
+  "dirty": false,
+  "identity": "",
+  "instructions": "",
+  "references": []
+}

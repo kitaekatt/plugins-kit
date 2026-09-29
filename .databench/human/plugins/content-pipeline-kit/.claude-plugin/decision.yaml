@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "directory": "plugins/content-pipeline-kit/.claude-plugin",
+  "decision": "none",
+  "source_sha": "74c2558e286223caaeb7857bd7201ec2b66f8d1a",
+  "input_sha256": "cace508ca6078847ba7f5b7cf2f36f7610d776c7002ceb3c5bad988c46e7f7b3",
+  "input_shape_sha256": "97f9dc305aa94e3ef9095c4cea26f5aec93555da4549cbbe90baf799a5f23de5",
+  "dirty": false,
+  "identity": "",
+  "instructions": "",
+  "references": []
+}

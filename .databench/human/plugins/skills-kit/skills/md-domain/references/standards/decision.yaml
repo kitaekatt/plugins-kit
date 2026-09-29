@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "directory": "plugins/skills-kit/skills/md-domain/references/standards",
+  "decision": "none",
+  "source_sha": "8b7703103d66ed91d4577b183e5b7e5f2dfffe36",
+  "input_sha256": "eae4ce6df8473b2c3acd7d1438b5bb8acdcbac986775e29dba74fa379048f79f",
+  "input_shape_sha256": "b4570c3aabbde1f2ccb3f5756eac3607ced6f9c1c02eeb308135b12672886b02",
+  "dirty": false,
+  "identity": "",
+  "instructions": "",
+  "references": []
+}

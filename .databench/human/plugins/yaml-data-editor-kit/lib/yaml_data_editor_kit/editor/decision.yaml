@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "directory": "plugins/yaml-data-editor-kit/lib/yaml_data_editor_kit/editor",
+  "decision": "none",
+  "source_sha": "37fb94f68e5a97e680eb947b0cbbd86df27a2f2d",
+  "input_sha256": "82f899d3837eec7f06026e3db595cc5026799e3435cccccd5b91e1d6f9b61ce9",
+  "input_shape_sha256": "19d411925ddfc7f976db7b370fd9558f3bd8e5af43e195f497a2436904ba1f59",
+  "dirty": false,
+  "identity": "",
+  "instructions": "",
+  "references": []
+}

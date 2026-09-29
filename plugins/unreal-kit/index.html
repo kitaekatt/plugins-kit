@@ -1,0 +1,476 @@
+<!doctype html>
+<html lang="en">
+<head>
+<!-- human-html: {"generated_by":"md-domain","source_sha":"a129b0ad7aa6d94cd8b7f74b1ab08ea011db00bc","directory":"plugins/unreal-kit","kind":"page"} -->
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>Unreal Engine automation plugin for Claude: plugin manifest, bootstrap provisioning, defaults, hooks, and host-side Unreal scripts.</title>
+<style data-human-html-style>
+/* human-html shared style asset -- SA-1.
+ *
+ * The single source of truth for human-html page styling. Every generated page
+ * inlines these exact bytes in one <style data-human-html-style> element
+ * (PC-4); the host viewer imports the same resource for matching chrome
+ * (HV-3). Do not copy these values anywhere else -- a second copy is the
+ * visual drift this asset exists to prevent.
+ *
+ * Dark only, seeded from the host viewer's established dark theme. ASCII only.
+ */
+
+:root {
+  color-scheme: dark;
+
+  --hh-background: #080b10;
+  --hh-text: #d7deea;
+  --hh-heading: #f3f6fb;
+  --hh-muted: #8b98aa;
+  --hh-surface: rgba(15,19,27,.88);
+  --hh-border: #3d4a5e;
+  --hh-link: #5789f4;
+  --hh-link-hover: #7ea3ff;
+  --hh-accent: #4f82f7;
+
+  --hh-font-size: 15px;
+  --hh-line-height: 1.72;
+  --hh-font-body: Inter, ui-sans-serif, system-ui, sans-serif;
+  --hh-font-mono: JetBrains Mono, ui-monospace, monospace;
+
+  --hh-space-1: .35rem;
+  --hh-space-2: .75rem;
+  --hh-space-3: 1rem;
+  --hh-space-4: 1.5rem;
+  --hh-space-5: 2rem;
+  --hh-radius: 6px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  background: var(--hh-background);
+}
+
+body {
+  margin: 0;
+  padding: var(--hh-space-5) var(--hh-space-3);
+  background: var(--hh-background);
+  color: var(--hh-text);
+  font-family: var(--hh-font-body);
+  font-size: var(--hh-font-size);
+  line-height: var(--hh-line-height);
+  -webkit-text-size-adjust: 100%;
+}
+
+main {
+  display: grid;
+  gap: var(--hh-space-5);
+  width: 100%;
+  min-width: 0;
+}
+
+main > header,
+section,
+article,
+.hh-panel {
+  display: grid;
+  gap: var(--hh-space-2);
+  min-width: 0;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  color: var(--hh-heading);
+  line-height: 1.25;
+  margin: 0;
+  font-weight: 600;
+  text-wrap: balance;
+}
+
+h1 {
+  font-size: 1.75rem;
+}
+
+h2 {
+  font-size: 1.3rem;
+}
+
+h3 {
+  font-size: 1.1rem;
+}
+
+p,
+ul,
+ol,
+dl,
+table,
+pre,
+blockquote {
+  margin: 0;
+}
+
+ul,
+ol {
+  padding-left: 1.4em;
+}
+
+li + li {
+  margin-top: var(--hh-space-1);
+}
+
+a {
+  color: var(--hh-link);
+  text-decoration-line: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: .18em;
+}
+
+a:hover,
+a:focus {
+  color: var(--hh-link-hover);
+}
+
+a:focus-visible {
+  outline: 2px solid var(--hh-accent);
+  outline-offset: 2px;
+}
+
+small,
+.hh-muted,
+[data-human-html-muted] {
+  color: var(--hh-muted);
+}
+
+strong {
+  color: var(--hh-heading);
+  font-weight: 600;
+}
+
+hr {
+  border: 0;
+  border-top: 1px solid var(--hh-border);
+  margin: var(--hh-space-5) 0;
+}
+
+code,
+kbd,
+samp,
+pre {
+  font-family: var(--hh-font-mono);
+  font-size: .92em;
+}
+
+code {
+  background: var(--hh-surface);
+  border: 1px solid var(--hh-border);
+  border-radius: 4px;
+  padding: .1em .35em;
+  overflow-wrap: anywhere;
+}
+
+pre {
+  background: var(--hh-surface);
+  border: 1px solid var(--hh-border);
+  border-radius: var(--hh-radius);
+  padding: var(--hh-space-3);
+  max-width: 100%;
+  min-width: 0;
+  overflow: auto;
+  white-space: pre;
+}
+
+pre code {
+  background: none;
+  border: 0;
+  padding: 0;
+  overflow-wrap: normal;
+}
+
+blockquote {
+  border-left: 3px solid var(--hh-accent);
+  padding-left: var(--hh-space-3);
+  color: var(--hh-muted);
+}
+
+dl {
+  display: grid;
+  grid-template-columns: minmax(7rem, .22fr) minmax(0, 1fr);
+  gap: var(--hh-space-1) var(--hh-space-3);
+}
+
+dt {
+  color: var(--hh-heading);
+  font-weight: 600;
+}
+
+dd {
+  min-width: 0;
+  margin: 0;
+}
+
+dt:not(:first-of-type),
+dt:not(:first-of-type) + dd {
+  border-top: 1px solid var(--hh-border);
+  padding-top: var(--hh-space-2);
+}
+
+table {
+  border-collapse: collapse;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  display: block;
+  overflow-x: auto;
+}
+
+th,
+td {
+  border: 1px solid var(--hh-border);
+  padding: .45em .7em;
+  text-align: left;
+  vertical-align: top;
+}
+
+th {
+  color: var(--hh-heading);
+  background: var(--hh-surface);
+  font-weight: 600;
+}
+
+section,
+article,
+.hh-panel {
+  background: transparent;
+}
+
+.hh-panel {
+  background: var(--hh-surface);
+  border: 1px solid var(--hh-border);
+  border-radius: var(--hh-radius);
+  padding: var(--hh-space-3);
+}
+
+[data-human-html-chrome="nav"] {
+  border-bottom: 1px solid var(--hh-border);
+  padding-bottom: var(--hh-space-4);
+  margin-bottom: var(--hh-space-4);
+  font-size: .95em;
+  color: var(--hh-muted);
+}
+
+[data-human-html-chrome="nav"] ul {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 18rem), 1fr));
+  gap: var(--hh-space-2) var(--hh-space-5);
+  list-style: none;
+  margin: 0;
+  padding-left: 0;
+}
+
+[data-human-html-chrome="nav"] li {
+  min-width: 0;
+  margin: 0;
+}
+
+[data-human-html-chrome="nav"] a {
+  display: grid;
+  gap: var(--hh-space-1);
+  min-width: 0;
+  color: var(--hh-link);
+  text-decoration: none;
+}
+
+[data-human-html-chrome="nav"] a:hover,
+[data-human-html-chrome="nav"] a:focus {
+  color: var(--hh-link-hover);
+}
+
+.hh-nav-label {
+  color: currentColor;
+  font-weight: 600;
+  line-height: 1.3;
+  text-decoration-line: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: .18em;
+  overflow-wrap: anywhere;
+}
+
+.hh-nav-identity {
+  color: var(--hh-muted);
+  line-height: 1.45;
+}
+
+/* The human-page card marker (PC-2). A card whose target is another
+ * `index.html` carries this icon; a card pointing at anything else does not,
+ * so the two card kinds stay distinguishable at a glance.
+ *
+ * The icon is a data URI, never a file beside the page and never a remote
+ * asset, so the page renders with nothing fetched (NF-1, PC-6). The `xmlns`
+ * inside the SVG is an XML namespace identifier, not a location: no browser
+ * requests it, and CK-1's URL rules apply to `href` and `src` attributes, not
+ * to a CSS background.
+ *
+ * The icon sits in its own grid column so the label's underline never runs
+ * beneath it, and it scales with the label, so it stays legible at phone
+ * width where the card list collapses to one column.
+ */
+[data-human-html-chrome="nav"] a[href="index.html"],
+[data-human-html-chrome="nav"] a[href="human.html"],
+[data-human-html-chrome="nav"] a[href$="/index.html"],
+[data-human-html-chrome="nav"] a[href$="/human.html"] {
+  grid-template-columns: 1.1em minmax(0, 1fr);
+}
+
+[data-human-html-chrome="nav"] a[href="index.html"]::before,
+[data-human-html-chrome="nav"] a[href="human.html"]::before,
+[data-human-html-chrome="nav"] a[href$="/index.html"]::before,
+[data-human-html-chrome="nav"] a[href$="/human.html"]::before {
+  content: "";
+  grid-column: 1;
+  grid-row: 1;
+  align-self: center;
+  width: 1.1em;
+  height: 1.1em;
+  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cg fill='%235789f4'%3E%3Ccircle cx='8' cy='4.3' r='3.1'/%3E%3Cpath d='M1.5 15.3c0-3.6 2.9-6.3 6.5-6.3s6.5 2.7 6.5 6.3z'/%3E%3C/g%3E%3C/svg%3E") center / contain no-repeat;
+}
+
+[data-human-html-chrome="nav"] a[href="index.html"] .hh-nav-label,
+[data-human-html-chrome="nav"] a[href="human.html"] .hh-nav-label,
+[data-human-html-chrome="nav"] a[href$="/index.html"] .hh-nav-label,
+[data-human-html-chrome="nav"] a[href$="/human.html"] .hh-nav-label {
+  grid-column: 2;
+  grid-row: 1;
+}
+
+[data-human-html-chrome="nav"] a[href="index.html"] .hh-nav-identity,
+[data-human-html-chrome="nav"] a[href="human.html"] .hh-nav-identity,
+[data-human-html-chrome="nav"] a[href$="/index.html"] .hh-nav-identity,
+[data-human-html-chrome="nav"] a[href$="/human.html"] .hh-nav-identity {
+  grid-column: 2;
+  grid-row: 2;
+}
+
+img,
+svg {
+  max-width: 100%;
+  height: auto;
+}
+
+::selection {
+  background: var(--hh-accent);
+  color: var(--hh-background);
+}
+
+@media (max-width: 40rem) {
+  body {
+    padding: var(--hh-space-4) var(--hh-space-2);
+  }
+
+  [data-human-html-chrome="nav"] ul,
+  dl {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  dt:not(:first-of-type) {
+    padding-top: var(--hh-space-2);
+  }
+
+  dt + dd {
+    border-top: 0;
+    padding-top: 0;
+  }
+}
+</style>
+</head>
+<body>
+<nav data-human-html-chrome="nav" aria-label="Orientation pages">
+<ul>
+<li><a href="../index.html"><span class="hh-nav-label">plugins</span> <span class="hh-nav-identity">The Claude Code plugin collection: installable plugins including git and Perforce review, secrets provisioning, statusline display, cache reporting, markdown auditing, stuck-bootstrap remediation, and prototype skills.</span></a></li>
+<li><a href="lib/index.html"><span class="hh-nav-label">lib</span> <span class="hh-nav-identity">Python support modules for the unreal-kit plugin: dependency bootstrap, bootstrap-presence guard, Windows PATH repair, Unreal project discovery, editor launch and MCP readiness, configuration, stub refresh, and the Unreal MCP Automation Bridge client.</span></a></li>
+<li><a href="skills/index.html"><span class="hh-nav-label">skills</span> <span class="hh-nav-identity">Unreal Engine automation skills for Claude agents, providing domain routing, shared runtime orientation, and live-Editor MCP server tooling.</span></a></li>
+</ul>
+</nav>
+<main>
+<h1>Unreal Engine automation plugin for Claude: plugin manifest, bootstrap provisioning, defaults, hooks, and host-side Unreal scripts.</h1>
+<p>This is the unreal-kit Claude Code plugin: the layer that lets Claude run Python inside Unreal Engine whether the Editor is open or closed. Beyond its manifest, its work splits into three jobs &mdash; provisioning (turning the API on and resolving the project and engine), a small terminal surface for driving the Editor and searching the API, and session hooks that guard MCP calls and route console commands. The Python support modules and the agent skills live in sibling directories with their own pages. Provisioning is the connective tissue: the fast UDP path and the slower headless fallback both depend on the settings and venv it writes, so its logic is the thing to understand first.</p>
+<h2>Where to start</h2>
+<p>Start with <a href="README.md"><code>README.md</code></a>, which separates what the plugin ships from what it drives externally and lists the prerequisites behind every other file here. It is the fastest way back to context.</p>
+<h2>Routes</h2>
+<ul>
+<li>Bring up the live Editor for MCP authoring: <a href="scripts/ue_env_cli.py"><code>scripts/ue_env_cli.py</code></a> status &rarr; <a href="scripts/ue_env_cli.py"><code>scripts/ue_env_cli.py</code></a> launch-editor --wait-for-mcp</li>
+<li>Search the Unreal API and recover a missing stub: <a href="scripts/search_unreal_stub.py"><code>scripts/search_unreal_stub.py</code></a> &lt;pattern&gt; &rarr; <a href="scripts/refresh_unreal_stub.py"><code>scripts/refresh_unreal_stub.py</code></a> --project-root .</li>
+<li>Guard an MCP save against a stale editor build: <a href="hooks/pretooluse/check-editor-build-fresh.sh"><code>hooks/pretooluse/check-editor-build-fresh.sh</code></a> &rarr; <a href="hooks/pretooluse/detect-editor-stale.py"><code>hooks/pretooluse/detect-editor-stale.py</code></a></li>
+</ul>
+<h2>Overview and manifest</h2>
+<ul>
+<li><a href="README.md"><code>README.md</code></a> &mdash; the human-facing overview: what the plugin ships versus what it drives externally, plus install and prerequisites. Open it before anything else.</li>
+<li><a href=".claude-plugin/plugin.json"><code>.claude-plugin/plugin.json</code></a> &mdash; the manifest Claude installs from: name, version, description, author, keywords, and the bootstrap dependency. Open it to change the plugin's public identity.</li>
+</ul>
+<h2>Provisioning and setup</h2>
+<ul>
+<li><a href="bootstrap.json"><code>bootstrap.json</code></a> &mdash; the provisioning contract: required bootstrap version, the venv imports, the per-project and plugin config fields, the UserEngine.ini flags, the unreal-pip pin, and the stub download. Open it to change what setup does.</li>
+<li><a href="custom_bootstrap.py"><code>custom_bootstrap.py</code></a> &mdash; the provisioning entry points the bootstrap engine calls: autodetect() finds the project and engine, and bootstrap() checks the enriched stub and defers the optional P4 provider.</li>
+<li><a href="defaults/config.yaml"><code>defaults/config.yaml</code></a> &mdash; the seed config with empty engine_dir and uproject that provisioning fills in per project.</li>
+<li><a href="pyproject.toml"><code>pyproject.toml</code></a> &mdash; the host-side Python spec: upyrc, pyyaml, websocket-client, and the 3.12 (not 3.14) interpreter range. Open it when a dependency or version bound looks wrong.</li>
+</ul>
+<h2>Host-side Unreal scripts</h2>
+<ul>
+<li><a href="scripts/ue_env_cli.py"><code>scripts/ue_env_cli.py</code></a> &mdash; drives the Editor host: status reports running processes and MCP readiness; launch-editor spawns the Editor and can wait for the MCP bridge.</li>
+<li><a href="scripts/search_unreal_stub.py"><code>scripts/search_unreal_stub.py</code></a> &mdash; searches the best available Unreal API stub (enriched first, then stock) and prints how to recover when neither exists.</li>
+<li><a href="scripts/refresh_unreal_stub.py"><code>scripts/refresh_unreal_stub.py</code></a> &mdash; copies the project's compiled enriched stub into the durable plugin-data location. Open it after a full compile when API search comes up empty.</li>
+</ul>
+<h2>Session hooks</h2>
+<ul>
+<li><a href="hooks/hooks.json"><code>hooks/hooks.json</code></a> &mdash; the hook registrations: a UserPromptSubmit command and a PreToolUse command matched to the mcp__unreal-engine__ tools.</li>
+<li><a href="hooks/userpromptsubmit/ue-console-cmd.sh"><code>hooks/userpromptsubmit/ue-console-cmd.sh</code></a> &mdash; the "&gt;" console-command hook: routes a "&gt;"-prefixed prompt to the Editor via MCP and self-disables when the server is not configured.</li>
+<li><a href="hooks/pretooluse/check-editor-build-fresh.sh"><code>hooks/pretooluse/check-editor-build-fresh.sh</code></a> &mdash; the foreground PreToolUse check that blocks a save tool call when the editor build is stale, then launches the detached detector.</li>
+<li><a href="hooks/pretooluse/detect-editor-stale.py"><code>hooks/pretooluse/detect-editor-stale.py</code></a> &mdash; the detached detector that compares the editor DLL against Build.version to set or clear the stale marker.</li>
+</ul>
+</main>
+<script>
+if (window.parent !== window) {
+  window.parent.postMessage({
+    type: "human-html:announce",
+    version: 1,
+    directory: "plugins/unreal-kit",
+    file: "index.html",
+    kind: "page",
+    source_sha: "a129b0ad7aa6d94cd8b7f74b1ab08ea011db00bc"
+  }, "*");
+  document.addEventListener("click", function (event) {
+    if (event.defaultPrevented || event.button !== 0) return;
+    if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    var el = event.target;
+    while (el && el.nodeName !== "A") el = el.parentNode;
+    if (!el) return;
+    var href = el.getAttribute("href");
+    if (!href) return;
+    if (href.charAt(0) === "#" || href.charAt(0) === "/") return;
+    if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(href)) return;
+    var target = href.split("#")[0].split("?")[0];
+    if (!target) return;
+    if (/(^|\/)human(\.[^/]+)?\.html$/.test(target)) return;
+    var parts = "plugins/unreal-kit".split("/");
+    if (parts.length === 1 && parts[0] === ".") parts = [];
+    var segs = target.split("/");
+    for (var i = 0; i < segs.length; i++) {
+      if (segs[i] === "" || segs[i] === ".") continue;
+      if (segs[i] === "..") { parts.pop(); continue; }
+      parts.push(segs[i]);
+    }
+    event.preventDefault();
+    window.parent.postMessage({
+      type: "human-html:navigate",
+      version: 1,
+      path: parts.join("/")
+    }, "*");
+  });
+}
+</script>
+</body>
+</html>

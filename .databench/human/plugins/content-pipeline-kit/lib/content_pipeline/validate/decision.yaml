@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "directory": "plugins/content-pipeline-kit/lib/content_pipeline/validate",
+  "decision": "none",
+  "source_sha": "990504a7f4b33364dcff8e9c6faa49438f7cc7cd",
+  "dirty": false,
+  "identity": "",
+  "instructions": "",
+  "references": []
+}

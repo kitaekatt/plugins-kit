@@ -1,0 +1,437 @@
+<!doctype html>
+<html lang="en">
+<head>
+<!-- human-html: {"generated_by":"md-domain","source_sha":"0fe42a1ea068a329846c9fcf3c10b4c00da12c26","directory":"plugins/bootstrap/hooks/sessionstart","kind":"page"} -->
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>SessionStart hook that starts the bootstrap engine and prepares Windows command shims for extensionless bash levers</title>
+<style data-human-html-style>
+/* human-html shared style asset -- SA-1.
+ *
+ * The single source of truth for human-html page styling. Every generated page
+ * inlines these exact bytes in one <style data-human-html-style> element
+ * (PC-4); the host viewer imports the same resource for matching chrome
+ * (HV-3). Do not copy these values anywhere else -- a second copy is the
+ * visual drift this asset exists to prevent.
+ *
+ * Dark only, seeded from the host viewer's established dark theme. ASCII only.
+ */
+
+:root {
+  color-scheme: dark;
+
+  --hh-background: #080b10;
+  --hh-text: #d7deea;
+  --hh-heading: #f3f6fb;
+  --hh-muted: #8b98aa;
+  --hh-surface: rgba(15,19,27,.88);
+  --hh-border: #3d4a5e;
+  --hh-link: #5789f4;
+  --hh-link-hover: #7ea3ff;
+  --hh-accent: #4f82f7;
+
+  --hh-font-size: 15px;
+  --hh-line-height: 1.72;
+  --hh-font-body: Inter, ui-sans-serif, system-ui, sans-serif;
+  --hh-font-mono: JetBrains Mono, ui-monospace, monospace;
+
+  --hh-space-1: .35rem;
+  --hh-space-2: .75rem;
+  --hh-space-3: 1rem;
+  --hh-space-4: 1.5rem;
+  --hh-space-5: 2rem;
+  --hh-radius: 6px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  background: var(--hh-background);
+}
+
+body {
+  margin: 0;
+  padding: var(--hh-space-5) var(--hh-space-3);
+  background: var(--hh-background);
+  color: var(--hh-text);
+  font-family: var(--hh-font-body);
+  font-size: var(--hh-font-size);
+  line-height: var(--hh-line-height);
+  -webkit-text-size-adjust: 100%;
+}
+
+main {
+  display: grid;
+  gap: var(--hh-space-5);
+  width: 100%;
+  min-width: 0;
+}
+
+main > header,
+section,
+article,
+.hh-panel {
+  display: grid;
+  gap: var(--hh-space-2);
+  min-width: 0;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  color: var(--hh-heading);
+  line-height: 1.25;
+  margin: 0;
+  font-weight: 600;
+  text-wrap: balance;
+}
+
+h1 {
+  font-size: 1.75rem;
+}
+
+h2 {
+  font-size: 1.3rem;
+}
+
+h3 {
+  font-size: 1.1rem;
+}
+
+p,
+ul,
+ol,
+dl,
+table,
+pre,
+blockquote {
+  margin: 0;
+}
+
+ul,
+ol {
+  padding-left: 1.4em;
+}
+
+li + li {
+  margin-top: var(--hh-space-1);
+}
+
+a {
+  color: var(--hh-link);
+  text-decoration-line: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: .18em;
+}
+
+a:hover,
+a:focus {
+  color: var(--hh-link-hover);
+}
+
+a:focus-visible {
+  outline: 2px solid var(--hh-accent);
+  outline-offset: 2px;
+}
+
+small,
+.hh-muted,
+[data-human-html-muted] {
+  color: var(--hh-muted);
+}
+
+strong {
+  color: var(--hh-heading);
+  font-weight: 600;
+}
+
+hr {
+  border: 0;
+  border-top: 1px solid var(--hh-border);
+  margin: var(--hh-space-5) 0;
+}
+
+code,
+kbd,
+samp,
+pre {
+  font-family: var(--hh-font-mono);
+  font-size: .92em;
+}
+
+code {
+  background: var(--hh-surface);
+  border: 1px solid var(--hh-border);
+  border-radius: 4px;
+  padding: .1em .35em;
+  overflow-wrap: anywhere;
+}
+
+pre {
+  background: var(--hh-surface);
+  border: 1px solid var(--hh-border);
+  border-radius: var(--hh-radius);
+  padding: var(--hh-space-3);
+  max-width: 100%;
+  min-width: 0;
+  overflow: auto;
+  white-space: pre;
+}
+
+pre code {
+  background: none;
+  border: 0;
+  padding: 0;
+  overflow-wrap: normal;
+}
+
+blockquote {
+  border-left: 3px solid var(--hh-accent);
+  padding-left: var(--hh-space-3);
+  color: var(--hh-muted);
+}
+
+dl {
+  display: grid;
+  grid-template-columns: minmax(7rem, .22fr) minmax(0, 1fr);
+  gap: var(--hh-space-1) var(--hh-space-3);
+}
+
+dt {
+  color: var(--hh-heading);
+  font-weight: 600;
+}
+
+dd {
+  min-width: 0;
+  margin: 0;
+}
+
+dt:not(:first-of-type),
+dt:not(:first-of-type) + dd {
+  border-top: 1px solid var(--hh-border);
+  padding-top: var(--hh-space-2);
+}
+
+table {
+  border-collapse: collapse;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  display: block;
+  overflow-x: auto;
+}
+
+th,
+td {
+  border: 1px solid var(--hh-border);
+  padding: .45em .7em;
+  text-align: left;
+  vertical-align: top;
+}
+
+th {
+  color: var(--hh-heading);
+  background: var(--hh-surface);
+  font-weight: 600;
+}
+
+section,
+article,
+.hh-panel {
+  background: transparent;
+}
+
+.hh-panel {
+  background: var(--hh-surface);
+  border: 1px solid var(--hh-border);
+  border-radius: var(--hh-radius);
+  padding: var(--hh-space-3);
+}
+
+[data-human-html-chrome="nav"] {
+  border-bottom: 1px solid var(--hh-border);
+  padding-bottom: var(--hh-space-4);
+  margin-bottom: var(--hh-space-4);
+  font-size: .95em;
+  color: var(--hh-muted);
+}
+
+[data-human-html-chrome="nav"] ul {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 18rem), 1fr));
+  gap: var(--hh-space-2) var(--hh-space-5);
+  list-style: none;
+  margin: 0;
+  padding-left: 0;
+}
+
+[data-human-html-chrome="nav"] li {
+  min-width: 0;
+  margin: 0;
+}
+
+[data-human-html-chrome="nav"] a {
+  display: grid;
+  gap: var(--hh-space-1);
+  min-width: 0;
+  color: var(--hh-link);
+  text-decoration: none;
+}
+
+[data-human-html-chrome="nav"] a:hover,
+[data-human-html-chrome="nav"] a:focus {
+  color: var(--hh-link-hover);
+}
+
+.hh-nav-label {
+  color: currentColor;
+  font-weight: 600;
+  line-height: 1.3;
+  text-decoration-line: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: .18em;
+  overflow-wrap: anywhere;
+}
+
+.hh-nav-identity {
+  color: var(--hh-muted);
+  line-height: 1.45;
+}
+
+/* The human-page card marker (PC-2). A card whose target is another
+ * `index.html` carries this icon; a card pointing at anything else does not,
+ * so the two card kinds stay distinguishable at a glance.
+ *
+ * The icon is a data URI, never a file beside the page and never a remote
+ * asset, so the page renders with nothing fetched (NF-1, PC-6). The `xmlns`
+ * inside the SVG is an XML namespace identifier, not a location: no browser
+ * requests it, and CK-1's URL rules apply to `href` and `src` attributes, not
+ * to a CSS background.
+ *
+ * The icon sits in its own grid column so the label's underline never runs
+ * beneath it, and it scales with the label, so it stays legible at phone
+ * width where the card list collapses to one column.
+ */
+[data-human-html-chrome="nav"] a[href="index.html"],
+[data-human-html-chrome="nav"] a[href="human.html"],
+[data-human-html-chrome="nav"] a[href$="/index.html"],
+[data-human-html-chrome="nav"] a[href$="/human.html"] {
+  grid-template-columns: 1.1em minmax(0, 1fr);
+}
+
+[data-human-html-chrome="nav"] a[href="index.html"]::before,
+[data-human-html-chrome="nav"] a[href="human.html"]::before,
+[data-human-html-chrome="nav"] a[href$="/index.html"]::before,
+[data-human-html-chrome="nav"] a[href$="/human.html"]::before {
+  content: "";
+  grid-column: 1;
+  grid-row: 1;
+  align-self: center;
+  width: 1.1em;
+  height: 1.1em;
+  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cg fill='%235789f4'%3E%3Ccircle cx='8' cy='4.3' r='3.1'/%3E%3Cpath d='M1.5 15.3c0-3.6 2.9-6.3 6.5-6.3s6.5 2.7 6.5 6.3z'/%3E%3C/g%3E%3C/svg%3E") center / contain no-repeat;
+}
+
+[data-human-html-chrome="nav"] a[href="index.html"] .hh-nav-label,
+[data-human-html-chrome="nav"] a[href="human.html"] .hh-nav-label,
+[data-human-html-chrome="nav"] a[href$="/index.html"] .hh-nav-label,
+[data-human-html-chrome="nav"] a[href$="/human.html"] .hh-nav-label {
+  grid-column: 2;
+  grid-row: 1;
+}
+
+[data-human-html-chrome="nav"] a[href="index.html"] .hh-nav-identity,
+[data-human-html-chrome="nav"] a[href="human.html"] .hh-nav-identity,
+[data-human-html-chrome="nav"] a[href$="/index.html"] .hh-nav-identity,
+[data-human-html-chrome="nav"] a[href$="/human.html"] .hh-nav-identity {
+  grid-column: 2;
+  grid-row: 2;
+}
+
+img,
+svg {
+  max-width: 100%;
+  height: auto;
+}
+
+::selection {
+  background: var(--hh-accent);
+  color: var(--hh-background);
+}
+
+@media (max-width: 40rem) {
+  body {
+    padding: var(--hh-space-4) var(--hh-space-2);
+  }
+
+  [data-human-html-chrome="nav"] ul,
+  dl {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  dt:not(:first-of-type) {
+    padding-top: var(--hh-space-2);
+  }
+
+  dt + dd {
+    border-top: 0;
+    padding-top: 0;
+  }
+}
+</style>
+</head>
+<body>
+<main>
+<h1>SessionStart hook that starts the bootstrap engine and prepares Windows command shims for extensionless bash levers</h1>
+<p class="hh-orientation">This is the SessionStart hook of the bootstrap plugin, and it has one job: turn Claude Code&#x27;s session-start event into a bootstrap engine pass, and on Windows make sure the levers that pass leaves behind still work. Two bash files do that. One is a thin wrapper that guards the run (session dedup, a per-project cooldown, an alert bypass, and the interpreter names every session needs) and then delegates to the engine. The other is a Windows-only shim library that defines functions to render a .cmd twin beside each extensionless bash lever, because cmd.exe and PowerShell 5.1 cannot run an extensionless file on their own. The two split cleanly: the wrapper runs on every platform, the shim is sourced only on Windows. Everything the engine itself does lives one level up.</p><section><h2>Where to start</h2><p>Open <a href="session-bootstrap.sh">plugins/bootstrap/hooks/sessionstart/session-bootstrap.sh</a> first: the guard logic, cooldown, and env-file writes decide whether a session runs, skips, or re-runs a pass, and the Windows branch that sources the shim starts here too. <a href="lever-cmd-shim.sh">plugins/bootstrap/hooks/sessionstart/lever-cmd-shim.sh</a> is only reachable once you are already debugging the Windows lever problem.</p></section><section><h2>Routes</h2><ul><li><strong>A background SessionStart pass</strong><ol><li>Claude Code fires SessionStart and runs the wrapper with no arguments.</li><li><a href="session-bootstrap.sh">plugins/bootstrap/hooks/sessionstart/session-bootstrap.sh</a> reads the hook stdin, applies the session-id and per-project cooldown gates (bypassing them on an unresolved alert or a newer plugin registry), then delegates to the Python engine, whose stdout becomes the JSON hook response.</li></ol></li><li><strong>Windows lever shim refresh</strong><ol><li><a href="session-bootstrap.sh">plugins/bootstrap/hooks/sessionstart/session-bootstrap.sh</a> sources the shim library on Windows at session start.</li><li><a href="lever-cmd-shim.sh">plugins/bootstrap/hooks/sessionstart/lever-cmd-shim.sh</a> provides the three functions that resolve the Git-for-Windows bash, render the .cmd text, and write the lever&#x27;s .cmd twin only when its content changed.</li></ol></li></ul></section><section><h2>The SessionStart handler</h2><p><a href="session-bootstrap.sh">plugins/bootstrap/hooks/sessionstart/session-bootstrap.sh</a> The thin bash wrapper that is the actual SessionStart handler. It parses the few flags the hook can carry, applies the session and cooldown gates, writes the interpreter names into the session env file, and delegates to the engine. Open it to understand why a session runs, skips, or re-runs.</p></section><section><h2>The Windows shim library</h2><p><a href="lever-cmd-shim.sh">plugins/bootstrap/hooks/sessionstart/lever-cmd-shim.sh</a> A sourced function library, inert on its own, that exists only on Windows. It resolves the Git-for-Windows bash, renders a .cmd twin for each extensionless bash lever, and writes the twin only when it changed. Open it when a lever works in Git Bash but not in cmd.exe or PowerShell.</p></section>
+</main>
+<nav data-human-html-chrome="nav"><ul><li><a href="../../index.html"><span class="hh-nav-label">bootstrap</span> <span class="hh-nav-identity">Bootstrap plugin that prepares user machines for marketplace plugins by installing tools, Python environments, and configuration, and exposes its command, hooks, shell resolvers, maintenance scripts, and plugin-development skill.</span></a></li><li><a href="../hooks.json"><span class="hh-nav-label">hooks.json</span> <span class="hh-nav-identity">The hook manifest that wires SessionStart to the wrapper; open it to see exactly when the hook fires and confirm it passes no arguments.</span></a></li><li><a href="../../engine/bootstrap_engine.py"><span class="hh-nav-label">bootstrap_engine.py</span> <span class="hh-nav-identity">The Python engine the wrapper delegates to; the provisioning, checks, and JSON output all happen there, not in this directory.</span></a></li><li><a href="../../scripts/bootstrap.sh"><span class="hh-nav-label">bootstrap.sh</span> <span class="hh-nav-identity">The extensionless bootstrap lever the Windows .cmd twin wraps; the shim exists so cmd.exe and PowerShell can run this file.</span></a></li><li><a href="../../README.md"><span class="hh-nav-label">README.md</span> <span class="hh-nav-identity">Human-facing bootstrap README for the plugin as a whole, for the bigger picture before diving into the hook.</span></a></li></ul></nav>
+<script>
+if (window.parent !== window) {
+  window.parent.postMessage({
+    type: "human-html:announce",
+    version: 1,
+    directory: "plugins/bootstrap/hooks/sessionstart",
+    file: "index.html",
+    kind: "page",
+    source_sha: "0fe42a1ea068a329846c9fcf3c10b4c00da12c26"
+  }, "*");
+  document.addEventListener("click", function (event) {
+    if (event.defaultPrevented || event.button !== 0) return;
+    if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    var el = event.target;
+    while (el && el.nodeName !== "A") el = el.parentNode;
+    if (!el) return;
+    var href = el.getAttribute("href");
+    if (!href) return;
+    if (href.charAt(0) === "#" || href.charAt(0) === "/") return;
+    if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(href)) return;
+    var target = href.split("#")[0].split("?")[0];
+    if (!target) return;
+    if (/(^|\/)human(\.[^/]+)?\.html$/.test(target)) return;
+    var parts = "plugins/bootstrap/hooks/sessionstart".split("/");
+    if (parts.length === 1 && parts[0] === ".") parts = [];
+    var segs = target.split("/");
+    for (var i = 0; i < segs.length; i++) {
+      if (segs[i] === "" || segs[i] === ".") continue;
+      if (segs[i] === "..") { parts.pop(); continue; }
+      parts.push(segs[i]);
+    }
+    event.preventDefault();
+    window.parent.postMessage({
+      type: "human-html:navigate",
+      version: 1,
+      path: parts.join("/")
+    }, "*");
+  });
+}
+</script>
+</body>
+</html>

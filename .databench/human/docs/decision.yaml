@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "directory": "docs",
+  "decision": "page",
+  "source_sha": "30982b436bba982a772eb443ea3e665e28008bda",
+  "dirty": false,
+  "identity": "Documents plugins-kit bootstrap operations, historical architecture, CLI gotchas, and plugin proposals",
+  "instructions": "",
+  "references": []
+}

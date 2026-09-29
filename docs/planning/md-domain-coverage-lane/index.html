@@ -1,0 +1,491 @@
+<!doctype html>
+<html lang="en">
+<head>
+<!-- human-html: {"generated_by":"md-domain","source_sha":"e855325b47bca0fe8f0edc2484e695805d323355","directory":"docs/planning/md-domain-coverage-lane","kind":"page"} -->
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>Planning documents that design, measure, and validate md-domain CLAUDE.md coverage and generation.</title>
+<style data-human-html-style>
+/* human-html shared style asset -- SA-1.
+ *
+ * The single source of truth for human-html page styling. Every generated page
+ * inlines these exact bytes in one <style data-human-html-style> element
+ * (PC-4); the host viewer imports the same resource for matching chrome
+ * (HV-3). Do not copy these values anywhere else -- a second copy is the
+ * visual drift this asset exists to prevent.
+ *
+ * Dark only, seeded from the host viewer's established dark theme. ASCII only.
+ */
+
+:root {
+  color-scheme: dark;
+
+  --hh-background: #080b10;
+  --hh-text: #d7deea;
+  --hh-heading: #f3f6fb;
+  --hh-muted: #8b98aa;
+  --hh-surface: rgba(15,19,27,.88);
+  --hh-border: #3d4a5e;
+  --hh-link: #5789f4;
+  --hh-link-hover: #7ea3ff;
+  --hh-accent: #4f82f7;
+
+  --hh-font-size: 15px;
+  --hh-line-height: 1.72;
+  --hh-font-body: Inter, ui-sans-serif, system-ui, sans-serif;
+  --hh-font-mono: JetBrains Mono, ui-monospace, monospace;
+
+  --hh-space-1: .35rem;
+  --hh-space-2: .75rem;
+  --hh-space-3: 1rem;
+  --hh-space-4: 1.5rem;
+  --hh-space-5: 2rem;
+  --hh-radius: 6px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  background: var(--hh-background);
+}
+
+body {
+  margin: 0;
+  padding: var(--hh-space-5) var(--hh-space-3);
+  background: var(--hh-background);
+  color: var(--hh-text);
+  font-family: var(--hh-font-body);
+  font-size: var(--hh-font-size);
+  line-height: var(--hh-line-height);
+  -webkit-text-size-adjust: 100%;
+}
+
+main {
+  display: grid;
+  gap: var(--hh-space-5);
+  width: 100%;
+  min-width: 0;
+}
+
+main > header,
+section,
+article,
+.hh-panel {
+  display: grid;
+  gap: var(--hh-space-2);
+  min-width: 0;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  color: var(--hh-heading);
+  line-height: 1.25;
+  margin: 0;
+  font-weight: 600;
+  text-wrap: balance;
+}
+
+h1 {
+  font-size: 1.75rem;
+}
+
+h2 {
+  font-size: 1.3rem;
+}
+
+h3 {
+  font-size: 1.1rem;
+}
+
+p,
+ul,
+ol,
+dl,
+table,
+pre,
+blockquote {
+  margin: 0;
+}
+
+ul,
+ol {
+  padding-left: 1.4em;
+}
+
+li + li {
+  margin-top: var(--hh-space-1);
+}
+
+a {
+  color: var(--hh-link);
+  text-decoration-line: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: .18em;
+}
+
+a:hover,
+a:focus {
+  color: var(--hh-link-hover);
+}
+
+a:focus-visible {
+  outline: 2px solid var(--hh-accent);
+  outline-offset: 2px;
+}
+
+small,
+.hh-muted,
+[data-human-html-muted] {
+  color: var(--hh-muted);
+}
+
+strong {
+  color: var(--hh-heading);
+  font-weight: 600;
+}
+
+hr {
+  border: 0;
+  border-top: 1px solid var(--hh-border);
+  margin: var(--hh-space-5) 0;
+}
+
+code,
+kbd,
+samp,
+pre {
+  font-family: var(--hh-font-mono);
+  font-size: .92em;
+}
+
+code {
+  background: var(--hh-surface);
+  border: 1px solid var(--hh-border);
+  border-radius: 4px;
+  padding: .1em .35em;
+  overflow-wrap: anywhere;
+}
+
+pre {
+  background: var(--hh-surface);
+  border: 1px solid var(--hh-border);
+  border-radius: var(--hh-radius);
+  padding: var(--hh-space-3);
+  max-width: 100%;
+  min-width: 0;
+  overflow: auto;
+  white-space: pre;
+}
+
+pre code {
+  background: none;
+  border: 0;
+  padding: 0;
+  overflow-wrap: normal;
+}
+
+blockquote {
+  border-left: 3px solid var(--hh-accent);
+  padding-left: var(--hh-space-3);
+  color: var(--hh-muted);
+}
+
+dl {
+  display: grid;
+  grid-template-columns: minmax(7rem, .22fr) minmax(0, 1fr);
+  gap: var(--hh-space-1) var(--hh-space-3);
+}
+
+dt {
+  color: var(--hh-heading);
+  font-weight: 600;
+}
+
+dd {
+  min-width: 0;
+  margin: 0;
+}
+
+dt:not(:first-of-type),
+dt:not(:first-of-type) + dd {
+  border-top: 1px solid var(--hh-border);
+  padding-top: var(--hh-space-2);
+}
+
+table {
+  border-collapse: collapse;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  display: block;
+  overflow-x: auto;
+}
+
+th,
+td {
+  border: 1px solid var(--hh-border);
+  padding: .45em .7em;
+  text-align: left;
+  vertical-align: top;
+}
+
+th {
+  color: var(--hh-heading);
+  background: var(--hh-surface);
+  font-weight: 600;
+}
+
+section,
+article,
+.hh-panel {
+  background: transparent;
+}
+
+.hh-panel {
+  background: var(--hh-surface);
+  border: 1px solid var(--hh-border);
+  border-radius: var(--hh-radius);
+  padding: var(--hh-space-3);
+}
+
+[data-human-html-chrome="nav"] {
+  border-bottom: 1px solid var(--hh-border);
+  padding-bottom: var(--hh-space-4);
+  margin-bottom: var(--hh-space-4);
+  font-size: .95em;
+  color: var(--hh-muted);
+}
+
+[data-human-html-chrome="nav"] ul {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 18rem), 1fr));
+  gap: var(--hh-space-2) var(--hh-space-5);
+  list-style: none;
+  margin: 0;
+  padding-left: 0;
+}
+
+[data-human-html-chrome="nav"] li {
+  min-width: 0;
+  margin: 0;
+}
+
+[data-human-html-chrome="nav"] a {
+  display: grid;
+  gap: var(--hh-space-1);
+  min-width: 0;
+  color: var(--hh-link);
+  text-decoration: none;
+}
+
+[data-human-html-chrome="nav"] a:hover,
+[data-human-html-chrome="nav"] a:focus {
+  color: var(--hh-link-hover);
+}
+
+.hh-nav-label {
+  color: currentColor;
+  font-weight: 600;
+  line-height: 1.3;
+  text-decoration-line: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: .18em;
+  overflow-wrap: anywhere;
+}
+
+.hh-nav-identity {
+  color: var(--hh-muted);
+  line-height: 1.45;
+}
+
+/* The human-page card marker (PC-2). A card whose target is another
+ * `index.html` carries this icon; a card pointing at anything else does not,
+ * so the two card kinds stay distinguishable at a glance.
+ *
+ * The icon is a data URI, never a file beside the page and never a remote
+ * asset, so the page renders with nothing fetched (NF-1, PC-6). The `xmlns`
+ * inside the SVG is an XML namespace identifier, not a location: no browser
+ * requests it, and CK-1's URL rules apply to `href` and `src` attributes, not
+ * to a CSS background.
+ *
+ * The icon sits in its own grid column so the label's underline never runs
+ * beneath it, and it scales with the label, so it stays legible at phone
+ * width where the card list collapses to one column.
+ */
+[data-human-html-chrome="nav"] a[href="index.html"],
+[data-human-html-chrome="nav"] a[href="human.html"],
+[data-human-html-chrome="nav"] a[href$="/index.html"],
+[data-human-html-chrome="nav"] a[href$="/human.html"] {
+  grid-template-columns: 1.1em minmax(0, 1fr);
+}
+
+[data-human-html-chrome="nav"] a[href="index.html"]::before,
+[data-human-html-chrome="nav"] a[href="human.html"]::before,
+[data-human-html-chrome="nav"] a[href$="/index.html"]::before,
+[data-human-html-chrome="nav"] a[href$="/human.html"]::before {
+  content: "";
+  grid-column: 1;
+  grid-row: 1;
+  align-self: center;
+  width: 1.1em;
+  height: 1.1em;
+  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cg fill='%235789f4'%3E%3Ccircle cx='8' cy='4.3' r='3.1'/%3E%3Cpath d='M1.5 15.3c0-3.6 2.9-6.3 6.5-6.3s6.5 2.7 6.5 6.3z'/%3E%3C/g%3E%3C/svg%3E") center / contain no-repeat;
+}
+
+[data-human-html-chrome="nav"] a[href="index.html"] .hh-nav-label,
+[data-human-html-chrome="nav"] a[href="human.html"] .hh-nav-label,
+[data-human-html-chrome="nav"] a[href$="/index.html"] .hh-nav-label,
+[data-human-html-chrome="nav"] a[href$="/human.html"] .hh-nav-label {
+  grid-column: 2;
+  grid-row: 1;
+}
+
+[data-human-html-chrome="nav"] a[href="index.html"] .hh-nav-identity,
+[data-human-html-chrome="nav"] a[href="human.html"] .hh-nav-identity,
+[data-human-html-chrome="nav"] a[href$="/index.html"] .hh-nav-identity,
+[data-human-html-chrome="nav"] a[href$="/human.html"] .hh-nav-identity {
+  grid-column: 2;
+  grid-row: 2;
+}
+
+img,
+svg {
+  max-width: 100%;
+  height: auto;
+}
+
+::selection {
+  background: var(--hh-accent);
+  color: var(--hh-background);
+}
+
+@media (max-width: 40rem) {
+  body {
+    padding: var(--hh-space-4) var(--hh-space-2);
+  }
+
+  [data-human-html-chrome="nav"] ul,
+  dl {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  dt:not(:first-of-type) {
+    padding-top: var(--hh-space-2);
+  }
+
+  dt + dd {
+    border-top: 0;
+    padding-top: 0;
+  }
+}
+</style>
+</head>
+<body>
+<main>
+<nav data-human-html-chrome="nav" aria-label="Orientation pages">
+<ul>
+<li><a href="../index.html"><span class="hh-nav-label">planning</span> <span class="hh-nav-identity">Maintainer planning and design records for plugin subsystems, task-system design, defect triage, and model dispatch.</span></a></li>
+<li>
+<a href="README.md">
+<span class="hh-nav-label">README.md</span>
+<span class="hh-nav-identity">The hand-written overview: why the lane exists, its scope, and its status.</span>
+</a>
+</li>
+</ul>
+</nav>
+<h1>Planning documents that design, measure, and validate md-domain CLAUDE.md coverage and generation.</h1>
+<p>This directory holds the maintainer's working records for the md-domain coverage lane and for the generation chain that writes agent guidance documents for code subtrees. The documents split by role rather than by date: the design of the coverage verb and of its tree-scale successor, settled measurements of individual generation runs, post-mortems on claims that failed their own checks, and the validation plans a fix must pass before it ships. The question that runs through every record is the same: does a changed md-domain surface what a clean audit missed, and does a generated document change what a code review finds? Most of this work happened in August 2026, so the dates in the filenames are part of the story, and several records state their own confound or limit up front.</p>
+<h2>Where to start</h2>
+<p>Open <a href="README.md"><code>README.md</code></a> first: it states the scope (this lane is not a code-review tool), the rejected hazard-sweep shape and the reasons for the rejection, and the current status, and it routes to the documents to read before building anything. If you are chasing a specific false claim instead, the adjudication and its forensics companion are the shorter path.</p>
+<h2>Routes</h2>
+<ul>
+<li>Understand the lane: <a href="README.md"><code>README.md</code></a> -&gt; <a href="coverage-lane-spec.md"><code>coverage-lane-spec.md</code></a> -- the overview names the spec as the design and points at the sections that settle its shape.</li>
+<li>Judge the fix: <a href="generation-deficiencies-and-plan.md"><code>generation-deficiencies-and-plan.md</code></a> -&gt; <a href="regeneration-run-2026-08-12.md"><code>regeneration-run-2026-08-12.md</code></a> -&gt; <a href="regeneration-run-2026-08-12-fresh-reports.md"><code>regeneration-run-2026-08-12-fresh-reports.md</code></a> -- the measured deficiencies and the owner decisions, then the first run with its stated confound, then the rerun that closes it.</li>
+<li>Trace a false claim: <a href="sol-adjudication-2026-08-13.md"><code>sol-adjudication-2026-08-13.md</code></a> -&gt; <a href="claim-verification-forensics-2026-08-13.md"><code>claim-verification-forensics-2026-08-13.md</code></a> -- the first establishes what was false; the second shows why the check did not catch it and fixes the acceptance corpus.</li>
+<li>Measure review effect: <a href="review-effect-experiment.md"><code>review-effect-experiment.md</code></a> -&gt; <a href="review-effect-results.md"><code>review-effect-results.md</code></a> -- the pre-registered design, then the null result and the finding behind it.</li>
+</ul>
+<h2>The overview</h2>
+<ul>
+<li><a href="README.md"><code>README.md</code></a> -- The hand-written entry point: why the lane exists, the rejected hazard-sweep shape with the recorded reasons, and the status as of 0.62.0. Open it after any gap.</li>
+</ul>
+<h2>The design</h2>
+<ul>
+<li><a href="coverage-lane-spec.md"><code>coverage-lane-spec.md</code></a> -- The spec for the coverage verb: the subtree-plus-document-chain unit, the report-only third-verb shape, intent gating, the exclusions, and the distinct GAPS-FOUND and COVERAGE-ASSESSED verdicts. Open it before changing the lane's shape.</li>
+<li><a href="hierarchy-analysis-design.md"><code>hierarchy-analysis-design.md</code></a> -- The proposal for tree-scale work: one report-only lane that decides where every written or proposed fact sits across a whole document tree. Open it when a placement question crosses one directory.</li>
+</ul>
+<h2>Generation runs and verdicts</h2>
+<ul>
+<li><a href="generation-deficiencies-and-plan.md"><code>generation-deficiencies-and-plan.md</code></a> -- The measured deficiencies of the chain (the G-series) and the remediation plan after the four owner decisions. The two runs below exercise its fixes.</li>
+<li><a href="regeneration-run-2026-08-12.md"><code>regeneration-run-2026-08-12.md</code></a> -- The first completed generation run. It was fed pre-amendment reports, so read its 11.4% loss as an upper bound, and note the null-branch defect it surfaced.</li>
+<li><a href="regeneration-run-2026-08-12-fresh-reports.md"><code>regeneration-run-2026-08-12-fresh-reports.md</code></a> -- The same chain re-run end to end on fresh reports: the confound closed, delivery loss measured at 1.6%, and the old answer key shown to measure sampling rather than delivery.</li>
+<li><a href="sol-adjudication-2026-08-13.md"><code>sol-adjudication-2026-08-13.md</code></a> -- An independent keep/revert decision over 13 generated documents: 3 kept, 10 reverted, 10 verified false claims. Open it to see the bar the batch had to clear.</li>
+<li><a href="claim-verification-forensics-2026-08-13.md"><code>claim-verification-forensics-2026-08-13.md</code></a> -- The forensics companion: why the ten false claims passed their own verification, and the claim-by-claim corpus any proposed fix must pass.</li>
+</ul>
+<h2>Review-effect measurement</h2>
+<ul>
+<li><a href="review-effect-experiment.md"><code>review-effect-experiment.md</code></a> -- The pre-registered documentation-on/off review experiment: two blind arms, planted defects, and an effect threshold fixed before any reviewer was dispatched.</li>
+<li><a href="review-effect-results.md"><code>review-effect-results.md</code></a> -- The null result: the generated document did not change what this review found, because every fact it carried was reachable in one or two hops.</li>
+</ul>
+<h2>Corpus-scale defect record</h2>
+<ul>
+<li><a href="defect-history-p-series.md"><code>defect-history-p-series.md</code></a> -- The P-series: defects found by running the lane at corpus scale, each with the proposal it produced. It is history, not the as-built record, and its Known limit section must be read before quoting any figure.</li>
+</ul>
+<h2>Validation plans</h2>
+<ul>
+<li><a href="regression-test-design.md"><code>regression-test-design.md</code></a> -- The pre-registered regression design: per-mechanism recall against a fixed answer key, with the negative controls. Still a draft; if the change ships, it belongs in the plugin.</li>
+<li><a href="parked-test-cpp-corpus.md"><code>parked-test-cpp-corpus.md</code></a> -- The parked corpus removal test: the owner-designed question, the verified Perforce operational facts, and the one prerequisite fix that must land before it runs. Open it to resume without re-deriving the design.</li>
+</ul>
+<h2>Working lists</h2>
+<ul>
+<li><a href="regeneration-ledger.md"><code>regeneration-ledger.md</code></a> -- The audit findings split into workflow flaws to fix and re-test versus observations that are held. Open it before acting on any finding.</li>
+</ul>
+</main>
+<script>
+if (window.parent !== window) {
+  window.parent.postMessage({
+    type: "human-html:announce",
+    version: 1,
+    directory: "docs/planning/md-domain-coverage-lane",
+    file: "index.html",
+    kind: "page",
+    source_sha: "e855325b47bca0fe8f0edc2484e695805d323355"
+  }, "*");
+  document.addEventListener("click", function (event) {
+    if (event.defaultPrevented || event.button !== 0) return;
+    if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    var el = event.target;
+    while (el && el.nodeName !== "A") el = el.parentNode;
+    if (!el) return;
+    var href = el.getAttribute("href");
+    if (!href) return;
+    if (href.charAt(0) === "#" || href.charAt(0) === "/") return;
+    if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(href)) return;
+    var target = href.split("#")[0].split("?")[0];
+    if (!target) return;
+    if (/(^|\/)human(\.[^/]+)?\.html$/.test(target)) return;
+    var parts = "docs/planning/md-domain-coverage-lane".split("/");
+    if (parts.length === 1 && parts[0] === ".") parts = [];
+    var segs = target.split("/");
+    for (var i = 0; i < segs.length; i++) {
+      if (segs[i] === "" || segs[i] === ".") continue;
+      if (segs[i] === "..") { parts.pop(); continue; }
+      parts.push(segs[i]);
+    }
+    event.preventDefault();
+    window.parent.postMessage({
+      type: "human-html:navigate",
+      version: 1,
+      path: parts.join("/")
+    }, "*");
+  });
+}
+</script>
+</body>
+</html>

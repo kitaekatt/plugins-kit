@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "directory": "plugins/skills-kit/.claude-plugin",
+  "decision": "none",
+  "source_sha": "8b7703103d66ed91d4577b183e5b7e5f2dfffe36",
+  "input_sha256": "679fbb8a0aa35fccb99c55db3810f1496eddb3078a962a6487c41ef97a57657c",
+  "input_shape_sha256": "5cecbab11525b1ec0b82b8ce51bfd82ce05a46209979780f44011516bf091070",
+  "dirty": false,
+  "identity": "",
+  "instructions": "",
+  "references": []
+}

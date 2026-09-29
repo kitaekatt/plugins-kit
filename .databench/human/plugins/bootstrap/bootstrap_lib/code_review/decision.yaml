@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "directory": "plugins/bootstrap/bootstrap_lib/code_review",
+  "decision": "page",
+  "source_sha": "99622e15be60cc79d3103b087a1bfcc01ec2166f",
+  "generation_spec_sha256": "0805933a1de089dc951a33d702e9d57d569f0584732b017cd3600742a34ba321",
+  "dirty": false,
+  "identity": "Shared VCS-neutral code-review pipeline for p4-kit and git-kit",
+  "instructions": "",
+  "references": []
+}

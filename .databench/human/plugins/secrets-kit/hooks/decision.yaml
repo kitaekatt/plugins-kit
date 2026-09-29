@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "directory": "plugins/secrets-kit/hooks",
+  "decision": "none",
+  "source_sha": "8d6048d0f6a8782282a17c83534e51cd8913e49b",
+  "dirty": false,
+  "identity": "",
+  "instructions": "",
+  "references": []
+}

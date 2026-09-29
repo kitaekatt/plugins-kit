@@ -1,0 +1,437 @@
+<!doctype html>
+<html lang="en">
+<head>
+<!-- human-html: {"generated_by":"md-domain","source_sha":"643f12d9369feb782fb2867f160070afe82005e9","directory":"plugins/awesome-kit/skills/task/scripts/task_system","kind":"page"} -->
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>The task-system implementation: the typed-unit schemas, task type registry and reference resolution backing the task CLI verbs, plus the discovery, validation, list and review logic those verbs share.</title>
+<style data-human-html-style>
+/* human-html shared style asset -- SA-1.
+ *
+ * The single source of truth for human-html page styling. Every generated page
+ * inlines these exact bytes in one <style data-human-html-style> element
+ * (PC-4); the host viewer imports the same resource for matching chrome
+ * (HV-3). Do not copy these values anywhere else -- a second copy is the
+ * visual drift this asset exists to prevent.
+ *
+ * Dark only, seeded from the host viewer's established dark theme. ASCII only.
+ */
+
+:root {
+  color-scheme: dark;
+
+  --hh-background: #080b10;
+  --hh-text: #d7deea;
+  --hh-heading: #f3f6fb;
+  --hh-muted: #8b98aa;
+  --hh-surface: rgba(15,19,27,.88);
+  --hh-border: #3d4a5e;
+  --hh-link: #5789f4;
+  --hh-link-hover: #7ea3ff;
+  --hh-accent: #4f82f7;
+
+  --hh-font-size: 15px;
+  --hh-line-height: 1.72;
+  --hh-font-body: Inter, ui-sans-serif, system-ui, sans-serif;
+  --hh-font-mono: JetBrains Mono, ui-monospace, monospace;
+
+  --hh-space-1: .35rem;
+  --hh-space-2: .75rem;
+  --hh-space-3: 1rem;
+  --hh-space-4: 1.5rem;
+  --hh-space-5: 2rem;
+  --hh-radius: 6px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  background: var(--hh-background);
+}
+
+body {
+  margin: 0;
+  padding: var(--hh-space-5) var(--hh-space-3);
+  background: var(--hh-background);
+  color: var(--hh-text);
+  font-family: var(--hh-font-body);
+  font-size: var(--hh-font-size);
+  line-height: var(--hh-line-height);
+  -webkit-text-size-adjust: 100%;
+}
+
+main {
+  display: grid;
+  gap: var(--hh-space-5);
+  width: 100%;
+  min-width: 0;
+}
+
+main > header,
+section,
+article,
+.hh-panel {
+  display: grid;
+  gap: var(--hh-space-2);
+  min-width: 0;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  color: var(--hh-heading);
+  line-height: 1.25;
+  margin: 0;
+  font-weight: 600;
+  text-wrap: balance;
+}
+
+h1 {
+  font-size: 1.75rem;
+}
+
+h2 {
+  font-size: 1.3rem;
+}
+
+h3 {
+  font-size: 1.1rem;
+}
+
+p,
+ul,
+ol,
+dl,
+table,
+pre,
+blockquote {
+  margin: 0;
+}
+
+ul,
+ol {
+  padding-left: 1.4em;
+}
+
+li + li {
+  margin-top: var(--hh-space-1);
+}
+
+a {
+  color: var(--hh-link);
+  text-decoration-line: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: .18em;
+}
+
+a:hover,
+a:focus {
+  color: var(--hh-link-hover);
+}
+
+a:focus-visible {
+  outline: 2px solid var(--hh-accent);
+  outline-offset: 2px;
+}
+
+small,
+.hh-muted,
+[data-human-html-muted] {
+  color: var(--hh-muted);
+}
+
+strong {
+  color: var(--hh-heading);
+  font-weight: 600;
+}
+
+hr {
+  border: 0;
+  border-top: 1px solid var(--hh-border);
+  margin: var(--hh-space-5) 0;
+}
+
+code,
+kbd,
+samp,
+pre {
+  font-family: var(--hh-font-mono);
+  font-size: .92em;
+}
+
+code {
+  background: var(--hh-surface);
+  border: 1px solid var(--hh-border);
+  border-radius: 4px;
+  padding: .1em .35em;
+  overflow-wrap: anywhere;
+}
+
+pre {
+  background: var(--hh-surface);
+  border: 1px solid var(--hh-border);
+  border-radius: var(--hh-radius);
+  padding: var(--hh-space-3);
+  max-width: 100%;
+  min-width: 0;
+  overflow: auto;
+  white-space: pre;
+}
+
+pre code {
+  background: none;
+  border: 0;
+  padding: 0;
+  overflow-wrap: normal;
+}
+
+blockquote {
+  border-left: 3px solid var(--hh-accent);
+  padding-left: var(--hh-space-3);
+  color: var(--hh-muted);
+}
+
+dl {
+  display: grid;
+  grid-template-columns: minmax(7rem, .22fr) minmax(0, 1fr);
+  gap: var(--hh-space-1) var(--hh-space-3);
+}
+
+dt {
+  color: var(--hh-heading);
+  font-weight: 600;
+}
+
+dd {
+  min-width: 0;
+  margin: 0;
+}
+
+dt:not(:first-of-type),
+dt:not(:first-of-type) + dd {
+  border-top: 1px solid var(--hh-border);
+  padding-top: var(--hh-space-2);
+}
+
+table {
+  border-collapse: collapse;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  display: block;
+  overflow-x: auto;
+}
+
+th,
+td {
+  border: 1px solid var(--hh-border);
+  padding: .45em .7em;
+  text-align: left;
+  vertical-align: top;
+}
+
+th {
+  color: var(--hh-heading);
+  background: var(--hh-surface);
+  font-weight: 600;
+}
+
+section,
+article,
+.hh-panel {
+  background: transparent;
+}
+
+.hh-panel {
+  background: var(--hh-surface);
+  border: 1px solid var(--hh-border);
+  border-radius: var(--hh-radius);
+  padding: var(--hh-space-3);
+}
+
+[data-human-html-chrome="nav"] {
+  border-bottom: 1px solid var(--hh-border);
+  padding-bottom: var(--hh-space-4);
+  margin-bottom: var(--hh-space-4);
+  font-size: .95em;
+  color: var(--hh-muted);
+}
+
+[data-human-html-chrome="nav"] ul {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 18rem), 1fr));
+  gap: var(--hh-space-2) var(--hh-space-5);
+  list-style: none;
+  margin: 0;
+  padding-left: 0;
+}
+
+[data-human-html-chrome="nav"] li {
+  min-width: 0;
+  margin: 0;
+}
+
+[data-human-html-chrome="nav"] a {
+  display: grid;
+  gap: var(--hh-space-1);
+  min-width: 0;
+  color: var(--hh-link);
+  text-decoration: none;
+}
+
+[data-human-html-chrome="nav"] a:hover,
+[data-human-html-chrome="nav"] a:focus {
+  color: var(--hh-link-hover);
+}
+
+.hh-nav-label {
+  color: currentColor;
+  font-weight: 600;
+  line-height: 1.3;
+  text-decoration-line: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: .18em;
+  overflow-wrap: anywhere;
+}
+
+.hh-nav-identity {
+  color: var(--hh-muted);
+  line-height: 1.45;
+}
+
+/* The human-page card marker (PC-2). A card whose target is another
+ * `index.html` carries this icon; a card pointing at anything else does not,
+ * so the two card kinds stay distinguishable at a glance.
+ *
+ * The icon is a data URI, never a file beside the page and never a remote
+ * asset, so the page renders with nothing fetched (NF-1, PC-6). The `xmlns`
+ * inside the SVG is an XML namespace identifier, not a location: no browser
+ * requests it, and CK-1's URL rules apply to `href` and `src` attributes, not
+ * to a CSS background.
+ *
+ * The icon sits in its own grid column so the label's underline never runs
+ * beneath it, and it scales with the label, so it stays legible at phone
+ * width where the card list collapses to one column.
+ */
+[data-human-html-chrome="nav"] a[href="index.html"],
+[data-human-html-chrome="nav"] a[href="human.html"],
+[data-human-html-chrome="nav"] a[href$="/index.html"],
+[data-human-html-chrome="nav"] a[href$="/human.html"] {
+  grid-template-columns: 1.1em minmax(0, 1fr);
+}
+
+[data-human-html-chrome="nav"] a[href="index.html"]::before,
+[data-human-html-chrome="nav"] a[href="human.html"]::before,
+[data-human-html-chrome="nav"] a[href$="/index.html"]::before,
+[data-human-html-chrome="nav"] a[href$="/human.html"]::before {
+  content: "";
+  grid-column: 1;
+  grid-row: 1;
+  align-self: center;
+  width: 1.1em;
+  height: 1.1em;
+  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cg fill='%235789f4'%3E%3Ccircle cx='8' cy='4.3' r='3.1'/%3E%3Cpath d='M1.5 15.3c0-3.6 2.9-6.3 6.5-6.3s6.5 2.7 6.5 6.3z'/%3E%3C/g%3E%3C/svg%3E") center / contain no-repeat;
+}
+
+[data-human-html-chrome="nav"] a[href="index.html"] .hh-nav-label,
+[data-human-html-chrome="nav"] a[href="human.html"] .hh-nav-label,
+[data-human-html-chrome="nav"] a[href$="/index.html"] .hh-nav-label,
+[data-human-html-chrome="nav"] a[href$="/human.html"] .hh-nav-label {
+  grid-column: 2;
+  grid-row: 1;
+}
+
+[data-human-html-chrome="nav"] a[href="index.html"] .hh-nav-identity,
+[data-human-html-chrome="nav"] a[href="human.html"] .hh-nav-identity,
+[data-human-html-chrome="nav"] a[href$="/index.html"] .hh-nav-identity,
+[data-human-html-chrome="nav"] a[href$="/human.html"] .hh-nav-identity {
+  grid-column: 2;
+  grid-row: 2;
+}
+
+img,
+svg {
+  max-width: 100%;
+  height: auto;
+}
+
+::selection {
+  background: var(--hh-accent);
+  color: var(--hh-background);
+}
+
+@media (max-width: 40rem) {
+  body {
+    padding: var(--hh-space-4) var(--hh-space-2);
+  }
+
+  [data-human-html-chrome="nav"] ul,
+  dl {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  dt:not(:first-of-type) {
+    padding-top: var(--hh-space-2);
+  }
+
+  dt + dd {
+    border-top: 0;
+    padding-top: 0;
+  }
+}
+</style>
+</head>
+<body>
+<main>
+<h1>The task-system implementation: the typed-unit schemas, task type registry and reference resolution backing the task CLI verbs, plus the discovery, validation, list and review logic those verbs share.</h1>
+<p class="hh-orientation">This package is the working implementation behind the task CLI. It keeps the typed-unit rules, the single task type, reference rules, and the shared logic that the verbs use. It keeps one source of truth for task shape, status, and location checks.</p><section><h2>Where to start</h2><p><a href="__init__.py">plugins/awesome-kit/skills/task/scripts/task_system/__init__.py</a> first: it names the package&#x27;s contract and the spec it follows. Then choose a verb module by the action you are changing.</p></section><section><h2>Routes</h2><ul><li><strong>Validate task shape</strong><ol><li><a href="schemas.py">plugins/awesome-kit/skills/task/scripts/task_system/schemas.py</a></li><li><a href="types.py">plugins/awesome-kit/skills/task/scripts/task_system/types.py</a></li><li><a href="task_items.py">plugins/awesome-kit/skills/task/scripts/task_system/task_items.py</a></li><li><a href="validate.py">plugins/awesome-kit/skills/task/scripts/task_system/validate.py</a></li></ol></li><li><strong>Create or change task state</strong><ol><li><a href="init.py">plugins/awesome-kit/skills/task/scripts/task_system/init.py</a></li><li><a href="state_ops.py">plugins/awesome-kit/skills/task/scripts/task_system/state_ops.py</a></li><li><a href="validate.py">plugins/awesome-kit/skills/task/scripts/task_system/validate.py</a></li></ol></li><li><strong>Read the list and review surface</strong><ol><li><a href="discovery.py">plugins/awesome-kit/skills/task/scripts/task_system/discovery.py</a></li><li><a href="listing.py">plugins/awesome-kit/skills/task/scripts/task_system/listing.py</a></li><li><a href="review_html.py">plugins/awesome-kit/skills/task/scripts/task_system/review_html.py</a></li></ol></li></ul></section><section><h2>Typed units and task type</h2><ul><li><a href="schemas.py">plugins/awesome-kit/skills/task/scripts/task_system/schemas.py</a>Schema floors for task.yaml, task_list, and task_items blocks.</li><li><a href="types.py">plugins/awesome-kit/skills/task/scripts/task_system/types.py</a>The registered hand-off type: statuses, priorities, scaffolding, and closure notes.</li><li><a href="task_items.py">plugins/awesome-kit/skills/task/scripts/task_system/task_items.py</a>Reads and checks the plan.md item block and stale priority refs.</li></ul></section><section><h2>References and locations</h2><ul><li><a href="resolve.py">plugins/awesome-kit/skills/task/scripts/task_system/resolve.py</a>Canonicalizes refs to tmp or dev/tasks paths and finds parking spots.</li><li><a href="reference_rewrite.py">plugins/awesome-kit/skills/task/scripts/task_system/reference_rewrite.py</a>Move logic and span-accurate rewrite of task_list references.</li><li><a href="location_ops.py">plugins/awesome-kit/skills/task/scripts/task_system/location_ops.py</a>Archive, delete, and VCS-aware folder disposition.</li></ul></section><section><h2>Discovery and review</h2><ul><li><a href="discovery.py">plugins/awesome-kit/skills/task/scripts/task_system/discovery.py</a>Finds live tasks from folders and embedded references, with skip notes.</li><li><a href="listing.py">plugins/awesome-kit/skills/task/scripts/task_system/listing.py</a>Projects records into list/review rows, sections, projects, and diagnostics.</li><li><a href="review_html.py">plugins/awesome-kit/skills/task/scripts/task_system/review_html.py</a>Renders the self-contained review page from listing data.</li><li><a href="summary_ops.py">plugins/awesome-kit/skills/task/scripts/task_system/summary_ops.py</a>Generates one-line summaries and writes them through the shared state path.</li></ul></section><section><h2>State verbs</h2><ul><li><a href="init.py">plugins/awesome-kit/skills/task/scripts/task_system/init.py</a>Scaffolds a valid active folder and removes it if validation fails.</li><li><a href="state_ops.py">plugins/awesome-kit/skills/task/scripts/task_system/state_ops.py</a>Work, update, close, and reopen with shared task.yaml edits and log entries.</li><li><a href="validate.py">plugins/awesome-kit/skills/task/scripts/task_system/validate.py</a>Classifies a task and emits errors, warnings, and advisory notes.</li></ul></section>
+</main>
+<nav data-human-html-chrome="nav"><ul><li><a href="../../index.html"><span class="hh-nav-label">task</span> <span class="hh-nav-identity">The awesome-kit task skill dispatch surface: the task.py CLI, file-backed task folder model, verb contracts, design specs, and task-system diagrams</span></a></li><li><a href="../../design/task-system-design.md"><span class="hh-nav-label">task-system-design.md</span> <span class="hh-nav-identity">The implementation contract for task units, verbs, and locations.</span></a></li><li><a href="../../design/task-items-design.md"><span class="hh-nav-label">task-items-design.md</span> <span class="hh-nav-identity">The item-enumeration contract behind the items verb.</span></a></li><li><a href="../../references/handoff-template.md"><span class="hh-nav-label">handoff-template.md</span> <span class="hh-nav-identity">The hand-off scaffold and rotation rules the package enforces.</span></a></li></ul></nav>
+<script>
+if (window.parent !== window) {
+  window.parent.postMessage({
+    type: "human-html:announce",
+    version: 1,
+    directory: "plugins/awesome-kit/skills/task/scripts/task_system",
+    file: "index.html",
+    kind: "page",
+    source_sha: "643f12d9369feb782fb2867f160070afe82005e9"
+  }, "*");
+  document.addEventListener("click", function (event) {
+    if (event.defaultPrevented || event.button !== 0) return;
+    if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    var el = event.target;
+    while (el && el.nodeName !== "A") el = el.parentNode;
+    if (!el) return;
+    var href = el.getAttribute("href");
+    if (!href) return;
+    if (href.charAt(0) === "#" || href.charAt(0) === "/") return;
+    if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(href)) return;
+    var target = href.split("#")[0].split("?")[0];
+    if (!target) return;
+    if (/(^|\/)human(\.[^/]+)?\.html$/.test(target)) return;
+    var parts = "plugins/awesome-kit/skills/task/scripts/task_system".split("/");
+    if (parts.length === 1 && parts[0] === ".") parts = [];
+    var segs = target.split("/");
+    for (var i = 0; i < segs.length; i++) {
+      if (segs[i] === "" || segs[i] === ".") continue;
+      if (segs[i] === "..") { parts.pop(); continue; }
+      parts.push(segs[i]);
+    }
+    event.preventDefault();
+    window.parent.postMessage({
+      type: "human-html:navigate",
+      version: 1,
+      path: parts.join("/")
+    }, "*");
+  });
+}
+</script>
+</body>
+</html>

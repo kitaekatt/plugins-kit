@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "directory": "plugins/skills-kit/skills/md-domain",
+  "decision": "none",
+  "source_sha": "8b7703103d66ed91d4577b183e5b7e5f2dfffe36",
+  "input_sha256": "27e790ea49d38c22634ef3184634ce418f760c12f9da3cffd2faf27be86415fd",
+  "input_shape_sha256": "4f261be3ba3af86b9e1f07659c626f9184149613c9573b8ac6ec7f3e0e6d6059",
+  "dirty": false,
+  "identity": "",
+  "instructions": "",
+  "references": []
+}

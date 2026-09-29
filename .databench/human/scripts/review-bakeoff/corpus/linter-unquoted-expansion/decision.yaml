@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "directory": "scripts/review-bakeoff/corpus/linter-unquoted-expansion",
+  "decision": "none",
+  "source_sha": "18daa8a681c85ed9e30a4749b676eb4d643cf801",
+  "dirty": false,
+  "identity": "",
+  "instructions": "",
+  "references": []
+}

@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "directory": "plugins/unreal-kit/skills/ue-python-api/scripts",
+  "decision": "none",
+  "source_sha": "ee22472954abd7625cd18ca618fe643be816b8a4",
+  "dirty": false,
+  "identity": "",
+  "instructions": "",
+  "references": []
+}

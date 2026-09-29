@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "directory": "plugins/awesome-kit/skills/orchestrate/defaults",
+  "decision": "none",
+  "source_sha": "f5bdfa137b741bfaab3fc63afe423e67f0540abc",
+  "dirty": false,
+  "identity": "",
+  "instructions": "",
+  "references": []
+}

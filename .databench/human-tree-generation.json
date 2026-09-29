@@ -1,0 +1,17 @@
+{
+  "schema_version": 2,
+  "state": "in-progress",
+  "finished": {
+    "plugins/awesome-kit/skills/task/scripts/task_system": "8143ca435904e3e243af1fde491f3104c720fadbea3a749f748142037f27b9c8",
+    "plugins/content-pipeline-kit/lib/content_pipeline/execution/drivers": "63a70588bc905ed6723a40ad05eef2ccf7834fef18d3eca1716d682cbf399595",
+    "plugins/awesome-kit/skills/orchestrate/references": "3cadf2c8ad35d63599b808b2762c02c3446db0f72d866e082904cb433b6f339d",
+    "plugins/awesome-kit/skills/task/references": "b80ff74f271500b0c1a0e674265d94b4441ed2e9bd94f115e78de236f4026852",
+    "plugins/llm-scripting-kit/lib/llm_scripting_kit/frontdoor": "a74ec90592385417a59c20d357f55072f15f3dde8793ec20baf12f6179669f21",
+    "plugins/skills-kit/skills/md-domain/scripts": "4586f6d7c91cf48b8f3be93d18d5899c038d2e34919abe93462c9cdcff1c18a4",
+    "plugins/unreal-kit/skills/fix-up-redirectors/scripts": "b52b0ce51f6de48e4e956d38950bcfae3706e788a0781a2a2a6eef963d34bda9",
+    "plugins/yaml-data-editor-kit/lib/yaml_data_editor_kit/comments": "5827be4558f31b34178408511a5fc483d465ca6d70400924477cba39883762f6",
+    "plugins/awesome-kit/skills/task": "9e0750183c04081f0248c47fdceefda41855b78b4fdfc59df37389dab7dd91e5",
+    "plugins/bootstrap/bootstrap_lib/managed_state": "3c902f46a382cf59864a03c98683159e8f9a7aa860f33a451d57736a7b1bc155",
+    "plugins/bootstrap/hooks/sessionstart": "75d8560a325ef31929af53d2768d857cf5b1331cc9d19007d935b4c3f90533b8"
+  }
+}

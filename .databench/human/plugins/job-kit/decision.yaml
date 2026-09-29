@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "directory": "plugins/job-kit",
+  "decision": "page",
+  "source_sha": "c6a73451857b38dd749e5b2a75eb4c5e93764fa9",
+  "generation_spec_sha256": "0805933a1de089dc951a33d702e9d57d569f0584732b017cd3600742a34ba321",
+  "dirty": false,
+  "identity": "The job-kit plugin packaging and startup path that checks bootstrap provisioning and starts the durable agent-job runner under a provisioned venv.",
+  "instructions": "",
+  "references": []
+}

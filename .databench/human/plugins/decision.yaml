@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "directory": "plugins",
+  "decision": "page",
+  "source_sha": "e3003f604b11bb60f0afa2916a846bae7430343e",
+  "dirty": false,
+  "identity": "The Claude Code plugin collection: installable plugins including git and Perforce review, secrets provisioning, statusline display, cache reporting, markdown auditing, stuck-bootstrap remediation, and prototype skills.",
+  "instructions": "",
+  "references": []
+}

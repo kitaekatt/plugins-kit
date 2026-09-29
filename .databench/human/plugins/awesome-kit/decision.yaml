@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "directory": "plugins/awesome-kit",
+  "decision": "none",
+  "source_sha": "024e20a944e6b6838ad1cfb00e12dbaff2164993",
+  "input_sha256": "a33291c40515e4b27ba60e3b72336de7d2a8061f56ed0aa8339e55827fdbd6b1",
+  "input_shape_sha256": "cbe59852215535b562fde77c5de1d32e3b70377e3d2313e16ee36a5edf61c2f1",
+  "dirty": false,
+  "identity": "",
+  "instructions": "",
+  "references": []
+}

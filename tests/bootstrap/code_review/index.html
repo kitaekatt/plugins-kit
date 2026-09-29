@@ -1,0 +1,607 @@
+<!doctype html>
+<html lang="en">
+<head>
+<!-- human-html: {"generated_by":"md-domain","source_sha":"99622e15be60cc79d3103b087a1bfcc01ec2166f","directory":"tests/bootstrap/code_review","kind":"page"} -->
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>Tests for the shared code-review pipeline, reviewer lanes, mechanical checks, and generated git and p4 skill contracts</title>
+<style data-human-html-style>
+/* human-html shared style asset -- SA-1.
+ *
+ * The single source of truth for human-html page styling. Every generated page
+ * inlines these exact bytes in one <style data-human-html-style> element
+ * (PC-4); the host viewer imports the same resource for matching chrome
+ * (HV-3). Do not copy these values anywhere else -- a second copy is the
+ * visual drift this asset exists to prevent.
+ *
+ * Dark only, seeded from the host viewer's established dark theme. ASCII only.
+ */
+
+:root {
+  color-scheme: dark;
+
+  --hh-background: #080b10;
+  --hh-text: #d7deea;
+  --hh-heading: #f3f6fb;
+  --hh-muted: #8b98aa;
+  --hh-surface: rgba(15,19,27,.88);
+  --hh-border: #3d4a5e;
+  --hh-link: #5789f4;
+  --hh-link-hover: #7ea3ff;
+  --hh-accent: #4f82f7;
+
+  --hh-font-size: 15px;
+  --hh-line-height: 1.72;
+  --hh-font-body: Inter, ui-sans-serif, system-ui, sans-serif;
+  --hh-font-mono: JetBrains Mono, ui-monospace, monospace;
+
+  --hh-space-1: .35rem;
+  --hh-space-2: .75rem;
+  --hh-space-3: 1rem;
+  --hh-space-4: 1.5rem;
+  --hh-space-5: 2rem;
+  --hh-radius: 6px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  background: var(--hh-background);
+}
+
+body {
+  margin: 0;
+  padding: var(--hh-space-5) var(--hh-space-3);
+  background: var(--hh-background);
+  color: var(--hh-text);
+  font-family: var(--hh-font-body);
+  font-size: var(--hh-font-size);
+  line-height: var(--hh-line-height);
+  -webkit-text-size-adjust: 100%;
+}
+
+main {
+  display: grid;
+  gap: var(--hh-space-5);
+  width: 100%;
+  min-width: 0;
+}
+
+main > header,
+section,
+article,
+.hh-panel {
+  display: grid;
+  gap: var(--hh-space-2);
+  min-width: 0;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  color: var(--hh-heading);
+  line-height: 1.25;
+  margin: 0;
+  font-weight: 600;
+  text-wrap: balance;
+}
+
+h1 {
+  font-size: 1.75rem;
+}
+
+h2 {
+  font-size: 1.3rem;
+}
+
+h3 {
+  font-size: 1.1rem;
+}
+
+p,
+ul,
+ol,
+dl,
+table,
+pre,
+blockquote {
+  margin: 0;
+}
+
+ul,
+ol {
+  padding-left: 1.4em;
+}
+
+li + li {
+  margin-top: var(--hh-space-1);
+}
+
+a {
+  color: var(--hh-link);
+  text-decoration-line: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: .18em;
+}
+
+a:hover,
+a:focus {
+  color: var(--hh-link-hover);
+}
+
+a:focus-visible {
+  outline: 2px solid var(--hh-accent);
+  outline-offset: 2px;
+}
+
+small,
+.hh-muted,
+[data-human-html-muted] {
+  color: var(--hh-muted);
+}
+
+strong {
+  color: var(--hh-heading);
+  font-weight: 600;
+}
+
+hr {
+  border: 0;
+  border-top: 1px solid var(--hh-border);
+  margin: var(--hh-space-5) 0;
+}
+
+code,
+kbd,
+samp,
+pre {
+  font-family: var(--hh-font-mono);
+  font-size: .92em;
+}
+
+code {
+  background: var(--hh-surface);
+  border: 1px solid var(--hh-border);
+  border-radius: 4px;
+  padding: .1em .35em;
+  overflow-wrap: anywhere;
+}
+
+pre {
+  background: var(--hh-surface);
+  border: 1px solid var(--hh-border);
+  border-radius: var(--hh-radius);
+  padding: var(--hh-space-3);
+  max-width: 100%;
+  min-width: 0;
+  overflow: auto;
+  white-space: pre;
+}
+
+pre code {
+  background: none;
+  border: 0;
+  padding: 0;
+  overflow-wrap: normal;
+}
+
+blockquote {
+  border-left: 3px solid var(--hh-accent);
+  padding-left: var(--hh-space-3);
+  color: var(--hh-muted);
+}
+
+dl {
+  display: grid;
+  grid-template-columns: minmax(7rem, .22fr) minmax(0, 1fr);
+  gap: var(--hh-space-1) var(--hh-space-3);
+}
+
+dt {
+  color: var(--hh-heading);
+  font-weight: 600;
+}
+
+dd {
+  min-width: 0;
+  margin: 0;
+}
+
+dt:not(:first-of-type),
+dt:not(:first-of-type) + dd {
+  border-top: 1px solid var(--hh-border);
+  padding-top: var(--hh-space-2);
+}
+
+table {
+  border-collapse: collapse;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  display: block;
+  overflow-x: auto;
+}
+
+th,
+td {
+  border: 1px solid var(--hh-border);
+  padding: .45em .7em;
+  text-align: left;
+  vertical-align: top;
+}
+
+th {
+  color: var(--hh-heading);
+  background: var(--hh-surface);
+  font-weight: 600;
+}
+
+section,
+article,
+.hh-panel {
+  background: transparent;
+}
+
+.hh-panel {
+  background: var(--hh-surface);
+  border: 1px solid var(--hh-border);
+  border-radius: var(--hh-radius);
+  padding: var(--hh-space-3);
+}
+
+[data-human-html-chrome="nav"] {
+  border-bottom: 1px solid var(--hh-border);
+  padding-bottom: var(--hh-space-4);
+  margin-bottom: var(--hh-space-4);
+  font-size: .95em;
+  color: var(--hh-muted);
+}
+
+[data-human-html-chrome="nav"] ul {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 18rem), 1fr));
+  gap: var(--hh-space-2) var(--hh-space-5);
+  list-style: none;
+  margin: 0;
+  padding-left: 0;
+}
+
+[data-human-html-chrome="nav"] li {
+  min-width: 0;
+  margin: 0;
+}
+
+[data-human-html-chrome="nav"] a {
+  display: grid;
+  gap: var(--hh-space-1);
+  min-width: 0;
+  color: var(--hh-link);
+  text-decoration: none;
+}
+
+[data-human-html-chrome="nav"] a:hover,
+[data-human-html-chrome="nav"] a:focus {
+  color: var(--hh-link-hover);
+}
+
+.hh-nav-label {
+  color: currentColor;
+  font-weight: 600;
+  line-height: 1.3;
+  text-decoration-line: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: .18em;
+  overflow-wrap: anywhere;
+}
+
+.hh-nav-identity {
+  color: var(--hh-muted);
+  line-height: 1.45;
+}
+
+/* The human-page card marker (PC-2). A card whose target is another
+ * `index.html` carries this icon; a card pointing at anything else does not,
+ * so the two card kinds stay distinguishable at a glance.
+ *
+ * The icon is a data URI, never a file beside the page and never a remote
+ * asset, so the page renders with nothing fetched (NF-1, PC-6). The `xmlns`
+ * inside the SVG is an XML namespace identifier, not a location: no browser
+ * requests it, and CK-1's URL rules apply to `href` and `src` attributes, not
+ * to a CSS background.
+ *
+ * The icon sits in its own grid column so the label's underline never runs
+ * beneath it, and it scales with the label, so it stays legible at phone
+ * width where the card list collapses to one column.
+ */
+[data-human-html-chrome="nav"] a[href="index.html"],
+[data-human-html-chrome="nav"] a[href="human.html"],
+[data-human-html-chrome="nav"] a[href$="/index.html"],
+[data-human-html-chrome="nav"] a[href$="/human.html"] {
+  grid-template-columns: 1.1em minmax(0, 1fr);
+}
+
+[data-human-html-chrome="nav"] a[href="index.html"]::before,
+[data-human-html-chrome="nav"] a[href="human.html"]::before,
+[data-human-html-chrome="nav"] a[href$="/index.html"]::before,
+[data-human-html-chrome="nav"] a[href$="/human.html"]::before {
+  content: "";
+  grid-column: 1;
+  grid-row: 1;
+  align-self: center;
+  width: 1.1em;
+  height: 1.1em;
+  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cg fill='%235789f4'%3E%3Ccircle cx='8' cy='4.3' r='3.1'/%3E%3Cpath d='M1.5 15.3c0-3.6 2.9-6.3 6.5-6.3s6.5 2.7 6.5 6.3z'/%3E%3C/g%3E%3C/svg%3E") center / contain no-repeat;
+}
+
+[data-human-html-chrome="nav"] a[href="index.html"] .hh-nav-label,
+[data-human-html-chrome="nav"] a[href="human.html"] .hh-nav-label,
+[data-human-html-chrome="nav"] a[href$="/index.html"] .hh-nav-label,
+[data-human-html-chrome="nav"] a[href$="/human.html"] .hh-nav-label {
+  grid-column: 2;
+  grid-row: 1;
+}
+
+[data-human-html-chrome="nav"] a[href="index.html"] .hh-nav-identity,
+[data-human-html-chrome="nav"] a[href="human.html"] .hh-nav-identity,
+[data-human-html-chrome="nav"] a[href$="/index.html"] .hh-nav-identity,
+[data-human-html-chrome="nav"] a[href$="/human.html"] .hh-nav-identity {
+  grid-column: 2;
+  grid-row: 2;
+}
+
+img,
+svg {
+  max-width: 100%;
+  height: auto;
+}
+
+::selection {
+  background: var(--hh-accent);
+  color: var(--hh-background);
+}
+
+@media (max-width: 40rem) {
+  body {
+    padding: var(--hh-space-4) var(--hh-space-2);
+  }
+
+  [data-human-html-chrome="nav"] ul,
+  dl {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  dt:not(:first-of-type) {
+    padding-top: var(--hh-space-2);
+  }
+
+  dt + dd {
+    border-top: 0;
+    padding-top: 0;
+  }
+}
+</style>
+</head>
+<body>
+<nav data-human-html-chrome="nav" aria-label="Orientation pages">
+  <ul>
+    <li><a href="../index.html"><span class="hh-nav-label">bootstrap</span> <span class="hh-nav-identity">Bootstrap library and CLI test suite for engine behavior, package installation backends, environment checks, and agent skill links</span></a></li>
+  </ul>
+</nav>
+<main>
+  <h1>Tests for the shared code-review pipeline, reviewer lanes, mechanical checks, and generated git and p4 skill contracts</h1>
+  <p>
+    This directory is the pytest suite for the code-review pipeline shared by the
+    git and p4 code-review skills. Every test builds synthetic diff sections or
+    temporary on-disk workspaces instead of parsing real VCS output, so the suite
+    pins the shared half of the pipeline while each kit's front-half stays in its
+    own test suite. The tests split by job: building the review bundle, what a
+    reviewer lane receives and returns, the deterministic checks that run before
+    any lane launches, and the exact prose the rendered skill files carry. Where a
+    test reaches into the plugin trees it is checking generated output against the
+    generator that renders it. Shared fixtures and the shipped-profile pin sit
+    beside the tests, not under a data directory.
+  </p>
+
+  <h2>Where to start</h2>
+  <p>
+    Open <a href="test_skill_drift.py"><code>test_skill_drift.py</code></a> first:
+    its module docstring is the map of the whole suite -- what the two kits share,
+    what the generator renders, and why the byte-identity guard lives here.
+  </p>
+
+  <h2>Routes</h2>
+  <ul>
+    <li>
+      Tune a shipped profile:
+      <a href="shipped_review_profiles.yaml"><code>shipped_review_profiles.yaml</code></a>
+      -&gt;
+      <a href="test_review_profiles.py"><code>test_review_profiles.py</code></a>
+      -- the yaml is the byte-pinned shipped projection the test re-renders and compares.
+    </li>
+    <li>
+      Make a personal convention reach the lanes:
+      <a href="conftest.py"><code>conftest.py</code></a>
+      -&gt;
+      <a href="test_mechanical_config.py"><code>test_mechanical_config.py</code></a>
+      -- the conftest fixture writes the isolated home the config tests target.
+    </li>
+    <li>
+      Change what a lane is told:
+      <a href="test_lane_prompts.py"><code>test_lane_prompts.py</code></a>
+      -&gt;
+      <a href="test_skill_drift.py"><code>test_skill_drift.py</code></a>
+      -- prompt text flows into the rendered skills, and the drift guard re-checks both.
+    </li>
+    <li>
+      Trace a diff into its chunk:
+      <a href="test_pipeline.py"><code>test_pipeline.py</code></a>
+      -&gt;
+      <a href="test_chunking.py"><code>test_chunking.py</code></a>
+      -- the pipeline packs diff sections through the chunker the second file pins.
+    </li>
+  </ul>
+
+  <h2>Building the review bundle</h2>
+  <ul>
+    <li>
+      <a href="test_pipeline.py"><code>test_pipeline.py</code></a>
+      -- the bundle builder: VCS runs, section splitting, claim matching, and which file lands in which chunk.
+    </li>
+    <li>
+      <a href="test_chunking.py"><code>test_chunking.py</code></a>
+      -- byte-balanced chunking with group-aware close rules; open when a chunk boundary looks wrong.
+    </li>
+  </ul>
+
+  <h2>What a reviewer lane sees and returns</h2>
+  <ul>
+    <li>
+      <a href="test_lane_prompts.py"><code>test_lane_prompts.py</code></a>
+      -- prompt assembly, model-alias versus endpoint classification, and which lanes may run where; open when a lane gets the wrong context.
+    </li>
+    <li>
+      <a href="test_lane_output.py"><code>test_lane_output.py</code></a>
+      -- the lane-output parser and citation verification against the bundle; open when a finding lacks a verified citation.
+    </li>
+    <li>
+      <a href="test_review_profiles.py"><code>test_review_profiles.py</code></a>
+      -- profile resolution across shipped, user, and project layers plus model priority; open when a reviewer ends up on the wrong model.
+    </li>
+    <li>
+      <a href="shipped_review_profiles.yaml"><code>shipped_review_profiles.yaml</code></a>
+      -- the byte-pinned shipped projection the profile tests render and compare.
+    </li>
+    <li>
+      <a href="test_effort_agents.py"><code>test_effort_agents.py</code></a>
+      -- the frontmatter contract for the generated effort-agent files in both plugin kits.
+    </li>
+  </ul>
+
+  <h2>The deterministic pre-scan</h2>
+  <ul>
+    <li>
+      <a href="test_mechanical_config.py"><code>test_mechanical_config.py</code></a>
+      -- check configuration across the shipped, user, and project layers, built-in versus personal conventions, and the findings a lane is told about.
+    </li>
+    <li>
+      <a href="test_mechanical_repository.py"><code>test_mechanical_repository.py</code></a>
+      -- the scan framework itself: declared requests, the snapshot overlay, and the target and content limits.
+    </li>
+    <li>
+      <a href="test_local_link_targets.py"><code>test_local_link_targets.py</code></a>
+      -- the markdown broken-link check, including anchor names and what counts as in scope.
+    </li>
+    <li>
+      <a href="test_python_syntax.py"><code>test_python_syntax.py</code></a>
+      -- the Python grammar check keyed to each file's version mapping, and when unavailable grammar must read as uncovered.
+    </li>
+    <li>
+      <a href="test_structured_parse.py"><code>test_structured_parse.py</code></a>
+      -- whole-post-image parse failures for JSON, YAML, and TOML, and how a parser with no line number stays out of findings.
+    </li>
+    <li>
+      <a href="test_triviality.py"><code>test_triviality.py</code></a>
+      -- the triviality profile and its disqualifiers, plus the added-lines-only findings form the lanes receive.
+    </li>
+    <li>
+      <a href="test_machine_emitted.py"><code>test_machine_emitted.py</code></a>
+      -- banner detection for machine-emitted artifacts, and why instructional prose is not a banner.
+    </li>
+    <li>
+      <a href="test_machine_emitted_paths.py"><code>test_machine_emitted_paths.py</code></a>
+      -- detection by declared generated paths, the axis that catches bannerless stubs.
+    </li>
+  </ul>
+
+  <h2>The rendered skill contracts</h2>
+  <ul>
+    <li>
+      <a href="test_skill_drift.py"><code>test_skill_drift.py</code></a>
+      -- the byte-identity guard for both rendered skills; open first when one kit looks out of step.
+    </li>
+    <li>
+      <a href="test_lane_retry_prose.py"><code>test_lane_retry_prose.py</code></a>
+      -- the launch-correction and failed-lane policy prose, kept identical in both kits.
+    </li>
+    <li>
+      <a href="test_submit_gate_prose.py"><code>test_submit_gate_prose.py</code></a>
+      -- the submit-gate evaluation prose: evidence over memory, and when the skill may ask the user for a fact.
+    </li>
+    <li>
+      <a href="test_review_persistence_prose.py"><code>test_review_persistence_prose.py</code></a>
+      -- the disk-artifact and no-PR-comment prose in both skills' gotchas and scope.
+    </li>
+    <li>
+      <a href="test_md_dimension_dispatch.py"><code>test_md_dimension_dispatch.py</code></a>
+      -- the dimension classifier the skill references call, and the fallback when it is unavailable.
+    </li>
+    <li>
+      <a href="test_temporal_prose.py"><code>test_temporal_prose.py</code></a>
+      -- keeps time-relative wording out of the generator, the prepare scripts, and the rendered references.
+    </li>
+  </ul>
+
+  <h2>Shared primitives and fixtures</h2>
+  <ul>
+    <li>
+      <a href="test_claude_mds.py"><code>test_claude_mds.py</code></a>
+      -- the ancestor walk that collects each changed file's governing rule files, plus submit-gate parsing and scope matching.
+    </li>
+    <li>
+      <a href="test_ledger.py"><code>test_ledger.py</code></a>
+      -- the declined-findings ledger: key normalization, baseline invalidation, and the never-collapsed serious findings.
+    </li>
+    <li>
+      <a href="conftest.py"><code>conftest.py</code></a>
+      -- the autouse fixture that isolates the mechanical-config home; open when a test starts reading a real user config.
+    </li>
+  </ul>
+</main>
+<script>
+if (window.parent !== window) {
+  window.parent.postMessage({
+    type: "human-html:announce",
+    version: 1,
+    directory: "tests/bootstrap/code_review",
+    file: "index.html",
+    kind: "page",
+    source_sha: "99622e15be60cc79d3103b087a1bfcc01ec2166f"
+  }, "*");
+  document.addEventListener("click", function (event) {
+    if (event.defaultPrevented || event.button !== 0) return;
+    if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    var el = event.target;
+    while (el && el.nodeName !== "A") el = el.parentNode;
+    if (!el) return;
+    var href = el.getAttribute("href");
+    if (!href) return;
+    if (href.charAt(0) === "#" || href.charAt(0) === "/") return;
+    if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(href)) return;
+    var target = href.split("#")[0].split("?")[0];
+    if (!target) return;
+    if (/(^|\/)human(\.[^/]+)?\.html$/.test(target)) return;
+    var parts = "tests/bootstrap/code_review".split("/");
+    if (parts.length === 1 && parts[0] === ".") parts = [];
+    var segs = target.split("/");
+    for (var i = 0; i < segs.length; i++) {
+      if (segs[i] === "" || segs[i] === ".") continue;
+      if (segs[i] === "..") { parts.pop(); continue; }
+      parts.push(segs[i]);
+    }
+    event.preventDefault();
+    window.parent.postMessage({
+      type: "human-html:navigate",
+      version: 1,
+      path: parts.join("/")
+    }, "*");
+  });
+}
+</script>
+</body>
+</html>

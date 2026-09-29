@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "directory": "tests/workflow-kit/fixtures/good",
+  "decision": "none",
+  "source_sha": "b227de217c48874e25312c1c5072a633a1269f55",
+  "dirty": false,
+  "identity": "",
+  "instructions": "",
+  "references": []
+}

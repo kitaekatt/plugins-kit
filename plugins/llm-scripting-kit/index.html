@@ -1,0 +1,495 @@
+<!doctype html>
+<html lang="en">
+<head>
+<!-- human-html: {"generated_by":"md-domain","source_sha":"9a57413d3efe0f71d67adbd61f0c74fe009dce91","directory":"plugins/llm-scripting-kit","kind":"page"} -->
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>The llm-scripting-kit plugin distribution that provides the installed CLI, local Qwen server scripts, credential setup, and completion-seam reference</title>
+<style data-human-html-style>
+/* human-html shared style asset -- SA-1.
+ *
+ * The single source of truth for human-html page styling. Every generated page
+ * inlines these exact bytes in one <style data-human-html-style> element
+ * (PC-4); the host viewer imports the same resource for matching chrome
+ * (HV-3). Do not copy these values anywhere else -- a second copy is the
+ * visual drift this asset exists to prevent.
+ *
+ * Dark only, seeded from the host viewer's established dark theme. ASCII only.
+ */
+
+:root {
+  color-scheme: dark;
+
+  --hh-background: #080b10;
+  --hh-text: #d7deea;
+  --hh-heading: #f3f6fb;
+  --hh-muted: #8b98aa;
+  --hh-surface: rgba(15,19,27,.88);
+  --hh-border: #3d4a5e;
+  --hh-link: #5789f4;
+  --hh-link-hover: #7ea3ff;
+  --hh-accent: #4f82f7;
+
+  --hh-font-size: 15px;
+  --hh-line-height: 1.72;
+  --hh-font-body: Inter, ui-sans-serif, system-ui, sans-serif;
+  --hh-font-mono: JetBrains Mono, ui-monospace, monospace;
+
+  --hh-space-1: .35rem;
+  --hh-space-2: .75rem;
+  --hh-space-3: 1rem;
+  --hh-space-4: 1.5rem;
+  --hh-space-5: 2rem;
+  --hh-radius: 6px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  background: var(--hh-background);
+}
+
+body {
+  margin: 0;
+  padding: var(--hh-space-5) var(--hh-space-3);
+  background: var(--hh-background);
+  color: var(--hh-text);
+  font-family: var(--hh-font-body);
+  font-size: var(--hh-font-size);
+  line-height: var(--hh-line-height);
+  -webkit-text-size-adjust: 100%;
+}
+
+main {
+  display: grid;
+  gap: var(--hh-space-5);
+  width: 100%;
+  min-width: 0;
+}
+
+main > header,
+section,
+article,
+.hh-panel {
+  display: grid;
+  gap: var(--hh-space-2);
+  min-width: 0;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  color: var(--hh-heading);
+  line-height: 1.25;
+  margin: 0;
+  font-weight: 600;
+  text-wrap: balance;
+}
+
+h1 {
+  font-size: 1.75rem;
+}
+
+h2 {
+  font-size: 1.3rem;
+}
+
+h3 {
+  font-size: 1.1rem;
+}
+
+p,
+ul,
+ol,
+dl,
+table,
+pre,
+blockquote {
+  margin: 0;
+}
+
+ul,
+ol {
+  padding-left: 1.4em;
+}
+
+li + li {
+  margin-top: var(--hh-space-1);
+}
+
+a {
+  color: var(--hh-link);
+  text-decoration-line: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: .18em;
+}
+
+a:hover,
+a:focus {
+  color: var(--hh-link-hover);
+}
+
+a:focus-visible {
+  outline: 2px solid var(--hh-accent);
+  outline-offset: 2px;
+}
+
+small,
+.hh-muted,
+[data-human-html-muted] {
+  color: var(--hh-muted);
+}
+
+strong {
+  color: var(--hh-heading);
+  font-weight: 600;
+}
+
+hr {
+  border: 0;
+  border-top: 1px solid var(--hh-border);
+  margin: var(--hh-space-5) 0;
+}
+
+code,
+kbd,
+samp,
+pre {
+  font-family: var(--hh-font-mono);
+  font-size: .92em;
+}
+
+code {
+  background: var(--hh-surface);
+  border: 1px solid var(--hh-border);
+  border-radius: 4px;
+  padding: .1em .35em;
+  overflow-wrap: anywhere;
+}
+
+pre {
+  background: var(--hh-surface);
+  border: 1px solid var(--hh-border);
+  border-radius: var(--hh-radius);
+  padding: var(--hh-space-3);
+  max-width: 100%;
+  min-width: 0;
+  overflow: auto;
+  white-space: pre;
+}
+
+pre code {
+  background: none;
+  border: 0;
+  padding: 0;
+  overflow-wrap: normal;
+}
+
+blockquote {
+  border-left: 3px solid var(--hh-accent);
+  padding-left: var(--hh-space-3);
+  color: var(--hh-muted);
+}
+
+dl {
+  display: grid;
+  grid-template-columns: minmax(7rem, .22fr) minmax(0, 1fr);
+  gap: var(--hh-space-1) var(--hh-space-3);
+}
+
+dt {
+  color: var(--hh-heading);
+  font-weight: 600;
+}
+
+dd {
+  min-width: 0;
+  margin: 0;
+}
+
+dt:not(:first-of-type),
+dt:not(:first-of-type) + dd {
+  border-top: 1px solid var(--hh-border);
+  padding-top: var(--hh-space-2);
+}
+
+table {
+  border-collapse: collapse;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  display: block;
+  overflow-x: auto;
+}
+
+th,
+td {
+  border: 1px solid var(--hh-border);
+  padding: .45em .7em;
+  text-align: left;
+  vertical-align: top;
+}
+
+th {
+  color: var(--hh-heading);
+  background: var(--hh-surface);
+  font-weight: 600;
+}
+
+section,
+article,
+.hh-panel {
+  background: transparent;
+}
+
+.hh-panel {
+  background: var(--hh-surface);
+  border: 1px solid var(--hh-border);
+  border-radius: var(--hh-radius);
+  padding: var(--hh-space-3);
+}
+
+[data-human-html-chrome="nav"] {
+  border-bottom: 1px solid var(--hh-border);
+  padding-bottom: var(--hh-space-4);
+  margin-bottom: var(--hh-space-4);
+  font-size: .95em;
+  color: var(--hh-muted);
+}
+
+[data-human-html-chrome="nav"] ul {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 18rem), 1fr));
+  gap: var(--hh-space-2) var(--hh-space-5);
+  list-style: none;
+  margin: 0;
+  padding-left: 0;
+}
+
+[data-human-html-chrome="nav"] li {
+  min-width: 0;
+  margin: 0;
+}
+
+[data-human-html-chrome="nav"] a {
+  display: grid;
+  gap: var(--hh-space-1);
+  min-width: 0;
+  color: var(--hh-link);
+  text-decoration: none;
+}
+
+[data-human-html-chrome="nav"] a:hover,
+[data-human-html-chrome="nav"] a:focus {
+  color: var(--hh-link-hover);
+}
+
+.hh-nav-label {
+  color: currentColor;
+  font-weight: 600;
+  line-height: 1.3;
+  text-decoration-line: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: .18em;
+  overflow-wrap: anywhere;
+}
+
+.hh-nav-identity {
+  color: var(--hh-muted);
+  line-height: 1.45;
+}
+
+/* The human-page card marker (PC-2). A card whose target is another
+ * `index.html` carries this icon; a card pointing at anything else does not,
+ * so the two card kinds stay distinguishable at a glance.
+ *
+ * The icon is a data URI, never a file beside the page and never a remote
+ * asset, so the page renders with nothing fetched (NF-1, PC-6). The `xmlns`
+ * inside the SVG is an XML namespace identifier, not a location: no browser
+ * requests it, and CK-1's URL rules apply to `href` and `src` attributes, not
+ * to a CSS background.
+ *
+ * The icon sits in its own grid column so the label's underline never runs
+ * beneath it, and it scales with the label, so it stays legible at phone
+ * width where the card list collapses to one column.
+ */
+[data-human-html-chrome="nav"] a[href="index.html"],
+[data-human-html-chrome="nav"] a[href="human.html"],
+[data-human-html-chrome="nav"] a[href$="/index.html"],
+[data-human-html-chrome="nav"] a[href$="/human.html"] {
+  grid-template-columns: 1.1em minmax(0, 1fr);
+}
+
+[data-human-html-chrome="nav"] a[href="index.html"]::before,
+[data-human-html-chrome="nav"] a[href="human.html"]::before,
+[data-human-html-chrome="nav"] a[href$="/index.html"]::before,
+[data-human-html-chrome="nav"] a[href$="/human.html"]::before {
+  content: "";
+  grid-column: 1;
+  grid-row: 1;
+  align-self: center;
+  width: 1.1em;
+  height: 1.1em;
+  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cg fill='%235789f4'%3E%3Ccircle cx='8' cy='4.3' r='3.1'/%3E%3Cpath d='M1.5 15.3c0-3.6 2.9-6.3 6.5-6.3s6.5 2.7 6.5 6.3z'/%3E%3C/g%3E%3C/svg%3E") center / contain no-repeat;
+}
+
+[data-human-html-chrome="nav"] a[href="index.html"] .hh-nav-label,
+[data-human-html-chrome="nav"] a[href="human.html"] .hh-nav-label,
+[data-human-html-chrome="nav"] a[href$="/index.html"] .hh-nav-label,
+[data-human-html-chrome="nav"] a[href$="/human.html"] .hh-nav-label {
+  grid-column: 2;
+  grid-row: 1;
+}
+
+[data-human-html-chrome="nav"] a[href="index.html"] .hh-nav-identity,
+[data-human-html-chrome="nav"] a[href="human.html"] .hh-nav-identity,
+[data-human-html-chrome="nav"] a[href$="/index.html"] .hh-nav-identity,
+[data-human-html-chrome="nav"] a[href$="/human.html"] .hh-nav-identity {
+  grid-column: 2;
+  grid-row: 2;
+}
+
+img,
+svg {
+  max-width: 100%;
+  height: auto;
+}
+
+::selection {
+  background: var(--hh-accent);
+  color: var(--hh-background);
+}
+
+@media (max-width: 40rem) {
+  body {
+    padding: var(--hh-space-4) var(--hh-space-2);
+  }
+
+  [data-human-html-chrome="nav"] ul,
+  dl {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  dt:not(:first-of-type) {
+    padding-top: var(--hh-space-2);
+  }
+
+  dt + dd {
+    border-top: 0;
+    padding-top: 0;
+  }
+}
+</style>
+</head>
+<body>
+<nav data-human-html-chrome="nav" aria-label="Orientation pages">
+  <ul>
+    <li><a href="../index.html"><span class="hh-nav-label">plugins</span> <span class="hh-nav-identity">The Claude Code plugin collection: installable plugins including git and Perforce review, secrets provisioning, statusline display, cache reporting, markdown auditing, stuck-bootstrap remediation, and prototype skills.</span></a></li>
+<li><a href="lib/llm_scripting_kit/index.html"><span class="hh-nav-label">llm_scripting_kit</span> <span class="hh-nav-identity">The llm-scripting-kit package that resolves credentials, endpoints, models, reachability, quota pacing, and completion backends for configured model calls.</span></a></li>
+    <li>
+      <a href="README.md">
+        <span class="hh-nav-label">README.md</span>
+        <span class="hh-nav-identity">The human-facing CLI reference: every verb with an example, the exit codes, and the credential and endpoint axes.</span>
+      </a>
+    </li>
+  </ul>
+</nav>
+<main>
+  <h1>The llm-scripting-kit plugin distribution that provides the installed CLI, local Qwen server scripts, credential setup, and completion-seam reference</h1>
+  <p>This directory is the llm-scripting-kit plugin distribution: the installed command, the local Qwen server tooling, the session-start credential pass, and the reference the fleet reads for how a completion call is made. It is deliberately thin. The verbs, the endpoint registry, and the completion backends are implemented in the Python package one level down, and that package carries its own page. What stays here is the shell surface around that package -- the shims on PATH, the measured server profiles, the bootstrap pass -- plus the documentation. Hold the split: a change to a verb belongs below this directory; a change to a shim, a server profile, or the docs belongs here.</p>
+
+  <h2>Where to start</h2>
+  <p>Start with <a href="README.md"><code>README.md</code></a>, the human-facing reference: every CLI verb with an example, the exit-code table, and how the configured, reachable, and quota axes differ.</p>
+
+  <h2>Routes</h2>
+  <ul>
+    <li>The installed command: <a href="bin/llm-scripting-kit"><code>bin/llm-scripting-kit</code></a> and its Windows twin pick a Python interpreter and exec <a href="scripts/llm_scripting_kit_cli.py"><code>scripts/llm_scripting_kit_cli.py</code></a>, which puts the bundled library on the path and hands off to the verbs implemented in the Python package, covered by its own page.</li>
+    <li>Launch a Qwen profile: <a href="bin/qwen36-server"><code>bin/qwen36-server</code></a>, <a href="bin/qwen38-server"><code>bin/qwen38-server</code></a>, and <a href="bin/qwen38l-server"><code>bin/qwen38l-server</code></a> each exec <a href="scripts/model-server.sh"><code>scripts/model-server.sh</code></a> with their profile, which assembles the measured NInfer or llama.cpp command line.</li>
+    <li>Swap the resident server: <a href="bin/qwen-switch"><code>bin/qwen-switch</code></a> runs <a href="scripts/qwen-switch.sh"><code>scripts/qwen-switch.sh</code></a>, which stops the identified listener on the profile port and relaunches <a href="scripts/model-server.sh"><code>scripts/model-server.sh</code></a> detached.</li>
+    <li>Session-start credential pass: <a href="bootstrap.json"><code>bootstrap.json</code></a> points the bootstrap engine at <a href="custom_bootstrap.py"><code>custom_bootstrap.py</code></a>, which migrates the renamed data dir, resolves the key, and defers or validates it.</li>
+  </ul>
+
+  <h2>The installed command</h2>
+  <ul>
+    <li><a href="bin/llm-scripting-kit"><code>bin/llm-scripting-kit</code></a> -- the Unix shim: picks the plugin venv Python, then the standalone Python, then PATH, and execs the launcher. Open it when the command starts under the wrong interpreter.</li>
+    <li><a href="bin/llm-scripting-kit.cmd"><code>bin/llm-scripting-kit.cmd</code></a> -- the Windows twin of the same shim, with the same interpreter ladder and the same guard against a Store stub.</li>
+    <li><a href="scripts/llm_scripting_kit_cli.py"><code>scripts/llm_scripting_kit_cli.py</code></a> -- the interpreter-agnostic launcher the shims exec; it adds the bundled library to the path and delegates to the package CLI, which owns every subcommand.</li>
+  </ul>
+
+  <h2>Local Qwen servers</h2>
+  <ul>
+    <li><a href="scripts/model-server.sh"><code>scripts/model-server.sh</code></a> -- the canonical launcher for the three measured profiles: qwen36 and qwen38 through NInfer, qwen38l through llama.cpp. All bind localhost and port 8080 by default, so only one profile serves at a time.</li>
+    <li><a href="scripts/qwen-switch.sh"><code>scripts/qwen-switch.sh</code></a> -- replaces the resident server: stops the identified listener, starts the launcher detached, and waits for the profile's exact model id.</li>
+    <li><a href="bin/qwen36-server"><code>bin/qwen36-server</code></a>, <a href="bin/qwen38-server"><code>bin/qwen38-server</code></a>, <a href="bin/qwen38l-server"><code>bin/qwen38l-server</code></a> -- one-line shims, one per profile, that exec <a href="scripts/model-server.sh"><code>scripts/model-server.sh</code></a> with the matching profile; the trailing l in the name marks the llama.cpp path.</li>
+    <li><a href="bin/qwen-switch"><code>bin/qwen-switch</code></a> -- the PATH shim for <a href="scripts/qwen-switch.sh"><code>scripts/qwen-switch.sh</code></a>, so the short name works from any working directory.</li>
+  </ul>
+
+  <h2>Credential setup</h2>
+  <ul>
+    <li><a href="bootstrap.json"><code>bootstrap.json</code></a> -- declares the venv extras, the shared-library link into the package, and the session-start script the bootstrap engine runs.</li>
+    <li><a href="custom_bootstrap.py"><code>custom_bootstrap.py</code></a> -- the session-start pass itself: migrates the pre-rename data dir, resolves the key through env, project, and user layers, and either defers a missing key or validates it against a seven-day hash cache.</li>
+    <li><a href="skills/openrouter-account/SKILL.md"><code>skills/openrouter-account/SKILL.md</code></a> -- the skill for the key's day-to-day: preflight it at the point of need, set or rotate it, and split HTTP 401 (rotate the key) from 402 (top up the account).</li>
+  </ul>
+
+  <h2>Documentation and contracts</h2>
+  <ul>
+    <li><a href="README.md"><code>README.md</code></a> -- the human-facing reference: every CLI verb with an example, the exit-code table, and the configured, reachable, and quota axes side by side.</li>
+    <li><a href="CLAUDE.md"><code>CLAUDE.md</code></a> -- the agent-facing companion: what this layer owns, the reachability and pacing invariants, and the per-transport rules. Open it when reviewing or changing behavior the human-facing reference only sketches.</li>
+    <li><a href="references/completion-seam-contract.md"><code>references/completion-seam-contract.md</code></a> -- the per-call contract of the completion seam: what each adapter advertises before a call and what the response reports after. Read it before changing an adapter, a capability record, or the complete verb.</li>
+  </ul>
+
+  <h2>Packaging</h2>
+  <ul>
+    <li><a href="pyproject.toml"><code>pyproject.toml</code></a> -- package metadata and the CLI entry point; the sdk and frontdoor extras pull in the OpenAI SDK and the frontdoor stack.</li>
+    <li><a href=".claude-plugin/plugin.json"><code>.claude-plugin/plugin.json</code></a> -- the plugin manifest: name, version, keywords, and the bootstrap dependency.</li>
+    <li><a href="scripts/frontdoor.sh"><code>scripts/frontdoor.sh</code></a> -- runs the package frontdoor module under the plugin venv Python; print-command shows the command without running it.</li>
+  </ul>
+</main>
+<script>
+if (window.parent !== window) {
+  window.parent.postMessage({
+    type: "human-html:announce",
+    version: 1,
+    directory: "plugins/llm-scripting-kit",
+    file: "index.html",
+    kind: "page",
+    source_sha: "9a57413d3efe0f71d67adbd61f0c74fe009dce91"
+  }, "*");
+  document.addEventListener("click", function (event) {
+    if (event.defaultPrevented || event.button !== 0) return;
+    if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    var el = event.target;
+    while (el && el.nodeName !== "A") el = el.parentNode;
+    if (!el) return;
+    var href = el.getAttribute("href");
+    if (!href) return;
+    if (href.charAt(0) === "#" || href.charAt(0) === "/") return;
+    if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(href)) return;
+    var target = href.split("#")[0].split("?")[0];
+    if (!target) return;
+    if (/(^|\/)human(\.[^/]+)?\.html$/.test(target)) return;
+    var parts = "plugins/llm-scripting-kit".split("/");
+    if (parts.length === 1 && parts[0] === ".") parts = [];
+    var segs = target.split("/");
+    for (var i = 0; i < segs.length; i++) {
+      if (segs[i] === "" || segs[i] === ".") continue;
+      if (segs[i] === "..") { parts.pop(); continue; }
+      parts.push(segs[i]);
+    }
+    event.preventDefault();
+    window.parent.postMessage({
+      type: "human-html:navigate",
+      version: 1,
+      path: parts.join("/")
+    }, "*");
+  });
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "directory": "plugins/workflow-kit/workflow_kit_lib",
+  "decision": "page",
+  "source_sha": "4ad89c1c0cc5eddc26b1f5334302f4e7e379544b",
+  "generation_spec_sha256": "0805933a1de089dc951a33d702e9d57d569f0584732b017cd3600742a34ba321",
+  "dirty": false,
+  "identity": "Workflow Kit library that validates workflow YAML and compiles it to Claude Code Workflow tool scripts",
+  "instructions": "",
+  "references": []
+}

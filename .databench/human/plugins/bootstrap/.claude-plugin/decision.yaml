@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "directory": "plugins/bootstrap/.claude-plugin",
+  "decision": "none",
+  "source_sha": "7c12b3c7b5a44d90cdcf4fbc07c9661c6fe68fd7",
+  "input_sha256": "7aabb54277a95724982e243794f993f9cc8d3e7b82d51c9d45ba6645a87480b3",
+  "input_shape_sha256": "afdd71ce4af88c77352d404506aa8f05a50aaa9fb43177d23d9279f8d720dd50",
+  "dirty": false,
+  "identity": "",
+  "instructions": "",
+  "references": []
+}
