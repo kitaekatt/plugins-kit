@@ -492,10 +492,12 @@ comes back empty, finalize, then read the run: if it is halted, clear the
 halt with `execution.controller.resume_run` once its condition has cleared
 (a halted run yields no claims, so looping without it never makes progress);
 if `unfinished_units` still lists a unit in the CLAIMED state, it is held
-by an earlier crashed or refused attempt and is not offered again until its
-lease has expired and it has been reclaimed -- the inline driver does not
-reclaim it, so wait out the lease and use a driver that reaps (the
-background or workflow lane), or stop and report it; if the run is not halted
+by an earlier crashed or refused attempt and is not offered again by default.
+Pass `reclaim_at=time.time()` to `prepare_run`: a unit whose lease has
+expired is then offered again and `run_wave` reclaims it (fence + 1). A live
+lease, or a unit under an open dispatch, is never offered, and a unit already
+reclaimed twice is failed terminally as `reclaim_exhausted`. Otherwise wait
+out the lease, or stop and report it; if the run is not halted
 and `unfinished_units` is empty, it is complete. Cap the loop, and stop when
 one full pass changes nothing.
 

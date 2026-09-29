@@ -408,6 +408,7 @@ def prepare_run(
     max_wave_size: Optional[int] = None,
     worker_id: str = DEFAULT_PREPARE_WORKER_ID,
     at: Optional[float] = None,
+    reclaim_at: Optional[float] = None,
 ) -> List[UnitRecord]:
     """Evaluate gates and freshness, record terminal skips, materialize a wave.
 
@@ -477,6 +478,20 @@ def prepare_run(
     :func:`~content_pipeline.execution.wave.ready_wave` computed AFTER all
     skips above have landed, so a just-skipped unit is not reported as
     claimable to a caller reading the returned wave.
+
+    ``reclaim_at`` (default ``None``: off) is a clock reading. When given,
+    a unit left ``CLAIMED`` whose lease expired at or before it -- a prior
+    inline run that died mid-unit -- is offered again, in ordinal position,
+    alongside the ``PENDING`` units; the driver's own claim then reclaims it
+    (fence + 1, an ``EXPIRE`` attempt). It is opt-in because a lane that
+    tracks its workers separately (background dispatch) must not have a unit
+    re-offered under an open dispatch: a unit with an open dispatch is never
+    offered, and a live lease never is. A unit that has already been reclaimed
+    the maximum number of times is failed terminally (``reclaim_exhausted``)
+    instead of being offered. Gates and freshness are not re-run for a
+    reclaimed unit; it passed them when first claimed. ``max_wave_size`` caps
+    the flat wave including reclaimed units; a graph strategy releases at most
+    one unit, as before.
     """
     if is_graph_strategy(strategy):
         _validate_graph_order(store, run_id, strategy, graph_source)
@@ -510,7 +525,61 @@ def prepare_run(
                 )
                 continue
 
-    return ready_wave(store, run_id, strategy, max_wave_size=max_wave_size)
+    if reclaim_at is None:
+        return ready_wave(store, run_id, strategy, max_wave_size=max_wave_size)
+    return _wave_with_reclaims(store, run_id, strategy, max_wave_size, reclaim_at)
+
+
+def _wave_with_reclaims(
+    store: ExecutionStore,
+    run_id: str,
+    strategy: WorkUnitStrategy,
+    max_wave_size: Optional[int],
+    reclaim_at: float,
+) -> List[UnitRecord]:
+    """The ready wave plus expired CLAIMED units that are safe to re-offer."""
+    # Imported here: workerpack is a driver-side module and owns the reclaim
+    # selection (expired lease, no open dispatch) and the reclaim limit.
+    from content_pipeline.execution.model import (
+        AlreadyClaimedError,
+        RunHaltedError,
+        TerminalStateError,
+    )
+    from content_pipeline.execution.workerpack import (
+        DEFAULT_MAX_RECLAIMS_PER_UNIT,
+        _terminally_fail_exhausted_unit,
+        reclaim_attempt_count,
+        reclaimable_units,
+    )
+
+    safe: List[UnitRecord] = []
+    for unit in reclaimable_units(store, run_id, at=reclaim_at):
+        if reclaim_attempt_count(store, run_id, unit.unit_id) >= DEFAULT_MAX_RECLAIMS_PER_UNIT:
+            try:
+                _terminally_fail_exhausted_unit(
+                    store, run_id, unit.unit_id, dispatcher_id="prepare-reclaim", at=reclaim_at
+                )
+            except RunHaltedError:
+                break
+            except (TerminalStateError, AlreadyClaimedError):
+                pass
+            continue
+        safe.append(unit)
+    safe_ids = {u.unit_id for u in safe}
+
+    if is_graph_strategy(strategy):
+        wave = ready_wave(
+            store, run_id, strategy, max_wave_size=max_wave_size, reclaim_at=reclaim_at
+        )
+        # ready_wave treats every expired CLAIMED unit as ready; keep only
+        # those that passed the open-dispatch and reclaim-limit screen.
+        return [
+            u for u in wave if u.state is not UnitState.CLAIMED or u.unit_id in safe_ids
+        ]
+
+    pending = ready_wave(store, run_id, strategy)
+    merged = sorted(pending + safe, key=lambda u: u.ordinal)
+    return merged[:max_wave_size] if max_wave_size is not None else merged
 
 
 # ---------------------------------------------------------------------------
