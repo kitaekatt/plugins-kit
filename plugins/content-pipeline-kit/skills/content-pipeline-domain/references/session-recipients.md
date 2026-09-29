@@ -154,6 +154,34 @@ as file CONTENT: the envelopes the worker authors, and the fence line of its
 answer file. Nothing that has to be allowlisted ahead of time ever varies
 with it.
 
+The permission mode does not stand in for that allowlist (live probe, claude
+CLI 2.1.284, 2026-09-29). Under `auto`, a `claude --bg` worker ran `rm -rf` on
+a directory outside its working directory without asking, so `auto` is not a
+safety boundary for an unattended worker. It refused a `git push --force` by
+stopping to ask: the session parked in agents state `blocked` until someone
+answered, so a refused action costs a hung worker, which `dispatch_wave`
+settles as `blocked`. `--permission-mode default` alone is not strict either:
+the worker inherits user-level settings, and a broad allow list there let
+ordinary commands run unattended. Adding `--setting-sources project` isolates
+the worker from user-level settings, and a command outside the allowlist then
+parks the session `blocked` (waitingFor "permission prompt"). What ran
+unattended: `--permission-mode default --setting-sources project
+--allowedTools "Bash(<exact command>)" Write`, one `Bash(...)` entry per
+literal invocation. Pass these through `extra_launch_args`; the driver places
+`--` between them and the prompt, which matters because `--allowedTools` is
+variadic and would otherwise consume the prompt. `acceptEdits` auto-approved
+both a Write and a `touch`, so it is looser than `default`.
+
+`--setting-sources project` and the shipped `pipeline-worker` agent do not
+combine when the plugin is enabled only in user settings (live probe, claude
+CLI 2.1.284, 2026-09-29): `--agent content-pipeline-kit:pipeline-worker` printed
+`warning: no agent named 'content-pipeline-kit:pipeline-worker' -- spawning with
+default template` and launched anyway, exit code unchanged. The warning goes to
+the launcher's output, which `dispatch_wave` reports as `launch_stderr` only on
+a failed launch, so do not expect to see it. Whether enabling the plugin in the
+project's own settings restores the agent under `--setting-sources project` was
+not probed.
+
 Build your worker's allowlist from those six computed strings, not from a
 broader grant (e.g. "any invocation of my protocol mount"). A broad grant
 reopens exactly the gap the enumerated-invocation design closes: a worker
@@ -274,12 +302,16 @@ where you select an agent definition: this plugin's shipped
 discipline), or one you write yourself. The default is empty, so the
 dispatcher selects no agent unless you ask for one.
 
-Know one thing before you rely on it: whether agent-selecting flags compose
-with a background launch, rather than being accepted and dropped, has not
-been established. The launcher exits 0 either way, so the only way to tell is
-to observe what a worker actually does. Treat an agent definition as a way to
-strengthen a worker's discipline, and the launch prompt as the constraint you
-can count on.
+Know one thing before you rely on it: an agent-selecting flag can be accepted
+and dropped. It composed in one probe (live probe, claude CLI 2.1.238,
+2026-08-21: `--agent content-pipeline-kit:pipeline-worker` with
+`--append-system-prompt-file` on `claude --bg`; the worker reported only the
+agent's tools, Bash and Write, and echoed a marker from the appended file). It
+was dropped in another (see the `--setting-sources project` paragraph above).
+The launcher exits 0 either way, so for your CLI version and settings, observe
+what a worker actually does. Treat an agent definition as a way to strengthen
+a worker's discipline, and the launch prompt as the constraint you can count
+on.
 
 ## Rules to carry into your own worker prompt or agent definition
 

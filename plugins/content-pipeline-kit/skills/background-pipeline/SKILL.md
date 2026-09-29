@@ -142,6 +142,11 @@ directory's trust first.
 Remedy: run `claude` once in the launch directory, accept the trust prompt,
 then call `dispatch_wave` again.
 
+Trust is per exact directory. A subdirectory of a trusted directory is not
+trusted, and `claude --bg` launched from it fails with "Workspace not trusted"
+(live probe, claude CLI 2.1.284, 2026-09-29). Launch from the exact directory
+that was trusted.
+
 ## Configurable: `max_agents` and `batch_size`
 
 These are the only two settings this skill treats as a genuine power-user
@@ -211,11 +216,15 @@ know before you rely on it. First, a worker is governed by its launch prompt
 regardless: the prompt built for each unit names the run id, unit id, worker
 id, and answer path, enumerates the exact invocations the worker may run, and
 states the rule against composing a shell construct to satisfy a step.
-Second, whether agent-selecting flags compose with a background launch rather
-than being accepted and dropped has not been established -- the launcher
-exits 0 either way, so the only way to tell is to observe what a worker
-actually does. Treat an agent definition as extra discipline on top of the
-launch prompt, not as a substitute for it.
+Second, an agent-selecting flag can be accepted and dropped. It composed with
+`claude --bg` on claude CLI 2.1.238 (live probe, 2026-08-21) and was dropped
+under `--setting-sources project` with the plugin enabled only in user
+settings (2026-09-29; see the reference below). The launcher exits 0 either
+way and `dispatch_wave` surfaces its output only on a failed launch, so
+observe what a worker actually does. Treat an agent definition as extra discipline on top of the
+launch prompt, not as a substitute for it. The same seam carries permission
+flags; see "The allowlist your worker needs" in the content-pipeline-domain
+`session-recipients.md` reference.
 
 ## Reading the report
 
