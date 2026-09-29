@@ -129,7 +129,7 @@ def test_launch_bg_argv_is_positional_prompt_never_dash_p():
     cli = _cli(runner)
     cli.launch_bg("do the thing")
     argv, kwargs = runner.calls[-1]
-    assert argv == ["claude", "--bg", "do the thing"]
+    assert argv == ["claude", "--bg", "--", "do the thing"]
 
 
 def test_launch_bg_extra_args_come_before_the_positional_prompt():
@@ -138,7 +138,21 @@ def test_launch_bg_extra_args_come_before_the_positional_prompt():
     cli = _cli(runner)
     cli.launch_bg("prompt text", extra_args=["--permission-mode", "manual"])
     argv, _ = runner.calls[-1]
-    assert argv == ["claude", "--bg", "--permission-mode", "manual", "prompt text"]
+    assert argv == ["claude", "--bg", "--permission-mode", "manual", "--", "prompt text"]
+
+
+def test_launch_bg_ends_variadic_extra_args_before_the_prompt_separator():
+    runner = FakeRunner()
+    runner.script(("claude", "--bg"), real_launch_response())
+    cli = _cli(runner)
+    prompt = "worker prompt"
+    cli.launch_bg(
+        prompt,
+        extra_args=("--allowedTools", "Bash(git --version)", "Write"),
+    )
+    argv, _ = runner.calls[-1]
+    assert argv[-1] == prompt
+    assert argv[-2] == "--"
 
 
 def test_agents_json_default_requests_all_sessions():
@@ -2652,13 +2666,14 @@ def test_dispatch_wave_forwards_extra_launch_args_to_the_launcher(tmp_path):
     """The seam: a consumer selects the shipped worker agent (or any other
     launch flag) by passing `extra_launch_args` to `dispatch_wave`, which
     reaches `ClaudeCli.launch_bg` unaltered and in order, ahead of the
-    positional prompt."""
+    positional prompt, after the end-of-options separator."""
     argv = _dispatch_one_and_capture_launch_argv(
         tmp_path, extra_launch_args=("--agent", "pipeline-worker")
     )
     assert argv[:4] == ["claude", "--bg", "--agent", "pipeline-worker"]
-    assert len(argv) == 5
-    assert argv[4].startswith("Run id: run-1\n")
+    assert argv[4] == "--"
+    assert len(argv) == 6
+    assert argv[5].startswith("Run id: run-1\n")
 
 
 def test_dispatch_wave_forwards_a_model_flag_through_extra_launch_args(tmp_path):
@@ -2685,14 +2700,15 @@ def test_dispatch_wave_docstring_states_the_model_declaration_contract():
 
 
 def test_dispatch_wave_default_launch_argv_is_byte_identical_without_the_seam(tmp_path):
-    """REFUSAL DIRECTION: passing no seam argument must launch exactly what
-    the driver launched before the seam existed -- [exe, "--bg", prompt] and
-    nothing else. The driver must never select an agent on its own: whether
-    `--agent` composes with `--bg` at all is not established."""
+    """REFUSAL DIRECTION: passing no seam argument must launch exactly
+    [exe, "--bg", "--", prompt] and nothing else. The driver must never
+    select an agent on its own: whether `--agent` composes with `--bg` at
+    all is not established."""
     argv = _dispatch_one_and_capture_launch_argv(tmp_path)
     assert argv[:2] == ["claude", "--bg"]
-    assert len(argv) == 3
-    assert argv[2].startswith("Run id: run-1\n")
+    assert argv[2] == "--"
+    assert len(argv) == 4
+    assert argv[3].startswith("Run id: run-1\n")
 
 
 # ---------------------------------------------------------------------------

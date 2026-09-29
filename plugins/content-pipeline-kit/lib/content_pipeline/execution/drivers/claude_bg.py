@@ -53,6 +53,10 @@
 
 Command construction (claude --bg command shape) -- read before adding a method
 ------------------------------------------------------------------------------
+Background launches use ``[exe, "--bg", *extra_args, "--", prompt]``. The
+end-of-options separator protects the positional prompt from variadic flags
+such as ``--allowedTools`` and from prompts that start with ``-``.
+
 The lifecycle verbs (``stop``, ``rm``, ``respawn`` -- and ``logs``,
 deliberately never given a method here, see below) are **top-level**:
 ``claude <verb> <id>``. ``claude agents <verb> <id>`` is silently accepted
@@ -312,11 +316,14 @@ class ClaudeCli:
         cwd: Optional[str] = None,
         timeout: Optional[float] = None,
     ) -> Tuple[str, str, int]:
-        """``claude --bg [extra_args...] <prompt>``. ``prompt`` is positional
-        (claude --bg command shape): a background session takes no ``-p``, and mixing the two is a
-        hard usage error (see :func:`preflight` step 6)."""
+        """``claude --bg [extra_args...] -- <prompt>``. ``prompt`` is positional
+        (claude --bg command shape): a background session takes no ``-p``, and
+        mixing the two is a hard usage error (see :func:`preflight` step 6). The
+        ``--`` separator keeps a variadic flag such as ``--allowedTools`` from
+        consuming the prompt, and a prompt starting with ``-`` from being read as
+        a flag."""
         exe = self.resolve_executable()
-        argv = [exe, "--bg", *extra_args, prompt]
+        argv = [exe, "--bg", *extra_args, "--", prompt]
         return self._invoke(argv, env=env, cwd=cwd, timeout=timeout)
 
     def agents_json(
@@ -1837,7 +1844,8 @@ def dispatch_wave(
     ``extra_launch_args`` is the LAUNCH-ARGS SEAM: a sequence of ``claude``
     flags forwarded verbatim, in order, to :func:`dispatch_unit` and thence
     to :meth:`ClaudeCli.launch_bg`, which places them between ``--bg`` and
-    the positional prompt. It is how a consumer selects a worker agent --
+    the end-of-options separator before the positional prompt. It is how a
+    consumer selects a worker agent --
     e.g. ``extra_launch_args=("--agent", "pipeline-worker")`` for the agent
     definition this plugin ships, or its own agent name -- and how any other
     launch flag (a permission mode, a system-prompt file) reaches the
@@ -1858,7 +1866,7 @@ def dispatch_wave(
     per the observed-transition rule it could only be judged by a worker's behavior, never by the
     launcher's exit code, which is 0 either way). Selecting an agent by
     default would therefore ship a possible silent no-op. With the default
-    the launch argv is exactly ``[exe, "--bg", prompt]``, and the launch
+    the launch argv is exactly ``[exe, "--bg", "--", prompt]``, and the launch
     prompt built by :func:`build_launch_prompt` is self-contained: it names
     the run, unit, worker and answer path, enumerates the exact invocations
     the worker may run, and carries the no-shell-construct rule. A worker
