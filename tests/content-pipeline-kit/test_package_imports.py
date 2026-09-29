@@ -61,7 +61,6 @@ _SUBPACKAGES = [
     "content_pipeline.cli",
     "content_pipeline.cli.scaffold",
     "content_pipeline.cli.budget",
-    "content_pipeline.cli.bulk",
     "content_pipeline.cli.unsupported",
     "content_pipeline.cli.run",
     "content_pipeline.execution",

@@ -1,8 +1,8 @@
 """Budget guard / hard-stop on 429/401, auth-expiry preflight.
 
-A bulk CLI run checks its credentials before starting (auth-expiry preflight,
+A CLI run checks its credentials before starting (auth-expiry preflight,
 so a run does not burn partial progress before discovering an expired key) and
-halts cleanly mid-sweep on a hard-stop (a 429 rate-limit or 401 auth-failure
+halts cleanly mid-run on a hard-stop (a 429 rate-limit or 401 auth-failure
 that persists across calls -- retrying the next unit would only burn budget
 against a dead credential). The whole point is a CLEAN stop with PARTIAL
 progress reported, so a resume loop picks up where it left off.
@@ -15,9 +15,7 @@ already raises; it does not re-implement provider-error classification.
 
 from __future__ import annotations
 
-import warnings
-from dataclasses import dataclass, field
-from typing import Any, Callable, List, Optional, Sequence, Tuple
+from typing import Any, Callable, List, Optional, Sequence
 
 from content_pipeline.llm.platform import (
     PipelineHaltError,
@@ -78,8 +76,7 @@ def check_response(response: Any) -> None:
     Inspects a response's text channel (``response.text`` or ``str(response)``)
     for a persistent-failure marker via ``llm.classify_halt_text`` -- the
     text-channel hard-stop the CLI backend surfaces even on a 200 envelope. A
-    marker raises ``PipelineHaltError`` (so a surrounding :func:`guarded_sweep` catches
-    it); a clean response returns ``None``.
+    marker raises ``PipelineHaltError`` (which a caller's halt handling catches); a clean response returns ``None``.
     """
     text = getattr(response, "text", None)
     if text is None:
@@ -89,100 +86,8 @@ def check_response(response: Any) -> None:
         raise PipelineHaltError(kind, text[:200])
 
 
-@dataclass
-class SweepResult:
-    """Outcome of a :func:`guarded_sweep`.
-
-    - ``done`` -- ``(unit, result)`` for units the worker completed.
-    - ``errors`` -- ``(unit, message)`` for units whose worker raised a
-      non-halt error (isolated, the sweep continued).
-    - ``halted`` -- the :class:`BudgetStop` that stopped the sweep, or ``None``
-      when the sweep ran to completion.
-    - ``remaining`` -- units not attempted (non-empty only after a halt).
-    """
-
-    done: List[Tuple[Any, Any]] = field(default_factory=list)
-    errors: List[Tuple[Any, str]] = field(default_factory=list)
-    halted: Optional[BudgetStop] = None
-    remaining: List[Any] = field(default_factory=list)
-
-    @property
-    def stopped(self) -> bool:
-        return self.halted is not None
-
-
-_DEPRECATION_MSG = (
-    "guarded_sweep is a deprecated untracked loop helper: it keeps no durable "
-    "run record and its halt semantics are frozen. Use the tracked path "
-    "instead: content_pipeline.execution.controller.prepare_run, "
-    "content_pipeline.execution.drivers.inline.run_wave, "
-    "content_pipeline.execution.controller.finalize_run, and "
-    "content_pipeline.execution.controller.unfinished_units to recover the "
-    "unfinished set after a halt."
-)
-
-
-def guarded_sweep(
-    units: Sequence[Any],
-    worker: Callable[[Any], Any],
-    *,
-    isolate_errors: bool = True,
-) -> SweepResult:
-    """Deprecated: run ``worker`` over ``units``, halting on the first hard-stop.
-
-    Emits a ``DeprecationWarning`` once per call, then delegates to the
-    private ``_guarded_sweep`` (whose docstring describes the behavior).
-    """
-    warnings.warn(_DEPRECATION_MSG, DeprecationWarning, stacklevel=2)
-    return _guarded_sweep(units, worker, isolate_errors=isolate_errors)
-
-
-def _guarded_sweep(
-    units: Sequence[Any],
-    worker: Callable[[Any], Any],
-    *,
-    isolate_errors: bool = True,
-) -> SweepResult:
-    """Run ``worker`` over ``units``, halting cleanly on the first hard-stop.
-
-    For each unit the worker runs; a
-    :class:`~content_pipeline.llm.platform.PipelineHaltError` halts the whole sweep
-    (records a :class:`BudgetStop` carrying done/remaining and stops -- the
-    remaining units are NOT attempted, since the credential is dead). A non-halt
-    exception is isolated per unit when ``isolate_errors`` (recorded on
-    ``errors``, the sweep continues) or propagated otherwise. Returns a
-    :class:`SweepResult`; the caller reports partial progress and can resume
-    from ``remaining``.
-    """
-    units = list(units)
-    result = SweepResult()
-    for index, unit in enumerate(units):
-        try:
-            outcome = worker(unit)
-        except PipelineHaltError as exc:
-            remaining = units[index + 1 :]
-            done_units = [u for u, _ in result.done]
-            result.halted = BudgetStop(
-                exc.kind,
-                unit_id=str(unit),
-                done=done_units,
-                remaining=remaining,
-            )
-            result.remaining = remaining
-            break
-        except Exception as exc:  # noqa: BLE001 -- isolate one unit's failure
-            if not isolate_errors:
-                raise
-            result.errors.append((unit, str(exc)))
-            continue
-        result.done.append((unit, outcome))
-    return result
-
-
 __all__ = [
     "BudgetStop",
     "preflight_check",
     "check_response",
-    "SweepResult",
-    "guarded_sweep",
 ]

@@ -348,6 +348,11 @@ telemetry, and nothing establishes they run the warning release even once before
 a breaking one. Under this plan's sequencing the question loses urgency --
 deprecation sits in A-cleanup and gates nothing.
 
+**Note (2026-09-29).** The user waived this evidence rule and ruled the helpers
+removable in 0.28.0: "I'm comfortable removing this now, I am the only
+consumer, I'll fix it as I go." The decision text above is unchanged; the
+waiver rests on there being one consumer, who accepts the break.
+
 ## Invariants
 
 One-line contracts, enforced by A-min tests and restated in the protocol
@@ -1112,10 +1117,13 @@ own sake.
   `platform.response_cost` does (reported cost, else a pricing-table
   estimate, else `None`). llm-scripting-kit's `completion/backends.py` repeats
   the flat-zero claim; that copy is left for the llm-effort work.
-- (5) Still open. D7 needs both known consumers migrated, or six months after
-  the deprecation release; `loc.py` still calls `guarded_sweep`. The window
-  starts at the release carrying (1), content-pipeline-kit 0.27.0, which is
-  not yet published.
+- (5) Done (2026-09-29). `run_single_pass`, `guarded_sweep` and `run_bulk`
+  are removed in content-pipeline-kit 0.28.0, with their tests. The user
+  waived D7's evidence rule as the only consumer (see D7's note). `cli.budget`
+  keeps `BudgetStop`, `preflight_check` and `check_response`;
+  `pipeline/single_pass.py` keeps `run`, `seed_for` and the `Gate` /
+  `run_gates` aliases. `loc.py`'s `guarded_sweep` call in the consuming
+  repository breaks and is the consumer's to migrate.
 - (6) Done. `Gate` and `run_gates` live in `pipeline/gate.py`;
   `pipeline/single_pass.py` re-exports both, and the aliases are tested by
   `test_pipeline_gate_aliases.py`.
