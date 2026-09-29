@@ -66,6 +66,8 @@ by writing the library's own template text and substituting only the literal
 `<FENCING_TOKEN>` placeholder with the fencing token its launch prompt names.
 For `fail`, also replace `<FAILURE_DETAIL_JSON>` with one nonempty JSON string
 literal.
+The mount dispatches an envelope file only when its body carries the verb and
+the run/unit ids in the file's name; change nothing else in the template.
 -- see step 3 of the procedure below.
 
 The block below shows those six invocations for one fully worked example

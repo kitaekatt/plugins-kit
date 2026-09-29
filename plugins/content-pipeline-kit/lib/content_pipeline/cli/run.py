@@ -87,6 +87,18 @@ no fence line at all are each refused with a typed reply -- never spliced
 and never treated as unfenced-and-fine. Only the first line is interpreted,
 so answer text that itself contains the prefix passes through untouched.
 
+**A worker-shaped file name bounds the envelope body.** A worker authors the
+body of the file an allowlisted ``@<path>`` invocation names, so an
+``@<path>`` whose file name has the worker shape
+(``<run>__<unit>.<verb>.json``; ``<run>__<unit>__<worker>.claim.json``) is
+dispatched only when the body's ``verb`` is the verb in the name and its
+run/unit (and worker, for claim) ids reproduce that name
+(``workerpack.envelope_file_mismatch``); otherwise the reply is
+``EnvelopeIdentityError``. A worker file therefore cannot carry
+``finalize``/``resume``/``pause``/``prepare`` or address another unit. Files
+with other names, stdin, and literal argv are not checked -- an orchestrator
+uses those, and the worker's allowlist never names them.
+
 **Why stdin is preferred, not merely tidier.** With the envelope in argv,
 every unit produces a DIFFERENT command string (the JSON payload varies per
 call), so a permission allowlist that must match exact command strings can
@@ -410,6 +422,7 @@ def build_commands(
 
         def protocol(args: List[str]) -> Any:
             positional, flags = _split_flags(args)
+            envelope_file: Optional[str] = None
             if not positional or positional[0] == "-":
                 # Preferred form (see module docstring): stdin, decoded as
                 # UTF-8 explicitly -- never the platform default, which on
@@ -436,6 +449,7 @@ def build_commands(
                     }
             elif positional[0].startswith("@"):
                 path = positional[0][1:]
+                envelope_file = path
                 try:
                     envelope_text = Path(path).read_text(encoding="utf-8")
                 except FileNotFoundError:
@@ -467,6 +481,16 @@ def build_commands(
                     "ok": False,
                     "error": {"type": "MalformedEnvelopeError", "message": f"invalid JSON: {exc}"},
                 }
+
+            if envelope_file is not None:
+                from content_pipeline.execution.workerpack import envelope_file_mismatch
+
+                mismatch = envelope_file_mismatch(envelope_file, envelope)
+                if mismatch is not None:
+                    return {
+                        "ok": False,
+                        "error": {"type": "EnvelopeIdentityError", "message": mismatch},
+                    }
 
             if "text-file" in flags:
                 # Worker-lane companion to '@<path>' (see module docstring):

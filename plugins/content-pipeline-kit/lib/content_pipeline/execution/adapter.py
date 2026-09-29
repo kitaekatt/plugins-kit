@@ -380,9 +380,12 @@ class WorkerEnvironment:
     def check(self, recorded: Mapping[str, str], *, run_id: str = "") -> None:
         """Refuse (:class:`WorkerEnvironmentMismatchError`) when the CURRENT
         process's environment disagrees with ``recorded`` (the run's stored
-        snapshot). Exact string equality throughout for ``required_vars`` /
-        ``require_cwd`` -- never resolved-location equality (DECIDED, module
-        docstring). A default ``WorkerEnvironment()`` (nothing declared) is
+        snapshot). String equality for ``required_vars`` / ``require_cwd`` --
+        exact for an ordinary var, path-text equality (``_same_path_text``:
+        case- and separator-insensitive on a case-insensitive host such as
+        Windows, identity on POSIX) for a var also named in ``cwd_vars`` and
+        for ``require_cwd`` -- never resolved-location equality against the
+        recorded value (DECIDED, module docstring). A default ``WorkerEnvironment()`` (nothing declared) is
         always a no-op, regardless of ``recorded``'s content.
 
         Deliberate asymmetry, worth restating so a later reader does not
@@ -391,7 +394,7 @@ class WorkerEnvironment:
         change since the run was created. ``cwd_vars``, below, compares this
         worker against ITS OWN ``os.getcwd()`` -- is THIS worker in the right
         place, regardless of what was recorded. Different questions, so
-        different comparisons: the former is exact string equality against
+        different comparisons: the former is string equality against
         ``recorded``; the latter is resolved-location equality against this
         process's own cwd, via the same ``_resolve_against_cwd`` helper
         :func:`require_creatable_environment` uses at create-run time.

@@ -43,6 +43,15 @@ from content_pipeline.execution.store import ExecutionStore
 
 DEFAULT_THROUGHPUT_WINDOW_S = 300.0
 DEFAULT_MAX_FAILURE_GROUPS = 5
+# Cap on the unit ids listed for the two apply states that need an operator
+# (the counts stay exact past the cap).
+MAX_APPLY_UNIT_IDS = 50
+
+APPLY_KINDS = (
+    AttemptKind.APPLY_STARTED,
+    AttemptKind.APPLY_SUCCEEDED,
+    AttemptKind.APPLY_REJECTED,
+)
 
 _CODE_LENGTH = 12
 
@@ -59,6 +68,28 @@ def _classify(text: Optional[str]) -> str:
     if not text:
         return ""
     return hashlib.sha256(text.encode("utf-8")).hexdigest()[:_CODE_LENGTH]
+
+
+def apply_states(units: List[Any], attempts: List[Any]) -> Dict[str, str]:
+    """``{unit_id: apply state}`` for every ACCEPTED unit.
+
+    The state is derived from the unit's LAST apply-kind attempt, the same
+    rule ``finalize_run`` uses: ``not_applied`` (none), ``applied``
+    (succeeded), ``apply_rejected`` (the adapter declined with no side
+    effect), or ``apply_unknown`` (started, never finished). ``attempts``
+    may hold other kinds; they are ignored.
+    """
+    last: Dict[str, AttemptKind] = {}
+    for a in attempts:
+        if a.kind in APPLY_KINDS:
+            last[a.unit_id] = a.kind
+    names = {
+        None: "not_applied",
+        AttemptKind.APPLY_SUCCEEDED: "applied",
+        AttemptKind.APPLY_REJECTED: "apply_rejected",
+        AttemptKind.APPLY_STARTED: "apply_unknown",
+    }
+    return {u.unit_id: names[last.get(u.unit_id)] for u in units if u.state is UnitState.ACCEPTED}
 
 
 @dataclass(frozen=True)
@@ -116,6 +147,13 @@ class RunStatus:
     halted_kind: Optional[str]
     halted_detail_code: str
     halted_at: Optional[float]
+    # Apply-axis outcome per ACCEPTED unit (an accepted unit stays terminal
+    # on the unit axis whatever its apply did): counts for not_applied /
+    # applied / apply_rejected / apply_unknown, plus the ids of the two
+    # states an operator must act on. Ids only -- never the adapter's reason.
+    apply_counts: Dict[str, int] = field(default_factory=dict)
+    apply_rejected_unit_ids: List[str] = field(default_factory=list)
+    apply_unknown_unit_ids: List[str] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
         """A plain-dict rendering suitable for YAML output (``cli.run``)."""
@@ -139,15 +177,23 @@ def compute_status(
     when = time.time() if now is None else now
     window_start = when - throughput_window_s
 
-    # Only FAIL attempts inside the throughput window are ever consulted
-    # below (recent_failures/failed_in_window); every other attempt kind,
-    # and every FAIL outside the window, is read and then discarded. Push
-    # both restrictions into the store's own filtered read instead.
-    run, units, attempts = store.snapshot(
-        run_id, attempt_kinds=(AttemptKind.FAIL,), attempts_since=window_start
+    # Only FAIL attempts (narrowed to the throughput window below) and the
+    # apply-kind attempts (every one, since apply state is a unit's LAST
+    # apply attempt whenever it happened) are consulted; push the kind
+    # restriction into the store's own filtered read.
+    run, units, all_attempts = store.snapshot(
+        run_id, attempt_kinds=(AttemptKind.FAIL,) + APPLY_KINDS
     )
     if run is None:
         raise KeyError(f"no such run: {run_id!r}")
+    attempts = [
+        a for a in all_attempts if a.kind is AttemptKind.FAIL and a.at >= window_start
+    ]
+    unit_apply_states = apply_states(units, all_attempts)
+    apply_counts = {
+        state: sum(1 for v in unit_apply_states.values() if v == state)
+        for state in ("not_applied", "applied", "apply_rejected", "apply_unknown")
+    }
 
     counts: Counter = Counter(u.state.value for u in units)
     for state in UnitState:
@@ -262,6 +308,13 @@ def compute_status(
         halted_kind=run.halted_kind,
         halted_detail_code=_classify(run.halted_detail),
         halted_at=run.halted_at,
+        apply_counts=apply_counts,
+        apply_rejected_unit_ids=[
+            u for u, v in unit_apply_states.items() if v == "apply_rejected"
+        ][:MAX_APPLY_UNIT_IDS],
+        apply_unknown_unit_ids=[
+            u for u, v in unit_apply_states.items() if v == "apply_unknown"
+        ][:MAX_APPLY_UNIT_IDS],
     )
 
 
@@ -269,6 +322,9 @@ __all__ = [
     "DEFAULT_THROUGHPUT_WINDOW_S",
     "DEFAULT_MAX_FAILURE_GROUPS",
     "FailureGroup",
+    "APPLY_KINDS",
+    "MAX_APPLY_UNIT_IDS",
+    "apply_states",
     "RunStatus",
     "compute_status",
 ]

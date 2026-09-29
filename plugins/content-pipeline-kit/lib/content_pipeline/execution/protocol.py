@@ -89,6 +89,7 @@ from content_pipeline.execution.controller import (
     prepare_run,
     resume_run,
 )
+from content_pipeline.execution.status import APPLY_KINDS, apply_states
 from content_pipeline.execution.model import (
     ExecutionError,
     UnitRecord,
@@ -566,7 +567,16 @@ def build_handlers(
         run = _get_run_or_raise(store, run_id)
         require_compatible_adapter(run, adapter)
         applied = finalize_run(store, run_id, adapter)
-        return {"run_id": run_id, "applied": applied}
+        # Accepted units whose apply the adapter declined (no side effect):
+        # terminal on the apply axis and otherwise invisible, since the unit
+        # itself stays ACCEPTED. Reported on every finalize, standing ones too.
+        _run, units, attempts = store.snapshot(run_id, attempt_kinds=APPLY_KINDS)
+        rejected = [
+            uid
+            for uid, state in apply_states(sorted(units, key=lambda u: u.ordinal), attempts).items()
+            if state == "apply_rejected"
+        ]
+        return {"run_id": run_id, "applied": applied, "rejected": rejected}
 
     return {
         "prepare": _prepare,

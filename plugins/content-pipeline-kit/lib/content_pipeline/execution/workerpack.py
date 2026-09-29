@@ -545,6 +545,70 @@ def claim_envelope_text(run_id: str, unit_id: str, worker_id: str) -> str:
     return json.dumps(envelope, indent=2) + "\n"
 
 
+_WORKER_FILE_VERBS: Tuple[str, ...] = ("claim", "read", "submit", "fail")
+
+
+def envelope_file_mismatch(path: str, envelope: Any) -> Optional[str]:
+    """Why ``envelope`` may not be dispatched from the file at ``path``, or
+    ``None`` when it may.
+
+    A worker writes the body of the envelope file that an allowlisted
+    ``protocol @<path>`` invocation names, while the dispatcher fixes the
+    file NAME. A name of the worker shape -- ``<run>__<unit>.<verb>.json``
+    for ``read``/``submit``/``fail``, ``<run>__<unit>__<worker>.claim.json``
+    for ``claim`` -- therefore bounds what the body may say: its ``verb``
+    must be the verb in the name, and its ``run_id``/``unit_id`` (and
+    ``worker_id`` for ``claim``) must produce exactly that file name. A body
+    that names another verb (``finalize``, ``resume``) or another unit is
+    refused. A file with any other name is not a worker file and is not
+    checked.
+    """
+    name = os.path.basename(path)
+    suffix = next(
+        (v for v in _WORKER_FILE_VERBS if name.endswith(f".{v}.json")),
+        None,
+    )
+    if suffix is None:
+        return None
+    # Worker shape only: the stem before ".<verb>.json" holds the "__"
+    # separator every enumerated path carries (sanitized ids may themselves
+    # contain "_" or "__", which keeps it present). Other names are not
+    # worker files.
+    if "__" not in name[: -len(f".{suffix}.json")]:
+        return None
+    if not isinstance(envelope, dict):
+        return f"envelope file {name!r} must hold a JSON object"
+    verb = envelope.get("verb")
+    if verb != suffix:
+        return (
+            f"envelope file {name!r} may only carry the {suffix!r} verb, "
+            f"not {verb!r}"
+        )
+    payload = envelope.get("payload")
+    if not isinstance(payload, dict):
+        payload = {}
+    run_id, unit_id = payload.get("run_id"), payload.get("unit_id")
+    if not isinstance(run_id, str) or not isinstance(unit_id, str):
+        return f"envelope file {name!r} must name its run_id and unit_id"
+    if suffix == "claim":
+        worker_id = payload.get("worker_id")
+        if not isinstance(worker_id, str):
+            return f"envelope file {name!r} must name its worker_id"
+        expected = os.path.basename(
+            claim_envelope_path_for(WorkerCommand(argv=(), answer_dir=""), run_id, unit_id, worker_id)
+        )
+    else:
+        expected = os.path.basename(
+            envelope_path_for(WorkerCommand(argv=(), answer_dir=""), run_id, unit_id, suffix)
+        )
+    if expected != name:
+        return (
+            f"envelope file {name!r} does not belong to the run/unit"
+            f"{'/worker' if suffix == 'claim' else ''} its body names"
+        )
+    return None
+
+
 def enumerate_workflow_invocations(
     worker_command: WorkerCommand, run_id: str, unit_id: str, worker_id: str
 ) -> Tuple[str, str, str, str, str, str, str]:
@@ -620,10 +684,10 @@ def build_wave_args(
     supplied and is a graph strategy, the post-reap candidate list (step
     (a)) is narrowed to the single unit
     :func:`~content_pipeline.execution.wave.ready_wave` admits (against the
-    run's live state, not the reap-processed subset -- a reclaimable unit
-    reported by :func:`reclaimable_units` is not yet actually ``PENDING``
-    until a worker's own ``claim`` reclaims it, so it is not itself
-    "ready" by the graph rule); ``max_wave_size`` greater than 1 against a
+    run's live state, not the reap-processed subset; the lookup passes
+    ``reclaim_at`` so a unit whose claim expired counts as ready and is
+    re-offered -- the worker's own ``claim`` reclaims it -- while a unit
+    behind a live claim is never admitted); ``max_wave_size`` greater than 1 against a
     graph strategy raises the same
     :class:`~content_pipeline.execution.wave.UnsafeGraphParallelismError`
     ``ready_wave`` itself raises, eagerly, before any further work. When
@@ -752,7 +816,16 @@ def build_wave_args(
         if is_graph_strategy(strategy):
             # Raises eagerly, same as `ready_wave` itself, before the
             # (already-committed) reap work above is second-guessed.
-            admitted_ids = {u.unit_id for u in ready_wave(store, run_id, strategy, max_wave_size=max_wave_size)}
+            # `reclaim_at=now`: a unit whose claim expired is re-offered
+            # here (the agent's own claim reclaims it), so a graph run whose
+            # agent died after claiming is not wedged behind an empty wave.
+            # A unit behind a LIVE claim is still never admitted.
+            admitted_ids = {
+                u.unit_id
+                for u in ready_wave(
+                    store, run_id, strategy, max_wave_size=max_wave_size, reclaim_at=now
+                )
+            }
             selected = [u for u in selected if u.unit_id in admitted_ids]
         elif max_wave_size is not None:
             selected = selected[:max_wave_size]
@@ -840,6 +913,7 @@ __all__ = [
     "claim_envelope_text",
     "enumerate_workflow_invocations",
     "enumerate_worker_invocations",
+    "envelope_file_mismatch",
     "envelope_path_for",
     "format_fenced_answer",
     "parse_fenced_answer",

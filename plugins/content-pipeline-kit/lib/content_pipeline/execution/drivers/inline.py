@@ -188,9 +188,15 @@ def run_wave(
     field.
 
     Exactly one of ``generate`` or ``backend`` must be supplied. The
-    ``backend`` path additionally requires ``adapter.parse_fn`` and
-    ``adapter.user_for`` (``adapter.system_for`` defaults to an empty system
-    prompt). ``**submit_kwargs`` forwards to
+    ``backend`` path additionally requires a way to build the request
+    (``adapter.build_request`` or ``adapter.user_for``; ``system_for``
+    defaults to an empty system prompt) and a way to validate it
+    (``adapter.validation_spec_for`` or ``adapter.parse_fn``), and reads both
+    through ``adapter.resolve_prepared_request`` and
+    ``adapter.resolve_validation_spec`` -- the same resolvers the protocol
+    ``read``/``submit`` verbs and ``finalize_run`` use, so every lane builds
+    the same prompt and judges the same response. A ``context`` or
+    ``block_soft`` keyword the caller passes still wins over the spec's. ``**submit_kwargs`` forwards to
     :func:`~content_pipeline.llm.platform.submit_validated` (and, through it,
     to ``call_llm`` -- e.g. ``cache_dir``, ``pricing``, ``max_attempts``).
 
@@ -209,9 +215,13 @@ def run_wave(
         adapter = RunAdapter()
     if (generate is None) == (backend is None):
         raise ValueError("run_wave requires exactly one of `generate` or `backend`")
-    if backend is not None and (adapter.parse_fn is None or adapter.user_for is None):
+    if backend is not None and (
+        (adapter.build_request is None and adapter.user_for is None)
+        or (adapter.validation_spec_for is None and adapter.parse_fn is None)
+    ):
         raise ValueError(
-            "the `backend` path requires both `adapter.parse_fn` and `adapter.user_for`"
+            "the `backend` path requires `adapter.build_request` or `adapter.user_for`, "
+            "and `adapter.validation_spec_for` or `adapter.parse_fn`"
         )
     if backend is not None:
         # Name this run in the front door's access log, but only as a DEFAULT:
@@ -249,16 +259,18 @@ def run_wave(
             if generate is not None:
                 text = generate(work_unit)
             else:
-                system = adapter.system_for(work_unit) if adapter.system_for is not None else ""
-                user = adapter.user_for(work_unit)  # type: ignore[misc]
+                request = adapter.resolve_prepared_request(work_unit)
+                spec = adapter.resolve_validation_spec(work_unit)
+                loop_kwargs = {"context": spec.context, "block_soft": spec.block_soft}
+                loop_kwargs.update(submit_kwargs)
                 result = submit_validated(
                     backend=backend,  # type: ignore[arg-type]
-                    system=system,
-                    user=user,
+                    system=request.system,
+                    user=request.user,
                     model=model,
-                    parse_fn=adapter.parse_fn,  # type: ignore[arg-type]
-                    validators=adapter.validators,
-                    **submit_kwargs,
+                    parse_fn=spec.parse_fn,
+                    validators=spec.validators,
+                    **loop_kwargs,
                 )
                 if not result.accepted:
                     raise UnacceptedSubmissionError(unit.unit_id, result.rejections)

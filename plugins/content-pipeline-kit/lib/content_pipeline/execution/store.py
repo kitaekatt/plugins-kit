@@ -784,9 +784,17 @@ class ExecutionStore:
         at: float,
         worker_id: Optional[str] = None,
         fencing_token: Optional[int] = None,
-        error: Optional[str] = None,
+        error: Union[str, Mapping, Sequence, None] = None,
         usage: Optional[UsageRecord] = None,
     ) -> None:
+        if error is not None and not isinstance(error, str):
+            # A structured failure detail (a JSON object or list from a
+            # worker) is stored as its JSON text, so the fail is recorded
+            # rather than refused; the same length cap applies below.
+            try:
+                error = json.dumps(error, sort_keys=True, default=str)
+            except (TypeError, ValueError):
+                error = str(error)
         conn.execute(
             "INSERT INTO attempts(run_id, unit_id, kind, at, worker_id, fencing_token, error, "
             "input_tokens, output_tokens, cache_hit_tokens) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -1026,7 +1034,7 @@ class ExecutionStore:
         unit_id: str,
         fencing_token: int,
         *,
-        error: str = "",
+        error: Union[str, Mapping, Sequence] = "",
         terminal: bool = False,
         terminal_state: UnitState = UnitState.FAILED,
         usage: Optional[UsageRecord] = None,
