@@ -2247,6 +2247,133 @@ def test_dispatch_wave_aborts_when_the_dispatcher_lease_is_lost(tmp_path, monkey
     assert run.dispatcher_id == "rival-dispatcher"  # the rival's takeover held
 
 
+def test_dispatch_wave_slow_launch_can_lose_lease_before_attach(tmp_path, monkeypatch):
+    """REPRODUCTION: the launch itself can consume most of the lease.
+
+    With the DEFAULT confirmation window, the original dispatcher raises
+    ``NoOpenDispatchError`` when a rival settles the row before attachment.
+    """
+    store = _seeded_dispatch_store(tmp_path)
+    wc = _worker_command(tmp_path)
+    monkeypatch.setattr(claude_bg, "_mint_worker_id", lambda: "our-dispatcher")
+    clock = {"t": 1000.0}
+    launched = {"done": False}
+    agents_calls = {"n": 0}
+    lifecycle_calls = []
+    own_acquires = []
+    real_acquire = store.acquire_dispatcher_lease
+
+    def _record_acquire(run_id, dispatcher_id, **kwargs):
+        result = real_acquire(run_id, dispatcher_id, **kwargs)
+        if dispatcher_id == "our-dispatcher":
+            own_acquires.append(result)
+        return result
+
+    monkeypatch.setattr(store, "acquire_dispatcher_lease", _record_acquire)
+    base_runner = _healthy_runner()
+
+    class _SlowLaunchRunner(FakeRunner):
+        def __call__(self, argv, **kwargs):
+            if len(argv) >= 2 and argv[1] == "--bg" and argv[2:3] != ["-p"]:
+                launched["done"] = True
+                clock["t"] += 70.0
+                return real_launch_response("abc12345")
+            if list(argv)[1:3] == ["agents", "--json"]:
+                if not launched["done"]:
+                    return super().__call__(argv, **kwargs)
+                agents_calls["n"] += 1
+                if agents_calls["n"] == 1:
+                    return ("[]", "", 0)
+                # The launch took 70 seconds. A slow confirmation poll now
+                # crosses either the original or a renewed dispatcher lease.
+                clock["t"] = 1195.0
+                assert store.acquire_dispatcher_lease(
+                    "run-1", "rival-dispatcher", lease_seconds=120.0, at=clock["t"]
+                ) is not None
+                unit = store.get_unit("run-1", "u0")
+                store.fail_unit("run-1", "u0", unit.fencing_token, at=clock["t"])
+                store.settle_dispatch(
+                    "run-1", "u0", outcome="orphaned_preconfirmation", at=clock["t"]
+                )
+                return (
+                    json.dumps([_bg_record(id="abc12345", session_id="sess-1", state="working")]),
+                    "",
+                    0,
+                    )
+            if len(argv) >= 2 and argv[1] in ("stop", "rm") and "--help" not in argv:
+                lifecycle_calls.append(list(argv))
+                return ("ok", "", 0)
+            return super().__call__(argv, **kwargs)
+
+    runner = _SlowLaunchRunner(scripts=base_runner.scripts)
+
+    report = dispatch_wave(
+        store,
+        "run-1",
+        store.list_units("run-1"),
+        RunAdapter(),
+        cli=_cli(runner),
+        worker_command=wc,
+        max_agents=1,
+        launch_confirm_seconds=claude_bg.DEFAULT_LAUNCH_CONFIRM_SECONDS,
+        sleep_fn=lambda seconds: None,
+        clock_fn=lambda: clock["t"],
+    )
+    assert report.aborted_reason == "dispatcher_lease_lost"
+    assert agents_calls["n"] == 2
+    assert len(own_acquires) >= 3
+    assert [argv[1] for argv in lifecycle_calls] == ["stop", "rm"]
+    assert all(argv[2] == "abc12345" for argv in lifecycle_calls)
+
+
+def test_dispatch_wave_slow_launch_renews_and_attaches_while_lease_is_ours(tmp_path, monkeypatch):
+    """ACCEPT: a slow launch remains safe when renewal keeps ownership."""
+    store = _seeded_dispatch_store(tmp_path)
+    wc = _worker_command(tmp_path)
+    monkeypatch.setattr(claude_bg, "_mint_worker_id", lambda: "our-dispatcher")
+    clock = {"t": 1000.0}
+    launched = {"done": False}
+    base_runner = _healthy_runner()
+
+    class _SlowLaunchRunner(FakeRunner):
+        def __call__(self, argv, **kwargs):
+            if len(argv) >= 2 and argv[1] == "--bg" and argv[2:3] != ["-p"]:
+                launched["done"] = True
+                clock["t"] += 70.0
+                return real_launch_response("abc12345")
+            if list(argv)[1:3] == ["agents", "--json"] and launched["done"]:
+                return (json.dumps([_bg_record(id="abc12345", session_id="sess-1", state="done")]), "", 0)
+            return super().__call__(argv, **kwargs)
+
+    runner = _SlowLaunchRunner(scripts=base_runner.scripts)
+    report = dispatch_wave(
+        store, "run-1", store.list_units("run-1"), RunAdapter(), cli=_cli(runner),
+        worker_command=wc, max_agents=1,
+        sleep_fn=lambda seconds: None,
+        clock_fn=lambda: clock["t"],
+    )
+    assert report.dispatched == ("u0",)
+    assert report.settled["u0"] == "done_unaccepted"
+    assert store.open_dispatches("run-1") == []
+
+
+def test_dispatch_wave_default_fast_launch_still_completes(tmp_path):
+    store = _seeded_dispatch_store(tmp_path)
+    runner = _healthy_runner()
+    runner.script(("claude", "--bg"), real_launch_response("abc12345"))
+    runner.script(
+        ("claude", "agents", "--json"),
+        (json.dumps([_bg_record(id="abc12345", session_id="sess-1", state="done")]), "", 0),
+    )
+    report = dispatch_wave(
+        store, "run-1", store.list_units("run-1"), RunAdapter(), cli=_cli(runner),
+        worker_command=_worker_command(tmp_path), sleep_fn=lambda seconds: None,
+        clock_fn=lambda: 1000.0,
+    )
+    assert report.dispatched == ("u0",)
+    assert report.settled["u0"] == "done_unaccepted"
+
+
 def test_dispatch_wave_dispatcher_can_reacquire_its_own_expired_lease(tmp_path, monkeypatch):
     """ACCEPT case: a dispatcher must be able to re-acquire its OWN expired
     lease."""

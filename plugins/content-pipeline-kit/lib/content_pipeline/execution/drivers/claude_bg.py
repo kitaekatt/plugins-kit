@@ -1042,6 +1042,10 @@ class OpenDispatch:
     terminal_since: Optional[float] = None
 
 
+class _DispatcherLeaseLostError(RuntimeError):
+    """The wave no longer owns its dispatcher lease during confirmation."""
+
+
 def _release_claim_and_settle(
     store: ExecutionStore,
     run_id: str,
@@ -1100,6 +1104,7 @@ def dispatch_unit(
     poll_interval_s: float = DEFAULT_LAUNCH_POLL_INTERVAL_S,
     sleep_fn: Callable[[float], None] = time.sleep,
     clock_fn: Callable[[], float] = time.time,
+    dispatcher_lease_renew_fn: Optional[Callable[[], bool]] = None,
     at: Optional[float] = None,
 ) -> OpenDispatch:
     """Dispatch ONE unit and confirm it, per the observed-transition rule.
@@ -1152,6 +1157,11 @@ def dispatch_unit(
     corpse is ``rm``'d (best-effort; an ``rm`` failure never masks the
     misconfiguration).
 
+    When called by :func:`dispatch_wave`, the dispatcher lease is renewed
+    immediately after launch and after each confirmation poll. Losing that
+    fenced lease aborts this dispatch before attachment; any identified
+    session is stopped and removed by the common cleanup path.
+
     The returned :class:`OpenDispatch` carries the claim's OWN
     ``fencing_token`` and ``worker_id`` -- what :func:`supervise_tick` later
     checks before EVER renewing this unit's lease.
@@ -1183,6 +1193,7 @@ def dispatch_unit(
     # so nothing could ever recover it: `dispatch_wave`'s exit cleanup only
     # settles dispatches it is TRACKING, and this one never got that far.
     matched: Optional[SessionRecord] = None
+    short_id: Optional[str] = None
     launch_stderr = ""
     launch_rc: Optional[int] = None
     try:
@@ -1213,9 +1224,14 @@ def dispatch_unit(
         launch_stderr = _stderr_excerpt(raw_launch_stderr)
         short_id = _parse_launch_session_id(launch_stdout)
 
+        if dispatcher_lease_renew_fn is not None and not dispatcher_lease_renew_fn():
+            raise _DispatcherLeaseLostError
+
         deadline = clock_fn() + launch_confirm_seconds
         while True:
             poll_stdout, _poll_stderr, poll_rc = cli.agents_json(all_sessions=True, env=env)
+            if dispatcher_lease_renew_fn is not None and not dispatcher_lease_renew_fn():
+                raise _DispatcherLeaseLostError
             if poll_rc == 0:
                 try:
                     parsed = parse_agents_json(poll_stdout)
@@ -1263,8 +1279,9 @@ def dispatch_unit(
     except LaunchMisconfigurationError:
         raise  # already released and settled by the branch above
     except BaseException:
-        if matched is not None:
-            _end_session(cli, matched.id, env=env)
+        identified_id = matched.id if matched is not None else short_id
+        if identified_id is not None:
+            _end_session(cli, identified_id, env=env)
         _release_claim_and_settle(
             store, run_id, unit.unit_id, claim.fencing_token,
             session_id=matched.session_id if matched is not None else None, at=at
@@ -1921,9 +1938,10 @@ def dispatch_wave(
     count, whatever their text. Units not yet dispatched stay PENDING;
     ``resume_run`` clears the halt. The halt detail carries the count only.
 
-    LEASE. The dispatcher lease is re-acquired before each launch, so a
-    refill of slow launches cannot outlast it; if another dispatcher holds
-    it the wave ends with ``aborted_reason="dispatcher_lease_lost"``.
+    LEASE. The dispatcher lease is re-acquired before each launch and renewed
+    after launch plus during confirmation, so a slow launch cannot outlast
+    it; if another dispatcher holds it the wave ends with
+    ``aborted_reason="dispatcher_lease_lost"``.
     """
     if systemic_failure_halt_threshold is not None and (
         isinstance(systemic_failure_halt_threshold, bool)
@@ -2006,6 +2024,20 @@ def dispatch_wave(
         unit_now = store.get_unit(run_id, unit_id)
         if unit_now is not None and unit_now.state is UnitState.ACCEPTED:
             accepted.append(unit_id)
+
+    def _renew_dispatcher_for_launch() -> bool:
+        """Renew the wave lease during one launch's confirmation window."""
+        nonlocal fence
+        refreshed = store.acquire_dispatcher_lease(
+            run_id,
+            dispatcher_id,
+            lease_seconds=DEFAULT_DISPATCHER_LEASE_SECONDS,
+            at=clock_fn(),
+        )
+        if refreshed is None:
+            return False
+        fence = refreshed
+        return True
 
     # Adopt durable launches before selecting candidates. This closes the
     # process-death gap: an attached session remains supervised by the next
@@ -2163,6 +2195,7 @@ def dispatch_wave(
                             sleep_fn=sleep_fn,
                             clock_fn=clock_fn,
                             at=tick_now,
+                            dispatcher_lease_renew_fn=_renew_dispatcher_for_launch,
                         )
                     except LaunchMisconfigurationError as launch_exc:
                         aborted_reason = "launch_misconfiguration"
@@ -2197,6 +2230,9 @@ def dispatch_wave(
                         claim_refused.add(unit.unit_id)
                         settled_all.setdefault(unit.unit_id, "claim_failed")
                         continue
+                    except (_DispatcherLeaseLostError, NoOpenDispatchError):
+                        aborted_reason = "dispatcher_lease_lost"
+                        break
                     open_dispatches[opened.unit_id] = opened
                     dispatched.append(opened.unit_id)
                     if len(dispatched) % batch_size == 0:

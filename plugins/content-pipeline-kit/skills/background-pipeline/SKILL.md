@@ -126,7 +126,10 @@ not trusted exits 1 with the stderr `Workspace not trusted. Run `claude` in
 <dir> once and accept the trust prompt, then retry.` and starts no session.
 
 `preflight` does not check trust, so it passes. The failure surfaces at the
-first launch. The dispatcher finds no session within `launch_confirm_seconds`, releases the unit's claim, settles
+first launch. During launch confirmation, the dispatcher renews its run lease;
+if another dispatcher takes it, the wave stops with
+`aborted_reason == "dispatcher_lease_lost"` and does not attach the session.
+Otherwise, the dispatcher finds no session within `launch_confirm_seconds`, releases the unit's claim, settles
 the dispatch as `launch_failed`, and stops the wave with
 `aborted_reason == "launch_misconfiguration"` (`LaunchMisconfigurationError`
 inside `dispatch_unit`). Nothing is dispatched. The launcher's own words reach

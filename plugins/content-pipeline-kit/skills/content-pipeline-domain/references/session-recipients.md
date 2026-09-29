@@ -102,9 +102,12 @@ sessions, beyond the fields every adapter already needs (`unit_for`,
   flag set, the unit ends FAILED, and a FAILED unit has no reset path: redoing
   it needs a new run. Without a `fail`, the unit is reclaimable once the lease
   expires. A systemic mismatch therefore costs one session per dispatched
-  unit, and no circuit breaker halts the wave on repeated identical
-  `worker_failed` errors -- check the environment declaration on the first
-  failure rather than letting the wave drain.
+  unit until a breaker trips: `dispatch_wave` halts the run
+  (`HALT_REPEATED_FAILURE`) once `systemic_failure_halt_threshold` units
+  (default 3; `0` or `None` disables) settle `worker_failed` with the code
+  `env_mismatch` on their fail envelope, and `resume_run` clears the halt.
+  Failures without that code are never counted, whatever their text -- check
+  the environment declaration on the first failure.
 - **`expected_unit_seconds`** (or a per-unit variant) -- your best estimate of
   how long one unit's worker session runs. This sizes the lease the
   dispatcher renews while a worker is active. Declaring nothing is safe --
@@ -244,12 +247,16 @@ trusted workspace, the launch exits 1 with `Workspace not trusted. Run
 `claude` in <dir> once and accept the trust prompt, then retry.` and spawns no
 session.
 
-`preflight` does not check trust. `dispatch_unit` discards the launcher's exit
-code and stderr, finds no session within `launch_confirm_seconds`, releases
-the claim, settles the dispatch as `launch_failed`, and raises
-`LaunchMisconfigurationError`; `dispatch_wave` then stops with
-`aborted_reason == "launch_misconfiguration"` and launches nothing. The trust
-message itself is not surfaced. Remedy: run `claude` once in that directory,
+`preflight` does not check trust. During confirmation, the dispatcher renews
+its run lease; if that lease is lost, it stops and removes the identified
+session and ends the wave with `aborted_reason == "dispatcher_lease_lost"`
+without attaching it. Otherwise, `dispatch_unit` finds no session within
+`launch_confirm_seconds`, releases the claim, settles the dispatch as
+`launch_failed`, and raises `LaunchMisconfigurationError`; `dispatch_wave` then
+stops with `aborted_reason == "launch_misconfiguration"` and launches nothing.
+The launcher's stderr excerpt (which carries the trust message) and exit code
+reach the caller in the exception message ("launcher said (rc=...): ...") and
+in the report's `launch_stderr` and `launch_rc`. Remedy: run `claude` once in that directory,
 accept the trust prompt, and dispatch again.
 
 ## Which worker your dispatch runs
