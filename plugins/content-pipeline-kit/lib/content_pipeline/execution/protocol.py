@@ -1,6 +1,6 @@
 """Versioned JSON worker protocol (A-min.3): mountable handlers, not a tool.
 
-The plan's exact verb list -- ``prepare | claim | read | submit | fail |
+The verb list -- ``prepare | claim | read | submit | fail |
 renew | status | pause | resume | finalize`` -- as a ``{verb: handler}``
 mapping a consumer wires onto ITS OWN entry point (a CLI subcommand, an MCP
 tool, a background-agent skill's shell-out, a workflow node). This module
@@ -26,7 +26,7 @@ WIRE FORMAT versus the CONSUMER'S PARSER/PROMPT code). A mismatched
 ``protocol_version`` is refused (:class:`ProtocolVersionError`) rather than
 silently interpreted under the wrong schema -- a version bump to this
 envelope shape is a breaking change to every out-of-process worker at once,
-so guessing compatibility is exactly the failure D1's adapter-identity
+so guessing compatibility is exactly the failure the adapter-identity
 refusal already rejects for the adapter axis; the wire axis gets the same
 discipline.
 
@@ -44,7 +44,7 @@ an ``Exception`` (``SystemExit``, ``KeyboardInterrupt``) is deliberately NOT
 caught -- it signals the process should stop, not that this one request
 failed -- and propagates normally; see :func:`dispatch`'s own docstring.
 
-Security posture (plan A-min.3, restated for this module specifically)
+Security posture (restated for this module specifically)
 ----------------------------------------------------------------------------
 Trusted policy -- which ``strategy``/``gates``/``freshness_of``/adapter a
 mount serves -- is supplied by the CONSUMER'S OWN entry point at
@@ -305,7 +305,7 @@ def _usage_from_payload(payload: Mapping[str, Any]) -> Optional[UsageRecord]:
 
 def _unit_summary(unit: UnitRecord) -> Dict[str, Any]:
     """A JSON-safe subset of ``UnitRecord`` -- identity, ordering, and state
-    only. Deliberately excludes ``accepted_text`` (invariant 6's spirit:
+    only. Deliberately excludes ``accepted_text`` (the digest rule's spirit:
     this module's replies are worker/orchestrator-facing operational data,
     not a channel for re-surfacing accepted content wholesale)."""
     return {"unit_id": unit.unit_id, "ordinal": unit.ordinal, "state": unit.state.value}
@@ -355,13 +355,13 @@ def build_handlers(
     :func:`~content_pipeline.execution.store.lease_for` -- an adapter that
     declares no cost falls back to the unchanged 300s default, no warning.
     An explicit ``lease_seconds`` still wins outright over derivation, same
-    as before this feature: trusted mount policy stays trusted, and D5's
+    as before this feature: trusted mount policy stays trusted, and the
     "consumer-configured lease per run" stays GUIDANCE the mount may still
     fix directly, never something derivation overrides.
     """
 
     def _require_compatible_run(run_id: str) -> None:
-        """D1's incompatible-resume refusal, extended to the WORKER verbs
+        """The incompatible-resume refusal, extended to the WORKER verbs
         (defect/design-gap, grok-4.6 review of 46d4a2b): ``require_compatible_adapter``
         used to run only on the orchestrator verbs (``prepare``/``resume``/
         ``finalize``) -- never on ``claim``/``read``/``submit``/``fail``/
@@ -471,7 +471,7 @@ def build_handlers(
         # The check itself must not raise directly: `store.accept_unit` is
         # the only code that appends the payload-free
         # `AttemptKind.SUPERSEDED` attempt row on a stale fence (store.py
-        # invariant 4 -- a fenced-out submission leaves a durable trace of
+        # fencing rule: a fenced-out submission leaves a durable trace of
         # the duplicated spend), so a stale token found here is delegated to
         # `accept_unit` (with no text) to record that row and raise
         # `StaleFenceError` itself, rather than short-circuiting past it.

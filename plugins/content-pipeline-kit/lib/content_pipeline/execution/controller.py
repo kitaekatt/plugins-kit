@@ -8,16 +8,16 @@ Two entry points bracket a run:
   :func:`~content_pipeline.execution.wave.ready_wave`).
 - :func:`finalize_run` -- applies every ``ACCEPTED`` unit's recorded text,
   serially, in ordinal order, recording ``apply_started``/``apply_succeeded``
-  around each call (plan D6). It never re-adjudicates a verdict (D1,
-  invariant 5): the adapter's ``parse_fn`` is called mechanically to recover
+  around each call (apply_unknown fails closed). It never re-adjudicates a verdict
+  (submit-time acceptance is authoritative): the adapter's ``parse_fn`` is called mechanically to recover
   the payload object from the durably recorded ``accepted_text``, and no
   validator ever runs again.
 
 Also here: :func:`unfinished_units` (every unit without a terminal state, a
 SET with holes preserved, the halt-triggering unit included), the thin
 ``pause_run`` / ``resume_run`` wrappers over ``store.set_halt`` /
-``store.clear_halt`` (D4 -- an operator pause is just another halt kind; no
-new store method exists for it), and :func:`record_halt` -- the D4 halt
+``store.clear_halt`` (halt handling -- an operator pause is just another halt kind; no
+new store method exists for it), and :func:`record_halt` -- the shared halt
 response (``set_halt`` then return the triggering unit to ``PENDING``) shared
 by every driver, so a driver never re-derives it (see "Halt handling is a
 driver-shared helper" below).
@@ -31,7 +31,7 @@ A-min.3 it lives in :mod:`content_pipeline.execution.adapter` -- widened in
 place with the two responsibilities this module's docstring used to call
 "still absent" (a first-class ``build_request`` step and a typed
 ``ValidationSpec`` via ``validation_spec_for``), plus ``adapter_version`` for
-D1's incompatible-resume refusal. This module imports and re-exports it
+the incompatible-resume refusal. This module imports and re-exports it
 unchanged, so every existing import (``from content_pipeline.execution.controller
 import RunAdapter``) and every existing call site --
 :func:`~content_pipeline.execution.drivers.inline.run_wave` (``unit_for``,
@@ -42,7 +42,7 @@ with no signature change, exactly as that module's own docstring promised
 its parse function via ``adapter.resolve_validation_spec(adapter.unit_for(unit_id)).parse_fn``
 -- the SAME method call ``execution.protocol``'s ``submit`` verb uses to
 evaluate the text in the first place -- rather than reading ``adapter.parse_fn``
-directly, which is what makes D1's "finalize re-parses with the SAME function
+directly, which is what makes the rule "finalize re-parses with the SAME function
 the driver submitted under" requirement hold BY CONSTRUCTION even for a
 consumer whose ``validation_spec_for`` varies ``parse_fn`` per unit, not only
 for the common case where ``parse_fn`` is the same single field both call
@@ -55,19 +55,19 @@ mountable-handler layer built on top of it).
 finalize re-runs it on text recorded at submit time, potentially long after
 and in a different process, so any dependence on ambient state (clock,
 filesystem, network) would make a replay diverge from what the worker that
-recorded the text actually saw (plan D1's adapter contract).
+recorded the text actually saw (the adapter contract).
 
 Halt handling is a driver-shared helper
 ------------------------------------------
 
-:func:`record_halt` implements D4's halt response once, here, rather than
+:func:`record_halt` implements the halt response once, here, rather than
 inside a driver: ``store.set_halt`` followed by returning the triggering unit
 to ``PENDING`` via ``store.fail_unit(..., terminal=False)``. It does not stop
 a driver's own claim loop -- that control flow is the driver's, since only the
 driver knows what "stop claiming" means for its own concurrency model (a
 ``break`` for the inline driver's serial loop; something else for a background
 dispatcher). Extracted from ``drivers/inline.py`` so the two planned drivers
-(phases B and C) that need byte-identical D4 semantics inherit this instead of
+(phases B and C) that need byte-identical halt semantics inherit this instead of
 re-deriving it.
 
 The gate seam: a direct import, not a re-derived shape
@@ -159,7 +159,7 @@ DEFAULT_FINALIZE_WORKER_ID = "finalize"
 
 
 class ApplyUnknownError(ExecutionError):
-    """Finalize refuses to proceed while any unit is ``apply_unknown`` (D6).
+    """Finalize refuses to proceed while any unit is ``apply_unknown`` (apply_unknown fails closed).
 
     Raised when the adapter supplies no ``reconcile`` hook (fail closed) --
     or when ``reconcile`` is supplied but this unit still resolves to
@@ -173,12 +173,12 @@ class ApplyUnknownError(ExecutionError):
         super().__init__(
             f"unit {unit_id!r} is apply_unknown (an APPLY_STARTED attempt with "
             "no following APPLY_SUCCEEDED) and the adapter supplies no "
-            "reconcile hook; finalize refuses to proceed (D6, fail closed)"
+            "reconcile hook; finalize refuses to proceed (fail closed)"
         )
 
 
 class MissingAcceptedTextError(ExecutionError):
-    """Finalize refuses an ACCEPTED unit with no recorded ``accepted_text`` (D6, fail closed).
+    """Finalize refuses an ACCEPTED unit with no recorded ``accepted_text`` (fail closed).
 
     ``store.accept_unit`` still permits omitting ``text`` (an optional
     parameter -- see its docstring -- and a pre-0.7.2 row migrated to a
@@ -195,7 +195,7 @@ class MissingAcceptedTextError(ExecutionError):
         self.unit_id = unit_id
         super().__init__(
             f"unit {unit_id!r} is ACCEPTED with no recorded accepted_text; "
-            "finalize refuses to apply a None payload (D6, fail closed)"
+            "finalize refuses to apply a None payload (fail closed)"
         )
 
 
@@ -235,10 +235,9 @@ class GraphOrderMismatchError(ExecutionError):
 
 class UnappliedPredecessorError(ExecutionError):
     """``prepare_run`` refuses a graph-strategy run that has an ``ACCEPTED``
-    unit whose apply has not yet succeeded (user decision, 2026-08-17; plan
-    item ``amin2-readiness-keys-on-accepted``).
+    unit whose apply has not yet succeeded (readiness keys on ACCEPTED, not on applied).
 
-    ACCEPTED only means the text was accepted into the store (D1's
+    ACCEPTED only means the text was accepted into the store (the
     submit-time verdict), not that ``finalize_run`` has actually applied it
     (``AttemptKind.APPLY_SUCCEEDED``). As of 2026-08-17, ``execution.wave``'s
     ``_graph_ready_wave`` is ITSELF apply-aware -- it returns ``[]`` rather
@@ -280,7 +279,7 @@ class UnappliedPredecessorError(ExecutionError):
             f"run {run_id!r}: unit {unit_id!r} is ACCEPTED but its last "
             "apply-kind attempt is not APPLY_SUCCEEDED; "
             f"{detail} -- prepare_run refuses to compute a wave until the "
-            "predecessor is settled (D1's one-unit-wave guarantee)"
+            "predecessor is settled (the one-unit-wave guarantee)"
         )
 
 
@@ -350,7 +349,7 @@ def _validate_no_unapplied_accepted(
     """Refuse loudly when a graph run has an ``ACCEPTED`` unit whose apply has
     not yet succeeded -- see :class:`UnappliedPredecessorError` and the "why"
     note on :func:`prepare_run`. Derives applied-ness from
-    ``store.list_attempts`` (invariant 3: never stored directly), the same
+    ``store.list_attempts`` (never stored directly), the same
     way :func:`finalize_run` does via :func:`_last_apply_kind`.
 
     Reads ``units`` and ``attempts`` together via :meth:`ExecutionStore.snapshot`
@@ -446,7 +445,7 @@ def prepare_run(
     Still for a graph strategy, this call THEN refuses if any unit is
     ``ACCEPTED`` but not yet applied (no ``AttemptKind.APPLY_SUCCEEDED``
     attempt), raising :class:`UnappliedPredecessorError`. ``ACCEPTED`` means
-    only that the text was accepted into the store at submit time (D1); it
+    only that the text was accepted into the store at submit time (submit-time acceptance is authoritative); it
     does not mean ``finalize_run`` has applied it. ``execution.wave``'s
     ``_graph_ready_wave`` is itself apply-aware (2026-08-17) and returns
     ``[]`` rather than releasing a successor over an unapplied predecessor,
@@ -529,7 +528,7 @@ def finalize_run(
 ) -> List[str]:
     """Apply every ``ACCEPTED`` unit's recorded text, serially, in ordinal order.
 
-    Idempotent (invariant 3): apply state is derived, never stored, by
+    Idempotent: apply state is derived, never stored, by
     scanning :meth:`~content_pipeline.execution.store.ExecutionStore.list_attempts`
     for the last apply-kind attempt per unit (see :func:`_last_apply_kind`):
 
@@ -540,7 +539,7 @@ def finalize_run(
       ``apply_unknown``. Refuses via :class:`ApplyUnknownError` unless
       ``adapter.reconcile`` is supplied. When it is: ``reconcile(unit_id)``
       returning ``True`` means the apply already landed -- record
-      ``apply_succeeded`` and move on WITHOUT calling ``apply`` again (D6:
+      ``apply_succeeded`` and move on WITHOUT calling ``apply`` again (reconciliation:
       never risk a duplicate side effect once reconciliation confirms it
       landed). Returning ``False`` means it did not land -- fall through to
       a normal re-apply (a fresh ``apply_started``/``apply_succeeded`` pair),
@@ -550,7 +549,7 @@ def finalize_run(
     during THIS call -- a reconciled-as-landed unit is not included, since
     its side effect was not (re)run here.
 
-    Never re-adjudicates a verdict (D1, invariant 5): the parse function
+    Never re-adjudicates a verdict (submit-time acceptance is authoritative): the parse function
     resolved via ``adapter.resolve_validation_spec(adapter.unit_for(unit_id)).parse_fn``
     -- the SAME resolution ``execution.protocol``'s ``submit`` verb used to
     evaluate this text in the first place, not a second, independently
@@ -558,7 +557,7 @@ def finalize_run(
     durably recorded ``accepted_text`` to recover the payload object; no
     validator runs again.
 
-    Fails closed on a ``None`` payload (D6): an ACCEPTED unit whose
+    Refuses an ACCEPTED unit with no recorded text: an ACCEPTED unit whose
     ``accepted_text`` is ``None`` (``accept_unit`` permits omitting ``text``;
     a pre-0.7.2 row may also have migrated to ``NULL``) raises
     :class:`MissingAcceptedTextError` rather than resolving a parse function
@@ -591,7 +590,7 @@ def finalize_run(
         if unit.accepted_text is None:
             raise MissingAcceptedTextError(unit.unit_id)
 
-        # D1 fix (grok-4.6 review of 46d4a2b, defect 2): resolve the parse
+        # Fix: resolve the parse
         # function through `adapter.resolve_validation_spec`, the SAME path
         # `execution.protocol`'s `submit` verb uses -- rather than calling
         # `adapter.parse_fn` directly. When `validation_spec_for` is unset
@@ -603,7 +602,7 @@ def finalize_run(
         # is the SAME callable `submit` evaluated the accepted text under,
         # because both call sites resolve it through the identical method on
         # the identical adapter object for the identical unit. Before this
-        # fix, finalize always used `adapter.parse_fn`, so D1 ("finalize
+        # fix, finalize always used `adapter.parse_fn`, so the rule ("finalize
         # re-parses with the SAME function the driver submitted under") held
         # only when `validation_spec_for` was None -- exactly the one case
         # where the two calls could not already diverge. `unit_for` must be
@@ -634,7 +633,7 @@ def unfinished_units(store: ExecutionStore, run_id: str) -> List[UnitRecord]:
     """Every unit WITHOUT a terminal state, ordinal order, holes included.
 
     A SET, not a queue: the halt-triggering unit (returned to ``PENDING`` by
-    the driver on halt, per D4/invariant 2) is included, and a unit's
+    the driver on halt, per the halt rule) is included, and a unit's
     original ordinal is preserved regardless of which ordinals around it are
     terminal -- there is no renumbering, so a caller can report "unit 7 of
     12 is unfinished" meaningfully even when units 3 and 5 are done.
@@ -657,7 +656,7 @@ def record_halt(
     *,
     at: Optional[float] = None,
 ) -> None:
-    """D4's halt response, shared by every driver: ``set_halt`` the run, then
+    """The halt response, shared by every driver: ``set_halt`` the run, then
     return the triggering unit to ``PENDING`` (not a terminal failure) via
     ``fail_unit(terminal=False)`` -- it is unfinished work, not a permanent
     failure, and stays eligible for a future wave once the run resumes.
@@ -690,7 +689,7 @@ def record_halt(
 def pause_run(
     store: ExecutionStore, run_id: str, *, detail: str = "", at: Optional[float] = None
 ) -> None:
-    """Halt ``run_id`` with kind ``"pause"`` (D4: an operator pause is just
+    """Halt ``run_id`` with kind ``"pause"`` (an operator pause is just
     another halt kind -- new claims stop; a valid-fence submission already
     in flight is still accepted; no new store method exists for this)."""
     store.set_halt(run_id, kind="pause", detail=detail, at=at)

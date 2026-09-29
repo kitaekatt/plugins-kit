@@ -676,7 +676,7 @@ class MockBackend:
     ``classify_halt`` maps a raised entry to a halt kind when its message
     carries a marker, so a scripted ``PipelineHaltError``-shaped exception halts,
     or when it carries a truthy ``halt_kind`` attribute (a CodexRunError-shaped
-    exception, D6 / migration step 10) -- reported verbatim, exactly like the
+    exception; migration step 10) -- reported verbatim, exactly like the
     real ``CodexCliBackend.classify_halt``, with no import of
     ``llm_scripting_kit`` (this backend stays hermetic). Every
     call's kwargs are recorded on ``self.calls``.
@@ -762,7 +762,7 @@ class MockBackend:
             return exc.kind
         halt_kind = getattr(exc, "halt_kind", None)
         if halt_kind:
-            # A scripted CodexRunError-shaped exception (D6, migration step
+            # A scripted CodexRunError-shaped exception (migration step
             # 10) carries its own verdict -- report it verbatim, exactly like
             # the real CodexCliBackend.classify_halt does, without importing
             # llm_scripting_kit (MockBackend stays hermetic: no network, no
@@ -780,7 +780,7 @@ MODELS_ENV = "CONTENT_PIPELINE_LLM_MODELS"
 registry ids (``bootstrap_lib.model_declaration``'s format; see bootstrap's
 ``plugin-dev`` skill, ``references/model-declaration.md``) naming which
 model(s) may serve a completion in this process. It is the only routing env.
-Resolved through ``llm_scripting_kit.declaration.describe`` (the D3 routing
+Resolved through ``llm_scripting_kit.declaration.describe`` (the routing
 layer) via :func:`resolve_declaration`, so quota pacing, reachability, and the
 itemised :class:`~llm_scripting_kit.declaration.NoUsableRoutingTarget` floor
 apply exactly as they do for every other declaration-driven caller. Unset

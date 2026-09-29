@@ -46,7 +46,7 @@ and what counts as valid (``validators``) -- is supplied as a single
 :class:`~content_pipeline.execution.controller.RunAdapter`, not five loose
 keyword arguments. This is the same object
 :func:`~content_pipeline.execution.controller.finalize_run` calls through,
-and the sharing is the point: D1 requires finalize to re-parse a unit's
+and the sharing is the point: submit-time acceptance requires finalize to re-parse a unit's
 accepted text with the SAME ``parse_fn`` this driver submitted it under, and
 one shared field makes that hold by construction -- a caller cannot
 accidentally pass a different ``parse_fn`` to each call, because there is
@@ -54,7 +54,7 @@ only one field to pass it in. See ``controller.py``'s module docstring, "The
 ``RunAdapter``-shaped seam", for the full field list and which A-min.3
 responsibilities are still absent from it.
 
-Cache-key stability (D3 / invariant 7) -- READ BEFORE TOUCHING THIS MODULE
+Cache-key stability -- READ BEFORE TOUCHING THIS MODULE
 ----------------------------------------------------------------------------
 
 ``backend`` is passed straight through to ``submit_validated`` (which passes
@@ -67,12 +67,10 @@ an adapter, a proxy, or any object with a different ``.name`` --
 to from this module's call site silently invalidates every consumer's
 on-disk response cache the moment they upgrade to a tracked run. There is no
 migration path for a silently-changed cache key; the corpus just re-spends
-in full. See ``docs/planning/content-pipeline-kit/session-recipients-plan.md``,
-decision D3, and ``tests/content-pipeline-kit/test_execution_driver_inline.py``
-for the regression test that pins this byte-for-byte against the REAL
+in full. A regression test pins this byte-for-byte against the REAL
 ``build_cache_key``.
 
-Halt handling (D4)
+Halt handling
 --------------------
 
 A :class:`~content_pipeline.llm.platform.PipelineHaltError` caught while producing a
@@ -84,7 +82,7 @@ unit's text (from either path -- ``generate`` may raise it directly, and
    then returns the triggering unit to ``PENDING`` (not terminally failed) via
    ``store.fail_unit(..., terminal=False, error=...)`` -- it is unfinished
    work, not a permanent failure, and stays eligible for a future wave once
-   the run resumes. This half is shared with every other driver (D4 semantics
+   the run resumes. This half is shared with every other driver (halt semantics
    must be byte-identical across all of them), so it lives in ``controller.py``
    rather than being re-derived here.
 2. The loop stops: no further unit in this wave is claimed. This half stays
@@ -96,7 +94,7 @@ Setting the halt does **not** retroactively affect any unit already accepted
 earlier in this same call, and does not prevent a DIFFERENT, already-in-flight
 claim (this driver's own next unit, or a concurrent worker's) from accepting
 with a still-valid fencing token -- ``store.accept_unit`` never consults halt
-state for a valid fence (D4). This driver adds no halt check of its own before
+state for a valid fence (halt blocks claims, never valid-fence submissions). This driver adds no halt check of its own before
 the accept call; it relies entirely on the store's existing behavior, which is
 what keeps this guarantee true without re-deriving it here.
 
@@ -118,8 +116,8 @@ set by the time this loop reaches ``store.claim_unit`` for a later unit in
 the same ``wave`` -- a peer process calling ``store.set_halt`` directly, or
 this call's own previous iteration setting the halt and still returning text
 for that unit. ``store.claim_unit`` raises
-:class:`~content_pipeline.execution.model.RunHaltedError` in that case (D4:
-halt blocks new claims). :func:`run_wave` catches it around the claim,
+:class:`~content_pipeline.execution.model.RunHaltedError` in that case (halt
+blocks new claims). :func:`run_wave` catches it around the claim,
 stopping the loop the same way the ``PipelineHaltError`` path does, and returns
 whatever was accepted so far -- it does not re-raise or swallow the halt
 silently: the run is already durably marked halted (by whoever set it), so

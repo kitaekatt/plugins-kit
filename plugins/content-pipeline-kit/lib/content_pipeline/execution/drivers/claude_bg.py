@@ -1,8 +1,6 @@
 """The Claude-background-session driver (B1).
 
-**Scope, steps 1-11.** Per the plan's B1 sequencing
-(``docs/planning/content-pipeline-kit/session-recipients-plan.md``, "Phase B
--- Claude background sessions"), this module ships:
+**Scope, steps 1-11.** This module ships:
 
 1. :class:`ClaudeCli` -- the ``claude`` process seam. Every argv this module
    ever builds funnels through ``ClaudeCli.runner``, its SOLE process
@@ -17,7 +15,7 @@
    docstring for why this matters).
 5. :class:`WorkerCommand`, :func:`envelope_path_for`, :func:`worker_envelopes_for`,
    :func:`enumerate_worker_invocations`, :func:`build_launch_prompt` -- the
-   enumerated invocation set (P5, six entries: three ``protocol @<path>``
+   enumerated invocation set (six entries: three ``protocol @<path>``
    invocations plus three Write-tool targets) and the launch prompt built
    from it. Every worker verb goes through ``cli.run.build_commands``'s
    ``protocol`` command with a ``@<path>`` JSON envelope -- never the flag
@@ -39,13 +37,13 @@
    envelope's own ``fencing_token`` and refuses on any mismatch. The path
    stays generation-neutral (see :func:`answer_path_for`), so the token
    lives in runtime FILE CONTENT and never in an enumerated command string
-   (P5).
+   (pre-computable allowlisted invocations).
 6. :func:`dispatch_unit` -- launch one unit, confirmed by an OBSERVED state
-   transition (P11), never by the launcher's exit code or banner.
+   transition (observed-transition rule), never by the launcher's exit code or banner.
 7. :class:`SessionRecord`, :class:`ParseResult`, :func:`parse_agents_json` --
-   the schema-tolerant reconciler (P4).
+   the schema-tolerant reconciler (agents --json record shape).
 8. :func:`supervise_tick` -- status classification, lease renewal, and stall
-   detection (D5, P12, P13) for every currently open dispatch.
+   detection (this lane's dispatcher is the renewer; agents --json is the authoritative status channel) for every currently open dispatch.
 9. :func:`reclaimable_units`, :func:`reclaim_attempt_count` -- driver-local
    reclaim selection and the bounded-reclaim rule.
 10. :func:`classify_settled_failure` -- halt classification for a SETTLED
@@ -53,12 +51,12 @@
     logs``.
 11. :func:`dispatch_wave` -- the bounded dispatch loop over all of the above.
 
-Command construction (P3) -- read before adding a method
+Command construction (claude --bg command shape) -- read before adding a method
 ------------------------------------------------------------------------------
 The lifecycle verbs (``stop``, ``rm``, ``respawn`` -- and ``logs``,
 deliberately never given a method here, see below) are **top-level**:
 ``claude <verb> <id>``. ``claude agents <verb> <id>`` is silently accepted
-(exit 0) and does NOTHING (P3) -- an undocumented, unstable platform shape
+(exit 0) and does NOTHING (claude --bg command shape) -- an undocumented, unstable platform shape
 this module must never emit as a dispatch command. The token ``"agents"``
 therefore appears in exactly ONE argv shape this module builds for real
 dispatch: :meth:`ClaudeCli.agents_json`'s ``[exe, "agents", "--json"]`` /
@@ -70,7 +68,7 @@ a dispatch command and is not covered by the invariant above.
 Why no ``logs`` method
 ------------------------
 ``claude logs <id>`` is a live-daemon-only channel: it fails once the
-session's daemon has exited (P13's ``\\\\.\\pipe\\cc-daemon-*-control``
+session's daemon has exited (the daemon-only channel: ``\\\\.\\pipe\\cc-daemon-*-control``
 observation). A later halt-classification path for a SETTLED unit must read
 the session transcript or per-job state instead, never ``claude logs`` --
 and the cheapest way to guarantee that later code never takes the wrong
@@ -156,7 +154,7 @@ from content_pipeline.llm.platform import HALT_AUTH, HALT_RATE_LIMIT, PipelineHa
 
 # The names above live in workerpack.py and are re-imported here as
 # module-level aliases -- claude_bg.X is workerpack.X for every one of them
-# (tests/content-pipeline-kit/test_workerpack_aliases.py). They moved there
+# (a test pins the aliasing). They moved there
 # so the workflow lane (workflows/run-ready-wave.js and its Python pack
 # builder) can build a worker's invocation set and reap abandoned units
 # without importing this driver module. Do not redefine any of them below;
@@ -238,7 +236,7 @@ def _default_runner(
 
     Never exercised by this module's own test suite -- every test supplies
     its own ``runner`` (a fake, scripted callable); see
-    ``tests/content-pipeline-kit/test_execution_driver_claude_bg.py``'s
+    the suite's
     "no test reaches a real subprocess" guard, which patches THIS name to a
     raising stub and asserts nothing in the suite still reaches it. The
     encoding behavior itself is pinned by a test that patches
@@ -312,7 +310,7 @@ class ClaudeCli:
         timeout: Optional[float] = None,
     ) -> Tuple[str, str, int]:
         """``claude --bg [extra_args...] <prompt>``. ``prompt`` is positional
-        (P3): a background session takes no ``-p``, and mixing the two is a
+        (claude --bg command shape): a background session takes no ``-p``, and mixing the two is a
         hard usage error (see :func:`preflight` step 6)."""
         exe = self.resolve_executable()
         argv = [exe, "--bg", *extra_args, prompt]
@@ -327,7 +325,7 @@ class ClaudeCli:
     ) -> Tuple[str, str, int]:
         """``claude agents --json [--all]`` -- the ONE argv shape in this
         module that carries the ``"agents"`` token (see the module
-        docstring's "Command construction (P3)" section)."""
+        docstring's "Command construction (claude --bg command shape)" section)."""
         exe = self.resolve_executable()
         argv = [exe, "agents", "--json"]
         if all_sessions:
@@ -343,7 +341,7 @@ class ClaudeCli:
         timeout: Optional[float] = None,
     ) -> Tuple[str, str, int]:
         """``claude <verb> <session_id>`` -- TOP-LEVEL, never
-        ``claude agents <verb> <session_id>`` (P3)."""
+        ``claude agents <verb> <session_id>`` (claude --bg command shape)."""
         exe = self.resolve_executable()
         argv = [exe, verb, session_id]
         return self._invoke(argv, env=env, timeout=timeout)
@@ -478,11 +476,11 @@ def preflight(
             f"{type(agents_sample).__name__}"
         )
 
-    # 5. Assert each lifecycle verb behaves (P3). For stop|logs|rm|respawn:
+    # 5. Assert each lifecycle verb behaves (claude --bg command shape). For stop|logs|rm|respawn:
     # `claude <verb> --help` must be verb-specific -- not byte-identical to
     # `claude agents --help`, and naming the verb. Then the negative half:
     # `claude agents stop --help` must BE the plain `agents` help (the
-    # silent P3 shape). If that stops holding, the platform changed and this
+    # silent command shape). If that stops holding, the platform changed and this
     # says so loudly.
     verb_help: Dict[str, str] = {}
     agents_help_stdout, _agents_help_stderr, _agents_help_rc = cli._invoke(
@@ -496,7 +494,7 @@ def preflight(
             raise PreflightError(
                 f"`claude {verb} --help` is byte-identical to `claude agents "
                 "--help`; the top-level lifecycle verb no longer appears to "
-                "exist as a distinct command (P3 has changed)"
+                "exist as a distinct command (the lifecycle-verbs-are-top-level assumption has changed)"
             )
         if verb.lower() not in text.lower():
             raise PreflightError(
@@ -511,7 +509,7 @@ def preflight(
         raise PreflightError(
             "`claude agents stop --help` no longer matches plain `claude "
             "agents --help` -- the platform's documented silent-no-op shape "
-            "(P3) has changed; command construction assumptions must be "
+            "(the lifecycle-verbs-are-top-level assumption) has changed; command construction assumptions must be "
             "re-verified before dispatching"
         )
 
@@ -521,7 +519,7 @@ def preflight(
     if bg_rc == 0:
         raise PreflightError(
             "`claude --bg -p x` exited 0; expected a hard usage-error "
-            "refusal (P3: --bg takes a positional prompt, never -p)"
+            "refusal (--bg takes a positional prompt, never -p)"
         )
     if "backgrounded" in bg_text.lower():
         raise PreflightError(
@@ -642,7 +640,7 @@ def compose_worker_environment(
 
 
 # ---------------------------------------------------------------------------
-# Step 5 -- launch prompt and the enumerated invocation set (P5)
+# Step 5 -- launch prompt and the enumerated invocation set (pre-computable allowlisted invocations)
 # ---------------------------------------------------------------------------
 
 
@@ -667,13 +665,13 @@ def build_launch_prompt(
     outcome to achieve -- the 2026-08-17 probe stalled on a shell redirect
     the worker composed itself to satisfy an instruction phrased as an
     outcome (``echo ... > file``), and no allowlist author would have
-    enumerated it (P5). Unit content never appears here: the worker fetches
+    enumerated it (pre-computable allowlisted invocations). Unit content never appears here: the worker fetches
     its own prepared request via the ``read`` invocation at runtime.
 
     ``fencing_token`` is the token the DISPATCHER's own claim returned
     (:func:`dispatch_unit` claims before launching). It reaches the worker
     here, in the prompt, and nowhere else -- never in an enumerated
-    invocation string, which must stay pre-computable for P5 allowlisting.
+    invocation string, which must stay pre-computable for allowlisting.
     The worker substitutes it into the ``submit``/``fail`` envelope
     templates and writes it as the fence line of its answer artifact.
 
@@ -756,7 +754,7 @@ def build_launch_prompt(
 
 class AgentsJsonParseError(ExecutionError):
     """``agents --json`` output could not be parsed under the schema-tolerant
-    contract (P4): not JSON, not a list, an element that is not an object, or
+    contract (agents --json record shape): not JSON, not a list, an element that is not an object, or
     a ``kind == "background"`` element missing a required field."""
 
 
@@ -765,11 +763,11 @@ _REQUIRED_SESSION_FIELDS: Tuple[str, ...] = ("kind", "id", "sessionId", "state")
 
 @dataclass(frozen=True)
 class SessionRecord:
-    """One ``kind == "background"`` record from ``agents --json`` (P4).
+    """One ``kind == "background"`` record from ``agents --json`` (agents --json record shape).
 
     ``id`` is the short id the launch banner prints and top-level lifecycle
     verbs (``claude stop|rm|respawn <id>``) take. ``session_id`` is the
-    Claude session id (``sessionId`` in the raw JSON) -- D5's "identity is
+    Claude session id (``sessionId`` in the raw JSON) -- the rule "identity is
     the Claude session ID, never the PID" -- and the per-job state file lives
     at ``~/.claude/jobs/<id>/state.json`` (keyed on the SHORT id, not
     ``session_id``; see :func:`classify_settled_failure`).
@@ -777,12 +775,12 @@ class SessionRecord:
     ``started_at_ms`` carries the raw epoch-MILLISECONDS value exactly as
     read; :attr:`started_at_seconds` is a distinctly named float-seconds
     computed property, so a call site can never be ambiguous about which
-    unit either attribute is in (P4's "startedAt is epoch milliseconds"
+    unit either attribute is in (the "startedAt is epoch milliseconds"
     note).
 
     ``pid``/``status``/``waiting_for`` are OPTIONAL: never required of a
     worker record, and never a background-vs-interactive discriminator --
-    ``kind`` is the only one (P4).
+    ``kind`` is the only one (agents --json record shape).
     """
 
     kind: str
@@ -813,7 +811,7 @@ class ParseResult:
 
 
 def parse_agents_json(text: str) -> ParseResult:
-    """Parse ``claude agents --json --all`` output, schema-tolerant (P4).
+    """Parse ``claude agents --json --all`` output, schema-tolerant (agents --json record shape).
 
     Order is load-bearing (see the module's B1 assignment):
 
@@ -879,12 +877,12 @@ def parse_agents_json(text: str) -> ParseResult:
 
 
 # ---------------------------------------------------------------------------
-# Step 6 -- dispatch one unit, confirmed by an observed transition (P11)
+# Step 6 -- dispatch one unit, confirmed by an observed transition (observed-transition rule)
 # ---------------------------------------------------------------------------
 
 
 class LaunchMisconfigurationError(ExecutionError):
-    """A single launch never reached a confirmed background state (P11): the
+    """A single launch never reached a confirmed background state (observed-transition rule): the
     session either appeared as ``state: "failed"`` inside the confirmation
     window, or never appeared at all. Per the module's B1 assignment, the
     unit was never claimed by this launch, so no ``fail_unit`` is recorded
@@ -934,9 +932,9 @@ _BG_LAUNCH_BANNER_RE = re.compile(r"backgrounded\s+\S+\s+([0-9a-fA-F]{8,})")
 def _parse_launch_session_id(stdout: str) -> Optional[str]:
     """Best-effort extraction of the short session id from a ``claude --bg``
     launch banner (``"backgrounded"``, U+00B7, then the id -- or historically
-    ``"backgrounded * a47add3f"``, P3). Used only to know WHICH ``agents
+    ``"backgrounded * a47add3f"``). Used only to know WHICH ``agents
     --json`` record to watch -- never as evidence the launch succeeded
-    (P11: the banner and exit code are discarded as evidence of success; a
+    (observed-transition rule: the banner and exit code are discarded as evidence of success; a
     bad flag surfaces only asynchronously as ``state: "failed"``).
     """
     if not stdout:
@@ -1075,7 +1073,7 @@ def dispatch_unit(
     clock_fn: Callable[[], float] = time.time,
     at: Optional[float] = None,
 ) -> OpenDispatch:
-    """Dispatch ONE unit and confirm it, per P11.
+    """Dispatch ONE unit and confirm it, per the observed-transition rule.
 
     ``worker_id`` is minted BEFORE launch (author ruling) when not supplied.
     ``store.record_dispatch`` is called BEFORE ``cli.launch_bg`` -- duplicate
@@ -1088,7 +1086,7 @@ def dispatch_unit(
     same unit cannot re-claim it after a reclaim has re-dispatched it under
     a fresh ``worker_id``; that zombie's token is stale, so its ``submit``
     and ``fail`` fail closed with ``StaleFenceError`` -- the duplicated
-    spend invariant 4 already accepts, not lost work.
+    spend the design already accepts, not lost work.
 
     On :class:`LaunchMisconfigurationError` the claim taken here is
     RELEASED (a non-terminal ``store.fail_unit``, returning the unit to
@@ -1275,7 +1273,7 @@ def _tail_scan_transcript(path: Path, *, max_lines: int = DEFAULT_TRANSCRIPT_TAI
 
 
 def _read_job_state_text_fields(job_id: str, *, jobs_root: Optional[Path] = None) -> str:
-    """``needs``/``detail``/``output.result`` -- TEXT fields only (P13);
+    """``needs``/``detail``/``output.result`` -- TEXT fields only (agents --json is the authoritative status channel);
     never a field that drives a progress/status decision."""
     root = jobs_root if jobs_root is not None else (Path.home() / ".claude" / "jobs")
     path = root / job_id / "state.json"
@@ -1307,14 +1305,14 @@ def classify_settled_failure(
     jobs_root: Optional[Path] = None,
 ) -> Optional[str]:
     """Halt classification for a SETTLED (no longer running) background
-    session -- never ``claude logs`` (that channel is live-daemon-only, P13,
+    session -- never ``claude logs`` (that channel is live-daemon-only,
     and :class:`ClaudeCli` ships no ``logs`` method by construction).
 
     Two sources, each behind a tolerant parse that can NEVER raise out of
     this function (the whole body is wrapped): the session transcript for
     ``session_id`` (located under ``~/.claude/projects/*/``, tail-scanned),
     then -- when ``job_id`` is supplied -- ``~/.claude/jobs/<job_id>/state.json``'s
-    TEXT fields only (``detail``, ``needs``, ``output.result`` -- P13: this
+    TEXT fields only (``detail``, ``needs``, ``output.result`` -- this
     file's own ``state`` field may disagree with ``agents --json`` and must
     never be read here or anywhere a status decision is made).
 
@@ -1342,7 +1340,7 @@ def _classify_and_maybe_halt(
     store: ExecutionStore, run_id: str, open_dispatch: OpenDispatch, *, at: Optional[float]
 ) -> Optional[str]:
     """Classify a settled dispatch's failure and, on ``rate_limit``/``auth``,
-    call :func:`~content_pipeline.execution.controller.record_halt` (D4).
+    call :func:`~content_pipeline.execution.controller.record_halt` (the shared halt response).
     Returns the classified kind, or ``None`` for an ordinary unit failure."""
     kind = classify_settled_failure(open_dispatch.session_id, job_id=open_dispatch.id)
     if kind in (HALT_RATE_LIMIT, HALT_AUTH):
@@ -1363,7 +1361,7 @@ def _classify_and_maybe_halt(
 
 
 # ---------------------------------------------------------------------------
-# Step 8 -- status classification, renewal, stall detection (D5, P12, P13)
+# Step 8 -- status classification, renewal, stall detection
 # ---------------------------------------------------------------------------
 
 # How long a dispatch whose unit is already TERMINAL may keep its slot while
@@ -1398,7 +1396,7 @@ def supervise_tick(
     at: Optional[float] = None,
 ) -> TickResult:
     """ONE ``agents --json --all`` call serving every tracked open dispatch
-    (D5, P12, P13).
+    (this lane's dispatcher is the renewer; agents --json is the authoritative status channel).
 
     Per open dispatch:
 
@@ -1425,10 +1423,10 @@ def supervise_tick(
       :func:`dispatch_wave`.
     - ``blocked`` (any reason) -- STOP renewing, with NO grace (ruling 1: a
       background session has been observed blocked for 19 days with nothing
-      timing it out, P12; renewing on ``blocked`` renews forever). Best-effort
+      timing it out; renewing on ``blocked`` renews forever). Best-effort
       ``stop`` + ``rm`` first, then the dispatch is settled
       (``outcome="blocked"``) so the unit becomes reclaimable once its lease
-      naturally expires (D5) -- this dispatcher never calls ``fail_unit``
+      naturally expires (lane-specific lease rules) -- this dispatcher never calls ``fail_unit``
       for it. The ``stop``/``rm`` are hygiene only; their return codes are
       not inspected, so they do not establish that the session ended.
     - ``failed``/``stopped`` -- stop renewing, settle, classify (step 10),
@@ -1448,7 +1446,7 @@ def supervise_tick(
     did not succeed are listed in ``TickResult.leaked_sessions``.
 
     No branch here reads ``~/.claude/jobs/<id>/state.json`` for a status
-    decision (P13); :func:`classify_settled_failure` reads it for TEXT
+    decision (agents --json is the authoritative status channel); :func:`classify_settled_failure` reads it for TEXT
     fields only, and only after a dispatch has already been settled from
     ``agents --json`` state.
     """
@@ -1616,7 +1614,7 @@ def supervise_tick(
             _end(open_dispatch)
             _settle(unit_id, "blocked")
             # No classify_settled_failure here: a stalled worker is not a
-            # settled FAILURE, and D5's "no grace" rule is about the RENEWAL
+            # settled FAILURE, and the "no grace" rule is about the RENEWAL
             # stopping, not about diagnosing why -- there is nothing failed
             # to explain yet.
         elif state == "done":
@@ -1757,7 +1755,7 @@ def dispatch_wave(
     positional, policy keyword-only, an injectable ``at``.
 
     ``max_agents`` and ``batch_size`` are the two configurable dispatch
-    settings (both pass the plugin-opinion razor per the plan: protecting
+    settings (both pass the plugin-opinion razor: protecting
     interactive quota versus maximizing throughput is a genuine power-user
     preference).
 
@@ -1782,7 +1780,7 @@ def dispatch_wave(
     compose with ``--bg`` or are silently dropped is NOT established (the
     flags are known to exist and background sessions are known to load
     plugin skills; composition with ``--bg`` has never been observed, and
-    per P11 it could only be judged by a worker's behavior, never by the
+    per the observed-transition rule it could only be judged by a worker's behavior, never by the
     launcher's exit code, which is 0 either way). Selecting an agent by
     default would therefore ship a possible silent no-op. With the default
     the launch argv is exactly ``[exe, "--bg", prompt]``, and the launch
@@ -2061,7 +2059,7 @@ def dispatch_wave(
                         # A ROUTINE race, not an error: between candidate
                         # selection and this claim, the unit went terminal
                         # or was claimed by someone else -- exactly the
-                        # duplicate-spend case invariant 4 accepts. Before
+                        # duplicate-spend case the design accepts. Before
                         # the dispatcher claimed, this refusal happened
                         # inside the worker and never reached the wave.
                         # The unit is no longer dispatchable BY THIS WAVE;

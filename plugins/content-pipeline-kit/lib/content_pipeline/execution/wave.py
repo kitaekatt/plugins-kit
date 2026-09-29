@@ -29,7 +29,7 @@ is not a broken link, it is a unit the run intentionally will not produce, so
 it must not permanently block everything ordinally after it the way a
 ``FAILED`` predecessor does below.
 
-Deliberate corner case, not spelled out by the plan of record: a terminally
+Deliberate corner case, not spelled out elsewhere: a terminally
 ``FAILED`` predecessor blocks the chain from ever becoming ready past it. Once
 the lowest-ordinal ``PENDING`` unit's predecessor is ``FAILED`` (a terminal
 state, per ``execution.model.TERMINAL_STATES``), that unit -- and by
@@ -49,7 +49,7 @@ The graph path additionally requires apply-awareness (2026-08-17, closing the
 ``UnappliedPredecessorError`` refusal): an ``ACCEPTED`` predecessor satisfies
 its successor only once its last apply-kind attempt is
 ``AttemptKind.APPLY_SUCCEEDED``. ``ACCEPTED`` means only that the text was
-accepted into the store at submit time (D1); it does not mean
+accepted into the store at submit time (submit-time acceptance is authoritative); it does not mean
 ``finalize_run`` has applied it. Without this, ``ready_wave`` ->
 ``run_wave`` (accept) -> ``ready_wave`` would release the successor before
 its predecessor's payload has landed, even though ``prepare_run`` refuses
@@ -102,7 +102,7 @@ apply-kind attempt is ``APPLY_STARTED`` with no following
 ``APPLY_SUCCEEDED``). This function withholds the successor forever in that
 state too -- it is not a deadlock, but nothing on THIS module's path
 recovers it. ``finalize_run`` recovers it: either by re-applying, or, when
-the adapter supplies a ``reconcile`` hook (D6), by confirming the apply
+the adapter supplies a ``reconcile`` hook (apply_unknown fails closed), by confirming the apply
 already landed without re-invoking ``adapter.apply``. See
 ``execution.controller``'s ``ApplyUnknownError`` and ``finalize_run``
 docstring for the mechanics.
@@ -125,7 +125,7 @@ from content_pipeline.pipeline.workunit import GraphWalkStrategy, WorkUnitStrate
 class UnsafeGraphParallelismError(ExecutionError):
     """A ``max_wave_size`` greater than 1 was requested against a graph strategy.
 
-    Graph strategies are strictly ordinal-sequential (D1's one-unit-wave
+    Graph strategies are strictly ordinal-sequential (the one-unit-wave
     consequence for store-dependent validators): a wave of more than one unit
     would let two dependent units be claimed concurrently, which the sequential
     contract never allows. Raised eagerly -- before any store read -- so a

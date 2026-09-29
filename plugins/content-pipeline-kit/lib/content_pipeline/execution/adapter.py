@@ -9,13 +9,13 @@ imports and re-exports it unchanged, so every existing import path
 (``from content_pipeline.execution.controller import RunAdapter``) and every
 existing call site (:func:`~content_pipeline.execution.drivers.inline.run_wave`,
 :func:`~content_pipeline.execution.controller.finalize_run`) keeps working
-with no signature change -- only new, optional, trailing fields (the plan's
-"Honour... widen, do not break existing callers" instruction). Both call
+with no signature change -- only new, optional, trailing fields (widen, do
+not break existing callers). Both call
 sites still share the identical ``parse_fn`` field for the same reason as
-before: D1's "finalize re-parses with the SAME function the driver submitted
-under" requirement holds BY CONSTRUCTION, not by convention.
+before: the requirement that finalize re-parses with the SAME function the driver
+submitted under holds BY CONSTRUCTION, not by convention.
 
-Five responsibilities (plan of record, phase A-min.3)
+Five responsibilities
 ----------------------------------------------------------
 1. **Reconstruct a unit by id** -- :attr:`RunAdapter.unit_for`. Unchanged
    from A-min.2.
@@ -28,14 +28,14 @@ Five responsibilities (plan of record, phase A-min.3)
    Reuses :class:`content_pipeline.llm.platform.ValidationSpec` -- the SAME
    type :func:`~content_pipeline.llm.platform.submit_validated` builds
    internally and :func:`~content_pipeline.llm.platform.evaluate_submission`
-   consumes (plan D1) -- rather than inventing a second, adapter-local type
+   consumes (submit-time acceptance is authoritative) -- rather than inventing a second, adapter-local type
    for the identical contract; that module's own docstring names this
    widening and explicitly declines to replace itself with it.
 4. **Apply a payload** -- :attr:`RunAdapter.apply`. Unchanged from A-min.2.
 5. **Optionally reconcile an ``apply_unknown``** -- :attr:`RunAdapter.reconcile`.
-   Unchanged from A-min.2 (D6, fail closed absent this hook).
+   Unchanged from A-min.2 (fail closed absent this hook).
 
-Adapter identity/version and incompatible resume (D1)
+Adapter identity/version and incompatible resume
 -----------------------------------------------------------
 :attr:`RunAdapter.adapter_version` is the consumer's own identity/version tag
 for ITS adapter code (parser, prompt builder, validators) -- distinct from,
@@ -43,9 +43,9 @@ and compared against, ``RunRecord.adapter_version``, the value the run was
 created with (``store.create_run(..., adapter_version=...)``). They are
 expected to be the identical string for a given adapter build.
 :func:`require_compatible_adapter` raises :class:`AdapterVersionMismatchError`
-when they disagree, BEFORE any unit is touched -- the plan's "adapter
-identity/version is recorded in the run... an incompatible resume is
-refused" requirement. This check is NOT run automatically by
+when they disagree, BEFORE any unit is touched -- the rule that adapter
+identity/version is recorded in the run and an incompatible resume is
+refused. This check is NOT run automatically by
 :func:`~content_pipeline.execution.controller.prepare_run` or
 :func:`~content_pipeline.execution.controller.finalize_run` (their A-min.2
 behavior, and the tests that pin it, are unchanged) -- it is invoked by
@@ -53,7 +53,7 @@ behavior, and the tests that pin it, are unchanged) -- it is invoked by
 out-of-process entry points a resumed worker actually calls through.
 
 ``parse_fn`` MUST be deterministic and store-independent for tracked runs
-(D1's adapter contract, restated from ``execution.controller``): finalize
+(the adapter contract, restated from ``execution.controller``): finalize
 re-runs it on text recorded at submit time, potentially long after and in a
 different process.
 """
@@ -95,7 +95,7 @@ class PreparedRequest:
 
 class AdapterVersionMismatchError(ExecutionError):
     """Raised by :func:`require_compatible_adapter` when ``adapter.adapter_version``
-    disagrees with the run's recorded ``RunRecord.adapter_version`` (D1: an
+    disagrees with the run's recorded ``RunRecord.adapter_version`` (an
     incompatible resume is refused, never guessed)."""
 
     def __init__(self, run_id: str, run_adapter_version: str, adapter_version: str) -> None:
@@ -106,7 +106,7 @@ class AdapterVersionMismatchError(ExecutionError):
             f"run {run_id!r} was created with adapter_version "
             f"{run_adapter_version!r}, but this adapter reports "
             f"{adapter_version!r}; refusing to resume with a mismatched "
-            "adapter (D1) rather than guess it is compatible"
+            "adapter (adapter identity and version are recorded in the run) rather than guess it is compatible"
         )
 
 
@@ -550,19 +550,19 @@ class RunAdapter:
     unchanged):
 
     - ``parse_fn`` -- ``text -> payload``. Called mechanically on the durably
-      recorded ``accepted_text``; never re-validates (D1). THE SAME callable
+      recorded ``accepted_text``; never re-validates (submit-time acceptance is authoritative). THE SAME callable
       a ``backend``-path ``run_wave`` call (or a protocol ``submit`` verb)
       evaluated the response under -- not a second, independently-supplied
-      copy (D1's re-parse requirement).
+      copy (the re-parse requirement).
     - ``apply`` -- ``(unit_id, payload) -> None``. The consumer's delivery
       side effect (e.g. a ``deliver.*`` write). It may raise
       ``execution.model.ApplyRejected`` only when it guarantees that no
-      side effect occurred; any uncertain outcome must remain D6
+      side effect occurred; any uncertain outcome must remain apply_unknown
       ``apply_unknown``.
     - ``reconcile`` -- optional ``unit_id -> bool``. Answers "did this
       unit's apply already land" for a unit found ``apply_unknown``. Absent
       means finalize refuses to proceed past any ``apply_unknown`` unit
-      (D6, fail closed).
+      (fail closed).
 
     A-min.3 widenings (new, optional, trailing fields -- see the module
     docstring; every A-min.2 caller that never sets these observes no
@@ -652,7 +652,7 @@ class RunAdapter:
         Uses ``validation_spec_for`` when supplied. Otherwise composes one
         from ``parse_fn``, ``validators``, and ``validation_context`` -- the
         SAME three inputs ``submit_validated`` already threads into its own
-        internally-built ``ValidationSpec`` (plan D1), so a protocol
+        internally-built ``ValidationSpec`` (submit-time acceptance is authoritative), so a protocol
         ``submit`` verb judges a response exactly as the inline driver's
         ``backend`` path would have. Raises ``ValueError`` when neither
         ``validation_spec_for`` nor ``parse_fn`` is supplied.
@@ -672,7 +672,7 @@ class RunAdapter:
 
 
 def require_compatible_adapter(run: RunRecord, adapter: RunAdapter) -> None:
-    """Refuse an incompatible resume (D1).
+    """Refuse an incompatible resume (adapter identity and version are recorded in the run).
 
     Compares ``adapter.adapter_version`` against ``run.adapter_version`` --
     equal (including both ``""``, the "identity not tracked" default) passes;

@@ -2,7 +2,7 @@
 
 The digest exists so a process that did NOT run the work (a supervising
 session, a batch-boundary check, an operator) can answer "how is this run
-going" from durable state alone. Invariant 6 (the plan's, restated here as the
+going" from durable state alone. The digest rule (restated here as the
 module's whole reason to exist): the digest never contains prompts, unit
 payloads, or full outputs -- only counts, timestamps, and small operational
 codes.
@@ -67,7 +67,7 @@ class FailureGroup:
 
     ``error_code`` is :func:`_classify` applied to whatever the caller passed
     to :meth:`~content_pipeline.execution.store.ExecutionStore.fail_unit` as
-    ``error`` -- never the raw text (invariant 6 / the plan's digest-leak
+    ``error`` -- never the raw text (the digest rule / the digest-leak
     fix). Two failures with the identical raw error text still group under
     the identical code, so this loses grouping fidelity to nothing; it only
     loses the ability to read the text back out of the digest.
@@ -198,7 +198,7 @@ def compute_status(
         # recent_failures both exclude a skip, or it would burn a
         # recent_failures slot and inflate the failure signal exactly like
         # the defect this guards against. Checking the error text's prefix,
-        # not storing it, keeps invariant 6 intact: skip: is a library-owned
+        # not storing it, keeps the digest rule intact: skip: is a library-owned
         # constant, so deriving a count/exclusion from it is content-free
         # and legal.
         if a.error is not None and a.error.startswith(SKIP_ERROR_PREFIX):

@@ -344,7 +344,7 @@ channel either function could scan. It is set by the CALLER on the raised
 exception's ``halt_kind`` attribute after re-reading the session rollout
 (llm-scripting-kit's ``CodexCliBackend`` / ``read_codex_pool``, >= 0.45.0),
 and :func:`classify_openai_exception` reports that carried verdict verbatim,
-ahead of any delegation or text-based classification (D6, migration step
+ahead of any delegation or text-based classification (migration step
 10). content-pipeline-kit has no verdict write-back of its own (that stays
 llm-scripting-kit's pinned-verdict machinery) -- it only classifies, so
 :data:`HALT_INSUFFICIENT_CREDIT` stays a distinct kind here rather than
@@ -432,7 +432,7 @@ def _classify_openai_exception_local(exc: BaseException) -> Optional[str]:
     the two are kept as separate functions so the delegation in
     :func:`classify_openai_exception` is a single, obvious try/except rather
     than interleaved with the classification rules themselves. It is
-    stdlib-only and importable with no shared lib present, per D6 / migration
+    stdlib-only and importable with no shared lib present, per migration
     step 10's "keep the local fallback importable without llm_scripting_kit".
     """
     halt_kind = getattr(exc, "halt_kind", None)
@@ -524,7 +524,8 @@ def classify_openai_exception(exc: BaseException) -> Optional[str]:
     classifier nor llm_scripting_kit's ``classify_openai_exception`` scans
     for it (that check lives only on the CLI backend's own ``classify_halt``,
     which this generic exception classifier is not), so checking it here is
-    what makes D6's rule hold regardless of which branch runs next (migration
+    what makes a carried quota halt (which moves the runner on to the next
+    entry) reach the runner regardless of which branch runs next (migration
     step 10).
 
     Otherwise delegates to
@@ -533,8 +534,7 @@ def classify_openai_exception(exc: BaseException) -> Optional[str]:
     same rules against the same category vocabulary (``HALT_AUTH == "auth"``,
     ``HALT_RATE_LIMIT == "rate_limit"``, ``HALT_INSUFFICIENT_CREDIT ==
     "insufficient_credit"``, ``HALT_QUOTA == "quota"`` on both sides, verified
-    against ``tests/llm-scripting-kit/test_completion_halt.py`` and this
-    module's own tests), so delegating changes no observable behaviour today
+    by tests on both sides), so delegating changes no observable behaviour today
     and avoids maintaining the duplicate. The import is lazy and optional,
     matching the pattern used elsewhere in this module (see
     :func:`_classify_openai_exception_local` above and
@@ -563,7 +563,7 @@ def classify_openai_exception(exc: BaseException) -> Optional[str]:
 # A reasoning model given a low `max_tokens` can spend its ENTIRE output
 # budget on hidden reasoning and return `text == ""` with `output_tokens`
 # nonzero. `evaluate_submission` / `submit_validated` correctly reject that
-# (D1: submit-time adjudication is authoritative, fail-closed is right) --
+# (submit-time adjudication is authoritative; fail-closed is right) --
 # this section does not change that. It only makes the empty-but-spent shape
 # distinguishable from a genuinely empty response (`output_tokens == 0`), so
 # a caller does not mistake a `max_tokens` tuning problem for a parser bug.
@@ -1032,8 +1032,8 @@ class ResponseCache:
         rather than a swallowed one.
 
         Does not change the cache KEY -- :func:`build_cache_key` is untouched
-        and cache-key stability across this change is a settled decision
-        (plan D3). This is a write-path hardening only.
+        and cache-key stability across this change is a settled requirement.
+        This is a write-path hardening only.
         """
         if not response.text or not response.text.strip():
             return False
@@ -1302,11 +1302,11 @@ class ValidationSpec:
     and ``block_soft`` policy so :func:`evaluate_submission` takes a single
     argument instead of four independently-threaded pieces of a caller's
     contract. This is the SAME contract :func:`submit_validated` drives its
-    loop with (plan D1) -- it builds one ``ValidationSpec`` from its own
+    loop with (submit-time acceptance is authoritative) -- it builds one ``ValidationSpec`` from its own
     parameters and calls :func:`evaluate_submission` with it, rather than
     reimplementing the parse/validate step inline. A ``RunAdapter``'s
-    eventual typed ``ValidationSpec`` field (plan A-min.3,
-    ``execution/adapter.py``, not built here) widens this shape for the
+    eventual typed ``ValidationSpec`` field (``execution/adapter.py``,
+    not built here) widens this shape for the
     out-of-process worker protocol; it does not replace it.
     """
 
@@ -1338,7 +1338,7 @@ class EvaluationResult:
 def evaluate_submission(text: str, spec: ValidationSpec) -> EvaluationResult:
     """Judge one candidate response against ``spec`` -- parse, then validate.
 
-    Extracted from :func:`submit_validated`'s per-attempt body (plan D1) so a
+    Extracted from :func:`submit_validated`'s per-attempt body (submit-time acceptance is authoritative) so a
     worker in another process can evaluate a submission WITHOUT the
     surrounding retry/backend/cache machinery: this function is PURE. It
     makes no backend calls, no cache reads or writes, reads no clock, touches

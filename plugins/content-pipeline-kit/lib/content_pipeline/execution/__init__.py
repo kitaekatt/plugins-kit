@@ -33,7 +33,7 @@ Submodules:
   / :func:`~content_pipeline.execution.controller.finalize_run` /
   :func:`~content_pipeline.execution.controller.unfinished_units` /
   ``record_halt`` / ``pause_run`` / ``resume_run``, the prepare/finalize
-  lifecycle plus the driver-shared D4 halt response, and the local
+  lifecycle plus the driver-shared halt response, and the local
   ``RunAdapter``-shaped seam both ``drivers.inline.run_wave`` and
   ``finalize_run`` call through.
 - ``drivers`` -- driver implementations that execute a prepared wave through
@@ -43,7 +43,7 @@ Submodules:
   the consumer's full five-responsibility worker-facing contract (reconstruct
   unit by id, build a prepared request, provide a ``ValidationSpec``, apply a
   payload, optionally reconcile an ``apply_unknown``), plus
-  ``require_compatible_adapter`` for D1's incompatible-resume refusal. This is
+  ``require_compatible_adapter`` for the incompatible-resume refusal. This is
   the canonical home of ``RunAdapter`` as of A-min.3 -- ``controller.py``
   imports and re-exports it unchanged (widened in place, not duplicated; see
   that module's "RunAdapter-shaped seam" docstring section).
@@ -82,9 +82,7 @@ and ``execution.status`` directly without triggering those heavier imports --
 each submodule's own dependency footprint is what matters, not this
 package's aggregate.
 
-Out of scope for this phase (see the plan of record,
-``docs/planning/content-pipeline-kit/session-recipients-plan.md``, phase
-A-min.3): the background-session / workflow drivers (phases B and C). A-min.3
+Out of scope for this phase (phase A-min.3): the background-session / workflow drivers (phases B and C). A-min.3
 ships the worker protocol, the full ``RunAdapter`` (mountable handlers,
 adapter identity/version-gated resume), pure evaluation, and cache hardening
 on top of the A-min.1 store and A-min.2 prepare/finalize controller.

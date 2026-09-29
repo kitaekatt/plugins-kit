@@ -30,7 +30,7 @@ DISPATCHER's: it claims each unit before launching that unit's session and
 passes the resulting fencing token to the worker in its launch prompt, so a
 worker never claims anything and a session left alive by an earlier dispatch
 cannot take the claim back after a reclaim. `renew` is the dispatcher's too
--- D5 makes the dispatcher the renewer in the background lane
+-- the background lane makes the dispatcher the renewer in the background lane
 (`supervise_tick` calls the store's lease-renew method itself, on a schedule,
 while a worker session is alive), so a worker session never runs it.
 `prepare`, `status`, `pause`, `resume`, `finalize`, `claim`, and `renew` are
