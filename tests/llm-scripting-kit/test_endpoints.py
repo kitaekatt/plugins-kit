@@ -649,3 +649,68 @@ class TestRegistryMarkersResolve:
         # config-declared endpoints carry the keys too, unmarked
         cfg = resolve_endpoint("local-vllm", config=CUSTOM_CFG)
         assert cfg["frontdoor"] is False and cfg["billing_mode"] is None
+
+
+class TestResolveEndpointEffortStyle:
+    """``resolve_endpoint`` exposes the direct-call effort delivery (additive keys)."""
+
+    def _registry(self, tmp_path, monkeypatch, text):
+        home = tmp_path / "home"
+        home.mkdir()
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.setenv("USERPROFILE", str(home))
+        path = tmp_path / "reg.yaml"
+        path.write_text(text, encoding="utf-8")
+        monkeypatch.setenv("MODEL_ENDPOINTS_REGISTRY", str(path))
+
+    def test_registry_entries_carry_style_and_source(self, tmp_path, monkeypatch):
+        self._registry(
+            tmp_path,
+            monkeypatch,
+            "models:\n"
+            "  gpu:\n    base_url: http://g/v1\n    model: m\n    reasoning_effort: medium\n"
+            "    routing: {group: q, effort_style: ninfer}\n"
+            "  own:\n    base_url: http://o/v1\n    model: m\n    effort_style: chat_template_kwargs\n"
+            "  fd:\n    base_url: http://fd/v1\n    model: q\n    frontdoor: true\n"
+            "  plain:\n    base_url: http://p/v1\n    model: m\n    reasoning_effort: medium\n",
+        )
+        gpu = resolve_endpoint("gpu", config=CUSTOM_CFG)
+        assert (gpu["effort_style"], gpu["effort_style_source"]) == ("ninfer", "routing")
+        assert gpu["request_defaults"] == {"reasoning_effort": "medium"}  # unchanged
+        own = resolve_endpoint("own", config=CUSTOM_CFG)
+        assert (own["effort_style"], own["effort_style_source"]) == ("chat_template_kwargs", "endpoint")
+        fd = resolve_endpoint("fd", config=CUSTOM_CFG)
+        assert (fd["effort_style"], fd["effort_style_source"]) == ("top-level", "frontdoor")
+        plain = resolve_endpoint("plain", config=CUSTOM_CFG)
+        assert (plain["effort_style"], plain["effort_style_source"]) == (None, "none")
+        assert plain["request_defaults"] == {"reasoning_effort": "medium"}
+
+    def test_config_declared_endpoints_carry_the_keys(self):
+        cfg = {
+            "endpoints": {
+                **CUSTOM_CFG["endpoints"],
+                "styled": {
+                    "base_url": "http://s/v1", "key_env": None, "model": "m",
+                    "effort_style": "top-level",
+                },
+                "fd": {"base_url": "http://f/v1", "key_env": None, "model": "g", "frontdoor": True},
+            },
+        }
+        styled = resolve_endpoint("styled", config=cfg)
+        assert (styled["effort_style"], styled["effort_style_source"]) == ("top-level", "endpoint")
+        fd = resolve_endpoint("fd", config=cfg)
+        assert (fd["effort_style"], fd["effort_style_source"]) == ("top-level", "frontdoor")
+        plain = resolve_endpoint("local-vllm", config=cfg)
+        assert (plain["effort_style"], plain["effort_style_source"]) == (None, "none")
+
+    def test_config_model_entry_passes_effort_style_through(self):
+        cfg = {
+            "endpoints": {
+                "styled": {
+                    "base_url": "http://s/v1", "key_env": None, "model": "m",
+                    "effort_style": "ninfer",
+                },
+            },
+        }
+        entry = discover_model_entries(config=cfg)["styled"]
+        assert (entry.effort_style, entry.effort_style_declared) == ("ninfer", True)

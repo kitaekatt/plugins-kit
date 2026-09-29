@@ -528,3 +528,185 @@ class TestFrontdoorAndBillingMarkers:
         assert reg.entries["c"].billing_mode is None
         assert any("'a'" in n and "billing" in n for n in reg.notes)
         assert any("'b'" in n and "billing" in n for n in reg.notes)
+
+
+# ---------------------------------------------------------------------------
+# Effort delivery: entry-level effort_style, declared vs defaulted routing
+# style, the direct-call resolution order, and the registry warnings.
+# ---------------------------------------------------------------------------
+
+
+def _load_text(tmp_path, text):
+    path = tmp_path / "m.yaml"
+    path.write_text(text, encoding="utf-8")
+    return load_endpoint_registry({REGISTRY_ENV: str(path)})
+
+
+def _entry_yaml(name, extra=""):
+    return f"  {name}:\n    base_url: http://{name}.invalid/v1\n    model: {name}-m\n{extra}"
+
+
+class TestEffortStyleSchema:
+    def test_entry_level_effort_style_parses(self, tmp_path):
+        reg = _load_text(tmp_path, "models:\n" + _entry_yaml("a", "    effort_style: ninfer\n"))
+        entry = reg.entries["a"]
+        assert (entry.effort_style, entry.effort_style_declared) == ("ninfer", True)
+        assert reg.notes == []
+
+    def test_entry_level_unsupported_is_valid(self, tmp_path):
+        reg = _load_text(tmp_path, "models:\n" + _entry_yaml("a", "    effort_style: unsupported\n"))
+        assert reg.entries["a"].effort_style == "unsupported"
+        assert reg.notes == []
+
+    def test_invalid_entry_level_style_is_noted_and_resolves_to_none(self, tmp_path):
+        from llm_scripting_kit.model_endpoints import resolve_effort_style
+
+        reg = _load_text(
+            tmp_path,
+            "models:\n"
+            + _entry_yaml(
+                "a",
+                "    effort_style: toplevel\n    frontdoor: true\n"
+                "    routing: {group: g, effort_style: ninfer}\n",
+            ),
+        )
+        entry = reg.entries["a"]
+        assert (entry.effort_style, entry.effort_style_declared) == (None, True)
+        assert any("'a'" in n and "invalid 'effort_style'" in n for n in reg.notes)
+        # Declared-invalid does NOT fall through to frontdoor or routing.
+        delivery = resolve_effort_style(entry)
+        assert (delivery.style, delivery.source, delivery.deliverable) == (None, "endpoint", False)
+
+    def test_routing_style_declared_vs_defaulted(self, tmp_path):
+        reg = _load_text(
+            tmp_path,
+            "models:\n"
+            + _entry_yaml("declared", "    routing: {group: g, effort_style: chat_template_kwargs}\n")
+            + _entry_yaml("defaulted", "    routing: {group: g}\n"),
+        )
+        declared = reg.entries["declared"].routing
+        defaulted = reg.entries["defaulted"].routing
+        assert (declared.effort_style, declared.effort_style_declared) == ("chat_template_kwargs", True)
+        assert (defaulted.effort_style, defaulted.effort_style_declared) == ("top-level", False)
+        assert reg.notes == []
+
+    def test_routing_accepts_unsupported(self, tmp_path):
+        reg = _load_text(
+            tmp_path, "models:\n" + _entry_yaml("a", "    routing: {group: g, effort_style: unsupported}\n")
+        )
+        assert reg.entries["a"].routing.effort_style == "unsupported"
+        assert reg.notes == []
+
+    def test_invalid_routing_style_is_noted_and_is_none(self, tmp_path):
+        from llm_scripting_kit.model_endpoints import deployment_effort_style, resolve_effort_style
+
+        reg = _load_text(
+            tmp_path, "models:\n" + _entry_yaml("a", "    routing: {group: g, effort_style: nope}\n")
+        )
+        routing = reg.entries["a"].routing
+        assert (routing.effort_style, routing.effort_style_declared) == (None, True)
+        assert any("routing has invalid 'effort_style'" in n for n in reg.notes)
+        # Neither a direct call nor the front door guesses a wire format.
+        assert resolve_effort_style(reg.entries["a"]).deliverable is False
+        assert deployment_effort_style(reg.entries["a"]) is None
+
+
+class TestEffortResolutionOrder:
+    def _resolve(self, tmp_path, extra):
+        from llm_scripting_kit.model_endpoints import resolve_effort_style
+
+        reg = _load_text(tmp_path, "models:\n" + _entry_yaml("a", extra))
+        return resolve_effort_style(reg.entries["a"])
+
+    def test_endpoint_beats_frontdoor_and_routing(self, tmp_path):
+        d = self._resolve(
+            tmp_path,
+            "    effort_style: chat_template_kwargs\n    frontdoor: true\n"
+            "    routing: {group: g, effort_style: ninfer}\n",
+        )
+        assert (d.style, d.source) == ("chat_template_kwargs", "endpoint")
+
+    def test_frontdoor_beats_declared_routing(self, tmp_path):
+        d = self._resolve(
+            tmp_path, "    frontdoor: true\n    routing: {group: g, effort_style: ninfer}\n"
+        )
+        assert (d.style, d.source) == ("top-level", "frontdoor")
+
+    def test_declared_routing_is_the_fallback(self, tmp_path):
+        d = self._resolve(tmp_path, "    routing: {group: g, effort_style: ninfer}\n")
+        assert (d.style, d.source, d.deliverable) == ("ninfer", "routing", True)
+
+    def test_nothing_declared_is_none(self, tmp_path):
+        d = self._resolve(tmp_path, "")
+        assert (d.style, d.source, d.deliverable) == (None, "none", False)
+
+    def test_routing_without_style_is_not_deliverable_directly_but_is_top_level_at_the_front_door(
+        self, tmp_path
+    ):
+        """The paid-spillover shape: routing with no effort_style."""
+        from llm_scripting_kit.model_endpoints import deployment_effort_style, resolve_effort_style
+
+        reg = _load_text(tmp_path, "models:\n" + _entry_yaml("a", "    routing: {group: g, order: 3}\n"))
+        entry = reg.entries["a"]
+        assert resolve_effort_style(entry).deliverable is False
+        assert resolve_effort_style(entry).source == "none"
+        assert deployment_effort_style(entry) == "top-level"
+
+    def test_deployment_style_prefers_the_entry_level_style(self, tmp_path):
+        from llm_scripting_kit.model_endpoints import deployment_effort_style
+
+        reg = _load_text(
+            tmp_path,
+            "models:\n" + _entry_yaml("a", "    effort_style: unsupported\n    routing: {group: g}\n"),
+        )
+        assert deployment_effort_style(reg.entries["a"]) == "unsupported"
+
+    def test_harness_entry_resolves_to_none(self, tmp_path):
+        from llm_scripting_kit.model_endpoints import resolve_effort_style
+
+        reg = _load_text(tmp_path, "models:\n  h:\n    harness: codex\n    model: m\n")
+        assert resolve_effort_style(reg.entries["h"]).source == "none"
+
+
+class TestEffortWarnings:
+    def test_reasoning_effort_without_a_style_warns_once(self, tmp_path):
+        reg = _load_text(tmp_path, "models:\n" + _entry_yaml("a", "    reasoning_effort: medium\n"))
+        assert len(reg.notes) == 1
+        assert "'a'" in reg.notes[0] and "reasoning_effort 'medium'" in reg.notes[0]
+        assert "a" in reg.entries  # a warning, never a failure
+
+    def test_conflicting_declared_styles_warn(self, tmp_path):
+        reg = _load_text(
+            tmp_path,
+            "models:\n"
+            + _entry_yaml(
+                "a", "    effort_style: chat_template_kwargs\n    routing: {group: g, effort_style: ninfer}\n"
+            ),
+        )
+        assert len(reg.notes) == 1
+        assert "overrides its routing effort_style 'ninfer'" in reg.notes[0]
+
+    def test_current_fleet_shaped_registry_warns_only_for_the_unstyled_entry(self, tmp_path):
+        """Mirrors the fleet registry's shapes: only the 64K entry, which
+        declares reasoning_effort but no style and no routing, warns."""
+        reg = _load_text(
+            tmp_path,
+            "default: fd\nmodels:\n"
+            + _entry_yaml(
+                "m5",
+                "    reasoning_effort: medium\n"
+                "    routing: {group: q, order: 2, max_parallel: 1, effort_style: chat_template_kwargs}\n",
+            )
+            + _entry_yaml("m5-64k", "    reasoning_effort: medium\n")
+            + _entry_yaml(
+                "gpu",
+                "    reasoning_effort: medium\n"
+                "    routing: {group: q, order: 1, max_parallel: 4, effort_style: ninfer}\n",
+            )
+            + _entry_yaml("small-m5", "    routing: {group: s, order: 2, effort_style: chat_template_kwargs}\n")
+            + _entry_yaml("paid", "    key_env: K\n    routing: {group: q, order: 3}\n")
+            + _entry_yaml("fd", "    frontdoor: true\n    reasoning_effort: medium\n")
+            + "  h:\n    harness: opencode\n    model: p/m\n",
+        )
+        assert len(reg.notes) == 1, reg.notes
+        assert "'m5-64k'" in reg.notes[0]

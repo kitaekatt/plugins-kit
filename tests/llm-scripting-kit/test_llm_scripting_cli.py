@@ -167,7 +167,10 @@ def test_complete_text_format_states_a_failure_on_stderr(monkeypatch, capsys):
 
 
 def test_resolve_emits_selection(monkeypatch, capsys):
+    from llm_scripting_kit.completion.adapter_capabilities import CLAUDE_CAPABILITIES
+
     backend = FakeBackend()
+    backend.capabilities = CLAUDE_CAPABILITIES
     monkeypatch.setattr(cli, "create_backend", lambda *_, **__: _selection(backend))
 
     assert cli.main(["resolve", "--models", "chosen"]) == 0
@@ -175,7 +178,201 @@ def test_resolve_emits_selection(monkeypatch, capsys):
     assert payload == {
         "backend": "fake", "effort": "high", "endpoint": "chosen",
         "kind": "harness", "model": "model-id",
+        "declared_effort": "high",
+        "effort_delivery": {
+            "deliverable": True, "emits": "--effort", "style": None, "source": "adapter",
+        },
     }
+
+
+# ---------------------------------------------------------------------------
+# Effort on transport entries: resolve / endpoints report deliverability, and
+# complete puts the registry default on the wire in the endpoint's style.
+# ---------------------------------------------------------------------------
+
+_EFFORT_REGISTRY = (
+    "models:\n"
+    "  gpu:\n    base_url: http://gpu.invalid/v1\n    model: gpu-m\n"
+    "    reasoning_effort: medium\n"
+    "    routing: {group: q, order: 1, effort_style: ninfer}\n"
+    "  gpu-high:\n    base_url: http://gpu.invalid/v1\n    model: gpu-m\n"
+    "    reasoning_effort: high\n"
+    "    routing: {group: q, order: 1, effort_style: ninfer}\n"
+    "  mac:\n    base_url: http://mac.invalid/v1\n    model: mac-m\n"
+    "    reasoning_effort: medium\n"
+    "    routing: {group: q, order: 2, effort_style: chat_template_kwargs}\n"
+    "  mac-64k:\n    base_url: http://mac.invalid/v1\n    model: mac-64k-m\n"
+    "    reasoning_effort: medium\n"
+    "  fd:\n    base_url: http://fd.invalid/v1\n    model: q\n    frontdoor: true\n"
+    "    reasoning_effort: medium\n"
+)
+
+
+@pytest.fixture
+def effort_registry(tmp_path, monkeypatch):
+    reg = tmp_path / "effort-reg.yaml"
+    reg.write_text(_EFFORT_REGISTRY, encoding="utf-8")
+    monkeypatch.setenv("MODEL_ENDPOINTS_REGISTRY", str(reg))
+    # `--models` ranks through describe(), which probes reachability; these
+    # hosts are fictional, so select the first declared id without a probe.
+    monkeypatch.setattr(cli, "_first_usable", lambda ids, _root: ids[0])
+    return reg
+
+
+class _WireClient:
+    """A fake OpenAI client recording each request's kwargs."""
+
+    def __init__(self, error=None):
+        self.calls = []
+        self.error = error
+        outer = self
+
+        class _Completions:
+            def create(self, **kwargs):
+                outer.calls.append(kwargs)
+                if outer.error is not None:
+                    raise outer.error
+                return _WireResponse()
+
+        class _Chat:
+            completions = _Completions()
+
+        self.chat = _Chat()
+
+
+class _WireResponse:
+    class _Choice:
+        class message:  # noqa: N801 -- mirrors the SDK attribute
+            content = "ok"
+            reasoning_content = None
+
+        finish_reason = "stop"
+
+    choices = [_Choice()]
+    usage = None
+
+
+@pytest.fixture
+def wire(monkeypatch):
+    """Route the REAL factory + OpenRouterBackend to a recording fake client."""
+    from llm_scripting_kit import client as client_mod
+
+    fake = _WireClient()
+    monkeypatch.setattr(client_mod, "make_openai_client", lambda **_: fake)
+    return fake
+
+
+def test_resolve_transport_reports_the_delivered_effort(effort_registry, capsys):
+    assert cli.main(["resolve", "--models", "gpu-high"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["effort"] == "xhigh"  # delivered, post-remap
+    assert payload["declared_effort"] == "high"
+    assert payload["effort_delivery"] == {
+        "deliverable": True, "emits": "reasoning_effort", "style": "ninfer",
+        "source": "routing", "remap": {"high": "xhigh"},
+    }
+
+
+def test_resolve_undeliverable_entry_reports_null_effort(effort_registry, capsys):
+    assert cli.main(["resolve", "--models", "mac-64k"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["effort"] is None
+    assert payload["declared_effort"] == "medium"
+    assert payload["effort_delivery"] == {
+        "deliverable": False, "emits": None, "style": None, "source": "none",
+    }
+
+
+def test_endpoints_reports_effort_delivery_and_the_registry_note(effort_registry, capsys):
+    assert cli.main(["endpoints"]) == cli.EXIT_OK
+    payload = json.loads(capsys.readouterr().out)
+    eps = payload["endpoints"]
+    assert eps["gpu"]["reasoning_effort"] == "medium"
+    assert eps["gpu"]["effort_delivery"]["style"] == "ninfer"
+    assert eps["mac"]["effort_delivery"]["emits"] == "chat_template_kwargs.reasoning_effort"
+    assert eps["fd"]["effort_delivery"]["source"] == "frontdoor"
+    assert eps["mac-64k"]["effort_delivery"]["deliverable"] is False
+    effort_notes = [n for n in payload["notes"] if "reasoning_effort" in n]
+    assert len(effort_notes) == 1 and "'mac-64k'" in effort_notes[0]
+    # The family record keeps effort dropped and names it conditional.
+    openrouter = payload["capabilities"]["openrouter"]
+    assert "effort" in openrouter["dropped_params"]
+    assert "effort" in openrouter["conditional_params"]
+
+
+def test_complete_databench_mirror_explicit_extras_are_byte_identical(
+    effort_registry, wire, tmp_path, capsys
+):
+    """databench sends options.extras.reasoning_effort when its own effort is
+    set. That wire must stay exactly what it was: the caller's value verbatim
+    (no remap, no second channel), and `effort` still reported dropped."""
+    path = _request(
+        tmp_path,
+        {
+            "protocol": 1, "endpoint": "gpu", "system": "s", "prompt": "p",
+            "options": {"extras": {"reasoning_effort": "xhigh"}},
+        },
+    )
+    assert cli.main(["complete", "--request-file", path, "--format", "json"]) == cli.EXIT_OK
+    assert wire.calls[0]["extra_body"] == {"reasoning_effort": "xhigh"}
+    response = json.loads(capsys.readouterr().out)["response"]
+    assert "effort" in response["dropped_params"]
+    assert response["forwarded_params"] == ["extras.reasoning_effort"]
+
+
+def test_complete_without_extras_sends_the_registry_default(effort_registry, wire, tmp_path, capsys):
+    path = _request(
+        tmp_path, {"protocol": 1, "endpoint": "gpu", "system": "s", "prompt": "p"}
+    )
+    assert cli.main(["complete", "--request-file", path]) == cli.EXIT_OK
+    assert wire.calls[0]["extra_body"] == {"reasoning_effort": "medium"}
+    response = json.loads(capsys.readouterr().out)["response"]
+    assert "effort" not in response["dropped_params"]
+    assert response["forwarded_params"] == []
+
+
+def test_complete_effort_flag_is_remapped_for_ninfer(effort_registry, wire, capsys):
+    assert cli.main(["complete", "--models", "gpu", "--prompt", "p", "--effort", "high"]) == 0
+    assert wire.calls[0]["extra_body"] == {"reasoning_effort": "xhigh"}
+
+
+def test_complete_chat_template_kwargs_entry_nests_the_default(effort_registry, wire, capsys):
+    assert cli.main(["complete", "--models", "mac", "--prompt", "p"]) == 0
+    assert wire.calls[0]["extra_body"] == {"chat_template_kwargs": {"reasoning_effort": "medium"}}
+
+
+def test_complete_undeliverable_entry_sends_no_effort(effort_registry, wire, capsys):
+    assert cli.main(["complete", "--models", "mac-64k", "--prompt", "p"]) == 0
+    assert "extra_body" not in wire.calls[0]
+    response = json.loads(capsys.readouterr().out)["response"]
+    assert "effort" in response["dropped_params"]
+
+
+@pytest.mark.parametrize(
+    "extras,dropped_has_effort,forwarded",
+    [
+        (None, False, []),  # translated: effort delivered
+        ({"reasoning_effort": "low"}, True, ["extras.reasoning_effort"]),  # overridden
+        ({"reasoning_effort": None}, True, []),  # suppressed: key not on the wire
+    ],
+    ids=["translated", "overridden", "suppressed"],
+)
+def test_failure_envelope_reports_from_the_effort_plan(
+    effort_registry, monkeypatch, tmp_path, capsys, extras, dropped_has_effort, forwarded
+):
+    from llm_scripting_kit import client as client_mod
+
+    fake = _WireClient(error=RuntimeError("boom"))
+    monkeypatch.setattr(client_mod, "make_openai_client", lambda **_: fake)
+    request = {"protocol": 1, "endpoint": "gpu", "system": "s", "prompt": "p"}
+    if extras is not None:
+        request["options"] = {"extras": extras}
+    path = _request(tmp_path, request)
+    assert cli.main(["complete", "--request-file", path]) == cli.EXIT_FAILURE
+    response = json.loads(capsys.readouterr().out)["response"]
+    assert response["status"] == "error"
+    assert ("effort" in response["dropped_params"]) is dropped_has_effort
+    assert response["forwarded_params"] == forwarded
 
 
 # ---------------------------------------------------------------------------

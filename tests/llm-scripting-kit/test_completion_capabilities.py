@@ -595,3 +595,71 @@ def test_codex_extra_keys_match_the_advertisement():
         if name.startswith("extras.")
     }
     assert advertised == set(CODEX_EXTRA_KEYS)
+
+
+# -- per-endpoint specialization (conditional params) -----------------------
+#
+# The digests are sha256(json.dumps(record.to_json())) of each family record as
+# llm-scripting-kit 0.53.0 serialized it. The harness records must not move at
+# all; openrouter may differ ONLY by the added `conditional_params` key.
+
+_PRE_CONDITIONAL_DIGESTS = {
+    "claude-cli": "4c45176d9465b035fa6cb67fa130a1d072b387a98a7a0f6f683b5ef942d20aef",
+    "codex-cli": "d92754c127616a71ec29bf51f47bea11ae014d89e2e1e2f062721b1baba1fe45",
+    "opencode-cli": "5da7421996e12913e5bb8633a1cdd98462b5ae16d9328f5c1f6895ab428ddc7b",
+    "openrouter": "48974b5178183adf014e82980c0f878078e74f160552be9567f253a551a43358",
+}
+
+
+def _digest(payload) -> str:
+    import hashlib
+
+    return hashlib.sha256(json.dumps(payload).encode()).hexdigest()
+
+
+@pytest.mark.parametrize("adapter", ["claude-cli", "codex-cli", "opencode-cli"])
+def test_harness_family_records_serialize_byte_identically(adapter):
+    payload = ADAPTER_CAPABILITIES[adapter].to_json()
+    assert "conditional_params" not in payload and "endpoint" not in payload
+    assert _digest(payload) == _PRE_CONDITIONAL_DIGESTS[adapter]
+
+
+def test_openrouter_family_record_only_gains_conditional_effort():
+    payload = OPENROUTER_CAPABILITIES.to_json()
+    conditional = payload.pop("conditional_params")
+    assert _digest(payload) == _PRE_CONDITIONAL_DIGESTS["openrouter"]
+    assert set(conditional) == {"effort"}
+    # Truthful default for an unknown endpoint: still dropped, not honored.
+    assert "effort" in OPENROUTER_CAPABILITIES.dropped_params
+    assert not OPENROUTER_CAPABILITIES.honors("effort")
+
+
+@pytest.mark.parametrize(
+    "style,emits",
+    [
+        ("top-level", "reasoning_effort"),
+        ("ninfer", "reasoning_effort"),
+        ("chat_template_kwargs", "chat_template_kwargs.reasoning_effort"),
+    ],
+)
+def test_specialized_record_emits_per_style(style, emits):
+    from llm_scripting_kit.completion.endpoint_profile import (
+        EndpointProfile,
+        endpoint_capabilities,
+    )
+    from llm_scripting_kit.effort import EffortDelivery
+
+    profile = EndpointProfile("e", EffortDelivery(style, "endpoint"), "medium")
+    record = endpoint_capabilities(OPENROUTER_CAPABILITIES, profile)
+    assert record.params["effort"].emits == emits
+    assert record.honors("effort")
+    assert "effort" not in record.dropped_params
+    assert "effort" not in record.conditional_params
+    assert record.endpoint == "e"
+    payload = record.to_json()
+    assert payload["endpoint"] == "e"
+    assert "conditional_params" not in payload  # emptied, so not serialized
+    # The disjointness invariant holds on the specialized record too.
+    honored = {name.split(".")[0] for name in record.params}
+    assert not (honored & set(record.dropped_params))
+    assert ALL_OPTION_FIELDS <= honored | set(record.dropped_params)

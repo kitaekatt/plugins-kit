@@ -84,3 +84,44 @@ def test_the_floor_propagates_through_a_transport_only_describe(shipped, monkeyp
         ("or-qwen", declaration.DISPOSITION_UNREACHABLE),
         ("typo", declaration.DISPOSITION_UNRESOLVED),
     ]
+
+
+# ---------------------------------------------------------------------------
+# BackendSelection.capabilities: the adapter record specialized per endpoint.
+# ---------------------------------------------------------------------------
+
+
+def _registry(tmp_path, monkeypatch, text):
+    path = tmp_path / "reg.yaml"
+    path.write_text(text, encoding="utf-8")
+    monkeypatch.setenv("MODEL_ENDPOINTS_REGISTRY", str(path))
+
+
+def test_transport_selection_capabilities_are_specialized(tmp_path, monkeypatch):
+    _registry(
+        tmp_path, monkeypatch,
+        "models:\n"
+        "  mac:\n    base_url: http://mac.invalid/v1\n    model: m\n"
+        "    reasoning_effort: medium\n"
+        "    routing: {group: q, effort_style: chat_template_kwargs}\n"
+        "  plain:\n    base_url: http://p.invalid/v1\n    model: m\n",
+    )
+    mac = factory.create_backend("mac")
+    assert mac.effort == "medium"
+    assert mac.capabilities.honors("effort")
+    assert mac.capabilities.params["effort"].emits == "chat_template_kwargs.reasoning_effort"
+    assert mac.capabilities.endpoint == "mac"
+
+    from llm_scripting_kit.completion.adapter_capabilities import OPENROUTER_CAPABILITIES
+
+    plain = factory.create_backend("plain")
+    assert plain.capabilities is OPENROUTER_CAPABILITIES
+
+
+def test_harness_selection_capabilities_are_the_family_record(monkeypatch):
+    monkeypatch.setattr(factory, "load_model_config", lambda **_: {
+        "default_endpoint": "reviewer",
+        "endpoints": {"reviewer": {"harness": "codex", "model": "gpt-test"}},
+    })
+    selected = factory.create_backend()
+    assert selected.capabilities is selected.backend.capabilities

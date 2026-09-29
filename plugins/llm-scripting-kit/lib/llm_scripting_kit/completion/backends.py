@@ -50,7 +50,14 @@ from .adapter_capabilities import (
     CLAUDE_CAPABILITIES,
     OPENROUTER_CAPABILITIES,
 )
+from ..effort import OUTCOME_TRANSLATED, EffortPlan, plan_effort
 from .capabilities import Capabilities
+from .endpoint_profile import (
+    EndpointProfile,
+    endpoint_capabilities,
+    profile_from_resolved,
+    unresolved_profile,
+)
 from .results import (
     check_applied_controls,
     derive_dropped_params,
@@ -105,6 +112,12 @@ class OpenRouterBackend:
     THREAD SAFETY: one instance may be shared across worker threads, and the
     lazy client build is guarded by double-checked locking -- see
     :meth:`_ensure_client`.
+
+    EFFORT: ``options.effort`` reaches the wire only when the endpoint resolves
+    a delivering effort style (``model_endpoints.resolve_effort_style``);
+    :func:`llm_scripting_kit.effort.plan_effort` decides the extra body, and an
+    effort the caller already put in ``extras`` wins. ``capabilities`` stays the
+    family record; :meth:`endpoint_capabilities` is this endpoint's.
     """
 
     endpoint: Optional[str] = None
@@ -118,6 +131,79 @@ class OpenRouterBackend:
     _cost_trusted: Optional[bool] = field(
         default=None, init=False, repr=False, compare=False
     )
+    _resolved_cache: Any = field(default=None, init=False, repr=False, compare=False)
+
+    _UNRESOLVED: ClassVar[object] = object()
+
+    def _resolved(self) -> Optional[Dict[str, Any]]:
+        """This endpoint's ``resolve_endpoint`` result, read once per instance.
+
+        None when it cannot be resolved. Shared by the native-cost trust gate
+        and the effort profile, and read lazily so a call that needs neither
+        pays no config read. A concurrent first read may resolve twice; both
+        reads agree, so no lock is taken.
+        """
+        if self._resolved_cache is None:
+            from ..models import resolve_endpoint  # noqa: PLC0415
+
+            try:
+                self._resolved_cache = resolve_endpoint(
+                    self.endpoint,
+                    project_root=str(self.project_root)
+                    if self.project_root is not None
+                    else None,
+                )
+            except Exception:  # noqa: BLE001 -- unresolvable: untrusted, no effort style
+                self._resolved_cache = self._UNRESOLVED
+        cached = self._resolved_cache
+        return None if cached is self._UNRESOLVED else cached
+
+    def endpoint_profile(self) -> EndpointProfile:
+        """This endpoint's profile (resolves the endpoint on first use)."""
+        resolved = self._resolved()
+        if resolved is None:
+            return unresolved_profile(self.endpoint)
+        return profile_from_resolved(
+            resolved, endpoint=self.endpoint or resolved.get("name")
+        )
+
+    def endpoint_capabilities(self) -> Capabilities:
+        """The family record specialized to this endpoint's profile."""
+        return endpoint_capabilities(self.capabilities, self.endpoint_profile())
+
+    def effort_plan(self, options: Optional[BackendOptions] = None) -> EffortPlan:
+        """What ``complete`` would put on the wire for effort, without calling.
+
+        The endpoint is resolved only when ``options.effort`` is set, so a call
+        without an effort reads no configuration here.
+        """
+        opts = options or BackendOptions()
+        style = self.endpoint_profile().effort.style if opts.effort is not None else None
+        return plan_effort(opts.extras, opts.effort, style)
+
+    def params_report(
+        self, options: Optional[BackendOptions] = None, plan: Optional[EffortPlan] = None
+    ) -> "tuple[tuple, tuple]":
+        """``(dropped_params, forwarded_params)`` for one call, from its effort plan.
+
+        Derived from the family record, then corrected by what the plan did:
+        ``effort`` is dropped unless the plan translated it (overridden,
+        suppressed and undeliverable efforts all went nowhere), and an extras
+        key the plan removed from the wire is not reported as forwarded. The
+        CLI's failure envelope calls this too, so a failed call reports the
+        same truth a completed one would have.
+        """
+        opts = options or BackendOptions()
+        plan = plan if plan is not None else self.effort_plan(opts)
+        dropped = derive_dropped_params(self.capabilities, opts)
+        if plan.outcome == OUTCOME_TRANSLATED:
+            dropped = tuple(p for p in dropped if p != "effort")
+        forwarded = tuple(
+            name
+            for name in derive_forwarded_params(self.capabilities, opts)
+            if name.split(".", 1)[1] in plan.extra_body
+        )
+        return dropped, forwarded
 
     def _trusts_native_cost(self) -> bool:
         """Whether this endpoint's native ``usage.cost`` is authoritative USD.
@@ -129,21 +215,11 @@ class OpenRouterBackend:
         actually carries a native cost, so ordinary calls pay no config read.
         """
         if self._cost_trusted is None:
-            from ..models import resolve_endpoint  # noqa: PLC0415
-
-            try:
-                ep = resolve_endpoint(
-                    self.endpoint,
-                    project_root=str(self.project_root)
-                    if self.project_root is not None
-                    else None,
-                )
-                trusted = bool(ep.get("frontdoor")) or (
-                    ep.get("billing_mode") == "provider-reported"
-                )
-            except Exception:  # noqa: BLE001 -- an unresolvable endpoint is untrusted
-                trusted = False
-            self._cost_trusted = trusted
+            ep = self._resolved()
+            self._cost_trusted = ep is not None and (
+                bool(ep.get("frontdoor"))
+                or ep.get("billing_mode") == "provider-reported"
+            )
         return self._cost_trusted
 
     def _reported_cost(self, usage: Any) -> "tuple[Optional[float], Optional[str]]":
@@ -270,17 +346,20 @@ class OpenRouterBackend:
             create_kwargs["temperature"] = opts.temperature
         if opts.timeout_s is not None:
             create_kwargs["timeout"] = opts.timeout_s
-        if opts.extras:
+        plan = self.effort_plan(opts)
+        if plan.extra_body:
             # The generic escape hatch: anything the caller puts in `extras`
-            # rides as TOP-LEVEL request parameters (``reasoning_effort`` is the
-            # motivating case). Omitted entirely when empty, so the request
-            # shape for existing callers is byte-identical.
+            # rides as TOP-LEVEL request parameters. Omitted entirely when
+            # empty, so the request shape for existing callers is
+            # byte-identical. The effort plan adds ``opts.effort`` in the
+            # endpoint's style when the caller's extras name none, and removes
+            # a reasoning_effort the caller set to null (an explicit opt-out).
             #
-            # Nothing here validates a key, which is why every one of them is
+            # Nothing here validates a key, which is why every caller key is
             # reported in ``forwarded_params`` rather than ``dropped_params``:
             # the key really is sent, and the only claim this adapter makes is
             # that it did not check it.
-            create_kwargs["extra_body"] = dict(opts.extras)
+            create_kwargs["extra_body"] = plan.extra_body
 
         started_at = utc_now_iso()
         start = time.monotonic()
@@ -338,6 +417,7 @@ class OpenRouterBackend:
             cache_hit_tokens = int(getattr(usage, "prompt_cache_hit_tokens", 0) or 0)
 
         reported_cost_usd, reported_cost_source = self._reported_cost(usage)
+        dropped_params, forwarded_params = self.params_report(opts, plan)
         return LLMResponse(
             text=text,
             model=resolved_model,
@@ -351,8 +431,8 @@ class OpenRouterBackend:
             from_cache=False,
             reported_cost_usd=reported_cost_usd,
             reported_cost_source=reported_cost_source,
-            dropped_params=derive_dropped_params(self.capabilities, opts),
-            forwarded_params=derive_forwarded_params(self.capabilities, opts),
+            dropped_params=dropped_params,
+            forwarded_params=forwarded_params,
             # This adapter emits no execution control: it builds an HTTP request,
             # which has no sandbox, tool or permission surface to constrain.
             execution_controls_applied=(),

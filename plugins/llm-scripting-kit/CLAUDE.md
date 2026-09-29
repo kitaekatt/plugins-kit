@@ -395,10 +395,36 @@ and its existence is the evidence: a genuinely uniform seam would not need it.
 **`BackendOptions` is a union, not a neutral description of the work.**
 `user_cache_prefix` is OpenRouter-only; `allowed_tools`, `disallowed_tools` and
 `system_prompt_mode` are claude-cli-only; `effort` reaches claude-cli, codex,
-and opencode but not OpenRouter; `cwd`
+and opencode, and reaches OpenRouter only on a transport entry that resolves
+an `effort_style`; `cwd`
 reaches the three CLI backends and not OpenRouter, which is why `cwd` is not a
 core param of this seam. `temperature` and `max_tokens` are accepted and then
 dropped by all CLI backends -- dropped and REPORTED, not ignored.
+
+**Effort on a transport entry is conditional, and one module owns its
+vocabulary.** `llm_scripting_kit.effort` defines the styles (`top-level`,
+`ninfer`, `chat_template_kwargs`, `unsupported`), the ninfer `high` -> `xhigh`
+remap, and `plan_effort`, the precedence a direct call follows: an effort the
+caller put in `extras` wins verbatim (top-level over nested when both are
+present; an explicit null means "send none"), then `BackendOptions.effort` is
+placed in the endpoint's style, else it is dropped. The front door's
+`_normalize_body` uses the same `extract_effort` / `place_effort`, so the two
+paths cannot disagree about a style. Style resolution for a DIRECT call is
+`model_endpoints.resolve_effort_style`: entry `effort_style` > `frontdoor:
+true` (top-level) > a DECLARED `routing.effort_style` > none; a
+declared-invalid style resolves to none rather than falling through. The front
+door's own choice is `deployment_effort_style`, where an omitted routing style
+still means top-level. The openrouter family record keeps `effort` in
+`dropped_params` and lists it in `conditional_params`;
+`completion.endpoint_profile.endpoint_capabilities` specializes the record per
+endpoint, and `OpenRouterBackend.params_report` derives the per-call report
+from the effort plan -- the CLI failure envelope calls it too, so a failed call
+never reports an overridden or suppressed effort as delivered. The factory
+(`BackendSelection.effort`), the `complete` verb and `declaration.run` fill the
+registry `reasoning_effort` default into `opts.effort`. `resolve` reports
+`effort` (the delivered value, null when undeliverable), `declared_effort` and
+`effort_delivery`; `endpoints` reports `reasoning_effort` and `effort_delivery`
+per transport entry.
 
 That inequality is no longer folklore: **each adapter ADVERTISES it.** Every
 backend class carries a `capabilities: ClassVar[Capabilities]`
@@ -475,7 +501,8 @@ What it reads: `routing:` on a transport entry in the user's model-endpoints
 registry -- `group` (the model name callers send), `order` (tier; lower fills
 first), `max_parallel` (cap; omitted = uncapped, only sensible on the last
 tier), `effort_style` (`top-level`, `ninfer` = top-level with `high` mapped to
-`xhigh`, or `chat_template_kwargs`). Fill-first: the lowest tier fills to its
+`xhigh`, `chat_template_kwargs`, or `unsupported`; omitted = top-level, and an
+entry-level `effort_style` overrides it). Fill-first: the lowest tier fills to its
 cap, the next tier takes the excess, and `--spill-after` (default 0 s) is how
 long a request waits for a slot in a lower tier before spilling. A transport
 entry WITHOUT `routing:` is not a deployment, which is how the front door's own

@@ -15,11 +15,13 @@ from ..completion.types import (
     COST_SOURCE_REGISTRY_UNMETERED,
     valid_reported_cost,
 )
+from ..effort import extract_effort, place_effort
 from ..model_endpoints import (
     EndpointEntry,
     EndpointRegistry,
     EndpointRegistryError,
     TRANSPORT_KIND,
+    deployment_effort_style,
     load_endpoint_registry,
 )
 
@@ -176,31 +178,21 @@ def _apply_cost_policy(
 
 
 def _normalize_body(body: dict[str, Any], entry: EndpointEntry) -> tuple[dict[str, Any], Optional[str]]:
+    """Rewrite an inbound body for ``entry``: model, ``user`` stripped, effort relocated.
+
+    The effort vocabulary is shared with the direct completion seam
+    (:mod:`llm_scripting_kit.effort`). An inbound effort in either channel is
+    removed and re-placed in the deployment's style; NInfer's ``high`` becomes
+    ``xhigh`` (its menu is none|low|medium|xhigh and it rejects ``high`` with a
+    400), and a deployment whose style delivers nothing (``unsupported``, an
+    invalid declaration, no routing) receives no effort at all.
+    """
     forwarded = dict(body)
-    if isinstance(forwarded.get("chat_template_kwargs"), dict):
-        forwarded["chat_template_kwargs"] = dict(forwarded["chat_template_kwargs"])
     user = forwarded.pop("user", None)
     forwarded["model"] = entry.model
-    effort = forwarded.pop("reasoning_effort", None)
-    if effort is None:
-        template = forwarded.get("chat_template_kwargs")
-        if isinstance(template, dict):
-            effort = template.pop("reasoning_effort", None)
-    if effort is not None and entry.routing is not None:
-        style = entry.routing.effort_style
-        if style == "ninfer" and effort == "high":
-            # NInfer's menu is none|low|medium|xhigh and rejects "high" with a
-            # 400; the remap is keyed on the ninfer style so a plain top-level
-            # OpenAI-compatible server still receives what the caller sent.
-            effort = "xhigh"
-        if style in ("top-level", "ninfer"):
-            forwarded["reasoning_effort"] = effort
-        else:
-            template = forwarded.get("chat_template_kwargs")
-            if not isinstance(template, dict):
-                template = {}
-                forwarded["chat_template_kwargs"] = template
-            template["reasoning_effort"] = effort
+    effort = extract_effort(forwarded)
+    if effort is not None:
+        place_effort(forwarded, effort, deployment_effort_style(entry))
     return forwarded, user
 
 

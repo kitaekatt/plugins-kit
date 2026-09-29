@@ -306,6 +306,14 @@ class Capabilities:
     back on. A transport that exposes no tools guarantees ``FILESYSTEM_WRITE``
     that way. A subject delivered by an emitted flag belongs in
     ``execution_controls`` instead, where ``emits`` keeps it falsifiable.
+
+    ``conditional_params`` names params the adapter emits ONLY for an endpoint
+    whose profile enables them; on a family record such a param also stays in
+    ``dropped_params``, because that is the truth for an endpoint nothing is
+    known about. A record SPECIALIZED to one endpoint
+    (``endpoint_profile.endpoint_capabilities``) carries that endpoint's name in
+    ``endpoint`` and has each enabled param moved into ``params``. Both keys
+    are serialized only when set, so a record without them is unchanged.
     """
 
     adapter: str
@@ -319,6 +327,8 @@ class Capabilities:
     system_prompt: SystemPromptCapability = field(
         default_factory=lambda: SystemPromptCapability(mode=NONE)
     )
+    conditional_params: Mapping[str, ParamCapability] = field(default_factory=dict)
+    endpoint: Optional[str] = None
 
     def honors(self, param: str) -> bool:
         """True when this adapter reads ``param`` at all."""
@@ -341,7 +351,7 @@ class Capabilities:
         )
 
     def to_json(self) -> Dict[str, Any]:
-        return {
+        result: Dict[str, Any] = {
             "adapter": self.adapter,
             "params": {k: v.to_json() for k, v in self.params.items()},
             "dropped_params": list(self.dropped_params),
@@ -350,6 +360,13 @@ class Capabilities:
             "structured_output": self.structured_output.to_json(),
             "system_prompt": self.system_prompt.to_json(),
         }
+        if self.conditional_params:
+            result["conditional_params"] = {
+                k: v.to_json() for k, v in self.conditional_params.items()
+            }
+        if self.endpoint is not None:
+            result["endpoint"] = self.endpoint
+        return result
 
 
 __all__ = [
