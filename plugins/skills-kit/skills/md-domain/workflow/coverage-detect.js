@@ -543,7 +543,7 @@ const FENCE = '\n\n-------------------------------------------------------------
 const subjectBlock = (s, key, ordinal, total) => {
   const chain = s.ambientClaudeMdPaths || []
   const chainClause = chain.length
-    ? `The CLAUDE.md files AMBIENT for this directory, root-most first:\n${chain.map((p) => `  - ${p}`).join('\n')}\n\nRead every one. A fact already carried by an ambient claim that RESOLVES is NOT a candidate -- that suppression is applied HERE, at assessment time, because establishing it requires reading the ambient document and usually the source it anchors to.`
+    ? `The CLAUDE.md files AMBIENT for this directory, root-most first (a directory's AGENTS.md appears here when it has no CLAUDE.md):\n${chain.map((p) => `  - ${p}`).join('\n')}\n\nRead every one. A fact already carried by an ambient claim that RESOLVES is NOT a candidate -- that suppression is applied HERE, at assessment time, because establishing it requires reading the ambient document and usually the source it anchors to.`
     : `This directory has NO ambient CLAUDE.md. Nothing loads for this code at all. That is not an error and not a skip -- it is the strongest form of the finding this verb exists to surface.`
 
   const exclusionClause = (s.skipped || []).length

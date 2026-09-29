@@ -56,12 +56,13 @@ class TestWrapperCopiesMatch:
         # (llm-scripting-kit); those stay the minimums below. git-kit and
         # p4-kit also launch skill scripts through the guarded BOOTSTRAP_PYTHON
         # form, which raises their floor to the interpreter contract's
-        # MIN_VERSION (0.120.0). llm-scripting-kit's describe/run call
+        # MIN_VERSION (0.120.0), and to 0.133.0, the release whose bundle supplies
+        # the AGENTS.md ancestor chain those skills read. llm-scripting-kit's describe/run call
         # bootstrap_lib.model_declaration (parse, CORE_IDS), first shipped in
         # bootstrap 0.129.0, which raises its floor to that release.
         expected = {
-            "git-kit": "0.120.0",
-            "p4-kit": "0.120.0",
+            "git-kit": "0.133.0",
+            "p4-kit": "0.133.0",
             "llm-scripting-kit": "0.129.0",
         }
         minimum = {"git-kit": "0.113.0", "p4-kit": "0.113.0",

@@ -23,6 +23,10 @@ The artifact is a **CLAUDE.md** (or **CLAUDE.local.md**): a file Claude Code loa
 
 **Load-trigger note (reachability).** A non-root CLAUDE.md loads on BOTH triggers: cwd descent into its directory AND file access (Read/Edit/Write) beneath it. Data directories and leaf code packages are typically worked by path from a repo-root cwd -- their CLAUDE.md files (review rails for committed-data diffs, package review notes) are REACHABLE and correctly placed. Do not flag such a file as dead weight or its facts for bubbling to root on a cwd-only reachability model; the reader set is "sessions touching files beneath this directory", by cwd or by path (see cohesion-principles `directory_claude_md`).
 
+### 1.0 Instruction-file precedence (AGENTS.md)
+
+Per directory, the instruction file is **CLAUDE.md when it exists; otherwise AGENTS.md.** An active AGENTS.md (a directory with no CLAUDE.md) is audited, generated, and chained as ancestor exactly like a CLAUDE.md, and every standard below applies to it unchanged. An AGENTS.md beside a CLAUDE.md is shadowed: it is ignored by every per-file lane (not discovered, not audited, not a project doc); the references lane's `md` scope still scans it for skill references. CLAUDE.local.md is unchanged and has no AGENTS counterpart. The deferred-defects sidecar keeps the literal name `CLAUDE-potential-defects.md` whichever file it belongs to. The resolver is `skills_kit_lib/instruction_files.py`; discovery scripts and the generation workflow's `documentPaths` apply it, so lanes never re-derive the rule.
+
 ### 1.1 Role (which subset of the classic standards applies)
 
 The role of a CLAUDE.md determines which subset of criteria applies. Roles are computed relative to the current working directory.

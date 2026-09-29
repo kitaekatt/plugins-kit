@@ -190,7 +190,7 @@ function lanePrompt(f) {
       ? `This is a genuine SKILL.md — apply all the criteria below.`
       : f.kind === 'skill_reference'
         ? `The caller classified this target as a skill reference document. ${applyClause}`
-        : `No \`kind\` signal was provided (typical for a review-mode subject-lens call, where the caller does not classify). Run the artifact-shape test YOURSELF FIRST: this lane audits the \`skill\` artifact's TWO subject shapes -- (a) a file whose BASENAME is \`SKILL.md\`, and (b) a skill REFERENCE DOCUMENT, i.e. a \`.md\` file inside a \`*/skills/<name>/references/\` folder. A \`CLAUDE.md\` / \`CLAUDE.local.md\` or any other standalone document is NEITHER -- if the path matches neither shape: ${declineInstruction} Otherwise apply the criteria for the shape it matched. ${applyClause}`
+        : `No \`kind\` signal was provided (typical for a review-mode subject-lens call, where the caller does not classify). Run the artifact-shape test YOURSELF FIRST: this lane audits the \`skill\` artifact's TWO subject shapes -- (a) a file whose BASENAME is \`SKILL.md\`, and (b) a skill REFERENCE DOCUMENT, i.e. a \`.md\` file inside a \`*/skills/<name>/references/\` folder. A \`CLAUDE.md\` / \`CLAUDE.local.md\` / \`AGENTS.md\` or any other standalone document is NEITHER -- if the path matches neither shape: ${declineInstruction} Otherwise apply the criteria for the shape it matched. ${applyClause}`
 
   const schemaClause = isRef
     ? `NOT APPLICABLE to a skill reference document. The mechanical validator's subject is a SKILL.md or a CLAUDE.md; there is no contract on a reference to validate. Do NOT run it, and do NOT emit a "validator unavailable" finding -- emit no Schema-group contract findings at all for this subject.`

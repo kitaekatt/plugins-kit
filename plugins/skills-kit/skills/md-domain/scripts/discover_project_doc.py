@@ -77,7 +77,7 @@ DOC_EXT = {".md", ".mdx", ".rst", ".txt"}
 MARKDEEP_SUFFIX = ".md.html"
 
 # Files that are other CLAUDE-artifacts, not project docs (audited elsewhere).
-_NOT_PROJECT_DOC_NAMES = {"SKILL.md", "CLAUDE.md", "CLAUDE.local.md"}
+_NOT_PROJECT_DOC_NAMES = {"SKILL.md", "CLAUDE.md", "CLAUDE.local.md", "AGENTS.md"}
 
 # Directory names that are vendored, generated, or build output -- never project
 # docs. Matched against any path segment.

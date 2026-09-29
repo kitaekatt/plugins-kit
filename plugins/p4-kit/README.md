@@ -19,10 +19,10 @@ The mechanisms that make it more than "ask a model about a diff":
   at the same baseline does not re-raise them. Reshelving or editing the CL
   invalidates the baseline and findings resurface; serious findings are
   never suppressed.
-- **CLAUDE.md-convention-aware review.** A dedicated reviewer checks the diff
+- **CLAUDE.md-convention-aware review (AGENTS.md where a directory has no CLAUDE.md).** A dedicated reviewer checks the diff
   against ancestor CLAUDE.md files and may flag a project-rule violation
   only when it can quote the rule verbatim.
-- **Path-scoped submit gates.** `Submit gate:` blocks in CLAUDE.md files
+- **Path-scoped submit gates.** `Submit gate:` blocks in CLAUDE.md (or AGENTS.md) files
   become a pre-submit confirmation checklist when the CL touches their
   scope. Advisory, not enforcement.
 - **Cost routing.** A `data_only` profile reviews docs/config-only CLs with

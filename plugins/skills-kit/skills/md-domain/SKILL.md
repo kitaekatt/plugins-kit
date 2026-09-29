@@ -100,6 +100,7 @@ WHAT I CAN DO
 WHAT I CAN DO IT TO
   skills             a SKILL.md and its reference documents      audit, author
   CLAUDE.md          one directory's ambient guidance            audit, author, generate
+                     (AGENTS.md counts when no CLAUDE.md sits beside it)
   project docs       READMEs, design records, docs/              audit, author
   cross-references   the links between all of the above          audit only
 
@@ -357,6 +358,7 @@ lanes:
     density_lens: true
     invocation_phrasings:
       - "audit this CLAUDE.md"
+      - "audit this AGENTS.md"
       - "check my claude_md block"
       - "is this CLAUDE.md too verbose / audit for token efficiency"
       - "review the directory review-notes file"
@@ -630,7 +632,7 @@ domain_skill:
         summary: What a good SKILL.md looks like -- per-type contract tables, description requirements, content-form choice, L1/L2/L3 allocation, hygiene thresholds -- plus section 10, the prose criteria for the artifact's second subject shape, a skill reference document. Read by both the audit_skill and author_skill lanes. Paired with skills_kit_lib/schema_registry.py, which wins on divergence.
       - id: claude_md_standards
         path: references/standards/claude-md-standards.md
-        keywords: [claude.md standards, claude_md block, C-1 R-1 A-1 H-1, ccp crp adp rules, code-directory review notes, CD-1, density DD-1, insight record shape, scope covers excludes]
+        keywords: [claude.md standards, claude_md block, C-1 R-1 A-1 H-1, ccp crp adp rules, code-directory review notes, CD-1, density DD-1, insight record shape, scope covers excludes, AGENTS.md, instruction-file precedence, shadowed AGENTS.md]
         summary: What a good CLAUDE.md looks like -- the classic C/R/A/H rule set, the CD code-directory review-notes dimension (shapes, observation kinds, anchoring discipline), and the opt-in DD density lens. Read by both the audit_claude_md and generate_claude_md lanes.
       - id: coverage_standards
         path: references/standards/coverage-standards.md

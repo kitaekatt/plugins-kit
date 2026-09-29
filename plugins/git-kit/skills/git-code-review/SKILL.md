@@ -100,7 +100,8 @@ technique_skill:
           tool: AskUserQuestion + git add/commit + prepare_review.py
         - n: 4
           action: |
-            Read every CLAUDE.md path in unique_claude_mds. Subagents do not need to re-read.
+            Read every path in unique_claude_mds (CLAUDE.md, or AGENTS.md where a directory has no
+            CLAUDE.md -- the bundle already applies that precedence). Subagents do not need to re-read.
             Also resolve the EXECUTABLE review-profile table -- profile ids, reviewer rosters,
             per-reviewer models, and validator_models -- by running "${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" ${CLAUDE_PLUGIN_ROOT}/scripts/render_review_profiles.py with
             `--project-root <bundle.project_root>` (omit the flag when bundle.project_root is
@@ -251,7 +252,9 @@ technique_skill:
             launches the reviewer subagents (or the reviewer Workflow, per the dispatch rule above), ALSO
             run md-domain's headless detect lanes for the NON-TRIVIAL claimed
             files, routed THREE ways by basename (plus one path-shape rule) -- at
-            most THREE lane groups total: (a) every claimed file named `CLAUDE.md` -> the
+            most THREE lane groups total: (a) every claimed file named `CLAUDE.md`, or `AGENTS.md` when it is ACTIVE (its directory has no
+            `CLAUDE.md`; a claimed `AGENTS.md` whose directory has a `CLAUDE.md` is SHADOWED: drop it from
+            every md-domain lane and audit it nowhere) -> the
             `audit_claude_md` lane's `skills/md-domain/workflow/claude-md-detect.js`; (b) every claimed
             file named `SKILL.md` OR sitting inside a `*/skills/<name>/references/` folder -> the
             `audit_skill` lane's `skills/md-domain/workflow/skill-detect.js`
@@ -260,7 +263,7 @@ technique_skill:
             lane's `skills/md-domain/workflow/project-doc-detect.js` (only if any). Pass `review: true`
             and, per claimed
             file, `preImagePath` = its `pre_image` from the bundle (null for an add), with the per-lane
-            `files[]` fields (CLAUDE.md: role / dimension / parentPath / ancestorClaudeMdPaths; SKILL.md
+            `files[]` fields (CLAUDE.md / active AGENTS.md: role / dimension / parentPath / ancestorClaudeMdPaths; SKILL.md
             and skill reference: ancestorClaudeMdPaths; project-doc: ancestorClaudeMdPaths), plus
             `mechanicalScan` = the claimed entry's sole `mechanical_scan.files[0]` record. Pass
             `mechanicalCheckPhrases` = `bundle.mechanical_check_phrases` once at the top level of
@@ -507,8 +510,8 @@ technique_skill:
         - A MET verdict means met WITH EVIDENCE. Name the file, the key and its default, the test, or the command and its result. A verdict with no evidence is the same empty signal as an unanswered prompt, just harder to notice.
         - NEEDS THE USER is for a fact you cannot derive -- an external system's state, a check that only runs on their hardware, an intent only they hold. It is not an escape hatch for a gate that is tedious to evaluate, and when you do use it, ask for that specific fact rather than asking whether they did the work.
         - md-domain findings are a SEPARATE, labeled section -- never interleave them with the code-review issue list. They come from md-domain's detect lanes (a subject-lens reviewer), not from the generic reviewer/validator subagents, so they are not filtered by the validators.
-        - The claim decision happens ONCE, at the step-2 probe: md-domain available -> `--claim '**/*.md'` (one glob covering CLAUDE.md, SKILL.md, a skill's `references/*.md`, and generic docs); md-domain absent -> no `--claim`. Claiming a skill's `references/*.md` assumes the INSTALLED audit_skill lane owns that subject shape; these kits declare no version constraint on skills-kit, so step 6 probes for it by capability and the skill-reference skew tier re-adds the exclusion when it is missing. Do not run prepare a second time just to add claims -- the only re-runs are the version-skew FALLBACKS (broad skew re-runs WITHOUT `--claim`; project-doc-only skew re-runs with `--claim '**/CLAUDE.md' --claim '**/SKILL.md' --claim '**/skills/*/references/*.md'`; skill-reference skew re-adds the `!**/skills/*/references/*.md` exclusion as a compatibility shim).
-        - Claimed `.md` files route THREE ways in step 6 -- `CLAUDE.md` -> the `audit_claude_md` lane; `SKILL.md` OR a file inside a `*/skills/<name>/references/` folder -> the `audit_skill` lane (its two subject shapes); every other `.md` -> the `audit_project_doc` lane (full routing table in references/md-domain-review.md; `.md.html` is never claimed). Never claim a shape no lane can audit: a declined file comes back NOT-AUDITED, which a caller can misread as a pass.
+        - The claim decision happens ONCE, at the step-2 probe: md-domain available -> `--claim '**/*.md'` (one glob covering CLAUDE.md, AGENTS.md, SKILL.md, a skill's `references/*.md`, and generic docs); md-domain absent -> no `--claim`. Claiming a skill's `references/*.md` assumes the INSTALLED audit_skill lane owns that subject shape; these kits declare no version constraint on skills-kit, so step 6 probes for it by capability and the skill-reference skew tier re-adds the exclusion when it is missing. Do not run prepare a second time just to add claims -- the only re-runs are the version-skew FALLBACKS (broad skew re-runs WITHOUT `--claim`; project-doc-only skew re-runs with `--claim '**/CLAUDE.md' --claim '**/AGENTS.md' --claim '**/SKILL.md' --claim '**/skills/*/references/*.md'`; skill-reference skew re-adds the `!**/skills/*/references/*.md` exclusion as a compatibility shim).
+        - Claimed `.md` files route THREE ways in step 6 -- `CLAUDE.md` (or an active `AGENTS.md`) -> the `audit_claude_md` lane; a shadowed `AGENTS.md` is dropped; `SKILL.md` OR a file inside a `*/skills/<name>/references/` folder -> the `audit_skill` lane (its two subject shapes); every other `.md` -> the `audit_project_doc` lane (full routing table in references/md-domain-review.md; `.md.html` is never claimed). Never claim a shape no lane can audit: a declined file comes back NOT-AUDITED, which a caller can misread as a pass.
         - A `NOT-AUDITED` verdict from a lane is NOT a pass. It means the lane declined the file as outside its criteria and read nothing. Render it as its own line, never fold it into the clean count, and never let it satisfy a submit gate -- treat it like the `## Mechanical checks (audit skipped)` section: an honest "not reviewed", not a result. Seeing one on a claimed file means the claim routing sent a file somewhere that cannot audit it; report that rather than accepting the verdict.
         - When skills-kit md-domain is absent the whole mechanism degrades silently: no `--claim`, no claimed_files, no md-domain section -- the md files get thin generic data_only coverage. Note the degradation in one line; do not treat it as an error.
         - The triviality gate is pure-mechanical and decided by prepare_review (per-claimed-file `trivial` / `trivial_reasons`); the skill never re-judges it. A TRIVIAL claimed file is reported via the mechanical-checks line and is NEVER sent to a detect lane or written to the ledger. When EVERY claimed file is trivial and there are no generic diff chunks, the whole audit is skipped -- render the `## Mechanical checks (audit skipped)` section, never a DIFF-CLEAN verdict, and never present the skip as an audit. A user or author asking for the full review overrides the gate.
@@ -672,7 +675,8 @@ technique_skill:
         the rule, you do not have a finding.
 
         Governing standards. The standards live in CLAUDE.md files inside this
-        repository. For each file in the diff, the governing CLAUDE.md files are the
+        repository; a directory with no CLAUDE.md but an AGENTS.md uses the AGENTS.md
+        as its CLAUDE.md, and an AGENTS.md beside a CLAUDE.md is ignored. For each file in the diff, the governing CLAUDE.md files are the
         one in that file's own directory and every CLAUDE.md in a parent directory up
         to the repository root. A CLAUDE.md that does not share a path with the file
         being reviewed does not govern it -- never cross-apply a rule between

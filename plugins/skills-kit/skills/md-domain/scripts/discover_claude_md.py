@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""discover_claude_md.py -- enumerate CLAUDE.md and CLAUDE.local.md files visible from the
+"""discover_claude_md.py -- enumerate CLAUDE.md (AGENTS.md when a directory has no
+CLAUDE.md) and CLAUDE.local.md files visible from the
 current working directory.
 
 Usage:
@@ -39,6 +40,7 @@ if str(_PLUGIN_ROOT) not in sys.path:
     sys.path.insert(0, str(_PLUGIN_ROOT))
 
 from skills_kit_lib.dirwalk import iter_dirs  # noqa: E402
+from skills_kit_lib.instruction_files import resolve_instruction_file  # noqa: E402
 
 
 DESCEND_MAX_DEPTH = 6
@@ -72,7 +74,7 @@ CODE_DATA_EXT = {
 # skipped entirely. `.sh` was already present.
 # .md files that are docs, not review-notes; CLAUDE.md/local are the audited file.
 _MD_LIKE = {".md", ".mdx", ".rst", ".txt"}
-_CLAUDE_NAMES = {"CLAUDE.md", "CLAUDE.local.md"}
+_CLAUDE_NAMES = {"CLAUDE.md", "CLAUDE.local.md", "AGENTS.md"}
 
 # Signal-B content markers (any hit flips the file to code-directory).
 _SIGNAL_B = re.compile(
@@ -178,10 +180,12 @@ def collect_ancestors(cwd: Path) -> list[tuple[Path, str]]:
         return out
     current = cwd.parent
     while True:
-        for name, role in (("CLAUDE.md", "ancestor"), ("CLAUDE.local.md", "local")):
-            candidate = current / name
-            if candidate.exists():
-                out.append((candidate, role))
+        resolved = resolve_instruction_file(current)
+        if resolved is not None:
+            out.append((resolved, "ancestor"))
+        local = current / "CLAUDE.local.md"
+        if local.exists():
+            out.append((local, "local"))
         if current == project_root:
             break
         current = current.parent
@@ -196,10 +200,12 @@ def collect_at_cwd(cwd: Path, has_ancestor_root: bool = False) -> list[tuple[Pat
     # file is a subordinate (`child`) -- the project-root-only hygiene checks
     # (H1/H2/H3) belong to the real root above, not to the launch-dir file.
     cwd_role = "child" if has_ancestor_root else "root"
-    for name, role in (("CLAUDE.md", cwd_role), ("CLAUDE.local.md", "local")):
-        candidate = cwd / name
-        if candidate.exists():
-            out.append((candidate, role))
+    resolved = resolve_instruction_file(cwd)
+    if resolved is not None:
+        out.append((resolved, cwd_role))
+    local = cwd / "CLAUDE.local.md"
+    if local.exists():
+        out.append((local, "local"))
     return out
 
 
@@ -222,9 +228,13 @@ def collect_descendants(
     ):
         if current_path == cwd:
             continue
-        for name, role in (("CLAUDE.md", "child"), ("CLAUDE.local.md", "local")):
+        # Instruction file: CLAUDE.md wins; AGENTS.md only when CLAUDE.md is absent.
+        for name in ("CLAUDE.md", "AGENTS.md"):
             if name in files:
-                out.append((current_path / name, role))
+                out.append((current_path / name, "child"))
+                break
+        if "CLAUDE.local.md" in files:
+            out.append((current_path / "CLAUDE.local.md", "local"))
     out.sort(key=lambda x: str(x[0]))
     return out
 
@@ -298,7 +308,7 @@ def main() -> int:
         return 0
 
     if not results:
-        print(f"No CLAUDE.md or CLAUDE.local.md files found at or near {cwd}.")
+        print(f"No CLAUDE.md, AGENTS.md or CLAUDE.local.md files found at or near {cwd}.")
     else:
         print(f"CLAUDE.md files visible from {cwd}:\n")
         for i, (path, role) in enumerate(results, start=1):

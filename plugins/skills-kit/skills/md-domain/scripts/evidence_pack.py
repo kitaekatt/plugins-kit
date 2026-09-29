@@ -41,6 +41,8 @@ _PLUGIN_ROOT = Path(__file__).resolve().parents[3]
 if str(_PLUGIN_ROOT) not in sys.path:
     sys.path.insert(0, str(_PLUGIN_ROOT))
 
+from skills_kit_lib.instruction_files import resolve_instruction_file  # noqa: E402
+
 _SCRIPTS_DIR = Path(__file__).resolve().parent
 _discover_claude_md_module = None
 
@@ -83,12 +85,23 @@ BACKTICK = re.compile(r"`([^`\n]+)`")
 MODAL = re.compile(r"\b(?:must|never|always|only|do\s+not)\b", re.I)
 
 
-def artifact_of(path: str | Path) -> str:
-    """Classify a Markdown artifact using both its basename and path."""
+SHADOWED_ARTIFACT = "shadowed-instruction-file"
+
+
+def artifact_of(path: str | Path, repo: Path | None = None) -> str:
+    """Classify a Markdown artifact using both its basename and path.
+
+    An AGENTS.md is a claude-md artifact when its directory holds no CLAUDE.md
+    (checked under `repo` when given). A shadowed AGENTS.md is
+    SHADOWED_ARTIFACT: not an audit subject for any lane.
+    """
     pure = Path(path)
     parts = pure.parts
     if pure.name == "CLAUDE.md":
         return "claude-md"
+    if pure.name == "AGENTS.md":
+        sibling = (Path(repo) / pure.parent / "CLAUDE.md") if repo else (pure.parent / "CLAUDE.md")
+        return SHADOWED_ARTIFACT if sibling.is_file() else "claude-md"
     if pure.name == "SKILL.md":
         return "skill"
     for index, part in enumerate(parts):
@@ -258,8 +271,8 @@ def _ancestors(repo: Path, subject: Path) -> list[Path]:
     result = []
     directory = subject.parent
     while True:
-        candidate = directory / "CLAUDE.md"
-        if candidate != subject and candidate.is_file():
+        candidate = resolve_instruction_file(directory)
+        if candidate is not None and candidate != subject:
             result.append(candidate)
         if directory == repo or repo not in directory.parents:
             break
@@ -610,7 +623,9 @@ def build_structured(repo_root: str | Path, rel_path: str | Path) -> dict[str, l
     if not subject.is_file():
         raise FileNotFoundError(subject)
     text = subject.read_text(encoding="utf-8")
-    artifact = artifact_of(rel)
+    artifact = artifact_of(rel, repo)
+    if artifact == SHADOWED_ARTIFACT:
+        raise ValueError(f"not an audit subject: {rel} is shadowed by a CLAUDE.md in the same directory")
     reference_rows, bad_lines = _references(repo, subject, text, artifact)
     return {
         "IDENTITY": _identity(repo, subject, artifact, text),
