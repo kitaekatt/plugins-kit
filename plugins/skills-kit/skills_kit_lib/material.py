@@ -22,11 +22,21 @@ lenient answer. Three states are told apart by `state`:
 The consumer contract is
 plugins/bootstrap/skills/plugin-dev/references/skill-material.md
 ("Probing for the module").
+
+This module is also the `material` command of scripts/skills_kit_tool.py
+(`main`, `build_parser`, the exit codes and `OUTCOMES`). The command prints
+the selected skills as one text block, or the provenance report as JSON, and
+maps each failure to one exit code; the three unavailable states above are
+all exit 3.
 """
 
 from __future__ import annotations
 
+import argparse
 import inspect
+import json
+import math
+import sys
 
 # The bootstrap version that first carries bootstrap_lib.skill_material with
 # every call shape this binding makes. This plugin's own constant: a stale
@@ -37,8 +47,9 @@ SKILL_MATERIAL_BOOTSTRAP = "0.138.0"
 _REQUIRED_REPORT_SCHEMA = "plugins-kit.skill-material-report/v1"
 
 _ABSENT_MESSAGE = (
-    "skills-kit's strict frontmatter mode needs bootstrap_lib, which is not "
-    "importable in this interpreter. Install bootstrap: "
+    "skills-kit's skill-material features (the strict frontmatter mode and "
+    "the material command) need bootstrap_lib, which is not importable in "
+    "this interpreter. Install bootstrap: "
     "claude plugin install bootstrap@plugins-kit. If bootstrap is installed, "
     "run skills-kit through its launcher, scripts/skills_kit_tool.py, which "
     "re-executes under the skills-kit venv that links bootstrap_lib. "
@@ -119,3 +130,179 @@ def no_pyyaml(exc: BaseException) -> SkillMaterialUnavailable:
     """The one mapping of the library's `PyYamlUnavailableError` to this
     binding's error. The caller raises the result `from exc`."""
     return SkillMaterialUnavailable(_NO_PYYAML_MESSAGE, state="no-pyyaml")
+
+
+# ---------------------------------------------------------------------------
+# The command: skills_kit_tool.py material
+# ---------------------------------------------------------------------------
+
+EXIT_OK = 0
+EXIT_REFUSED = 1
+EXIT_USAGE = 2
+EXIT_UNAVAILABLE = 3
+EXIT_OVER_BUDGET = 4
+
+# The four outcomes of a RUN, keyed by exit code. Exit 2 is deliberately not
+# a key: a malformed command line decides nothing about the skill, so it is
+# not a verdict on it. md-domain's render lane declares these values as its
+# verdicts.
+OUTCOMES = {
+    EXIT_OK: "RENDERED",
+    EXIT_REFUSED: "REFUSED",
+    EXIT_UNAVAILABLE: "UNAVAILABLE",
+    EXIT_OVER_BUDGET: "OVER-BUDGET",
+}
+
+_PROG = "material"
+
+
+def _positive_int(text: str) -> int:
+    try:
+        value = int(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"invalid int value: {text!r}") from None
+    if value <= 0:
+        raise argparse.ArgumentTypeError("must be greater than 0")
+    return value
+
+
+class _AddSkill(argparse.Action):
+    def __call__(self, parser, namespace, values, option_string=None):
+        refs = list(getattr(namespace, "refs", None) or [])
+        refs.append(
+            {"path": values, "level": "full", "declared_resources": True, "resources": []}
+        )
+        namespace.refs = refs
+
+
+class _Modifier(argparse.Action):
+    """A flag that changes the `--skill` given before it."""
+
+    def __call__(self, parser, namespace, values, option_string=None):
+        refs = getattr(namespace, "refs", None)
+        if not refs:
+            parser.error(f"{option_string} must come after the --skill it applies to")
+        ref = refs[-1]
+        if self.dest == "catalog":
+            ref["level"] = "catalog"
+        elif self.dest == "no_declared":
+            ref["declared_resources"] = False
+        else:
+            ref["resources"] = [*ref["resources"], values]
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog=_PROG,
+        description=(
+            "Print the text of the named skills, and the reference files they "
+            "declare, as one block for another model or agent. Reads files and "
+            "writes nothing."
+        ),
+    )
+    parser.add_argument(
+        "--skill", action=_AddSkill, metavar="PATH",
+        help="a skill directory or its SKILL.md; repeatable, order is kept",
+    )
+    parser.add_argument(
+        "--catalog", action=_Modifier, nargs=0, dest="catalog", default=argparse.SUPPRESS,
+        help="render the preceding --skill as name and description only",
+    )
+    parser.add_argument(
+        "--no-declared", action=_Modifier, nargs=0, dest="no_declared",
+        default=argparse.SUPPRESS,
+        help="do not load the files the preceding --skill declares",
+    )
+    parser.add_argument(
+        "--resource", action=_Modifier, dest="resource", metavar="REL",
+        default=argparse.SUPPRESS,
+        help="a further file of the preceding --skill, relative to its directory; repeatable",
+    )
+    parser.add_argument(
+        "--budget", type=_positive_int, required=True, metavar="N",
+        help="token budget for the whole block (chars/4 estimate); no default",
+    )
+    parser.add_argument(
+        "--json", action="store_true",
+        help="print the provenance report as JSON instead of the text block",
+    )
+    parser.set_defaults(refs=[])
+    return parser
+
+
+def _is_json_native(value) -> bool:
+    """A mapping whose every value, at every depth, is a str, int, finite
+    float, bool, None, list, or dict with str keys. Tuples and other objects
+    fail."""
+    if value is None or isinstance(value, (str, bool, int)):
+        return True
+    if isinstance(value, float):
+        return math.isfinite(value)
+    if isinstance(value, list):
+        return all(_is_json_native(item) for item in value)
+    if isinstance(value, dict):
+        return all(isinstance(k, str) and _is_json_native(v) for k, v in value.items())
+    return False
+
+
+def _write_stdout(text: str) -> None:
+    """UTF-8 with LF line ends on every platform, so the bytes equal the digest's."""
+    data = text.encode("utf-8")
+    buffer = getattr(sys.stdout, "buffer", None)
+    if buffer is None:
+        sys.stdout.write(text)
+        return
+    sys.stdout.flush()
+    buffer.write(data)
+    buffer.flush()
+
+
+def _fail(message: str, code: int) -> int:
+    print(f"{_PROG}: {message}", file=sys.stderr)
+    return code
+
+
+def main(argv=None) -> int:
+    parser = build_parser()
+    try:
+        args = parser.parse_args(sys.argv[1:] if argv is None else list(argv))
+    except SystemExit as exc:
+        return exc.code if isinstance(exc.code, int) else EXIT_USAGE
+    if not args.refs:
+        try:
+            parser.error("at least one --skill is required")
+        except SystemExit as exc:
+            return exc.code if isinstance(exc.code, int) else EXIT_USAGE
+
+    try:
+        module = load_skill_material()
+    except SkillMaterialUnavailable as exc:
+        return _fail(str(exc), EXIT_UNAVAILABLE)
+
+    mapping = {"skills": args.refs, "token_budget": args.budget}
+    try:
+        selection = module.SkillSelection.from_json(mapping)
+        result = module.materialize(selection)
+    except module.PyYamlUnavailableError as exc:
+        return _fail(str(no_pyyaml(exc)), EXIT_UNAVAILABLE)
+    except module.SkillMaterialBudgetExceeded as exc:
+        return _fail(str(exc), EXIT_OVER_BUDGET)
+    except module.SkillMaterialError as exc:
+        return _fail(str(exc), EXIT_REFUSED)
+
+    if not args.json:
+        _write_stdout(result.text + "\n")
+        return EXIT_OK
+
+    try:
+        document = result.report.to_json()
+    except TypeError:
+        return _fail(_TOO_OLD_MESSAGE, EXIT_UNAVAILABLE)
+    if not isinstance(document, dict) or not _is_json_native(document):
+        return _fail(_TOO_OLD_MESSAGE, EXIT_UNAVAILABLE)
+    _write_stdout(json.dumps(document, indent=2, sort_keys=True, ensure_ascii=True) + "\n")
+    return EXIT_OK
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -1,4 +1,4 @@
-"""scripts/skills_kit_tool.py: the documented launcher for audit/classify/tag.
+"""scripts/skills_kit_tool.py: the documented launcher for audit/classify/tag/material.
 
 md-domain's SKILL.md names the launcher as
 ``"${BOOTSTRAP_PYTHON:?...}" "${CLAUDE_PLUGIN_ROOT}/scripts/skills_kit_tool.py"
@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import ast
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -62,7 +63,7 @@ def test_exit_status_is_the_commands(tmp_path):
 def test_unknown_command_is_a_usage_error(tmp_path):
     run = _run(tmp_path, "bogus")
     assert run.returncode == 2
-    assert "usage: skills_kit_tool.py {audit|classify|tag}" in run.stderr
+    assert "usage: skills_kit_tool.py {audit|classify|tag|material}" in run.stderr
 
 
 def test_reexec_precedes_any_skills_kit_lib_import():
@@ -84,7 +85,10 @@ def test_skill_md_names_the_launcher():
     from bootstrap_lib.interpreter_env import PLUGIN_CALL_SITE_EXPR as expr
 
     text = SKILL.read_text(encoding="utf-8")
-    for command in ("audit", "classify", "tag"):
-        assert (f"'{expr} "
-                f'"${{CLAUDE_PLUGIN_ROOT}}/scripts/skills_kit_tool.py" {command}') in text
+    for command in ("audit", "classify", "tag", "material"):
+        # Two sites name each launch form: the capability's operation and the
+        # tool's command. Both must carry the real call-site expression.
+        launch = (f"'{expr} "
+                  f'"${{CLAUDE_PLUGIN_ROOT}}/scripts/skills_kit_tool.py" {command}')
+        assert len(re.findall(re.escape(launch) + "(?=[ '])", text)) == 2, command
     assert "-m skills_kit_lib." not in text

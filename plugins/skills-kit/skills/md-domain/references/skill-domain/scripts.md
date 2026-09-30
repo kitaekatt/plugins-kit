@@ -1,10 +1,10 @@
 # Skill-authoring scripts
 
-The skill-authoring tooling ships as modules of the plugin-level `skills_kit_lib` package: `audit`, `classify`, and `tag` are the per-skill CLI utilities, backed by the shared `markdown_heuristics` detectors and the `corpus` discovery module. They support the audit / classify / tag operations the agent applies during authoring and refinement. All of it is plain Python with one optional dependency (pyyaml; everything degrades gracefully without it).
+The skill-authoring tooling ships as modules of the plugin-level `skills_kit_lib` package: `audit`, `classify`, and `tag` are the per-skill CLI utilities, backed by the shared `markdown_heuristics` detectors and the `corpus` discovery module. They support the audit / classify / tag operations the agent applies during authoring and refinement. A fourth command, `material`, prints skills as prompt text through bootstrap's skill-material library. All of it is plain Python. `audit`, `classify` and `tag` have one optional dependency (pyyaml) and degrade gracefully without it. `material` requires both pyyaml and bootstrap's `bootstrap_lib`, and refuses without either (exit 3).
 
 The scripts surface candidates and structural facts; the agent weighs them. They never make semantic judgments on whether a rule has a real counter, whether a hedge softens vs. carves a bounded exception, or whether content is meaningfully complete. Those rows return `judgment-required` and the agent runs them by hand against the contract in `framework.md`.
 
-## Invocation (all three CLIs)
+## Invocation (all four CLIs)
 
 The CLIs are package modules, so run them with `-m` from the plugin root (the directory containing `skills_kit_lib/`), under the plugin venv:
 
@@ -13,7 +13,7 @@ cd plugins/skills-kit            # dev tree; or the plugin's install path
 python -m skills_kit_lib.audit <path-to-SKILL.md>
 ```
 
-The bootstrap-provisioned venv lives at `~/.claude/plugins/data/plugins-kit/skills-kit/.venv` (use its `bin/python` / `Scripts/python.exe` from any cwd). A bare system Python also works: `audit` degrades to the contract-staged state without pyyaml; `classify` and `tag` fall back to regex detection.
+The bootstrap-provisioned venv lives at `~/.claude/plugins/data/plugins-kit/skills-kit/.venv` (use its `bin/python` / `Scripts/python.exe` from any cwd). A bare system Python also works for the first three: `audit` degrades to the contract-staged state without pyyaml; `classify` and `tag` fall back to regex detection. `material` does not degrade: it needs bootstrap's `bootstrap_lib` and pyyaml, and without either it prints a diagnosis and exits 3. Run it through the launcher, which re-executes under the plugin venv that has both.
 
 ## audit (skills_kit_lib/audit.py)
 
@@ -90,6 +90,37 @@ python -m skills_kit_lib.tag <path-to-SKILL.md> <skill-type> --force
 - `tag` modifies the file in place. For bulk-tagging operations, run on a clean working tree so changes are reviewable per-file.
 - The valid type values are the canonical types registered in `skills_kit_lib/schema_registry.py` (dashed form). Passing any other value errors out before touching the file.
 - The frontmatter parser is regex-based and handles the simple `key: value` shape used throughout this project. Frontmatter using YAML features beyond simple flat keys (lists, nested mappings) is not preserved verbatim by tag and should be hand-edited instead.
+
+## material (skills_kit_lib/material.py)
+
+**Purpose.** Print the text of named skills, and the reference files each declares, as one block for another model or agent, or print the report of what went into that block. It reads files and writes nothing. The rules for what is read, how duplicates merge and how the budget is checked belong to bootstrap's skill-material library, which this command calls; the `plugin-dev` skill in the bootstrap plugin documents them.
+
+**Usage.** Run it through the launcher, from any directory:
+
+```
+"${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${CLAUDE_PLUGIN_ROOT}/scripts/skills_kit_tool.py" material --skill <path> [--catalog] [--no-declared] [--resource <rel>]... [--skill <path> ...] --budget <n> [--json]
+```
+
+- `--skill <path>` is a skill directory or its `SKILL.md`; it is repeatable and the order is kept. A relative path resolves against the caller's working directory.
+- `--catalog`, `--no-declared` and `--resource <rel>` apply to the `--skill` before them, and are usage errors before the first one. `--catalog` renders name and description only. `--no-declared` leaves out the files the skill declares in its own `SKILL.md`. `--resource` names one further file, relative to that skill's directory, and is repeatable.
+- `--budget <n>` is required, must be greater than zero, and has no default.
+- `--json` prints the report instead of the block.
+
+**Output.** On success stdout holds one of two things and nothing else, in UTF-8 with LF line ends. Without `--json` it is the text block followed by one newline. With `--json` it is the report as JSON (two-space indent, sorted keys, ASCII only) followed by one newline; it carries the digest, the token estimates, each skill's declared list, each file rendered with its hash, and the suppressed duplicates, and it does not carry the text.
+
+**Exit codes.** On any failure stdout is empty and stderr holds the diagnosis, marked with a `material:` prefix.
+
+- `0` -- printed.
+- `1` -- the library refused the input: no frontmatter, invalid YAML, no `name`, a named or declared file that is missing or unsafe, or two different skills with one name. The message names the ref at fault, counted from zero in command-line order, and the file.
+- `2` -- usage: argparse's message (a missing `--budget` or `--skill`, a modifier before the first `--skill`, a budget that is not above zero).
+- `3` -- the library cannot run in this interpreter. The message says which of three states it is: `bootstrap_lib` is absent (install bootstrap), the linked copy is older than bootstrap 0.138.0 (update bootstrap), or PyYAML is missing (run through the launcher). With `--json`, a report whose `to_json()` fails or returns anything but plain JSON values is reported as the second state.
+- `4` -- over budget. The message gives the estimate against the budget and the way to fit. When the block was rendered before it was refused, the message also itemizes each skill and file with its estimate and the total; a single file too large to read within the budget is refused from its size alone.
+
+**Gotchas.**
+
+- The estimate is the character count divided by four, rounded up. It can undercount code-heavy or CJK text.
+- Exit 4 is the one refusal answered by changing the arguments and running again. Nothing is truncated and no smaller block is printed.
+- The md-domain `render` verb is this command behind a lane, and `references/lanes/render-lane.md` is the procedure Claude follows for it.
 
 ## HTML hierarchy report
 

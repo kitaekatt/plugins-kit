@@ -11,15 +11,16 @@ one owned surface with a place each fact belongs, rather than a pile of
 files that drift apart independently.
 
 There is one front door, `/md-domain`, and it works on a **verb x artifact**
-grammar: pick a verb (`audit`, `author`, `generate`, or `analyze`) and, for
-`audit`/`author`, an artifact (`skill`, `claude-md`, `project-doc`, or
-`references`; `references` is audit-only).
+grammar: pick a verb (`audit`, `author`, `generate`, `analyze`, or `render`)
+and, for `audit`/`author`, an artifact (`skill`, `claude-md`, `project-doc`, or
+`references`; `references` is audit-only). `render` takes a skill.
 
 ```
 /md-domain audit claude-md ./CLAUDE.md
 /md-domain author skill
 /md-domain generate claude-md ./some-directory
 /md-domain analyze ./some-directory
+/md-domain render skill ./some-skill --budget 8000
 ```
 
 - **audit** checks what you already have: placement (does this fact belong
@@ -36,6 +37,9 @@ grammar: pick a verb (`audit`, `author`, `generate`, or `analyze`) and, for
   `claude-md`.
 - **analyze** is report-only: it reads one directory's direct code and reports
   what it found. It never remediates.
+- **render** prints a skill, and the reference files it declares, as one text
+  block you can place in another model's or agent's prompt. It is not an audit:
+  it reads the skill and judges nothing. See "Rendering a skill" below.
 
 Both verbs read the same four standards documents -- one per artifact,
 covering SKILL.md, CLAUDE.md, project documents, and cross-references. That
@@ -75,6 +79,32 @@ compliant with it.
 - **materialized-output** -- a design pattern for tools that materialize an
   insight from deep scans over project data.
 
+## Rendering a skill
+
+`/md-domain render skill <path> --budget <n>` prints the skill's name,
+description and instructions, then the reference files its own `SKILL.md`
+declares, as one text block. A token budget is required and has no default: the
+number is yours, and a block over it is refused whole, never cut short. Three
+flags shape each skill: `--catalog` prints name and description only,
+`--no-declared` leaves out the declared files, and `--resource <file>` adds one
+more. Add `--json` to print the report instead of the text: a digest, token
+estimates, and each file that went in with its hash. The command writes nothing.
+
+`/md-domain render` runs the `material` command of the plugin's
+`scripts/skills_kit_tool.py` launcher, which works from any directory. It exits
+0 when it printed, 1 when a skill or file was refused, 2 for a malformed command
+line, 3 when bootstrap's library cannot run (not installed, too old, or no
+PyYAML), and 4 when the block is over budget.
+
+For a script of your own, the rendering is done by `bootstrap_lib.skill_material`
+in the bootstrap plugin: build a `SkillSelection` of `SkillRef` entries and a
+budget, call `materialize`, and read the text and the report from the result.
+Its contract is the bootstrap plugin's `plugin-dev` skill, in the
+`skill-material` reference. A script that uses it declares `pyyaml` itself.
+Through skills-kit, the `strict` mode of `parse_frontmatter` in
+`skills_kit_lib.markdown_heuristics` reads a skill's frontmatter with the same
+strict rules and raises instead of returning empty fields.
+
 ## How it relates to neighboring tools
 
 - Anthropic's skill-creator generates new skills from a description.
@@ -111,7 +141,7 @@ and installs automatically.
 ```
 
 Bare invocation shows the menu: audit or generate a SKILL.md, a CLAUDE.md, a
-project doc, or (audit only) cross-references. Point it at your root
+project doc, or (audit only) cross-references, and render a skill as text. Point it at your root
 CLAUDE.md.
 
 ## When not to use it

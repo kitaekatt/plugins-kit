@@ -3,15 +3,15 @@ _schema_version: 1
 name: md-domain
 author: christina
 skill-type: domain-skill
-description: Use when auditing, authoring, generating, or analyzing markdown -- SKILL.md, CLAUDE.md, docs. Do NOT use for knowledge-encoding or update-documentation.
+description: Use when auditing/authoring/generating/analyzing SKILL.md, CLAUDE.md, docs or rendering a skill prompt. Do NOT use for knowledge-encoding/update-documentation.
 disable-model-invocation: false
 user-invocable: true
-argument-hint: "[audit|author|generate|analyze] [skill|claude-md|project-doc|references|<directory>] [<path>|--diff|jobs <dir>] [--coverage <dir>] [--review] [--density] [--json] [--advanced] [fast]"
+argument-hint: "[audit|author|generate|analyze|render] [skill|claude-md|project-doc|references|<directory>] [<path>|--diff|jobs <dir>] [--coverage <dir>] [--review] [--density] [--json] [--advanced] [--budget <n>] [fast]"
 ---
 
 # md-domain
 
-The single front door for four dispatch verbs over project markdown:
+The single front door for five dispatch verbs over project markdown:
 
 - **audit** -- check an existing document against its standards. Report a verdict.
 - **analyze** -- read ONE directory's own code and report **coverage**: candidate
@@ -20,11 +20,13 @@ The single front door for four dispatch verbs over project markdown:
   standards.
 - **generate** -- write a document FROM coverage, so every claim traces back to
   code a later run can re-read.
+- **render** -- print a skill, and the reference files it declares, as one text
+  block or as a report of what went into it. Runs one command and writes nothing.
 
 `audit` crosses four artifacts (`skill`, `claude-md`, `project-doc`,
 `references`) and `author` crosses three (cross-references are not authored).
-`generate` crosses `claude-md`, and `analyze` has the non-artifact subject
-`code_subtree`. This replaces the former `md-audit` / `md-authoring` routers and
+`generate` crosses `claude-md`, `render` crosses `skill`, and `analyze` has the
+non-artifact subject `code_subtree`. This replaces the former `md-audit` / `md-authoring` routers and
 the member skills they dispatched into.
 
 **Coverage's subject is ONE DIRECTORY'S OWN DIRECT code files -- never a
@@ -57,7 +59,8 @@ guard against. Dispositions and section format:
 `references/standards/claude-md-standards.md` section 6.4.
 
 One skill, one dispatch table, three procedures -- audit, producing (shared by
-author and generate), and analysis. Audit, author and generate share the
+author and generate), and analysis -- plus render's short one, which runs a
+command. Audit, author and generate share the
 per-artifact standards docs; analyze has its own criteria. The "what good looks
 like" documents live in `references/standards/`, the "how to run it" procedures
 live in `references/lanes/`, and the placement spine they all defer to lives in
@@ -69,6 +72,7 @@ live in `references/lanes/`, and the placement spine they all defer to lives in
 - **Argument-dispatched** -- `/md-domain audit skill <path>`,
   `/md-domain author claude-md`, `/md-domain generate claude-md <directory>`,
   `/md-domain audit references [flags]`,
+  `/md-domain render skill <path> --budget <n>`,
   and `/md-domain analyze <directory> [--advanced]` jump straight into that
   lane.
 - **Natural language** -- routed by the verb and subject named. Each lane
@@ -79,6 +83,10 @@ live in `references/lanes/`, and the placement spine they all defer to lives in
 - **Analyze mode** -- name a directory or pass `--diff`; there is no whole-repo
   default. Analysis reads that directory's own direct code files -- not its
   subdirectories -- and reports coverage without editing code or markdown.
+- **Render mode** -- name one or more skills and a token budget. Render prints
+  the skills as one text block, or with `--json` a report of what went into it,
+  and writes nothing. The budget is the user's number; ask for it when the request
+  names none. It is not an audit, and a request to check a skill is `audit skill`.
 - **Generate mode** -- name a directory. Generate needs coverage: it uses this
   session's, or reads persisted reports named by `--coverage <dir>`, or runs
   `analyze` first and says so. Over a document that already exists it is
@@ -96,9 +104,12 @@ WHAT I CAN DO
   author     produce a document from content you supply, held to the standards
   generate   produce a CLAUDE.md out of analysis, so every claim traces back to
              what was read
+  render     print a skill and the reference files it declares as one text block
+             for another model or agent, or as a report of token estimates;
+             writes nothing
 
 WHAT I CAN DO IT TO
-  skills             a SKILL.md and its reference documents      audit, author
+  skills             a SKILL.md and its reference documents      audit, author, render
   CLAUDE.md          one directory's ambient guidance            audit, author, generate
                      (AGENTS.md counts when no CLAUDE.md sits beside it)
   project docs       READMEs, design records, docs/              audit, author
@@ -113,6 +124,7 @@ FOR EXAMPLE
   "author me a new skill"                from what you tell me
   "author a README for this project"     same, as a project doc
   "generate src/cache's CLAUDE.md"       out of the analysis; I analyze first if needed
+  "render this skill as prompt text"     the skill and its declared files as one block
   "give src/ and everything under it CLAUDE.md files"
                                          the whole-tree form, deepest first
 
@@ -158,7 +170,8 @@ The canonical analysis name that "Naming and scope announcement" below requires
 you to echo is COMPOSED from the greeting's two lists -- the verb plus the
 artifact it is applied to: "Skill audit", "CLAUDE.md audit", "Project-doc audit",
 "Cross-reference audit", "Skill authoring", "CLAUDE.md authoring", "Project-doc
-authoring", "CLAUDE.md generation", and "Code analysis" for `analyze <directory>`.
+authoring", "CLAUDE.md generation", "Skill rendering", and "Code analysis" for
+`analyze <directory>`.
 The example phrasings are entry points only and are deliberately not exhaustive.
 
 ### Naming and scope announcement (applies to every run)
@@ -235,9 +248,10 @@ silently returns a SMALLER corpus, which then reads as the whole corpus.
 ## Dispatch table
 
 For audit and author, route by verb AND artifact. `generate` takes `claude-md`;
-`analyze` has the non-artifact subject `code_subtree`. In every case load the
-selected procedure plus its standards doc -- exactly those two, never the whole
-tree.
+`render` takes `skill`; `analyze` has the non-artifact subject `code_subtree`. In
+every case but `render` load the selected procedure plus its standards doc --
+exactly those two, never the whole tree. `render` loads its procedure only, because
+it judges nothing and so has no standards doc.
 
 | Verb x artifact or subject | Lane id | Procedure | Standards doc |
 |---|---|---|---|
@@ -250,6 +264,7 @@ tree.
 | author x project-doc | `author_project_doc` | `references/lanes/generation-lane.md` | `references/standards/project-doc-standards.md` |
 | author x references | -- (no lane) | -- | -- |
 | generate x claude-md | `generate_claude_md` | `references/lanes/generation-lane.md` | `references/standards/claude-md-standards.md` |
+| render x skill | `render_skill` | `references/lanes/render-lane.md` | -- (none) |
 | analyze (one directory) | `coverage_code_subtree` | `references/lanes/coverage-lane.md` | `references/standards/coverage-standards.md` |
 
 **The analyze lane's files are named for its OUTPUT, not its verb.** The lane id
@@ -470,6 +485,21 @@ lanes:
       Changes when the CLAUDE.md standards change, when the coverage intake
       contract changes, or when the retention/verification rules for
       regeneration change.
+  - id: render_skill
+    verb: render
+    artifact: skill
+    procedure: references/lanes/render-lane.md
+    command: material
+    verdicts: [RENDERED, OVER-BUDGET, REFUSED, UNAVAILABLE]
+    writes: none
+    invocation_phrasings:
+      - "render this skill as prompt text"
+      - "print this skill and the references it declares as one block"
+      - "how many tokens is this skill with its references"
+      - "materialize this skill for another model"
+    change_driver: >-
+      Changes when the material command's arguments, outputs or exit codes
+      change, or when bootstrap's skill-material report gains a schema.
   - id: coverage_code_subtree
     verb: analyze
     subject: code_subtree
@@ -494,16 +524,23 @@ lanes:
 Audit/author positional form: `<verb> <artifact> [selector] [flags]`.
 Analyze form: `analyze (<directory> | --diff) [--json] [--advanced]`.
 Generate form: `generate claude-md <directory> [--coverage <dir>]`.
+Render form: `render skill <path>... [--catalog] [--no-declared] [--resource <rel>]... --budget <n> [--json]`.
 Verb and subject may be inferred from natural language; when a required part is
 ambiguous, ask rather than guessing.
 
-- **Verb** -- `audit` | `author` | `generate` | `analyze`. Absent and
+- **Verb** -- `audit` | `author` | `generate` | `render` | `analyze`. Absent and
   unrecoverable from phrasing -> show the menu. **"generate a skill" and
   "generate a README" route to `author`**, because no analysis produces coverage
   for those artifacts; take the intent, not the token.
 - **Artifact** (audit / author only) -- `skill` | `claude-md` | `project-doc`
   | `references` (`references` is audit-only). `generate` takes `claude-md` and
-  nothing else.
+  nothing else, and `render` takes `skill` and nothing else.
+- **Render arguments** -- each `<path>` is a skill directory or its `SKILL.md`, in
+  the order given. `--catalog`, `--no-declared` and `--resource <rel>` apply to the
+  path before them and are usage errors before the first path. `--budget <n>` is
+  required and has no default: the number is the user's. `--json` prints the report
+  instead of the text. Requests to check, validate or audit a skill are `audit
+  skill`, never `render`. Procedure and exit codes: `references/lanes/render-lane.md`.
 - **`--coverage <dir>`** -- generate-only. A directory of persisted coverage
   reports (JSON) to write up, as emitted by `analyze --json`. Absent, generate
   uses the coverage from this session, and runs `analyze` first if there is none.
@@ -519,9 +556,10 @@ ambiguous, ask rather than guessing.
   renders a verdict, so none is an audit -- announce it as its own operation.
 - **Analyze subject** -- a named directory or `--diff`. There is NO whole-repo
   default: if neither is present, say so and stop rather than choosing the cwd.
-- **`--diff` / `--json`** -- both analyze-only. `--diff` resolves changed code
-  into per-directory subjects; `--json` emits the report as structured JSON on
-  the analyze lane.
+- **`--diff` / `--json`** -- `--diff` is analyze-only: it resolves changed code
+  into per-directory subjects. `--json` belongs to two lanes: on analyze it emits
+  the report as structured JSON, and on render it prints the provenance report
+  instead of the text block.
 - **`--advanced`** -- analyze-only exhaustive reads, invariant discovery, and
   the refutation stage that tries to falsify every surviving candidate in fresh
   context. Only this depth earns "verified absent". Without an explicit depth,
@@ -571,7 +609,7 @@ filter, pre-image materialization, the two documented limits) live in
 ```yaml
 domain_skill:
   _schema_version: "1"
-  identity: The single front door for four dispatch verbs over project markdown -- auditing SKILL.md (and its reference documents), CLAUDE.md, project documents and skill cross-references; authoring any of those from content the user supplies; generating a CLAUDE.md from analysis-produced coverage so its claims stay re-checkable; and report-only analysis of one directory's direct code.
+  identity: The single front door for five dispatch verbs over project markdown -- auditing SKILL.md (and its reference documents), CLAUDE.md, project documents and skill cross-references; authoring any of those from content the user supplies; generating a CLAUDE.md from analysis-produced coverage so its claims stay re-checkable; rendering a skill and the reference files it declares as one text block or report; and report-only analysis of one directory's direct code.
   companions:
     siblings: []
     note: |
@@ -584,9 +622,10 @@ domain_skill:
       end-of-session-review triggers.
   scope:
     covers:
-      - dispatching audit, author, generate, or analyze intent to exactly one lane
+      - dispatching audit, author, generate, render, or analyze intent to exactly one lane
       - owning the four per-artifact standards docs (what good looks like for skill / claude-md / project-doc / references)
       - owning coverage-standards.md for the code_subtree composition (one directory's direct code, not a subtree)
+      - owning the render lane's procedure, which runs the material command and writes nothing
       - owning three procedures (shared audit; ONE producing procedure serving both author and generate, including regeneration and its retention rules; and report-only analysis)
       - owning the placement spine (cohesion-principles) and the shared audit framework, configuration, and content-shape references
     excludes:
@@ -596,9 +635,10 @@ domain_skill:
       - invoking the skills being audited or generated
   orientation:
     summary: |
-      One skill, one dispatch table, three procedures. Audit and author select an artifact,
-      then load its standards plus the verb procedure; generate takes claude-md and nothing
-      else. Analyze selects code_subtree and loads coverage-lane.md plus
+      One skill, one dispatch table, three procedures and render's short one. Audit and author
+      select an artifact, then load its standards plus the verb procedure; generate takes
+      claude-md and nothing else; render takes skill, loads its procedure only, and runs the
+      material command. Analyze selects code_subtree and loads coverage-lane.md plus
       coverage-standards.md. Audit uses DETECT -> Q&A gate -> REMEDIATE; author and generate
       SHARE confirm -> place -> apply -> shape -> validate, with generate adding a coverage
       intake in front and, on regeneration, a retention pass; analyze uses
@@ -612,7 +652,7 @@ domain_skill:
       - Scope is the user's decision, and it is announced in BOTH directions. Mechanical exclusions (VCS-ignored, vendored, generated) are yours to take and to report as a count. A JUDGMENT exclusion -- "this directory probably holds nothing worth carrying" -- is a prediction of the analysis result, so the way to settle it is to RUN the analysis, not to drop the subject. Never let cost silently shrink scope: report the honest subject count with its cost and let the user choose what to drop. A banding or ranking pre-filter is a substitute for the analysis, not a preparation for it -- if it means "skip" rather than "order", it has moved the admission decision outside coverage-standards.md where nothing enforces it. See "Narrowing scope".
       - Enumerate subjects with the discovery scripts, never a hand-rolled walk or extension filter. `scripts/discover_coverage.py <dir>` for one subject; `scripts/discover_composition.py <root> --json` -> `compositionSubjects` for every subject under a root, which is the cheap model-free enumeration to plan and cost from -- `coverageSubjects` under-counts by the code-free intermediate directories the chain still composes. A hand-written filter fails SILENTLY toward a smaller corpus, and that smaller corpus then reads as the whole one.
       - When this work is handed to another agent -- a subagent, a background CLI, a workflow -- pass the artifact's standards document VERBATIM by absolute path. Do not summarize it into a brief. A paraphrase is not the criteria: the agent will satisfy the paraphrase. Worse, a brief that lists worked EXAMPLES of qualifying facts will have those examples beat its own abstract rules, so a brief that correctly forbids repo-wide facts while illustrating "good" facts with repo-wide project rules produces exactly the bloat it forbade. If a brief must exist, let it carry the task and the return shape, and let the standards document carry every criterion.
-      - Route by verb AND subject. Audit and author require an artifact; generate takes claude-md; analyze takes code_subtree. Do not run a SKILL.md audit on a CLAUDE.md, and do not apply the producing direction when the user asked for a verdict.
+      - Route by verb AND subject. Audit and author require an artifact; generate takes claude-md; render takes skill; analyze takes code_subtree. A request to check, validate or audit a skill is an audit, never a render. Do not run a SKILL.md audit on a CLAUDE.md, and do not apply the producing direction when the user asked for a verdict.
       - Author and generate are chosen by INPUT PROVENANCE, never by the word the user typed. Content the user supplies is authored; coverage from an analyze run is generated. "Generate a skill" and "generate a README" are author dispatches, because no analysis produces coverage for those artifacts -- say which lane you are taking and why, rather than silently honouring or silently overriding the token.
       - >-
         CLAUDE.md regeneration never deletes and never blocks. Generating over a CLAUDE.md that already exists SORTS every unit: content a DIRECTED check confirms against the code it describes is kept in place, marked content is kept verbatim, and everything else moves verbatim into the document's `## Unverified` section with the reason its check failed (NOT LOCATED, or CONTRADICTED at a named file:line). Verify by reading the code the claim describes -- never by whether this run's coverage happened to re-derive it, because coverage is a non-idempotent sample and sorting on coincidence churns the document. There is no proposal round and no pre-write marking chore; `retain` is how a user resolves a unit OUT of the Unverified section, never a precondition to running. Report the section with a count every run.
@@ -686,6 +726,10 @@ domain_skill:
         path: references/references-finding-taxonomy.md
         keywords: [references finding taxonomy, A-K categories, hard dep missing, soft ref missing, name mismatch, shadowing, detection signals, disposition defaults, background-agent brief]
         summary: The references lane's A-K classification taxonomy -- detection signals, default remediations, the scanner-rule disposition table, and the background-agent brief template for cross-reference findings.
+      - id: render_lane
+        path: references/lanes/render-lane.md
+        keywords: [render procedure, skill as prompt text, material command, token budget, declared resources, text block, provenance report, exit codes, over budget, refused, unavailable, usage error]
+        summary: The RENDER procedure for a skill -- build the material command line from the request, run it, and report its four outcomes (RENDERED, REFUSED, UNAVAILABLE, OVER-BUDGET) with their exit codes. Exit 2 is a usage error and carries no verdict. The budget is the user's. Not an audit.
       - id: generation_lane
         path: references/lanes/generation-lane.md
         keywords: [producing procedure, author lane, generate lane, confirm artifact, placement, apply standards, shape content, validate, coverage intake, regeneration, retention marking, propose markings, input provenance, tree generation, leaf first]
@@ -701,7 +745,7 @@ domain_skill:
       - id: skill_domain
         path: references/skill-domain/
         keywords: [glossary, vocabulary, type contract tables, framework records, example audit, example verification, scripts reference, report usage, schema fixtures, domain layering, subdomain schema, patterns actions, skill authoring deep refs]
-        summary: The skill-artifact deep reference cluster -- glossary.md (canonical vocabulary), framework.md (type-contract tables plus structured framework records; schema_registry.py wins on divergence), example-audit.md, example-verification.md, scripts.md (audit/classify/tag CLI + skills_kit_lib.corpus), report-usage.md (roster/hierarchy CLI), schema-fixtures.md (owner_doc validation fixtures), domain-layering.md, subdomain-schema.md, patterns-actions.md. Loaded on demand by the skill lanes.
+        summary: The skill-artifact deep reference cluster -- glossary.md (canonical vocabulary), framework.md (type-contract tables plus structured framework records; schema_registry.py wins on divergence), example-audit.md, example-verification.md, scripts.md (audit/classify/tag/material CLI + skills_kit_lib.corpus), report-usage.md (roster/hierarchy CLI), schema-fixtures.md (owner_doc validation fixtures), domain-layering.md, subdomain-schema.md, patterns-actions.md. Loaded on demand by the skill lanes.
       - id: provenance
         path: references/provenance/
         keywords: [decision provenance, dec_N, why the contract looks like this, framework decision log, folded skill histories]
@@ -728,6 +772,13 @@ domain_skill:
       tool: skills_kit_lib/tag.py
       scope_axes: [single-skill]
       reference_section: skill-domain/scripts.md (tag)
+    - id: material
+      keywords: [material, render a skill, skill as prompt text, token estimate, declared resources, skill context block]
+      description: Print selected skills and the reference files they declare as one text block, or the report of what went into it, within a token budget.
+      operation: '"${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${CLAUDE_PLUGIN_ROOT}/scripts/skills_kit_tool.py" material --skill <path> --budget <n> [--json]'
+      tool: skills_kit_lib/material.py
+      scope_axes: [multi-skill]
+      reference_section: skill-domain/scripts.md (material)
   tools:
     - name: audit
       command: '"${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${CLAUDE_PLUGIN_ROOT}/scripts/skills_kit_tool.py" audit'
@@ -738,6 +789,9 @@ domain_skill:
     - name: tag
       command: '"${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${CLAUDE_PLUGIN_ROOT}/scripts/skills_kit_tool.py" tag'
       description: Idempotent frontmatter tagger; refuses to invent or overwrite without --force.
+    - name: material
+      command: '"${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${CLAUDE_PLUGIN_ROOT}/scripts/skills_kit_tool.py" material'
+      description: Prints skills as one text block or a report, within a required token budget. Exits 0 printed, 1 refused, 2 usage, 3 library unavailable, 4 over budget.
 ```
 
 ## Cross-references
@@ -746,6 +800,7 @@ domain_skill:
 - **How to run an audit** -- `references/lanes/audit-lane.md`.
 - **How to author or generate a document** -- `references/lanes/generation-lane.md`.
 - **How to run an analysis** -- `references/lanes/coverage-lane.md`.
+- **How to render a skill as prompt text** -- `references/lanes/render-lane.md`.
 - **What earns a coverage candidate** -- `references/standards/coverage-standards.md`.
 - **Retention marking for regeneration** -- `references/standards/claude-md-standards.md`, section 6.4.
 - **What this domain does NOT do, and who owns it instead** -- `references/capability-boundaries.md`.

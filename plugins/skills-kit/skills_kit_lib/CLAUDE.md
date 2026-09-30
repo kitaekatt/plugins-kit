@@ -14,7 +14,7 @@ claude_md:
       - schemas/portable, schemas/skill_types, schemas/claude_md (the registered schemas)
       - document_walker (fenced-yaml-block extraction)
       - markdown_heuristics (the heuristic vocabulary used by the legacy markdown fallback)
-      - material (the binding to bootstrap_lib.skill_material behind parse_frontmatter's strict mode)
+      - material (the binding to bootstrap_lib.skill_material behind parse_frontmatter's strict mode, and the material command: main, and OUTCOMES, the exit-code contract; md-domain's render lane invokes it through scripts/skills_kit_tool.py)
       - corpus (SKILL.md discovery across user/project/plugin tiers)
       - checks (owner_doc validation and other corpus-level rules)
       - audit / classify / tag (per-skill CLI utilities, invoked via `python -m skills_kit_lib.<module>`)
