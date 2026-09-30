@@ -59,6 +59,8 @@ from .endpoint_profile import (
     profile_from_resolved,
     unresolved_profile,
 )
+from .skill_context import compose_system, prepare_skill_context
+from .skill_context_types import SkillContextUnsatisfiable
 from .results import (
     check_applied_controls,
     derive_dropped_params,
@@ -308,9 +310,17 @@ class OpenRouterBackend:
         # record does not list (or one sent beside extras.response_format) is
         # refused here, with nothing sent.
         contract_plan = prepare_contract(self.capabilities, opts)
+        # Also before the client or the model: a skill context whose text and
+        # digest disagree is refused here. This record delivers skill context,
+        # so a valid one yields a plan.
+        skill_plan = prepare_skill_context(self.capabilities, opts)
         client = self.client if self.client is not None else self._ensure_client()
         resolved_model = self._resolve_model(model)
 
+        # The skill-context block leads the system text: [block] [caller
+        # system] [schema instruction]. The block is the library's bytes,
+        # unchanged; the instruction below is still the suffix.
+        system = compose_system(skill_plan, system)
         if contract_plan is not None and contract_plan.instruction is not None:
             # Prompt delivery: the exact render_schema_instruction text is
             # appended to the system message. No response_format is sent --
@@ -462,6 +472,9 @@ class OpenRouterBackend:
             execution_controls_applied=(),
             started_at=started_at,
             ended_at=ended_at,
+            # Set BEFORE finalize_contract, so a violation's response carries
+            # the skill report too.
+            skill_context=skill_plan.delivered_report() if skill_plan is not None else None,
         )
         # No contract: returned unchanged. Otherwise the answer is judged
         # against the contract, and a violation raises with this response.
@@ -570,6 +583,13 @@ class ClaudeCliBackend:
         # Before argv is built or the runner invoked: a contract this record
         # does not list is refused here, with nothing spawned.
         contract_plan = prepare_contract(self.capabilities, opts)
+        # Skill context is refused here, before argv or the runner: this
+        # record carries no skill_context block (the harness loads skills
+        # itself), so prepare_skill_context raises for any skill context.
+        if prepare_skill_context(self.capabilities, opts) is not None:
+            raise SkillContextUnsatisfiable(
+                f"{self.name} has no skill-context delivery path; nothing was dispatched"
+            )
         if contract_plan is not None and contract_plan.instruction is not None:
             # Prompt delivery: the exact render_schema_instruction text is
             # appended to the system prompt sent through the system-prompt

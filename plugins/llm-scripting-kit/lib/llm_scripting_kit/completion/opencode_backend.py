@@ -44,6 +44,8 @@ from .claude_runner import AgentTimeoutError, run_cli_streaming
 from .adapter_capabilities import OPENCODE_CAPABILITIES
 from .capabilities import Capabilities
 from .contract import finalize_contract, prepare_contract
+from .skill_context import prepare_skill_context
+from .skill_context_types import SkillContextUnsatisfiable
 from .prompt_fold import fold_prompt
 from .results import (
     check_applied_controls,
@@ -207,6 +209,13 @@ class OpencodeCliBackend:
         # Before the invocation is built or the runner invoked: a contract this
         # record does not list is refused here, with nothing spawned.
         contract_plan = prepare_contract(self.capabilities, opts)
+        # Skill context is refused here, before any invocation or runner call:
+        # this record carries no skill_context block (the harness loads skills
+        # itself), so prepare_skill_context raises for any skill context.
+        if prepare_skill_context(self.capabilities, opts) is not None:
+            raise SkillContextUnsatisfiable(
+                f"{self.name} has no skill-context delivery path; nothing was dispatched"
+            )
         if contract_plan is not None and contract_plan.instruction is not None:
             # Prompt delivery: the exact render_schema_instruction text is
             # appended to the system half, which compose_prompt folds into

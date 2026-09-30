@@ -67,6 +67,7 @@ EXPECTED_LANES = {
     "author_claude_md": {"verb": "author", "artifact": "claude-md"},
     "author_project_doc": {"verb": "author", "artifact": "project-doc"},
     "generate_claude_md": {"verb": "generate", "artifact": "claude-md"},
+    "render_skill": {"verb": "render", "artifact": "skill"},
     "coverage_code_subtree": {
         # The verb is `analyze`; the lane id, its procedure, its standards doc
         # and its scripts are all named for the OUTPUT (coverage) instead.

@@ -367,6 +367,22 @@ does not carry its own shared-lib edges to a consumer -- each venv declares what
 it needs (`plugins/CLAUDE.md`, "Why shared libs rather than published
 packages"). content-pipeline-kit declares both.
 
+**Skill context is a REQUIRED edge into `bootstrap_lib.skill_material`, with a
+floor and a refusal at the call.** `completion/skill_context.py` imports the
+module lazily, so `import llm_scripting_kit` never needs it (the records live in
+the stdlib-only leaf `completion/skill_context_types.py`). `requires_bootstrap`
+in `bootstrap.json` is 0.138.0, the version that ships the calls the seam
+makes (`SKILL_MATERIAL_BOOTSTRAP`, pinned with the manifest by
+`tests/llm-scripting-kit/test_bootstrap_manifest_floor.py`). A floor gates
+provisioning, not the code that is already active, so `_skill_material()`
+still probes every call it makes and `materialize_skill_context` raises
+`SkillContextSupportError` in three states, each with its own message:
+`absent` (`bootstrap_lib` not importable; install bootstrap), `too-old` (the
+linked copy lacks a call, or a report shape is unknown; update bootstrap, a
+copy left by an uninstall reads the same) and `no-pyyaml` (the interpreter has
+no PyYAML). No state falls back to another reader, because a request that names
+skills and is sent without them would be read as answered with them.
+
 **Model-authored text must stay out of exception messages.** Codex writes its
 transcript to BOTH stdout and stderr, and `halt` classifies by substring-matching
 an exception's message -- so `CodexRunError` keeps the transcript on attributes
@@ -410,6 +426,10 @@ an `effort_style`; `cwd`
 reaches the three CLI backends and not OpenRouter, which is why `cwd` is not a
 core param of this seam. `temperature` and `max_tokens` are accepted and then
 dropped by all CLI backends -- dropped and REPORTED, not ignored.
+`skill_context` is read by all four and delivered by OpenRouter alone, as the
+leading block of its system message; the three CLI backends refuse it before
+dispatch, because a harness loads skills itself and the seam cannot see what
+it loaded.
 
 **Effort on a transport entry is conditional, and one module owns its
 vocabulary.** `llm_scripting_kit.effort` defines the styles (`top-level`,

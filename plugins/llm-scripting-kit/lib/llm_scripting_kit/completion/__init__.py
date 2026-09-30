@@ -58,6 +58,7 @@ from .capabilities import (
     Capabilities,
     ExecutionControl,
     ParamCapability,
+    SkillContextCapability,
     StructuredOutputCapability,
     SystemPromptCapability,
     subjects_for_disallowed_tools,
@@ -75,6 +76,21 @@ from .contract import (
     OutputContractViolation,
     contract_requirements,
     evaluate_output,
+)
+# The skill-context CONSUMER surface. The adapter plumbing (the delivery plan,
+# the pre-dispatch refusal, the system-text composition) stays importable from
+# ``.skill_context`` for this package's own adapters.
+from .skill_context import (
+    SKILL_MATERIAL_BOOTSTRAP,
+    materialize_skill_context,
+    skill_context_requirements,
+)
+from .skill_context_types import (
+    SkillContext,
+    SkillContextError,
+    SkillContextReport,
+    SkillContextSupportError,
+    SkillContextUnsatisfiable,
 )
 from .results import (
     caller_set_params,
@@ -137,6 +153,7 @@ __all__ = [
     "ExecutionControl",
     "StructuredOutputCapability",
     "SystemPromptCapability",
+    "SkillContextCapability",
     "ADAPTER_CAPABILITIES",
     "adapter_capabilities",
     "match_capabilities",
@@ -149,6 +166,15 @@ __all__ = [
     "POLICY_NATIVE_REQUIRED",
     "POLICY_VALIDATED_RESULT",
     "POLICY_TEXT_ONLY",
+    # skill context (consumer surface)
+    "SkillContext",
+    "SkillContextReport",
+    "SkillContextError",
+    "SkillContextUnsatisfiable",
+    "SkillContextSupportError",
+    "SKILL_MATERIAL_BOOTSTRAP",
+    "materialize_skill_context",
+    "skill_context_requirements",
     "BackendOptions",
     "LLMBackend",
     "BackendSelection",

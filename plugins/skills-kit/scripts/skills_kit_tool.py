@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Run a skills_kit_lib command (audit, classify, tag) from any directory.
+"""Run a skills_kit_lib command (audit, classify, tag, material) from any directory.
 
 Usage::
 
     "${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" \\
-        "${CLAUDE_PLUGIN_ROOT}/scripts/skills_kit_tool.py" <audit|classify|tag> [args...]
+        "${CLAUDE_PLUGIN_ROOT}/scripts/skills_kit_tool.py" <audit|classify|tag|material> [args...]
 
 The launcher re-execs under the skills-kit plugin venv, where pyyaml lives.
 Without pyyaml the YAML contract checks degrade to judgment-required. It then
@@ -23,7 +23,7 @@ from pathlib import Path
 _SCRIPTS = Path(__file__).resolve().parent
 _PLUGIN_ROOT = _SCRIPTS.parent
 
-COMMANDS = ("audit", "classify", "tag")
+COMMANDS = ("audit", "classify", "tag", "material")
 
 
 def main(argv: list[str] | None = None) -> int:

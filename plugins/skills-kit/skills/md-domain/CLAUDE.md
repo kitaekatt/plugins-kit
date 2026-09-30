@@ -746,4 +746,40 @@ claude_md:
         in a consumer's plugin cache (OP-1). Finding: the pointer belongs in
         this maintainer file, not the shipped reference. Follow-up: none.
       added: "2026-09-06"
+    - id: render_is_a_fifth_verb_with_one_command_lane
+      keywords: [render verb, material command, fifth verb, command lane, not an audit, no fifth skill, routed through md-domain, skill as prompt text, render_skill, usage error outside verdicts, budget is the users]
+      summary: The verb render is a fifth dispatch verb over the artifact skill. It has one lane (render_skill) that runs the material command and writes nothing. It is not an audit, checking a skill stays with `audit skill`, and the owner routed it through md-domain instead of a separate skill.
+      detail: |
+        The owner asked for a command that prints skills as prompt text, then ruled
+        that it be routed through md-domain ("The skill should be routed through
+        mf domain", the owner's typing of md-domain) rather than shipped as a fifth
+        skill. So the roster stays four skills, the trigger description gained
+        "rendering a skill prompt" within the 160-character rule, and the verb is a
+        lane: a record in SKILL.md's lanes block, a dispatch-table row, the
+        argument grammar, the greeting and references/lanes/render-lane.md.
+        Four facts decide the shape.
+        - It is not an audit. Render judges nothing, so it has no standards doc, no
+          NOT-AUDITED or DIFF-CLEAN verdict and no bound workflow, which is what the
+          registry test requires of audit lanes only. The dispatch sentence says
+          render loads its procedure alone.
+        - The lane's verdicts are the command's four outcomes of a run, one to one
+          with `skills_kit_lib.material.OUTCOMES`: RENDERED, REFUSED, UNAVAILABLE,
+          OVER-BUDGET. Exit 2, a malformed command line, is deliberately outside
+          them: it decides nothing about the skill, so the procedure tells Claude to
+          correct the line and run again and reports no verdict.
+        - Checking, validating and auditing a skill stay with `audit skill`. No
+          render phrasing uses those words, and a REFUSED verdict that comes from a
+          frontmatter failure points the user at the audit.
+        - The budget is the user's. The command has no default and the procedure
+          tells Claude to ask when a request names none.
+        The command calls bootstrap's skill-material library through
+        skills_kit_lib/material.py, the same binding the strict frontmatter mode
+        uses. Tests that keep this shape from drifting compare the instruction text
+        with the code: tests/skills-kit/test_md_domain_render_lane.py.
+      origin: |
+        Surface: the skills-kit command for the skill-material library needed a
+        route a plain request reaches. Finding: the owner ruled it goes through
+        md-domain, which forced the verb, lane and description changes above.
+        Follow-up: none.
+      added: "2026-09-30"
 ```

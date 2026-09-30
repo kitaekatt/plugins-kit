@@ -242,6 +242,72 @@ schema_digest, schema_version)` and never carries the schema body.
   it for a provider halt. Domain validity beyond the schema stays with the
   caller.
 
+**Skill context is caller-named skill material, read once before the call.**
+`BackendOptions.skill_context` holds a `SkillContext` (`text` plus a
+`SkillContextReport`) built by `materialize_skill_context(selection, *,
+base_dir=None)` from a `bootstrap_lib.skill_material` selection or its JSON
+mapping. The library reads every file inside that call, so the block and its
+`digest` are fixed before anything is dispatched; its rules (strict
+frontmatter, declared resources, the budget, duplicates, format `"1"`) are
+bootstrap's plugin-dev reference `skill-material.md`. There is no tool loop:
+nothing is loaded on demand.
+
+- **The option.** Every adapter READS it through `prepare_skill_context`,
+  called immediately after `prepare_contract` and before any client, temp file,
+  argv or runner call. A value that is not a `SkillContext` raises `TypeError`
+  naming `materialize_skill_context`; a record whose `sha256(text)` differs
+  from `report.digest` raises `SkillContextError`. When the options also carry
+  an output contract that the adapter refuses, the contract refusal is raised
+  first.
+- **The block.** A record's `skill_context` is a `SkillContextCapability`
+  (`delivery`, `emits`), serialized only when set, and only the delivering
+  adapter has one:
+
+  | Adapter | `params.skill_context` | `skill_context` block |
+  | --- | --- | --- |
+  | `openrouter` | read; `emits: "messages[system] leading skill context block"` | `{"delivery": "system-message", "emits": "messages[system] leading skill context block"}` |
+  | `claude-cli`, `codex-cli`, `opencode-cli` | read and refused before dispatch (`SkillContextUnsatisfiable`) | none |
+
+  A harness adapter refuses because a harness loads skills itself and the seam
+  cannot see what it loaded; the message names the two remedies, a transport
+  entry or your own text in `system`. `endpoint_capabilities` keeps the block.
+- **Ordering with the contract.** openrouter's system message is `[block]`,
+  `"\n\n"`, `[caller system]`, then the output-contract instruction, whose
+  bytes and suffix position do not change. With an empty caller system the
+  block stands alone, with no separator. The block is the library's text,
+  unchanged.
+- **The requirement.** `skill_context_requirements(context)` is
+  `{"skill_context": {"delivery": "system-message"}}` (`{}` for None); it
+  matches only an adapter whose record carries the block, and its key is
+  disjoint from `contract_requirements`'.
+- **The report.** A delivering adapter sets `LLMResponse.skill_context` to the
+  record's report with `adapter`, `delivery` and `emits` filled in, before
+  `finalize_contract`, so an `OutputContractViolation`'s response carries it
+  too. `provenance` is the library's `report.to_json()` document verbatim
+  (schema `plugins-kit.skill-material-report/v1`); this seam checks the schema
+  id and mirrors no per-skill record. The adapter composes the block into the
+  system message, so a caller that caches responses keyed on the system and
+  user text must add `context.report.digest` to its key; the digest is known
+  before dispatch.
+- **The library edge.** `completion/skill_context.py` imports
+  `bootstrap_lib.skill_material` lazily, and the leaf module
+  `completion/skill_context_types.py` imports the standard library only, so
+  `import llm_scripting_kit` never needs the library or PyYAML. The probe
+  binds the report schema id, `SkillMaterialError`, `PyYamlUnavailableError`,
+  `SkillSelection.from_json(mapping)`, `materialize(selection, base_dir=)` and
+  `SkillMaterialReport.to_json(self)`, and `skill_context_from` re-checks the
+  `to_json()` result at the call: a mapping of JSON-native values at every
+  depth. Failures raise `SkillContextSupportError` with `state` `absent`
+  (install bootstrap), `too-old` (update bootstrap; needs 0.138.0) or
+  `no-pyyaml` (the interpreter lacks PyYAML). A refused selection, skill or
+  resource raises `SkillContextError` with the library's message.
+- **The request protocol.** `options.skill_context` in a request file is the
+  selection's JSON object; it is materialized against the CLI working
+  directory before any endpoint is resolved, and every `SkillContextError` or
+  `TypeError` there is a protocol error (exit 4). An adapter refusal after
+  parsing is a failed envelope (exit 1). `request-schema` describes the option
+  by its wire type, not its Python type.
+
 **Error-as-data lives at the CLI surface only.** The package API keeps RAISING
 typed exceptions -- every existing consumer branches on them, and returning a
 failure there would make it read as a SUCCESS at call sites that never asked for

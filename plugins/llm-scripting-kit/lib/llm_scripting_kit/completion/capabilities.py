@@ -325,6 +325,29 @@ class SystemPromptCapability:
 
 
 @dataclass(frozen=True)
+class SkillContextCapability:
+    """How this adapter delivers a :class:`~.skill_context_types.SkillContext`.
+
+    Present on a record only when the adapter DELIVERS skill context; an
+    adapter without this block refuses ``BackendOptions.skill_context`` before
+    dispatch. ``delivery`` is the channel (``system-message``) and ``emits``
+    the concrete element produced, falsifiable exactly as
+    :attr:`ExecutionControl.emits` is. A selection requirement matches it as
+    ``{"skill_context": {"delivery": "system-message"}}``.
+    """
+
+    delivery: str
+    emits: str
+    note: str = ""
+
+    def to_json(self) -> Dict[str, Any]:
+        result: Dict[str, Any] = {"delivery": self.delivery, "emits": self.emits}
+        if self.note:
+            result["note"] = self.note
+        return result
+
+
+@dataclass(frozen=True)
 class Capabilities:
     """What one adapter family can honor, as the adapter itself declares it.
 
@@ -349,6 +372,10 @@ class Capabilities:
     (``endpoint_profile.endpoint_capabilities``) carries that endpoint's name in
     ``endpoint`` and has each enabled param moved into ``params``. Both keys
     are serialized only when set, so a record without them is unchanged.
+
+    ``skill_context`` is the :class:`SkillContextCapability` of an adapter that
+    delivers skill context, serialized only when set; a record without it
+    refuses skill context before dispatch.
     """
 
     adapter: str
@@ -364,6 +391,7 @@ class Capabilities:
     )
     conditional_params: Mapping[str, ParamCapability] = field(default_factory=dict)
     endpoint: Optional[str] = None
+    skill_context: Optional[SkillContextCapability] = None
 
     def honors(self, param: str) -> bool:
         """True when this adapter reads ``param`` at all."""
@@ -401,6 +429,8 @@ class Capabilities:
             }
         if self.endpoint is not None:
             result["endpoint"] = self.endpoint
+        if self.skill_context is not None:
+            result["skill_context"] = self.skill_context.to_json()
         return result
 
 
@@ -410,6 +440,7 @@ __all__ = [
     "ExecutionControl",
     "StructuredOutputCapability",
     "SystemPromptCapability",
+    "SkillContextCapability",
     "MAPPED",
     "PASSTHROUGH",
     "ALLOW",

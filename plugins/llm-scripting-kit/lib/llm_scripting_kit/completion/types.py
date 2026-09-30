@@ -20,6 +20,12 @@ from typing import Any, Dict, Mapping, Optional, Protocol, Tuple, runtime_checka
 # imports this one, so the edge cannot form a cycle.
 from .contract_types import ContractReport, OutputContract
 
+# Also a RUNTIME import, for the same reason: the two skill_context fields are
+# annotated with these names. skill_context_types is a leaf module that imports
+# the standard library only, so importing it here neither forms a cycle nor
+# reaches bootstrap_lib.
+from .skill_context_types import SkillContext, SkillContextReport
+
 
 # -- call status -----------------------------------------------------------
 
@@ -212,6 +218,12 @@ class LLMResponse:
       carried no contract. A response handed back by ``complete()`` with a
       schema-policy report always reads ``disposition == "valid"``, because a
       violation raises instead.
+    - ``skill_context`` -- the :class:`~.skill_context_types.SkillContextReport`
+      of a call whose skill-context block was DELIVERED, with ``adapter``,
+      ``delivery`` and ``emits`` set by the delivering adapter; the library's
+      per-skill and per-resource records are under its ``provenance``. ``None``
+      when the call carried no skill context. An adapter that refuses skill
+      context raises before dispatch, so it never sets this field.
 
     A note for anyone adding another field here, learned from ``total_tokens``
     above: think about what a consumer will SUM or COUNT. None of the fields
@@ -243,6 +255,7 @@ class LLMResponse:
     reported_cost_usd: Optional[float] = None
     reported_cost_source: Optional[str] = None
     output_contract: Optional[ContractReport] = None
+    skill_context: Optional[SkillContextReport] = None
 
 
 @dataclass(frozen=True)
@@ -304,6 +317,13 @@ class BackendOptions:
       ``structured_output.policies`` lists the contract's policy, so a
       contract is never silently ignored. ``None`` (the default) leaves every
       call unchanged. See :mod:`.contract`.
+    - ``skill_context`` -- a :class:`~.skill_context_types.SkillContext`
+      built by :func:`~.skill_context.materialize_skill_context`: caller-named
+      skill material, read once before the call. Every adapter READS it:
+      openrouter places the block first in the system message; the three
+      harness adapters refuse it before dispatch. Any other value is a
+      ``TypeError`` before dispatch. ``None`` (the default) leaves every call
+      unchanged. See :mod:`.skill_context`.
     """
 
     max_tokens: int = 4096
@@ -321,6 +341,7 @@ class BackendOptions:
     log_prefix: str = "[llm]"
     extras: Mapping[str, Any] = field(default_factory=dict)
     output_contract: Optional[OutputContract] = None
+    skill_context: Optional[SkillContext] = None
 
 
 @runtime_checkable

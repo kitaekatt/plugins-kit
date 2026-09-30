@@ -1,10 +1,10 @@
 # skills-kit plugin orientation
 
-Plugin-level orientation for `plugins-kit:skills-kit`. The plugin's artifact is **markdown generally** -- every md file a project accumulates: SKILL.md, CLAUDE.md, project docs, READMEs, and skill references (see "Total ownership" below). It is organized around a **verb x artifact matrix** over that `md` artifact -- **audit** and **author** crossed with the artifacts (`skill` = SKILL.md, `claude-md` = CLAUDE.md, `project-doc`, `references`), plus **generate** (claude-md only, written from analysis-produced coverage) and **analyze** (report-only, subject is CODE) -- and since 2026-07-29 that matrix is expressed as DATA inside a single skill rather than as topology. Author and generate differ by INPUT PROVENANCE, not output: see md-domain/CLAUDE.md `author_and_generate_split_on_provenance`. `skill` and `claude-md` are the *typed* specializations (the ones with a formal schema contract), not the whole surface: the domain also audits project docs and cross-references, and the framework claims ownership of every md role.
+Plugin-level orientation for `plugins-kit:skills-kit`. The plugin's artifact is **markdown generally** -- every md file a project accumulates: SKILL.md, CLAUDE.md, project docs, READMEs, and skill references (see "Total ownership" below). It is organized around a **verb x artifact matrix** over that `md` artifact -- **audit** and **author** crossed with the artifacts (`skill` = SKILL.md, `claude-md` = CLAUDE.md, `project-doc`, `references`), plus **generate** (claude-md only, written from analysis-produced coverage), **analyze** (report-only, subject is CODE) and **render** (skill only; one command lane that prints a skill as prompt text) -- and since 2026-07-29 that matrix is expressed as DATA inside a single skill rather than as topology. Author and generate differ by INPUT PROVENANCE, not output: see md-domain/CLAUDE.md `author_and_generate_split_on_provenance`. `skill` and `claude-md` are the *typed* specializations (the ones with a formal schema contract), not the whole surface: the domain also audits project docs and cross-references, and the framework claims ownership of every md role.
 
 The plugin ships **four skills**:
 
-- **`md-domain`** (`/md-domain`) -- the single front door. One dispatch table (verb x artifact -> lane record), three shared verb procedures (audit; one producing lane serving both author and generate; analyze), four per-artifact standards docs, the placement spine, and all the audit machinery.
+- **`md-domain`** (`/md-domain`) -- the single front door. One dispatch table (verb x artifact -> lane record), three shared verb procedures (audit; one producing lane serving both author and generate; analyze) plus render's short command procedure, four per-artifact standards docs, the placement spine, and all the audit machinery.
 - **`knowledge-encoding`** -- encoding a newly discovered insight into a persistent home.
 - **`update-documentation`** -- end-of-session review of what the work implies for the docs.
 - **`materialized-output`** -- designing a tool that produces a materialized insight.
@@ -96,6 +96,11 @@ claude_md:
         - skills_kit_lib/tag.py -- idempotent skill-type: frontmatter
           writer; refuses to overwrite existing differing values without --force;
           refuses missing-frontmatter cases (never invents).
+        - skills_kit_lib/material.py -- the one binding to
+          bootstrap_lib.skill_material, and the `material` command behind the
+          md-domain `render` verb (exit codes 0 printed, 1 refused, 2 usage,
+          3 library unavailable, 4 over budget). No fifth skill exists for it;
+          the skill count stays four.
 
         Standards-configuration surface:
         - skills_kit_lib/rule_catalog.py -- the RULES catalog, SSOT for rule id ->
@@ -218,18 +223,24 @@ claude_md:
         - Scripts: launch scripts/skills_kit_tool.py under the bootstrap
           interpreter; it re-execs under the plugin venv the bootstrap engine
           provisions (~/.claude/plugins/data/plugins-kit/skills-kit/.venv), so
-          audit.py / classify.py / tag.py run with pyyaml available, from any
-          directory:
+          audit.py / classify.py / tag.py / material.py run with pyyaml available,
+          from any directory:
 
           "${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" \\
             "${CLAUDE_PLUGIN_ROOT}/scripts/skills_kit_tool.py" audit \\
             <path-to-SKILL.md-or-CLAUDE.md>
+
+          "${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" \\
+            "${CLAUDE_PLUGIN_ROOT}/scripts/skills_kit_tool.py" material \\
+            --skill <path> --budget <n> [--json]
 
         - The md-domain lane scripts (scripts/discover_*.py, references_audit.py,
           report.py) are stdlib-only entry points invoked by the lanes themselves.
         - Outside the venv (bare system Python): audit.py runs but reports
           judgment-required on the YAML contract row. classify.py and tag.py operate
           on frontmatter and a regex-detected YAML root key; they do not need pyyaml.
+          material.py does not degrade: without bootstrap_lib or pyyaml it prints a
+          diagnosis and exits 3.
     - id: audit_framework_paths_are_cross_plugin_api
       keywords: [audit-framework.md, audit-framework.yaml, cross-plugin consumers, breaking rename, md-domain references, awesome-kit, path contract]
       summary: skills/md-domain/references/audit-framework.{md,yaml} are consumed BY PATH from awesome-kit -- renaming or moving them is a breaking cross-plugin change requiring consumer version bumps.
