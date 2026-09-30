@@ -95,6 +95,13 @@ feed both `llm.submit_validated` (in-loop) and `audit` (post-hoc); `Severity`
 tiers (`HARD` / `SOFT` / `ADVISORY`) and the shared `is_rejecting` predicate
 give one accept/reject decision everywhere.
 
+Structural validity is a separate, earlier question. A declared
+`OutputContract` is judged by llm-scripting-kit, and only a structurally valid
+object reaches these validators; a schema failure is one HARD
+`schema_violation` Rejection with the raw output kept. The schema never
+replaces a domain validator, because conforming to a shape says nothing about
+whether the content is acceptable.
+
 ## Advisory floor guards on a known-good corpus
 
 **Principle.** A quality diagnostic that flags suspicious output is admitted

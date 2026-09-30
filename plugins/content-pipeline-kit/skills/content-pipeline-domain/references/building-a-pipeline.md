@@ -288,6 +288,37 @@ Both the in-loop generation site and the post-hoc audit validate through the
 SAME `validate.contract` validators (step 8), so the rule set cannot drift
 between them. Per-attempt cache-busting is automatic.
 
+**Structured output.** A caller that needs a JSON object of a known shape
+declares it with an `llm_scripting_kit.completion.OutputContract` (an `id`, a
+`policy`, a JSON Schema, and an optional `schema_version`) and passes it as
+`submit_validated(..., output_contract=contract)`, or on
+`BackendOptions.output_contract`. A schema-policy contract (`native-required`
+or `validated-result`) takes no `parse_fn`: the validated object is
+`result.payload`. Two questions stay separate:
+
+- Structural validity: does the output conform to the declared schema?
+  llm-scripting-kit answers it, before any validator runs.
+- Domain validity: is the conforming object acceptable content? Your
+  `validate.contract` validators answer it, unchanged, and they see only a
+  structurally valid object.
+
+A schema failure is one HARD `schema_violation` Rejection. Its payload keeps
+the contract identity, the disposition, the schema errors as `(path, keyword)`
+pairs, and the raw output. It feeds the same retry loop as any rejection. A
+`text-only` contract records the report and keeps `parse_fn`. The contract is
+part of the cache key, and a cache hit is served only with a report for the
+same contract identity and a success disposition.
+
+Delivery follows the backend. A backend may enforce the schema natively, or
+deliver it in the prompt; a text-only contract delivers no schema (`delivery: none`); a response whose backend reported nothing carries
+`delivery: unreported` and is judged locally by llm-scripting-kit's validator.
+`native-required` refuses a backend that cannot deliver natively rather than
+downgrading. Per-adapter schema rules belong to llm-scripting-kit: the codex
+adapter requires OpenAI strict-mode schemas (`additionalProperties: false` and
+a full `required` list at every object level), while prompt-delivered adapters
+accept the package's schema subset. The contract path refuses without
+llm-scripting-kit >= 0.56.0 and never substitutes a local parse.
+
 For the convergence-loop shape, the stopping gate is `llm.convergence`:
 `ProgressEvaluator(stall_window=2, converge_window=1).evaluate(history)` folds
 a sequence of `Round(produced, outstanding)` into a `CONVERGED` / `STALLED` /
@@ -518,7 +549,11 @@ longer resolves).
 `audit.reasoning_chain` records why a candidate was selected. `record_submission(
 recorder, entity_id, submit_result)` duck-types a `submit_validated` result
 (reads `responses` / `rejections` / `payload`) into a per-attempt trail
-without importing `llm`. Pick a `Recorder`: `InMemoryRecorder` for tests,
+without importing `llm`. Under an output contract each attempt event also
+carries `contract` = `{id, schema_version, schema_digest, policy, delivery,
+disposition}`, read from that attempt's stored response, and the final event
+carries the last attempt's `contract`. The schema body is never copied: the
+digest and version identify the schema. Pick a `Recorder`: `InMemoryRecorder` for tests,
 `SidecarRecorder` for a per-item on-disk sidecar, `NullRecorder` to disable.
 
 `audit.report.coverage_report(states, findings=...)` folds freshness states

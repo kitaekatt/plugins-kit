@@ -7,6 +7,30 @@ llm-scripting-kit, which owns making one call correctly (endpoint, model, key,
 transport, halt taxonomy); the reverse edge does not exist. A consumer imports
 the library and drives it from its own entry point.
 
+## Structured output
+
+A caller declares the shape it needs with an
+`llm_scripting_kit.completion.OutputContract` and passes it to
+`submit_validated(output_contract=...)` or `BackendOptions.output_contract`.
+Structural validity (the output conforms to the schema) is judged first, by
+llm-scripting-kit; domain validity (the content is acceptable) stays with the
+`validate.contract` validators, which run only on a structurally valid object.
+A schema failure is one HARD `schema_violation` Rejection carrying the contract
+identity, the schema errors, and the raw output, and it feeds the normal retry
+loop. Under a `text-only` contract the report is recorded and `parse_fn` still
+parses. The contract is part of the cache key; a cache hit needs a report for
+the same contract with a success disposition.
+
+`audit.reasoning_chain.record_submission` records, per attempt, the contract
+`id`, `schema_version`, `schema_digest`, `policy`, `delivery` (`native`,
+`prompt`, `none` for a text-only contract that delivers no schema, or `unreported`
+when no seam report exists), and `disposition`. It never records the schema body.
+
+The codex adapter requires OpenAI strict-mode schemas (`additionalProperties:
+false` and a full `required` list at every object level); prompt-delivered
+adapters accept the package's schema subset. The contract path needs
+llm-scripting-kit 0.56.0 or later and refuses without it.
+
 ## Cost and budget
 
 `call_llm` charges each live response against an optional `CostBudget`.
