@@ -150,6 +150,16 @@ unconfigurable opinion whose test passes is a finding.
   answer is a lease plus an expiry plus a fencing token, which is a distributed runner --
   a different plugin, not a column.
 
+- **job-kit continues an answered interrupt at least once, never exactly once.** A
+  process lost or interrupted mid-continuation returns the job to `waiting` and the next
+  `resume` re-runs the contract. A team could reasonably want at-most-once for a
+  side-effecting approval, and their remedy is a contract that makes its own side effect
+  idempotent. We refuse a mode switch because job-kit cannot observe what a killed contract
+  did, so it cannot make an arbitrary side effect idempotent; it guarantees a stable key
+  instead (`JOB_KIT_INTERRUPT_ID` plus a byte-identical resolution document). Exactly-once
+  needs a lease plus fencing, which the entry above refuses. See the README section
+  "Durable interrupts" in `job-kit/README.md`.
+
 - **A recorded forced worktree removal stays forced.** Once `gc --force` has begun
   removing an attempt's worktree, a later `gc` over that attempt continues as forced even
   without the flag, and a refusal never clears the recorded intent. A team could

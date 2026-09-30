@@ -1,4 +1,4 @@
-"""Command-line entry point for job-kit run, status, resume, events and gc."""
+"""Command-line entry point for job-kit run, status, resume, resolve, events and gc."""
 
 from __future__ import annotations
 
@@ -10,27 +10,38 @@ import uuid
 from pathlib import Path
 from typing import Optional, Sequence
 
-from .model import JobState, RunSnapshot, validate_max_parallel
+from .model import TERMINAL_STATES, JobState, RunSnapshot, validate_max_parallel
 from .run import (
     DEFAULT_TIMEOUT_S,
     default_store_path,
     resume_run,
     run_job_file,
 )
-from .store import JobStore
+from .store import (
+    InterruptExpiredError,
+    JobStore,
+    LedgerReader,
+    ResolutionConflictError,
+    ResolutionInputError,
+)
 
 
 EXIT_OK = 0
 EXIT_FAILURE = 1
 EXIT_USAGE = 2
 EXIT_RUNNER_FAILURE = 3
+EXIT_WAITING = 4
 
 _EXIT_EPILOG = """Exit codes:
   0 -- every job accepted, or the verb succeeded (GC refusals are reported)
-  1 -- the verb ran but a job was not accepted (rejected / failed / halted / unroutable)
+  1 -- the verb ran but a job was not accepted (rejected / failed / halted / unroutable /
+       operator_rejected / expired), or `resolve` refused the resolution
   2 -- usage error (argparse exits with this code)
-  3 -- the runner itself failed (unreadable jobs file, missing store, or unexpected exception),
-       or `events` refused (a run without an event log, or an existing --out file)
+  3 -- the runner itself failed (unreadable jobs file, missing store, unknown run or
+       interrupt, or unexpected exception), or `events` refused (a run without an
+       event log, or an existing --out file)
+  4 -- `run` or `resume` ended with no failure but at least one job waiting on an
+       interrupt: healthy, not done; `resolve` it, then `resume`
 """
 
 
@@ -72,11 +83,36 @@ def _parser() -> argparse.ArgumentParser:
         help="pool width for this pass only; the ledger's recorded value is not rewritten",
     )
 
+    resolve = subcommands.add_parser(
+        "resolve",
+        help="resolve a waiting job's interrupt (answer or reject it)",
+        description=(
+            "Record the immutable resolution of one interrupt. An answer is "
+            "validated against the request schema the interrupt declared. "
+            "Replaying an equal resolution is a no-op that exits 0; a different "
+            "one is refused. resolve never resumes the run: run "
+            "`job-kit resume <run-id>` afterwards."
+        ),
+    )
+    resolve.add_argument("run")
+    resolve.add_argument("interrupt_id")
+    decision = resolve.add_mutually_exclusive_group(required=True)
+    decision.add_argument("--input", help="the answer, as JSON text")
+    decision.add_argument(
+        "--input-file", type=Path, help="read the answer as JSON from this file"
+    )
+    decision.add_argument(
+        "--reject", action="store_true", help="reject the request instead of answering it"
+    )
+    resolve.add_argument("--reason", help="the operator's reason; only with --reject")
+    resolve.add_argument("--store", type=Path)
+
     events = subcommands.add_parser(
         "events",
         help="export a run's execution events as JSONL",
         description=(
-            "Write the run's execution events (plugins-kit.execution-event/v1) "
+            "Write the run's execution events (plugins-kit.execution-event/v1, "
+            "and /v2 for interrupt events) "
             "as one JSON object per line, in seq order: to stdout, or to a new "
             "file with --out. A run created before job-kit recorded events is "
             "refused, because its stream would be partial."
@@ -133,12 +169,20 @@ def _emit(snapshot: RunSnapshot, store_path: Path) -> None:
 
 
 def _exit_for_snapshot(snapshot: RunSnapshot) -> int:
-    """Return success only when every declared job was accepted."""
-    return (
-        EXIT_OK
-        if all(job.state is JobState.ACCEPTED for job in snapshot.jobs)
-        else EXIT_FAILURE
-    )
+    """Map a run's jobs to an exit code: a failure dominates a wait.
+
+    1 when any job is terminal and not accepted; otherwise 4 when any job is
+    waiting on an interrupt; otherwise 0 when every job was accepted;
+    otherwise 1.
+    """
+    states = [job.state for job in snapshot.jobs]
+    if any(state in TERMINAL_STATES and state is not JobState.ACCEPTED for state in states):
+        return EXIT_FAILURE
+    if any(state is JobState.WAITING for state in states):
+        return EXIT_WAITING
+    if all(state is JobState.ACCEPTED for state in states):
+        return EXIT_OK
+    return EXIT_FAILURE
 
 
 def _run(args: argparse.Namespace) -> int:
@@ -178,9 +222,13 @@ def _emit_interrupted_run(args: argparse.Namespace) -> None:
 
 
 def _status(args: argparse.Namespace) -> int:
-    """Handle the status subcommand."""
+    """Handle the status subcommand through the read-only ledger reader.
+
+    The reader never migrates a ledger or changes its journal mode, so
+    `status` can be pointed at any ledger without upgrading it.
+    """
     store_path = _store_path(args.store)
-    snapshot = JobStore(store_path, create=False).snapshot(args.run)
+    snapshot = LedgerReader(store_path).snapshot(args.run)
     _emit(snapshot, store_path)
     return EXIT_OK
 
@@ -196,6 +244,102 @@ def _resume(args: argparse.Namespace) -> int:
     )
     _emit(snapshot, store_path)
     return _exit_for_snapshot(snapshot)
+
+
+def _parse_input_text(text: str) -> object:
+    """Parse resolution input JSON, refusing NaN, infinity and repeated keys."""
+
+    def refuse_constant(name: str) -> object:
+        raise ValueError(f"{name} is not JSON")
+
+    def refuse_duplicates(pairs: list) -> dict:
+        result: dict = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError(f"the key {key!r} is repeated")
+            result[key] = value
+        return result
+
+    return json.loads(
+        text, parse_constant=refuse_constant, object_pairs_hook=refuse_duplicates
+    )
+
+
+def _refusal(args: argparse.Namespace, code: str, message: str, errors: Sequence = ()) -> int:
+    """Print the JSON body of a refused resolution and return the refusal exit."""
+    print(
+        json.dumps(
+            {
+                "run": args.run,
+                "interrupt_id": args.interrupt_id,
+                "refused": code,
+                "message": message,
+                "errors": [
+                    {"pointer": pointer, "keyword": keyword} for pointer, keyword in errors
+                ],
+            },
+            sort_keys=True,
+        )
+    )
+    return EXIT_FAILURE
+
+
+def _resolve(args: argparse.Namespace) -> int:
+    """Handle the resolve subcommand.
+
+    The json_schema probe runs before the ledger is opened, so a machine that
+    cannot validate an answer never migrates or writes the ledger.
+    """
+    from . import interrupts
+
+    interrupts._schema_validator()
+    store_path = _store_path(args.store)
+    value: object = None
+    if not args.reject:
+        text = args.input
+        if args.input_file is not None:
+            text = args.input_file.expanduser().read_text(encoding="utf-8")
+        try:
+            value = _parse_input_text(text)
+        except ValueError as exc:
+            return _refusal(args, "invalid_json", f"the input is not valid JSON: {exc}")
+    store = JobStore(store_path, create=False)
+    decision = "reject" if args.reject else "answer"
+    try:
+        resolution = store.resolve_interrupt(
+            args.run,
+            args.interrupt_id,
+            decision=decision,
+            input=value,
+            reason=args.reason,
+        )
+    except ResolutionInputError as exc:
+        return _refusal(args, "schema" if exc.errors else "input", str(exc), exc.errors)
+    except ResolutionConflictError as exc:
+        return _refusal(args, "conflict", str(exc))
+    except InterruptExpiredError as exc:
+        return _refusal(args, "expired", str(exc))
+    record = next(
+        item
+        for item in store.list_interrupts(args.run)
+        if item.id == resolution.interrupt_id
+    )
+    job = store.get_job(args.run, record.job_id)
+    print(
+        json.dumps(
+            {
+                "run": args.run,
+                "interrupt_id": resolution.interrupt_id,
+                "job_id": record.job_id,
+                "outcome": "replayed" if resolution.replayed else "recorded",
+                "decision": decision,
+                "state": job.state.value if job is not None else None,
+                "store": str(store_path),
+            },
+            sort_keys=True,
+        )
+    )
+    return EXIT_OK
 
 
 def _events(args: argparse.Namespace) -> int:
@@ -250,11 +394,15 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     """Run the CLI and return its documented exit status.
 
     Returns 0 when every job is accepted or a verb succeeds, 1 when a run job
-    is rejected, failed, halted, or unroutable, and 3 when the runner itself
-    fails. Argparse exits with 2 for usage errors.
+    is rejected, failed, halted, unroutable, operator-rejected or expired (or
+    `resolve` refuses), 3 when the runner itself fails, and 4 when `run` or
+    `resume` leaves a job waiting on an interrupt and none failed. Argparse
+    exits with 2 for usage errors.
     """
     parser = _parser()
     args = parser.parse_args(argv)
+    if args.command == "resolve" and args.reason is not None and not args.reject:
+        parser.error("resolve: --reason is only valid with --reject")
     try:
         if args.command == "run":
             return _run(args)
@@ -262,6 +410,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             return _status(args)
         if args.command == "resume":
             return _resume(args)
+        if args.command == "resolve":
+            return _resolve(args)
         if args.command == "events":
             return _events(args)
         if args.command == "gc":
@@ -284,5 +434,6 @@ __all__ = [
     "EXIT_FAILURE",
     "EXIT_USAGE",
     "EXIT_RUNNER_FAILURE",
+    "EXIT_WAITING",
     "main",
 ]
