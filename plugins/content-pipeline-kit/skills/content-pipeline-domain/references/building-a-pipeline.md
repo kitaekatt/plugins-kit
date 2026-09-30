@@ -532,6 +532,33 @@ be accepted. Any other exception from `generate` propagates out of `run_wave`
 and leaves that unit `CLAIMED` until its lease expires. Halt kinds are the
 `PipelineHaltError.kind` values, plus `"pause"` for an operator pause.
 
+### Execution events
+
+`execution.events.project_run(store, run_id)` projects one tracked run's
+attempt log into the shared execution-event envelope
+(`plugins-kit.execution-event/v1`, specified by bootstrap's plugin-dev
+reference `execution-events.md`). It only reads: the store is not changed,
+and `write_run_events(store, run_id, sink)` writes the events to a sink you
+supply (`InMemorySink`, or `JsonlSink` from `bootstrap_lib.execution_event`).
+
+- Each event's `seq` is `attempts.id * 4 + phase`, so it follows commit order
+  and is unchanged when you project again after more rows were appended. The
+  run-created event is `seq` 0. `at` is informational; do not sort by it.
+- Identity: `run_id`, `unit_id`, and `attempt_id` = the claim's fencing token.
+- A claim is `call-started`. An accept or fail row yields `usage` (only when a
+  count is known; unknown stays null, never 0), then `result`, then `terminal`
+  when the unit reached accepted, failed or skipped. A retryable fail has no
+  `terminal`. An expired lease is a `result` with status `expired` for the old
+  attempt.
+- Renewals, superseded submissions and the apply steps appear as
+  `content-pipeline-kit:` extension events.
+- Not projected: background `dispatches` (they have their own sequence, so
+  there is no `dispatch-selected` event) and the audit reasoning chain (no run
+  or attempt identity; its payload is model content).
+- The events functions need `bootstrap_lib.execution_event`. Where it is not
+  importable they raise `ExecutionEventSupportError` (an `ImportError`) with
+  the install or update command; no other part of the package needs it.
+
 ## 11. Add the audit spec + Recorder (opt-in)
 
 `audit` closes the loop: it classifies every delivered output against policy,
