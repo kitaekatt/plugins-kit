@@ -111,8 +111,12 @@ A **step** is exactly one of: an agent step, a pipeline step, a `script` node, o
   `model` is a model declaration of llm-scripting-kit transport entry ids
   (e.g. `or-qwen`, or `[or-qwen, or-gpt-mini]`). Omit it to use the configured
   default declaration (set `cheap: true` for that entry's `defaultCheap`). A
-  model alias or raw slug is not an entry id and is not accepted. See
-  `node-strategies.md`.
+  model alias or raw slug is not an entry id and is not accepted. Every
+  compiled openrouter node also records its execution events at
+  `./.workflow-kit/{{runId}}/<step-id>.events.jsonl` with unit id `<step-id>`;
+  under `for_each`, the path gets the index `i` like `$OUT`, and the unit id is
+  `<step-id>-<i>`. A re-run replaces the file. See `node-strategies.md`
+  ("Execution events").
 
 **Templating** -- `{{ inputs.X }}`, `{{ steps.ID }}`, `{{ steps.ID[*].field }}`
 (flatten), `{{ <as> }}` (pipeline/fan_out item), `{{ <prevStage>.field }}`

@@ -210,6 +210,12 @@ def _emit_openrouter_node(step: Step, defined: dict, phase_titles: dict, inputs:
     spec.append(f"out: {out_js}")
     if op.status:
         spec.append(f"status: {compile_template(op.status, scope)}")
+    # Every openrouter node records its execution events beside the default
+    # $OUT, indexed and unit-identified per item under fan-out.
+    spec.append(f"events: {_default_out_js(step.id, '.events.jsonl', fan)}")
+    spec.append("runId: inputs.runId")
+    unit_js = f"`{step.id}-${{i}}`" if fan else json.dumps(step.id)
+    spec.append(f"unitId: {unit_js}")
     spec_js = "{ " + ", ".join(spec) + " }"
     opts = _node_opts(op.label, step.phase, phase_titles)
     call = f"wkOpenRouter({runner_js}, {spec_js}, {opts})"

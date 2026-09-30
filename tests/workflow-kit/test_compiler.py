@@ -126,6 +126,39 @@ def test_openrouter_node_compiles(write_workflow):
     assert "`./.workflow-kit/${inputs.runId}/classify.out`" in js
 
 
+def test_openrouter_node_passes_events_path(write_workflow):
+    js = _compile_text(_OPENROUTER_WF, write_workflow)
+    spec = js.split("const step_classify = await wkOpenRouter(")[1].split("\n")[0]
+    assert "events: `./.workflow-kit/${inputs.runId}/classify.events.jsonl`" in spec
+    assert "runId: inputs.runId" in spec
+    assert 'unitId: "classify"' in spec
+    # the inlined preamble turns the three spec fields into the runner's flags
+    assert "' --events ' + shq(spec.events)" in js
+    assert "' --run-id ' + shq(spec.runId)" in js
+    assert "' --unit-id ' + shq(spec.unitId)" in js
+
+
+def test_fanout_openrouter_node_indexes_events_and_unit(write_workflow):
+    js = _compile_text(
+        """
+name: fan
+description: fan-out openrouter
+inputs:
+  files: { type: list }
+steps:
+  - id: each
+    for_each: "{{ inputs.files }}"
+    openrouter:
+      prompt_file: "{{ item }}"
+""",
+        write_workflow,
+    )
+    assert "await parallel(inputs.files.map((item, i) => () => wkOpenRouter(" in js
+    assert "events: `./.workflow-kit/${inputs.runId}/each.${i}.events.jsonl`" in js
+    assert "unitId: `each-${i}`" in js
+    assert "`./.workflow-kit/${inputs.runId}/each.${i}.out`" in js
+
+
 def test_script_node_for_each_indexes_out_path(write_workflow):
     js = _compile_text(
         """

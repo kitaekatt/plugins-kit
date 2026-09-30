@@ -32,11 +32,22 @@ class TestTools:
         assert "claude" not in names
 
 
+def _version(text):
+    return tuple(int(part) for part in text.split("."))
+
+
 class TestRequiresBootstrap:
-    def test_floor_covers_the_model_declaration_call(self):
-        # The loader calls bootstrap_lib.model_declaration.parse / CORE_IDS,
-        # first shipped in bootstrap 0.129.0 (workflow_kit_lib.declarations).
-        from workflow_kit_lib.declarations import MODEL_DECLARATION_BOOTSTRAP
+    def test_floor_covers_every_required_bootstrap_lib_call(self):
+        # The loader calls bootstrap_lib.model_declaration.parse / CORE_IDS
+        # (MODEL_DECLARATION_BOOTSTRAP), and every compiled openrouter node
+        # calls bootstrap_lib.execution_event.Emitter / JsonlSink
+        # (EXECUTION_EVENT_BOOTSTRAP). The floor is the newer of the two.
+        from workflow_kit_lib.declarations import (
+            EXECUTION_EVENT_BOOTSTRAP,
+            MODEL_DECLARATION_BOOTSTRAP,
+        )
 
         manifest = json.loads((PLUGIN_ROOT / "bootstrap.json").read_text(encoding="utf-8"))
-        assert manifest.get("requires_bootstrap") == MODEL_DECLARATION_BOOTSTRAP
+        floor = max(MODEL_DECLARATION_BOOTSTRAP, EXECUTION_EVENT_BOOTSTRAP, key=_version)
+        assert manifest.get("requires_bootstrap") == floor
+        assert "execution_event" in manifest["$comment"]

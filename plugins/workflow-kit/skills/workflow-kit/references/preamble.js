@@ -70,7 +70,10 @@ function wkScript(command, out, opts) {
 // where <workflow-kit-venv-python> is
 //   ~/.claude/plugins/data/plugins-kit/workflow-kit/.venv/Scripts/python.exe  (Windows)
 //   ~/.claude/plugins/data/plugins-kit/workflow-kit/.venv/bin/python          (macOS/Linux)
-// `spec` = { model?, cheap?, promptFile, system?, out, status? }. `model` is a
+// `spec` = { model?, cheap?, promptFile, system?, out, status?, events?, runId?,
+// unitId? }. `events` is where the call records its execution-event JSONL
+// stream (replaced on each run); it requires `runId` and `unitId`, and the
+// compiler always sets all three. `model` is a
 // model declaration of transport entry ids, comma-separated (e.g. 'or-qwen' or
 // 'or-qwen,or-gpt-mini'). When `model` is omitted the runner uses
 // llm-scripting-kit's configured default declaration and its 'default' model
@@ -85,10 +88,15 @@ function wkOpenRouter(runner, spec, opts) {
   const cheap = spec.cheap ? ' --cheap' : ''
   const sys = spec.system ? ' --system ' + shq(spec.system) : ''
   const st = spec.status ? ' --status ' + shq(spec.status) : ''
+  const ev = spec.events
+    ? ' --events ' + shq(spec.events) +
+      ' --run-id ' + shq(spec.runId) +
+      ' --unit-id ' + shq(spec.unitId)
+    : ''
   const cmd =
     runner + model + cheap +
     ' --prompt-file ' + shq(spec.promptFile) +
-    ' --out ' + shq(spec.out) + sys + st
+    ' --out ' + shq(spec.out) + sys + st + ev
   const merged = { status: spec.status }
   if (opts.label) merged.label = opts.label
   if (opts.phase) merged.phase = opts.phase

@@ -132,6 +132,33 @@ Provisioning:
 - `openai` is a declared workflow-kit dependency (`pyproject.toml` +
   `venv.check_imports`), so bootstrap installs it into workflow-kit's venv.
 
+### Execution events
+
+An openrouter node can record what its call did as a JSONL stream of
+execution events, in the `plugins-kit.execution-event/v1` format that
+bootstrap's plugin-dev `references/execution-events.md` specifies. Pass
+`events`, `runId` and `unitId` in `wkOpenRouter`'s `spec`; the runner gets
+`--events <path> --run-id <id> --unit-id <id>`. `--events` without both ids
+is a usage error (exit 2).
+
+- Every event has `source.plugin` `workflow-kit` and the given run and unit
+  ids. Per attempt, the stream holds `dispatch-selected`, `call-started`,
+  `usage` (when the provider reported token counts) and `result`. One
+  `terminal` closes the node. llm-scripting-kit emits these through
+  `run(..., observer=...)`.
+- The file records the node's LAST execution: a re-run replaces it, as it
+  replaces `$OUT`.
+- The runner creates the file's parent directory, so a fresh run with no
+  `./.workflow-kit/<runId>/` directory works.
+- Before any model call, the runner checks that bootstrap_lib has
+  `execution_event` with the v1 schema and the `Emitter`/`JsonlSink` calls it
+  makes, and that `declaration.run` takes the `observer` keyword. An absent or
+  too-old library exits 2 with the command that repairs it, and creates no
+  file or directory.
+
+A compiled `.workflow.yaml` sets all three for every openrouter node (see
+`workflow-yaml.md`). A hand-written script that omits `events` records none.
+
 ## Consuming a node's output
 
 A downstream Claude reasoning node reads the payload only when it must reason

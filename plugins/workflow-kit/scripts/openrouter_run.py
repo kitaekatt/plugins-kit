@@ -28,7 +28,8 @@ Run this with WORKFLOW-KIT's OWN venv python, which bootstrap provisions with:
 
     <workflow-kit-venv-python> scripts/openrouter_run.py \\
         [--model <entry>[,<entry>...]] [--cheap] --prompt-file <req.txt> --out <OUT> \\
-        [--system <s>] [--status <STATUS>]
+        [--system <s>] [--status <STATUS>] \\
+        [--events <EVENTS.jsonl> --run-id <runId> --unit-id <unitId>]
 
 Contract: writes the reply to --out and exits 0 on success. Exit 2 is a
 resolution failure (the floor, an invalid declaration, a missing or too-old
@@ -36,10 +37,24 @@ shared library); exit 1 is a call that ran and failed. The optional --status
 JSON names the entry that ran or, on failure, the error kind, the halt kind
 when one was classified, and the floor's dispositions. The seam classifies
 transport, HTTP and halt failures; this script reports them.
+
+Execution events: with --events (which requires --run-id and --unit-id), the
+call records a ``plugins-kit.execution-event/v1`` JSONL stream at that path.
+An ``Emitter`` from ``bootstrap_lib.execution_event``, bound to
+``source.plugin`` ``workflow-kit`` and the given run and unit ids, is passed
+as ``observer=`` to ``declaration.run``, which emits ``dispatch-selected``,
+``call-started``, ``usage`` and ``result`` per attempt and one ``terminal``.
+The file is truncated on each execution, so it records the node's LAST
+execution, as --out does. Before any model call, the runner probes
+``bootstrap_lib.execution_event`` (the v1 schema and the exact ``Emitter`` and
+``JsonlSink`` calls) and ``run``'s ``observer`` keyword; an absent or too-old
+library exits 2 and creates nothing. Only then is the events file's parent
+directory created.
 """
 from __future__ import annotations
 
 import argparse
+import inspect
 import json
 import os
 import sys
@@ -49,6 +64,19 @@ from pathlib import Path
 #: newest symbol this runner uses (with default_declaration and the
 #: declaration module's run/NoUsableRoutingTarget).
 _LLM_SCRIPTING_KIT_MIN = "0.46.0"
+
+#: The llm-scripting-kit release that shipped ``run(..., observer=...)``, the
+#: call --events makes.
+_LLM_SCRIPTING_KIT_OBSERVER = "0.56.0"
+
+#: The execution-event schema this runner writes. Its own literal, never read
+#: from the (possibly stale) linked module.
+_REQUIRED_SCHEMA = "plugins-kit.execution-event/v1"
+
+#: ``source.plugin`` of every event this runner records.
+_EVENT_PLUGIN = "workflow-kit"
+
+_OBSERVER_KINDS = (inspect.Parameter.KEYWORD_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)
 
 
 def _write_status(path, obj):
@@ -61,6 +89,81 @@ def _write_status(path, obj):
 
 def _split(value):
     return [part.strip() for part in (value or "").split(",") if part.strip()]
+
+
+def _execution_event_bootstrap():
+    """workflow-kit's own constant for the bootstrap release --events needs."""
+    try:
+        from workflow_kit_lib.declarations import EXECUTION_EVENT_BOOTSTRAP  # noqa: PLC0415
+    except ImportError:
+        # workflow_kit_lib ships beside this script; use that copy when the
+        # interpreter has none installed.
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+        from workflow_kit_lib.declarations import EXECUTION_EVENT_BOOTSTRAP  # noqa: PLC0415
+    return EXECUTION_EVENT_BOOTSTRAP
+
+
+def _probe_execution_event():
+    """Return ``(module, None)`` when usable, else ``(None, message)``.
+
+    Absent and too-old are different repairs (install vs. update), so they get
+    different messages. The version named is workflow-kit's own constant,
+    never a value read from the linked module.
+    """
+    try:
+        import bootstrap_lib  # noqa: F401, PLC0415
+    except ImportError:
+        return None, (
+            "--events needs bootstrap_lib.execution_event, but bootstrap_lib is not "
+            "importable: the plugins-kit:bootstrap plugin has not provisioned "
+            "workflow-kit here. Run `claude plugin install bootstrap@plugins-kit`, start "
+            "a new session, and run this with workflow-kit's venv python."
+        )
+    try:
+        from bootstrap_lib import execution_event  # noqa: PLC0415
+    except ImportError:
+        execution_event = None
+    reason = None
+    if execution_event is None:
+        reason = "no bootstrap_lib.execution_event"
+    elif _REQUIRED_SCHEMA not in (getattr(execution_event, "SUPPORTED_SCHEMAS", None) or ()):
+        reason = f"schema {_REQUIRED_SCHEMA} is not supported"
+    elif not callable(getattr(execution_event, "Emitter", None)) or not callable(
+        getattr(execution_event, "JsonlSink", None)
+    ):
+        reason = "Emitter or JsonlSink is missing"
+    else:
+        try:
+            inspect.signature(execution_event.Emitter).bind(
+                _EVENT_PLUGIN, "r", unit_id="u", sinks=()
+            )
+            inspect.signature(execution_event.JsonlSink).bind("p", mode="truncate")
+        except (TypeError, ValueError):
+            reason = "Emitter(...) or JsonlSink(..., mode='truncate') does not bind"
+    if reason is None:
+        return execution_event, None
+    return None, (
+        f"the linked bootstrap_lib predates the execution-event call --events makes ({reason}); "
+        f"this requires bootstrap >= {_execution_event_bootstrap()}. Run `claude plugin update "
+        "bootstrap@plugins-kit` and restart so bootstrap re-links the newer shared lib onto "
+        "workflow-kit's venv."
+    )
+
+
+def _probe_run_observer(run):
+    """Return None when ``run`` accepts ``observer=`` as a keyword, else a message."""
+    try:
+        param = inspect.signature(run).parameters.get("observer")
+    except (TypeError, ValueError):
+        param = None
+    if param is not None and param.kind in _OBSERVER_KINDS:
+        return None
+    return (
+        "the linked llm_scripting_kit's declaration.run takes no `observer` keyword, which "
+        f"--events passes; this requires llm-scripting-kit >= {_LLM_SCRIPTING_KIT_OBSERVER}. "
+        "Run `claude plugin update llm-scripting-kit@plugins-kit` and restart so bootstrap "
+        "re-links the newer shared lib onto workflow-kit's venv."
+    )
 
 
 def main(argv=None):
@@ -87,7 +190,16 @@ def main(argv=None):
     ap.add_argument("--max-tokens", type=int)
     ap.add_argument("--out", required=True, help="write the reply text here ($OUT)")
     ap.add_argument("--status", help="optional path for a small JSON status object ($STATUS)")
+    ap.add_argument(
+        "--events",
+        help="record a plugins-kit.execution-event/v1 JSONL stream here (replaced on each "
+        "run); requires --run-id and --unit-id",
+    )
+    ap.add_argument("--run-id", help="the workflow run id the events carry (with --events)")
+    ap.add_argument("--unit-id", help="the node's unit id the events carry (with --events)")
     args = ap.parse_args(argv)
+    if args.events and not (args.run_id and args.unit_id):
+        ap.error("--events requires --run-id and --unit-id")
 
     # The package and the newest symbol are probed separately: a .pth links no
     # version, so this venv can resolve an llm-scripting-kit predating the
@@ -123,6 +235,34 @@ def main(argv=None):
         )
         return 2
 
+    observer = None
+    if args.events:
+        # Every probe runs before any directory is created and before any
+        # model call; a refusal leaves nothing on disk.
+        execution_event, message = _probe_execution_event()
+        if message is None:
+            message = _probe_run_observer(run)
+        if message is None:
+            try:
+                execution_event.Emitter(
+                    _EVENT_PLUGIN, args.run_id, unit_id=args.unit_id, sinks=()
+                )
+            except ValueError as exc:  # EventError is a ValueError
+                message = f"--run-id/--unit-id are not valid event identities: {exc}"
+        if message is not None:
+            print(message, file=sys.stderr)
+            return 2
+        events_path = Path(args.events)
+        # A fresh run has no ./.workflow-kit/<runId>/ directory, and --out's
+        # parent is created only after the call returns.
+        events_path.parent.mkdir(parents=True, exist_ok=True)
+        observer = execution_event.Emitter(
+            _EVENT_PLUGIN,
+            args.run_id,
+            unit_id=args.unit_id,
+            sinks=[execution_event.JsonlSink(events_path, mode="truncate")],
+        )
+
     project_root = os.getcwd()
     names = _split(args.model)
     try:
@@ -145,9 +285,10 @@ def main(argv=None):
         return create_transport_backend(name, cheap=args.cheap, project_root=project_root)
 
     try:
+        run_kwargs = {} if observer is None else {"observer": observer}
         result = run(
             names, request, project_root=project_root, backend_factory=factory,
-            max_attempts=len(names),
+            max_attempts=len(names), **run_kwargs,
         )
     except NoUsableRoutingTarget as exc:
         print(str(exc), file=sys.stderr)

@@ -32,6 +32,10 @@ from .errors import WorkflowError
 #: The bootstrap release that shipped ``bootstrap_lib.model_declaration``.
 MODEL_DECLARATION_BOOTSTRAP = "0.129.0"
 
+#: The bootstrap release that shipped ``bootstrap_lib.execution_event`` (the
+#: ``Emitter`` and ``JsonlSink`` an openrouter node run with ``--events`` uses).
+EXECUTION_EVENT_BOOTSTRAP = "0.135.0"
+
 #: The node executor's model (W3, W4): a one-entry declaration. The agent
 #: definition's frontmatter and the preamble's ``agent()`` options can carry
 #: only a scalar, so each writes this declaration's single id; a test pins
@@ -101,6 +105,7 @@ def agent_model(declared: Optional[tuple], where: str) -> Optional[str]:
 
 
 __all__ = [
+    "EXECUTION_EVENT_BOOTSTRAP",
     "EXECUTOR_MODELS",
     "MODEL_DECLARATION_BOOTSTRAP",
     "agent_model",
