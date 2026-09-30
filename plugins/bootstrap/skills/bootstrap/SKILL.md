@@ -144,7 +144,7 @@ reference_skill:
         Differences from a hook pass, each required by the terminal: console
         output (no bootstrap.log, engine version stamps, pending display file,
         or fix-all queue); no cooldown consumed or reset; no per-project
-        interpreter record (_global_ key); no Codex project hook generated;
+        interpreter record (_global_ key); no user Codex hook installed;
         stdin closed; exit 1 when the pass reports failures.
 
         run refuses with exit code 2 while another pass holds the shared lock

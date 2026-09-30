@@ -93,8 +93,9 @@ After a clean automatic pass, when Codex is available, bootstrap installs one
 guarded `SessionStart` hook in the user-level `$CODEX_HOME/hooks.json` (default
 `~/.codex/hooks.json`). The guard uses `bootstrap` from PATH or
 `$HOME/.local/bin/bootstrap` and exits 0 silently when bootstrap is absent; the
-Windows equivalent uses `where bootstrap.cmd` and a quoted `%USERPROFILE%`
-fallback. Every pass removes bootstrap-owned entries from a project's legacy
+Windows equivalent is a one-line `cmd.exe /d /c` wrapper that calls
+`bootstrap.cmd` from PATH, then uses a quoted `%USERPROFILE%` fallback. Every
+pass removes bootstrap-owned entries from a project's legacy
 `.codex/hooks.json` while preserving team hooks. A newly written or changed
 user hook requires a one-time `/hooks` trust review in Codex.
 

@@ -29,16 +29,10 @@ POSIX_HOOK_COMMAND = (
     "codex-hook; fi; exit 0"
 )
 WINDOWS_HOOK_COMMAND = (
-    "where bootstrap.cmd >nul 2>&1\n"
-    "if not errorlevel 1 (\n"
-    "  call bootstrap.cmd codex-hook\n"
-    "  exit /b %ERRORLEVEL%\n"
-    ")\n"
-    'if exist "%USERPROFILE%\\.local\\bin\\bootstrap.cmd" (\n'
-    '  call "%USERPROFILE%\\.local\\bin\\bootstrap.cmd" codex-hook\n'
-    "  exit /b %ERRORLEVEL%\n"
-    ")\n"
-    "exit /b 0"
+    'cmd.exe /d /c "where bootstrap.cmd >nul 2>&1 & '
+    'if errorlevel 1 (if exist """%USERPROFILE%\\.local\\bin\\bootstrap.cmd""" '
+    '(call """%USERPROFILE%\\.local\\bin\\bootstrap.cmd""" codex-hook) '
+    'else exit /b 0) else call bootstrap.cmd codex-hook"'
 )
 _TIMEOUT_SECONDS = 15.0
 
@@ -177,7 +171,12 @@ def _atomic_write(path: str, content: str, mode: int | None = None) -> None:
 def _hooks_lock(path: str):
     """Serialize read/merge/write cycles across concurrent hook passes."""
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)
+    created = False
+    try:
+        fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_RDWR, 0o600)
+        created = True
+    except FileExistsError:
+        fd = os.open(path, os.O_RDWR)
     try:
         if os.name == "nt":
             import msvcrt
@@ -185,7 +184,7 @@ def _hooks_lock(path: str):
         else:
             import fcntl
             fcntl.flock(fd, fcntl.LOCK_EX)
-        yield
+        yield created
     finally:
         try:
             if os.name == "nt":
@@ -263,9 +262,20 @@ def strip_project_codex_hook(project_dir: str) -> CodexHookStripResult:
     lock_path = hooks_path + ".lock"
     if not os.path.isfile(hooks_path) or os.path.islink(hooks_path):
         return CodexHookStripResult(False, hooks_path)
-    delete_file = False
+
     try:
-        with _hooks_lock(lock_path):
+        old_content, document, mode = _read_document(hooks_path)
+        reduced, changed = _strip_hooks(document)
+        empty_untracked = _semantically_empty(reduced) and not _git_tracked(project_dir)
+        if not changed and not empty_untracked:
+            return CodexHookStripResult(False, hooks_path)
+    except (CodexHookError, OSError, ValueError, subprocess.SubprocessError):
+        return CodexHookStripResult(False, hooks_path)
+
+    delete_file = False
+    lock_created = False
+    try:
+        with _hooks_lock(lock_path) as lock_created:
             old_content, document, mode = _read_document(hooks_path)
             reduced, changed = _strip_hooks(document)
             empty_untracked = _semantically_empty(reduced) and not _git_tracked(project_dir)
@@ -280,6 +290,12 @@ def strip_project_codex_hook(project_dir: str) -> CodexHookStripResult:
                 return CodexHookStripResult(True, hooks_path)
     except (CodexHookError, OSError, ValueError, subprocess.SubprocessError):
         return CodexHookStripResult(False, hooks_path)
+    finally:
+        if lock_created:
+            try:
+                os.unlink(lock_path)
+            except OSError:
+                pass
 
     if delete_file:
         try:

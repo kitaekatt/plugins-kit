@@ -403,9 +403,10 @@ lock plus an atomic replacement.
 
 The generated matcher covers `startup` and `resume`. Its stable command first
 looks for `bootstrap` on PATH, then `$HOME/.local/bin/bootstrap`, and exits 0
-silently when neither exists. The Windows command uses `where bootstrap.cmd`
-and then `%USERPROFILE%\\.local\\bin\\bootstrap.cmd`, with quoted fallback
-paths for spaces. A newly written or changed user hook tells the user to
+silently when neither exists. The Windows command is a one-line
+`cmd.exe /d /c` wrapper that calls `bootstrap.cmd` from PATH, then
+`%USERPROFILE%\\.local\\bin\\bootstrap.cmd`, with quoted fallback paths for
+spaces. A newly written or changed user hook tells the user to
 review the new hook once with `/hooks`.
 
 `bootstrap codex-hook` reads SessionStart JSON from stdin and uses its existing

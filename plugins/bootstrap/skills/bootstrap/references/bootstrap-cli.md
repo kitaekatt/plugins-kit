@@ -103,8 +103,11 @@ Codex is not available, it skips user-hook installation. Every pass strips
 bootstrap-owned entries from the project's legacy `.codex/hooks.json`.
 The command reads SessionStart JSON from stdin, uses its existing `cwd`, and
 runs the full engine synchronously. A duplicate `session_id` is a quiet no-op.
-If bootstrap is absent, the generated guard exits 0 without output. A changed
-user hook is announced as requiring one `/hooks` trust review.
+On Windows, the generated `commandWindows` value is a one-line
+`cmd.exe /d /c` wrapper that calls `bootstrap.cmd` from PATH, then the quoted
+`%USERPROFILE%\\.local\\bin\\bootstrap.cmd` fallback. If bootstrap is absent,
+the generated guard exits 0 without output. A changed user hook is announced as
+requiring one `/hooks` trust review.
 
 ## Running passes and exit codes
 

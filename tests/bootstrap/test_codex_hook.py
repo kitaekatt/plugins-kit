@@ -4,6 +4,7 @@ import json
 import importlib.util
 import io
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -39,6 +40,27 @@ def _git_project(tmp_path):
 
 
 class TestCodexHookInstall:
+    def test_windows_command_is_portable_single_line_with_terminal_calls(
+        self, monkeypatch, tmp_path
+    ):
+        home = tmp_path / "user home"
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.setenv("USERPROFILE", str(home))
+
+        command = codex_hook._hook_entry()["commandWindows"]
+
+        assert "\n" not in command
+        assert "\r" not in command
+        assert command.startswith("cmd.exe /d /c ")
+        assert "%USERPROFILE%\\.local\\bin\\bootstrap.cmd" in command
+        assert str(home) not in command
+        assert "&&" not in command
+        assert "||" not in command
+        assert re.search(r"else call bootstrap\.cmd codex-hook\"$", command)
+        assert re.search(
+            r"else exit /b 0\) else call bootstrap\.cmd codex-hook\"$", command
+        )
+
     @pytest.mark.skipif(os.name != "nt", reason="Windows shell execution contract")
     @pytest.mark.parametrize("home_name", ["home", "home with spaces"])
     @pytest.mark.parametrize("shell", ["powershell.exe", "cmd.exe"])
@@ -231,6 +253,23 @@ class TestProjectHookStrip:
             ]}],
             "Other": [{"hooks": [{"command": "team-other"}]}],
         }
+        assert not hooks_path.with_name("hooks.json.lock").exists()
+
+    def test_team_only_project_hook_does_not_create_lock_file(self, tmp_path):
+        project = _git_project(tmp_path)
+        hooks_path = project / ".codex" / "hooks.json"
+        hooks_path.parent.mkdir()
+        hooks_path.write_text(json.dumps({"hooks": {
+            "SessionStart": [{"hooks": [
+                {"type": "command", "command": "team-hook"},
+            ]}],
+        }}), encoding="utf-8")
+
+        result = codex_hook.strip_project_codex_hook(str(project))
+
+        assert result.changed is False
+        assert hooks_path.exists()
+        assert not hooks_path.with_name("hooks.json.lock").exists()
 
     def test_untracked_empty_strip_removes_file_lock_and_empty_codex_dir(self, tmp_path):
         project = _git_project(tmp_path)
