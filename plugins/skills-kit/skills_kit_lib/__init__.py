@@ -7,6 +7,7 @@ Provides:
 - schema_registry: registry of typed-unit roots and their schemas
 - schemas/: lib-owned schema definitions (skill-type schemas, portable units, claude_md)
 - markdown_heuristics: structural-shape detectors + the one frontmatter parser
+- material: the binding to bootstrap_lib.skill_material behind the parser's strict mode (never imported by the package)
 - corpus: SKILL.md corpus discovery across user/project/plugin tiers
 - dirwalk: depth-limited cwd-downward walk shared by the audit discover scripts
 - checks: corpus-level audit checks (owner-doc validation)

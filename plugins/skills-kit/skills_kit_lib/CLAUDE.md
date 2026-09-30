@@ -14,6 +14,7 @@ claude_md:
       - schemas/portable, schemas/skill_types, schemas/claude_md (the registered schemas)
       - document_walker (fenced-yaml-block extraction)
       - markdown_heuristics (the heuristic vocabulary used by the legacy markdown fallback)
+      - material (the binding to bootstrap_lib.skill_material behind parse_frontmatter's strict mode)
       - corpus (SKILL.md discovery across user/project/plugin tiers)
       - checks (owner_doc validation and other corpus-level rules)
       - audit / classify / tag (per-skill CLI utilities, invoked via `python -m skills_kit_lib.<module>`)
@@ -197,6 +198,27 @@ claude_md:
       origin: |
         home-domain skill audit 2026-07-15 (findings LG-1/LG-3/LG-4): a pytest suite and an orphaned reference existed in the skill but nothing pointed at them; the mechanical validator passed every row.
       added: "2026-07-15"
+    - id: strict_frontmatter_mode_delegates
+      keywords: [strict mode, parse_frontmatter strict, StrictFrontmatterError, SkillMaterialUnavailable, skill_material, bootstrap_lib binding, material.py, never degrades, audit path, lazy import, requires_bootstrap]
+      summary: "parse_frontmatter(mode=\"strict\") is the only mode that raises. It delegates to bootstrap_lib.skill_material.parse_frontmatter_strict through material.py, and the audit path never imports that binding."
+      detail: |
+        light and full degrade (None with no block; full gives empty fields on
+        invalid YAML or no pyyaml), and audit, classify, tag and corpus rely on
+        that. strict raises instead: StrictFrontmatterError (a ValueError, the
+        library's FrontmatterError as __cause__) for no block, invalid YAML or a
+        non-mapping, and material.SkillMaterialUnavailable (an ImportError with
+        state "absent", "too-old" or "no-pyyaml") when the library cannot be
+        used. A missing PyYAML is never reported as invalid frontmatter.
+        material.load_skill_material probes every call skills-kit makes before
+        returning the module; its SKILL_MATERIAL_BOOTSTRAP constant equals
+        requires_bootstrap in ../bootstrap.json. markdown_heuristics imports
+        the binding inside the strict branch only, so importing it (as every
+        audit caller does) imports neither material nor bootstrap_lib, and the
+        audits run unchanged against an older bootstrap_lib. Keep both imports
+        out of module top. Pinned by tests/skills-kit/test_frontmatter_strict.py
+        and tests/skills-kit/test_skills_kit_bootstrap_manifest.py.
+      origin: explicit-skill-context plan, unit SC4 (decision SC-D9).
+      added: "2026-09-30"
   conventions:
     - rule: When extending heuristics, modify markdown_heuristics.py first; audit.py and classify.py both import from there.
       keywords: [SSOT, markdown_heuristics, helper extraction, drift]

@@ -30,6 +30,11 @@ class Frontmatter:
     fields: dict = field(default_factory=dict)
 
 
+class StrictFrontmatterError(ValueError):
+    """mode="strict" found no frontmatter block, invalid YAML, or a block
+    that is not a mapping. The library's error is the `__cause__`."""
+
+
 @dataclass
 class Body:
     text: str
@@ -47,9 +52,30 @@ def parse_frontmatter(content: str, mode: str = "light"):
         lists, nested maps). Degrades to EMPTY fields when pyyaml is
         unavailable or the YAML is invalid/non-dict (the contract-staged
         degradation corpus discovery relies on).
+    mode="strict": bootstrap_lib.skill_material.parse_frontmatter_strict,
+        reached through skills_kit_lib.material. Typed fields, and it never
+        degrades: it raises StrictFrontmatterError when there is no block, the
+        YAML is invalid, or the block is not a mapping, and
+        material.SkillMaterialUnavailable (state "absent", "too-old" or
+        "no-pyyaml") when the library cannot be used from this interpreter.
+        `content` is decoded text without a leading byte-order mark. The
+        binding is imported inside this branch only, so importing this module
+        imports neither skills_kit_lib.material nor bootstrap_lib.
 
-    Returns None when the document has no leading --- block.
+    Any other mode behaves as "light". "light" and "full" return None when the
+    document has no leading --- block; "strict" never returns None.
     """
+    if mode == "strict":
+        from .material import load_skill_material, no_pyyaml
+
+        module = load_skill_material()
+        try:
+            fields, raw, _body = module.parse_frontmatter_strict(content)
+        except module.PyYamlUnavailableError as exc:
+            raise no_pyyaml(exc) from exc  # availability, not content
+        except module.SkillMaterialError as exc:
+            raise StrictFrontmatterError(str(exc)) from exc
+        return Frontmatter(raw=raw, fields=fields)
     m = FRONTMATTER_RE.match(content)
     if not m:
         return None
