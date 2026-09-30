@@ -3,7 +3,7 @@ _schema_version: 1
 name: plugin-dev
 author: christina
 skill-type: technique-skill
-description: Use when cross-plugin edge, REQUIRED/REFUSE/DEGRADE, enable, opt-lib probe, silent/disclosed, model declaration. Do NOT use for bootstrap config/md authoring.
+description: Use when cross-plugin edge, REQUIRED/REFUSE/DEGRADE, opt-lib probe, enabling, model declaration, execution events. Do NOT use for bootstrap config/md authoring.
 ---
 
 # Plugin development
@@ -16,13 +16,14 @@ when the consuming skill can host a consented probe.
 ```yaml
 technique_skill:
   _schema_version: "1"
-  identity: Procedure for choosing and applying the REQUIRED / REFUSE / DEGRADE contract for cross-plugin capability edges, and for the shared model-declaration format.
+  identity: Procedure for choosing and applying the REQUIRED / REFUSE / DEGRADE contract for cross-plugin capability edges, and for the shared model-declaration format and execution-event envelope.
   scope:
     covers:
       - cross-plugin imports and optional shared-library edges
       - REQUIRED, REFUSE, and DEGRADE branch selection
       - skill-embedded enabling and consented capability probes
       - the shared model-declaration format and its structural validator
+      - the shared execution-event envelope, its vocabulary, ordering rules, and sinks
     excludes:
       - bootstrap manifest configuration
       - skill and CLAUDE.md authoring standards
@@ -58,4 +59,8 @@ references:
     path: references/model-declaration.md
     keywords: [model declaration, models list, registry id, core ids, fable opus sonnet haiku, agent prefix, peer prefix, duplicate id, empty list, bootstrap_lib.model_declaration]
     summary: The one format every plugin uses to declare which models may do a unit of work -- a list of registry ids -- plus the core ids, the deprecated prefixes, and the stdlib-only structural validator.
+  - id: execution_events
+    path: references/execution-events.md
+    keywords: [execution event, event envelope, run identity, seq ordering, usage payload, zero versus unknown, JsonlSink, Emitter, extension event name, schema revision, bootstrap_lib.execution_event]
+    summary: The shared envelope every plugin uses to record execution facts (dispatch, call start, usage, result, terminal) in its own store -- the frozen v1 vocabulary, the extension and revision rules, ordering and identity, the zero-versus-unknown usage rule, the sinks, and the consumer probe.
 ```
