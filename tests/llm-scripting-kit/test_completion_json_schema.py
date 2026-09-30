@@ -232,3 +232,162 @@ def test_ref_and_siblings_both_apply():
     schema = {"$ref": "#/$defs/s", "maxLength": 2, "$defs": {"s": {"type": "string"}}}
     assert validate(schema, "abc") == (("", "maxLength"),)
     assert validate(schema, 5) == (("", "type"),)
+
+
+# -- the frozen subset revision ---------------------------------------------
+
+import inspect  # noqa: E402
+
+from llm_scripting_kit.completion import json_schema as _json_schema  # noqa: E402
+from llm_scripting_kit.completion.contract_types import OutputContract  # noqa: E402
+
+_V1 = "llm-scripting-kit.json-schema-subset/v1"
+
+
+def test_subset_v1_literal_is_frozen():
+    assert _json_schema.SUBSET_V1 == "llm-scripting-kit.json-schema-subset/v1"
+
+
+def test_supported_subsets_is_v1():
+    assert _json_schema.SUPPORTED_SUBSETS == frozenset(
+        {"llm-scripting-kit.json-schema-subset/v1"}
+    )
+    assert isinstance(_json_schema.SUPPORTED_SUBSETS, frozenset)
+
+
+def test_subset_v1_keyword_sets_are_frozen():
+    assert _json_schema.SUPPORTED_KEYWORDS == frozenset(
+        {
+            "type", "properties", "required", "additionalProperties", "items",
+            "enum", "const", "minLength", "maxLength", "minimum", "maximum",
+            "exclusiveMinimum", "exclusiveMaximum", "minItems", "maxItems",
+            "anyOf", "$ref",
+        }
+    )
+    assert _json_schema.ANNOTATION_KEYWORDS == frozenset(
+        {"title", "description", "$schema", "$id", "default", "examples", "$defs"}
+    )
+    assert _json_schema.TYPE_NAMES == frozenset(
+        {"null", "boolean", "integer", "number", "string", "array", "object"}
+    )
+
+
+_VECTORS = {
+    "conforms": ({"type": "object"}, {}, ()),
+    "anyof-reports-one-error-at-its-own-location": (
+        {"anyOf": [{"type": "string"}, {"type": "integer"}]},
+        1.5,
+        (("", "anyOf"),),
+    ),
+    "required-and-additional-sorted": (
+        {
+            "type": "object",
+            "required": ["b", "a"],
+            "properties": {"a": {"type": "string"}},
+            "additionalProperties": False,
+        },
+        {"c": 1},
+        (("/a", "required"), ("/b", "required"), ("/c", "additionalProperties")),
+    ),
+    "local-ref-through-items": (
+        {
+            "$defs": {"n": {"type": "integer", "minimum": 1}},
+            "type": "array",
+            "items": {"$ref": "#/$defs/n"},
+        },
+        [1, 0, "x"],
+        (("/1", "minimum"), ("/2", "type")),
+    ),
+    "bool-is-not-integer": ({"type": "integer"}, True, (("", "type"),)),
+    "const-one-is-not-true": ({"const": 1}, True, (("", "const"),)),
+    "pointer-escapes-slash": (
+        {"properties": {"a/b": {"type": "string"}}},
+        {"a/b": 1},
+        (("/a~1b", "type"),),
+    ),
+}
+
+
+@pytest.mark.parametrize("vector", sorted(_VECTORS))
+def test_subset_v1_conformance_vectors(vector):
+    schema, value, expected = _VECTORS[vector]
+    check_schema(schema, subset=_V1)
+    assert validate(schema, value, subset=_V1) == expected
+    assert validate(schema, value) == expected
+
+
+_REFUSALS = {
+    "pattern": ({"pattern": "^a"}, "unsupported schema keyword 'pattern' at /pattern"),
+    "oneOf": ({"oneOf": [{}]}, "unsupported schema keyword 'oneOf' at /oneOf"),
+    "non-local-ref": ({"$ref": "http://x/y"}, "only local #/$defs/<name>"),
+    "ref-cycle": (
+        {
+            "$defs": {"a": {"$ref": "#/$defs/b"}, "b": {"$ref": "#/$defs/a"}},
+            "$ref": "#/$defs/a",
+        },
+        "$ref cycle at",
+    ),
+}
+
+
+@pytest.mark.parametrize("vector", sorted(_REFUSALS))
+def test_subset_v1_refusal_vectors(vector):
+    schema, fragment = _REFUSALS[vector]
+    with pytest.raises(ValueError) as caught:
+        check_schema(schema, subset=_V1)
+    assert fragment in str(caught.value)
+
+
+@pytest.mark.parametrize("name", ["check_schema", "validate"])
+def test_default_subset_is_v1(name):
+    param = inspect.signature(getattr(_json_schema, name)).parameters["subset"]
+    assert param.default == "llm-scripting-kit.json-schema-subset/v1"
+
+
+@pytest.mark.parametrize("name", ["check_schema", "validate"])
+@pytest.mark.parametrize("bad", ["llm-scripting-kit.json-schema-subset/v2", "", None])
+def test_unknown_subset_is_refused(name, bad):
+    args = ({"type": "string"},) if name == "check_schema" else ({"type": "string"}, "x")
+    with pytest.raises(ValueError) as caught:
+        getattr(_json_schema, name)(*args, subset=bad)
+    assert "unsupported schema subset" in str(caught.value)
+    assert _V1 in str(caught.value)
+
+
+@pytest.mark.parametrize("name", ["check_schema", "validate"])
+def test_subset_is_keyword_only(name):
+    param = inspect.signature(getattr(_json_schema, name)).parameters["subset"]
+    assert param.kind is inspect.Parameter.KEYWORD_ONLY
+
+
+def test_anchor_call_shapes_still_bind():
+    schema = {"type": "string"}
+    inspect.signature(check_schema).bind(schema)
+    inspect.signature(validate).bind(schema, "x")
+    assert check_schema(schema) is None
+    assert validate(schema, "x") == ()
+    assert validate(schema, 1) == (("", "type"),)
+
+
+def test_output_contract_construction_is_unchanged():
+    contract = OutputContract(
+        id="x", policy="validated-result", schema={"type": "object"}
+    )
+    assert contract.schema_digest == (
+        "a2c799262a3ce3c19ef5cdd983bf3d12b43ab3c426227091b909dcb7054738c0"
+    )
+    with pytest.raises(ValueError):
+        OutputContract(
+            id="x", policy="validated-result", schema={"type": "object", "pattern": "a"}
+        )
+
+
+def test_public_surface_lists_the_subset_names():
+    assert {"SUBSET_V1", "SUPPORTED_SUBSETS"} <= set(_json_schema.__all__)
+    assert sorted(_json_schema.__all__) == sorted(
+        [
+            "SUBSET_V1", "SUPPORTED_SUBSETS", "SUPPORTED_KEYWORDS",
+            "ANNOTATION_KEYWORDS", "TYPE_NAMES", "check_schema", "validate",
+            "resolve_local_ref",
+        ]
+    )

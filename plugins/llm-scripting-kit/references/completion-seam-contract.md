@@ -192,7 +192,14 @@ schema_digest, schema_version)` and never carries the schema body.
   local `$ref` (`#/$defs/<name>`), plus annotation keywords that constrain
   nothing. Every other keyword (`pattern`, `oneOf`, `allOf`, `format`,
   `uniqueItems`, ...) is refused at construction, because a keyword accepted
-  and ignored would let an answer pass a constraint nobody checked.
+  and ignored would let an answer pass a constraint nobody checked. The subset
+  is a frozen revision: `json_schema.SUBSET_V1`
+  (`llm-scripting-kit.json-schema-subset/v1`) never changes its keyword sets,
+  its local-`$ref` rule, its cycle refusal, or the shape and order of its error
+  tuples. `json_schema.SUPPORTED_SUBSETS` is the marker a consumer probes for
+  and only grows; a keyword added later enters under a later literal. Both
+  `check_schema` and `validate` take a keyword-only `subset=` that defaults to
+  v1, and a value outside `SUPPORTED_SUBSETS` raises `ValueError`.
 - **Public surface** of `llm_scripting_kit.completion`: `OutputContract`,
   `OutputContractViolation`, `contract_requirements`, `evaluate_output` and the
   three `POLICY_*` constants. `evaluate_output(contract, text)` is pure: `text`

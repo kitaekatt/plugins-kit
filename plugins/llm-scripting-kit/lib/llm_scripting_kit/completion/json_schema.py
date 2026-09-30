@@ -26,12 +26,26 @@ Errors are a sorted, de-duplicated tuple of ``(json_pointer, keyword)``: the
 pointer names the INSTANCE location, the keyword the constraint it failed. No
 message text is produced, so the result is deterministic for a given schema
 and value.
+
+The subset carries a revision. :data:`SUBSET_V1` is FROZEN: under it the three
+keyword sets below, the local-``$ref`` rule, the cycle refusal, and the shape
+and order of the error tuples never change. A keyword added later enters under
+a later literal, and a call that selects v1 keeps refusing it.
+:data:`SUPPORTED_SUBSETS` is the marker a consumer probes for; it only grows.
+:func:`check_schema` and :func:`validate` take a keyword-only ``subset`` that
+defaults to v1, so a caller that names none is unchanged.
 """
 from __future__ import annotations
 
 import math
 from collections.abc import Mapping, Sequence
 from typing import Any, List, Tuple
+
+#: The frozen first revision of the subset. Never edited once committed.
+SUBSET_V1 = "llm-scripting-kit.json-schema-subset/v1"
+
+#: Every subset literal this module can validate under. Only grows.
+SUPPORTED_SUBSETS = frozenset({SUBSET_V1})
 
 #: Keywords that constrain an instance. Each is enforced by :func:`validate`.
 SUPPORTED_KEYWORDS = frozenset(
@@ -249,15 +263,26 @@ def _check_no_ref_cycle(root: Mapping) -> None:
         visit(start, ())
 
 
-def check_schema(schema: Any) -> None:
+def _require_subset(subset: Any) -> None:
+    """Refuse a ``subset`` selector this module cannot validate under."""
+    if not isinstance(subset, str) or subset not in SUPPORTED_SUBSETS:
+        raise ValueError(
+            f"unsupported schema subset {subset!r}; supported: "
+            f"{', '.join(sorted(SUPPORTED_SUBSETS))}"
+        )
+
+
+def check_schema(schema: Any, *, subset: str = SUBSET_V1) -> None:
     """Refuse a schema outside the supported subset.
 
     Raises :class:`ValueError` naming the first offending keyword (keys are
     visited in sorted order, so "first" is deterministic) and its JSON
     pointer within the schema. Also refuses a malformed keyword value, an
     unresolvable ``$ref``, and a ``$ref`` cycle that never descends into the
-    instance.
+    instance. ``subset`` names the revision to check under and must be in
+    :data:`SUPPORTED_SUBSETS`; otherwise :class:`ValueError`.
     """
+    _require_subset(subset)
     if not isinstance(schema, Mapping):
         raise ValueError("schema root must be a JSON object")
     _check_node(schema, "", schema)
@@ -380,20 +405,26 @@ def _validate(node: Mapping, value: Any, pointer: str, root: Mapping, errors: se
                 _validate(extra, item, here, root, errors)
 
 
-def validate(schema: Mapping, value: Any) -> Tuple[Error, ...]:
+def validate(
+    schema: Mapping, value: Any, *, subset: str = SUBSET_V1
+) -> Tuple[Error, ...]:
     """Every ``(json_pointer, keyword)`` the value fails, sorted.
 
     ``schema`` must already have passed :func:`check_schema`. An empty tuple
     means the value conforms. ``anyOf`` reports one error at its own
     location when no branch passes, never the branches' inner errors, so the
-    result does not depend on the branch order.
+    result does not depend on the branch order. ``subset`` must be in
+    :data:`SUPPORTED_SUBSETS`; otherwise :class:`ValueError`.
     """
+    _require_subset(subset)
     errors: set = set()
     _validate(schema, value, "", schema, errors)
     return tuple(sorted(errors))
 
 
 __all__ = [
+    "SUBSET_V1",
+    "SUPPORTED_SUBSETS",
     "SUPPORTED_KEYWORDS",
     "ANNOTATION_KEYWORDS",
     "TYPE_NAMES",
