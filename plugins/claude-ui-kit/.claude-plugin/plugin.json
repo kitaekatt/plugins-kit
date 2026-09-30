@@ -1,7 +1,11 @@
 {
   "name": "claude-ui-kit",
-  "version": "0.12.3",
+  "version": "0.12.4",
   "description": "Claude Code status line with context-window and rate-limit threshold colors, plus the /statusline skill to inspect and customize it.",
+  "codex-kit": {
+    "wrap": false,
+    "reason": "Claude UI/statusline plugin; it has no Codex skill surface."
+  },
   "author": {
     "name": "Christina"
   },
