@@ -265,6 +265,9 @@ def _install_fake_json_schema(monkeypatch: Any, **overrides: Any) -> None:
     fake = types.ModuleType("llm_scripting_kit.completion.json_schema")
     fake.check_schema = real_json_schema.check_schema  # type: ignore[attr-defined]
     fake.validate = real_json_schema.validate  # type: ignore[attr-defined]
+    # The subset marker the contract requires; without it every fake below
+    # would be refused for the marker and never reach the fault it stands for.
+    fake.SUPPORTED_SUBSETS = real_json_schema.SUPPORTED_SUBSETS  # type: ignore[attr-defined]
     for name, value in overrides.items():
         if value is _MISSING:
             delattr(fake, name)

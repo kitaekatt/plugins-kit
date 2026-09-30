@@ -70,7 +70,8 @@ jobs:
   `endpoint` are rejected: a job that uses one of them in place of `models`
   fails loading with an error that names the key and points to `models`.
   Requires llm-scripting-kit >= 0.56.0, the version that added
-  `completion.json_schema`, which `run`, `resume` and `resolve` probe before
+  `completion.json_schema` with its frozen subset marker
+  (`SUPPORTED_SUBSETS`), which `run`, `resume` and `resolve` probe before
   they open the ledger (exit 3 without it). Selection needs
   llm-scripting-kit >= 0.46.0, the
   version that added `describe` (and, before it,
@@ -262,7 +263,10 @@ anything is recorded and names the `claude plugin update` or
 
 A person can be a step in a run. A contract asks a question; the job waits,
 durably, with no process alive; an operator answers with `job-kit resolve`;
-`job-kit resume` continues. A wait is a healthy state, never a failure.
+`job-kit resume` continues. A wait is a healthy state, never a failure. The
+request, answer and resolution rules run in `bootstrap_lib.interrupt_contract`
+(bootstrap >= 0.137.0, probed before the ledger opens); its specification is the
+plugin-dev skill's `references/interrupt-contract.md`.
 
 ### Job states and how status tells them apart
 

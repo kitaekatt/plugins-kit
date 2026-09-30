@@ -148,10 +148,6 @@ READER_MIN_SCHEMA = 10
 #: The first ledger schema that has the interrupt tables.
 INTERRUPT_SCHEMA = 12
 
-#: The decision a resolve call names, and the outcome it records.
-_DECISION_OUTCOMES = {"answer": "answered", "reject": "rejected"}
-
-
 _MIGRATIONS: list[list[str]] = [
     [
         """
@@ -1894,11 +1890,7 @@ class JobStore:
         created_at: float,
     ) -> sqlite3.Row:
         """Insert one interrupt row; ``expires_at`` is job-kit's own clock."""
-        expires_at = (
-            created_at + request.expires_in_s
-            if request.expires_in_s is not None
-            else None
-        )
+        expires_at = _interrupts.expiry(created_at, request.expires_in_s)
         cursor = conn.execute(
             "INSERT INTO interrupts(run_id, job_id, attempt_no, continuation_no, "
             "envelope, kind, request_schema_json, payload_json, created_at, "
@@ -2074,17 +2066,8 @@ class JobStore:
         before the transaction opens.
         """
         _interrupts._schema_validator()
-        outcome = _DECISION_OUTCOMES.get(decision)
-        if outcome is None:
-            raise ValueError(
-                f"decision must be one of {', '.join(sorted(_DECISION_OUTCOMES))}, "
-                f"got {decision!r}"
-            )
-        if outcome == "rejected" and input is not None:
-            raise ValueError("a rejection carries a reason, not an input")
-        if outcome == "answered" and reason is not None:
-            raise ValueError("an answer carries an input, not a reason")
-        bounded_reason = str(reason)[:ERROR_LIMIT] if reason is not None else None
+        outcome = _interrupts.decision_outcome(decision, input=input, reason=reason)
+        bounded_reason = _interrupts.bound_reason(reason)
         when = time.time() if now is None else float(now)
         text = str(interrupt_id).strip()
         if not text.isdecimal() or not text.isascii():
@@ -2113,22 +2096,14 @@ class JobStore:
                         text,
                         float(row["expires_at"]) if row["expires_at"] is not None else None,
                     )
-                if outcome == "answered":
-                    try:
-                        candidate = _interrupts.canonical_json(input)
-                    except (TypeError, ValueError):
-                        candidate = None
-                    same = (
-                        resolution.outcome == outcome
-                        and candidate is not None
-                        and candidate == stored["input_json"]
-                    )
-                else:
-                    same = (
-                        resolution.outcome == outcome
-                        and bounded_reason == resolution.reason
-                    )
-                if not same:
+                if not _interrupts.same_resolution(
+                    stored_outcome=resolution.outcome,
+                    stored_input_json=stored["input_json"],
+                    stored_reason=resolution.reason,
+                    outcome=outcome,
+                    input=input,
+                    reason=reason,
+                ):
                     raise ResolutionConflictError(text, resolution.outcome)
                 return replace(resolution, replayed=True)
             expires_at = float(row["expires_at"]) if row["expires_at"] is not None else None
