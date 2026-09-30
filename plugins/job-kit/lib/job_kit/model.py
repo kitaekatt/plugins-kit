@@ -143,6 +143,13 @@ class JobState(str, Enum):
     FAILED = "failed"
     HALTED = "halted"
     UNROUTABLE = "unroutable"
+    # A healthy durable wait on an operator's answer to an interrupt. NOT
+    # terminal: the job still moves on once the interrupt is resolved.
+    WAITING = "waiting"
+    # The operator rejected the job's interrupt.
+    OPERATOR_REJECTED = "operator_rejected"
+    # The job's interrupt lapsed before anyone answered it.
+    EXPIRED = "expired"
 
 
 TERMINAL_STATES = frozenset(
@@ -152,6 +159,8 @@ TERMINAL_STATES = frozenset(
         JobState.FAILED,
         JobState.HALTED,
         JobState.UNROUTABLE,
+        JobState.OPERATOR_REJECTED,
+        JobState.EXPIRED,
     }
 )
 
@@ -170,6 +179,17 @@ class RunState(str, Enum):
     PENDING = "pending"
     RUNNING = "running"
     COMPLETED = "completed"
+    # No job is running or pending, not every job is terminal, and at least
+    # one job waits on an interrupt.
+    WAITING = "waiting"
+
+
+#: The acceptance outcomes a contract run can record. ``interrupt_requested``
+#: is a contract that exited 0 after writing a valid interrupt request: it is
+#: never an acceptance.
+ACCEPTANCE_OUTCOMES = frozenset(
+    {"observed", "timed_out", "not_run", "interrupt_requested"}
+)
 
 
 @dataclass(frozen=True)
@@ -697,11 +717,14 @@ class Acceptance:
     def __post_init__(self) -> None:
         object.__setattr__(self, "command", tuple(str(part) for part in self.command))
         object.__setattr__(self, "directory", Path(self.directory).expanduser().resolve())
-        if self.outcome not in {"observed", "timed_out", "not_run"}:
+        if self.outcome not in ACCEPTANCE_OUTCOMES:
             raise ValueError(
-                "acceptance outcome must be one of: observed, timed_out, not_run"
+                "acceptance outcome must be one of: "
+                + ", ".join(sorted(ACCEPTANCE_OUTCOMES))
             )
-        object.__setattr__(self, "accepted", self.exit_code == 0)
+        object.__setattr__(
+            self, "accepted", self.exit_code == 0 and self.outcome == "observed"
+        )
 
     def to_mapping(self) -> dict[str, object]:
         """Return a JSON-compatible acceptance mapping."""
@@ -1001,14 +1024,159 @@ class RunRecord:
         }
 
 
+def interrupt_lapsed(expires_at: Optional[float], now: float) -> bool:
+    """Whether an interrupt expiring at ``expires_at`` has lapsed at ``now``.
+
+    Inclusive: an interrupt lapses AT its ``expires_at``. An interrupt with
+    no expiry never lapses.
+    """
+    return expires_at is not None and now >= expires_at
+
+
+@dataclass(frozen=True)
+class InterruptRequest:
+    """A contract's validated request to wait for an operator's answer.
+
+    ``envelope`` is the request-file schema literal it arrived under, and
+    ``expires_in_s`` is relative, so a contract never supplies an absolute
+    time. ``job_kit.interrupts.parse_request`` builds and validates one.
+    """
+
+    envelope: str
+    kind: str
+    request_schema: Mapping[str, object]
+    payload: Mapping[str, object]
+    expires_in_s: Optional[int] = None
+
+
+@dataclass(frozen=True)
+class InterruptResolution:
+    """The one immutable resolution of one interrupt.
+
+    ``outcome`` is ``answered``, ``rejected`` or ``expired``. ``input`` is
+    the operator's answer (answered only) and ``reason`` the operator's free
+    text (rejected only). ``replayed`` is not stored: it is true when a
+    resolve call matched the existing resolution and wrote nothing.
+    """
+
+    interrupt_id: str
+    outcome: str
+    resolved_at: float
+    input: object = None
+    reason: Optional[str] = None
+    replayed: bool = field(default=False, compare=False)
+
+    def to_mapping(self) -> dict[str, object]:
+        """Return a JSON-compatible resolution mapping."""
+        return {
+            "interrupt_id": self.interrupt_id,
+            "outcome": self.outcome,
+            "input": self.input,
+            "reason": self.reason,
+            "resolved_at": self.resolved_at,
+        }
+
+
+@dataclass(frozen=True)
+class InterruptRecord:
+    """One append-only interrupt row, with its resolution when it has one.
+
+    ``id`` is the decimal string of the ledger row id. The owning attempt is
+    ``(run_id, job_id, attempt_no)``; ``continuation_no`` names the contract
+    run of that attempt that raised it (0: the attempt's first run).
+    """
+
+    id: str
+    run_id: str
+    job_id: str
+    attempt_no: int
+    continuation_no: int
+    envelope: str
+    kind: str
+    request_schema: Mapping[str, object]
+    payload: Mapping[str, object]
+    created_at: float
+    expires_at: Optional[float] = None
+    resolution: Optional[InterruptResolution] = None
+
+    def lapsed(self, now: float) -> bool:
+        """Whether the interrupt is unresolved and past its expiry at ``now``."""
+        return self.resolution is None and interrupt_lapsed(self.expires_at, now)
+
+    def to_mapping(self) -> dict[str, object]:
+        """Return a JSON-compatible interrupt mapping."""
+        return {
+            "id": self.id,
+            "run_id": self.run_id,
+            "job_id": self.job_id,
+            "attempt_no": self.attempt_no,
+            "continuation_no": self.continuation_no,
+            "envelope": self.envelope,
+            "kind": self.kind,
+            "request_schema": self.request_schema,
+            "payload": self.payload,
+            "created_at": self.created_at,
+            "expires_at": self.expires_at,
+            "resolution": (
+                self.resolution.to_mapping() if self.resolution is not None else None
+            ),
+        }
+
+
+@dataclass(frozen=True)
+class Continuation:
+    """One re-run of an attempt's contract after its interrupt was answered.
+
+    ``disposition`` is ``None`` while live, then ``completed``,
+    ``interrupted`` or ``process_lost``. A continuation makes no model call
+    and holds no reservation, so it never spends the attempt budget.
+    """
+
+    id: int
+    run_id: str
+    job_id: str
+    attempt_no: int
+    continuation_no: int
+    interrupt_id: str
+    started_at: float
+    ended_at: Optional[float] = None
+    disposition: Optional[str] = None
+    acceptance: Optional[Acceptance] = None
+
+    def to_mapping(self) -> dict[str, object]:
+        """Return a JSON-compatible continuation mapping."""
+        return {
+            "id": self.id,
+            "run_id": self.run_id,
+            "job_id": self.job_id,
+            "attempt_no": self.attempt_no,
+            "continuation_no": self.continuation_no,
+            "interrupt_id": self.interrupt_id,
+            "started_at": self.started_at,
+            "ended_at": self.ended_at,
+            "disposition": self.disposition,
+            "acceptance": (
+                self.acceptance.to_mapping() if self.acceptance is not None else None
+            ),
+        }
+
+
 @dataclass(frozen=True)
 class RunSnapshot:
-    """A consistent read of one run, its jobs, and its attempts."""
+    """A consistent read of one run, its jobs, attempts and interrupts.
+
+    ``read_at`` is the epoch the snapshot was read. It derives each job's
+    ``effective_state`` and each interrupt's ``lapsed`` flag without writing
+    anything, so a lapse nobody has recorded yet is shown, never hidden.
+    """
 
     run: RunRecord
     jobs: tuple[JobRecord, ...]
     attempts: tuple[Attempt, ...]
     reservations: tuple[AttemptReservation, ...] = ()
+    interrupts: tuple[InterruptRecord, ...] = ()
+    continuations: tuple[Continuation, ...] = ()
+    read_at: Optional[float] = None
 
     @property
     def status(self) -> RunState:
@@ -1017,22 +1185,56 @@ class RunSnapshot:
 
     @property
     def counts(self) -> dict[str, int]:
-        """Count jobs by state."""
+        """Count jobs by recorded state."""
         result = {state.value: 0 for state in JobState}
         for record in self.jobs:
             result[record.state.value] += 1
         return result
 
+    def open_interrupt(self, job_id: str) -> Optional[InterruptRecord]:
+        """The job's one unresolved interrupt, or ``None``."""
+        for record in self.interrupts:
+            if record.job_id == job_id and record.resolution is None:
+                return record
+        return None
+
+    def effective_state(self, job_id: str) -> JobState:
+        """The recorded state, except ``expired`` for a waiting job whose open
+        interrupt has lapsed at ``read_at``."""
+        record = next(job for job in self.jobs if job.id == job_id)
+        if record.state is JobState.WAITING and self.read_at is not None:
+            open_record = self.open_interrupt(job_id)
+            if open_record is not None and open_record.lapsed(self.read_at):
+                return JobState.EXPIRED
+        return record.state
+
     def to_mapping(self) -> dict[str, object]:
         """Return a JSON-compatible status payload."""
+        jobs = []
+        for job in self.jobs:
+            mapping = job.to_mapping()
+            mapping["effective_state"] = self.effective_state(job.id).value
+            jobs.append(mapping)
+        interrupts = []
+        for record in self.interrupts:
+            mapping = record.to_mapping()
+            mapping["lapsed"] = (
+                record.lapsed(self.read_at) if self.read_at is not None else False
+            )
+            interrupts.append(mapping)
         return {
             "run": self.run.to_mapping(),
-            "jobs": [job.to_mapping() for job in self.jobs],
+            "jobs": jobs,
             "attempts": [attempt.to_mapping() for attempt in self.attempts],
             "reservations": [
                 reservation.to_mapping() for reservation in self.reservations
             ],
+            "interrupts": interrupts,
+            "continuations": [
+                continuation.to_mapping() for continuation in self.continuations
+            ],
             "counts": self.counts,
+            "read_at": self.read_at,
         }
 
 
@@ -1052,6 +1254,12 @@ __all__ = [
     "TIMEOUT",
     "ERROR",
     "RunState",
+    "ACCEPTANCE_OUTCOMES",
+    "interrupt_lapsed",
+    "InterruptRequest",
+    "InterruptResolution",
+    "InterruptRecord",
+    "Continuation",
     "Prompt",
     "Contract",
     "ContractContext",

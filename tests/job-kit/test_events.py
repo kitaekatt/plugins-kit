@@ -626,12 +626,55 @@ def test_probe_rejects_make_event_that_cannot_bind_jk_keywords(monkeypatch: Any)
 
 
 def test_too_old_message_names_jk_constant_version(monkeypatch: Any) -> None:
-    """The version comes from job-kit's own constant, never from the module."""
-    monkeypatch.setattr(events, "_EXECUTION_EVENT_BOOTSTRAP", "9.8.7")
+    """The version comes from job-kit's own constant, never from the module,
+    and the message names both schema literals job-kit writes."""
+    assert events._EXECUTION_EVENT_BOOTSTRAP == "0.136.0"
     _install_fake_module(monkeypatch, SUPPORTED_SCHEMAS=_DELETE)
     with pytest.raises(events.ExecutionEventSupportError) as excinfo:
         events._execution_event()
+    message = str(excinfo.value)
+    assert ">= 0.136.0" in message
+    assert "plugins-kit.execution-event/v1" in message
+    assert "plugins-kit.execution-event/v2" in message
+    monkeypatch.setattr(events, "_EXECUTION_EVENT_BOOTSTRAP", "9.8.7")
+    with pytest.raises(events.ExecutionEventSupportError) as excinfo:
+        events._execution_event()
     assert ">= 9.8.7" in str(excinfo.value)
+
+
+def test_probe_rejects_module_without_schema_v2(monkeypatch: Any) -> None:
+    """A module that supports only v1 cannot record interrupts, so it is
+    refused up front: a whole run is refused, not its first interrupt."""
+    _install_fake_module(monkeypatch, SUPPORTED_SCHEMAS=frozenset({events.SCHEMA_V1}))
+    with pytest.raises(events.ExecutionEventSupportError, match="update"):
+        events._execution_event()
+
+
+def test_probe_v1_only_module_gets_the_v2_missing_message(monkeypatch: Any) -> None:
+    _install_fake_module(monkeypatch, SUPPORTED_SCHEMAS=frozenset({events.SCHEMA_V1}))
+    with pytest.raises(events.ExecutionEventSupportError) as excinfo:
+        events._execution_event()
+    message = str(excinfo.value)
+    assert "supports plugins-kit.execution-event/v1 but not /v2" in message
+    assert "to record interrupts" in message
+    assert ">= 0.136.0" in message
+    assert "claude plugin update bootstrap@plugins-kit" in message
+    assert "predates or lacks" not in message
+    _install_fake_module(monkeypatch, SUPPORTED_SCHEMAS=frozenset({events.SCHEMA_V2}))
+    with pytest.raises(events.ExecutionEventSupportError) as generic:
+        events._execution_event()
+    assert "but not /v2" not in str(generic.value)
+
+
+def test_probe_rejects_make_event_without_schema_keyword(monkeypatch: Any) -> None:
+    def make_event(*, seq, run_id, event, plugin, at=None, unit_id=None,  # noqa: ANN001
+                   attempt_id=None, adapter=None, model=None, payload=None):
+        raise AssertionError("never called")
+
+    assert "schema" not in inspect.signature(make_event).parameters
+    _install_fake_module(monkeypatch, make_event=make_event)
+    with pytest.raises(events.ExecutionEventSupportError, match="update"):
+        events._execution_event()
 
 
 def test_store_verb_refuses_before_writing_when_the_module_is_unusable(
@@ -678,12 +721,74 @@ def _every_verb_stream(tmp_path: Path) -> tuple[JobStore, tuple[dict, ...]]:
     return store, store.list_events("run")
 
 
+def _interrupt_lifecycle_stream(store: JobStore, tmp_path: Path) -> tuple[dict, ...]:
+    """A run whose job waits, is answered, continues and is accepted."""
+    from job_kit.interrupts import REQUEST_ENVELOPE_V1
+    from job_kit.model import InterruptRequest
+
+    store.create_run("interrupted", [_job(tmp_path)])
+    attempt_no = _reserve(store, "interrupted", "job")
+    store.arm_reservation("interrupted", "job", attempt_no, invoke_armed_at=ARMED_AT)
+    requested = Acceptance(
+        command=("true",),
+        directory=Path.cwd(),
+        exit_code=0,
+        stdout="",
+        stderr="",
+        wall_ms=1,
+        accepted=False,
+        outcome="interrupt_requested",
+    )
+    store.append_attempt(
+        replace_acceptance(_attempt("interrupted", "job", attempt_no), requested),
+        interrupt=InterruptRequest(
+            envelope=REQUEST_ENVELOPE_V1,
+            kind="approval",
+            request_schema={"type": "object"},
+            payload={},
+        ),
+        at=10.0,
+    )
+    [record] = store.list_interrupts("interrupted")
+    store.resolve_interrupt("interrupted", record.id, decision="answer", input={}, now=11.0)
+    continuation = store.begin_continuation("interrupted", "job", now=12.0)
+    store.finish_continuation(
+        "interrupted",
+        "job",
+        continuation.attempt_no,
+        continuation.continuation_no,
+        acceptance=_attempt("interrupted", "job", 1).acceptance,  # exit 0, observed
+        terminal_state=JobState.ACCEPTED,
+        now=13.0,
+    )
+    return store.list_events("interrupted")
+
+
+def replace_acceptance(attempt: Attempt, acceptance: Acceptance) -> Attempt:
+    from dataclasses import replace
+
+    return replace(attempt, acceptance=acceptance)
+
+
 def test_no_later_revision_names_emitted(tmp_path: Path) -> None:
-    _, stream = _every_verb_stream(tmp_path)
+    """No ``contract`` event at all; ``interrupt`` only under v2; every other
+    event under v1, so a run without interrupts is a pure v1 stream."""
+    store, stream = _every_verb_stream(tmp_path)
     names = set(_names(list(stream)))
     assert not names & real_module.LATER_REVISION_NAMES
     assert names <= real_module.CORE_EVENTS | {"job-kit:run-created"}
     assert names >= real_module.CORE_EVENTS
+    assert {event["schema"] for event in stream} == {real_module.SCHEMA_V1}
+
+    interrupted = _interrupt_lifecycle_stream(store, tmp_path)
+    assert real_module.validate_stream(interrupted) == interrupted
+    assert "contract" not in set(_names(list(interrupted)))
+    assert "interrupt" in set(_names(list(interrupted)))
+    for event in interrupted:
+        expected = (
+            real_module.SCHEMA_V2 if event["event"] == "interrupt" else real_module.SCHEMA_V1
+        )
+        assert event["schema"] == expected, event
 
 
 def test_events_validate_as_stream(tmp_path: Path) -> None:

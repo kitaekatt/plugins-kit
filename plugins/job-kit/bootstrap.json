@@ -1,6 +1,6 @@
 {
-  "$comment": "requires_bootstrap is the highest call shape this plugin needs: every ledger transition records an execution event through bootstrap_lib.execution_event (make_event with the plugins-kit.execution-event/v1 schema, usage_payload, utc_timestamp, validate_stream, and JsonlSink(path, mode='create') for `job-kit events --out`), which first shipped in bootstrap 0.135.0; job-kit also validates model declarations with bootstrap_lib.model_declaration.parse (bootstrap 0.129.0).",
-  "requires_bootstrap": "0.135.0",
+  "$comment": "requires_bootstrap is the highest call shape this plugin needs: every ledger transition records an execution event through bootstrap_lib.execution_event -- make_event(..., schema=) with plugins-kit.execution-event/v1 for every event and plugins-kit.execution-event/v2 for the interrupt event (SUPPORTED_SCHEMAS must hold both), usage_payload, utc_timestamp, validate_stream, and JsonlSink(path, mode='create') for `job-kit events --out` -- a call shape first shipped in bootstrap 0.136.0; job-kit also validates model declarations with bootstrap_lib.model_declaration.parse (bootstrap 0.129.0).",
+  "requires_bootstrap": "0.136.0",
   "tools": [
     {
       "name": "git"

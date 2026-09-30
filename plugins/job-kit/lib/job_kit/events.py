@@ -2,7 +2,8 @@
 
 job-kit records one execution event beside each ledger fact, in the fact's own
 transaction, using the shared envelope in ``bootstrap_lib.execution_event``
-(schema ``plugins-kit.execution-event/v1``). This module is the only place
+(schema ``plugins-kit.execution-event/v1``; the ``interrupt`` event alone is
+written under ``plugins-kit.execution-event/v2``). This module is the only place
 job-kit reaches that module, and it reaches it only through
 :func:`_execution_event`, so importing ``job_kit`` never needs
 ``bootstrap_lib``.
@@ -30,14 +31,21 @@ from typing import Any, Iterable, Mapping, Optional
 #: The ``source.plugin`` of every event job-kit records.
 PLUGIN = "job-kit"
 
-#: The schema job-kit writes. A literal, because the module that defines
-#: ``SCHEMA_V1`` may be absent when this is read.
-REQUIRED_SCHEMA = "plugins-kit.execution-event/v1"
+#: The schemas job-kit writes. Literals, because the module that defines
+#: ``SCHEMA_V1`` and ``SCHEMA_V2`` may be absent when this is read. Every
+#: event is written under v1 except ``interrupt``, which v2 defines.
+SCHEMA_V1 = "plugins-kit.execution-event/v1"
+SCHEMA_V2 = "plugins-kit.execution-event/v2"
+REQUIRED_SCHEMAS = (SCHEMA_V1, SCHEMA_V2)
+
+#: The v1 literal, kept under its original name.
+REQUIRED_SCHEMA = SCHEMA_V1
 
 #: The bootstrap release that shipped ``bootstrap_lib.execution_event`` with
-#: the call shape job-kit uses. Messages name this constant, never a value read
-#: from a possibly stale module.
-_EXECUTION_EVENT_BOOTSTRAP = "0.135.0"
+#: the call shape job-kit uses (``make_event(..., schema=)`` and
+#: ``plugins-kit.execution-event/v2``). Messages name this constant, never a
+#: value read from a possibly stale module.
+_EXECUTION_EVENT_BOOTSTRAP = "0.136.0"
 
 #: Every module attribute job-kit calls.
 _REQUIRED_CALLABLES = (
@@ -60,6 +68,7 @@ _MAKE_EVENT_KEYWORDS = (
     "adapter",
     "model",
     "payload",
+    "schema",
 )
 
 #: A ``reason`` in an event payload is cut to this many characters. The ledger
@@ -93,8 +102,9 @@ def _execution_event() -> ModuleType:
         ) from exc
     too_old = (
         "job-kit records execution events with bootstrap_lib.execution_event "
-        f"({REQUIRED_SCHEMA}), which the linked bootstrap_lib predates or "
-        f"lacks: update the bootstrap plugin to >= {_EXECUTION_EVENT_BOOTSTRAP} "
+        f"({SCHEMA_V1} and {SCHEMA_V2}), which the linked bootstrap_lib "
+        "predates or lacks: update the bootstrap plugin to >= "
+        f"{_EXECUTION_EVENT_BOOTSTRAP} "
         "(`claude plugin update bootstrap@plugins-kit`) and restart."
     )
     try:
@@ -102,8 +112,16 @@ def _execution_event() -> ModuleType:
     except ImportError as exc:
         raise ExecutionEventSupportError(too_old) from exc
     supported = getattr(module, "SUPPORTED_SCHEMAS", None)
-    if supported is None or REQUIRED_SCHEMA not in supported:
+    if supported is None or SCHEMA_V1 not in supported:
         raise ExecutionEventSupportError(too_old)
+    if SCHEMA_V2 not in supported:
+        raise ExecutionEventSupportError(
+            "the linked bootstrap_lib.execution_event supports "
+            f"{SCHEMA_V1} but not /v2, which job-kit needs to record "
+            "interrupts: update the bootstrap plugin to >= "
+            f"{_EXECUTION_EVENT_BOOTSTRAP} "
+            "(`claude plugin update bootstrap@plugins-kit`) and restart."
+        )
     for name in _REQUIRED_CALLABLES:
         if not callable(getattr(module, name, None)):
             raise ExecutionEventSupportError(too_old)
@@ -165,15 +183,18 @@ def build_event(
     adapter: Optional[str] = None,
     model: Optional[str] = None,
     payload: Optional[Mapping[str, Any]] = None,
+    schema: Optional[str] = None,
 ) -> dict:
     """Build and validate one job-kit event from ledger values.
 
+    ``schema`` is the revision the event is written under; ``None`` is v1.
     Raises ``EventError`` (a ``ValueError``) when the event breaks the
     envelope, and :class:`ExecutionEventSupportError` when the module is
     unusable.
     """
     module = _execution_event()
     return module.make_event(
+        schema=SCHEMA_V1 if schema is None else schema,
         seq=seq,
         run_id=run_id,
         event=event,
@@ -246,6 +267,9 @@ __all__ = [
     "PLUGIN",
     "REASON_LIMIT",
     "REQUIRED_SCHEMA",
+    "REQUIRED_SCHEMAS",
+    "SCHEMA_V1",
+    "SCHEMA_V2",
     "ExecutionEventSupportError",
     "build_event",
     "check_unit_identity",

@@ -31,8 +31,8 @@ def _version(text: str) -> tuple[int, ...]:
 def test_requires_bootstrap_covers_every_bootstrap_lib_call() -> None:
     """job-kit calls bootstrap_lib.model_declaration.parse (bootstrap 0.129.0)
     and records every ledger transition through bootstrap_lib.execution_event
-    (bootstrap 0.135.0). The floor is the HIGHEST call shape it uses, not what
-    happens to import."""
+    with the v2 schema selector (bootstrap 0.136.0). The floor is the HIGHEST
+    call shape it uses, not what happens to import."""
     import job_kit.events as events
     import job_kit.model as model
 
@@ -42,3 +42,16 @@ def test_requires_bootstrap_covers_every_bootstrap_lib_call() -> None:
     )
     manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
     assert manifest.get("requires_bootstrap") == max(floors, key=_version)
+
+
+def test_execution_event_floor_is_0_136_0() -> None:
+    """The execution-event floor is the literal 0.136.0 -- the bootstrap that
+    shipped plugins-kit.execution-event/v2 and make_event(schema=) -- asserted
+    independently of the manifest, so moving the constant and the manifest back
+    together cannot stay green (the test above derives its floor from the
+    constants)."""
+    import job_kit.events as events
+
+    assert events._EXECUTION_EVENT_BOOTSTRAP == "0.136.0"
+    manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
+    assert manifest.get("requires_bootstrap") == events._EXECUTION_EVENT_BOOTSTRAP
