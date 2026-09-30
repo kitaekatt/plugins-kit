@@ -52,16 +52,31 @@ def stage(dest: Path) -> Path:
     return staged
 
 
+def _root_spellings(staged_root: Path) -> list[str]:
+    """Every spelling of the staged root, longest first.
+
+    On macOS the lexical root (/var/...) resolves through /private/var, and
+    tools may emit either form; replacing the shorter one first would leave a
+    stray "/private" prefix behind.
+    """
+    spellings: set[str] = set()
+    for root in (staged_root, staged_root.resolve()):
+        text = str(root)
+        spellings.add(text.replace("\\", "/"))
+        spellings.add(text.replace("/", "\\"))
+    return sorted(spellings, key=len, reverse=True)
+
+
 def normalize(obj, staged_root: Path):
     """Recursively replace the staged root with <CORPUS> and unify slashes."""
-    fwd = str(staged_root).replace("\\", "/")
-    back = str(staged_root).replace("/", "\\")
     if isinstance(obj, dict):
         return {k: normalize(v, staged_root) for k, v in obj.items()}
     if isinstance(obj, list):
         return [normalize(v, staged_root) for v in obj]
     if isinstance(obj, str):
-        out = obj.replace(back, "<CORPUS>").replace(fwd, "<CORPUS>")
+        out = obj
+        for spelling in _root_spellings(staged_root):
+            out = out.replace(spelling, "<CORPUS>")
         return out.replace("\\", "/")
     return obj
 

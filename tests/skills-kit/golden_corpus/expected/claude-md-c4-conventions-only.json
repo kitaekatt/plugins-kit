@@ -12,7 +12,32 @@
     "kind": "claude_md",
     "declared_type": null,
     "yaml_root": "claude_md",
-    "universal": [],
+    "universal": [
+      {
+        "row": "relative markdown links resolve",
+        "verdict": "pass",
+        "note": "",
+        "rule": "claude-md-links-resolve"
+      },
+      {
+        "row": "code fences closed",
+        "verdict": "pass",
+        "note": "",
+        "rule": "claude-md-fences-closed"
+      },
+      {
+        "row": "@imports <= 50 lines",
+        "verdict": "pass",
+        "note": "",
+        "rule": "claude-md-import-size"
+      },
+      {
+        "row": "body size signal",
+        "verdict": "pass",
+        "note": "lines=16, tokens~58",
+        "rule": "claude-md-size-signal"
+      }
+    ],
     "yaml_contract": [
       {
         "row": "yaml: root key 'claude_md'",

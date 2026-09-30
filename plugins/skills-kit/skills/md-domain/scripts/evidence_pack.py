@@ -553,21 +553,32 @@ def _claim_rows(repo: Path, subject: Path, text: str, artifact: str) -> list[str
 
 
 def _audit_verdicts(subject: Path) -> list[str]:
-    """Run this plugin's own contract audit in-process and keep its verdict lines."""
+    """Run this plugin's own contract audit in-process and keep its verdict lines.
+
+    Uses the layered standards config the audit CLI's --config applies, so a
+    disabled rule or overridden threshold is honored here too. Judgment-required
+    rows are kept, and rows are ordered fail, judgment-required, then the rest
+    before the 20-row cap so a schema FAIL is never cut.
+    """
     try:
+        from skills_kit_lib import standards_resolve
+        from skills_kit_lib.audit import _find_project_root
         from skills_kit_lib.audit import audit as _audit
         from skills_kit_lib.audit import render_text as _render_text
     except ImportError as error:
         return [f"mechanical-contract-check unavailable: {type(error).__name__}"]
     try:
-        report = _audit(subject)
+        resolved = standards_resolve.resolve(_find_project_root(subject.resolve()))
+        report = _audit(subject, resolved)
         output = report["error"] if "error" in report else _render_text(report)
     except Exception as error:  # noqa: BLE001 - a broken audit must not sink the pack
         return [f"mechanical-contract-check unavailable: {type(error).__name__}"]
     verdicts = [line.strip() for line in output.splitlines()
-                if re.search(r"\[(?:pass|fail|info|warn|n/a)\]", line, re.I)]
+                if re.search(r"\[(?:pass|fail|judgment-required|info|warn|n/a)\]", line, re.I)]
     if not verdicts:
         verdicts = ["mechanical-contract-check produced no verdict lines"]
+    rank = {"[fail]": 0, "[judgment-required]": 1}
+    verdicts.sort(key=lambda line: rank.get(line.split(" ", 1)[0].lower(), 2))
     return verdicts[:20]
 
 

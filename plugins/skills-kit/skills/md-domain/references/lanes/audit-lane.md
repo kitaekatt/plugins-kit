@@ -191,7 +191,9 @@ Mechanical validator (skill and claude-md lanes):
 ```
 
 `--config` makes the validator honor the resolved config (drop disabled
-mechanical rows, overlay thresholds). If the validator is unavailable, mark the
+mechanical rows, overlay thresholds). For claude-md it runs on every CLAUDE.md /
+AGENTS.md: the default rules (`mechanical_defaults`) always apply, and the
+contract rows apply only when a `claude_md:` block is present (otherwise N/A). If the validator is unavailable, mark the
 Schema group JUDGMENT ("validator unavailable") and continue with judgment
 criteria only -- never fail a file for that.
 

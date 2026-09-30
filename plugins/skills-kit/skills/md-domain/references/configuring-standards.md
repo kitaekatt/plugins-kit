@@ -130,6 +130,8 @@ through `audit-framework.yaml`.
 | `body-line-count` | Reports the SKILL.md body line count (informational count row). |
 | `body-token-count` | Reports the approximate SKILL.md body token count (informational count row). |
 | `body-size-signal` | An over-threshold body with no `references/` directory raises a progressive-disclosure signal (consumes `body_max_lines`, `body_max_tokens`). |
+| `claude-md-import-size` | Every `@import` target in a CLAUDE.md / AGENTS.md is at most `import_max_lines` lines. |
+| `claude-md-size-signal` | An over-threshold CLAUDE.md / AGENTS.md body raises a size judgment (consumes `body_max_lines`, `body_max_tokens`). |
 | `step-tracking` | A technique-skill with more than three steps carries a tickbox checklist or a step-tracker invocation. |
 | `facts-floor` | A reference-skill declares at least one fact (nested in `reference_skill:` or as a top-level `facts:` unit). |
 | `facts-gotcha` | At least one fact carries a `gotchas` list. |
@@ -172,19 +174,22 @@ document, so they carry no config knob.
 | `refs-cited-exist` | Every reference cited in the body resolves to a file. |
 | `asset-paths-resolve` | Every declared asset-dependency and `tools[].tests` path resolves. |
 | `refs-reachable` | Every file under `references/` is reachable from SKILL.md. |
+| `claude-md-links-resolve` | Every relative markdown link target and `@import` path in a CLAUDE.md / AGENTS.md (outside code fences) resolves on disk; URLs, `#fragment`-only and absolute targets are skipped. |
+| `claude-md-fences-closed` | Every code fence opened in a CLAUDE.md / AGENTS.md is closed. |
 
 ## Thresholds
 
-Five named thresholds carry the numeric limits some rules apply. Override any of
+Six named thresholds carry the numeric limits some rules apply. Override any of
 them in `thresholds:`; an override must be a positive integer.
 
 | Threshold | Default | Consumed by |
 |-----------|---------|-------------|
 | `name_max_chars` | 64 | `name-length` |
 | `desc_max_chars` | 160 | `desc-160-char` |
-| `body_max_lines` | 500 | `body-size-signal` |
-| `body_max_tokens` | 3000 | `body-size-signal` |
+| `body_max_lines` | 500 | `body-size-signal`, `claude-md-size-signal` |
+| `body_max_tokens` | 3000 | `body-size-signal`, `claude-md-size-signal` |
 | `mixed_min_score` | 2 | `mixed-type` |
+| `import_max_lines` | 50 | `claude-md-import-size` |
 
 <!-- END GENERATED: rule-catalog -->
 
@@ -279,7 +284,7 @@ degrading to an empty config, and the message names the problem:
 - **An unknown rule id.** A typo'd or removed id in `rules:` -- one that names
   neither a catalog rule nor a criterion declared by a standards file resolved
   for this project -- raises an error naming the id (bucket `unknown`).
-- **An unknown threshold.** A `thresholds:` key not among the five above raises
+- **An unknown threshold.** A `thresholds:` key not among the thresholds above raises
   an error listing the valid threshold names.
 - **A bad value.** A rule value other than `off`/`false`, or a threshold value
   that is not a positive integer, raises an error naming the offending value.

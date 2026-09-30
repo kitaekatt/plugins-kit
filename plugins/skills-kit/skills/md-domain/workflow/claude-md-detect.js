@@ -3,7 +3,8 @@
 // Fan-out detection + classification, one lane per target CLAUDE.md file. Each
 // lane reads the file (and its parent, for child role), loads the SINGLE
 // self-contained audit-criteria doc, applies the role-to-criteria map,
-// optionally runs the mechanical schema validator, and classifies every finding
+// runs the mechanical validator (default rules always, schema rows when a
+// claude_md: block is present), and classifies every finding
 // into the taxonomy + a remediation bucket. Cache efficiency: each fan-out lane
 // is an isolated context whose prompt prefix is NOT shared across siblings (the
 // Workflow tool re-creates per-lane cache beyond a fixed harness shell), so the
@@ -81,7 +82,8 @@
 //            pluginRoot: <abs path to plugins/skills-kit (parent of skills_kit_lib)>,
 //            venvPython: <abs path to skills-kit venv python> }
 // }
-// The schema validator is invoked as a module:
+// The mechanical validator (runs on every file; default rules always, schema rows
+// only with a claude_md: block) is invoked as a module:
 //   (cd <pluginRoot> && <venvPython> -m skills_kit_lib.audit <file> --json --config)
 //   --config makes audit.py honor the resolved standards config (drop disabled
 //   mechanical rows, overlay thresholds); disabled ids also arrive as
@@ -291,8 +293,8 @@ function lanePrompt(f) {
    VERDICT INTERACTION (do not get this wrong): the document has no defect, so this finding must NOT make the file NON-COMPLIANT -- that is why its severity is JUDGMENT and not FAIL. It must also not vanish: as a SERIOUS finding it is reported ABOVE the verdict and survives review mode's attributability filter. Reported, never gated -- the verdict keeps describing only the document.`
 
   const schemaClause = refs.pluginRoot && refs.venvPython
-    ? `If the file body contains a \`claude_md:\` YAML contract block, run the mechanical schema validator via Bash (it is a package module, so cd into the plugin root first):\n    (cd "${refs.pluginRoot}" && "${refs.venvPython}" -m skills_kit_lib.audit "${f.path}" --json --config)\n(--config makes audit.py drop disabled mechanical rows and overlay the resolved thresholds; the disabled ids also arrive as args.disabledCriteria, so honor both.) and merge its results as Schema-group findings (validation failure on a non-optional field = FAIL, taxonomy E). If the validator is unavailable or errors, emit one Schema finding with severity JUDGMENT and message "schema validator unavailable" and continue. If there is no \`claude_md:\` block, skip the Schema group entirely (do NOT fail a file for not declaring a contract).`
-    : `Schema validator path was not provided; if the file has a \`claude_md:\` block, emit one Schema finding with severity JUDGMENT noting the validator was unavailable.`
+    ? `ALWAYS run the mechanical validator via Bash, whether or not the file has a \`claude_md:\` block (it is a package module, so cd into the plugin root first):\n    (cd "${refs.pluginRoot}" && "${refs.venvPython}" -m skills_kit_lib.audit "${f.path}" --json --config)\n(--config makes audit.py drop disabled mechanical rows and overlay the resolved thresholds; the disabled ids also arrive as args.disabledCriteria, so honor both.) Merge its universal default rows as findings, each at its reported verdict: claude-md-links-resolve -> criterion A-1 (markdown-link subset only; bare and backtick paths stay your judgment), claude-md-import-size -> A-2, claude-md-size-signal -> R-3 / F_hygiene_threshold, claude-md-fences-closed -> Hygiene. Do NOT emit the same finding a second time from your own judgment. Merge the schema/contract rows as Schema-group findings ONLY when the file carries a \`claude_md:\` block (validation failure on a non-optional field = FAIL, taxonomy E); when the block is absent the contract row is N/A ("validated against default rules") and is never a failure. If the validator is unavailable or errors, emit one Schema finding with severity JUDGMENT and message "schema validator unavailable" and continue.`
+    : `Schema validator path was not provided; emit one Schema finding with severity JUDGMENT noting the validator was unavailable, and apply the default-rule checks (markdown links resolve, fences closed, import size, body size) by your own reading.`
 
   return `You are ONE lane of a CLAUDE.md audit. Audit exactly one file and return structured findings. This is DETECTION ONLY -- do not modify any file.
 

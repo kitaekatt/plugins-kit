@@ -132,3 +132,26 @@ def extract_skill_type_unit(body_text: str) -> tuple[dict | None, str, str | Non
     if HAVE_YAML:
         return None, "no-contract-yaml-block", None
     return None, "no-yaml-parser-no-block", None
+
+
+def extract_claude_md_unit(body_text: str) -> tuple[dict | None, str, str | None]:
+    """Like extract_skill_type_unit, but for instruction files (CLAUDE.md).
+
+    Prefers a block carrying a ``claude_md`` root over any other recognized
+    root, wherever it sits in the document, so an example block of another
+    type placed earlier cannot hide the real contract. A claude_md block that
+    fails to parse is reported as a parse error even when an unrelated block
+    parses. With no claude_md block at all the result is exactly
+    extract_skill_type_unit's (first other unit, parse error, or no block).
+    """
+    units, detected_root_no_parser, parse_error = collect_yaml_units(body_text)
+    for _root, data in units:
+        if "claude_md" in data:
+            return data, "", "claude_md"
+    if parse_error is not None and parse_error[0] == "claude_md":
+        return None, f"yaml-parse-error: {parse_error[1]}", "claude_md"
+    if not HAVE_YAML and not units:
+        for text in iter_yaml_blocks(body_text):
+            if re.search(r"^claude_md\s*:", text, re.MULTILINE):
+                return None, "no-yaml-parser", "claude_md"
+    return extract_skill_type_unit(body_text)

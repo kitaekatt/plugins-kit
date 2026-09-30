@@ -694,8 +694,9 @@ const chainClauseFor = (s) => {
 // not say so writes the wrong artifact in the right place.
 const artifactTypeClause =
   'ARTIFACT TYPE. This is a CODE-DIRECTORY CLAUDE.md -- a review-notes file, the BRANCH ' +
-  'in step 1 of ' + laneRef + '. It carries NO claude_md: YAML block and the schema ' +
-  'validator is NEVER run on it. Follow the code-directory section of ' + standardsRef +
+  'in step 1 of ' + laneRef + '. It carries NO claude_md: YAML block; do not add one. ' +
+  'Run the validator on it (skills_kit_lib.audit <path> --config) and resolve its FAILs: ' +
+  'it is validated against the default rules, and the contract row is N/A. Follow the code-directory section of ' + standardsRef +
   ' in the PRODUCING direction: the documented shapes, the high-value observation kinds, ' +
   'symbol anchors in preference to line numbers, no machine-specific absolute paths, and ' +
   'the value gate applied to every entry.'
