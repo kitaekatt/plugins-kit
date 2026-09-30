@@ -47,11 +47,15 @@ from .contract_types import (
     POLICY_NATIVE_REQUIRED,
     POLICY_TEXT_ONLY,
     POLICY_VALIDATED_RESULT,
+    SCHEMA_CLASS_OPENAI_STRICT,
+    SCHEMA_CLASS_SUBSET,
+    SCHEMA_CLASSES,
     SCHEMA_INSTRUCTION_PREFIX,
     SCHEMA_POLICIES,
     ContractReport,
     OutputContract,
     canonical_schema_json,
+    strict_schema_violations,
 )
 from .json_schema import validate
 from .types import ERROR, BackendOptions, LLMResponse, ResponseError
@@ -179,6 +183,13 @@ def contract_requirements(contract: Optional[OutputContract]) -> Dict[str, Any]:
     ``{"structured_output": {"policies": [<policy>]}}`` for every policy,
     text-only included: an adapter that does not list a policy refuses it at
     dispatch, so selecting one would only move the refusal later.
+
+    A schema contract whose schema is NOT strict-compatible
+    (:attr:`OutputContract.strict_compatible`) also requires
+    ``"contract_schema_class": "json-schema-subset"``: an adapter that accepts
+    only ``openai-strict`` schemas would refuse it before dispatch. The
+    requirement is positive, so a record declaring no class does not match
+    it. A strict-compatible schema, and text-only, add nothing.
     """
     if contract is None:
         return {}
@@ -186,7 +197,10 @@ def contract_requirements(contract: Optional[OutputContract]) -> Dict[str, Any]:
         raise TypeError(
             f"expected an OutputContract, got {type(contract).__name__}"
         )
-    return {"structured_output": {"policies": [contract.policy]}}
+    structured: Dict[str, Any] = {"policies": [contract.policy]}
+    if contract.policy in SCHEMA_POLICIES and not contract.strict_compatible:
+        structured["contract_schema_class"] = SCHEMA_CLASS_SUBSET
+    return {"structured_output": structured}
 
 
 _KEY_ALIASES = {"structured": "structured_output"}
@@ -249,8 +263,12 @@ def prepare_contract(capabilities: Any, options: Optional[BackendOptions]) -> Op
     one specialized to an endpoint). Returns None when the options carry no
     contract, so an uncontracted call is unchanged. Raises
     :class:`OutputContractUnsatisfiable` when a legacy schema key is sent
-    alongside the contract, or when the record's
-    ``structured_output.policies`` does not list the contract's policy.
+    alongside the contract, when the record's
+    ``structured_output.policies`` does not list the contract's policy, or
+    when the record's ``contract_schema_class`` is ``openai-strict`` and the
+    schema is not strict-compatible (the message names the offending schema
+    pointers, sorted). Every refusal happens before the adapter writes any
+    file or starts any call.
     """
     contract = getattr(options, "output_contract", None) if options is not None else None
     if contract is None:
@@ -281,6 +299,16 @@ def prepare_contract(capabilities: Any, options: Optional[BackendOptions]) -> Op
         )
     if contract.policy == POLICY_TEXT_ONLY:
         return DeliveryPlan(contract=contract, adapter=adapter, delivery=DELIVERY_NONE)
+    if getattr(structured, "contract_schema_class", None) == SCHEMA_CLASS_OPENAI_STRICT:
+        violations = contract.strict_violations
+        if violations:
+            raise OutputContractUnsatisfiable(
+                f"{adapter} accepts only {SCHEMA_CLASS_OPENAI_STRICT} schemas, and "
+                f"contract {contract.id!r} is not strict-compatible at "
+                + ", ".join(p or "/" for p in violations)
+                + " (each object schema needs additionalProperties false and "
+                "every property listed in required); refused before dispatch"
+            )
     delivery = getattr(structured, "contract_delivery", None)
     if delivery == DELIVERY_NATIVE:
         return DeliveryPlan(
@@ -367,9 +395,13 @@ __all__ = [
     "DISPOSITION_TEXT_ONLY",
     "DISPOSITIONS",
     "SCHEMA_INSTRUCTION_PREFIX",
+    "SCHEMA_CLASS_SUBSET",
+    "SCHEMA_CLASS_OPENAI_STRICT",
+    "SCHEMA_CLASSES",
     "OutputContract",
     "ContractReport",
     "canonical_schema_json",
+    "strict_schema_violations",
     # this module
     "LEGACY_SCHEMA_EXTRAS",
     "VIOLATION_ERROR_CODE",

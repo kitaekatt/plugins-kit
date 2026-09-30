@@ -53,6 +53,15 @@ DISPOSITIONS = (
     DISPOSITION_TEXT_ONLY,
 )
 
+#: The schemas an adapter's contract delivery accepts
+#: (``StructuredOutputCapability.contract_schema_class``). SUBSET is the whole
+#: supported JSON Schema subset; OPENAI_STRICT is the part of it that also
+#: satisfies OpenAI strict mode (see :func:`strict_schema_violations`), which
+#: a native channel that enforces strict mode requires.
+SCHEMA_CLASS_SUBSET = "json-schema-subset"
+SCHEMA_CLASS_OPENAI_STRICT = "openai-strict"
+SCHEMA_CLASSES = (SCHEMA_CLASS_SUBSET, SCHEMA_CLASS_OPENAI_STRICT)
+
 #: The fixed lead-in of a prompt-delivered schema instruction. The schema's
 #: canonical JSON follows it directly, so the whole instruction is
 #: deterministic ASCII a test can find byte for byte.
@@ -160,6 +169,59 @@ def _excludes_null(schema: Mapping, root: Mapping, seen: frozenset = frozenset()
     return False
 
 
+def _pointer_child(pointer: str, token: Any) -> str:
+    return pointer + "/" + str(token).replace("~", "~0").replace("/", "~1")
+
+
+def _is_object_schema(node: Mapping) -> bool:
+    kind = node.get("type")
+    names = (kind,) if isinstance(kind, str) else tuple(kind or ())
+    return "object" in names or "properties" in node
+
+
+def strict_schema_violations(schema: Any) -> Tuple[str, ...]:
+    """JSON pointers of the object schemas that break OpenAI strict mode.
+
+    Pure and deterministic: a sorted tuple, empty when the schema is
+    strict-compatible (and for no schema at all). An object schema -- one
+    whose ``type`` includes ``"object"`` or that carries ``properties`` --
+    breaks strict mode when ``additionalProperties`` is not exactly
+    ``False``, or when ``required`` does not list exactly its property keys.
+    Those are the two rules observed live against ``codex exec
+    --output-schema`` (codex-cli 0.161.0-alpha.2); no restriction is inferred
+    for any other keyword.
+
+    Every schema-bearing position is walked: ``properties`` values, ``items``,
+    ``additionalProperties`` when it is a schema, ``$defs`` values and
+    ``anyOf`` branches. The root's pointer is ``""``.
+    """
+    found: set = set()
+
+    def walk(node: Any, pointer: str) -> None:
+        if not isinstance(node, Mapping):
+            return
+        if _is_object_schema(node):
+            properties = node.get("properties") or {}
+            required = node.get("required") or ()
+            if node.get("additionalProperties") is not False or set(required) != set(
+                properties
+            ):
+                found.add(pointer)
+        for name, child in (node.get("properties") or {}).items():
+            walk(child, _pointer_child(_pointer_child(pointer, "properties"), name))
+        if "items" in node:
+            walk(node["items"], _pointer_child(pointer, "items"))
+        if isinstance(node.get("additionalProperties"), Mapping):
+            walk(node["additionalProperties"], _pointer_child(pointer, "additionalProperties"))
+        for name, child in (node.get("$defs") or {}).items():
+            walk(child, _pointer_child(_pointer_child(pointer, "$defs"), name))
+        for index, branch in enumerate(node.get("anyOf") or ()):
+            walk(branch, _pointer_child(_pointer_child(pointer, "anyOf"), index))
+
+    walk(schema, "")
+    return tuple(sorted(found))
+
+
 @dataclass(frozen=True)
 class OutputContract:
     """What a valid answer is, and how strictly it must be delivered.
@@ -234,6 +296,21 @@ class OutputContract:
         in for a contract that carries a new one.
         """
         return (self.id, self.policy, self.schema_digest, self.schema_version)
+
+    @property
+    def strict_violations(self) -> Tuple[str, ...]:
+        """:func:`strict_schema_violations` of this schema (``()`` for text-only)."""
+        return strict_schema_violations(self.schema)
+
+    @property
+    def strict_compatible(self) -> bool:
+        """True when the schema satisfies OpenAI strict mode (and for text-only).
+
+        Derived from :attr:`strict_violations` being empty. A schema contract
+        that is not strict-compatible needs an adapter whose
+        ``contract_schema_class`` is :data:`SCHEMA_CLASS_SUBSET`.
+        """
+        return not self.strict_violations
 
     def schema_json(self) -> Any:
         """A fresh plain-dict deep copy of the schema (None for text-only)."""
@@ -368,7 +445,11 @@ __all__ = [
     "DISPOSITION_TEXT_ONLY",
     "DISPOSITIONS",
     "SCHEMA_INSTRUCTION_PREFIX",
+    "SCHEMA_CLASS_SUBSET",
+    "SCHEMA_CLASS_OPENAI_STRICT",
+    "SCHEMA_CLASSES",
     "OutputContract",
     "ContractReport",
     "canonical_schema_json",
+    "strict_schema_violations",
 ]

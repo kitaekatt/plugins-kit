@@ -52,7 +52,7 @@ from .adapter_capabilities import (
 )
 from ..effort import OUTCOME_TRANSLATED, EffortPlan, plan_effort
 from .capabilities import Capabilities
-from .contract import prepare_contract
+from .contract import finalize_contract, prepare_contract
 from .endpoint_profile import (
     EndpointProfile,
     endpoint_capabilities,
@@ -305,10 +305,18 @@ class OpenRouterBackend:
         """
         opts = options or BackendOptions()
         # Before the client is built or the model resolved: a contract this
-        # record does not list is refused here, with nothing sent.
-        prepare_contract(self.capabilities, opts)
+        # record does not list (or one sent beside extras.response_format) is
+        # refused here, with nothing sent.
+        contract_plan = prepare_contract(self.capabilities, opts)
         client = self.client if self.client is not None else self._ensure_client()
         resolved_model = self._resolve_model(model)
+
+        if contract_plan is not None and contract_plan.instruction is not None:
+            # Prompt delivery: the exact render_schema_instruction text is
+            # appended to the system message. No response_format is sent --
+            # the family spans servers that reject or ignore it -- so the
+            # answer is judged at the seam by finalize_contract below.
+            system = system + contract_plan.instruction
 
         if system:
             system_content: Any = [
@@ -434,7 +442,7 @@ class OpenRouterBackend:
 
         reported_cost_usd, reported_cost_source = self._reported_cost(usage)
         dropped_params, forwarded_params = self.params_report(opts, plan)
-        return LLMResponse(
+        response = LLMResponse(
             text=text,
             model=resolved_model,
             reasoning=reasoning,
@@ -455,6 +463,9 @@ class OpenRouterBackend:
             started_at=started_at,
             ended_at=ended_at,
         )
+        # No contract: returned unchanged. Otherwise the answer is judged
+        # against the contract, and a violation raises with this response.
+        return finalize_contract(contract_plan, response)
 
     def classify_halt(self, exc: BaseException) -> Optional[str]:
         return halt.classify_openai_exception(exc)

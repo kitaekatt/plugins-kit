@@ -6,9 +6,12 @@ options. These tests drive each adapter through its fake seam with a contract
 of each policy and require ZERO runner or client invocations. Removing the
 call from any one adapter turns exactly that adapter's test red.
 
-No adapter lists a policy yet, so all three policies are refused everywhere.
-When an adapter starts to deliver a policy, its case narrows to the policies
-it still does not list.
+Each case covers the policies its adapter's record does NOT list: openrouter
+lists validated-result and text-only (native-required stays refused), codex
+lists all three (so its case is the legacy-key conflict instead), and claude
+and opencode list none yet. What a listed policy delivers, and a refusal case
+for any policy a record stops listing, come from the records themselves in
+test_completion_contract_conformance.py.
 """
 from __future__ import annotations
 
@@ -73,7 +76,7 @@ class _RecordingClient:
         self.chat = _Chat()
 
 
-@pytest.mark.parametrize("policy", POLICIES)
+@pytest.mark.parametrize("policy", [POLICY_NATIVE_REQUIRED])
 def test_openrouter_refuses_any_contract_before_client_call(policy, monkeypatch):
     client = _RecordingClient()
     backend = OpenRouterBackend(client=client)
@@ -101,9 +104,7 @@ def test_claude_refuses_any_contract_before_runner_call(policy):
     assert runner.calls == []
 
 
-@pytest.mark.parametrize("policy", POLICIES)
-def test_codex_refuses_any_contract_before_runner_call(policy, tmp_path, monkeypatch):
-    runner = _RecordingRunner()
+def _record_codex_temp_files(monkeypatch):
     temp_files = []
     real_mkstemp = codex_mod.tempfile.mkstemp
 
@@ -113,15 +114,37 @@ def test_codex_refuses_any_contract_before_runner_call(policy, tmp_path, monkeyp
         return handle, path
 
     monkeypatch.setattr(codex_mod.tempfile, "mkstemp", _recording_mkstemp)
+    return temp_files
+
+
+@pytest.mark.parametrize("policy", [POLICY_NATIVE_REQUIRED, POLICY_VALIDATED_RESULT, POLICY_TEXT_ONLY])
+def test_contract_and_legacy_output_schema_conflict(policy, tmp_path, monkeypatch):
+    """A contract beside extras.output_schema is refused before anything is
+    spawned or written: two schema instructions with no rule for which wins."""
+    runner = _RecordingRunner()
+    temp_files = _record_codex_temp_files(monkeypatch)
     work = tmp_path / "work"
     work.mkdir()
+    legacy = tmp_path / "legacy_schema.json"
+    legacy.write_text(json.dumps(_SCHEMA), encoding="ascii")
     backend = CodexCliBackend(runner=runner, argv_prefix=("codex",))
-    with pytest.raises(OutputContractUnsatisfiable, match=policy):
-        backend.complete("sys", "usr", model="m", options=_options(policy, cwd=work))
+    options = _options(policy, cwd=work, extras={"output_schema": str(legacy)})
+    with pytest.raises(OutputContractUnsatisfiable, match="extras.output_schema"):
+        backend.complete("sys", "usr", model="m", options=options)
     assert runner.calls == []
     # No temp file of any kind -- neither the -o result file nor a schema file.
     assert temp_files == []
     assert list(work.iterdir()) == []
+
+
+@pytest.mark.parametrize("policy", [POLICY_VALIDATED_RESULT, POLICY_TEXT_ONLY])
+def test_contract_and_legacy_response_format_conflict(policy):
+    client = _RecordingClient()
+    backend = OpenRouterBackend(client=client)
+    options = _options(policy, extras={"response_format": {"type": "json_object"}})
+    with pytest.raises(OutputContractUnsatisfiable, match="extras.response_format"):
+        backend.complete("sys", "usr", model="test/slug", options=options)
+    assert client.calls == []
 
 
 @pytest.mark.parametrize("policy", POLICIES)

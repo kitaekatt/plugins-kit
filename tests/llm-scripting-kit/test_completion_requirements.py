@@ -169,6 +169,9 @@ def test_structured_output_policies_require_every_listed_policy() -> None:
             policies=(POLICY_VALIDATED_RESULT, POLICY_TEXT_ONLY),
             contract_delivery="prompt",
             contract_emits="messages[system]",
+            # {"type": "object"} below is not strict-compatible, so its
+            # requirement also names the subset schema class.
+            contract_schema_class="json-schema-subset",
         ),
     )
     schema = {"type": "object"}

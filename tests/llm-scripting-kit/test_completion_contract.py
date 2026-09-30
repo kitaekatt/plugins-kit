@@ -406,7 +406,10 @@ def test_text_only_is_judged_text_only():
     "policy", [POLICY_NATIVE_REQUIRED, POLICY_VALIDATED_RESULT, POLICY_TEXT_ONLY]
 )
 def test_contract_requirements_name_the_policy(policy):
-    assert contract_requirements(_contract(policy)) == {
+    # A strict-compatible schema adds no schema-class requirement; the
+    # non-strict case is pinned in test_completion_contract_strict.py.
+    strict = {**_SCHEMA, "required": ["score", "title"]}
+    assert contract_requirements(_contract(policy, schema=strict)) == {
         "structured_output": {"policies": [policy]}
     }
 

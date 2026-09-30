@@ -246,6 +246,12 @@ class StructuredOutputCapability:
       contract reaches the target through.
     - ``contract_emits`` -- the concrete element that delivery produces,
       falsifiable exactly as :attr:`ExecutionControl.emits` is.
+    - ``contract_schema_class`` -- which schemas that delivery accepts:
+      ``json-schema-subset`` (any schema in the supported subset) or
+      ``openai-strict`` (only one that satisfies OpenAI strict mode). A
+      non-strict schema contract requires ``json-schema-subset`` at
+      selection, and an ``openai-strict`` adapter refuses one before
+      dispatch.
 
     Each is serialized only when set, so a record without them is unchanged.
     """
@@ -257,6 +263,7 @@ class StructuredOutputCapability:
     policies: Tuple[str, ...] = ()
     contract_delivery: Optional[str] = None
     contract_emits: Optional[str] = None
+    contract_schema_class: Optional[str] = None
 
     def to_json(self) -> Dict[str, Any]:
         result: Dict[str, Any] = {"mode": self.mode, "result": self.result}
@@ -270,6 +277,8 @@ class StructuredOutputCapability:
             result["contract_delivery"] = self.contract_delivery
         if self.contract_emits is not None:
             result["contract_emits"] = self.contract_emits
+        if self.contract_schema_class is not None:
+            result["contract_schema_class"] = self.contract_schema_class
         return result
 
 

@@ -45,7 +45,7 @@ from . import halt
 from .claude_runner import run_cli_streaming
 from .adapter_capabilities import CODEX_CAPABILITIES
 from .capabilities import Capabilities
-from .contract import prepare_contract
+from .contract import finalize_contract, prepare_contract
 from .prompt_fold import fold_prompt
 from .results import (
     check_applied_controls,
@@ -228,6 +228,19 @@ class CodexCliBackend:
       extras key reaches nothing and comes back in ``dropped_params`` as
       ``extras.<key>`` -- per key, because half of this map IS read and the
       bare field name would have no single answer here.
+    - ``output_contract`` -> native delivery. A schema contract's
+      :func:`~.contract_types.canonical_schema_json` is written to a temp file
+      passed as ``--output-schema`` (deleted in the same ``finally`` as the
+      result file), and the answer is judged by
+      :func:`~.contract.finalize_contract`; ``text-only`` emits nothing. A
+      contract sent beside ``extras.output_schema`` is refused before
+      dispatch. Codex applies OpenAI strict-mode rules to that schema (every
+      object needs ``additionalProperties: false`` and every property listed
+      in ``required``; a schema that breaks them fails the run with a
+      non-zero exit, observed live on codex-cli 0.161.0-alpha.2), so the
+      record advertises ``contract_schema_class: openai-strict`` and
+      ``prepare_contract`` refuses any other schema before a file is written
+      or the runner called, naming the offending schema pointers.
     - ``temperature`` / ``max_tokens`` / ``allowed_tools`` /
       ``disallowed_tools`` / ``system_prompt_mode`` / ``cache_salt`` /
       ``user_cache_prefix`` -- codex exposes no such knobs. Accepted for
@@ -269,8 +282,9 @@ class CodexCliBackend:
         """
         opts = options or BackendOptions()
         # Before any temp file, argv or runner call: a contract this record
-        # does not list is refused here, with nothing spawned.
-        prepare_contract(self.capabilities, opts)
+        # does not list (or one sent beside extras.output_schema) is refused
+        # here, with nothing spawned.
+        plan = prepare_contract(self.capabilities, opts)
         timeout_s = (
             opts.timeout_s if opts.timeout_s is not None else self.default_timeout_s
         )
@@ -288,11 +302,21 @@ class CodexCliBackend:
         )
         os.close(handle)
         output_path = Path(raw_output_path)
+        schema_path: Optional[Path] = None
 
         try:
+            extras = opts.extras
+            if plan is not None and plan.schema_json is not None:
+                # Native contract delivery: the canonical schema document goes
+                # to --output-schema through the same builder key the legacy
+                # extras path uses. prepare_contract already refused a
+                # contract sent beside extras.output_schema, so nothing here
+                # overrides a caller's own schema file.
+                schema_path = self._write_schema_file(plan.schema_json)
+                extras = {**dict(opts.extras or {}), "output_schema": str(schema_path)}
             argv = self._build_argv(
                 root=root, model=model, effort=opts.effort,
-                output_file=output_path, extras=opts.extras,
+                output_file=output_path, extras=extras,
             )
             prompt = compose_prompt(system, user)
 
@@ -336,14 +360,17 @@ class CodexCliBackend:
 
             text = self._read_output(output_path, stdout=stdout, stderr=stderr)
         finally:
-            try:
-                output_path.unlink()
-            except OSError:
-                pass
+            for path in (output_path, schema_path):
+                if path is None:
+                    continue
+                try:
+                    path.unlink()
+                except OSError:
+                    pass
 
         total_tokens = parse_codex_token_total(stderr)
 
-        return LLMResponse(
+        response = LLMResponse(
             text=text,
             model=model,
             input_tokens=0,
@@ -356,10 +383,35 @@ class CodexCliBackend:
             dropped_params=derive_dropped_params(self.capabilities, opts),
             forwarded_params=derive_forwarded_params(self.capabilities, opts),
             execution_controls_applied=self._applied_controls(argv),
-            structured=self._parse_structured(text, opts.extras),
+            # Under a contract, structured is set only by finalize_contract,
+            # and only to a validated object; the legacy bare parse is for
+            # the extras.output_schema path alone.
+            structured=None if plan is not None else self._parse_structured(text, opts.extras),
             started_at=started_at,
             ended_at=utc_now_iso(),
         )
+        # No contract: returned unchanged. Otherwise the answer is judged
+        # against the contract, and a violation raises with this response.
+        return finalize_contract(plan, response)
+
+    @staticmethod
+    def _write_schema_file(schema_json: str) -> Path:
+        """Write the native schema document to a fresh temp file, exact bytes.
+
+        ``schema_json`` is :func:`~.contract_types.canonical_schema_json`
+        (ASCII by construction), written as those bytes and nothing else so
+        what codex reads is exactly what the contract fingerprints. The
+        caller deletes the file in its ``finally``.
+        """
+        handle, raw_path = tempfile.mkstemp(prefix="codex_schema_", suffix=".json")
+        try:
+            with os.fdopen(handle, "wb") as stream:
+                stream.write(schema_json.encode("ascii"))
+        except BaseException:
+            # Not yet handed to the caller's finally, so remove it here.
+            Path(raw_path).unlink(missing_ok=True)
+            raise
+        return Path(raw_path)
 
     def _applied_controls(self, argv: "list") -> "tuple[str, ...]":
         """Which advertised controls THIS argv actually carries.

@@ -984,9 +984,15 @@ def _contract(policy):
 
     if policy == "text-only":
         return OutputContract(id="t.text", policy=policy)
+    # Strict-compatible, so selection turns on the policy alone: a non-strict
+    # schema would also require contract_schema_class json-schema-subset,
+    # which the fake advertisements below do not declare.
     return OutputContract(
         id="t.obj", policy=policy,
-        schema={"type": "object", "properties": {"a": {"type": "string"}}, "required": ["a"]},
+        schema={
+            "type": "object", "properties": {"a": {"type": "string"}}, "required": ["a"],
+            "additionalProperties": False,
+        },
     )
 
 

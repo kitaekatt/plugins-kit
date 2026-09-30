@@ -145,18 +145,43 @@ def test_output_contract_is_read_by_every_adapter_not_dropped(cap):
     assert "output_contract" not in cap.dropped_params
 
 
-@pytest.mark.parametrize("cap", list(ADAPTER_CAPABILITIES.values()), ids=lambda c: c.adapter)
-def test_no_adapter_advertises_an_output_contract_policy_yet(cap):
-    """Every record refuses every contract until an adapter delivers one.
+#: The output-contract advertisement per adapter: (policies, delivery, emits).
+#: An empty ``policies`` refuses every contract, the truthful state for an
+#: adapter that does not yet validate a contract's answer; listing a policy is
+#: what enables it, and that change comes with its delivery and its cases in
+#: test_completion_contract_conformance.py.
+_CONTRACT_ADVERTISEMENT = {
+    "openrouter": (
+        ("validated-result", "text-only"),
+        "prompt",
+        "messages[system] schema instruction",
+    ),
+    "codex-cli": (
+        ("native-required", "validated-result", "text-only"),
+        "native",
+        "--output-schema <temp schema file>",
+    ),
+    "claude-cli": ((), None, None),
+    "opencode-cli": ((), None, None),
+}
 
-    An empty ``policies`` is the truthful state while no adapter validates a
-    contract's answer; listing a policy is what enables it, and that change
-    must come with its delivery and its conformance tests.
-    """
-    assert cap.structured_output.policies == ()
-    assert cap.structured_output.contract_delivery is None
-    assert cap.structured_output.contract_emits is None
-    assert "policies" not in cap.to_json()["structured_output"]
+
+@pytest.mark.parametrize("cap", list(ADAPTER_CAPABILITIES.values()), ids=lambda c: c.adapter)
+def test_output_contract_advertisement_per_adapter(cap):
+    policies, delivery, emits = _CONTRACT_ADVERTISEMENT[cap.adapter]
+    assert cap.structured_output.policies == policies
+    assert cap.structured_output.contract_delivery == delivery
+    assert cap.structured_output.contract_emits == emits
+    payload = cap.to_json()["structured_output"]
+    if policies:
+        assert payload["policies"] == list(policies)
+        assert payload["contract_delivery"] == delivery
+        assert payload["contract_emits"] == emits
+        # The param names the same emission as the structured-output record.
+        assert cap.params["output_contract"].emits == emits
+    else:
+        assert "policies" not in payload
+        assert cap.params["output_contract"].emits is None
 
 
 # -- openrouter ------------------------------------------------------------
@@ -647,21 +672,25 @@ def _digest(payload) -> str:
 
 
 def _without_output_contract_param(payload):
-    """The payload minus the one param every record gained with output contracts.
+    """The payload minus what every record gained with output contracts.
 
-    ``params.output_contract`` is the only addition since the digests above
-    were taken (it is asserted separately below), so removing it must restore
-    each record byte for byte -- which keeps these digests guarding everything
-    else in the record.
+    ``params.output_contract`` and the three ``structured_output`` contract
+    keys are the only additions since the digests above were taken (both are
+    asserted separately, in ``test_output_contract_advertisement_per_adapter``),
+    so removing them must restore each record byte for byte -- which keeps
+    these digests guarding everything else in the record.
     """
-    assert payload["params"].pop("output_contract") == {
-        "type": "output-contract",
-        "handling": "mapped",
-        "note": (
+    param = payload["params"].pop("output_contract")
+    emits = param.pop("emits", None)
+    note = param.pop("note")
+    assert param == {"type": "output-contract", "handling": "mapped"}
+    if emits is None:
+        assert note == (
             "read and refused before dispatch unless structured_output.policies "
             "lists the contract's policy"
-        ),
-    }
+        )
+    for key in ("policies", "contract_delivery", "contract_emits", "contract_schema_class"):
+        payload["structured_output"].pop(key, None)
     return payload
 
 
