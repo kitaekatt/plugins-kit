@@ -46,6 +46,36 @@ The skill encodes the UE Python landmines so the agent avoids them: the
 posing, `focus_actor` framing from bind-pose bounds, save traps on
 Perforce-tracked assets, protected Slate struct fields, and more.
 
+## Project subagent (`ue-agent`)
+
+`.claude/agents/ue-agent.md` is a path Claude Code fixes: project subagents
+load only from there, and plugin-shipped agents ignore `mcpServers`. It is
+harness configuration, not plugin data, so it lives in the project rather than
+under `.plugin-data` or `.local-data`.
+
+When a project's `.mcp.json` declares a stdio `unreal-engine` MCP server,
+bootstrap creates `<project>/.claude/agents/ue-agent.md` if it is missing. The
+agent's `mcpServers` block is built from that `.mcp.json` entry (command, args,
+env). An existing file, directory or symlink at that path is never touched. The
+new agent loads on the next session or via `/agents`; bootstrap logs one
+`ue-agent:` line per pass.
+
+It is skipped, with a logged reason, when there is no `unreal-engine` server
+or when the entry has a shape the template cannot express (a `cwd`, a non-stdio
+`type`, non-string args or env values).
+
+To turn it off, set `provision_ue_agent: false` in unreal-kit's `config.yaml`:
+user scope is `~/.claude/plugins/data/plugins-kit/unreal-kit/config.yaml`,
+project scope is `<project>/.local-data/plugins-kit/unreal-kit/config.yaml`
+(project wins). Absent means on; a non-boolean value is reported as an invalid
+option and provisioning is skipped.
+
+If the project names its server something other than `unreal-engine`, set
+`ue_agent_mcp_server: <name>` in the same config. That name selects the
+`.mcp.json` entry and keys the agent's `mcpServers` block. Absent means
+`unreal-engine`; an empty, non-string or non-plain-name value is reported as an
+invalid option and provisioning is skipped.
+
 ## Install
 
 ```

@@ -12,6 +12,14 @@ The bootstrap plugin automatically handles all setup on session start. This docu
 | Host Python deps | `upyrc`, `pyyaml` | Plugin venv (managed by bootstrap) |
 | Stock API stub | Generic `unreal.py` from PyPI | `~/.claude/plugins/data/plugins-kit/unreal-kit/stubs/unreal.py` (machine-local) |
 | Enriched API stub check | Read-only presence/freshness check | `<project>/.plugin-data/plugins-kit/unreal-kit/unreal.py` (durable project data) |
+| Project subagent | Created only when missing, from the project's `.mcp.json` server entry; never overwrites | `<project>/.claude/agents/ue-agent.md` (a path Claude Code fixes; harness configuration, not plugin data) |
+
+The subagent step reads two keys from the same layered `config.yaml` as the
+project config: `provision_ue_agent` (boolean; absent = on, `false` = opt out)
+and `ue_agent_mcp_server` (string; absent = `unreal-engine`, the `.mcp.json`
+server the agent is built from). A value of the wrong type is reported as an
+invalid option and the step is skipped. A new agent loads on the next session
+or via `/agents`.
 
 ## Troubleshooting
 
