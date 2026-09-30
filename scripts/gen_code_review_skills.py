@@ -372,8 +372,9 @@ MD_DOMAIN_LAUNCH = """\
             `mechanicalCheckPhrases` = `bundle.mechanical_check_phrases` once at the top level of
             EVERY lane args object. Resolve the remaining fields from each claimed file's
             `claude_mds` per references/md-domain-review.md. Resolve the skills-kit plugin root and
-            venvPython defensively per that reference. Use the Workflow tool when callable; when it
-            is unavailable or rejects the installed script path, use that reference's
+            venvPython defensively per that reference. Use the Workflow tool when callable, passing
+            each installed lane's full text as `script` (never its installed path as `scriptPath`)
+            per that reference; when the tool is unavailable or rejects the lane, use that reference's
             "Manual detect invocation" with the SAME installed lanes and args. Transport failure
             does not make md-domain absent and does not release its claimed files. On a skills-kit
             version skew (a detect lane
@@ -433,7 +434,7 @@ MD_DOMAIN_GOTCHAS = """
         - A `NOT-AUDITED` verdict from a lane is NOT a pass. It means the lane declined the file as outside its criteria and read nothing. Render it as its own line, never fold it into the clean count, and never let it satisfy a submit gate -- treat it like the `## Mechanical checks (audit skipped)` section: an honest "not reviewed", not a result. Seeing one on a claimed file means the claim routing sent a file somewhere that cannot audit it; report that rather than accepting the verdict.
         - When skills-kit md-domain is absent the whole mechanism degrades silently: no `--claim`, no claimed_files, no md-domain section -- the md files get thin generic data_only coverage. Note the degradation in one line; do not treat it as an error.
         - The triviality gate is pure-mechanical and decided by prepare_review (per-claimed-file `trivial` / `trivial_reasons`); the skill never re-judges it. A TRIVIAL claimed file is reported via the mechanical-checks line and is NEVER sent to a detect lane or written to the ledger. When EVERY claimed file is trivial and there are no generic diff chunks, the whole audit is skipped -- render the `## Mechanical checks (audit skipped)` section, never a DIFF-CLEAN verdict, and never present the skip as an audit. A user or author asking for the full review overrides the gate.
-        - Workflow availability is a transport check, separate from md-domain availability. Prefer a main-session Workflow; if the tool is unavailable or rejects the installed script path, use "Manual detect invocation" in references/md-domain-review.md. Keep the claimed files with their existing specialist lanes. If neither invocation can complete, report the affected files as review incomplete; never present missing lane output as a clean audit."""
+        - Workflow availability is a transport check, separate from md-domain availability. Prefer a main-session Workflow with each lane's text passed as `script`; if the tool is unavailable or rejects the lane, use "Manual detect invocation" in references/md-domain-review.md. Keep the claimed files with their existing specialist lanes. If neither invocation can complete, report the affected files as review incomplete; never present missing lane output as a clean audit."""
 
 
 # ===========================================================================
@@ -1747,8 +1748,9 @@ for the full review overrides the gate.
 
 ## Resolve the skills-kit plugin root and venvPython (defensively)
 
-md-domain's detect lanes are native Workflow scripts. Use the Workflow tool when callable;
-otherwise use "Manual detect invocation" below. Locate the INSTALLED skills-kit plugin:
+md-domain's detect lanes are native Workflow scripts. Use the Workflow tool when callable,
+passing each lane as described in "Passing a lane script to the Workflow tool" below; otherwise
+use "Manual detect invocation" below. Locate the INSTALLED skills-kit plugin:
 
 - Plugin root (`<root>`): resolve via the REGISTRY first, falling back to a cache scan only
   when the registry is empty or unreadable. Read `~/.claude/plugins/installed_plugins.json`;
@@ -1821,26 +1823,34 @@ Route by basename first; the ONE path-shape rule is the skill-reference case in 
    `AGENTS.md` when active. An `AGENTS.md` is ACTIVE only when its directory has no `CLAUDE.md`
    (CLAUDE.md takes precedence); a claimed `AGENTS.md` sitting beside a `CLAUDE.md` is SHADOWED
    and is dropped from ALL three lanes -- never audited as a claude-md and never as a project doc.
-   `scriptPath = <root>/skills/md-domain/workflow/claude-md-detect.js`, `args` =
+   `script` = the text of `<root>/skills/md-domain/workflow/claude-md-detect.js`, `args` =
    `{ files: [...], mechanicalCheckPhrases: bundle.mechanical_check_phrases, review: true, refs: { criteria: <root>/skills/md-domain/references/standards/claude-md-standards.md, codeDirFilter: <root>/skills/md-domain/references/standards/claude-md-standards.md, densityCriteria: <root>/skills/md-domain/references/standards/claude-md-standards.md, pluginRoot: <root>, venvPython: <venvPython> } }` (one standards doc backs all three refs -- the code-directory dimension and the density lens are sections of it).
 2. **`audit_skill` lane** -- one call for every claimed file that is EITHER (a) named `SKILL.md`
    OR (b) inside a `*/skills/<name>/references/` folder (only if any). Those are the `skill`
    artifact's two subject shapes and they share one lane and one Workflow call; the lane picks the
    criteria set per file from the path.
-   `scriptPath = <root>/skills/md-domain/workflow/skill-detect.js`, `args` =
+   `script` = the text of `<root>/skills/md-domain/workflow/skill-detect.js`, `args` =
    `{ files: [...], mechanicalCheckPhrases: bundle.mechanical_check_phrases, review: true, refs: { pluginRoot: <root>, venvPython: <venvPython> } }`.
 3. **`audit_project_doc` lane** -- one call for every OTHER claimed `.md` file (generic docs; only if any).
-   `scriptPath = <root>/skills/md-domain/workflow/project-doc-detect.js`, `args` =
+   `script` = the text of `<root>/skills/md-domain/workflow/project-doc-detect.js`, `args` =
    `{ files: [...], mechanicalCheckPhrases: bundle.mechanical_check_phrases, review: true, refs: { criteria: <root>/skills/md-domain/references/standards/project-doc-standards.md, pluginRoot: <root> } }`.
 
 `args` may be passed as an object or a JSON string; all `refs` paths must be ABSOLUTE (the
 Workflow runs from the session cwd, not the skill dir). `review: true` forces the model pin and
 per-file diff attribution; keep it true.
 
+**Passing a lane script to the Workflow tool.** Read the installed lane script and pass its full
+text VERBATIM as `script`. Do not pass the installed path as `scriptPath`: the tool refuses the
+plugin-cache path, and it has also been observed refusing a copy placed in the working
+directory, so copying the script does not help. Every Workflow result names a saved
+script file; a later call in the same session for the SAME lane may pass that returned path as
+`scriptPath` instead of the text again. A rejected `scriptPath` is not fixed by changing how the
+path is spelled; pass `script`.
+
 ## Manual detect invocation
 
 Use this route when the Workflow tool is unavailable (including inside a subagent) or
-rejects the installed script path. Run the existing detect script's audit through the Agent tool.
+rejects the lane script. Run the existing detect script's audit through the Agent tool.
 The installed script remains the source of the prompt and result contract.
 
 1. Read the applicable existing detect script in full. Build the same args described above and

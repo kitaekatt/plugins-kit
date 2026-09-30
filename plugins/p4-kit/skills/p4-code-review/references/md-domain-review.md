@@ -59,8 +59,9 @@ for the full review overrides the gate.
 
 ## Resolve the skills-kit plugin root and venvPython (defensively)
 
-md-domain's detect lanes are native Workflow scripts. Use the Workflow tool when callable;
-otherwise use "Manual detect invocation" below. Locate the INSTALLED skills-kit plugin:
+md-domain's detect lanes are native Workflow scripts. Use the Workflow tool when callable,
+passing each lane as described in "Passing a lane script to the Workflow tool" below; otherwise
+use "Manual detect invocation" below. Locate the INSTALLED skills-kit plugin:
 
 - Plugin root (`<root>`): resolve via the REGISTRY first, falling back to a cache scan only
   when the registry is empty or unreadable. Read `~/.claude/plugins/installed_plugins.json`;
@@ -133,26 +134,34 @@ Route by basename first; the ONE path-shape rule is the skill-reference case in 
    `AGENTS.md` when active. An `AGENTS.md` is ACTIVE only when its directory has no `CLAUDE.md`
    (CLAUDE.md takes precedence); a claimed `AGENTS.md` sitting beside a `CLAUDE.md` is SHADOWED
    and is dropped from ALL three lanes -- never audited as a claude-md and never as a project doc.
-   `scriptPath = <root>/skills/md-domain/workflow/claude-md-detect.js`, `args` =
+   `script` = the text of `<root>/skills/md-domain/workflow/claude-md-detect.js`, `args` =
    `{ files: [...], mechanicalCheckPhrases: bundle.mechanical_check_phrases, review: true, refs: { criteria: <root>/skills/md-domain/references/standards/claude-md-standards.md, codeDirFilter: <root>/skills/md-domain/references/standards/claude-md-standards.md, densityCriteria: <root>/skills/md-domain/references/standards/claude-md-standards.md, pluginRoot: <root>, venvPython: <venvPython> } }` (one standards doc backs all three refs -- the code-directory dimension and the density lens are sections of it).
 2. **`audit_skill` lane** -- one call for every claimed file that is EITHER (a) named `SKILL.md`
    OR (b) inside a `*/skills/<name>/references/` folder (only if any). Those are the `skill`
    artifact's two subject shapes and they share one lane and one Workflow call; the lane picks the
    criteria set per file from the path.
-   `scriptPath = <root>/skills/md-domain/workflow/skill-detect.js`, `args` =
+   `script` = the text of `<root>/skills/md-domain/workflow/skill-detect.js`, `args` =
    `{ files: [...], mechanicalCheckPhrases: bundle.mechanical_check_phrases, review: true, refs: { pluginRoot: <root>, venvPython: <venvPython> } }`.
 3. **`audit_project_doc` lane** -- one call for every OTHER claimed `.md` file (generic docs; only if any).
-   `scriptPath = <root>/skills/md-domain/workflow/project-doc-detect.js`, `args` =
+   `script` = the text of `<root>/skills/md-domain/workflow/project-doc-detect.js`, `args` =
    `{ files: [...], mechanicalCheckPhrases: bundle.mechanical_check_phrases, review: true, refs: { criteria: <root>/skills/md-domain/references/standards/project-doc-standards.md, pluginRoot: <root> } }`.
 
 `args` may be passed as an object or a JSON string; all `refs` paths must be ABSOLUTE (the
 Workflow runs from the session cwd, not the skill dir). `review: true` forces the model pin and
 per-file diff attribution; keep it true.
 
+**Passing a lane script to the Workflow tool.** Read the installed lane script and pass its full
+text VERBATIM as `script`. Do not pass the installed path as `scriptPath`: the tool refuses the
+plugin-cache path, and it has also been observed refusing a copy placed in the working
+directory, so copying the script does not help. Every Workflow result names a saved
+script file; a later call in the same session for the SAME lane may pass that returned path as
+`scriptPath` instead of the text again. A rejected `scriptPath` is not fixed by changing how the
+path is spelled; pass `script`.
+
 ## Manual detect invocation
 
 Use this route when the Workflow tool is unavailable (including inside a subagent) or
-rejects the installed script path. Run the existing detect script's audit through the Agent tool.
+rejects the lane script. Run the existing detect script's audit through the Agent tool.
 The installed script remains the source of the prompt and result contract.
 
 1. Read the applicable existing detect script in full. Build the same args described above and
