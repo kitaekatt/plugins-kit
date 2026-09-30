@@ -43,6 +43,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Mapping, MutableMapping, Optional, Sequence
 
+from .completion.contract import OutputContractViolation, contract_requirements, merge_requirements
 from .completion.halt import HALT_INSUFFICIENT_CREDIT, HALT_QUOTA
 from .completion.types import BackendOptions
 from .model_endpoints import HARNESS_KIND, TRANSPORT_KIND, EndpointEntry, EndpointRegistryError
@@ -842,9 +843,21 @@ def run(
     re-selection, and a workspace that cannot be reset ends the run rather
     than layering a second model on the first one's partial edits.
     :class:`NoUsableRoutingTarget` propagates.
+
+    A request whose ``options.output_contract`` is set has its selection
+    requirement (:func:`~.completion.contract.contract_requirements`) merged
+    into ``requirements`` before every :func:`describe`, so an entry whose
+    adapter cannot satisfy the contract's policy is skipped rather than
+    dispatched to and refused. A conflicting caller requirement raises
+    ``ValueError`` before anything runs. A call that completed but violated
+    its contract is a failed attempt, not a halt, and the violation's full
+    response (raw text, controls, report) is returned in ``RunResult.response``.
     """
     if max_attempts < 1:
         raise ValueError("max_attempts must be at least 1")
+    contract = getattr(request.options, "output_contract", None)
+    if contract is not None:
+        requirements = merge_requirements(requirements, contract_requirements(contract))
     root = str(project_root) if project_root is not None else None
     if backend_factory is None:
         from .completion.factory import create_backend as backend_factory  # noqa: PLC0415
@@ -881,6 +894,12 @@ def run(
             response = selection.backend.complete(
                 request.system, request.prompt, model=selection.model, options=options
             )
+        except OutputContractViolation as exc:
+            # The call ran and was billed; its answer failed the contract. A
+            # task error (the message carries no model text, so it can never
+            # read as a halt), and the raw response survives for the caller.
+            report(Attempt(chosen.id, number, chosen.pace, error=str(exc), outcome="failed"))
+            return RunResult(RUN_FAILED, chosen.id, exc.response, tuple(attempts), f"task error: {exc}")
         except Exception as exc:  # noqa: BLE001 -- transports raise heterogeneous types
             halt = selection.backend.classify_halt(exc)
             launch = halt is None and isinstance(exc, _LAUNCH_ERRORS)

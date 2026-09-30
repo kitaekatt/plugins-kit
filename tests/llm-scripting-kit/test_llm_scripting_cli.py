@@ -1176,3 +1176,30 @@ def test_complete_negative_max_retries_is_rejected(monkeypatch, capsys):
         cli.main(["complete", "--prompt", "hi", "--max-retries", "-1"])
     assert exc.value.code == 2
     assert "must be >= 0" in capsys.readouterr().err
+
+
+def test_complete_violation_envelope_keeps_text_and_controls(monkeypatch, capsys):
+    """A contract violation is a call that ran; the envelope keeps what it holds."""
+    from llm_scripting_kit.completion import OutputContractViolation
+    from llm_scripting_kit.completion.types import ResponseError
+
+    failed = LLMResponse(
+        text="raw model text",
+        model="model-id",
+        status="error",
+        error=ResponseError("output-contract-violation", "schema-mismatch: /a required"),
+        execution_controls_applied=("sandbox=read-only",),
+        input_tokens=7,
+        output_tokens=3,
+    )
+    backend = FakeBackend(error=OutputContractViolation(failed))
+    monkeypatch.setattr(cli, "create_backend", lambda *_, **__: _selection(backend))
+
+    assert cli.main(["complete", "--prompt", "hello"]) == cli.EXIT_FAILURE
+    resp = json.loads(capsys.readouterr().out)["response"]
+    assert resp["status"] == "error"
+    assert resp["error"]["code"] == "output-contract-violation"
+    assert resp["text"] == "raw model text"
+    assert resp["execution_controls_applied"] == ["sandbox=read-only"]
+    assert "structured" in resp and resp["structured"] is None
+    assert resp["output_tokens"] == 3
