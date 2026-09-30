@@ -5360,15 +5360,17 @@ _AGENT_SKILLS_FAILURE_KWARGS = {
 
 
 def _run_codex_hook_setup(project_dir, *, console=False, existing_failures=()):
-    """Materialize the Codex adapter only when Codex is installed and clean.
+    """Install the user Codex adapter and remove the legacy project adapter.
 
     The returned lists follow the engine's normal ``(actions, oks, failures)``
-    convention.  Keeping the policy here makes the lifecycle gate testable and
-    prevents a future caller from accidentally generating a project hook during
-    a failed, Codex-free, or read-only console diagnostic pass. Ignore-policy
-    remediation is deliberately left to the generated hook's runtime context;
-    it must not prevent the hook from being installed in the first place.
+    convention. The cleanup runs for every project pass, while installation
+    remains gated by the existing Codex-detected, clean, non-console pass.
     """
+    from . import codex_hook
+
+    if project_dir:
+        codex_hook.strip_project_codex_hook(project_dir)
+
     if not project_dir or console or existing_failures:
         return [], [], []
 
@@ -5380,23 +5382,19 @@ def _run_codex_hook_setup(project_dir, *, console=False, existing_failures=()):
         return [], [], []
 
     try:
-        from .codex_hook import (
-            CodexHookError,
-            ensure_codex_hook,
-            resolve_project_root,
-        )
-        result = ensure_codex_hook(resolve_project_root(project_dir))
+        from .codex_hook import CodexHookError, ensure_user_codex_hook
+        result = ensure_user_codex_hook()
     except CodexHookError as exc:
-        detail = "cannot install project Codex hook: %s" % exc
+        detail = "cannot install user Codex hook: %s" % exc
         return (
-            ["codex hook: FAILED - %s" % exc],
+            ["codex user hook: FAILED - %s" % exc],
             [],
             [{
                 "type": "codex_hook",
                 "plugin": "bootstrap",
                 "message": detail,
                 "agent_msg": (
-                    "%s. Bootstrap will retry after the project Codex hook "
+                    "%s. Bootstrap will retry after the user Codex hook "
                     "path is writable and its JSON is valid." % detail
                 ),
                 "persist_across_sessions": True,
@@ -5405,7 +5403,7 @@ def _run_codex_hook_setup(project_dir, *, console=False, existing_failures=()):
         )
 
     if result.changed:
-        return ["codex hook: installed %s" % result.path], [], []
+        return ["codex hook: installed %s; Codex needs /hooks review" % result.path], [], []
     return [], ["codex hook: already current %s" % result.path], []
 
 

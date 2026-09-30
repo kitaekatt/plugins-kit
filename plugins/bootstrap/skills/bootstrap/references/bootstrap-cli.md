@@ -38,7 +38,7 @@ A terminal pass differs from a hook pass only where it must:
 | Console output; no `bootstrap.log` writes, engine version stamps (`last_version`, `engine_ran_version`), pending display file, or fix-all queue | The terminal is the display; the version stamps drive the next session's update handling |
 | Not throttled by the cooldown, and does not consume or reset it | It is the explicit request for a pass now |
 | `--project-key _global_`: the per-project interpreter record is neither read nor written | The record is keyed by the hook's hash of Claude's cwd, which a terminal cwd cannot reproduce |
-| No Codex project hook is generated | A console pass never materializes `.codex/hooks.json` in the directory it runs from |
+| No user Codex hook is installed | A console pass does not install the user-level hook; project legacy cleanup may still run |
 | Refuses a held lock (exit 2) instead of attaching | A running pass may have a different project scope |
 | Exits 1 when the pass reports failures (`--exit-status`) | A hook pass always exits 0 so a defect cannot block a session |
 | stdin is closed | A manifest command or custom script cannot prompt on, or hang on, the terminal |
@@ -95,17 +95,16 @@ own dependencies exist.
 updates bootstrap on machines that lack it. It is documented, with its
 opt-out, in fleet-management.md.
 
-`bootstrap codex-hook` is the runtime command used by the project-local Codex
-adapter that normal bootstrap creates at the canonical project root's
-`.codex/hooks.json`. It is not a separate hook-installation step. A clean
-non-console pass first uses the existing Codex CLI detector; when Codex is not
-available, it skips this setup. When Codex is available, bootstrap installs the
-adapter even if the ignore policy is not ready. The command runs the full
-engine synchronously and emits the normal Codex `SessionStart` JSON response.
-It rechecks the policies and appends Codex-only remediation if they are
-missing or drift. For a Perforce ignore file, the remediation requires the
-`p4 edit .p4ignore` command before the file is changed. Bootstrap does not
-create this adapter for a failed automatic pass or a `--console` diagnostic.
+`bootstrap codex-hook` is the runtime command used by the guarded user-level
+Codex adapter that normal bootstrap installs in `$CODEX_HOME/hooks.json`
+(default `~/.codex/hooks.json`). It is not a separate hook-installation step.
+A clean non-console pass first uses the existing Codex CLI detector; when
+Codex is not available, it skips user-hook installation. Every pass strips
+bootstrap-owned entries from the project's legacy `.codex/hooks.json`.
+The command reads SessionStart JSON from stdin, uses its existing `cwd`, and
+runs the full engine synchronously. A duplicate `session_id` is a quiet no-op.
+If bootstrap is absent, the generated guard exits 0 without output. A changed
+user hook is announced as requiring one `/hooks` trust review.
 
 ## Running passes and exit codes
 

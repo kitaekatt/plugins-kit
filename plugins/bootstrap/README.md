@@ -89,16 +89,14 @@ With more than one marketplace installed, `bootstrap` reports on all of them
 and `bootstrap run` asks you to set `BOOTSTRAP_MARKETPLACE` rather than guess
 which engine to run.
 
-After a clean automatic pass with the applicable ignore policy already in
-place, bootstrap creates a machine-local `.codex/hooks.json` with a
-`SessionStart` hook. Starting Codex then runs the same full bootstrap engine
-and injects its remediation context into the Codex session. If the policy is
-missing, Claude receives the remediation and bootstrap defers hook creation so
-the first generated `.codex` tree cannot leak into source control. The hook
-rechecks the project's `.gitignore` and applicable `.p4ignore` for `/.codex/`;
-Perforce remediation tells the agent to run `p4 edit .p4ignore` before changing
-that file. Codex may require a one-time review/trust of the generated project
-hook through `/hooks`.
+After a clean automatic pass, when Codex is available, bootstrap installs one
+guarded `SessionStart` hook in the user-level `$CODEX_HOME/hooks.json` (default
+`~/.codex/hooks.json`). The guard uses `bootstrap` from PATH or
+`$HOME/.local/bin/bootstrap` and exits 0 silently when bootstrap is absent; the
+Windows equivalent uses `where bootstrap.cmd` and a quoted `%USERPROFILE%`
+fallback. Every pass removes bootstrap-owned entries from a project's legacy
+`.codex/hooks.json` while preserving team hooks. A newly written or changed
+user hook requires a one-time `/hooks` trust review in Codex.
 
 To verify bootstrap actually ran for a plugin, read its log:
 
