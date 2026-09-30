@@ -242,6 +242,21 @@ def test_readme_version_floor_matches_the_declared_frontier() -> None:
     assert "subjects_for_disallowed_tools" in readme
 
 
+def test_readme_json_schema_floor_matches_the_probe_constant() -> None:
+    """The README names the llm-scripting-kit floor the interrupt validator
+    probe diagnoses, so the two cannot drift apart."""
+    from job_kit import interrupts as job_kit_interrupts
+
+    readme = (
+        Path(__file__).resolve().parents[2] / "plugins" / "job-kit" / "README.md"
+    ).read_text(encoding="utf-8")
+    assert (
+        f"llm-scripting-kit >= {job_kit_interrupts._JSON_SCHEMA_LSK_VERSION}"
+        in readme
+    )
+    assert "completion.json_schema" in readme
+
+
 # ---------------------------------------------------------------------------
 # Selection through llm-scripting-kit's describe(caller="process")
 # ---------------------------------------------------------------------------

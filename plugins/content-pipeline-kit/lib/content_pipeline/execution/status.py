@@ -55,6 +55,19 @@ APPLY_KINDS = (
 
 _CODE_LENGTH = 12
 
+# The states `counts_by_state` always lists, with a zero when no unit is in
+# one. The three interrupt states (waiting, operator_rejected,
+# interrupt_expired) are deliberately absent: they appear in the digest only
+# when a unit occupies them, so the digest of a run that never requests an
+# interrupt has exactly these five keys.
+_ZERO_FILLED_STATES = (
+    UnitState.PENDING,
+    UnitState.CLAIMED,
+    UnitState.ACCEPTED,
+    UnitState.FAILED,
+    UnitState.SKIPPED,
+)
+
 
 def _classify(text: Optional[str]) -> str:
     """A short, stable, content-free code for an arbitrary operational string.
@@ -197,7 +210,7 @@ def compute_status(
     }
 
     counts: Counter = Counter(u.state.value for u in units)
-    for state in UnitState:
+    for state in _ZERO_FILLED_STATES:
         counts.setdefault(state.value, 0)
 
     # Age is measured from CLAIM, not from the unit's last update -- a renew

@@ -126,6 +126,39 @@ def test_openrouter_node_compiles(write_workflow):
     assert "`./.workflow-kit/${inputs.runId}/classify.out`" in js
 
 
+def test_openrouter_node_passes_events_path(write_workflow):
+    js = _compile_text(_OPENROUTER_WF, write_workflow)
+    spec = js.split("const step_classify = await wkOpenRouter(")[1].split("\n")[0]
+    assert "events: `./.workflow-kit/${inputs.runId}/classify.events.jsonl`" in spec
+    assert "runId: inputs.runId" in spec
+    assert 'unitId: "classify"' in spec
+    # the inlined preamble turns the three spec fields into the runner's flags
+    assert "' --events ' + shq(spec.events)" in js
+    assert "' --run-id ' + shq(spec.runId)" in js
+    assert "' --unit-id ' + shq(spec.unitId)" in js
+
+
+def test_fanout_openrouter_node_indexes_events_and_unit(write_workflow):
+    js = _compile_text(
+        """
+name: fan
+description: fan-out openrouter
+inputs:
+  files: { type: list }
+steps:
+  - id: each
+    for_each: "{{ inputs.files }}"
+    openrouter:
+      prompt_file: "{{ item }}"
+""",
+        write_workflow,
+    )
+    assert "await parallel(inputs.files.map((item, i) => () => wkOpenRouter(" in js
+    assert "events: `./.workflow-kit/${inputs.runId}/each.${i}.events.jsonl`" in js
+    assert "unitId: `each-${i}`" in js
+    assert "`./.workflow-kit/${inputs.runId}/each.${i}.out`" in js
+
+
 def test_script_node_for_each_indexes_out_path(write_workflow):
     js = _compile_text(
         """
@@ -322,3 +355,310 @@ def test_executor_model_is_a_one_entry_declaration_carried_as_a_scalar():
         PLUGIN_ROOT / "skills" / "workflow-kit" / "references" / "preamble.js"
     ).read_text(encoding="utf-8")
     assert re.findall(r"\bmodel:\s*'([^']+)'", preamble) == [only]
+
+
+# --------------------------------------------------------------------------- #
+# typed node contracts: emission (provides / requires / {{ artifacts.X }})
+# --------------------------------------------------------------------------- #
+import hashlib  # noqa: E402
+import importlib.util  # noqa: E402
+import json  # noqa: E402
+import re  # noqa: E402
+
+from wk_testlib import PLUGIN_ROOT  # noqa: E402
+
+_LSK_LIB = PLUGIN_ROOT.parent / "llm-scripting-kit" / "lib"
+
+
+@pytest.fixture
+def lsk_path(monkeypatch):
+    # Stands in for the shared-libs .pth linking llm_scripting_kit onto the venv.
+    monkeypatch.syspath_prepend(str(_LSK_LIB))
+
+
+# sha256 of the compiled output bytes (UTF-8) of each artifact-free source
+# document, captured at commit 2082c7fa, before typed contracts existed. A
+# document that declares no provides/requires must still compile to exactly
+# those bytes. The compiled scripts themselves are generated artifacts and are
+# not checked in; only their digests are.
+_GOLDEN_DIGESTS = {
+    # plugins/workflow-kit/examples/review-changes.workflow.yaml @ 2082c7fa
+    "review-changes": (
+        EXAMPLES / "review-changes.workflow.yaml",
+        "26b6bbd25244b9e1e75e027ccb2fea8c9abd49fa8672ee99d5e8ca276ea3a69a",
+    ),
+    # plugins/workflow-kit/examples/node-strategies.workflow.yaml @ 2082c7fa
+    "node-strategies": (
+        EXAMPLES / "node-strategies.workflow.yaml",
+        "70b8f48d1ab4f4d1a1ff5e72521159218095c93e7b65846717f2a14c6fe8f56d",
+    ),
+    # tests/workflow-kit/fixtures/good/flat.workflow.yaml @ 2082c7fa
+    "flat": (
+        FIXTURES / "good" / "flat.workflow.yaml",
+        "df283e11e9cc28f4ed9a4eb5c4c8feebb0b1a1fbaa31e284b31548a58c23906a",
+    ),
+}
+
+
+def _compiled_digest(source):
+    return hashlib.sha256(_compile(source).encode("utf-8")).hexdigest()
+
+
+@pytest.mark.parametrize("golden", sorted(_GOLDEN_DIGESTS))
+def test_examples_without_contracts_compile_unchanged(golden):
+    source, digest = _GOLDEN_DIGESTS[golden]
+    assert _compiled_digest(source) == digest
+
+
+_TYPED = """
+name: typed
+description: x
+inputs:
+  xs: { type: list }
+steps:
+  - id: count
+    script: { command: "wc -w in.txt" }
+    provides:
+      doc: { type: opaque-file }
+  - id: many
+    for_each: "{{ inputs.xs }}"
+    script: { command: "wc -w {{ item }}" }
+    provides:
+      docs: { type: opaque-file }
+  - id: classify
+    openrouter: { prompt_file: p.txt }
+    provides:
+      label: { type: opaque-file }
+"""
+
+
+def _consumer(body, requires="      doc: { type: opaque-file }\n"):
+    return _TYPED + "  - id: use\n    requires:\n" + requires + body
+
+
+def test_artifact_expression_compiles_to_provider_path(write_workflow):
+    js = _compile_text(_consumer('    agent: { prompt: "read {{ artifacts.doc }}" }\n'),
+                       write_workflow)
+    assert "const step_use = await agent(`read ${step_count.path}`);" in js
+
+
+def test_each_artifact_expression_compiles_to_path_list(write_workflow):
+    js = _compile_text(
+        _consumer('    agent: { prompt: "read {{ artifacts.docs }}" }\n',
+                  "      docs: { type: opaque-file, each: true }\n"),
+        write_workflow,
+    )
+    assert "agent(`read ${step_many.map((r) => r.path)}`)" in js
+
+
+def test_artifact_use_without_requires_is_a_compile_error(write_workflow):
+    text = _TYPED + '  - id: use\n    agent: { prompt: "read {{ artifacts.doc }}" }\n'
+    with pytest.raises(WorkflowError, match=r"step 'use': .* uses artifact 'doc', which this "
+                                            r"step does not declare in `requires`"):
+        _compile_text(text, write_workflow)
+
+
+def test_artifact_expression_refuses_member_tail(write_workflow):
+    with pytest.raises(WorkflowError, match=r"step 'use': .*has a member tail"):
+        _compile_text(_consumer('    agent: { prompt: "{{ artifacts.doc.bytes }}" }\n'),
+                      write_workflow)
+
+
+def test_output_expression_has_no_artifacts(write_workflow):
+    text = _consumer('    agent: { prompt: "hi" }\n') + 'output: "{{ artifacts.doc }}"\n'
+    with pytest.raises(WorkflowError, match=r"output: .* uses artifact 'doc'"):
+        _compile_text(text, write_workflow)
+
+
+def _pipeline(over="[1]", first="hi", later="hi", fan=None):
+    fan_line = f"          fan_out: {{ over: \"{fan[0]}\", as: f }}\n" if fan else ""
+    second = fan[1] if fan else later
+    return (
+        f"    pipeline:\n      over: {over}\n      as: n\n      stages:\n"
+        f"        - id: one\n          agent: {{ prompt: \"{first}\" }}\n"
+        f"        - id: two\n{fan_line}          agent: {{ prompt: \"{second}\" }}\n"
+    )
+
+
+def test_artifact_expression_in_pipeline_over(write_workflow):
+    js = _compile_text(
+        _consumer(_pipeline(over='"{{ artifacts.docs }}"'),
+                  "      docs: { type: opaque-file, each: true }\n"),
+        write_workflow,
+    )
+    assert "await pipeline(\n  step_many.map((r) => r.path)," in js
+
+
+@pytest.mark.parametrize("stage", ["first_stage", "later_stage"])
+def test_artifact_expression_in_stage_prompt(write_workflow, stage):
+    expr = "{{ artifacts.doc }}"
+    body = _pipeline(first=expr) if stage == "first_stage" else _pipeline(later=expr)
+    js = _compile_text(_consumer(body), write_workflow)
+    assert "agent(`${step_count.path}`)" in js
+
+
+def test_artifact_expression_in_fanout_over(write_workflow):
+    body = _pipeline(fan=("{{ artifacts.docs }}", "hi"))
+    js = _compile_text(_consumer(body, "      docs: { type: opaque-file, each: true }\n"),
+                       write_workflow)
+    assert "parallel(step_many.map((r) => r.path).map((f) => () => agent(`hi`)))" in js
+
+
+def test_artifact_expression_in_fanout_body(write_workflow):
+    body = _pipeline(fan=("{{ inputs.xs }}", "{{ f }} {{ artifacts.doc }}"))
+    js = _compile_text(_consumer(body), write_workflow)
+    assert "parallel(inputs.xs.map((f) => () => agent(`${f} ${step_count.path}`)))" in js
+
+
+def test_validate_only_does_not_compile_artifact_expressions(write_workflow, capsys):
+    # The undeclared-use check is compile_doc-only, like unknown steps.ID;
+    # --validate-only never compiles expressions.
+    spec = importlib.util.spec_from_file_location(
+        "workflow_kit_compile_cli_expr", PLUGIN_ROOT / "scripts" / "compile_workflow.py"
+    )
+    cli = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(cli)
+    path = write_workflow(_TYPED + '  - id: use\n    agent: { prompt: "{{ artifacts.doc }}" }\n')
+    assert cli.main([str(path), "--validate-only"]) == 0
+    capsys.readouterr()
+    assert cli.main([str(path)]) == 1
+    assert "uses artifact 'doc'" in capsys.readouterr().err
+
+
+def test_contract_free_expressions_compile_as_at_the_anchor(write_workflow):
+    # A contract-free document: `artifacts` is an ordinary `as` local, exactly
+    # as before typed contracts (the golden digests pin the rest byte-for-byte).
+    js = _compile_text(
+        "name: t\ndescription: x\nsteps:\n  - id: p\n    pipeline:\n      over: [1]\n"
+        "      as: artifacts\n      stages:\n        - id: s\n"
+        "          agent: { prompt: \"{{ artifacts.x }}\" }\n",
+        write_workflow,
+    )
+    assert "(prev, artifacts, i) => agent(`${artifacts.x}`)" in js
+    source, digest = _GOLDEN_DIGESTS["node-strategies"]
+    assert _compiled_digest(source) == digest
+
+
+def test_contract_preamble_absent_without_provides():
+    js = _compile(EXAMPLES / "node-strategies.workflow.yaml")
+    assert "function wkScript(" in js
+    assert "function wkProvided(" not in js
+    assert "function wkScriptProvided(" not in js
+    assert "function wkProviderFlags(" not in js
+
+
+def test_contract_preamble_present_with_provides(write_workflow):
+    js = _compile_text(_TYPED, write_workflow)
+    preamble = js.index("function wkOpenRouter(")
+    for name in ("wkProviderFlags", "wkScriptProvided", "wkProvided"):
+        assert js.count(f"function {name}(") == 1
+        assert js.index(f"function {name}(") > preamble  # inlined AFTER preamble.js
+
+
+def test_script_provider_chains_checker_after_command(write_workflow):
+    js = _compile_text(_TYPED, write_workflow)
+    assert "const step_count = await wkScriptProvided(`wc -w in.txt`, " in js
+    assert ('runner: `"${inputs.workflowKitVenvPython}" '
+            '"${inputs.pluginRoot}/scripts/check_artifact.py"`') in js
+    helper = js[js.index("function wkScriptProvided("):js.index("function wkProvided(")]
+    order = [
+        "'wk_e=; case $- in *e*) wk_e=1; set +e;; esac'",
+        "'( if [ -n \"$wk_e\" ]; then set -e; fi'",
+        "    command,",
+        "') > ' + shq(out)",
+        "'wk_rc=$?'",
+        "'if [ -n \"$wk_e\" ]; then set -e; fi'",
+        "' --command-exit \"$wk_rc\"'",
+    ]
+    positions = [helper.index(part) for part in order]
+    assert positions == sorted(positions)
+
+
+def test_openrouter_provider_passes_contract_flags(write_workflow):
+    js = _compile_text(_TYPED, write_workflow)
+    line = js.split("const step_classify = await ")[1].split("\n")[0]
+    assert line.startswith(
+        'wkOpenRouter(`"${inputs.workflowKitVenvPython}" '
+        '"${inputs.pluginRoot}/scripts/openrouter_run.py"` + wkProviderFlags({ '
+        'artifact: "label", kind: "opaque-file", '
+        'verdict: `./.workflow-kit/${inputs.runId}/classify.contract.json` }), {'
+    )
+    helper = js[js.index("function wkProviderFlags("):js.index("function wkScriptProvided(")]
+    for flag in ("--provides", "--kind", "--schema", "--schema-digest", "--verdict"):
+        assert f"' {flag} ' + shq(" in helper
+
+
+def test_verdict_path_is_indexed_under_fanout(write_workflow):
+    js = _compile_text(_TYPED, write_workflow)
+    assert "verdict: `./.workflow-kit/${inputs.runId}/many.${i}.contract.json`" in js
+    assert "verdict: `./.workflow-kit/${inputs.runId}/count.contract.json`" in js
+    assert ('wkProvided(step_many, "many", "docs", '
+            '(i) => `./.workflow-kit/${inputs.runId}/many.${i}.contract.json`);') in js
+
+
+def test_provider_step_is_followed_by_guard(write_workflow):
+    js = _compile_text(_TYPED + '  - id: tail\n    agent: { prompt: "hi" }\n', write_workflow)
+    lines = js.splitlines()
+    for var, step, art in (("step_count", "count", "doc"), ("step_many", "many", "docs"),
+                           ("step_classify", "classify", "label")):
+        at = next(i for i, ln in enumerate(lines) if ln.startswith(f"const {var} = await "))
+        assert lines[at + 1].startswith(f'wkProvided({var}, "{step}", "{art}", ')
+    # non-provider steps get no guard
+    assert js.count("\nwkProvided(") == 3
+
+
+def test_shipped_typed_contracts_example_compiles(lsk_path):
+    js = _compile(EXAMPLES / "typed-contracts.workflow.yaml")
+    assert "const step_count = await wkScriptProvided(" in js
+    assert 'artifact: "doc_stats", kind: "schema", schema: "{' in js
+    assert re.search(r'digest: "[0-9a-f]{64}"', js)
+    assert 'wkProvided(step_count, "count", "doc_stats", ' in js
+    assert 'wkProviderFlags({ artifact: "doc_class", kind: "opaque-file"' in js
+    assert 'wkProvided(step_classify, "classify", "doc_class", ' in js
+    assert "Read ${step_count.path} (wordcount" in js
+    assert "${step_classify.path} (external" in js
+
+
+def test_schema_text_is_the_canonical_json(write_workflow, lsk_path):
+    js = _compile_text(
+        "name: t\ndescription: x\nschemas:\n  s:\n    type: object\n"
+        "    properties: { b: { type: number, minimum: 1.0 }, a: { type: integer } }\n"
+        "steps:\n  - id: n\n    script: { command: echo }\n    provides:\n"
+        "      x: { schema: s }\n",
+        write_workflow,
+    )
+    literal = re.search(r'schema: ("(?:[^"\\]|\\.)*")', js).group(1)
+    assert json.loads(literal) == (
+        '{"properties":{"a":{"type":"integer"},"b":{"minimum":1.0,"type":"number"}},'
+        '"type":"object"}'
+    )
+
+
+# --------------------------------------------------------------------------- #
+# TC4: a script provider's checker records the `contract` event in the node's
+# events stream, at the path and unit id an openrouter node uses (E5).
+# --------------------------------------------------------------------------- #
+def test_script_provider_passes_events_path(write_workflow):
+    js = _compile_text(_TYPED, write_workflow)
+    line = js.split("const step_count = await ")[1].split("\n")[0]
+    assert (
+        "verdict: `./.workflow-kit/${inputs.runId}/count.contract.json`, "
+        "events: `./.workflow-kit/${inputs.runId}/count.events.jsonl`, "
+        'runId: inputs.runId, unitId: "count" }'
+    ) in line
+    helper = js[js.index("function wkScriptProvided("):js.index("function wkProvided(")]
+    for flag, key in (("--events", "events"), ("--run-id", "runId"), ("--unit-id", "unitId")):
+        assert f"' {flag} ' + shq(check.{key})" in helper
+    # the event flags precede the command-exit argument on the checker line
+    assert helper.index("eventFlags +") < helper.index("' --command-exit \"$wk_rc\"'")
+    # an openrouter provider's events travel in wkOpenRouter's spec, not its check
+    classify = js.split("const step_classify = await ")[1].split("\n")[0]
+    assert classify.count("--events") == 0 and classify.count("events: `") == 1
+
+
+def test_fanout_script_provider_indexes_events_and_unit(write_workflow):
+    js = _compile_text(_TYPED, write_workflow)
+    line = js.split("const step_many = await ")[1].split("\n")[0]
+    assert "events: `./.workflow-kit/${inputs.runId}/many.${i}.events.jsonl`" in line
+    assert "unitId: `many-${i}`" in line
+    assert "runId: inputs.runId" in line

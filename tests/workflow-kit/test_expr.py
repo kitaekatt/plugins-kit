@@ -81,3 +81,34 @@ def test_compile_single_requires_single_expression():
     assert compile_single("{{ inputs.x }}", Scope()) == "inputs.x"
     with pytest.raises(WorkflowError, match="single"):
         compile_single("prefix {{ inputs.x }}", Scope())
+
+
+# --------------------------------------------------------------------------- #
+# typed node contracts: the `artifacts.NAME` head (only when Scope.artifacts is set)
+# --------------------------------------------------------------------------- #
+def test_artifact_head_compiles_to_the_mapped_path():
+    scope = Scope(artifacts={"doc": "step_p.path"}, where="step 'c'")
+    assert compile_expr("artifacts.doc", scope) == "step_p.path"
+    assert compile_template("read {{ artifacts.doc }}", scope) == "`read ${step_p.path}`"
+
+
+def test_artifact_head_refuses_an_undeclared_name():
+    scope = Scope(artifacts={"doc": "step_p.path"}, where="step 'c'")
+    with pytest.raises(WorkflowError, match=r"step 'c': .* uses artifact 'other', which this "
+                                            r"step does not declare in `requires`"):
+        compile_expr("artifacts.other", scope)
+
+
+def test_artifact_head_refuses_a_member_tail():
+    scope = Scope(artifacts={"doc": "step_p.path"}, where="step 'c'")
+    with pytest.raises(WorkflowError, match="has a member tail"):
+        compile_expr("artifacts.doc.x", scope)
+    with pytest.raises(WorkflowError, match=r"expected `artifacts\.NAME`"):
+        compile_expr("artifacts", scope)
+
+
+def test_artifact_head_is_not_recognized_without_an_artifact_map():
+    # Scope.artifacts None: `artifacts` is an ordinary head (a local, or unknown).
+    assert compile_expr("artifacts.x", Scope(locals={"artifacts": "artifacts"})) == "artifacts.x"
+    with pytest.raises(WorkflowError, match="unknown reference 'artifacts'"):
+        compile_expr("artifacts.x", Scope())

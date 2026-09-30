@@ -132,6 +132,216 @@ Provisioning:
 - `openai` is a declared workflow-kit dependency (`pyproject.toml` +
   `venv.check_imports`), so bootstrap installs it into workflow-kit's venv.
 
+### Execution events
+
+An openrouter node can record what its call did as a JSONL stream of
+execution events, in the `plugins-kit.execution-event/v1` format that
+bootstrap's plugin-dev `references/execution-events.md` specifies. Pass
+`events`, `runId` and `unitId` in `wkOpenRouter`'s `spec`; the runner gets
+`--events <path> --run-id <id> --unit-id <id>`. `--events` without both ids
+is a usage error (exit 2).
+
+- Every event has `source.plugin` `workflow-kit` and the given run and unit
+  ids. Per attempt, the stream holds `dispatch-selected`, `call-started`,
+  `usage` (when the provider reported token counts) and `result`. One
+  `terminal` closes the node. llm-scripting-kit emits these through
+  `run(..., observer=...)`.
+- The file records the node's LAST execution: a re-run replaces it, as it
+  replaces `$OUT`.
+- The runner creates the file's parent directory, so a fresh run with no
+  `./.workflow-kit/<runId>/` directory works.
+- Before any model call, the runner checks that bootstrap_lib has
+  `execution_event` with the v1 schema and the `Emitter`/`JsonlSink` calls it
+  makes, and that `declaration.run` takes the `observer` keyword. An absent or
+  too-old library exits 2 with the command that repairs it, and creates no
+  file or directory.
+
+A compiled `.workflow.yaml` sets all three for every openrouter node (see
+`workflow-yaml.md`). A hand-written script that omits `events` records none.
+
+A node that also PROVIDES a typed artifact (see "Typed artifacts") records
+its judgment in its stream as one `contract` event, and writes the whole
+stream in the `plugins-kit.execution-event/v3` format (v3 accepts every v1
+event unchanged). A node that provides nothing keeps the v1 stream.
+
+- The `contract` payload is `artifact`, `kind`, `verdict`, `schema_digest`
+  (kind `schema` only) and `error_count` (verdict `violated` only). It never
+  holds a payload value, an error pointer or free text; those stay in the
+  verdict file.
+- The `contract` event always comes before the node's `terminal`. If the call
+  never started (for example, the default declaration did not resolve), the
+  stream holds only the `contract` event. If no entry was usable, it holds
+  `contract` (`missing`) and then `terminal` `unroutable`.
+- Each execution that passes its checks attempts exactly one `contract`
+  event. If the events file cannot be written, the event is not in the
+  stream, the error goes to stderr, and the node exits non-zero.
+- For each execution whose arguments parse, the previous events file is
+  removed together with the previous verdict, before any check. A refused
+  execution (exit 2) therefore leaves no stream. A node that provides
+  nothing does not remove it.
+- The check before the call asks bootstrap_lib for v3. A bootstrap that
+  supports v1 but not v3 gets its own message, which names bootstrap 0.137.0.
+- A script provider records the same `contract` event: give
+  `scripts/check_artifact.py` the flags `--events <path> --run-id <id>
+  --unit-id <id>` (with `wkScriptProvided`, set `events`, `runId` and
+  `unitId` in its `check`). Its stream holds only that event and no
+  `terminal`, because the checker judges the artifact but does not run the
+  node's command. A compiled `.workflow.yaml` uses the openrouter node's path
+  and unit id: `<step>[.<i>].events.jsonl`, unit `<step>` (`<step>-<i>` under
+  `for_each`).
+
+## Typed artifacts
+
+A node can PROVIDE a named artifact: its `$OUT`, checked against a declared
+type, with the judgment recorded in a verdict file. The executor's
+`exit_code` and `$STATUS` are metadata about the command; the verdict file is
+the proof that the payload has the declared type.
+
+An artifact has one of two kinds:
+
+- `schema` -- `$OUT` holds JSON that conforms to a JSON Schema. The schema must
+  be inside the closed subset llm-scripting-kit's `OutputContract` accepts
+  (policy `validated-result`): keywords such as `pattern`, `format` and
+  `oneOf` are refused, and the root must refuse `null`. It travels as JSON
+  text with its digest: the sha256 of its canonical JSON (sorted keys, no
+  spaces, ASCII), the value `OutputContract(...).schema_digest` reports.
+  Compute it once with workflow-kit's venv python:
+
+  ```sh
+  "<workflow-kit-venv-python>" -c "import json,sys; from llm_scripting_kit.completion import OutputContract; print(OutputContract(id='x', policy='validated-result', schema=json.load(open(sys.argv[1]))).schema_digest)" stats.schema.json
+  ```
+
+  A digest that does not match the schema means the schema changed in
+  transit; the node refuses it (exit 2) before any model call or check,
+  after removing the previous verdict (see "The verdict file").
+- `opaque-file` -- `$OUT` is any regular file. Nothing inside it is checked.
+
+The helpers in `references/preamble-contracts.js` build these provider
+commands for you: `wkProviderFlags(check)` for an openrouter runner prefix,
+`wkScriptProvided(command, out, check, opts)` for a script provider, and
+`wkProvided(result, step, artifact, verdict)`, which throws when a provider
+(or any fan-out item) exited non-zero so no consumer runs. A hand-written
+script pastes `preamble-contracts.js` after `preamble.js`; it calls only `shq`
+and `wkNode` from there. A compiled `.workflow.yaml` inlines it automatically
+when a step declares `provides` (see `workflow-yaml.md`, "Typed artifacts").
+The examples below spell the same commands out by hand.
+
+### openrouter providers
+
+Add the provider flags to the runner prefix; the order of flags does not
+matter:
+
+```js
+const verdict = `./.workflow-kit/${args.runId}/classify.contract.json`
+const typed = runner +
+  ' --provides doc_class --kind schema --verdict ' + shq(verdict) +
+  ' --schema ' + shq(STATS_SCHEMA_JSON) + ' --schema-digest ' + shq(STATS_DIGEST)
+const r = await wkOpenRouter(typed, { promptFile: req, out, cheap: true }, { label: 'classify' })
+```
+
+`--provides NAME` requires `--kind` and `--verdict`; `--kind schema` also
+requires `--schema` and `--schema-digest`, which `--kind opaque-file`
+refuses. Any other combination is a usage error (exit 2).
+
+- `--kind schema`: the runner sends the schema to llm-scripting-kit as an
+  output contract. The seam uses only entries that can satisfy it, adds the
+  schema instruction to the system message, and validates the answer. On
+  success `$OUT` holds the validated value serialized as ASCII JSON, not the
+  raw reply.
+  An answer that is not JSON or does not conform is `violated`: exit 1 and
+  `$OUT` is not written.
+- `--kind opaque-file`: no contract is sent; `$OUT` is the reply text.
+- Any other failure (a failed call, no usable entry, an unexpected error) is
+  `missing`, with the node's usual exit code.
+
+### script providers
+
+Run the command in a subshell, capture its exit status on the next line, and
+always run `scripts/check_artifact.py` after it. The checker's exit code is
+the node's:
+
+```js
+const checker = `"${venvPy}" "${args.pluginRoot}/scripts/check_artifact.py"`
+const out = `./.workflow-kit/${args.runId}/count.out`
+const verdict = `./.workflow-kit/${args.runId}/count.contract.json`
+const cmd = [
+  'wk_e=; case $- in *e*) wk_e=1; set +e;; esac',
+  '( if [ -n "$wk_e" ]; then set -e; fi',
+  `"${venvPy}" wc.py "${args.source}"`,
+  ') > ' + shq(out),
+  'wk_rc=$?',
+  'if [ -n "$wk_e" ]; then set -e; fi',
+  checker + ' --artifact doc_stats --kind schema --in ' + shq(out) +
+    ' --verdict ' + shq(verdict) + ' --schema ' + shq(STATS_SCHEMA_JSON) +
+    ' --schema-digest ' + shq(STATS_DIGEST) + ' --command-exit "$wk_rc"',
+].join('\n')
+const r = await wkNode(cmd, out, { label: 'count' })
+if (r.exit_code !== 0) throw new Error(`count did not provide doc_stats; see ${verdict}`)
+```
+
+The subshell keeps an `exit N` in the command from ending the shell before
+the checker runs. The first and last lines suspend an outer `set -e` only
+around the capture, so the checker always runs; a `set -e` inside the
+command still applies. Keep the command on lines of its own, so a trailing
+`#` comment cannot swallow the `)`.
+
+Checker flags: `--artifact NAME --kind {schema,opaque-file} --in PATH
+--verdict PATH --command-exit CODE [--schema JSON --schema-digest HEX]
+[--events PATH --run-id ID --unit-id ID]`, with the same pairing rules as the
+runner (`--events` requires both ids; see "Execution events" for the
+`contract` event it records). Judgment:
+
+- a non-zero `--command-exit` is `missing`, and the checker exits with that
+  code (clamped to 1..255);
+- `opaque-file` is `satisfied` when `--in` is a regular file, else `missing`;
+- `schema` is `missing` when `--in` is not a readable regular file. The bytes
+  must be strict UTF-8 JSON (`NaN` and `Infinity` refused), else `violated`
+  with the one error `["", "unparseable"]`. A parsed value is validated with
+  llm-scripting-kit's `completion.json_schema.validate`.
+
+Checker exit codes: 0 `satisfied`; 1 `violated`, or `missing` after a command
+that exited 0; the command's own code when it failed; 2 a usage error, an
+absent or too-old llm-scripting-kit, a schema outside the subset, a digest
+mismatch, a previous verdict or events file that cannot be removed, or (with
+`--events`) a bootstrap_lib without execution-event schema v3.
+
+### The verdict file
+
+Both runners write the same file, `workflow-kit.artifact-verdict/v1`, one per
+provided artifact per execution. Use the run directory:
+`./.workflow-kit/<runId>/<step>[.<i>].contract.json`.
+
+```json
+{"schema": "workflow-kit.artifact-verdict/v1",
+ "artifact": "doc_stats", "kind": "schema", "verdict": "violated",
+ "path": "./.workflow-kit/r1/count.out", "bytes": 41,
+ "sha256": "<hex of the bytes judged>", "schema_digest": "<hex>",
+ "errors": [["/words", "type"]], "errors_truncated": false}
+```
+
+- `verdict` is `satisfied`, `violated` or `missing`.
+- `bytes` and `sha256` describe exactly the bytes at `path` that were judged
+  (for an openrouter provider, the bytes it wrote to `$OUT`). They are `null`
+  when no bytes were judged or written: a missing file, a failed command, a
+  `violated` openrouter answer. Compare them with the file you read to detect
+  a file that changed after the check, for example after a resume.
+- `errors` holds at most 100 `[json_pointer, keyword]` pairs and never a
+  payload value; `errors_truncated` is true when there were more.
+  `schema_digest` is present only for kind `schema`.
+- For every execution whose arguments parse, the previous verdict is removed
+  first, before any check. A refused execution (exit 2) therefore leaves no
+  verdict, never an earlier `satisfied` one. If the old verdict cannot be
+  removed, the node exits 2 and does nothing else. An argument error is
+  reported before this step, so it can leave an earlier verdict in place.
+- Every execution that passes its checks writes a verdict, on every path,
+  including an unexpected error. The write is atomic (a uniquely named temp
+  file, then a rename), so a verdict is never partial. If it cannot be
+  written, the error is printed and a node that otherwise succeeded exits 1;
+  a node that failed keeps its own exit code.
+- One writer per verdict path: `runId` must be unique among runs in flight in
+  one project directory. Two concurrent executions of the same node are not
+  supported; the last complete write wins.
+
 ## Consuming a node's output
 
 A downstream Claude reasoning node reads the payload only when it must reason

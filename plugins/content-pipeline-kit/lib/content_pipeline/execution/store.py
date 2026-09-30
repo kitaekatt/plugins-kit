@@ -50,6 +50,12 @@ additionally records a payload-free
 (worker, presented token, timestamp) before raising, so a fenced-out
 submission is a visible, durable fact -- not a silently discarded one
 (a fenced-out late submission is superseded, never applied).
+
+Interrupts are opt-in. ``request_interrupt`` moves a CLAIMED unit to WAITING
+on a typed request, and ``resolve_interrupt`` and ``expire_interrupts`` close
+the request; see "Waiting on an interrupt" in ``execution.model`` and the
+section comment above those verbs. Their two tables exist in every store
+(schema step 10) and stay empty for a run that never calls them.
 """
 
 from __future__ import annotations
@@ -61,9 +67,11 @@ import sys
 import time
 import warnings
 from contextlib import contextmanager
+from dataclasses import replace
 from pathlib import Path
 from typing import Iterable, Iterator, List, Mapping, Optional, Sequence, Tuple, Union
 
+from content_pipeline.execution import interrupts as _interrupts
 from content_pipeline.execution.model import (
     AlreadyClaimedError,
     AttemptKind,
@@ -71,9 +79,18 @@ from content_pipeline.execution.model import (
     ClaimResult,
     DispatchRecord,
     DuplicateUnitError,
+    ExecutionError,
+    INTERRUPT_POLICIES,
+    InterruptExpiredError,
+    InterruptRecord,
+    InterruptRequest,
+    InterruptRequestError,
+    InterruptResolution,
     NoOpenDispatchError,
     NotAcceptedError,
     NotClaimedError,
+    POLICY_STOP,
+    ResolutionConflictError,
     RunHaltedError,
     RunRecord,
     StaleDispatcherLeaseError,
@@ -82,9 +99,12 @@ from content_pipeline.execution.model import (
     TerminalStateError,
     UnitRecord,
     UnitState,
+    UnitWaitingError,
+    UnknownInterruptError,
     UnknownRunError,
     UnknownUnitError,
     UsageRecord,
+    WaitUnderDispatchError,
 )
 
 DEFAULT_BUSY_TIMEOUT_MS = 5000
@@ -288,6 +308,69 @@ _MIGRATIONS: List[List[str]] = [
         "CREATE UNIQUE INDEX idx_dispatches_open_unique ON dispatches(run_id, unit_id) "
         "WHERE settled_at IS NULL;",
     ],
+    [
+        # Interrupts: a claim holder's typed request to wait for a person's
+        # answer, and the one resolution of each request. Two tables, one
+        # index and five triggers; no existing table is altered. Rows of
+        # both tables are immutable, the two policy columns included.
+        # `fencing_token` is the token of the claim that made the request,
+        # and UNIQUE(run_id, unit_id, fencing_token) allows one request per
+        # claim. The insert trigger allows one UNRESOLVED request per unit.
+        """
+        CREATE TABLE interrupts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            run_id TEXT NOT NULL,
+            unit_id TEXT NOT NULL,
+            fencing_token INTEGER NOT NULL,
+            envelope TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            request_schema_json TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            created_at REAL NOT NULL,
+            expires_at REAL,
+            on_rejected TEXT NOT NULL CHECK (on_rejected IN ('stop', 'release')),
+            on_expired TEXT NOT NULL CHECK (on_expired IN ('stop', 'release')),
+            FOREIGN KEY (run_id, unit_id) REFERENCES units(run_id, unit_id),
+            UNIQUE (run_id, unit_id, fencing_token)
+        );
+        """,
+        "CREATE INDEX idx_interrupts_run_unit ON interrupts(run_id, unit_id, id);",
+        """
+        CREATE TABLE interrupt_resolutions (
+            interrupt_id INTEGER PRIMARY KEY REFERENCES interrupts(id),
+            outcome TEXT NOT NULL CHECK (outcome IN ('answered', 'rejected', 'expired')),
+            input_json TEXT,
+            reason TEXT,
+            resolved_at REAL NOT NULL
+        );
+        """,
+        """
+        CREATE TRIGGER interrupts_one_open_per_unit BEFORE INSERT ON interrupts
+            WHEN EXISTS (
+                SELECT 1 FROM interrupts AS open
+                WHERE open.run_id = NEW.run_id AND open.unit_id = NEW.unit_id
+                  AND NOT EXISTS (
+                      SELECT 1 FROM interrupt_resolutions AS r
+                      WHERE r.interrupt_id = open.id))
+            BEGIN SELECT RAISE(ABORT, 'unit already has an unresolved interrupt'); END;
+        """,
+        """
+        CREATE TRIGGER interrupts_immutable_update BEFORE UPDATE ON interrupts
+            BEGIN SELECT RAISE(ABORT, 'interrupt records are immutable'); END;
+        """,
+        """
+        CREATE TRIGGER interrupts_immutable_delete BEFORE DELETE ON interrupts
+            BEGIN SELECT RAISE(ABORT, 'interrupt records are immutable'); END;
+        """,
+        """
+        CREATE TRIGGER resolutions_immutable_update BEFORE UPDATE ON interrupt_resolutions
+            BEGIN SELECT RAISE(ABORT, 'interrupt resolutions are immutable'); END;
+        """,
+        """
+        CREATE TRIGGER resolutions_immutable_delete BEFORE DELETE ON interrupt_resolutions
+            BEGIN SELECT RAISE(ABORT, 'interrupt resolutions are immutable'); END;
+        """,
+    ],
 ]
 
 
@@ -375,6 +458,63 @@ def _row_to_dispatch(row: sqlite3.Row) -> DispatchRecord:
         outcome=row["outcome"],
         cli_version=row["cli_version"],
     )
+
+
+_INTERRUPT_SELECT = (
+    "SELECT i.*, r.outcome AS r_outcome, r.input_json AS r_input_json, "
+    "r.reason AS r_reason, r.resolved_at AS r_resolved_at "
+    "FROM interrupts AS i LEFT JOIN interrupt_resolutions AS r ON r.interrupt_id = i.id "
+)
+
+
+def _row_to_interrupt(row: sqlite3.Row) -> InterruptRecord:
+    """Decode one :data:`_INTERRUPT_SELECT` row: an interrupt, and its
+    resolution when the joined columns hold one."""
+    resolution = None
+    if row["r_outcome"] is not None:
+        resolution = InterruptResolution(
+            interrupt_id=str(row["id"]),
+            outcome=row["r_outcome"],
+            resolved_at=row["r_resolved_at"],
+            input=json.loads(row["r_input_json"]) if row["r_input_json"] is not None else None,
+            reason=row["r_reason"],
+        )
+    return InterruptRecord(
+        id=str(row["id"]),
+        run_id=row["run_id"],
+        unit_id=row["unit_id"],
+        fencing_token=row["fencing_token"],
+        envelope=row["envelope"],
+        kind=row["kind"],
+        request_schema=json.loads(row["request_schema_json"]),
+        payload=json.loads(row["payload_json"]),
+        created_at=row["created_at"],
+        expires_at=row["expires_at"],
+        on_rejected=row["on_rejected"],
+        on_expired=row["on_expired"],
+        resolution=resolution,
+    )
+
+
+def _fetch_interrupt_rows(
+    conn: sqlite3.Connection, run_id: str, unit_id: Optional[str] = None
+) -> List[sqlite3.Row]:
+    if unit_id is None:
+        return conn.execute(
+            _INTERRUPT_SELECT + "WHERE i.run_id = ? ORDER BY i.id", (run_id,)
+        ).fetchall()
+    return conn.execute(
+        _INTERRUPT_SELECT + "WHERE i.run_id = ? AND i.unit_id = ? ORDER BY i.id",
+        (run_id, unit_id),
+    ).fetchall()
+
+
+def _interrupt_row_id(interrupt_id: object) -> Optional[int]:
+    """The row id an interrupt id names, or ``None`` when it names none."""
+    text = str(interrupt_id).strip()
+    if not text.isdecimal() or not text.isascii():
+        return None
+    return int(text)
 
 
 def _fetch_run_row(conn: sqlite3.Connection, run_id: str) -> Optional[sqlite3.Row]:
@@ -831,7 +971,9 @@ class ExecutionStore:
         raises :class:`AlreadyClaimedError`; a terminal unit raises
         :class:`TerminalStateError`; a halted run raises
         :class:`RunHaltedError` (halt blocks new claims, never a
-        fenced-valid submission already in flight).
+        fenced-valid submission already in flight). A WAITING unit raises
+        :class:`~content_pipeline.execution.model.UnitWaitingError`, a
+        subclass of :class:`AlreadyClaimedError`, naming its open interrupt.
         """
         now = time.time() if at is None else at
         with self._writer() as conn:
@@ -844,6 +986,15 @@ class ExecutionStore:
 
             if state in TERMINAL_STATES:
                 raise TerminalStateError(f"{run_id!r}/{unit_id!r} is already {state.value}")
+
+            if state is UnitState.WAITING:
+                # A waiting unit holds no lease, so without this branch it
+                # would be claimed like a PENDING unit and the wait would be
+                # bypassed.
+                open_row = self._open_interrupt_row(conn, run_id, unit_id)
+                raise UnitWaitingError(
+                    run_id, unit_id, str(open_row["id"]) if open_row is not None else None
+                )
 
             if state is UnitState.CLAIMED:
                 lease_expires_at = unit_row["lease_expires_at"]
@@ -1249,6 +1400,388 @@ class ExecutionStore:
                 )
             ]
         return run, units, attempts
+
+    # -- interrupts: a unit waits on a typed request ------------------------------
+    #
+    # The rules of a wait (request shape, limits, canonical form, decision and
+    # outcome words, replay test, lapse rule) execute in the shared interrupt
+    # contract, reached only through `execution.interrupts`. The three writing
+    # verbs probe that edge BEFORE opening a transaction, so a machine without
+    # it refuses and writes nothing. The reads below decode rows and need no
+    # edge. No other verb of this store calls into `execution.interrupts`.
+
+    @staticmethod
+    def _open_interrupt_row(
+        conn: sqlite3.Connection, run_id: str, unit_id: str
+    ) -> Optional[sqlite3.Row]:
+        """The unit's one unresolved interrupt row, or ``None``."""
+        return conn.execute(
+            _INTERRUPT_SELECT + "WHERE i.run_id = ? AND i.unit_id = ? AND r.interrupt_id IS NULL "
+            "ORDER BY i.id DESC LIMIT 1",
+            (run_id, unit_id),
+        ).fetchone()
+
+    @staticmethod
+    def _interrupt_row(conn: sqlite3.Connection, row_id: int) -> Optional[sqlite3.Row]:
+        return conn.execute(_INTERRUPT_SELECT + "WHERE i.id = ?", (row_id,)).fetchone()
+
+    def _close_waiting_unit(
+        self,
+        conn: sqlite3.Connection,
+        interrupt_row: sqlite3.Row,
+        kind: AttemptKind,
+        *,
+        stopped_state: Optional[UnitState],
+        at: float,
+    ) -> None:
+        """Move a WAITING unit on and append the closing attempt row.
+
+        ``stopped_state`` is the terminal state the unit ends in, or ``None``
+        to return it to PENDING. The attempt row carries the fencing token of
+        the claim that made the request, which is still the unit's token: no
+        claim can happen while a unit waits.
+        """
+        run_id = interrupt_row["run_id"]
+        unit_id = interrupt_row["unit_id"]
+        if stopped_state is None:
+            conn.execute(
+                "UPDATE units SET state = ?, updated_at = ? WHERE run_id = ? AND unit_id = ?",
+                (UnitState.PENDING.value, at, run_id, unit_id),
+            )
+        else:
+            conn.execute(
+                "UPDATE units SET state = ?, failed_at = ?, updated_at = ? "
+                "WHERE run_id = ? AND unit_id = ?",
+                (stopped_state.value, at, at, run_id, unit_id),
+            )
+        self._record_attempt(
+            conn,
+            run_id,
+            unit_id,
+            kind,
+            at=at,
+            fencing_token=interrupt_row["fencing_token"],
+        )
+
+    def _record_expiry(
+        self, conn: sqlite3.Connection, interrupt_row: sqlite3.Row, at: float
+    ) -> None:
+        """Write the ``expired`` resolution of a lapsed interrupt and apply
+        the request's ``on_expired`` policy to its WAITING unit."""
+        conn.execute(
+            "INSERT INTO interrupt_resolutions(interrupt_id, outcome, input_json, reason, "
+            "resolved_at) VALUES (?, 'expired', NULL, NULL, ?)",
+            (interrupt_row["id"], at),
+        )
+        self._close_waiting_unit(
+            conn,
+            interrupt_row,
+            AttemptKind.INTERRUPT_EXPIRED,
+            stopped_state=(
+                UnitState.INTERRUPT_EXPIRED
+                if interrupt_row["on_expired"] == POLICY_STOP
+                else None
+            ),
+            at=at,
+        )
+
+    def request_interrupt(
+        self,
+        run_id: str,
+        unit_id: str,
+        fencing_token: int,
+        request: InterruptRequest,
+        *,
+        on_rejected: str = POLICY_STOP,
+        on_expired: str = POLICY_STOP,
+        usage: Optional[UsageRecord] = None,
+        at: Optional[float] = None,
+    ) -> InterruptRecord:
+        """Record a typed request for a person's answer; the unit waits.
+
+        Called by the holder of the unit's claim, with the claim's fencing
+        token. In one transaction the unit goes CLAIMED -> WAITING, its
+        claimant and lease are cleared, the interrupt row is written with both
+        policies, and an ``interrupt_requested`` attempt row records the
+        token, the claimant and ``usage``. The token is not bumped: the claim
+        after a resolution takes the next one. Returns the interrupt record.
+
+        ``on_rejected`` and ``on_expired`` say what the unit does after a
+        rejection or a lapse: ``stop`` (the default) ends it in a terminal
+        state, ``release`` returns it to PENDING so the next attempt can read
+        the outcome and continue, skip or ask again.
+
+        Refusals, in order. A policy outside ``stop``/``release`` and a
+        request the interrupt contract refuses raise
+        :class:`~content_pipeline.execution.model.InterruptRequestError`; a
+        missing contract or validator raises
+        :class:`~content_pipeline.execution.interrupts.InterruptSupportError`.
+        All of these happen before the transaction opens, so nothing is
+        written. Inside it the fencing check comes first, as for
+        :meth:`accept_unit`: a stale token records a SUPERSEDED attempt row
+        and raises :class:`StaleFenceError` once the row is committed. Then a
+        terminal unit raises :class:`TerminalStateError`, any other state than
+        CLAIMED raises :class:`NotClaimedError`, and a unit with an open
+        dispatch raises
+        :class:`~content_pipeline.execution.model.WaitUnderDispatchError`.
+        A valid-fence request ignores the run's halt state, as a valid-fence
+        acceptance does.
+        """
+        for name, value in (("on_rejected", on_rejected), ("on_expired", on_expired)):
+            if value not in INTERRUPT_POLICIES:
+                raise InterruptRequestError(
+                    f"{name} must be one of {', '.join(INTERRUPT_POLICIES)}, got {value!r}"
+                )
+        _interrupts.support()
+        checked = _interrupts.check_request(request)
+        now = time.time() if at is None else at
+        expires_at = _interrupts.expiry(now, checked.expires_in_s)
+        schema_json = _interrupts.canonical_json(checked.request_schema)
+        payload_json = _interrupts.canonical_json(checked.payload)
+        # As in accept_unit: the stale branch leaves the transaction cleanly
+        # and raises afterwards, so its SUPERSEDED row is committed.
+        stale: Optional[Tuple[int, int]] = None  # (presented, current)
+        record: Optional[InterruptRecord] = None
+        with self._writer() as conn:
+            self._require_run(conn, run_id)
+            unit_row = self._require_unit(conn, run_id, unit_id)
+            current = unit_row["fencing_token"]
+            if fencing_token != current:
+                self._record_attempt(
+                    conn,
+                    run_id,
+                    unit_id,
+                    AttemptKind.SUPERSEDED,
+                    at=now,
+                    fencing_token=fencing_token,
+                )
+                stale = (fencing_token, current)
+            else:
+                state = UnitState(unit_row["state"])
+                if state in TERMINAL_STATES:
+                    raise TerminalStateError(f"{run_id!r}/{unit_id!r} is already {state.value}")
+                if state is not UnitState.CLAIMED:
+                    raise NotClaimedError(f"{run_id!r}/{unit_id!r} is {state.value}, not claimed")
+                open_dispatch = conn.execute(
+                    "SELECT 1 FROM dispatches WHERE run_id = ? AND unit_id = ? "
+                    "AND settled_at IS NULL",
+                    (run_id, unit_id),
+                ).fetchone()
+                if open_dispatch is not None:
+                    raise WaitUnderDispatchError(run_id, unit_id)
+
+                cursor = conn.execute(
+                    "INSERT INTO interrupts(run_id, unit_id, fencing_token, envelope, kind, "
+                    "request_schema_json, payload_json, created_at, expires_at, on_rejected, "
+                    "on_expired) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        run_id,
+                        unit_id,
+                        fencing_token,
+                        checked.envelope,
+                        checked.kind,
+                        schema_json,
+                        payload_json,
+                        now,
+                        expires_at,
+                        on_rejected,
+                        on_expired,
+                    ),
+                )
+                conn.execute(
+                    "UPDATE units SET state = ?, updated_at = ?, claimed_by = NULL, "
+                    "claimed_at = NULL, lease_expires_at = NULL WHERE run_id = ? AND unit_id = ?",
+                    (UnitState.WAITING.value, now, run_id, unit_id),
+                )
+                self._record_attempt(
+                    conn,
+                    run_id,
+                    unit_id,
+                    AttemptKind.INTERRUPT_REQUESTED,
+                    at=now,
+                    worker_id=unit_row["claimed_by"],
+                    fencing_token=fencing_token,
+                    usage=usage,
+                )
+                record = _row_to_interrupt(self._interrupt_row(conn, cursor.lastrowid))
+        if stale is not None:
+            raise StaleFenceError(run_id, unit_id, stale[0], stale[1])
+        return record  # type: ignore[return-value]
+
+    def resolve_interrupt(
+        self,
+        run_id: str,
+        interrupt_id: str,
+        *,
+        decision: str,
+        input: object = None,
+        reason: Optional[str] = None,
+        now: Optional[float] = None,
+    ) -> InterruptResolution:
+        """Resolve one interrupt, idempotently, in one transaction.
+
+        ``decision`` is ``answer`` (``input`` is validated against the schema
+        the request declared) or ``reject`` (``reason`` is optional free
+        text). An answer returns the unit to PENDING; the next claim is a
+        fresh attempt that reads the answer with
+        :func:`~content_pipeline.execution.interrupts.unit_resolutions`. A
+        rejection applies the request's ``on_rejected`` policy: ``stop`` ends
+        the unit OPERATOR_REJECTED, ``release`` returns it to PENDING. The
+        resolution row is written whatever the policy.
+
+        Replaying a resolution equal to the stored one -- same decision, same
+        canonical input, same reason -- returns it with ``replayed`` set and
+        writes nothing, even after the unit moved on. A different one raises
+        :class:`~content_pipeline.execution.model.ResolutionConflictError`
+        and the stored resolution is kept. An interrupt found lapsed is
+        recorded as expired (its ``on_expired`` policy applied), committed,
+        and then refused with
+        :class:`~content_pipeline.execution.model.InterruptExpiredError`.
+        An unknown run or interrupt id raises
+        :class:`~content_pipeline.execution.model.UnknownInterruptError`, and
+        a refused input raises
+        :class:`~content_pipeline.execution.model.ResolutionInputError`.
+        A decision other than ``answer`` or ``reject``, a rejection given an
+        input, and an answer given a reason raise ``ValueError``. The edge
+        probe runs before the transaction opens.
+        """
+        _interrupts.support()
+        outcome = _interrupts.decision_outcome(decision, input=input, reason=reason)
+        bounded_reason = _interrupts.bound_reason(reason)
+        when = time.time() if now is None else now
+        row_id = _interrupt_row_id(interrupt_id)
+        if row_id is None:
+            raise UnknownInterruptError(
+                f"interrupt {interrupt_id!r} is not an interrupt id in run {run_id!r}"
+            )
+        # The lapse branch commits the expiry and raises afterwards, for the
+        # reason the stale branch of accept_unit does.
+        expired: Optional[InterruptExpiredError] = None
+        with self._writer() as conn:
+            if _fetch_run_row(conn, run_id) is None:
+                raise UnknownInterruptError(f"run {run_id!r} does not exist")
+            row = self._interrupt_row(conn, row_id)
+            if row is None or row["run_id"] != run_id:
+                raise UnknownInterruptError(
+                    f"interrupt {row_id} is not an interrupt in run {run_id!r}"
+                )
+            stored = _row_to_interrupt(row).resolution
+            if stored is not None:
+                if stored.outcome == "expired":
+                    raise InterruptExpiredError(str(row_id), row["expires_at"])
+                if not _interrupts.same_resolution(
+                    stored_outcome=stored.outcome,
+                    stored_input_json=row["r_input_json"],
+                    stored_reason=stored.reason,
+                    outcome=outcome,
+                    input=input,
+                    reason=reason,
+                ):
+                    raise ResolutionConflictError(str(row_id), stored.outcome)
+                return replace(stored, replayed=True)
+            unit_row = self._require_unit(conn, run_id, row["unit_id"])
+            state = UnitState(unit_row["state"])
+            if _interrupts.lapsed(row["expires_at"], when) and state is UnitState.WAITING:
+                self._record_expiry(conn, row, when)
+                expired = InterruptExpiredError(str(row_id), row["expires_at"])
+            else:
+                if state is not UnitState.WAITING:
+                    raise ExecutionError(
+                        f"interrupt {row_id} is unresolved but its unit "
+                        f"{run_id!r}/{row['unit_id']!r} is {state.value}, not waiting; "
+                        "nothing was written"
+                    )
+                input_json = None
+                if outcome == "answered":
+                    input_json = _interrupts.validate_input(
+                        json.loads(row["request_schema_json"]), input
+                    )
+                conn.execute(
+                    "INSERT INTO interrupt_resolutions(interrupt_id, outcome, input_json, "
+                    "reason, resolved_at) VALUES (?, ?, ?, ?, ?)",
+                    (row_id, outcome, input_json, bounded_reason, when),
+                )
+                if outcome == "answered":
+                    self._close_waiting_unit(
+                        conn, row, AttemptKind.INTERRUPT_RESOLVED, stopped_state=None, at=when
+                    )
+                else:
+                    self._close_waiting_unit(
+                        conn,
+                        row,
+                        AttemptKind.INTERRUPT_REJECTED,
+                        stopped_state=(
+                            UnitState.OPERATOR_REJECTED
+                            if row["on_rejected"] == POLICY_STOP
+                            else None
+                        ),
+                        at=when,
+                    )
+                stored = _row_to_interrupt(self._interrupt_row(conn, row_id)).resolution
+        if expired is not None:
+            raise expired
+        return stored  # type: ignore[return-value]
+
+    def expire_interrupts(self, run_id: str, now: Optional[float] = None) -> List[InterruptRecord]:
+        """Record every lapsed, unresolved interrupt of a WAITING unit.
+
+        One transaction. Each lapse writes an ``expired`` resolution and
+        applies the request's ``on_expired`` policy: ``stop`` ends the unit
+        INTERRUPT_EXPIRED, ``release`` returns it to PENDING. An interrupt
+        lapses AT its ``expires_at``; one with no expiry never lapses. An
+        interrupt that is not yet lapsed, already resolved, or whose unit is
+        not WAITING is left alone, so a second call records nothing. Returns
+        the interrupts expired by this call.
+
+        No timer calls this, and no other function of the library does: a
+        lapse is recorded only by this verb and by a :meth:`resolve_interrupt`
+        that observes one. The edge probe runs before the transaction opens.
+        """
+        _interrupts.support()
+        when = time.time() if now is None else now
+        expired_ids: List[int] = []
+        with self._writer() as conn:
+            self._require_run(conn, run_id)
+            for row in _fetch_interrupt_rows(conn, run_id):
+                if row["r_outcome"] is not None:
+                    continue
+                if not _interrupts.lapsed(row["expires_at"], when):
+                    continue
+                unit_row = self._require_unit(conn, run_id, row["unit_id"])
+                if UnitState(unit_row["state"]) is not UnitState.WAITING:
+                    continue
+                self._record_expiry(conn, row, when)
+                expired_ids.append(row["id"])
+            records = [
+                _row_to_interrupt(self._interrupt_row(conn, row_id)) for row_id in expired_ids
+            ]
+        return records
+
+    def list_interrupts(
+        self, run_id: str, unit_id: Optional[str] = None
+    ) -> List[InterruptRecord]:
+        """A run's (or one unit's) interrupts, oldest first, each with its
+        policies and its resolution or ``None``. A read; it needs no edge."""
+        with self._connect() as conn:
+            rows = _fetch_interrupt_rows(conn, run_id, unit_id)
+        return [_row_to_interrupt(r) for r in rows]
+
+    def get_interrupt(self, run_id: str, interrupt_id: str) -> Optional[InterruptRecord]:
+        """The interrupt with this id in ``run_id``, or ``None``. A read."""
+        row_id = _interrupt_row_id(interrupt_id)
+        if row_id is None:
+            return None
+        with self._connect() as conn:
+            row = self._interrupt_row(conn, row_id)
+        if row is None or row["run_id"] != run_id:
+            return None
+        return _row_to_interrupt(row)
+
+    def open_interrupt(self, run_id: str, unit_id: str) -> Optional[InterruptRecord]:
+        """The unit's one unresolved interrupt, or ``None``. A read."""
+        with self._connect() as conn:
+            row = self._open_interrupt_row(conn, run_id, unit_id)
+        return _row_to_interrupt(row) if row is not None else None
 
     # -- dispatcher (launcher-election) lease, B1 ---------------------------------
     #

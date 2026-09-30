@@ -1,0 +1,70 @@
+# Typed twin of node-strategies.workflow.yaml: the same three nodes, with the
+# files they pass declared as typed artifacts.
+#
+# - `count` PROVIDES `doc_stats`, typed by the `stats` schema. After the
+#   wordcount command runs, scripts/check_artifact.py validates $OUT against the
+#   schema and writes a verdict file beside it.
+# - `classify` PROVIDES `doc_class`, an opaque file (the reply text).
+# - `reconcile` REQUIRES both and reads them through {{ artifacts.NAME }}, which
+#   compiles to each provider's reported $OUT path.
+#
+# The compiler checks the contracts before anything runs: every required
+# artifact has exactly one provider, earlier in the document, with a matching
+# schema. At run time a provider that exits non-zero (a command failure, a
+# payload that violates its schema, a missing file) stops the workflow before
+# `reconcile` is dispatched. See references/workflow-yaml.md "Typed artifacts".
+
+name: typed-contracts-demo
+description: A schema-typed script artifact and an opaque openrouter artifact feed a Claude reasoning node.
+
+inputs:
+  source: { type: string, description: "path to the input document" }
+
+phases:
+  - { id: prepare, title: Prepare }
+  - { id: classify, title: Classify }
+  - { id: reason, title: Reason }
+
+schemas:
+  stats:
+    type: object
+    required: [lines, words, chars]
+    additionalProperties: false
+    properties:
+      lines: { type: integer, minimum: 0 }
+      words: { type: integer, minimum: 0 }
+      chars: { type: integer, minimum: 0 }
+
+steps:
+  - id: count
+    phase: prepare
+    script:
+      command: '"{{ inputs.workflowKitVenvPython }}" "{{ inputs.pluginRoot }}/examples/scripts/wordcount.py" "{{ inputs.source }}"'
+      label: wordcount
+    provides:
+      doc_stats: { schema: stats }
+
+  - id: classify
+    phase: classify
+    openrouter:
+      prompt_file: "{{ inputs.source }}"
+      cheap: true
+      system: "In one word, classify the document type."
+      label: classify
+    provides:
+      doc_class: { type: opaque-file }
+
+  - id: reconcile
+    phase: reason
+    requires:
+      doc_stats: { schema: stats }
+      doc_class: { type: opaque-file }
+    agent:
+      prompt: |
+        Read {{ artifacts.doc_stats }} (wordcount stats JSON, validated against the
+        stats schema) and {{ artifacts.doc_class }} (external classifier verdict). In
+        3 bullets, reconcile them: report the stats, the classifier's one-word
+        verdict, and whether it is plausible given the stats.
+      label: reconcile
+
+output: "{{ steps.reconcile }}"

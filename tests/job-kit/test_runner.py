@@ -435,6 +435,7 @@ def test_runner_gives_contract_only_the_remaining_timeout_budget(
         timeout_s: float | None = None,
         response_text: str = "",
         context: ContractContext | None = None,
+        interrupt_io: object = None,
     ) -> Acceptance:
         contract_timeouts.append(timeout_s)
         return Acceptance(

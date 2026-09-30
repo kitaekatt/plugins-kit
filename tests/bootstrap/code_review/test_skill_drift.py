@@ -184,7 +184,7 @@ class TestMdDomainContributorPresent:
         ref = " ".join(ref.split())
         for clause in (
             "Use this route when the Workflow tool is unavailable (including inside a subagent) "
-            "or rejects the installed script path.",
+            "or rejects the lane script.",
             f"invoke Agent with `subagent_type: {vcs}-kit:review-lane-high` and `model: opus`.",
             "The Agent tool has no effort argument; the subtype's `effort: high` frontmatter binds effort.",
             "Set `prompt` to the installed script's instantiated `lanePrompt` plus its exact installed "
@@ -207,6 +207,23 @@ class TestMdDomainContributorPresent:
             "Do not rerun prepare_review.py for a transport failure."
         ) in ref
         assert "never from within a reviewer subagent" not in body
+
+    @pytest.mark.parametrize("vcs", ["git", "p4"])
+    def test_detect_lanes_pass_script_text_not_installed_path(self, vcs: str) -> None:
+        """The Workflow tool refuses a plugin-cache `scriptPath`.
+
+        Each lane must be passed as `script` text; naming the installed path as
+        `scriptPath` sends every review down the manual route.
+        """
+        body = gen.render_skill(vcs)
+        ref = gen.render_md_domain_review(vcs)
+        assert "`scriptPath = <root>/" not in ref
+        for lane in ("claude-md-detect.js", "skill-detect.js", "project-doc-detect.js"):
+            assert f"`script` = the text of `<root>/skills/md-domain/workflow/{lane}`" in ref
+        assert "**Passing a lane script to the Workflow tool.**" in ref
+        assert "Do not pass the installed path as `scriptPath`" in " ".join(ref.split())
+        assert "rejects the installed script path" not in body
+        assert "(never its installed path as `scriptPath`)" in " ".join(body.split())
 
     def test_both_skills_carry_probe_and_fallback(self):
         for vcs in ("git", "p4"):

@@ -45,10 +45,13 @@ def main(argv=None) -> int:
     if args.out:
         out = Path(args.out)
         out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_text(js, encoding="utf-8")
+        out.write_text(js, encoding="utf-8", newline="\n")
         print(str(out))
     else:
-        sys.stdout.write(js)
+        # Bytes, not text mode: Windows text-mode stdout turns "\n" into "\r\n".
+        sys.stdout.flush()
+        sys.stdout.buffer.write(js.encode("utf-8"))
+        sys.stdout.buffer.flush()
     return 0
 
 

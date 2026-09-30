@@ -214,6 +214,31 @@ def test_cache_roundtrips_truthfulness_fields_without_live_timestamps(
     assert got.ended_at is None
 
 
+def test_cache_roundtrips_the_output_contract_report(tmp_path: Path) -> None:
+    report = {
+        "contract_id": "cpk.summary",
+        "schema_version": "v1",
+        "schema_digest": "ab" * 32,
+        "policy": "validated-result",
+        "delivery": "unreported",
+        "disposition": "valid",
+        "errors": [],
+    }
+    cache = ResponseCache(tmp_path)
+    assert cache.store("k", LLMResponse(text="{}", model="m", output_contract=report))
+    assert json.loads((tmp_path / "k.json").read_text(encoding="utf-8"))[
+        "output_contract"
+    ] == report
+    assert cache.lookup("k").output_contract == report
+
+
+def test_cache_entry_without_a_contract_writes_no_report_key(tmp_path: Path) -> None:
+    ResponseCache(tmp_path).store("k", LLMResponse(text="hello", model="m"))
+    payload = json.loads((tmp_path / "k.json").read_text(encoding="utf-8"))
+    assert "output_contract" not in payload
+    assert ResponseCache(tmp_path).lookup("k").output_contract is None
+
+
 def test_cache_miss_returns_none(tmp_path):
     assert ResponseCache(tmp_path).lookup("absent") is None
 

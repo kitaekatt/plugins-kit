@@ -32,6 +32,23 @@ from .errors import WorkflowError
 #: The bootstrap release that shipped ``bootstrap_lib.model_declaration``.
 MODEL_DECLARATION_BOOTSTRAP = "0.129.0"
 
+#: The bootstrap release that shipped ``bootstrap_lib.execution_event`` (the
+#: ``Emitter`` and ``JsonlSink`` an openrouter node run with ``--events`` uses).
+EXECUTION_EVENT_BOOTSTRAP = "0.135.0"
+
+#: The bootstrap release that shipped execution-event schema v3 with the
+#: ``contract`` event: the ``Emitter(..., schema=<v3>)`` a node that provides
+#: an artifact and records events calls (``scripts/openrouter_run.py
+#: --provides --events``, ``scripts/check_artifact.py --events``).
+CONTRACT_EVENT_BOOTSTRAP = "0.137.0"
+
+#: The llm-scripting-kit release that shipped ``OutputContract`` (with
+#: ``schema_digest``), ``BackendOptions(output_contract=...)`` and
+#: ``completion.json_schema``: the calls a node that provides a schema-typed
+#: artifact makes (``scripts/check_artifact.py``, ``scripts/openrouter_run.py
+#: --provides``).
+OUTPUT_CONTRACT_LSK = "0.56.0"
+
 #: The node executor's model (W3, W4): a one-entry declaration. The agent
 #: definition's frontmatter and the preamble's ``agent()`` options can carry
 #: only a scalar, so each writes this declaration's single id; a test pins
@@ -101,8 +118,11 @@ def agent_model(declared: Optional[tuple], where: str) -> Optional[str]:
 
 
 __all__ = [
+    "CONTRACT_EVENT_BOOTSTRAP",
+    "EXECUTION_EVENT_BOOTSTRAP",
     "EXECUTOR_MODELS",
     "MODEL_DECLARATION_BOOTSTRAP",
+    "OUTPUT_CONTRACT_LSK",
     "agent_model",
     "parse_declaration",
 ]

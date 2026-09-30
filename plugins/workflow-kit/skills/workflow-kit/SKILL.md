@@ -50,13 +50,13 @@ domain_skill:
     behavioral_guardrails:
       - Never run a compiled .js by hand or with node -- only the native Workflow tool executes it.
       - Node payloads travel by file ($OUT), never through the agent's context; the executor must not read or summarize $OUT.
-      - The node contract is convention, lightly checked (exit code + file presence). Correctness of a command is the author's responsibility, not the executor's.
+      - The node contract is convention, lightly checked (exit code + file presence). Correctness of a command is the author's responsibility, not the executor's. A step that declares `provides` is the exception -- its artifact is checked against its declared type, recorded in a verdict file, and a failed check stops the workflow before any consumer runs (workflow-yaml.md "Typed artifacts").
       - Nondeterministic-time and random calls are banned inside Workflow scripts (they break resume); vary per-node behavior by index or by args.
   index:
     references:
       - id: workflow-yaml
         path: references/workflow-yaml.md
-        keywords: [workflow.yaml, declarative, compile, validate, scaffold, run workflow, steps, pipeline, templating, format]
+        keywords: [workflow.yaml, declarative, compile, validate, scaffold, run workflow, steps, pipeline, templating, format, provides, requires, artifact, typed artifact, artifacts expression]
         summary: The .workflow.yaml format (v1) and the compile / validate / run / scaffold procedures.
       - id: contract
         path: references/contract.md
@@ -64,12 +64,16 @@ domain_skill:
         summary: The node contract -- file-passing via $OUT/$STATUS, the return schema, and why payloads bypass context.
       - id: node-strategies
         path: references/node-strategies.md
-        keywords: [node strategy, script node, openrouter node, workflow-kit-agent, shell redirect, haiku executor, command template]
+        keywords: [node strategy, script node, openrouter node, workflow-kit-agent, shell redirect, haiku executor, command template, provides, artifact, verdict file, check_artifact]
         summary: The workflow-kit-agent executor and the script / openrouter strategies -- command templates and how to wire them into a native workflow.
       - id: preamble
         path: references/preamble.js
         keywords: [preamble, inline helpers, wkScript, wkOpenRouter, wkNode, paste, node schema, hand-written workflow]
         summary: The inlinable JS preamble (paste into a native Workflow script) that builds node-strategy agent() calls.
+      - id: preamble-contracts
+        path: references/preamble-contracts.js
+        keywords: [preamble-contracts, provides, artifact, provider, wkProviderFlags, wkScriptProvided, wkProvided, guard, typed artifact, hand-written workflow]
+        summary: The typed-artifact provider helpers, pasted after preamble.js -- provider flags for an openrouter runner, the script-provider command that always runs the checker, and the guard that stops a workflow after a failed provider.
   capabilities:
     - id: run-workflow
       keywords: [run workflow, execute workflow, compile and run, run the pipeline]

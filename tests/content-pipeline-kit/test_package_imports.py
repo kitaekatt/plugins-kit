@@ -67,6 +67,8 @@ _SUBPACKAGES = [
     "content_pipeline.execution.model",
     "content_pipeline.execution.store",
     "content_pipeline.execution.status",
+    "content_pipeline.execution.interrupts",
+    "content_pipeline.execution.events",
     "content_pipeline.execution.wave",
     "content_pipeline.execution.controller",
     "content_pipeline.execution.drivers",

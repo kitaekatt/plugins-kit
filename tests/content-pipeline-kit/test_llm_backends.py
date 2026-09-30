@@ -10,9 +10,15 @@ only verify the adapters construct without the shared lib and raise a clear
 ImportError when actually driven without it.
 """
 
+import dataclasses as _dataclasses
+import sys as _sys
+import types as _types
+from pathlib import Path as _Path
+
 import pytest
 
 from content_pipeline.llm import backends
+from content_pipeline.llm import platform as _platform
 from content_pipeline.llm.backends import (
     ClaudeCliBackend,
     CodexCliBackend,
@@ -22,7 +28,12 @@ from content_pipeline.llm.backends import (
     route,
     routed_model,
 )
-from content_pipeline.llm.platform import BackendOptions, build_cache_key
+from content_pipeline.llm.platform import (
+    BackendOptions,
+    StructuralOutputError,
+    StructuredContractSupportError,
+    build_cache_key,
+)
 
 
 # --- MockBackend -------------------------------------------------------------
@@ -818,10 +829,12 @@ def test_legacy_endpoint_env_is_not_read(monkeypatch):
     assert ModelEndpointBackend().endpoint == ""
 
 
-def test_route_takes_only_the_mock_and_openrouter_seams():
+def test_route_takes_the_mock_openrouter_and_contract_seams():
     import inspect
 
-    assert list(inspect.signature(route).parameters) == ["openrouter", "mock"]
+    assert list(inspect.signature(route).parameters) == [
+        "openrouter", "mock", "output_contract"
+    ]
 
 
 def test_response_adapter_carries_reported_cost_pair_and_drops_invalid() -> None:
@@ -867,3 +880,401 @@ def test_response_adapter_carries_reported_cost_pair_and_drops_invalid() -> None
         got = backends._from_completion_response(_Bad())
         assert got.reported_cost_usd is None
         assert got.reported_cost_source is None
+
+
+# --- output contracts across the live-adapter seam (U6) ----------------------
+#
+# The live adapters pass a declared contract to llm-scripting-kit through the
+# one probe (platform._contract_seam), bring its report back as JSON data, and
+# map its OutputContractViolation to CPK's StructuralOutputError. route()
+# hands the contract's selection requirement to describe(). Backend behavior
+# is faked; the contract types are the REAL llm-scripting-kit ones, so the
+# tests do not depend on which adapters advertise which policy.
+
+_SHARED_LIB = _Path(__file__).resolve().parents[2] / "plugins" / "llm-scripting-kit" / "lib"
+
+_SCHEMA = {
+    "type": "object",
+    "required": ["title"],
+    "properties": {"title": {"type": "string", "minLength": 1}},
+    "additionalProperties": False,
+}
+
+# The literal pinned on BOTH sides of the plugin boundary: llm-scripting-kit's
+# tests/llm-scripting-kit/test_completion_contract.py::CONTRACT_EXPORTS pins
+# the same seven names as its consumer surface.
+_CONTRACT_PROBE_PIN = (
+    "OutputContract",
+    "OutputContractViolation",
+    "contract_requirements",
+    "evaluate_output",
+    "POLICY_NATIVE_REQUIRED",
+    "POLICY_VALIDATED_RESULT",
+    "POLICY_TEXT_ONLY",
+)
+
+
+def _lsk_module_names():
+    return {
+        n for n in _sys.modules
+        if n == "llm_scripting_kit" or n.startswith("llm_scripting_kit.")
+    }
+
+
+@pytest.fixture
+def lsk(monkeypatch):
+    """The real ``llm_scripting_kit.completion``, unloaded again afterwards."""
+    before = _lsk_module_names()
+    monkeypatch.syspath_prepend(str(_SHARED_LIB))
+    import llm_scripting_kit.completion as completion  # noqa: PLC0415
+
+    yield completion
+    for name in _lsk_module_names() - before:
+        del _sys.modules[name]
+
+
+def _output_contract(lsk, policy=None, cid="cpk.summary"):
+    policy = policy or lsk.POLICY_VALIDATED_RESULT
+    schema = None if policy == lsk.POLICY_TEXT_ONLY else _SCHEMA
+    return lsk.OutputContract(id=cid, policy=policy, schema=schema)
+
+
+def _lsk_report(output_contract, disposition, errors=(), delivery="native"):
+    from llm_scripting_kit.completion.contract_types import ContractReport  # noqa: PLC0415
+
+    contract_id, policy, digest, version = output_contract.identity()
+    return ContractReport(
+        contract_id=contract_id,
+        schema_version=version,
+        schema_digest=digest,
+        policy=policy,
+        delivery=delivery,
+        disposition=disposition,
+        errors=errors,
+    )
+
+
+class _ScriptedDelegate:
+    """A shared-lib backend stand-in: records options, replays a script."""
+
+    def __init__(self, *script):
+        self.script = list(script)
+        self.options = []
+
+    def complete(self, _system, _user, *, model, options):
+        self.options.append(options)
+        entry = self.script.pop(0)
+        if isinstance(entry, BaseException):
+            raise entry
+        return entry
+
+    def classify_halt(self, _exc):
+        return None
+
+
+def _with_delegate(backend, delegate):
+    backend._delegate = delegate
+    return backend
+
+
+def test_contract_probe_set_matches_lsk_export_pin(lsk):
+    """F4: CPK probes exactly the consumer surface llm-scripting-kit exports.
+
+    A dropped name would let a stale shared lib pass the probe and fail deep
+    in a call; an added one would refuse a shared lib that is fine.
+    """
+    assert _platform._CONTRACT_SYMBOLS == _CONTRACT_PROBE_PIN
+    exported = set(lsk.__all__)
+    for name in _CONTRACT_PROBE_PIN:
+        assert name in exported, name
+        assert hasattr(lsk, name), name
+
+
+def test_delegate_receives_output_contract(lsk):
+    """The contract reaches the llm-scripting-kit adapter on its own options."""
+    output_contract = _output_contract(lsk)
+    delegate = _ScriptedDelegate(
+        lsk.LLMResponse(
+            text='{"title": "t"}',
+            model="m",
+            structured={"title": "t"},
+            output_contract=_lsk_report(output_contract, "valid"),
+        )
+    )
+    backend = _with_delegate(OpenRouterBackend(), delegate)
+
+    response = backend.complete(
+        "s", "u", model="m", options=BackendOptions(output_contract=output_contract)
+    )
+
+    sent = delegate.options[0]
+    assert isinstance(sent, lsk.BackendOptions)
+    assert sent.output_contract is output_contract
+    # the report comes back as JSON data, the shape the response cache stores
+    assert response.output_contract == _lsk_report(output_contract, "valid").to_json()
+    assert response.structured == {"title": "t"}
+
+
+def test_no_contract_options_carry_no_contract_field(lsk):
+    delegate = _ScriptedDelegate(lsk.LLMResponse(text="ok", model="m"))
+    response = _with_delegate(ClaudeCliBackend(), delegate).complete("s", "u", model="m")
+    assert delegate.options[0].output_contract is None
+    assert response.output_contract is None
+
+
+def _install_old_completion(monkeypatch, delegate_cls=None):
+    """An llm-scripting-kit that predates output contracts.
+
+    Its ``BackendOptions`` is a dataclass WITHOUT ``output_contract`` and it
+    exports none of the contract frontier.
+    """
+    completion = _types.ModuleType("llm_scripting_kit.completion")
+    completion.BackendOptions = _dataclasses.make_dataclass(
+        "BackendOptions",
+        [
+            (name, object, _dataclasses.field(default=None))
+            for name in (
+                "max_tokens", "temperature", "timeout_s", "cache_salt",
+                "user_cache_prefix", "effort", "allowed_tools", "cwd",
+                "client_id", "log_prefix", "extras",
+            )
+        ],
+    )
+    if delegate_cls is not None:
+        completion.OpenRouterBackend = delegate_cls
+    package = _types.ModuleType("llm_scripting_kit")
+    package.completion = completion
+    monkeypatch.setitem(_sys.modules, "llm_scripting_kit", package)
+    monkeypatch.setitem(_sys.modules, "llm_scripting_kit.completion", completion)
+    return completion
+
+
+def test_old_lsk_options_refuse_contract(monkeypatch):
+    """The options path goes through the probe: a stale shared lib REFUSES.
+
+    It must never drop the contract silently (the call would then run as plain
+    text) nor fail with a bare TypeError that names no remedy.
+    """
+    _install_old_completion(monkeypatch)
+    with pytest.raises(StructuredContractSupportError) as excinfo:
+        backends._to_completion_options(BackendOptions(output_contract=object()))
+    message = str(excinfo.value)
+    assert "claude plugin update llm-scripting-kit@plugins-kit" in message
+    assert "BackendOptions.output_contract" in message
+
+
+def test_old_lsk_contract_call_refuses_before_building_a_delegate(monkeypatch):
+    built = []
+
+    class _Delegate:
+        def __init__(self, **_kwargs):
+            built.append(self)
+
+    _install_old_completion(monkeypatch, _Delegate)
+    with pytest.raises(StructuredContractSupportError):
+        OpenRouterBackend().complete(
+            "s", "u", model="m", options=BackendOptions(output_contract=object())
+        )
+    assert built == []
+
+
+def test_no_contract_call_works_against_an_lsk_without_the_field(monkeypatch):
+    """The text path imports nothing new: an older shared lib keeps working."""
+    seen = []
+
+    class _Delegate:
+        def __init__(self, **_kwargs):
+            pass
+
+        def complete(self, _system, _user, *, model, options):
+            seen.append(options)
+            return _types.SimpleNamespace(
+                text="ok", model=model, input_tokens=0, output_tokens=0,
+                cache_hit_tokens=0, wall_ms=0, attempts=1, from_cache=False,
+            )
+
+    _install_old_completion(monkeypatch, _Delegate)
+    response = OpenRouterBackend().complete("s", "u", model="m")
+    assert response.text == "ok"
+    assert response.output_contract is None
+    assert not hasattr(seen[0], "output_contract")
+
+
+def test_contract_violation_maps_to_structural_output_error(lsk):
+    """The shared lib's violation becomes CPK's distinctly named error.
+
+    It carries the adapted failed response -- raw text, usage and the report
+    as data -- which is what call_llm charges and submit_validated feeds back.
+    """
+    output_contract = _output_contract(lsk)
+    failed = lsk.LLMResponse(
+        text="Sure! Here is the title.",
+        model="m",
+        input_tokens=11,
+        output_tokens=7,
+        status="error",
+        output_contract=_lsk_report(output_contract, "unparseable"),
+    )
+    delegate = _ScriptedDelegate(lsk.OutputContractViolation(failed))
+    backend = _with_delegate(CodexCliBackend(), delegate)
+
+    with pytest.raises(StructuralOutputError) as excinfo:
+        backend.complete(
+            "s", "u", model="m", options=BackendOptions(output_contract=output_contract)
+        )
+    exc = excinfo.value
+    assert not isinstance(exc, lsk.OutputContractViolation)
+    assert isinstance(exc.__cause__, lsk.OutputContractViolation)
+    assert exc.response.text == "Sure! Here is the title."
+    assert exc.response.output_contract == _lsk_report(output_contract, "unparseable").to_json()
+    assert (exc.input_tokens, exc.output_tokens, exc.model) == (11, 7, "m")
+
+
+def test_violation_is_not_mapped_without_a_contract(lsk):
+    """Mapping is keyed on the declared contract, not on the exception alone."""
+    output_contract = _output_contract(lsk)
+    violation = lsk.OutputContractViolation(
+        lsk.LLMResponse(
+            text="x", model="m", output_contract=_lsk_report(output_contract, "unparseable")
+        )
+    )
+    backend = _with_delegate(OpenRouterBackend(), _ScriptedDelegate(violation))
+    with pytest.raises(lsk.OutputContractViolation):
+        backend.complete("s", "u", model="m")
+
+
+def test_live_violation_feeds_submit_validated_retry(lsk, tmp_path):
+    """End to end over a live adapter: a structural failure is retried with
+    feedback, and the accepted answer is the validated object with its report.
+    """
+    output_contract = _output_contract(lsk)
+    failed = lsk.LLMResponse(
+        text='{"title": ""}',
+        model="m",
+        status="error",
+        output_contract=_lsk_report(
+            output_contract, "schema-mismatch", errors=(("/title", "minLength"),)
+        ),
+    )
+    good = lsk.LLMResponse(
+        text='{"title": "ok"}',
+        model="m",
+        structured={"title": "ok"},
+        output_contract=_lsk_report(output_contract, "valid"),
+    )
+    delegate = _ScriptedDelegate(lsk.OutputContractViolation(failed), good)
+    backend = _with_delegate(OpenRouterBackend(), delegate)
+
+    result = _platform.submit_validated(
+        backend=backend, system="s", user="u", model="m",
+        output_contract=output_contract, cache_dir=tmp_path,
+    )
+
+    assert result.accepted
+    assert result.payload == {"title": "ok"}
+    assert result.attempts == 2
+    assert all(o.output_contract is output_contract for o in delegate.options)
+    assert result.responses[-1].output_contract["disposition"] == "valid"
+
+
+# --- selection under an output contract ---------------------------------------
+
+_FAKE_POLICIES = {
+    # adapter family -> policies it advertises (a FAKE advertisement: these
+    # tests must not depend on which real adapters list which policy)
+    "claude": (),
+    "codex": ("native-required", "validated-result", "text-only"),
+}
+
+
+def _install_requirement_aware_declaration(monkeypatch, entries):
+    """A fake ``llm_scripting_kit.declaration`` whose describe honors requirements.
+
+    ``entries`` maps a declared id to its ``EntryState``-shaped entry; the
+    entry's harness names its advertisement in :data:`_FAKE_POLICIES`.
+    Returns the list of ``requirements`` each describe() call received.
+    """
+    received = []
+
+    def _describe(names, *, requirements=None, **_kwargs):
+        received.append(requirements)
+        wanted = set(((requirements or {}).get("structured_output") or {}).get("policies") or ())
+        for name in names:
+            entry = entries[name]
+            if wanted <= set(_FAKE_POLICIES[entry.harness]):
+                return _types.SimpleNamespace(default=entry)
+        raise RuntimeError("no usable routing target")
+
+    declaration = _types.SimpleNamespace(
+        describe=_describe,
+        run=lambda *a, **kw: None,
+        RunRequest=object,
+        NoUsableRoutingTarget=RuntimeError,
+        CALLER_PROCESS="process",
+    )
+    monkeypatch.setattr(backends, "_declaration_module", lambda: declaration)
+    return received
+
+
+_DECLARED = {
+    "opus": _entry("opus", harness="claude", model="claude-opus", drive="claude-cli"),
+    "sol": _entry("sol", harness="codex", model="gpt-5.6-sol", drive="codex-cli"),
+}
+
+
+def test_route_native_required_skips_claude_entry(lsk, monkeypatch):
+    """A2: the contract's requirement reaches describe(), so an entry that
+    cannot deliver natively is skipped rather than selected and refused."""
+    monkeypatch.setenv(backends.MODELS_ENV, "opus,sol")
+    received = _install_requirement_aware_declaration(monkeypatch, _DECLARED)
+    output_contract = _output_contract(lsk, lsk.POLICY_NATIVE_REQUIRED)
+
+    backend = route(output_contract=output_contract)
+
+    assert isinstance(backend, CodexCliBackend)
+    assert received == [lsk.contract_requirements(output_contract)]
+    assert routed_model("x", output_contract=output_contract) == "gpt-5.6-sol"
+
+
+def test_route_without_a_contract_is_unchanged(lsk, monkeypatch):
+    monkeypatch.setenv(backends.MODELS_ENV, "opus,sol")
+    received = _install_requirement_aware_declaration(monkeypatch, _DECLARED)
+    assert isinstance(route(), ClaudeCliBackend)
+    assert received == [None]
+
+
+def test_declared_entry_memo_is_keyed_on_contract_identity(lsk, monkeypatch):
+    """A no-contract selection never stands in for a contract one, nor one
+    contract's for another's; the same contract is resolved once."""
+    monkeypatch.setenv(backends.MODELS_ENV, "opus,sol")
+    received = _install_requirement_aware_declaration(monkeypatch, _DECLARED)
+    native = _output_contract(lsk, lsk.POLICY_NATIVE_REQUIRED)
+    text_only = _output_contract(lsk, lsk.POLICY_TEXT_ONLY, cid="cpk.text")
+
+    assert isinstance(route(), ClaudeCliBackend)
+    assert isinstance(route(output_contract=native), CodexCliBackend)
+    assert isinstance(route(output_contract=native), CodexCliBackend)
+    assert isinstance(route(output_contract=text_only), CodexCliBackend)
+    assert routed_model("x") == "claude-opus"
+    assert len(received) == 3
+
+
+def test_route_contract_refuses_a_stale_shared_lib(monkeypatch):
+    monkeypatch.setenv(backends.MODELS_ENV, "opus,sol")
+    _install_requirement_aware_declaration(monkeypatch, _DECLARED)
+    _install_old_completion(monkeypatch)
+    with pytest.raises(StructuredContractSupportError, match="update"):
+        route(output_contract=object())
+
+
+def test_default_route_is_not_reselected_by_a_contract(lsk):
+    """No declaration: the default entry runs, and the shared lib's
+    pre-dispatch refusal (not routing) guards an unsatisfiable contract."""
+    output_contract = _output_contract(lsk, lsk.POLICY_NATIVE_REQUIRED)
+    assert isinstance(route(output_contract=output_contract), OpenRouterBackend)
+
+
+def test_supplied_mock_wins_over_a_contract(lsk, monkeypatch):
+    monkeypatch.setenv(backends.MODELS_ENV, "opus,sol")
+    mine = MockBackend(responses=["x"])
+    assert route(mock=mine, output_contract=_output_contract(lsk)) is mine

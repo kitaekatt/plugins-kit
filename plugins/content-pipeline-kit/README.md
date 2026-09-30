@@ -7,6 +7,30 @@ llm-scripting-kit, which owns making one call correctly (endpoint, model, key,
 transport, halt taxonomy); the reverse edge does not exist. A consumer imports
 the library and drives it from its own entry point.
 
+## Structured output
+
+A caller declares the shape it needs with an
+`llm_scripting_kit.completion.OutputContract` and passes it to
+`submit_validated(output_contract=...)` or `BackendOptions.output_contract`.
+Structural validity (the output conforms to the schema) is judged first, by
+llm-scripting-kit; domain validity (the content is acceptable) stays with the
+`validate.contract` validators, which run only on a structurally valid object.
+A schema failure is one HARD `schema_violation` Rejection carrying the contract
+identity, the schema errors, and the raw output, and it feeds the normal retry
+loop. Under a `text-only` contract the report is recorded and `parse_fn` still
+parses. The contract is part of the cache key; a cache hit needs a report for
+the same contract with a success disposition.
+
+`audit.reasoning_chain.record_submission` records, per attempt, the contract
+`id`, `schema_version`, `schema_digest`, `policy`, `delivery` (`native`,
+`prompt`, `none` for a text-only contract that delivers no schema, or `unreported`
+when no seam report exists), and `disposition`. It never records the schema body.
+
+The codex adapter requires OpenAI strict-mode schemas (`additionalProperties:
+false` and a full `required` list at every object level); prompt-delivered
+adapters accept the package's schema subset. The contract path needs
+llm-scripting-kit 0.56.0 or later and refuses without it.
+
 ## Cost and budget
 
 `call_llm` charges each live response against an optional `CostBudget`.
@@ -34,3 +58,36 @@ non-negative, and not a boolean; anything else is treated as unknown. Against
 an llm-scripting-kit that lacks the fields, responses carry no reported cost and
 are priced from the `pricing` table (step 3). Exception (transport error)
 charges are always estimator-based and need a pricing table.
+
+## Durable waits
+
+A unit of a tracked run can ask a person a typed question and wait for the
+answer without holding a claim, while the rest of the run continues. The
+question, the answer and the outcome are rows in the execution store
+(`content_pipeline.execution`), and a per-request policy decides whether a
+rejection or an expiry stops the unit (`stop`, the default) or returns it to
+`pending` (`release`) so its next attempt can branch on the outcome.
+
+It is opt-in per unit. Calling `store.request_interrupt`, or raising
+`InterruptRequested` from an inline `generate`, is the whole opt-in: there is no
+flag or config key. A pipeline that does neither records no interrupt rows, and
+none of its units ever enters the waiting state. `content_pipeline.roundtrip`
+does not use the execution store's interrupt code, so its questions and
+returns work the same with or without durable waits and can be used beside
+them.
+
+Lane scope:
+
+- The inline lane can ask, and so can a consumer's own loop over the store.
+- The background lane refuses a wait under its open dispatch
+  (`WaitUnderDispatchError`).
+- The workflow lane has no supported request surface: its worker protocol has no
+  wait verb, and nothing in the library handles a wait requested through a verb a
+  consumer mounts itself.
+
+The requesting verbs use `bootstrap_lib` (bootstrap 0.137.0 or later) and
+`llm_scripting_kit` (0.56.0 or later), probed inside the verb. Without them the
+verb raises `InterruptSupportError` before it writes. How to ask, answer,
+expire and drain a run with a waiting unit:
+`skills/content-pipeline-domain/references/building-a-pipeline.md`, "Durable
+waits (opt-in)".

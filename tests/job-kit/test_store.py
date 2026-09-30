@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 import threading
 from dataclasses import replace
@@ -593,3 +594,141 @@ def test_persistent_halt_vocabulary_agrees_across_modules() -> None:
         "store._PERSISTENT_HALT_KINDS and run._PERSISTENT_HALT_KINDS disagree; "
         "a halt kind was added or renamed in one place only"
     )
+
+
+def test_store_migrates_to_the_event_log_from_the_previous_schema(
+    tmp_path: Path,
+) -> None:
+    """A ledger at the schema before the events step gains the events table
+    and ``runs.events_recorded`` additively; its existing run is kept and
+    marked as not recorded, and the schema version reaches the current one."""
+    events_step = next(
+        index
+        for index, step in enumerate(_MIGRATIONS)
+        if any("CREATE TABLE events" in statement for statement in step)
+    )
+    db_path = tmp_path / "previous.sqlite3"
+    with sqlite3.connect(str(db_path)) as connection:
+        for index in range(events_step):
+            for statement in _MIGRATIONS[index]:
+                connection.execute(statement)
+            if index:
+                connection.execute(
+                    "UPDATE schema_version SET version = ?", (index + 1,)
+                )
+        connection.execute(
+            "INSERT INTO runs(id, created_at, max_parallel) VALUES ('old', 1.0, 2)"
+        )
+
+    store = JobStore(db_path, create=False)
+
+    with sqlite3.connect(str(db_path)) as connection:
+        version = connection.execute("SELECT version FROM schema_version").fetchone()[0]
+        event_columns = {
+            row[1] for row in connection.execute("PRAGMA table_info(events)").fetchall()
+        }
+        recorded = connection.execute(
+            "SELECT events_recorded FROM runs WHERE id = 'old'"
+        ).fetchone()[0]
+        indexes = {
+            row[1] for row in connection.execute("PRAGMA index_list(events)").fetchall()
+        }
+    assert version == len(_MIGRATIONS)
+    assert {
+        "seq",
+        "run_id",
+        "job_id",
+        "attempt_no",
+        "event",
+        "at",
+        "adapter",
+        "model",
+        "payload_json",
+        "schema",
+    } == event_columns
+    assert "idx_events_run_seq" in indexes
+    assert recorded == 0
+    assert store.get_run("old").max_parallel == 2
+
+
+def test_store_migrates_to_interrupts_from_the_previous_schema(
+    tmp_path: Path,
+) -> None:
+    """A schema-11 ledger migrates additively to 12: its run, job, attempt and
+    events are kept, their event rows render as v1 (the new ``schema`` column
+    is NULL on them), and the interrupt tables and triggers are added."""
+    interrupts_step = next(
+        index
+        for index, step in enumerate(_MIGRATIONS)
+        if any("CREATE TABLE interrupts" in statement for statement in step)
+    )
+    assert interrupts_step == 11  # step 12, the one after the events step
+    db_path = tmp_path / "schema-11.sqlite3"
+    with sqlite3.connect(str(db_path)) as connection:
+        for index in range(interrupts_step):
+            for statement in _MIGRATIONS[index]:
+                connection.execute(statement)
+            if index:
+                connection.execute(
+                    "UPDATE schema_version SET version = ?", (index + 1,)
+                )
+        connection.execute(
+            "INSERT INTO runs(id, created_at, max_parallel, events_recorded) "
+            "VALUES ('old', 1.0, 1, 1)"
+        )
+        connection.execute(
+            "INSERT INTO jobs(run_id, id, ordinal, definition_json, state, "
+            "created_at, updated_at) VALUES ('old', 'job', 0, ?, 'accepted', 1.0, 1.0)",
+            (json.dumps(_job(tmp_path).to_mapping(), sort_keys=True),),
+        )
+        connection.execute(
+            "INSERT INTO attempts(run_id, job_id, attempt_no, endpoint, backend, "
+            "model, status) VALUES ('old', 'job', 1, 'e', 'b', 'm', 'completed')"
+        )
+        connection.execute(
+            "INSERT INTO events(run_id, job_id, attempt_no, event, at, adapter, "
+            "model, payload_json) VALUES ('old', NULL, NULL, 'job-kit:run-created', "
+            "'2026-09-01T00:00:00Z', NULL, NULL, '{}')"
+        )
+        connection.execute(
+            "INSERT INTO events(run_id, job_id, attempt_no, event, at, adapter, "
+            "model, payload_json) VALUES ('old', 'job', 1, 'result', "
+            "'2026-09-01T00:00:01Z', 'b', 'm', '{\"status\": \"completed\"}')"
+        )
+
+    store = JobStore(db_path, create=False)
+
+    with sqlite3.connect(str(db_path)) as connection:
+        version = connection.execute("SELECT version FROM schema_version").fetchone()[0]
+        tables = {
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            ).fetchall()
+        }
+        triggers = {
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'trigger'"
+            ).fetchall()
+        }
+        schemas = [
+            row[0] for row in connection.execute("SELECT schema FROM events").fetchall()
+        ]
+    assert version == len(_MIGRATIONS) == 12
+    assert {"interrupts", "interrupt_resolutions", "continuations", "events"} <= tables
+    assert triggers == {
+        "interrupts_one_open_per_job",
+        "interrupts_immutable_update",
+        "interrupts_immutable_delete",
+        "resolutions_immutable_update",
+        "resolutions_immutable_delete",
+    }
+    assert schemas == [None, None]
+    assert store.get_job("old", "job").state is JobState.ACCEPTED
+    assert [attempt.attempt_no for attempt in store.list_attempts("old")] == [1]
+    stream = store.list_events("old")
+    assert [event["event"] for event in stream] == ["job-kit:run-created", "result"]
+    assert {event["schema"] for event in stream} == {"plugins-kit.execution-event/v1"}
+    snapshot = store.snapshot("old")
+    assert snapshot.interrupts == () and snapshot.continuations == ()

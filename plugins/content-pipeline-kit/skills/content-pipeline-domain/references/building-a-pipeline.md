@@ -288,6 +288,37 @@ Both the in-loop generation site and the post-hoc audit validate through the
 SAME `validate.contract` validators (step 8), so the rule set cannot drift
 between them. Per-attempt cache-busting is automatic.
 
+**Structured output.** A caller that needs a JSON object of a known shape
+declares it with an `llm_scripting_kit.completion.OutputContract` (an `id`, a
+`policy`, a JSON Schema, and an optional `schema_version`) and passes it as
+`submit_validated(..., output_contract=contract)`, or on
+`BackendOptions.output_contract`. A schema-policy contract (`native-required`
+or `validated-result`) takes no `parse_fn`: the validated object is
+`result.payload`. Two questions stay separate:
+
+- Structural validity: does the output conform to the declared schema?
+  llm-scripting-kit answers it, before any validator runs.
+- Domain validity: is the conforming object acceptable content? Your
+  `validate.contract` validators answer it, unchanged, and they see only a
+  structurally valid object.
+
+A schema failure is one HARD `schema_violation` Rejection. Its payload keeps
+the contract identity, the disposition, the schema errors as `(path, keyword)`
+pairs, and the raw output. It feeds the same retry loop as any rejection. A
+`text-only` contract records the report and keeps `parse_fn`. The contract is
+part of the cache key, and a cache hit is served only with a report for the
+same contract identity and a success disposition.
+
+Delivery follows the backend. A backend may enforce the schema natively, or
+deliver it in the prompt; a text-only contract delivers no schema (`delivery: none`); a response whose backend reported nothing carries
+`delivery: unreported` and is judged locally by llm-scripting-kit's validator.
+`native-required` refuses a backend that cannot deliver natively rather than
+downgrading. Per-adapter schema rules belong to llm-scripting-kit: the codex
+adapter requires OpenAI strict-mode schemas (`additionalProperties: false` and
+a full `required` list at every object level), while prompt-delivered adapters
+accept the package's schema subset. The contract path refuses without
+llm-scripting-kit >= 0.56.0 and never substitutes a local parse.
+
 For the convergence-loop shape, the stopping gate is `llm.convergence`:
 `ProgressEvaluator(stall_window=2, converge_window=1).evaluate(history)` folds
 a sequence of `Round(produced, outstanding)` into a `CONVERGED` / `STALLED` /
@@ -409,6 +440,182 @@ that signal.
 
 Skip this whole step if the pipeline is fully automated.
 
+### Durable waits (opt-in)
+
+A durable wait holds ONE unit of a tracked run while a person answers a typed
+question, and records the question and the answer in the execution store. It
+is opt-in per unit. A pipeline that never calls an interrupt verb and never
+raises the signal below is not changed: `roundtrip` is untouched, and there is
+nothing to configure. The one visible difference is the store file, which gains
+two tables (`interrupts`, `interrupt_resolutions`) that stay empty until a wait
+is requested.
+
+Pick the shape by what the answer is for:
+
+| The need | Use |
+| --- | --- |
+| A question about an entity, answered between runs (a workbook, a review screen), re-entering as context | `roundtrip.questions` or `roundtrip.returns`, above |
+| A unit that cannot finish without a person's answer, while the rest of the run continues, and the answer is a schema-checked value the run records | a durable wait |
+
+The two do not exclude each other, and a pipeline can use both.
+
+**Which lanes can ask.**
+
+- The inline lane can ask, and so can a consumer's own loop over the store.
+- The background lane refuses a wait under its open dispatch: `store.request_interrupt`
+  raises `WaitUnderDispatchError` and writes nothing.
+- The workflow lane has no supported request surface. Its worker protocol has
+  no wait verb, nothing in the library handles a wait requested through a verb
+  a consumer mounts itself, and the store does not refuse a request for a
+  claimed unit that has no dispatch row.
+
+**Asking from the inline lane.** Raise `InterruptRequested` from `generate`.
+`run_wave` turns the signal into `store.request_interrupt` under the claim's
+own fencing token, leaves the unit `waiting` (no claimant, no lease), keeps it
+out of the returned list, and goes on with the next unit of the wave. The
+signal can also come from `adapter.build_request` or
+`adapter.validation_spec_for` on the backend path. It cannot come from
+`parse_fn` or a validator, which the validate loop treats as a rejection, nor
+from `adapter.unit_for`, which runs before the claim. A consumer that decides
+after generation asks from `generate`.
+
+```python
+from content_pipeline.execution.interrupts import unit_resolutions
+from content_pipeline.execution.model import InterruptRequest, InterruptRequested
+
+APPROVAL = {
+    "type": "object",
+    "required": ["approved"],
+    "properties": {"approved": {"type": "boolean"}},
+    "additionalProperties": False,
+}
+
+
+def generate(work_unit):
+    seen = unit_resolutions(store, run_id, work_unit.id)
+    if not seen:
+        raise InterruptRequested(
+            InterruptRequest(
+                kind="approval",
+                request_schema=APPROVAL,
+                payload={"question": f"Publish {work_unit.id}?"},
+            ),
+            on_rejected="release",
+            on_expired="release",
+        )
+    last = seen[-1]
+    if last["outcome"] == "answered" and last["input"]["approved"]:
+        return f"published copy for {work_unit.id}"
+    return f"draft copy for {work_unit.id}"
+```
+
+**Asking from your own loop.** Claim the unit, then call
+`store.request_interrupt(run_id, unit_id, claim.fencing_token, request)` with
+the same `InterruptRequest` and the same `on_rejected` and `on_expired`
+keywords. It returns an `InterruptRecord`. A request carries `kind` (lower-case
+letters, digits and hyphens, at most 64 characters), a JSON-schema
+`request_schema` for the answer, a `payload` shown to the person, and
+optionally `expires_in_s`.
+
+**Recording the answer.** Mount `store.resolve_interrupt` on your own command,
+spreadsheet intake or review screen; the package ships no console script. Show
+`store.list_interrupts(run_id)` (or `store.open_interrupt(run_id, unit_id)`) to
+the person. `decision="answer"` validates `input` against the request's schema
+and raises `ResolutionInputError` when it does not conform; `decision="reject"`
+takes an optional `reason`. An identical replay returns the stored resolution
+with `replayed=True`; a different second resolution raises
+`ResolutionConflictError`.
+
+**Policies, and what the unit does next.** `on_rejected` and `on_expired` each
+take `stop` or `release`, and `stop` is the default. The resolution row records
+the outcome either way; the policy decides the unit.
+
+| Outcome | Policy | Unit | How the consumer proceeds |
+| --- | --- | --- | --- |
+| answered | not applicable | `pending` | the next attempt reads the typed answer from `unit_resolutions` and generates with it |
+| rejected or expired | `stop` | terminal (`UnitState.OPERATOR_REJECTED` or `UnitState.INTERRUPT_EXPIRED`) | nothing more runs for the unit; a graph chain behind it is blocked, as behind a failed unit |
+| rejected or expired | `release` | `pending` | the next attempt reads the outcome and continues without the answer, skips the unit, fails it, or asks again with another request |
+
+To skip a released unit, either add a gate to `prepare_run` that fires on the
+outcome, or call `store.fail_unit` with `terminal=True` and
+`terminal_state=UnitState.SKIPPED` from your own loop.
+
+The attempt after a release MUST read `unit_resolutions`. A consumer that
+releases and then asks again without reading the outcome asks forever.
+`unit_resolutions(store, run_id, unit_id)` returns the resolved interrupts of
+one unit, oldest first, as dicts with `interrupt_id`, `kind`, `outcome`
+(`answered`, `rejected` or `expired`), `input`, `reason` and `payload`; an open
+interrupt is not in it.
+
+**Draining a run that has a waiting unit.** A waiting unit is not claimable, so
+a wave can be empty while the run is unfinished. A pass ends when the wave is
+empty, `finalize_run` applied nothing, and `waiting_units` is non-empty; the
+run is waiting, which is a healthy state. Run the loop again after an answer:
+the answered unit is `pending` and is offered in the next wave. The loop below
+calls `finalize_run` before it checks `unfinished_units`, because an accepted
+unit is already terminal and `unfinished_units` does not list it: checking
+first would return "complete" before the accepted units are applied.
+
+```python
+from content_pipeline.execution.controller import finalize_run, unfinished_units
+from content_pipeline.execution.drivers.inline import run_wave
+from content_pipeline.execution.interrupts import waiting_units
+from content_pipeline.execution.wave import ready_wave
+
+
+def drain(store, run_id, strategy, adapter, generate):
+    """Run waves until the run is complete, waiting, or blocked."""
+    while True:
+        wave = ready_wave(store, run_id, strategy)
+        if wave and store.get_run(run_id).halted_kind is None:
+            run_wave(store, run_id, wave, adapter, generate=generate)
+            continue
+        applied = finalize_run(store, run_id, adapter)
+        if not unfinished_units(store, run_id):
+            return "complete"
+        if applied:
+            continue
+        if waiting_units(store, run_id):
+            return "waiting"
+        return "blocked"
+```
+
+`"blocked"` covers any other reason work stays unfinished with nothing to run,
+such as a unit claimed by another worker. A halted run still offers its
+`pending` units, but `run_wave` claims none while the halt stands, so the loop
+does not call `run_wave` then and falls through to `"waiting"` or `"blocked"`.
+Clear the halt with `controller.resume_run`, then run the loop again.
+
+**Expiry.** `expires_in_s` (an integer from 1 to 2147483647) sets a deadline.
+No timer records it. A lapse is recorded by `store.resolve_interrupt` when it
+observes one, and by `store.expire_interrupts(run_id)`, which your own
+scheduler or loop calls; `InterruptRecord.lapsed(now)` reports a lapse without
+writing. An interrupt lapses at its `expires_at`, and one with no expiry does
+not lapse. `prepare_run(reclaim_at=...)` reclaims claimed units only, so it
+neither offers a waiting unit nor records an expiry.
+
+**What is recorded in events.** `execution.events.project_run` projects each
+interrupt row as an `interrupt` event with phase `requested`, `resolved`,
+`rejected` or `expired`, carrying the interrupt id, the kind and the claim's
+fencing token as the attempt id. A `terminal` event follows a rejection or a
+lapse only under `stop`. The request payload, the request schema and the answer
+do not enter an event; a rejection's reason appears only in the `terminal`
+event, cut to 1000 characters.
+
+**The two libraries the verbs need.** `request_interrupt`, `resolve_interrupt`
+and `expire_interrupts` use two shared libraries, probed inside the verb and
+not at import: `bootstrap_lib` (the interrupt contract, bootstrap 0.137.0 or
+later) and `llm_scripting_kit` (the schema validator, llm-scripting-kit 0.56.0
+or later). They are libraries this package reaches, not plugin dependencies,
+and no manifest entry is added for them. When one is missing or too old the
+verb raises `InterruptSupportError` (an `ImportError`) before it writes, with a
+message that names the plugin to install or update. Reads, status reports,
+waves, `waiting_units` and `unit_resolutions` need neither. A run that has
+interrupt rows also needs bootstrap 0.136.0 or later to project events.
+
+Limits: an answer is at most 65536 bytes of canonical JSON, and a reason is cut
+to 2000 characters.
+
 ## 10. Stand up the CLI
 
 `cli.scaffold` is the reusable dispatch scaffold a thin per-command CLI wires
@@ -497,9 +704,37 @@ stops claiming units and returns the ids it accepted before the halt. A
 halted run refuses new claims (a later `run_wave` on it claims nothing) until
 `controller.resume_run` clears the halt. Units already accepted stay
 accepted, and a claim already in flight with a valid fencing token can still
-be accepted. Any other exception from `generate` propagates out of `run_wave`
-and leaves that unit `CLAIMED` until its lease expires. Halt kinds are the
-`PipelineHaltError.kind` values, plus `"pause"` for an operator pause.
+be accepted. Any other exception from `generate`, except the
+`InterruptRequested` signal of a durable wait (step 9), propagates out of
+`run_wave` and leaves that unit `CLAIMED` until its lease expires. Halt kinds are
+the `PipelineHaltError.kind` values, plus `"pause"` for an operator pause.
+
+### Execution events
+
+`execution.events.project_run(store, run_id)` projects one tracked run's
+attempt log into the shared execution-event envelope
+(`plugins-kit.execution-event/v1`, specified by bootstrap's plugin-dev
+reference `execution-events.md`). It only reads: the store is not changed,
+and `write_run_events(store, run_id, sink)` writes the events to a sink you
+supply (`InMemorySink`, or `JsonlSink` from `bootstrap_lib.execution_event`).
+
+- Each event's `seq` is `attempts.id * 4 + phase`, so it follows commit order
+  and is unchanged when you project again after more rows were appended. The
+  run-created event is `seq` 0. `at` is informational; do not sort by it.
+- Identity: `run_id`, `unit_id`, and `attempt_id` = the claim's fencing token.
+- A claim is `call-started`. An accept or fail row yields `usage` (only when a
+  count is known; unknown stays null, never 0), then `result`, then `terminal`
+  when the unit reached accepted, failed or skipped. A retryable fail has no
+  `terminal`. An expired lease is a `result` with status `expired` for the old
+  attempt.
+- Renewals, superseded submissions and the apply steps appear as
+  `content-pipeline-kit:` extension events.
+- Not projected: background `dispatches` (they have their own sequence, so
+  there is no `dispatch-selected` event) and the audit reasoning chain (no run
+  or attempt identity; its payload is model content).
+- The events functions need `bootstrap_lib.execution_event`. Where it is not
+  importable they raise `ExecutionEventSupportError` (an `ImportError`) with
+  the install or update command; no other part of the package needs it.
 
 ## 11. Add the audit spec + Recorder (opt-in)
 
@@ -518,7 +753,11 @@ longer resolves).
 `audit.reasoning_chain` records why a candidate was selected. `record_submission(
 recorder, entity_id, submit_result)` duck-types a `submit_validated` result
 (reads `responses` / `rejections` / `payload`) into a per-attempt trail
-without importing `llm`. Pick a `Recorder`: `InMemoryRecorder` for tests,
+without importing `llm`. Under an output contract each attempt event also
+carries `contract` = `{id, schema_version, schema_digest, policy, delivery,
+disposition}`, read from that attempt's stored response, and the final event
+carries the last attempt's `contract`. The schema body is never copied: the
+digest and version identify the schema. Pick a `Recorder`: `InMemoryRecorder` for tests,
 `SidecarRecorder` for a per-item on-disk sidecar, `NullRecorder` to disable.
 
 `audit.report.coverage_report(states, findings=...)` folds freshness states

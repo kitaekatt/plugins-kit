@@ -111,12 +111,103 @@ A **step** is exactly one of: an agent step, a pipeline step, a `script` node, o
   `model` is a model declaration of llm-scripting-kit transport entry ids
   (e.g. `or-qwen`, or `[or-qwen, or-gpt-mini]`). Omit it to use the configured
   default declaration (set `cheap: true` for that entry's `defaultCheap`). A
-  model alias or raw slug is not an entry id and is not accepted. See
-  `node-strategies.md`.
+  model alias or raw slug is not an entry id and is not accepted. Every
+  compiled openrouter node also records its execution events at
+  `./.workflow-kit/{{runId}}/<step-id>.events.jsonl` with unit id `<step-id>`;
+  under `for_each`, the path gets the index `i` like `$OUT`, and the unit id is
+  `<step-id>-<i>`. A re-run replaces the file. A node that `provides` an
+  artifact writes that stream in the v3 format, with one `contract` event
+  before its `terminal`. See `node-strategies.md` ("Execution events").
+
+Any step may also declare `requires`, and a `script` or `openrouter` node may
+declare `provides` -- see "Typed artifacts" below.
 
 **Templating** -- `{{ inputs.X }}`, `{{ steps.ID }}`, `{{ steps.ID[*].field }}`
 (flatten), `{{ <as> }}` (pipeline/fan_out item), `{{ <prevStage>.field }}`
-(preceding stage's result). Anything outside this grammar is a compile error.
+(preceding stage's result), and, in a step that declares `requires`,
+`{{ artifacts.NAME }}` (see "Typed artifacts"). Anything outside this grammar
+is a compile error.
+
+### Typed artifacts (`provides` / `requires`)
+
+A node's `$OUT` can be a named, typed artifact that later steps require. The
+compiler checks the whole contract before anything runs, and the node checks
+the file after its command runs. See
+`${CLAUDE_PLUGIN_ROOT}/examples/typed-contracts.workflow.yaml`.
+
+```yaml
+schemas:
+  stats: { type: object, required: [lines], additionalProperties: false,
+           properties: { lines: { type: integer } } }
+steps:
+  - id: count
+    script: { command: '"{{ inputs.workflowKitVenvPython }}" wc.py "{{ inputs.source }}"' }
+    provides:
+      doc_stats: { schema: stats }        # a named schema from `schemas:`
+  - id: classify
+    openrouter: { prompt_file: "{{ inputs.source }}", cheap: true }
+    provides:
+      doc_class: { type: opaque-file }    # any regular file
+  - id: reconcile
+    requires:
+      doc_stats: { schema: stats }
+      doc_class: { type: opaque-file }
+    agent: { prompt: "Read {{ artifacts.doc_stats }} and {{ artifacts.doc_class }}." }
+```
+
+- **Spec.** An artifact name is an identifier. A spec is exactly one of
+  `schema: <name>` (a key of `schemas:`) or `type: opaque-file`. A `requires`
+  spec may add `each: true` (default `false`).
+- **`provides`** is allowed only on `script` and `openrouter` steps, with at
+  most one entry: the artifact IS the node's single `$OUT`. An agent step's
+  result is typed by its own `schema:` instead.
+- **`requires`** is allowed on every step kind; on a pipeline step it covers
+  every stage, `over` and `fan_out`.
+- **Compile-time checks** (also run by `--validate-only`): every schema name
+  exists; a provider schema is inside llm-scripting-kit's `validated-result`
+  subset (no `pattern`, `format` or `oneOf`; the root refuses `null`) and its
+  canonical JSON is at most 8192 bytes, because it travels on the node's
+  command line (split it, or use `type: opaque-file` and validate
+  downstream); an artifact has exactly one provider; a required artifact has
+  a provider; the provider comes EARLIER in the document than the consumer
+  (steps run in document order, and a step cannot require its own artifact).
+- **Compatibility.** An `opaque-file` requirement accepts any provider. A
+  `schema` requirement accepts only a `schema` provider whose schema digest
+  (`OutputContract.schema_digest`, the sha256 of its canonical JSON) equals
+  the requirement's: naming the same schema always matches, and two names
+  with identical bodies match too, whatever their key order. A narrower or
+  wider schema does not match. Cardinality must match: `each: true` exactly
+  when the provider fans out with `for_each`.
+- **`{{ artifacts.NAME }}`** compiles to the provider's executor-reported
+  `$OUT` path (`steps.P.path`), or to the list of item paths for a fan-out
+  provider (usable as a `for_each` or `over` value). It is valid only in a
+  step whose `requires` names `NAME`, has no member tail, and is not
+  available in `output:`. That use check runs at compile, not under
+  `--validate-only`. A `requires` entry without an `artifacts.` use is still
+  checked for order and type.
+- **`artifacts` as a name.** In a document that declares `provides` or
+  `requires`, `artifacts` cannot be a stage id or an `as` name (it is the
+  expression head there). Step ids are unaffected. Documents without
+  contracts are unchanged.
+- **At run time** a script provider runs its command, then always runs
+  `scripts/check_artifact.py` on `$OUT`; an openrouter provider validates
+  the answer at the llm-scripting-kit seam. Each writes the verdict file
+  `./.workflow-kit/{{runId}}/<step-id>[.<i>].contract.json` (format and
+  exit codes: `node-strategies.md`, "Typed artifacts").
+- **Contract events.** Every provider also records its judgment as one
+  `contract` execution event (schema v3; artifact, kind, verdict, schema
+  digest and error count, never the payload). An openrouter provider adds it
+  to its own events stream, before its `terminal`. A script provider's
+  checker writes it at the path and unit id an openrouter node uses,
+  `./.workflow-kit/{{runId}}/<step-id>[.<i>].events.jsonl` with unit id
+  `<step-id>` (`<step-id>-<i>` under `for_each`), as the only event in that
+  stream. Running a provider needs bootstrap 0.137.0 or later. See
+  `node-strategies.md` ("Execution events").
+- **The guard.** After every provider step the compiled script checks the
+  result: if the node, or any fan-out item, exited non-zero (a failed
+  command, a `violated` or `missing` artifact, a refused schema), it throws
+  an error naming the step, the artifact, the exit code and the verdict path,
+  and no later step runs. Steps without `provides` get no check.
 
 ### Reserved inputs (auto-injected for node steps)
 
@@ -124,6 +215,10 @@ A **step** is exactly one of: an agent step, a pipeline step, a `script` node, o
 automatically (do NOT declare them in `inputs:`; the run procedure injects them):
 
 - `{{ inputs.runId }}` -- a per-run id used to namespace default `$OUT` paths.
+  It must be unique among runs in flight in one project directory: verdict
+  and events files are per (runId, step, item) and have one writer each, so
+  two concurrent runs sharing a `runId` can remove or overwrite each other's
+  files.
 - `{{ inputs.pluginRoot }}` -- the workflow-kit plugin dir (for the openrouter runner).
 - `{{ inputs.workflowKitVenvPython }}` -- the interpreter that runs the openrouter
   runner and your `script` Python commands. Reference it in a `script` `command`

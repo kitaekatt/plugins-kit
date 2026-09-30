@@ -484,6 +484,25 @@ stdlib-only and generic over every backend, duplicating `resolve_cli` (three
 lines, trusted config argv, no caller-supplied path) rather than coupling a
 renderer to a codex-specific module. Change both copies together.
 
+`bootstrap_lib/interrupt_contract.py` is the one place the durable-interrupt
+rules execute for both job-kit and content-pipeline-kit: the request and
+resolution envelopes, the size and expiry limits, answer validation, the
+replay test, expiry arithmetic and the resolution document. It also defines the
+lapse rule; content-pipeline-kit calls it when it records an expiry, while
+job-kit runs its own copy (`job_kit.model.interrupt_lapsed`), held equal by
+`tests/job-kit/test_interrupts_contract_parity.py`. The module is stdlib-only
+and imports no plugin, and it imports no validator either: the caller passes one,
+and the contract refuses any validator that does not advertise the subset
+literal `llm-scripting-kit.json-schema-subset/v1` and selects that subset with
+`subset=` on every call, so a keyword added to llm-scripting-kit later cannot
+change what an accepted request means. Each implementing plugin keeps its own
+store, its own continuation (job-kit re-runs the job's contract,
+content-pipeline-kit offers the unit again) and its own event phases, reaches
+the contract and the validator through a lazy probe that REFUSES with a named
+install or update command, and declares no edge to the other plugin.
+`tests/bootstrap/test_interrupt_contract_consumers.py` drives both real stores
+with one request and one answer and compares what they record, refuse and emit.
+
 The venv-scoping above is the ordinary consequence of a per-venv install rather
 than fragility -- a `.pth` written into one environment no more appears in
 another than a `pip install` does. The re-exec rule below is how a script

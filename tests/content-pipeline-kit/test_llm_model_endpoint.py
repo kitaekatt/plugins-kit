@@ -613,6 +613,54 @@ def test_non_connection_error_defers_to_the_delegate(monkeypatch):
     assert b.classify_halt(ValueError("nope")) == "delegated"
 
 
+# --- output contracts (U6) ----------------------------------------------------
+
+
+def test_contract_rides_the_entry_default_path_and_violation_maps(monkeypatch):
+    """This adapter overrides complete(), so it gets its own pin: the contract
+    survives the entry-effort defaulting, and the shared lib's violation
+    becomes StructuralOutputError with the report as data."""
+    from content_pipeline.llm.platform import StructuralOutputError
+
+    _make_shared_lib_importable()
+    import llm_scripting_kit.completion as lsk
+    from llm_scripting_kit.completion.contract_types import ContractReport
+
+    output_contract = lsk.OutputContract(
+        id="cpk.t",
+        policy=lsk.POLICY_VALIDATED_RESULT,
+        schema={"type": "object", "required": ["a"], "properties": {"a": {"type": "string"}}},
+    )
+    contract_id, policy, digest, version = output_contract.identity()
+    failed = lsk.LLMResponse(
+        text="not json",
+        model="m",
+        status="error",
+        output_contract=ContractReport(
+            contract_id=contract_id, schema_version=version, schema_digest=digest,
+            policy=policy, delivery="prompt", disposition="unparseable",
+        ),
+    )
+    seen = []
+
+    class _Delegate:
+        def complete(self, _system, _user, *, model, options):
+            seen.append(options)
+            raise lsk.OutputContractViolation(failed)
+
+    b = ModelEndpointBackend(endpoint="qwen38")
+    monkeypatch.setattr(b, "_backend", lambda: _Delegate())
+    monkeypatch.setattr(b, "_entry_reasoning_effort", lambda: ("medium", "ninfer"))
+
+    with pytest.raises(StructuralOutputError) as excinfo:
+        b.complete("s", "u", model="m", options=BackendOptions(output_contract=output_contract))
+
+    assert seen[0].output_contract is output_contract
+    assert seen[0].effort == "medium"
+    assert excinfo.value.response.text == "not json"
+    assert excinfo.value.response.output_contract["disposition"] == "unparseable"
+
+
 # --- route(): the selection-time probe --------------------------------------
 
 

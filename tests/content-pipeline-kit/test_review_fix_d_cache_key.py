@@ -50,6 +50,93 @@ def test_deadline_and_client_id_do_not_move_the_pinned_digest():
 
 
 # ---------------------------------------------------------------------------
+# Output contracts: every declared contract is isolated in the key by its
+# identity (id, policy, schema digest, schema label). The no-contract key is
+# the pinned MINIMAL_DIGEST above, unchanged.
+# ---------------------------------------------------------------------------
+
+_SHARED_LIB = Path(__file__).resolve().parents[2] / "plugins" / "llm-scripting-kit" / "lib"
+_SCHEMA = {"type": "object", "properties": {"title": {"type": "string"}}}
+
+
+def _lsk_names():
+    import sys
+
+    return {n for n in sys.modules if n == "llm_scripting_kit" or n.startswith("llm_scripting_kit.")}
+
+
+@pytest.fixture
+def lsk(monkeypatch):
+    """The real ``llm_scripting_kit.completion``, unloaded again afterwards."""
+    import sys
+
+    before = _lsk_names()
+    monkeypatch.syspath_prepend(str(_SHARED_LIB))
+    import llm_scripting_kit.completion as completion  # noqa: PLC0415
+
+    yield completion
+    for name in _lsk_names() - before:
+        del sys.modules[name]
+
+
+def _contract_key(output_contract):
+    return build_cache_key(
+        backend="mock",
+        model="m",
+        system="s",
+        user="u",
+        options=BackendOptions(output_contract=output_contract),
+    )
+
+
+def test_cache_key_isolates_no_contract_text_only_and_schema_modes(lsk):
+    keys = {
+        "none": _contract_key(None),
+        "text-only": _contract_key(lsk.OutputContract(id="c", policy=lsk.POLICY_TEXT_ONLY)),
+        "validated": _contract_key(
+            lsk.OutputContract(id="c", policy=lsk.POLICY_VALIDATED_RESULT, schema=_SCHEMA)
+        ),
+        "native": _contract_key(
+            lsk.OutputContract(id="c", policy=lsk.POLICY_NATIVE_REQUIRED, schema=_SCHEMA)
+        ),
+    }
+    assert keys["none"] == MINIMAL_DIGEST
+    assert len(set(keys.values())) == len(keys)
+
+
+def test_cache_key_differs_for_same_version_different_schema(lsk):
+    first = lsk.OutputContract(
+        id="c", policy=lsk.POLICY_VALIDATED_RESULT, schema=_SCHEMA, schema_version="v1"
+    )
+    second = lsk.OutputContract(
+        id="c",
+        policy=lsk.POLICY_VALIDATED_RESULT,
+        schema={"type": "object", "required": ["title"]},
+        schema_version="v1",
+    )
+    assert first.schema_version == second.schema_version
+    assert _contract_key(first) != _contract_key(second)
+
+
+def test_cache_key_differs_for_changed_version_label(lsk):
+    first = lsk.OutputContract(
+        id="c", policy=lsk.POLICY_VALIDATED_RESULT, schema=_SCHEMA, schema_version="v1"
+    )
+    second = lsk.OutputContract(
+        id="c", policy=lsk.POLICY_VALIDATED_RESULT, schema=_SCHEMA, schema_version="v2"
+    )
+    assert first.schema_digest == second.schema_digest
+    assert _contract_key(first) != _contract_key(second)
+
+
+def test_cache_key_is_stable_for_one_contract(lsk):
+    def make():
+        return lsk.OutputContract(id="c", policy=lsk.POLICY_VALIDATED_RESULT, schema=_SCHEMA)
+
+    assert _contract_key(make()) == _contract_key(make())
+
+
+# ---------------------------------------------------------------------------
 # ModelEndpointBackend: the effective-options key moves exactly where the wire
 # does.
 #

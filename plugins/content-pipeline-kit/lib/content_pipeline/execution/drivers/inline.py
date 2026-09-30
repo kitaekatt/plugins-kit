@@ -124,6 +124,55 @@ silently: the run is already durably marked halted (by whoever set it), so
 returning the partial ``accepted`` list is the correct, documented behavior
 for this path, matching the module's contract of "stop claiming, return what
 was accepted."
+
+A unit that asks for a durable wait
+-----------------------------------
+
+A ``generate`` callable (or the adapter callable ``run_wave`` uses to build
+the request, ``adapter.build_request``, or the validation spec,
+``adapter.validation_spec_for``) may raise
+:class:`~content_pipeline.execution.model.InterruptRequested` to ask a person
+a typed question instead of returning text. :func:`run_wave` turns the signal
+into ``store.request_interrupt`` under the claim's own fencing token, with the
+signal's ``on_rejected`` and ``on_expired`` policies and its ``usage``. The
+unit is then ``waiting``: it holds no claimant and no lease, it is not
+accepted and not in the returned list, and the wave goes on with its next
+unit. The inline lane writes no dispatch row, so there is nothing to settle.
+
+The signal must come from ``generate`` or from those two adapter callables. A
+``parse_fn`` or validator that raises it is not supported: the
+validate-until-valid loop treats an exception from caller code as a
+rejection. A consumer that decides after generating asks from ``generate``.
+
+A caller that has not linked the shared libraries gets
+``InterruptSupportError`` from ``request_interrupt`` before anything is
+written. It propagates out of :func:`run_wave` like any other non-halt
+exception, and the unit stays ``CLAIMED`` until its lease lapses.
+
+A caller that raises nothing sees no change: the clause below is never
+entered.
+
+Draining a run that has a waiting unit
+--------------------------------------
+
+A waiting unit is not in a flat wave and blocks a graph chain, and
+:func:`~content_pipeline.execution.controller.unfinished_units` still lists
+it. The loop under "Graph-strategy caller" therefore never ends by itself on
+a run with a waiting unit. Add a stop rule to its empty-wave branch: when the
+wave is empty, ``finalize_run`` applied nothing, and
+:func:`~content_pipeline.execution.interrupts.waiting_units` is non-empty,
+end the pass. The run is waiting, which is a healthy state, not a failure::
+
+    applied = finalize_run(store, run_id, adapter)
+    if not applied and waiting_units(store, run_id):
+        break  # waiting for an answer; run the loop again after one arrives
+
+After a resolution (an answer, or a rejection or expiry under the ``release``
+policy) the unit is ``pending`` again and the next wave offers it. Its next
+``generate`` call reads
+:func:`~content_pipeline.execution.interrupts.unit_resolutions` for the
+outcome. A unit stopped by the ``stop`` policy is terminal and is never
+offered again. ``prepare_run(reclaim_at=...)`` never re-offers a waiting unit.
 """
 
 from __future__ import annotations
@@ -132,7 +181,12 @@ from dataclasses import replace
 from typing import Any, Callable, List, Optional, Sequence
 
 from content_pipeline.execution.controller import RunAdapter, record_halt
-from content_pipeline.execution.model import ExecutionError, RunHaltedError, UnitRecord
+from content_pipeline.execution.model import (
+    ExecutionError,
+    InterruptRequested,
+    RunHaltedError,
+    UnitRecord,
+)
 from content_pipeline.execution.store import ExecutionStore, lease_for
 from content_pipeline.llm.platform import (
     BackendOptions,
@@ -203,7 +257,11 @@ def run_wave(
     Returns the ids of units accepted during this call, in the order they
     were processed. Stops early (returning what was accepted so far) on a
     caught :class:`~content_pipeline.llm.platform.PipelineHaltError` -- see the
-    module docstring's "Halt handling" section.
+    module docstring's "Halt handling" section. A unit whose ``generate`` (or
+    request or validation-spec builder) raises
+    :class:`~content_pipeline.execution.model.InterruptRequested` is left
+    ``waiting`` and is not in the returned list; the wave continues -- see
+    "A unit that asks for a durable wait".
 
     ``lease_seconds`` (item 2, A-min.4): ``None`` (the default) derives a
     per-unit lease ceiling from ``adapter.resolve_expected_unit_seconds``
@@ -270,6 +328,10 @@ def run_wave(
                     model=model,
                     parse_fn=spec.parse_fn,
                     validators=spec.validators,
+                    # The spec's structural contract, or the unit would be
+                    # judged as text here while protocol and finalize judge
+                    # it as a contract (``None`` for a spec with none).
+                    output_contract=spec.output_contract,
                     **loop_kwargs,
                 )
                 if not result.accepted:
@@ -278,6 +340,21 @@ def run_wave(
         except PipelineHaltError as exc:
             record_halt(store, run_id, unit.unit_id, claim.fencing_token, exc, at=at)
             break
+        except InterruptRequested as signal:
+            # The unit asks for a durable wait: request it under this claim's
+            # token (which clears the claimant and lease) and go on with the
+            # next unit. Never accept it, and keep it out of ``accepted``.
+            store.request_interrupt(
+                run_id,
+                unit.unit_id,
+                claim.fencing_token,
+                signal.request,
+                on_rejected=signal.on_rejected,
+                on_expired=signal.on_expired,
+                usage=signal.usage,
+                at=at,
+            )
+            continue
 
         store.accept_unit(run_id, unit.unit_id, claim.fencing_token, text=text, at=at)
         accepted.append(unit.unit_id)

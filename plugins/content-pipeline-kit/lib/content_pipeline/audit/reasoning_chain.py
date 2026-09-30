@@ -87,6 +87,37 @@ def record_chain(
         recorder.record(entity_id, dict(step))
 
 
+#: The contract-report keys recorded per attempt, as ``(recorded, report)``
+#: pairs. The schema body is never among them: identity (``schema_digest``,
+#: ``schema_version``) says which schema judged the attempt, and the body
+#: stays with the contract's owner.
+_CONTRACT_FIELDS = (
+    ("id", "contract_id"),
+    ("schema_version", "schema_version"),
+    ("schema_digest", "schema_digest"),
+    ("policy", "policy"),
+    ("delivery", "delivery"),
+    ("disposition", "disposition"),
+)
+
+
+def _contract_extra(response: Any) -> Optional[dict]:
+    """The recorded contract identity of one response, or ``None``.
+
+    Reads ``response.output_contract`` with ``getattr`` -- a mapping, or an
+    object with ``to_json()`` -- so no LLM import is needed. Only the fields
+    in ``_CONTRACT_FIELDS`` are copied; the schema body and the error list
+    are not.
+    """
+    report = getattr(response, "output_contract", None)
+    to_json = getattr(report, "to_json", None)
+    if callable(to_json):
+        report = to_json()
+    if not isinstance(report, Mapping):
+        return None
+    return {name: report.get(key) for name, key in _CONTRACT_FIELDS}
+
+
 def record_submission(
     recorder: Recorder,
     entity_id: str,
@@ -104,18 +135,32 @@ def record_submission(
     available), then a final event carrying the accepted payload and the
     outstanding rejections. Decoupled by construction: a caller that does not
     use ``llm`` can pass any object with the same attribute names.
+
+    Under a declared output contract each attempt event also carries
+    ``contract`` -- ``{id, schema_version, schema_digest, policy, delivery,
+    disposition}`` read from that attempt's stored response, never the schema
+    body -- and the final event carries the last attempt's ``contract``, i.e.
+    the final disposition. A response with no report adds no ``contract`` key.
     """
     responses = getattr(submit_result, "responses", None) or []
+    last_contract: Optional[dict] = None
     for index, response in enumerate(responses):
+        extra: dict = {"response_text": getattr(response, "text", "")}
+        last_contract = _contract_extra(response)
+        if last_contract is not None:
+            extra["contract"] = last_contract
         recorder.record(
             entity_id,
             build_event(
                 stage=stage,
                 attempt=index + 1,
                 inputs=inputs if index == 0 else None,
-                extra={"response_text": getattr(response, "text", "")},
+                extra=extra,
             ),
         )
+    final_extra: dict = {"attempts": getattr(submit_result, "attempts", len(responses))}
+    if last_contract is not None:
+        final_extra["contract"] = last_contract
     recorder.record(
         entity_id,
         build_event(
@@ -125,7 +170,7 @@ def record_submission(
                 getattr(r, "kind", str(r))
                 for r in (getattr(submit_result, "rejections", None) or [])
             ],
-            extra={"attempts": getattr(submit_result, "attempts", len(responses))},
+            extra=final_extra,
         ),
     )
 

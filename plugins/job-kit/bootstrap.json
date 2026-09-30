@@ -1,6 +1,6 @@
 {
-  "$comment": "requires_bootstrap is the call shape this plugin needs: job-kit validates a job's model declaration with bootstrap_lib.model_declaration.parse, and llm-scripting-kit's describe (which job-kit's selection calls) does the same; that module first shipped in bootstrap 0.129.0.",
-  "requires_bootstrap": "0.129.0",
+  "$comment": "requires_bootstrap is the highest call shape this plugin needs. Every ledger transition records an execution event through bootstrap_lib.execution_event -- make_event(..., schema=) with plugins-kit.execution-event/v1 for every event and plugins-kit.execution-event/v2 for the interrupt event (SUPPORTED_SCHEMAS must hold both), usage_payload, utc_timestamp, validate_stream, and JsonlSink(path, mode='create') for `job-kit events --out` -- a call shape first shipped in bootstrap 0.136.0; job-kit also validates model declarations with bootstrap_lib.model_declaration.parse (bootstrap 0.129.0). Interrupt requests and resolutions are checked by bootstrap_lib.interrupt_contract (SUPPORTED_CONTRACTS must hold plugins-kit.interrupt-contract/v1; check_request, parse_request_document, validate_input, decision_outcome, same_resolution, expiry, bound_reason and resolution_document with the keyword shapes job_kit.interrupts binds), first shipped in bootstrap 0.137.0. The contract validates through llm_scripting_kit.completion.json_schema under the frozen subset selector (SUPPORTED_SUBSETS, check_schema(schema, subset=), validate(schema, value, subset=)), first shipped in llm-scripting-kit 0.56.0, which is the min_version of the llm-scripting-kit entry below.",
+  "requires_bootstrap": "0.137.0",
   "tools": [
     {
       "name": "git"
@@ -11,7 +11,8 @@
       "ref": "plugins-kit:llm-scripting-kit",
       "enabled": true,
       "scope": "user",
-      "install": "auto"
+      "install": "auto",
+      "min_version": "0.56.0"
     }
   ],
   "shared_lib_imports": ["llm_scripting_kit", "bootstrap_lib"],

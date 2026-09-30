@@ -58,6 +58,21 @@ writing to `$OUT` and returning only the path + metadata:
 So: control travels in-context (small, for routing); data travels on disk (large,
 out of context).
 
+## Proof of a payload: the verdict file
+
+`exit_code` and `$STATUS` are metadata about the command, not proof that the
+payload in `$OUT` is valid. A node that PROVIDES a named artifact (see
+"Typed artifacts" in `node-strategies.md`) also writes a verdict file,
+`workflow-kit.artifact-verdict/v1`, conventionally at
+`./.workflow-kit/<runId>/<step>[.<i>].contract.json`. workflow-kit's own
+code writes it after checking `$OUT` against the artifact's declared type:
+a JSON Schema (validated with llm-scripting-kit's output-contract subset) or
+an opaque file. It records `satisfied`, `violated` or `missing`, the size and
+`sha256` of exactly the bytes judged, and the failing JSON pointers (never
+payload values). A provider node exits non-zero unless the verdict is
+`satisfied`, so routing on `exit_code` stops a consumer from reading an
+invalid artifact. `$STATUS` is unchanged: it stays the command's own.
+
 ## Paths, fan-out, and resume
 
 - **Deterministic, run-scoped paths.** Nondeterministic-time/random calls are
@@ -69,14 +84,17 @@ out of context).
   result (`{path, sha256, ...}`) but does NOT restore the file. Two defenses:
   write artifacts under a run dir that persists with the run, and carry `sha256`
   so a downstream consumer can detect a stale/missing file and fail loudly
-  rather than read garbage.
+  rather than read garbage. For a provided artifact, the verdict file's
+  `sha256` is the value to compare against.
 
 ## What this is not
 
 - Not deterministic: an LLM (haiku) is in the loop. Keep the command's data on
   the shell/disk path (redirection) so the model never touches the payload --
   that minimizes deviation, but does not eliminate it.
-- Not validated: the executor checks exit code + file presence only. No schema
-  enforcement on the payload, no sandboxing. If a step needs bit-exact
+- Not validated, for a node that provides no artifact: the executor checks
+  exit code + file presence only, with no schema enforcement on the payload.
+  A node that declares a provided artifact is checked by workflow-kit and
+  writes a verdict file (above). No node is sandboxed. If a step needs bit-exact
   guarantees or moves large data with no downstream LLM consumer, do it in the
   main loop (and pass results in via `args`) instead of as a node.

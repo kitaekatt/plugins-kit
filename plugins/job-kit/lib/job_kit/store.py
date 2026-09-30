@@ -5,6 +5,19 @@ Every public operation opens its own connection. Each connection enables WAL,
 ``busy_timeout`` and foreign-key enforcement. Attempt seam records are inserts
 only; GC may annotate their workspace lifecycle. A job in a terminal state
 refuses every later attempt.
+
+Each lifecycle fact also records a common execution event (see ``events.py``)
+in the ``events`` table, inside the fact's own transaction: the event exists
+if and only if the fact committed.
+
+Durable interrupts (schema 12): an attempt whose contract requested an
+interrupt leaves its job ``waiting`` with one append-only interrupt row. The
+row's one resolution (answered, rejected or expired) is written once and never
+changed, both enforced by the database. An answered interrupt is continued by
+re-running the attempt's contract, recorded as a continuation row.
+
+:class:`LedgerReader` is the second, read-only way to open a ledger: it never
+migrates, sets no journal mode, and reads a snapshot in one transaction.
 """
 
 from __future__ import annotations
@@ -12,16 +25,23 @@ from __future__ import annotations
 import json
 import sqlite3
 import time
+import urllib.parse
 from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
 from typing import Iterator, Mapping, Optional, Sequence
 
+from . import events as _events
+from . import interrupts as _interrupts
 from .model import (
     Acceptance,
     Attempt,
     AttemptError,
     AttemptReservation,
+    Continuation,
+    InterruptRecord,
+    InterruptRequest,
+    InterruptResolution,
     Job,
     JobRecord,
     JobState,
@@ -30,6 +50,7 @@ from .model import (
     RunState,
     TERMINAL_STATES,
     Usage,
+    interrupt_lapsed,
     validate_max_parallel,
 )
 
@@ -68,6 +89,64 @@ class DuplicateJobError(StoreError):
 class TerminalStateError(StoreError):
     """A transition was attempted after a job reached a terminal state."""
 
+
+class EventsNotRecordedError(StoreError):
+    """A run predates the event log, so its stream is not its full history."""
+
+    def __init__(self, run_id: str) -> None:
+        self.run_id = run_id
+        super().__init__(
+            f"run {run_id!r} was created before job-kit recorded execution "
+            "events, so its event stream would be partial; it is not exported"
+        )
+
+
+class UnknownInterruptError(StoreError):
+    """No interrupt with the requested identifier exists in the named run."""
+
+
+class ResolutionConflictError(StoreError):
+    """The interrupt already has a different resolution; nothing was written."""
+
+    def __init__(self, interrupt_id: str, stored_outcome: str) -> None:
+        self.interrupt_id = interrupt_id
+        self.stored_outcome = stored_outcome
+        super().__init__(
+            f"interrupt {interrupt_id} is already resolved ({stored_outcome}) "
+            "with a different decision; the original resolution is kept"
+        )
+
+
+class InterruptExpiredError(StoreError):
+    """The interrupt lapsed before it was resolved; the expiry is recorded."""
+
+    def __init__(self, interrupt_id: str, expires_at: Optional[float]) -> None:
+        self.interrupt_id = interrupt_id
+        self.expires_at = expires_at
+        super().__init__(
+            f"interrupt {interrupt_id} expired at {expires_at} before it was "
+            "resolved; the expiry is recorded and the job is expired"
+        )
+
+
+class ResolutionInputError(StoreError):
+    """The resolution input was refused; nothing was written.
+
+    ``errors`` holds the validator's ``(json_pointer, keyword)`` tuples when
+    the input failed the request schema.
+    """
+
+    def __init__(self, message: str, errors: tuple = ()) -> None:
+        self.errors = tuple(errors)
+        super().__init__(message)
+
+
+#: The lowest ledger schema :class:`LedgerReader` reads: the ledger the
+#: published job-kit 0.9.1 writes (its last step adds ``pace_readings_json``).
+READER_MIN_SCHEMA = 10
+
+#: The first ledger schema that has the interrupt tables.
+INTERRUPT_SCHEMA = 12
 
 _MIGRATIONS: list[list[str]] = [
     [
@@ -184,6 +263,111 @@ _MIGRATIONS: list[list[str]] = [
     ],
     [
         "ALTER TABLE attempts ADD COLUMN pace_readings_json TEXT",
+    ],
+    [
+        # Execution events: one row per ledger fact, inserted in the fact's
+        # transaction. The AUTOINCREMENT seq is the event's order: writers
+        # are serialized by BEGIN IMMEDIATE, so seq is commit order across
+        # transactions and insertion order within one, run-wide.
+        """
+        CREATE TABLE events (
+            seq INTEGER PRIMARY KEY AUTOINCREMENT,
+            run_id TEXT NOT NULL REFERENCES runs(id),
+            job_id TEXT,
+            attempt_no INTEGER,
+            event TEXT NOT NULL,
+            at TEXT NOT NULL,
+            adapter TEXT,
+            model TEXT,
+            payload_json TEXT NOT NULL
+        )
+        """,
+        "CREATE INDEX idx_events_run_seq ON events(run_id, seq)",
+        # A run created before this step has no events for its earlier facts;
+        # 0 marks it so its partial stream is never exported as its history.
+        "ALTER TABLE runs ADD COLUMN events_recorded INTEGER NOT NULL DEFAULT 0",
+    ],
+    [
+        # Durable interrupts. Additive: every earlier table and row is kept.
+        """
+        CREATE TABLE interrupts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            run_id TEXT NOT NULL,
+            job_id TEXT NOT NULL,
+            attempt_no INTEGER NOT NULL,
+            continuation_no INTEGER NOT NULL,
+            envelope TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            request_schema_json TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            created_at REAL NOT NULL,
+            expires_at REAL,
+            FOREIGN KEY (run_id, job_id) REFERENCES jobs(run_id, id),
+            FOREIGN KEY (run_id, job_id, attempt_no)
+                REFERENCES attempts(run_id, job_id, attempt_no),
+            UNIQUE (run_id, job_id, attempt_no, continuation_no)
+        )
+        """,
+        "CREATE INDEX idx_interrupts_run_job ON interrupts(run_id, job_id, id)",
+        """
+        CREATE TABLE interrupt_resolutions (
+            interrupt_id INTEGER PRIMARY KEY REFERENCES interrupts(id),
+            outcome TEXT NOT NULL
+                CHECK (outcome IN ('answered', 'rejected', 'expired')),
+            input_json TEXT,
+            reason TEXT,
+            resolved_at REAL NOT NULL
+        )
+        """,
+        """
+        CREATE TABLE continuations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            run_id TEXT NOT NULL,
+            job_id TEXT NOT NULL,
+            attempt_no INTEGER NOT NULL,
+            continuation_no INTEGER NOT NULL,
+            interrupt_id INTEGER NOT NULL REFERENCES interrupts(id),
+            started_at REAL NOT NULL,
+            ended_at REAL,
+            disposition TEXT,
+            acceptance_json TEXT,
+            FOREIGN KEY (run_id, job_id, attempt_no)
+                REFERENCES attempts(run_id, job_id, attempt_no),
+            UNIQUE (run_id, job_id, attempt_no, continuation_no)
+        )
+        """,
+        "CREATE INDEX idx_continuations_run_job ON continuations(run_id, job_id, id)",
+        # At most one unresolved interrupt per job, whatever writes the row.
+        """
+        CREATE TRIGGER interrupts_one_open_per_job BEFORE INSERT ON interrupts
+            WHEN EXISTS (
+                SELECT 1 FROM interrupts AS open
+                WHERE open.run_id = NEW.run_id AND open.job_id = NEW.job_id
+                  AND NOT EXISTS (
+                      SELECT 1 FROM interrupt_resolutions AS r
+                      WHERE r.interrupt_id = open.id))
+            BEGIN SELECT RAISE(ABORT, 'job already has an unresolved interrupt'); END
+        """,
+        # Immutability, enforced by the database rather than by convention.
+        """
+        CREATE TRIGGER interrupts_immutable_update BEFORE UPDATE ON interrupts
+            BEGIN SELECT RAISE(ABORT, 'interrupt records are immutable'); END
+        """,
+        """
+        CREATE TRIGGER interrupts_immutable_delete BEFORE DELETE ON interrupts
+            BEGIN SELECT RAISE(ABORT, 'interrupt records are immutable'); END
+        """,
+        """
+        CREATE TRIGGER resolutions_immutable_update BEFORE UPDATE ON interrupt_resolutions
+            BEGIN SELECT RAISE(ABORT, 'interrupt resolutions are immutable'); END
+        """,
+        """
+        CREATE TRIGGER resolutions_immutable_delete BEFORE DELETE ON interrupt_resolutions
+            BEGIN SELECT RAISE(ABORT, 'interrupt resolutions are immutable'); END
+        """,
+        # The revision each event row was built under; NULL (rows written
+        # before this step) renders as v1.
+        "ALTER TABLE events ADD COLUMN schema TEXT",
     ],
 ]
 
@@ -380,8 +564,112 @@ def _row_to_reservation(row: sqlite3.Row) -> AttemptReservation:
     )
 
 
+def _row_to_resolution(row: sqlite3.Row) -> InterruptResolution:
+    """Convert an interrupt_resolutions row into its public record."""
+    return InterruptResolution(
+        interrupt_id=str(row["interrupt_id"]),
+        outcome=str(row["outcome"]),
+        resolved_at=float(row["resolved_at"]),
+        input=_load_json(row["input_json"]),
+        reason=(str(row["reason"]) if row["reason"] is not None else None),
+    )
+
+
+def _row_to_interrupt(
+    row: sqlite3.Row, resolution: Optional[InterruptResolution] = None
+) -> InterruptRecord:
+    """Convert an interrupts row (and its resolution) into its public record."""
+    request_schema = _load_json(row["request_schema_json"])
+    payload = _load_json(row["payload_json"])
+    if not isinstance(request_schema, Mapping) or not isinstance(payload, Mapping):
+        raise StoreError("ledger interrupt schema or payload is not a JSON mapping")
+    return InterruptRecord(
+        id=str(row["id"]),
+        run_id=str(row["run_id"]),
+        job_id=str(row["job_id"]),
+        attempt_no=int(row["attempt_no"]),
+        continuation_no=int(row["continuation_no"]),
+        envelope=str(row["envelope"]),
+        kind=str(row["kind"]),
+        request_schema=dict(request_schema),
+        payload=dict(payload),
+        created_at=float(row["created_at"]),
+        expires_at=(float(row["expires_at"]) if row["expires_at"] is not None else None),
+        resolution=resolution,
+    )
+
+
+def _row_to_continuation(row: sqlite3.Row) -> Continuation:
+    """Convert a continuations row into its public record."""
+    return Continuation(
+        id=int(row["id"]),
+        run_id=str(row["run_id"]),
+        job_id=str(row["job_id"]),
+        attempt_no=int(row["attempt_no"]),
+        continuation_no=int(row["continuation_no"]),
+        interrupt_id=str(row["interrupt_id"]),
+        started_at=float(row["started_at"]),
+        ended_at=(float(row["ended_at"]) if row["ended_at"] is not None else None),
+        disposition=(
+            str(row["disposition"]) if row["disposition"] is not None else None
+        ),
+        acceptance=_acceptance_from_json(row["acceptance_json"]),
+    )
+
+
+def _read_interrupts(
+    conn: sqlite3.Connection, run_id: str, job_id: Optional[str] = None
+) -> list[InterruptRecord]:
+    """Read a run's (or one job's) interrupts with their resolutions, in id order."""
+    query = (
+        "SELECT i.*, r.interrupt_id AS r_interrupt_id, r.outcome AS r_outcome, "
+        "r.input_json AS r_input_json, r.reason AS r_reason, "
+        "r.resolved_at AS r_resolved_at "
+        "FROM interrupts AS i LEFT JOIN interrupt_resolutions AS r "
+        "ON r.interrupt_id = i.id WHERE i.run_id = ?"
+    )
+    parameters: tuple = (run_id,)
+    if job_id is not None:
+        query += " AND i.job_id = ?"
+        parameters += (job_id,)
+    rows = conn.execute(query + " ORDER BY i.id", parameters).fetchall()
+    records = []
+    for row in rows:
+        resolution = None
+        if row["r_interrupt_id"] is not None:
+            resolution = InterruptResolution(
+                interrupt_id=str(row["r_interrupt_id"]),
+                outcome=str(row["r_outcome"]),
+                resolved_at=float(row["r_resolved_at"]),
+                input=_load_json(row["r_input_json"]),
+                reason=(str(row["r_reason"]) if row["r_reason"] is not None else None),
+            )
+        records.append(_row_to_interrupt(row, resolution))
+    return records
+
+
+def _read_continuations(
+    conn: sqlite3.Connection, run_id: str, job_id: Optional[str] = None
+) -> list[Continuation]:
+    """Read a run's (or one job's) continuations in id order."""
+    if job_id is None:
+        rows = conn.execute(
+            "SELECT * FROM continuations WHERE run_id = ? ORDER BY id", (run_id,)
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT * FROM continuations WHERE run_id = ? AND job_id = ? ORDER BY id",
+            (run_id, job_id),
+        ).fetchall()
+    return [_row_to_continuation(row) for row in rows]
+
+
 def _derive_run_state(job_rows: Sequence[sqlite3.Row]) -> RunState:
-    """Derive run state from job states rather than duplicating state."""
+    """Derive run state from job states rather than duplicating state.
+
+    All terminal -> completed; any running -> running; any pending ->
+    pending; otherwise (only waiting and terminal jobs) -> waiting.
+    """
     if not job_rows:
         return RunState.COMPLETED
     states = [JobState(row["state"]) for row in job_rows]
@@ -389,7 +677,57 @@ def _derive_run_state(job_rows: Sequence[sqlite3.Row]) -> RunState:
         return RunState.COMPLETED
     if any(state is JobState.RUNNING for state in states):
         return RunState.RUNNING
-    return RunState.PENDING
+    if any(state is JobState.PENDING for state in states):
+        return RunState.PENDING
+    return RunState.WAITING
+
+
+def _future_schema_message(stored_version: int) -> str:
+    """The refusal for a ledger written by a newer job-kit."""
+    return (
+        f"database schema version {stored_version} is newer than this "
+        f"job-kit supports (max {len(_MIGRATIONS)}); refusing to open "
+        "it -- update job-kit, or point at a database this version "
+        "understands"
+    )
+
+
+def _read_snapshot(
+    conn: sqlite3.Connection, run_id: str, *, version: int, now: float
+) -> RunSnapshot:
+    """Read one run inside the caller's read transaction.
+
+    ``version`` is the ledger schema, read in the same transaction: below
+    :data:`INTERRUPT_SCHEMA` the interrupt tables do not exist and are not
+    queried. Shared by :meth:`JobStore.snapshot` and
+    :meth:`LedgerReader.snapshot`.
+    """
+    run_row = conn.execute("SELECT * FROM runs WHERE id = ?", (run_id,)).fetchone()
+    if run_row is None:
+        raise UnknownRunError(run_id)
+    job_rows = conn.execute(
+        "SELECT * FROM jobs WHERE run_id = ? ORDER BY ordinal", (run_id,)
+    ).fetchall()
+    attempt_rows = conn.execute(
+        "SELECT * FROM attempts WHERE run_id = ? ORDER BY id", (run_id,)
+    ).fetchall()
+    reservation_rows = conn.execute(
+        "SELECT * FROM reservations WHERE run_id = ? ORDER BY id", (run_id,)
+    ).fetchall()
+    interrupts: tuple[InterruptRecord, ...] = ()
+    continuations: tuple[Continuation, ...] = ()
+    if version >= INTERRUPT_SCHEMA:
+        interrupts = tuple(_read_interrupts(conn, run_id))
+        continuations = tuple(_read_continuations(conn, run_id))
+    return RunSnapshot(
+        run=JobStore._run_record(run_row, job_rows),
+        jobs=tuple(_row_to_job(row) for row in job_rows),
+        attempts=tuple(_row_to_attempt(row) for row in attempt_rows),
+        reservations=tuple(_row_to_reservation(row) for row in reservation_rows),
+        interrupts=interrupts,
+        continuations=continuations,
+        read_at=now,
+    )
 
 
 class JobStore:
@@ -513,12 +851,7 @@ class JobStore:
         finally:
             probe.close()
         if stored_version > len(_MIGRATIONS):
-            raise StoreError(
-                f"database schema version {stored_version} is newer than this "
-                f"job-kit supports (max {len(_MIGRATIONS)}); refusing to open "
-                "it -- update job-kit, or point at a database this version "
-                "understands"
-            )
+            raise StoreError(_future_schema_message(stored_version))
         with self._connect() as conn:
             if self._read_schema_version(conn) >= len(_MIGRATIONS):
                 return
@@ -556,6 +889,99 @@ class JobStore:
         if row is None:
             raise UnknownJobError(f"{run_id!r}/{job_id!r}")
         return row
+
+    @staticmethod
+    def _record_event(
+        conn: sqlite3.Connection,
+        *,
+        run_id: str,
+        event: str,
+        at: str,
+        job_id: Optional[str] = None,
+        attempt_no: Optional[int] = None,
+        adapter: Optional[str] = None,
+        model: Optional[str] = None,
+        payload: Optional[Mapping[str, object]] = None,
+        schema: Optional[str] = None,
+    ) -> int:
+        """Validate one execution event and insert it on the fact's connection.
+
+        The caller is inside a ``_writer()`` transaction, so the event commits
+        or rolls back with its fact. The envelope is validated before the
+        insert with a placeholder ``seq``; the row's AUTOINCREMENT value is
+        the authoritative ``seq``. ``schema`` selects the revision (``None``
+        is v1) and is stored with the row. Returns the ``seq``.
+        """
+        rendered = _events.build_event(
+            seq=0,
+            run_id=run_id,
+            event=event,
+            at=at,
+            job_id=job_id,
+            attempt_no=attempt_no,
+            adapter=adapter,
+            model=model,
+            payload=payload,
+            schema=schema,
+        )
+        source = rendered["source"]
+        cursor = conn.execute(
+            "INSERT INTO events(run_id, job_id, attempt_no, event, at, adapter, "
+            "model, payload_json, schema) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                run_id,
+                job_id,
+                attempt_no,
+                rendered["event"],
+                rendered["at"],
+                source.get("adapter"),
+                source.get("model"),
+                json.dumps(rendered["payload"], sort_keys=True),
+                rendered["schema"],
+            ),
+        )
+        return int(cursor.lastrowid)
+
+    def _record_interrupt_event(
+        self,
+        conn: sqlite3.Connection,
+        interrupt_row: sqlite3.Row,
+        *,
+        phase: str,
+        at: str,
+    ) -> int:
+        """Record one v2 ``interrupt`` event for an interrupt row.
+
+        The identity is the owning attempt and the source its backend and
+        model. The payload holds identifiers, the kind, the phase, the
+        expiry and the continuation number only: never the request payload,
+        the request schema, the resolution input, or free text.
+        """
+        attempt = conn.execute(
+            "SELECT backend, model FROM attempts WHERE run_id = ? AND job_id = ? "
+            "AND attempt_no = ?",
+            (interrupt_row["run_id"], interrupt_row["job_id"], interrupt_row["attempt_no"]),
+        ).fetchone()
+        payload: dict[str, object] = {
+            "interrupt_id": str(interrupt_row["id"]),
+            "kind": str(interrupt_row["kind"]),
+            "phase": phase,
+            "continuation_no": int(interrupt_row["continuation_no"]),
+        }
+        if interrupt_row["expires_at"] is not None:
+            payload["expires_at"] = _events.event_at(float(interrupt_row["expires_at"]))
+        return self._record_event(
+            conn,
+            run_id=str(interrupt_row["run_id"]),
+            event="interrupt",
+            at=at,
+            job_id=str(interrupt_row["job_id"]),
+            attempt_no=int(interrupt_row["attempt_no"]),
+            adapter=(str(attempt["backend"]) if attempt is not None else None),
+            model=(str(attempt["model"]) if attempt is not None else None),
+            payload=payload,
+            schema=_events.SCHEMA_V2,
+        )
 
     @staticmethod
     def _run_record(
@@ -624,10 +1050,15 @@ class JobStore:
                 str(job_id): str(base_ref)
                 for job_id, base_ref in workspace_base_refs.items()
             }
+        # Every job id becomes an event unit id; refuse one the envelope
+        # cannot carry now, before anything is written, not mid-run.
+        for job_id in ids:
+            _events.check_unit_identity(run_id, job_id)
         with self._writer() as conn:
             conn.execute(
                 "INSERT INTO runs(id, created_at, jobs_path, max_parallel, workspace_root, "
-                "workspace_base_refs_json, disallowed_tools) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                "workspace_base_refs_json, disallowed_tools, events_recorded) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, 1)",
                 (
                     run_id,
                     when,
@@ -653,6 +1084,13 @@ class JobStore:
                     )
                     for ordinal, job in enumerate(jobs)
                 ],
+            )
+            self._record_event(
+                conn,
+                run_id=run_id,
+                event=f"{_events.PLUGIN}:run-created",
+                at=_events.event_at(when),
+                payload={"max_parallel": bound, "job_count": len(ids)},
             )
         record = self.get_run(run_id)
         if record is None:  # pragma: no cover - the insert is in the same store
@@ -746,6 +1184,18 @@ class JobStore:
                 "WHERE run_id = ? AND id = ?",
                 (target.value, error_message, when, run_id, job_id),
             )
+            if target in TERMINAL_STATES:
+                payload: dict[str, object] = {"state": target.value}
+                if error_message is not None:
+                    payload["reason"] = _events.reason_text(error_message)
+                self._record_event(
+                    conn,
+                    run_id=run_id,
+                    event="terminal",
+                    at=_events.event_at(when),
+                    job_id=job_id,
+                    payload=payload,
+                )
             updated = conn.execute(
                 "SELECT * FROM jobs WHERE run_id = ? AND id = ?", (run_id, job_id)
             ).fetchone()
@@ -879,6 +1329,17 @@ class JobStore:
                 "WHERE run_id = ? AND id = ?",
                 (JobState.RUNNING.value, time.time(), run_id, job_id),
             )
+            self._record_event(
+                conn,
+                run_id=run_id,
+                event="dispatch-selected",
+                at=_events.event_at(reserved_at),
+                job_id=job_id,
+                attempt_no=attempt_no,
+                adapter=backend,
+                model=model,
+                payload={"endpoint": endpoint, "budget_no": budget_no},
+            )
             row = conn.execute(
                 "SELECT * FROM reservations WHERE run_id = ? AND job_id = ? "
                 "AND attempt_no = ?",
@@ -986,6 +1447,16 @@ class JobStore:
                 "WHERE run_id = ? AND job_id = ? AND attempt_no = ?",
                 (str(invoke_armed_at), run_id, job_id, attempt_no),
             )
+            self._record_event(
+                conn,
+                run_id=run_id,
+                event="call-started",
+                at=_events.event_at(invoke_armed_at),
+                job_id=job_id,
+                attempt_no=attempt_no,
+                adapter=str(row["backend"]),
+                model=str(row["model"]),
+            )
             updated = conn.execute(
                 "SELECT * FROM reservations WHERE run_id = ? AND job_id = ? "
                 "AND attempt_no = ?",
@@ -1039,6 +1510,34 @@ class JobStore:
                     job_id,
                 ),
             )
+            # The reservation ends without an invocation, and its job becomes
+            # FAILED: one attempt result and the job's one terminal.
+            event_at = _events.event_at(when)
+            self._record_event(
+                conn,
+                run_id=run_id,
+                event="result",
+                at=event_at,
+                job_id=job_id,
+                attempt_no=attempt_no,
+                adapter=str(row["backend"]),
+                model=str(row["model"]),
+                payload={
+                    "status": "not-invoked",
+                    "reason": _events.reason_text(reason),
+                },
+            )
+            self._record_event(
+                conn,
+                run_id=run_id,
+                event="terminal",
+                at=event_at,
+                job_id=job_id,
+                payload={
+                    "state": JobState.FAILED.value,
+                    "reason": _events.reason_text(reason),
+                },
+            )
             updated = conn.execute(
                 "SELECT * FROM reservations WHERE run_id = ? AND job_id = ? "
                 "AND attempt_no = ?",
@@ -1056,6 +1555,12 @@ class JobStore:
         recovered: list[AttemptReservation] = []
         with self._writer() as conn:
             self._require_run(conn, run_id)
+            # A live continuation holds its job RUNNING with no live
+            # reservation, which the legacy branch below would reset to
+            # PENDING -- a second model call for an attempt that already
+            # completed. Resolve continuations FIRST: the job returns to
+            # WAITING with its answer intact, and the next pass re-runs it.
+            self._recover_continuations(conn, run_id, when)
             rows = conn.execute(
                 "SELECT * FROM reservations WHERE run_id = ? AND disposition IS NULL "
                 "ORDER BY id",
@@ -1120,6 +1625,30 @@ class JobStore:
                         run_job[1],
                     ),
                 )
+                event_at = _events.event_at(when)
+                self._record_event(
+                    conn,
+                    run_id=run_job[0],
+                    event="result",
+                    at=event_at,
+                    job_id=run_job[1],
+                    attempt_no=int(row["attempt_no"]),
+                    adapter=str(row["backend"]),
+                    model=str(row["model"]),
+                    payload={"status": "lost", "reason": loss_reason},
+                )
+                if terminal_state in TERMINAL_STATES:
+                    self._record_event(
+                        conn,
+                        run_id=run_job[0],
+                        event="terminal",
+                        at=event_at,
+                        job_id=run_job[1],
+                        payload={
+                            "state": terminal_state.value,
+                            "reason": _events.reason_text(error_message or loss_reason),
+                        },
+                    )
                 updated = conn.execute(
                     "SELECT * FROM reservations WHERE id = ?", (int(row["id"]),)
                 ).fetchone()
@@ -1134,6 +1663,7 @@ class JobStore:
         terminal_state: Optional[JobState] = None,
         at: Optional[float] = None,
         reason: Optional[str] = None,
+        interrupt: Optional[InterruptRequest] = None,
     ) -> Attempt:
         """Append one attempt and update its job state atomically.
 
@@ -1143,12 +1673,39 @@ class JobStore:
         refuses a terminal job. A null ``terminal_state`` leaves the job
         pending for another attempt. ``reason`` becomes the job's error
         message when the attempt terminalizes it, and is ignored otherwise.
+
+        ``interrupt`` records the contract's interrupt request in the same
+        transaction and leaves the job ``waiting``. It needs a null
+        ``terminal_state``, an acceptance whose outcome is
+        ``interrupt_requested``, a ``running`` job, and the attempt's own
+        live, armed reservation; the legacy direct-append path refuses it.
         """
         if terminal_state is not None and terminal_state not in TERMINAL_STATES:
             raise ValueError("append_attempt requires a terminal or null job state")
         if terminal_state is JobState.UNROUTABLE:
             raise ValueError("unroutable jobs must be marked without an attempt")
-        next_state = terminal_state or JobState.PENDING
+        if interrupt is not None:
+            if terminal_state is not None:
+                raise ValueError(
+                    "an attempt that requests an interrupt leaves its job "
+                    "waiting; it cannot also name a terminal state"
+                )
+            if attempt.acceptance is None or attempt.acceptance.outcome != "interrupt_requested":
+                raise ValueError(
+                    "an attempt that requests an interrupt needs an acceptance "
+                    "whose outcome is interrupt_requested"
+                )
+            interrupt = _interrupts.check_request(interrupt)
+        elif (
+            attempt.acceptance is not None
+            and attempt.acceptance.outcome == "interrupt_requested"
+        ):
+            raise ValueError(
+                "an acceptance outcome of interrupt_requested needs its interrupt request"
+            )
+        next_state = (
+            JobState.WAITING if interrupt is not None else terminal_state or JobState.PENDING
+        )
         when = time.time() if at is None else at
         with self._writer() as conn:
             self._require_run(conn, attempt.run_id)
@@ -1163,6 +1720,22 @@ class JobStore:
                 "AND attempt_no = ?",
                 (attempt.run_id, attempt.job_id, attempt.attempt_no),
             ).fetchone()
+            if interrupt is not None:
+                if state is not JobState.RUNNING:
+                    raise StoreError(
+                        f"{attempt.run_id!r}/{attempt.job_id!r} is {state.value}; "
+                        "an interrupt request needs a running job"
+                    )
+                if (
+                    reservation is None
+                    or reservation["disposition"] is not None
+                    or reservation["invoke_armed_at"] is None
+                ):
+                    raise StoreError(
+                        "an interrupt request needs the attempt's own live "
+                        f"armed reservation ({attempt.run_id!r}/{attempt.job_id!r} "
+                        f"attempt {attempt.attempt_no})"
+                    )
             active_reservation = conn.execute(
                 "SELECT 1 FROM reservations WHERE run_id = ? AND job_id = ? "
                 "AND disposition IS NULL LIMIT 1",
@@ -1284,7 +1857,630 @@ class JobStore:
                 "WHERE run_id = ? AND id = ?",
                 (next_state.value, job_reason, when, attempt.run_id, attempt.job_id),
             )
+            self._record_attempt_events(
+                conn, attempt, terminal_state=terminal_state, when=when
+            )
+            if interrupt is not None:
+                interrupt_row = self._insert_interrupt(
+                    conn,
+                    run_id=attempt.run_id,
+                    job_id=attempt.job_id,
+                    attempt_no=attempt.attempt_no,
+                    continuation_no=0,
+                    request=interrupt,
+                    created_at=when,
+                )
+                self._record_interrupt_event(
+                    conn,
+                    interrupt_row,
+                    phase="requested",
+                    at=_events.event_at(attempt.ended_at, when),
+                )
         return replace(attempt, id=attempt_id)
+
+    @staticmethod
+    def _insert_interrupt(
+        conn: sqlite3.Connection,
+        *,
+        run_id: str,
+        job_id: str,
+        attempt_no: int,
+        continuation_no: int,
+        request: InterruptRequest,
+        created_at: float,
+    ) -> sqlite3.Row:
+        """Insert one interrupt row; ``expires_at`` is job-kit's own clock."""
+        expires_at = _interrupts.expiry(created_at, request.expires_in_s)
+        cursor = conn.execute(
+            "INSERT INTO interrupts(run_id, job_id, attempt_no, continuation_no, "
+            "envelope, kind, request_schema_json, payload_json, created_at, "
+            "expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                run_id,
+                job_id,
+                attempt_no,
+                continuation_no,
+                request.envelope,
+                request.kind,
+                _interrupts.canonical_json(request.request_schema),
+                _interrupts.canonical_json(request.payload),
+                created_at,
+                expires_at,
+            ),
+        )
+        row = conn.execute(
+            "SELECT * FROM interrupts WHERE id = ?", (int(cursor.lastrowid),)
+        ).fetchone()
+        if row is None:  # pragma: no cover - protected by the transaction
+            raise StoreError("interrupt was not persisted")
+        return row
+
+    def _record_attempt_events(
+        self,
+        conn: sqlite3.Connection,
+        attempt: Attempt,
+        *,
+        terminal_state: Optional[JobState],
+        when: float,
+    ) -> None:
+        """Record an appended attempt's usage, result and (maybe) terminal."""
+        at = _events.event_at(attempt.ended_at, when)
+        identity = dict(
+            run_id=attempt.run_id,
+            job_id=attempt.job_id,
+            attempt_no=attempt.attempt_no,
+            adapter=attempt.backend,
+            model=attempt.model,
+        )
+        usage = _events.usage_payload(attempt.usage)
+        if usage is not None:
+            self._record_event(conn, event="usage", at=at, payload=usage, **identity)
+        result: dict[str, object] = {"status": attempt.status}
+        if attempt.error is not None:
+            result["error_code"] = attempt.error.code
+        if attempt.halt_kind is not None:
+            result["halt_kind"] = attempt.halt_kind
+        if attempt.acceptance is not None:
+            if attempt.acceptance.outcome in ("not_run", "interrupt_requested", "request_refused"):
+                result["acceptance"] = attempt.acceptance.outcome
+            elif attempt.acceptance.accepted:
+                result["acceptance"] = "accepted"
+            else:
+                result["acceptance"] = "rejected"
+        self._record_event(conn, event="result", at=at, payload=result, **identity)
+        if terminal_state is not None:
+            self._record_event(
+                conn,
+                run_id=attempt.run_id,
+                event="terminal",
+                at=at,
+                job_id=attempt.job_id,
+                payload={"state": terminal_state.value},
+            )
+
+    # ------------------------------------------------------------------
+    # Durable interrupts
+    # ------------------------------------------------------------------
+
+    def _record_expiry(
+        self, conn: sqlite3.Connection, interrupt_row: sqlite3.Row, now: float
+    ) -> None:
+        """Record one lapsed interrupt: resolution, job expired, events."""
+        interrupt_id = str(interrupt_row["id"])
+        conn.execute(
+            "INSERT INTO interrupt_resolutions(interrupt_id, outcome, input_json, "
+            "reason, resolved_at) VALUES (?, 'expired', NULL, NULL, ?)",
+            (int(interrupt_row["id"]), now),
+        )
+        message = f"interrupt {interrupt_id} expired before it was resolved"
+        conn.execute(
+            "UPDATE jobs SET state = ?, error_message = ?, updated_at = ? "
+            "WHERE run_id = ? AND id = ?",
+            (
+                JobState.EXPIRED.value,
+                message,
+                now,
+                interrupt_row["run_id"],
+                interrupt_row["job_id"],
+            ),
+        )
+        at = _events.event_at(now)
+        self._record_interrupt_event(conn, interrupt_row, phase="expired", at=at)
+        self._record_event(
+            conn,
+            run_id=str(interrupt_row["run_id"]),
+            event="terminal",
+            at=at,
+            job_id=str(interrupt_row["job_id"]),
+            payload={"state": JobState.EXPIRED.value, "reason": message},
+        )
+
+    @staticmethod
+    def _open_interrupt_rows(
+        conn: sqlite3.Connection, run_id: str, job_id: Optional[str] = None
+    ) -> list[sqlite3.Row]:
+        """The unresolved interrupt rows of a run (or one job), in id order."""
+        query = (
+            "SELECT i.* FROM interrupts AS i WHERE i.run_id = ? AND NOT EXISTS ("
+            "SELECT 1 FROM interrupt_resolutions AS r WHERE r.interrupt_id = i.id)"
+        )
+        parameters: tuple = (run_id,)
+        if job_id is not None:
+            query += " AND i.job_id = ?"
+            parameters += (job_id,)
+        return conn.execute(query + " ORDER BY i.id", parameters).fetchall()
+
+    def expire_interrupts(
+        self, run_id: str, now: Optional[float] = None
+    ) -> list[InterruptRecord]:
+        """Record every lapsed, unresolved interrupt of a waiting job.
+
+        One transaction. Each lapse writes an ``expired`` resolution, moves
+        the job ``waiting`` -> ``expired``, and records the ``interrupt``
+        (expired) and ``terminal`` events. A lapse is recorded exactly once:
+        an interrupt with a resolution is never considered again. Returns
+        the interrupts expired by this call.
+        """
+        when = time.time() if now is None else float(now)
+        expired_ids: list[int] = []
+        with self._writer() as conn:
+            self._require_run(conn, run_id)
+            for row in self._open_interrupt_rows(conn, run_id):
+                if not interrupt_lapsed(
+                    float(row["expires_at"]) if row["expires_at"] is not None else None,
+                    when,
+                ):
+                    continue
+                job_row = self._require_job(conn, run_id, str(row["job_id"]))
+                if JobState(job_row["state"]) is not JobState.WAITING:
+                    continue
+                self._record_expiry(conn, row, when)
+                expired_ids.append(int(row["id"]))
+            records = [
+                record
+                for record in _read_interrupts(conn, run_id)
+                if int(record.id) in expired_ids
+            ]
+        return records
+
+    def resolve_interrupt(
+        self,
+        run_id: str,
+        interrupt_id: str,
+        *,
+        decision: str,
+        input: object = None,
+        reason: Optional[str] = None,
+        now: Optional[float] = None,
+    ) -> InterruptResolution:
+        """Resolve one interrupt, idempotently, in one transaction.
+
+        ``decision`` is ``answer`` (``input`` is validated against the
+        request schema the interrupt row declared) or ``reject`` (``reason``
+        is the operator's optional free text). Replaying a resolution equal to
+        the stored one -- same decision, same canonical input, same reason --
+        returns it with ``replayed`` set and writes nothing, even after the
+        job moved on; a different one raises :class:`ResolutionConflictError`.
+        An interrupt found lapsed is recorded as expired, committed, and then
+        refused with :class:`InterruptExpiredError`. The validator probe runs
+        before the transaction opens.
+        """
+        _interrupts._schema_validator()
+        outcome = _interrupts.decision_outcome(decision, input=input, reason=reason)
+        bounded_reason = _interrupts.bound_reason(reason)
+        when = time.time() if now is None else float(now)
+        text = str(interrupt_id).strip()
+        if not text.isdecimal() or not text.isascii():
+            raise UnknownInterruptError(
+                f"interrupt {interrupt_id!r} is not an interrupt id in run {run_id!r}"
+            )
+        expired: Optional[InterruptExpiredError] = None
+        with self._writer() as conn:
+            if conn.execute("SELECT 1 FROM runs WHERE id = ?", (run_id,)).fetchone() is None:
+                raise UnknownInterruptError(f"run {run_id!r} does not exist")
+            row = conn.execute(
+                "SELECT * FROM interrupts WHERE id = ?", (int(text),)
+            ).fetchone()
+            if row is None or str(row["run_id"]) != run_id:
+                raise UnknownInterruptError(
+                    f"interrupt {text} is not an interrupt in run {run_id!r}"
+                )
+            stored = conn.execute(
+                "SELECT * FROM interrupt_resolutions WHERE interrupt_id = ?",
+                (int(text),),
+            ).fetchone()
+            if stored is not None:
+                resolution = _row_to_resolution(stored)
+                if resolution.outcome == "expired":
+                    raise InterruptExpiredError(
+                        text,
+                        float(row["expires_at"]) if row["expires_at"] is not None else None,
+                    )
+                if not _interrupts.same_resolution(
+                    stored_outcome=resolution.outcome,
+                    stored_input_json=stored["input_json"],
+                    stored_reason=resolution.reason,
+                    outcome=outcome,
+                    input=input,
+                    reason=reason,
+                ):
+                    raise ResolutionConflictError(text, resolution.outcome)
+                return replace(resolution, replayed=True)
+            expires_at = float(row["expires_at"]) if row["expires_at"] is not None else None
+            job_row = self._require_job(conn, run_id, str(row["job_id"]))
+            state = JobState(job_row["state"])
+            if interrupt_lapsed(expires_at, when) and state is JobState.WAITING:
+                self._record_expiry(conn, row, when)
+                expired = InterruptExpiredError(text, expires_at)
+            else:
+                if state is not JobState.WAITING:
+                    raise StoreError(
+                        f"interrupt {text} is unresolved but its job "
+                        f"{run_id!r}/{row['job_id']!r} is {state.value}, not waiting; "
+                        "nothing was written"
+                    )
+                input_json = None
+                if outcome == "answered":
+                    request_schema = _load_json(row["request_schema_json"])
+                    try:
+                        input_json = _interrupts.validate_input(request_schema, input)
+                    except _interrupts.InterruptInputError as exc:
+                        raise ResolutionInputError(str(exc), exc.errors) from exc
+                conn.execute(
+                    "INSERT INTO interrupt_resolutions(interrupt_id, outcome, "
+                    "input_json, reason, resolved_at) VALUES (?, ?, ?, ?, ?)",
+                    (int(text), outcome, input_json, bounded_reason, when),
+                )
+                at = _events.event_at(when)
+                if outcome == "answered":
+                    self._record_interrupt_event(conn, row, phase="resolved", at=at)
+                else:
+                    job_message = bounded_reason or f"interrupt {text} rejected by the operator"
+                    conn.execute(
+                        "UPDATE jobs SET state = ?, error_message = ?, updated_at = ? "
+                        "WHERE run_id = ? AND id = ?",
+                        (
+                            JobState.OPERATOR_REJECTED.value,
+                            job_message,
+                            when,
+                            run_id,
+                            str(row["job_id"]),
+                        ),
+                    )
+                    self._record_interrupt_event(conn, row, phase="rejected", at=at)
+                    terminal: dict[str, object] = {
+                        "state": JobState.OPERATOR_REJECTED.value
+                    }
+                    if bounded_reason is not None:
+                        terminal["reason"] = _events.reason_text(bounded_reason)
+                    self._record_event(
+                        conn,
+                        run_id=run_id,
+                        event="terminal",
+                        at=at,
+                        job_id=str(row["job_id"]),
+                        payload=terminal,
+                    )
+                stored = conn.execute(
+                    "SELECT * FROM interrupt_resolutions WHERE interrupt_id = ?",
+                    (int(text),),
+                ).fetchone()
+        if expired is not None:
+            raise expired
+        return _row_to_resolution(stored)
+
+    def begin_continuation(
+        self, run_id: str, job_id: str, *, now: Optional[float] = None
+    ) -> Continuation:
+        """Start re-running the owning attempt's contract after an answer.
+
+        One transaction: the job's latest interrupt must be resolved
+        ``answered``, the job must have no live continuation, and the job
+        must be ``waiting``. The continuation is numbered after every earlier
+        continuation of that attempt, the job becomes ``running``, and
+        ``job-kit:continuation-started`` is recorded. No reservation and no
+        attempt row is written, so the attempt budget is untouched.
+        """
+        when = time.time() if now is None else float(now)
+        with self._writer() as conn:
+            self._require_run(conn, run_id)
+            job_row = self._require_job(conn, run_id, job_id)
+            latest = _read_interrupts(conn, run_id, job_id)
+            if not latest:
+                raise StoreError(f"{run_id!r}/{job_id!r} has no interrupt to continue")
+            record = latest[-1]
+            if record.resolution is None or record.resolution.outcome != "answered":
+                status = (
+                    record.resolution.outcome if record.resolution is not None else "unresolved"
+                )
+                raise StoreError(
+                    f"interrupt {record.id} of {run_id!r}/{job_id!r} is {status}, "
+                    "not answered; only an answered interrupt is continued"
+                )
+            live = conn.execute(
+                "SELECT continuation_no FROM continuations WHERE run_id = ? "
+                "AND job_id = ? AND disposition IS NULL",
+                (run_id, job_id),
+            ).fetchone()
+            if live is not None:
+                raise StoreError(
+                    f"{run_id!r}/{job_id!r} already has a live continuation "
+                    f"({int(live['continuation_no'])})"
+                )
+            state = JobState(job_row["state"])
+            if state is not JobState.WAITING:
+                raise StoreError(
+                    f"{run_id!r}/{job_id!r} is {state.value}; a continuation "
+                    "starts only from waiting"
+                )
+            number_row = conn.execute(
+                "SELECT MAX(continuation_no) AS number FROM continuations "
+                "WHERE run_id = ? AND job_id = ? AND attempt_no = ?",
+                (run_id, job_id, record.attempt_no),
+            ).fetchone()
+            continuation_no = int(number_row["number"] or 0) + 1
+            cursor = conn.execute(
+                "INSERT INTO continuations(run_id, job_id, attempt_no, "
+                "continuation_no, interrupt_id, started_at) VALUES (?, ?, ?, ?, ?, ?)",
+                (run_id, job_id, record.attempt_no, continuation_no, int(record.id), when),
+            )
+            conn.execute(
+                "UPDATE jobs SET state = ?, error_message = NULL, updated_at = ? "
+                "WHERE run_id = ? AND id = ?",
+                (JobState.RUNNING.value, when, run_id, job_id),
+            )
+            self._record_continuation_event(
+                conn,
+                run_id=run_id,
+                job_id=job_id,
+                attempt_no=record.attempt_no,
+                event=f"{_events.PLUGIN}:continuation-started",
+                at=_events.event_at(when),
+                payload={"interrupt_id": record.id, "continuation_no": continuation_no},
+            )
+            row = conn.execute(
+                "SELECT * FROM continuations WHERE id = ?", (int(cursor.lastrowid),)
+            ).fetchone()
+        if row is None:  # pragma: no cover - protected by the transaction
+            raise StoreError("continuation was not persisted")
+        return _row_to_continuation(row)
+
+    def _record_continuation_event(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        run_id: str,
+        job_id: str,
+        attempt_no: int,
+        event: str,
+        at: str,
+        payload: Mapping[str, object],
+    ) -> int:
+        """Record a ``job-kit:`` continuation event under the owning attempt."""
+        attempt = conn.execute(
+            "SELECT backend, model FROM attempts WHERE run_id = ? AND job_id = ? "
+            "AND attempt_no = ?",
+            (run_id, job_id, attempt_no),
+        ).fetchone()
+        return self._record_event(
+            conn,
+            run_id=run_id,
+            event=event,
+            at=at,
+            job_id=job_id,
+            attempt_no=attempt_no,
+            adapter=(str(attempt["backend"]) if attempt is not None else None),
+            model=(str(attempt["model"]) if attempt is not None else None),
+            payload=payload,
+        )
+
+    def finish_continuation(
+        self,
+        run_id: str,
+        job_id: str,
+        attempt_no: int,
+        continuation_no: int,
+        *,
+        acceptance: Optional[Acceptance] = None,
+        disposition: str = "completed",
+        terminal_state: Optional[JobState] = None,
+        interrupt: Optional[InterruptRequest] = None,
+        reason: Optional[str] = None,
+        now: Optional[float] = None,
+    ) -> Continuation:
+        """Record how a live continuation ended, and move its job, atomically.
+
+        The named continuation must be the job's live one, for that attempt.
+        ``disposition`` ``interrupted`` (Ctrl-C) returns the job to
+        ``waiting`` with its answer intact. ``completed`` moves the job to
+        ``terminal_state`` (then ``terminal`` is recorded), to ``waiting`` on
+        a follow-up ``interrupt`` raised by this continuation (whose
+        ``continuation_no`` it carries), or back to ``pending``. ``reason``
+        becomes the job's error message when it terminalizes the job.
+        """
+        if disposition not in ("completed", "interrupted"):
+            raise ValueError("disposition must be completed or interrupted")
+        if terminal_state is not None and terminal_state not in TERMINAL_STATES:
+            raise ValueError("finish_continuation requires a terminal or null job state")
+        if disposition == "interrupted" and (terminal_state is not None or interrupt is not None):
+            raise ValueError("an interrupted continuation returns its job to waiting")
+        if interrupt is not None:
+            if terminal_state is not None:
+                raise ValueError(
+                    "a continuation that requests a follow-up interrupt leaves its "
+                    "job waiting; it cannot also name a terminal state"
+                )
+            if acceptance is None or acceptance.outcome != "interrupt_requested":
+                raise ValueError(
+                    "a follow-up interrupt request needs an acceptance whose "
+                    "outcome is interrupt_requested"
+                )
+            interrupt = _interrupts.check_request(interrupt)
+        if disposition == "interrupted":
+            next_state = JobState.WAITING
+        elif interrupt is not None:
+            next_state = JobState.WAITING
+        else:
+            next_state = terminal_state or JobState.PENDING
+        when = time.time() if now is None else float(now)
+        with self._writer() as conn:
+            self._require_run(conn, run_id)
+            self._require_job(conn, run_id, job_id)
+            live = conn.execute(
+                "SELECT * FROM continuations WHERE run_id = ? AND job_id = ? "
+                "AND disposition IS NULL",
+                (run_id, job_id),
+            ).fetchone()
+            if live is None:
+                raise StoreError(
+                    f"{run_id!r}/{job_id!r} has no live continuation to finish"
+                )
+            if int(live["attempt_no"]) != attempt_no or int(live["continuation_no"]) != continuation_no:
+                raise StoreError(
+                    f"the live continuation of {run_id!r}/{job_id!r} is attempt "
+                    f"{int(live['attempt_no'])} continuation "
+                    f"{int(live['continuation_no'])}, not attempt {attempt_no} "
+                    f"continuation {continuation_no}"
+                )
+            conn.execute(
+                "UPDATE continuations SET ended_at = ?, disposition = ?, "
+                "acceptance_json = ? WHERE id = ?",
+                (
+                    when,
+                    disposition,
+                    _json_or_none(acceptance.to_mapping() if acceptance is not None else None),
+                    int(live["id"]),
+                ),
+            )
+            job_reason = (
+                str(reason)[:ERROR_LIMIT]
+                if reason is not None and terminal_state is not None
+                else None
+            )
+            conn.execute(
+                "UPDATE jobs SET state = ?, error_message = ?, updated_at = ? "
+                "WHERE run_id = ? AND id = ?",
+                (next_state.value, job_reason, when, run_id, job_id),
+            )
+            at = _events.event_at(when)
+            result: dict[str, object] = {
+                "status": disposition,
+                "continuation_no": continuation_no,
+            }
+            if acceptance is not None:
+                if acceptance.outcome in (
+                    "not_run", "timed_out", "interrupt_requested", "request_refused"
+                ):
+                    result["acceptance"] = acceptance.outcome
+                else:
+                    result["acceptance"] = "accepted" if acceptance.accepted else "rejected"
+            self._record_continuation_event(
+                conn,
+                run_id=run_id,
+                job_id=job_id,
+                attempt_no=attempt_no,
+                event=f"{_events.PLUGIN}:continuation-result",
+                at=at,
+                payload=result,
+            )
+            if interrupt is not None:
+                interrupt_row = self._insert_interrupt(
+                    conn,
+                    run_id=run_id,
+                    job_id=job_id,
+                    attempt_no=attempt_no,
+                    continuation_no=continuation_no,
+                    request=interrupt,
+                    created_at=when,
+                )
+                self._record_interrupt_event(conn, interrupt_row, phase="requested", at=at)
+            elif terminal_state is not None:
+                terminal: dict[str, object] = {"state": terminal_state.value}
+                if job_reason is not None:
+                    terminal["reason"] = _events.reason_text(job_reason)
+                self._record_event(
+                    conn,
+                    run_id=run_id,
+                    event="terminal",
+                    at=at,
+                    job_id=job_id,
+                    payload=terminal,
+                )
+            row = conn.execute(
+                "SELECT * FROM continuations WHERE id = ?", (int(live["id"]),)
+            ).fetchone()
+        if row is None:  # pragma: no cover - protected by the transaction
+            raise StoreError("continuation disappeared")
+        return _row_to_continuation(row)
+
+    def _recover_continuations(
+        self, conn: sqlite3.Connection, run_id: str, at: str
+    ) -> None:
+        """Return every job whose live continuation lost its process to waiting.
+
+        Runs inside :meth:`recover_reservations`' transaction, before its
+        legacy branch. A job moves only while it is still ``running``.
+        """
+        live = conn.execute(
+            "SELECT * FROM continuations WHERE run_id = ? AND disposition IS NULL "
+            "ORDER BY id",
+            (run_id,),
+        ).fetchall()
+        when = time.time()
+        for row in live:
+            conn.execute(
+                "UPDATE continuations SET ended_at = ?, disposition = 'process_lost' "
+                "WHERE id = ?",
+                (when, int(row["id"])),
+            )
+            conn.execute(
+                "UPDATE jobs SET state = ?, updated_at = ? "
+                "WHERE run_id = ? AND id = ? AND state = ?",
+                (
+                    JobState.WAITING.value,
+                    when,
+                    run_id,
+                    str(row["job_id"]),
+                    JobState.RUNNING.value,
+                ),
+            )
+            self._record_continuation_event(
+                conn,
+                run_id=run_id,
+                job_id=str(row["job_id"]),
+                attempt_no=int(row["attempt_no"]),
+                event=f"{_events.PLUGIN}:continuation-result",
+                at=_events.event_at(at),
+                payload={
+                    "status": "lost",
+                    "continuation_no": int(row["continuation_no"]),
+                },
+            )
+
+    def list_interrupts(
+        self, run_id: str, job_id: Optional[str] = None
+    ) -> list[InterruptRecord]:
+        """Read a run's (or one job's) interrupts with their resolutions."""
+        with self.read_transaction() as conn:
+            self._require_run(conn, run_id)
+            return _read_interrupts(conn, run_id, job_id)
+
+    def open_interrupt(self, run_id: str, job_id: str) -> Optional[InterruptRecord]:
+        """The job's one unresolved interrupt, or ``None``."""
+        with self.read_transaction() as conn:
+            self._require_run(conn, run_id)
+            for record in _read_interrupts(conn, run_id, job_id):
+                if record.resolution is None:
+                    return record
+        return None
+
+    def list_continuations(
+        self, run_id: str, job_id: Optional[str] = None
+    ) -> list[Continuation]:
+        """Read a run's (or one job's) continuations in insertion order."""
+        with self.read_transaction() as conn:
+            self._require_run(conn, run_id)
+            return _read_continuations(conn, run_id, job_id)
 
     def list_attempts(
         self, run_id: str, job_id: Optional[str] = None
@@ -1302,6 +2498,42 @@ class JobStore:
                     (run_id, job_id),
                 ).fetchall()
         return [_row_to_attempt(row) for row in rows]
+
+    def list_events(self, run_id: str) -> tuple[dict, ...]:
+        """Render a run's execution events in ``seq`` order.
+
+        Each row renders under the revision stored with it; a row with no
+        stored revision (written before ledger schema 12) renders as v1. The
+        stream is validated as a whole before it is returned. A run
+        created before the event log existed raises
+        :class:`EventsNotRecordedError`: its stream would miss the facts
+        recorded before the upgrade and must not stand in for its history.
+        """
+        with self.read_transaction() as conn:
+            run_row = self._require_run(conn, run_id)
+            if not int(run_row["events_recorded"]):
+                raise EventsNotRecordedError(run_id)
+            rows = conn.execute(
+                "SELECT * FROM events WHERE run_id = ? ORDER BY seq", (run_id,)
+            ).fetchall()
+        rendered = [
+            _events.build_event(
+                seq=int(row["seq"]),
+                run_id=str(row["run_id"]),
+                event=str(row["event"]),
+                at=str(row["at"]),
+                job_id=(str(row["job_id"]) if row["job_id"] is not None else None),
+                attempt_no=(
+                    int(row["attempt_no"]) if row["attempt_no"] is not None else None
+                ),
+                adapter=row["adapter"],
+                model=row["model"],
+                payload=_load_json(row["payload_json"]),
+                schema=row["schema"],
+            )
+            for row in rows
+        ]
+        return _events.validate_stream(rendered)
 
     def record_workspace_removed(
         self,
@@ -1555,37 +2787,128 @@ class JobStore:
             ).fetchall()
         return frozenset(str(row["endpoint"]) for row in rows)
 
-    def snapshot(self, run_id: str) -> RunSnapshot:
-        """Read a run, jobs and attempts from one transaction snapshot."""
+    def snapshot(self, run_id: str, *, now: Optional[float] = None) -> RunSnapshot:
+        """Read a run, its jobs, attempts, reservations, interrupts and
+        continuations from one transaction snapshot.
+
+        ``now`` (default: the time of the read) becomes the snapshot's
+        ``read_at``. Nothing is written: a lapse is reported, not recorded.
+        """
         with self.read_transaction() as conn:
-            run_row = conn.execute("SELECT * FROM runs WHERE id = ?", (run_id,)).fetchone()
-            if run_row is None:
-                raise UnknownRunError(run_id)
-            job_rows = conn.execute(
-                "SELECT * FROM jobs WHERE run_id = ? ORDER BY ordinal", (run_id,)
-            ).fetchall()
-            attempt_rows = conn.execute(
-                "SELECT * FROM attempts WHERE run_id = ? ORDER BY id", (run_id,)
-            ).fetchall()
-            reservation_rows = conn.execute(
-                "SELECT * FROM reservations WHERE run_id = ? ORDER BY id", (run_id,)
-            ).fetchall()
-            run = self._run_record(run_row, job_rows)
-            jobs = tuple(_row_to_job(row) for row in job_rows)
-            attempts = tuple(_row_to_attempt(row) for row in attempt_rows)
-            reservations = tuple(_row_to_reservation(row) for row in reservation_rows)
-        return RunSnapshot(
-            run=run, jobs=jobs, attempts=attempts, reservations=reservations
+            return _read_snapshot(
+                conn,
+                run_id,
+                version=len(_MIGRATIONS),
+                now=time.time() if now is None else float(now),
+            )
+
+
+class LedgerReader:
+    """A read-only view of a job-kit ledger, for ``status``.
+
+    It opens the file with ``mode=ro`` (a URI) and ``PRAGMA query_only``,
+    sets no journal mode, and never migrates, so reading a ledger never
+    upgrades it. It reads ledger schemas :data:`READER_MIN_SCHEMA` through
+    the current one; below :data:`INTERRUPT_SCHEMA` a snapshot has no
+    interrupts or continuations. A read-only open of a WAL ledger may create
+    SQLite's ``-shm`` sidecar when the directory is writable: that is SQLite
+    runtime state, not a ledger write.
+    """
+
+    def __init__(
+        self,
+        db_path: str | Path,
+        *,
+        busy_timeout_ms: int = DEFAULT_BUSY_TIMEOUT_MS,
+    ) -> None:
+        if busy_timeout_ms <= 0:
+            raise ValueError("busy_timeout_ms must be positive")
+        self.db_path = Path(db_path).expanduser()
+        self.busy_timeout_ms = int(busy_timeout_ms)
+        if not self.db_path.is_file():
+            raise StoreNotFoundError(self.db_path)
+
+    def _uri(self) -> str:
+        path = urllib.parse.quote(self.db_path.resolve().as_posix())
+        return f"file:{path}?mode=ro"
+
+    @contextmanager
+    def _connect(self) -> Iterator[sqlite3.Connection]:
+        """Open a read-only connection that cannot write, even by pragma."""
+        conn = sqlite3.connect(
+            self._uri(), uri=True, timeout=self.busy_timeout_ms / 1000.0
         )
+        try:
+            conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA query_only = ON")
+            conn.execute(f"PRAGMA busy_timeout = {self.busy_timeout_ms}")
+            yield conn
+        finally:
+            conn.close()
+
+    @contextmanager
+    def read_transaction(self) -> Iterator[sqlite3.Connection]:
+        """One read transaction: every read inside it sees one snapshot."""
+        with self._connect() as conn:
+            conn.execute("BEGIN")
+            try:
+                yield conn
+            finally:
+                conn.rollback()
+
+    @staticmethod
+    def _checked_version(conn: sqlite3.Connection) -> int:
+        """Read and validate the schema version inside the caller's transaction."""
+        version = JobStore._read_schema_version(conn)
+        if version > len(_MIGRATIONS):
+            raise StoreError(_future_schema_message(version))
+        if version < READER_MIN_SCHEMA:
+            raise StoreError(
+                f"database schema version {version} is older than status reads "
+                f"(min {READER_MIN_SCHEMA}); status never migrates a ledger -- "
+                "run any writing verb, for example `job-kit resume <run-id>`, to "
+                "migrate it first"
+            )
+        return version
+
+    def schema_version(self) -> int:
+        """The ledger's stored schema version, validated as :meth:`snapshot` does."""
+        with self.read_transaction() as conn:
+            return self._checked_version(conn)
+
+    def snapshot(self, run_id: str, *, now: Optional[float] = None) -> RunSnapshot:
+        """Read one run in ONE read transaction.
+
+        The schema version is read and validated inside the transaction, and
+        every table is read in it, so the version and the rows come from one
+        snapshot even beside a writer committing between the reads.
+        """
+        with self.read_transaction() as conn:
+            version = self._checked_version(conn)
+            return _read_snapshot(
+                conn,
+                run_id,
+                version=version,
+                now=time.time() if now is None else float(now),
+            )
+
 
 __all__ = [
     "DEFAULT_BUSY_TIMEOUT_MS",
+    "INTERRUPT_SCHEMA",
+    "READER_MIN_SCHEMA",
     "StoreError",
     "StoreNotFoundError",
     "UnknownRunError",
     "UnknownJobError",
     "DuplicateJobError",
     "TerminalStateError",
+    "EventsNotRecordedError",
+    "UnknownInterruptError",
+    "ResolutionConflictError",
+    "InterruptExpiredError",
+    "ResolutionInputError",
     "AttemptReservation",
     "JobStore",
+    "LedgerReader",
 ]

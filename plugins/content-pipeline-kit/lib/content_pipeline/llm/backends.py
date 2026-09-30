@@ -31,7 +31,11 @@ guards) load with no shared lib and no ``openai`` SDK installed. The per-call
 options and the normalized response are adapted across the seam so this module's
 :class:`~content_pipeline.llm.platform.BackendOptions` /
 :class:`~content_pipeline.llm.platform.LLMResponse` stay the pipeline-facing
-types regardless of provider.
+types regardless of provider. A declared output contract crosses the same
+seam: it rides the options, its report comes back as JSON data on the
+response, and the shared lib's ``OutputContractViolation`` becomes
+:class:`~content_pipeline.llm.platform.StructuralOutputError`, all through the
+one contract probe, :func:`~content_pipeline.llm.platform._contract_seam`.
 
 :func:`route` reads one process-level model declaration
 (``CONTENT_PIPELINE_LLM_MODELS``) and returns the backend for its first usable
@@ -162,10 +166,16 @@ def _to_completion_options(opts: BackendOptions) -> Any:
     conversion is explicit so a future field drift surfaces here rather than
     silently mis-binding across the seam. Lazy import -- only reached once a live
     backend is actually driven.
-    """
-    from llm_scripting_kit.completion import BackendOptions as _CompletionOptions
 
-    return _CompletionOptions(
+    A declared ``output_contract`` is passed through, and it goes through
+    :func:`~content_pipeline.llm.platform._contract_seam` (the one contract
+    probe), never a second import: the probe REFUSES a shared lib whose
+    ``BackendOptions`` has no ``output_contract`` field (the too-old message)
+    rather than letting the contract be dropped and the call run as plain
+    text. Without a contract the options are built exactly as before and
+    nothing new is imported, so an older shared lib keeps working.
+    """
+    fields = dict(
         max_tokens=opts.max_tokens,
         temperature=opts.temperature,
         timeout_s=opts.timeout_s,
@@ -178,6 +188,13 @@ def _to_completion_options(opts: BackendOptions) -> Any:
         log_prefix=opts.log_prefix,
         extras=opts.extras,
     )
+    if opts.output_contract is None:
+        from llm_scripting_kit.completion import BackendOptions as _CompletionOptions
+
+        return _CompletionOptions(**fields)
+    seam = platform._contract_seam()
+    platform._require_contract(opts.output_contract, seam)
+    return seam.BackendOptions(**fields, output_contract=opts.output_contract)
 
 
 def _error_to_data(error: Any) -> Any:
@@ -239,7 +256,46 @@ def _from_completion_response(resp: Any) -> LLMResponse:
         # the budget as a coerced zero.
         reported_cost_usd=reported_cost,
         reported_cost_source=reported_source,
+        # The seam's ContractReport, normalized to JSON data at the boundary
+        # for the same reason `error` is: the response cache stores JSON, and a
+        # live call and a cache hit must yield one shape. An older shared lib
+        # has no report: None.
+        output_contract=platform._report_mapping(getattr(resp, "output_contract", None)),
     )
+
+
+def _complete_through(
+    delegate_fn: Callable[[], Any],
+    system: str,
+    user: str,
+    *,
+    model: str,
+    opts: BackendOptions,
+) -> LLMResponse:
+    """Drive a shared-lib delegate and adapt its answer, contract included.
+
+    ``delegate_fn`` is the adapter's ``_backend`` (called here, so building
+    the delegate stays lazy). Under a declared ``opts.output_contract`` the
+    contract probe runs FIRST, before any delegate is built, and an
+    llm-scripting-kit ``OutputContractViolation`` -- recognized by the
+    probe-imported type, never a second import -- becomes CPK's
+    :class:`~content_pipeline.llm.platform.StructuralOutputError` carrying the
+    adapted failed response (raw text, usage, report), so ``call_llm`` charges
+    it and ``submit_validated`` turns it into a structural rejection. Without
+    a contract nothing new is imported and nothing is mapped.
+    """
+    violation: Any = ()  # an empty tuple of exception types catches nothing
+    if opts.output_contract is not None:
+        violation = platform._contract_seam().OutputContractViolation
+    delegate = delegate_fn()
+    options = _to_completion_options(opts)
+    try:
+        resp = delegate.complete(system, user, model=model, options=options)
+    except violation as exc:
+        raise platform.StructuralOutputError(
+            _from_completion_response(exc.response)
+        ) from exc
+    return _from_completion_response(resp)
 
 
 @dataclass
@@ -299,10 +355,7 @@ class _LazyDelegate:
         options: Optional[BackendOptions] = None,
     ) -> LLMResponse:
         opts = options or BackendOptions()
-        resp = self._backend().complete(
-            system, user, model=model, options=_to_completion_options(opts)
-        )
-        return _from_completion_response(resp)
+        return _complete_through(self._backend, system, user, model=model, opts=opts)
 
     def classify_halt(self, exc: BaseException) -> Optional[str]:
         return self._backend().classify_halt(exc)
@@ -734,10 +787,7 @@ class ModelEndpointBackend(_LazyDelegate):
             sent = self._legacy_effective_options(opts)
         else:
             sent = self._delegate_options(opts)
-        resp = self._backend().complete(
-            system, user, model=model, options=_to_completion_options(sent)
-        )
-        return _from_completion_response(resp)
+        return _complete_through(self._backend, system, user, model=model, opts=sent)
 
     def classify_halt(self, exc: BaseException) -> Optional[str]:
         """Connection failures are halts here; everything else defers."""
@@ -923,7 +973,12 @@ def declared_model_names() -> Optional[List[str]]:
     return [part.strip() for part in raw.split(",") if part.strip()]
 
 
-def resolve_declaration(names: "Sequence[str] | List[str]", *, project_root: Optional[str] = None) -> Any:
+def resolve_declaration(
+    names: "Sequence[str] | List[str]",
+    *,
+    project_root: Optional[str] = None,
+    requirements: Optional[Dict[str, Any]] = None,
+) -> Any:
     """Resolve an explicit declaration to its first usable llm-scripting-kit entry.
 
     Thin caller of ``llm_scripting_kit.declaration.describe(caller="process")``
@@ -933,10 +988,18 @@ def resolve_declaration(names: "Sequence[str] | List[str]", *, project_root: Opt
     :class:`~llm_scripting_kit.declaration.NoUsableRoutingTarget` (R23) and
     :class:`DeclarationSupportError` / ``ImportError`` for an absent or stale
     ``bootstrap_lib`` / ``llm_scripting_kit``. Skipping is silent (R18, R19).
+
+    ``requirements`` is handed to ``describe`` so an entry whose adapter
+    cannot satisfy them is skipped rather than selected and refused at
+    dispatch. :func:`route` passes an output contract's
+    ``contract_requirements``. Empty or ``None`` passes nothing, so the call
+    is exactly the no-requirement call.
     """
     declaration = _declaration_module()
+    extra: Dict[str, Any] = {"requirements": requirements} if requirements else {}
     ranking = declaration.describe(
         list(names), project_root=project_root, caller=declaration.CALLER_PROCESS,
+        **extra,
     )
     return ranking.default
 
@@ -959,25 +1022,45 @@ def declared_backend_and_model(
 
 
 _declared_entry_cache: Dict[Any, Any] = {}
-"""Per-process memo of :func:`resolve_declaration` keyed by (names, root).
+"""Per-process memo of :func:`resolve_declaration` keyed by (names, root,
+output-contract identity).
 
 A declaration governs a whole run; re-probing reachability and quota on every
-call site would multiply live probes for no benefit. Cleared by
-:func:`reset_declared_entry_cache` (a test seam, and a legitimate call after a
-mid-run re-selection that should re-probe)."""
+call site would multiply live probes for no benefit. The contract identity is
+part of the key because a contract narrows the usable entries: a no-contract
+selection must never stand in for a contract one, nor one contract's for
+another's. Cleared by :func:`reset_declared_entry_cache` (a test seam, and a
+legitimate call after a mid-run re-selection that should re-probe)."""
 
 
-def _resolve_declared_entry(*, project_root: Optional[str] = None) -> Any:
+def _resolve_declared_entry(
+    *, project_root: Optional[str] = None, output_contract: Optional[Any] = None
+) -> Any:
     """The first usable entry for the ACTIVE :data:`MODELS_ENV` declaration, memoized.
 
     Callers gate on ``declared_model_names() is not None`` before calling
     this (:func:`route`, :func:`routed_model`), so ``names`` is never
     ``None`` here.
+
+    With an ``output_contract`` the selection requirement comes from
+    llm-scripting-kit's ``contract_requirements``, reached through
+    :func:`~content_pipeline.llm.platform._contract_seam` (so an absent or
+    stale shared lib refuses with its own diagnosis), and the memo is keyed
+    on the contract's ``identity()``.
     """
     names = declared_model_names()
-    key = (tuple(names), project_root)
+    identity: Optional[tuple] = None
+    requirements: Optional[Dict[str, Any]] = None
+    if output_contract is not None:
+        seam = platform._contract_seam()
+        platform._require_contract(output_contract, seam)
+        identity = tuple(output_contract.identity())
+        requirements = seam.contract_requirements(output_contract)
+    key = (tuple(names), project_root, identity)
     if key not in _declared_entry_cache:
-        _declared_entry_cache[key] = resolve_declaration(names, project_root=project_root)
+        _declared_entry_cache[key] = resolve_declaration(
+            names, project_root=project_root, requirements=requirements
+        )
     return _declared_entry_cache[key]
 
 
@@ -1039,6 +1122,7 @@ def route(
     *,
     openrouter: Optional[Any] = None,
     mock: Optional[Any] = None,
+    output_contract: Optional[Any] = None,
 ) -> Any:
     """Return the process-active backend instance.
 
@@ -1056,12 +1140,21 @@ def route(
     :class:`OpenRouterBackend`. A removed routing env set without
     :data:`MODELS_ENV` raises ``ConfigurationError`` instead (a supplied
     ``mock`` is still returned first).
+
+    ``output_contract`` (an llm-scripting-kit ``OutputContract``, the same
+    object the call will carry on ``BackendOptions.output_contract``) makes
+    the declaration select only entries whose adapter can satisfy it: its
+    ``contract_requirements`` reach ``describe``, so a ``native-required``
+    contract skips an entry that cannot deliver natively instead of selecting
+    it and refusing at dispatch. The default entry (no :data:`MODELS_ENV`) is
+    not re-selected: the shared lib's pre-dispatch refusal guards it, so an
+    unsatisfiable contract fails before any request rather than downgrading.
     """
     if mock is not None:
         return mock
     _refuse_removed_routing_env()
     if declared_model_names() is not None:
-        backend = _backend_for_entry(_resolve_declared_entry())
+        backend = _backend_for_entry(_resolve_declared_entry(output_contract=output_contract))
         # PROBE ONLY THE SELECTED ENTRY, and only here. One ping per route()
         # call. A server that dies MID-run surfaces instead as
         # HALT_UNREACHABLE on the failing call.
@@ -1077,7 +1170,12 @@ def route(
     return openrouter if openrouter is not None else OpenRouterBackend()
 
 
-def routed_model(requested_model: str, *, backend_name: Optional[str] = None) -> str:
+def routed_model(
+    requested_model: str,
+    *,
+    backend_name: Optional[str] = None,
+    output_contract: Optional[Any] = None,
+) -> str:
     """Resolve the model a routed call should run, truthfully.
 
     When :data:`MODELS_ENV` is set, ``requested_model`` and ``backend_name``
@@ -1091,10 +1189,13 @@ def routed_model(requested_model: str, *, backend_name: Optional[str] = None) ->
     because an OpenRouter-style slug means nothing to that server. The
     returned id is what lands on ``LLMResponse.model`` and therefore on
     audit records.
+
+    Pass the same ``output_contract`` given to :func:`route`: a contract can
+    select a different entry, and the model must be that entry's.
     """
     _refuse_removed_routing_env()
     if declared_model_names() is not None:
-        entry = _resolve_declared_entry()
+        entry = _resolve_declared_entry(output_contract=output_contract)
         return entry.model or requested_model
     if backend_name == "model-endpoint":
         try:

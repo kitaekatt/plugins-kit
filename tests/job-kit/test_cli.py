@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import sqlite3
 import subprocess
 import sys
 from dataclasses import replace
@@ -637,3 +638,89 @@ def test_cli_rejects_a_non_positive_max_parallel(value: str) -> None:
     with pytest.raises(SystemExit) as excinfo:
         cli.main(["run", "jobs.yaml", "--max-parallel", value])
     assert excinfo.value.code == cli.EXIT_USAGE
+
+
+def _events_run(tmp_path: Path, monkeypatch: Any) -> Path:
+    """Run one accepted job through the CLI and return its store path."""
+    _install_fake_transport(monkeypatch)
+    jobs_path = _jobs_file(tmp_path, ["only"])
+    store_path = tmp_path / "events.sqlite3"
+    assert (
+        cli.main(["run", str(jobs_path), "--store", str(store_path), "--run-id", "ev"])
+        == cli.EXIT_OK
+    )
+    return store_path
+
+
+def test_cli_events_emits_jsonl(tmp_path: Path, monkeypatch: Any, capsys: Any) -> None:
+    """`events` writes the run's stream as one sorted-key JSON line per event."""
+    from bootstrap_lib.execution_event import validate_stream
+
+    store_path = _events_run(tmp_path, monkeypatch)
+    capsys.readouterr()
+
+    assert cli.main(["events", "ev", "--store", str(store_path)]) == cli.EXIT_OK
+    lines = capsys.readouterr().out.splitlines()
+    stream = [json.loads(line) for line in lines]
+    assert tuple(stream) == JobStore(store_path, create=False).list_events("ev")
+    assert validate_stream(stream)
+    assert [event["event"] for event in stream] == [
+        "job-kit:run-created",
+        "dispatch-selected",
+        "call-started",
+        "result",
+        "terminal",
+    ]
+    assert all(line == json.dumps(json.loads(line), sort_keys=True, separators=(",", ":")) for line in lines)
+
+
+def test_cli_events_out_writes_a_new_valid_file(
+    tmp_path: Path, monkeypatch: Any, capsys: Any
+) -> None:
+    from bootstrap_lib.execution_event import read_jsonl
+
+    store_path = _events_run(tmp_path, monkeypatch)
+    capsys.readouterr()
+    out = tmp_path / "stream.jsonl"
+
+    assert (
+        cli.main(["events", "ev", "--store", str(store_path), "--out", str(out)])
+        == cli.EXIT_OK
+    )
+    summary = json.loads(capsys.readouterr().out)
+    assert read_jsonl(out) == JobStore(store_path, create=False).list_events("ev")
+    assert summary["events"] == len(read_jsonl(out))
+
+
+def test_cli_events_out_refuses_existing_file(
+    tmp_path: Path, monkeypatch: Any, capsys: Any
+) -> None:
+    """--out never replaces a file: the export is refused and the file kept."""
+    store_path = _events_run(tmp_path, monkeypatch)
+    capsys.readouterr()
+    out = tmp_path / "stream.jsonl"
+    out.write_text("keep me\n", encoding="utf-8")
+
+    exit_code = cli.main(["events", "ev", "--store", str(store_path), "--out", str(out)])
+
+    assert exit_code == cli.EXIT_RUNNER_FAILURE
+    assert "already exists" in capsys.readouterr().err
+    assert out.read_text(encoding="utf-8") == "keep me\n"
+
+
+def test_cli_events_refuses_a_run_without_an_event_log(
+    tmp_path: Path, capsys: Any
+) -> None:
+    """A run from before the event log exits non-zero and writes no --out file."""
+    store_path = tmp_path / "old.sqlite3"
+    store = JobStore(store_path)
+    store.create_run("old", [])
+    with sqlite3.connect(str(store_path)) as connection:
+        connection.execute("UPDATE runs SET events_recorded = 0 WHERE id = 'old'")
+    out = tmp_path / "old.jsonl"
+
+    exit_code = cli.main(["events", "old", "--store", str(store_path), "--out", str(out)])
+
+    assert exit_code == cli.EXIT_RUNNER_FAILURE
+    assert "created before job-kit recorded execution events" in capsys.readouterr().err
+    assert not out.exists()

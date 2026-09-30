@@ -6,7 +6,11 @@ result (no llm import), a null recorder is a safe no-op, and a sidecar recorder
 persists append-only through injected I/O callables.
 """
 
+import sys
 from dataclasses import dataclass, field
+from pathlib import Path
+
+import pytest
 
 import content_pipeline.audit.reasoning_chain as reasoning_chain
 from content_pipeline.audit.reasoning_chain import (
@@ -118,3 +122,107 @@ def test_sidecar_recorder_appends_through_io(tmp_path):
     rec.record("e1", {"stage": "a"})
     rec.record("e1", {"stage": "b"})  # append-only, not overwrite
     assert [ev["stage"] for ev in rec.chain("e1")] == ["a", "b"]
+
+
+# -- output-contract identity -------------------------------------------------
+
+_SCHEMA = {
+    "type": "object",
+    "required": ["title"],
+    "properties": {"title": {"type": "string"}},
+    "additionalProperties": False,
+}
+_SHARED_LIB = Path(__file__).resolve().parents[2] / "plugins" / "llm-scripting-kit" / "lib"
+_CONTRACT_KEYS = {"id", "schema_version", "schema_digest", "policy", "delivery", "disposition"}
+
+
+@pytest.fixture
+def lsk(monkeypatch):
+    """The real ``llm_scripting_kit.completion``, unloaded again afterwards."""
+
+    def names():
+        return {n for n in sys.modules if n == "llm_scripting_kit" or n.startswith("llm_scripting_kit.")}
+
+    before = names()
+    monkeypatch.syspath_prepend(str(_SHARED_LIB))
+    import llm_scripting_kit.completion as completion  # noqa: PLC0415
+
+    yield completion
+    for name in names() - before:
+        del sys.modules[name]
+
+
+def _report(delivery="native", disposition="valid"):
+    return {
+        "contract_id": "cpk.t",
+        "schema_version": "1",
+        "schema_digest": "d" * 8,
+        "policy": "validated-result",
+        "delivery": delivery,
+        "disposition": disposition,
+        "errors": [["/title", "type"]],
+        "schema": _SCHEMA,
+    }
+
+
+@dataclass
+class _ReportedResp:
+    text: str
+    output_contract: object = None
+
+
+def test_record_submission_records_contract_identity_without_schema_body():
+    rec = InMemoryRecorder()
+    submit = _Submit(
+        payload={"title": "x"},
+        responses=[
+            _ReportedResp("bad", _report(disposition="invalid")),
+            _ReportedResp("ok", _report()),
+        ],
+        attempts=2,
+    )
+    record_submission(rec, "e1", submit)
+    first, second, final = rec.chain("e1")
+    assert set(first["contract"]) == _CONTRACT_KEYS
+    assert first["contract"]["id"] == "cpk.t"
+    assert first["contract"]["schema_digest"] == "d" * 8
+    assert first["contract"]["disposition"] == "invalid"
+    assert second["contract"]["disposition"] == "valid"
+    assert final["contract"] == second["contract"]  # the final disposition
+    for event in (first, second, final):
+        assert "schema" not in event["contract"]
+        assert "errors" not in event["contract"]
+        assert "additionalProperties" not in str(event)
+
+
+def test_record_submission_without_report_adds_no_contract_key():
+    rec = InMemoryRecorder()
+    record_submission(rec, "e1", _Submit(payload=1, responses=[_Resp("t")], attempts=1))
+    assert all("contract" not in ev for ev in rec.chain("e1"))
+
+
+def test_record_submission_records_unreported_delivery_on_no_report_path(lsk):
+    """A backend with no seam report still records delivery=unreported: the
+    value comes from the response submit_validated stored, not from
+    EvaluationResult."""
+    from content_pipeline.llm.backends import MockBackend
+    from content_pipeline.llm.platform import submit_validated
+
+    output_contract = lsk.OutputContract(
+        id="cpk.t", policy=lsk.POLICY_VALIDATED_RESULT, schema=_SCHEMA
+    )
+    result = submit_validated(
+        backend=MockBackend(responses=['{"title": "ok"}']),
+        system="s",
+        user="u",
+        model="m",
+        output_contract=output_contract,
+    )
+    rec = InMemoryRecorder()
+    record_submission(rec, "e1", result)
+    attempt = [ev for ev in rec.chain("e1") if "attempt" in ev][0]
+    assert attempt["contract"]["delivery"] == "unreported"
+    assert attempt["contract"]["disposition"] == "valid"
+    assert attempt["contract"]["id"] == "cpk.t"
+    assert attempt["contract"]["schema_digest"] == output_contract.identity()[2]
+    assert "schema" not in attempt["contract"]

@@ -19,6 +19,20 @@ Mapping (see the skill / plan for the authoring format):
   - openrouter step          -> `const VAR = await wkOpenRouter(runner, spec, opts)`  (node strategy)
       script/openrouter steps inline preamble.js (wkScript/wkOpenRouter) once; both
       support for_each (fan-out indexes the default out path so payloads do not collide).
+  - script step + provides   -> `const VAR = await wkScriptProvided(cmd, out, check, opts)`
+      (the check also carries the node's events path and unit id, indexed per
+      item under fan-out like an openrouter node's, so the checker records its
+      `contract` event in `<step>[.<i>].events.jsonl`)
+  - openrouter step + provides -> `wkOpenRouter(runner + wkProviderFlags(check), spec, opts)`
+      then, after either, the guard `wkProvided(VAR, "ID", "NAME", verdict);`, which
+      throws when the node (or any fan-out item) exited non-zero. A document with a
+      provider inlines preamble-contracts.js after preamble.js; a document without one
+      compiles exactly as before typed contracts. The verdict path is
+      `./.workflow-kit/<runId>/<step>[.<i>].contract.json`; a schema travels as a
+      string literal of its canonical JSON plus its OutputContract.schema_digest.
+  - requires + {{ artifacts.NAME }} -> the provider's executor-reported `path`
+      (`.map((r) => r.path)` for a fan-out provider), in every scope of the step
+      (for_each / pipeline over, every stage, fan_out.over, the fan-out body).
   - output                   -> `return EXPR;`  (default: object of all step results)
 """
 
@@ -27,6 +41,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from .contracts import EACH, KIND_SCHEMA, analyze, has_provides, is_contract_document
 from .declarations import agent_model
 from .errors import WorkflowError
 from .expr import Scope, compile_single, compile_template
@@ -92,6 +107,10 @@ def _phase_table(doc: WorkflowDoc):
     return ordered, by_id
 
 
+def _where(step: Step) -> str:
+    return f"step {step.id!r}"
+
+
 def _agent_call(agent, phase_id, scope: Scope, phase_titles: dict, where: str) -> str:
     prompt_js = compile_template(agent.prompt, scope)
     opts = []
@@ -123,6 +142,14 @@ def _over_js(over, scope: Scope) -> str:
 # node strategies (script / openrouter) -- compile to the inlined preamble
 # helpers wkScript / wkOpenRouter, which run via the workflow-kit-agent executor.
 # --------------------------------------------------------------------------- #
+def _read_reference(name: str, what: str) -> str:
+    p = Path(__file__).resolve().parent.parent / "skills" / "workflow-kit" / "references" / name
+    try:
+        return p.read_text(encoding="utf-8").rstrip("\n")
+    except OSError as exc:
+        raise WorkflowError(f"cannot read {what} at {p}: {exc}")
+
+
 def _load_preamble() -> str:
     """Read the node-strategy preamble (wkNode/wkScript/wkOpenRouter) for inlining.
 
@@ -130,14 +157,17 @@ def _load_preamble() -> str:
     compiled output verbatim. The preamble is the single source of truth and ships
     with the plugin's skill alongside this package.
     """
-    p = (
-        Path(__file__).resolve().parent.parent
-        / "skills" / "workflow-kit" / "references" / "preamble.js"
-    )
-    try:
-        return p.read_text(encoding="utf-8").rstrip("\n")
-    except OSError as exc:
-        raise WorkflowError(f"cannot read node-strategy preamble at {p}: {exc}")
+    return _read_reference("preamble.js", "node-strategy preamble")
+
+
+def _load_contract_preamble() -> str:
+    """Read the provider helpers (wkProviderFlags/wkScriptProvided/wkProvided).
+
+    Inlined after preamble.js ONLY when a step declares `provides`, so a
+    document without providers compiles byte-identically to one compiled before
+    typed contracts existed. It calls only `shq` and `wkNode` from preamble.js.
+    """
+    return _read_reference("preamble-contracts.js", "typed-contract preamble")
 
 
 def _default_out_js(step_id: str, suffix: str, fanout: bool) -> str:
@@ -161,13 +191,16 @@ def _node_opts(label, phase_id, phase_titles, status_js=None) -> str:
     return "{ " + ", ".join(parts) + " }" if parts else "{}"
 
 
-def _node_scope(step: Step, defined: dict, inputs: set):
+def _node_scope(step: Step, defined: dict, inputs: set, arts=None):
     """(scope, over_js|None) for a node step, honoring an optional flat for_each."""
-    base = Scope(step_vars=defined, inputs=inputs)
+    base = Scope(step_vars=defined, inputs=inputs, artifacts=arts, where=_where(step))
     if step.for_each is None:
         return base, None
     over_js = _over_js(step.for_each, base)
-    return Scope(step_vars=defined, locals={"item": "item"}, inputs=inputs), over_js
+    return Scope(
+        step_vars=defined, locals={"item": "item"}, inputs=inputs,
+        artifacts=arts, where=_where(step),
+    ), over_js
 
 
 def _wrap_node(var: str, call: str, over_js) -> str:
@@ -177,26 +210,91 @@ def _wrap_node(var: str, call: str, over_js) -> str:
     return f"const {var} = await parallel({over_js}.map((item, i) => () => {call}));"
 
 
-def _emit_script_node(step: Step, defined: dict, phase_titles: dict, inputs: set) -> str:
+def _unit_js(step_id: str, fanout: bool) -> str:
+    """A node's execution-event unit id: `<step>`, or `<step>-<i>` under fan-out."""
+    return f"`{step_id}-${{i}}`" if fanout else json.dumps(step_id)
+
+
+def _check_js(prov, verdict_js: str, runner_js=None, events=None) -> str:
+    """The provider check object wkScriptProvided / wkProviderFlags take.
+
+    ``events`` is ``(events_js, unit_js)`` for a script provider, whose checker
+    records the `contract` event; an openrouter provider passes its events
+    through wkOpenRouter's own spec instead.
+    """
+    parts = []
+    if runner_js is not None:
+        parts.append(f"runner: {runner_js}")
+    parts.append(f"artifact: {json.dumps(prov.name)}")
+    parts.append(f"kind: {json.dumps(prov.kind)}")
+    if prov.kind == KIND_SCHEMA:
+        # The canonical JSON text travels as a compile-time string literal, never
+        # JSON.stringify(schema_X) at run time: JS number formatting (1.0 -> 1)
+        # would change the canonical form and fail the runner's digest check.
+        parts.append(f"schema: {json.dumps(prov.schema_text)}")
+        parts.append(f"digest: {json.dumps(prov.digest)}")
+    parts.append(f"verdict: {verdict_js}")
+    if events is not None:
+        events_js, unit_js = events
+        parts.append(f"events: {events_js}")
+        parts.append("runId: inputs.runId")
+        parts.append(f"unitId: {unit_js}")
+    return "{ " + ", ".join(parts) + " }"
+
+
+def _guard(step: Step, prov, fan: bool) -> str:
+    """The provider guard: stop the script when the node did not provide its artifact."""
+    verdict = (
+        f"(i) => {_default_out_js(step.id, '.contract.json', True)}"
+        if fan
+        else _default_out_js(step.id, ".contract.json", False)
+    )
+    return (
+        f"wkProvided({_var(step.id)}, {json.dumps(step.id)}, "
+        f"{json.dumps(prov.name)}, {verdict});"
+    )
+
+
+def _emit_script_node(
+    step: Step, defined: dict, phase_titles: dict, inputs: set, arts=None, prov=None,
+) -> str:
     sp = step.script
-    scope, over_js = _node_scope(step, defined, inputs)
+    scope, over_js = _node_scope(step, defined, inputs, arts)
     fan = over_js is not None
     cmd_js = compile_template(sp.command, scope)
     out_js = compile_template(sp.out, scope) if sp.out else _default_out_js(step.id, ".out", fan)
     status_js = compile_template(sp.status, scope) if sp.status else None
     opts = _node_opts(sp.label, step.phase, phase_titles, status_js)
-    call = f"wkScript({cmd_js}, {out_js}, {opts})"
-    return _wrap_node(_var(step.id), call, over_js)
+    if prov is None:
+        call = f"wkScript({cmd_js}, {out_js}, {opts})"
+        return _wrap_node(_var(step.id), call, over_js)
+    checker_js = (
+        '`"${inputs.workflowKitVenvPython}" '
+        '"${inputs.pluginRoot}/scripts/check_artifact.py"`'
+    )
+    events = (_default_out_js(step.id, ".events.jsonl", fan), _unit_js(step.id, fan))
+    check = _check_js(
+        prov, _default_out_js(step.id, ".contract.json", fan), checker_js, events
+    )
+    call = f"wkScriptProvided({cmd_js}, {out_js}, {check}, {opts})"
+    return _wrap_node(_var(step.id), call, over_js) + "\n" + _guard(step, prov, fan)
 
 
-def _emit_openrouter_node(step: Step, defined: dict, phase_titles: dict, inputs: set) -> str:
+def _emit_openrouter_node(
+    step: Step, defined: dict, phase_titles: dict, inputs: set, arts=None, prov=None,
+) -> str:
     op = step.openrouter
-    scope, over_js = _node_scope(step, defined, inputs)
+    scope, over_js = _node_scope(step, defined, inputs, arts)
     fan = over_js is not None
     runner_js = (
         '`"${inputs.workflowKitVenvPython}" '
         '"${inputs.pluginRoot}/scripts/openrouter_run.py"`'
     )
+    if prov is not None:
+        # argparse is order-free, so the provider flags may precede the flags
+        # the unchanged wkOpenRouter appends.
+        check = _check_js(prov, _default_out_js(step.id, ".contract.json", fan))
+        runner_js = f"{runner_js} + wkProviderFlags({check})"
     out_js = compile_template(op.out, scope) if op.out else _default_out_js(step.id, ".out", fan)
     spec = []
     if op.model:
@@ -210,28 +308,37 @@ def _emit_openrouter_node(step: Step, defined: dict, phase_titles: dict, inputs:
     spec.append(f"out: {out_js}")
     if op.status:
         spec.append(f"status: {compile_template(op.status, scope)}")
+    # Every openrouter node records its execution events beside the default
+    # $OUT, indexed and unit-identified per item under fan-out.
+    spec.append(f"events: {_default_out_js(step.id, '.events.jsonl', fan)}")
+    spec.append("runId: inputs.runId")
+    spec.append(f"unitId: {_unit_js(step.id, fan)}")
     spec_js = "{ " + ", ".join(spec) + " }"
     opts = _node_opts(op.label, step.phase, phase_titles)
     call = f"wkOpenRouter({runner_js}, {spec_js}, {opts})"
-    return _wrap_node(_var(step.id), call, over_js)
+    emitted = _wrap_node(_var(step.id), call, over_js)
+    if prov is None:
+        return emitted
+    return emitted + "\n" + _guard(step, prov, fan)
 
 
-def _emit_flat_step(step: Step, defined: dict, phase_titles: dict, inputs: set) -> str:
-    scope, over_js = _node_scope(step, defined, inputs)
+def _emit_flat_step(step: Step, defined: dict, phase_titles: dict, inputs: set, arts=None) -> str:
+    scope, over_js = _node_scope(step, defined, inputs, arts)
     call = _agent_call(step.agent, step.phase, scope, phase_titles, f"step {step.id!r}.agent")
     return _wrap_node(_var(step.id), call, over_js)
 
 
 def _emit_stage_callback(
     stage: Stage, as_name: str, prev_stage_id, defined: dict, phase_titles: dict,
-    inputs: set,
+    inputs: set, arts=None, owner: str = "",
 ) -> str:
     prev = (prev_stage_id, PREV_VAR) if prev_stage_id else None
     where = f"stage {stage.id!r}.agent"
     if stage.fan_out is not None:
         fan = stage.fan_out
         over_scope = Scope(
-            step_vars=defined, locals={as_name: as_name}, prev_stage=prev, inputs=inputs
+            step_vars=defined, locals={as_name: as_name}, prev_stage=prev, inputs=inputs,
+            artifacts=arts, where=owner,
         )
         over_js = _over_js(fan.over, over_scope)
         body_scope = Scope(
@@ -239,35 +346,58 @@ def _emit_stage_callback(
             locals={as_name: as_name, fan.as_: fan.as_},
             prev_stage=prev,
             inputs=inputs,
+            artifacts=arts,
+            where=owner,
         )
         call = _agent_call(stage.agent, stage.phase, body_scope, phase_titles, where)
         body = f"parallel({over_js}.map(({fan.as_}) => () => {call}))"
     else:
         scope = Scope(
-            step_vars=defined, locals={as_name: as_name}, prev_stage=prev, inputs=inputs
+            step_vars=defined, locals={as_name: as_name}, prev_stage=prev, inputs=inputs,
+            artifacts=arts, where=owner,
         )
         body = _agent_call(stage.agent, stage.phase, scope, phase_titles, where)
     return f"({PREV_VAR}, {as_name}, i) => {body}"
 
 
-def _emit_pipeline_step(step: Step, defined: dict, phase_titles: dict, inputs: set) -> str:
+def _emit_pipeline_step(
+    step: Step, defined: dict, phase_titles: dict, inputs: set, arts=None,
+) -> str:
     var = _var(step.id)
     pipe = step.pipeline
-    over_js = _over_js(pipe.over, Scope(step_vars=defined, inputs=inputs))
+    over_js = _over_js(
+        pipe.over,
+        Scope(step_vars=defined, inputs=inputs, artifacts=arts, where=_where(step)),
+    )
     callbacks = []
     prev_id = None
     for stage in pipe.stages:
         callbacks.append(
-            _emit_stage_callback(stage, pipe.as_, prev_id, defined, phase_titles, inputs)
+            _emit_stage_callback(
+                stage, pipe.as_, prev_id, defined, phase_titles, inputs, arts,
+                f"{_where(step)}.stage {stage.id!r}",
+            )
         )
         prev_id = stage.id
     cb_block = ",\n  ".join(callbacks)
     return f"const {var} = await pipeline(\n  {over_js},\n  {cb_block},\n);"
 
 
-def _emit_output(doc: WorkflowDoc, defined: dict, inputs: set) -> str:
+def _artifact_map(step: Step, plan) -> dict:
+    """{name -> js path expression} for the artifacts a step requires."""
+    out = {}
+    for name in step.requires:
+        prov = plan.providers[name]
+        var = _var(prov.step_id)
+        out[name] = f"{var}.map((r) => r.path)" if prov.cardinality == EACH else f"{var}.path"
+    return out
+
+
+def _emit_output(doc: WorkflowDoc, defined: dict, inputs: set, arts=None) -> str:
     if doc.output:
-        expr = compile_single(doc.output, Scope(step_vars=defined, inputs=inputs))
+        expr = compile_single(
+            doc.output, Scope(step_vars=defined, inputs=inputs, artifacts=arts, where="output")
+        )
         return f"return {expr};"
     parts = ", ".join(f"{json.dumps(s.id)}: {_var(s.id)}" for s in doc.steps)
     return f"return {{ {parts} }};"
@@ -318,22 +448,36 @@ def compile_doc(doc: WorkflowDoc) -> str:
     # inline the node-strategy preamble when any script/openrouter node is present
     if has_nodes:
         lines.append(_load_preamble())
+    # ... and the provider helpers only when a step provides an artifact
+    if has_provides(doc):
+        lines.append(_load_contract_preamble())
+
+    # Typed contracts: a contract-free document keeps every Scope's artifact map
+    # at None, so the `artifacts.` head is not recognized there at all.
+    contracts = is_contract_document(doc)
+    plan = analyze(doc) if contracts else None
 
     # body
     defined = {}
     body = []
     for step in doc.steps:
         kind = step.kind
+        arts = _artifact_map(step, plan) if contracts else None
+        prov = plan.provision_of(step.id) if contracts else None
         if kind == "pipeline":
-            body.append(_emit_pipeline_step(step, defined, phase_titles, allowed_inputs))
+            body.append(_emit_pipeline_step(step, defined, phase_titles, allowed_inputs, arts))
         elif kind == "script":
-            body.append(_emit_script_node(step, defined, phase_titles, allowed_inputs))
+            body.append(
+                _emit_script_node(step, defined, phase_titles, allowed_inputs, arts, prov)
+            )
         elif kind == "openrouter":
-            body.append(_emit_openrouter_node(step, defined, phase_titles, allowed_inputs))
+            body.append(
+                _emit_openrouter_node(step, defined, phase_titles, allowed_inputs, arts, prov)
+            )
         else:
-            body.append(_emit_flat_step(step, defined, phase_titles, allowed_inputs))
+            body.append(_emit_flat_step(step, defined, phase_titles, allowed_inputs, arts))
         defined[step.id] = _var(step.id)
-    body.append(_emit_output(doc, defined, allowed_inputs))
+    body.append(_emit_output(doc, defined, allowed_inputs, {} if contracts else None))
     lines.append("\n".join(body))
 
     return "\n\n".join(lines) + "\n"
