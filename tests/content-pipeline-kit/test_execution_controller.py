@@ -10,6 +10,9 @@ ACCEPTED unit with no recorded accepted_text.
 
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
 import pytest
 
 from content_pipeline.execution.controller import (
@@ -24,9 +27,12 @@ from content_pipeline.execution.controller import (
     resume_run,
     unfinished_units,
 )
+from content_pipeline.execution.drivers.inline import run_wave
 from content_pipeline.execution.model import ApplyRejected, AttemptKind, UnitState
 from content_pipeline.execution.store import ExecutionStore
 from content_pipeline.execution.wave import ready_wave
+from content_pipeline.llm.backends import MockBackend
+from content_pipeline.llm.platform import ValidationSpec
 from content_pipeline.pipeline.single_pass import Gate
 from content_pipeline.pipeline.workunit import FlatChunkStrategy, GraphWalkStrategy, WorkUnit
 
@@ -370,6 +376,63 @@ def test_finalize_run_recovers_payload_via_parse_fn_from_accepted_text(tmp_path)
     finalize_run(store, "run-1", adapter)
 
     assert seen_payloads == ["raw-text"]
+
+
+_SHARED_LIB = Path(__file__).resolve().parents[2] / "plugins" / "llm-scripting-kit" / "lib"
+
+
+def _lsk_names():
+    return {n for n in sys.modules if n == "llm_scripting_kit" or n.startswith("llm_scripting_kit.")}
+
+
+@pytest.fixture
+def lsk(monkeypatch):
+    """The real ``llm_scripting_kit.completion``, unloaded again afterwards."""
+    before = _lsk_names()
+    monkeypatch.syspath_prepend(str(_SHARED_LIB))
+    import llm_scripting_kit.completion as completion  # noqa: PLC0415
+
+    yield completion
+    for name in _lsk_names() - before:
+        del sys.modules[name]
+
+
+def test_finalize_contract_unit_payload_equals_validated_object(tmp_path, lsk):
+    # A schema-policy contract spec has no parse_fn: finalize must recover the
+    # payload through spec.payload_from_text, and it must be the SAME object
+    # the submit step validated.
+    output_contract = lsk.OutputContract(
+        id="cpk.summary",
+        policy=lsk.POLICY_VALIDATED_RESULT,
+        schema={
+            "type": "object",
+            "required": ["title", "tags"],
+            "properties": {
+                "title": {"type": "string"},
+                "tags": {"type": "array", "items": {"type": "string"}},
+            },
+        },
+    )
+    validated = []
+    spec = ValidationSpec(
+        validators=[lambda candidate, context: validated.append(candidate) or []],
+        output_contract=output_contract,
+    )
+    applied = []
+    adapter = RunAdapter(
+        user_for=lambda wu: "user prompt",
+        validation_spec_for=lambda wu: spec,
+        apply=lambda unit_id, payload: applied.append(payload),
+    )
+    store = _seeded_store(tmp_path, unit_ids=("u0",))
+    backend = MockBackend(responses=['{"title": "T", "tags": ["a", "b"], "n": 1.5}'])
+
+    assert run_wave(
+        store, "run-1", [store.get_unit("run-1", "u0")], adapter, backend=backend, model="m"
+    ) == ["u0"]
+    finalize_run(store, "run-1", adapter)
+
+    assert applied == validated == [{"title": "T", "tags": ["a", "b"], "n": 1.5}]
 
 
 def test_finalize_run_records_apply_started_and_succeeded(tmp_path):

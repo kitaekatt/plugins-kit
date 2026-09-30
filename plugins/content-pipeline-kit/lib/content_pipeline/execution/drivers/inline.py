@@ -270,6 +270,10 @@ def run_wave(
                     model=model,
                     parse_fn=spec.parse_fn,
                     validators=spec.validators,
+                    # The spec's structural contract, or the unit would be
+                    # judged as text here while protocol and finalize judge
+                    # it as a contract (``None`` for a spec with none).
+                    output_contract=spec.output_contract,
                     **loop_kwargs,
                 )
                 if not result.accepted:

@@ -55,16 +55,28 @@ Public surface:
   ``submit_validated`` drives its loop with, extracted so an out-of-process
   worker can reuse the exact same verdict logic without the retry/backend/
   cache machinery around it.
+- :class:`StructuralOutputError` / :class:`StructuredContractSupportError` --
+  the output-contract failure types. A declared output contract (an
+  ``llm_scripting_kit.completion.OutputContract`` on
+  ``BackendOptions.output_contract`` or ``ValidationSpec.output_contract``)
+  is judged STRUCTURALLY first, by llm-scripting-kit's validator, and only a
+  structurally valid object reaches the consumer's semantic validators. The
+  contract path REFUSES without llm-scripting-kit >= 0.56.0: it never falls
+  back to a local parse, because an accepted payload recorded as
+  contract-valid would then be false. The shared lib is reached only through
+  :func:`_contract_seam`, lazily, so a call with no contract imports nothing.
 """
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import math
 import os
 import sys
 import tempfile
 import time
+import types
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import (
@@ -148,6 +160,12 @@ class LLMResponse:
       both ``None``; ``None`` means UNKNOWN, never zero. Survives the response
       cache as provenance, but a cache hit costs nothing on the current run
       (see :func:`response_cost`).
+    - ``output_contract`` -- the output-contract report for this call as JSON
+      data (``contract_id``, ``schema_version``, ``schema_digest``,
+      ``policy``, ``delivery``, ``disposition``, ``errors``), or ``None`` when
+      no contract was declared. A report the transport did not produce is
+      synthesized by :func:`evaluate_submission` with delivery
+      ``"unreported"``. It never carries the schema body.
     """
 
     text: str
@@ -173,6 +191,7 @@ class LLMResponse:
     finish_reason: Optional[str] = None
     reported_cost_usd: Optional[float] = None
     reported_cost_source: Optional[str] = None
+    output_contract: Optional[Mapping[str, Any]] = None
 
 
 def valid_reported_cost(
@@ -274,6 +293,12 @@ class BackendOptions:
     - ``log_prefix`` -- stderr tag so mixed logs from parallel runs stay
       attributable.
     - ``extras`` -- open map for consumer-specific knobs a backend may read.
+    - ``output_contract`` -- an ``llm_scripting_kit.completion.OutputContract``
+      (re-exported as ``content_pipeline.llm.OutputContract``), or ``None``.
+      Not a duplicate type: the contract is llm-scripting-kit's. When set, it
+      participates in the response-cache key by its identity (id, policy,
+      schema digest, schema label) and a cache hit is served only when it
+      carries a matching, structurally valid report.
     """
 
     max_tokens: int = 4096
@@ -287,6 +312,7 @@ class BackendOptions:
     client_id: str = ""
     log_prefix: str = "[llm]"
     extras: Mapping[str, Any] = field(default_factory=dict)
+    output_contract: Optional[Any] = None
 
 
 @runtime_checkable
@@ -307,6 +333,207 @@ class LLMBackend(Protocol):
 
     def classify_halt(self, exc: BaseException) -> Optional[str]:
         ...
+
+
+# ---------------------------------------------------------------------------
+# Output contracts (the lazy llm-scripting-kit seam)
+# ---------------------------------------------------------------------------
+
+#: The complete llm-scripting-kit frontier the contract path uses, probed as a
+#: set by :func:`_contract_seam`. It is exactly the consumer surface
+#: ``llm_scripting_kit.completion`` exports for output contracts.
+_CONTRACT_SYMBOLS = (
+    "OutputContract",
+    "OutputContractViolation",
+    "contract_requirements",
+    "evaluate_output",
+    "POLICY_NATIVE_REQUIRED",
+    "POLICY_VALIDATED_RESULT",
+    "POLICY_TEXT_ONLY",
+)
+
+#: The ``llm_scripting_kit.completion.BackendOptions`` field the contract rides.
+_CONTRACT_OPTIONS_FIELD = "output_contract"
+
+#: The first llm-scripting-kit release that ships the frontier above.
+_CONTRACT_FLOOR = "0.56.0"
+
+_MISSING_CONTRACT_LIB_MSG = (
+    "output contracts need the 'llm_scripting_kit' shared lib (from "
+    "llm-scripting-kit) to validate structured output; content-pipeline-kit "
+    "never substitutes its own parse for a declared contract. Run "
+    "`claude plugin install llm-scripting-kit@plugins-kit`."
+)
+
+_STALE_CONTRACT_LIB_MSG = (
+    "the linked llm_scripting_kit predates output contracts (missing: {missing}); "
+    f"output contracts require llm-scripting-kit >= {_CONTRACT_FLOOR}. Run "
+    "`claude plugin update llm-scripting-kit@plugins-kit`."
+)
+
+# Report vocabulary CPK reads and writes. Plain strings, so reading a stored
+# report never needs the shared lib.
+_DISPOSITION_VALID = "valid"
+_DISPOSITION_TEXT_ONLY = "text-only"
+_DELIVERY_UNREPORTED = "unreported"
+
+
+class StructuredContractSupportError(ImportError):
+    """A declared output contract cannot be honored truthfully here.
+
+    Raised by :func:`_contract_seam` when llm-scripting-kit is absent (the
+    message says to install it) or present but too old (the message says to
+    update it), and by :func:`evaluate_submission` when a ``native-required``
+    contract's response carries no seam report, so native delivery cannot be
+    proven. Both are configuration faults, not model defects, so nothing
+    retries them.
+    """
+
+
+def _contract_seam() -> Any:
+    """Return the output-contract frontier of ``llm_scripting_kit.completion``.
+
+    The ONE place content-pipeline-kit reaches the contract seam. It probes
+    every symbol in :data:`_CONTRACT_SYMBOLS` and the
+    ``BackendOptions.output_contract`` field, and returns a namespace holding
+    those objects plus ``BackendOptions``. An absent shared lib and a stale
+    one have different remedies, so they raise
+    :class:`StructuredContractSupportError` with different messages.
+    """
+    try:
+        from llm_scripting_kit import completion as _completion  # noqa: PLC0415
+    except ImportError as exc:
+        raise StructuredContractSupportError(_MISSING_CONTRACT_LIB_MSG) from exc
+    missing = [name for name in _CONTRACT_SYMBOLS if not hasattr(_completion, name)]
+    options_cls = getattr(_completion, "BackendOptions", None)
+    if not (
+        options_cls is not None
+        and dataclasses.is_dataclass(options_cls)
+        and _CONTRACT_OPTIONS_FIELD
+        in {f.name for f in dataclasses.fields(options_cls)}
+    ):
+        missing.append(f"BackendOptions.{_CONTRACT_OPTIONS_FIELD}")
+    if missing:
+        raise StructuredContractSupportError(
+            _STALE_CONTRACT_LIB_MSG.format(missing=", ".join(missing))
+        )
+    namespace = {name: getattr(_completion, name) for name in _CONTRACT_SYMBOLS}
+    namespace["BackendOptions"] = options_cls
+    return types.SimpleNamespace(**namespace)
+
+
+def _require_contract(output_contract: Any, seam: Any) -> None:
+    if not isinstance(output_contract, seam.OutputContract):
+        raise TypeError(
+            "output_contract must be an llm_scripting_kit OutputContract, got "
+            f"{type(output_contract).__name__}"
+        )
+
+
+def _is_schema_contract(output_contract: Any, seam: Any) -> bool:
+    """True for ``native-required`` / ``validated-result`` (not ``text-only``)."""
+    return output_contract.policy in (
+        seam.POLICY_NATIVE_REQUIRED,
+        seam.POLICY_VALIDATED_RESULT,
+    )
+
+
+def _report_mapping(report: Any) -> Optional[dict]:
+    """A contract report as plain JSON data, or ``None`` when there is none.
+
+    Accepts the JSON form (a mapping) or a seam report object with a
+    ``to_json()`` -- duck-typed, so reading a report never imports the seam.
+    """
+    if report is None:
+        return None
+    to_json = getattr(report, "to_json", None)
+    if callable(to_json):
+        report = to_json()
+    if isinstance(report, Mapping):
+        return dict(report)
+    return None
+
+
+def _report_identity(report: Mapping[str, Any]) -> tuple:
+    return (
+        report.get("contract_id"),
+        report.get("policy"),
+        report.get("schema_digest"),
+        report.get("schema_version"),
+    )
+
+
+def _report_accepts(report: Any, output_contract: Any) -> bool:
+    """The cache hit-acceptance rule for a contract call.
+
+    The report must judge exactly this contract -- ``(contract_id, policy,
+    schema_digest, schema_version)`` equal to ``output_contract.identity()``
+    -- AND carry the success disposition for its policy: ``valid`` for a
+    schema policy, ``text-only`` for a text-only contract. Anything else is
+    a miss, and is never stored.
+    """
+    mapping = _report_mapping(report)
+    if mapping is None:
+        return False
+    if _report_identity(mapping) != tuple(output_contract.identity()):
+        return False
+    expected = (
+        _DISPOSITION_VALID
+        if _is_schema_contract(output_contract, _contract_seam())
+        else _DISPOSITION_TEXT_ONLY
+    )
+    return mapping.get("disposition") == expected
+
+
+def _synthesized_report(
+    output_contract: Any, disposition: str, errors: Sequence[Sequence[str]] = ()
+) -> dict:
+    """A report for a response no seam judged: delivery ``unreported``."""
+    contract_id, policy, schema_digest, schema_version = output_contract.identity()
+    return {
+        "contract_id": contract_id,
+        "schema_version": schema_version,
+        "schema_digest": schema_digest,
+        "policy": policy,
+        "delivery": _DELIVERY_UNREPORTED,
+        "disposition": disposition,
+        "errors": [[p, k] for p, k in sorted((str(p), str(k)) for p, k in errors)],
+    }
+
+
+class StructuralOutputError(RuntimeError):
+    """A completed call whose answer violated its declared output contract.
+
+    The CPK counterpart of llm-scripting-kit's ``OutputContractViolation``,
+    named distinctly (``plugins/CLAUDE.md``, "Duplicated seam types across a
+    shared-lib boundary"). ``response`` is the failed CPK :class:`LLMResponse`
+    (raw ``text``, usage, and the report in ``output_contract``). The token
+    counts and ``model`` are mirrored as attributes so ``call_llm`` charges
+    the billed call. :func:`call_llm` never retries it: retry with feedback
+    belongs to :func:`submit_validated`, which feeds the response to
+    :func:`evaluate_submission` as a structural rejection.
+
+    The message carries no model-authored text, so halt classification,
+    which substring-matches messages, cannot misread an answer as a halt.
+    """
+
+    def __init__(self, response: LLMResponse, message: Optional[str] = None) -> None:
+        if message is None:
+            report = _report_mapping(response.output_contract)
+            if report is None:
+                message = "output contract violated"
+            else:
+                message = (
+                    f"output contract {report.get('contract_id')!r} violated: "
+                    f"{report.get('disposition')} "
+                    f"({len(report.get('errors') or ())} schema error(s))"
+                )
+        super().__init__(message)
+        self.response = response
+        self.input_tokens = response.input_tokens
+        self.output_tokens = response.output_tokens
+        self.cache_hit_tokens = response.cache_hit_tokens
+        self.model = response.model
 
 
 # ---------------------------------------------------------------------------
@@ -932,6 +1159,14 @@ def build_cache_key(
     resolution back to the caller -- see ``LLMBackend.effective_options`` --
     so the value this function hashes is the one that actually reaches the
     provider, not the caller's pre-resolution options.
+
+    ``output_contract`` participates only when set, as an ``output_contract``
+    entry holding the contract's ``identity()`` -- ``id``, ``policy``,
+    ``schema_digest`` and ``schema_version`` -- never the schema body. So the
+    no-contract key is byte-identical to earlier releases, a declared
+    ``text-only`` contract never shares a key with no contract, two schemas
+    sharing one version label never share a key (the digest), and a changed
+    label never replays a report that records the old one.
     """
     opts = options or BackendOptions()
     payload = {
@@ -950,7 +1185,54 @@ def build_cache_key(
         payload["cache_salt"] = opts.cache_salt
     if opts.user_cache_prefix:
         payload["user_cache_prefix"] = opts.user_cache_prefix
+    output_contract = getattr(opts, "output_contract", None)
+    if output_contract is not None:
+        contract_id, policy, schema_digest, schema_version = output_contract.identity()
+        payload["output_contract"] = {
+            "id": contract_id,
+            "policy": policy,
+            "schema_digest": schema_digest,
+            "schema_version": schema_version,
+        }
     return hashing.content_hash(payload, length=hashing.FULL_DIGEST_LENGTH)
+
+
+def _cache_key_for(
+    backend: LLMBackend,
+    system: str,
+    user: str,
+    model: str,
+    options: BackendOptions,
+) -> str:
+    """The response-cache key for one call: the ONE place it is computed.
+
+    Resolves ``options`` through the backend's ``effective_options`` when it
+    exposes one (see :func:`build_cache_key`), then hashes. Both
+    :func:`call_llm` and :func:`submit_validated` (its deferred contract
+    storage) use it, so the two can never key one call differently.
+    """
+    effective_options = getattr(backend, "effective_options", None)
+    key_opts = effective_options(options) if callable(effective_options) else options
+    return build_cache_key(
+        backend=backend.name,
+        model=model,
+        system=system,
+        user=user,
+        options=key_opts,
+    )
+
+
+def _store_contract_response(
+    cache_dir: Union[str, Path], key: str, response: LLMResponse
+) -> bool:
+    """Store a response judged under a contract, with its report attached.
+
+    The deferred half of contract caching: :func:`call_llm` does not store a
+    reportless response under a contract (no later hit could be accepted),
+    so :func:`submit_validated` stores it here once :func:`evaluate_submission`
+    has attached a structurally successful report. It is the only caller.
+    """
+    return ResponseCache(cache_dir).store(key, response)
 
 
 def _serialize_response_error(error: Any) -> Any:
@@ -1013,6 +1295,7 @@ class ResponseCache:
             # Provenance only: response_cost() charges a cache hit nothing.
             reported_cost_usd=reported_cost,
             reported_cost_source=reported_source,
+            output_contract=_report_mapping(data.get("output_contract")),
         )
 
     def store(self, key: str, response: LLMResponse) -> bool:
@@ -1069,6 +1352,10 @@ class ResponseCache:
             "reported_cost_usd": response.reported_cost_usd,
             "reported_cost_source": response.reported_cost_source,
         }
+        report = _report_mapping(response.output_contract)
+        if report is not None:
+            # Written only when present, so a no-contract entry is unchanged.
+            payload["output_contract"] = report
         target = self._path(key)
         fd, tmp_name = tempfile.mkstemp(
             prefix=f".{target.name}.", suffix=".tmp", dir=str(self.cache_dir)
@@ -1167,8 +1454,25 @@ def call_llm(
 
     ``sleep`` is invoked through the module-level ``time`` object so tests can
     monkeypatch ``platform.time.sleep``.
+
+    Under a declared ``options.output_contract``:
+
+    - The contract is part of the cache key (:func:`build_cache_key`), and a
+      hit is returned only when it carries a report that judges this exact
+      contract with the success disposition (``valid``, or ``text-only``).
+      Any other entry is a miss.
+    - A live response is stored only when it already carries such a report
+      from the transport. A reportless response is returned uncached;
+      :func:`submit_validated` stores it once it has been judged. A direct
+      caller passing a contract to a reportless backend therefore gets
+      correct, uncached responses.
+    - A :class:`StructuralOutputError` from the backend is charged and
+      re-raised at once: never retried, never halt-classified, never cached.
     """
     opts = options or BackendOptions()
+    output_contract = opts.output_contract
+    if output_contract is not None:
+        _require_contract(output_contract, _contract_seam())
 
     if input_budgets is not None:
         check_request_fits(
@@ -1183,17 +1487,11 @@ def call_llm(
     cache_key: Optional[str] = None
     if cache_dir is not None:
         cache = ResponseCache(cache_dir)
-        effective_options = getattr(backend, "effective_options", None)
-        key_opts = effective_options(opts) if callable(effective_options) else opts
-        cache_key = build_cache_key(
-            backend=backend.name,
-            model=model,
-            system=system,
-            user=user,
-            options=key_opts,
-        )
+        cache_key = _cache_key_for(backend, system, user, model, opts)
         hit = cache.lookup(cache_key)
-        if hit is not None:
+        if hit is not None and (
+            output_contract is None or _report_accepts(hit.output_contract, output_contract)
+        ):
             return hit
 
     response: Optional[LLMResponse] = None
@@ -1202,6 +1500,18 @@ def call_llm(
         try:
             candidate = backend.complete(system, user, model=model, options=opts)
         except PipelineHaltError:
+            raise
+        except StructuralOutputError as exc:
+            # A billed call whose answer broke its contract: a model defect,
+            # not a transport failure. Retry with feedback is
+            # submit_validated's job, so this is never retried here.
+            _charge_exception(
+                exc,
+                model=model,
+                pricing=pricing,
+                cost_budget=cost_budget,
+                identifier=identifier,
+            )
             raise
         except BaseException as exc:  # noqa: BLE001 -- classify then re-raise
             _charge_exception(
@@ -1267,7 +1577,10 @@ def call_llm(
         cost_budget.charge(cost, identifier=identifier or model)
 
     if cache is not None and cache_key is not None and not response.from_cache:
-        cache.store(cache_key, response)
+        if output_contract is None or _report_accepts(
+            response.output_contract, output_contract
+        ):
+            cache.store(cache_key, response)
 
     return response
 
@@ -1287,8 +1600,9 @@ class SubmitResult:
     - ``rejections`` -- outstanding
       :class:`~content_pipeline.validate.contract.Rejection` after the final
       attempt; empty means accepted. A parse failure is surfaced as one
-      ``parse_error`` rejection so the caller's exhaustion policy sees a
-      uniform shape.
+      ``parse_error`` rejection (a structural failure under a schema-policy
+      output contract as one ``schema_violation`` rejection) so the caller's
+      exhaustion policy sees a uniform shape.
     - ``attempts`` -- number of completion calls made.
     - ``responses`` -- per-attempt :class:`LLMResponse` list (the audit
       trail).
@@ -1319,12 +1633,60 @@ class ValidationSpec:
     eventual typed ``ValidationSpec`` field (``execution/adapter.py``,
     not built here) widens this shape for the
     out-of-process worker protocol; it does not replace it.
+
+    ``output_contract`` (an ``llm_scripting_kit`` ``OutputContract``, or
+    ``None``) adds a STRUCTURAL step ahead of the semantic validators. A
+    schema-policy contract (``native-required`` / ``validated-result``)
+    replaces ``parse_fn`` -- the validated object IS the payload -- so the
+    two are refused together. A ``text-only`` contract keeps ``parse_fn``.
+    ``parse_fn`` and ``validators`` default to ``None`` / ``()``; positional
+    construction is unchanged, and a spec with neither a ``parse_fn`` nor a
+    schema-policy contract is refused.
     """
 
-    parse_fn: Callable[[str], Any]
-    validators: Sequence[contract.Validator]
+    parse_fn: Optional[Callable[[str], Any]] = None
+    validators: Sequence[contract.Validator] = ()
     context: Any = None
     block_soft: bool = True
+    output_contract: Optional[Any] = None
+
+    def __post_init__(self) -> None:
+        if self.output_contract is None:
+            if self.parse_fn is None:
+                raise ValueError(
+                    "ValidationSpec needs a parse_fn, or a schema-policy output_contract"
+                )
+            return
+        seam = _contract_seam()
+        _require_contract(self.output_contract, seam)
+        if _is_schema_contract(self.output_contract, seam):
+            if self.parse_fn is not None:
+                raise ValueError(
+                    f"output contract {self.output_contract.id!r} "
+                    f"({self.output_contract.policy}) replaces parse_fn: the "
+                    "validated object is the payload, so pass one or the other"
+                )
+        elif self.parse_fn is None:
+            raise ValueError(
+                f"a text-only output contract ({self.output_contract.id!r}) "
+                "validates nothing structurally, so the spec still needs a parse_fn"
+            )
+
+    def payload_from_text(self, text: str) -> Any:
+        """Recover the payload from ACCEPTED text, deterministically.
+
+        ``json.loads(text)`` for a schema-policy contract -- text accepted
+        under that contract was already judged as exactly one strict JSON
+        value, so this returns the object that was validated -- and
+        ``parse_fn(text)`` otherwise. Finalize uses this, so it recovers the
+        same payload the submit step judged.
+        """
+        if self.output_contract is not None and _is_schema_contract(
+            self.output_contract, _contract_seam()
+        ):
+            return json.loads(text)
+        assert self.parse_fn is not None  # guaranteed by __post_init__
+        return self.parse_fn(text)
 
 
 @dataclass
@@ -1338,15 +1700,91 @@ class EvaluationResult:
       because a legitimate parse result can itself be ``None`` or empty.
     - ``rejections`` -- validator rejections when ``parsed`` is True (empty
       means accepted); a single ``parse_error`` rejection when ``parsed`` is
-      False.
+      False (a single ``schema_violation`` rejection for a structural
+      failure under a schema-policy contract).
+    - ``structural`` -- the output-contract report the judgment used (the
+      transport's, or one synthesized with delivery ``unreported``), or
+      ``None`` when the spec declares no contract.
     """
 
     parsed: bool
     payload: Any
     rejections: List[contract.Rejection]
+    structural: Optional[Mapping[str, Any]] = None
 
 
-def evaluate_submission(text: str, spec: ValidationSpec) -> EvaluationResult:
+def _structural_detail(
+    output_contract: Any, disposition: Any, errors: Sequence[Sequence[str]]
+) -> str:
+    """Deterministic feedback for a structural failure (no model text)."""
+    head = (
+        f"output does not satisfy output contract {output_contract.id} "
+        f"(schema {output_contract.schema_version})"
+    )
+    if disposition == "unparseable":
+        return (
+            f"{head}: the response is not exactly one JSON value; respond with "
+            "only the JSON value, with no prose and no code fence"
+        )
+    if not errors:
+        return f"{head}: {disposition}"
+    listed = "; ".join(f"{pointer or '(root)'} fails {keyword}" for pointer, keyword in errors)
+    return f"{head}: {listed}"
+
+
+def _structural_failure(
+    output_contract: Any, report: Mapping[str, Any], text: str
+) -> EvaluationResult:
+    """One HARD ``schema_violation`` rejection; domain validators do not run."""
+    errors = sorted((str(p), str(k)) for p, k in (report.get("errors") or ()))
+    disposition = report.get("disposition")
+    return EvaluationResult(
+        parsed=False,
+        payload=None,
+        rejections=[
+            contract.Rejection(
+                kind="schema_violation",
+                severity=contract.Severity.HARD,
+                detail=_structural_detail(output_contract, disposition, errors),
+                rule_id=output_contract.id,
+                payload={
+                    "contract_id": output_contract.id,
+                    "schema_version": output_contract.schema_version,
+                    "policy": output_contract.policy,
+                    "delivery": report.get("delivery"),
+                    "disposition": disposition,
+                    "errors": [[p, k] for p, k in errors],
+                    "raw_output": text,
+                },
+            )
+        ],
+        structural=report,
+    )
+
+
+def _parse_and_validate(text: str, spec: ValidationSpec) -> EvaluationResult:
+    """The pre-contract judgment: ``parse_fn``, then the validators."""
+    try:
+        payload = spec.parse_fn(text)  # type: ignore[misc]
+    except Exception as exc:  # noqa: BLE001 -- parse_fn is caller code
+        return EvaluationResult(
+            parsed=False,
+            payload=None,
+            rejections=[
+                contract.Rejection(
+                    kind="parse_error",
+                    severity=contract.Severity.HARD,
+                    detail=str(exc),
+                )
+            ],
+        )
+    rejections = contract.run_rules(payload, spec.context, spec.validators)
+    return EvaluationResult(parsed=True, payload=payload, rejections=rejections)
+
+
+def evaluate_submission(
+    text: str, spec: ValidationSpec, *, response: Optional[LLMResponse] = None
+) -> EvaluationResult:
     """Judge one candidate response against ``spec`` -- parse, then validate.
 
     Extracted from :func:`submit_validated`'s per-attempt body (submit-time acceptance is authoritative) so a
@@ -1366,23 +1804,67 @@ def evaluate_submission(text: str, spec: ValidationSpec) -> EvaluationResult:
     rejection -- a malformed response is a model defect exactly like a
     validation rejection, matching ``submit_validated``'s documented parse
     handling.
+
+    With no contract, or a ``text-only`` contract, that is the whole path
+    (a text-only contract adds only ``structural``, the report). Under a
+    schema-policy contract the STRUCTURAL step runs first, and the semantic
+    validators run only on a structurally valid object:
+
+    1. ``response.output_contract`` judging this exact contract is a seam
+       report: ``valid`` makes ``response.structured`` the payload; any other
+       disposition is a structural failure.
+    2. No such report (the protocol ``submit`` verb, ``MockBackend``, any
+       transport that did not report): ``validated-result`` is judged here by
+       llm-scripting-kit's ``evaluate_output`` and reported with delivery
+       ``unreported``; ``native-required`` raises
+       :class:`StructuredContractSupportError`, because native delivery
+       cannot be proven.
+
+    A structural failure is one HARD ``schema_violation`` rejection whose
+    ``payload`` carries the contract identity, the disposition, the sorted
+    errors and the raw output; the domain validators do NOT run. Still pure:
+    the contract path reads only its arguments.
     """
-    try:
-        payload = spec.parse_fn(text)
-    except Exception as exc:  # noqa: BLE001 -- parse_fn is caller code
-        return EvaluationResult(
-            parsed=False,
-            payload=None,
-            rejections=[
-                contract.Rejection(
-                    kind="parse_error",
-                    severity=contract.Severity.HARD,
-                    detail=str(exc),
-                )
-            ],
+    output_contract = spec.output_contract
+    if output_contract is None:
+        return _parse_and_validate(text, spec)
+    seam = _contract_seam()
+    report = _report_mapping(getattr(response, "output_contract", None))
+    if report is not None and _report_identity(report) != tuple(output_contract.identity()):
+        # A report about some other contract proves nothing about this one.
+        report = None
+
+    if not _is_schema_contract(output_contract, seam):
+        result = _parse_and_validate(text, spec)
+        result.structural = (
+            report
+            if report is not None
+            else _synthesized_report(output_contract, _DISPOSITION_TEXT_ONLY)
         )
+        return result
+
+    structured = getattr(response, "structured", None)
+    if report is not None and report.get("disposition") != _DISPOSITION_VALID:
+        return _structural_failure(output_contract, report, text)
+    if report is not None and structured is not None:
+        payload = structured
+    else:
+        if output_contract.policy == seam.POLICY_NATIVE_REQUIRED:
+            raise StructuredContractSupportError(
+                f"output contract {output_contract.id!r} is native-required, but "
+                "the response carries no seam report with a validated object, so "
+                "native delivery cannot be proven; declare validated-result, or "
+                "route to a transport that reports native delivery"
+            )
+        outcome = seam.evaluate_output(output_contract, text)
+        report = _synthesized_report(output_contract, outcome.disposition, outcome.errors)
+        if outcome.disposition != _DISPOSITION_VALID:
+            return _structural_failure(output_contract, report, text)
+        payload = outcome.value
     rejections = contract.run_rules(payload, spec.context, spec.validators)
-    return EvaluationResult(parsed=True, payload=payload, rejections=rejections)
+    return EvaluationResult(
+        parsed=True, payload=payload, rejections=rejections, structural=report
+    )
 
 
 def _default_feedback(original_user: str, response_text: str, feedback: str) -> str:
@@ -1402,14 +1884,15 @@ def submit_validated(
     system: str,
     user: str,
     model: str,
-    parse_fn: Callable[[str], Any],
-    validators: Sequence[contract.Validator],
+    parse_fn: Optional[Callable[[str], Any]] = None,
+    validators: Sequence[contract.Validator] = (),
     context: Any = None,
     build_feedback: Optional[Callable[[str, str, str], str]] = None,
     max_attempts: int = 3,
     options: Optional[BackendOptions] = None,
     cache_dir: Optional[Union[str, Path]] = None,
     block_soft: bool = True,
+    output_contract: Optional[Any] = None,
     **call_kwargs: Any,
 ) -> SubmitResult:
     """Run the call -> parse -> validate -> feed-back loop.
@@ -1431,17 +1914,45 @@ def submit_validated(
     Extra keyword arguments are forwarded to :func:`call_llm` (e.g. ``pricing``,
     ``input_budgets``, ``retries``). Per-attempt cache-busting is automatic:
     each retry carries a ``cache_salt`` equal to the attempt index.
+
+    ``output_contract`` declares a structured-output contract (see
+    :class:`ValidationSpec`); it is placed on ``options`` (a different
+    contract already there is refused) and judged by
+    :func:`evaluate_submission` with each attempt's response. A schema-policy
+    contract takes no ``parse_fn``. A :class:`StructuralOutputError` from
+    the transport becomes that attempt's response, so the ``schema_violation``
+    feedback reaches the next prompt through this same loop. Under a
+    contract each attempt is judged BEFORE it is recorded: a report this
+    loop synthesized (delivery ``unreported``) is attached to the recorded
+    response, with the validated object as ``structured``, and a live,
+    structurally valid, reportless response is stored in the response cache
+    in that enriched form -- a structural failure never is.
     """
     if max_attempts < 1:
         raise ValueError(f"max_attempts must be >= 1, got {max_attempts}")
 
     feedback_fn = build_feedback or _default_feedback
     base_options = options or BackendOptions()
+    if output_contract is not None:
+        declared = base_options.output_contract
+        if declared is not None and tuple(declared.identity()) != tuple(
+            output_contract.identity()
+        ):
+            raise ValueError(
+                "submit_validated got two different output contracts: "
+                f"{output_contract.id!r} and options.output_contract {declared.id!r}"
+            )
+        base_options = replace(base_options, output_contract=output_contract)
+    effective_contract = base_options.output_contract
     spec = ValidationSpec(
         parse_fn=parse_fn,
         validators=validators,
         context=context,
         block_soft=block_soft,
+        output_contract=effective_contract,
+    )
+    schema_contract = effective_contract is not None and _is_schema_contract(
+        effective_contract, _contract_seam()
     )
 
     responses: List[LLMResponse] = []
@@ -1471,9 +1982,41 @@ def submit_validated(
             # input the old successful-empty path supplied, without adding a
             # second retry inside one validation attempt.
             resp = exc.response()
-        responses.append(resp)
+        except StructuralOutputError as exc:
+            # The transport judged the answer and it failed its contract: the
+            # failed response is this attempt's input, and its report becomes
+            # a schema_violation rejection and the next prompt's feedback.
+            resp = exc.response
 
-        evaluation = evaluate_submission(resp.text, spec)
+        if effective_contract is None:
+            responses.append(resp)
+            evaluation = evaluate_submission(resp.text, spec)
+        else:
+            evaluation = evaluate_submission(resp.text, spec, response=resp)
+            recorded = resp
+            if resp.output_contract is None and evaluation.structural is not None:
+                recorded = replace(
+                    resp,
+                    output_contract=evaluation.structural,
+                    structured=(
+                        evaluation.payload
+                        if schema_contract and evaluation.parsed
+                        else None
+                    ),
+                )
+                if (
+                    cache_dir is not None
+                    and not resp.from_cache
+                    and _report_accepts(evaluation.structural, effective_contract)
+                ):
+                    _store_contract_response(
+                        cache_dir,
+                        _cache_key_for(
+                            backend, system, current_user, model, attempt_options
+                        ),
+                        recorded,
+                    )
+            responses.append(recorded)
         rejections = evaluation.rejections
         if evaluation.parsed:
             payload = evaluation.payload
@@ -1529,4 +2072,6 @@ __all__ = [
     "ValidationSpec",
     "EvaluationResult",
     "evaluate_submission",
+    "StructuralOutputError",
+    "StructuredContractSupportError",
 ]

@@ -12,7 +12,9 @@ byte-identity: the driver must present ``backend.name`` to the REAL
 
 from __future__ import annotations
 
+import sys
 import time
+from pathlib import Path
 
 import pytest
 
@@ -22,7 +24,12 @@ from content_pipeline.execution.store import ExecutionStore
 from content_pipeline.execution.wave import ready_wave
 from content_pipeline.execution.drivers.inline import run_wave
 from content_pipeline.llm.backends import MockBackend
-from content_pipeline.llm.platform import BackendOptions, PipelineHaltError, build_cache_key
+from content_pipeline.llm.platform import (
+    BackendOptions,
+    PipelineHaltError,
+    ValidationSpec,
+    build_cache_key,
+)
 from content_pipeline.pipeline.workunit import FlatChunkStrategy, WorkUnit
 
 
@@ -381,3 +388,55 @@ def test_driver_does_not_overwrite_a_caller_supplied_client_id(tmp_path):
         options=BackendOptions(client_id="caller-chose-this"),
     )
     assert options.client_id == "caller-chose-this"
+
+
+# -- output contracts (F1): the spec's contract reaches submit_validated -------
+
+_SHARED_LIB = Path(__file__).resolve().parents[2] / "plugins" / "llm-scripting-kit" / "lib"
+
+
+def _lsk_names():
+    return {n for n in sys.modules if n == "llm_scripting_kit" or n.startswith("llm_scripting_kit.")}
+
+
+@pytest.fixture
+def lsk(monkeypatch):
+    """The real ``llm_scripting_kit.completion``, unloaded again afterwards."""
+    before = _lsk_names()
+    monkeypatch.syspath_prepend(str(_SHARED_LIB))
+    import llm_scripting_kit.completion as completion  # noqa: PLC0415
+
+    yield completion
+    for name in _lsk_names() - before:
+        del sys.modules[name]
+
+
+def test_inline_driver_passes_output_contract_to_submit_validated(tmp_path, lsk):
+    output_contract = lsk.OutputContract(
+        id="cpk.summary",
+        policy=lsk.POLICY_VALIDATED_RESULT,
+        schema={"type": "object", "required": ["title"]},
+    )
+    seen = []
+    spec = ValidationSpec(
+        validators=[lambda candidate, context: seen.append(candidate) or []],
+        output_contract=output_contract,
+    )
+    store = _seeded_store(tmp_path, unit_ids=("u0",))
+    # The first answer is valid JSON that breaks the schema: judged as text it
+    # would be accepted, so acceptance of the SECOND proves the contract ran.
+    backend = MockBackend(responses=['{"other": 1}', '{"title": "ok"}'])
+    adapter = RunAdapter(
+        user_for=lambda wu: "user prompt", validation_spec_for=lambda wu: spec
+    )
+
+    accepted = run_wave(
+        store, "run-1", _wave(store, ["u0"]), adapter, backend=backend, model="m"
+    )
+
+    assert accepted == ["u0"]
+    assert backend.calls[0]["options"].output_contract is output_contract
+    assert len(backend.calls) == 2
+    assert "[schema_violation:cpk.summary]" in backend.calls[1]["user"]
+    assert seen == [{"title": "ok"}]
+    assert store.get_unit("run-1", "u0").accepted_text == '{"title": "ok"}'

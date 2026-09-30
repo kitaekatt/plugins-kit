@@ -112,6 +112,14 @@ The surface (both live under ``platform`` unless noted):
 - ``PipelineHaltError`` + ``HALT_AUTH`` / ``HALT_RATE_LIMIT`` /
   ``HALT_INSUFFICIENT_CREDIT`` -- the halt taxonomy.
 - ``ResponseCache`` / ``CostBudget`` -- the cache and budget guard.
+- ``StructuralOutputError`` / ``StructuredContractSupportError`` -- the
+  output-contract failure types.
+- ``OutputContract`` -- llm-scripting-kit's output-contract type, re-exported
+  LAZILY through ``platform._contract_seam`` (not a duplicate type). Reading
+  it needs llm-scripting-kit >= 0.56.0 and raises
+  ``StructuredContractSupportError`` otherwise, so it resolves on first
+  attribute access and is deliberately absent from ``__all__``: a star import
+  must never require the shared lib.
 - ``OpenRouterBackend`` / ``ClaudeCliBackend`` / ``CodexCliBackend`` /
   ``OpencodeCliBackend`` / ``ModelEndpointBackend`` / ``MockBackend`` /
   ``route`` / ``routed_model`` -- the transports and process-level routing
@@ -150,9 +158,12 @@ from content_pipeline.llm.platform import (
     LLMBackend,
     LLMResponse,
     ResponseCache,
+    StructuralOutputError,
+    StructuredContractSupportError,
     call_llm,
     submit_validated,
 )
+from content_pipeline.llm.platform import _contract_seam
 
 __all__ = [
     "call_llm",
@@ -182,4 +193,14 @@ __all__ = [
     "declared_model_names",
     "resolve_declaration",
     "declared_backend_and_model",
+    "StructuralOutputError",
+    "StructuredContractSupportError",
 ]
+
+
+def __getattr__(name: str):
+    # The lazy OutputContract re-export, resolved through the one probe so an
+    # absent or stale shared lib raises its own distinct diagnosis.
+    if name == "OutputContract":
+        return _contract_seam().OutputContract
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

@@ -41,7 +41,8 @@ import RunAdapter``) and every existing call site --
 :func:`finalize_run` (``parse_fn``, ``apply``) -- keeps working
 with no signature change, exactly as that module's own docstring promised
 ("widenings -- new fields, not signature changes"). ``finalize_run`` resolves
-its parse function via ``adapter.resolve_validation_spec(adapter.unit_for(unit_id)).parse_fn``
+its payload via ``adapter.resolve_validation_spec(adapter.unit_for(unit_id)).payload_from_text``
+(``parse_fn``, or the validated JSON object under a schema-policy output contract)
 -- the SAME method call ``execution.protocol``'s ``submit`` verb uses to
 evaluate the text in the first place -- rather than reading ``adapter.parse_fn``
 directly, which is what makes the rule "finalize re-parses with the SAME function
@@ -587,7 +588,9 @@ def finalize_run(
     during THIS call.
 
     Never re-adjudicates a verdict (submit-time acceptance is authoritative): the parse function
-    resolved via ``adapter.resolve_validation_spec(adapter.unit_for(unit_id)).parse_fn``
+    resolved via ``adapter.resolve_validation_spec(adapter.unit_for(unit_id))``
+    (its ``payload_from_text``: ``parse_fn``, or ``json.loads`` under a
+    schema-policy output contract)
     -- the SAME resolution ``execution.protocol``'s ``submit`` verb used to
     evaluate this text in the first place, not a second, independently
     reached ``adapter.parse_fn`` reference -- is called mechanically on the
@@ -641,9 +644,15 @@ def finalize_run(
         # deterministic and store-independent for the same reason `parse_fn`
         # must (see the module docstring): it is being called fresh here,
         # potentially long after and in a different process from `submit`.
+        #
+        # The payload comes from `spec.payload_from_text`, not `parse_fn`
+        # directly: a spec declaring a schema-policy output contract has no
+        # `parse_fn` (the validated JSON object is the payload), and
+        # `payload_from_text` recovers exactly that object; for every other
+        # spec it is `parse_fn(accepted_text)`, byte-identical to before.
         work_unit = adapter.unit_for(unit.unit_id)
-        parse_fn = adapter.resolve_validation_spec(work_unit).parse_fn
-        payload = parse_fn(unit.accepted_text)
+        spec = adapter.resolve_validation_spec(work_unit)
+        payload = spec.payload_from_text(unit.accepted_text)
         store.record_apply_started(run_id, unit.unit_id, at=at)
         try:
             adapter.apply(unit.unit_id, payload)
