@@ -3,7 +3,7 @@ _schema_version: 1
 name: plugin-dev
 author: christina
 skill-type: technique-skill
-description: Use when cross-plugin edge, REQUIRED/REFUSE/DEGRADE, opt-lib probe, enable, model declaration, execution events, interrupts. Do NOT use for config/md authoring.
+description: Use when cross-plugin edge, REQUIRED/REFUSE/DEGRADE, opt-lib probe/enable, model declaration, exec events, interrupts, skill material. Do NOT use for config/md.
 ---
 
 # Plugin development
@@ -16,7 +16,7 @@ when the consuming skill can host a consented probe.
 ```yaml
 technique_skill:
   _schema_version: "1"
-  identity: Procedure for choosing and applying the REQUIRED / REFUSE / DEGRADE contract for cross-plugin capability edges, and for the shared model-declaration format, execution-event envelope, and interrupt contract.
+  identity: Procedure for choosing and applying the REQUIRED / REFUSE / DEGRADE contract for cross-plugin capability edges, and for the shared model-declaration format, execution-event envelope, interrupt contract, and skill-material library.
   scope:
     covers:
       - cross-plugin imports and optional shared-library edges
@@ -25,6 +25,7 @@ technique_skill:
       - the shared model-declaration format and its structural validator
       - the shared execution-event envelope, its vocabulary, ordering rules, and sinks
       - the shared interrupt contract, its request shape, validation rules, injected validator, and resolution document
+      - the shared skill-material library, its selection, declared-resource and budget rules, frozen text format, provenance report, and consumer probe
     excludes:
       - bootstrap manifest configuration
       - skill and CLAUDE.md authoring standards
@@ -68,4 +69,8 @@ references:
     path: references/interrupt-contract.md
     keywords: [interrupt contract, durable interrupt, waiting state, interrupt request, request envelope, request_schema, resolution document, injected validator, json schema subset, decision outcome, replay, expiry, lapse, bootstrap_lib.interrupt_contract]
     summary: The shared contract a plugin checks a durable wait against while keeping the wait in its own store -- the frozen v1 request shape, field rules and limits, the three per-store inputs, the injected validator and the subset literal it must advertise, decisions and outcomes, input validation, the replay test, the lapse rule, the resolution document, what stays in the implementing plugin (store, continuation, outcome policy, event phases), the consumer probe, and the revision rule.
+  - id: skill_material
+    path: references/skill-material.md
+    keywords: [skill material, skill context, token budget, declared resources, catalog level, full level, provenance report, format version, strict frontmatter, PyYAML, bootstrap_lib.skill_material]
+    summary: The shared library that turns caller-named skills into one token-bounded text block with a provenance report -- the selection and its levels, the strict reader, the resources a skill declares and how they are resolved, the budget refusal, duplicate suppression, the frozen format "1" bytes, the report document and its schema id, the PyYAML rule, the consumer probe, and the revision rule.
 ```
