@@ -503,6 +503,15 @@ install or update command, and declares no edge to the other plugin.
 `tests/bootstrap/test_interrupt_contract_consumers.py` drives both real stores
 with one request and one answer and compares what they record, refuse and emit.
 
+`bootstrap_lib/skill_material.py` is consumed by llm-scripting-kit
+(`completion/skill_context.py`) and skills-kit (`skills_kit_lib/material.py`);
+its PyYAML handling and frozen report format are specified in
+`plugins/bootstrap/skills/plugin-dev/references/skill-material.md`. Each
+consumer carries `SKILL_MATERIAL_BOOTSTRAP = "0.138.0"` and pins it with
+`requires_bootstrap` "0.138.0" in its `bootstrap.json`. An installed bootstrap
+older than that floor refuses both consumers, so bootstrap ships before or with
+llm-scripting-kit and skills-kit.
+
 The venv-scoping above is the ordinary consequence of a per-venv install rather
 than fragility -- a `.pth` written into one environment no more appears in
 another than a `pip install` does. The re-exec rule below is how a script
