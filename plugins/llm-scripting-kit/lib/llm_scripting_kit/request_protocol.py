@@ -40,6 +40,7 @@ from pathlib import Path
 from typing import Any, Dict, Mapping, Optional, Tuple
 
 from .completion import BackendOptions
+from .completion.contract import OutputContract
 
 PROTOCOL_VERSION = 1
 """The only request/result protocol version this build speaks.
@@ -136,6 +137,8 @@ def _classify(annotation: Any) -> str:
     base, _optional = _unwrap_optional(annotation)
     if base is Path:
         return "path"
+    if base is OutputContract:
+        return "output-contract"
     origin = typing.get_origin(base)
     if base in (dict, Mapping) or origin in (dict, Mapping, collections.abc.Mapping):
         return "mapping"
@@ -173,6 +176,15 @@ def _coerce(name: str, value: Any, annotation: Any) -> Any:
         if not isinstance(value, str):
             raise ProtocolError(f"options.{name} must be a string path")
         return Path(value)
+    if kind == "output-contract":
+        # The contract's own constructor is the validator: an unknown key, a
+        # bad policy, an unsupported schema keyword or a null-accepting root
+        # all refuse here, before any endpoint is resolved.
+        mapping = _require_mapping(value, f"options.{name}")
+        try:
+            return OutputContract.from_json(mapping)
+        except (ValueError, TypeError) as exc:
+            raise ProtocolError(f"options.{name}: {exc}") from exc
     if kind == "mapping":
         return dict(_require_mapping(value, f"options.{name}"))
     if kind == "bool":

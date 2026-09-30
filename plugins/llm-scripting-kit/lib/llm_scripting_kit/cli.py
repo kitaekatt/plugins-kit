@@ -19,6 +19,7 @@ from .completion import (
     AgentTimeoutError,
     BackendOptions,
     LLMResponse,
+    OutputContractViolation,
     ResponseError,
     adapter_capabilities,
     create_backend,
@@ -325,6 +326,11 @@ def _parser() -> argparse.ArgumentParser:
     complete.add_argument("--max-tokens", type=int)
     complete.add_argument("--temperature", type=float)
     complete.add_argument("--timeout", type=float)
+    complete.add_argument(
+        "--max-retries",
+        type=_non_negative_int,
+        help="OpenAI-compatible endpoints: SDK retries per call (default 2; 0 disables).",
+    )
     complete.add_argument("--effort")
     complete.add_argument("--cwd", type=Path)
     complete.add_argument("--format", choices=("json", "text"), default="json")
@@ -1062,6 +1068,7 @@ _COMPLETE_CALL_FLAGS = (
     "max_tokens",
     "temperature",
     "timeout",
+    "max_retries",
     "effort",
     "cwd",
 )
@@ -1097,6 +1104,7 @@ def _request_from_flags(args: argparse.Namespace) -> "tuple[str, str, Any, Backe
         max_tokens=flag("max_tokens"),
         temperature=flag("temperature"),
         timeout_s=args.timeout,
+        max_retries=args.max_retries,
         effort=args.effort or selection.effort,
         cwd=args.cwd,
         log_prefix=f"[{selection.endpoint}]",
@@ -1146,6 +1154,16 @@ def _request_from_protocol(
     return request.system, request.prompt, selection, options
 
 
+def _non_negative_int(text: str) -> int:
+    try:
+        value = int(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"invalid non-negative integer: {text!r}") from None
+    if value < 0:
+        raise argparse.ArgumentTypeError(f"must be >= 0, got {value}")
+    return value
+
+
 def _cmd_complete(args: argparse.Namespace) -> int:
     try:
         if args.request_file:
@@ -1166,6 +1184,15 @@ def _cmd_complete(args: argparse.Namespace) -> int:
     started_monotonic = time.monotonic()
     try:
         response = selection.backend.complete(system, user, model=selection.model, options=options)
+    except OutputContractViolation as exc:
+        # The call RAN: the adapter holds the full failed response (raw text,
+        # the controls it emitted, the contract report), so the envelope
+        # renders that rather than a rebuilt empty one. Not a halt.
+        if args.format == "text":
+            print(f"{exc.response.error.code}: {exc.response.error.message}", file=sys.stderr)
+        else:
+            _json(_complete_envelope(selection, exc.response, call_ran=True))
+        return EXIT_FAILURE
     except Exception as exc:  # transport implementations expose heterogeneous exception types
         # ERROR-AS-DATA, and only here. The package API keeps RAISING -- every
         # existing consumer branches on typed exceptions, and returning a
@@ -1259,7 +1286,9 @@ def _forwarded_for(backend: Any, options: BackendOptions) -> tuple:
     return derive_forwarded_params(capabilities, options)
 
 
-def _complete_envelope(selection: Any, response: LLMResponse) -> dict[str, Any]:
+def _complete_envelope(
+    selection: Any, response: LLMResponse, *, call_ran: bool = False
+) -> dict[str, Any]:
     """One result shape for a completed, timed-out, or failed call.
 
     ``error`` is rendered through :meth:`ResponseError.to_json` rather than
@@ -1271,6 +1300,9 @@ def _complete_envelope(selection: Any, response: LLMResponse) -> dict[str, Any]:
     payload.pop("error", None)
     if response.error is not None:
         payload["error"] = response.error.to_json()
+        # call_ran: an output-contract violation. The adapter built this
+        # response and knows what it emitted, so the controls stay as it
+        # reported them; the omission below is for exceptions the CLI caught.
         # OMITTED, not emptied. The CLI catches an exception, which carries no
         # record of the argv the adapter built, so what the request emitted is
         # UNKNOWN here -- and an empty list does not mean "unknown", it means
@@ -1278,8 +1310,9 @@ def _complete_envelope(selection: Any, response: LLMResponse) -> dict[str, Any]:
         # would be false, since each emits unconditional controls on every
         # invocation. A missing key is the only honest way to say "not known";
         # `structured` goes with it for the same reason.
-        payload.pop("execution_controls_applied", None)
-        payload.pop("structured", None)
+        if not call_ran:
+            payload.pop("execution_controls_applied", None)
+            payload.pop("structured", None)
     return {
         # Versioned so a consumer can tell which payload shape it is holding.
         # The other keys are unchanged from the unversioned envelope: adding a

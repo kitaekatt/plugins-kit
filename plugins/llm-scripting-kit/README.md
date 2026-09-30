@@ -23,6 +23,13 @@ usable entry of the pace-ordered list (see `describe` below), and `--model`
 overrides the model id of whichever entry is chosen. `resolve` and `complete`
 take no `--endpoint` flag; name one entry as `--models NAME`.
 
+`complete --max-retries N` sets the OpenAI SDK's automatic retries for that one
+call on OpenAI-compatible endpoints (default 2, the SDK default; `0` turns them
+off; a negative value is refused). Pass `0` when the caller runs its own backoff,
+so one failed request surfaces at once instead of after hidden SDK retries. The
+CLI transports (Claude, Codex, OpenCode) ignore it and report it in
+`dropped_params`. A `--request-file` request sets it as `options.max_retries`.
+
 Discovery and completion commands emit JSON by default. `complete --format
 text` prints only the response text. Exit codes are `0` for success, `1` for a
 runtime failure, `2` for invalid input/configuration, `3` for a classified
@@ -376,6 +383,24 @@ before another entry runs. A workspace that cannot be reset ends the run
 instead of stacking a second model's work on the first one's partial edits.
 `on_attempt` receives each `Attempt` with its pace reading.
 
+`run(..., observer=...)` (keyword-only) reports what happened as execution
+events. `observer` is any object with an `emit` method keyword-compatible with
+`bootstrap_lib.execution_event.Emitter.emit` (`llm_scripting_kit.ExecutionObserver`
+is the protocol); an `Emitter` bound to your run and unit works as is. Bind the
+`run_id` and `unit_id` and choose `source.plugin` on the `Emitter`, because the
+stream records your run, not this library's. Per attempt `run` emits
+`dispatch-selected` (payload `entry`, `pace`), `call-started` immediately before
+the call, `usage` when the response reported a count, and `result` (`status`
+`completed`, `failed` or `halted`, plus `halt` or `reason`). `attempt_id` is the
+attempt number as a string. Once per call it emits `terminal` with the
+`RunResult.status`, or `unroutable` just before raising `NoUsableRoutingTarget`.
+Usage passes through `usage_payload`, so an unreported count is `null` rather
+than `0`: codex reports a total only, and an all-zero response emits no `usage`
+event. An exception raised by the observer propagates unchanged. Passing an
+observer needs bootstrap >= 0.135.0; when `bootstrap_lib.execution_event` is
+absent or older, `run` raises `DeclarationSupportError` before any dispatch.
+Without an observer nothing is imported and nothing changes.
+
 `order_by_pace(items)` is the ordering rule on its own. `check_registry_entry(id,
 merged)` reports a core id (`fable`, `opus`, `sonnet`, `haiku`) whose merged
 entry is not a Claude harness.
@@ -472,6 +497,39 @@ Any other key is read as a dotted path over `Capabilities.to_json()` (e.g.
 `"adapter"`, `"structured_output.mode"`), so the function carries no
 capability table of its own -- it only knows how to walk the advertisement's
 JSON shape.
+
+### Output contracts
+
+A caller that needs a structured answer declares an
+`llm_scripting_kit.completion.OutputContract(id, policy, schema)` on
+`BackendOptions.output_contract` instead of sending a per-transport schema key.
+The policy is `native-required` (the schema must reach the target through a
+first-class schema channel), `validated-result` (any advertised channel, answer
+checked), or `text-only` (an explicit declaration that the answer is text). The
+schema is a stdlib JSON Schema subset; a keyword outside it (`pattern`,
+`oneOf`, `format`, ...) is refused when the contract is built.
+
+- `codex-cli` delivers the schema natively (`--output-schema`) and lists all
+  three policies, but accepts only OpenAI strict-mode schemas
+  (`additionalProperties` false and every property in `required`, at every
+  object level); anything else is refused before it spawns.
+- `openrouter`, `claude-cli` and `opencode-cli` append an exact schema
+  instruction to the system text, list `validated-result` and `text-only`, and
+  never `native-required`. `openrouter` sends no `response_format`.
+- `contract_requirements(contract)` gives the selection requirement, and
+  `declaration.run` applies it before choosing a model, so an entry that cannot
+  satisfy the policy is skipped.
+- A `completed` call means the answer satisfies the contract:
+  `response.structured` is the validated object. A structural failure raises
+  `OutputContractViolation`, whose `response` holds the raw text, usage and
+  report; `evaluate_output(contract, text)` runs the same check standalone. The
+  `complete` verb reports a violation as a failed envelope with the same
+  response.
+- Sending `extras.output_schema` or `extras.response_format` beside a contract
+  is refused.
+
+Domain validity beyond the schema stays with the caller. Details:
+[references/completion-seam-contract.md](references/completion-seam-contract.md).
 
 ## Key handling
 

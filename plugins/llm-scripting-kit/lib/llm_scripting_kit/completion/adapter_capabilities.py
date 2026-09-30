@@ -41,6 +41,15 @@ from .capabilities import (
     TEXT_RESULT,
     WINDOWS,
 )
+from .contract_types import (
+    DELIVERY_NATIVE,
+    DELIVERY_PROMPT,
+    POLICY_NATIVE_REQUIRED,
+    POLICY_TEXT_ONLY,
+    POLICY_VALIDATED_RESULT,
+    SCHEMA_CLASS_OPENAI_STRICT,
+    SCHEMA_CLASS_SUBSET,
+)
 from .types import BackendOptions
 
 # Every field on BackendOptions, READ FROM THE DATACLASS rather than restated.
@@ -56,6 +65,46 @@ _ALL_OPTION_FIELDS = tuple(f.name for f in fields(BackendOptions))
 def _dropped(honored: object) -> tuple:
     """BackendOptions fields this adapter does not read, in declaration order."""
     return tuple(name for name in _ALL_OPTION_FIELDS if name not in honored)
+
+
+def _output_contract_param(emits: "str | None" = None) -> ParamCapability:
+    """``output_contract`` as every adapter handles it: READ, then refused
+    before dispatch unless the record lists the contract's policy.
+
+    A refused param is still a read one, so it belongs in ``params`` and not in
+    ``dropped_params`` -- "dropped" means "not read", and reporting a contract
+    as dropped would tell a caller it went nowhere when in fact it stopped the
+    call. Which policies an adapter satisfies is its
+    ``structured_output.policies``. An adapter that DELIVERS a schema contract
+    passes ``emits``, the same string as its ``structured_output.contract_emits``.
+    """
+    if emits is None:
+        return ParamCapability(
+            type="output-contract",
+            note=(
+                "read and refused before dispatch unless structured_output.policies "
+                "lists the contract's policy"
+            ),
+        )
+    return ParamCapability(
+        type="output-contract",
+        emits=emits,
+        note=(
+            "a listed schema policy is delivered as emitted and the answer is "
+            "validated at the seam; text-only emits nothing; a policy "
+            "structured_output.policies does not list is refused before dispatch"
+        ),
+    )
+
+
+#: ``structured_output.contract_emits`` (and ``params.output_contract.emits``)
+#: of the two adapters that deliver a contract in this module. Each names the
+#: concrete element the delivery produces, asserted byte for byte by
+#: tests/llm-scripting-kit/test_completion_contract_conformance.py.
+_OPENROUTER_CONTRACT_EMITS = "messages[system] schema instruction"
+_CODEX_CONTRACT_EMITS = "--output-schema <temp schema file>"
+_CLAUDE_CONTRACT_EMITS = "--system-prompt schema instruction"
+_OPENCODE_CONTRACT_EMITS = "stdin schema instruction"
 
 
 # -- openrouter (OpenAI-compatible HTTP) -----------------------------------
@@ -80,6 +129,12 @@ _OPENROUTER_PARAMS = {
         type="number",
         emits="timeout",
         note="omitted from the request entirely when None",
+    ),
+    "max_retries": ParamCapability(
+        type="integer",
+        default=None,
+        emits="client.with_options(max_retries=...)",
+        note="SDK retries per call; unset keeps the client default of 2",
     ),
     "user_cache_prefix": ParamCapability(
         type="string",
@@ -106,6 +161,7 @@ _OPENROUTER_PARAMS = {
             "them"
         ),
     ),
+    "output_contract": _output_contract_param(_OPENROUTER_CONTRACT_EMITS),
 }
 
 #: Params openrouter emits only for an endpoint whose profile enables them.
@@ -146,6 +202,15 @@ OPENROUTER_CAPABILITIES = Capabilities(
             "caller-supplied response_format through extras and always reads the "
             "result as message.content"
         ),
+        # The output-contract path is separate from the legacy passthrough
+        # above: the schema is appended to the system message as the exact
+        # render_schema_instruction text and the answer is validated at the
+        # seam. No response_format is sent, so native-required is not listed.
+        policies=(POLICY_VALIDATED_RESULT, POLICY_TEXT_ONLY),
+        contract_delivery=DELIVERY_PROMPT,
+        contract_emits=_OPENROUTER_CONTRACT_EMITS,
+        # The instruction carries any schema in the supported subset.
+        contract_schema_class=SCHEMA_CLASS_SUBSET,
     ),
     system_prompt=SystemPromptCapability(
         mode=NATIVE_ROLE,
@@ -219,6 +284,7 @@ _CLAUDE_PARAMS = {
     "log_prefix": ParamCapability(
         type="string", default="[llm]", emits="runner log_prefix"
     ),
+    "output_contract": _output_contract_param(_CLAUDE_CONTRACT_EMITS),
 }
 
 CLAUDE_CAPABILITIES = Capabilities(
@@ -280,6 +346,15 @@ CLAUDE_CAPABILITIES = Capabilities(
             "--output-format json is claude's transport envelope, which the "
             "adapter parses to reach data['result']; it is not a caller schema"
         ),
+        # The output-contract path is separate from the transport envelope:
+        # the exact schema instruction is appended to the system prompt sent
+        # through the system-prompt flag and the answer is validated at the
+        # seam. No native schema flag exists here, so native-required is not
+        # listed.
+        policies=(POLICY_VALIDATED_RESULT, POLICY_TEXT_ONLY),
+        contract_delivery=DELIVERY_PROMPT,
+        contract_emits=_CLAUDE_CONTRACT_EMITS,
+        contract_schema_class=SCHEMA_CLASS_SUBSET,
     ),
     system_prompt=SystemPromptCapability(
         mode=REPLACE,
@@ -349,6 +424,7 @@ _CODEX_PARAMS = {
     "extras.output_schema": ParamCapability(
         type="absolute-path", emits="--output-schema"
     ),
+    "output_contract": _output_contract_param(_CODEX_CONTRACT_EMITS),
 }
 
 CODEX_CAPABILITIES = Capabilities(
@@ -417,6 +493,17 @@ CODEX_CAPABILITIES = Capabilities(
             "-- and only when -- a caller schema was sent. Unparseable output "
             "leaves structured None; text still carries the result verbatim"
         ),
+        # The output-contract path: the canonical schema is written to a temp
+        # file passed as --output-schema, and the answer is validated at the
+        # seam. The CLI applies OpenAI strict-mode rules to that schema (a
+        # schema without additionalProperties false and a full required list
+        # on every object fails the run with a non-zero exit), so the record
+        # accepts only openai-strict schemas: selection skips codex for any
+        # other schema, and prepare_contract refuses one before dispatch.
+        policies=(POLICY_NATIVE_REQUIRED, POLICY_VALIDATED_RESULT, POLICY_TEXT_ONLY),
+        contract_delivery=DELIVERY_NATIVE,
+        contract_emits=_CODEX_CONTRACT_EMITS,
+        contract_schema_class=SCHEMA_CLASS_OPENAI_STRICT,
     ),
     system_prompt=SystemPromptCapability(
         mode=PROMPT_FOLD,
@@ -462,6 +549,7 @@ _OPENCODE_PARAMS = {
     "log_prefix": ParamCapability(
         type="string", default="[llm]", emits="runner log_prefix"
     ),
+    "output_contract": _output_contract_param(_OPENCODE_CONTRACT_EMITS),
 }
 
 OPENCODE_CAPABILITIES = Capabilities(
@@ -569,6 +657,13 @@ OPENCODE_CAPABILITIES = Capabilities(
         mode=NONE,
         result=TEXT_RESULT,
         note="--format json is deliberately unused; stdout is read as the answer",
+        # The output-contract path: the exact schema instruction is appended
+        # to the system half that is folded into the stdin prompt, and the
+        # answer is validated at the seam. native-required is not listed.
+        policies=(POLICY_VALIDATED_RESULT, POLICY_TEXT_ONLY),
+        contract_delivery=DELIVERY_PROMPT,
+        contract_emits=_OPENCODE_CONTRACT_EMITS,
+        contract_schema_class=SCHEMA_CLASS_SUBSET,
     ),
     system_prompt=SystemPromptCapability(
         mode=PROMPT_FOLD,

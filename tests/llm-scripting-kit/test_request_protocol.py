@@ -89,3 +89,69 @@ class TestCoerceKnownTypes:
     def test_bool_field_rejects_non_bool(self):
         with pytest.raises(ProtocolError, match="must be a boolean"):
             _coerce("flag", 1, bool)
+
+
+class TestOutputContractOption:
+    """``options.output_contract`` is decoded by ``OutputContract.from_json``.
+
+    Removing the coercion branch does not merely fail these tests: the
+    import-time ``_ensure_coercible`` guard makes this whole module fail to
+    import, because BackendOptions then declares a field of a type the coercer
+    has no branch for.
+    """
+
+    _CONTRACT = {
+        "id": "t.summary",
+        "policy": "validated-result",
+        "schema": {"type": "object", "required": ["a"]},
+    }
+
+    def test_a_contract_mapping_becomes_an_output_contract(self):
+        from llm_scripting_kit.completion import OutputContract
+        from llm_scripting_kit.completion.contract import OutputContract as Direct
+        from llm_scripting_kit.request_protocol import parse_request
+
+        request = parse_request(
+            {"protocol": 1, "options": {"output_contract": self._CONTRACT}}
+        )
+        contract = request.options.output_contract
+        assert isinstance(contract, OutputContract)
+        assert OutputContract is Direct
+        assert contract == OutputContract.from_json(self._CONTRACT)
+        assert contract.to_json()["schema"] == self._CONTRACT["schema"]
+
+    def test_null_contract_is_no_contract(self):
+        from llm_scripting_kit.request_protocol import parse_request
+
+        request = parse_request({"protocol": 1, "options": {"output_contract": None}})
+        assert request.options.output_contract is None
+
+    @pytest.mark.parametrize(
+        "bad",
+        [
+            5,
+            {"id": "x", "policy": "not-a-policy", "schema": {"type": "object"}},
+            {"id": "x", "policy": "validated-result"},
+            {"id": "x", "policy": "validated-result", "schema": {"pattern": "a"}},
+            {"id": "x", "policy": "validated-result", "schema": {}},
+            {"id": "x", "policy": "text-only", "extra": 1},
+        ],
+        ids=[
+            "not-a-mapping",
+            "bad-policy",
+            "no-schema",
+            "unsupported-keyword",
+            "null-accepting-root",
+            "unknown-key",
+        ],
+    )
+    def test_a_bad_contract_is_a_protocol_error(self, bad):
+        from llm_scripting_kit.request_protocol import parse_request
+
+        with pytest.raises(ProtocolError, match="output_contract"):
+            parse_request({"protocol": 1, "options": {"output_contract": bad}})
+
+    def test_the_field_is_advertised_in_the_request_schema(self):
+        from llm_scripting_kit.request_protocol import describe_request_schema
+
+        assert "output_contract" in describe_request_schema()["options"]

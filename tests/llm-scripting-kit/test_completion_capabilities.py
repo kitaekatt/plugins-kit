@@ -132,6 +132,66 @@ def test_record_is_json_serializable(cap):
     json.dumps(cap.to_json())
 
 
+@pytest.mark.parametrize("cap", list(ADAPTER_CAPABILITIES.values()), ids=lambda c: c.adapter)
+def test_output_contract_is_read_by_every_adapter_not_dropped(cap):
+    """Every adapter READS output_contract -- it refuses an unlisted policy
+    before dispatch -- so reporting it as dropped would say the contract went
+    nowhere when it in fact stopped the call. ``_dropped()`` derives from the
+    dataclass, so without an explicit params entry the field would land in
+    dropped_params silently and the honored-or-dropped test would stay green.
+    """
+    assert "output_contract" in cap.params
+    assert cap.params["output_contract"].type == "output-contract"
+    assert "output_contract" not in cap.dropped_params
+
+
+#: The output-contract advertisement per adapter: (policies, delivery, emits).
+#: An empty ``policies`` refuses every contract, the truthful state for an
+#: adapter that does not yet validate a contract's answer; listing a policy is
+#: what enables it, and that change comes with its delivery and its cases in
+#: test_completion_contract_conformance.py.
+_CONTRACT_ADVERTISEMENT = {
+    "openrouter": (
+        ("validated-result", "text-only"),
+        "prompt",
+        "messages[system] schema instruction",
+    ),
+    "codex-cli": (
+        ("native-required", "validated-result", "text-only"),
+        "native",
+        "--output-schema <temp schema file>",
+    ),
+    "claude-cli": (
+        ("validated-result", "text-only"),
+        "prompt",
+        "--system-prompt schema instruction",
+    ),
+    "opencode-cli": (
+        ("validated-result", "text-only"),
+        "prompt",
+        "stdin schema instruction",
+    ),
+}
+
+
+@pytest.mark.parametrize("cap", list(ADAPTER_CAPABILITIES.values()), ids=lambda c: c.adapter)
+def test_output_contract_advertisement_per_adapter(cap):
+    policies, delivery, emits = _CONTRACT_ADVERTISEMENT[cap.adapter]
+    assert cap.structured_output.policies == policies
+    assert cap.structured_output.contract_delivery == delivery
+    assert cap.structured_output.contract_emits == emits
+    payload = cap.to_json()["structured_output"]
+    if policies:
+        assert payload["policies"] == list(policies)
+        assert payload["contract_delivery"] == delivery
+        assert payload["contract_emits"] == emits
+        # The param names the same emission as the structured-output record.
+        assert cap.params["output_contract"].emits == emits
+    else:
+        assert "policies" not in payload
+        assert cap.params["output_contract"].emits is None
+
+
 # -- openrouter ------------------------------------------------------------
 
 
@@ -602,12 +662,14 @@ def test_codex_extra_keys_match_the_advertisement():
 # The digests are sha256(json.dumps(record.to_json())) of each family record as
 # llm-scripting-kit 0.53.0 serialized it. The harness records must not move at
 # all; openrouter may differ ONLY by the added `conditional_params` key.
+# Re-pinned in 0.56.0: the new BackendOptions.max_retries field joins every
+# record's dropped_params (harnesses) or params (openrouter) and nothing else.
 
 _PRE_CONDITIONAL_DIGESTS = {
-    "claude-cli": "4c45176d9465b035fa6cb67fa130a1d072b387a98a7a0f6f683b5ef942d20aef",
-    "codex-cli": "d92754c127616a71ec29bf51f47bea11ae014d89e2e1e2f062721b1baba1fe45",
-    "opencode-cli": "5da7421996e12913e5bb8633a1cdd98462b5ae16d9328f5c1f6895ab428ddc7b",
-    "openrouter": "48974b5178183adf014e82980c0f878078e74f160552be9567f253a551a43358",
+    "claude-cli": "a27c473c1c2f724b12491fb92fdb810bedf7ce4421d1af5b20c4c9c6183516b0",
+    "codex-cli": "519b7ece167c305ae18695afc6c5b04d3d774603b9b1082b94e7cd865d6a7771",
+    "opencode-cli": "3b7f34739e47bc612f6311defd3661aca96f51e0c9dcb4b4bf95ca3c824542d7",
+    "openrouter": "559129a60425838d9708a95b523c1e1976e6513cf315d253e42517050b1ce4c9",
 }
 
 
@@ -617,15 +679,38 @@ def _digest(payload) -> str:
     return hashlib.sha256(json.dumps(payload).encode()).hexdigest()
 
 
+def _without_output_contract_param(payload):
+    """The payload minus what every record gained with output contracts.
+
+    ``params.output_contract`` and the three ``structured_output`` contract
+    keys are the only additions since the digests above were taken (both are
+    asserted separately, in ``test_output_contract_advertisement_per_adapter``),
+    so removing them must restore each record byte for byte -- which keeps
+    these digests guarding everything else in the record.
+    """
+    param = payload["params"].pop("output_contract")
+    emits = param.pop("emits", None)
+    note = param.pop("note")
+    assert param == {"type": "output-contract", "handling": "mapped"}
+    if emits is None:
+        assert note == (
+            "read and refused before dispatch unless structured_output.policies "
+            "lists the contract's policy"
+        )
+    for key in ("policies", "contract_delivery", "contract_emits", "contract_schema_class"):
+        payload["structured_output"].pop(key, None)
+    return payload
+
+
 @pytest.mark.parametrize("adapter", ["claude-cli", "codex-cli", "opencode-cli"])
 def test_harness_family_records_serialize_byte_identically(adapter):
-    payload = ADAPTER_CAPABILITIES[adapter].to_json()
+    payload = _without_output_contract_param(ADAPTER_CAPABILITIES[adapter].to_json())
     assert "conditional_params" not in payload and "endpoint" not in payload
     assert _digest(payload) == _PRE_CONDITIONAL_DIGESTS[adapter]
 
 
 def test_openrouter_family_record_only_gains_conditional_effort():
-    payload = OPENROUTER_CAPABILITIES.to_json()
+    payload = _without_output_contract_param(OPENROUTER_CAPABILITIES.to_json())
     conditional = payload.pop("conditional_params")
     assert _digest(payload) == _PRE_CONDITIONAL_DIGESTS["openrouter"]
     assert set(conditional) == {"effort"}

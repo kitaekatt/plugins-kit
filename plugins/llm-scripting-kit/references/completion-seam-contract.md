@@ -164,7 +164,83 @@ and only when -- `extras.output_schema` was sent. Valid JSON a model produced
 unbidden is not schema-backed output, and presenting it as such would be the
 overclaim the advertisement exists to prevent; an unparseable result under a
 schema leaves `structured` None rather than failing the call, because `text`
-still carries the answer verbatim.
+still carries the answer verbatim. That is the LEGACY path (`extras.output_schema`
+on codex, `extras.response_format` on the OpenAI-compatible transport); it does
+not validate. The output contract below is the provider-independent path, and
+sending either legacy key beside a contract is refused before dispatch.
+
+**An output contract turns "the caller wants JSON" into a checked promise.**
+`OutputContract(id, policy, schema, schema_version=None)` rides on
+`BackendOptions.output_contract`. It is a frozen value: the schema must be
+JSON-native (dict with string keys, list, string, bool, int, finite float,
+null), is deep-copied into a read-only form, and its root must refuse `null`.
+Construction raises `ValueError` on any fault, including a keyword outside the
+supported subset. `schema_digest` is the sha256 of the schema's canonical JSON
+(sorted keys, compact, ASCII); `schema_version` is a caller label defaulting to
+the first 12 hex characters of the digest; `identity()` is `(id, policy,
+schema_digest, schema_version)` and never carries the schema body.
+
+- **Policies.** `POLICY_NATIVE_REQUIRED` (`native-required`: the schema must
+  reach the target through a first-class schema channel), `POLICY_VALIDATED_RESULT`
+  (`validated-result`: any delivery channel the adapter advertises), and
+  `POLICY_TEXT_ONLY` (`text-only`: an explicit declaration that the answer is
+  text; it takes no schema).
+- **Validator.** `completion/json_schema.py` is a stdlib subset, not a
+  dependency: `type`, `properties`, `required`, `additionalProperties`, `items`,
+  `enum`, `const`, `minLength`, `maxLength`, `minimum`, `maximum`,
+  `exclusiveMinimum`, `exclusiveMaximum`, `minItems`, `maxItems`, `anyOf` and
+  local `$ref` (`#/$defs/<name>`), plus annotation keywords that constrain
+  nothing. Every other keyword (`pattern`, `oneOf`, `allOf`, `format`,
+  `uniqueItems`, ...) is refused at construction, because a keyword accepted
+  and ignored would let an answer pass a constraint nobody checked. The subset
+  is a frozen revision: `json_schema.SUBSET_V1`
+  (`llm-scripting-kit.json-schema-subset/v1`) never changes its keyword sets,
+  its local-`$ref` rule, its cycle refusal, or the shape and order of its error
+  tuples. `json_schema.SUPPORTED_SUBSETS` is the marker a consumer probes for
+  and only grows; a keyword added later enters under a later literal. Both
+  `check_schema` and `validate` take a keyword-only `subset=` that defaults to
+  v1, and a value outside `SUPPORTED_SUBSETS` raises `ValueError`.
+- **Public surface** of `llm_scripting_kit.completion`: `OutputContract`,
+  `OutputContractViolation`, `contract_requirements`, `evaluate_output` and the
+  three `POLICY_*` constants. `evaluate_output(contract, text)` is pure: `text`
+  must parse as exactly one strict JSON value (no NaN, Infinity or duplicate
+  keys) that conforms to the schema.
+- **Per adapter** (each adapter's `structured_output` record):
+
+  | Adapter | Delivery | Policies | Schema class |
+  | --- | --- | --- | --- |
+  | `codex-cli` | `native`: `--output-schema <temp schema file>` | all three | `openai-strict` |
+  | `openrouter`, `claude-cli`, `opencode-cli` | `prompt`: an exact schema instruction (`Respond with only one JSON value, with no prose and no code fence, that conforms to this JSON Schema:` plus the canonical schema) appended to the system text | `validated-result`, `text-only` | `json-schema-subset` |
+
+  `openai-strict` means OpenAI strict mode: every object schema has
+  `additionalProperties` false and lists exactly its property keys in
+  `required`; codex refuses a schema that does not, before it spawns anything,
+  naming the offending JSON pointers. The prompt-delivering adapters never list
+  `native-required`, and openrouter never sends `response_format`.
+- **Selection.** `contract_requirements(contract)` returns the requirement a
+  contract implies: the policy, plus `contract_schema_class:
+  json-schema-subset` for a schema that is not strict-compatible, so codex is
+  skipped for it. `declaration.run` merges it into the caller's requirements
+  before every model selection; a conflicting caller requirement raises
+  `ValueError` before anything runs. A call that completes but violates its
+  contract is a failed attempt (`RunResult` status failed, response preserved),
+  not a halt and not a reason to select another model. A prepare-time
+  `OutputContractUnsatisfiable` (policy not advertised, schema class mismatch,
+  legacy key beside the contract) is a hard failure, since no dispatch happened.
+- **Result.** A `completed` call under a schema contract means the answer
+  satisfies it: `LLMResponse.structured` is the validated object and
+  `LLMResponse.output_contract` is a report of `contract_id`, `schema_version`,
+  `schema_digest`, `policy`, `delivery` (`native`, `prompt` or `none`) and
+  `disposition` (`valid`, `schema-mismatch`, `unparseable` or `text-only`) with
+  sorted `(json_pointer, keyword)` errors. A structural failure raises
+  `OutputContractViolation` rather than returning `status=error`, because
+  callers treat any returned response as completed and a response cache would
+  store it. The exception carries the full failed response (`status=error`,
+  error code `output-contract-violation`, raw `text`, usage, the truthfulness
+  fields, `structured` None) and mirrors the token counts and `model`. Its
+  message holds no model-authored text, so halt classification cannot mistake
+  it for a provider halt. Domain validity beyond the schema stays with the
+  caller.
 
 **Error-as-data lives at the CLI surface only.** The package API keeps RAISING
 typed exceptions -- every existing consumer branches on them, and returning a
@@ -172,7 +248,12 @@ failure there would make it read as a SUCCESS at call sites that never asked for
 this contract. The `complete` verb emits a failure in the same envelope shape as
 a success (`status` of `completed` / `timeout` / `error`, plus an `error` object
 carrying the halt classification as its `code`), on stdout, with exit codes
-unchanged as the shell-level signal.
+unchanged as the shell-level signal. An output-contract violation is the one
+failure the adapter itself reports: the envelope carries the adapter's full
+failed response (`status` `error`, `error.code` `output-contract-violation`, the
+raw `text`, the controls it emitted and the contract report), and the exit code
+is the failure code. A request file declares the contract as `options.output_contract` (the OutputContract request form: id, policy, schema, schema_version). With
+`--format text` the CLI prints `<code>: <message>` to stderr instead.
 
 **The `complete` verb speaks a versioned protocol in BOTH directions.** The
 result envelope carries `protocol` (`request_protocol.PROTOCOL_VERSION`)

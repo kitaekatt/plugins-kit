@@ -971,3 +971,116 @@ class TestEffortRequirements:
         assert result.status == decl.RUN_COMPLETED
         assert sent[0]["extra_body"] == {"reasoning_effort": "xhigh"}
         assert "effort" not in result.response.dropped_params
+
+
+
+# ---------------------------------------------------------------------------
+# run() with an output contract -- selection requirements and the violation
+# ---------------------------------------------------------------------------
+
+
+def _contract(policy):
+    from llm_scripting_kit.completion import OutputContract
+
+    if policy == "text-only":
+        return OutputContract(id="t.text", policy=policy)
+    # Strict-compatible, so selection turns on the policy alone: a non-strict
+    # schema would also require contract_schema_class json-schema-subset,
+    # which the fake advertisements below do not declare.
+    return OutputContract(
+        id="t.obj", policy=policy,
+        schema={
+            "type": "object", "properties": {"a": {"type": "string"}}, "required": ["a"],
+            "additionalProperties": False,
+        },
+    )
+
+
+def _policy_caps(**by_adapter):
+    """Fake advertisements: adapter name -> the policies it lists."""
+    return {
+        name: {"structured_output": {"policies": list(policies)}}
+        for name, policies in by_adapter.items()
+    }
+
+
+class TestRunOutputContract:
+    def _entries(self):
+        return {"opus": _harness("opus"), "sol": _harness("sol", "codex")}
+
+    def _run(self, contract, backends, caps, **kw):
+        from llm_scripting_kit.completion import BackendOptions
+
+        return decl.run(
+            ["opus", "sol"],
+            decl.RunRequest(system="s", prompt="p", options=BackendOptions(output_contract=contract)),
+            entries=self._entries(), backend_factory=_factory_for(backends),
+            reachability_cache={"opus": _reach(), "sol": _reach()},
+            capabilities=caps, **kw,
+        )
+
+    def test_run_native_required_skips_non_native_entry(self, quota):
+        backends = {
+            "opus": _ScriptedBackend("claude-cli", ["wrong"]),
+            "sol": _ScriptedBackend("codex-cli", ["ok"]),
+        }
+        caps = _policy_caps(**{
+            "claude-cli": ["validated-result", "text-only"],
+            "codex-cli": ["native-required", "validated-result", "text-only"],
+        })
+        result = self._run(_contract("native-required"), backends, caps)
+        assert result.status == decl.RUN_COMPLETED and result.entry == "sol"
+        assert backends["opus"].calls == 0
+
+    def test_run_text_only_requires_the_text_only_policy(self, quota):
+        backends = {
+            "opus": _ScriptedBackend("claude-cli", ["wrong"]),
+            "sol": _ScriptedBackend("codex-cli", ["ok"]),
+        }
+        caps = _policy_caps(**{"claude-cli": ["validated-result"], "codex-cli": ["text-only"]})
+        result = self._run(_contract("text-only"), backends, caps)
+        assert result.entry == "sol" and backends["opus"].calls == 0
+
+    def test_run_with_no_entry_advertising_the_policy_reaches_the_floor(self, quota):
+        backends = {"opus": _ScriptedBackend("claude-cli", []), "sol": _ScriptedBackend("codex-cli", [])}
+        caps = _policy_caps(**{"claude-cli": [], "codex-cli": []})
+        with pytest.raises(decl.NoUsableRoutingTarget):
+            self._run(_contract("validated-result"), backends, caps)
+        assert backends["opus"].calls == backends["sol"].calls == 0
+
+    def test_run_without_a_contract_does_not_add_requirements(self, quota):
+        backends = {"opus": _ScriptedBackend("claude-cli", ["ok"]), "sol": _ScriptedBackend("codex-cli", [])}
+        result = self._run(None, backends, caps={})
+        assert result.entry == "opus"
+
+    def test_run_refuses_a_conflicting_structured_requirement(self, quota):
+        backends = {"opus": _ScriptedBackend("claude-cli", []), "sol": _ScriptedBackend("codex-cli", [])}
+        with pytest.raises(ValueError, match="conflicting requirements"):
+            self._run(
+                _contract("native-required"), backends, {},
+                requirements={"structured_output": {"policies": ["text-only"]}},
+            )
+        assert backends["opus"].calls == 0
+
+    def test_run_violation_returns_the_response_as_a_failed_attempt(self, quota):
+        from llm_scripting_kit.completion import LLMResponse, OutputContractViolation
+        from llm_scripting_kit.completion.types import ResponseError
+
+        failed = LLMResponse(
+            text="raw model text", model="m", status="error",
+            error=ResponseError("output-contract-violation", "schema-mismatch"),
+        )
+        backends = {
+            "opus": _ScriptedBackend("claude-cli", [OutputContractViolation(failed)]),
+            "sol": _ScriptedBackend("codex-cli", ["ok"]),
+        }
+        caps = _policy_caps(**{"claude-cli": ["validated-result"], "codex-cli": ["validated-result"]})
+        attempts = []
+        result = self._run(
+            _contract("validated-result"), backends, caps, max_attempts=3,
+            on_attempt=attempts.append,
+        )
+        assert result.status == decl.RUN_FAILED
+        assert result.response is failed and result.response.text == "raw model text"
+        assert backends["sol"].calls == 0
+        assert [(a.entry, a.outcome, a.halt) for a in attempts] == [("opus", "failed", None)]

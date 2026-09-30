@@ -150,6 +150,16 @@ unconfigurable opinion whose test passes is a finding.
   answer is a lease plus an expiry plus a fencing token, which is a distributed runner --
   a different plugin, not a column.
 
+- **job-kit continues an answered interrupt at least once, never exactly once.** A
+  process lost or interrupted mid-continuation returns the job to `waiting` and the next
+  `resume` re-runs the contract. A team could reasonably want at-most-once for a
+  side-effecting approval, and their remedy is a contract that makes its own side effect
+  idempotent. We refuse a mode switch because job-kit cannot observe what a killed contract
+  did, so it cannot make an arbitrary side effect idempotent; it guarantees a stable key
+  instead (`JOB_KIT_INTERRUPT_ID` plus a byte-identical resolution document). Exactly-once
+  needs a lease plus fencing, which the entry above refuses. See the README section
+  "Durable interrupts" in `job-kit/README.md`.
+
 - **A recorded forced worktree removal stays forced.** Once `gc --force` has begun
   removing an attempt's worktree, a later `gc` over that attempt continues as forced even
   without the flag, and a refusal never clears the recorded intent. A team could
@@ -441,7 +451,7 @@ optional-dependency section above defers to it.
 |---|---|---|---|
 | content-pipeline-kit | `llm_scripting_kit.completion` (lazy/optional, via `content_pipeline.llm.platform` and `.llm.backends`) | Batch-run policy: retry, cost accounting, budgeting, concurrency, caching | Yes |
 | job-kit | `llm_scripting_kit.completion` (`BackendSelection`, `Capabilities`, `adapter_capabilities`, `create_backend`, `match_capabilities`), `llm_scripting_kit.declaration` (`describe`, `NoUsableRoutingTarget`, `CALLER_PROCESS`), `llm_scripting_kit.usage_budget` (`record_observed_halt`, `quota_pool_key`) | Run policy over llm-scripting-kit's `describe(caller="process")` ranking: halt narrowing, attempts, and the ledger's pace-reading record | Yes |
-| workflow-kit | `llm_scripting_kit.declaration` (`run`, `RunRequest`, `NoUsableRoutingTarget`), `llm_scripting_kit.completion` (`create_transport_backend`, `BackendOptions`), and `default_declaration` (via `scripts/openrouter_run.py`); every `model:` declaration is validated with `bootstrap_lib.model_declaration` (via `workflow_kit_lib/declarations.py`), not llm-scripting-kit | The `openrouter` node strategy: one non-Claude call per workflow node over a declaration of transport entries, reporting the typed floor; agent-step routing of Claude core ids at compile time | Yes |
+| workflow-kit | `llm_scripting_kit.declaration` (`run`, `RunRequest`, `NoUsableRoutingTarget`), `llm_scripting_kit.completion` (`create_transport_backend`, `BackendOptions`), and `default_declaration` (via `scripts/openrouter_run.py`); `llm_scripting_kit.completion` (`OutputContract`, `POLICY_VALIDATED_RESULT`, `json_schema`) for typed artifacts (via `workflow_kit_lib/contracts.py` at compile time, lazily and only for a schema artifact, and `scripts/check_artifact.py` and `scripts/openrouter_run.py --provides` at run time); every `model:` declaration is validated with `bootstrap_lib.model_declaration` (via `workflow_kit_lib/declarations.py`), not llm-scripting-kit | The `openrouter` node strategy: one non-Claude call per workflow node over a declaration of transport entries, reporting the typed floor; agent-step routing of Claude core ids at compile time; typed node artifacts (compile-time `provides`/`requires` checks with compatibility by `schema_digest` equality, and the per-execution verdict file) | Yes |
 | awesome-kit (orchestrate) | `llm_scripting_kit.discover_model_entries` and `describe(caller="session")` (lazy/optional, via `orchestration_guidance.py` and `dispatch.py`) | Each routing row ranked by `describe(caller="session")` and passed through verbatim (no local ranking); `dispatch.py` resolves `--model` through `discover_model_entries` and REFUSES (exit 3) without llm-scripting-kit | Yes |
 | bootstrap | `llm_scripting_kit.seats.discover_seats` (lazy/optional, via `bootstrap_lib.code_review.review_profiles`) | Peer-seat discovery for review profiles (a `peer:<name>` entry in a reviewer's ordered `model` priority list); it never talks to an LLM | Yes |
 | git-kit, p4-kit | `llm_scripting_kit.review_lane.main` via each kit's thin `scripts/run_review_lane.py` wrapper | The code-review skills rank each reviewer declaration through the `llm-scripting-kit describe` CLI (session caller) and dispatch by entry harness; bootstrap setup and the REFUSE probe for the shared library live here, and the lane's prompt lives in `bootstrap_lib.code_review.lane_prompts` and its guards in `llm_scripting_kit.review_lane` | Yes |

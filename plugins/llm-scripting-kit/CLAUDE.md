@@ -290,7 +290,7 @@ the choice and re-selection rule text (`Ranking.rule`). It raises
 usable remains. It RANKS and does not dispatch, which is what lets job-kit
 pass its own requirements, capabilities, factory, exclusions and run-scoped
 reachability cache into one selection it still owns. `run` is the dispatcher
-for callers with no loop of their own. Four things are easy to break:
+for callers with no loop of their own. Five things are easy to break:
 
 - **RENDER, SKIP and FLOOR are separate surfaces.** Nothing may name a hidden
   id outside the floor, including the render header. A notice, warning or log
@@ -302,6 +302,16 @@ for callers with no loop of their own. Four things are easy to break:
 - **`max_attempts` is not the floor.** A halt that uses up the last attempt
   returns `attempt-limit`. It never raises `NoUsableRoutingTarget`, because
   the pool was not empty.
+- **`run(..., observer=)` reports execution events and refuses without their
+  module.** The keyword-only `observer` (`ExecutionObserver`, an `emit` method
+  keyword-compatible with `bootstrap_lib.execution_event.Emitter.emit`) gets
+  `dispatch-selected`, `call-started`, `usage` and `result` per attempt
+  (`attempt_id` is the attempt number as a string) and one `terminal` per call
+  (`unroutable` before the floor is raised). Usage goes only through
+  `usage_payload`, so null means unknown and is never written as 0. An observer
+  exception propagates. Bootstrap >= 0.135.0 is required, and its absence
+  raises `DeclarationSupportError` before any dispatch. Detail: the
+  `declaration.run` docstring.
 - **A session caller hides transports unless it says it can run them.** A
   transport entry has no agent loop, so `caller="session"` classifies it
   unroutable by default. A session caller that reaches transports through a
@@ -469,13 +479,20 @@ behaviour. Say so when documenting this layer rather than letting "four
 transports behind one `complete()`" imply more than it delivers.
 
 It does not own the concerns of a RUN OF MANY CALLS. Response caching, cost
-accounting, budget guarding, batching, concurrency, rate limiting, and
-structured-output enforcement all belong to the caller. Those are policy, not
-transport: what a cache is keyed on, what a budget is measured against, how many
-calls may run at once, and what a valid output looks like are questions the
-calling pipeline can answer and a transport cannot, so answering them here would
-mean guessing once on behalf of every caller. Holding that altitude is also what
-keeps this layer stdlib-only apart from a lazy `openai` import, so a consumer
+accounting, budget guarding, batching, concurrency, and rate limiting all
+belong to the caller. Those are policy, not transport: what a cache is keyed on,
+what a budget is measured against, and how many calls may run at once are
+questions the calling pipeline can answer and a transport cannot, so answering
+them here would mean guessing once on behalf of every caller. Output validity is
+split the same way. The seam enforces a contract the CALLER declares: the caller
+answers what a valid output looks like by declaring an `OutputContract` (a JSON
+Schema and a policy), and the transport only checks the returned object against
+that declaration; it never invents a schema. What to do with a structurally
+valid object -- semantic or domain validation, retry, caching -- stays with the
+caller. A declared contract is refused before dispatch until an adapter
+advertises a policy for it. Holding that altitude is also what keeps this layer
+stdlib-only apart from a lazy `openai` import (the schema validator is a stdlib
+JSON Schema subset in `completion/json_schema.py`), so a consumer
 driving only `claude-cli` installs no SDK. content-pipeline-kit's
 `lib/content_pipeline/llm/platform.py` is the in-fleet implementation of the
 layer above.

@@ -35,6 +35,8 @@ the default come from the session-pinned verdict
 
 from __future__ import annotations
 
+import importlib
+import inspect
 import os
 import subprocess
 import tempfile
@@ -43,8 +45,10 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Mapping, MutableMapping, Optional, Sequence
 
+from .completion.contract import OutputContractViolation, contract_requirements, merge_requirements
 from .completion.halt import HALT_INSUFFICIENT_CREDIT, HALT_QUOTA
 from .completion.types import BackendOptions
+from .observer import ExecutionObserver
 from .model_endpoints import HARNESS_KIND, TRANSPORT_KIND, EndpointEntry, EndpointRegistryError
 from .models import EndpointResolveError, claude_cli_alias
 from .reachability import (
@@ -103,6 +107,16 @@ _ABOUT_TO_RESET = 0.01
 
 #: The bootstrap release that shipped ``bootstrap_lib.model_declaration``.
 _MODEL_DECLARATION_BOOTSTRAP = "0.129.0"
+
+#: The bootstrap release that shipped ``bootstrap_lib.execution_event``.
+EXECUTION_EVENT_BOOTSTRAP = "0.135.0"
+
+#: The envelope schema ``run`` emits; the probe requires the linked module to
+#: support it.
+_REQUIRED_EXECUTION_SCHEMA = "plugins-kit.execution-event/v1"
+
+#: The exact keywords ``run`` passes to ``usage_payload``.
+_USAGE_KEYWORDS = ("input_tokens", "output_tokens", "cache_hit_tokens", "total_tokens")
 
 RULE_CHOICE_SESSION = (
     "Rule: any usable entry may be chosen; the default applies only when you "
@@ -176,6 +190,46 @@ def _model_declaration() -> Any:
             f"{_MODEL_DECLARATION_BOOTSTRAP} -- update the bootstrap plugin"
         )
     return model_declaration
+
+
+def _execution_event() -> Any:
+    """Return ``bootstrap_lib.execution_event``, probed for what ``run`` calls.
+
+    Reached only when a caller passed an observer, which is REFUSE: emitting
+    usage without ``usage_payload`` would state an unknown count as zero, and
+    emitting nothing would drop the record the caller asked for. Absent and
+    too-old are diagnosed apart because their remedies differ; the version in
+    a message is this plugin's own constant, never read from the module.
+    """
+    try:
+        import bootstrap_lib  # noqa: F401, PLC0415
+    except ModuleNotFoundError as exc:
+        raise DeclarationSupportError(
+            "run(observer=...) needs bootstrap_lib.execution_event, but bootstrap_lib is "
+            "not importable here; run `claude plugin install bootstrap@plugins-kit` "
+            f"(needs bootstrap >= {EXECUTION_EVENT_BOOTSTRAP})"
+        ) from exc
+    too_old = (
+        "the linked bootstrap_lib does not support the execution-event calls "
+        f"run(observer=...) makes; it needs bootstrap >= {EXECUTION_EVENT_BOOTSTRAP} -- "
+        "run `claude plugin update bootstrap@plugins-kit`, then restart the session"
+    )
+    try:
+        module = importlib.import_module("bootstrap_lib.execution_event")
+    except ImportError as exc:
+        raise DeclarationSupportError(too_old) from exc
+    supported = getattr(module, "SUPPORTED_SCHEMAS", None)
+    usage_payload = getattr(module, "usage_payload", None)
+    if (
+        not isinstance(supported, (set, frozenset))
+        or _REQUIRED_EXECUTION_SCHEMA not in supported
+    ):
+        raise DeclarationSupportError(too_old)
+    try:
+        inspect.signature(usage_payload).bind(**{name: 0 for name in _USAGE_KEYWORDS})
+    except (TypeError, ValueError) as exc:
+        raise DeclarationSupportError(too_old) from exc
+    return module
 
 
 def check_registry_entry(entry_id: str, merged: Any) -> Optional[str]:
@@ -826,6 +880,7 @@ def run(
     backend_factory: Optional[Callable[..., Any]] = None,
     reachability_cache: Optional[MutableMapping[str, Reachability]] = None,
     entries: Optional[Mapping[str, Any]] = None,
+    observer: Optional[ExecutionObserver] = None,
 ) -> RunResult:
     """Dispatch a unit to the first usable entry, moving on only on a classified halt.
 
@@ -842,9 +897,33 @@ def run(
     re-selection, and a workspace that cannot be reset ends the run rather
     than layering a second model on the first one's partial edits.
     :class:`NoUsableRoutingTarget` propagates.
+
+    A request whose ``options.output_contract`` is set has its selection
+    requirement (:func:`~.completion.contract.contract_requirements`) merged
+    into ``requirements`` before every :func:`describe`, so an entry whose
+    adapter cannot satisfy the contract's policy is skipped rather than
+    dispatched to and refused. A conflicting caller requirement raises
+    ``ValueError`` before anything runs. A call that completed but violated
+    its contract is a failed attempt, not a halt, and the violation's full
+    response (raw text, controls, report) is returned in ``RunResult.response``.
+
+    ``observer`` (keyword-only) receives execution events through its
+    ``emit`` method (:class:`~.observer.ExecutionObserver`; a
+    ``bootstrap_lib.execution_event.Emitter`` bound to the caller's run and
+    unit fits). Per attempt: ``dispatch-selected``, ``call-started``, ``usage``
+    (only when the response reports a non-zero count, through
+    ``usage_payload``), ``result``; once per call: ``terminal``. An observer
+    exception propagates unchanged. When an observer is passed and
+    ``bootstrap_lib.execution_event`` is absent or too old, the call raises
+    :class:`DeclarationSupportError` before any dispatch; without an observer
+    the module is never imported.
     """
     if max_attempts < 1:
         raise ValueError("max_attempts must be at least 1")
+    execution_event = _execution_event() if observer is not None else None
+    contract = getattr(request.options, "output_contract", None)
+    if contract is not None:
+        requirements = merge_requirements(requirements, contract_requirements(contract))
     root = str(project_root) if project_root is not None else None
     if backend_factory is None:
         from .completion.factory import create_backend as backend_factory  # noqa: PLC0415
@@ -864,12 +943,24 @@ def run(
         if on_attempt is not None:
             on_attempt(attempt)
 
+    def emit(event: str, **fields: Any) -> None:
+        if observer is not None:
+            observer.emit(event, **fields)
+
+    def finish(result: RunResult) -> RunResult:
+        emit("terminal", payload={"state": result.status})
+        return result
+
     while True:
-        ranking = describe(
-            names, project_root=root, caller=CALLER_PROCESS, requirements=requirements,
-            capabilities=capabilities, backend_factory=backend_factory, exclude=excluded,
-            reachability_cache=cache, entries=entries,
-        )
+        try:
+            ranking = describe(
+                names, project_root=root, caller=CALLER_PROCESS, requirements=requirements,
+                capabilities=capabilities, backend_factory=backend_factory, exclude=excluded,
+                reachability_cache=cache, entries=entries,
+            )
+        except NoUsableRoutingTarget:
+            emit("terminal", payload={"state": "unroutable"})
+            raise
         chosen = ranking.default
         assert chosen is not None  # describe() raises the floor otherwise
         number = len(attempts) + 1
@@ -877,16 +968,49 @@ def run(
         options = request.options or BackendOptions()
         if options.effort is None and getattr(selection, "effort", None):
             options = replace(options, effort=selection.effort)
+        attempt_fields: Dict[str, Any] = {"attempt_id": str(number)}
+        backend_name = getattr(selection.backend, "name", None)
+        if isinstance(backend_name, str) and backend_name:
+            attempt_fields["adapter"] = backend_name
+        if isinstance(selection.model, str) and selection.model:
+            attempt_fields["model"] = selection.model
+        if observer is not None:
+            picked: Dict[str, Any] = {"entry": chosen.id}
+            if chosen.pace is not None:
+                picked["pace"] = chosen.pace
+            emit("dispatch-selected", payload=picked, **attempt_fields)
+            emit("call-started", **attempt_fields)
+
+        def observe_usage(reported: Any) -> None:
+            if observer is None:
+                return
+            usage = execution_event.usage_payload(
+                **{name: getattr(reported, name, None) for name in _USAGE_KEYWORDS}
+            )
+            if usage is not None:
+                emit("usage", payload=usage, **attempt_fields)
+
         try:
             response = selection.backend.complete(
                 request.system, request.prompt, model=selection.model, options=options
             )
+        except OutputContractViolation as exc:
+            # The call ran and was billed; its answer failed the contract. A
+            # task error (the message carries no model text, so it can never
+            # read as a halt), and the raw response survives for the caller.
+            report(Attempt(chosen.id, number, chosen.pace, error=str(exc), outcome="failed"))
+            observe_usage(exc.response)
+            emit("result", payload={"status": "failed", "reason": "output-contract"}, **attempt_fields)
+            return finish(RunResult(RUN_FAILED, chosen.id, exc.response, tuple(attempts), f"task error: {exc}"))
         except Exception as exc:  # noqa: BLE001 -- transports raise heterogeneous types
             halt = selection.backend.classify_halt(exc)
             launch = halt is None and isinstance(exc, _LAUNCH_ERRORS)
+            halted_payload: Dict[str, Any] = {"status": "halted"}
+            halted_payload.update({"halt": halt} if halt else {"reason": "launch"})
             if halt is None and not launch:
                 report(Attempt(chosen.id, number, chosen.pace, error=str(exc), outcome="failed"))
-                return RunResult(RUN_FAILED, chosen.id, None, tuple(attempts), f"task error: {exc}")
+                emit("result", payload={"status": "failed", "reason": "task-error"}, **attempt_fields)
+                return finish(RunResult(RUN_FAILED, chosen.id, None, tuple(attempts), f"task error: {exc}"))
             if halt in _QUOTA_HALTS:
                 registry = entries
                 if registry is None:
@@ -916,21 +1040,25 @@ def run(
                     action = f"workspace could not be reset: {reset_exc}"
                     report(Attempt(chosen.id, number, chosen.pace, halt=halt or "launch",
                                    error=str(exc), outcome="halted", workspace_action=action))
-                    return RunResult(
+                    emit("result", payload=halted_payload, **attempt_fields)
+                    return finish(RunResult(
                         RUN_FAILED, chosen.id, None, tuple(attempts),
                         f"{chosen.id} halted and the workspace could not be reset to its "
                         f"launch state, so no other entry was dispatched: {reset_exc}",
-                    )
+                    ))
             report(Attempt(chosen.id, number, chosen.pace, halt=halt or "launch",
                            error=str(exc), outcome="halted", workspace_action=action))
+            emit("result", payload=halted_payload, **attempt_fields)
             if len(attempts) >= max_attempts:
-                return RunResult(
+                return finish(RunResult(
                     RUN_ATTEMPT_LIMIT, chosen.id, None, tuple(attempts),
                     f"attempt limit reached ({max_attempts})",
-                )
+                ))
             continue
         report(Attempt(chosen.id, number, chosen.pace, outcome="completed"))
-        return RunResult(RUN_COMPLETED, chosen.id, response, tuple(attempts))
+        observe_usage(response)
+        emit("result", payload={"status": "completed"}, **attempt_fields)
+        return finish(RunResult(RUN_COMPLETED, chosen.id, response, tuple(attempts)))
 
 
 __all__ = [
@@ -951,7 +1079,9 @@ __all__ = [
     "Attempt",
     "DeclarationSupportError",
     "Disposition",
+    "EXECUTION_EVENT_BOOTSTRAP",
     "EntryState",
+    "ExecutionObserver",
     "NoUsableRoutingTarget",
     "Ranking",
     "RunRequest",

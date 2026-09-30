@@ -546,6 +546,7 @@ def test_the_request_schema_is_derived_from_backend_options(capsys):
         ("--max-tokens", "99"),
         ("--temperature", "0.9"),
         ("--timeout", "0"),
+        ("--max-retries", "0"),
         ("--system", ""),
     ],
 )
@@ -1153,3 +1154,52 @@ def test_acceptance_frontdoor_config_errors_exit_two(tmp_path, capsys):
     registry.write_text("models:\n  x:\n    base_url: http://h/v1\n    model: m\n", encoding="utf-8")
     assert cli.main(base + ["--registry", str(registry)]) == cli.EXIT_USAGE
     assert cli.main(base + ["--registry", str(registry), "--expect-tier1-cap", "-2"]) == cli.EXIT_USAGE
+
+
+def test_complete_max_retries_defaults_to_unset(monkeypatch):
+    backend = FakeBackend(LLMResponse(text="a", model="model-id"))
+    monkeypatch.setattr(cli, "create_backend", lambda *_, **__: _selection(backend))
+    assert cli.main(["complete", "--prompt", "hi"]) == cli.EXIT_OK
+    assert backend.call[3].max_retries is None
+
+
+def test_complete_max_retries_zero_reaches_the_backend_options(monkeypatch):
+    backend = FakeBackend(LLMResponse(text="a", model="model-id"))
+    monkeypatch.setattr(cli, "create_backend", lambda *_, **__: _selection(backend))
+    assert cli.main(["complete", "--prompt", "hi", "--max-retries", "0"]) == cli.EXIT_OK
+    assert backend.call[3].max_retries == 0
+
+
+def test_complete_negative_max_retries_is_rejected(monkeypatch, capsys):
+    monkeypatch.setattr(cli, "create_backend", lambda *_, **__: pytest.fail("no call"))
+    with pytest.raises(SystemExit) as exc:
+        cli.main(["complete", "--prompt", "hi", "--max-retries", "-1"])
+    assert exc.value.code == 2
+    assert "must be >= 0" in capsys.readouterr().err
+
+
+def test_complete_violation_envelope_keeps_text_and_controls(monkeypatch, capsys):
+    """A contract violation is a call that ran; the envelope keeps what it holds."""
+    from llm_scripting_kit.completion import OutputContractViolation
+    from llm_scripting_kit.completion.types import ResponseError
+
+    failed = LLMResponse(
+        text="raw model text",
+        model="model-id",
+        status="error",
+        error=ResponseError("output-contract-violation", "schema-mismatch: /a required"),
+        execution_controls_applied=("sandbox=read-only",),
+        input_tokens=7,
+        output_tokens=3,
+    )
+    backend = FakeBackend(error=OutputContractViolation(failed))
+    monkeypatch.setattr(cli, "create_backend", lambda *_, **__: _selection(backend))
+
+    assert cli.main(["complete", "--prompt", "hello"]) == cli.EXIT_FAILURE
+    resp = json.loads(capsys.readouterr().out)["response"]
+    assert resp["status"] == "error"
+    assert resp["error"]["code"] == "output-contract-violation"
+    assert resp["text"] == "raw model text"
+    assert resp["execution_controls_applied"] == ["sandbox=read-only"]
+    assert "structured" in resp and resp["structured"] is None
+    assert resp["output_tokens"] == 3

@@ -63,6 +63,19 @@ from .capabilities import (
     subjects_for_disallowed_tools,
 )
 from .requirements import match_capabilities
+# The output-contract CONSUMER surface, exactly. Everything else a contract
+# involves (reports, delivery plans, the pre-dispatch refusal, the prompt
+# instruction) is importable from ``.contract`` for this package's own
+# adapters and is deliberately not re-exported here.
+from .contract import (
+    POLICY_NATIVE_REQUIRED,
+    POLICY_TEXT_ONLY,
+    POLICY_VALIDATED_RESULT,
+    OutputContract,
+    OutputContractViolation,
+    contract_requirements,
+    evaluate_output,
+)
 from .results import (
     caller_set_params,
     check_applied_controls,
@@ -128,6 +141,14 @@ __all__ = [
     "adapter_capabilities",
     "match_capabilities",
     "subjects_for_disallowed_tools",
+    # output contracts (consumer surface)
+    "OutputContract",
+    "OutputContractViolation",
+    "contract_requirements",
+    "evaluate_output",
+    "POLICY_NATIVE_REQUIRED",
+    "POLICY_VALIDATED_RESULT",
+    "POLICY_TEXT_ONLY",
     "BackendOptions",
     "LLMBackend",
     "BackendSelection",

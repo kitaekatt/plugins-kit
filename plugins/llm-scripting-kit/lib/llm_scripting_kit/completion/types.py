@@ -13,6 +13,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Mapping, Optional, Protocol, Tuple, runtime_checkable
 
+# A RUNTIME import, deliberately not behind TYPE_CHECKING: the two contract
+# fields below are annotated with these names, and typing.get_type_hints (which
+# the request protocol runs over BackendOptions at import) resolves annotations
+# against THIS module's globals. contract_types is a leaf module that never
+# imports this one, so the edge cannot form a cycle.
+from .contract_types import ContractReport, OutputContract
+
 
 # -- call status -----------------------------------------------------------
 
@@ -199,6 +206,12 @@ class LLMResponse:
       native ``usage.cost`` is ignored, and a call with no reported cost is
       priced by whatever estimator the consumer holds. See
       :func:`valid_reported_cost`.
+    - ``output_contract`` -- the :class:`~.contract_types.ContractReport` of a
+      call made under ``BackendOptions.output_contract``: which contract was
+      judged, how it was delivered, and the disposition. ``None`` when the call
+      carried no contract. A response handed back by ``complete()`` with a
+      schema-policy report always reads ``disposition == "valid"``, because a
+      violation raises instead.
 
     A note for anyone adding another field here, learned from ``total_tokens``
     above: think about what a consumer will SUM or COUNT. None of the fields
@@ -229,6 +242,7 @@ class LLMResponse:
     ended_at: Optional[str] = None
     reported_cost_usd: Optional[float] = None
     reported_cost_source: Optional[str] = None
+    output_contract: Optional[ContractReport] = None
 
 
 @dataclass(frozen=True)
@@ -242,6 +256,9 @@ class BackendOptions:
 
     - ``timeout_s`` -- per-call wall-clock cap. ``None`` uses the backend
       default.
+    - ``max_retries`` -- OpenAI-compatible transport only: SDK-level automatic
+      retries for this call (0 disables them). ``None`` keeps the client's
+      default of 2. Non-negative integer.
     - ``temperature`` -- optional sampling control. ``None`` omits it so the
       server/model default can follow its mode; an explicit value is sent.
     - ``cache_salt`` -- per-attempt salt for malformed-response retry loops so a
@@ -281,11 +298,18 @@ class BackendOptions:
       every key unvalidated, and claude-cli and opencode-cli read none. A key
       that reaches nothing is reported in ``LLMResponse.dropped_params``; one
       forwarded without validation is reported in ``forwarded_params``.
+    - ``output_contract`` -- a provider-independent
+      :class:`~.contract_types.OutputContract`. Every adapter READS it: before
+      dispatch it refuses the contract unless its advertised
+      ``structured_output.policies`` lists the contract's policy, so a
+      contract is never silently ignored. ``None`` (the default) leaves every
+      call unchanged. See :mod:`.contract`.
     """
 
     max_tokens: int = 4096
     temperature: Optional[float] = None
     timeout_s: Optional[float] = None
+    max_retries: Optional[int] = None
     cache_salt: int = 0
     user_cache_prefix: str = ""
     effort: Optional[str] = None
@@ -296,6 +320,7 @@ class BackendOptions:
     client_id: Optional[str] = None
     log_prefix: str = "[llm]"
     extras: Mapping[str, Any] = field(default_factory=dict)
+    output_contract: Optional[OutputContract] = None
 
 
 @runtime_checkable

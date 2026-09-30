@@ -52,6 +52,7 @@ from .adapter_capabilities import (
 )
 from ..effort import OUTCOME_TRANSLATED, EffortPlan, plan_effort
 from .capabilities import Capabilities
+from .contract import finalize_contract, prepare_contract
 from .endpoint_profile import (
     EndpointProfile,
     endpoint_capabilities,
@@ -303,8 +304,19 @@ class OpenRouterBackend:
         on the static prefix; otherwise it is a plain string.
         """
         opts = options or BackendOptions()
+        # Before the client is built or the model resolved: a contract this
+        # record does not list (or one sent beside extras.response_format) is
+        # refused here, with nothing sent.
+        contract_plan = prepare_contract(self.capabilities, opts)
         client = self.client if self.client is not None else self._ensure_client()
         resolved_model = self._resolve_model(model)
+
+        if contract_plan is not None and contract_plan.instruction is not None:
+            # Prompt delivery: the exact render_schema_instruction text is
+            # appended to the system message. No response_format is sent --
+            # the family spans servers that reject or ignore it -- so the
+            # answer is judged at the seam by finalize_contract below.
+            system = system + contract_plan.instruction
 
         if system:
             system_content: Any = [
@@ -363,6 +375,18 @@ class OpenRouterBackend:
 
         started_at = utc_now_iso()
         start = time.monotonic()
+        if opts.max_retries is not None:
+            if (
+                isinstance(opts.max_retries, bool)
+                or not isinstance(opts.max_retries, int)
+                or opts.max_retries < 0
+            ):
+                raise ValueError(
+                    f"max_retries must be a non-negative integer, got {opts.max_retries!r}"
+                )
+            # The client is shared across calls; the SDK scopes the override
+            # to a copy, so this call's setting never leaks to another.
+            client = client.with_options(max_retries=opts.max_retries)
         response = client.chat.completions.create(**create_kwargs)
         wall_ms = int((time.monotonic() - start) * 1000)
         ended_at = utc_now_iso()
@@ -418,7 +442,7 @@ class OpenRouterBackend:
 
         reported_cost_usd, reported_cost_source = self._reported_cost(usage)
         dropped_params, forwarded_params = self.params_report(opts, plan)
-        return LLMResponse(
+        response = LLMResponse(
             text=text,
             model=resolved_model,
             reasoning=reasoning,
@@ -439,6 +463,9 @@ class OpenRouterBackend:
             started_at=started_at,
             ended_at=ended_at,
         )
+        # No contract: returned unchanged. Otherwise the answer is judged
+        # against the contract, and a violation raises with this response.
+        return finalize_contract(contract_plan, response)
 
     def classify_halt(self, exc: BaseException) -> Optional[str]:
         return halt.classify_openai_exception(exc)
@@ -540,6 +567,14 @@ class ClaudeCliBackend:
         # accepted for protocol compatibility and ignored. Tests stub this
         # backend via ``runner=`` (and optionally ``executable=``).
         opts = options or BackendOptions()
+        # Before argv is built or the runner invoked: a contract this record
+        # does not list is refused here, with nothing spawned.
+        contract_plan = prepare_contract(self.capabilities, opts)
+        if contract_plan is not None and contract_plan.instruction is not None:
+            # Prompt delivery: the exact render_schema_instruction text is
+            # appended to the system prompt sent through the system-prompt
+            # flag. The answer is judged at the seam by finalize_contract.
+            system = system + contract_plan.instruction
         timeout_s = (
             opts.timeout_s if opts.timeout_s is not None else self.default_timeout_s
         )
@@ -682,7 +717,7 @@ class ClaudeCliBackend:
 
         usage = data.get("usage") or {}
         wall_ms = int((time.monotonic() - start) * 1000)
-        return LLMResponse(
+        response = LLMResponse(
             text=data["result"],
             model=model,
             input_tokens=int(usage.get("input_tokens", 0) or 0),
@@ -697,6 +732,9 @@ class ClaudeCliBackend:
             started_at=started_at,
             ended_at=utc_now_iso(),
         )
+        # No contract: returned unchanged. Otherwise the answer is judged
+        # against the contract, and a violation raises with this response.
+        return finalize_contract(contract_plan, response)
 
     def _applied_controls(self, opts: BackendOptions) -> "tuple[str, ...]":
         """The advertised controls this adapter's argv carries, per call.
