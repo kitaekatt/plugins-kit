@@ -14,6 +14,12 @@ later schema literal that ``SUPPORTED_SCHEMAS`` gains, selected by the
 know a schema refuses the event at ``schema`` instead of accepting it under
 weaker rules.
 
+Schema ``plugins-kit.execution-event/v2`` (``SCHEMA_V2``) is v1 plus the
+attempt-scoped ``interrupt`` event, whose payload key set is closed and holds
+no free text. It is frozen on the same terms. Each event is checked against
+the vocabulary of its own ``schema``, so a v1 event is validated exactly as
+before and a stream may mix both revisions.
+
 The module is stdlib-only and imports nothing from ``bootstrap_lib``: it is
 linked into venvs that carry no third-party dependency, and a process that
 holds an older copy of a sibling module cannot disagree with it.
@@ -36,18 +42,46 @@ OWNER = "bootstrap@plugins-kit"
 # FROZEN. Never reassigned; a later revision adds its own constant.
 SCHEMA_V1 = "plugins-kit.execution-event/v1"
 
-# The capability marker a consumer probes. It only ever grows.
-SUPPORTED_SCHEMAS = frozenset({SCHEMA_V1})
+# FROZEN. v1 plus the attempt-scoped `interrupt` event.
+SCHEMA_V2 = "plugins-kit.execution-event/v2"
 
+# The capability marker a consumer probes. It only ever grows.
+SUPPORTED_SCHEMAS = frozenset({SCHEMA_V1, SCHEMA_V2})
+
+# The v1 core vocabulary. FROZEN; a later revision has its own set.
 CORE_EVENTS = frozenset(
     {"dispatch-selected", "call-started", "usage", "result", "terminal"}
 )
 
 # Events that describe one attempt: unit_id and attempt_id are both required.
+# The v1 set. FROZEN.
 ATTEMPT_SCOPED = frozenset({"dispatch-selected", "call-started", "usage", "result"})
 
 # Names a later schema revision defines. Used only to word the v1 refusal.
 LATER_REVISION_NAMES = frozenset({"contract", "interrupt"})
+
+# The v2 vocabulary: every v1 name under the v1 rules, plus `interrupt`.
+CORE_EVENTS_V2 = CORE_EVENTS | {"interrupt"}
+ATTEMPT_SCOPED_V2 = ATTEMPT_SCOPED | {"interrupt"}
+
+# The lifecycle of one interrupt: one request, then at most one close.
+INTERRUPT_PHASES = frozenset({"requested", "resolved", "rejected", "expired"})
+_INTERRUPT_CLOSING = frozenset({"resolved", "rejected", "expired"})
+
+# The CLOSED `interrupt` payload key set. Every value is an identifier, a
+# pattern-bound name, a closed-set phase, a timestamp, or an int, so no key
+# can carry a request payload, a request schema, a resolution input, or free
+# text such as a reason.
+INTERRUPT_PAYLOAD_KEYS = frozenset(
+    {"interrupt_id", "kind", "phase", "expires_at", "continuation_no"}
+)
+_INTERRUPT_REQUIRED_KEYS = ("interrupt_id", "kind", "phase")
+
+# Per schema: (core names, attempt-scoped names, names a later revision defines).
+_VOCABULARIES = {
+    SCHEMA_V1: (CORE_EVENTS, ATTEMPT_SCOPED, LATER_REVISION_NAMES),
+    SCHEMA_V2: (CORE_EVENTS_V2, ATTEMPT_SCOPED_V2, frozenset({"contract"})),
+}
 
 MAX_PAYLOAD_BYTES = 16384
 
@@ -124,18 +158,24 @@ def utc_timestamp(epoch: float | str | None = None) -> str:
     return text + "Z"
 
 
-def _check_at(value: Any) -> str:
+def _check_utc_z(value: Any, label: str, pointer: str) -> str:
     if not isinstance(value, str) or not _AT_RE.fullmatch(value):
         raise EventError(
-            "at must be ISO-8601 UTC ending in Z, "
+            f"{label} must be ISO-8601 UTC ending in Z, "
             f"YYYY-MM-DDTHH:MM:SS[.fff to .ffffff]Z, got {value!r}",
-            pointer="/at",
+            pointer=pointer,
         )
     try:
         _dt.datetime.strptime(value[:19], "%Y-%m-%dT%H:%M:%S")
     except ValueError as exc:
-        raise EventError(f"at is not a calendar time: {value!r}", pointer="/at") from exc
+        raise EventError(
+            f"{label} is not a calendar time: {value!r}", pointer=pointer
+        ) from exc
     return value
+
+
+def _check_at(value: Any) -> str:
+    return _check_utc_z(value, "at", "/at")
 
 
 # --------------------------------------------------------------------------
@@ -295,10 +335,17 @@ def _check_payload(value: Any) -> dict:
     return payload
 
 
-def _check_event_name(name: Any, plugin: str) -> str:
+def _vocabulary(schema: str) -> tuple[frozenset, frozenset, frozenset]:
+    """Return (core names, attempt-scoped names, later-revision names) for a
+    supported schema. v1 always resolves to the frozen v1 sets."""
+    return _VOCABULARIES[schema]
+
+
+def _check_event_name(name: Any, plugin: str, schema: str = SCHEMA_V1) -> str:
+    core, _scoped, later = _vocabulary(schema)
     if not isinstance(name, str) or not name:
         raise EventError("event must be a non-empty string", pointer="/event")
-    if name in CORE_EVENTS:
+    if name in core:
         return name
     if ":" in name:
         prefix, _, part = name.partition(":")
@@ -314,17 +361,57 @@ def _check_event_name(name: Any, plugin: str) -> str:
                 pointer="/event",
             )
         return name
-    if name in LATER_REVISION_NAMES:
+    if name in later:
         raise EventError(
             f"event {name!r} is defined by a later schema revision; "
-            f"{SCHEMA_V1} does not accept it",
+            f"{schema} does not accept it",
             pointer="/event",
         )
     raise EventError(
         f"unknown event {name!r}: use a core name "
-        f"({', '.join(sorted(CORE_EVENTS))}) or '<plugin>:<name>'",
+        f"({', '.join(sorted(core))}) or '<plugin>:<name>'",
         pointer="/event",
     )
+
+
+def _check_interrupt_payload(payload: dict) -> None:
+    for key in payload:
+        if key not in INTERRUPT_PAYLOAD_KEYS:
+            raise EventError(
+                f"interrupt payload has unknown key {key!r}; allowed: "
+                f"{', '.join(sorted(INTERRUPT_PAYLOAD_KEYS))}. The key set is "
+                "closed: an interrupt event never carries the request payload, "
+                "the request schema, the resolution input, or free text",
+                pointer=_ptr("payload", key),
+            )
+    for key in _INTERRUPT_REQUIRED_KEYS:
+        if key not in payload:
+            raise EventError(
+                f"interrupt payload needs {key!r}", pointer=_ptr("payload", key)
+            )
+    _bounded(payload["interrupt_id"], "/payload/interrupt_id")
+    kind = payload["kind"]
+    if not isinstance(kind, str) or not _NAME_RE.fullmatch(kind):
+        raise EventError(
+            f"interrupt kind must match [a-z][a-z0-9-]*, got {kind!r}",
+            pointer="/payload/kind",
+        )
+    phase = payload["phase"]
+    if not isinstance(phase, str) or phase not in INTERRUPT_PHASES:
+        raise EventError(
+            f"interrupt phase must be one of {', '.join(sorted(INTERRUPT_PHASES))}, "
+            f"got {phase!r}",
+            pointer="/payload/phase",
+        )
+    if "expires_at" in payload:
+        _check_utc_z(payload["expires_at"], "interrupt expires_at", "/payload/expires_at")
+    if "continuation_no" in payload:
+        number = payload["continuation_no"]
+        if isinstance(number, bool) or not isinstance(number, int) or number < 0:
+            raise EventError(
+                f"interrupt continuation_no must be an int >= 0, got {number!r}",
+                pointer="/payload/continuation_no",
+            )
 
 
 def _check_core_payload(event: str, payload: dict) -> None:
@@ -369,6 +456,8 @@ def _check_core_payload(event: str, payload: dict) -> None:
                 "terminal payload needs state: a non-empty string",
                 pointer="/payload/state",
             )
+    elif event == "interrupt":
+        _check_interrupt_payload(payload)
 
 
 def _is_supported(schema: Any) -> bool:
@@ -436,8 +525,9 @@ def validate_event(value: Any) -> dict:
                 f"source.{key} must be a non-empty string", pointer=_ptr("source", key)
             )
 
-    event = _check_event_name(value["event"], plugin)
-    if event in ATTEMPT_SCOPED and (
+    _core, attempt_scoped, _later = _vocabulary(schema)
+    event = _check_event_name(value["event"], plugin, schema)
+    if event in attempt_scoped and (
         "unit_id" not in identity or "attempt_id" not in identity
     ):
         raise EventError(
@@ -512,15 +602,24 @@ def validate_stream(events: Iterable[Any]) -> tuple[dict, ...]:
     """Validate every event, then the ordering and lifecycle rules of a stream.
 
     Within one ordering group (plugin, run_id, unit_id or none) ``seq`` must
-    strictly increase in the given order. An attempt has at most one
-    ``result``; a unit (or the run) has at most one ``terminal``; no
-    attempt-scoped event follows its unit's ``terminal``.
+    strictly increase in the given order; the group does not include the
+    schema, so ordering spans a stream that mixes revisions. An attempt has
+    at most one ``result``; a unit (or the run) has at most one ``terminal``;
+    no attempt-scoped event -- judged by the event's own schema -- follows its
+    unit's ``terminal``.
+
+    ``interrupt`` events (v2), keyed by (group, attempt_id, interrupt_id):
+    the first must be ``requested``; a second ``requested`` is refused; at
+    most one closing phase (``resolved``, ``rejected``, ``expired``) is
+    allowed; and no ``interrupt`` event follows the close.
     """
     out: list[dict] = []
     seen: set[tuple] = set()
     last_seq: dict[tuple, int] = {}
     results: set[tuple] = set()
     terminals: set[tuple] = set()
+    interrupts_open: set[tuple] = set()
+    interrupts_closed: set[tuple] = set()
     for index, raw in enumerate(events):
         try:
             item = validate_event(raw)
@@ -543,7 +642,8 @@ def validate_stream(events: Iterable[Any]) -> tuple[dict, ...]:
         seen.add((group, seq))
         last_seq[group] = seq
         name = item["event"]
-        if name in ATTEMPT_SCOPED and group in terminals:
+        _core, attempt_scoped, _later = _vocabulary(item["schema"])
+        if name in attempt_scoped and group in terminals:
             raise EventError(
                 f"event {index}: attempt-scoped {name!r} after the unit's terminal "
                 f"in group {group!r}",
@@ -564,8 +664,49 @@ def validate_stream(events: Iterable[Any]) -> tuple[dict, ...]:
                     pointer=_ptr(index, "event"),
                 )
             terminals.add(group)
+        elif name == "interrupt":
+            _check_interrupt_order(
+                index, group, identity, item["payload"], interrupts_open, interrupts_closed
+            )
         out.append(item)
     return tuple(out)
+
+
+def _check_interrupt_order(
+    index: int,
+    group: tuple,
+    identity: dict,
+    payload: dict,
+    opened: set[tuple],
+    closed: set[tuple],
+) -> None:
+    key = group + (identity["attempt_id"], payload["interrupt_id"])
+    phase = payload["phase"]
+    pointer = _ptr(index, "payload", "phase")
+    if key not in opened:
+        if phase != "requested":
+            raise EventError(
+                f"event {index}: interrupt {phase!r} before its request for {key!r}",
+                pointer=pointer,
+            )
+        opened.add(key)
+        return
+    if key in closed and phase in _INTERRUPT_CLOSING:
+        raise EventError(
+            f"event {index}: second interrupt close ({phase!r}) for {key!r}",
+            pointer=pointer,
+        )
+    if key in closed:
+        raise EventError(
+            f"event {index}: interrupt {phase!r} after its close for {key!r}",
+            pointer=pointer,
+        )
+    if phase == "requested":
+        raise EventError(
+            f"event {index}: second interrupt request for {key!r}",
+            pointer=pointer,
+        )
+    closed.add(key)
 
 
 # --------------------------------------------------------------------------
@@ -719,15 +860,20 @@ def read_jsonl(path: str | os.PathLike) -> tuple[dict, ...]:
 
 __all__ = [
     "ATTEMPT_SCOPED",
+    "ATTEMPT_SCOPED_V2",
     "CORE_EVENTS",
+    "CORE_EVENTS_V2",
     "Emitter",
     "EventError",
+    "INTERRUPT_PAYLOAD_KEYS",
+    "INTERRUPT_PHASES",
     "InMemorySink",
     "JsonlSink",
     "LATER_REVISION_NAMES",
     "MAX_PAYLOAD_BYTES",
     "OWNER",
     "SCHEMA_V1",
+    "SCHEMA_V2",
     "SUPPORTED_SCHEMAS",
     "make_event",
     "read_jsonl",

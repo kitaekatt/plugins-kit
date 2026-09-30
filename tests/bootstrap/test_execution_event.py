@@ -1,7 +1,8 @@
 """Tests for bootstrap_lib.execution_event -- the shared execution-event envelope.
 
-The module owns one frozen envelope (schema v1), its vocabulary, the stream
-ordering rules, the zero-versus-unknown usage rule, and two sinks. Every
+The module owns one envelope with two frozen revisions (schema v1, and v2 =
+v1 plus the `interrupt` event), their vocabularies, the stream ordering and
+lifecycle rules, the zero-versus-unknown usage rule, and two sinks. Every
 plugin keeps its own store, so nothing here opens a database or imports
 another plugin; the module is stdlib-only and imports nothing from
 bootstrap_lib.
@@ -93,8 +94,8 @@ def test_missing_required_key_is_refused() -> None:
 
 
 def test_unknown_schema_revision_is_refused() -> None:
-    error = _refused(_event(schema="plugins-kit.execution-event/v2"))
-    assert "plugins-kit.execution-event/v2" in str(error)
+    error = _refused(_event(schema="plugins-kit.execution-event/v3"))
+    assert "plugins-kit.execution-event/v3" in str(error)
     assert error.pointer == "/schema"
 
 
@@ -473,14 +474,14 @@ def test_make_event_default_schema_is_v1() -> None:
 
 def test_make_event_refuses_unsupported_schema_selector() -> None:
     with pytest.raises(ee.EventError) as info:
-        _make(schema="plugins-kit.execution-event/v2")
+        _make(schema="plugins-kit.execution-event/v3")
     assert "selector" in str(info.value)
     assert info.value.pointer == "/schema"
 
 
 def test_emitter_refuses_unsupported_schema_selector() -> None:
     with pytest.raises(ee.EventError) as info:
-        ee.Emitter("job-kit", "r", schema="plugins-kit.execution-event/v2")
+        ee.Emitter("job-kit", "r", schema="plugins-kit.execution-event/v3")
     assert "selector" in str(info.value)
 
 
@@ -488,6 +489,8 @@ def test_consumer_probe_shape_binds_real_constructors() -> None:
     """The section-2.8 probe a consumer runs, against the real module."""
     module = ee
     assert ee.SCHEMA_V1 in module.SUPPORTED_SCHEMAS
+    # A v2 emitter (job-kit) requires both literals and binds schema=SCHEMA_V2.
+    assert ee.SCHEMA_V2 in module.SUPPORTED_SCHEMAS
     for name in ("make_event", "utc_timestamp", "usage_payload", "validate_stream",
                  "Emitter", "JsonlSink", "InMemorySink", "read_jsonl", "validate_event"):
         assert callable(getattr(module, name)), name
@@ -498,10 +501,18 @@ def test_consumer_probe_shape_binds_real_constructors() -> None:
     }
     inspect.signature(module.make_event).bind(**make_keywords)
     inspect.signature(module.make_event).bind(**make_keywords, schema=ee.SCHEMA_V1)
+    inspect.signature(module.make_event).bind(**make_keywords, schema=ee.SCHEMA_V2)
     inspect.signature(module.Emitter).bind("workflow-kit", "r", unit_id="u", sinks=())
     inspect.signature(module.Emitter).bind(
         "workflow-kit", "r", unit_id="u", sinks=(), start_seq=0, schema=ee.SCHEMA_V1
     )
+    inspect.signature(module.Emitter).bind(
+        "job-kit", "r", unit_id="u", sinks=(), start_seq=0, schema=ee.SCHEMA_V2
+    )
+    # The bound shape is also a working one under v2.
+    built = module.make_event(**{**make_keywords, "event": "interrupt",
+                                 "payload": _interrupt_payload()}, schema=ee.SCHEMA_V2)
+    assert built["schema"] == ee.SCHEMA_V2
     inspect.signature(module.Emitter.emit).bind(
         None, "result", unit_id="u", attempt_id="1", adapter="a", model="m",
         payload={}, at=AT,
@@ -647,14 +658,14 @@ def test_emitter_refuses_bad_construction() -> None:
             ee.Emitter(*args, **kwargs)
 
 
-def test_emitter_schema_selector_stamps_every_event(monkeypatch: pytest.MonkeyPatch) -> None:
-    fixture_schema = "plugins-kit.execution-event/v1-fixture"
-    monkeypatch.setattr(ee, "SUPPORTED_SCHEMAS", frozenset({ee.SCHEMA_V1, fixture_schema}))
+def test_emitter_schema_selector_stamps_every_event() -> None:
     sink = ee.InMemorySink()
-    emitter = ee.Emitter("job-kit", "r", unit_id="u", sinks=[sink], schema=fixture_schema)
+    emitter = ee.Emitter("job-kit", "r", unit_id="u", sinks=[sink], schema=ee.SCHEMA_V2)
     emitter.emit("call-started", attempt_id="1")
+    emitter.emit("interrupt", attempt_id="1", payload=_interrupt_payload())
     emitter.emit("terminal", payload={"state": "done"})
-    assert [event["schema"] for event in sink.events] == [fixture_schema, fixture_schema]
+    assert [event["schema"] for event in sink.events] == [ee.SCHEMA_V2] * 3
+    assert ee.validate_stream(sink.events) == tuple(sink.events)
 
 
 def test_emitter_holds_seq_and_write_under_one_lock() -> None:
@@ -812,6 +823,313 @@ def test_read_jsonl_refuses_non_json_constants(tmp_path: Path) -> None:
 
 
 # --------------------------------------------------------------------------
+# Schema v2: v1 plus the `interrupt` event
+# --------------------------------------------------------------------------
+
+
+def _interrupt_payload(**overrides: Any) -> dict:
+    payload: dict[str, Any] = {"interrupt_id": "int-1", "kind": "approval", "phase": "requested"}
+    payload.update(overrides)
+    return {key: value for key, value in payload.items() if value is not _DROP}
+
+
+_DROP = object()
+
+
+def _interrupt(**payload_overrides: Any) -> dict:
+    """A valid v2 `interrupt` event (raw, for validate_event)."""
+    return _event(schema=ee.SCHEMA_V2, event="interrupt",
+                  payload=_interrupt_payload(**payload_overrides))
+
+
+def _v2(seq: int, phase: str, interrupt_id: str = "int-1", attempt: str = "1",
+        unit: str = "u") -> dict:
+    return _make(seq=seq, event="interrupt", unit_id=unit, attempt_id=attempt,
+                 payload=_interrupt_payload(interrupt_id=interrupt_id, phase=phase),
+                 schema=ee.SCHEMA_V2)
+
+
+def _stream_refused(events: list) -> ee.EventError:
+    with pytest.raises(ee.EventError) as info:
+        ee.validate_stream(events)
+    return info.value
+
+
+def test_schema_v2_literal_is_frozen() -> None:
+    assert ee.SCHEMA_V2 == "plugins-kit.execution-event/v2"
+
+
+def test_supported_schemas_are_v1_and_v2() -> None:
+    assert ee.SUPPORTED_SCHEMAS == frozenset(
+        {"plugins-kit.execution-event/v1", "plugins-kit.execution-event/v2"}
+    )
+
+
+def test_v1_core_events_are_frozen() -> None:
+    v1_core = frozenset({"dispatch-selected", "call-started", "usage", "result", "terminal"})
+    v1_scoped = frozenset({"dispatch-selected", "call-started", "usage", "result"})
+    assert ee.CORE_EVENTS == v1_core
+    assert ee.ATTEMPT_SCOPED == v1_scoped
+    assert ee.LATER_REVISION_NAMES == frozenset({"contract", "interrupt"})
+    assert ee.CORE_EVENTS_V2 == v1_core | {"interrupt"}
+    assert ee.ATTEMPT_SCOPED_V2 == v1_scoped | {"interrupt"}
+    assert ee.INTERRUPT_PHASES == frozenset({"requested", "resolved", "rejected", "expired"})
+    assert ee.INTERRUPT_PAYLOAD_KEYS == frozenset(
+        {"interrupt_id", "kind", "phase", "expires_at", "continuation_no"}
+    )
+
+
+def test_v1_event_serialization_is_unchanged(tmp_path: Path) -> None:
+    """A fixed v1 event against a literal line: v2 must not move one v1 byte."""
+    literal = (
+        '{"at":"2026-09-29T20:00:00.123Z","event":"result",'
+        '"identity":{"attempt_id":"2","run_id":"run-1","unit_id":"unit-1"},'
+        '"payload":{"acceptance":"accepted","n":[1,2.5,null],"note":"caf\\u00e9",'
+        '"status":"completed"},'
+        '"schema":"plugins-kit.execution-event/v1","seq":7,'
+        '"source":{"adapter":"openrouter","model":"m","plugin":"job-kit"}}'
+    )
+    kwargs = dict(
+        seq=7, run_id="run-1", event="result", plugin="job-kit",
+        at="2026-09-29T20:00:00.123Z", unit_id="unit-1", attempt_id="2",
+        adapter="openrouter", model="m",
+        payload={"status": "completed", "acceptance": "accepted",
+                 "note": "caf" + chr(0xE9), "n": [1, 2.5, None]},
+    )
+    event = ee.make_event(**kwargs)
+    assert event == ee.make_event(**kwargs, schema=ee.SCHEMA_V1)
+    assert list(event) == ["schema", "seq", "identity", "event", "at", "source", "payload"]
+    assert list(event["identity"]) == ["run_id", "unit_id", "attempt_id"]
+    assert list(event["source"]) == ["plugin", "adapter", "model"]
+    path = tmp_path / "v1.jsonl"
+    ee.JsonlSink(path).write(event)
+    assert path.read_bytes() == (literal + "\n").encode("ascii")
+    assert ee.read_jsonl(path) == (event,)
+
+
+def test_v2_accepts_interrupt_event() -> None:
+    minimal = ee.validate_event(_interrupt())
+    assert minimal["schema"] == ee.SCHEMA_V2
+    assert minimal["event"] == "interrupt"
+    assert minimal["payload"] == {"interrupt_id": "int-1", "kind": "approval",
+                                  "phase": "requested"}
+    full = ee.validate_event(_interrupt(expires_at="2026-10-01T00:00:00Z", continuation_no=0))
+    assert full["payload"]["expires_at"] == "2026-10-01T00:00:00Z"
+    assert full["payload"]["continuation_no"] == 0
+    for phase in sorted(ee.INTERRUPT_PHASES):
+        assert ee.validate_event(_interrupt(phase=phase))["payload"]["phase"] == phase
+    built = _v2(0, "requested")
+    assert built["schema"] == ee.SCHEMA_V2
+
+
+@pytest.mark.parametrize("name", sorted(ee.CORE_EVENTS))
+def test_v2_accepts_every_v1_core_name(name: str) -> None:
+    payload: dict = {}
+    identity = {"run_id": "r", "unit_id": "u", "attempt_id": "1"}
+    if name == "usage":
+        payload = ee.usage_payload(input_tokens=3, output_tokens=4)
+    elif name == "result":
+        payload = {"status": "completed"}
+    elif name == "terminal":
+        payload = {"state": "done"}
+        identity = {"run_id": "r", "unit_id": "u"}
+    value = ee.validate_event(_event(schema=ee.SCHEMA_V2, event=name, identity=identity,
+                                     payload=payload))
+    assert value["event"] == name
+    # ... under the v1 rules: the same required payload is still required.
+    if name in ("result", "terminal", "usage"):
+        bad = _refused(_event(schema=ee.SCHEMA_V2, event=name, identity=identity,
+                              payload={}))
+        assert bad.pointer.startswith("/payload")
+
+
+def test_v2_refuses_contract_as_later_revision() -> None:
+    error = _refused(_event(schema=ee.SCHEMA_V2, event="contract", payload={}))
+    assert str(error) == (
+        "event 'contract' is defined by a later schema revision; "
+        "plugins-kit.execution-event/v2 does not accept it"
+    )
+    assert error.pointer == "/event"
+
+
+def test_v1_refusal_wording_is_unchanged() -> None:
+    error = _refused(_event(event="interrupt", payload=_interrupt_payload()))
+    assert str(error) == (
+        "event 'interrupt' is defined by a later schema revision; "
+        "plugins-kit.execution-event/v1 does not accept it"
+    )
+    error = _refused(_event(event="started"))
+    assert str(error) == (
+        "unknown event 'started': use a core name "
+        "(call-started, dispatch-selected, result, terminal, usage) or '<plugin>:<name>'"
+    )
+
+
+def test_interrupt_requires_unit_and_attempt() -> None:
+    for identity in ({"run_id": "r", "unit_id": "u"}, {"run_id": "r"}):
+        error = _refused(_event(schema=ee.SCHEMA_V2, event="interrupt", identity=identity,
+                                payload=_interrupt_payload()))
+        assert "attempt-scoped" in str(error), identity
+        assert error.pointer == "/identity"
+
+
+@pytest.mark.parametrize(
+    "value",
+    [_DROP, "", "x" * 201, "a\nb", 7],
+    ids=["missing", "empty", "too_long", "control_char", "non_string"],
+)
+def test_interrupt_id_is_bounded(value: Any) -> None:
+    error = _refused(_interrupt(interrupt_id=value))
+    assert error.pointer == "/payload/interrupt_id"
+    at_bound = ee.validate_event(_interrupt(interrupt_id="x" * 200))
+    assert at_bound["payload"]["interrupt_id"] == "x" * 200
+
+
+def test_interrupt_kind_pattern_is_enforced() -> None:
+    for kind in ("Approval", "1x", "a_b", "", "a:b", 3, _DROP):
+        error = _refused(_interrupt(kind=kind))
+        assert error.pointer == "/payload/kind", kind
+    for kind in ("approval", "free-text-answer", "k8s"):
+        assert ee.validate_event(_interrupt(kind=kind))["payload"]["kind"] == kind
+
+
+def test_interrupt_phase_is_a_closed_set() -> None:
+    for phase in ("answered", "Requested", "", None, 1, _DROP):
+        error = _refused(_interrupt(phase=phase))
+        assert error.pointer == "/payload/phase", phase
+
+
+@pytest.mark.parametrize(
+    "key", ["payload", "request_schema", "request_payload", "input", "resolution"]
+)
+def test_interrupt_payload_refuses_content_key(key: str) -> None:
+    error = _refused(_interrupt(**{key: {"answer": "yes"}}))
+    assert "closed" in str(error)
+    assert error.pointer == "/payload/" + key
+    # A scalar under the same key is refused too: the key, not the shape, is barred.
+    assert _refused(_interrupt(**{key: "x"})).pointer == "/payload/" + key
+
+
+def test_interrupt_payload_refuses_unknown_key() -> None:
+    error = _refused(_interrupt(note="n"))
+    assert "unknown key 'note'" in str(error)
+    assert error.pointer == "/payload/note"
+
+
+def test_interrupt_payload_refuses_reason() -> None:
+    for reason in ("operator said no", ""):
+        error = _refused(_interrupt(phase="rejected", reason=reason))
+        assert "unknown key 'reason'" in str(error)
+        assert error.pointer == "/payload/reason"
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["2026-10-01T00:00:00+00:00", "2026-10-01", "2026-13-01T00:00:00Z", 1727640000, None],
+)
+def test_interrupt_expires_at_must_be_utc_z(value: Any) -> None:
+    error = _refused(_interrupt(expires_at=value))
+    assert error.pointer == "/payload/expires_at"
+
+
+@pytest.mark.parametrize("value", [-1, True, 1.0], ids=["negative", "bool", "float"])
+def test_interrupt_continuation_no_is_non_negative_int(value: Any) -> None:
+    error = _refused(_interrupt(continuation_no=value))
+    assert error.pointer == "/payload/continuation_no"
+    assert ee.validate_event(_interrupt(continuation_no=3))["payload"]["continuation_no"] == 3
+
+
+def test_interrupt_lifecycle_stream_is_accepted() -> None:
+    stream = [
+        _attempt(0, "call-started"),
+        _attempt(1, "result", payload={"status": "completed",
+                                       "acceptance": "interrupt_requested"}),
+        _v2(2, "requested"),
+        _v2(3, "resolved"),
+        _make(seq=4, event="job-kit:continuation-started", unit_id="u", attempt_id="1",
+              payload={"interrupt_id": "int-1", "continuation_no": 1}),
+        _v2(5, "requested", interrupt_id="int-2"),
+        _v2(6, "rejected", interrupt_id="int-2"),
+        _terminal(7),
+    ]
+    assert ee.validate_stream(stream) == tuple(stream)
+    # The same interrupt id on another attempt is a different key.
+    ee.validate_stream([_v2(0, "requested"), _v2(1, "expired"),
+                        _v2(2, "requested", attempt="2")])
+
+
+def test_stream_refuses_interrupt_close_before_request() -> None:
+    for phase in ("resolved", "rejected", "expired"):
+        error = _stream_refused([_attempt(0, "result"), _v2(1, phase)])
+        assert "before its request" in str(error), phase
+        assert error.pointer == "/1/payload/phase"
+
+
+def test_stream_refuses_second_interrupt_request() -> None:
+    error = _stream_refused([_v2(0, "requested"), _v2(1, "requested")])
+    assert "second interrupt request" in str(error)
+    assert error.pointer == "/1/payload/phase"
+
+
+def test_stream_refuses_second_interrupt_close() -> None:
+    error = _stream_refused([_v2(0, "requested"), _v2(1, "resolved"), _v2(2, "expired")])
+    assert "second interrupt close" in str(error)
+    assert error.pointer == "/2/payload/phase"
+
+
+def test_stream_refuses_interrupt_event_after_close() -> None:
+    error = _stream_refused([_v2(0, "requested"), _v2(1, "rejected"), _v2(2, "requested")])
+    assert "after its close" in str(error)
+    assert error.pointer == "/2/payload/phase"
+
+
+def test_stream_refuses_interrupt_after_unit_terminal() -> None:
+    error = _stream_refused([_v2(0, "requested"), _terminal(1), _v2(2, "expired")])
+    assert "after the unit's terminal" in str(error)
+    assert error.pointer == "/2/event"
+
+
+def test_stream_seq_orders_across_v1_and_v2() -> None:
+    mixed = [_attempt(0, "call-started"), _v2(1, "requested"), _v2(2, "resolved"),
+             _terminal(3)]
+    assert ee.validate_stream(mixed) == tuple(mixed)
+    error = _stream_refused([_attempt(5, "call-started"), _v2(3, "requested")])
+    assert "does not increase" in str(error)
+    assert error.pointer == "/1/seq"
+    error = _stream_refused([_attempt(4, "call-started"), _v2(4, "requested")])
+    assert "duplicate seq" in str(error)
+
+
+def test_emitter_default_schema_is_v1() -> None:
+    assert inspect.signature(ee.Emitter).parameters["schema"].default == ee.SCHEMA_V1
+    sink = ee.InMemorySink()
+    emitter = ee.Emitter("job-kit", "r", unit_id="u", sinks=[sink])
+    emitter.emit("call-started", attempt_id="1", at=AT)
+    assert sink.events[0]["schema"] == "plugins-kit.execution-event/v1"
+    with pytest.raises(ee.EventError) as info:
+        emitter.emit("interrupt", attempt_id="1", payload=_interrupt_payload())
+    assert "later schema revision" in str(info.value)
+
+
+def test_read_jsonl_accepts_mixed_v1_v2_stream(tmp_path: Path) -> None:
+    path = tmp_path / "mixed.jsonl"
+    sink = ee.JsonlSink(path)
+    events = [
+        _attempt(0, "call-started"),
+        _attempt(1, "result"),
+        _v2(2, "requested"),
+        _v2(3, "resolved"),
+        _terminal(4),
+    ]
+    for event in events:
+        sink.write(event)
+    assert ee.read_jsonl(path) == tuple(events)
+    assert [event["schema"] for event in ee.read_jsonl(path)] == [
+        ee.SCHEMA_V1, ee.SCHEMA_V1, ee.SCHEMA_V2, ee.SCHEMA_V2, ee.SCHEMA_V1
+    ]
+
+
+# --------------------------------------------------------------------------
 # Module boundary
 # --------------------------------------------------------------------------
 
@@ -841,6 +1159,10 @@ def test_public_surface_is_the_documented_one() -> None:
         "LATER_REVISION_NAMES", "MAX_PAYLOAD_BYTES", "EventError", "utc_timestamp",
         "usage_payload", "make_event", "validate_event", "validate_stream", "Emitter",
         "InMemorySink", "JsonlSink", "read_jsonl",
+        "SCHEMA_V2", "CORE_EVENTS_V2", "ATTEMPT_SCOPED_V2", "INTERRUPT_PHASES",
+        "INTERRUPT_PAYLOAD_KEYS",
     ])
+    for name in ee.__all__:
+        assert hasattr(ee, name), name
     assert issubclass(ee.EventError, ValueError)
     assert ee.EventError("x").pointer == ""

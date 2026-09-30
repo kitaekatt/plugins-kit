@@ -13,10 +13,11 @@ the format it enforces.
 ## Envelope
 
 ```yaml
-schema: plugins-kit.execution-event/v1      # exact literal
+schema: plugins-kit.execution-event/v1      # exact literal; or .../v2 (see "Schema v2")
 seq: 17                                     # int >= 0; bool is refused
 identity: {run_id: str, unit_id: str?, attempt_id: str?}
 event: dispatch-selected | call-started | usage | result | terminal | <plugin>:<name>
+       # v2 also: interrupt
 at: "2026-09-29T20:00:00Z"                  # ISO-8601 UTC, "Z", optional .fff to .ffffff
 source: {plugin: str, adapter: str?, model: str?}
 payload: {}                                 # JSON-native mapping, <= 16384 bytes serialized
@@ -67,11 +68,13 @@ whose `source.plugin` is `job-kit`. An unprefixed unknown name, or a prefix
 naming another plugin, is refused. An extension may be run-, unit-, or
 attempt-scoped. Extensions are never promoted to core names.
 
-**`contract` and `interrupt` are not v1 names.** A v1 validator refuses them
-with an error saying they are defined by a later schema revision
-(`LATER_REVISION_NAMES`). Both describe execution: a contract event is emitted
-while a run executes, under its run identity, never for a compile. A compile
-error is reported by the compiler itself and needs no event.
+**`contract` and `interrupt` are not v1 names.** A v1 event carrying either
+is refused with an error saying it is defined by a later schema revision
+(`LATER_REVISION_NAMES`). `interrupt` is a v2 name (see "Schema v2").
+`contract` is not a v2 name either; a revision after v2 defines it with its
+own payload rules. Both describe execution: a contract event is emitted while
+a run executes, under its run identity, never for a compile. A compile error
+is reported by the compiler itself and needs no event.
 
 ## Revisions
 
@@ -91,6 +94,61 @@ A process that holds a module without a later revision refuses an event
 written under it at `schema`, naming the revision; it never accepts such an
 event under weaker rules.
 
+## Schema v2
+
+`SCHEMA_V2 = "plugins-kit.execution-event/v2"` is v1 plus one core name,
+`interrupt`: a durable wait for an answer from outside the run. It is frozen
+on the same terms as v1.
+
+- **Every v1 name is a v2 name, under the v1 rules.** `CORE_EVENTS_V2` is
+  `CORE_EVENTS` plus `interrupt`; `ATTEMPT_SCOPED_V2` is `ATTEMPT_SCOPED` plus
+  `interrupt`. `CORE_EVENTS`, `ATTEMPT_SCOPED` and `LATER_REVISION_NAMES` keep
+  their v1 values, so a v1 event validates exactly as it does under a v1-only
+  module and still refuses `interrupt`.
+- **`contract` is not a v2 name.** A v2 event named `contract` is refused with
+  "defined by a later schema revision; plugins-kit.execution-event/v2 does not
+  accept it".
+- **Each event is judged by its own `schema`.** `validate_event` and
+  `validate_stream` select the vocabulary and the attempt scope from the
+  event's `schema` field.
+
+The `interrupt` event:
+
+| Field | Rule |
+| --- | --- |
+| scope | attempt: `unit_id` and `attempt_id` required (the attempt that asked) |
+| `payload.interrupt_id` | required; non-empty string, at most 200 characters, no control characters |
+| `payload.kind` | required; matches `[a-z][a-z0-9-]*` |
+| `payload.phase` | required; one of `requested`, `resolved`, `rejected`, `expired` (`INTERRUPT_PHASES`) |
+| `payload.expires_at` | optional; an `at`-format UTC timestamp ending in `Z` |
+| `payload.continuation_no` | optional; an int >= 0 (bool refused) |
+
+**The payload key set is closed** (`INTERRUPT_PAYLOAD_KEYS`). Any other key is
+refused, including `payload`, `request_schema`, `request_payload`, `input`,
+`resolution`, and `reason`. Every allowed value is an identifier, a
+pattern-bound name, a closed-set phase, a timestamp, or an int, so the
+validator itself refuses an `interrupt` event that carries the request, its
+schema, the answer, or free text. An operator's free-text reason for a
+rejection belongs in the emitting plugin's own store, and at most in the v1
+`terminal` event's payload, where keeping content out is the emitter's
+discipline: the validator cannot tell a reason from content there.
+
+`validate_stream` adds four rules for `interrupt` events, keyed by (ordering
+group, `attempt_id`, `interrupt_id`):
+
+- the first event for a key has phase `requested`;
+- a second `requested` for a key is refused;
+- at most one closing phase (`resolved`, `rejected`, `expired`) per key;
+- no `interrupt` event for a key follows its close.
+
+`interrupt` is attempt-scoped, so it is also refused after its unit's
+`terminal`. An answered wait that continues the work reports through the
+emitter's own extension events, since an attempt has at most one `result`.
+
+**A stream may mix v1 and v2 events.** The ordering group does not include
+`schema`, so `seq` ordering and (G, `seq`) uniqueness span both revisions. An
+emitter that writes `interrupt` under v2 may keep every other event under v1.
+
 ## Ordering and identity
 
 - **Ordering group** G = (`source.plugin`, `identity.run_id`,
@@ -109,7 +167,8 @@ event under weaker rules.
 - a `seq` that does not increase within G, in the given order;
 - a second `result` for one attempt;
 - a second `terminal` for one unit (or for the run);
-- an attempt-scoped event after that unit's `terminal`.
+- an attempt-scoped event after that unit's `terminal`;
+- an `interrupt` event that breaks the lifecycle rules in "Schema v2".
 
 An extension event after a unit's `terminal` is allowed.
 
@@ -141,7 +200,10 @@ the reported value cannot distinguish the two.
 | --- | --- |
 | `OWNER` | `"bootstrap@plugins-kit"`, for remedy text |
 | `SCHEMA_V1`, `SUPPORTED_SCHEMAS` | the frozen v1 literal, and the set of supported revisions (the capability marker; it only grows) |
-| `CORE_EVENTS`, `ATTEMPT_SCOPED`, `LATER_REVISION_NAMES` | the vocabulary sets above |
+| `SCHEMA_V2` | the frozen v2 literal, `"plugins-kit.execution-event/v2"` |
+| `CORE_EVENTS`, `ATTEMPT_SCOPED`, `LATER_REVISION_NAMES` | the v1 vocabulary sets above |
+| `CORE_EVENTS_V2`, `ATTEMPT_SCOPED_V2` | the v2 vocabulary sets: the v1 sets plus `interrupt` |
+| `INTERRUPT_PHASES`, `INTERRUPT_PAYLOAD_KEYS` | the `interrupt` phases, and its closed payload key set |
 | `MAX_PAYLOAD_BYTES` | 16384 |
 | `EventError` | a `ValueError`; `.pointer` is the JSON pointer of the first fault (`"/identity/run_id"`, `"/3/seq"` inside a stream, `""` for the whole value) |
 | `utc_timestamp(epoch=None)` | an `at` value from epoch seconds (int, float, or a decimal string such as `str(time.time())`); `None` means now |
@@ -203,6 +265,11 @@ probe distinguishes three states:
 
 Never read the version for a message from the module: a stale module cannot
 know the version that replaced it.
+
+The example below is a v1 emitter. A v2 emitter sets `REQUIRED_SCHEMA` to
+`SCHEMA_V2`'s literal (and requires `SCHEMA_V1` too if it writes v1 events),
+binds `schema=` among the keywords it checks, and names bootstrap 0.136.0, the
+version that shipped v2.
 
 ```python
 import inspect
