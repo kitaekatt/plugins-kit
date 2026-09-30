@@ -66,6 +66,10 @@ EMITTERS: dict[str, tuple[Path, frozenset[str]]] = {
         PLUGINS / "workflow-kit" / "scripts" / "openrouter_run.py",
         frozenset({"llm_scripting_kit", "workflow_kit_lib"}),
     ),
+    "workflow-kit/scripts/check_artifact.py": (
+        PLUGINS / "workflow-kit" / "scripts" / "check_artifact.py",
+        frozenset({"llm_scripting_kit", "workflow_kit_lib"}),
+    ),
 }
 
 
