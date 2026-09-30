@@ -75,9 +75,11 @@ from .select import (
     requirements_match,
     select_endpoint,
 )
+from .events import ExecutionEventSupportError
 from .store import (
     DEFAULT_BUSY_TIMEOUT_MS,
     DuplicateJobError,
+    EventsNotRecordedError,
     JobStore,
     StoreError,
     StoreNotFoundError,
@@ -140,6 +142,8 @@ __all__ = [
     "select_endpoint",
     "DEFAULT_BUSY_TIMEOUT_MS",
     "DuplicateJobError",
+    "EventsNotRecordedError",
+    "ExecutionEventSupportError",
     "JobStore",
     "StoreError",
     "StoreNotFoundError",

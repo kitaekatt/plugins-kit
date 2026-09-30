@@ -1,4 +1,4 @@
-"""Command-line entry point for job-kit run, status, resume and gc."""
+"""Command-line entry point for job-kit run, status, resume, events and gc."""
 
 from __future__ import annotations
 
@@ -29,7 +29,8 @@ _EXIT_EPILOG = """Exit codes:
   0 -- every job accepted, or the verb succeeded (GC refusals are reported)
   1 -- the verb ran but a job was not accepted (rejected / failed / halted / unroutable)
   2 -- usage error (argparse exits with this code)
-  3 -- the runner itself failed (unreadable jobs file, missing store, or unexpected exception)
+  3 -- the runner itself failed (unreadable jobs file, missing store, or unexpected exception),
+       or `events` refused (a run without an event log, or an existing --out file)
 """
 
 
@@ -69,6 +70,24 @@ def _parser() -> argparse.ArgumentParser:
         "--max-parallel",
         type=_max_parallel_argument,
         help="pool width for this pass only; the ledger's recorded value is not rewritten",
+    )
+
+    events = subcommands.add_parser(
+        "events",
+        help="export a run's execution events as JSONL",
+        description=(
+            "Write the run's execution events (plugins-kit.execution-event/v1) "
+            "as one JSON object per line, in seq order: to stdout, or to a new "
+            "file with --out. A run created before job-kit recorded events is "
+            "refused, because its stream would be partial."
+        ),
+    )
+    events.add_argument("run")
+    events.add_argument("--store", type=Path)
+    events.add_argument(
+        "--out",
+        type=Path,
+        help="write the stream to this new file; an existing file is refused",
     )
 
     gc = subcommands.add_parser("gc", help="reclaim eligible attempt worktrees")
@@ -179,6 +198,37 @@ def _resume(args: argparse.Namespace) -> int:
     return _exit_for_snapshot(snapshot)
 
 
+def _events(args: argparse.Namespace) -> int:
+    """Handle the events subcommand."""
+    from . import events as event_support
+
+    store_path = _store_path(args.store)
+    stream = JobStore(store_path, create=False).list_events(args.run)
+    if args.out is None:
+        for event in stream:
+            print(json.dumps(event, sort_keys=True, ensure_ascii=True, separators=(",", ":")))
+        return EXIT_OK
+    out_path = args.out.expanduser().resolve()
+    try:
+        sink = event_support.jsonl_sink(out_path)
+    except FileExistsError:
+        print(
+            f"job-kit: --out file already exists: {out_path}; events are only "
+            "written to a new file",
+            file=sys.stderr,
+        )
+        return EXIT_RUNNER_FAILURE
+    for event in stream:
+        sink.write(event)
+    print(
+        json.dumps(
+            {"events": len(stream), "out": str(out_path), "run": args.run, "store": str(store_path)},
+            sort_keys=True,
+        )
+    )
+    return EXIT_OK
+
+
 def _gc(args: argparse.Namespace) -> int:
     """Handle the conservative workspace garbage collector."""
     from .workspace import gc_workspaces
@@ -212,6 +262,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             return _status(args)
         if args.command == "resume":
             return _resume(args)
+        if args.command == "events":
+            return _events(args)
         if args.command == "gc":
             return _gc(args)
     except KeyboardInterrupt:

@@ -5,6 +5,10 @@ Every public operation opens its own connection. Each connection enables WAL,
 ``busy_timeout`` and foreign-key enforcement. Attempt seam records are inserts
 only; GC may annotate their workspace lifecycle. A job in a terminal state
 refuses every later attempt.
+
+Each lifecycle fact also records a common execution event (see ``events.py``)
+in the ``events`` table, inside the fact's own transaction: the event exists
+if and only if the fact committed.
 """
 
 from __future__ import annotations
@@ -17,6 +21,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Iterator, Mapping, Optional, Sequence
 
+from . import events as _events
 from .model import (
     Acceptance,
     Attempt,
@@ -67,6 +72,17 @@ class DuplicateJobError(StoreError):
 
 class TerminalStateError(StoreError):
     """A transition was attempted after a job reached a terminal state."""
+
+
+class EventsNotRecordedError(StoreError):
+    """A run predates the event log, so its stream is not its full history."""
+
+    def __init__(self, run_id: str) -> None:
+        self.run_id = run_id
+        super().__init__(
+            f"run {run_id!r} was created before job-kit recorded execution "
+            "events, so its event stream would be partial; it is not exported"
+        )
 
 
 _MIGRATIONS: list[list[str]] = [
@@ -184,6 +200,29 @@ _MIGRATIONS: list[list[str]] = [
     ],
     [
         "ALTER TABLE attempts ADD COLUMN pace_readings_json TEXT",
+    ],
+    [
+        # Execution events: one row per ledger fact, inserted in the fact's
+        # transaction. The AUTOINCREMENT seq is the event's order: writers
+        # are serialized by BEGIN IMMEDIATE, so seq is commit order across
+        # transactions and insertion order within one, run-wide.
+        """
+        CREATE TABLE events (
+            seq INTEGER PRIMARY KEY AUTOINCREMENT,
+            run_id TEXT NOT NULL REFERENCES runs(id),
+            job_id TEXT,
+            attempt_no INTEGER,
+            event TEXT NOT NULL,
+            at TEXT NOT NULL,
+            adapter TEXT,
+            model TEXT,
+            payload_json TEXT NOT NULL
+        )
+        """,
+        "CREATE INDEX idx_events_run_seq ON events(run_id, seq)",
+        # A run created before this step has no events for its earlier facts;
+        # 0 marks it so its partial stream is never exported as its history.
+        "ALTER TABLE runs ADD COLUMN events_recorded INTEGER NOT NULL DEFAULT 0",
     ],
 ]
 
@@ -558,6 +597,54 @@ class JobStore:
         return row
 
     @staticmethod
+    def _record_event(
+        conn: sqlite3.Connection,
+        *,
+        run_id: str,
+        event: str,
+        at: str,
+        job_id: Optional[str] = None,
+        attempt_no: Optional[int] = None,
+        adapter: Optional[str] = None,
+        model: Optional[str] = None,
+        payload: Optional[Mapping[str, object]] = None,
+    ) -> int:
+        """Validate one execution event and insert it on the fact's connection.
+
+        The caller is inside a ``_writer()`` transaction, so the event commits
+        or rolls back with its fact. The envelope is validated before the
+        insert with a placeholder ``seq``; the row's AUTOINCREMENT value is
+        the authoritative ``seq``. Returns that value.
+        """
+        rendered = _events.build_event(
+            seq=0,
+            run_id=run_id,
+            event=event,
+            at=at,
+            job_id=job_id,
+            attempt_no=attempt_no,
+            adapter=adapter,
+            model=model,
+            payload=payload,
+        )
+        source = rendered["source"]
+        cursor = conn.execute(
+            "INSERT INTO events(run_id, job_id, attempt_no, event, at, adapter, "
+            "model, payload_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                run_id,
+                job_id,
+                attempt_no,
+                rendered["event"],
+                rendered["at"],
+                source.get("adapter"),
+                source.get("model"),
+                json.dumps(rendered["payload"], sort_keys=True),
+            ),
+        )
+        return int(cursor.lastrowid)
+
+    @staticmethod
     def _run_record(
         row: sqlite3.Row, job_rows: Sequence[sqlite3.Row]
     ) -> RunRecord:
@@ -624,10 +711,15 @@ class JobStore:
                 str(job_id): str(base_ref)
                 for job_id, base_ref in workspace_base_refs.items()
             }
+        # Every job id becomes an event unit id; refuse one the envelope
+        # cannot carry now, before anything is written, not mid-run.
+        for job_id in ids:
+            _events.check_unit_identity(run_id, job_id)
         with self._writer() as conn:
             conn.execute(
                 "INSERT INTO runs(id, created_at, jobs_path, max_parallel, workspace_root, "
-                "workspace_base_refs_json, disallowed_tools) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                "workspace_base_refs_json, disallowed_tools, events_recorded) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, 1)",
                 (
                     run_id,
                     when,
@@ -653,6 +745,13 @@ class JobStore:
                     )
                     for ordinal, job in enumerate(jobs)
                 ],
+            )
+            self._record_event(
+                conn,
+                run_id=run_id,
+                event=f"{_events.PLUGIN}:run-created",
+                at=_events.event_at(when),
+                payload={"max_parallel": bound, "job_count": len(ids)},
             )
         record = self.get_run(run_id)
         if record is None:  # pragma: no cover - the insert is in the same store
@@ -746,6 +845,18 @@ class JobStore:
                 "WHERE run_id = ? AND id = ?",
                 (target.value, error_message, when, run_id, job_id),
             )
+            if target in TERMINAL_STATES:
+                payload: dict[str, object] = {"state": target.value}
+                if error_message is not None:
+                    payload["reason"] = _events.reason_text(error_message)
+                self._record_event(
+                    conn,
+                    run_id=run_id,
+                    event="terminal",
+                    at=_events.event_at(when),
+                    job_id=job_id,
+                    payload=payload,
+                )
             updated = conn.execute(
                 "SELECT * FROM jobs WHERE run_id = ? AND id = ?", (run_id, job_id)
             ).fetchone()
@@ -879,6 +990,17 @@ class JobStore:
                 "WHERE run_id = ? AND id = ?",
                 (JobState.RUNNING.value, time.time(), run_id, job_id),
             )
+            self._record_event(
+                conn,
+                run_id=run_id,
+                event="dispatch-selected",
+                at=_events.event_at(reserved_at),
+                job_id=job_id,
+                attempt_no=attempt_no,
+                adapter=backend,
+                model=model,
+                payload={"endpoint": endpoint, "budget_no": budget_no},
+            )
             row = conn.execute(
                 "SELECT * FROM reservations WHERE run_id = ? AND job_id = ? "
                 "AND attempt_no = ?",
@@ -986,6 +1108,16 @@ class JobStore:
                 "WHERE run_id = ? AND job_id = ? AND attempt_no = ?",
                 (str(invoke_armed_at), run_id, job_id, attempt_no),
             )
+            self._record_event(
+                conn,
+                run_id=run_id,
+                event="call-started",
+                at=_events.event_at(invoke_armed_at),
+                job_id=job_id,
+                attempt_no=attempt_no,
+                adapter=str(row["backend"]),
+                model=str(row["model"]),
+            )
             updated = conn.execute(
                 "SELECT * FROM reservations WHERE run_id = ? AND job_id = ? "
                 "AND attempt_no = ?",
@@ -1038,6 +1170,34 @@ class JobStore:
                     run_id,
                     job_id,
                 ),
+            )
+            # The reservation ends without an invocation, and its job becomes
+            # FAILED: one attempt result and the job's one terminal.
+            event_at = _events.event_at(when)
+            self._record_event(
+                conn,
+                run_id=run_id,
+                event="result",
+                at=event_at,
+                job_id=job_id,
+                attempt_no=attempt_no,
+                adapter=str(row["backend"]),
+                model=str(row["model"]),
+                payload={
+                    "status": "not-invoked",
+                    "reason": _events.reason_text(reason),
+                },
+            )
+            self._record_event(
+                conn,
+                run_id=run_id,
+                event="terminal",
+                at=event_at,
+                job_id=job_id,
+                payload={
+                    "state": JobState.FAILED.value,
+                    "reason": _events.reason_text(reason),
+                },
             )
             updated = conn.execute(
                 "SELECT * FROM reservations WHERE run_id = ? AND job_id = ? "
@@ -1120,6 +1280,30 @@ class JobStore:
                         run_job[1],
                     ),
                 )
+                event_at = _events.event_at(when)
+                self._record_event(
+                    conn,
+                    run_id=run_job[0],
+                    event="result",
+                    at=event_at,
+                    job_id=run_job[1],
+                    attempt_no=int(row["attempt_no"]),
+                    adapter=str(row["backend"]),
+                    model=str(row["model"]),
+                    payload={"status": "lost", "reason": loss_reason},
+                )
+                if terminal_state in TERMINAL_STATES:
+                    self._record_event(
+                        conn,
+                        run_id=run_job[0],
+                        event="terminal",
+                        at=event_at,
+                        job_id=run_job[1],
+                        payload={
+                            "state": terminal_state.value,
+                            "reason": _events.reason_text(error_message or loss_reason),
+                        },
+                    )
                 updated = conn.execute(
                     "SELECT * FROM reservations WHERE id = ?", (int(row["id"]),)
                 ).fetchone()
@@ -1284,7 +1468,53 @@ class JobStore:
                 "WHERE run_id = ? AND id = ?",
                 (next_state.value, job_reason, when, attempt.run_id, attempt.job_id),
             )
+            self._record_attempt_events(
+                conn, attempt, terminal_state=terminal_state, when=when
+            )
         return replace(attempt, id=attempt_id)
+
+    def _record_attempt_events(
+        self,
+        conn: sqlite3.Connection,
+        attempt: Attempt,
+        *,
+        terminal_state: Optional[JobState],
+        when: float,
+    ) -> None:
+        """Record an appended attempt's usage, result and (maybe) terminal."""
+        at = _events.event_at(attempt.ended_at, when)
+        identity = dict(
+            run_id=attempt.run_id,
+            job_id=attempt.job_id,
+            attempt_no=attempt.attempt_no,
+            adapter=attempt.backend,
+            model=attempt.model,
+        )
+        usage = _events.usage_payload(attempt.usage)
+        if usage is not None:
+            self._record_event(conn, event="usage", at=at, payload=usage, **identity)
+        result: dict[str, object] = {"status": attempt.status}
+        if attempt.error is not None:
+            result["error_code"] = attempt.error.code
+        if attempt.halt_kind is not None:
+            result["halt_kind"] = attempt.halt_kind
+        if attempt.acceptance is not None:
+            if attempt.acceptance.outcome == "not_run":
+                result["acceptance"] = "not_run"
+            elif attempt.acceptance.accepted:
+                result["acceptance"] = "accepted"
+            else:
+                result["acceptance"] = "rejected"
+        self._record_event(conn, event="result", at=at, payload=result, **identity)
+        if terminal_state is not None:
+            self._record_event(
+                conn,
+                run_id=attempt.run_id,
+                event="terminal",
+                at=at,
+                job_id=attempt.job_id,
+                payload={"state": terminal_state.value},
+            )
 
     def list_attempts(
         self, run_id: str, job_id: Optional[str] = None
@@ -1302,6 +1532,39 @@ class JobStore:
                     (run_id, job_id),
                 ).fetchall()
         return [_row_to_attempt(row) for row in rows]
+
+    def list_events(self, run_id: str) -> tuple[dict, ...]:
+        """Render a run's execution events as v1 envelopes in ``seq`` order.
+
+        The stream is validated as a whole before it is returned. A run
+        created before the event log existed raises
+        :class:`EventsNotRecordedError`: its stream would miss the facts
+        recorded before the upgrade and must not stand in for its history.
+        """
+        with self.read_transaction() as conn:
+            run_row = self._require_run(conn, run_id)
+            if not int(run_row["events_recorded"]):
+                raise EventsNotRecordedError(run_id)
+            rows = conn.execute(
+                "SELECT * FROM events WHERE run_id = ? ORDER BY seq", (run_id,)
+            ).fetchall()
+        rendered = [
+            _events.build_event(
+                seq=int(row["seq"]),
+                run_id=str(row["run_id"]),
+                event=str(row["event"]),
+                at=str(row["at"]),
+                job_id=(str(row["job_id"]) if row["job_id"] is not None else None),
+                attempt_no=(
+                    int(row["attempt_no"]) if row["attempt_no"] is not None else None
+                ),
+                adapter=row["adapter"],
+                model=row["model"],
+                payload=_load_json(row["payload_json"]),
+            )
+            for row in rows
+        ]
+        return _events.validate_stream(rendered)
 
     def record_workspace_removed(
         self,
@@ -1586,6 +1849,7 @@ __all__ = [
     "UnknownJobError",
     "DuplicateJobError",
     "TerminalStateError",
+    "EventsNotRecordedError",
     "AttemptReservation",
     "JobStore",
 ]

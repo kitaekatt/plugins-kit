@@ -10,6 +10,7 @@ when a command says so.
 job-kit run jobs.yaml [--store PATH] [--timeout SECONDS] [--run-id ID] [--max-parallel N]
 job-kit status <run-id> [--store PATH]
 job-kit resume <run-id> [--store PATH] [--timeout SECONDS] [--max-parallel N]
+job-kit events <run-id> [--store PATH] [--out PATH]
 job-kit gc [<run-id>] [--store PATH] [--accepted-only] [--force]
 ```
 
@@ -21,7 +22,7 @@ seconds.
 
 Exit codes: **0** every job accepted (or the verb succeeded), **1** a job was
 rejected, failed, halted, or could not be routed, **2** a usage error, **3**
-the runner itself failed. An unattended caller should branch on 1 versus 3:
+the runner itself failed, or `events` refused an export. An unattended caller should branch on 1 versus 3:
 the first is a result about the work, the second is a result about job-kit.
 
 ## The job file
@@ -190,3 +191,43 @@ configuration:
 - **Interleaved stderr.** Backends stream to stderr as they go, so N workers
   produce interleaved output. Each line carries its job through the
   `[job:<id>]` prefix; the ledger, not the console, is the record of a run.
+
+## Execution events
+
+Every ledger transition also records an execution event in the common
+envelope `plugins-kit.execution-event/v1` (bootstrap's plugin-dev skill,
+`references/execution-events.md`). The event is written in the same SQLite
+transaction as the fact it describes, so it exists if and only if the fact
+committed. `job-kit events <run-id>` prints the run's stream as JSON Lines, in
+`seq` order; `--out PATH` writes it to a new file instead and refuses a file
+that already exists.
+
+| Ledger fact | Event |
+| --- | --- |
+| run created | `job-kit:run-created` (payload `max_parallel`, `job_count`) |
+| attempt reserved | `dispatch-selected` (payload `endpoint`, `budget_no`) |
+| invocation armed | `call-started` |
+| attempt appended | `usage` when usage is known; `result` (`status`, and `error_code`, `halt_kind`, `acceptance` when present); `terminal` when the attempt ends the job |
+| reservation resolved before invocation | `result` (`status: not-invoked`, `reason`), then `terminal` (`state: failed`) |
+| reservation lost to a dead process | `result` (`status: lost`, `reason`), then `terminal` when the loss spends the last attempt |
+| job marked unroutable, halted or failed | `terminal` (`state`, `reason`) |
+
+Identity: `run_id` is the run, `unit_id` the job id, and `attempt_id` the
+attempt number as a string. `source.adapter` and `source.model` are the
+attempt's backend and model. A job reaches exactly one `terminal`.
+
+`seq` is unique across the whole run and follows the order the ledger recorded
+the facts, including across `resume`. `at` is informational: it is the fact's
+own timestamp when that is a UTC time, and the moment of recording otherwise.
+A token count of 0 that means "not reported" is recorded as `null`, so a
+total-only report stays total-only.
+
+Run and job ids must fit the envelope (at most 200 characters, no control
+characters); `run` refuses a job file that breaks this before writing
+anything. A run created by a job-kit that predates the event log has no events
+for its earlier facts, so `events` refuses to export it rather than present a
+partial stream as its history.
+
+Recording events needs bootstrap >= 0.135.0. With an older or absent
+`bootstrap_lib`, a write refuses before anything is recorded and names the
+`claude plugin update` or `claude plugin install` command that fixes it.

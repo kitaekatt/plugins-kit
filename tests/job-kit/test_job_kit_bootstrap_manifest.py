@@ -24,11 +24,21 @@ def test_job_kit_bootstrap_lib_is_a_declared_shared_lib_import() -> None:
     )
 
 
-def test_requires_bootstrap_covers_the_model_declaration_call() -> None:
-    """job-kit calls bootstrap_lib.model_declaration.parse (directly, and through
-    llm-scripting-kit's describe), which first shipped in bootstrap 0.129.0; the
-    floor is set from that call, not from what happens to import."""
+def _version(text: str) -> tuple[int, ...]:
+    return tuple(int(part) for part in text.split("."))
+
+
+def test_requires_bootstrap_covers_every_bootstrap_lib_call() -> None:
+    """job-kit calls bootstrap_lib.model_declaration.parse (bootstrap 0.129.0)
+    and records every ledger transition through bootstrap_lib.execution_event
+    (bootstrap 0.135.0). The floor is the HIGHEST call shape it uses, not what
+    happens to import."""
+    import job_kit.events as events
     import job_kit.model as model
 
+    floors = (
+        model._MODEL_DECLARATION_BOOTSTRAP,
+        events._EXECUTION_EVENT_BOOTSTRAP,
+    )
     manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
-    assert manifest.get("requires_bootstrap") == model._MODEL_DECLARATION_BOOTSTRAP
+    assert manifest.get("requires_bootstrap") == max(floors, key=_version)

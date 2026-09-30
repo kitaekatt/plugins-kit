@@ -593,3 +593,57 @@ def test_persistent_halt_vocabulary_agrees_across_modules() -> None:
         "store._PERSISTENT_HALT_KINDS and run._PERSISTENT_HALT_KINDS disagree; "
         "a halt kind was added or renamed in one place only"
     )
+
+
+def test_store_migrates_to_the_event_log_from_the_previous_schema(
+    tmp_path: Path,
+) -> None:
+    """A ledger at the schema before the events step gains the events table
+    and ``runs.events_recorded`` additively; its existing run is kept and
+    marked as not recorded, and the schema version reaches the current one."""
+    events_step = next(
+        index
+        for index, step in enumerate(_MIGRATIONS)
+        if any("CREATE TABLE events" in statement for statement in step)
+    )
+    db_path = tmp_path / "previous.sqlite3"
+    with sqlite3.connect(str(db_path)) as connection:
+        for index in range(events_step):
+            for statement in _MIGRATIONS[index]:
+                connection.execute(statement)
+            if index:
+                connection.execute(
+                    "UPDATE schema_version SET version = ?", (index + 1,)
+                )
+        connection.execute(
+            "INSERT INTO runs(id, created_at, max_parallel) VALUES ('old', 1.0, 2)"
+        )
+
+    store = JobStore(db_path, create=False)
+
+    with sqlite3.connect(str(db_path)) as connection:
+        version = connection.execute("SELECT version FROM schema_version").fetchone()[0]
+        event_columns = {
+            row[1] for row in connection.execute("PRAGMA table_info(events)").fetchall()
+        }
+        recorded = connection.execute(
+            "SELECT events_recorded FROM runs WHERE id = 'old'"
+        ).fetchone()[0]
+        indexes = {
+            row[1] for row in connection.execute("PRAGMA index_list(events)").fetchall()
+        }
+    assert version == len(_MIGRATIONS)
+    assert {
+        "seq",
+        "run_id",
+        "job_id",
+        "attempt_no",
+        "event",
+        "at",
+        "adapter",
+        "model",
+        "payload_json",
+    } == event_columns
+    assert "idx_events_run_seq" in indexes
+    assert recorded == 0
+    assert store.get_run("old").max_parallel == 2
