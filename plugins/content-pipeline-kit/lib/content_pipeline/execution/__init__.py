@@ -17,6 +17,10 @@ Submodules:
   only place run truth lives. WAL journal mode, a ``busy_timeout`` on every
   connection, connections opened per verb and closed, and a loud (never
   refusing) warning when the database path looks like a network filesystem.
+- ``interrupts`` -- the opt-in durable wait: a claim holder asks a person a
+  typed question with ``ExecutionStore.request_interrupt`` and the unit waits
+  until ``resolve_interrupt`` or ``expire_interrupts`` closes the request; a
+  run that never calls those verbs is unchanged.
 - ``status`` -- :func:`~content_pipeline.execution.status.compute_status`, a
   read-only bounded digest (counts, ages, throughput, capped failure groups,
   halt state) that never contains prompts, unit payloads, or outputs.

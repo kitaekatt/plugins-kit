@@ -32,6 +32,31 @@ fail is legal against them (``execution.store`` raises
 submit-time adjudication (parsing, validation, the accepted-verdict-is-final
 rule) belongs to the adapter/protocol layer added in a later phase.
 
+Waiting on an interrupt
+-----------------------
+
+A claim holder that needs a person's answer asks for one with
+``ExecutionStore.request_interrupt``. The unit then waits::
+
+    CLAIMED --request_interrupt--> WAITING
+    WAITING --answer--> PENDING
+    WAITING --reject, policy stop--> OPERATOR_REJECTED (terminal)
+    WAITING --reject, policy release--> PENDING
+    WAITING --lapse, policy stop--> INTERRUPT_EXPIRED (terminal)
+    WAITING --lapse, policy release--> PENDING
+
+``WAITING`` is not terminal and holds no claimant and no lease. A waiting
+unit cannot be claimed (:class:`UnitWaitingError`), and renew, accept and
+fail against it raise :class:`NotClaimedError`. The request keeps the
+fencing token of the claim that made it; the claim after a resolution takes
+the next token, so one interrupt belongs to exactly one attempt.
+
+The outcome (``answered``, ``rejected``, ``expired``) is one immutable
+resolution row. What the unit does after a rejection or a lapse is the
+requester's choice, stored with the request: ``on_rejected`` and
+``on_expired``, each ``stop`` (the default) or ``release``. A unit that
+never requests an interrupt never enters any of these three states.
+
 Accepted text and the apply outcomes (A-min.2)
 -------------------------------------------------
 
@@ -56,7 +81,7 @@ anything; that outcome is terminal on the apply axis while the unit remains
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import Mapping, Optional
 
@@ -71,6 +96,12 @@ class UnitState(str, Enum):
     ``str`` Enum and the backing ``units.state`` column is ``TEXT``, so this
     addition needs no schema migration -- a fresh string value round-trips
     through the existing column exactly like any other member.
+
+    ``WAITING``, ``OPERATOR_REJECTED`` and ``INTERRUPT_EXPIRED`` are the
+    interrupt states (see "Waiting on an interrupt" in the module docstring).
+    They are string values of the same column, so they need no migration
+    either. ``INTERRUPT_EXPIRED`` is not named ``expired`` because "expire"
+    already means a lapsed lease here (``AttemptKind.EXPIRE``).
     """
 
     PENDING = "pending"
@@ -78,9 +109,29 @@ class UnitState(str, Enum):
     ACCEPTED = "accepted"
     FAILED = "failed"
     SKIPPED = "skipped"
+    WAITING = "waiting"  # an interrupt request is open for the unit
+    OPERATOR_REJECTED = "operator_rejected"  # rejected, under the stop policy
+    INTERRUPT_EXPIRED = "interrupt_expired"  # lapsed, under the stop policy
 
 
-TERMINAL_STATES = (UnitState.ACCEPTED, UnitState.FAILED, UnitState.SKIPPED)
+TERMINAL_STATES = (
+    UnitState.ACCEPTED,
+    UnitState.FAILED,
+    UnitState.SKIPPED,
+    UnitState.OPERATOR_REJECTED,
+    UnitState.INTERRUPT_EXPIRED,
+)
+
+# The request ``schema`` literal an interrupt request is accepted under. It is
+# the shared literal of the interrupt contract, written here because
+# ``InterruptRequest`` defaults to it and this module imports nothing.
+INTERRUPT_REQUEST_ENVELOPE = "plugins-kit.interrupt-request/v1"
+
+# What a unit does after its interrupt is rejected or lapses: ``stop`` ends
+# the unit in a terminal state, ``release`` returns it to ``PENDING``.
+POLICY_STOP = "stop"
+POLICY_RELEASE = "release"
+INTERRUPT_POLICIES = (POLICY_STOP, POLICY_RELEASE)
 
 # The error-string convention ``execution.controller`` uses for a terminal
 # skip's ``fail_unit(error=...)`` text (e.g. ``"skip:up_to_date"``,
@@ -147,6 +198,10 @@ class AttemptKind(str, Enum):
     APPLY_STARTED = "apply_started"  # finalize is about to call the adapter's apply (a trailing one is retried)
     APPLY_SUCCEEDED = "apply_succeeded"  # the adapter's apply returned without raising
     APPLY_REJECTED = "apply_rejected"  # the adapter declined before any side effect
+    INTERRUPT_REQUESTED = "interrupt_requested"  # the claim holder asked; the unit waits
+    INTERRUPT_RESOLVED = "interrupt_resolved"  # an answer was recorded
+    INTERRUPT_REJECTED = "interrupt_rejected"  # a rejection was recorded
+    INTERRUPT_EXPIRED = "interrupt_expired"  # a lapse was recorded
 
 
 @dataclass(frozen=True)
@@ -288,6 +343,78 @@ class DispatchRecord:
     cli_version: Optional[str]
 
 
+@dataclass(frozen=True)
+class InterruptRequest:
+    """A claim holder's typed request to wait for a person's answer.
+
+    ``kind`` names the question, ``request_schema`` is the JSON Schema the
+    answer must satisfy, and ``payload`` is what the person is shown.
+    ``expires_in_s`` is relative, so a requester never supplies an absolute
+    time; ``None`` means the request never lapses. ``envelope`` is the request
+    ``schema`` literal; the default is the only one the store accepts.
+    """
+
+    kind: str
+    request_schema: Mapping[str, object]
+    payload: Mapping[str, object]
+    expires_in_s: Optional[int] = None
+    envelope: str = INTERRUPT_REQUEST_ENVELOPE
+
+
+@dataclass(frozen=True)
+class InterruptResolution:
+    """The one immutable resolution of one interrupt.
+
+    ``outcome`` is ``answered``, ``rejected`` or ``expired``. ``input`` is
+    the answer (answered only) and ``reason`` the free text given with a
+    rejection (rejected only). ``replayed`` is not stored: it is true when a
+    resolve call matched the stored resolution and wrote nothing.
+    """
+
+    interrupt_id: str
+    outcome: str
+    resolved_at: float
+    input: object = None
+    reason: Optional[str] = None
+    replayed: bool = field(default=False, compare=False)
+
+
+@dataclass(frozen=True)
+class InterruptRecord:
+    """One immutable interrupt row, with its resolution when it has one.
+
+    ``id`` is the decimal string of the store's row id. ``fencing_token`` is
+    the token of the claim that made the request. ``on_rejected`` and
+    ``on_expired`` are the requester's policies (``stop`` or ``release``).
+    """
+
+    id: str
+    run_id: str
+    unit_id: str
+    fencing_token: int
+    envelope: str
+    kind: str
+    request_schema: Mapping[str, object]
+    payload: Mapping[str, object]
+    created_at: float
+    expires_at: Optional[float] = None
+    on_rejected: str = POLICY_STOP
+    on_expired: str = POLICY_STOP
+    resolution: Optional[InterruptResolution] = None
+
+    def lapsed(self, now: float) -> bool:
+        """Whether the interrupt is unresolved and past its expiry at ``now``.
+
+        Inclusive: an interrupt lapses AT its ``expires_at``, and one with no
+        expiry never lapses. A read; it records nothing.
+        """
+        return (
+            self.resolution is None
+            and self.expires_at is not None
+            and now >= self.expires_at
+        )
+
+
 class ExecutionError(Exception):
     """Base class for every execution-store error."""
 
@@ -403,9 +530,119 @@ class NoOpenDispatchError(ExecutionError):
         )
 
 
+class InterruptRequested(ExecutionError):
+    """A signal, not a failure: the code holding a claim asks for a wait.
+
+    It carries the request, the two policies and the usage already spent on
+    the attempt. A caller that holds the claim's fencing token turns it into
+    ``ExecutionStore.request_interrupt``.
+    """
+
+    def __init__(
+        self,
+        request: InterruptRequest,
+        *,
+        on_rejected: str = POLICY_STOP,
+        on_expired: str = POLICY_STOP,
+        usage: Optional[UsageRecord] = None,
+    ) -> None:
+        self.request = request
+        self.on_rejected = on_rejected
+        self.on_expired = on_expired
+        self.usage = usage
+        super().__init__(f"interrupt requested: {getattr(request, 'kind', None)!r}")
+
+
+class UnitWaitingError(AlreadyClaimedError):
+    """A claim was attempted against a unit that waits on an open interrupt.
+
+    A subclass of :class:`AlreadyClaimedError`: to a dispatcher, a unit a
+    person holds is the same routine per-unit refusal as a unit a worker
+    holds.
+    """
+
+    def __init__(self, run_id: str, unit_id: str, interrupt_id: Optional[str]) -> None:
+        self.run_id = run_id
+        self.unit_id = unit_id
+        self.interrupt_id = interrupt_id
+        super().__init__(
+            f"{run_id!r}/{unit_id!r} is waiting on interrupt {interrupt_id}; "
+            "it can be claimed again after the interrupt is resolved"
+        )
+
+
+class WaitUnderDispatchError(ExecutionError):
+    """An interrupt was requested for a unit that has an open dispatch.
+
+    A background-session launch tracks the unit until its dispatch settles,
+    and that lane has no way to settle a dispatch whose unit waits. Nothing
+    was written.
+    """
+
+    def __init__(self, run_id: str, unit_id: str) -> None:
+        self.run_id = run_id
+        self.unit_id = unit_id
+        super().__init__(
+            f"{run_id!r}/{unit_id!r} has an open dispatch; a unit launched as a "
+            "background session cannot wait on an interrupt. Nothing was written"
+        )
+
+
+class UnknownInterruptError(ExecutionError):
+    """No interrupt with this id exists in the named run."""
+
+
+class ResolutionConflictError(ExecutionError):
+    """The interrupt already has a different resolution; nothing was written."""
+
+    def __init__(self, interrupt_id: str, stored_outcome: str) -> None:
+        self.interrupt_id = interrupt_id
+        self.stored_outcome = stored_outcome
+        super().__init__(
+            f"interrupt {interrupt_id} is already resolved ({stored_outcome}) "
+            "with a different decision; the original resolution is kept"
+        )
+
+
+class InterruptExpiredError(ExecutionError):
+    """The interrupt lapsed before it was resolved; the expiry is recorded."""
+
+    def __init__(self, interrupt_id: str, expires_at: Optional[float]) -> None:
+        self.interrupt_id = interrupt_id
+        self.expires_at = expires_at
+        super().__init__(
+            f"interrupt {interrupt_id} expired at {expires_at} before it was "
+            "resolved; the expiry is recorded"
+        )
+
+
+class InterruptRequestError(ExecutionError, ValueError):
+    """An interrupt request, or a policy given with it, is refused.
+
+    Nothing was written.
+    """
+
+
+class ResolutionInputError(ExecutionError):
+    """The resolution input was refused; nothing was written.
+
+    ``errors`` holds the validator's ``(json_pointer, keyword)`` tuples when
+    the input failed the request schema, and is empty when the input was
+    refused before validation (not JSON-native, or over the size cap).
+    """
+
+    def __init__(self, message: str, errors: tuple = ()) -> None:
+        self.errors = tuple(errors)
+        super().__init__(message)
+
+
 __all__ = [
     "UnitState",
     "TERMINAL_STATES",
+    "INTERRUPT_REQUEST_ENVELOPE",
+    "POLICY_STOP",
+    "POLICY_RELEASE",
+    "INTERRUPT_POLICIES",
     "SKIP_ERROR_PREFIX",
     "AttemptKind",
     "UsageRecord",
@@ -414,6 +651,17 @@ __all__ = [
     "AttemptRecord",
     "ClaimResult",
     "DispatchRecord",
+    "InterruptRequest",
+    "InterruptResolution",
+    "InterruptRecord",
+    "InterruptRequested",
+    "UnitWaitingError",
+    "WaitUnderDispatchError",
+    "UnknownInterruptError",
+    "ResolutionConflictError",
+    "InterruptExpiredError",
+    "InterruptRequestError",
+    "ResolutionInputError",
     "ExecutionError",
     "MAX_APPLY_REJECTION_REASON_LENGTH",
     "ApplyRejected",

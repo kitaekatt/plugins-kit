@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import ast
 import json
+import sys
 import types
 from pathlib import Path
 
@@ -21,6 +22,7 @@ from content_pipeline.execution.events import (
 )
 from content_pipeline.execution.model import (
     AttemptKind,
+    InterruptRequest,
     StaleFenceError,
     UnitState,
     UnknownRunError,
@@ -82,6 +84,30 @@ def test_second_claim_has_next_fencing_token(tmp_path):
 
 # -- row-kind mapping -----------------------------------------------------------
 
+_INTERRUPT_KINDS = (
+    AttemptKind.INTERRUPT_REQUESTED,
+    AttemptKind.INTERRUPT_RESOLVED,
+    AttemptKind.INTERRUPT_REJECTED,
+    AttemptKind.INTERRUPT_EXPIRED,
+)
+
+_SHARED_LIB = Path(__file__).resolve().parents[2] / "plugins" / "llm-scripting-kit" / "lib"
+
+
+def _lsk_names():
+    return {n for n in sys.modules if n == "llm_scripting_kit" or n.startswith("llm_scripting_kit.")}
+
+
+@pytest.fixture
+def interrupt_edges(monkeypatch):
+    """The interrupt verbs need llm-scripting-kit's validator; link it for
+    one test and unload it again afterwards."""
+    before = _lsk_names()
+    monkeypatch.syspath_prepend(str(_SHARED_LIB))
+    yield
+    for name in _lsk_names() - before:
+        del sys.modules[name]
+
 
 def _scenario_for(store, kind: AttemptKind):
     """Drive the store so at least one row of ``kind`` exists; return unit id."""
@@ -104,6 +130,26 @@ def _scenario_for(store, kind: AttemptKind):
         store.claim_unit(RUN, "u0", "w2", at=2000.0)
         with pytest.raises(StaleFenceError):
             store.accept_unit(RUN, "u0", tok, at=2001.0)
+    elif kind in _INTERRUPT_KINDS:
+        tok = store.claim_unit(RUN, "u0", "w", at=1001.0).fencing_token
+        record = store.request_interrupt(
+            RUN,
+            "u0",
+            tok,
+            InterruptRequest(
+                kind="approval",
+                request_schema={"type": "object"},
+                payload={"question": "ship it?"},
+                expires_in_s=60,
+            ),
+            at=1002.0,
+        )
+        if kind is AttemptKind.INTERRUPT_RESOLVED:
+            store.resolve_interrupt(RUN, record.id, decision="answer", input={}, now=1003.0)
+        elif kind is AttemptKind.INTERRUPT_REJECTED:
+            store.resolve_interrupt(RUN, record.id, decision="reject", reason="no", now=1003.0)
+        elif kind is AttemptKind.INTERRUPT_EXPIRED:
+            store.expire_interrupts(RUN, now=1062.0)
     else:
         tok = store.claim_unit(RUN, "u0", "w", at=1001.0).fencing_token
         store.accept_unit(RUN, "u0", tok, at=1002.0)
@@ -125,11 +171,15 @@ _EXPECTED = {
     AttemptKind.APPLY_STARTED: {f"{PLUGIN}:apply-started"},
     AttemptKind.APPLY_SUCCEEDED: {f"{PLUGIN}:apply-succeeded"},
     AttemptKind.APPLY_REJECTED: {f"{PLUGIN}:apply-rejected"},
+    AttemptKind.INTERRUPT_REQUESTED: {"result", "interrupt"},
+    AttemptKind.INTERRUPT_RESOLVED: {"interrupt"},
+    AttemptKind.INTERRUPT_REJECTED: {"interrupt", "terminal"},
+    AttemptKind.INTERRUPT_EXPIRED: {"interrupt", "terminal"},
 }
 
 
 @pytest.mark.parametrize("kind", list(AttemptKind), ids=lambda k: k.value)
-def test_every_row_kind_maps(tmp_path, kind):
+def test_every_row_kind_maps(tmp_path, kind, interrupt_edges):
     store = _store(tmp_path)
     _scenario_for(store, kind)
     rows = [r for r in store.list_attempts(RUN) if r.kind is kind]

@@ -103,6 +103,11 @@ use :func:`~content_pipeline.execution.controller.unfinished_units` to tell
 A run with an empty wave and no unfinished units is done; a run with an
 empty wave and any unfinished unit is blocked -- most often on an unapplied
 ``ACCEPTED`` predecessor, diagnosable with :func:`graph_block_reason` below.
+A run whose consumer requests interrupts can also be blocked on a person: a
+loop must end its pass when the wave is empty, ``finalize_run`` applied
+nothing, and ``execution.interrupts.waiting_units`` returns a unit, because
+retrying cannot move a ``WAITING`` unit -- only ``resolve_interrupt`` or
+``expire_interrupts`` can.
 
 An interrupted apply: a crash between ``record_apply_started`` and
 ``record_apply_succeeded`` leaves a unit whose last apply-kind attempt is
@@ -363,6 +368,9 @@ def graph_block_reason(
       following ``APPLY_SUCCEEDED``) -- names rerunning ``finalize_run`` as
       the fix (see the module docstring's "An interrupted apply").
     - a terminally ``FAILED`` predecessor -- names the block as permanent.
+    - a ``WAITING`` predecessor -- names the open interrupt as the cause.
+    - an ``OPERATOR_REJECTED`` or ``INTERRUPT_EXPIRED`` predecessor -- names
+      the block as permanent, as for ``FAILED``.
     - a ``CLAIMED`` predecessor whose lease expired at or before ``at`` --
       names it as expired and reclaimable rather than in flight (``at`` is
       the caller's clock reading; without it every claim reads as live).
@@ -388,6 +396,19 @@ def graph_block_reason(
             f"unit {unit.unit_id!r} is blocked: predecessor "
             f"{predecessor_id!r} is terminally FAILED, which "
             "permanently blocks the chain"
+        )
+    if predecessor_state is UnitState.WAITING:
+        return (
+            f"unit {unit.unit_id!r} is blocked: predecessor "
+            f"{predecessor_id!r} is waiting on an open interrupt; nothing "
+            "behind it is released until the interrupt is resolved"
+        )
+    if predecessor_state in (UnitState.OPERATOR_REJECTED, UnitState.INTERRUPT_EXPIRED):
+        return (
+            f"unit {unit.unit_id!r} is blocked: predecessor "
+            f"{predecessor_id!r} is terminally "
+            f"{predecessor_state.value.upper()} (its interrupt closed under "
+            "the stop policy), which permanently blocks the chain"
         )
     if predecessor_state is UnitState.ACCEPTED:
         last = lookup.predecessor_last_apply_kind
