@@ -17,6 +17,13 @@ Supported expressions (anything else is a compile error -- v1 stays tight):
                                     for_each)
     {{ <prevStageId> [.Y...] }}  -> <prevVar>[.Y...]  (only the immediately
                                     preceding stage of a pipeline is addressable)
+    {{ artifacts.NAME }}         -> the providing step's executor-reported path:
+                                    <providerVar>.path, or
+                                    <providerVar>.map((r) => r.path) for a
+                                    fan-out provider. Recognized ONLY in a
+                                    document that declares provides/requires,
+                                    and valid only where the step's `requires`
+                                    names NAME; no member tail.
 
 A Scope carries the bindings available at one point in the document.
 """
@@ -35,6 +42,7 @@ _STEPS_RE = re.compile(
     r"^steps\.([A-Za-z_][A-Za-z0-9_]*)(\[\*\])?(.*)$", re.DOTALL
 )
 _INPUTS_RE = re.compile(r"^inputs\.(.+)$", re.DOTALL)
+_ARTIFACTS_RE = re.compile(r"^artifacts(?![A-Za-z0-9_])(.*)$", re.DOTALL)
 
 
 class Scope:
@@ -49,13 +57,24 @@ class Scope:
                  check. The compiler passes the declared `inputs:` names (plus the
                  reserved node args when node steps exist); an unknown head is a
                  compile error instead of a silent runtime `undefined`.
+    artifacts  : {artifact_name -> js expression} the step's `requires` declares,
+                 or None. None (every contract-free document) leaves the
+                 `artifacts.` head unrecognized, exactly as before typed
+                 contracts; a mapping (possibly empty) makes it the artifact
+                 head and refuses any name the mapping lacks.
+    where      : the location named in an artifact error (e.g. "step 'x'").
     """
 
-    def __init__(self, step_vars=None, locals=None, prev_stage=None, inputs=None):
+    def __init__(
+        self, step_vars=None, locals=None, prev_stage=None, inputs=None,
+        artifacts=None, where=None,
+    ):
         self.step_vars = dict(step_vars or {})
         self.locals = dict(locals or {})
         self.prev_stage = prev_stage
         self.inputs = set(inputs) if inputs is not None else None
+        self.artifacts = dict(artifacts) if artifacts is not None else None
+        self.where = where
 
     def available(self) -> str:
         # `names` always begins with the literal "inputs.*", so it is never
@@ -65,6 +84,7 @@ class Scope:
             + [f"steps.{k}" for k in self.step_vars]
             + list(self.locals)
             + ([self.prev_stage[0]] if self.prev_stage else [])
+            + [f"artifacts.{k}" for k in (self.artifacts or {})]
         )
         return ", ".join(names)
 
@@ -106,6 +126,11 @@ def compile_expr(expr: str, scope: Scope) -> str:
             return f"{var}.flatMap((r) => r{_member(tail)})"
         return f"{var}{_member(tail)}"
 
+    if scope.artifacts is not None:
+        m = _ARTIFACTS_RE.match(e)
+        if m:
+            return _compile_artifact(m.group(1).strip(), e, scope)
+
     m = _INPUTS_RE.match(e)
     if m:
         parts = _split_idents(m.group(1), e)
@@ -125,6 +150,27 @@ def compile_expr(expr: str, scope: Scope) -> str:
     raise WorkflowError(
         f"unknown reference {head!r} in {{{{ {e} }}}}; available: {scope.available()}"
     )
+
+
+def _compile_artifact(rest: str, e: str, scope: Scope) -> str:
+    where = scope.where or "this expression"
+    if not rest.startswith("."):
+        raise WorkflowError(f"{where}: expected `artifacts.NAME` in {{{{ {e} }}}}")
+    parts = _split_idents(rest, e)
+    if not parts:
+        raise WorkflowError(f"{where}: expected `artifacts.NAME` in {{{{ {e} }}}}")
+    name, tail = parts[0], parts[1:]
+    if tail:
+        raise WorkflowError(
+            f"{where}: {{{{ {e} }}}} has a member tail; `artifacts.{name}` is a file path "
+            "and has no fields"
+        )
+    if name not in scope.artifacts:
+        raise WorkflowError(
+            f"{where}: {{{{ {e} }}}} uses artifact {name!r}, which this step does not "
+            f"declare in `requires`; declared here: {sorted(scope.artifacts)}"
+        )
+    return scope.artifacts[name]
 
 
 def _escape_literal(s: str) -> str:

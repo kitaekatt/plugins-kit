@@ -22,7 +22,16 @@ The grammar, mirroring the steps-wrap-pipelines format:
                            optional for_each/mode (flat fan-out)
           openrouter-step: openrouter (prompt_file, model?, cheap?, system?,
                            out?, status?) -- a node strategy; optional for_each
+          every step:      optional requires: {name: ArtifactSpec}
+          script/openrouter step: optional provides: {name: ArtifactSpec}
+                           (at most one entry: the node's $OUT)
+            ArtifactSpec = {schema: <schemas name>} | {type: opaque-file},
+                           plus each: <bool> under requires only
       output                       optional return expression
+
+Artifact specs are parsed by ``contracts.parse_artifact_spec``; the document
+checks over them (``contracts.analyze``) run at the end of
+``_validate_cross_refs``.
 """
 
 from __future__ import annotations
@@ -31,6 +40,8 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Optional, Union
 
+from .contracts import analyze as analyze_contracts
+from .contracts import parse_artifact_spec
 from .declarations import parse_declaration
 from .errors import WorkflowError
 
@@ -47,6 +58,9 @@ _IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 # callback params, `item` is the implicit for_each binding, `inputs`/`args` are
 # the normalized-inputs consts, and `steps` is the expression-grammar namespace.
 # Using one as an id/`as` name would shadow or collide with them silently.
+# `artifacts` is deliberately NOT here: it is an expression head only in a
+# document that declares provides/requires, and contracts.analyze refuses it
+# as a stage id or `as` name there, so no contract-free document is affected.
 _RESERVED_IDS = {"prev", "i", "item", "inputs", "args", "steps"}
 
 
@@ -320,6 +334,8 @@ class Step:
     pipeline: Optional[PipelineSpec] = None
     script: Optional[ScriptSpec] = None
     openrouter: Optional[OpenRouterSpec] = None
+    provides: dict = field(default_factory=dict)  # name -> contracts.ArtifactSpec
+    requires: dict = field(default_factory=dict)  # name -> contracts.ArtifactSpec
 
     @property
     def is_pipeline(self) -> bool:
@@ -342,7 +358,10 @@ class Step:
         loc = f"step {sid!r}"
         _forbid_extra(
             d,
-            {"id", "phase", "agent", "for_each", "mode", "pipeline", "script", "openrouter"},
+            {
+                "id", "phase", "agent", "for_each", "mode", "pipeline", "script",
+                "openrouter", "provides", "requires",
+            },
             loc,
         )
 
@@ -371,11 +390,42 @@ class Step:
         # `mode` is accepted and validated (typo protection) but not stored:
         # v1 has only parallel fan-out, so nothing reads it.
         _enum(_opt_str(d, "mode", loc) or "parallel", VALID_MODE, "mode", loc)
+        provides = _artifact_block(d, "provides", loc)
+        requires = _artifact_block(d, "requires", loc)
+        if provides:
+            if kind in ("agent", "pipeline"):
+                raise WorkflowError(
+                    f"{loc}.provides: an agent result is typed by its `schema:`, which the "
+                    "Workflow tool applies; only script and openrouter steps provide file "
+                    "artifacts"
+                )
+            if len(provides) > 1:
+                raise WorkflowError(
+                    f"{loc}.provides: a node provides at most one artifact (its single $OUT), "
+                    f"got {sorted(provides)}"
+                )
         return cls(
             id=sid, phase=_opt_str(d, "phase", loc), agent=agent,
             for_each=for_each, pipeline=pipeline,
             script=script, openrouter=openrouter,
+            provides=provides, requires=requires,
         )
+
+
+def _artifact_block(d: dict, key: str, loc: str) -> dict:
+    """Parse an optional `provides:` / `requires:` mapping of name -> ArtifactSpec."""
+    raw = d.get(key)
+    if raw is None:
+        return {}
+    where = f"{loc}.{key}"
+    block = _as_dict(raw, where)
+    if not block:
+        raise WorkflowError(f"{where}: must name at least one artifact (or be omitted)")
+    out = {}
+    for name, spec in block.items():
+        _ident(name, "artifact name", where)
+        out[name] = parse_artifact_spec(spec, f"{where}.{name}", key)
+    return out
 
 
 # --------------------------------------------------------------------------- #
@@ -447,6 +497,11 @@ class WorkflowDoc:
                         f"{loc}: unknown schema {agent.schema!r}; "
                         f"declared schemas: {sorted(schema_names)}"
                     )
+
+        # Typed node contracts (provides/requires): every check that needs no
+        # expression compilation, so --validate-only rejects exactly what
+        # compile does apart from {{ artifacts.X }} uses (compiler-only).
+        analyze_contracts(self)
 
 
 def _agents_of(step: Step):

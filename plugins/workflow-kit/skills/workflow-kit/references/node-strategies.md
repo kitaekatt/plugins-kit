@@ -185,6 +185,16 @@ An artifact has one of two kinds:
   after removing the previous verdict (see "The verdict file").
 - `opaque-file` -- `$OUT` is any regular file. Nothing inside it is checked.
 
+The helpers in `references/preamble-contracts.js` build these provider
+commands for you: `wkProviderFlags(check)` for an openrouter runner prefix,
+`wkScriptProvided(command, out, check, opts)` for a script provider, and
+`wkProvided(result, step, artifact, verdict)`, which throws when a provider
+(or any fan-out item) exited non-zero so no consumer runs. A hand-written
+script pastes `preamble-contracts.js` after `preamble.js`; it calls only `shq`
+and `wkNode` from there. A compiled `.workflow.yaml` inlines it automatically
+when a step declares `provides` (see `workflow-yaml.md`, "Typed artifacts").
+The examples below spell the same commands out by hand.
+
 ### openrouter providers
 
 Add the provider flags to the runner prefix; the order of flags does not
