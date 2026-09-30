@@ -57,6 +57,14 @@ EMITTERS: dict[str, tuple[Path, frozenset[str]]] = {
         CPK_PKG / "execution" / "events.py",
         frozenset({"content_pipeline"}),
     ),
+    "content_pipeline/execution/interrupts.py": (
+        CPK_PKG / "execution" / "interrupts.py",
+        frozenset({"content_pipeline", "llm_scripting_kit"}),
+    ),
+    "content_pipeline/execution/store.py": (
+        CPK_PKG / "execution" / "store.py",
+        frozenset({"content_pipeline"}),
+    ),
     "llm_scripting_kit/observer.py": (LSK_PKG / "observer.py", frozenset({"llm_scripting_kit"})),
     "llm_scripting_kit/declaration.py": (
         LSK_PKG / "declaration.py",
