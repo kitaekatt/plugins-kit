@@ -383,6 +383,24 @@ before another entry runs. A workspace that cannot be reset ends the run
 instead of stacking a second model's work on the first one's partial edits.
 `on_attempt` receives each `Attempt` with its pace reading.
 
+`run(..., observer=...)` (keyword-only) reports what happened as execution
+events. `observer` is any object with an `emit` method keyword-compatible with
+`bootstrap_lib.execution_event.Emitter.emit` (`llm_scripting_kit.ExecutionObserver`
+is the protocol); an `Emitter` bound to your run and unit works as is. Bind the
+`run_id` and `unit_id` and choose `source.plugin` on the `Emitter`, because the
+stream records your run, not this library's. Per attempt `run` emits
+`dispatch-selected` (payload `entry`, `pace`), `call-started` immediately before
+the call, `usage` when the response reported a count, and `result` (`status`
+`completed`, `failed` or `halted`, plus `halt` or `reason`). `attempt_id` is the
+attempt number as a string. Once per call it emits `terminal` with the
+`RunResult.status`, or `unroutable` just before raising `NoUsableRoutingTarget`.
+Usage passes through `usage_payload`, so an unreported count is `null` rather
+than `0`: codex reports a total only, and an all-zero response emits no `usage`
+event. An exception raised by the observer propagates unchanged. Passing an
+observer needs bootstrap >= 0.135.0; when `bootstrap_lib.execution_event` is
+absent or older, `run` raises `DeclarationSupportError` before any dispatch.
+Without an observer nothing is imported and nothing changes.
+
 `order_by_pace(items)` is the ordering rule on its own. `check_registry_entry(id,
 merged)` reports a core id (`fable`, `opus`, `sonnet`, `haiku`) whose merged
 entry is not a Claude harness.

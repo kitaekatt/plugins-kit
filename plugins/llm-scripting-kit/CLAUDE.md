@@ -290,7 +290,7 @@ the choice and re-selection rule text (`Ranking.rule`). It raises
 usable remains. It RANKS and does not dispatch, which is what lets job-kit
 pass its own requirements, capabilities, factory, exclusions and run-scoped
 reachability cache into one selection it still owns. `run` is the dispatcher
-for callers with no loop of their own. Four things are easy to break:
+for callers with no loop of their own. Five things are easy to break:
 
 - **RENDER, SKIP and FLOOR are separate surfaces.** Nothing may name a hidden
   id outside the floor, including the render header. A notice, warning or log
@@ -302,6 +302,16 @@ for callers with no loop of their own. Four things are easy to break:
 - **`max_attempts` is not the floor.** A halt that uses up the last attempt
   returns `attempt-limit`. It never raises `NoUsableRoutingTarget`, because
   the pool was not empty.
+- **`run(..., observer=)` reports execution events and refuses without their
+  module.** The keyword-only `observer` (`ExecutionObserver`, an `emit` method
+  keyword-compatible with `bootstrap_lib.execution_event.Emitter.emit`) gets
+  `dispatch-selected`, `call-started`, `usage` and `result` per attempt
+  (`attempt_id` is the attempt number as a string) and one `terminal` per call
+  (`unroutable` before the floor is raised). Usage goes only through
+  `usage_payload`, so null means unknown and is never written as 0. An observer
+  exception propagates. Bootstrap >= 0.135.0 is required, and its absence
+  raises `DeclarationSupportError` before any dispatch. Detail: the
+  `declaration.run` docstring.
 - **A session caller hides transports unless it says it can run them.** A
   transport entry has no agent loop, so `caller="session"` classifies it
   unroutable by default. A session caller that reaches transports through a
