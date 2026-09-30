@@ -135,3 +135,13 @@ def test_p4_requirement_is_deferred_only_for_detected_workspace(
     custom_bootstrap.bootstrap(ctx)
     assert "unreal_redirector_p4" not in {item["name"] for item in ctx.deferred}
     assert "redirectors: skipped - no Perforce workspace marker" in ctx.logs
+
+
+def test_ue_agent_template_ships_without_a_plugin_agents_dir():
+    """A plugin agents/ dir would auto-register an agent that ignores mcpServers."""
+    plugin = ROOT / "plugins" / "unreal-kit"
+    assert not (plugin / "agents").exists()
+    template = (plugin / "templates" / "ue-agent.md").read_bytes()
+    template.decode("ascii")
+    assert b"\r" not in template
+    assert template.count(b"@@MCP_SERVERS@@") == 1
