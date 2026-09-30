@@ -49,6 +49,10 @@ PLUGIN_PACKAGES = {
 EMITTERS: dict[str, tuple[Path, frozenset[str]]] = {
     "job_kit/events.py": (JK_PKG / "events.py", frozenset({"job_kit"})),
     "job_kit/store.py": (JK_PKG / "store.py", frozenset({"job_kit"})),
+    "job_kit/interrupts.py": (
+        JK_PKG / "interrupts.py",
+        frozenset({"job_kit", "llm_scripting_kit"}),
+    ),
     "content_pipeline/execution/events.py": (
         CPK_PKG / "execution" / "events.py",
         frozenset({"content_pipeline"}),
