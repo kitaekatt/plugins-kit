@@ -390,38 +390,31 @@ next attempt cheaper); a `cleanup failed` outcome tells the user to delete
 user who opens a fresh clone only in Codex, never in Claude Code, gets no
 link — the mechanism has nothing to run from.
 
-### Step 4e: Codex project SessionStart adapter
+### Step 4e: Codex user SessionStart adapter
 
-After all automatic work completes, a clean non-console pass calls
-`bootstrap_lib/engine.py::_run_codex_hook_setup`. It first uses
-`bootstrap_lib.codex.detect_codex()`; when Codex is unavailable, the pass
-silently skips this Codex-only setup. When Codex is available, it resolves the
-Git root when there is one and writes the machine-local project file
-`<project>/.codex/hooks.json` through `bootstrap_lib/codex_hook.py`. Ignore
-policy does not block this first write: the generated hook's runtime preflight
-reports missing or ineffective Git and Perforce rules to Codex. A failed pass
-or console diagnostic still does not create the adapter. The write path is
-project-ephemeral, not derived from the plugin script location, and the JSON
-preserves unrelated Codex hooks while replacing only bootstrap-owned entries.
-Existing hook-file modes are preserved, symlink targets are refused, and
-concurrent merges are serialized.
+After all automatic work completes, `_run_codex_hook_setup` always removes
+bootstrap-owned entries from the project's legacy `.codex/hooks.json`. On a
+clean non-console pass, it also uses `bootstrap_lib.codex.detect_codex()` and,
+when Codex is available, merges one guarded `SessionStart` hook into the
+user-level `$CODEX_HOME/hooks.json` (default `~/.codex/hooks.json`). The user
+directory may be a symlink; `hooks.json` itself is never followed when it is a
+symlink. Foreign hooks are preserved and concurrent merges use the existing
+lock plus an atomic replacement.
 
-The generated `SessionStart` matcher covers `startup` and `resume`. Its stable
-command is the runtime adapter `bootstrap codex-hook`, rather than a versioned
-cache path; `codex-hook` is not the installation mechanism. The CLI runs the
-full engine synchronously without the Claude background relay, so the engine's
-stdout is Codex `hookSpecificOutput` with `hookEventName: "SessionStart"` and
-`additionalContext`.
+The generated matcher covers `startup` and `resume`. Its stable command first
+looks for `bootstrap` on PATH, then `$HOME/.local/bin/bootstrap`, and exits 0
+silently when neither exists. The Windows command is a one-line
+`cmd.exe /d /c` wrapper that calls `bootstrap.cmd` from PATH, then
+`%USERPROFILE%\\.local\\bin\\bootstrap.cmd`, with quoted fallback paths for
+spaces. A newly written or changed user hook tells the user to
+review the new hook once with `/hooks`.
 
-`bootstrap codex-hook` then checks the project `.gitignore` and applicable
-`.p4ignore` for the anchored `/.codex/` rule. A missing or ineffective Git
-rule adds Codex context telling the agent to modify `.gitignore`. A present or
-mapped Perforce policy is checked with `p4 ignores`; its remediation tells the
-agent to run `p4 edit .p4ignore` before adding the rule. Healthy checks add no
-context. The engine is synchronous and bounded below the hook's 300-second
-timeout. Codex's hook review/trust flow remains in force, so a consumer may
-need to review the generated project hook once through `/hooks`; changing the
-definition requires review again.
+`bootstrap codex-hook` reads SessionStart JSON from stdin and uses its existing
+`cwd`, falling back to the process directory. It runs the full engine
+synchronously and emits the normal Codex `SessionStart` JSON response. A
+`session_id` marker under bootstrap's data directory makes a duplicate legacy
+and user-hook invocation a quiet success. The engine remains bounded below
+the hook's 300-second timeout.
 
 ### Plugin updates target the recorded scope
 

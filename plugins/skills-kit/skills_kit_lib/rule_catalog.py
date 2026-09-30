@@ -41,6 +41,8 @@ RULES: dict[str, tuple[str, str, str]] = {
     "refs-cited-exist": ("inoffensive", "integrity", "Every reference cited in the body resolves to a file."),
     "asset-paths-resolve": ("inoffensive", "integrity", "Every declared asset-dependency and `tools[].tests` path resolves."),
     "refs-reachable": ("inoffensive", "integrity", "Every file under `references/` is reachable from SKILL.md."),
+    "claude-md-links-resolve": ("inoffensive", "integrity", "Every relative markdown link target and `@import` path in a CLAUDE.md / AGENTS.md (outside code fences) resolves on disk; URLs, `#fragment`-only and absolute targets are skipped."),
+    "claude-md-fences-closed": ("inoffensive", "integrity", "Every code fence opened in a CLAUDE.md / AGENTS.md is closed."),
     # -- architectural: structural contract -------------------------------
     "yaml-contract": ("architectural", "contract", "The YAML type-contract block is recognized and validates against its schema (root key found, required keys present, rules satisfied)."),
     "mixed-type": ("architectural", "contract", "A SKILL.md declares exactly one skill-type root -- no drift across two type contracts (consumes `mixed_min_score`)."),
@@ -60,6 +62,8 @@ RULES: dict[str, tuple[str, str, str]] = {
     "body-line-count": ("optional", "thresholds-signals", "Reports the SKILL.md body line count (informational count row)."),
     "body-token-count": ("optional", "thresholds-signals", "Reports the approximate SKILL.md body token count (informational count row)."),
     "body-size-signal": ("optional", "thresholds-signals", "An over-threshold body with no `references/` directory raises a progressive-disclosure signal (consumes `body_max_lines`, `body_max_tokens`)."),
+    "claude-md-import-size": ("optional", "thresholds-signals", "Every `@import` target in a CLAUDE.md / AGENTS.md is at most `import_max_lines` lines."),
+    "claude-md-size-signal": ("optional", "thresholds-signals", "An over-threshold CLAUDE.md / AGENTS.md body raises a size judgment (consumes `body_max_lines`, `body_max_tokens`)."),
     # -- optional: record floors ------------------------------------------
     "step-tracking": ("optional", "record-floors", "A technique-skill with more than three steps carries a tickbox checklist or a step-tracker invocation."),
     "facts-floor": ("optional", "record-floors", "A reference-skill declares at least one fact (nested in `reference_skill:` or as a top-level `facts:` unit)."),
@@ -100,9 +104,10 @@ BUCKET_NAMES = ("architectural", "optional", "inoffensive")
 THRESHOLD_CONSUMERS: dict[str, str] = {
     "name_max_chars": "`name-length`",
     "desc_max_chars": "`desc-160-char`",
-    "body_max_lines": "`body-size-signal`",
-    "body_max_tokens": "`body-size-signal`",
+    "body_max_lines": "`body-size-signal`, `claude-md-size-signal`",
+    "body_max_tokens": "`body-size-signal`, `claude-md-size-signal`",
     "mixed_min_score": "`mixed-type`",
+    "import_max_lines": "`claude-md-import-size`",
 }
 
 

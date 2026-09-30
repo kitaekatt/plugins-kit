@@ -350,8 +350,9 @@ The four boundaries:
   carries review intelligence, NOT a `claude_md:` schema block. Follow the
   code-directory section of `../standards/claude-md-standards.md` (the shapes,
   the high-value observation kinds, the anchoring and path discipline, the value
-  gate); steps 3-5 below apply only in their code-directory form, and the schema
-  validator is NOT run on it.
+  gate); steps 3-5 below apply only in their code-directory form. Step 5 still
+  runs the validator on it (default rules only; there is no contract block to
+  check).
 - **project-doc** -- a standalone project document outside the skill tree and
   outside the CLAUDE.md hierarchy (a design record, a reference doc under
   `docs/` or `.claude/docs/`, a README).
@@ -412,7 +413,7 @@ hand-maintained copy.
   load-bearing structured keys beyond the floor freely, but do not declare a
   "recommended" pattern (only required, conditionally required, prohibited).
 - **claude-md** -- write or extend the `claude_md:` block: `scope.covers` plus
-  `scope.excludes` (the exclusion clause is load-bearing and required), then
+  `scope.excludes` (the exclusion clause is load-bearing and strongly expected; the schema marks it optional, so omitting it is an authoring-quality finding, not a FAIL), then
   records as `insights` and/or `conventions`. An insight record carries
   `id` / `keywords` (>= 3) / `summary` / `detail` / `origin` / `added`; a
   convention record carries `rule` / `keywords` / `why`. The floor is >= 1 record
@@ -460,16 +461,19 @@ Expected: records in the file's native shape, no duplication.
 
 ### Step 5 -- Validate
 
-- **skill and claude-md** -- run the mechanical validator via the plugin venv:
+- **skill and claude-md** -- run the mechanical validator via the plugin venv, on
+  every CLAUDE.md including a code-directory one (`--config` applies the
+  resolved thresholds and disabled rules):
 
   ```
-  (cd ${CLAUDE_PLUGIN_ROOT} && <venvPython> -m skills_kit_lib.audit <path>)
+  (cd ${CLAUDE_PLUGIN_ROOT} && <venvPython> -m skills_kit_lib.audit <path> --config)
   ```
 
-  Resolve every FAIL (missing `scope.excludes`, keywords under 3, a missing
-  required block, a forbidden key indicating mixed-type drift) before considering
-  the work done. Zero FAILs is well-formed. Do NOT run it on a code-directory
-  CLAUDE.md -- it carries no `claude_md:` block by design.
+  Resolve every FAIL (an unresolved markdown link, an unclosed fence, an
+  oversized import, keywords under 3, a forbidden key indicating mixed-type
+  drift) before considering the work done. Zero FAILs is well-formed. A file with
+  no `claude_md:` block is validated against the default rules; absence of the
+  block is never a FAIL, and a code-directory CLAUDE.md carries none by design.
 - **project-doc** -- no mechanical validator exists. Self-check against the
   standards doc's Test column: does every outbound file path resolve, is there at
   least one inbound citation, is every cross-reference one hop, does the body
@@ -487,17 +491,17 @@ Expected: 0 FAILs on the target, or a stated reason a JUDGMENT row is accepted.
   Which file a fact belongs in is a framework decision, not a guess. (Exception:
   a placement already resolved upstream is followed, not re-derived.)
 - Omitting `scope.excludes` on a `claude_md:` block. The exclusion clause is what
-  stops adjacent areas from drifting into the file's ownership; the schema
-  requires it.
+  stops adjacent areas from drifting into the file's ownership; the schema marks
+  it optional, so omitting it is an authoring-quality finding, not a FAIL.
 - Keyword clusters under 3 entries on a record. The schema floor is >= 3, for
   chat-term routing.
 - A root CLAUDE.md without a `claude_md:` block. Root files SHOULD carry one; add
-  it when generation touches a root file that lacks it. (The audit side treats
-  absence on a pre-existing root file as INFO -- adding the block is the
-  generation path's job.)
+  it when generation touches a root file that lacks it. (The audit side never
+  FAILs absence -- the file is validated against the default rules; adding the
+  block is the generation path's job.)
 - Treating a code-directory review-notes file like a schema-block CLAUDE.md, or
   vice-versa. Review-notes files carry gotchas / review checks / boundary claims,
-  not a `claude_md:` block, and the schema validator is never run on them.
+  not a `claude_md:` block, so only the default rules validate them.
 - Line-only anchors in a code-directory file. Line numbers rot fast; prefer a
   symbol anchor and drop the number unless the gotcha is sub-function.
 - Taking a VCS-ignored child directory's CLAUDE.md as a composition input. A task

@@ -144,7 +144,7 @@ reference_skill:
         Differences from a hook pass, each required by the terminal: console
         output (no bootstrap.log, engine version stamps, pending display file,
         or fix-all queue); no cooldown consumed or reset; no per-project
-        interpreter record (_global_ key); no Codex project hook generated;
+        interpreter record (_global_ key); no user Codex hook installed;
         stdin closed; exit 1 when the pass reports failures.
 
         run refuses with exit code 2 while another pass holds the shared lock
@@ -558,8 +558,8 @@ reference_skill:
         subcommands.
     - id: engine_internals
       path: references/engine-internals.md
-      keywords: [engine, internals, processing order, project_git_pull, safe pull, Step 3c-pull, self-setup, manifest phase, script phase, messaging protocol, execution flow, throttling, first run, clean install, phases, design principles, shared library, hybrid model, agent_skills_link, agent skills link, codex skills, Codex project hook, Step 4e, .codex/hooks.json, .gitignore, .p4ignore, p4 edit, .agents, .agents/skills, agents directory, profile resolution, profile prompt gating, profile_prompts marker directory, CLAUDE_CODE_SESSION_ATTENDED, CLAUDE_CODE_SESSION_ID]
-      summary: Engine internals deep-dive, including the Codex project-hook adapter, ignore-file preflight, profile resolution, and how the profile prompt is gated.
+      keywords: [engine, internals, processing order, project_git_pull, safe pull, Step 3c-pull, self-setup, manifest phase, script phase, messaging protocol, execution flow, throttling, first run, clean install, phases, design principles, shared library, hybrid model, agent_skills_link, agent skills link, codex skills, user-level Codex hook, legacy project hook cleanup, Step 4e, CODEX_HOME, hooks.json, session_id, .agents, .agents/skills, agents directory, profile resolution, profile prompt gating, profile_prompts marker directory, CLAUDE_CODE_SESSION_ATTENDED, CLAUDE_CODE_SESSION_ID]
+      summary: Engine internals deep-dive, including the user-level Codex hook, legacy project-hook cleanup, profile resolution, and how the profile prompt is gated.
     - id: manifest_reference
       path: references/manifest-reference.md
       keywords: [bootstrap.json, env.json, manifest, schema, fields, project_git_pull, git pull, fast-forward, project checkout, update gate, gate_timeout, variable expansion, layered config, merge semantics, identity keys, example, marketplace pin, pin field, unpin workflow, machines registry, env gate, env_checks, symlinks, shell_rc, macos_defaults, macos_hotkeys, login_items, personalization, agent_skills_link, codex, .agents/skills, profile, profiles, extends, profile inheritance]

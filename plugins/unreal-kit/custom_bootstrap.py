@@ -88,8 +88,84 @@ def autodetect() -> Optional[Dict[str, str]]:
     return result
 
 
+def _provision_ue_agent(ctx: Any) -> None:
+    """Create <project>/.claude/agents/ue-agent.md when missing.
+
+    Logs exactly one ``ue-agent:`` line and never raises. Independent of the
+    configured uproject: the user config layer can hold a stale one.
+    """
+    try:
+        project_dir = getattr(ctx, "project_dir", None)
+        if not project_dir:
+            ctx.log_ok("ue-agent: skipped - project directory is unavailable")
+            return
+        skill_lib = os.path.join(os.path.dirname(__file__), "lib")
+        if skill_lib not in sys.path:
+            sys.path.insert(0, skill_lib)
+        import ue_agent_provision as prov
+
+        enabled, valid = prov.read_option(getattr(ctx, "config", None) or {})
+        if not valid:
+            ctx.log(
+                f"ue-agent: invalid option - {prov.OPTION_KEY} must be true or "
+                "false; skipped"
+            )
+            return
+        if not enabled:
+            ctx.log_ok(f"ue-agent: skipped - {prov.OPTION_KEY} is false")
+            return
+        server_name, name_valid = prov.read_server_name(
+            getattr(ctx, "config", None) or {}
+        )
+        if not name_valid:
+            ctx.log(
+                f"ue-agent: invalid option - {prov.SERVER_OPTION_KEY} must be a "
+                "non-empty plain name (letters, digits, _ or -); skipped"
+            )
+            return
+        result = prov.check(project_dir, server_name)
+        if result.status == prov.PRESENT:
+            ctx.log_ok("ue-agent: present")
+        elif result.status == prov.NO_SERVER:
+            ctx.log_ok(f"ue-agent: skipped - {result.detail}")
+        elif result.status == prov.UNSUPPORTED:
+            ctx.log(
+                f"ue-agent: unsupported - {result.detail}; not created "
+                "(create .claude/agents/ue-agent.md by hand)"
+            )
+        else:
+            try:
+                target = prov.create(project_dir, prov.render(result.server, server_name=server_name)
+                )
+            except (OSError, ValueError) as exc:
+                if isinstance(exc, FileExistsError) and os.path.lexists(
+                    prov.agent_path(project_dir)
+                ):
+                    # Raced with another writer; the path now exists.
+                    ctx.log_ok("ue-agent: present")
+                    return
+                # A FileExistsError with no agent path means a parent (for
+                # example .claude) is a file: a real failure, not "present".
+                ctx.log(f"ue-agent: FAILED to create - {exc}")
+            else:
+                ctx.log(
+                    f"ue-agent: created {target}; it loads next session or via "
+                    "/agents"
+                )
+    except Exception as exc:  # the step must never break the pass
+        try:
+            ctx.log(f"ue-agent: FAILED - {exc}")
+        except Exception:
+            pass
+
+
 def bootstrap(ctx: Any) -> None:
-    """Check the optional durable enriched stub without writing project data."""
+    """Provision the project ue-agent subagent, then check the durable stub.
+
+    The only write is the create-if-missing ue-agent file (project harness
+    configuration); the stub check writes no project data.
+    """
+    _provision_ue_agent(ctx)
     config = getattr(ctx, "config", None) or {}
     uproject = config.get("uproject") if hasattr(config, "get") else None
     project_root = getattr(ctx, "project_dir", None)

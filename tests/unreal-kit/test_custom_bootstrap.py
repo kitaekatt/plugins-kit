@@ -55,6 +55,12 @@ def _stub_paths(tmp_path):
 
 
 def _assert_one_outcome(ctx, *, p4_checked=False):
+    # The ue-agent provisioning step logs its own line; it is asserted in
+    # test_ue_agent_provision.py, not here.
+    ctx.outcomes = [
+        (kind, message) for kind, message in ctx.outcomes
+        if not message.startswith("ue-agent:")
+    ]
     if p4_checked:
         assert ("ok", "redirectors: skipped - no Perforce workspace marker") in ctx.outcomes
         outcomes = [

@@ -39,6 +39,7 @@ Stdlib-only, like everything a bootstrap lever can rely on.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -55,6 +56,7 @@ POLL_INTERVAL = 0.25
 # Leave a small margin below the generated Codex hook's 300-second limit so a
 # stalled engine can still produce a bounded SessionStart response.
 CODEX_ENGINE_TIMEOUT_SECONDS = 285
+CODEX_SESSION_MARKER_TTL_SECONDS = 24 * 60 * 60
 
 # How often the tail asks whether the pass is still running. Deliberately much
 # coarser than POLL_INTERVAL: see the comment at its use in follow().
@@ -393,6 +395,53 @@ def _bootstrap_engine_python() -> str:
     return os.environ.get("BOOTSTRAP_PYTHON") or _bootstrap_python_value()
 
 
+def _codex_session_input() -> dict:
+    """Read Codex's JSON without attempting to consume an interactive TTY."""
+    try:
+        if sys.stdin.isatty():
+            return {}
+        raw = sys.stdin.read()
+    except (OSError, ValueError):
+        return {}
+    if not raw or not raw.strip():
+        return {}
+    try:
+        value = json.loads(raw)
+    except ValueError:
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def _claim_codex_session(data_dir: str, session_id) -> bool:
+    """Claim a session once; a duplicate hook invocation is a quiet success."""
+    if not isinstance(session_id, str) or not session_id:
+        return True
+    marker_dir = os.path.join(data_dir, "codex-hook-sessions")
+    marker = os.path.join(
+        marker_dir, hashlib.sha256(session_id.encode("utf-8")).hexdigest() + ".marker"
+    )
+    try:
+        os.makedirs(marker_dir, exist_ok=True)
+        now = time.time()
+        for entry in os.scandir(marker_dir):
+            if not entry.name.endswith(".marker"):
+                continue
+            try:
+                if now - entry.stat().st_mtime > CODEX_SESSION_MARKER_TTL_SECONDS:
+                    os.unlink(entry.path)
+            except OSError:
+                pass
+        fd = os.open(marker, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        os.close(fd)
+    except FileExistsError:
+        return False
+    except OSError:
+        # Dedupe is an optimization. Never turn an unavailable data directory
+        # into a Codex startup failure.
+        return True
+    return True
+
+
 def cmd_codex_hook(args) -> int:
     """Run bootstrap as a synchronous Codex SessionStart hook.
 
@@ -405,10 +454,15 @@ def cmd_codex_hook(args) -> int:
     """
     from bootstrap_lib import codex_hook
 
+    session_input = _codex_session_input()
     mkts = marketplaces()
     response = None
     context_parts = []
-    project_dir = codex_hook.resolve_project_root(args.project_dir or os.getcwd())
+    requested_cwd = session_input.get("cwd")
+    project_dir = requested_cwd if isinstance(requested_cwd, str) and os.path.isdir(
+        requested_cwd
+    ) else os.getcwd()
+    project_dir = os.path.realpath(os.path.abspath(project_dir))
     if len(mkts) > 1 and not os.environ.get("BOOTSTRAP_MARKETPLACE"):
         context_parts.append(
             "Bootstrap could not choose a marketplace for this Codex startup. "
@@ -418,6 +472,8 @@ def cmd_codex_hook(args) -> int:
     else:
         marketplace = mkts[0]
         data_dir = plugin_data_dir(marketplace)
+        if not _claim_codex_session(data_dir, session_input.get("session_id")):
+            return 0
         plugin_root = find_plugin_root(marketplace, args.plugin_root)
         if not plugin_root:
             context_parts.append(
@@ -454,10 +510,6 @@ def cmd_codex_hook(args) -> int:
                         "Run Claude once to repair bootstrap, then retry."
                         % result.returncode
                     )
-
-    ignore_context = codex_hook.codex_ignore_context(str(project_dir))
-    if ignore_context:
-        context_parts.append(ignore_context)
 
     if response is None and context_parts:
         response = _codex_context_response("\n\n".join(context_parts))

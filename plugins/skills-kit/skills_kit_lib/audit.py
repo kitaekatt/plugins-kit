@@ -13,13 +13,16 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
+from urllib.parse import unquote
 from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Any
 
 from .document_walker import (
+    extract_claude_md_unit,
     HAVE_YAML,
     collect_yaml_units,
     extract_skill_type_unit,
@@ -72,6 +75,7 @@ THRESHOLDS = {
     "body_max_lines": 500,
     "body_max_tokens": 3000,
     "mixed_min_score": 2,
+    "import_max_lines": 50,
 }
 
 
@@ -979,24 +983,157 @@ def check_cross_block_drift(body_text: str) -> CheckResult | None:
     return None
 
 
+_FENCE_RE = re.compile(r"^\s*(`{3,}|~{3,})(.*)$")
+_INLINE_CODE_RE = re.compile(r"`[^`\n]*`")
+_LINK_RE = re.compile(r"\]\(\s*<?([^)>\s]+)>?(?:\s+[^)]*)?\)")
+_LINK_DEF_RE = re.compile(r"^ {0,3}\[[^\]]+\]:\s*<?(\S+?)>?(?:\s|$)")
+_IMPORT_RE = re.compile(r"^@(\S+)")
+_SCHEME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*:")
+
+
+def _split_fences(content: str) -> tuple[list[tuple[int, str]], bool]:
+    """Return ([(line_number, line)] outside code fences, fence_left_open).
+
+    CommonMark fence rule: a closing fence uses the opening character, is at
+    least as long, and carries no info string. Text after an unclosed opener
+    counts as inside the fence.
+    """
+    outside: list[tuple[int, str]] = []
+    open_char = ""
+    open_len = 0
+    for n, line in enumerate(content.splitlines(), 1):
+        m = _FENCE_RE.match(line)
+        if open_char:
+            if (m and m.group(1)[0] == open_char and len(m.group(1)) >= open_len
+                    and not m.group(2).strip()):
+                open_char, open_len = "", 0
+            continue
+        if m and not (m.group(1)[0] == "`" and "`" in m.group(2)):
+            open_char, open_len = m.group(1)[0], len(m.group(1))
+            continue
+        outside.append((n, line))
+    return outside, bool(open_char)
+
+
+def _link_target_path(target: str, base: Path) -> Path | None:
+    """The on-disk path a relative link target names, or None when the target
+    is not checkable (URL/scheme, fragment-only, absolute)."""
+    if not target or target.startswith(("#", "/", "\\")) or _SCHEME_RE.match(target):
+        return None
+    path_part = unquote(re.split(r"[#?]", target, maxsplit=1)[0])
+    if not path_part:
+        return None
+    return base / path_part
+
+
+def check_claude_md_defaults(
+    path: Path, content: str, body: Body, th: dict[str, int]
+) -> list[CheckResult]:
+    """Default rules for every CLAUDE.md / AGENTS.md, with or without a
+    claude_md: block. Independent of the directory dimension classifier and of
+    sibling files; reads only the file itself and its link/import targets."""
+    base = path.parent
+    outside, unclosed = _split_fences(content)
+
+    bad_links: list[str] = []
+    for n, line in outside:
+        scan = _INLINE_CODE_RE.sub("", line)
+        targets = _LINK_RE.findall(scan)
+        d = _LINK_DEF_RE.match(scan)
+        if d:
+            targets.append(d.group(1))
+        for t in targets:
+            p = _link_target_path(t, base)
+            if p is not None and not os.path.exists(p):
+                bad_links.append(f"line {n}: {t}")
+
+    over_imports: list[str] = []
+    for n, line in outside:
+        m = _IMPORT_RE.match(line)
+        if not m or not re.search(r"[./]", m.group(1)):
+            continue
+        t = m.group(1)
+        if t.startswith("~"):
+            p = Path(t).expanduser()
+        elif t.startswith("/"):
+            p = Path(t)
+        else:
+            p = _link_target_path(t, base)
+            if p is not None and not p.exists():
+                bad_links.append(f"line {n}: @{t} (missing import)")
+                continue
+        if p is not None and p.is_file():
+            try:
+                count = len(p.read_text(encoding="utf-8", errors="replace").splitlines())
+            except OSError:
+                continue
+            if count > th["import_max_lines"]:
+                over_imports.append(f"line {n}: @{t} has {count} lines")
+
+    out: list[CheckResult] = []
+    out.append(CheckResult(
+        "relative markdown links resolve",
+        FAIL if bad_links else PASS,
+        "; ".join(bad_links[:10]) + (f"; +{len(bad_links) - 10} more" if len(bad_links) > 10 else ""),
+        rule="claude-md-links-resolve",
+    ))
+    out.append(CheckResult(
+        "code fences closed",
+        FAIL if unclosed else PASS,
+        "a ``` or ~~~ fence is opened and never closed" if unclosed else "",
+        rule="claude-md-fences-closed",
+    ))
+    out.append(CheckResult(
+        f"@imports <= {th['import_max_lines']} lines",
+        FAIL if over_imports else PASS,
+        "; ".join(over_imports),
+        rule="claude-md-import-size",
+    ))
+    too_big = body.lines > th["body_max_lines"] or body.tokens_approx > th["body_max_tokens"]
+    out.append(CheckResult(
+        "body size signal",
+        JUDGMENT if too_big else PASS,
+        f"lines={body.lines}, tokens~{body.tokens_approx}; run the size-signal judgment "
+        "(split only when sections serve different reading tasks)" if too_big
+        else f"lines={body.lines}, tokens~{body.tokens_approx}",
+        rule="claude-md-size-signal",
+    ))
+    return out
+
+
 def audit_claude_md(
     claude_md_path: Path,
     content: str,
     resolved: "ResolvedStandards | None" = None,
 ) -> dict[str, Any]:
-    """Audit a CLAUDE.md insight file."""
+    """Audit an instruction file (CLAUDE.md / AGENTS.md).
+
+    Default rules (universal rows) run on every file. The claude_md: block is
+    optional: when present it is schema-validated; when absent the contract row
+    is n/a and the file is validated against the defaults alone.
+    """
+    th = {**THRESHOLDS, **(resolved.thresholds if resolved else {})}
     body = parse_body(content)
-    yaml_data, yaml_err, detected_root = extract_skill_type_unit(body.text)
+    universal = check_claude_md_defaults(claude_md_path, content, body, th)
+    yaml_data, yaml_err, detected_root = extract_claude_md_unit(body.text)
     yaml_results: list[CheckResult] = []
     yaml_root: str | None = None
 
     if yaml_data is not None:
         if "claude_md" not in yaml_data:
-            roots = list(yaml_data.keys()) if isinstance(yaml_data, dict) else []
+            # Only other contract roots were found: no claude_md contract.
+            roots = [k for k in yaml_data if k in SCHEMAS_BY_ROOT]
             yaml_results.append(CheckResult(
-                "yaml: claude_md root key",
-                FAIL,
-                f"CLAUDE.md must carry a claude_md: YAML block; found roots {roots}",
+                "yaml: claude_md contract block",
+                NA,
+                "no claude_md: contract block; file validated against default rules",
+                rule="yaml-contract",
+            ))
+            yaml_results.append(CheckResult(
+                "yaml: non-claude_md contract root",
+                JUDGMENT,
+                f"non-claude_md contract root '{roots[0] if roots else '?'}' in an "
+                "instruction file (standards section 6.2) -- example or misplaced?",
                 rule="yaml-contract",
             ))
         else:
@@ -1022,14 +1159,16 @@ def audit_claude_md(
     else:
         yaml_results.append(CheckResult(
             "yaml: claude_md contract block",
-            FAIL,
-            "no fenced yaml block with a claude_md root key found",
+            NA,
+            "no claude_md: contract block; file validated against default rules",
             rule="yaml-contract",
         ))
 
     disabled = resolved.disabled_rules if resolved else set()
+    universal_rows = [asdict(r) for r in universal]
     yaml_rows = [asdict(r) for r in yaml_results]
     if disabled:
+        universal_rows = [r for r in universal_rows if r["rule"] not in disabled]
         yaml_rows = [r for r in yaml_rows if r["rule"] not in disabled]
 
     return {
@@ -1037,7 +1176,7 @@ def audit_claude_md(
         "kind": "claude_md",
         "declared_type": None,
         "yaml_root": yaml_root,
-        "universal": [],
+        "universal": universal_rows,
         "yaml_contract": yaml_rows,
         "type_specific": [],
         "mixed_type": asdict(CheckResult("mixed-type signal (n/a for CLAUDE.md)", NA, rule="mixed-type")),

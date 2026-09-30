@@ -264,13 +264,13 @@ audit_kinds:
     skill: 'skills-kit:md-domain (lane: audit_claude_md)'
     subject_type: corpus
     discovery: plugins/skills-kit/skills/md-domain/scripts/discover_claude_md.py (cwd-relative; emits the role -- root / ancestor / child / local -- and the code-directory|classic dimension Level-1 trigger per file)
-    evaluator_scaffolding: plugins/skills-kit/skills/md-domain/workflow/claude-md-detect.js (LLM lanes apply the criteria; skills_kit_lib/audit.py contributes the mechanical schema-validation and record-floor rows)
+    evaluator_scaffolding: plugins/skills-kit/skills/md-domain/workflow/claude-md-detect.js (LLM lanes apply the criteria; skills_kit_lib/audit.py contributes the four default rules on every file -- mechanical_defaults -- plus the schema-validation and record-floor rows when a claude_md block is present; an absent block is N/A, never FAIL)
     consumes_primitives: [claude_md, yaml]
     traverses_compositions: [directory, project]
     rules_owned_in: plugins/skills-kit/skills/md-domain/references/standards/claude-md-standards.md (audit-direction criteria table)
     rules_per_composition:
-      directory: [ccp_change_cadence, ccp_cross_file_duplication, crp_size_signal, crp_role_appropriate, adp_no_forward_dependency, hygiene_thresholds, schema_validation, cd_anchor_modality_classify, cd_fidelity_anchor_resolves, cd_fidelity_line_anchor, cd_fidelity_claim_holds, cd_value_insight_earns_place, cd_silent_failure_preserved, dd_density_in_place, dd_extract_to_reference, dd_intra_file_redundancy, dd_value_earns_tokens]
-      project: [ccp_change_cadence, ccp_cross_file_duplication, crp_size_signal, crp_role_appropriate, adp_no_forward_dependency, hygiene_thresholds, schema_validation, cd_anchor_modality_classify, cd_fidelity_anchor_resolves, cd_fidelity_line_anchor, cd_fidelity_claim_holds, cd_value_insight_earns_place, cd_silent_failure_preserved, dd_density_in_place, dd_extract_to_reference, dd_intra_file_redundancy, dd_value_earns_tokens]
+      directory: [ccp_change_cadence, ccp_cross_file_duplication, crp_size_signal, crp_role_appropriate, adp_no_forward_dependency, hygiene_thresholds, schema_validation, mechanical_defaults, cd_anchor_modality_classify, cd_fidelity_anchor_resolves, cd_fidelity_line_anchor, cd_fidelity_claim_holds, cd_value_insight_earns_place, cd_silent_failure_preserved, dd_density_in_place, dd_extract_to_reference, dd_intra_file_redundancy, dd_value_earns_tokens]
+      project: [ccp_change_cadence, ccp_cross_file_duplication, crp_size_signal, crp_role_appropriate, adp_no_forward_dependency, hygiene_thresholds, schema_validation, mechanical_defaults, cd_anchor_modality_classify, cd_fidelity_anchor_resolves, cd_fidelity_line_anchor, cd_fidelity_claim_holds, cd_value_insight_earns_place, cd_silent_failure_preserved, dd_density_in_place, dd_extract_to_reference, dd_intra_file_redundancy, dd_value_earns_tokens]
     taxonomy_in_skill: 'plugins/skills-kit/skills/md-domain/references/standards/claude-md-standards.md (audit-direction taxonomy table)'
     note: 'Not every bound rule runs on every file: cd_* criteria fire only for targets discover.py flagged dimension=code-directory (the Level-1 trigger), and dd_* criteria only when the density lens is requested. The role (root / ancestor / child / local) further selects which hygiene checks apply.'
 
