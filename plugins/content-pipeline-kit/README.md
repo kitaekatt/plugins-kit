@@ -58,3 +58,34 @@ non-negative, and not a boolean; anything else is treated as unknown. Against
 an llm-scripting-kit that lacks the fields, responses carry no reported cost and
 are priced from the `pricing` table (step 3). Exception (transport error)
 charges are always estimator-based and need a pricing table.
+
+## Durable waits
+
+A unit of a tracked run can ask a person a typed question and wait for the
+answer without holding a claim, while the rest of the run continues. The
+question, the answer and the outcome are rows in the execution store
+(`content_pipeline.execution`), and a per-request policy decides whether a
+rejection or an expiry stops the unit (`stop`, the default) or returns it to
+`pending` (`release`) so its next attempt can branch on the outcome.
+
+It is opt-in per unit. Calling `store.request_interrupt`, or raising
+`InterruptRequested` from an inline `generate`, is the whole opt-in: there is no
+flag or config key. A pipeline that does neither runs as before, and
+`content_pipeline.roundtrip` is unchanged, so the questions and returns a
+pipeline already uses keep working beside it.
+
+Lane scope:
+
+- The inline lane can ask, and so can a consumer's own loop over the store.
+- The background lane refuses a wait under its open dispatch
+  (`WaitUnderDispatchError`).
+- The workflow lane has no supported request surface: its worker protocol has no
+  wait verb, and nothing in the library handles a wait requested through a verb a
+  consumer mounts itself.
+
+The requesting verbs use `bootstrap_lib` (bootstrap 0.137.0 or later) and
+`llm_scripting_kit` (0.56.0 or later), probed inside the verb. Without them the
+verb raises `InterruptSupportError` before it writes. How to ask, answer,
+expire and drain a run with a waiting unit:
+`skills/content-pipeline-domain/references/building-a-pipeline.md`, "Durable
+waits (opt-in)".

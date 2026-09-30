@@ -440,6 +440,182 @@ that signal.
 
 Skip this whole step if the pipeline is fully automated.
 
+### Durable waits (opt-in)
+
+A durable wait holds ONE unit of a tracked run while a person answers a typed
+question, and records the question and the answer in the execution store. It
+is opt-in per unit. A pipeline that never calls an interrupt verb and never
+raises the signal below is not changed: `roundtrip` is untouched, and there is
+nothing to configure. The one visible difference is the store file, which gains
+two tables (`interrupts`, `interrupt_resolutions`) that stay empty until a wait
+is requested.
+
+Pick the shape by what the answer is for:
+
+| The need | Use |
+| --- | --- |
+| A question about an entity, answered between runs (a workbook, a review screen), re-entering as context | `roundtrip.questions` or `roundtrip.returns`, above |
+| A unit that cannot finish without a person's answer, while the rest of the run continues, and the answer is a schema-checked value the run records | a durable wait |
+
+The two do not exclude each other, and a pipeline can use both.
+
+**Which lanes can ask.**
+
+- The inline lane can ask, and so can a consumer's own loop over the store.
+- The background lane refuses a wait under its open dispatch: `store.request_interrupt`
+  raises `WaitUnderDispatchError` and writes nothing.
+- The workflow lane has no supported request surface. Its worker protocol has
+  no wait verb, nothing in the library handles a wait requested through a verb
+  a consumer mounts itself, and the store does not refuse a request for a
+  claimed unit that has no dispatch row.
+
+**Asking from the inline lane.** Raise `InterruptRequested` from `generate`.
+`run_wave` turns the signal into `store.request_interrupt` under the claim's
+own fencing token, leaves the unit `waiting` (no claimant, no lease), keeps it
+out of the returned list, and goes on with the next unit of the wave. The
+signal can also come from `adapter.build_request` or
+`adapter.validation_spec_for` on the backend path. It cannot come from
+`parse_fn` or a validator, which the validate loop treats as a rejection, nor
+from `adapter.unit_for`, which runs before the claim. A consumer that decides
+after generation asks from `generate`.
+
+```python
+from content_pipeline.execution.interrupts import unit_resolutions
+from content_pipeline.execution.model import InterruptRequest, InterruptRequested
+
+APPROVAL = {
+    "type": "object",
+    "required": ["approved"],
+    "properties": {"approved": {"type": "boolean"}},
+    "additionalProperties": False,
+}
+
+
+def generate(work_unit):
+    seen = unit_resolutions(store, run_id, work_unit.id)
+    if not seen:
+        raise InterruptRequested(
+            InterruptRequest(
+                kind="approval",
+                request_schema=APPROVAL,
+                payload={"question": f"Publish {work_unit.id}?"},
+            ),
+            on_rejected="release",
+            on_expired="release",
+        )
+    last = seen[-1]
+    if last["outcome"] == "answered" and last["input"]["approved"]:
+        return f"published copy for {work_unit.id}"
+    return f"draft copy for {work_unit.id}"
+```
+
+**Asking from your own loop.** Claim the unit, then call
+`store.request_interrupt(run_id, unit_id, claim.fencing_token, request)` with
+the same `InterruptRequest` and the same `on_rejected` and `on_expired`
+keywords. It returns an `InterruptRecord`. A request carries `kind` (lower-case
+letters, digits and hyphens, at most 64 characters), a JSON-schema
+`request_schema` for the answer, a `payload` shown to the person, and
+optionally `expires_in_s`.
+
+**Recording the answer.** Mount `store.resolve_interrupt` on your own command,
+spreadsheet intake or review screen; the package ships no console script. Show
+`store.list_interrupts(run_id)` (or `store.open_interrupt(run_id, unit_id)`) to
+the person. `decision="answer"` validates `input` against the request's schema
+and raises `ResolutionInputError` when it does not conform; `decision="reject"`
+takes an optional `reason`. An identical replay returns the stored resolution
+with `replayed=True`; a different second resolution raises
+`ResolutionConflictError`.
+
+**Policies, and what the unit does next.** `on_rejected` and `on_expired` each
+take `stop` or `release`, and `stop` is the default. The resolution row records
+the outcome either way; the policy decides the unit.
+
+| Outcome | Policy | Unit | How the consumer proceeds |
+| --- | --- | --- | --- |
+| answered | not applicable | `pending` | the next attempt reads the typed answer from `unit_resolutions` and generates with it |
+| rejected or expired | `stop` | terminal (`UnitState.OPERATOR_REJECTED` or `UnitState.INTERRUPT_EXPIRED`) | nothing more runs for the unit; a graph chain behind it is blocked, as behind a failed unit |
+| rejected or expired | `release` | `pending` | the next attempt reads the outcome and continues without the answer, skips the unit, fails it, or asks again with another request |
+
+To skip a released unit, either add a gate to `prepare_run` that fires on the
+outcome, or call `store.fail_unit` with `terminal=True` and
+`terminal_state=UnitState.SKIPPED` from your own loop.
+
+The attempt after a release MUST read `unit_resolutions`. A consumer that
+releases and then asks again without reading the outcome asks forever.
+`unit_resolutions(store, run_id, unit_id)` returns the resolved interrupts of
+one unit, oldest first, as dicts with `interrupt_id`, `kind`, `outcome`
+(`answered`, `rejected` or `expired`), `input`, `reason` and `payload`; an open
+interrupt is not in it.
+
+**Draining a run that has a waiting unit.** A waiting unit is not claimable, so
+a wave can be empty while the run is unfinished. A pass ends when the wave is
+empty, `finalize_run` applied nothing, and `waiting_units` is non-empty; the
+run is waiting, which is a healthy state. Run the loop again after an answer:
+the answered unit is `pending` and is offered in the next wave. The loop below
+calls `finalize_run` before it checks `unfinished_units`, because an accepted
+unit is already terminal and `unfinished_units` does not list it: checking
+first would return "complete" before the accepted units are applied.
+
+```python
+from content_pipeline.execution.controller import finalize_run, unfinished_units
+from content_pipeline.execution.drivers.inline import run_wave
+from content_pipeline.execution.interrupts import waiting_units
+from content_pipeline.execution.wave import ready_wave
+
+
+def drain(store, run_id, strategy, adapter, generate):
+    """Run waves until the run is complete, waiting, or blocked."""
+    while True:
+        wave = ready_wave(store, run_id, strategy)
+        if wave and store.get_run(run_id).halted_kind is None:
+            run_wave(store, run_id, wave, adapter, generate=generate)
+            continue
+        applied = finalize_run(store, run_id, adapter)
+        if not unfinished_units(store, run_id):
+            return "complete"
+        if applied:
+            continue
+        if waiting_units(store, run_id):
+            return "waiting"
+        return "blocked"
+```
+
+`"blocked"` covers any other reason work stays unfinished with nothing to run,
+such as a unit claimed by another worker. A halted run still offers its
+`pending` units, but `run_wave` claims none while the halt stands, so the loop
+does not call `run_wave` then and falls through to `"waiting"` or `"blocked"`.
+Clear the halt with `controller.resume_run`, then run the loop again.
+
+**Expiry.** `expires_in_s` (an integer from 1 to 2147483647) sets a deadline.
+No timer records it. A lapse is recorded by `store.resolve_interrupt` when it
+observes one, and by `store.expire_interrupts(run_id)`, which your own
+scheduler or loop calls; `InterruptRecord.lapsed(now)` reports a lapse without
+writing. An interrupt lapses at its `expires_at`, and one with no expiry does
+not lapse. `prepare_run(reclaim_at=...)` reclaims claimed units only, so it
+neither offers a waiting unit nor records an expiry.
+
+**What is recorded in events.** `execution.events.project_run` projects each
+interrupt row as an `interrupt` event with phase `requested`, `resolved`,
+`rejected` or `expired`, carrying the interrupt id, the kind and the claim's
+fencing token as the attempt id. A `terminal` event follows a rejection or a
+lapse only under `stop`. The request payload, the request schema and the answer
+do not enter an event; a rejection's reason appears only in the `terminal`
+event, cut to 1000 characters.
+
+**The two libraries the verbs need.** `request_interrupt`, `resolve_interrupt`
+and `expire_interrupts` use two shared libraries, probed inside the verb and
+not at import: `bootstrap_lib` (the interrupt contract, bootstrap 0.137.0 or
+later) and `llm_scripting_kit` (the schema validator, llm-scripting-kit 0.56.0
+or later). They are libraries this package reaches, not plugin dependencies,
+and no manifest entry is added for them. When one is missing or too old the
+verb raises `InterruptSupportError` (an `ImportError`) before it writes, with a
+message that names the plugin to install or update. Reads, status reports,
+waves, `waiting_units` and `unit_resolutions` need neither. A run that has
+interrupt rows also needs bootstrap 0.136.0 or later to project events.
+
+Limits: an answer is at most 65536 bytes of canonical JSON, and a reason is cut
+to 2000 characters.
+
 ## 10. Stand up the CLI
 
 `cli.scaffold` is the reusable dispatch scaffold a thin per-command CLI wires
@@ -528,9 +704,10 @@ stops claiming units and returns the ids it accepted before the halt. A
 halted run refuses new claims (a later `run_wave` on it claims nothing) until
 `controller.resume_run` clears the halt. Units already accepted stay
 accepted, and a claim already in flight with a valid fencing token can still
-be accepted. Any other exception from `generate` propagates out of `run_wave`
-and leaves that unit `CLAIMED` until its lease expires. Halt kinds are the
-`PipelineHaltError.kind` values, plus `"pause"` for an operator pause.
+be accepted. Any other exception from `generate`, except the
+`InterruptRequested` signal of a durable wait (step 9), propagates out of
+`run_wave` and leaves that unit `CLAIMED` until its lease expires. Halt kinds are
+the `PipelineHaltError.kind` values, plus `"pause"` for an operator pause.
 
 ### Execution events
 

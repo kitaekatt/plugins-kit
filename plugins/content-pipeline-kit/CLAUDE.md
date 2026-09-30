@@ -103,3 +103,18 @@ A supplied `mock` wins unconditionally in `route()`, checked before
 the declaration is even read: `route(mock=FakeBackend())` always returns the
 supplied instance, regardless of `CONTENT_PIPELINE_LLM_MODELS`. A test needs
 no environment setup to keep a routed call off a live transport.
+
+## The durable wait is opt-in and lives in the execution store
+
+A durable wait (`store.request_interrupt`, `InterruptRequested` in the inline
+lane) is a waiting state of a unit in the execution store, requested per unit
+and per call. It adds no flag, config key or manifest entry, and a consumer that
+never asks sees no change. It leaves `content_pipeline.roundtrip` and a
+consumer's own round trips alone: they are a different shape (a question about
+an entity that re-enters as context between runs), and the wait does not
+replace or wrap them. Keep it that way when editing either. The wait reaches
+`bootstrap_lib` and `llm_scripting_kit` as libraries, inside its verbs, never at
+import. Say the lane scope when describing it: the inline lane and a consumer's
+own loop can ask, the background lane refuses under an open dispatch, and the
+workflow lane has no request surface (do not describe it as refusing). User
+docs: `README.md` and step 9 of `building-a-pipeline.md`.
