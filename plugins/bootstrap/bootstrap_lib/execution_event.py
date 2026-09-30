@@ -20,6 +20,12 @@ no free text. It is frozen on the same terms. Each event is checked against
 the vocabulary of its own ``schema``, so a v1 event is validated exactly as
 before and a stream may mix both revisions.
 
+Schema ``plugins-kit.execution-event/v3`` (``SCHEMA_V3``) is v2 plus the
+unit-scoped ``contract`` event: one judgment of one declared artifact, with
+a closed payload key set that holds no content and no free text. It is frozen
+on the same terms, and v1 and v2 events validate exactly as they do under a
+module without it.
+
 The module is stdlib-only and imports nothing from ``bootstrap_lib``: it is
 linked into venvs that carry no third-party dependency, and a process that
 holds an older copy of a sibling module cannot disagree with it.
@@ -45,8 +51,11 @@ SCHEMA_V1 = "plugins-kit.execution-event/v1"
 # FROZEN. v1 plus the attempt-scoped `interrupt` event.
 SCHEMA_V2 = "plugins-kit.execution-event/v2"
 
+# FROZEN. v2 plus the unit-scoped `contract` event.
+SCHEMA_V3 = "plugins-kit.execution-event/v3"
+
 # The capability marker a consumer probes. It only ever grows.
-SUPPORTED_SCHEMAS = frozenset({SCHEMA_V1, SCHEMA_V2})
+SUPPORTED_SCHEMAS = frozenset({SCHEMA_V1, SCHEMA_V2, SCHEMA_V3})
 
 # The v1 core vocabulary. FROZEN; a later revision has its own set.
 CORE_EVENTS = frozenset(
@@ -77,10 +86,31 @@ INTERRUPT_PAYLOAD_KEYS = frozenset(
 )
 _INTERRUPT_REQUIRED_KEYS = ("interrupt_id", "kind", "phase")
 
+# The v3 vocabulary: every v2 name under the v2 rules, plus `contract`, which
+# is unit-scoped (an artifact is judged for the unit, after its attempts).
+CORE_EVENTS_V3 = CORE_EVENTS_V2 | {"contract"}
+ATTEMPT_SCOPED_V3 = ATTEMPT_SCOPED_V2
+
+# What kind of artifact a `contract` event judges, and the judgment.
+CONTRACT_KINDS = frozenset({"schema", "opaque-file"})
+CONTRACT_VERDICTS = frozenset({"satisfied", "violated", "missing"})
+
+# The CLOSED `contract` payload key set. The other values are a closed-set
+# word, a digest, or an int, so no key can carry the artifact's content or its
+# validation errors. `artifact` is a bounded string (at most 200 characters, no
+# control characters) that is not pattern-checked, so keeping free text out of
+# it is the emitter's discipline.
+CONTRACT_PAYLOAD_KEYS = frozenset(
+    {"artifact", "kind", "verdict", "schema_digest", "error_count"}
+)
+_CONTRACT_REQUIRED_KEYS = ("artifact", "kind", "verdict")
+_DIGEST_RE = re.compile(r"[0-9a-f]{64}")
+
 # Per schema: (core names, attempt-scoped names, names a later revision defines).
 _VOCABULARIES = {
     SCHEMA_V1: (CORE_EVENTS, ATTEMPT_SCOPED, LATER_REVISION_NAMES),
     SCHEMA_V2: (CORE_EVENTS_V2, ATTEMPT_SCOPED_V2, frozenset({"contract"})),
+    SCHEMA_V3: (CORE_EVENTS_V3, ATTEMPT_SCOPED_V3, frozenset()),
 }
 
 MAX_PAYLOAD_BYTES = 16384
@@ -414,6 +444,81 @@ def _check_interrupt_payload(payload: dict) -> None:
             )
 
 
+def _check_contract_payload(payload: dict) -> None:
+    for key in payload:
+        if key not in CONTRACT_PAYLOAD_KEYS:
+            raise EventError(
+                f"contract payload has unknown key {key!r}; allowed: "
+                f"{', '.join(sorted(CONTRACT_PAYLOAD_KEYS))}. The key set is "
+                "closed: a contract event never carries the artifact's content, "
+                "its validation errors, a pointer into it, or free text",
+                pointer=_ptr("payload", key),
+            )
+    for key in _CONTRACT_REQUIRED_KEYS:
+        if key not in payload:
+            raise EventError(
+                f"contract payload needs {key!r}", pointer=_ptr("payload", key)
+            )
+    _bounded(payload["artifact"], "/payload/artifact")
+    kind = payload["kind"]
+    if not isinstance(kind, str) or kind not in CONTRACT_KINDS:
+        raise EventError(
+            f"contract kind must be one of {', '.join(sorted(CONTRACT_KINDS))}, "
+            f"got {kind!r}",
+            pointer="/payload/kind",
+        )
+    verdict = payload["verdict"]
+    if not isinstance(verdict, str) or verdict not in CONTRACT_VERDICTS:
+        raise EventError(
+            f"contract verdict must be one of {', '.join(sorted(CONTRACT_VERDICTS))}, "
+            f"got {verdict!r}",
+            pointer="/payload/verdict",
+        )
+    if verdict == "violated" and kind != "schema":
+        raise EventError(
+            f"contract verdict 'violated' requires kind 'schema'; a {kind!r} "
+            "artifact is satisfied or missing",
+            pointer="/payload/verdict",
+        )
+    if kind == "schema":
+        if "schema_digest" not in payload:
+            raise EventError(
+                "contract payload needs 'schema_digest' when kind is 'schema'",
+                pointer="/payload/schema_digest",
+            )
+        digest = payload["schema_digest"]
+        if not isinstance(digest, str) or not _DIGEST_RE.fullmatch(digest):
+            raise EventError(
+                "contract schema_digest must be 64 lowercase hex characters, "
+                f"got {digest!r}",
+                pointer="/payload/schema_digest",
+            )
+    elif "schema_digest" in payload:
+        raise EventError(
+            "contract schema_digest is allowed only when kind is 'schema', "
+            f"not {kind!r}",
+            pointer="/payload/schema_digest",
+        )
+    if verdict == "violated":
+        if "error_count" not in payload:
+            raise EventError(
+                "contract payload needs 'error_count' when verdict is 'violated'",
+                pointer="/payload/error_count",
+            )
+        count = payload["error_count"]
+        if isinstance(count, bool) or not isinstance(count, int) or count < 1:
+            raise EventError(
+                f"contract error_count must be an int >= 1, got {count!r}",
+                pointer="/payload/error_count",
+            )
+    elif "error_count" in payload:
+        raise EventError(
+            "contract error_count is allowed only when verdict is 'violated', "
+            f"not {verdict!r}",
+            pointer="/payload/error_count",
+        )
+
+
 def _check_core_payload(event: str, payload: dict) -> None:
     if event == "usage":
         for key in payload:
@@ -458,6 +563,8 @@ def _check_core_payload(event: str, payload: dict) -> None:
             )
     elif event == "interrupt":
         _check_interrupt_payload(payload)
+    elif event == "contract":
+        _check_contract_payload(payload)
 
 
 def _is_supported(schema: Any) -> bool:
@@ -539,6 +646,17 @@ def validate_event(value: Any) -> dict:
             "'terminal' is unit- or run-scoped: identity must not carry attempt_id",
             pointer="/identity/attempt_id",
         )
+    if event == "contract":
+        if "unit_id" not in identity:
+            raise EventError(
+                "'contract' is unit-scoped: identity needs unit_id",
+                pointer="/identity",
+            )
+        if "attempt_id" in identity:
+            raise EventError(
+                "'contract' is unit-scoped: identity must not carry attempt_id",
+                pointer="/identity/attempt_id",
+            )
 
     at = _check_at(value["at"])
     payload = _check_payload(value["payload"])
@@ -612,6 +730,9 @@ def validate_stream(events: Iterable[Any]) -> tuple[dict, ...]:
     the first must be ``requested``; a second ``requested`` is refused; at
     most one closing phase (``resolved``, ``rejected``, ``expired``) is
     allowed; and no ``interrupt`` event follows the close.
+
+    ``contract`` events (v3), keyed by (group, artifact): at most one per key,
+    and none after the unit's ``terminal``.
     """
     out: list[dict] = []
     seen: set[tuple] = set()
@@ -620,6 +741,7 @@ def validate_stream(events: Iterable[Any]) -> tuple[dict, ...]:
     terminals: set[tuple] = set()
     interrupts_open: set[tuple] = set()
     interrupts_closed: set[tuple] = set()
+    contracts: set[tuple] = set()
     for index, raw in enumerate(events):
         try:
             item = validate_event(raw)
@@ -668,6 +790,20 @@ def validate_stream(events: Iterable[Any]) -> tuple[dict, ...]:
             _check_interrupt_order(
                 index, group, identity, item["payload"], interrupts_open, interrupts_closed
             )
+        elif name == "contract":
+            if group in terminals:
+                raise EventError(
+                    f"event {index}: contract after the unit's terminal "
+                    f"in group {group!r}",
+                    pointer=_ptr(index, "event"),
+                )
+            key = group + (item["payload"]["artifact"],)
+            if key in contracts:
+                raise EventError(
+                    f"event {index}: second contract for artifact {key!r}",
+                    pointer=_ptr(index, "payload", "artifact"),
+                )
+            contracts.add(key)
         out.append(item)
     return tuple(out)
 
@@ -861,8 +997,13 @@ def read_jsonl(path: str | os.PathLike) -> tuple[dict, ...]:
 __all__ = [
     "ATTEMPT_SCOPED",
     "ATTEMPT_SCOPED_V2",
+    "ATTEMPT_SCOPED_V3",
+    "CONTRACT_KINDS",
+    "CONTRACT_PAYLOAD_KEYS",
+    "CONTRACT_VERDICTS",
     "CORE_EVENTS",
     "CORE_EVENTS_V2",
+    "CORE_EVENTS_V3",
     "Emitter",
     "EventError",
     "INTERRUPT_PAYLOAD_KEYS",
@@ -874,6 +1015,7 @@ __all__ = [
     "OWNER",
     "SCHEMA_V1",
     "SCHEMA_V2",
+    "SCHEMA_V3",
     "SUPPORTED_SCHEMAS",
     "make_event",
     "read_jsonl",

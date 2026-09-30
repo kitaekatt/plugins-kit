@@ -1,7 +1,8 @@
 """Tests for bootstrap_lib.execution_event -- the shared execution-event envelope.
 
-The module owns one envelope with two frozen revisions (schema v1, and v2 =
-v1 plus the `interrupt` event), their vocabularies, the stream ordering and
+The module owns one envelope with three frozen revisions (schema v1, v2 =
+v1 plus the `interrupt` event, and v3 = v2 plus the unit-scoped `contract`
+event), their vocabularies, the stream ordering and
 lifecycle rules, the zero-versus-unknown usage rule, and two sinks. Every
 plugin keeps its own store, so nothing here opens a database or imports
 another plugin; the module is stdlib-only and imports nothing from
@@ -94,8 +95,8 @@ def test_missing_required_key_is_refused() -> None:
 
 
 def test_unknown_schema_revision_is_refused() -> None:
-    error = _refused(_event(schema="plugins-kit.execution-event/v3"))
-    assert "plugins-kit.execution-event/v3" in str(error)
+    error = _refused(_event(schema="plugins-kit.execution-event/v4"))
+    assert "plugins-kit.execution-event/v4" in str(error)
     assert error.pointer == "/schema"
 
 
@@ -474,14 +475,14 @@ def test_make_event_default_schema_is_v1() -> None:
 
 def test_make_event_refuses_unsupported_schema_selector() -> None:
     with pytest.raises(ee.EventError) as info:
-        _make(schema="plugins-kit.execution-event/v3")
+        _make(schema="plugins-kit.execution-event/v4")
     assert "selector" in str(info.value)
     assert info.value.pointer == "/schema"
 
 
 def test_emitter_refuses_unsupported_schema_selector() -> None:
     with pytest.raises(ee.EventError) as info:
-        ee.Emitter("job-kit", "r", schema="plugins-kit.execution-event/v3")
+        ee.Emitter("job-kit", "r", schema="plugins-kit.execution-event/v4")
     assert "selector" in str(info.value)
 
 
@@ -513,6 +514,21 @@ def test_consumer_probe_shape_binds_real_constructors() -> None:
     built = module.make_event(**{**make_keywords, "event": "interrupt",
                                  "payload": _interrupt_payload()}, schema=ee.SCHEMA_V2)
     assert built["schema"] == ee.SCHEMA_V2
+    # A v3 emitter (workflow-kit provider nodes) binds schema=SCHEMA_V3, and the
+    # bound shape is a working one: a unit-scoped contract event.
+    assert ee.SCHEMA_V3 in module.SUPPORTED_SCHEMAS
+    inspect.signature(module.make_event).bind(**make_keywords, schema=ee.SCHEMA_V3)
+    inspect.signature(module.Emitter).bind(
+        "workflow-kit", "r", unit_id="u", sinks=(), schema=ee.SCHEMA_V3
+    )
+    contract = module.make_event(**{**make_keywords, "event": "contract",
+                                    "attempt_id": None, "payload": _contract_payload()},
+                                 schema=ee.SCHEMA_V3)
+    assert contract["schema"] == ee.SCHEMA_V3
+    v3_sink = module.InMemorySink()
+    module.Emitter("workflow-kit", "r", unit_id="u", sinks=[v3_sink],
+                   schema=ee.SCHEMA_V3).emit("contract", payload=_contract_payload())
+    assert v3_sink.events[0]["schema"] == ee.SCHEMA_V3
     inspect.signature(module.Emitter.emit).bind(
         None, "result", unit_id="u", attempt_id="1", adapter="a", model="m",
         payload={}, at=AT,
@@ -859,9 +875,10 @@ def test_schema_v2_literal_is_frozen() -> None:
     assert ee.SCHEMA_V2 == "plugins-kit.execution-event/v2"
 
 
-def test_supported_schemas_are_v1_and_v2() -> None:
+def test_supported_schemas_are_v1_v2_v3() -> None:
     assert ee.SUPPORTED_SCHEMAS == frozenset(
-        {"plugins-kit.execution-event/v1", "plugins-kit.execution-event/v2"}
+        {"plugins-kit.execution-event/v1", "plugins-kit.execution-event/v2",
+         "plugins-kit.execution-event/v3"}
     )
 
 
@@ -1130,6 +1147,332 @@ def test_read_jsonl_accepts_mixed_v1_v2_stream(tmp_path: Path) -> None:
 
 
 # --------------------------------------------------------------------------
+# Schema v3: v2 plus the unit-scoped `contract` event
+# --------------------------------------------------------------------------
+
+
+DIGEST = "0123456789abcdef" * 4
+
+
+def _contract_payload(**overrides: Any) -> dict:
+    payload: dict[str, Any] = {"artifact": "report", "kind": "schema",
+                               "verdict": "satisfied", "schema_digest": DIGEST}
+    payload.update(overrides)
+    return {key: value for key, value in payload.items() if value is not _DROP}
+
+
+def _contract(identity: dict | None = None, **payload_overrides: Any) -> dict:
+    """A valid v3 `contract` event (raw, for validate_event)."""
+    if identity is None:
+        identity = {"run_id": "run-1", "unit_id": "unit-1"}
+    return _event(schema=ee.SCHEMA_V3, event="contract", identity=identity,
+                  source={"plugin": "workflow-kit"},
+                  payload=_contract_payload(**payload_overrides))
+
+
+def _v3(seq: int, artifact: str = "report", unit: str = "u", **payload_overrides: Any) -> dict:
+    return _make(seq=seq, event="contract", unit_id=unit, attempt_id=None,
+                 payload=_contract_payload(artifact=artifact, **payload_overrides),
+                 schema=ee.SCHEMA_V3)
+
+
+def test_schema_v3_literal_is_frozen() -> None:
+    assert ee.SCHEMA_V3 == "plugins-kit.execution-event/v3"
+
+
+def test_v2_core_events_are_frozen() -> None:
+    v1_core = frozenset({"dispatch-selected", "call-started", "usage", "result", "terminal"})
+    v1_scoped = frozenset({"dispatch-selected", "call-started", "usage", "result"})
+    assert ee.CORE_EVENTS_V2 == v1_core | {"interrupt"}
+    assert ee.ATTEMPT_SCOPED_V2 == v1_scoped | {"interrupt"}
+    assert "contract" not in ee.CORE_EVENTS_V2
+
+
+def test_v3_vocabulary_and_contract_sets() -> None:
+    assert ee.CORE_EVENTS_V3 == ee.CORE_EVENTS_V2 | {"contract"}
+    assert ee.ATTEMPT_SCOPED_V3 == ee.ATTEMPT_SCOPED_V2
+    assert "contract" not in ee.ATTEMPT_SCOPED_V3
+    assert ee.CONTRACT_KINDS == frozenset({"schema", "opaque-file"})
+    assert ee.CONTRACT_VERDICTS == frozenset({"satisfied", "violated", "missing"})
+    assert ee.CONTRACT_PAYLOAD_KEYS == frozenset(
+        {"artifact", "kind", "verdict", "schema_digest", "error_count"}
+    )
+
+
+def test_v3_accepts_contract_event() -> None:
+    minimal = ee.validate_event(_contract())
+    assert minimal["schema"] == ee.SCHEMA_V3
+    assert minimal["event"] == "contract"
+    assert minimal["identity"] == {"run_id": "run-1", "unit_id": "unit-1"}
+    assert minimal["payload"] == {"artifact": "report", "kind": "schema",
+                                  "verdict": "satisfied", "schema_digest": DIGEST}
+    violated = ee.validate_event(_contract(verdict="violated", error_count=3))
+    assert violated["payload"]["error_count"] == 3
+    assert ee.validate_event(_contract(verdict="missing"))["payload"]["verdict"] == "missing"
+    for verdict in ("satisfied", "missing"):
+        opaque = ee.validate_event(_contract(kind="opaque-file", verdict=verdict,
+                                             schema_digest=_DROP))
+        assert opaque["payload"] == {"artifact": "report", "kind": "opaque-file",
+                                     "verdict": verdict}
+    built = _v3(0)
+    assert built["schema"] == ee.SCHEMA_V3
+    assert built["identity"] == {"run_id": "run-1", "unit_id": "u"}
+
+
+@pytest.mark.parametrize("name", sorted(ee.CORE_EVENTS_V2))
+def test_v3_accepts_every_v2_core_name(name: str) -> None:
+    payload: dict = {}
+    identity = {"run_id": "r", "unit_id": "u", "attempt_id": "1"}
+    if name == "usage":
+        payload = ee.usage_payload(input_tokens=3, output_tokens=4)
+    elif name == "result":
+        payload = {"status": "completed"}
+    elif name == "terminal":
+        payload = {"state": "done"}
+        identity = {"run_id": "r", "unit_id": "u"}
+    elif name == "interrupt":
+        payload = _interrupt_payload()
+    value = ee.validate_event(_event(schema=ee.SCHEMA_V3, event=name, identity=identity,
+                                     payload=payload))
+    assert value["event"] == name
+    assert value["schema"] == ee.SCHEMA_V3
+    # ... under the v2 rules: the same required payload is still required.
+    if name in ("result", "terminal", "usage", "interrupt"):
+        bad = _refused(_event(schema=ee.SCHEMA_V3, event=name, identity=identity,
+                              payload={}))
+        assert bad.pointer.startswith("/payload")
+
+
+def test_v3_interrupt_keeps_v2_payload_and_stream_rules() -> None:
+    def v3_interrupt(seq: int, phase: str, **extra: Any) -> dict:
+        return _make(seq=seq, event="interrupt", unit_id="u", attempt_id="1",
+                     payload=_interrupt_payload(phase=phase, **extra), schema=ee.SCHEMA_V3)
+
+    # Payload: the closed key set and the attempt scope hold under v3.
+    error = _refused(_event(schema=ee.SCHEMA_V3, event="interrupt",
+                            payload=_interrupt_payload(request_payload={"q": 1})))
+    assert "closed" in str(error)
+    assert error.pointer == "/payload/request_payload"
+    error = _refused(_event(schema=ee.SCHEMA_V3, event="interrupt",
+                            identity={"run_id": "r", "unit_id": "u"},
+                            payload=_interrupt_payload()))
+    assert "attempt-scoped" in str(error)
+    # Stream: the lifecycle rules hold under v3.
+    assert len(ee.validate_stream([v3_interrupt(0, "requested"),
+                                   v3_interrupt(1, "resolved")])) == 2
+    error = _stream_refused([_attempt(0, "result"), v3_interrupt(1, "resolved")])
+    assert "before its request" in str(error)
+    error = _stream_refused([v3_interrupt(0, "requested"), v3_interrupt(1, "requested")])
+    assert "second interrupt request" in str(error)
+    error = _stream_refused([v3_interrupt(0, "requested"), _terminal(1),
+                             v3_interrupt(2, "expired")])
+    assert "after the unit's terminal" in str(error)
+
+
+def test_contract_requires_unit_id() -> None:
+    error = _refused(_contract(identity={"run_id": "r"}))
+    assert "unit-scoped" in str(error)
+    assert error.pointer == "/identity"
+    with pytest.raises(ee.EventError):
+        _make(event="contract", unit_id=None, attempt_id=None,
+              payload=_contract_payload(), schema=ee.SCHEMA_V3)
+
+
+def test_contract_forbids_attempt_id() -> None:
+    error = _refused(_contract(identity={"run_id": "r", "unit_id": "u", "attempt_id": "1"}))
+    assert "must not carry attempt_id" in str(error)
+    assert error.pointer == "/identity/attempt_id"
+
+
+@pytest.mark.parametrize(
+    "value",
+    [_DROP, "", "x" * 201, "a\nb", 7],
+    ids=["missing", "empty", "too_long", "control_char", "non_string"],
+)
+def test_contract_artifact_is_bounded(value: Any) -> None:
+    error = _refused(_contract(artifact=value))
+    assert error.pointer == "/payload/artifact"
+    at_bound = ee.validate_event(_contract(artifact="x" * 200))
+    assert at_bound["payload"]["artifact"] == "x" * 200
+
+
+def test_contract_kind_is_a_closed_set() -> None:
+    for kind in ("json", "Schema", "opaque_file", "", None, 3, ["schema"], _DROP):
+        error = _refused(_contract(kind=kind))
+        assert error.pointer == "/payload/kind", kind
+
+
+def test_contract_verdict_is_a_closed_set() -> None:
+    for verdict in ("passed", "Satisfied", "invalid", "", None, 1, ["missing"], _DROP):
+        error = _refused(_contract(verdict=verdict))
+        assert error.pointer == "/payload/verdict", verdict
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [{"schema_digest": _DROP}, {"kind": "opaque-file"}],
+    ids=["missing_for_schema", "present_for_opaque"],
+)
+def test_contract_schema_digest_iff_schema_kind(overrides: dict) -> None:
+    error = _refused(_contract(**overrides))
+    assert error.pointer == "/payload/schema_digest"
+
+
+@pytest.mark.parametrize(
+    "digest",
+    ["0123456789abcdef" * 3, "0123456789ABCDEF" * 4, "0123456789abcdeg" * 4],
+    ids=["short", "upper", "non_hex"],
+)
+def test_contract_schema_digest_is_64_lowercase_hex(digest: str) -> None:
+    error = _refused(_contract(schema_digest=digest))
+    assert "64 lowercase hex" in str(error)
+    assert error.pointer == "/payload/schema_digest"
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [{"verdict": "violated"}, {"verdict": "satisfied", "error_count": 1}],
+    ids=["missing", "present_when_satisfied"],
+)
+def test_contract_error_count_iff_violated(overrides: dict) -> None:
+    error = _refused(_contract(**overrides))
+    assert error.pointer == "/payload/error_count"
+    # Neither `missing` nor an opaque-file artifact carries a count either.
+    assert _refused(_contract(verdict="missing", error_count=2)).pointer == (
+        "/payload/error_count"
+    )
+
+
+@pytest.mark.parametrize("value", [0, True, 1.0], ids=["zero", "bool", "float"])
+def test_contract_error_count_is_positive_int(value: Any) -> None:
+    error = _refused(_contract(verdict="violated", error_count=value))
+    assert error.pointer == "/payload/error_count"
+    assert ee.validate_event(_contract(verdict="violated", error_count=1))
+
+
+def test_contract_opaque_cannot_be_violated() -> None:
+    for extra in ({"error_count": 1}, {}):
+        error = _refused(_contract(kind="opaque-file", verdict="violated",
+                                   schema_digest=_DROP, **extra))
+        assert "requires kind 'schema'" in str(error)
+        assert error.pointer == "/payload/verdict"
+
+
+@pytest.mark.parametrize("key", ["errors", "value", "payload", "reason", "message"])
+def test_contract_payload_refuses_content_key(key: str) -> None:
+    error = _refused(_contract(verdict="violated", error_count=1,
+                               **{key: [{"pointer": "/a", "message": "bad"}]}))
+    assert "closed" in str(error)
+    assert error.pointer == "/payload/" + key
+    # A scalar under the same key is refused too: the key, not the shape, is barred.
+    assert _refused(_contract(**{key: "x"})).pointer == "/payload/" + key
+
+
+def test_contract_payload_refuses_unknown_key() -> None:
+    error = _refused(_contract(note="n"))
+    assert "unknown key 'note'" in str(error)
+    assert error.pointer == "/payload/note"
+
+
+def test_stream_refuses_second_contract_for_artifact() -> None:
+    for second in (_v3(1), _v3(1, verdict="missing")):
+        error = _stream_refused([_v3(0), second])
+        assert "second contract" in str(error)
+        assert error.pointer == "/1/payload/artifact"
+
+
+def test_stream_accepts_contracts_for_two_artifacts() -> None:
+    stream = [_v3(0, artifact="report"), _v3(1, artifact="summary"),
+              _v3(0, artifact="report", unit="v")]
+    assert ee.validate_stream(stream) == tuple(stream)
+
+
+def test_stream_refuses_contract_after_unit_terminal() -> None:
+    ok = [_attempt(0, "result"), _v3(1), _terminal(2)]
+    assert ee.validate_stream(ok) == tuple(ok)
+    error = _stream_refused([_attempt(0, "result"), _terminal(1), _v3(2)])
+    assert "contract after the unit's terminal" in str(error)
+    assert error.pointer == "/2/event"
+    # Another unit's terminal does not close this unit.
+    ee.validate_stream([_terminal(0, unit="v"), _v3(1)])
+
+
+def test_stream_seq_orders_across_v1_v2_v3() -> None:
+    mixed = [_attempt(0, "call-started"), _v2(1, "requested"), _v2(2, "resolved"),
+             _attempt(3, "result"), _v3(4), _terminal(5)]
+    assert ee.validate_stream(mixed) == tuple(mixed)
+    error = _stream_refused([_v2(5, "requested"), _v3(3)])
+    assert "does not increase" in str(error)
+    assert error.pointer == "/1/seq"
+    error = _stream_refused([_attempt(4, "call-started"), _v3(4)])
+    assert "duplicate seq" in str(error)
+
+
+def test_v2_event_serialization_is_unchanged(tmp_path: Path) -> None:
+    """A fixed v2 event against a literal line: v3 must not move one v2 byte."""
+    literal = (
+        '{"at":"2026-09-29T20:00:00.123Z","event":"interrupt",'
+        '"identity":{"attempt_id":"2","run_id":"run-1","unit_id":"unit-1"},'
+        '"payload":{"continuation_no":0,"expires_at":"2026-10-01T00:00:00Z",'
+        '"interrupt_id":"int-1","kind":"approval","phase":"requested"},'
+        '"schema":"plugins-kit.execution-event/v2","seq":7,'
+        '"source":{"adapter":"openrouter","model":"m","plugin":"job-kit"}}'
+    )
+    event = ee.make_event(
+        seq=7, run_id="run-1", event="interrupt", plugin="job-kit",
+        at="2026-09-29T20:00:00.123Z", unit_id="unit-1", attempt_id="2",
+        adapter="openrouter", model="m", schema=ee.SCHEMA_V2,
+        payload={"phase": "requested", "kind": "approval", "interrupt_id": "int-1",
+                 "expires_at": "2026-10-01T00:00:00Z", "continuation_no": 0},
+    )
+    assert list(event) == ["schema", "seq", "identity", "event", "at", "source", "payload"]
+    assert list(event["identity"]) == ["run_id", "unit_id", "attempt_id"]
+    assert list(event["source"]) == ["plugin", "adapter", "model"]
+    path = tmp_path / "v2.jsonl"
+    ee.JsonlSink(path).write(event)
+    assert path.read_bytes() == (literal + "\n").encode("ascii")
+    assert ee.read_jsonl(path) == (event,)
+
+
+def test_emitter_v3_stamps_every_event() -> None:
+    sink = ee.InMemorySink()
+    emitter = ee.Emitter("workflow-kit", "r", unit_id="u", sinks=[sink], schema=ee.SCHEMA_V3)
+    emitter.emit("call-started", attempt_id="1")
+    emitter.emit("result", attempt_id="1", payload={"status": "completed"})
+    emitter.emit("contract", payload=_contract_payload())
+    emitter.emit("terminal", payload={"state": "done"})
+    assert [event["schema"] for event in sink.events] == [ee.SCHEMA_V3] * 4
+    assert [event["seq"] for event in sink.events] == [0, 1, 2, 3]
+    assert sink.events[2]["identity"] == {"run_id": "r", "unit_id": "u"}
+    assert ee.validate_stream(sink.events) == tuple(sink.events)
+    # A contract with an attempt id is refused and consumes no seq.
+    with pytest.raises(ee.EventError):
+        emitter.emit("contract", attempt_id="1", payload=_contract_payload(artifact="b"))
+    assert len(sink.events) == 4
+
+
+def test_read_jsonl_accepts_mixed_v1_v2_v3_stream(tmp_path: Path) -> None:
+    path = tmp_path / "mixed.jsonl"
+    sink = ee.JsonlSink(path)
+    events = [
+        _attempt(0, "call-started"),
+        _v2(1, "requested"),
+        _v2(2, "resolved"),
+        _attempt(3, "result"),
+        _v3(4, verdict="violated", error_count=2),
+        _v3(5, artifact="log", kind="opaque-file", schema_digest=_DROP),
+        _terminal(6),
+    ]
+    for event in events:
+        sink.write(event)
+    assert ee.read_jsonl(path) == tuple(events)
+    assert [event["schema"] for event in ee.read_jsonl(path)] == [
+        ee.SCHEMA_V1, ee.SCHEMA_V2, ee.SCHEMA_V2, ee.SCHEMA_V1,
+        ee.SCHEMA_V3, ee.SCHEMA_V3, ee.SCHEMA_V1,
+    ]
+
+
+# --------------------------------------------------------------------------
 # Module boundary
 # --------------------------------------------------------------------------
 
@@ -1161,6 +1504,8 @@ def test_public_surface_is_the_documented_one() -> None:
         "InMemorySink", "JsonlSink", "read_jsonl",
         "SCHEMA_V2", "CORE_EVENTS_V2", "ATTEMPT_SCOPED_V2", "INTERRUPT_PHASES",
         "INTERRUPT_PAYLOAD_KEYS",
+        "SCHEMA_V3", "CORE_EVENTS_V3", "ATTEMPT_SCOPED_V3", "CONTRACT_KINDS",
+        "CONTRACT_VERDICTS", "CONTRACT_PAYLOAD_KEYS",
     ])
     for name in ee.__all__:
         assert hasattr(ee, name), name

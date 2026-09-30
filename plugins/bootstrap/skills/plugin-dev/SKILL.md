@@ -61,6 +61,6 @@ references:
     summary: The one format every plugin uses to declare which models may do a unit of work -- a list of registry ids -- plus the core ids, the deprecated prefixes, and the stdlib-only structural validator.
   - id: execution_events
     path: references/execution-events.md
-    keywords: [execution event, event envelope, run identity, seq ordering, usage payload, zero versus unknown, JsonlSink, Emitter, extension event name, schema revision, schema v2, interrupt, bootstrap_lib.execution_event]
-    summary: The shared envelope every plugin uses to record execution facts (dispatch, call start, usage, result, terminal, interrupt) in its own store -- the frozen v1 vocabulary and its v2 revision (the interrupt event, its closed payload, and its lifecycle rules), the extension and revision rules, ordering and identity, the zero-versus-unknown usage rule, the sinks, and the consumer probe.
+    keywords: [execution event, event envelope, run identity, seq ordering, usage payload, zero versus unknown, JsonlSink, Emitter, extension event name, schema revision, schema v2, interrupt, schema v3, contract, bootstrap_lib.execution_event]
+    summary: The shared envelope every plugin uses to record execution facts (dispatch, call start, usage, result, terminal, interrupt, contract) in its own store -- the frozen v1 vocabulary, its v2 revision (the interrupt event, its closed payload, and its lifecycle rules) and its v3 revision (the unit-scoped contract event, its closed payload, and its stream rules), the extension and revision rules, ordering and identity, the zero-versus-unknown usage rule, the sinks, and the consumer probe.
 ```

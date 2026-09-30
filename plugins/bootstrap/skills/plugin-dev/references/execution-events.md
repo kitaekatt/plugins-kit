@@ -13,11 +13,11 @@ the format it enforces.
 ## Envelope
 
 ```yaml
-schema: plugins-kit.execution-event/v1      # exact literal; or .../v2 (see "Schema v2")
+schema: plugins-kit.execution-event/v1      # exact literal; or .../v2, .../v3 (see "Schema v2", "Schema v3")
 seq: 17                                     # int >= 0; bool is refused
 identity: {run_id: str, unit_id: str?, attempt_id: str?}
 event: dispatch-selected | call-started | usage | result | terminal | <plugin>:<name>
-       # v2 also: interrupt
+       # v2 also: interrupt; v3 also: interrupt, contract
 at: "2026-09-29T20:00:00Z"                  # ISO-8601 UTC, "Z", optional .fff to .ffffff
 source: {plugin: str, adapter: str?, model: str?}
 payload: {}                                 # JSON-native mapping, <= 16384 bytes serialized
@@ -71,8 +71,8 @@ attempt-scoped. Extensions are never promoted to core names.
 **`contract` and `interrupt` are not v1 names.** A v1 event carrying either
 is refused with an error saying it is defined by a later schema revision
 (`LATER_REVISION_NAMES`). `interrupt` is a v2 name (see "Schema v2").
-`contract` is not a v2 name either; a revision after v2 defines it with its
-own payload rules. Both describe execution: a contract event is emitted while
+`contract` is not a v2 name either; v3 defines it with its own payload rules
+(see "Schema v3"). Both describe execution: a contract event is emitted while
 a run executes, under its run identity, never for a compile. A compile error
 is reported by the compiler itself and needs no event.
 
@@ -149,6 +149,59 @@ emitter's own extension events, since an attempt has at most one `result`.
 `schema`, so `seq` ordering and (G, `seq`) uniqueness span both revisions. An
 emitter that writes `interrupt` under v2 may keep every other event under v1.
 
+## Schema v3
+
+`SCHEMA_V3 = "plugins-kit.execution-event/v3"` is v2 plus one core name,
+`contract`: the judgment of one declared artifact of a unit against its
+declaration, made while the run executes. It is frozen on the same terms as
+v1 and v2.
+
+- **Every v2 name is a v3 name, under the v2 rules.** `CORE_EVENTS_V3` is
+  `CORE_EVENTS_V2` plus `contract`; `ATTEMPT_SCOPED_V3` equals
+  `ATTEMPT_SCOPED_V2`. `interrupt` keeps its v2 payload and lifecycle rules
+  under v3. The v1 and v2 sets keep their values, so v1 and v2 events validate
+  exactly as they do under a module without v3, and a v2 event named
+  `contract` is still refused with the v2 wording above.
+- **Each event is judged by its own `schema`**, as in v2.
+
+The `contract` event:
+
+| Field | Rule |
+| --- | --- |
+| scope | unit: `unit_id` required, `attempt_id` forbidden (the artifact is judged for the unit, after its attempts) |
+| `payload.artifact` | required; the declared artifact name: non-empty string, at most 200 characters, no control characters |
+| `payload.kind` | required; one of `schema`, `opaque-file` (`CONTRACT_KINDS`) |
+| `payload.verdict` | required; one of `satisfied`, `violated`, `missing` (`CONTRACT_VERDICTS`) |
+| `payload.schema_digest` | required when `kind` is `schema`, refused otherwise; 64 lowercase hex characters |
+| `payload.error_count` | required when `verdict` is `violated`, refused otherwise; an int >= 1 (bool refused) |
+
+`violated` requires `kind` `schema`: an opaque file has no schema to violate,
+so it is `satisfied` or `missing`.
+
+**The payload key set is closed** (`CONTRACT_PAYLOAD_KEYS`). Any other key is
+refused, including `errors`, `value`, `payload`, `reason`, and `message`.
+The other allowed values are a closed-set word, a digest, or an int, so no key
+can carry the artifact's content or its validation errors. `artifact` is a
+bounded string (at most 200 characters, no control characters) that is not
+pattern-checked, so keeping free text out of it is the emitter's discipline:
+the validator cannot tell an artifact name from a sentence. The emitting
+plugin keeps the content, the errors, and any pointer into the artifact in its
+own store (for example, a verdict file beside the artifact).
+
+`validate_stream` adds two rules for `contract` events, keyed by (ordering
+group, `artifact`):
+
+- at most one `contract` event per key;
+- no `contract` event after that unit's `terminal`.
+
+An emitter that must also record the unit's `terminal` therefore emits
+`contract` first. Distinct artifacts of one unit each get one `contract`.
+
+**A stream may mix v1, v2 and v3 events**, on the same terms as v1 and v2:
+the ordering group does not include `schema`. An `Emitter` is bound to one
+schema, so a stream written by one `Emitter` with `schema=SCHEMA_V3` is v3
+throughout; v3 accepts every v1 and v2 name.
+
 ## Ordering and identity
 
 - **Ordering group** G = (`source.plugin`, `identity.run_id`,
@@ -168,7 +221,9 @@ emitter that writes `interrupt` under v2 may keep every other event under v1.
 - a second `result` for one attempt;
 - a second `terminal` for one unit (or for the run);
 - an attempt-scoped event after that unit's `terminal`;
-- an `interrupt` event that breaks the lifecycle rules in "Schema v2".
+- an `interrupt` event that breaks the lifecycle rules in "Schema v2";
+- a second `contract` for one artifact of a unit, or a `contract` after that
+  unit's `terminal` ("Schema v3").
 
 An extension event after a unit's `terminal` is allowed.
 
@@ -204,6 +259,9 @@ the reported value cannot distinguish the two.
 | `CORE_EVENTS`, `ATTEMPT_SCOPED`, `LATER_REVISION_NAMES` | the v1 vocabulary sets above |
 | `CORE_EVENTS_V2`, `ATTEMPT_SCOPED_V2` | the v2 vocabulary sets: the v1 sets plus `interrupt` |
 | `INTERRUPT_PHASES`, `INTERRUPT_PAYLOAD_KEYS` | the `interrupt` phases, and its closed payload key set |
+| `SCHEMA_V3` | the frozen v3 literal, `"plugins-kit.execution-event/v3"` |
+| `CORE_EVENTS_V3`, `ATTEMPT_SCOPED_V3` | the v3 vocabulary sets: the v2 core names plus `contract`, and the v2 attempt-scoped names unchanged |
+| `CONTRACT_KINDS`, `CONTRACT_VERDICTS`, `CONTRACT_PAYLOAD_KEYS` | the `contract` kinds and verdicts, and its closed payload key set |
 | `MAX_PAYLOAD_BYTES` | 16384 |
 | `EventError` | a `ValueError`; `.pointer` is the JSON pointer of the first fault (`"/identity/run_id"`, `"/3/seq"` inside a stream, `""` for the whole value) |
 | `utc_timestamp(epoch=None)` | an `at` value from epoch seconds (int, float, or a decimal string such as `str(time.time())`); `None` means now |
@@ -269,7 +327,11 @@ know the version that replaced it.
 The example below is a v1 emitter. A v2 emitter sets `REQUIRED_SCHEMA` to
 `SCHEMA_V2`'s literal (and requires `SCHEMA_V1` too if it writes v1 events),
 binds `schema=` among the keywords it checks, and names bootstrap 0.136.0, the
-version that shipped v2.
+version that shipped v2. A v3 emitter does the same with `SCHEMA_V3`'s literal
+and names bootstrap 0.137.0, the version that shipped v3; when it constructs
+an `Emitter`, it binds `schema=` in that constructor's keywords too. A module
+that supports `SCHEMA_V1` but not the literal you need is a too-old module,
+and its message may say so ("supports ... but not /v3").
 
 ```python
 import inspect
