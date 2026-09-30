@@ -109,7 +109,7 @@ no environment setup to keep a routed call off a live transport.
 A durable wait (`store.request_interrupt`, `InterruptRequested` in the inline
 lane) is a waiting state of a unit in the execution store, requested per unit
 and per call. It adds no flag, config key or manifest entry, and a consumer that
-never asks sees no change. It leaves `content_pipeline.roundtrip` and a
+never asks has no waiting units. It leaves `content_pipeline.roundtrip` and a
 consumer's own round trips alone: they are a different shape (a question about
 an entity that re-enters as context between runs), and the wait does not
 replace or wrap them. Keep it that way when editing either. The wait reaches

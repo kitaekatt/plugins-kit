@@ -70,9 +70,11 @@ rejection or an expiry stops the unit (`stop`, the default) or returns it to
 
 It is opt-in per unit. Calling `store.request_interrupt`, or raising
 `InterruptRequested` from an inline `generate`, is the whole opt-in: there is no
-flag or config key. A pipeline that does neither runs as before, and
-`content_pipeline.roundtrip` is unchanged, so the questions and returns a
-pipeline already uses keep working beside it.
+flag or config key. A pipeline that does neither records no interrupt rows, and
+none of its units ever enters the waiting state. `content_pipeline.roundtrip`
+does not use the execution store's interrupt code, so its questions and
+returns work the same with or without durable waits and can be used beside
+them.
 
 Lane scope:
 
