@@ -43,7 +43,7 @@ from . import halt
 from .claude_runner import AgentTimeoutError, run_cli_streaming
 from .adapter_capabilities import OPENCODE_CAPABILITIES
 from .capabilities import Capabilities
-from .contract import prepare_contract
+from .contract import finalize_contract, prepare_contract
 from .prompt_fold import fold_prompt
 from .results import (
     check_applied_controls,
@@ -206,7 +206,12 @@ class OpencodeCliBackend:
         opts = options or BackendOptions()
         # Before the invocation is built or the runner invoked: a contract this
         # record does not list is refused here, with nothing spawned.
-        prepare_contract(self.capabilities, opts)
+        contract_plan = prepare_contract(self.capabilities, opts)
+        if contract_plan is not None and contract_plan.instruction is not None:
+            # Prompt delivery: the exact render_schema_instruction text is
+            # appended to the system half, which compose_prompt folds into
+            # the single stdin brief. The answer is judged by finalize_contract.
+            system = system + contract_plan.instruction
         timeout_s = (
             opts.timeout_s
             if opts.timeout_s is not None
@@ -271,7 +276,7 @@ class OpencodeCliBackend:
                 cmd=list(invocation.argv),
             )
 
-        return LLMResponse(
+        response = LLMResponse(
             text=stdout,
             model=model,
             input_tokens=0,
@@ -296,6 +301,9 @@ class OpencodeCliBackend:
             started_at=started_at,
             ended_at=utc_now_iso(),
         )
+        # No contract: returned unchanged. Otherwise the answer is judged
+        # against the contract, and a violation raises with this response.
+        return finalize_contract(contract_plan, response)
 
     def _dropped_params(self, opts: BackendOptions) -> "tuple[str, ...]":
         """The generic derivation, plus disallowed_tools when it went nowhere.

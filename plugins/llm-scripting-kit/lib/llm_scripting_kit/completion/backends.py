@@ -569,7 +569,12 @@ class ClaudeCliBackend:
         opts = options or BackendOptions()
         # Before argv is built or the runner invoked: a contract this record
         # does not list is refused here, with nothing spawned.
-        prepare_contract(self.capabilities, opts)
+        contract_plan = prepare_contract(self.capabilities, opts)
+        if contract_plan is not None and contract_plan.instruction is not None:
+            # Prompt delivery: the exact render_schema_instruction text is
+            # appended to the system prompt sent through the system-prompt
+            # flag. The answer is judged at the seam by finalize_contract.
+            system = system + contract_plan.instruction
         timeout_s = (
             opts.timeout_s if opts.timeout_s is not None else self.default_timeout_s
         )
@@ -712,7 +717,7 @@ class ClaudeCliBackend:
 
         usage = data.get("usage") or {}
         wall_ms = int((time.monotonic() - start) * 1000)
-        return LLMResponse(
+        response = LLMResponse(
             text=data["result"],
             model=model,
             input_tokens=int(usage.get("input_tokens", 0) or 0),
@@ -727,6 +732,9 @@ class ClaudeCliBackend:
             started_at=started_at,
             ended_at=utc_now_iso(),
         )
+        # No contract: returned unchanged. Otherwise the answer is judged
+        # against the contract, and a violation raises with this response.
+        return finalize_contract(contract_plan, response)
 
     def _applied_controls(self, opts: BackendOptions) -> "tuple[str, ...]":
         """The advertised controls this adapter's argv carries, per call.

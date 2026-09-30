@@ -103,6 +103,8 @@ def _output_contract_param(emits: "str | None" = None) -> ParamCapability:
 #: tests/llm-scripting-kit/test_completion_contract_conformance.py.
 _OPENROUTER_CONTRACT_EMITS = "messages[system] schema instruction"
 _CODEX_CONTRACT_EMITS = "--output-schema <temp schema file>"
+_CLAUDE_CONTRACT_EMITS = "--system-prompt schema instruction"
+_OPENCODE_CONTRACT_EMITS = "stdin schema instruction"
 
 
 # -- openrouter (OpenAI-compatible HTTP) -----------------------------------
@@ -282,7 +284,7 @@ _CLAUDE_PARAMS = {
     "log_prefix": ParamCapability(
         type="string", default="[llm]", emits="runner log_prefix"
     ),
-    "output_contract": _output_contract_param(),
+    "output_contract": _output_contract_param(_CLAUDE_CONTRACT_EMITS),
 }
 
 CLAUDE_CAPABILITIES = Capabilities(
@@ -344,6 +346,15 @@ CLAUDE_CAPABILITIES = Capabilities(
             "--output-format json is claude's transport envelope, which the "
             "adapter parses to reach data['result']; it is not a caller schema"
         ),
+        # The output-contract path is separate from the transport envelope:
+        # the exact schema instruction is appended to the system prompt sent
+        # through the system-prompt flag and the answer is validated at the
+        # seam. No native schema flag exists here, so native-required is not
+        # listed.
+        policies=(POLICY_VALIDATED_RESULT, POLICY_TEXT_ONLY),
+        contract_delivery=DELIVERY_PROMPT,
+        contract_emits=_CLAUDE_CONTRACT_EMITS,
+        contract_schema_class=SCHEMA_CLASS_SUBSET,
     ),
     system_prompt=SystemPromptCapability(
         mode=REPLACE,
@@ -538,7 +549,7 @@ _OPENCODE_PARAMS = {
     "log_prefix": ParamCapability(
         type="string", default="[llm]", emits="runner log_prefix"
     ),
-    "output_contract": _output_contract_param(),
+    "output_contract": _output_contract_param(_OPENCODE_CONTRACT_EMITS),
 }
 
 OPENCODE_CAPABILITIES = Capabilities(
@@ -646,6 +657,13 @@ OPENCODE_CAPABILITIES = Capabilities(
         mode=NONE,
         result=TEXT_RESULT,
         note="--format json is deliberately unused; stdout is read as the answer",
+        # The output-contract path: the exact schema instruction is appended
+        # to the system half that is folded into the stdin prompt, and the
+        # answer is validated at the seam. native-required is not listed.
+        policies=(POLICY_VALIDATED_RESULT, POLICY_TEXT_ONLY),
+        contract_delivery=DELIVERY_PROMPT,
+        contract_emits=_OPENCODE_CONTRACT_EMITS,
+        contract_schema_class=SCHEMA_CLASS_SUBSET,
     ),
     system_prompt=SystemPromptCapability(
         mode=PROMPT_FOLD,

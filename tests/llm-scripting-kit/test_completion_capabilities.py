@@ -161,8 +161,16 @@ _CONTRACT_ADVERTISEMENT = {
         "native",
         "--output-schema <temp schema file>",
     ),
-    "claude-cli": ((), None, None),
-    "opencode-cli": ((), None, None),
+    "claude-cli": (
+        ("validated-result", "text-only"),
+        "prompt",
+        "--system-prompt schema instruction",
+    ),
+    "opencode-cli": (
+        ("validated-result", "text-only"),
+        "prompt",
+        "stdin schema instruction",
+    ),
 }
 
 

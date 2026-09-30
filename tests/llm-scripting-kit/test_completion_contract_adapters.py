@@ -9,7 +9,8 @@ call from any one adapter turns exactly that adapter's test red.
 Each case covers the policies its adapter's record does NOT list: openrouter
 lists validated-result and text-only (native-required stays refused), codex
 lists all three (so its case is the legacy-key conflict instead), and claude
-and opencode list none yet. What a listed policy delivers, and a refusal case
+and opencode list validated-result and text-only like openrouter (so
+native-required is their refused policy). What a listed policy delivers, and a refusal case
 for any policy a record stops listing, come from the records themselves in
 test_completion_contract_conformance.py.
 """
@@ -95,7 +96,7 @@ def test_openrouter_refuses_any_contract_before_client_call(policy, monkeypatch)
         unbuilt.complete("sys", "usr", model="test/slug", options=_options(policy))
 
 
-@pytest.mark.parametrize("policy", POLICIES)
+@pytest.mark.parametrize("policy", [POLICY_NATIVE_REQUIRED])
 def test_claude_refuses_any_contract_before_runner_call(policy):
     runner = _RecordingRunner(stdout=json.dumps({"result": "ok", "usage": {}}))
     backend = ClaudeCliBackend(runner=runner, executable="claude")
@@ -147,7 +148,7 @@ def test_contract_and_legacy_response_format_conflict(policy):
     assert client.calls == []
 
 
-@pytest.mark.parametrize("policy", POLICIES)
+@pytest.mark.parametrize("policy", [POLICY_NATIVE_REQUIRED])
 def test_opencode_refuses_any_contract_before_runner_call(policy, tmp_path):
     runner = _RecordingRunner()
     backend = OpencodeCliBackend(runner=runner, argv_prefix=("opencode-test",))

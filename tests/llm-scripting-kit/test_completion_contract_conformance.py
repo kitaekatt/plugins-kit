@@ -15,6 +15,11 @@ green with the schema instruction removed. The exact forms are:
 
 - prompt delivery (openrouter): the system message text ends with
   ``render_schema_instruction(contract)``, i.e. equals ``system`` plus it;
+- prompt delivery (claude-cli): the argv value after ``--system-prompt``
+  equals ``system`` plus it, every other argv element and the stdin user
+  prompt unchanged;
+- prompt delivery (opencode-cli): the stdin brief equals the folded
+  ``system`` plus it, then the separator and the user prompt;
 - native delivery (codex-cli): the ``--output-schema`` file, read by the fake
   runner DURING the call (the adapter deletes it afterwards), holds exactly
   ``canonical_schema_json(contract).encode("ascii")``, and the prompt carries
@@ -238,6 +243,15 @@ def _run(adapter, tmp_path, monkeypatch, *, policy=None, answer=VALID_ANSWER, re
 # -- independent baselines (no contract) --------------------------------------
 
 
+def _claude_expected_argv(system: str) -> List[str]:
+    """The claude argv built WITHOUT the adapter's help, for a given system."""
+    return [
+        "claude", "-p", "--model", "m", "--system-prompt", system,
+        "--output-format", "json", "--no-session-persistence",
+        "--permission-mode", "bypassPermissions", "--allowedTools", "",
+    ]
+
+
 def _assert_no_contract_baseline(adapter: str, rec: Recording, tmp_path: Path) -> None:
     """The uncontracted request equals one built WITHOUT the adapter's help."""
     assert rec.calls == 1
@@ -265,9 +279,11 @@ def _assert_no_contract_baseline(adapter: str, rec: Recording, tmp_path: Path) -
         assert "--output-schema" not in rec.argv
         assert rec.stdin == codex_compose_prompt(SYSTEM, USER)
     elif adapter == "claude-cli":
-        assert SYSTEM in rec.argv
+        assert rec.argv == _claude_expected_argv(SYSTEM)
+        assert rec.stdin == USER
     elif adapter == "opencode-cli":
         assert rec.stdin == opencode_compose_prompt(SYSTEM, USER)
+        assert rec.stdin == SYSTEM + "\n\n---\n\n" + USER
     else:  # pragma: no cover -- a new adapter must add its baseline here
         pytest.fail(f"no independent no-contract baseline for {adapter}")
 
@@ -284,6 +300,16 @@ def _assert_prompt_delivery_exact(adapter: str, rec: Recording, contract: Output
         assert rec.kwargs["messages"][1] == {"role": "user", "content": USER}
         assert "response_format" not in rec.kwargs
         assert "response_format" not in (rec.kwargs.get("extra_body") or {})
+    elif adapter == "claude-cli":
+        # Only the --system-prompt value changes; the user prompt (stdin)
+        # and every other argv element equal the uncontracted request.
+        assert rec.argv == _claude_expected_argv(SYSTEM + instruction)
+        assert rec.argv[rec.argv.index("--system-prompt") + 1].endswith(instruction)
+        assert rec.stdin == USER
+    elif adapter == "opencode-cli":
+        assert rec.stdin == SYSTEM + instruction + "\n\n---\n\n" + USER
+        assert rec.stdin == opencode_compose_prompt(SYSTEM + instruction, USER)
+        assert rec.stdin.endswith(USER)
     else:
         pytest.fail(
             f"{adapter} delivers contracts by prompt but has no exact delivery "
@@ -313,8 +339,8 @@ class Case:
 EXPECTED_POLICIES = {
     "openrouter": ("validated-result", "text-only"),
     "codex-cli": ("native-required", "validated-result", "text-only"),
-    "claude-cli": (),
-    "opencode-cli": (),
+    "claude-cli": ("validated-result", "text-only"),
+    "opencode-cli": ("validated-result", "text-only"),
 }
 
 
