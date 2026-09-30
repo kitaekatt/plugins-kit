@@ -29,7 +29,9 @@ Run this with WORKFLOW-KIT's OWN venv python, which bootstrap provisions with:
     <workflow-kit-venv-python> scripts/openrouter_run.py \\
         [--model <entry>[,<entry>...]] [--cheap] --prompt-file <req.txt> --out <OUT> \\
         [--system <s>] [--status <STATUS>] \\
-        [--events <EVENTS.jsonl> --run-id <runId> --unit-id <unitId>]
+        [--events <EVENTS.jsonl> --run-id <runId> --unit-id <unitId>] \\
+        [--provides <NAME> --kind {schema,opaque-file} --verdict <VERDICT.json> \\
+         [--schema <JSON> --schema-digest <HEX>]]
 
 Contract: writes the reply to --out and exits 0 on success. Exit 2 is a
 resolution failure (the floor, an invalid declaration, a missing or too-old
@@ -50,10 +52,51 @@ execution, as --out does. Before any model call, the runner probes
 ``JsonlSink`` calls) and ``run``'s ``observer`` keyword; an absent or too-old
 library exits 2 and creates nothing. Only then is the events file's parent
 directory created.
+
+Typed artifacts: with --provides (which requires --kind and --verdict; --kind
+schema also requires --schema and --schema-digest, which --kind opaque-file
+refuses) the node provides a named artifact, and the runner records its
+judgment in a ``workflow-kit.artifact-verdict/v1`` file at --verdict, the same
+file ``check_artifact.py`` writes for a script node (that module owns the
+writer).
+
+- --kind schema: the runner builds llm-scripting-kit's
+  ``OutputContract(id="workflow-kit.artifact.<NAME>", policy="validated-result",
+  schema=<--schema>)``, refuses (exit 2, before any call) a schema outside the
+  contract subset or a digest that differs from --schema-digest (the schema
+  changed in transit), and sends it as ``BackendOptions(output_contract=...)``.
+  The seam selects only entries that satisfy the policy, instructs the model,
+  and validates the answer. On success --out receives the VALIDATED value as
+  JSON (``json.dumps(structured, ensure_ascii=True, allow_nan=False)``), not
+  the reply text, and the verdict is ``satisfied``. An answer that fails the
+  contract (``schema-mismatch`` or ``unparseable``) is ``violated`` with its
+  ``[json_pointer, keyword]`` errors; the node exits 1 and --out is not
+  written. A completed call that carries no valid contract report is never
+  written as validated: it is ``missing``, exit 1.
+- --kind opaque-file: no contract is sent; --out is the reply text as without
+  --provides, and a completed call is ``satisfied``.
+- Every other outcome after the probes (a failed call, the floor, a default
+  declaration that does not resolve, an unexpected exception) is ``missing``,
+  with the exit code the same outcome has without --provides; an unexpected
+  exception still propagates.
+
+Lifecycle with --provides, for every execution whose arguments parse: the
+previous verdict is removed first, before any probe (an absent file is fine;
+any other error exits 2 having done nothing else, creating no directory). The
+probes follow; with --kind schema they add ``OutputContract`` (with
+``schema_digest``), ``POLICY_VALIDATED_RESULT`` and
+``BackendOptions(output_contract=)``, and an absent and a too-old library get
+different messages. Everything after the probes runs in one ``try``/``finally``
+whose cleanup writes the verdict atomically (``missing`` when no judgment was
+reached), so no return or exception path skips it. A cleanup failure is
+printed to stderr naming its layer; it makes a successful node exit 1 and
+never masks the body's own failure or exception. Without --provides, no
+contract is sent and nothing here applies.
 """
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import inspect
 import json
 import os
@@ -77,6 +120,26 @@ _REQUIRED_SCHEMA = "plugins-kit.execution-event/v1"
 _EVENT_PLUGIN = "workflow-kit"
 
 _OBSERVER_KINDS = (inspect.Parameter.KEYWORD_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)
+
+#: Contract dispositions that make a provided artifact ``violated``.
+_VIOLATIONS = frozenset({"schema-mismatch", "unparseable"})
+
+_CHECKER_MODULE = "workflow_kit_check_artifact"
+
+
+def _checker():
+    """``check_artifact.py`` beside this script: the verdict writer, cleanup
+    layers and output-contract probe both node runners share. Loaded by path,
+    so no other module named ``check_artifact`` can shadow it."""
+    module = sys.modules.get(_CHECKER_MODULE)
+    if module is None:
+        spec = importlib.util.spec_from_file_location(
+            _CHECKER_MODULE, Path(__file__).resolve().parent / "check_artifact.py"
+        )
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[_CHECKER_MODULE] = module
+        spec.loader.exec_module(module)
+    return module
 
 
 def _write_status(path, obj):
@@ -166,6 +229,21 @@ def _probe_run_observer(run):
     )
 
 
+def _probe_backend_options(backend_options, checker):
+    """None when ``BackendOptions`` takes ``output_contract``, else the too-old message."""
+    try:
+        inspect.signature(backend_options).bind_partial(output_contract=None)
+    except (TypeError, ValueError):
+        return (
+            "the linked llm_scripting_kit's completion.BackendOptions takes no "
+            "`output_contract`, which --provides --kind schema sends; this requires "
+            f"llm-scripting-kit >= {checker.output_contract_lsk()}. Run `claude plugin update "
+            "llm-scripting-kit@plugins-kit` and restart so bootstrap re-links the newer shared "
+            "lib onto workflow-kit's venv."
+        )
+    return None
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(
         description="workflow-kit: one non-Claude model call via llm-scripting-kit's declaration API."
@@ -197,9 +275,46 @@ def main(argv=None):
     )
     ap.add_argument("--run-id", help="the workflow run id the events carry (with --events)")
     ap.add_argument("--unit-id", help="the node's unit id the events carry (with --events)")
+    ap.add_argument(
+        "--provides",
+        metavar="NAME",
+        help="the node provides this named artifact (its --out); requires --kind and --verdict",
+    )
+    ap.add_argument("--kind", choices=("schema", "opaque-file"),
+                    help="the provided artifact's kind (with --provides)")
+    ap.add_argument("--schema",
+                    help="the artifact's JSON Schema as JSON text (with --kind schema)")
+    ap.add_argument("--schema-digest",
+                    help="sha256 of the schema's canonical JSON (with --kind schema)")
+    ap.add_argument("--verdict",
+                    help="write the workflow-kit.artifact-verdict/v1 file here (with --provides)")
     args = ap.parse_args(argv)
     if args.events and not (args.run_id and args.unit_id):
         ap.error("--events requires --run-id and --unit-id")
+    if args.provides is None:
+        if any(v is not None for v in (args.kind, args.schema, args.schema_digest, args.verdict)):
+            ap.error("--kind, --schema, --schema-digest and --verdict require --provides")
+    else:
+        if not args.provides:
+            ap.error("--provides needs a non-empty artifact name")
+        if not (args.kind and args.verdict):
+            ap.error("--provides requires --kind and --verdict")
+        if args.kind == "schema" and not (args.schema and args.schema_digest):
+            ap.error("--kind schema requires --schema and --schema-digest")
+        if args.kind == "opaque-file" and (
+            args.schema is not None or args.schema_digest is not None
+        ):
+            ap.error("--kind opaque-file takes no --schema or --schema-digest")
+
+    checker = None
+    if args.provides is not None:
+        # First action of a parsed execution: no refusal below may leave a
+        # previous execution's verdict on disk.
+        checker = _checker()
+        message = checker.invalidate_verdict(args.verdict)
+        if message is not None:
+            print(message, file=sys.stderr)
+            return 2
 
     # The package and the newest symbol are probed separately: a .pth links no
     # version, so this venv can resolve an llm-scripting-kit predating the
@@ -235,7 +350,23 @@ def main(argv=None):
         )
         return 2
 
-    observer = None
+    contract = None
+    if args.kind == "schema":
+        api, message = checker.probe_output_contract(need_validate=False)
+        if message is None:
+            message = _probe_backend_options(BackendOptions, checker)
+        if message is not None:
+            print(message, file=sys.stderr)
+            return 2
+        try:
+            contract, _schema = checker.build_contract(
+                api, args.provides, args.schema, args.schema_digest
+            )
+        except checker.ContractRefusal as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
+
+    execution_event = None
     if args.events:
         # Every probe runs before any directory is created and before any
         # model call; a refusal leaves nothing on disk.
@@ -252,83 +383,150 @@ def main(argv=None):
         if message is not None:
             print(message, file=sys.stderr)
             return 2
-        events_path = Path(args.events)
-        # A fresh run has no ./.workflow-kit/<runId>/ directory, and --out's
-        # parent is created only after the call returns.
-        events_path.parent.mkdir(parents=True, exist_ok=True)
-        observer = execution_event.Emitter(
-            _EVENT_PLUGIN,
-            args.run_id,
-            unit_id=args.unit_id,
-            sinks=[execution_event.JsonlSink(events_path, mode="truncate")],
-        )
 
-    project_root = os.getcwd()
-    names = _split(args.model)
-    try:
-        if not names:
-            names = default_declaration(project_root=project_root)
-    except (DeclarationSupportError, ValueError) as exc:  # DeclarationError is a ValueError
-        print(str(exc), file=sys.stderr)
-        _write_status(args.status, {"ok": False, "error": type(exc).__name__})
-        return 2
+    # One post-probe lifecycle. The body covers everything after the probes;
+    # its cleanup layers run on every return and exception path. Without
+    # --provides there are no layers, and the body is exactly the node's
+    # behavior without --provides.
+    outcome = {"verdict": "missing", "data": None, "errors": ()}
+    layers = []
+    if checker is not None:
+        def write_verdict_layer():
+            checker.write_verdict(args.verdict, checker.verdict_record(
+                artifact=args.provides,
+                kind=args.kind,
+                verdict=outcome["verdict"],
+                path=args.out,
+                data=outcome["data"],
+                schema_digest=None if contract is None else contract.schema_digest,
+                errors=outcome["errors"],
+            ))
 
-    prompt = args.prompt if args.prompt is not None else Path(args.prompt_file).read_text(encoding="utf-8")
-    backend_kwargs = {}
-    if args.temperature is not None:
-        backend_kwargs["temperature"] = args.temperature
-    if args.max_tokens is not None:
-        backend_kwargs["max_tokens"] = args.max_tokens
-    request = RunRequest(system=args.system or "", prompt=prompt, options=BackendOptions(**backend_kwargs))
+        layers.append(("verdict", write_verdict_layer))
 
-    def factory(name, project_root=None):
-        return create_transport_backend(name, cheap=args.cheap, project_root=project_root)
+    def body():
+        observer = None
+        if args.events:
+            events_path = Path(args.events)
+            # A fresh run has no ./.workflow-kit/<runId>/ directory, and --out's
+            # parent is created only after the call returns.
+            events_path.parent.mkdir(parents=True, exist_ok=True)
+            observer = execution_event.Emitter(
+                _EVENT_PLUGIN,
+                args.run_id,
+                unit_id=args.unit_id,
+                sinks=[execution_event.JsonlSink(events_path, mode="truncate")],
+            )
 
-    try:
-        run_kwargs = {} if observer is None else {"observer": observer}
-        result = run(
-            names, request, project_root=project_root, backend_factory=factory,
-            max_attempts=len(names), **run_kwargs,
-        )
-    except NoUsableRoutingTarget as exc:
-        print(str(exc), file=sys.stderr)
+        project_root = os.getcwd()
+        names = _split(args.model)
+        try:
+            if not names:
+                names = default_declaration(project_root=project_root)
+        except (DeclarationSupportError, ValueError) as exc:  # DeclarationError is a ValueError
+            print(str(exc), file=sys.stderr)
+            _write_status(args.status, {"ok": False, "error": type(exc).__name__})
+            return 2
+
+        prompt = args.prompt if args.prompt is not None else Path(args.prompt_file).read_text(encoding="utf-8")
+        backend_kwargs = {}
+        if args.temperature is not None:
+            backend_kwargs["temperature"] = args.temperature
+        if args.max_tokens is not None:
+            backend_kwargs["max_tokens"] = args.max_tokens
+        if contract is not None:
+            backend_kwargs["output_contract"] = contract
+        request = RunRequest(system=args.system or "", prompt=prompt, options=BackendOptions(**backend_kwargs))
+
+        def factory(name, project_root=None):
+            return create_transport_backend(name, cheap=args.cheap, project_root=project_root)
+
+        try:
+            run_kwargs = {} if observer is None else {"observer": observer}
+            result = run(
+                names, request, project_root=project_root, backend_factory=factory,
+                max_attempts=len(names), **run_kwargs,
+            )
+        except NoUsableRoutingTarget as exc:
+            print(str(exc), file=sys.stderr)
+            _write_status(args.status, {
+                "ok": False,
+                "error": "NoUsableRoutingTarget",
+                "dispositions": exc.to_json()["dispositions"],
+            })
+            return 2
+        except (DeclarationSupportError, ValueError) as exc:  # structurally invalid declaration
+            print(str(exc), file=sys.stderr)
+            _write_status(args.status, {"ok": False, "error": type(exc).__name__})
+            return 2
+
+        if result.status != RUN_COMPLETED:
+            report = getattr(result.response, "output_contract", None) if contract else None
+            if report is not None and report.disposition in _VIOLATIONS:
+                # An unparseable answer has no instance errors; record one.
+                errors = tuple(report.errors) or checker.UNPARSEABLE_ERRORS
+                outcome.update(verdict="violated", errors=errors)
+            print(f"openrouter node failed on {result.entry}: {result.detail}", file=sys.stderr)
+            status = {
+                "ok": False,
+                "error": result.status,
+                "entry": result.entry,
+                "detail": result.detail,
+                "attempts": [attempt.to_json() for attempt in result.attempts],
+            }
+            halt = result.attempts[-1].halt if result.attempts else None
+            if halt:
+                status["halt"] = halt
+            _write_status(args.status, status)
+            return 1
+
+        if contract is not None:
+            # Only the seam's own report makes a completed answer validated; a
+            # completion without one (a backend that ignored the contract) is
+            # never written under the artifact's schema-typed name.
+            report = getattr(result.response, "output_contract", None)
+            if (
+                report is None
+                or report.disposition != "valid"
+                or report.schema_digest != contract.schema_digest
+            ):
+                print(
+                    f"openrouter node on {result.entry} completed without a validated result "
+                    f"for artifact {args.provides!r}; --out is not written",
+                    file=sys.stderr,
+                )
+                _write_status(args.status, {
+                    "ok": False, "error": "output-contract", "entry": result.entry,
+                })
+                return 1
+            text = json.dumps(result.response.structured, ensure_ascii=True, allow_nan=False)
+        else:
+            text = result.response.text
+        out = Path(args.out)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(text, encoding="utf-8")
+        if checker is not None:
+            # The verdict describes exactly the bytes now at --out.
+            outcome.update(verdict="satisfied", data=out.read_bytes())
         _write_status(args.status, {
-            "ok": False,
-            "error": "NoUsableRoutingTarget",
-            "dispositions": exc.to_json()["dispositions"],
-        })
-        return 2
-    except (DeclarationSupportError, ValueError) as exc:  # structurally invalid declaration
-        print(str(exc), file=sys.stderr)
-        _write_status(args.status, {"ok": False, "error": type(exc).__name__})
-        return 2
-
-    if result.status != RUN_COMPLETED:
-        print(f"openrouter node failed on {result.entry}: {result.detail}", file=sys.stderr)
-        status = {
-            "ok": False,
-            "error": result.status,
+            "ok": True,
             "entry": result.entry,
-            "detail": result.detail,
-            "attempts": [attempt.to_json() for attempt in result.attempts],
-        }
-        halt = result.attempts[-1].halt if result.attempts else None
-        if halt:
-            status["halt"] = halt
-        _write_status(args.status, status)
-        return 1
+            "model": result.response.model,
+            "bytes": len(text.encode("utf-8")),
+        })
+        return 0
 
-    text = result.response.text
-    out = Path(args.out)
-    out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(text, encoding="utf-8")
-    _write_status(args.status, {
-        "ok": True,
-        "entry": result.entry,
-        "model": result.response.model,
-        "bytes": len(text.encode("utf-8")),
-    })
-    return 0
+    rc = 1
+    failures = []
+    try:
+        rc = body()
+    finally:
+        if layers:
+            failures = checker.run_cleanup(layers)
+            checker.report_cleanup_failures(failures)
+    if failures and rc == 0:
+        return 1
+    return rc
 
 
 if __name__ == "__main__":

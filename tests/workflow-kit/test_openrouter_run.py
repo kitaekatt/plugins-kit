@@ -9,12 +9,15 @@ answered, and OpenRouterBackend.complete replaced -- so no network is touched
 and no openai SDK is needed.
 """
 
+import hashlib
 import importlib.util
 import inspect
 import json
+import os
 import sys
 import types
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -95,8 +98,7 @@ class _Resp:
         self.model = model
 
 
-@pytest.fixture
-def lsk(monkeypatch, tmp_path):
+def _real_lsk(monkeypatch, tmp_path):
     """The real llm_scripting_kit on an isolated HOME, probing nothing."""
     monkeypatch.syspath_prepend(str(_LSK_LIB))
     home = tmp_path / "home"
@@ -113,6 +115,18 @@ def lsk(monkeypatch, tmp_path):
         declaration, "check_many",
         lambda entries, **_kw: {n: Reachability(reach["status"], "models-probe", "x") for n in entries},
     )
+    return completion, declaration, reach
+
+
+@pytest.fixture
+def lsk(monkeypatch, tmp_path):
+    """The real llm_scripting_kit with OpenRouterBackend.complete REPLACED.
+
+    Valid only for dispatch and non-contract assertions: a replaced
+    ``complete`` never runs prepare_contract/finalize_contract, so no
+    output-contract assertion can go red under it (see ``lsk_transport``).
+    """
+    completion, declaration, reach = _real_lsk(monkeypatch, tmp_path)
     calls = []
     behaviour = {"raise": {}, "halt": None}
 
@@ -445,3 +459,378 @@ def test_no_events_flag_passes_no_observer(lsk, tmp_path, monkeypatch):
     monkeypatch.setattr(lsk["declaration"], "run", spy)
     assert _run(tmp_path, "--model", "or-qwen")[0] == 0
     assert seen == [False]
+
+
+# --------------------------------------------------------------------------- #
+# Typed artifacts (--provides/--kind/--schema/--schema-digest/--verdict).
+#
+# Every assertion that touches the output contract (sent, delivered,
+# validated, reported) uses ``lsk_transport``, which fakes the transport BELOW
+# OpenRouterBackend.complete, so prepare_contract and finalize_contract really
+# run. The ``lsk`` fixture replaces complete wholesale and could never show a
+# contract failure.
+# --------------------------------------------------------------------------- #
+SCHEMA = {
+    "type": "object",
+    "required": ["lines", "words"],
+    "additionalProperties": False,
+    "properties": {
+        "lines": {"type": "integer", "minimum": 0},
+        "words": {"type": "integer", "minimum": 0},
+    },
+}
+
+
+def _digest(schema):
+    from llm_scripting_kit.completion import OutputContract
+
+    return OutputContract(id="x", policy="validated-result", schema=schema).schema_digest
+
+
+@pytest.fixture
+def lsk_transport(monkeypatch, tmp_path):
+    """The real llm_scripting_kit, including OpenRouterBackend.complete; only
+    the OpenAI-compatible client beneath it is faked (``_ensure_client``)."""
+    completion, declaration, reach = _real_lsk(monkeypatch, tmp_path)
+    requests = []
+    behaviour = {"text": "", "raise": None}
+
+    class _Completions:
+        def create(self, **kwargs):
+            requests.append(kwargs)
+            if behaviour["raise"] is not None:
+                raise behaviour["raise"]
+            message = SimpleNamespace(content=behaviour["text"])
+            return SimpleNamespace(
+                choices=[SimpleNamespace(message=message, finish_reason="stop")], usage=None
+            )
+
+    client = SimpleNamespace(chat=SimpleNamespace(completions=_Completions()))
+    monkeypatch.setattr(completion.OpenRouterBackend, "_ensure_client", lambda self: client)
+    return {"requests": requests, "behaviour": behaviour, "reach": reach,
+            "completion": completion, "declaration": declaration}
+
+
+def _verdict_path(tmp_path):
+    return tmp_path / ".workflow-kit" / "r1" / "classify.contract.json"
+
+
+def _provider_args(tmp_path, *, kind="schema", schema=SCHEMA, digest=None, name="doc_stats"):
+    args = ["--provides", name, "--kind", kind, "--verdict", str(_verdict_path(tmp_path))]
+    if kind == "schema":
+        args += ["--schema", json.dumps(schema),
+                 "--schema-digest", digest if digest is not None else _digest(schema)]
+    return args
+
+
+def _verdict(tmp_path):
+    path = _verdict_path(tmp_path)
+    return json.loads(path.read_text(encoding="ascii")) if path.exists() else None
+
+
+def _system_text(request):
+    return request["messages"][0]["content"][0]["text"]
+
+
+def _seed_verdict(tmp_path):
+    path = _verdict_path(tmp_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text('{"verdict": "satisfied"}', encoding="ascii")
+
+
+def test_provider_schema_writes_validated_json(lsk_transport, tmp_path, capsys):
+    reply = '  {"words": 5,\n   "lines": 3}  '
+    lsk_transport["behaviour"]["text"] = reply
+    rc, out, payload = _run(tmp_path, "--model", "or-qwen", *_provider_args(tmp_path))
+    assert rc == 0, capsys.readouterr().err
+    written = out.read_bytes()
+    assert written == b'{"words": 5, "lines": 3}'
+    assert written.decode("ascii") != reply
+    # the schema instruction was delivered on the system message
+    sent = _system_text(lsk_transport["requests"][0])
+    assert sent.startswith("be terse") and sent != "be terse"
+    verdict = _verdict(tmp_path)
+    assert verdict["verdict"] == "satisfied"
+    assert verdict["kind"] == "schema" and verdict["artifact"] == "doc_stats"
+    assert verdict["schema_digest"] == _digest(SCHEMA)
+    assert verdict["bytes"] == len(written)
+    assert verdict["sha256"] == hashlib.sha256(written).hexdigest()
+    assert verdict["path"] == str(out)
+    assert payload["ok"] is True
+
+
+def test_provider_schema_violation_exits_1_verdict_violated_no_out(lsk_transport, tmp_path):
+    lsk_transport["behaviour"]["text"] = '{"lines": "three", "words": 5}'
+    rc, out, payload = _run(tmp_path, "--model", "or-qwen", *_provider_args(tmp_path))
+    assert rc == 1
+    assert not out.exists()
+    assert len(lsk_transport["requests"]) == 1
+    verdict = _verdict(tmp_path)
+    assert verdict["verdict"] == "violated"
+    assert verdict["errors"] == [["/lines", "type"]]
+    assert verdict["schema_digest"] == _digest(SCHEMA)
+    assert verdict["bytes"] is None and verdict["sha256"] is None
+    assert payload["ok"] is False
+
+
+def test_provider_unparseable_reply_is_violated(lsk_transport, tmp_path):
+    lsk_transport["behaviour"]["text"] = "three lines, five words"
+    rc, out, _payload = _run(tmp_path, "--model", "or-qwen", *_provider_args(tmp_path))
+    assert rc == 1
+    assert not out.exists()
+    verdict = _verdict(tmp_path)
+    assert verdict["verdict"] == "violated"
+    assert verdict["errors"] == [["", "unparseable"]]
+
+
+def test_provider_opaque_records_satisfied(lsk_transport, tmp_path):
+    lsk_transport["behaviour"]["text"] = "a free-form reply"
+    rc, out, _payload = _run(
+        tmp_path, "--model", "or-qwen", *_provider_args(tmp_path, kind="opaque-file")
+    )
+    assert rc == 0
+    assert out.read_text(encoding="utf-8") == "a free-form reply"
+    assert _system_text(lsk_transport["requests"][0]) == "be terse"  # no contract sent
+    verdict = _verdict(tmp_path)
+    assert verdict["verdict"] == "satisfied"
+    assert verdict["kind"] == "opaque-file"
+    assert "schema_digest" not in verdict
+    assert verdict["sha256"] == hashlib.sha256(out.read_bytes()).hexdigest()
+
+
+def test_provider_task_error_records_missing(lsk_transport, tmp_path):
+    lsk_transport["behaviour"]["raise"] = RuntimeError("no API key resolved")
+    rc, out, payload = _run(tmp_path, "--model", "or-qwen", *_provider_args(tmp_path))
+    assert rc == 1
+    assert not out.exists()
+    assert payload["error"] == "failed"
+    verdict = _verdict(tmp_path)
+    assert verdict["verdict"] == "missing"
+    assert verdict["errors"] == []
+
+
+def test_provider_floor_records_missing(lsk_transport, tmp_path):
+    rc, out, payload = _run(tmp_path, "--model", "sol,typo", *_provider_args(tmp_path))
+    assert rc == 2
+    assert not out.exists()
+    assert lsk_transport["requests"] == []
+    assert payload["error"] == "NoUsableRoutingTarget"
+    assert _verdict(tmp_path)["verdict"] == "missing"
+
+
+def test_provider_default_declaration_failure_records_missing(lsk_transport, tmp_path, monkeypatch):
+    import llm_scripting_kit
+
+    def unconfigured(project_root=None):
+        raise ValueError("no default declaration is configured")
+
+    monkeypatch.setattr(llm_scripting_kit, "default_declaration", unconfigured)
+    rc, out, payload = _run(tmp_path, *_provider_args(tmp_path))
+    assert rc == 2
+    assert not out.exists()
+    assert lsk_transport["requests"] == []
+    assert payload["error"] == "ValueError"
+    assert _verdict(tmp_path)["verdict"] == "missing"
+
+
+def test_provider_unexpected_exception_records_missing(lsk_transport, tmp_path, monkeypatch):
+    def exploding_run(*args, **kwargs):
+        raise RuntimeError("unexpected")
+
+    monkeypatch.setattr(lsk_transport["declaration"], "run", exploding_run)
+    with pytest.raises(RuntimeError, match="unexpected"):
+        _run(tmp_path, "--model", "or-qwen", *_provider_args(tmp_path))
+    assert _verdict(tmp_path)["verdict"] == "missing"
+
+
+def test_provider_completed_without_contract_report_is_missing(lsk, tmp_path, capsys):
+    # ``lsk`` replaces complete wholesale: the "backend" returns a completed
+    # response carrying no contract report, as a backend that ignored the
+    # contract would. That is never written as a validated artifact.
+    rc, out, payload = _run(tmp_path, "--model", "or-qwen", *_provider_args(tmp_path))
+    assert rc == 1
+    assert not out.exists()
+    assert payload == {"ok": False, "error": "output-contract", "entry": "or-qwen"}
+    assert _verdict(tmp_path)["verdict"] == "missing"
+    assert "completed without a validated result" in capsys.readouterr().err
+
+
+def test_no_provides_sends_no_output_contract(lsk_transport, tmp_path, monkeypatch):
+    seen = []
+    real_complete = lsk_transport["completion"].OpenRouterBackend.complete
+
+    def spy(self, system, user, *, model, options=None):
+        seen.append(getattr(options, "output_contract", None))
+        return real_complete(self, system, user, model=model, options=options)
+
+    monkeypatch.setattr(lsk_transport["completion"].OpenRouterBackend, "complete", spy)
+    lsk_transport["behaviour"]["text"] = '{"lines": 1}'
+    rc, out, _payload = _run(tmp_path, "--model", "or-qwen")
+    assert rc == 0
+    assert seen == [None]
+    assert _system_text(lsk_transport["requests"][0]) == "be terse"
+    assert out.read_text(encoding="utf-8") == '{"lines": 1}'
+    assert not (tmp_path / ".workflow-kit").exists()
+
+
+# --------------------------------------------------------------------------- #
+# refusals before any call, and invalidation before the probes
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize("drop", ["--kind", "--verdict"])
+def test_provides_requires_kind_and_verdict(tmp_path, capsys, drop):
+    args = ["--provides", "a", "--kind", "opaque-file", "--verdict", str(tmp_path / "v.json")]
+    i = args.index(drop)
+    del args[i:i + 2]
+    with pytest.raises(SystemExit) as caught:
+        orr.main(["--prompt", "hi", "--out", str(tmp_path / "o.txt"), *args])
+    assert caught.value.code == 2
+    assert "--provides requires --kind and --verdict" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("extra,message", [
+    (["--kind", "opaque-file"], "require --provides"),
+    (["--verdict", "v.json"], "require --provides"),
+    (["--provides", "a", "--kind", "schema", "--verdict", "v.json"],
+     "--kind schema requires --schema and --schema-digest"),
+    (["--provides", "a", "--kind", "opaque-file", "--verdict", "v.json", "--schema", "{}"],
+     "--kind opaque-file takes no --schema or --schema-digest"),
+])
+def test_provider_flag_pairing_is_a_usage_error(tmp_path, capsys, extra, message):
+    with pytest.raises(SystemExit) as caught:
+        orr.main(["--prompt", "hi", "--out", str(tmp_path / "o.txt"), *extra])
+    assert caught.value.code == 2
+    assert message in capsys.readouterr().err
+
+
+def test_provider_flags_parse_in_any_position(lsk_transport, tmp_path):
+    # TC2 appends the provider flags to wkOpenRouter's runner prefix, so they
+    # precede the node's own flags.
+    lsk_transport["behaviour"]["text"] = '{"lines": 1, "words": 2}'
+    out = tmp_path / "out.txt"
+    rc = orr.main([*_provider_args(tmp_path), "--model", "or-qwen", "--prompt", "hi",
+                   "--out", str(out)])
+    assert rc == 0
+    assert _verdict(tmp_path)["verdict"] == "satisfied"
+
+
+def test_provider_schema_digest_mismatch_exits_2_before_call(lsk_transport, tmp_path, capsys):
+    rc, out, payload = _run(
+        tmp_path, "--model", "or-qwen", *_provider_args(tmp_path, digest="0" * 64)
+    )
+    assert rc == 2
+    assert lsk_transport["requests"] == []
+    assert _verdict(tmp_path) is None
+    assert not _verdict_path(tmp_path).parent.exists()
+    assert payload is None and not out.exists()
+    assert "changed in transit" in capsys.readouterr().err
+
+
+def test_provider_contract_probe_too_old_exits_2_before_call(
+    lsk_transport, tmp_path, capsys, monkeypatch
+):
+    args = _provider_args(tmp_path)
+    monkeypatch.delattr(lsk_transport["completion"], "OutputContract")
+    rc, _out, _payload = _run(tmp_path, "--model", "or-qwen", *args)
+    assert rc == 2
+    assert lsk_transport["requests"] == []
+    assert _verdict(tmp_path) is None
+    err = capsys.readouterr().err
+    assert "llm-scripting-kit >= 0.56.0" in err
+    assert "not importable" not in err
+
+
+def test_provider_backend_options_without_output_contract_exits_2(
+    lsk_transport, tmp_path, capsys, monkeypatch
+):
+    class OldBackendOptions:  # predates output_contract
+        def __init__(self, max_tokens=4096, temperature=None):
+            self.max_tokens = max_tokens
+            self.temperature = temperature
+
+    args = _provider_args(tmp_path)
+    monkeypatch.setattr(lsk_transport["completion"], "BackendOptions", OldBackendOptions)
+    rc, _out, _payload = _run(tmp_path, "--model", "or-qwen", *args)
+    assert rc == 2
+    assert lsk_transport["requests"] == []
+    err = capsys.readouterr().err
+    assert "BackendOptions takes no `output_contract`" in err
+    assert "llm-scripting-kit >= 0.56.0" in err
+
+
+def test_provider_digest_mismatch_removes_seeded_verdict(lsk_transport, tmp_path):
+    _seed_verdict(tmp_path)
+    rc, _out, _payload = _run(
+        tmp_path, "--model", "or-qwen", *_provider_args(tmp_path, digest="0" * 64)
+    )
+    assert rc == 2
+    assert not _verdict_path(tmp_path).exists()
+
+
+def test_provider_probe_failure_removes_seeded_verdict(lsk_transport, tmp_path, monkeypatch, capsys):
+    args = _provider_args(tmp_path)
+    _seed_verdict(tmp_path)
+    monkeypatch.setitem(sys.modules, "llm_scripting_kit", None)
+    rc, _out, _payload = _run(tmp_path, "--model", "or-qwen", *args)
+    assert rc == 2
+    assert "llm_scripting_kit not importable" in capsys.readouterr().err
+    assert not _verdict_path(tmp_path).exists()
+
+
+def test_provider_undeletable_verdict_exits_2_before_call(lsk_transport, tmp_path, capsys):
+    _verdict_path(tmp_path).mkdir(parents=True)  # a directory where the verdict goes
+    rc, out, payload = _run(tmp_path, "--model", "or-qwen", *_provider_args(tmp_path))
+    assert rc == 2
+    assert lsk_transport["requests"] == []
+    assert _verdict_path(tmp_path).is_dir()
+    assert payload is None and not out.exists()
+    assert "cannot invalidate the previous verdict at" in capsys.readouterr().err
+
+
+# --------------------------------------------------------------------------- #
+# cleanup-layer failures and exception precedence
+# --------------------------------------------------------------------------- #
+def _fail_verdict_replace(monkeypatch, tmp_path):
+    real_replace = os.replace
+    target = str(_verdict_path(tmp_path))
+
+    def failing(src, dst):
+        if str(dst) == target:
+            raise OSError("verdict replace refused")
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(os, "replace", failing)
+
+
+def test_provider_verdict_write_failure_is_reported_exit_1(
+    lsk_transport, tmp_path, monkeypatch, capsys
+):
+    lsk_transport["behaviour"]["text"] = '{"lines": 1, "words": 2}'
+    _fail_verdict_replace(monkeypatch, tmp_path)
+    rc, out, _payload = _run(tmp_path, "--model", "or-qwen", *_provider_args(tmp_path))
+    assert rc == 1
+    assert out.exists()  # the call itself succeeded
+    assert not _verdict_path(tmp_path).exists()
+    assert list(_verdict_path(tmp_path).parent.iterdir()) == []  # no temp sibling
+    err = capsys.readouterr().err
+    assert "the verdict cleanup layer failed" in err
+    assert "verdict replace refused" in err
+
+
+@pytest.mark.parametrize("body_error,expected_rc,message", [
+    ("task", 1, "openrouter node failed on or-qwen"),
+    ("floor", 2, "no usable routing target"),
+])
+def test_provider_body_error_wins_over_verdict_write_failure(
+    lsk_transport, tmp_path, monkeypatch, capsys, body_error, expected_rc, message
+):
+    if body_error == "task":
+        lsk_transport["behaviour"]["raise"] = RuntimeError("no API key resolved")
+        model = "or-qwen"
+    else:
+        model = "sol,typo"
+    _fail_verdict_replace(monkeypatch, tmp_path)
+    rc, _out, _payload = _run(tmp_path, "--model", model, *_provider_args(tmp_path))
+    assert rc == expected_rc
+    err = capsys.readouterr().err
+    assert message in err
+    assert "the verdict cleanup layer failed" in err
