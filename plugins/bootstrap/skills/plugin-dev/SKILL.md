@@ -3,7 +3,7 @@ _schema_version: 1
 name: plugin-dev
 author: christina
 skill-type: technique-skill
-description: Use when cross-plugin edge, REQUIRED/REFUSE/DEGRADE, opt-lib probe, enabling, model declaration, execution events. Do NOT use for bootstrap config/md authoring.
+description: Use when cross-plugin edge, REQUIRED/REFUSE/DEGRADE, opt-lib probe, enable, model declaration, execution events, interrupts. Do NOT use for config/md authoring.
 ---
 
 # Plugin development
@@ -16,7 +16,7 @@ when the consuming skill can host a consented probe.
 ```yaml
 technique_skill:
   _schema_version: "1"
-  identity: Procedure for choosing and applying the REQUIRED / REFUSE / DEGRADE contract for cross-plugin capability edges, and for the shared model-declaration format and execution-event envelope.
+  identity: Procedure for choosing and applying the REQUIRED / REFUSE / DEGRADE contract for cross-plugin capability edges, and for the shared model-declaration format, execution-event envelope, and interrupt contract.
   scope:
     covers:
       - cross-plugin imports and optional shared-library edges
@@ -24,6 +24,7 @@ technique_skill:
       - skill-embedded enabling and consented capability probes
       - the shared model-declaration format and its structural validator
       - the shared execution-event envelope, its vocabulary, ordering rules, and sinks
+      - the shared interrupt contract, its request shape, validation rules, injected validator, and resolution document
     excludes:
       - bootstrap manifest configuration
       - skill and CLAUDE.md authoring standards
@@ -63,4 +64,8 @@ references:
     path: references/execution-events.md
     keywords: [execution event, event envelope, run identity, seq ordering, usage payload, zero versus unknown, JsonlSink, Emitter, extension event name, schema revision, schema v2, interrupt, schema v3, contract, bootstrap_lib.execution_event]
     summary: The shared envelope every plugin uses to record execution facts (dispatch, call start, usage, result, terminal, interrupt, contract) in its own store -- the frozen v1 vocabulary, its v2 revision (the interrupt event, its closed payload, and its lifecycle rules) and its v3 revision (the unit-scoped contract event, its closed payload, and its stream rules), the extension and revision rules, ordering and identity, the zero-versus-unknown usage rule, the sinks, and the consumer probe.
+  - id: interrupt_contract
+    path: references/interrupt-contract.md
+    keywords: [interrupt contract, durable interrupt, waiting state, interrupt request, request envelope, request_schema, resolution document, injected validator, json schema subset, decision outcome, replay, expiry, lapse, bootstrap_lib.interrupt_contract]
+    summary: The shared contract a plugin checks a durable wait against while keeping the wait in its own store -- the frozen v1 request shape, field rules and limits, the three per-store inputs, the injected validator and the subset literal it must advertise, decisions and outcomes, input validation, the replay test, the lapse rule, the resolution document, what stays in the implementing plugin (store, continuation, outcome policy, event phases), the consumer probe, and the revision rule.
 ```
