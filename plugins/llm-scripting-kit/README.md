@@ -609,6 +609,12 @@ accepts the same selection object as `options.skill_context` in a request file
 and materializes it against its working directory before any endpoint is
 resolved; `request-schema` describes it.
 
+`run` and the execution events: `declaration.run` merges
+`skill_context_requirements` into its requirements, so it never dispatches a
+skill-context request to a harness entry, and its `dispatch-selected` event
+payload gains `skill_context: {"digest", "skills", "estimated_tokens"}` (no
+names, text or paths).
+
 A response cache keyed on the system and user text must add
 `context.report.digest` to its key, because the block is composed inside the
 adapter.

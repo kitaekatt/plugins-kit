@@ -47,6 +47,7 @@ from typing import Any, Callable, Dict, Iterable, List, Mapping, MutableMapping,
 
 from .completion.contract import OutputContractViolation, contract_requirements, merge_requirements
 from .completion.halt import HALT_INSUFFICIENT_CREDIT, HALT_QUOTA
+from .completion.skill_context import skill_context_requirements
 from .completion.types import BackendOptions
 from .observer import ExecutionObserver
 from .model_endpoints import HARNESS_KIND, TRANSPORT_KIND, EndpointEntry, EndpointRegistryError
@@ -907,6 +908,17 @@ def run(
     its contract is a failed attempt, not a halt, and the violation's full
     response (raw text, controls, report) is returned in ``RunResult.response``.
 
+    A request whose ``options.skill_context`` is set has its selection
+    requirement (:func:`~.completion.skill_context.skill_context_requirements`)
+    merged the same way, so a harness entry, whose adapter refuses skill
+    context, is skipped rather than dispatched to; a declaration of harness
+    entries only reaches the floor. A conflicting caller requirement raises
+    ``ValueError`` before anything runs. The skill context was built before
+    this call (``materialize_skill_context``), so every attempt sends the same
+    block. Each ``dispatch-selected`` payload then gains
+    ``skill_context: {"digest", "skills", "estimated_tokens"}``: counts and the
+    digest only, never a name, a path or text.
+
     ``observer`` (keyword-only) receives execution events through its
     ``emit`` method (:class:`~.observer.ExecutionObserver`; a
     ``bootstrap_lib.execution_event.Emitter`` bound to the caller's run and
@@ -924,6 +936,9 @@ def run(
     contract = getattr(request.options, "output_contract", None)
     if contract is not None:
         requirements = merge_requirements(requirements, contract_requirements(contract))
+    skill_context = getattr(request.options, "skill_context", None)
+    if skill_context is not None:
+        requirements = merge_requirements(requirements, skill_context_requirements(skill_context))
     root = str(project_root) if project_root is not None else None
     if backend_factory is None:
         from .completion.factory import create_backend as backend_factory  # noqa: PLC0415
@@ -978,6 +993,12 @@ def run(
             picked: Dict[str, Any] = {"entry": chosen.id}
             if chosen.pace is not None:
                 picked["pace"] = chosen.pace
+            if skill_context is not None:
+                picked["skill_context"] = {
+                    "digest": skill_context.report.digest,
+                    "skills": skill_context.report.skills,
+                    "estimated_tokens": skill_context.report.estimated_tokens,
+                }
             emit("dispatch-selected", payload=picked, **attempt_fields)
             emit("call-started", **attempt_fields)
 
