@@ -124,8 +124,12 @@ def test_get_type_hints_resolves_output_contract_fields():
     assert options_hints["output_contract"] == typing.Optional[OutputContract]
     assert response_hints["output_contract"] == typing.Optional[ContractReport]
     assert BackendOptions().output_contract is None
-    last = dataclasses.fields(LLMResponse)[-1]
-    assert last.name == "output_contract" and last.default is None
+    # The last two fields of each record are output_contract then
+    # skill_context, both defaulting to None.
+    for record in (BackendOptions, LLMResponse):
+        last_two = dataclasses.fields(record)[-2:]
+        assert [f.name for f in last_two] == ["output_contract", "skill_context"]
+        assert all(f.default is None for f in last_two)
 
 
 def test_contract_types_is_a_leaf_module():

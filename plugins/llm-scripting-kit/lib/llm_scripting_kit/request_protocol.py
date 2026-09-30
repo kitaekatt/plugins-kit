@@ -41,6 +41,8 @@ from typing import Any, Dict, Mapping, Optional, Tuple
 
 from .completion import BackendOptions
 from .completion.contract import OutputContract
+from .completion.skill_context import materialize_skill_context
+from .completion.skill_context_types import SkillContext, SkillContextError
 
 PROTOCOL_VERSION = 1
 """The only request/result protocol version this build speaks.
@@ -74,6 +76,20 @@ _REQUEST_KEYS = ("protocol",) + _SELECTION_KEYS + ("options",)
 #: request set it would let a caller mislabel its own stderr.
 _UNSETTABLE_OPTIONS = {
     "log_prefix": "derived by the CLI from the resolved endpoint",
+}
+
+#: Settable options whose WIRE type differs from the Python annotation, which
+#: :func:`describe_request_schema` would otherwise render. ``skill_context`` is
+#: a :class:`~.completion.skill_context_types.SkillContext` in Python, but a
+#: request carries the skill selection it is materialized from.
+_WIRE_TYPE_OVERRIDES = {
+    "skill_context": (
+        "skill selection object, optional: {skills: [{path: string, level?: "
+        "'catalog'|'full', declared_resources?: boolean, resources?: [string]}], "
+        "token_budget: integer > 0, format_version?: string}; materialized by "
+        "bootstrap_lib.skill_material against the CLI working directory before "
+        "any endpoint is resolved"
+    ),
 }
 
 
@@ -139,6 +155,8 @@ def _classify(annotation: Any) -> str:
         return "path"
     if base is OutputContract:
         return "output-contract"
+    if base is SkillContext:
+        return "skill-context"
     origin = typing.get_origin(base)
     if base in (dict, Mapping) or origin in (dict, Mapping, collections.abc.Mapping):
         return "mapping"
@@ -184,6 +202,16 @@ def _coerce(name: str, value: Any, annotation: Any) -> Any:
         try:
             return OutputContract.from_json(mapping)
         except (ValueError, TypeError) as exc:
+            raise ProtocolError(f"options.{name}: {exc}") from exc
+    if kind == "skill-context":
+        # The request carries a skill SELECTION; it is materialized here,
+        # against the working directory, before any endpoint is resolved. A
+        # refused selection or an unusable library is a protocol error: nothing
+        # was dispatched, and the same bytes can only fail again.
+        mapping = _require_mapping(value, f"options.{name}")
+        try:
+            return materialize_skill_context(mapping, base_dir=Path.cwd())
+        except (SkillContextError, TypeError) as exc:
             raise ProtocolError(f"options.{name}: {exc}") from exc
     if kind == "mapping":
         return dict(_require_mapping(value, f"options.{name}"))
@@ -356,7 +384,8 @@ def describe_request_schema() -> Dict[str, Any]:
             "options": "object, optional",
         },
         "options": {
-            name: str(field.type) for name, field in sorted(settable.items())
+            name: _WIRE_TYPE_OVERRIDES.get(name, str(field.type))
+            for name, field in sorted(settable.items())
         },
         "rejected_options": dict(_UNSETTABLE_OPTIONS),
     }

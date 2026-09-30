@@ -664,6 +664,10 @@ def test_codex_extra_keys_match_the_advertisement():
 # all; openrouter may differ ONLY by the added `conditional_params` key.
 # Re-pinned in 0.56.0: the new BackendOptions.max_retries field joins every
 # record's dropped_params (harnesses) or params (openrouter) and nothing else.
+# Not re-pinned for skill context (llm-scripting-kit 0.57.0): every record
+# gained params.skill_context and openrouter a top-level skill_context block,
+# and _without_later_additions removes exactly those after asserting their
+# shape, so the digests still guard everything else.
 
 _PRE_CONDITIONAL_DIGESTS = {
     "claude-cli": "a27c473c1c2f724b12491fb92fdb810bedf7ce4421d1af5b20c4c9c6183516b0",
@@ -679,14 +683,41 @@ def _digest(payload) -> str:
     return hashlib.sha256(json.dumps(payload).encode()).hexdigest()
 
 
-def _without_output_contract_param(payload):
-    """The payload minus what every record gained with output contracts.
+_HARNESS_SKILL_CONTEXT_PARAM = {
+    "type": "skill-context",
+    "handling": "mapped",
+    "note": "read and refused before dispatch: the harness loads skills itself",
+}
+_OPENROUTER_SKILL_CONTEXT_EMITS = "messages[system] leading skill context block"
+_OPENROUTER_SKILL_CONTEXT_PARAM = {
+    "type": "skill-context",
+    "handling": "mapped",
+    "emits": _OPENROUTER_SKILL_CONTEXT_EMITS,
+    "note": (
+        "the materialized block leads the system message, followed by the "
+        "caller's system text and then any output-contract instruction"
+    ),
+}
+_OPENROUTER_SKILL_CONTEXT_BLOCK = {
+    "delivery": "system-message",
+    "emits": _OPENROUTER_SKILL_CONTEXT_EMITS,
+}
 
-    ``params.output_contract`` and the three ``structured_output`` contract
-    keys are the only additions since the digests above were taken (both are
-    asserted separately, in ``test_output_contract_advertisement_per_adapter``),
-    so removing them must restore each record byte for byte -- which keeps
-    these digests guarding everything else in the record.
+
+def _without_later_additions(payload):
+    """The payload minus what every record gained after the digests were taken.
+
+    Two additions, each asserted to its exact shape BEFORE it is removed, so a
+    malformed advertisement is never stripped silently:
+
+    - output contracts: ``params.output_contract`` and the four
+      ``structured_output`` contract keys (asserted per adapter in
+      ``test_output_contract_advertisement_per_adapter``);
+    - skill context: ``params.skill_context`` on every record, and the
+      top-level ``skill_context`` block on openrouter's only.
+
+    Removing them must restore each record byte for byte, which keeps these
+    digests guarding everything else in the record.
     """
     param = payload["params"].pop("output_contract")
     emits = param.pop("emits", None)
@@ -699,18 +730,26 @@ def _without_output_contract_param(payload):
         )
     for key in ("policies", "contract_delivery", "contract_emits", "contract_schema_class"):
         payload["structured_output"].pop(key, None)
+    skill_param = payload["params"].pop("skill_context")
+    block = payload.pop("skill_context", None)
+    if payload["adapter"] == "openrouter":
+        assert skill_param == _OPENROUTER_SKILL_CONTEXT_PARAM
+        assert block == _OPENROUTER_SKILL_CONTEXT_BLOCK
+    else:
+        assert skill_param == _HARNESS_SKILL_CONTEXT_PARAM
+        assert block is None
     return payload
 
 
 @pytest.mark.parametrize("adapter", ["claude-cli", "codex-cli", "opencode-cli"])
 def test_harness_family_records_serialize_byte_identically(adapter):
-    payload = _without_output_contract_param(ADAPTER_CAPABILITIES[adapter].to_json())
+    payload = _without_later_additions(ADAPTER_CAPABILITIES[adapter].to_json())
     assert "conditional_params" not in payload and "endpoint" not in payload
     assert _digest(payload) == _PRE_CONDITIONAL_DIGESTS[adapter]
 
 
 def test_openrouter_family_record_only_gains_conditional_effort():
-    payload = _without_output_contract_param(OPENROUTER_CAPABILITIES.to_json())
+    payload = _without_later_additions(OPENROUTER_CAPABILITIES.to_json())
     conditional = payload.pop("conditional_params")
     assert _digest(payload) == _PRE_CONDITIONAL_DIGESTS["openrouter"]
     assert set(conditional) == {"effort"}

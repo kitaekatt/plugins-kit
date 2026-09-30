@@ -36,6 +36,7 @@ from .capabilities import (
     REPLACE,
     REQUEST,
     StructuredOutputCapability,
+    SkillContextCapability,
     SystemPromptCapability,
     PARSED_RESULT,
     TEXT_RESULT,
@@ -50,6 +51,7 @@ from .contract_types import (
     SCHEMA_CLASS_OPENAI_STRICT,
     SCHEMA_CLASS_SUBSET,
 )
+from .skill_context_types import DELIVERY_SYSTEM_MESSAGE
 from .types import BackendOptions
 
 # Every field on BackendOptions, READ FROM THE DATACLASS rather than restated.
@@ -93,6 +95,37 @@ def _output_contract_param(emits: "str | None" = None) -> ParamCapability:
             "a listed schema policy is delivered as emitted and the answer is "
             "validated at the seam; text-only emits nothing; a policy "
             "structured_output.policies does not list is refused before dispatch"
+        ),
+    )
+
+
+#: ``params.skill_context.emits`` and ``skill_context.emits`` of the one
+#: adapter that delivers skill context: the block leads the system message,
+#: before the caller's system text and any schema instruction. Asserted
+#: against the captured request by
+#: tests/llm-scripting-kit/test_completion_skill_context_adapters.py.
+_OPENROUTER_SKILL_CONTEXT_EMITS = "messages[system] leading skill context block"
+
+
+def _skill_context_param(emits: "str | None" = None) -> ParamCapability:
+    """``skill_context`` as every adapter handles it: READ, and either
+    delivered as ``emits`` or refused before dispatch.
+
+    Refused is still read, for the reason :func:`_output_contract_param`
+    gives: reporting the param as dropped would say it went nowhere when it
+    stopped the call.
+    """
+    if emits is None:
+        return ParamCapability(
+            type="skill-context",
+            note="read and refused before dispatch: the harness loads skills itself",
+        )
+    return ParamCapability(
+        type="skill-context",
+        emits=emits,
+        note=(
+            "the materialized block leads the system message, followed by the "
+            "caller's system text and then any output-contract instruction"
         ),
     )
 
@@ -162,6 +195,7 @@ _OPENROUTER_PARAMS = {
         ),
     ),
     "output_contract": _output_contract_param(_OPENROUTER_CONTRACT_EMITS),
+    "skill_context": _skill_context_param(_OPENROUTER_SKILL_CONTEXT_EMITS),
 }
 
 #: Params openrouter emits only for an endpoint whose profile enables them.
@@ -219,6 +253,12 @@ OPENROUTER_CAPABILITIES = Capabilities(
             "a distinct system-role message, not an append: the adapter supplies "
             "the system prompt rather than adding to an existing one"
         ),
+    ),
+    # The one adapter that DELIVERS skill context. The three harness records
+    # carry no block, so each refuses it before dispatch.
+    skill_context=SkillContextCapability(
+        delivery=DELIVERY_SYSTEM_MESSAGE,
+        emits=_OPENROUTER_SKILL_CONTEXT_EMITS,
     ),
 )
 
@@ -285,6 +325,7 @@ _CLAUDE_PARAMS = {
         type="string", default="[llm]", emits="runner log_prefix"
     ),
     "output_contract": _output_contract_param(_CLAUDE_CONTRACT_EMITS),
+    "skill_context": _skill_context_param(),
 }
 
 CLAUDE_CAPABILITIES = Capabilities(
@@ -425,6 +466,7 @@ _CODEX_PARAMS = {
         type="absolute-path", emits="--output-schema"
     ),
     "output_contract": _output_contract_param(_CODEX_CONTRACT_EMITS),
+    "skill_context": _skill_context_param(),
 }
 
 CODEX_CAPABILITIES = Capabilities(
@@ -550,6 +592,7 @@ _OPENCODE_PARAMS = {
         type="string", default="[llm]", emits="runner log_prefix"
     ),
     "output_contract": _output_contract_param(_OPENCODE_CONTRACT_EMITS),
+    "skill_context": _skill_context_param(),
 }
 
 OPENCODE_CAPABILITIES = Capabilities(

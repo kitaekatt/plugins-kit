@@ -531,6 +531,102 @@ schema is a stdlib JSON Schema subset; a keyword outside it (`pattern`,
 Domain validity beyond the schema stays with the caller. Details:
 [references/completion-seam-contract.md](references/completion-seam-contract.md).
 
+### Skill context
+
+A caller that wants chosen skills' text in the system prompt names the skills
+and a token budget; the seam puts the rendered block first in the system
+message of the one adapter that can deliver it.
+
+```python
+from llm_scripting_kit.completion import (
+    BackendOptions, OpenRouterBackend, materialize_skill_context,
+)
+
+context = materialize_skill_context({
+    "skills": [
+        {"path": "skills/review"},                                  # level "full"
+        {"path": "skills/style", "level": "catalog"},               # name + description
+        {"path": "skills/big", "declared_resources": False,
+         "resources": ["references/one.md"]},                       # a subset
+    ],
+    "token_budget": 20000,
+})
+resp = OpenRouterBackend().complete(
+    "Review this diff.", diff_text, model="provider/model",
+    options=BackendOptions(skill_context=context),
+)
+resp.skill_context.digest       # sha256 of the delivered block
+```
+
+Which plugin owns what:
+
+- Reading skills is bootstrap's: `bootstrap_lib.skill_material` reads each
+  `SKILL.md` strictly, loads the files the skill declares, enforces the budget,
+  folds duplicates and renders format `"1"`. Its selection, its rules and its
+  report are specified in bootstrap's plugin-dev reference `skill-material.md`.
+- Delivering is this plugin's: `materialize_skill_context(selection, *,
+  base_dir=None)` takes that library's `SkillSelection` or its JSON mapping,
+  reads every file once, and returns a `SkillContext` (the block `text` and a
+  `SkillContextReport`). A relative skill path resolves against `base_dir`,
+  default the working directory. It needs bootstrap >= 0.138.0, and this
+  plugin's manifest requires that version (llm-scripting-kit 0.57.0 and later).
+  skills-kit is not needed.
+
+Declared resources: a `full` skill loads the files its own `SKILL.md` declares
+(the `path` records of a `references` list in a fenced YAML block). To take
+fewer, set `declared_resources: false` on the skill and name the files wanted
+in `resources`. A `catalog` skill loads no resource. A selection that does not
+fit `token_budget` is refused, and the message says how to narrow it; nothing
+is truncated.
+
+Which adapters deliver or refuse:
+
+- `openrouter` delivers it: the system message is the block, a blank line,
+  your `system` text, then any output-contract instruction. Its record carries
+  `skill_context: {"delivery": "system-message", "emits": "messages[system]
+  leading skill context block"}`.
+- `claude-cli`, `codex-cli` and `opencode-cli` refuse it before anything runs
+  (`SkillContextUnsatisfiable`): a harness loads skills itself, and this seam
+  cannot see what it loaded. Use a transport entry, or put your own text in
+  `system`.
+- Every adapter reads the option, so it is never reported in `dropped_params`.
+  `skill_context_requirements(context)` is the selection requirement
+  (`{"skill_context": {"delivery": "system-message"}}`), which matches only a
+  delivering adapter.
+- Before dispatch the adapter checks that the block's sha256 equals the
+  report's `digest`, so a record whose text was edited is refused. When a call
+  also carries an output contract that the adapter refuses, the contract
+  refusal is the one raised.
+
+The report: a delivering call's `LLMResponse.skill_context` records the
+`digest`, `estimated_tokens`, `token_budget`, `token_estimate` (`"chars/4"`),
+the number of `skills`, `adapter`, `delivery` and `emits`, and `provenance`,
+which is the library's report document verbatim (schema
+`plugins-kit.skill-material-report/v1`: each skill's source, sha256, bytes,
+declared paths and rendered resources, and each suppressed duplicate). An
+`OutputContractViolation`'s response carries it too. The `complete` verb
+accepts the same selection object as `options.skill_context` in a request file
+and materializes it against its working directory before any endpoint is
+resolved; `request-schema` describes it.
+
+A response cache keyed on the system and user text must add
+`context.report.digest` to its key, because the block is composed inside the
+adapter.
+
+Refusals, each raised before anything is dispatched
+(`SkillContextSupportError`, a `SkillContextError` whose `state` names the
+case; the `complete` verb reports each as a protocol error, exit 4):
+
+| `state` | Cause | Remedy |
+| --- | --- | --- |
+| `absent` | `bootstrap_lib` is not importable in this interpreter | `claude plugin install bootstrap@plugins-kit`, or omit `skill_context` and put your own text in `system` |
+| `too-old` | the linked bootstrap predates 0.138.0 (a copy left behind by an uninstall reads the same way) | `claude plugin update bootstrap@plugins-kit` |
+| `no-pyyaml` | the interpreter has no PyYAML, which the library needs to read a skill | run through the `llm-scripting-kit` command, or from a plugin that declares PyYAML |
+
+A refused selection, skill or resource (bad frontmatter, a missing declared
+file, over budget) raises `SkillContextError` with the library's message; the
+`complete` verb reports it as a protocol error too.
+
 ## Key handling
 
 Interactive `set-key` uses a hidden prompt (`getpass`), the `.env` file is

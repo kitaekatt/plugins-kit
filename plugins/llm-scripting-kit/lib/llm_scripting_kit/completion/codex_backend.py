@@ -46,6 +46,8 @@ from .claude_runner import run_cli_streaming
 from .adapter_capabilities import CODEX_CAPABILITIES
 from .capabilities import Capabilities
 from .contract import finalize_contract, prepare_contract
+from .skill_context import prepare_skill_context
+from .skill_context_types import SkillContextUnsatisfiable
 from .prompt_fold import fold_prompt
 from .results import (
     check_applied_controls,
@@ -285,6 +287,13 @@ class CodexCliBackend:
         # does not list (or one sent beside extras.output_schema) is refused
         # here, with nothing spawned.
         plan = prepare_contract(self.capabilities, opts)
+        # Skill context is refused here, before any temp file, argv or runner call:
+        # this record carries no skill_context block (the harness loads skills
+        # itself), so prepare_skill_context raises for any skill context.
+        if prepare_skill_context(self.capabilities, opts) is not None:
+            raise SkillContextUnsatisfiable(
+                f"{self.name} has no skill-context delivery path; nothing was dispatched"
+            )
         timeout_s = (
             opts.timeout_s if opts.timeout_s is not None else self.default_timeout_s
         )
