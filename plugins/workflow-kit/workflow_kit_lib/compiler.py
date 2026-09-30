@@ -20,6 +20,9 @@ Mapping (see the skill / plan for the authoring format):
       script/openrouter steps inline preamble.js (wkScript/wkOpenRouter) once; both
       support for_each (fan-out indexes the default out path so payloads do not collide).
   - script step + provides   -> `const VAR = await wkScriptProvided(cmd, out, check, opts)`
+      (the check also carries the node's events path and unit id, indexed per
+      item under fan-out like an openrouter node's, so the checker records its
+      `contract` event in `<step>[.<i>].events.jsonl`)
   - openrouter step + provides -> `wkOpenRouter(runner + wkProviderFlags(check), spec, opts)`
       then, after either, the guard `wkProvided(VAR, "ID", "NAME", verdict);`, which
       throws when the node (or any fan-out item) exited non-zero. A document with a
@@ -207,8 +210,18 @@ def _wrap_node(var: str, call: str, over_js) -> str:
     return f"const {var} = await parallel({over_js}.map((item, i) => () => {call}));"
 
 
-def _check_js(prov, verdict_js: str, runner_js=None) -> str:
-    """The provider check object wkScriptProvided / wkProviderFlags take."""
+def _unit_js(step_id: str, fanout: bool) -> str:
+    """A node's execution-event unit id: `<step>`, or `<step>-<i>` under fan-out."""
+    return f"`{step_id}-${{i}}`" if fanout else json.dumps(step_id)
+
+
+def _check_js(prov, verdict_js: str, runner_js=None, events=None) -> str:
+    """The provider check object wkScriptProvided / wkProviderFlags take.
+
+    ``events`` is ``(events_js, unit_js)`` for a script provider, whose checker
+    records the `contract` event; an openrouter provider passes its events
+    through wkOpenRouter's own spec instead.
+    """
     parts = []
     if runner_js is not None:
         parts.append(f"runner: {runner_js}")
@@ -221,6 +234,11 @@ def _check_js(prov, verdict_js: str, runner_js=None) -> str:
         parts.append(f"schema: {json.dumps(prov.schema_text)}")
         parts.append(f"digest: {json.dumps(prov.digest)}")
     parts.append(f"verdict: {verdict_js}")
+    if events is not None:
+        events_js, unit_js = events
+        parts.append(f"events: {events_js}")
+        parts.append("runId: inputs.runId")
+        parts.append(f"unitId: {unit_js}")
     return "{ " + ", ".join(parts) + " }"
 
 
@@ -254,7 +272,10 @@ def _emit_script_node(
         '`"${inputs.workflowKitVenvPython}" '
         '"${inputs.pluginRoot}/scripts/check_artifact.py"`'
     )
-    check = _check_js(prov, _default_out_js(step.id, ".contract.json", fan), checker_js)
+    events = (_default_out_js(step.id, ".events.jsonl", fan), _unit_js(step.id, fan))
+    check = _check_js(
+        prov, _default_out_js(step.id, ".contract.json", fan), checker_js, events
+    )
     call = f"wkScriptProvided({cmd_js}, {out_js}, {check}, {opts})"
     return _wrap_node(_var(step.id), call, over_js) + "\n" + _guard(step, prov, fan)
 
@@ -291,8 +312,7 @@ def _emit_openrouter_node(
     # $OUT, indexed and unit-identified per item under fan-out.
     spec.append(f"events: {_default_out_js(step.id, '.events.jsonl', fan)}")
     spec.append("runId: inputs.runId")
-    unit_js = f"`{step.id}-${{i}}`" if fan else json.dumps(step.id)
-    spec.append(f"unitId: {unit_js}")
+    spec.append(f"unitId: {_unit_js(step.id, fan)}")
     spec_js = "{ " + ", ".join(spec) + " }"
     opts = _node_opts(op.label, step.phase, phase_titles)
     call = f"wkOpenRouter({runner_js}, {spec_js}, {opts})"

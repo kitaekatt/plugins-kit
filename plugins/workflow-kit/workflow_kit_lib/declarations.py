@@ -36,6 +36,12 @@ MODEL_DECLARATION_BOOTSTRAP = "0.129.0"
 #: ``Emitter`` and ``JsonlSink`` an openrouter node run with ``--events`` uses).
 EXECUTION_EVENT_BOOTSTRAP = "0.135.0"
 
+#: The bootstrap release that shipped execution-event schema v3 with the
+#: ``contract`` event: the ``Emitter(..., schema=<v3>)`` a node that provides
+#: an artifact and records events calls (``scripts/openrouter_run.py
+#: --provides --events``, ``scripts/check_artifact.py --events``).
+CONTRACT_EVENT_BOOTSTRAP = "0.137.0"
+
 #: The llm-scripting-kit release that shipped ``OutputContract`` (with
 #: ``schema_digest``), ``BackendOptions(output_contract=...)`` and
 #: ``completion.json_schema``: the calls a node that provides a schema-typed
@@ -112,6 +118,7 @@ def agent_model(declared: Optional[tuple], where: str) -> Optional[str]:
 
 
 __all__ = [
+    "CONTRACT_EVENT_BOOTSTRAP",
     "EXECUTION_EVENT_BOOTSTRAP",
     "EXECUTOR_MODELS",
     "MODEL_DECLARATION_BOOTSTRAP",

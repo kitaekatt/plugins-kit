@@ -9,10 +9,12 @@ exit code is the checker's.
     <workflow-kit-venv-python> scripts/check_artifact.py \\
         --artifact <NAME> --kind {schema,opaque-file} --in <OUT> \\
         --verdict <VERDICT.json> --command-exit <CODE> \\
-        [--schema <JSON> --schema-digest <HEX>]
+        [--schema <JSON> --schema-digest <HEX>] \\
+        [--events <EVENTS.jsonl> --run-id <runId> --unit-id <unitId>]
 
 ``--schema`` and ``--schema-digest`` are required with ``--kind schema`` and
-refused with ``--kind opaque-file``.
+refused with ``--kind opaque-file``. ``--events`` requires ``--run-id`` and
+``--unit-id``.
 
 Judgment:
 
@@ -32,7 +34,9 @@ Exit codes: 0 ``satisfied``; 1 ``violated``, or ``missing`` after a command
 that exited 0; the command's own code when it failed; 2 a usage error, an
 absent or too-old llm-scripting-kit, a schema outside the subset, a
 ``--schema-digest`` that does not match the schema (the schema changed in
-transit), or a previous verdict that cannot be removed.
+transit), a previous verdict or events file that cannot be removed, or (with
+``--events``) a bootstrap_lib without execution-event schema v3 or ids that
+are not valid event identities.
 
 The verdict file (``workflow-kit.artifact-verdict/v1``) records the artifact,
 kind, verdict, the judged path, ``bytes`` and ``sha256`` of exactly the bytes
@@ -59,9 +63,29 @@ Each verdict path belongs to one (runId, step, item) execution. Two concurrent
 executions writing one verdict path are unsupported: the last complete write
 wins, and no final verdict is ever partial.
 
-This module also owns the verdict writer, the cleanup layers and the
-output-contract probe that ``openrouter_run.py --provides`` uses, so both node
-runners write the same file the same way.
+Execution events: with ``--events`` the checker records its judgment as ONE
+``contract`` event in a ``plugins-kit.execution-event/v3`` JSONL stream at that
+path (``source.plugin`` ``workflow-kit``, the given run and unit ids; payload
+``artifact``, ``kind``, ``verdict``, ``schema_digest`` for kind ``schema`` and
+``error_count`` for ``violated`` -- never a payload value or an error pointer,
+which stay in the verdict file). It emits no ``terminal``: the checker judges
+the artifact; it does not own the unit's lifecycle. The stream records the
+node's last execution: a previous events file at ``--events`` is removed
+together with the previous verdict, before any probe, with the same error
+handling. The probe of ``bootstrap_lib.execution_event`` (schema v3 among
+``SUPPORTED_SCHEMAS``, and the exact ``Emitter(..., schema=<v3>)``,
+``make_event`` and ``JsonlSink(..., mode="truncate")`` calls) follows the
+llm-scripting-kit probe; absent, supports-v1-but-not-v3 and otherwise too old
+get three different messages, and every refusal exits 2 having written
+nothing. The ``contract`` event is attempted exactly once, from the same
+cleanup as the verdict, as an independent layer after it: it is recorded
+unless the events sink itself raises, in which case the error is printed to
+stderr and the exit is non-zero.
+
+This module also owns the verdict writer, the cleanup layers, the
+output-contract probe and the contract-event probe and payload that
+``openrouter_run.py --provides`` uses, so both node runners write the same
+files the same way.
 
 Run it with workflow-kit's own venv interpreter, which bootstrap links
 ``llm_scripting_kit`` onto.
@@ -92,6 +116,18 @@ MISSING = "missing"
 #: At most this many errors are recorded; ``errors_truncated`` says when more existed.
 MAX_ERRORS = 100
 
+#: The execution-event schema a stream holding a ``contract`` event is written
+#: under. workflow-kit's own literal, never read from the (possibly stale)
+#: linked module.
+CONTRACT_EVENT_SCHEMA = "plugins-kit.execution-event/v3"
+
+#: The first execution-event schema; a module that supports it but not
+#: :data:`CONTRACT_EVENT_SCHEMA` gets its own message.
+_EVENT_SCHEMA_V1 = "plugins-kit.execution-event/v1"
+
+#: ``source.plugin`` of every event workflow-kit records.
+EVENT_PLUGIN = "workflow-kit"
+
 #: The one error a payload that is not UTF-8 JSON records.
 UNPARSEABLE_ERRORS = (("", "unparseable"),)
 
@@ -106,33 +142,52 @@ class ContractRefusal(Exception):
     """A schema or digest that must be refused before any judgment (exit 2)."""
 
 
-def output_contract_lsk() -> str:
-    """workflow-kit's own constant for the llm-scripting-kit release the contract calls need."""
+def _declarations():
+    """``workflow_kit_lib.declarations``: workflow-kit's own version constants."""
     try:
-        from workflow_kit_lib.declarations import OUTPUT_CONTRACT_LSK  # noqa: PLC0415
+        from workflow_kit_lib import declarations  # noqa: PLC0415
     except ImportError:
         # workflow_kit_lib ships beside this script; use that copy when the
         # interpreter has none installed.
         sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-        from workflow_kit_lib.declarations import OUTPUT_CONTRACT_LSK  # noqa: PLC0415
-    return OUTPUT_CONTRACT_LSK
+        from workflow_kit_lib import declarations  # noqa: PLC0415
+    return declarations
+
+
+def output_contract_lsk() -> str:
+    """workflow-kit's own constant for the llm-scripting-kit release the contract calls need."""
+    return _declarations().OUTPUT_CONTRACT_LSK
+
+
+def contract_event_bootstrap() -> str:
+    """workflow-kit's own constant for the bootstrap release a contract event needs."""
+    return _declarations().CONTRACT_EVENT_BOOTSTRAP
 
 
 # --------------------------------------------------------------------------- #
 # The verdict file
 # --------------------------------------------------------------------------- #
-def invalidate_verdict(path) -> str | None:
-    """Remove a previous verdict. None on success (an absent file included), else a message.
-
-    Creates nothing: no directory, no file.
-    """
+def _invalidate(path, what: str) -> str | None:
     try:
         os.unlink(path)
     except FileNotFoundError:
         return None
     except OSError as exc:
-        return f"cannot invalidate the previous verdict at {path}: {exc}"
+        return f"cannot invalidate the previous {what} at {path}: {exc}"
     return None
+
+
+def invalidate_verdict(path) -> str | None:
+    """Remove a previous verdict. None on success (an absent file included), else a message.
+
+    Creates nothing: no directory, no file.
+    """
+    return _invalidate(path, "verdict")
+
+
+def invalidate_events(path) -> str | None:
+    """Remove a previous events file, exactly as :func:`invalidate_verdict` does."""
+    return _invalidate(path, "events file")
 
 
 def verdict_record(*, artifact, kind, verdict, path, data=None, schema_digest=None, errors=()):
@@ -307,6 +362,117 @@ def build_contract(api: ContractAPI, artifact: str, schema_text: str, expected_d
 
 
 # --------------------------------------------------------------------------- #
+# The contract event (execution-event schema v3)
+# --------------------------------------------------------------------------- #
+_BOOTSTRAP_ABSENT = (
+    "--events needs bootstrap_lib.execution_event, but bootstrap_lib is not "
+    "importable: the plugins-kit:bootstrap plugin has not provisioned "
+    "workflow-kit here. Run `claude plugin install bootstrap@plugins-kit`, start "
+    "a new session, and run this with workflow-kit's venv python."
+)
+
+
+def probe_contract_events():
+    """Return ``(execution_event module, None)`` when usable, else ``(None, message)``.
+
+    Three states get three messages: bootstrap_lib absent (install); a module
+    that supports schema v1 but not v3 (update, naming what v3 is for); any
+    other stale module, including an ``Emitter`` without ``schema=`` (update).
+    The version named is workflow-kit's own constant.
+    """
+    try:
+        import bootstrap_lib  # noqa: F401, PLC0415
+    except ImportError:
+        return None, _BOOTSTRAP_ABSENT
+    try:
+        from bootstrap_lib import execution_event  # noqa: PLC0415
+    except ImportError:
+        execution_event = None
+    supported = getattr(execution_event, "SUPPORTED_SCHEMAS", None) or ()
+    if _EVENT_SCHEMA_V1 in supported and CONTRACT_EVENT_SCHEMA not in supported:
+        return None, (
+            f"the linked bootstrap_lib.execution_event supports {_EVENT_SCHEMA_V1} but not "
+            "/v3, which workflow-kit needs to record contract events: update the bootstrap "
+            f"plugin to >= {contract_event_bootstrap()}. Run `claude plugin update "
+            "bootstrap@plugins-kit` and restart so bootstrap re-links the newer shared lib "
+            "onto workflow-kit's venv."
+        )
+    reason = None
+    if execution_event is None:
+        reason = "no bootstrap_lib.execution_event"
+    elif CONTRACT_EVENT_SCHEMA not in supported:
+        reason = f"schema {CONTRACT_EVENT_SCHEMA} is not supported"
+    elif not all(
+        callable(getattr(execution_event, name, None))
+        for name in ("Emitter", "JsonlSink", "make_event")
+    ):
+        reason = "Emitter, JsonlSink or make_event is missing"
+    else:
+        try:
+            inspect.signature(execution_event.Emitter).bind(
+                EVENT_PLUGIN, "r", unit_id="u", sinks=(), schema=CONTRACT_EVENT_SCHEMA
+            )
+            inspect.signature(execution_event.make_event).bind(
+                seq=0, run_id="r", event="contract", plugin=EVENT_PLUGIN, unit_id="u",
+                payload={}, schema=CONTRACT_EVENT_SCHEMA,
+            )
+            inspect.signature(execution_event.JsonlSink).bind("p", mode="truncate")
+        except (TypeError, ValueError):
+            reason = (
+                "Emitter(..., schema=), make_event(..., schema=) or "
+                "JsonlSink(..., mode='truncate') does not bind"
+            )
+    if reason is None:
+        return execution_event, None
+    return None, (
+        f"the linked bootstrap_lib predates the execution-event calls a contract event needs "
+        f"({reason}); this requires bootstrap >= {contract_event_bootstrap()}. Run `claude "
+        "plugin update bootstrap@plugins-kit` and restart so bootstrap re-links the newer "
+        "shared lib onto workflow-kit's venv."
+    )
+
+
+def contract_payload(*, artifact, kind, verdict, schema_digest=None, errors=()):
+    """The closed ``contract`` payload: identity, kind and verdict; never content."""
+    payload = {"artifact": artifact, "kind": kind, "verdict": verdict}
+    if kind == KIND_SCHEMA:
+        payload["schema_digest"] = schema_digest
+    if verdict == VIOLATED:
+        payload["error_count"] = len(tuple(errors))
+    return payload
+
+
+def check_contract_event(execution_event, run_id, unit_id, payload) -> str | None:
+    """None when a ``contract`` event with these ids and ``payload`` is valid, else a message.
+
+    Builds (and discards) one v3 event before anything is written, so a bad
+    run id, unit id or artifact name is refused up front rather than lost from
+    the stream after the judgment.
+    """
+    try:
+        execution_event.make_event(
+            seq=0, run_id=run_id, event="contract", plugin=EVENT_PLUGIN, unit_id=unit_id,
+            payload=payload, schema=CONTRACT_EVENT_SCHEMA,
+        )
+    except ValueError as exc:  # EventError is a ValueError
+        return f"--run-id/--unit-id or the artifact name are not valid event identities: {exc}"
+    return None
+
+
+def open_contract_stream(execution_event, path, run_id, unit_id):
+    """A v3 ``Emitter`` writing a fresh stream at ``path`` (its directory created here)."""
+    events = Path(path)
+    events.parent.mkdir(parents=True, exist_ok=True)
+    return execution_event.Emitter(
+        EVENT_PLUGIN,
+        run_id,
+        unit_id=unit_id,
+        sinks=[execution_event.JsonlSink(events, mode="truncate")],
+        schema=CONTRACT_EVENT_SCHEMA,
+    )
+
+
+# --------------------------------------------------------------------------- #
 # The checker
 # --------------------------------------------------------------------------- #
 def judge(kind: str, in_path, schema=None, validate=None):
@@ -342,6 +508,11 @@ def _parser() -> argparse.ArgumentParser:
     ap.add_argument("--schema", help="the artifact's JSON Schema, as JSON text (kind schema)")
     ap.add_argument("--schema-digest",
                     help="sha256 of the schema's canonical JSON (kind schema)")
+    ap.add_argument("--events",
+                    help="record one contract event in a plugins-kit.execution-event/v3 "
+                    "JSONL stream here (replaced on each run); requires --run-id and --unit-id")
+    ap.add_argument("--run-id", help="the workflow run id the event carries (with --events)")
+    ap.add_argument("--unit-id", help="the node's unit id the event carries (with --events)")
     return ap
 
 
@@ -354,10 +525,14 @@ def main(argv=None) -> int:
         ap.error("--kind schema requires --schema and --schema-digest")
     if args.kind == KIND_OPAQUE and (args.schema is not None or args.schema_digest is not None):
         ap.error("--kind opaque-file takes no --schema or --schema-digest")
+    if args.events and not (args.run_id and args.unit_id):
+        ap.error("--events requires --run-id and --unit-id")
 
     # First action of a parsed execution: no refusal below may leave a
-    # previous execution's verdict on disk.
+    # previous execution's verdict or events stream on disk.
     message = invalidate_verdict(args.verdict)
+    if message is None and args.events:
+        message = invalidate_events(args.events)
     if message is not None:
         print(message, file=sys.stderr)
         return 2
@@ -379,6 +554,27 @@ def main(argv=None) -> int:
 
     outcome = {"verdict": MISSING, "data": None, "errors": ()}
 
+    def event_payload():
+        return contract_payload(
+            artifact=args.artifact,
+            kind=args.kind,
+            verdict=outcome["verdict"],
+            schema_digest=None if contract is None else contract.schema_digest,
+            errors=outcome["errors"],
+        )
+
+    execution_event = None
+    if args.events:
+        # Before any directory or write: a refusal leaves nothing on disk.
+        execution_event, message = probe_contract_events()
+        if message is None:
+            message = check_contract_event(
+                execution_event, args.run_id, args.unit_id, event_payload()
+            )
+        if message is not None:
+            print(message, file=sys.stderr)
+            return 2
+
     def write_layer():
         write_verdict(args.verdict, verdict_record(
             artifact=args.artifact,
@@ -389,6 +585,16 @@ def main(argv=None) -> int:
             schema_digest=None if contract is None else contract.schema_digest,
             errors=outcome["errors"],
         ))
+
+    layers = [("verdict", write_layer)]
+    if execution_event is not None:
+        def contract_layer():
+            # Exactly one attempt, after the verdict layer, whatever it did.
+            open_contract_stream(
+                execution_event, args.events, args.run_id, args.unit_id
+            ).emit("contract", payload=event_payload())
+
+        layers.append(("contract", contract_layer))
 
     rc = 1
     failures = []
@@ -404,7 +610,7 @@ def main(argv=None) -> int:
             outcome.update(verdict=verdict, data=data, errors=errors)
             rc = 0 if verdict == SATISFIED else 1
     finally:
-        failures = run_cleanup([("verdict", write_layer)])
+        failures = run_cleanup(layers)
         report_cleanup_failures(failures)
     return settle(rc, failures)
 

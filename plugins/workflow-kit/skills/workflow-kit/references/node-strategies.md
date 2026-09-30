@@ -159,6 +159,37 @@ is a usage error (exit 2).
 A compiled `.workflow.yaml` sets all three for every openrouter node (see
 `workflow-yaml.md`). A hand-written script that omits `events` records none.
 
+A node that also PROVIDES a typed artifact (see "Typed artifacts") records
+its judgment in its stream as one `contract` event, and writes the whole
+stream in the `plugins-kit.execution-event/v3` format (v3 accepts every v1
+event unchanged). A node that provides nothing keeps the v1 stream.
+
+- The `contract` payload is `artifact`, `kind`, `verdict`, `schema_digest`
+  (kind `schema` only) and `error_count` (verdict `violated` only). It never
+  holds a payload value, an error pointer or free text; those stay in the
+  verdict file.
+- The `contract` event always comes before the node's `terminal`. If the call
+  never started (for example, the default declaration did not resolve), the
+  stream holds only the `contract` event. If no entry was usable, it holds
+  `contract` (`missing`) and then `terminal` `unroutable`.
+- Each execution that passes its checks attempts exactly one `contract`
+  event. If the events file cannot be written, the event is not in the
+  stream, the error goes to stderr, and the node exits non-zero.
+- For each execution whose arguments parse, the previous events file is
+  removed together with the previous verdict, before any check. A refused
+  execution (exit 2) therefore leaves no stream. A node that provides
+  nothing does not remove it.
+- The check before the call asks bootstrap_lib for v3. A bootstrap that
+  supports v1 but not v3 gets its own message, which names bootstrap 0.137.0.
+- A script provider records the same `contract` event: give
+  `scripts/check_artifact.py` the flags `--events <path> --run-id <id>
+  --unit-id <id>` (with `wkScriptProvided`, set `events`, `runId` and
+  `unitId` in its `check`). Its stream holds only that event and no
+  `terminal`, because the checker judges the artifact but does not run the
+  node's command. A compiled `.workflow.yaml` uses the openrouter node's path
+  and unit id: `<step>[.<i>].events.jsonl`, unit `<step>` (`<step>-<i>` under
+  `for_each`).
+
 ## Typed artifacts
 
 A node can PROVIDE a named artifact: its `$OUT`, checked against a declared
@@ -255,8 +286,10 @@ command still applies. Keep the command on lines of its own, so a trailing
 `#` comment cannot swallow the `)`.
 
 Checker flags: `--artifact NAME --kind {schema,opaque-file} --in PATH
---verdict PATH --command-exit CODE [--schema JSON --schema-digest HEX]`, with
-the same pairing rules as the runner. Judgment:
+--verdict PATH --command-exit CODE [--schema JSON --schema-digest HEX]
+[--events PATH --run-id ID --unit-id ID]`, with the same pairing rules as the
+runner (`--events` requires both ids; see "Execution events" for the
+`contract` event it records). Judgment:
 
 - a non-zero `--command-exit` is `missing`, and the checker exits with that
   code (clamped to 1..255);
@@ -269,7 +302,8 @@ the same pairing rules as the runner. Judgment:
 Checker exit codes: 0 `satisfied`; 1 `violated`, or `missing` after a command
 that exited 0; the command's own code when it failed; 2 a usage error, an
 absent or too-old llm-scripting-kit, a schema outside the subset, a digest
-mismatch, or a previous verdict that cannot be removed.
+mismatch, a previous verdict or events file that cannot be removed, or (with
+`--events`) a bootstrap_lib without execution-event schema v3.
 
 ### The verdict file
 

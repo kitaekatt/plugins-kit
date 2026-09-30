@@ -461,3 +461,168 @@ def test_verdict_temp_name_is_unique_per_process(tmp_path, monkeypatch):
     # PermissionError on Windows when two writers race os.replace is a
     # platform effect of replacing an open target, not a shared temp path.
     assert all(isinstance(e, PermissionError) for e in errors)
+
+
+# --------------------------------------------------------------------------- #
+# TC4: the checker's contract event (--events/--run-id/--unit-id): one v3
+# `contract` event per execution, no `terminal`.
+# --------------------------------------------------------------------------- #
+_V1 = "plugins-kit.execution-event/v1"
+_V2 = "plugins-kit.execution-event/v2"
+_V3 = "plugins-kit.execution-event/v3"
+
+
+def _events(tmp_path):
+    return tmp_path / ".workflow-kit" / "r1" / "count.events.jsonl"
+
+
+def _events_argv(tmp_path, run_id="r1", unit_id="count"):
+    argv = ["--events", str(_events(tmp_path))]
+    if run_id is not None:
+        argv += ["--run-id", run_id]
+    if unit_id is not None:
+        argv += ["--unit-id", unit_id]
+    return argv
+
+
+def _check_events(tmp_path, payload, **kw):
+    """Like ``_check``, with --events; returns (rc, verdict record, validated stream)."""
+    out, verdict = _paths(tmp_path)
+    if payload is not None:
+        out.write_bytes(payload if isinstance(payload, bytes) else payload.encode("utf-8"))
+    rc = ca.main(_argv(out, verdict, **kw) + _events_argv(tmp_path))
+    record = json.loads(verdict.read_text(encoding="ascii")) if verdict.exists() else None
+    stream = None
+    if _events(tmp_path).exists():
+        from bootstrap_lib import execution_event
+
+        stream = execution_event.validate_stream(execution_event.read_jsonl(_events(tmp_path)))
+    return rc, record, stream
+
+
+def _fake_execution_event(monkeypatch, **overrides):
+    """A bootstrap_lib whose execution_event is the real module with ``overrides``."""
+    from bootstrap_lib import execution_event as real
+
+    fake = types.ModuleType("bootstrap_lib.execution_event")
+    fake.__dict__.update({k: v for k, v in vars(real).items() if not k.startswith("__")})
+    for name, value in overrides.items():
+        setattr(fake, name, value)
+    pkg = types.ModuleType("bootstrap_lib")
+    pkg.__path__ = []
+    pkg.execution_event = fake
+    monkeypatch.setitem(sys.modules, "bootstrap_lib", pkg)
+    monkeypatch.setitem(sys.modules, "bootstrap_lib.execution_event", fake)
+
+
+@pytest.mark.parametrize("case", ["satisfied", "violated"])
+def test_checker_writes_one_contract_event(lsk, tmp_path, capsys, case):
+    payload = '{"lines": 3, "words": 5}' if case == "satisfied" else '{"lines": -1, "words": "x"}'
+    rc, record, stream = _check_events(tmp_path, payload)
+    assert rc == (0 if case == "satisfied" else 1), capsys.readouterr().err
+    assert [e["event"] for e in stream] == ["contract"]  # no terminal
+    (event,) = stream
+    assert event["schema"] == _V3
+    assert event["identity"] == {"run_id": "r1", "unit_id": "count"}
+    assert event["source"] == {"plugin": "workflow-kit"}
+    expected = {"artifact": "doc_stats", "kind": "schema", "verdict": case,
+                "schema_digest": _digest(SCHEMA)}
+    if case == "violated":
+        assert len(record["errors"]) == 2
+        expected["error_count"] = 2
+    assert event["payload"] == expected
+    assert record["verdict"] == case
+
+
+def test_checker_opaque_contract_event_has_no_digest(tmp_path):
+    rc, _record, stream = _check_events(tmp_path, "bytes", kind="opaque-file")
+    assert rc == 0
+    assert [e["payload"] for e in stream] == [
+        {"artifact": "doc_stats", "kind": "opaque-file", "verdict": "satisfied"}
+    ]
+
+
+def test_checker_rerun_replaces_events_file(lsk, tmp_path):
+    assert _check_events(tmp_path, '{"lines": 3, "words": 5}')[0] == 0
+    rc, _record, stream = _check_events(tmp_path, '{"lines": "x", "words": 5}')
+    assert rc == 1
+    # the LAST execution only: one contract, seq restarting at 0
+    assert [(e["event"], e["seq"]) for e in stream] == [("contract", 0)]
+    assert stream[0]["payload"]["verdict"] == "violated"
+
+
+def test_checker_command_failure_emits_missing(lsk, tmp_path):
+    rc, record, stream = _check_events(tmp_path, '{"lines": 3, "words": 5}', command_exit=7)
+    assert rc == 7
+    assert record["verdict"] == "missing"
+    assert [e["payload"] for e in stream] == [{
+        "artifact": "doc_stats", "kind": "schema", "verdict": "missing",
+        "schema_digest": _digest(SCHEMA),
+    }]
+
+
+@pytest.mark.parametrize("missing", ["--run-id", "--unit-id"])
+def test_checker_events_requires_run_and_unit_ids(tmp_path, capsys, missing):
+    out, verdict = _paths(tmp_path)
+    kwargs = {"run_id": None} if missing == "--run-id" else {"unit_id": None}
+    with pytest.raises(SystemExit) as caught:
+        ca.main(_argv(out, verdict, kind="opaque-file") + _events_argv(tmp_path, **kwargs))
+    assert caught.value.code == 2
+    assert "--events requires --run-id and --unit-id" in capsys.readouterr().err
+    assert not (tmp_path / ".workflow-kit").exists()
+
+
+def test_checker_events_probe_without_v3_exits_2_writes_nothing(tmp_path, capsys, monkeypatch):
+    _fake_execution_event(monkeypatch, SUPPORTED_SCHEMAS=frozenset({_V1, _V2}))
+    rc, record, stream = _check_events(tmp_path, "bytes", kind="opaque-file")
+    assert rc == 2
+    assert record is None and stream is None
+    assert not (tmp_path / ".workflow-kit").exists()
+    err = capsys.readouterr().err
+    assert "supports plugins-kit.execution-event/v1 but not /v3" in err
+    assert ">= 0.137.0" in err and "claude plugin update bootstrap@plugins-kit" in err
+
+
+def test_checker_events_probe_bootstrap_absent_exits_2(tmp_path, capsys, monkeypatch):
+    monkeypatch.setitem(sys.modules, "bootstrap_lib", None)
+    rc, record, stream = _check_events(tmp_path, "bytes", kind="opaque-file")
+    assert rc == 2
+    assert record is None and stream is None
+    err = capsys.readouterr().err
+    assert "claude plugin install bootstrap@plugins-kit" in err
+    assert "claude plugin update" not in err
+
+
+def test_checker_events_invalid_ids_exit_2_writes_nothing(tmp_path, capsys):
+    out, verdict = _paths(tmp_path)
+    out.write_text("bytes", encoding="utf-8")
+    rc = ca.main(_argv(out, verdict, kind="opaque-file") + _events_argv(tmp_path, run_id="r\x01"))
+    assert rc == 2
+    assert not (tmp_path / ".workflow-kit").exists()
+    assert "not valid event identities" in capsys.readouterr().err
+
+
+def test_checker_probe_failure_removes_seeded_events_file(tmp_path, monkeypatch):
+    digest = _digest(SCHEMA)
+    events = _events(tmp_path)
+    events.parent.mkdir(parents=True)
+    events.write_text("stale\n", encoding="ascii")
+    _block_lsk(monkeypatch)
+    rc, record, stream = _check_events(tmp_path, '{"lines": 3, "words": 5}', digest=digest)
+    assert rc == 2
+    assert record is None and stream is None
+    assert not events.exists()
+
+
+def test_checker_contract_sink_failure_exits_1_verdict_kept(tmp_path, monkeypatch, capsys):
+    from bootstrap_lib import execution_event
+
+    def refuse(self, event):
+        raise OSError("contract sink refused")
+
+    monkeypatch.setattr(execution_event.JsonlSink, "write", refuse)
+    rc, record, _stream = _check_events(tmp_path, "bytes", kind="opaque-file")
+    assert rc == 1
+    assert record["verdict"] == "satisfied"
+    err = capsys.readouterr().err
+    assert "the contract cleanup layer failed" in err and "contract sink refused" in err

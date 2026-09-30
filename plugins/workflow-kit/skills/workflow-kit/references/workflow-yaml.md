@@ -115,8 +115,9 @@ A **step** is exactly one of: an agent step, a pipeline step, a `script` node, o
   compiled openrouter node also records its execution events at
   `./.workflow-kit/{{runId}}/<step-id>.events.jsonl` with unit id `<step-id>`;
   under `for_each`, the path gets the index `i` like `$OUT`, and the unit id is
-  `<step-id>-<i>`. A re-run replaces the file. See `node-strategies.md`
-  ("Execution events").
+  `<step-id>-<i>`. A re-run replaces the file. A node that `provides` an
+  artifact writes that stream in the v3 format, with one `contract` event
+  before its `terminal`. See `node-strategies.md` ("Execution events").
 
 Any step may also declare `requires`, and a `script` or `openrouter` node may
 declare `provides` -- see "Typed artifacts" below.
@@ -193,6 +194,15 @@ steps:
   the answer at the llm-scripting-kit seam. Each writes the verdict file
   `./.workflow-kit/{{runId}}/<step-id>[.<i>].contract.json` (format and
   exit codes: `node-strategies.md`, "Typed artifacts").
+- **Contract events.** Every provider also records its judgment as one
+  `contract` execution event (schema v3; artifact, kind, verdict, schema
+  digest and error count, never the payload). An openrouter provider adds it
+  to its own events stream, before its `terminal`. A script provider's
+  checker writes it at the path and unit id an openrouter node uses,
+  `./.workflow-kit/{{runId}}/<step-id>[.<i>].events.jsonl` with unit id
+  `<step-id>` (`<step-id>-<i>` under `for_each`), as the only event in that
+  stream. Running a provider needs bootstrap 0.137.0 or later. See
+  `node-strategies.md` ("Execution events").
 - **The guard.** After every provider step the compiled script checks the
   result: if the node, or any fan-out item, exited non-zero (a failed
   command, a `violated` or `missing` artifact, a refused schema), it throws

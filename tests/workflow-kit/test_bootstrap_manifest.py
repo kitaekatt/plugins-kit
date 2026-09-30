@@ -39,15 +39,41 @@ def _version(text):
 class TestRequiresBootstrap:
     def test_floor_covers_every_required_bootstrap_lib_call(self):
         # The loader calls bootstrap_lib.model_declaration.parse / CORE_IDS
-        # (MODEL_DECLARATION_BOOTSTRAP), and every compiled openrouter node
-        # calls bootstrap_lib.execution_event.Emitter / JsonlSink
-        # (EXECUTION_EVENT_BOOTSTRAP). The floor is the newer of the two.
+        # (MODEL_DECLARATION_BOOTSTRAP), every compiled openrouter node calls
+        # bootstrap_lib.execution_event.Emitter / JsonlSink
+        # (EXECUTION_EVENT_BOOTSTRAP), and every compiled provider node calls
+        # Emitter(..., schema=<v3>) for its contract event
+        # (CONTRACT_EVENT_BOOTSTRAP). The floor is the newest of the three.
         from workflow_kit_lib.declarations import (
+            CONTRACT_EVENT_BOOTSTRAP,
             EXECUTION_EVENT_BOOTSTRAP,
             MODEL_DECLARATION_BOOTSTRAP,
         )
 
         manifest = json.loads((PLUGIN_ROOT / "bootstrap.json").read_text(encoding="utf-8"))
-        floor = max(MODEL_DECLARATION_BOOTSTRAP, EXECUTION_EVENT_BOOTSTRAP, key=_version)
+        floor = max(
+            MODEL_DECLARATION_BOOTSTRAP,
+            EXECUTION_EVENT_BOOTSTRAP,
+            CONTRACT_EVENT_BOOTSTRAP,
+            key=_version,
+        )
         assert manifest.get("requires_bootstrap") == floor
         assert "execution_event" in manifest["$comment"]
+
+    def test_contract_event_floor_is_0_137_0(self):
+        # A literal, independent of the constants: bootstrap 0.137.0 shipped
+        # execution-event schema v3 with the contract event. Moving the
+        # constant and the manifest back together keeps the test above green;
+        # it turns this one red.
+        from workflow_kit_lib.declarations import CONTRACT_EVENT_BOOTSTRAP
+
+        manifest = json.loads((PLUGIN_ROOT / "bootstrap.json").read_text(encoding="utf-8"))
+        assert CONTRACT_EVENT_BOOTSTRAP == "0.137.0"
+        assert manifest["requires_bootstrap"] == "0.137.0"
+
+    def test_bootstrap_comment_names_contract_event_call(self):
+        manifest = json.loads((PLUGIN_ROOT / "bootstrap.json").read_text(encoding="utf-8"))
+        comment = manifest["$comment"]
+        assert 'Emitter(..., schema="plugins-kit.execution-event/v3")' in comment
+        assert "contract event" in comment
+        assert "0.137.0" in comment

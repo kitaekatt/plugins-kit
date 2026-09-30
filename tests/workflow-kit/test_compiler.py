@@ -632,3 +632,33 @@ def test_schema_text_is_the_canonical_json(write_workflow, lsk_path):
         '{"properties":{"a":{"type":"integer"},"b":{"minimum":1.0,"type":"number"}},'
         '"type":"object"}'
     )
+
+
+# --------------------------------------------------------------------------- #
+# TC4: a script provider's checker records the `contract` event in the node's
+# events stream, at the path and unit id an openrouter node uses (E5).
+# --------------------------------------------------------------------------- #
+def test_script_provider_passes_events_path(write_workflow):
+    js = _compile_text(_TYPED, write_workflow)
+    line = js.split("const step_count = await ")[1].split("\n")[0]
+    assert (
+        "verdict: `./.workflow-kit/${inputs.runId}/count.contract.json`, "
+        "events: `./.workflow-kit/${inputs.runId}/count.events.jsonl`, "
+        'runId: inputs.runId, unitId: "count" }'
+    ) in line
+    helper = js[js.index("function wkScriptProvided("):js.index("function wkProvided(")]
+    for flag, key in (("--events", "events"), ("--run-id", "runId"), ("--unit-id", "unitId")):
+        assert f"' {flag} ' + shq(check.{key})" in helper
+    # the event flags precede the command-exit argument on the checker line
+    assert helper.index("eventFlags +") < helper.index("' --command-exit \"$wk_rc\"'")
+    # an openrouter provider's events travel in wkOpenRouter's spec, not its check
+    classify = js.split("const step_classify = await ")[1].split("\n")[0]
+    assert classify.count("--events") == 0 and classify.count("events: `") == 1
+
+
+def test_fanout_script_provider_indexes_events_and_unit(write_workflow):
+    js = _compile_text(_TYPED, write_workflow)
+    line = js.split("const step_many = await ")[1].split("\n")[0]
+    assert "events: `./.workflow-kit/${inputs.runId}/many.${i}.events.jsonl`" in line
+    assert "unitId: `many-${i}`" in line
+    assert "runId: inputs.runId" in line

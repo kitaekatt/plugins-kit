@@ -834,3 +834,362 @@ def test_provider_body_error_wins_over_verdict_write_failure(
     err = capsys.readouterr().err
     assert message in err
     assert "the verdict cleanup layer failed" in err
+
+
+
+# --------------------------------------------------------------------------- #
+# TC4: the contract event. A provider node with --events writes its whole
+# stream under schema v3 and records one ``contract`` event, which always
+# precedes the unit's ``terminal`` (``_TerminalLast`` holds it). Every
+# assertion about the contract path uses ``lsk_transport``.
+# --------------------------------------------------------------------------- #
+_V1 = "plugins-kit.execution-event/v1"
+_V2 = "plugins-kit.execution-event/v2"
+_V3 = "plugins-kit.execution-event/v3"
+_VALID = '{"lines": 3, "words": 5}'
+
+
+def _events_path(tmp_path):
+    return tmp_path / ".workflow-kit" / "r1" / "classify.events.jsonl"
+
+
+def _run_provider(tmp_path, *extra, kind="schema", model="or-qwen"):
+    args = ["--model", model] if model else []
+    return _run(tmp_path, *args, *_provider_args(tmp_path, kind=kind),
+                *_events_args(_events_path(tmp_path)), *extra)
+
+
+def _names(stream):
+    return [e["event"] for e in stream]
+
+
+def _contracts(stream):
+    return [e for e in stream if e["event"] == "contract"]
+
+
+def _raising_run(error):
+    """A ``run`` that emits the unit's terminal through its observer, then raises."""
+    def run(names, request, *, project_root=None, backend_factory=None, max_attempts=1,
+            observer=None):
+        observer.emit("terminal", payload={"state": "failed"})
+        raise error
+
+    return run
+
+
+def _failing_sink(monkeypatch, event_name):
+    """Make the real JsonlSink raise while writing ``event_name`` events only."""
+    from bootstrap_lib import execution_event
+
+    real_write = execution_event.JsonlSink.write
+
+    def write(self, event):
+        if event["event"] == event_name:
+            raise OSError(f"{event_name} sink refused")
+        return real_write(self, event)
+
+    monkeypatch.setattr(execution_event.JsonlSink, "write", write)
+
+
+def test_provider_stream_has_contract_before_terminal(lsk_transport, tmp_path, capsys):
+    lsk_transport["behaviour"]["text"] = _VALID
+    rc, _out, _payload = _run_provider(tmp_path)
+    assert rc == 0, capsys.readouterr().err
+    stream = _read_stream(_events_path(tmp_path))  # validate_stream passes
+    names = _names(stream)
+    assert names[:2] == ["dispatch-selected", "call-started"]
+    assert names[-2:] == ["contract", "terminal"]
+    assert names.count("contract") == 1
+    assert {e["schema"] for e in stream} == {_V3}
+    contract = _contracts(stream)[0]
+    assert contract["payload"] == {
+        "artifact": "doc_stats", "kind": "schema", "verdict": "satisfied",
+        "schema_digest": _digest(SCHEMA),
+    }
+    assert contract["identity"] == {"run_id": "r1", "unit_id": "classify"}
+    assert contract["source"]["plugin"] == "workflow-kit"
+    assert stream[-1]["payload"] == {"state": "completed"}
+    assert [e["seq"] for e in stream] == sorted(e["seq"] for e in stream)
+
+
+def test_held_terminal_is_forwarded_when_run_raises(lsk_transport, tmp_path, monkeypatch):
+    monkeypatch.setattr(lsk_transport["declaration"], "run", _raising_run(RuntimeError("late")))
+    with pytest.raises(RuntimeError, match="late"):
+        _run_provider(tmp_path)
+    stream = _read_stream(_events_path(tmp_path))
+    terminals = [e for e in stream if e["event"] == "terminal"]
+    assert len(terminals) == 1
+    assert terminals[0]["payload"] == {"state": "failed"}
+    assert terminals[0]["seq"] == stream[-1]["seq"]
+
+
+def test_unexpected_exception_emits_contract_then_terminal(lsk_transport, tmp_path, monkeypatch):
+    monkeypatch.setattr(lsk_transport["declaration"], "run", _raising_run(RuntimeError("boom")))
+    with pytest.raises(RuntimeError, match="boom"):
+        _run_provider(tmp_path)
+    stream = _read_stream(_events_path(tmp_path))
+    assert _names(stream) == ["contract", "terminal"]
+    assert stream[0]["payload"]["verdict"] == "missing"
+    assert _verdict(tmp_path)["verdict"] == "missing"
+
+
+@pytest.mark.parametrize("verdict", ["satisfied", "violated", "missing"])
+def test_provider_contract_event_verdict(lsk_transport, tmp_path, verdict):
+    if verdict == "satisfied":
+        lsk_transport["behaviour"]["text"] = _VALID
+    elif verdict == "violated":
+        lsk_transport["behaviour"]["text"] = '{"lines": "three", "words": 5}'
+    else:
+        lsk_transport["behaviour"]["raise"] = RuntimeError("no API key resolved")
+    rc, _out, _payload = _run_provider(tmp_path)
+    assert rc == (0 if verdict == "satisfied" else 1)
+    (contract,) = _contracts(_read_stream(_events_path(tmp_path)))
+    expected = {"artifact": "doc_stats", "kind": "schema", "verdict": verdict,
+                "schema_digest": _digest(SCHEMA)}
+    if verdict == "violated":
+        expected["error_count"] = 1
+    assert contract["payload"] == expected
+    assert _verdict(tmp_path)["verdict"] == verdict
+
+
+def test_provider_contract_event_opaque_has_no_digest(lsk_transport, tmp_path):
+    lsk_transport["behaviour"]["text"] = "free text"
+    assert _run_provider(tmp_path, kind="opaque-file")[0] == 0
+    (contract,) = _contracts(_read_stream(_events_path(tmp_path)))
+    assert contract["payload"] == {"artifact": "doc_stats", "kind": "opaque-file",
+                                   "verdict": "satisfied"}
+
+
+@pytest.mark.parametrize("reply,count", [
+    ('{"lines": "three", "words": -1, "extra": 1}', 3),
+    ("three lines, five words", 1),
+])
+def test_provider_contract_event_error_count(lsk_transport, tmp_path, reply, count):
+    lsk_transport["behaviour"]["text"] = reply
+    assert _run_provider(tmp_path)[0] == 1
+    (contract,) = _contracts(_read_stream(_events_path(tmp_path)))
+    assert contract["payload"]["error_count"] == count == len(_verdict(tmp_path)["errors"])
+
+
+def test_non_provider_stream_stays_v1(lsk, tmp_path):
+    events = tmp_path / ".workflow-kit" / "r1" / "classify.events.jsonl"
+    assert _run(tmp_path, "--model", "or-qwen", *_events_args(events))[0] == 0
+    stream = _read_stream(events)
+    assert {e["schema"] for e in stream} == {_V1}
+    assert _names(stream) == ["dispatch-selected", "call-started", "result", "terminal"]
+
+
+def test_provider_events_probe_without_v3_exits_2_before_call(
+    lsk_transport, tmp_path, capsys, monkeypatch
+):
+    args = [*_provider_args(tmp_path), *_events_args(_events_path(tmp_path))]
+    _fake_execution_event(monkeypatch, SUPPORTED_SCHEMAS=frozenset({_V1, _V2}))
+    rc, out, payload = _run(tmp_path, "--model", "or-qwen", *args)
+    assert rc == 2
+    assert lsk_transport["requests"] == []
+    assert not (tmp_path / ".workflow-kit").exists()  # no stream, no verdict, no directory
+    assert payload is None and not out.exists()
+    err = capsys.readouterr().err
+    assert "supports plugins-kit.execution-event/v1 but not /v3" in err
+    assert "contract events" in err and ">= 0.137.0" in err
+    assert "claude plugin update bootstrap@plugins-kit" in err
+    assert "does not bind" not in err
+
+
+def test_provider_events_probe_emitter_without_schema_exits_2(
+    lsk_transport, tmp_path, capsys, monkeypatch
+):
+    class OldEmitter:  # predates schema=
+        def __init__(self, plugin, run_id, *, unit_id=None, sinks=(), start_seq=0):
+            raise AssertionError("never constructed")
+
+    args = [*_provider_args(tmp_path), *_events_args(_events_path(tmp_path))]
+    _fake_execution_event(monkeypatch, Emitter=OldEmitter)
+    rc, _out, _payload = _run(tmp_path, "--model", "or-qwen", *args)
+    assert rc == 2
+    assert lsk_transport["requests"] == []
+    assert not (tmp_path / ".workflow-kit").exists()
+    err = capsys.readouterr().err
+    assert "does not bind" in err and "bootstrap >= 0.137.0" in err
+    assert "but not /v3" not in err
+
+
+def test_default_declaration_failure_emits_contract_only_missing_stream(
+    lsk_transport, tmp_path, monkeypatch
+):
+    import llm_scripting_kit
+
+    def unconfigured(project_root=None):
+        raise ValueError("no default declaration is configured")
+
+    monkeypatch.setattr(llm_scripting_kit, "default_declaration", unconfigured)
+    rc, _out, _payload = _run_provider(tmp_path, model=None)
+    assert rc == 2
+    stream = _read_stream(_events_path(tmp_path))
+    assert _names(stream) == ["contract"]
+    assert stream[0]["payload"]["verdict"] == "missing"
+    assert stream[0]["schema"] == _V3
+
+
+def test_routing_floor_emits_contract_before_unroutable_terminal(lsk_transport, tmp_path):
+    rc, _out, _payload = _run_provider(tmp_path, model="sol,typo")  # the real run
+    assert rc == 2
+    assert lsk_transport["requests"] == []
+    stream = _read_stream(_events_path(tmp_path))  # validate_stream passes
+    assert _names(stream) == ["contract", "terminal"]
+    assert stream[0]["payload"]["verdict"] == "missing"
+    assert stream[1]["payload"] == {"state": "unroutable"}
+
+
+def test_contract_sink_error_still_releases_terminal(lsk_transport, tmp_path, monkeypatch, capsys):
+    lsk_transport["behaviour"]["text"] = _VALID
+    _failing_sink(monkeypatch, "contract")
+    rc, _out, _payload = _run_provider(tmp_path)
+    assert rc == 1
+    stream = _read_stream(_events_path(tmp_path))
+    assert "contract" not in _names(stream)
+    assert _names(stream)[-1] == "terminal"
+    assert _verdict(tmp_path)["verdict"] == "satisfied"
+    err = capsys.readouterr().err
+    assert "the contract cleanup layer failed" in err and "contract sink refused" in err
+
+
+def test_verdict_write_failure_still_emits_contract_and_terminal(
+    lsk_transport, tmp_path, monkeypatch, capsys
+):
+    lsk_transport["behaviour"]["text"] = _VALID
+    _fail_verdict_replace(monkeypatch, tmp_path)
+    rc, _out, _payload = _run_provider(tmp_path)
+    assert rc == 1
+    assert not _verdict_path(tmp_path).exists()
+    stream = _read_stream(_events_path(tmp_path))
+    assert _names(stream)[-2:] == ["contract", "terminal"]
+    assert _contracts(stream)[0]["payload"]["verdict"] == "satisfied"
+    assert "the verdict cleanup layer failed" in capsys.readouterr().err
+
+
+def test_terminal_sink_failure_is_reported_exit_1(lsk_transport, tmp_path, monkeypatch, capsys):
+    lsk_transport["behaviour"]["text"] = _VALID
+    _failing_sink(monkeypatch, "terminal")
+    rc, _out, _payload = _run_provider(tmp_path)
+    assert rc == 1
+    assert _verdict(tmp_path)["verdict"] == "satisfied"
+    stream = _read_stream(_events_path(tmp_path))
+    assert _names(stream)[-1] == "contract"
+    assert "terminal" not in _names(stream)
+    err = capsys.readouterr().err
+    assert "the terminal cleanup layer failed" in err and "terminal sink refused" in err
+
+
+class _RecordingEmitter:
+    def __init__(self, fail_on=None):
+        self.events = []
+        self.fail_on = fail_on
+
+    def emit(self, event, **fields):
+        self.events.append((event, fields))
+        if event == self.fail_on:
+            raise OSError(f"{event} refused")
+        return {"event": event}
+
+
+def test_release_once_forwards_at_most_once():
+    emitter = _RecordingEmitter()
+    held = orr._TerminalLast(emitter)
+    forwarded = held.emit("result", attempt_id="1", payload={"status": "completed"})
+    assert forwarded == {"event": "result"}
+    assert held.emit("terminal", payload={"state": "completed"}) is None
+    assert [e for e, _f in emitter.events] == ["result"]  # terminal held
+    held.release_once()
+    held.release_once()  # a second call is a no-op
+    assert emitter.events[1:] == [("terminal", {"payload": {"state": "completed"}})]
+
+    failing = _RecordingEmitter(fail_on="terminal")
+    held = orr._TerminalLast(failing)
+    held.emit("terminal", payload={"state": "failed"})
+    with pytest.raises(OSError, match="terminal refused"):
+        held.release_once()
+    held.release_once()  # a forward that raised is not retried
+    assert [e for e, _f in failing.events] == ["terminal"]
+
+
+def test_body_exception_wins_over_cleanup_errors(lsk_transport, tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(lsk_transport["declaration"], "run", _raising_run(RuntimeError("body")))
+    _failing_sink(monkeypatch, "contract")
+    with pytest.raises(RuntimeError, match="body"):
+        _run_provider(tmp_path)
+    err = capsys.readouterr().err
+    assert "the contract cleanup layer failed" in err and "contract sink refused" in err
+    assert _names(_read_stream(_events_path(tmp_path))) == ["terminal"]
+
+
+@pytest.mark.parametrize("path", [
+    "completed", "violated", "task_error", "floor", "default_declaration", "exception",
+])
+def test_provider_emits_exactly_one_contract(lsk_transport, tmp_path, monkeypatch, path):
+    model = "or-qwen"
+    if path == "completed":
+        lsk_transport["behaviour"]["text"] = _VALID
+    elif path == "violated":
+        lsk_transport["behaviour"]["text"] = '{"lines": -1, "words": 5}'
+    elif path == "task_error":
+        lsk_transport["behaviour"]["raise"] = RuntimeError("no API key resolved")
+    elif path == "floor":
+        model = "sol,typo"
+    elif path == "default_declaration":
+        import llm_scripting_kit
+
+        def unconfigured(project_root=None):
+            raise ValueError("no default declaration is configured")
+
+        monkeypatch.setattr(llm_scripting_kit, "default_declaration", unconfigured)
+        model = None
+    else:
+        monkeypatch.setattr(lsk_transport["declaration"], "run",
+                            _raising_run(RuntimeError("boom")))
+    if path == "exception":
+        with pytest.raises(RuntimeError):
+            _run_provider(tmp_path, model=model)
+    else:
+        _run_provider(tmp_path, model=model)
+    stream = _read_stream(_events_path(tmp_path))  # validate_stream passes
+    names = _names(stream)
+    assert names.count("contract") == 1
+    assert names.count("terminal") <= 1
+    if "terminal" in names:
+        assert names.index("contract") < names.index("terminal")
+
+
+def _seed_events(tmp_path):
+    path = _events_path(tmp_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("stale\n", encoding="ascii")
+    return path
+
+
+def test_provider_probe_failure_removes_seeded_events_file(lsk_transport, tmp_path, monkeypatch):
+    args = [*_provider_args(tmp_path), *_events_args(_events_path(tmp_path))]
+    events = _seed_events(tmp_path)
+    monkeypatch.setitem(sys.modules, "llm_scripting_kit", None)
+    rc, _out, _payload = _run(tmp_path, "--model", "or-qwen", *args)
+    assert rc == 2
+    assert not events.exists()
+    assert not _verdict_path(tmp_path).exists()
+
+
+def test_provider_undeletable_events_file_exits_2_before_call(lsk_transport, tmp_path, capsys):
+    _events_path(tmp_path).mkdir(parents=True)  # a directory where the stream goes
+    rc, out, payload = _run_provider(tmp_path)
+    assert rc == 2
+    assert lsk_transport["requests"] == []
+    assert _events_path(tmp_path).is_dir()
+    assert payload is None and not out.exists()
+    assert "cannot invalidate the previous events file at" in capsys.readouterr().err
+
+
+def test_non_provider_probe_failure_keeps_events_file(lsk, tmp_path, monkeypatch):
+    events = _seed_events(tmp_path)
+    monkeypatch.setitem(sys.modules, "llm_scripting_kit", None)
+    rc, _out, _payload = _run(tmp_path, "--model", "or-qwen", *_events_args(events))
+    assert rc == 2
+    assert events.read_text(encoding="ascii") == "stale\n"

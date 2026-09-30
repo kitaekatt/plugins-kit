@@ -7,7 +7,7 @@
 // inside Workflow scripts -- they break resume).
 //
 // A provider `check` object:
-//   { runner?, artifact, kind, schema?, digest?, verdict }
+//   { runner?, artifact, kind, schema?, digest?, verdict, events?, runId?, unitId? }
 // - `runner` (script providers only) runs scripts/check_artifact.py under
 //   workflow-kit's venv python, e.g.
 //   '"<workflow-kit-venv-python>" "<pluginRoot>/scripts/check_artifact.py"'
@@ -16,6 +16,11 @@
 //   llm-scripting-kit's OutputContract(...).schema_digest reports).
 // - `verdict` is where the node writes its workflow-kit.artifact-verdict/v1
 //   file, e.g. `./.workflow-kit/${runId}/<step>[.<i>].contract.json`.
+// - `events`, `runId`, `unitId` (script providers; all three or none): the
+//   checker records its `contract` event in a plugins-kit.execution-event/v3
+//   stream at `events`, e.g. `./.workflow-kit/${runId}/<step>[.<i>].events.jsonl`
+//   with unit id `<step>` (`<step>-<i>` under fan-out). An openrouter provider
+//   passes its events through wkOpenRouter's spec instead.
 
 // The provider flags an openrouter node's runner takes. Append them to the
 // runner prefix passed to the unchanged wkOpenRouter (argparse accepts the
@@ -43,6 +48,11 @@ function wkScriptProvided(command, out, check, opts) {
   if (check.kind === 'schema') {
     schemaFlags = ' --schema ' + shq(check.schema) + ' --schema-digest ' + shq(check.digest)
   }
+  let eventFlags = ''
+  if (check.events) {
+    eventFlags = ' --events ' + shq(check.events) +
+      ' --run-id ' + shq(check.runId) + ' --unit-id ' + shq(check.unitId)
+  }
   const cmd = [
     'wk_e=; case $- in *e*) wk_e=1; set +e;; esac',
     '( if [ -n "$wk_e" ]; then set -e; fi',
@@ -56,6 +66,7 @@ function wkScriptProvided(command, out, check, opts) {
       ' --in ' + shq(out) +
       ' --verdict ' + shq(check.verdict) +
       schemaFlags +
+      eventFlags +
       ' --command-exit "$wk_rc"',
   ].join('\n')
   return wkNode(cmd, out, opts)

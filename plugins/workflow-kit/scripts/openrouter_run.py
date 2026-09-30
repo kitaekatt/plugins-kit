@@ -53,6 +53,17 @@ execution, as --out does. Before any model call, the runner probes
 library exits 2 and creates nothing. Only then is the events file's parent
 directory created.
 
+A node that also PROVIDES an artifact (--provides with --events) writes its
+whole stream under ``plugins-kit.execution-event/v3`` instead (v3 accepts
+every v1 event under the v1 rules) and records its judgment as one
+``contract`` event (see ``check_artifact.py`` for the payload), which always
+precedes the unit's ``terminal``: ``run`` is given a wrapper that forwards
+every event except ``terminal``, which it holds until the verdict is known.
+The probe then asks for v3 (absent, supports-v1-but-not-v3 and otherwise too
+old get three messages), and the previous events file is removed together
+with the previous verdict, before any probe. A node that provides nothing
+keeps the v1 stream exactly as described above.
+
 Typed artifacts: with --provides (which requires --kind and --verdict; --kind
 schema also requires --schema and --schema-digest, which --kind opaque-file
 refuses) the node provides a named artifact, and the runner records its
@@ -81,17 +92,23 @@ writer).
   exception still propagates.
 
 Lifecycle with --provides, for every execution whose arguments parse: the
-previous verdict is removed first, before any probe (an absent file is fine;
-any other error exits 2 having done nothing else, creating no directory). The
-probes follow; with --kind schema they add ``OutputContract`` (with
-``schema_digest``), ``POLICY_VALIDATED_RESULT`` and
-``BackendOptions(output_contract=)``, and an absent and a too-old library get
-different messages. Everything after the probes runs in one ``try``/``finally``
-whose cleanup writes the verdict atomically (``missing`` when no judgment was
-reached), so no return or exception path skips it. A cleanup failure is
-printed to stderr naming its layer; it makes a successful node exit 1 and
-never masks the body's own failure or exception. Without --provides, no
-contract is sent and nothing here applies.
+previous verdict (and, with --events, the previous events file) is removed
+first, before any probe (an absent file is fine; any other error exits 2
+having done nothing else, creating no directory). The probes follow; with
+--kind schema they add ``OutputContract`` (with ``schema_digest``),
+``POLICY_VALIDATED_RESULT`` and ``BackendOptions(output_contract=)``, and an
+absent and a too-old library get different messages. Everything after the
+probes runs in one ``try``/``finally`` whose cleanup is three independent
+layers, each attempted whatever the others did: (1) write the verdict
+atomically (``missing`` when no judgment was reached); (2) with --events,
+attempt exactly one ``contract`` event; (3) with --events, release the held
+``terminal`` at most once. So a failure before ``run`` (the default
+declaration, say) leaves a contract-only stream, and the routing floor, which
+``run`` reports as ``terminal`` "unroutable" before it raises, leaves
+``contract`` then ``terminal``. A cleanup failure is printed to stderr naming
+its layer; with no failure in the body the first one makes the node exit 1,
+and it never masks the body's own failure or exception. Without --provides,
+no contract is sent and nothing here applies.
 """
 from __future__ import annotations
 
@@ -164,6 +181,41 @@ def _execution_event_bootstrap():
         sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
         from workflow_kit_lib.declarations import EXECUTION_EVENT_BOOTSTRAP  # noqa: PLC0415
     return EXECUTION_EVENT_BOOTSTRAP
+
+
+class _TerminalLast:
+    """The observer ``run`` gets on a provider node: every event but ``terminal``.
+
+    ``run`` emits the unit's ``terminal`` before the runner knows the artifact's
+    verdict, and the v3 stream rules refuse a ``contract`` after the unit's
+    ``terminal``. So ``terminal`` is held here and forwarded by
+    :meth:`release_once` after the ``contract`` event. ``seq`` is assigned when
+    the real ``Emitter.emit`` runs, so the stream stays monotonic.
+    """
+
+    def __init__(self, emitter):
+        self._emitter = emitter
+        self._held = None
+
+    def emit(self, event, **fields):
+        if event != "terminal":
+            return self._emitter.emit(event, **fields)
+        if self._held is not None:
+            raise RuntimeError("run emitted a second terminal event for one unit")
+        self._held = fields
+        return None
+
+    def emit_contract(self, payload):
+        """Record the unit's ``contract`` event on the underlying emitter."""
+        return self._emitter.emit("contract", payload=payload)
+
+    def release_once(self):
+        """Forward the held ``terminal``, if any. The slot is cleared BEFORE
+        forwarding, so a second call, or one after a forward that raised, is a
+        no-op: the terminal is forwarded at most once."""
+        held, self._held = self._held, None
+        if held is not None:
+            self._emitter.emit("terminal", **held)
 
 
 def _probe_execution_event():
@@ -307,11 +359,16 @@ def main(argv=None):
             ap.error("--kind opaque-file takes no --schema or --schema-digest")
 
     checker = None
+    # A provider node that records events writes a v3 stream holding its
+    # contract event; any other node keeps the v1 stream unchanged.
+    contract_events = args.provides is not None and bool(args.events)
     if args.provides is not None:
         # First action of a parsed execution: no refusal below may leave a
-        # previous execution's verdict on disk.
+        # previous execution's verdict or events stream on disk.
         checker = _checker()
         message = checker.invalidate_verdict(args.verdict)
+        if message is None and contract_events:
+            message = checker.invalidate_events(args.events)
         if message is not None:
             print(message, file=sys.stderr)
             return 2
@@ -366,14 +423,32 @@ def main(argv=None):
             print(str(exc), file=sys.stderr)
             return 2
 
+    outcome = {"verdict": "missing", "data": None, "errors": ()}
+
+    def event_payload():
+        return checker.contract_payload(
+            artifact=args.provides,
+            kind=args.kind,
+            verdict=outcome["verdict"],
+            schema_digest=None if contract is None else contract.schema_digest,
+            errors=outcome["errors"],
+        )
+
     execution_event = None
     if args.events:
         # Every probe runs before any directory is created and before any
         # model call; a refusal leaves nothing on disk.
-        execution_event, message = _probe_execution_event()
+        if contract_events:
+            execution_event, message = checker.probe_contract_events()
+        else:
+            execution_event, message = _probe_execution_event()
         if message is None:
             message = _probe_run_observer(run)
-        if message is None:
+        if message is None and contract_events:
+            message = checker.check_contract_event(
+                execution_event, args.run_id, args.unit_id, event_payload()
+            )
+        elif message is None:
             try:
                 execution_event.Emitter(
                     _EVENT_PLUGIN, args.run_id, unit_id=args.unit_id, sinks=()
@@ -388,7 +463,7 @@ def main(argv=None):
     # its cleanup layers run on every return and exception path. Without
     # --provides there are no layers, and the body is exactly the node's
     # behavior without --provides.
-    outcome = {"verdict": "missing", "data": None, "errors": ()}
+    stream = {"held": None}  # the _TerminalLast of a provider node with --events
     layers = []
     if checker is not None:
         def write_verdict_layer():
@@ -404,9 +479,28 @@ def main(argv=None):
 
         layers.append(("verdict", write_verdict_layer))
 
+    if contract_events:
+        def contract_layer():
+            held = stream["held"]
+            if held is None:
+                raise RuntimeError(f"the events stream at {args.events} was never opened")
+            held.emit_contract(event_payload())
+
+        def terminal_layer():
+            if stream["held"] is not None:
+                stream["held"].release_once()
+
+        layers.append(("contract", contract_layer))
+        layers.append(("terminal", terminal_layer))
+
     def body():
         observer = None
-        if args.events:
+        if contract_events:
+            stream["held"] = _TerminalLast(checker.open_contract_stream(
+                execution_event, args.events, args.run_id, args.unit_id
+            ))
+            observer = stream["held"]
+        elif args.events:
             events_path = Path(args.events)
             # A fresh run has no ./.workflow-kit/<runId>/ directory, and --out's
             # parent is created only after the call returns.
