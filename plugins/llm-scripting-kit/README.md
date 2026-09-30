@@ -480,6 +480,39 @@ Any other key is read as a dotted path over `Capabilities.to_json()` (e.g.
 capability table of its own -- it only knows how to walk the advertisement's
 JSON shape.
 
+### Output contracts
+
+A caller that needs a structured answer declares an
+`llm_scripting_kit.completion.OutputContract(id, policy, schema)` on
+`BackendOptions.output_contract` instead of sending a per-transport schema key.
+The policy is `native-required` (the schema must reach the target through a
+first-class schema channel), `validated-result` (any advertised channel, answer
+checked), or `text-only` (an explicit declaration that the answer is text). The
+schema is a stdlib JSON Schema subset; a keyword outside it (`pattern`,
+`oneOf`, `format`, ...) is refused when the contract is built.
+
+- `codex-cli` delivers the schema natively (`--output-schema`) and lists all
+  three policies, but accepts only OpenAI strict-mode schemas
+  (`additionalProperties` false and every property in `required`, at every
+  object level); anything else is refused before it spawns.
+- `openrouter`, `claude-cli` and `opencode-cli` append an exact schema
+  instruction to the system text, list `validated-result` and `text-only`, and
+  never `native-required`. `openrouter` sends no `response_format`.
+- `contract_requirements(contract)` gives the selection requirement, and
+  `declaration.run` applies it before choosing a model, so an entry that cannot
+  satisfy the policy is skipped.
+- A `completed` call means the answer satisfies the contract:
+  `response.structured` is the validated object. A structural failure raises
+  `OutputContractViolation`, whose `response` holds the raw text, usage and
+  report; `evaluate_output(contract, text)` runs the same check standalone. The
+  `complete` verb reports a violation as a failed envelope with the same
+  response.
+- Sending `extras.output_schema` or `extras.response_format` beside a contract
+  is refused.
+
+Domain validity beyond the schema stays with the caller. Details:
+[references/completion-seam-contract.md](references/completion-seam-contract.md).
+
 ## Key handling
 
 Interactive `set-key` uses a hidden prompt (`getpass`), the `.env` file is
