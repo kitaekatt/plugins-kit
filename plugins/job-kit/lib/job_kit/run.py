@@ -3,15 +3,18 @@
 from __future__ import annotations
 
 import os
+import shutil
 import signal
 import subprocess
+import tempfile
 import threading
 import time
 import uuid
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
-from dataclasses import replace
+from contextlib import contextmanager
+from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Callable, Collection, Mapping, Optional, Sequence
+from typing import Callable, Collection, Iterator, Mapping, Optional, Sequence
 
 # select.py is the guarded front door for llm_scripting_kit.completion: it
 # probes for the symbols job-kit needs and raises SharedLibTooOldError with a
@@ -37,12 +40,15 @@ from llm_scripting_kit.completion import (
 )
 from llm_scripting_kit.completion.capabilities import Capabilities
 from llm_scripting_kit.completion.factory import BackendSelection
+from . import interrupts as _interrupts
 from .model import (
     Acceptance,
     Attempt,
     AttemptError,
+    Continuation,
     Contract,
     ContractContext,
+    InterruptRequest,
     Job,
     JobState,
     RunSnapshot,
@@ -88,6 +94,91 @@ except ImportError:  # pragma: no cover - optional until an HTTP backend runs
 
 CapabilitiesProvider = Callable[[], Mapping[str, Capabilities]]
 BackendFactory = Callable[..., BackendSelection]
+
+#: The scratch directory, beside the ledger, that holds each contract run's
+#: interrupt files while the contract runs. The ledger, not a file here, is
+#: the durable record.
+INTERRUPT_IO_DIRNAME = "interrupt-io"
+_REQUEST_FILENAME = "request.json"
+_RESOLUTION_FILENAME = "resolution.json"
+#: Variables a contract reads to request or continue an interrupt. They are
+#: always set by job-kit or removed, never inherited: a contract tells its
+#: first run from a continuation by the presence of the resolution path.
+_INTERRUPT_VARIABLES = (
+    "JOB_KIT_INTERRUPT_REQUEST",
+    "JOB_KIT_INTERRUPT_RESOLUTION",
+    "JOB_KIT_INTERRUPT_ID",
+    "JOB_KIT_CONTINUATION_NO",
+)
+
+
+@dataclass(frozen=True)
+class InterruptIO:
+    """The interrupt files and identity one contract run receives.
+
+    ``request_path`` is where the contract may write an interrupt request
+    (it does not exist when the contract starts). A continuation also gets
+    the ``resolution_path`` of the resolution document job-kit wrote, the
+    ``interrupt_id`` it continues, and its ``continuation_no``, a counter
+    that changes on every re-run and is not an idempotency key.
+    """
+
+    request_path: Path
+    resolution_path: Optional[Path] = None
+    interrupt_id: Optional[str] = None
+    continuation_no: Optional[int] = None
+
+    def environment(self) -> dict[str, str]:
+        """The ``JOB_KIT_INTERRUPT_*`` variables this run exports."""
+        values = {"JOB_KIT_INTERRUPT_REQUEST": str(self.request_path)}
+        if self.resolution_path is not None:
+            values["JOB_KIT_INTERRUPT_RESOLUTION"] = str(self.resolution_path)
+        if self.interrupt_id is not None:
+            values["JOB_KIT_INTERRUPT_ID"] = str(self.interrupt_id)
+        if self.continuation_no is not None:
+            values["JOB_KIT_CONTINUATION_NO"] = str(self.continuation_no)
+        return values
+
+
+@contextmanager
+def _interrupt_scratch(store: JobStore) -> Iterator[Path]:
+    """A fresh scratch directory beside the ledger, removed afterwards."""
+    parent = store.db_path.expanduser().resolve().parent / INTERRUPT_IO_DIRNAME
+    parent.mkdir(parents=True, exist_ok=True)
+    scratch = Path(tempfile.mkdtemp(dir=str(parent)))
+    try:
+        yield scratch
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
+
+
+def _ingest_request(
+    acceptance: Acceptance, request_path: Path
+) -> tuple[Acceptance, Optional[InterruptRequest], Optional[str]]:
+    """Apply the interrupt-request outcome table to one contract result.
+
+    Returns the acceptance to record, the validated request when the
+    contract asked to wait, and the fault when a request makes the run fail.
+    Only the request FILE is read; stdout and stderr are never parsed for
+    state. A timed-out or unlaunched contract's file is not read at all, and
+    the exit code keeps governing: a request beside a non-zero exit fails.
+    """
+    if acceptance.outcome != "observed" or not os.path.lexists(request_path):
+        return acceptance, None, None
+    # A refused request is recorded as ``request_refused``, never as the
+    # observed exit: an exit-0 run whose request was refused is not accepted.
+    refused = replace(acceptance, outcome="request_refused")
+    if acceptance.exit_code != 0:
+        return (
+            refused,
+            None,
+            f"contract exited {acceptance.exit_code} after writing an interrupt request",
+        )
+    try:
+        request = _interrupts.parse_request(request_path)
+    except (_interrupts.InterruptRequestError, _interrupts.JsonSchemaSupportError) as exc:
+        return refused, None, f"invalid interrupt request: {exc}"
+    return replace(acceptance, outcome="interrupt_requested"), request, None
 
 
 def default_store_path(project_root: Optional[str | Path] = None) -> Path:
@@ -187,14 +278,24 @@ def run_contract(
     timeout_s: Optional[float] = None,
     response_text: str = "",
     context: Optional[ContractContext] = None,
+    interrupt_io: Optional[InterruptIO] = None,
 ) -> Acceptance:
-    """Run a contract command and capture its observed result."""
+    """Run a contract command and capture its observed result.
+
+    ``interrupt_io`` exports the interrupt request path (and, for a
+    continuation, the resolution path, interrupt id and continuation number);
+    any of those variables it does not set are removed from the inherited
+    environment. Reading the request file is the caller's job.
+    """
     if timeout_s is not None and timeout_s <= 0:
         raise ValueError("timeout_s must be positive")
     working_directory = (directory or contract.directory or Path.cwd()).expanduser().resolve()
     environment = None
-    if context is not None:
+    if context is not None or interrupt_io is not None:
         environment = os.environ.copy()
+        for name in _INTERRUPT_VARIABLES:
+            environment.pop(name, None)
+    if context is not None:
         environment.update(
             {
                 "JOB_KIT_RUN_ID": context.run_id,
@@ -205,6 +306,8 @@ def run_contract(
                 "JOB_KIT_MODEL": context.model,
             }
         )
+    if interrupt_io is not None:
+        environment.update(interrupt_io.environment())
     started = time.monotonic()
     outcome = "observed"
     try:
@@ -854,25 +957,33 @@ def run_job(
             _record_quota_halt(job, recorded.endpoint, response)
         return recorded
 
+    interrupt_request: Optional[InterruptRequest] = None
+    request_fault: Optional[str] = None
     try:
         contract_timeout_s = timeout_s - completion_elapsed_s
         if contract_timeout_s <= 0:
             acceptance = _timed_out_contract(job.contract, working_directory)
         else:
-            acceptance = run_contract(
-                job.contract,
-                directory=working_directory,
-                timeout_s=contract_timeout_s,
-                response_text=attempt.response_text or "",
-                context=ContractContext(
-                    run_id=run_id,
-                    job_id=job.id,
-                    attempt_no=attempt_no,
-                    endpoint=attempt.endpoint,
-                    backend=attempt.backend,
-                    model=attempt.model,
-                ),
-            )
+            with _interrupt_scratch(store) as scratch:
+                request_path = scratch / _REQUEST_FILENAME
+                acceptance = run_contract(
+                    job.contract,
+                    directory=working_directory,
+                    timeout_s=contract_timeout_s,
+                    response_text=attempt.response_text or "",
+                    context=ContractContext(
+                        run_id=run_id,
+                        job_id=job.id,
+                        attempt_no=attempt_no,
+                        endpoint=attempt.endpoint,
+                        backend=attempt.backend,
+                        model=attempt.model,
+                    ),
+                    interrupt_io=InterruptIO(request_path=request_path),
+                )
+                acceptance, interrupt_request, request_fault = _ingest_request(
+                    acceptance, request_path
+                )
     except (KeyboardInterrupt, SystemExit) as exc:
         interrupted_attempt = replace(
             attempt,
@@ -904,15 +1015,17 @@ def run_job(
         )
     try:
         attempt = replace_attempt_acceptance(attempt, acceptance)
-        if acceptance.outcome == "not_run":
-            outcome = JobState.FAILED
-        elif acceptance.accepted:
-            outcome = JobState.ACCEPTED
+        if request_fault is not None:
+            attempt = replace(
+                attempt,
+                error=AttemptError(code="interrupt_request", message=request_fault),
+            )
+        if interrupt_request is not None:
+            terminal_state = None
         else:
-            outcome = JobState.REJECTED
-        terminal_state = _terminal_state_after_attempt(
-            job, reservation.budget_no, outcome
-        )
+            terminal_state = _terminal_state_after_attempt(
+                job, reservation.budget_no, _contract_outcome(acceptance, request_fault)
+            )
     except (KeyboardInterrupt, SystemExit) as exc:
         interrupted_attempt = replace(
             attempt,
@@ -928,7 +1041,22 @@ def run_job(
             ),
         )
         raise
-    return store.append_attempt(attempt, terminal_state=terminal_state)
+    if interrupt_request is not None:
+        # The job waits on an operator. The reservation completes with this
+        # attempt, so no live reservation spans the wait.
+        return store.append_attempt(attempt, interrupt=interrupt_request)
+    return store.append_attempt(
+        attempt, terminal_state=terminal_state, reason=request_fault
+    )
+
+
+def _contract_outcome(acceptance: Acceptance, fault: Optional[str]) -> JobState:
+    """Map one contract result that did not request a wait to its outcome."""
+    if fault is not None or acceptance.outcome == "not_run":
+        return JobState.FAILED
+    if acceptance.accepted:
+        return JobState.ACCEPTED
+    return JobState.REJECTED
 
 
 def _attempt_limit_reason(job: Job, terminal_state: Optional[JobState]) -> Optional[str]:
@@ -971,6 +1099,144 @@ def _record_quota_halt(job: Job, endpoint: str, exc: BaseException) -> None:
 def replace_attempt_acceptance(attempt: Attempt, acceptance: Acceptance) -> Attempt:
     """Return an attempt with its observed contract result attached."""
     return replace(attempt, acceptance=acceptance)
+
+
+def continue_job(
+    store: JobStore,
+    run_id: str,
+    job: Job,
+    *,
+    timeout_s: float = DEFAULT_TIMEOUT_S,
+) -> Continuation:
+    """Re-run the contract of a job whose interrupt was answered.
+
+    No model call, no reservation and no attempt row: the owning attempt's
+    contract runs again with that attempt's recorded response on stdin, in
+    its recorded working directory, with its six ``JOB_KIT_*`` identity
+    variables, plus ``JOB_KIT_INTERRUPT_ID``, ``JOB_KIT_CONTINUATION_NO``, a
+    fresh ``JOB_KIT_INTERRUPT_REQUEST`` path and ``JOB_KIT_INTERRUPT_RESOLUTION``
+    naming the canonical resolution document. That document and the id are
+    byte-identical on every re-run, so a contract can key an idempotent side
+    effect on them; job-kit cannot make the side effect idempotent itself.
+
+    The outcome follows the attempt's own policy against the owning
+    attempt's budget number: accepted; waiting on a follow-up request;
+    rejected or failed when that attempt was the last budgeted one, else
+    pending for a fresh attempt. Ctrl-C returns the job to waiting with its
+    answer intact, so a continuation runs at least once after an answer.
+    """
+    if timeout_s <= 0:
+        raise ValueError("timeout_s must be positive")
+    records = store.list_interrupts(run_id, job.id)
+    if not records:
+        raise StoreError(f"{run_id!r}/{job.id!r} has no interrupt to continue")
+    record = records[-1]
+    attempt_no = record.attempt_no
+    owning = next(
+        (
+            item
+            for item in store.list_attempts(run_id, job.id)
+            if item.attempt_no == attempt_no
+        ),
+        None,
+    )
+    if owning is None:
+        raise StoreError(
+            f"interrupt {record.id} names attempt {attempt_no} of "
+            f"{run_id!r}/{job.id!r}, which has no attempt row"
+        )
+    reservation = store.get_reservation(run_id, job.id, attempt_no)
+    budget_no = reservation.budget_no if reservation is not None else attempt_no
+    # begin_continuation re-checks, in its own transaction, that this latest
+    # interrupt is answered, that the job waits, and that none is live.
+    continuation = store.begin_continuation(run_id, job.id)
+    number = continuation.continuation_no
+
+    def finish(**outcome: object) -> Continuation:
+        return store.finish_continuation(
+            run_id, job.id, attempt_no, number, **outcome
+        )
+
+    try:
+        directory = (
+            owning.acceptance.directory if owning.acceptance is not None else None
+        )
+        request: Optional[InterruptRequest] = None
+        fault: Optional[str] = None
+        if directory is None or not directory.is_dir():
+            fault = (
+                f"continuation working directory {directory} no longer exists"
+                if directory is not None
+                else "the owning attempt recorded no contract working directory"
+            )
+            acceptance = Acceptance(
+                command=job.contract.command,
+                directory=directory or job.declared_directory,
+                exit_code=None,
+                stdout="",
+                stderr=fault,
+                wall_ms=0,
+                accepted=False,
+                outcome="not_run",
+            )
+        else:
+            with _interrupt_scratch(store) as scratch:
+                request_path = scratch / _REQUEST_FILENAME
+                resolution_path = scratch / _RESOLUTION_FILENAME
+                resolution_path.write_bytes(
+                    _interrupts.resolution_document(record).encode("ascii")
+                )
+                acceptance = run_contract(
+                    job.contract,
+                    directory=directory,
+                    timeout_s=timeout_s,
+                    response_text=owning.response_text or "",
+                    context=ContractContext(
+                        run_id=run_id,
+                        job_id=job.id,
+                        attempt_no=attempt_no,
+                        endpoint=owning.endpoint,
+                        backend=owning.backend,
+                        model=owning.model,
+                    ),
+                    interrupt_io=InterruptIO(
+                        request_path=request_path,
+                        resolution_path=resolution_path,
+                        interrupt_id=record.id,
+                        continuation_no=number,
+                    ),
+                )
+                acceptance, request, fault = _ingest_request(acceptance, request_path)
+    except (KeyboardInterrupt, SystemExit):
+        finish(disposition="interrupted")
+        raise
+    except Exception as exc:
+        return finish(
+            terminal_state=_terminal_state_after_attempt(
+                job, budget_no, JobState.FAILED
+            ),
+            reason=str(exc) or exc.__class__.__name__,
+        )
+    if request is not None:
+        return finish(acceptance=acceptance, interrupt=request)
+    if fault is None and acceptance.outcome == "not_run":
+        fault = acceptance.stderr or "the contract could not be run"
+    return finish(
+        acceptance=acceptance,
+        terminal_state=_terminal_state_after_attempt(
+            job, budget_no, _contract_outcome(acceptance, fault)
+        ),
+        reason=fault,
+    )
+
+
+def _answered_and_waiting(store: JobStore, run_id: str, job_id: str) -> bool:
+    """Whether a waiting job's latest interrupt is answered (continuable)."""
+    records = store.list_interrupts(run_id, job_id)
+    if not records:
+        return False
+    resolution = records[-1].resolution
+    return resolution is not None and resolution.outcome == "answered"
 
 
 def _store_object(store: JobStore | str | Path) -> JobStore:
@@ -1070,11 +1336,25 @@ def _drive_job(
     This is the unit the worker pool submits. Attempts within a job stay
     strictly sequential, which is what keeps the attempt sequence append-only
     without a lease: parallelism is across jobs only.
+
+    A ``waiting`` job ends the drive: a wait holds no reservation and cannot
+    take one. The one exception is a job found waiting on an ANSWERED
+    interrupt when the drive starts, whose contract is continued first. A
+    job that starts waiting during this drive, or an answer that arrives
+    during it, is continued by the next pass.
     """
+    starting = True
     while True:
         current = store.get_job(run_id, job.id)
         if current is None or current.terminal:
             return
+        if current.state is JobState.WAITING:
+            if not starting or not _answered_and_waiting(store, run_id, job.id):
+                return
+            starting = False
+            continue_job(store, run_id, job, timeout_s=timeout_s)
+            continue
+        starting = False
         halted_endpoints = halts.current()
         try:
             attempt = run_job(
@@ -1132,6 +1412,9 @@ def _run_pending(
     """
     bound = validate_max_parallel(max_parallel)
     store.recover_reservations(run_id)
+    # Record every lapsed interrupt BEFORE the read that builds the dispatch
+    # list, so a job that has just expired is never submitted to a worker.
+    store.expire_interrupts(run_id, time.time())
     records = store.list_jobs(run_id)
     root = (
         Path(workspace_root).expanduser().resolve()
@@ -1218,6 +1501,9 @@ def run_jobs(
     backend_factory: Optional[BackendFactory] = None,
 ) -> RunSnapshot:
     """Create and execute a flat run of jobs through a bounded pool."""
+    # Probe the interrupt validator before the ledger is opened, migrated or
+    # written: a run that could not validate a request must not start.
+    _interrupts._schema_validator()
     store_object = _store_object(store)
     identifier = run_id or uuid.uuid4().hex
     root = (
@@ -1266,6 +1552,7 @@ def run_job_file(
     the run starts and can resume it after an interruption. ``max_parallel``
     overrides the file's own bound, and the override is what the ledger
     records, so a later resume of this run inherits it."""
+    _interrupts._schema_validator()
     path = Path(jobs_path).expanduser().resolve()
     job_file = load_job_file(path)
     store = JobStore(store_path or default_store_path())
@@ -1302,6 +1589,8 @@ def resume_run(
     explicit ``max_parallel`` applies to this pass only and is never written
     back: the ledger records what the run was created with.
     """
+    # Before recovery, expiry or the migrating open of the ledger.
+    _interrupts._schema_validator()
     store_object = _store_object(store)
     run = store_object.get_run(run_id)
     if run is None:
@@ -1327,6 +1616,9 @@ __all__ = [
     "DEFAULT_TIMEOUT_S",
     "CONTRACT_OUTPUT_LIMIT",
     "HALT_UNREACHABLE",
+    "INTERRUPT_IO_DIRNAME",
+    "InterruptIO",
+    "continue_job",
     "default_store_path",
     "default_workspace_root",
     "run_contract",

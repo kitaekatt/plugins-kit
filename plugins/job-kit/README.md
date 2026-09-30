@@ -71,7 +71,8 @@ jobs:
   fails loading with an error that names the key and points to `models`.
   Requires llm-scripting-kit >= 0.56.0, the version that added
   `completion.json_schema`, which `run`, `resume` and `resolve` probe before
-  they open the ledger (exit 3 without it). Selection needs >= 0.46.0, the
+  they open the ledger (exit 3 without it). Selection needs
+  llm-scripting-kit >= 0.46.0, the
   version that added `describe` (and, before it,
   `subjects_for_disallowed_tools` for the deny floor); job_kit.select fails at
   import time with a named remediation if an older llm-scripting-kit is
@@ -309,9 +310,9 @@ The exit code still governs the attempt:
 | --- | --- | --- |
 | 0 | absent | accepted |
 | 0 | valid | the job waits (`waiting`, acceptance outcome `interrupt_requested`) |
-| 0 | present, invalid | failed, `error_code` `interrupt_request`, naming the fault |
+| 0 | present, invalid | failed, acceptance outcome `request_refused`, `error_code` `interrupt_request`, naming the fault |
 | non-zero | absent | rejected per the attempt budget |
-| non-zero | present | failed, `error_code` `interrupt_request` |
+| non-zero | present | failed, acceptance outcome `request_refused`, `error_code` `interrupt_request` |
 | timed out or not run | any | decided by the timeout or not-run rule; the file is not read |
 
 At most one request is open per job, and one request per contract run.

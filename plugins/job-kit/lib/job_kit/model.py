@@ -185,10 +185,12 @@ class RunState(str, Enum):
 
 
 #: The acceptance outcomes a contract run can record. ``interrupt_requested``
-#: is a contract that exited 0 after writing a valid interrupt request: it is
-#: never an acceptance.
+#: is a contract that exited 0 after writing a valid interrupt request;
+#: ``request_refused`` is a contract whose interrupt request job-kit refused
+#: (an invalid request, or a request beside a non-zero exit). Neither is ever
+#: an acceptance.
 ACCEPTANCE_OUTCOMES = frozenset(
-    {"observed", "timed_out", "not_run", "interrupt_requested"}
+    {"observed", "timed_out", "not_run", "interrupt_requested", "request_refused"}
 )
 
 

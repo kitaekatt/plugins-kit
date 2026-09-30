@@ -1949,7 +1949,7 @@ class JobStore:
         if attempt.halt_kind is not None:
             result["halt_kind"] = attempt.halt_kind
         if attempt.acceptance is not None:
-            if attempt.acceptance.outcome in ("not_run", "interrupt_requested"):
+            if attempt.acceptance.outcome in ("not_run", "interrupt_requested", "request_refused"):
                 result["acceptance"] = attempt.acceptance.outcome
             elif attempt.acceptance.accepted:
                 result["acceptance"] = "accepted"
@@ -2393,7 +2393,9 @@ class JobStore:
                 "continuation_no": continuation_no,
             }
             if acceptance is not None:
-                if acceptance.outcome in ("not_run", "timed_out", "interrupt_requested"):
+                if acceptance.outcome in (
+                    "not_run", "timed_out", "interrupt_requested", "request_refused"
+                ):
                     result["acceptance"] = acceptance.outcome
                 else:
                     result["acceptance"] = "accepted" if acceptance.accepted else "rejected"
