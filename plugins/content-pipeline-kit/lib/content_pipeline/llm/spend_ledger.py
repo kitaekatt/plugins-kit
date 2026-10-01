@@ -715,7 +715,7 @@ class SpendLedger:
             "outstanding": settled + reserved + unknown + leaked,
         }
 
-    # -- halt plumbing (the row this unit writes; the switch is a later unit) --
+    # -- halt plumbing (shared by the reserve gate, settle and the halt switch) --
 
     @staticmethod
     def _read_halt(conn: sqlite3.Connection) -> sqlite3.Row:
@@ -910,6 +910,115 @@ class SpendLedger:
                 raise StaleReservationError(
                     f"reservation {reservation.id} is no longer open at generation "
                     f"{reservation.generation}; nothing was released"
+                )
+
+    # -- the halt surface -----------------------------------------------------
+
+    def halt(self, reason: str, detail: str = "") -> None:
+        """Stop every further admission, durably and for every process.
+
+        Writes the one-row control table and appends to ``halt_history`` inside
+        ONE ``BEGIN IMMEDIATE`` transaction, so the halt is committed before any
+        later ``reserve`` can read it. Enforcement is entirely pull-side: every
+        ``reserve`` reads that row inside its OWN ``BEGIN IMMEDIATE``
+        transaction and raises :class:`SpendLedgerHalted`. There is no poller,
+        no signal and no background thread.
+
+        LATENCY BOUND. A process observes the halt at its NEXT ``reserve``,
+        which is its next provider ATTEMPT, so at most ONE in-flight attempt per
+        process completes after the halt commits::
+
+            bound = one attempt's duration + busy_timeout_ms
+
+        An attempt's duration is bounded only where the caller set a timeout;
+        with no timeout the bound is unbounded and the ledger cannot improve on
+        it.
+
+        ``settle`` is deliberately NOT gated by the halt: money already spent
+        must be recorded whether or not the ledger is halted, which is also what
+        makes that bound safe -- the one attempt that completes after the halt
+        still charges the cap.
+
+        Halting an already-halted ledger re-states the reason and appends
+        another ``halt_history`` row: a second cause is worth recording, and the
+        first stays readable in the history.
+        """
+        if not reason:
+            raise ValueError(
+                "halt() needs a non-empty reason; an unexplainable halt is worse than none"
+            )
+        with self._writer() as conn:
+            self._record_halt(conn, reason=str(reason), detail=str(detail))
+
+    def resume(self, *, force: bool = False) -> None:
+        """Clear the halt row -- except an ``overbilled`` one, which needs force.
+
+        An ``overbilled`` halt means a settle recorded MORE money than its
+        reservation admitted, so the cap arithmetic is already known to have
+        understated real spend; clearing it resumes admission against a cap that
+        no longer bounds anything. That halt therefore requires
+        ``resume(force=True)``, and a forced resume writes a ``halt_history``
+        row with ``forced = 1`` so the decision is on the record rather than
+        inferred later from a cap that stopped holding.
+
+        Resuming a ledger that is not halted is a no-op and writes nothing.
+
+        The refusal is a :class:`ValueError`, deliberately NOT a
+        :class:`~content_pipeline.llm.platform.BudgetExceededError`: it is an
+        operator verdict about a control switch, not a verdict about a
+        reservation, so ``cli.budget.spend_stop`` must never translate it into a
+        ``BudgetStop`` that would read as a run hitting its cap.
+        """
+        with self._writer() as conn:
+            halt = self._read_halt(conn)
+            if not int(halt["halted"]):
+                return
+            reason = halt["reason"] or ""
+            detail = halt["detail"] or ""
+            if reason == "overbilled" and not force:
+                raise ValueError(
+                    f"{self._path}: refusing to resume an 'overbilled' halt without "
+                    f"force=True -- recorded spend exceeded its reservation "
+                    f"({detail or 'no detail recorded'}), so the cap arithmetic is "
+                    "known to have understated real spend. Call resume(force=True) to "
+                    "resume anyway; the force is written to halt_history."
+                )
+            now = _now_iso()
+            conn.execute(
+                "UPDATE halt SET halted = 0, reason = NULL, detail = NULL, since = NULL "
+                "WHERE id = 1"
+            )
+            conn.execute(
+                "INSERT INTO halt_history (action, reason, detail, forced, at) "
+                "VALUES (?, ?, ?, ?, ?)",
+                ("resume", reason, detail, 1 if force else 0, now),
+            )
+
+    def check_halted(self, *, identifier: str = "") -> None:
+        """Raise :class:`SpendLedgerHalted` when the ledger is halted, else return.
+
+        A read-only probe under the same plain deferred ``BEGIN`` as
+        :meth:`status`. It exists so a consumer loop can stop BETWEEN units
+        rather than waiting for its next ``reserve`` to refuse -- it makes the
+        stop SOONER, it is not what enforces it, and skipping it changes no
+        guarantee. One read, no loop, no sleep: a caller that wants to keep
+        watching calls it again.
+
+        Raises rather than returning a flag so a consumer loop reaches the same
+        handler as a refused ``reserve``, and so ``cli.budget.spend_stop`` can
+        translate both. Read :meth:`status` instead when the halt is to be
+        INSPECTED rather than obeyed: it reports ``halted``, ``halt_reason`` and
+        ``halt_detail`` without raising.
+        """
+        with self._reader() as conn:
+            halt = self._read_halt(conn)
+            if int(halt["halted"]):
+                raise SpendLedgerHalted(
+                    identifier=identifier,
+                    measured=0.0,
+                    budget=self.cap_usd,
+                    reason=halt["reason"] or "",
+                    detail=halt["detail"] or "",
                 )
 
     def status(self) -> SpendStatus:

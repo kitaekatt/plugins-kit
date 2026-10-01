@@ -1339,11 +1339,22 @@ class TestPublicSurface:
             assert hasattr(sl, name), name
 
     def test_the_later_units_surfaces_are_not_half_shipped(self):
-        """SL-2 owns `halt` / `resume` / `check_halted`, SL-3 owns `renew` /
-        `reclaim_orphans`. SL-1 ships their SCHEMA, not their behaviour, so a
-        caller gets an AttributeError rather than a method that silently does
-        nothing."""
-        for name in ("halt", "resume", "check_halted", "renew", "reclaim_orphans"):
+        """SL-3 owns `renew` / `reclaim_orphans`. SL-1 ships their SCHEMA (the
+        `generation` and `lease_expires_at` columns, the `reclaimed` state and
+        the `leaks` table), not their behaviour, so a caller gets an
+        AttributeError rather than a method that silently does nothing.
+
+        `halt` / `resume` / `check_halted` were in this list while SL-2 was
+        unbuilt and were REMOVED from it, not deleted: the same guard still
+        covers the remaining two, and the three halt methods are now asserted to
+        EXIST and behave in test_llm_spend_ledger_halt.py. Narrowing rather than
+        dropping keeps the lease surface from being half-shipped.
+        """
+        for name in ("renew", "reclaim_orphans"):
             assert not hasattr(sl.SpendLedger, name), (
-                f"SpendLedger.{name} is a later unit's; SL-1 must not stub it"
+                f"SpendLedger.{name} is a later unit's; it must not be stubbed"
             )
+        # The complement, so this test cannot silently become the assertion that
+        # SL-2's surface is absent again.
+        for name in ("halt", "resume", "check_halted"):
+            assert hasattr(sl.SpendLedger, name), f"SpendLedger.{name} is SL-2's and must exist"

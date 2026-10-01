@@ -1,7 +1,10 @@
-"""The files the convergence-extension and provenance units added or changed carry no consumer vocabulary.
+"""The library files written since this gate exists carry no consumer vocabulary.
 
-Scoped to those files: other library modules predate this check and already say
-"glossary" (providers/assembly.py, providers/registry.py, validate/__init__.py).
+Scoped to an explicit file list: other library modules predate this check and
+already say "glossary" (providers/assembly.py, providers/registry.py,
+validate/__init__.py). Every NEW library module belongs on this list -- a file
+that is merely absent from it is unguarded, which is indistinguishable from a
+file that passes.
 """
 
 import re
@@ -11,6 +14,7 @@ LIB = Path(__file__).resolve().parents[2] / "plugins" / "content-pipeline-kit" /
 SCOPED = [
     "llm/convergence.py",
     "llm/platform.py",
+    "llm/spend_ledger.py",
     "pipeline/convergence_loop.py",
     "pipeline/cell_policy.py",
     "store/candidate.py",
