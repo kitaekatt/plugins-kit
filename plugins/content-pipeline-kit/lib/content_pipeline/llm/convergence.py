@@ -50,6 +50,10 @@ class Round:
     - ``terminal`` -- terminal units that never succeeded (informational).
     - ``detail`` -- opaque caller data; excluded from hashing and equality-free
       of meaning to the gate.
+    - ``total`` -- population size (all units, drained or not), when the caller
+      knows it. ``None`` means unknown. ``0`` marks an empty population, which
+      :class:`ProgressEvaluator` can treat differently from a drained one. It is
+      informational and excluded from equality and hashing, like ``detail``.
     """
 
     produced: int
@@ -57,6 +61,7 @@ class Round:
     failed: int = 0
     terminal: int = 0
     detail: Mapping[str, Any] = field(default_factory=dict, hash=False)
+    total: Optional[int] = field(default=None, compare=False)
 
 
 @runtime_checkable
@@ -82,6 +87,11 @@ class ProgressEvaluator:
       outstanding work before declaring CONVERGED. Default 1 (converge as soon
       as outstanding hits zero, loc's behavior); raise it to require the empty
       state to persist for stability.
+    - ``empty_is_converged`` -- default True: a round with ``outstanding == 0``
+      converges even when the population is empty. When False and the latest
+      round reports ``total == 0``, the verdict is CONTINUE (an empty
+      population is not success). A round whose ``total`` is ``None`` is
+      unaffected.
 
     Precedence: CONVERGED is checked before STALLED, so a run that both drained
     its outstanding work and stopped producing classifies as converged, not
@@ -90,11 +100,14 @@ class ProgressEvaluator:
 
     stall_window: Optional[int] = 2
     converge_window: int = 1
+    empty_is_converged: bool = True
 
     def evaluate(self, history: Sequence[Round]) -> Verdict:
         """Classify the run given its cycle-by-cycle history.
 
-        An empty history is CONTINUE (nothing has run yet). Otherwise:
+        An empty history is CONTINUE (nothing has run yet). When
+        ``empty_is_converged`` is False and the last round has ``total == 0``
+        the verdict is CONTINUE. Otherwise:
 
         1. When the last ``converge_window`` rounds all have
            ``outstanding == 0`` (and at least that many rounds exist): FAILED
@@ -105,6 +118,9 @@ class ProgressEvaluator:
         3. CONTINUE otherwise.
         """
         if not history:
+            return Verdict.CONTINUE
+
+        if not self.empty_is_converged and history[-1].total == 0:
             return Verdict.CONTINUE
 
         if len(history) >= self.converge_window and all(

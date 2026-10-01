@@ -53,7 +53,8 @@ class Tally:
 
         ``previous=None`` is a baseline: ``produced=0``. Otherwise
         ``produced = max(0, locked - previous.locked)``. ``outstanding`` is
-        ``open``; ``failed`` and ``terminal`` are copied.
+        ``open``; ``failed`` and ``terminal`` are copied; ``total`` is the cell
+        count (0 for an empty store).
         """
         produced = 0 if previous is None else max(0, self.locked - previous.locked)
         return Round(
@@ -61,6 +62,7 @@ class Tally:
             outstanding=self.open,
             failed=self.failed,
             terminal=self.terminal,
+            total=self.total,
         )
 
 

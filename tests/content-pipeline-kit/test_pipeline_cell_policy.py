@@ -35,3 +35,13 @@ def test_policy_failed_cells_yield_failed_verdict():
     rnd = m(store)
     assert rnd.failed == 1 and rnd.outstanding == 0
     assert ProgressEvaluator(stall_window=None).evaluate([rnd]) == Verdict.FAILED
+
+
+def test_to_round_sets_total_and_empty_store_is_distinguishable():
+    assert tally(["open", "locked", "terminal"], _Policy()).to_round().total == 3
+    m = measure_from(lambda s: s["cells"], _Policy())
+    rnd = m({"cells": []})
+    assert rnd.total == 0
+    gate = ProgressEvaluator(stall_window=None, empty_is_converged=False)
+    assert gate.evaluate([rnd]) == Verdict.CONTINUE
+    assert ProgressEvaluator(stall_window=None).evaluate([rnd]) == Verdict.CONVERGED
