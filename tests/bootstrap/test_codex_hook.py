@@ -374,6 +374,29 @@ class TestEngineWiring:
         )
         assert calls == []
 
+class TestNoCodexTreeInArbitraryCwd:
+    def test_pass_from_subdirectory_writes_only_user_codex_home(self, tmp_path, monkeypatch):
+        home = tmp_path / "home"
+        codex_home = home / ".codex"
+        sub = tmp_path / "project" / "tmp" / "run" / "audit"
+        sub.mkdir(parents=True)
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.setenv("USERPROFILE", str(home))
+        monkeypatch.setenv("CODEX_HOME", str(codex_home))
+        monkeypatch.chdir(sub)
+        monkeypatch.setattr(
+            codex, "detect_codex",
+            lambda: codex.CodexDetection(available=True, reason="fake codex"),
+        )
+
+        actions, _oks, failures = engine._run_codex_hook_setup(str(sub))
+
+        assert failures == []
+        assert (codex_home / "hooks.json").is_file()
+        stray = [p for p in (tmp_path / "project").rglob(".codex")]
+        assert stray == []
+
+
 class TestCodexCli:
     def test_codex_hook_uses_stdin_cwd_and_does_not_add_ignore_context(
         self, tmp_path, monkeypatch, capsys

@@ -170,7 +170,7 @@ class TestEnsureWritable:
         def fake_edit(path):
             calls.append(path)
             os.chmod(path, stat.S_IWRITE)
-            return True
+            return True, ""
 
         monkeypatch.setattr(settings_writable, "_p4_tracked", lambda path: True)
         monkeypatch.setattr(settings_writable, "_p4_edit", fake_edit)
@@ -185,13 +185,16 @@ class TestEnsureWritable:
         target.write_text("{}")
         _make_read_only(str(target))
         monkeypatch.setattr(settings_writable, "_p4_tracked", lambda path: True)
-        monkeypatch.setattr(settings_writable, "_p4_edit", lambda path: False)
+        monkeypatch.setattr(
+            settings_writable, "_p4_edit", lambda path: (False, "p4 edit: boom"),
+        )
 
         result = ensure_writable(str(target))
 
         assert not result.ok and result.method == "failed"
         assert _is_read_only(str(target))
         assert "Perforce" in result.detail
+        assert "p4 edit: boom" in result.detail
 
     def test_unfixable_read_only_reports_failure(self, tmp_path, monkeypatch):
         target = tmp_path / "settings.json"

@@ -1369,12 +1369,12 @@ def _main_pass():
         if not args.console:
             deferred_plugin_logs.append((data_dir, notice_label, [notice]))
 
-    # Step 4e: A clean Claude bootstrap pass arms this project's Codex
-    # SessionStart adapter.  The generated .codex/ tree is machine-local and
-    # ignored by the project; the hook invokes the stable `bootstrap`
-    # executable rather than pinning a versioned plugin-cache path.  Do not
-    # materialize it after an incomplete pass: the user explicitly gets the
-    # adapter once bootstrap has successfully converged once.
+    # Step 4e: A clean Claude bootstrap pass arms the USER-level Codex
+    # SessionStart adapter ($CODEX_HOME/hooks.json) and strips bootstrap's
+    # legacy entries from <project>/.codex/hooks.json.  Nothing is ever
+    # created under the project or the session cwd.  The hook invokes the
+    # stable `bootstrap` executable rather than pinning a versioned
+    # plugin-cache path.  Do not install it after an incomplete pass.
     codex_hook_actions, codex_hook_oks, codex_hook_failures = (
         _run_codex_hook_setup(
             args.project_dir,
