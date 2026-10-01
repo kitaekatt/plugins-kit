@@ -1,10 +1,27 @@
 """Shared fixtures for plugins-kit test suite."""
 
+import atexit
 import json
 import os
+import shutil
 import sys
+import tempfile
 
 import pytest
+
+# Bytecode isolation: give this process a fresh, empty bytecode cache so no run
+# can reuse .pyc files written by an earlier run. Python and pytest's
+# assertion rewriter both validate a cached .pyc by source mtime (whole seconds)
+# plus source size, so a source edited to the same length within the same
+# second -- a revert-to-red check does exactly that -- silently runs stale
+# bytecode. Both honour sys.pycache_prefix when set at runtime. Under xdist each
+# worker imports this file and gets its own directory. An explicit
+# PYTHONPYCACHEPREFIX (or -X pycache_prefix) is respected and left in place.
+# See docs/reference/testing.md, "Bytecode isolation".
+if sys.pycache_prefix is None:
+    _PYCACHE_DIR = tempfile.mkdtemp(prefix="plugins-kit-pycache-")
+    sys.pycache_prefix = _PYCACHE_DIR
+    atexit.register(shutil.rmtree, _PYCACHE_DIR, ignore_errors=True)
 
 BOOTSTRAP_ROOT = os.path.normpath(
     os.path.join(os.path.dirname(__file__), os.pardir, "plugins", "bootstrap")

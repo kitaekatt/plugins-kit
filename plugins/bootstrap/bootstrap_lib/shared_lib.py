@@ -20,6 +20,23 @@ Mechanism (a generalization of llm-scripting-kit's B1 prototype):
   same ``<pkg>.pth`` into THAT plugin's own venv. The per-lib path-entry dir means
   the ``.pth`` exposes only that one package (opt-in isolation).
 
+- Generations (no swap under a running process): every publish ALSO lands an
+  immutable snapshot beside the stable copy and flips a pointer to it::
+
+      <shared_root>/<pkg>/.generations/<id>/<pkg>/   # one per published content
+      <shared_root>/<pkg>/.current                   # the current <id>
+
+  The ``.pth`` is still version-independent -- it names only
+  ``<shared_root>/<pkg>/`` -- but at interpreter start it reads ``.current`` and
+  puts THAT generation's directory on ``sys.path``. A process therefore keeps
+  resolving the generation it started with, including submodules it imports
+  lazily after a later publish; only a NEW process sees the new generation.
+  Missing or invalid pointer -> the stable ``<shared_root>/<pkg>/`` entry, as
+  before. A superseded generation is pruned once it has been superseded for
+  ``GENERATION_RETENTION_S``. The stable ``<pkg>/<pkg>/`` copy is still
+  swapped in place on every publish: it is the documented location a
+  foreign-interpreter consumer reads (library-consumption.md, mode 3).
+
 This module shares first-party SOURCE only. Third-party deps the package needs
 (e.g. ``openai`` for ``llm_scripting_kit``) are the importing plugin's own concern,
 declared in its ``pyproject.toml`` -- NOT installed here. A separate static test
@@ -40,6 +57,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 import uuid
 from typing import NamedTuple, Optional
 
@@ -64,6 +82,54 @@ _CACHE_STAMP_VERSION = "2"
 
 def _cache_stamp(content_hash: str) -> str:
     return f"{_CACHE_STAMP_VERSION}:{content_hash}"
+
+
+# Generation layout inside <shared_root>/<name>/ (see the module docstring).
+GENERATIONS_DIR = ".generations"
+CURRENT_POINTER = ".current"
+SUPERSEDED_MARKER = ".superseded"
+# How long a superseded generation is kept for processes that started on it.
+# Seven days covers any realistic run of a long-lived consumer process; a
+# process older than that which then imports a NOT-yet-imported submodule of a
+# pruned generation gets ImportError (modules it already imported are unaffected).
+GENERATION_RETENTION_S = 7 * 24 * 3600
+# Hex digits of the content hash used as the generation id.
+_GENERATION_ID_LEN = 16
+
+
+def generation_id(content_hash: str) -> str:
+    """Generation id for a published content hash (a hex prefix of it)."""
+    return content_hash[:_GENERATION_ID_LEN]
+
+
+def pth_line(name: str, entry_dir: str) -> str:
+    """The single executable ``.pth`` line linking ``name`` from ``entry_dir``.
+
+    site.py executes a ``.pth`` line that begins with ``import``. The line
+    resolves the CURRENT generation once, at interpreter start, and prepends
+    it to ``sys.path``; a missing or invalid pointer (never published under the
+    generation layout, or a pruned/partial generation) falls back to
+    ``entry_dir`` itself, which holds the stable ``<name>/`` copy. Prepending
+    (rather than a plain-path line, which only appends) makes the shared copy
+    win over a stale installed shadow of ``name`` in site-packages. Every error
+    is contained: a ``.pth`` that raises would print a traceback on every
+    interpreter start.
+    """
+    code = (
+        "import os\n"
+        f"_bsl_e = {entry_dir!r}\n"
+        "_bsl_p = _bsl_e\n"
+        "try:\n"
+        f"    with open(os.path.join(_bsl_e, {CURRENT_POINTER!r}), encoding='utf-8') as _bsl_f:\n"
+        "        _bsl_g = _bsl_f.read().strip()\n"
+        f"    _bsl_c = os.path.join(_bsl_e, {GENERATIONS_DIR!r}, _bsl_g)\n"
+        f"    if _bsl_g.isalnum() and os.path.isdir(os.path.join(_bsl_c, {name!r})):\n"
+        "        _bsl_p = _bsl_c\n"
+        "except Exception:\n"
+        "    pass\n"
+        "sys.path.insert(0, _bsl_p)\n"
+    )
+    return "import sys; exec(%r)" % code
 
 
 def find_standalone_python() -> Optional[str]:
@@ -249,10 +315,21 @@ def sync_shared_lib(
     entry_dir = os.path.join(shared_root, name)
     dest_pkg = os.path.join(entry_dir, name)
     hash_file = os.path.join(entry_dir, ".src.sha256")
+    pointer = os.path.join(entry_dir, CURRENT_POINTER)
 
     current = _hash_tree(src_pkg)
     stamp = _cache_stamp(current)
-    if os.path.isdir(dest_pkg) and _read_text(hash_file) == stamp:
+    gen_id = generation_id(current)
+    gen_dir = os.path.join(entry_dir, GENERATIONS_DIR, gen_id)
+    # Cached only when the stable copy, the stamp, AND the current generation
+    # all agree. A tree published before generations existed has no pointer,
+    # so it re-publishes exactly once and gains one.
+    if (
+        os.path.isdir(dest_pkg)
+        and _read_text(hash_file) == stamp
+        and _read_text(pointer) == gen_id
+        and os.path.isdir(os.path.join(gen_dir, name))
+    ):
         return SharedLibResult(name, "cached", f"synced (cached, {dest_pkg})")
 
     stage_root = None
@@ -293,9 +370,17 @@ def sync_shared_lib(
                     f"{name} failed to import from the published copy: {first_stderr_line}",
                 )
 
+        # The generation lands BEFORE anything a process resolves through
+        # changes: once the pointer below flips, every new interpreter start
+        # resolves this directory, and it is never modified again.
+        _install_generation(entry_dir, name, stage_pkg, gen_dir)
         _swap_directory(stage_pkg, dest_pkg)
         shutil.rmtree(stage_root, ignore_errors=True)
         stage_root = None
+        previous_gen = _read_text(pointer)
+        write_atomic(pointer, gen_id + "\n")
+        if previous_gen and previous_gen != gen_id:
+            _mark_superseded(os.path.join(entry_dir, GENERATIONS_DIR, previous_gen))
         with open(hash_file, "w", encoding="utf-8") as f:
             f.write(stamp + "\n")
     except OSError as exc:
@@ -303,7 +388,109 @@ def sync_shared_lib(
     finally:
         if stage_root is not None:
             shutil.rmtree(stage_root, ignore_errors=True)
-    return SharedLibResult(name, "published", f"synced -> {dest_pkg}")
+    pruned, prune_errors = prune_generations(entry_dir, keep=gen_id)
+    message = f"synced -> {dest_pkg} (generation {gen_id})"
+    if pruned:
+        message += f"; pruned {len(pruned)} superseded generation(s): {', '.join(pruned)}"
+    if prune_errors:
+        message += f"; could not prune: {'; '.join(prune_errors)} (retried next publish)"
+    return SharedLibResult(name, "published", message)
+
+
+def _install_generation(entry_dir: str, name: str, stage_pkg: str, gen_dir: str) -> None:
+    """Place an immutable copy of ``stage_pkg`` at ``<gen_dir>/<name>/``.
+
+    Built in its own stage beside the entry (inheriting its ACL, see
+    ``_make_stage_dir``) and renamed into place, so a generation directory is
+    either complete or absent. An existing complete generation (the same
+    content published before, e.g. a revert) is reused and becomes current
+    again, so its superseded marker is cleared.
+    """
+    if os.path.isdir(os.path.join(gen_dir, name)):
+        try:
+            os.remove(os.path.join(gen_dir, SUPERSEDED_MARKER))
+        except FileNotFoundError:
+            pass
+        return
+    if os.path.exists(gen_dir):
+        # A directory without the package cannot be resolved by the .pth;
+        # discard it rather than renaming over it.
+        _discard_dir(entry_dir, gen_dir)
+    os.makedirs(os.path.dirname(gen_dir), exist_ok=True)
+    gen_stage = _make_stage_dir(entry_dir)
+    try:
+        shutil.copytree(stage_pkg, os.path.join(gen_stage, name))
+        try:
+            os.replace(gen_stage, gen_dir)
+        except OSError:
+            # A concurrent publisher may have installed the same content first.
+            if not os.path.isdir(os.path.join(gen_dir, name)):
+                raise
+        else:
+            gen_stage = None
+    finally:
+        if gen_stage is not None:
+            shutil.rmtree(gen_stage, ignore_errors=True)
+
+
+def _mark_superseded(gen_dir: str) -> None:
+    """Start a superseded generation's retention clock (marker mtime)."""
+    if os.path.isdir(gen_dir):
+        write_atomic(os.path.join(gen_dir, SUPERSEDED_MARKER), "superseded\n")
+
+
+def _discard_dir(entry_dir: str, path: str) -> None:
+    """Rename ``path`` out of its resolvable name, then delete it.
+
+    The rename is atomic, so ``path`` is either intact or gone; a delete
+    that fails part-way (a file held open on Windows) only leaves a
+    ``.trash-*`` directory that ``prune_generations`` retries.
+    """
+    trash = os.path.join(entry_dir, f".trash-{uuid.uuid4().hex}")
+    os.replace(path, trash)
+    shutil.rmtree(trash, ignore_errors=True)
+
+
+def prune_generations(entry_dir: str, keep: str, now: Optional[float] = None):
+    """Delete superseded generations older than ``GENERATION_RETENTION_S``.
+
+    Never touches ``keep`` (the current generation). A non-current generation
+    without a superseded marker gets one now, which starts its clock. Returns
+    ``(pruned_ids, errors)``; an error leaves that generation in place for the
+    next publish to retry and is reported, never swallowed.
+    """
+    now = time.time() if now is None else now
+    pruned, errors = [], []
+    gen_root = os.path.join(entry_dir, GENERATIONS_DIR)
+    try:
+        names = sorted(os.listdir(gen_root))
+    except OSError:
+        names = []
+    for gid in names:
+        if gid == keep:
+            continue
+        gen_dir = os.path.join(gen_root, gid)
+        if not os.path.isdir(gen_dir):
+            continue
+        marker = os.path.join(gen_dir, SUPERSEDED_MARKER)
+        try:
+            if not os.path.exists(marker):
+                _mark_superseded(gen_dir)
+                continue
+            if now - os.path.getmtime(marker) < GENERATION_RETENTION_S:
+                continue
+            _discard_dir(entry_dir, gen_dir)
+            pruned.append(gid)
+        except OSError as exc:
+            errors.append(f"{gid}: {exc}")
+    # Leftovers of a delete that failed part-way.
+    try:
+        leftovers = [n for n in os.listdir(entry_dir) if n.startswith(".trash-")]
+    except OSError:
+        leftovers = []
+    for leftover in leftovers:
+        shutil.rmtree(os.path.join(entry_dir, leftover), ignore_errors=True)
+    return pruned, errors
 
 
 def _swap_directory(staged: str, destination: str) -> None:
@@ -351,14 +538,15 @@ def link_shared_lib(name: str, python: Optional[str], shared_root: str) -> Share
         return SharedLibResult(name, "skipped", f"could not resolve site-packages; skipped linking {name}")
 
     pth = os.path.join(site, f"{name}.pth")
-    # Executable .pth that PREPENDS the shared dir to sys.path. A plain-path .pth
+    # Executable .pth that PREPENDS the current generation (or the stable entry
+    # dir) to sys.path at interpreter start -- see pth_line. A plain-path .pth
     # only APPENDS (after this interpreter's own site-packages), so a stale
     # pip-installed copy of <name> sitting in site-packages -- e.g. left over from
     # a former `bootstrap @ git+` dependency that uv sync didn't prune -- would
     # shadow the shared copy. Prepending makes the shared copy authoritative (the
-    # single source of truth) regardless of any such leftover. site.py executes
-    # .pth lines that begin with "import".
-    desired = 'import sys; sys.path.insert(0, r"%s")' % entry_dir
+    # single source of truth) regardless of any such leftover. The line names
+    # only entry_dir, so an owner publish never rewrites it.
+    desired = pth_line(name, entry_dir)
     if _read_text(pth) == desired:
         return SharedLibResult(name, "cached", f"linked (cached, {pth})")
 

@@ -1137,7 +1137,11 @@ def route(
     being returned: a registry server is up only if somebody started it, so
     a dead one refuses here rather than once per unit. Unset, the default
     entry runs: the supplied ``openrouter`` instance, else a new
-    :class:`OpenRouterBackend`. A removed routing env set without
+    :class:`OpenRouterBackend`. When the declaration resolves to the
+    ``openrouter`` entry and an ``openrouter`` instance was supplied, that
+    instance is returned (never a fresh one), so the caller's client, endpoint
+    pin and budget wrapper survive a declaration; an entry naming another
+    transport still wins over the supplied instance. A removed routing env set without
     :data:`MODELS_ENV` raises ``ConfigurationError`` instead (a supplied
     ``mock`` is still returned first).
 
@@ -1154,7 +1158,13 @@ def route(
         return mock
     _refuse_removed_routing_env()
     if declared_model_names() is not None:
-        backend = _backend_for_entry(_resolve_declared_entry(output_contract=output_contract))
+        entry = _resolve_declared_entry(output_contract=output_contract)
+        if entry.id == "openrouter" and openrouter is not None:
+            # The caller's instance IS the openrouter entry: it carries the
+            # client, endpoint pin and budget wrapper a bare per-call
+            # OpenRouterBackend() would drop, and is reused across calls.
+            return openrouter
+        backend = _backend_for_entry(entry)
         # PROBE ONLY THE SELECTED ENTRY, and only here. One ping per route()
         # call. A server that dies MID-run surfaces instead as
         # HALT_UNREACHABLE on the failing call.
@@ -1178,11 +1188,13 @@ def routed_model(
 ) -> str:
     """Resolve the model a routed call should run, truthfully.
 
-    When :data:`MODELS_ENV` is set, ``requested_model`` and ``backend_name``
-    are both ignored in favour of the declaration's resolved entry -- its own
-    concrete model IS the truthful answer (Y1: a caller like
-    ``yaml-data-editor-kit``'s ``PlannerPolicy.model`` is routed through this
-    env exactly like every other model choice).
+    When :data:`MODELS_ENV` is set, ``backend_name`` is ignored in favour of
+    the declaration's resolved entry. If that entry is ``openrouter`` and the
+    caller requested a model (non-empty ``requested_model``), the request
+    wins: an OpenRouter slug is meaningful to that transport and the caller
+    chose it explicitly. Otherwise the entry's own concrete model IS the
+    truthful answer (Y1: a CLI or endpoint entry cannot run an OpenRouter
+    slug, and an empty request defers to the declaration).
 
     Otherwise the requested id runs unchanged, with one exception: a
     ``model-endpoint`` backend runs the registry default entry's own model,
@@ -1196,6 +1208,8 @@ def routed_model(
     _refuse_removed_routing_env()
     if declared_model_names() is not None:
         entry = _resolve_declared_entry(output_contract=output_contract)
+        if entry.id == "openrouter" and requested_model:
+            return requested_model
         return entry.model or requested_model
     if backend_name == "model-endpoint":
         try:

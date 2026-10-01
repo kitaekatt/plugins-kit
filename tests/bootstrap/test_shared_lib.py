@@ -393,7 +393,7 @@ class TestLink:
         pth = site / "mylib.pth"
         # Executable prepend .pth (wins over any stale installed shadow).
         entry = os.path.join(shared_root, "mylib")
-        assert pth.read_text(encoding="utf-8").strip() == 'import sys; sys.path.insert(0, r"%s")' % entry
+        assert pth.read_text(encoding="utf-8").strip() == shared_lib.pth_line("mylib", entry)
 
         r2 = shared_lib.link_shared_lib("mylib", sys.executable, shared_root)
         assert r2.status == "cached"
@@ -476,7 +476,7 @@ class TestLinkRollback:
 
         assert r.status == "linked"
         entry = os.path.join(shared_root, "mylib")
-        assert pth.read_text(encoding="utf-8").strip() == 'import sys; sys.path.insert(0, r"%s")' % entry
+        assert pth.read_text(encoding="utf-8").strip() == shared_lib.pth_line("mylib", entry)
 
     def test_cache_still_short_circuits_on_genuinely_current_link(self, tmp_path, monkeypatch):
         """Control: a .pth that is ALREADY the desired content must still hit
@@ -485,7 +485,7 @@ class TestLinkRollback:
         shared_root, site = self._linkable(tmp_path, monkeypatch)
         entry = os.path.join(shared_root, "mylib")
         pth = site / "mylib.pth"
-        pth.write_text('import sys; sys.path.insert(0, r"%s")\n' % entry, encoding="utf-8")
+        pth.write_text(shared_lib.pth_line("mylib", entry) + "\n", encoding="utf-8")
 
         verify_calls = []
         monkeypatch.setattr(
@@ -590,6 +590,213 @@ class TestRealVenv:
         )
         assert proc.returncode == 0, proc.stderr
         assert proc.stdout.strip() == "99", f"stale shadow won: {proc.stdout!r}"
+
+
+# --- generations: a re-sync never changes what a running process resolves --
+
+def _make_venv(tmp_path):
+    venv_dir = tmp_path / "venv"
+    try:
+        subprocess.run(
+            [sys.executable, "-m", "venv", "--without-pip", str(venv_dir)],
+            capture_output=True, timeout=120, check=True,
+        )
+    except (subprocess.SubprocessError, OSError) as e:
+        pytest.skip(f"could not create venv: {e}")
+    from bootstrap_lib.venv_check import _find_python
+    venv_python = _find_python(str(venv_dir))
+    assert venv_python, "venv python not found"
+    return venv_python
+
+
+def _write_version(pkg, version):
+    """Package contents for `version`: VALUE in __init__, WHO in a submodule
+    that a consumer imports LAZILY (only after the re-sync)."""
+    with open(os.path.join(pkg, "__init__.py"), "w", encoding="utf-8") as f:
+        f.write(f"VALUE = {version!r}\n")
+    with open(os.path.join(pkg, "late.py"), "w", encoding="utf-8") as f:
+        f.write(f"WHO = {version!r}\n")
+
+
+class TestRunningProcessKeepsItsGeneration:
+    """Acceptance check for bootstrap-shared-lib-hot-swap.
+
+    A process that imported the lib before a re-sync must keep resolving the
+    OLD version's files afterwards -- including a submodule it imports for the
+    first time after the re-sync, which is the mixed-generation case of
+    shared-lib-architecture.md Finding 5. Before generations existed the
+    re-sync swapped the one directory every process resolved through, so the
+    lazy import below loaded the NEW file into the OLD process.
+    """
+
+    def test_running_process_resolves_old_files_after_resync(self, tmp_path):
+        venv_python = _make_venv(tmp_path)
+        plugin_root = tmp_path / "plugin"
+        pkg = _make_pkg(str(plugin_root / "lib"), "mylib")
+        _write_version(pkg, "v1")
+        shared_root = str(tmp_path / "_shared_libs")
+        assert shared_lib.sync_shared_lib("mylib", "lib", str(plugin_root), shared_root).status == "published"
+        link = shared_lib.link_shared_lib("mylib", venv_python, shared_root)
+        assert link.status == "linked", link.message
+
+        child_code = (
+            "import sys, mylib\n"
+            "print(mylib.VALUE, flush=True)\n"
+            "sys.stdin.readline()\n"
+            "import mylib.late\n"
+            "print(mylib.late.WHO, flush=True)\n"
+            "print(mylib.late.__file__, flush=True)\n"
+        )
+        child = subprocess.Popen(
+            [venv_python, "-c", child_code],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            text=True,
+        )
+        try:
+            assert child.stdout.readline().strip() == "v1"
+
+            # Re-sync to a new version while the child is running.
+            _write_version(pkg, "v2")
+            resync = shared_lib.sync_shared_lib("mylib", "lib", str(plugin_root), shared_root)
+            assert resync.status == "published", resync.message
+
+            out, err = child.communicate("go\n", timeout=60)
+        finally:
+            if child.poll() is None:
+                child.kill()
+        assert child.returncode == 0, err
+        who, late_file = out.splitlines()[:2]
+        assert who == "v1", f"running process loaded the re-synced file: {late_file}"
+        with open(late_file, encoding="utf-8") as f:
+            assert f.read() == "WHO = 'v1'\n"
+
+        # A process started after the re-sync sees the new version.
+        fresh = subprocess.run(
+            [venv_python, "-c", "import mylib, mylib.late; print(mylib.VALUE, mylib.late.WHO)"],
+            capture_output=True, text=True, timeout=30,
+        )
+        assert fresh.returncode == 0, fresh.stderr
+        assert fresh.stdout.strip() == "v2 v2"
+
+
+class TestGenerations:
+    def _publish(self, tmp_path, version):
+        plugin_root = tmp_path / "plugin"
+        pkg = os.path.join(str(plugin_root / "lib"), "mylib")
+        os.makedirs(pkg, exist_ok=True)
+        _write_version(pkg, version)
+        shared_root = str(tmp_path / "_shared_libs")
+        result = shared_lib.sync_shared_lib("mylib", "lib", str(plugin_root), shared_root)
+        return result, os.path.join(shared_root, "mylib"), shared_lib.generation_id(shared_lib._hash_tree(pkg))
+
+    def test_publish_lands_generation_and_pointer_and_logs_it(self, tmp_path):
+        result, entry, gid = self._publish(tmp_path, "v1")
+        assert result.status == "published"
+        assert f"generation {gid}" in result.message
+        assert open(os.path.join(entry, ".current"), encoding="utf-8").read().strip() == gid
+        assert os.path.isfile(os.path.join(entry, ".generations", gid, "mylib", "late.py"))
+        # The stable copy still exists (foreign-interpreter consumers read it).
+        assert os.path.isfile(os.path.join(entry, "mylib", "late.py"))
+
+    def test_resync_keeps_old_generation_untouched_and_marks_it(self, tmp_path):
+        _r, entry, gid1 = self._publish(tmp_path, "v1")
+        _r, _e, gid2 = self._publish(tmp_path, "v2")
+        assert gid1 != gid2
+        old = os.path.join(entry, ".generations", gid1)
+        assert open(os.path.join(old, "mylib", "late.py"), encoding="utf-8").read() == "WHO = 'v1'\n"
+        assert os.path.isfile(os.path.join(old, ".superseded"))
+        assert not os.path.exists(os.path.join(entry, ".generations", gid2, ".superseded"))
+
+    def test_republishing_old_content_reuses_its_generation(self, tmp_path):
+        _r, entry, gid1 = self._publish(tmp_path, "v1")
+        self._publish(tmp_path, "v2")
+        result, _e, gid_again = self._publish(tmp_path, "v1")
+        assert result.status == "published"
+        assert gid_again == gid1
+        assert open(os.path.join(entry, ".current"), encoding="utf-8").read().strip() == gid1
+        assert not os.path.exists(os.path.join(entry, ".generations", gid1, ".superseded"))
+
+    def test_tree_without_pointer_republishes_once_then_caches(self, tmp_path):
+        """A machine published before generations has the stamp but no pointer."""
+        _r, entry, _gid = self._publish(tmp_path, "v1")
+        os.remove(os.path.join(entry, ".current"))
+        again, _e, _g = self._publish(tmp_path, "v1")
+        assert again.status == "published"
+        cached, _e, _g = self._publish(tmp_path, "v1")
+        assert cached.status == "cached"
+
+    def test_prune_respects_retention_and_never_removes_current(self, tmp_path):
+        _r, entry, gid1 = self._publish(tmp_path, "v1")
+        _r, _e, gid2 = self._publish(tmp_path, "v2")
+        marker = os.path.join(entry, ".generations", gid1, ".superseded")
+        now = os.path.getmtime(marker)
+
+        pruned, errors = shared_lib.prune_generations(entry, keep=gid2, now=now + 60)
+        assert (pruned, errors) == ([], [])
+        assert os.path.isdir(os.path.join(entry, ".generations", gid1))
+
+        later = now + shared_lib.GENERATION_RETENTION_S + 1
+        pruned, errors = shared_lib.prune_generations(entry, keep=gid2, now=later)
+        assert (pruned, errors) == ([gid1], [])
+        assert not os.path.exists(os.path.join(entry, ".generations", gid1))
+        assert os.path.isdir(os.path.join(entry, ".generations", gid2, "mylib"))
+        assert not any(n.startswith(".trash-") for n in os.listdir(entry))
+
+    def test_unmarked_superseded_generation_starts_its_clock(self, tmp_path):
+        _r, entry, gid1 = self._publish(tmp_path, "v1")
+        _r, _e, gid2 = self._publish(tmp_path, "v2")
+        marker = os.path.join(entry, ".generations", gid1, ".superseded")
+        os.remove(marker)
+        far_future = os.path.getmtime(os.path.join(entry, ".current")) + 10 * shared_lib.GENERATION_RETENTION_S
+        pruned, _errors = shared_lib.prune_generations(entry, keep=gid2, now=far_future)
+        assert pruned == []
+        assert os.path.isfile(marker)
+
+    def test_prune_failure_is_reported_in_the_publish_message(self, tmp_path, monkeypatch):
+        _r, entry, gid1 = self._publish(tmp_path, "v1")
+        self._publish(tmp_path, "v2")
+        monkeypatch.setattr(shared_lib, "GENERATION_RETENTION_S", -1)
+
+        def deny(entry_dir, path):
+            raise PermissionError("in use")
+
+        monkeypatch.setattr(shared_lib, "_discard_dir", deny)
+        result, _e, _g = self._publish(tmp_path, "v3")
+        assert result.status == "published"
+        assert "could not prune" in result.message and gid1 in result.message
+
+
+class TestPthLine:
+    """The .pth line resolves the generation at interpreter start and falls
+    back to the stable entry dir on any pointer problem, without raising."""
+
+    def _resolve(self, monkeypatch, entry):
+        monkeypatch.setattr(sys, "path", list(sys.path))
+        exec(shared_lib.pth_line("mylib", entry), {})
+        return sys.path[0]
+
+    def test_points_at_current_generation(self, tmp_path, monkeypatch):
+        entry = tmp_path / "mylib"
+        (entry / ".generations" / "abc123" / "mylib").mkdir(parents=True)
+        (entry / ".current").write_text("abc123\n", encoding="utf-8")
+        assert self._resolve(monkeypatch, str(entry)) == str(entry / ".generations" / "abc123")
+
+    @pytest.mark.parametrize("pointer", [None, "", "../../elsewhere", "missing0"])
+    def test_falls_back_to_entry_dir(self, tmp_path, monkeypatch, pointer):
+        entry = tmp_path / "mylib"
+        (entry / "mylib").mkdir(parents=True)
+        if pointer is not None:
+            (entry / ".current").write_text(pointer, encoding="utf-8")
+        assert self._resolve(monkeypatch, str(entry)) == str(entry)
+
+    def test_unreadable_pointer_falls_back_without_raising(self, tmp_path, monkeypatch):
+        entry = tmp_path / "mylib"
+        (entry / ".current").mkdir(parents=True)  # open() on a directory raises
+        assert self._resolve(monkeypatch, str(entry)) == str(entry)
+
+    def test_is_one_import_line(self, tmp_path):
+        line = shared_lib.pth_line("mylib", str(tmp_path / "x"))
+        assert "\n" not in line and line.startswith("import ")
 
 
 # --- engine wiring via _process_manifest ---------------------------------

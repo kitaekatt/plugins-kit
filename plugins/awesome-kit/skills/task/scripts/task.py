@@ -574,7 +574,14 @@ def _cmd_archive(args: argparse.Namespace) -> int:
     except StateOpError as exc:
         _print_state_op_error(exc)
         return 1
-    if result.folder_removed:
+    if result.repaired_split:
+        print(
+            f"repaired split state: {result.canonical} was in two folders; "
+            f"the complete copy is at {result.archived_to}, status: "
+            "archived; the leftover source folder was removed"
+        )
+        disposition = f"repaired; lives at {result.archived_to}"
+    elif result.folder_removed:
         disposition = (
             "final state committed; folder deleted; version control is the "
             "record"

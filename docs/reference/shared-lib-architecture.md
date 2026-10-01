@@ -4,13 +4,14 @@ Six findings about bootstrap's `shared_libs` mechanism (declared in a plugin's
 `bootstrap.json`, implemented in `plugins/bootstrap/bootstrap_lib/shared_lib.py`
 and driven by `_phase_shared_libs` in `plugins/bootstrap/bootstrap_lib/engine.py`).
 Each was reviewed against the code at `dev` HEAD on 2026-09-20 and is recorded
-here so it survives outside the session transcript that found it. Five are open
-at HEAD; Finding 2 was fixed in bootstrap 0.123.0 on 2026-09-20 and is kept
-here for the record. Being named in this document fixes nothing -- read each
-finding's own status line.
+here so it survives outside the session transcript that found it. Four are
+open at HEAD; Finding 2 was fixed in bootstrap 0.123.0 on 2026-09-20 and
+Finding 5 in bootstrap 0.140.0 on 2026-10-01, and both are kept here for the
+record. Being named in this document fixes nothing -- read each finding's own
+status line.
 
 Each finding's claim is a verbatim copy of a task plan's record, apart from the
-fix write-up added under Finding 2 when it was closed; the original
+fix write-ups added under Findings 2 and 5 when they were closed; the original
 reviewer notes were written to a session scratchpad that no longer exists, so
 this document -- and the source citations added while writing it -- is the only
 surviving record of the underlying claims.
@@ -32,11 +33,11 @@ fix added the `CLAUDE_BOOTSTRAP_DATA_ROOT` gate around the broadcast, made the
 `.pth` write atomic (`write_atomic`), and made `claude_plugin_test.py --print`
 side-effect-free. All three are in place at HEAD.
 
-The six findings below are unrelated defects in the same mechanism. Five are
-open at HEAD; Finding 2 is closed, and its section records what the fix does.
-Do not re-open or re-fix the `CLAUDE_BOOTSTRAP_DATA_ROOT` gate, the atomic
-write, `--print`, or Finding 2 on the strength of anything in this document --
-those are closed. The other five are open.
+The six findings below are unrelated defects in the same mechanism. Four are
+open at HEAD; Findings 2 and 5 are closed, and each closed section records what
+the fix does. Do not re-open or re-fix the `CLAUDE_BOOTSTRAP_DATA_ROOT` gate,
+the atomic write, `--print`, Finding 2, or Finding 5 on the strength of
+anything in this document -- those are closed. The other four are open.
 
 ## Finding 1: two marketplaces publishing one package name collide in the standalone broadcast
 
@@ -232,7 +233,9 @@ probe, exactly as the finding states.
 
 ## Finding 5: "picks up fresh source on its next import" is misleading
 
-**Confirmed.**
+**Confirmed at review time (2026-09-20). Fixed in bootstrap 0.140.0
+(2026-10-01) for the `.pth` consumers (modes 1-2); mode 3 has a documented
+opt-in.** The fix write-up follows the original claim.
 
 `library-consumption.md`, Mode 3 ("Foreign-interpreter project consumer"),
 "Update" section, states:
@@ -267,6 +270,49 @@ If the two generations' internal contract changed together (a renamed helper,
 a changed internal signature, a moved constant), the mix can misbehave in a
 way that has no "stale code" signature to search for, because part of the
 package genuinely is current.
+
+**The fix is versioned generations behind a stable link.** Task
+`loc-pipeline-consumer-needs`, item `bootstrap-shared-lib-hot-swap`, recorded
+a live occurrence of the exposure: on 2026-09-30 an llm-scripting-kit re-sync
+(0.56.0 -> 0.57.0) landed while a paid pipeline run was in progress. A later
+cycle of that run hung for about 17 minutes; the re-sync is the only observed
+correlate, and causation is not established. The exposure itself does not
+depend on that.
+
+Since bootstrap 0.140.0, `sync_shared_lib` also installs each published content as an immutable
+generation, `<entry_dir>/.generations/<id>/<name>/` (`<id>` is a 16-hex prefix
+of the content hash), and only then points `<entry_dir>/.current` at it. The
+`.pth` that `link_shared_lib` writes (`pth_line`) still names only
+`<entry_dir>`, so it is never rewritten on a publish; it reads the pointer once
+at interpreter start and prepends the generation directory to `sys.path`,
+falling back to `<entry_dir>` when the pointer is missing, unreadable, not
+alphanumeric, or names no complete generation, and containing every error so a
+bad pointer cannot break interpreter startup. Python resolves each submodule
+through its package's `__path__`, which points into the immutable
+generation, so a process's lazy imports after a publish come from the
+generation it started with. The stable `<entry_dir>/<name>/` copy is still
+swapped in place: the mode-3 recipe in `library-consumption.md` reads it, and
+as of bootstrap 0.140.0 that document gives mode-3 shims the same pointer rule and replaces the
+misleading sentence. A superseded generation gets a `.superseded` marker and a
+later publish deletes it once the marker is older than
+`GENERATION_RETENTION_S` (7 days), renaming it out of place first so it is
+either intact or gone.
+
+Alternative considered and rejected: deferring the re-sync while a consumer
+process holds the library. A pure-Python package keeps no file handle or lock
+once imported, so there is nothing portable for the engine to observe; the
+remaining route is a lease each consumer process writes, which is a change in
+every consuming plugin and project, and a lease held by a long-lived process
+would postpone every later publish indefinitely.
+
+Tests: `TestRunningProcessKeepsItsGeneration` in
+`tests/bootstrap/test_shared_lib.py` starts a process that imports the
+library, re-syncs a new version, and asserts that the running process's first
+import of a submodule still returns the old file while a new process gets the
+new one; with `shared_lib.py` reverted to its pre-fix version the test fails
+with the re-synced file loaded. `TestGenerations` and `TestPthLine` cover
+generation reuse, the one-time re-publish of a pre-generation tree, retention
+and pruning, the reported prune failure, and every pointer fallback.
 
 ## Finding 6: `find_standalone_python` duplicates `interpreter_env.standalone_python` with a different POSIX path
 

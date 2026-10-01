@@ -51,12 +51,13 @@ Readings chosen in Step 2 (flagged in the implementation report):
 from __future__ import annotations
 
 import re
-import shutil
+import sys
 from pathlib import Path
 
 import yaml
 
 from . import resolve
+from .relocate import RelocationError, remove_tree
 from . import validate
 from .types import TaskType, get_type
 from .validate import validate_ref
@@ -331,6 +332,15 @@ def init_task(
             )
     except BaseException:
         # Invariant: init never leaves a partial/invalid folder behind.
-        shutil.rmtree(folder, ignore_errors=True)
+        # Read-only-aware removal; a removal that still fails is reported
+        # (naming the folder) instead of hiding the original error.
+        try:
+            remove_tree(folder)
+        except RelocationError as cleanup_exc:
+            print(
+                f"warning: init could not remove its partial folder: "
+                f"{cleanup_exc}",
+                file=sys.stderr,
+            )
         raise
     return folder

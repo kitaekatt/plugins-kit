@@ -111,3 +111,28 @@ accepted name it stops being read as evidence, and the mechanism had been
 sitting in a guard docstring in plain prose the whole time. A standing caveat
 can be a finding wearing a workaround. If a moving victim reappears, that
 refutes the fix rather than restoring the caveat.
+
+## Bytecode isolation
+
+`tests/conftest.py` sets `sys.pycache_prefix` to a fresh temporary directory
+(prefix `plugins-kit-pycache-`) when the process starts, and removes it at exit.
+Every pytest run therefore compiles every module, including the assertion-rewritten
+test modules, from source. No run can reuse bytecode left by an earlier run. Under
+`-n`, each xdist worker imports the conftest and owns its own directory.
+
+Why: Python and the pytest assertion rewriter validate a cached `.pyc` by the
+source mtime (whole seconds) and size. A revert-to-red check mutates a source file,
+runs the test, restores the file, and runs again. When the mutated and restored
+sources have the same length and fall in the same second, the stale `.pyc` passes
+validation and the second run executes the wrong code. The result is a vacuous
+check (see [vacuous-checks.md](vacuous-checks.md)).
+
+Cost: every run recompiles, a small fixed amount (about 0.05 s on a 45-test slice,
+measured 2026-09-30).
+
+Opt out by setting `PYTHONPYCACHEPREFIX` (or `-X pycache_prefix=...`) before the
+run. The conftest then leaves it alone and bytecode persists in that location.
+Only an explicit prefix opts out. `PYTHONDONTWRITEBYTECODE` is not an opt-out: it
+stops Python from writing `.pyc` files but still reads existing ones, so a stale
+`__pycache__` from an earlier run would be reused. With it set, the fresh prefix
+stays empty and nothing stale is read.

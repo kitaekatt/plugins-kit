@@ -39,7 +39,7 @@ import shutil
 import stat
 import subprocess
 from contextlib import contextmanager
-from typing import NamedTuple, Optional
+from typing import NamedTuple, Optional, Tuple
 
 from .path_check import _home
 
@@ -155,17 +155,11 @@ def _find_or_make_changelist(cwd: str) -> Optional[str]:
     Returns None if p4 can't tell us -- the caller then falls back to a plain
     `p4 edit`, which is still better than leaving the file read-only.
     """
-    listed = _p4(["changes", "-s", "pending", "-l", "-c", os.environ.get("P4CLIENT", "")], cwd) \
-        if os.environ.get("P4CLIENT") else _p4(["changes", "-s", "pending", "-l"], cwd)
-    if listed is not None and listed.returncode == 0:
-        current = None
-        for line in (listed.stdout or "").splitlines():
-            match = _CHANGE_LINE_RE.match(line)
-            if match:
-                current = match.group(1)
-            elif current and _CL_MARKER in line:
-                return current
-
+    # Identify THIS client and user first (resolved from `cwd`, so P4CONFIG is
+    # honoured), and scope the pending-changes listing to them. An unscoped
+    # `p4 changes -s pending` lists every client's and user's pending changes,
+    # so a marker CL parked by another workspace would be reused and
+    # `p4 edit -c <that CL>` then fails ("belongs to client ...").
     info = _p4(["info"], cwd)
     if info is None or info.returncode != 0:
         return None
@@ -177,6 +171,16 @@ def _find_or_make_changelist(cwd: str) -> Optional[str]:
     client, user = fields.get("Client name", ""), fields.get("User name", "")
     if not client or not user:
         return None
+
+    listed = _p4(["changes", "-s", "pending", "-l", "-c", client, "-u", user], cwd)
+    if listed is not None and listed.returncode == 0:
+        current = None
+        for line in (listed.stdout or "").splitlines():
+            match = _CHANGE_LINE_RE.match(line)
+            if match:
+                current = match.group(1)
+            elif current and _CL_MARKER in line:
+                return current
 
     # Deliberately NO Files: section -- including one would sweep every file
     # currently open in the default changelist into this new CL.
@@ -199,17 +203,37 @@ def _find_or_make_changelist(cwd: str) -> Optional[str]:
     return match.group(1) if match else None
 
 
-def _p4_edit(path: str) -> bool:
-    """Open `path` for edit. True only if the file is actually writable after."""
+def _p4_error_text(proc) -> str:
+    """The underlying p4 error text (stderr, else stdout), single-spaced."""
+    if proc is None:
+        return "p4 could not be run"
+    text = (proc.stderr or "").strip() or (proc.stdout or "").strip()
+    return " ".join(text.split()) or f"p4 exited {proc.returncode} with no output"
+
+
+def _p4_edit(path: str) -> Tuple[bool, str]:
+    """Open `path` for edit. Returns (ok, detail); ok only if the file is writable after.
+
+    Runs with the file's own directory as cwd (so P4CONFIG resolves from the
+    workspace) and on the absolute path. When the parked changelist is
+    rejected, retries a plain `p4 edit` before giving up. `detail` carries
+    p4's own error text for every failed attempt.
+    """
+    path = os.path.abspath(path)
     cwd = os.path.dirname(path) or None
     changelist = _find_or_make_changelist(cwd)
-    args = ["edit", "-c", changelist, path] if changelist else ["edit", path]
-    proc = _p4(args, cwd)
-    if proc is None:
-        return False
-    # p4 can exit 0 having done nothing useful (e.g. "not on client"), so the
-    # writability of the file -- not the exit code -- is the authority.
-    return proc.returncode == 0 and not _is_read_only(path)
+    attempts = [["edit", "-c", changelist, path]] if changelist else []
+    attempts.append(["edit", path])
+    errors = []
+    for args in attempts:
+        proc = _p4(args, cwd)
+        # p4 can exit 0 having done nothing useful (e.g. "not on client"), so the
+        # writability of the file -- not the exit code -- is the authority.
+        if proc is not None and proc.returncode == 0 and not _is_read_only(path):
+            return True, ""
+        label = f"p4 {' '.join(args[:3] if len(args) > 2 else args[:1])}"
+        errors.append(f"{label}: {_p4_error_text(proc)}")
+    return False, "; ".join(errors)
 
 
 def ensure_writable(path: Optional[str]) -> WritableResult:
@@ -223,10 +247,11 @@ def ensure_writable(path: Optional[str]) -> WritableResult:
         return WritableResult(True, "already-writable", "")
 
     if _p4_tracked(path):
-        if _p4_edit(path):
+        edited, why = _p4_edit(path)
+        if edited:
             return WritableResult(True, "p4-edit", "opened for edit in Perforce")
         return WritableResult(
-            False, "failed", "Perforce edit failed; file remains read-only",
+            False, "failed", f"Perforce edit failed; file remains read-only ({why})",
         )
 
     try:
