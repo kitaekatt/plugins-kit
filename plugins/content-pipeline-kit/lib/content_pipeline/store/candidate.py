@@ -32,9 +32,9 @@ Design points carried from the source systems:
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field, replace
+from dataclasses import MISSING, dataclass, field, fields, replace
 from enum import Enum
-from typing import Any, Callable, Dict, Mapping, Optional, Tuple
+from typing import Any, Callable, Dict, Mapping, Optional, Tuple, Type
 
 from content_pipeline.freshness import hashing
 
@@ -95,6 +95,48 @@ class Candidate:
 
 
 @dataclass(frozen=True)
+class CellState:
+    """Typed cell-level state, extensible by a frozen subclass.
+
+    ``lock_reason`` records why a cell was locked. ``passthrough`` holds any
+    serialized state key the (sub)class does not model, so unknown keys
+    round-trip untouched. A consumer adds typed fields with a frozen subclass
+    whose fields all carry defaults; :meth:`to_dict` omits default-valued
+    fields, so a default state serializes to ``{}``.
+    """
+
+    lock_reason: Optional[str] = None
+    passthrough: Mapping[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict:
+        """Return the non-default fields plus passthrough keys as a dict."""
+        out: dict = {}
+        for f in fields(self):
+            if f.name == "passthrough":
+                continue
+            if f.default is not MISSING:
+                default = f.default
+            elif f.default_factory is not MISSING:
+                default = f.default_factory()
+            else:
+                default = MISSING
+            value = getattr(self, f.name)
+            if default is MISSING or value != default:
+                out[f.name] = value
+        for key, value in self.passthrough.items():
+            out.setdefault(key, value)
+        return out
+
+    @classmethod
+    def from_dict(cls, doc: Mapping[str, Any]) -> "CellState":
+        """Build a state from ``doc``; unmodelled keys go to ``passthrough``."""
+        names = {f.name for f in fields(cls)} - {"passthrough"}
+        known = {k: v for k, v in doc.items() if k in names}
+        rest = {k: v for k, v in doc.items() if k not in names}
+        return cls(**known, passthrough=rest)
+
+
+@dataclass(frozen=True)
 class CandidateCell:
     """A population of candidates for one cell ``key``.
 
@@ -109,6 +151,7 @@ class CandidateCell:
     entries: Tuple[Candidate, ...] = ()
     locked: bool = False
     extras: Mapping[str, Any] = field(default_factory=dict)
+    state: CellState = field(default_factory=CellState)
 
     @property
     def active(self) -> Optional[Candidate]:
@@ -233,9 +276,17 @@ def retire_candidate(cell: CandidateCell, candidate_id: str) -> CandidateCell:
     return replace(cell, entries=new_entries)
 
 
-def set_locked(cell: CandidateCell, locked: bool = True) -> CandidateCell:
-    """Return a copy of ``cell`` with its ``locked`` flag set."""
-    return replace(cell, locked=locked)
+def set_locked(
+    cell: CandidateCell, locked: bool = True, *, reason: Optional[str] = None
+) -> CandidateCell:
+    """Return a copy of ``cell`` with its ``locked`` flag and reason set.
+
+    ``reason`` is stored as ``state.lock_reason`` via ``dataclasses.replace``
+    so a ``CellState`` subclass keeps its type; ``reason=None`` clears it.
+    """
+    return replace(
+        cell, locked=locked, state=replace(cell.state, lock_reason=reason)
+    )
 
 
 # -- rider cache keys ---------------------------------------------------------
@@ -307,10 +358,15 @@ def cell_to_dict(cell: CandidateCell) -> dict:
         out["locked"] = True
     if cell.extras:
         out["extras"] = dict(cell.extras)
+    state_doc = cell.state.to_dict()
+    if state_doc:
+        out["state"] = state_doc
     return out
 
 
-def cell_from_dict(doc: Mapping[str, Any]) -> CandidateCell:
+def cell_from_dict(
+    doc: Mapping[str, Any], *, state_type: Type[CellState] = CellState
+) -> CandidateCell:
     """Build a :class:`CandidateCell` from a plain dict document.
 
     Validates the at-most-one-active and unique-id invariants on load.
@@ -329,6 +385,7 @@ def cell_from_dict(doc: Mapping[str, Any]) -> CandidateCell:
         entries=entries,
         locked=bool(doc.get("locked", False)),
         extras=dict(doc.get("extras") or {}),
+        state=state_type.from_dict(doc.get("state") or {}),
     )
 
 
@@ -367,7 +424,9 @@ def store_to_doc(store: CandidateStore) -> dict:
     return {"cells": [cell_to_dict(c) for c in store.cells.values()]}
 
 
-def store_from_doc(doc: Optional[Mapping[str, Any]]) -> CandidateStore:
+def store_from_doc(
+    doc: Optional[Mapping[str, Any]], *, state_type: Type[CellState] = CellState
+) -> CandidateStore:
     """Build a :class:`CandidateStore` from a plain dict document.
 
     Rejects a duplicate cell key. ``None`` / empty document yields an empty
@@ -377,7 +436,7 @@ def store_from_doc(doc: Optional[Mapping[str, Any]]) -> CandidateStore:
     if not doc:
         return store
     for cell_doc in doc.get("cells") or ():
-        cell = cell_from_dict(cell_doc)
+        cell = cell_from_dict(cell_doc, state_type=state_type)
         key = tuple(cell.key)
         if key in store.cells:
             raise CandidateError(f"duplicate cell key {key!r} in document")
@@ -385,15 +444,42 @@ def store_from_doc(doc: Optional[Mapping[str, Any]]) -> CandidateStore:
     return store
 
 
-def load_store(text: str, *, yaml_load: Callable[[str], Any]) -> CandidateStore:
+def load_store(
+    text: str,
+    *,
+    yaml_load: Callable[[str], Any],
+    state_type: Type[CellState] = CellState,
+) -> CandidateStore:
     """Parse ``text`` with the caller's ``yaml_load`` and build the store.
 
     The YAML engine is injected so a bulk store can use a C-backed loader for
     throughput; this module never binds one.
     """
-    return store_from_doc(yaml_load(text))
+    return store_from_doc(yaml_load(text), state_type=state_type)
 
 
 def dump_store(store: CandidateStore, *, yaml_dump: Callable[[Any], str]) -> str:
     """Serialize ``store`` to text with the caller's ``yaml_dump``."""
     return yaml_dump(store_to_doc(store))
+
+__all__ = [
+    "CandidateStatus",
+    "CandidateError",
+    "Candidate",
+    "CellState",
+    "CandidateCell",
+    "append_candidate",
+    "promote_candidate",
+    "retire_candidate",
+    "set_locked",
+    "rider_cache_key",
+    "candidate_to_dict",
+    "candidate_from_dict",
+    "cell_to_dict",
+    "cell_from_dict",
+    "CandidateStore",
+    "store_to_doc",
+    "store_from_doc",
+    "load_store",
+    "dump_store",
+]

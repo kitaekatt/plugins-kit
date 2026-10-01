@@ -766,6 +766,43 @@ view; `cost_effectiveness_report` combines findings with a plain cost ledger
 (the consumer builds it from `llm.platform`'s accounting -- `audit` stays
 LLM-free).
 
+## Record a run and replay one stage (opt-in)
+
+`content_pipeline.provenance` answers "what produced this output, and what
+would stage K do with a different input". Stdlib only; the library writes only
+under the bundle directory you pass.
+
+```python
+from content_pipeline.provenance.record import start_run
+from content_pipeline.provenance.snapshot import EventLog, StageSnapshotter
+from content_pipeline.provenance.call_audit import CallAuditor
+from content_pipeline.provenance.replay import replay_stage
+from content_pipeline.pipeline import convergence_loop
+
+with start_run(bundle, root=project_root, params={...},
+               inputs={"config": config_path}) as rec:
+    snap = StageSnapshotter(bundle, write=write_store)      # write(store, path)
+    log = EventLog(bundle / "events.jsonl")
+    audit = CallAuditor(bundle / "calls")                    # pass as on_attempt=
+    result = convergence_loop.run(store, grade=..., select=..., apply=...,
+                                  fill=..., measure=..., max_cycles=5,
+                                  observers=[snap, log])
+    rec.finish(result={"verdict": result.verdict.value})
+
+replay_stage(bundle, cycle=2, stage="fill", run=fill, out_bundle=out,
+             root=project_root, materialize=load_store_from_snapshot,
+             write=write_store, edit=edit_store, edits=["glossary entry X"])
+```
+
+The context manager records `error` when its block raises; call `finish` for
+`ok`. `replay_stage` only reads the source bundle, refuses an `out_bundle`
+inside it, and writes the edited store, the stage's output store, and a record
+whose `source` names the source run, cycle, stage and the snapshot's sha256.
+A stage that reads inputs the record did not hash (a global glossary, a
+template directory) yields a link that looks complete and is not: pass those
+files through `inputs`. A response-cache hit replays an old answer; each
+`CallAttempt` carries `from_cache`, and cache policy stays yours.
+
 ## Test with MockBackend
 
 Every test that exercises pipeline logic scripts a `MockBackend` (step 6) and

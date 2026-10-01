@@ -87,6 +87,7 @@ from typing import (
     Optional,
     Protocol,
     Sequence,
+    Tuple,
     Union,
     runtime_checkable,
 )
@@ -1398,6 +1399,57 @@ class ResponseCache:
 
 
 # ---------------------------------------------------------------------------
+# Per-call attempt observation
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class CallAttempt:
+    """One completion attempt, as reported to an ``on_attempt`` observer.
+
+    ``validation_attempt`` is the :func:`submit_validated` level (1 for a
+    direct :func:`call_llm`); ``transport_attempt`` is the :func:`call_llm`
+    retry level, both 1-based. ``system`` / ``user`` are the bytes sent on
+    this attempt. ``response`` is ``None`` when the call raised and ``error``
+    is then ``"Type: message"``. ``rejections`` holds rejection kinds and is
+    populated only by :func:`submit_validated`, on the final transport attempt
+    of each validation attempt.
+    """
+
+    identifier: str
+    validation_attempt: int
+    transport_attempt: int
+    system: str
+    user: str
+    model: str
+    temperature: Optional[float]
+    max_tokens: Optional[int]
+    cache_salt: int
+    effort: Optional[str]
+    response: Optional[LLMResponse]
+    error: Optional[str]
+    rejections: Tuple[str, ...] = ()
+
+
+AttemptObserver = Callable[[CallAttempt], None]
+
+
+def _notify_failed(
+    observer: AttemptObserver, event: CallAttempt, to_raise: BaseException
+) -> None:
+    """Report a failed attempt; an observer error chains onto ``to_raise``.
+
+    Returns normally when the observer succeeds. When the observer raises,
+    ``to_raise`` (the original failure) is raised with the observer's error
+    as its cause, so the original exception type is never lost.
+    """
+    try:
+        observer(event)
+    except BaseException as obs_exc:  # noqa: BLE001 -- chain, never swallow
+        raise to_raise from obs_exc
+
+
+# ---------------------------------------------------------------------------
 # call_llm -- the single entry point
 # ---------------------------------------------------------------------------
 
@@ -1416,6 +1468,7 @@ def call_llm(
     retries: int = 0,
     retry_sleep: float = 0.0,
     identifier: str = "",
+    on_attempt: Optional[AttemptObserver] = None,
 ) -> LLMResponse:
     """Run one completion through the shared pipeline concerns.
 
@@ -1468,8 +1521,62 @@ def call_llm(
       correct, uncached responses.
     - A :class:`StructuralOutputError` from the backend is charged and
       re-raised at once: never retried, never halt-classified, never cached.
+
+    ``on_attempt`` (default ``None``) receives one :class:`CallAttempt` per
+    attempt: each backend call, successful or not, and a cache hit as
+    ``transport_attempt=1`` with ``from_cache`` set. It is called outside the
+    transport ``try`` so its own error is never charged, classified or
+    retried. After a failed attempt it runs before the original exception is
+    re-raised; if it raises then, the original exception is re-raised with the
+    observer's error as its cause. With ``None`` nothing changes.
     """
     opts = options or BackendOptions()
+
+    def _charge_reporting(exc: BaseException, response: Optional[LLMResponse]) -> None:
+        """Charge a failed attempt; a budget raise is still reported."""
+        try:
+            _charge_exception(
+                exc,
+                model=model,
+                pricing=pricing,
+                cost_budget=cost_budget,
+                identifier=identifier,
+            )
+        except BaseException as budget_exc:  # noqa: BLE001 -- report, re-raise
+            if on_attempt is not None:
+                _notify_failed(
+                    on_attempt,
+                    _event(
+                        attempt_no[0],
+                        response,
+                        f"{type(budget_exc).__name__}: {budget_exc}",
+                    ),
+                    budget_exc,
+                )
+            raise
+
+    attempt_no = [1]
+
+    def _event(
+        transport_attempt: int,
+        response: Optional[LLMResponse],
+        error: Optional[str] = None,
+    ) -> CallAttempt:
+        return CallAttempt(
+            identifier=identifier,
+            validation_attempt=1,
+            transport_attempt=transport_attempt,
+            system=system,
+            user=user,
+            model=model,
+            temperature=opts.temperature,
+            max_tokens=opts.max_tokens,
+            cache_salt=opts.cache_salt,
+            effort=opts.effort,
+            response=response,
+            error=error,
+        )
+
     output_contract = opts.output_contract
     if output_contract is not None:
         _require_contract(output_contract, _contract_seam())
@@ -1492,42 +1599,63 @@ def call_llm(
         if hit is not None and (
             output_contract is None or _report_accepts(hit.output_contract, output_contract)
         ):
+            if on_attempt is not None:
+                on_attempt(_event(1, hit))
             return hit
 
     response: Optional[LLMResponse] = None
     last_exc: Optional[BaseException] = None
     for attempt in range(retries + 1):
+        attempt_no[0] = attempt + 1
         try:
             candidate = backend.complete(system, user, model=model, options=opts)
-        except PipelineHaltError:
+        except PipelineHaltError as exc:
+            if on_attempt is not None:
+                _notify_failed(
+                    on_attempt,
+                    _event(attempt + 1, None, f"{type(exc).__name__}: {exc}"),
+                    exc,
+                )
             raise
         except StructuralOutputError as exc:
             # A billed call whose answer broke its contract: a model defect,
             # not a transport failure. Retry with feedback is
             # submit_validated's job, so this is never retried here.
-            _charge_exception(
-                exc,
-                model=model,
-                pricing=pricing,
-                cost_budget=cost_budget,
-                identifier=identifier,
-            )
+            _charge_reporting(exc, getattr(exc, "response", None))
+            if on_attempt is not None:
+                _notify_failed(
+                    on_attempt,
+                    _event(
+                        attempt + 1,
+                        getattr(exc, "response", None),
+                        f"{type(exc).__name__}: {exc}",
+                    ),
+                    exc,
+                )
             raise
         except BaseException as exc:  # noqa: BLE001 -- classify then re-raise
-            _charge_exception(
-                exc,
-                model=model,
-                pricing=pricing,
-                cost_budget=cost_budget,
-                identifier=identifier,
-            )
+            _charge_reporting(exc, getattr(exc, "response", None))
             if opts.timeout_s is not None and _is_callers_own_deadline(exc):
                 halt = None
             else:
                 halt = backend.classify_halt(exc)
             if halt is not None:
-                raise PipelineHaltError(halt, str(exc)) from exc
+                halt_exc = PipelineHaltError(halt, str(exc))
+                halt_exc.__cause__ = exc
+                if on_attempt is not None:
+                    _notify_failed(
+                        on_attempt,
+                        _event(attempt + 1, None, f"{type(exc).__name__}: {exc}"),
+                        halt_exc,
+                    )
+                raise halt_exc
             last_exc = exc
+            if on_attempt is not None:
+                _notify_failed(
+                    on_attempt,
+                    _event(attempt + 1, None, f"{type(exc).__name__}: {exc}"),
+                    exc,
+                )
             if attempt < retries:
                 if retry_sleep:
                     time.sleep(retry_sleep)
@@ -1544,6 +1672,18 @@ def call_llm(
                 cost = response_cost(candidate.model, candidate, pricing=pricing)
                 if cost is not None and cost_budget is not None:
                     cost_budget.charge(cost, identifier=identifier or model)
+            except BaseException as budget_exc:  # noqa: BLE001 -- report, re-raise
+                if on_attempt is not None:
+                    _notify_failed(
+                        on_attempt,
+                        _event(
+                            attempt + 1,
+                            candidate,
+                            f"{type(budget_exc).__name__}: {budget_exc}",
+                        ),
+                        budget_exc,
+                    )
+                raise
             finally:
                 print(
                     _empty_completion_line(
@@ -1552,6 +1692,8 @@ def call_llm(
                     file=sys.stderr,
                     flush=True,
                 )
+            if on_attempt is not None:
+                on_attempt(_event(attempt + 1, candidate))
             if attempt < retries:
                 if retry_sleep:
                     time.sleep(retry_sleep)
@@ -1574,7 +1716,20 @@ def call_llm(
 
     cost = response_cost(response.model, response, pricing=pricing)
     if cost is not None and cost_budget is not None:
-        cost_budget.charge(cost, identifier=identifier or model)
+        try:
+            cost_budget.charge(cost, identifier=identifier or model)
+        except BaseException as budget_exc:  # noqa: BLE001 -- report, re-raise
+            if on_attempt is not None:
+                _notify_failed(
+                    on_attempt,
+                    _event(
+                        attempt + 1,
+                        response,
+                        f"{type(budget_exc).__name__}: {budget_exc}",
+                    ),
+                    budget_exc,
+                )
+            raise
 
     if cache is not None and cache_key is not None and not response.from_cache:
         if output_contract is None or _report_accepts(
@@ -1582,6 +1737,8 @@ def call_llm(
         ):
             cache.store(cache_key, response)
 
+    if on_attempt is not None:
+        on_attempt(_event(attempt + 1, response))
     return response
 
 
@@ -1893,6 +2050,7 @@ def submit_validated(
     cache_dir: Optional[Union[str, Path]] = None,
     block_soft: bool = True,
     output_contract: Optional[Any] = None,
+    on_attempt: Optional[AttemptObserver] = None,
     **call_kwargs: Any,
 ) -> SubmitResult:
     """Run the call -> parse -> validate -> feed-back loop.
@@ -1927,6 +2085,12 @@ def submit_validated(
     response, with the validated object as ``structured``, and a live,
     structurally valid, reportless response is stored in the response cache
     in that enriched form -- a structural failure never is.
+
+    ``on_attempt`` is passed down to :func:`call_llm` with this loop's
+    validation index. The final transport attempt of each validation attempt
+    is reported only after :func:`evaluate_submission` has run, with its
+    ``rejections`` (kinds) populated; earlier transport attempts of the same
+    validation attempt are reported as they happen.
     """
     if max_attempts < 1:
         raise ValueError(f"max_attempts must be >= 1, got {max_attempts}")
@@ -1959,6 +2123,14 @@ def submit_validated(
     payload: Any = None  # last SUCCESSFULLY parsed payload; never clobbered
     rejections: List[contract.Rejection] = []
     current_user = user
+    # The most recent transport attempt of the current validation attempt,
+    # held back until the evaluation can fill in its rejections.
+    pending: List[Optional[CallAttempt]] = [None]
+
+    def _flush(rejection_kinds: Tuple[str, ...] = ()) -> None:
+        held, pending[0] = pending[0], None
+        if held is not None and on_attempt is not None:
+            on_attempt(replace(held, rejections=rejection_kinds))
 
     for attempt in range(max_attempts):
         attempt_options = (
@@ -1966,6 +2138,11 @@ def submit_validated(
             if attempt == 0
             else replace(base_options, cache_salt=attempt)
         )
+
+        def _tap(event: CallAttempt, _index: int = attempt + 1) -> None:
+            _flush()
+            pending[0] = replace(event, validation_attempt=_index)
+
         try:
             resp = call_llm(
                 backend,
@@ -1974,6 +2151,7 @@ def submit_validated(
                 model=model,
                 options=attempt_options,
                 cache_dir=cache_dir,
+                on_attempt=_tap if on_attempt is not None else None,
                 **call_kwargs,
             )
         except EmptyCompletionError as exc:
@@ -1987,6 +2165,11 @@ def submit_validated(
             # failed response is this attempt's input, and its report becomes
             # a schema_violation rejection and the next prompt's feedback.
             resp = exc.response
+        except BaseException as exc:
+            held, pending[0] = pending[0], None
+            if held is not None and on_attempt is not None:
+                _notify_failed(on_attempt, held, exc)
+            raise
 
         if effective_contract is None:
             responses.append(resp)
@@ -2018,6 +2201,7 @@ def submit_validated(
                     )
             responses.append(recorded)
         rejections = evaluation.rejections
+        _flush(tuple(r.kind for r in rejections))
         if evaluation.parsed:
             payload = evaluation.payload
             if not contract.is_rejecting(rejections, block_soft=block_soft):
@@ -2074,4 +2258,6 @@ __all__ = [
     "evaluate_submission",
     "StructuralOutputError",
     "StructuredContractSupportError",
+    "CallAttempt",
+    "AttemptObserver",
 ]

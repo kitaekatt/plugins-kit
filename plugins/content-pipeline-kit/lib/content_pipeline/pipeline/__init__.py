@@ -11,7 +11,10 @@ never speculative. ``workunit`` is the pluggable work-unit strategy: a
 graph-walk (structural cadence) or a flat-chunk split, selected per
 pipeline. ``gate`` holds the ``Gate`` / ``run_gates`` pre-generation gate
 shape re-exported by ``single_pass`` and consumed by the tracked
-``execution.controller``.
+``execution.controller``. ``convergence_loop.run`` and ``run_cycle`` accept
+``observers`` (``LoopObserver`` callables receiving ``LoopEvent``s at stage
+boundaries); ``cell_policy`` folds per-cell outcomes into a ``Round`` measure
+for the loop.
 
 Deviations from the skeleton / source systems
 ---------------------------------------------

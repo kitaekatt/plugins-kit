@@ -12,7 +12,8 @@ VCS seam (git-default, Perforce ships in p4-kit), a human-in-the-loop
 round-trip abstraction, and an audit framework that reuses the runtime's own
 classifiers.
 
-Deliberately re-exports NOTHING here -- submodule imports only
+Deliberately re-exports NOTHING here (beyond ``__version__``, which equals the
+plugin manifest version) -- submodule imports only
 (``from content_pipeline.freshness import classify``, not
 ``from content_pipeline import classify``). This keeps the import graph a
 strict DAG: importing ``freshness`` never drags in ``llm``, importing
@@ -21,3 +22,5 @@ for its scope (REP: independently reusable; CCP: single-owner modules for
 things that change together; CRP: opt-in components -- guards, convergence,
 round-trip, VCS -- never reached from the core import path).
 """
+
+__version__ = "0.32.0"
