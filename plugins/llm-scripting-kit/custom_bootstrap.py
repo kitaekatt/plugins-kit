@@ -40,7 +40,7 @@ if _LIB_DIR not in sys.path:
 
 from llm_scripting_kit.api_key import get_api_key  # noqa: E402
 from llm_scripting_kit.account import AccountCheckError, check_account  # noqa: E402
-from llm_scripting_kit.constants import API_KEY_ENV, USER_ENV_FILE  # noqa: E402
+from llm_scripting_kit.constants import API_KEY_ENV, CLI_COMMAND, USER_ENV_FILE  # noqa: E402
 from llm_scripting_kit.env_file import read_env_file, write_env_file  # noqa: E402
 
 
@@ -81,7 +81,7 @@ def _defer(ctx: Any, *, user_msg: str, agent_msg: str) -> None:
         "openrouter_credential",
         user_msg=user_msg,
         agent_msg=agent_msg,
-        satisfied_by="llm-scripting-kit set-key",
+        satisfied_by=f"{CLI_COMMAND} set-key",
     )
 
 
@@ -143,16 +143,16 @@ def bootstrap(ctx: Any) -> None:
                 "  > llm-scripting-kit needs an API key. Two ways to set it:\n"
                 "  >   1. (preferred -- key stays out of the transcript) Type "
                 "this in the prompt with the leading `!`:\n"
-                "  >        ! llm-scripting-kit set-key\n"
+                f"  >        ! {CLI_COMMAND} set-key\n"
                 "  >      It'll prompt for the key with a hidden input. "
                 "Paste from https://openrouter.ai/keys (starts with `sk-or-v1-`).\n"
                 "  >   2. If you'd rather paste the key here and have me set "
                 "it for you, paste it. WARNING: the key will be visible in "
                 "the transcript, so prefer option 1 unless you don't mind.\n\n"
                 "If the user picks option 2 and pastes a key, run:\n"
-                "  llm-scripting-kit set-key --key <THE_KEY>\n"
+                f"  {CLI_COMMAND} set-key --key <THE_KEY>\n"
                 "It validates against GET /auth/key before writing to "
-                f"{USER_ENV_FILE}. Do NOT run `llm-scripting-kit set-key` "
+                f"{USER_ENV_FILE}. Do NOT run `{CLI_COMMAND} set-key` "
                 "without --key yourself -- it requires an interactive hidden "
                 "prompt you cannot provide; it must be the user who runs the "
                 "bang-prefixed form."
@@ -200,12 +200,12 @@ def bootstrap(ctx: Any) -> None:
             user_msg=(
                 "Your OpenRouter API key was rejected (HTTP 401). "
                 "Generate a new one at https://openrouter.ai/keys and run "
-                "`llm-scripting-kit set-key`."
+                f"`{CLI_COMMAND} set-key`."
             ),
             agent_msg=(
                 f"OpenRouter rejected the API key currently in {lookup.source_path or USER_ENV_FILE} "
                 f"with HTTP 401. Ask the user to generate a fresh key at "
-                f"https://openrouter.ai/keys and run `llm-scripting-kit set-key`."
+                f"https://openrouter.ai/keys and run `{CLI_COMMAND} set-key`."
             ),
         )
         ctx.log_ok("openrouter: key REJECTED (HTTP 401) -- deferred to point of use")

@@ -5,6 +5,7 @@
 endpoint-less callers keep resolving OpenRouter exactly as before.
 """
 
+import sys
 from pathlib import Path
 
 # Default endpoint (``openrouter``) values. Aliases of
@@ -23,6 +24,18 @@ API_KEY_ENV = "OPENROUTER_API_KEY"
 # USER_ENV_FILE.
 USER_ENV_FILE = (
     Path.home() / ".claude" / "plugins" / "data" / "plugins-kit" / "llm-scripting-kit" / ".env"
+)
+
+# The CLI resolution contract, as the literal ``~/``-prefixed display string an
+# agent-facing message tells a reader to run (USER_ENV_FILE above is a resolved
+# Path for code; this is text, so the two are deliberately separate). The
+# version-free plugin-venv console script needs no PATH entry or env var and
+# resolves from any shell; a bare ``llm-scripting-kit`` resolves only inside a
+# Claude Code session. The ``plugins-kit`` marketplace segment is part of the
+# contract. Documented in README.md, "Invoking the CLI".
+CLI_COMMAND = (
+    "~/.claude/plugins/data/plugins-kit/llm-scripting-kit/.venv/"
+    + ("Scripts/llm-scripting-kit.exe" if sys.platform == "win32" else "bin/llm-scripting-kit")
 )
 
 

@@ -45,6 +45,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Mapping, MutableMapping, Optional, Sequence
 
+from .constants import CLI_COMMAND
 from .completion.contract import OutputContractViolation, contract_requirements, merge_requirements
 from .completion.halt import HALT_INSUFFICIENT_CREDIT, HALT_QUOTA
 from .completion.skill_context import skill_context_requirements
@@ -138,7 +139,7 @@ RULE_TRIGGER_SESSION = (
     "re-selecting a unit that may have written, reset its workspace to its "
     "launch state or re-run it in a fresh worktree; read-only review lanes skip "
     "this step. A quota or credit halt (a usage-limit or out-of-credits error) "
-    "is written back first: run `llm-scripting-kit record-halt <entry>` before "
+    f"is written back first: run `{CLI_COMMAND} record-halt <entry>` before "
     "re-selecting or re-running describe with --exclude, so every later render "
     "in this session shows that entry out of quota."
 )
