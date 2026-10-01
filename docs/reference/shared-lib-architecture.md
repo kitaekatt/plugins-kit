@@ -279,7 +279,7 @@ cycle of that run hung for about 17 minutes; the re-sync is the only observed
 correlate, and causation is not established. The exposure itself does not
 depend on that.
 
-`sync_shared_lib` now also installs each published content as an immutable
+Since bootstrap 0.140.0, `sync_shared_lib` also installs each published content as an immutable
 generation, `<entry_dir>/.generations/<id>/<name>/` (`<id>` is a 16-hex prefix
 of the content hash), and only then points `<entry_dir>/.current` at it. The
 `.pth` that `link_shared_lib` writes (`pth_line`) still names only
@@ -288,11 +288,11 @@ at interpreter start and prepends the generation directory to `sys.path`,
 falling back to `<entry_dir>` when the pointer is missing, unreadable, not
 alphanumeric, or names no complete generation, and containing every error so a
 bad pointer cannot break interpreter startup. Python resolves each submodule
-through its package's `__path__`, which now points into the immutable
+through its package's `__path__`, which points into the immutable
 generation, so a process's lazy imports after a publish come from the
 generation it started with. The stable `<entry_dir>/<name>/` copy is still
 swapped in place: the mode-3 recipe in `library-consumption.md` reads it, and
-that document now gives mode-3 shims the same pointer rule and replaces the
+as of bootstrap 0.140.0 that document gives mode-3 shims the same pointer rule and replaces the
 misleading sentence. A superseded generation gets a `.superseded` marker and a
 later publish deletes it once the marker is older than
 `GENERATION_RETENTION_S` (7 days), renaming it out of place first so it is

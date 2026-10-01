@@ -31,7 +31,8 @@ Each publish also lands an immutable copy of the same source at
 `_shared_libs/<name>/.generations/<id>/<name>/` and writes `<id>` to
 `_shared_libs/<name>/.current`. The `.pth` of modes 1-2 reads that pointer
 when an interpreter starts, so a process keeps the version it started with
-until it exits; the next process gets the new one. A mode-3 shim gets the same
+for as long as that generation is retained (7 days after it is superseded; see
+mode 3, "Update"); the next process gets the new one. A mode-3 shim gets the same
 property only if it reads the pointer too (see mode 3, "Update").
 
 ## Mode 1 -- Plugin consumer (`shared_lib_imports`)
@@ -46,7 +47,8 @@ are the importing plugin's own concern):
 **Update.** The engine re-syncs the shared, version-independent location on
 every owner publish; the consumer's `.pth` never needs to change. A process
 already running keeps the generation it started with (including submodules it
-has not imported yet); a new process gets the new version. **Version.**
+has not imported yet) for as long as that generation is retained (7 days after
+it is superseded; see mode 3, "Update"); a new process gets the new version. **Version.**
 Lockstep with whatever version of the owner plugin the marketplace has
 installed. There is no pinning -- a consumer cannot ask for an older revision of
 the library while staying on the marketplace's current owner-plugin version.
