@@ -27,6 +27,13 @@ and every consumer's path entry -- a `.pth` file in modes 1-2, whatever the
 project supplies in mode 3 -- keeps resolving without a rewrite. The modes
 differ only in HOW a given interpreter is told to look there.
 
+Each publish also lands an immutable copy of the same source at
+`_shared_libs/<name>/.generations/<id>/<name>/` and writes `<id>` to
+`_shared_libs/<name>/.current`. The `.pth` of modes 1-2 reads that pointer
+when an interpreter starts, so a process keeps the version it started with
+until it exits; the next process gets the new one. A mode-3 shim gets the same
+property only if it reads the pointer too (see mode 3, "Update").
+
 ## Mode 1 -- Plugin consumer (`shared_lib_imports`)
 
 The canonical, fully-supported case. A plugin declares
@@ -37,7 +44,9 @@ are the importing plugin's own concern):
 [manifest-reference.md](manifest-reference.md#shared_libs--shared_lib_imports--cross-plugin-first-party-libraries).
 
 **Update.** The engine re-syncs the shared, version-independent location on
-every owner publish; the consumer's `.pth` never needs to change. **Version.**
+every owner publish; the consumer's `.pth` never needs to change. A process
+already running keeps the generation it started with (including submodules it
+has not imported yet); a new process gets the new version. **Version.**
 Lockstep with whatever version of the owner plugin the marketplace has
 installed. There is no pinning -- a consumer cannot ask for an older revision of
 the library while staying on the marketplace's current owner-plugin version.
@@ -96,11 +105,41 @@ the recipe below itself, and owns it.
 
 Automatic, and this is the point of the recipe: an owner publish re-syncs
 `_shared_libs/<name>/` the same way it does for modes 1-2, and the project's own
-runtime never has to invoke Claude Code to see the change -- a scheduled job or
-a long-running process using the project's interpreter picks up fresh source on
-its next import. Only the machine's session-start bootstrap pass has to run at
-some point to perform that re-sync; the consuming process does not participate
-in it.
+runtime never has to invoke Claude Code to see the change -- the next process
+started on the project's interpreter gets the fresh source. Only the machine's
+session-start bootstrap pass has to run at some point to perform that re-sync;
+the consuming process does not participate in it.
+
+A process that is already running does NOT pick the change up on its next
+`import` statement: CPython caches every imported module in `sys.modules`, so
+a module the process already imported stays the old one until the process
+exits. What does change under it is the directory itself. With the shim above,
+the process resolves `_shared_libs/<name>/<name>/`, which every publish
+replaces in place, so a submodule the process imports for the FIRST time after
+a publish comes from the new version while the modules it already holds are
+the old one -- two versions of one package in one process.
+
+To keep a long-running process on one version, have the shim insert the
+current generation instead of the entry directory, falling back to the entry
+directory when there is no usable pointer -- the same rule the mode 1-2 `.pth`
+applies:
+
+```python
+# For each <entry> = ~/.claude/plugins/data/<marketplace>/_shared_libs/<name>
+path = entry
+try:
+    gen = open(os.path.join(entry, ".current"), encoding="utf-8").read().strip()
+    candidate = os.path.join(entry, ".generations", gen)
+    if gen.isalnum() and os.path.isdir(os.path.join(candidate, name)):
+        path = candidate
+except OSError:
+    pass
+sys.path.insert(0, path)
+```
+
+A superseded generation is deleted 7 days after it stops being current, so a
+process running longer than that can still fail to import a submodule it had
+not imported yet.
 
 ### Caveats
 
