@@ -326,6 +326,8 @@
     {"name": "content_pipeline.llm.spend_ledger.LedgerIdentityChanged", "status": "public"},
     {"name": "content_pipeline.llm.spend_ledger.LedgerStateInvalid", "status": "public"},
     {"name": "content_pipeline.llm.spend_ledger.NANO_PER_USD", "status": "public"},
+    {"name": "content_pipeline.llm.spend_ledger.ORPHAN_RECLAIM_MODES", "status": "public"},
+    {"name": "content_pipeline.llm.spend_ledger.ReclaimReport", "status": "public"},
     {"name": "content_pipeline.llm.spend_ledger.Reservation", "status": "public"},
     {"name": "content_pipeline.llm.spend_ledger.SCHEMA_VERSION", "status": "public"},
     {"name": "content_pipeline.llm.spend_ledger.SpendCapExceeded", "status": "public"},

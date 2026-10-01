@@ -1339,22 +1339,34 @@ class TestPublicSurface:
             assert hasattr(sl, name), name
 
     def test_the_later_units_surfaces_are_not_half_shipped(self):
-        """SL-3 owns `renew` / `reclaim_orphans`. SL-1 ships their SCHEMA (the
-        `generation` and `lease_expires_at` columns, the `reclaimed` state and
-        the `leaks` table), not their behaviour, so a caller gets an
-        AttributeError rather than a method that silently does nothing.
+        """No `SpendLedger` method is a later unit's any more, so the guard is
+        now entirely its own complement: every method design section 3 declares
+        must EXIST, and nothing may be half-shipped as a silent stub.
 
-        `halt` / `resume` / `check_halted` were in this list while SL-2 was
-        unbuilt and were REMOVED from it, not deleted: the same guard still
-        covers the remaining two, and the three halt methods are now asserted to
-        EXIST and behave in test_llm_spend_ledger_halt.py. Narrowing rather than
-        dropping keeps the lease surface from being half-shipped.
+        This list has been narrowed twice rather than deleted, each time by
+        MOVING names from the absent half to the present half. `halt` / `resume`
+        / `check_halted` moved when SL-2 landed; `renew` / `reclaim_orphans`
+        moved when SL-3 landed, and `_LATER_UNIT_METHODS` is empty because SL-3
+        was the last unit that owned one -- SL-4 adds tests only, SL-5 edits
+        `llm/platform.py`, SL-6 edits `cli/budget.py`. Moving rather than
+        deleting is what stops this test silently becoming the assertion that a
+        shipped surface is absent.
+
+        Revert shown red: deleted `reclaim_orphans` from `SpendLedger` -> this
+        test failed with `AssertionError: SpendLedger.reclaim_orphans is
+        declared by design section 3 and must exist`. Restored.
         """
-        for name in ("renew", "reclaim_orphans"):
+        _LATER_UNIT_METHODS = ()
+        for name in _LATER_UNIT_METHODS:
             assert not hasattr(sl.SpendLedger, name), (
                 f"SpendLedger.{name} is a later unit's; it must not be stubbed"
             )
-        # The complement, so this test cannot silently become the assertion that
-        # SL-2's surface is absent again.
-        for name in ("halt", "resume", "check_halted"):
-            assert hasattr(sl.SpendLedger, name), f"SpendLedger.{name} is SL-2's and must exist"
+        # Section 3's whole method surface. A name here is a name that has
+        # already landed, so this half can only grow.
+        for name in (
+            "reserve", "settle", "release", "renew", "halt", "resume",
+            "check_halted", "reclaim_orphans", "status",
+        ):
+            assert callable(getattr(sl.SpendLedger, name, None)), (
+                f"SpendLedger.{name} is declared by design section 3 and must exist"
+            )

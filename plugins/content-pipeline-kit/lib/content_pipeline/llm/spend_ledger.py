@@ -78,8 +78,10 @@ __all__ = [
     "NANO_PER_USD",
     "SCHEMA_VERSION",
     "LEDGER_STATES",
+    "ORPHAN_RECLAIM_MODES",
     "SpendLedger",
     "Reservation",
+    "ReclaimReport",
     "SpendStatus",
     "SpendCapExceeded",
     "SpendLedgerHalted",
@@ -103,10 +105,20 @@ SCHEMA_VERSION = 1
 #: The five exhaustive states of a ``ledger`` row.
 LEDGER_STATES = ("open", "unknown", "settled", "overbilled", "reclaimed")
 
+#: The two orphan-reclaim modes. ``"manual"`` sweeps only when
+#: :meth:`SpendLedger.reclaim_orphans` is called; ``"lease"`` also sweeps inside
+#: every :meth:`SpendLedger.reserve` transaction.
+ORPHAN_RECLAIM_MODES = ("manual", "lease")
+
 #: Environment variable :func:`spend_ledger_from_env` reads.
 LEDGER_PATH_ENV = "CONTENT_PIPELINE_SPEND_LEDGER"
 
 _DEFAULT_BUSY_TIMEOUT_MS = 5000
+
+#: Rows one sweep may reclaim. 1 keeps the overshoot bound at the largest
+#: single reclaimed row; 0 means no limit, which widens the bound to the SUM
+#: over every expired row the sweep takes.
+_DEFAULT_RECLAIM_BATCH_LIMIT = 1
 
 
 # ---------------------------------------------------------------------------
@@ -423,6 +435,29 @@ class Reservation:
 
 
 @dataclass(frozen=True)
+class ReclaimReport:
+    """What one orphan sweep took, and therefore how much headroom it freed.
+
+    ``freed_nano`` is the SUM of ``reserved`` over every row the sweep
+    reclaimed, which is exactly the overshoot bound of that pass: each of those
+    rows may still be a live attempt that goes on to bill, and its headroom is
+    now available to someone else. One row is the bound only because
+    ``reclaim_batch_limit`` defaults to 1 -- a sweep with no limit takes every
+    expired row at once and the bound becomes the whole sum.
+
+    ``expired_total`` counts the rows that were eligible BEFORE the batch limit
+    applied, so a caller can tell "nothing was orphaned" from "more remain and
+    the next sweep will take them".
+    """
+
+    reclaimed_ids: tuple
+    freed_nano: int
+    freed_usd: float
+    expired_total: int
+    swept_at: str
+
+
+@dataclass(frozen=True)
 class SpendStatus:
     """A consistent snapshot of the ledger, all amounts in USD.
 
@@ -479,6 +514,8 @@ class SpendLedger:
         halt_on_overbilled: bool = True,
         synchronous: str = "FULL",
         warn_on_network_path: bool = True,
+        orphan_reclaim: str = "manual",
+        reclaim_batch_limit: int = _DEFAULT_RECLAIM_BATCH_LIMIT,
     ) -> None:
         self._path = Path(path)
         self._run_id = run_id
@@ -486,6 +523,18 @@ class SpendLedger:
         self._busy_timeout_ms = int(busy_timeout_ms)
         self._halt_on_overbilled = bool(halt_on_overbilled)
         self._synchronous = str(synchronous)
+        if orphan_reclaim not in ORPHAN_RECLAIM_MODES:
+            raise ValueError(
+                f"orphan_reclaim must be one of {ORPHAN_RECLAIM_MODES}, got "
+                f"{orphan_reclaim!r}"
+            )
+        self._orphan_reclaim = str(orphan_reclaim)
+        if int(reclaim_batch_limit) < 0:
+            raise ValueError(
+                f"reclaim_batch_limit must be >= 0 (0 means no limit), got "
+                f"{reclaim_batch_limit!r}"
+            )
+        self._reclaim_batch_limit = int(reclaim_batch_limit)
         if warn_on_network_path and looks_like_network_path(self._path):
             warnings.warn(
                 f"spend ledger {self._path} looks like a network path; SQLite WAL "
@@ -536,6 +585,29 @@ class SpendLedger:
     def halt_on_overbilled(self) -> bool:
         """Whether a settle above its reservation also sets the halt row."""
         return self._halt_on_overbilled
+
+    @property
+    def orphan_reclaim(self) -> str:
+        """Whether ``reserve`` also sweeps expired leases, or only the caller.
+
+        ``"manual"`` is the default BECAUSE a ledger handle cannot see whether
+        the work its reservations cover has a timeout. The design derives the
+        default from ``options.timeout_s``, which lives at the call site, so the
+        safe end of that derivation is what the handle defaults to: a caller
+        that sets ``ttl_s`` from a known deadline opens with ``"lease"``.
+        """
+        return self._orphan_reclaim
+
+    @property
+    def reclaim_batch_limit(self) -> int:
+        """Rows one sweep may reclaim; 0 means no limit.
+
+        This is the knob that keeps the reclaim overshoot bound tight. The bound
+        of a pass is the SUM of ``reserved`` over every row it reclaimed, so a
+        limit of 1 holds it at the largest single row while still converging --
+        every later sweep takes the next one.
+        """
+        return self._reclaim_batch_limit
 
     # -- connection plumbing --------------------------------------------------
 
@@ -739,6 +811,155 @@ class SpendLedger:
             ("halt", reason, detail, 1 if forced else 0, now),
         )
 
+    # -- orphan sweeping ------------------------------------------------------
+
+    def _sweep_expired(
+        self, conn: sqlite3.Connection, *, now: float, batch_limit: int
+    ) -> ReclaimReport:
+        """Reclaim expired-but-still-open rows, inside the CALLER's transaction.
+
+        Takes no transaction of its own: both entry points
+        (:meth:`reclaim_orphans` and the ``"lease"``-mode sweep inside
+        :meth:`reserve`) are already in ``BEGIN IMMEDIATE``, so the sweep, the
+        outstanding total and the insert that follows it cannot interleave with
+        another process's.
+
+        The eligibility predicate is ``state = 'open' AND lease_expires_at IS
+        NOT NULL AND lease_expires_at < now``. The ``IS NOT NULL`` half is what
+        the design calls the NULL lease that is never swept -- an attempt with
+        no deadline. SQLite's three-valued logic would also exclude NULL from
+        the ``<`` comparison alone, so that clause is belt and braces, stated
+        because it is the rule rather than because the comparison needs help.
+
+        A reclaimed row is UPDATED, never deleted: retention is what lets a late
+        settle be attributed to ``leaks`` instead of looking like a settle
+        against an id that never existed. ``generation`` is bumped so that late
+        settle LOSES its compare-and-set, and ``settled`` is written as 0
+        because the structural clause ``settled_null_on_resolved`` covers
+        ``reclaimed``.
+
+        ``ORDER BY lease_expires_at`` makes a limited batch take the longest-
+        expired rows first, so repeated sweeps converge in expiry order rather
+        than in whatever order the index happens to return.
+        """
+        eligible = conn.execute(
+            "SELECT id, reserved FROM ledger "
+            "WHERE state = 'open' AND lease_expires_at IS NOT NULL AND lease_expires_at < ? "
+            "ORDER BY lease_expires_at, id",
+            (now,),
+        ).fetchall()
+        swept_at = _now_iso()
+        expired_total = len(eligible)
+        taken = eligible if batch_limit <= 0 else eligible[:batch_limit]
+        if not taken:
+            return ReclaimReport(
+                reclaimed_ids=(),
+                freed_nano=0,
+                freed_usd=0.0,
+                expired_total=expired_total,
+                swept_at=swept_at,
+            )
+        ids = tuple(str(row["id"]) for row in taken)
+        freed_nano = sum(int(row["reserved"]) for row in taken)
+        placeholders = ", ".join("?" for _ in ids)
+        conn.execute(
+            "UPDATE ledger SET state = 'reclaimed', generation = generation + 1, "
+            "settled = 0, resolved_at = ? "
+            f"WHERE state = 'open' AND id IN ({placeholders})",
+            (swept_at,) + ids,
+        )
+        return ReclaimReport(
+            reclaimed_ids=ids,
+            freed_nano=freed_nano,
+            freed_usd=nano_to_usd(freed_nano),
+            expired_total=expired_total,
+            swept_at=swept_at,
+        )
+
+    def reclaim_orphans(self, *, batch_limit: Optional[int] = None) -> ReclaimReport:
+        """Reclaim expired leases, freeing their headroom. The manual lever.
+
+        A process killed between ``reserve`` and ``settle`` leaves an ``open``
+        row that nothing will ever resolve; its headroom would otherwise consume
+        the cap for the life of the file. This sweep resolves such a row to
+        ``reclaimed``, bumps its ``generation`` and RETAINS it permanently.
+
+        THE HOLE, stated plainly: an expired lease does not prove the attempt is
+        dead, so a sweep may free headroom an attempt still goes on to spend.
+        The overshoot bound of one pass is the SUM of ``reserved`` over every row
+        that pass reclaimed -- :attr:`ReclaimReport.freed_nano` -- which is at
+        most concurrency times the largest reservation. ``batch_limit`` is what
+        keeps it tight: 1 (the default) holds the bound at one row per pass while
+        still converging, because every later sweep takes the next expired row.
+
+        Rows with a NULL lease are NEVER swept, at any batch limit: no deadline
+        is known, so no elapsed time is evidence of anything.
+
+        Not gated by the halt: reclaiming is accounting, and a halted ledger must
+        still be able to tell freed headroom from money written off.
+
+        ``batch_limit`` overrides :attr:`reclaim_batch_limit` for this call only;
+        0 means no limit, which widens the bound to the whole expired set.
+
+        There is NO renewal thread, no poller and no signal anywhere in this
+        module: a lease exists only when a deadline exists, and a caller with its
+        own watchdog calls :meth:`renew`.
+        """
+        limit = self._reclaim_batch_limit if batch_limit is None else int(batch_limit)
+        if limit < 0:
+            raise ValueError(
+                f"batch_limit must be >= 0 (0 means no limit), got {batch_limit!r}"
+            )
+        with self._writer() as conn:
+            return self._sweep_expired(conn, now=time.time(), batch_limit=limit)
+
+    def renew(
+        self, reservation: Reservation, *, ttl_s: float
+    ) -> Reservation:
+        """Push ``reservation``'s lease out by ``ttl_s`` seconds from now.
+
+        For a caller running its own watchdog over work whose deadline it knows
+        better than the ledger does. The new deadline is ``now + ttl_s``, NOT the
+        old deadline plus ``ttl_s``: a renewal that arrives late must not inherit
+        the lateness it was sent to correct.
+
+        Renewing a reservation whose lease is NULL GIVES it one, which is how a
+        caller that could not supply a deadline at ``reserve`` time opts into
+        sweeping later.
+
+        Compare-and-set on ``(id, generation, state='open')``, like
+        :meth:`settle`: a renewal of a row that was already resolved or
+        reclaimed raises :class:`StaleReservationError` and changes nothing, so a
+        watchdog cannot resurrect headroom the ledger has already freed.
+
+        Returns a NEW :class:`Reservation` carrying the new lease; the old value
+        is frozen and keeps the superseded deadline, so present the returned one.
+        """
+        if not (float(ttl_s) > 0):
+            raise ValueError(f"ttl_s must be positive, got {ttl_s!r}")
+        lease = time.time() + float(ttl_s)
+        with self._writer() as conn:
+            cursor = conn.execute(
+                "UPDATE ledger SET lease_expires_at = ? "
+                "WHERE id = ? AND generation = ? AND state = 'open'",
+                (lease, reservation.id, reservation.generation),
+            )
+            if cursor.rowcount == 0:
+                raise StaleReservationError(
+                    f"reservation {reservation.id} is no longer open at generation "
+                    f"{reservation.generation}; its lease was not renewed"
+                )
+        return Reservation(
+            id=reservation.id,
+            generation=reservation.generation,
+            amount_usd=reservation.amount_usd,
+            amount_nano=reservation.amount_nano,
+            scope=reservation.scope,
+            identifier=reservation.identifier,
+            created_at=reservation.created_at,
+            lease_expires_at=lease,
+        )
+
     # -- public operations ----------------------------------------------------
 
     def reserve(
@@ -792,6 +1013,14 @@ class SpendLedger:
                     reason=halt["reason"] or "",
                     detail=halt["detail"] or "",
                 )
+            if self._orphan_reclaim == "lease":
+                # In the SAME transaction as the SUM and the INSERT below, so the
+                # headroom a sweep frees cannot be read by one process and spent
+                # by another. After the halt gate: a refused admission has no
+                # business doing the ledger's housekeeping.
+                self._sweep_expired(
+                    conn, now=time.time(), batch_limit=self._reclaim_batch_limit
+                )
             outstanding = self._partition_nano(conn)["outstanding"]
             if outstanding + amount_nano > self._cap_nano:
                 raise SpendCapExceeded(
@@ -834,13 +1063,19 @@ class SpendLedger:
         understated real spend.
 
         Compare-and-set on ``(id, generation, state='open')``. A settle that
-        loses it raises :class:`StaleReservationError` and changes nothing, so
-        a retried settle cannot double-charge.
+        loses it raises :class:`StaleReservationError` and changes no ``ledger``
+        row, so a retried settle cannot double-charge. When the row it lost to
+        is ``reclaimed`` -- an orphan sweep freed its headroom -- a positive
+        presented cost is appended to ``leaks`` before the raise, because that
+        money was really spent against headroom somebody else may already have
+        used; it then counts in LEAKED and takes the row out of
+        ``written_off_usd``. A loss against any other state writes nothing.
         """
         cost_nano = None if cost_usd is None else usd_to_nano(cost_usd)
         if cost_nano is not None and cost_nano < 0:
             raise ValueError(f"settled cost must not be negative, got {cost_usd!r}")
         now = _now_iso()
+        stale: Optional[StaleReservationError] = None
         with self._writer() as conn:
             if cost_nano is None:
                 state = "unknown"
@@ -863,16 +1098,36 @@ class SpendLedger:
                     (state, cost_nano, now, reservation.id, reservation.generation),
                 )
             if cursor.rowcount == 0:
-                # SL-3 adds the `leaks` write here: a late settle against an
-                # already-`reclaimed` row presents a real cost that must be
-                # recorded rather than discarded. Until reclaim exists, the
-                # only way to lose this compare-and-set is a repeated settle,
-                # which has nothing new to record.
-                raise StaleReservationError(
+                # The compare-and-set was lost: the row is no longer `open` at
+                # the presented generation. When an orphan sweep reclaimed it,
+                # this settle is carrying REAL money against headroom the ledger
+                # already gave away, so the cost goes to `leaks` rather than
+                # being discarded -- and that write must COMMIT, which is why
+                # the raise is deferred past the transaction exactly as the
+                # overbilled raise is. `_writer` rolls back on any exception
+                # leaving its body, so raising here would erase the leak row.
+                stale = StaleReservationError(
                     f"reservation {reservation.id} is no longer open at generation "
                     f"{reservation.generation}; nothing was changed"
                 )
-            if state == "overbilled":
+                if cost_nano is not None and cost_nano > 0:
+                    # Only against a `reclaimed` row, and only for a positive
+                    # cost: the structural clauses require every leak row to
+                    # name an existing reclaimed row and carry a positive
+                    # `reported_cost`. A repeated settle against an already
+                    # `settled` row has nothing new to record and writes
+                    # nothing.
+                    reclaimed = conn.execute(
+                        "SELECT 1 FROM ledger WHERE id = ? AND state = 'reclaimed'",
+                        (reservation.id,),
+                    ).fetchone()
+                    if reclaimed is not None:
+                        conn.execute(
+                            "INSERT INTO leaks (ledger_id, reported_cost, presented_at, "
+                            "generation) VALUES (?, ?, ?, ?)",
+                            (reservation.id, cost_nano, now, reservation.generation),
+                        )
+            elif state == "overbilled":
                 detail = (
                     f"reservation {reservation.id} settled at {cost_nano} nano-USD "
                     f"over a reservation of {reserved_nano}"
@@ -884,6 +1139,10 @@ class SpendLedger:
                     measured=nano_to_usd(cost_nano),
                     budget=nano_to_usd(reserved_nano),
                 )
+        if stale is not None:
+            # Before the overbilled check below, which may have computed its
+            # state from the pre-update SELECT that found nothing.
+            raise stale
         if state == "overbilled":
             # Raised AFTER the commit: the overbilled row and its halt are the
             # record of real money, and must survive the exception.
@@ -1072,6 +1331,8 @@ def create_ledger(
     halt_on_overbilled: bool = True,
     synchronous: str = "FULL",
     warn_on_network_path: bool = True,
+    orphan_reclaim: str = "manual",
+    reclaim_batch_limit: int = _DEFAULT_RECLAIM_BATCH_LIMIT,
 ) -> SpendLedger:
     """Create a ledger file EXCLUSIVELY and write its pinned policy row.
 
@@ -1105,6 +1366,8 @@ def create_ledger(
         halt_on_overbilled=halt_on_overbilled,
         synchronous=synchronous,
         warn_on_network_path=warn_on_network_path,
+        orphan_reclaim=orphan_reclaim,
+        reclaim_batch_limit=reclaim_batch_limit,
     )
     # The WHOLE schema in one transaction: both tables, the control tables and
     # the declared version. A failure part-way rolls all of it back, so there
@@ -1144,6 +1407,8 @@ def open_ledger(
     halt_on_overbilled: bool = True,
     synchronous: str = "FULL",
     warn_on_network_path: bool = True,
+    orphan_reclaim: str = "manual",
+    reclaim_batch_limit: int = _DEFAULT_RECLAIM_BATCH_LIMIT,
 ) -> SpendLedger:
     """Open an existing ledger, pinning its cap and run identity from the file.
 
@@ -1195,6 +1460,8 @@ def open_ledger(
         halt_on_overbilled=halt_on_overbilled,
         synchronous=synchronous,
         warn_on_network_path=warn_on_network_path,
+        orphan_reclaim=orphan_reclaim,
+        reclaim_batch_limit=reclaim_batch_limit,
     )
 
 
