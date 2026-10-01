@@ -138,3 +138,78 @@ def test_call_attempt_is_frozen():
     with pytest.raises(dataclasses.FrozenInstanceError):
         a = CallAttempt("i", 1, 1, "s", "u", "m", None, 1, 0, None, None, None)
         a.user = "x"  # type: ignore[misc]
+
+
+# --- budget raise still reports the billed attempt ---------------------------
+
+
+class _Billed(RuntimeError):
+    output_tokens = 1_000_000
+    input_tokens = 0
+    model = "m"
+
+
+def _over_budget():
+    return CostBudget(limit=0.5)
+
+
+def test_budget_exceeding_success_is_reported():
+    from content_pipeline.llm.platform import BudgetExceededError
+
+    seen = []
+    resp = LLMResponse(text="x", model="m", output_tokens=1_000_000)
+    with pytest.raises(BudgetExceededError):
+        call_llm(MockBackend(responses=[resp]), "s", "u", model="m",
+                 pricing=PRICING, cost_budget=_over_budget(), on_attempt=seen.append)
+    assert len(seen) == 1
+    assert seen[0].response.text == resp.text
+    assert seen[0].error.startswith("BudgetExceededError")
+
+
+def test_budget_exceeding_empty_completion_is_reported():
+    from content_pipeline.llm.platform import BudgetExceededError
+
+    seen = []
+    resp = LLMResponse(text="", model="m", output_tokens=1_000_000)
+    with pytest.raises(BudgetExceededError):
+        call_llm(MockBackend(responses=[resp]), "s", "u", model="m",
+                 pricing=PRICING, cost_budget=_over_budget(), on_attempt=seen.append)
+    assert len(seen) == 1 and seen[0].response.text == resp.text
+    assert seen[0].error.startswith("BudgetExceededError")
+
+
+def test_budget_exceeding_failed_attempt_is_reported():
+    from content_pipeline.llm.platform import BudgetExceededError
+
+    seen = []
+    with pytest.raises(BudgetExceededError):
+        call_llm(MockBackend(responses=[_Billed("boom")]), "s", "u", model="m",
+                 pricing=PRICING, cost_budget=_over_budget(), on_attempt=seen.append)
+    assert len(seen) == 1 and seen[0].response is None
+    assert seen[0].error.startswith("BudgetExceededError")
+
+
+def test_budget_raise_with_raising_observer_chains():
+    from content_pipeline.llm.platform import BudgetExceededError
+
+    def observer(_):
+        raise KeyError("obs")
+
+    resp = LLMResponse(text="x", model="m", output_tokens=1_000_000)
+    with pytest.raises(BudgetExceededError) as info:
+        call_llm(MockBackend(responses=[resp]), "s", "u", model="m",
+                 pricing=PRICING, cost_budget=_over_budget(), on_attempt=observer)
+    assert isinstance(info.value.__cause__, KeyError)
+
+
+def test_submit_validated_budget_raise_keeps_held_attempt():
+    from content_pipeline.llm.platform import BudgetExceededError
+
+    seen = []
+    resp = LLMResponse(text="ok", model="m", output_tokens=1_000_000)
+    with pytest.raises(BudgetExceededError):
+        submit_validated(backend=MockBackend(responses=[resp]), system="s", user="u",
+                         model="m", parse_fn=_parse_ok, pricing=PRICING, cost_budget=_over_budget(),
+                         on_attempt=seen.append)
+    assert len(seen) == 1 and seen[0].validation_attempt == 1
+    assert seen[0].error.startswith("BudgetExceededError")

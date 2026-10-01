@@ -18,6 +18,8 @@ loading, prompt content, field names, the pricing table, and persistence are
 all the consumer's. Say that before describing any subpackage -- a consumer
 that expects a runnable tool has already misunderstood the layer.
 
+`content_pipeline.__version__` (`lib/content_pipeline/__init__.py`) must equal the `plugin.json` and `pyproject.toml` versions on every bump; `tests/content-pipeline-kit/test_version_matches_plugin_json.py` enforces it.
+
 ## The dependency on llm-scripting-kit is one-way by design
 
 `content_pipeline` depends on `llm_scripting_kit`; the reverse edge does not

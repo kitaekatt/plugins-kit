@@ -111,11 +111,11 @@ def test_finish_marks_ok_with_result(tmp_path):
 
 
 def test_record_is_ascii(tmp_path):
-    r = rec.start_run(tmp_path / "b", root=tmp_path, params={"name": "café"},
-                      argv=["x", "ü"])
+    r = rec.start_run(tmp_path / "b", root=tmp_path, params={"name": "caf\u00e9"},
+                      argv=["x", "\u00fc"])
     raw = r.path.read_bytes()
     raw.decode("ascii")
-    assert _load(r.path)["params"]["name"] == "café"
+    assert _load(r.path)["params"]["name"] == "caf\u00e9"
 
 
 def test_modules_default_imports_nothing(tmp_path):

@@ -1532,6 +1532,31 @@ def call_llm(
     """
     opts = options or BackendOptions()
 
+    def _charge_reporting(exc: BaseException, response: Optional[LLMResponse]) -> None:
+        """Charge a failed attempt; a budget raise is still reported."""
+        try:
+            _charge_exception(
+                exc,
+                model=model,
+                pricing=pricing,
+                cost_budget=cost_budget,
+                identifier=identifier,
+            )
+        except BaseException as budget_exc:  # noqa: BLE001 -- report, re-raise
+            if on_attempt is not None:
+                _notify_failed(
+                    on_attempt,
+                    _event(
+                        attempt_no[0],
+                        response,
+                        f"{type(budget_exc).__name__}: {budget_exc}",
+                    ),
+                    budget_exc,
+                )
+            raise
+
+    attempt_no = [1]
+
     def _event(
         transport_attempt: int,
         response: Optional[LLMResponse],
@@ -1581,6 +1606,7 @@ def call_llm(
     response: Optional[LLMResponse] = None
     last_exc: Optional[BaseException] = None
     for attempt in range(retries + 1):
+        attempt_no[0] = attempt + 1
         try:
             candidate = backend.complete(system, user, model=model, options=opts)
         except PipelineHaltError as exc:
@@ -1595,13 +1621,7 @@ def call_llm(
             # A billed call whose answer broke its contract: a model defect,
             # not a transport failure. Retry with feedback is
             # submit_validated's job, so this is never retried here.
-            _charge_exception(
-                exc,
-                model=model,
-                pricing=pricing,
-                cost_budget=cost_budget,
-                identifier=identifier,
-            )
+            _charge_reporting(exc, getattr(exc, "response", None))
             if on_attempt is not None:
                 _notify_failed(
                     on_attempt,
@@ -1614,13 +1634,7 @@ def call_llm(
                 )
             raise
         except BaseException as exc:  # noqa: BLE001 -- classify then re-raise
-            _charge_exception(
-                exc,
-                model=model,
-                pricing=pricing,
-                cost_budget=cost_budget,
-                identifier=identifier,
-            )
+            _charge_reporting(exc, getattr(exc, "response", None))
             if opts.timeout_s is not None and _is_callers_own_deadline(exc):
                 halt = None
             else:
@@ -1658,6 +1672,18 @@ def call_llm(
                 cost = response_cost(candidate.model, candidate, pricing=pricing)
                 if cost is not None and cost_budget is not None:
                     cost_budget.charge(cost, identifier=identifier or model)
+            except BaseException as budget_exc:  # noqa: BLE001 -- report, re-raise
+                if on_attempt is not None:
+                    _notify_failed(
+                        on_attempt,
+                        _event(
+                            attempt + 1,
+                            candidate,
+                            f"{type(budget_exc).__name__}: {budget_exc}",
+                        ),
+                        budget_exc,
+                    )
+                raise
             finally:
                 print(
                     _empty_completion_line(
@@ -1690,7 +1716,20 @@ def call_llm(
 
     cost = response_cost(response.model, response, pricing=pricing)
     if cost is not None and cost_budget is not None:
-        cost_budget.charge(cost, identifier=identifier or model)
+        try:
+            cost_budget.charge(cost, identifier=identifier or model)
+        except BaseException as budget_exc:  # noqa: BLE001 -- report, re-raise
+            if on_attempt is not None:
+                _notify_failed(
+                    on_attempt,
+                    _event(
+                        attempt + 1,
+                        response,
+                        f"{type(budget_exc).__name__}: {budget_exc}",
+                    ),
+                    budget_exc,
+                )
+            raise
 
     if cache is not None and cache_key is not None and not response.from_cache:
         if output_contract is None or _report_accepts(
