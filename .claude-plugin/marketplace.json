@@ -150,7 +150,7 @@
     {
       "name": "content-pipeline-kit",
       "description": "Library + skills for LLM-in-the-loop batch content pipelines.",
-      "version": "0.30.1",
+      "version": "0.31.0",
       "author": {
         "name": "Christina"
       },
