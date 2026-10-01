@@ -837,3 +837,11 @@ size (line or module counts, "the largest module"), and by negation (what it is
 not, or what it does not do). A missing capability is only worth naming when it
 names the owner instead -- "run-level retry belongs to the caller" is a
 boundary; "no retry" is a gap.
+
+## Removing a public name needs a deprecation window
+
+A removed or renamed public name keeps a shim that emits `DeprecationWarning`
+for two minor versions, and a behavior change from success to raise follows
+the same window. Policy, rationale, and the contract-listing convention:
+[docs/reference/deprecation-policy.md](../docs/reference/deprecation-policy.md).
+content-pipeline-kit's listing and guard are the reference implementation.

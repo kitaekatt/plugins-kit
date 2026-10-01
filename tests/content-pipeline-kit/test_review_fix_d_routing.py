@@ -123,7 +123,7 @@ def test_only_the_models_env_set_routes_through_the_declaration(monkeypatch):
 
     monkeypatch.setattr(backends, "_declaration_module", lambda: _Decl)
     assert type(route()) is OpenRouterBackend
-    assert routed_model("ignored") == "m-declared"
+    assert routed_model("") == "m-declared"
 
 
 @pytest.mark.parametrize("name", REMOVED)
@@ -148,7 +148,7 @@ def test_models_env_wins_and_the_stale_names_are_ignored(monkeypatch, name):
 
     monkeypatch.setattr(backends, "_declaration_module", lambda: _Decl)
     assert type(route()) is OpenRouterBackend
-    assert routed_model("ignored") == "m-declared"
+    assert routed_model("") == "m-declared"
 
 
 @pytest.mark.parametrize("name", REMOVED)
@@ -165,3 +165,54 @@ def test_constructing_a_backend_in_code_does_not_consult_routing(monkeypatch, na
     assert ModelEndpointBackend(endpoint="qwen38").endpoint == "qwen38"
     assert OpenRouterBackend().name == "openrouter"
     assert MockBackend(responses=["a"]).complete("s", "u", model="m").text == "a"
+
+
+# --- injected backend and requested model survive a declaration --------------
+
+
+def _declare_openrouter(monkeypatch, entry_id="openrouter", model="m-declared", harness=""):
+    monkeypatch.setenv(MODELS_ENV, entry_id)
+
+    class _Entry:
+        id = entry_id
+        drive = entry_id
+        model = ""
+
+    _Entry.model = model
+    _Entry.harness = harness
+
+    class _Ranking:
+        default = _Entry()
+
+    class _Decl:
+        CALLER_PROCESS = "process"
+        describe = staticmethod(lambda names, project_root=None, caller=None: _Ranking())
+
+    monkeypatch.setattr(backends, "_declaration_module", lambda: _Decl)
+
+
+def test_injected_openrouter_backend_is_used_and_reused_under_a_declaration(monkeypatch):
+    _declare_openrouter(monkeypatch)
+    stub = MockBackend(responses=["a", "b"])
+    first = route(openrouter=stub)
+    second = route(openrouter=stub)
+    assert first is stub and second is stub
+    assert not isinstance(first, OpenRouterBackend)
+    # the stub receives the calls and sees the caller's model, not the declared one
+    model = routed_model("caller/model-x")
+    assert model == "caller/model-x"
+    first.complete("s", "u", model=model)
+    second.complete("s", "u", model=routed_model("caller/model-x"))
+    assert [c["model"] for c in stub.calls] == ["caller/model-x", "caller/model-x"]
+
+
+def test_empty_request_defers_to_the_declared_model(monkeypatch):
+    _declare_openrouter(monkeypatch)
+    assert routed_model("") == "m-declared"
+
+
+def test_declared_non_openrouter_entry_still_beats_an_injected_instance(monkeypatch):
+    _declare_openrouter(monkeypatch, entry_id="sol", model="gpt-5.6-sol", harness="codex")
+    stub = MockBackend(responses=["a"])
+    assert route(openrouter=stub) is not stub
+    assert routed_model("openai/gpt-5") == "gpt-5.6-sol"

@@ -91,3 +91,14 @@ verb raises `InterruptSupportError` before it writes. How to ask, answer,
 expire and drain a run with a waiting unit:
 `skills/content-pipeline-domain/references/building-a-pipeline.md`, "Durable
 waits (opt-in)".
+
+## Checking a consumer against the public surface
+
+`contract/public-surface.json` lists each public name and whether it is
+deprecated or removed. To see which names a consumer uses are affected:
+
+```bash
+"${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${CLAUDE_PLUGIN_ROOT}/scripts/check_consumer_contract.py" <consumer source path>
+```
+
+The script exits 1 when a removed name is used.
