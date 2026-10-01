@@ -120,6 +120,8 @@ The surface (both live under ``platform`` unless noted):
   ``StructuredContractSupportError`` otherwise, so it resolves on first
   attribute access and is deliberately absent from ``__all__``: a star import
   must never require the shared lib.
+- ``CallAttempt`` / ``AttemptObserver`` -- the per-attempt record and the
+  ``on_attempt`` callback type ``call_llm`` and ``submit_validated`` report to.
 - ``OpenRouterBackend`` / ``ClaudeCliBackend`` / ``CodexCliBackend`` /
   ``OpencodeCliBackend`` / ``ModelEndpointBackend`` / ``MockBackend`` /
   ``route`` / ``routed_model`` -- the transports and process-level routing
@@ -160,6 +162,8 @@ from content_pipeline.llm.platform import (
     ResponseCache,
     StructuralOutputError,
     StructuredContractSupportError,
+    AttemptObserver,
+    CallAttempt,
     call_llm,
     submit_validated,
 )
@@ -195,6 +199,8 @@ __all__ = [
     "declared_backend_and_model",
     "StructuralOutputError",
     "StructuredContractSupportError",
+    "CallAttempt",
+    "AttemptObserver",
 ]
 
 

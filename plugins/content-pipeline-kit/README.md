@@ -92,6 +92,25 @@ expire and drain a run with a waiting unit:
 `skills/content-pipeline-domain/references/building-a-pipeline.md`, "Durable
 waits (opt-in)".
 
+## Run provenance and stage replay
+
+`content_pipeline.provenance` records a run and replays one stage of it. It is
+opt-in and stdlib only; every write lands under a directory the caller names.
+
+- `record.start_run` writes `run.json` (params, hashed inputs, module versions)
+  and returns a `RunRecorder`. Call `finish` on success; leaving the `with`
+  block on an exception records `error`, and a clean exit leaves the status
+  `running` until `finish` is called.
+- `call_audit.CallAuditor` is an `on_attempt` observer for `call_llm` and
+  `submit_validated`; it writes per-call prompt, response, and metadata files.
+- `snapshot.StageSnapshotter` and `snapshot.EventLog` are `LoopObserver`s for
+  `pipeline.convergence_loop.run`: they save the store around each stage and log
+  each loop event.
+- `replay.replay_stage` re-runs one stage from a snapshot with an edited input
+  and writes a new bundle whose record links back to the source.
+
+`content_pipeline.__version__` equals the plugin manifest version.
+
 ## Checking a consumer against the public surface
 
 `contract/public-surface.json` lists each public name and whether it is
