@@ -64,7 +64,8 @@ applies. Pass either flag to override its value.
 Run the runner with **workflow-kit's own venv python** -- bootstrap provisions it
 with `openai` (declared) and links `llm_scripting_kit` onto it (declared via
 `shared_lib_imports`). The API key is resolved the llm-scripting-kit way; run
-`llm-scripting-kit set-key` once to provision it.
+`~/.claude/plugins/data/plugins-kit/llm-scripting-kit/.venv/bin/llm-scripting-kit set-key`
+(Windows: ~/.claude/plugins/data/plugins-kit/llm-scripting-kit/.venv/Scripts/llm-scripting-kit.exe) once to provision it.
 
 ```js
 // workflow-kit's venv python: has openai + llm_scripting_kit (shared-libs .pth).

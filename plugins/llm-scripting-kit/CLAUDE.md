@@ -123,7 +123,8 @@ swapper on purpose; default and every other value is on.
 
 ## `acceptance`: proofs that must be able to go red
 
-`llm-scripting-kit acceptance swapper|frontdoor`
+`llm-scripting-kit acceptance swapper|frontdoor` (run it by the CLI contract path
+in README.md, "Invoking the CLI")
 (`swapper_acceptance.py`, `frontdoor/acceptance.py`) asserts a deployment
 through its HTTP surface only (`/v1/models`, `/running`, `/health/backends`,
 `/v1/chat/completions`, the `x-frontdoor-deployment` header), never through

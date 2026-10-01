@@ -36,12 +36,12 @@ technique_skill:
       goal: Get the key in place at the moment a capability actually needs it -- bootstrap deliberately does not ask at session start.
       steps:
         - n: 1
-          action: Run `llm-scripting-kit status` BEFORE the work that calls OpenRouter. Exit 0 means proceed; do not ask the user anything.
+          action: Run the CLI `status` (path under Invocation) BEFORE the work that calls OpenRouter. Exit 0 means proceed; do not ask the user anything.
         - n: 2
           action: "On non-zero, read the recorded ask from `~/.claude/plugins/data/plugins-kit/llm-scripting-kit/deferred_requirements.json` and present the entry's `agent_msg` VERBATIM. It is the authored copy of the ask; do not paraphrase it."
           on_failure: If the file is absent (bootstrap not installed, or never ran), fall back to the two options in the Common scenarios section below -- same content, same order.
         - n: 3
-          action: Set the key per the user's choice (they run `! llm-scripting-kit set-key`, or you run `llm-scripting-kit set-key --key <KEY>` if they pasted it), then retry the original action. No restart is needed.
+          action: Set the key per the user's choice (they run `! llm-scripting-kit set-key`, or you run `set-key --key <KEY>` if they pasted it; both by the path under Invocation), then retry the original action. No restart is needed.
       gotchas:
         - Preflight inside the action that needs the key, never at skill load -- every other action in a consuming skill must keep working without a key.
         - A declined key is not settled for the rest of the session. Re-ask on the next genuine need.
@@ -52,17 +52,17 @@ technique_skill:
       goal: Bring the shared OpenRouter key to a validated state and diagnose any auth/credit failure a consumer hit.
       steps:
         - n: 1
-          action: Run `llm-scripting-kit status` to resolve the key (env var > project .env > user .env) and validate it against GET /auth/key.
+          action: Run the CLI `status` (path under Invocation) to resolve the key (env var > project .env > user .env) and validate it against GET /auth/key.
           expected: Exit 0 prints account label, usage, limit, and free-tier flag. Non-zero means the key is missing or rejected.
         - n: 2
-          action: If the source is ambiguous, run `llm-scripting-kit which` to see which file the resolver reads and rule out a shadowing project .env.
+          action: If the source is ambiguous, run the CLI `which` (path under Invocation) to see which file the resolver reads and rule out a shadowing project .env.
         - n: 3
-          action: To set or rotate, run `llm-scripting-kit set-key` (interactive hidden prompt -- the user runs it, prefix with `!`) or `llm-scripting-kit set-key --key sk-or-v1-...` (non-interactive; Claude may run it only when the user already shared the key in chat). The key validates against /auth/key before it is written.
+          action: To set or rotate, run the CLI `set-key` (path under Invocation; interactive hidden prompt -- the user runs it, prefix with `!`) or `set-key --key sk-or-v1-...` (non-interactive; Claude may run it only when the user already shared the key in chat). The key validates against /auth/key before it is written.
           on_failure: A typo is rejected at validation and never lands on disk; re-run with the corrected key.
         - n: 4
           action: Diagnose the failure class -- HTTP 401 means the key was revoked or rotated server-side (generate a new one at openrouter.ai/keys and re-run set-key); HTTP 402 means the key is valid but the account has no balance (top up at openrouter.ai/credits).
         - n: 5
-          action: Re-run `llm-scripting-kit status` to confirm OK.
+          action: Re-run the CLI `status` to confirm OK.
           expected: status reports OK with the key's label; bootstrap auto-clears last_validated.sha256 on the next successful /auth/key call, so no manual cache reset is needed.
       gotchas:
         - "`set-key` without `--key` requires an interactive hidden prompt Claude cannot supply; the user must run it (prefix with `!`)."
@@ -91,7 +91,14 @@ The plugin ships one CLI script at `${CLAUDE_PLUGIN_ROOT}/scripts/llm_scripting_
 
 ### Invocation
 
-The plugin ships shims at `bin/llm-scripting-kit` (Unix) and `bin/llm-scripting-kit.cmd` (Windows). Claude Code adds each plugin's `bin/` directory to PATH, so the short form works from any cwd:
+The plugin ships shims at `bin/llm-scripting-kit` (Unix) and `bin/llm-scripting-kit.cmd` (Windows). Claude Code puts each enabled plugin's version-keyed `bin/` directory on PATH inside its own sessions only; PowerShell, Codex, and other shells do not get it. Run the CLI by its version-free venv path, which works from any shell and cwd:
+
+```
+~/.claude/plugins/data/plugins-kit/llm-scripting-kit/.venv/bin/llm-scripting-kit
+(Windows: ~/.claude/plugins/data/plugins-kit/llm-scripting-kit/.venv/Scripts/llm-scripting-kit.exe)
+```
+
+That path exists once bootstrap has provisioned the plugin venv. The examples below write `llm-scripting-kit` for that path:
 
 ```bash
 llm-scripting-kit status
@@ -117,7 +124,7 @@ Bootstrap will NOT have prompted for this at session start -- an OpenRouter key 
 > 1. (preferred -- key stays out of the transcript) The user types this in the prompt with the leading `!`:
 >      `! llm-scripting-kit set-key`
 >    It prompts with hidden input. Paste from <https://openrouter.ai/keys> (starts with `sk-or-v1-`).
-> 2. If they would rather paste the key in chat, Claude runs `llm-scripting-kit set-key --key <THE_KEY>`. WARNING: the key is then visible in the transcript.
+> 2. If they would rather paste the key in chat, Claude runs the CLI `set-key --key <THE_KEY>` (path under Invocation). WARNING: the key is then visible in the transcript.
 
 **Key was rejected (HTTP 401)** -- the key was revoked or rotated on the OpenRouter side. Generate a new one at <https://openrouter.ai/keys> and re-run `set-key`. Old key value is overwritten.
 
@@ -125,7 +132,7 @@ Bootstrap will NOT have prompted for this at session start -- an OpenRouter key 
 
 **Key loaded from the wrong place** -- run `which` to see which file Wins the precedence resolution (env var > project `.env` > user `.env` > the endpoint's configured `key_file`, source `key_file`). If the user wants the user-scoped file to win but a project file is shadowing it, delete `<project>/.local-data/plugins-kit/llm-scripting-kit/.env` (and `<project>/.local-data/llm-scripting-kit/.env`, the superseded location, if it exists -- `which` names whichever one actually won).
 
-**Bootstrap plugin not installed** -- llm-scripting-kit declares a dependency on `plugins-kit:bootstrap`. If bootstrap isn't installed/enabled, the session-start credential check never runs, so `deferred_requirements.json` is absent and the preflight has no recorded statement to present. Nothing breaks: the CLI still works (it self-heals to system Python), so run `llm-scripting-kit status` and fall back to the two options above. Installing/enabling bootstrap restores the recorded diagnosis on the next session.
+**Bootstrap plugin not installed** -- llm-scripting-kit declares a dependency on `plugins-kit:bootstrap`. If bootstrap isn't installed/enabled, the session-start credential check never runs, so `deferred_requirements.json` is absent and the preflight has no recorded statement to present. Without bootstrap the venv console script under Invocation is absent, because bootstrap never provisioned that venv. The shim the plugin ships at its own `bin/llm-scripting-kit` (`bin/llm-scripting-kit.cmd` on Windows), under the plugin's install directory, is what falls back to system Python, so run `status` through that shim and fall back to the two options above. Installing/enabling bootstrap restores the recorded diagnosis on the next session.
 
 ## What lives where
 

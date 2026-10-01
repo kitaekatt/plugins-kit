@@ -221,7 +221,10 @@ LANE_ROUTING = """\
             - A one-entry declaration has no menu and no announcement: dispatch its entry by
               the entry-harness rule below.
             - For each declaration with two or more entries, run
-              `llm-scripting-kit describe <entry>... --caller session` with the entries in
+              `~/.claude/plugins/data/plugins-kit/llm-scripting-kit/.venv/bin/llm-scripting-kit describe <entry>... --caller session`
+              (Windows: ~/.claude/plugins/data/plugins-kit/llm-scripting-kit/.venv/Scripts/llm-scripting-kit.exe)
+              (the venv path works from every shell; a bare name resolves only inside a Claude Code
+              Bash session) with the entries in
               declared order, plus `--project-root <bundle.project_root>` when the bundle
               has one, plus `--dispatchable transport` when the reviewer is not
               `reviewer_a_claude_md_compliance` or `reviewer_c_introduced_code` (the lane
@@ -771,7 +774,7 @@ technique_skill:
             chain. Endpoint envelopes already contain output from the same shared parser. A
             non-zero parser exit is a FAILED lane under the existing failure rule; never pass
             its unparsed issues to validators.
-          tool: Bash (`llm-scripting-kit describe`) + Agent (per the entry-harness rule, a lane whose entry is not a `claude` entry runs as a Bash call to @LANE_TOOL@ instead)
+          tool: Bash (the llm-scripting-kit venv CLI, `describe`) + Agent (per the entry-harness rule, a lane whose entry is not a `claude` entry runs as a Bash call to @LANE_TOOL@ instead)
           expected: JSON arrays of candidate issues from each launched reviewer (one array per (reviewer, chunk) lane), plus a recorded failure for any lane that exited non-zero.
         - n: 7
           action: |
@@ -2299,9 +2302,9 @@ no separate field to set.
 
 For a reviewer whose declaration has two or more entries, the skill runs
 
-    llm-scripting-kit describe <entry>... --caller session [--project-root <root>] [--dispatchable transport] [--self <id>]
+    ~/.claude/plugins/data/plugins-kit/llm-scripting-kit/.venv/bin/llm-scripting-kit describe <entry>... --caller session [--project-root <root>] [--dispatchable transport] [--self <id>]
 
-and prints its output verbatim: the entries this machine can use or will be able to use, in pace
+(Windows: ~/.claude/plugins/data/plugins-kit/llm-scripting-kit/.venv/Scripts/llm-scripting-kit.exe), and prints its output verbatim: the entries this machine can use or will be able to use, in pace
 order, the one marked `[default]`, and the rule text that says how to choose, how to announce
 the choice, and when to re-select. The skill follows that printed rule rather than restating
 it, so the rule you read in a review is the rule llm-scripting-kit applied. `--self` names the

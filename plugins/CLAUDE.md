@@ -228,7 +228,7 @@ unconfigurable opinion whose test passes is a finding.
   verdict expires and the next read evaluates the pool afresh (`usage_budget.pinned_evaluate`). A
   team could reasonably want live re-evaluation -- a session running for days holds an
   `available` verdict computed against numbers that have since moved -- and the only
-  remedy we leave them is to start a new session (or `llm-scripting-kit usage --no-pin`,
+  remedy we leave them is to start a new session (or `~/.claude/plugins/data/plugins-kit/llm-scripting-kit/.venv/bin/llm-scripting-kit usage --no-pin`, or `.venv/Scripts/llm-scripting-kit.exe` in place of `.venv/bin/llm-scripting-kit` on Windows,
   which inspects without changing what `seats` returns). We refuse the seam because the
   alternative is the failure the feature exists to prevent: an endpoint that was usable
   when work was planned against it disappearing mid-run on a re-read, which strands that

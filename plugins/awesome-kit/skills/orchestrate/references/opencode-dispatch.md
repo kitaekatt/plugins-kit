@@ -43,8 +43,10 @@ The rendered policy's command uses one discovered entry as an example. Before
 every launch, take `<entry-id>` from the chosen `opencode/<entry-id>` target
 and resolve it:
 
-  llm-scripting-kit resolve --models <entry-id> \
-    --project-root <ABSOLUTE root>
+  ~/.claude/plugins/data/plugins-kit/llm-scripting-kit/.venv/bin/llm-scripting-kit \
+    resolve --models <entry-id> --project-root <ABSOLUTE root>
+
+(Windows: ~/.claude/plugins/data/plugins-kit/llm-scripting-kit/.venv/Scripts/llm-scripting-kit.exe)
 
 Read the returned JSON. Replace the displayed `-m` value with its `model`.
 Remove any displayed `--variant`, then add `--variant <effort>` only when the

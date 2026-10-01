@@ -162,7 +162,10 @@ technique_skill:
             - A one-entry declaration has no menu and no announcement: dispatch its entry by
               the entry-harness rule below.
             - For each declaration with two or more entries, run
-              `llm-scripting-kit describe <entry>... --caller session` with the entries in
+              `~/.claude/plugins/data/plugins-kit/llm-scripting-kit/.venv/bin/llm-scripting-kit describe <entry>... --caller session`
+              (Windows: ~/.claude/plugins/data/plugins-kit/llm-scripting-kit/.venv/Scripts/llm-scripting-kit.exe)
+              (the venv path works from every shell; a bare name resolves only inside a Claude Code
+              Bash session) with the entries in
               declared order, plus `--project-root <bundle.project_root>` when the bundle
               has one, plus `--dispatchable transport` when the reviewer is not
               `reviewer_a_claude_md_compliance` or `reviewer_c_introduced_code` (the lane
@@ -354,7 +357,7 @@ technique_skill:
             chain. Endpoint envelopes already contain output from the same shared parser. A
             non-zero parser exit is a FAILED lane under the existing failure rule; never pass
             its unparsed issues to validators.
-          tool: Bash (`llm-scripting-kit describe`) + Agent (per the entry-harness rule, a lane whose entry is not a `claude` entry runs as a Bash call to "${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" ${CLAUDE_PLUGIN_ROOT}/scripts/run_review_lane.py instead)
+          tool: Bash (the llm-scripting-kit venv CLI, `describe`) + Agent (per the entry-harness rule, a lane whose entry is not a `claude` entry runs as a Bash call to "${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" ${CLAUDE_PLUGIN_ROOT}/scripts/run_review_lane.py instead)
           expected: JSON arrays of candidate issues from each launched reviewer (one array per (reviewer, chunk) lane), plus a recorded failure for any lane that exited non-zero.
         - n: 7
           action: |
