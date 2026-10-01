@@ -40,7 +40,6 @@
 from __future__ import annotations
 
 import os
-import shutil
 from pathlib import Path
 
 import yaml
@@ -48,6 +47,7 @@ import yaml
 from skills_kit_lib.document_walker import YAML_BLOCK_RE
 
 from . import resolve
+from .relocate import RelocationError, relocate_tree
 from .location_ops import MoveResult
 from .state_ops import StateOpError, _resolve
 
@@ -221,8 +221,13 @@ def move_task(
             f"destination {new_canonical} already exists -- move refuses"
         )
 
-    new_folder.parent.mkdir(parents=True, exist_ok=True)
-    shutil.move(str(old_folder), str(new_folder))
+    try:
+        relocate_tree(old_folder, new_folder)
+    except RelocationError as exc:
+        raise StateOpError(
+            f"move failed: {exc} -- the task is NOT split; the "
+            f"authoritative folder is {exc.authoritative}"
+        ) from exc
 
     rewritten = _rewrite_references(
         project_root, resolved.canonical, new_canonical

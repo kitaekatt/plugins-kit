@@ -100,12 +100,18 @@ Readings chosen in Step 5 (flagged in the implementation report):
 
 from __future__ import annotations
 
-import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path, PurePath, PureWindowsPath
 
 from . import resolve
+from .relocate import (
+    RelocationError,
+    absorb_leftover_source,
+    differing_paths,
+    relocate_tree,
+    remove_tree,
+)
 from .discovery import log_timestamp
 from .state_ops import (
     StateOpError,
@@ -146,6 +152,10 @@ class ArchiveResult:
     # degrades to this note rather than refusing -- manifests here stay
     # backwards-READABLE.
     durable_note: str | None = None
+    # A split state left by an earlier failed archive (source AND parked copy
+    # both present) was repaired: the parked copy was authoritative and the
+    # leftover source was removed.
+    repaired_split: bool = False
 
 
 @dataclass(frozen=True)
@@ -575,10 +585,95 @@ def _parking_target(
     return parking, canonical
 
 
-def _park(folder: Path, parking: Path) -> None:
-    """Move the folder into its (verified-free) parking spot."""
-    parking.parent.mkdir(parents=True, exist_ok=True)
-    shutil.move(str(folder), str(parking))
+def _repair_split_state(
+    folder: Path, parking: Path, canonical: str
+) -> bool:
+    """A failed earlier archive can leave the task in BOTH ``folder`` and the
+    parking spot. When the parking spot exists: if every file left in the
+    source is held byte-identically by the parked copy, the parked copy is
+    authoritative -- remove the leftover source, make the parked task.yaml
+    read ``archived``, and return True. Otherwise change nothing and refuse,
+    naming both folders and the differing paths. Returns False when there is
+    no parked copy (the normal case)."""
+    if not parking.is_dir():
+        return False
+    bad = differing_paths(folder, parking)
+    if bad:
+        shown = ", ".join(bad[:5]) + (
+            f" (+{len(bad) - 5} more)" if len(bad) > 5 else ""
+        )
+        raise StateOpError(
+            f"archive parking spot already occupied: {canonical} exists, "
+            f"and {len(bad)} file(s) in {folder} are missing from it or "
+            f"differ ({shown}) -- nothing was changed; compare {folder} "
+            f"and {parking} and remove the stale one by hand"
+        )
+    try:
+        removal_error = absorb_leftover_source(folder, parking)
+    except RelocationError as exc:
+        raise StateOpError(
+            f"split state: the complete archived copy is {parking}, but "
+            f"the leftover source could not be removed: {exc}"
+        ) from exc
+    assert not removal_error
+    parked_data = _read_task_yaml(parking, canonical)
+    if parked_data["task"].get("status") != "archived":
+        parked_data["task"]["status"] = "archived"
+        _write_task_yaml(parking, parked_data)
+    return True
+
+
+def _park(
+    folder: Path, parking: Path, pre_write: dict[str, bytes | None]
+) -> None:
+    """Move the folder into its (verified-free) parking spot.
+
+    ``pre_write`` is the document snapshot taken before archive wrote the
+    final state. A failed move leaves exactly one complete folder: when that
+    is the live folder, the snapshot is restored so it does not claim
+    ``archived``; when it is the parked copy (source cleanup failed), it
+    already carries the final state. Either way the error names it."""
+    try:
+        relocate_tree(folder, parking)
+    except RelocationError as exc:
+        if exc.authoritative == folder:
+            _restore_docs(folder, pre_write)
+        raise StateOpError(
+            f"archive failed: {exc} -- the task is NOT split; the "
+            f"authoritative folder is {exc.authoritative}"
+        ) from exc
+
+
+def _split_state_first(ref: str, project_root: Path) -> ArchiveResult | None:
+    """The observed failed-archive shape: the live folder ALREADY says
+    ``archived`` (or lost its task.yaml) while a parked copy exists, so the
+    normal preflight would refuse it as not-active. Repair it first: a
+    parked copy that holds every remaining source file byte-identically is
+    authoritative. Returns None when this is not a split state."""
+    resolved = _resolve(ref, project_root)
+    folder = resolved.folder(project_root)
+    parking = resolve.archived_folder(
+        project_root, resolved.location, resolved.stub
+    )
+    if not (folder.is_dir() and parking.is_dir()):
+        return None
+    try:
+        status = _read_task_yaml(folder, resolved.canonical)["task"].get(
+            "status"
+        )
+    except StateOpError:
+        status = None
+    if status not in ("archived", None):
+        return None  # active: the normal flow repairs where parking applies
+    canonical = resolve.archived_canonical(resolved.location, resolved.stub)
+    _repair_split_state(folder, parking, canonical)
+    return ArchiveResult(
+        canonical=resolved.canonical,
+        folder_removed=False,
+        archived_to=canonical,
+        vcs_ignored=resolved.location != resolve.LOCATION_TMP,
+        repaired_split=True,
+    )
 
 
 def archive_task(ref: str, project_root: Path) -> ArchiveResult:
@@ -598,6 +693,9 @@ def archive_task(ref: str, project_root: Path) -> ArchiveResult:
     holds SOME of the folder and ignores the rest -> record the final state
     and KEEP the folder in place (``vcs_ignored`` with no ``archived_to``:
     moving it would take tracked files off their tracked paths)."""
+    split = _split_state_first(ref, project_root)
+    if split is not None:
+        return split
     resolved, folder, data = _archive_preflight(
         ref,
         project_root,
@@ -618,10 +716,25 @@ def archive_task(ref: str, project_root: Path) -> ArchiveResult:
     unheld: list[str] = []
     tracked: list[str] = []
     if resolved.location == resolve.LOCATION_TMP:
+        parking = resolve.archived_folder(
+            project_root, resolved.location, resolved.stub
+        )
+        parking_canonical = resolve.archived_canonical(
+            resolved.location, resolved.stub
+        )
+        if _repair_split_state(folder, parking, parking_canonical):
+            return ArchiveResult(
+                canonical=resolved.canonical,
+                folder_removed=False,
+                archived_to=parking_canonical,
+                durable_note=durable_note,
+                repaired_split=True,
+            )
         parking, parking_canonical = _parking_target(project_root, resolved)
+        pre_write = _snapshot_docs(folder)
         data["task"]["status"] = "archived"
         _write_task_yaml(folder, data)
-        _park(folder, parking)
+        _park(folder, parking, pre_write)
         removed = False
         archived_to = parking_canonical
     else:
@@ -657,6 +770,23 @@ def archive_task(ref: str, project_root: Path) -> ArchiveResult:
             if not tracked:
                 # Resolved BEFORE the final-state writes: an occupied parking
                 # spot must refuse while the task is still untouched.
+                parking = resolve.archived_folder(
+                    project_root, resolved.location, resolved.stub
+                )
+                parking_canonical = resolve.archived_canonical(
+                    resolved.location, resolved.stub
+                )
+                if _repair_split_state(folder, parking, parking_canonical):
+                    return ArchiveResult(
+                        canonical=resolved.canonical,
+                        folder_removed=False,
+                        archived_to=parking_canonical,
+                        vcs_ignored=True,
+                        vcs_unheld_count=len(unheld),
+                        vcs_held_count=0,
+                        durable_note=durable_note,
+                        repaired_split=True,
+                    )
                 parking, parking_canonical = _parking_target(
                     project_root, resolved
                 )
@@ -678,7 +808,7 @@ def archive_task(ref: str, project_root: Path) -> ArchiveResult:
                 )
                 # The log entry is written first so it travels with the
                 # folder.
-                _park(folder, parking)
+                _park(folder, parking, pre_write)
                 archived_to = parking_canonical
             else:
                 held = ", ".join(tracked[:3]) + (
@@ -742,7 +872,14 @@ def archive_task(ref: str, project_root: Path) -> ArchiveResult:
             # Past this point the final state IS in git history, so the
             # writes are no longer unbacked and there is nothing to undo:
             # a failure of the removal commit leaves a recoverable folder.
-            shutil.rmtree(folder)
+            try:
+                remove_tree(folder)
+            except RelocationError as exc:
+                raise StateOpError(
+                    f"archive committed the final state but could not "
+                    f"remove the folder: {exc} -- the commit holds the "
+                    "record; delete the leftover folder by hand"
+                ) from exc
             _git_commit_folder(
                 repo_root,
                 folder_resolved,
@@ -779,5 +916,8 @@ def delete_task(ref: str, project_root: Path) -> str:
         require_committed=True,
         accept_parked=True,
     )
-    shutil.rmtree(folder)
+    try:
+        remove_tree(folder)
+    except RelocationError as exc:
+        raise StateOpError(f"delete failed: {exc}") from exc
     return resolved.canonical

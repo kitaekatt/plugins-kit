@@ -389,6 +389,17 @@ inference exception.
   `old -> <dest>/<stub>`; scan project-scope documents for the old path; **rewrite every reference** to
   the new path (project-relative when `dest` is `dev/tasks`).
   Writes: folder location and N documents. (section 7.2)
+- **Relocation and removal failures (archive, reopen, move, delete, init cleanup)** -- every folder
+  move or removal goes through one helper (`task_system/relocate.py`): rename, else copy +
+  byte-verify + remove source, clearing read-only bits (never `ignore_errors`). A failure leaves
+  exactly ONE complete folder and exits non-zero with a plain message naming it (`authoritative
+  folder is <path>`); a failed archive move restores the live folder's documents so it does not
+  claim `archived`. If the copy verified but the source could not be fully removed, the copy is
+  authoritative and the message names the partial source to delete. `archive` (and `reopen`) also
+  repair a split state left by an earlier failed archive: when the source and the parked copy both
+  exist and every file left in the source is byte-identical in the parked copy, the parked copy is
+  authoritative (task.yaml forced to `archived`) and the leftover source is removed; any missing or
+  differing file refuses with nothing changed and the differing paths named.
 
 - **`status <ref>`** -- *(inference)* Resolve + `validate` to classify, then a **background agent**
   summarizes `task.yaml` + `plan.md`/`log.md`. Works on **any** task. The only inference verb.

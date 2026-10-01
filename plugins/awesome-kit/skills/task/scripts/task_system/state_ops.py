@@ -70,7 +70,6 @@ Readings chosen in Step 4 (flagged in the implementation report):
 
 from __future__ import annotations
 
-import shutil
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -78,6 +77,11 @@ from pathlib import Path
 import yaml
 
 from . import resolve
+from .relocate import (
+    RelocationError,
+    absorb_leftover_source,
+    relocate_tree,
+)
 from .discovery import log_timestamp, read_task_block
 from .init import InitError, derive_stub_and_title, init_task
 from .validate import ValidationResult, validate_ref
@@ -421,13 +425,27 @@ def reopen(
     looks in the parking directory for either."""
     resolved = _resolve(ref, project_root)
     folder = resolved.folder(project_root)
+    parked = resolve.archived_folder(
+        project_root, resolved.location, resolved.stub
+    )
+    if folder.is_dir() and parked.is_dir():
+        # Split state from an earlier failed archive: when every file left in
+        # the live folder is held byte-identically by the parked copy, the
+        # parked copy is the complete one -- drop the leftover and restore it.
+        # A live folder with differing files is left as the user's own.
+        try:
+            absorb_leftover_source(folder, parked)
+        except RelocationError as exc:
+            raise StateOpError(f"reopen failed: {exc}") from exc
     if not folder.is_dir():
-        parked = resolve.archived_folder(
-            project_root, resolved.location, resolved.stub
-        )
         if parked.is_dir():
-            folder.parent.mkdir(parents=True, exist_ok=True)
-            shutil.move(str(parked), str(folder))
+            try:
+                relocate_tree(parked, folder)
+            except RelocationError as exc:
+                raise StateOpError(
+                    f"reopen failed: {exc} -- the task is NOT split; the "
+                    f"authoritative folder is {exc.authoritative}"
+                ) from exc
         else:
             raise StateOpError(
                 f"{resolved.canonical}: no task folder -- a missing folder "
