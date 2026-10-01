@@ -43,6 +43,13 @@ baked gradeable before fill runs), reads `measure(store) -> (produced,
 outstanding)` after each cycle, and stops the instant the gate (step 6's
 `ProgressEvaluator` by default) returns `CONVERGED` or `STALLED`.
 
+Observers receive a `LoopEvent` at each boundary. A `STAGE_FINISHED` event
+carries the stage's raw return value in `event.result` (`None` when the stage
+returned nothing), so a binding can pass one stage's result to the next without
+a side dict. When `measure` is built with `cell_policy.measure_from(cells_of,
+policy, detail_of=fn)`, `fn(store)` is attached to every `Round.detail`, so
+per-cycle bookkeeping reads the round and does not reload the store.
+
 ## 2. Choose a work-unit strategy
 
 `pipeline.workunit` defines `WorkUnit(id, payload, context)` and two
