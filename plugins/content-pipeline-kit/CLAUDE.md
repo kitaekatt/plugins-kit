@@ -91,7 +91,12 @@ Exception charges stay estimator-based. User docs: `README.md`.
 ## Backend selection is process-wide
 
 Backend selection is process-global: one `CONTENT_PIPELINE_LLM_MODELS`
-declaration picks the entry, and its model, for the whole process. The consequence
+declaration picks the entry, and its model, for the whole process. One exception:
+when the declaration resolves to the `openrouter` entry, `route()` returns a
+caller-supplied `openrouter=` instance instead of building a fresh one, and
+`routed_model()` returns a non-empty caller-requested model instead of the
+entry's model. An empty request, or an entry naming another transport, still runs
+the declaration's entry and model. The consequence
 to state to a consumer: two pipelines that need different backends cannot share
 a process, and nothing at a call site signals that one of them got the other's
 backend, so a changed environment variable can move output quality with no
