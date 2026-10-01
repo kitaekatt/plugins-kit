@@ -105,7 +105,9 @@ opt-in and stdlib only; every write lands under a directory the caller names.
   `submit_validated`; it writes per-call prompt, response, and metadata files.
 - `snapshot.StageSnapshotter` and `snapshot.EventLog` are `LoopObserver`s for
   `pipeline.convergence_loop.run`: they save the store around each stage and log
-  each loop event.
+  each loop event. A `STAGE_FINISHED` `LoopEvent` carries the stage's return
+  value in `result`. `cell_policy.measure_from(..., detail_of=fn)` attaches
+  `fn(store)` to each `Round.detail`.
 - `replay.replay_stage` re-runs one stage from a snapshot with an edited input
   and writes a new bundle whose record links back to the source.
 

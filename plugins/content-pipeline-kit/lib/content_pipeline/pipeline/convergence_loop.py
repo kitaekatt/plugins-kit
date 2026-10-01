@@ -78,7 +78,10 @@ class LoopEvent:
     ``at`` is ``time.time()``; ``elapsed_s`` is monotonic and set on the
     ``*_FINISHED`` kinds and ``STAGE_FAILED``. ``stage`` is one of
     :data:`STAGES`. ``store`` is the store at that moment: observers observe,
-    they never replace it.
+    they never replace it. ``result`` is set on ``STAGE_FINISHED`` only: the
+    stage callable's raw return value (``None`` when it returned nothing or
+    mutated in place). It lets a binding hand one stage's return value to a
+    later stage without a side dict; it is ``None`` on every other kind.
     """
 
     kind: LoopEventKind
@@ -90,6 +93,7 @@ class LoopEvent:
     round: Optional[Round] = None
     verdict: Optional[Verdict] = None
     error: Optional[BaseException] = None
+    result: Any = None
 
 
 LoopObserver = Callable[[LoopEvent], None]
@@ -196,15 +200,17 @@ def _apply_stage(
         raise
     elapsed = time.monotonic() - started
     seconds[name] = elapsed
-    store = store if result is None else result
+    new_store = store if result is None else result
     _emit(
         observers,
         LoopEventKind.STAGE_FINISHED,
         cycle=cycle,
         stage=name,
-        store=store,
+        store=new_store,
         elapsed_s=elapsed,
+        result=result,
     )
+    store = new_store
     return store
 
 
