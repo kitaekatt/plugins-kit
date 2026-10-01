@@ -437,6 +437,8 @@ git fetch origin
 git log --oneline $(uv run python scripts/publish.py --print-range-base)..dev
 ```
 
+**In this checkout a bare `dev` ref is ambiguous.** `dev` names both the branch and the `dev/` directory, so `git log -3 dev`, `git show dev`, and `git diff dev` fail with `fatal: ambiguous argument 'dev': both revision and filename`. The range form above parses as a revision and works. For a lone branch name, write `refs/heads/dev`, or end the revision list with `--` (`git log -3 dev --`).
+
 Use `publish.py --print-range-base` as the range base, NOT `origin/master..origin/dev`. Given a go-signal, ship the range -- other sessions' commits in it are not a reason to stop (see "The implied contract" above). A self-contained change that must ship alone uses `uv run python scripts/publish.py --only <plugin>`; mechanics: [docs/reference/publish-reconcile.md](docs/reference/publish-reconcile.md), "Partial release".
 
 See "Anti-pattern: creating a branch" -- do not branch from master to route around this. `publish.py`'s fast-forward shortcut is refused outright while any dev-only plugin exists.
