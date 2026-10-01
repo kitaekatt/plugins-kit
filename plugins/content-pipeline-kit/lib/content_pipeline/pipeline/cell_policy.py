@@ -13,9 +13,9 @@ stored, so it cannot drift from them.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import Enum
-from typing import Any, Callable, Iterable, Optional, Protocol, TypeVar
+from typing import Any, Callable, Iterable, Mapping, Optional, Protocol, TypeVar
 
 from content_pipeline.llm.convergence import Round
 
@@ -83,7 +83,9 @@ def tally(cells: Iterable[C], policy: CellPolicy[C]) -> Tally:
 
 
 def measure_from(
-    cells_of: Callable[[Any], Iterable[C]], policy: CellPolicy[C]
+    cells_of: Callable[[Any], Iterable[C]],
+    policy: CellPolicy[C],
+    detail_of: Optional[Callable[[Any], Mapping[str, Any]]] = None,
 ) -> Callable[[Any], Round]:
     """Build a stateful ``measure`` for ``convergence_loop.run``.
 
@@ -91,12 +93,20 @@ def measure_from(
     ``produced=0``; each later call reports the locked delta against the
     previous call. One instance serves exactly one ``run`` call; do not share
     it across runs.
+
+    ``detail_of`` (optional) maps the same store to consumer data that is
+    attached to every returned ``Round.detail``. It is called once per measure
+    call with the store the measure just read, so a consumer that needs
+    per-cycle bookkeeping reads it from the round instead of loading the store
+    again. The gate ignores ``detail``.
     """
     previous: list = []
 
     def measure(store: Any) -> Round:
         current = tally(cells_of(store), policy)
         rnd = current.to_round(previous[0] if previous else None)
+        if detail_of is not None:
+            rnd = replace(rnd, detail=dict(detail_of(store)))
         previous[:] = [current]
         return rnd
 
