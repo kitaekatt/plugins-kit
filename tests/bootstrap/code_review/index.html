@@ -40,10 +40,8 @@
   <ul>
     <li>
       Tune a shipped profile:
-      <a href="shipped_review_profiles.yaml"><code>shipped_review_profiles.yaml</code></a>
-      -&gt;
-      <a href="test_review_profiles.py"><code>test_review_profiles.py</code></a>
-      -- the yaml is the byte-pinned shipped projection the test re-renders and compares.
+      <a href="test_shipped_review_profiles.py"><code>test_shipped_review_profiles.py</code></a>
+      -- asserts the shipped defaults state an effort on every entry and resolve cleanly.
     </li>
     <li>
       Make a personal convention reach the lanes:
@@ -93,10 +91,6 @@
     <li>
       <a href="test_review_profiles.py"><code>test_review_profiles.py</code></a>
       -- profile resolution across shipped, user, and project layers plus model priority; open when a reviewer ends up on the wrong model.
-    </li>
-    <li>
-      <a href="shipped_review_profiles.yaml"><code>shipped_review_profiles.yaml</code></a>
-      -- the byte-pinned shipped projection the profile tests render and compare.
     </li>
     <li>
       <a href="test_effort_agents.py"><code>test_effort_agents.py</code></a>

@@ -2385,18 +2385,21 @@ profiles:
   reviewers:
   - name: reviewer_a_claude_md_compliance
     model:
+    - {id: luna, effort: high}
     - {id: sonnet, effort: low}
   - name: reviewer_b_diff_only_bugs
     model:
+    - {id: luna, effort: high}
     - {id: sonnet, effort: low}
   validator_models:
-    bug: sonnet
-    claude_md: sonnet
+    bug: [{id: sonnet, effort: low}]
+    claude_md: [{id: sonnet, effort: low}]
 - id: code
   selection: {}
   reviewers:
   - name: reviewer_a_claude_md_compliance
     model:
+    - {id: luna, effort: high}
     - {id: sonnet, effort: low}
   - name: reviewer_b_diff_only_bugs
     model:
@@ -2406,8 +2409,8 @@ profiles:
     - {id: sol, effort: high}
     - {id: opus, effort: high}
   validator_models:
-    bug: opus
-    claude_md: sonnet
+    bug: [{id: opus, effort: medium}]
+    claude_md: [{id: sonnet, effort: low}]
 ```
 
 ## What an `effort` value may name

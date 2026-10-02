@@ -45,43 +45,46 @@ class TestShippedDefaultsPreserveAgentDispatch:
     ) -> None:
         """The no-override path must still run on a machine with no endpoint.
 
-        Every shipped reviewer declaration (resolved `model` plus
-        `model_fallbacks`) ends in an Agent alias, so a machine without
+        Every shipped reviewer's resolved `model` is a list of `{id, effort}`
+        entries ending in an Agent alias, so a machine without
         llm-scripting-kit, or whose endpoints are all unusable, still routes
         every lane through the Agent tool. The one shipped endpoint entry is
-        `sol` ahead of `opus` on reviewer_c (migration step 5: the explicit form
-        of the `[peer:opus, opus]` it replaced). Validators are never
-        endpoint-eligible, so each is an alias.
-
-        Each resolved value is asserted to be a STRING before it reaches
-        is_agent_alias: a list must never get this far, since every downstream
-        consumer (is_agent_alias, the lane runner) reads one model per lane.
+        `luna` ahead of `sonnet` on reviewer_a and reviewer_b (data_only and code)
+        and `sol` ahead of `opus` on reviewer_c. Validators are never
+        endpoint-eligible, so each reason is a one-entry list holding an alias.
         """
         config, _provenance = rp.resolve_config(tmp_path / "project", home=tmp_path / "home")
         config = rp.apply_model_priority(config)
         endpoint_entries = []
         for profile in config["profiles"]:
             for reviewer in profile["reviewers"]:
-                assert isinstance(reviewer["model"], str), (
-                    f"resolved {profile['id']}.{reviewer['name']} is not a string"
+                entries = reviewer["model"]
+                assert isinstance(entries, list) and entries, (
+                    f"resolved {profile['id']}.{reviewer['name']} is not a non-empty list"
                 )
-                declaration = [reviewer["model"], *reviewer["model_fallbacks"]]
-                assert lp.is_agent_alias(declaration[-1]), (
+                assert all(set(entry) == {"id", "effort"} for entry in entries)
+                ids = [entry["id"] for entry in entries]
+                assert lp.is_agent_alias(ids[-1]), (
                     f"shipped {profile['id']}.{reviewer['name']} does not end in an Agent alias"
                 )
                 endpoint_entries.extend(
-                    (profile["id"], reviewer["name"], entry)
-                    for entry in declaration
-                    if not lp.is_agent_alias(entry)
+                    (profile["id"], reviewer["name"], model_id)
+                    for model_id in ids
+                    if not lp.is_agent_alias(model_id)
                 )
-            for reason, model in profile["validator_models"].items():
-                assert isinstance(model, str), (
-                    f"shipped {profile['id']}.validator_models.{reason} is not a string"
+            for reason, entries in profile["validator_models"].items():
+                assert isinstance(entries, list) and len(entries) == 1, (
+                    f"shipped {profile['id']}.validator_models.{reason} is not a one-entry list"
                 )
-                assert lp.is_agent_alias(model), (
+                assert lp.is_agent_alias(entries[0]["id"]), (
                     f"shipped {profile['id']}.validator_models.{reason} is not an Agent alias"
                 )
-        assert endpoint_entries == [("code", "reviewer_c_introduced_code", "sol")]
+        assert endpoint_entries == [
+            ("data_only", "reviewer_a_claude_md_compliance", "luna"),
+            ("data_only", "reviewer_b_diff_only_bugs", "luna"),
+            ("code", "reviewer_a_claude_md_compliance", "luna"),
+            ("code", "reviewer_c_introduced_code", "sol"),
+        ]
 
 
 class TestParseIssueArray:
