@@ -123,11 +123,11 @@ profiles:
     - .md
   reviewers:
   - name: reviewer_a_claude_md_compliance
-    model: sonnet
-    effort: low
+    model:
+    - {id: sonnet, effort: low}
   - name: reviewer_b_diff_only_bugs
-    model: sonnet
-    effort: low
+    model:
+    - {id: sonnet, effort: low}
   validator_models:
     bug: sonnet
     claude_md: sonnet
@@ -135,16 +135,15 @@ profiles:
   selection: {}
   reviewers:
   - name: reviewer_a_claude_md_compliance
-    model: sonnet
-    effort: low
+    model:
+    - {id: sonnet, effort: low}
   - name: reviewer_b_diff_only_bugs
-    model: opus
-    effort: medium
+    model:
+    - {id: opus, effort: medium}
   - name: reviewer_c_introduced_code
     model:
-    - sol
-    - opus
-    effort: high
+    - {id: sol, effort: high}
+    - {id: opus, effort: high}
   validator_models:
     bug: opus
     claude_md: sonnet
