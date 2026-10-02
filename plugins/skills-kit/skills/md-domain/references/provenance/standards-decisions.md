@@ -22,7 +22,7 @@ claude_md:
       summary: "A-3 amended 2026-08-03: a provenance field citing an untracked path (e.g. tmp/...) is a decisive FIX (drop the path, keep description/date/ids), never an accepted historical pattern."
       detail: |
         Surface: back-to-back full audits of plugins/skills-kit (2026-08-03,
-        detect lanes opus/high) disagreed on skills_kit_lib/CLAUDE.md line
+        detect lanes then pinned opus/high) disagreed on skills_kit_lib/CLAUDE.md line
         175 -- run 1 classified the gitignored tmp/ citation in an origin:
         field SILENT ("accepted structural pattern"), run 2 FAILed it as a
         broken reference. Finding: both readings were defensible under the

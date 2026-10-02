@@ -461,6 +461,35 @@ def test_findings_aggregate_across_all_three_layers(
 # --------------------------------------------------------------------------
 
 
+def test_a_validator_keeps_its_entry_order(tmp_path: Path) -> None:
+    entries = [_e("opus", "high"), _e("sonnet", "low")]
+    resolved = rp.apply_model_priority(
+        _resolved(tmp_path, user=_validator_layer(entries))
+    )
+
+    assert _profile(resolved, "code")["validator_models"]["bug"] == entries
+    rp.validate_config(resolved)
+
+
+def test_a_validator_may_lead_with_a_non_agent_entry(tmp_path: Path) -> None:
+    entries = [_e("luna", "high"), _e("sonnet", "low")]
+    resolved = rp.apply_model_priority(
+        _resolved(tmp_path, user=_validator_layer(entries))
+    )
+
+    assert _profile(resolved, "code")["validator_models"]["bug"] == entries
+
+
+def test_a_validator_with_no_agent_entry_is_refused(tmp_path: Path) -> None:
+    with pytest.raises(rp.ConfigError) as excinfo:
+        _resolved(tmp_path, user=_validator_layer([_e("luna", "high")]))
+
+    message = str(excinfo.value)
+    assert "validator_models.bug" in message
+    assert "no validator route" in message
+    assert "luna" in message
+
+
 @pytest.mark.parametrize(
     ("label", "model", "fragment"),
     [
@@ -584,7 +613,6 @@ def test_a_validator_entry_resolves_to_a_one_entry_list(tmp_path: Path) -> None:
     ("label", "model", "fragment"),
     [
         ("empty list", [], "empty"),
-        ("two entries", [_e("opus", "high"), _e("sonnet", "low")], "exactly one"),
         ("duplicate", [_e("opus", "high"), _e("opus", "low")], "duplicate"),
         ("non-string id", [_e(7, "high")], "string"),  # type: ignore[arg-type]
         ("blank", "  ", "string"),

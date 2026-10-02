@@ -402,16 +402,20 @@ def _parse_standards_file(path: Path) -> StandardsFile:
 
 
 def layer_paths(
-    project_root: Path | None, *, shipped_dir: Path | None = None
+    project_root: Path | None,
+    *,
+    shipped_dir: Path | None = None,
+    user_dir: Path | None = None,
 ) -> tuple[list[Path], list[Path]]:
     """The paths resolve() reads, lowest layer first. Pure: touches no disk.
 
     Returns (config_files, standards_dirs). config_files are the config.yaml /
     config.local.yaml candidates, merged later-wins; standards_dirs are the
     directories scanned for *-standards.md. Either may name a path that does
-    not exist.
+    not exist. `user_dir` replaces the harness config dir (_config_dir()) for
+    the user layer; lane_models passes `<home>/.claude` through it.
     """
-    user_layer = _config_dir() / "skills-kit"
+    user_layer = (user_dir if user_dir is not None else _config_dir()) / "skills-kit"
     proj_layer = (project_root / ".claude" / "skills-kit") if project_root is not None else None
 
     config_files: list[Path] = []

@@ -40,6 +40,10 @@ def _cli(args, tmp_path, block_yaml=False):
         "CLAUDE_CONFIG_DIR": str(tmp_path / "config"),
         "SYSTEMROOT": str(Path(sys.executable).anchor),
         "PATH": "",
+        # The plugin venv links bootstrap_lib (lane_models needs it); the test
+        # interpreter does not. Never re-exec into the installed venv.
+        "PYTHONPATH": str(REPO_ROOT / "plugins" / "bootstrap"),
+        "_BOOTSTRAP_GUARD_VENV_REEXEC": "1",
     }
     argv = [str(SCRIPT), *args]
     code = (

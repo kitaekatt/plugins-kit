@@ -142,10 +142,19 @@ from:
 primitive this review may route. The script makes `<root>` importable itself, so no `cd` is needed.
 Run it under venvPython only: the resolver needs pyyaml, which skills-kit's venv carries.
 
-On exit 0, parse stdout as `{ disabled, thresholds, standards, audit, notes }`:
+On exit 0, parse stdout as `{ disabled, thresholds, standards, audit, lane_models, notes }`:
 
 - `disabledCriteria` = `disabled`, passed at the top level of EVERY lane args object below --
   including the empty list.
+- `laneModels` = `lane_models.detect`, passed as `{ run, dropped }` at the top level of EVERY lane
+  args object below. `run` is the ordered list of `{id, effort}` entries agent() and Agent can run;
+  `dropped` lists each declared entry they cannot run, with its reason. A drop is configured
+  behaviour, not an error: the step-9 disclosure line reports it. Every detect lane throws without
+  `laneModels`, and no lane inherits the session model.
+- If stdout has no `lane_models` key, the installed skills-kit predates the lane-model slot. Do NOT
+  guess a model and do NOT fall back to a fixed one: run no detect lane, keep the files claimed, and
+  report `REVIEW INCOMPLETE: <file> - resolve_standards.py output has no lane_models; requires skills-kit >= 0.89.0`
+  for every non-trivial claimed file.
 - per file, `standardsPaths` = `standards.<primitive>` (absent key -> `[]`), where `<primitive>` is
   `claude_md` for a CLAUDE.md / active AGENTS.md, `skill_md` for a SKILL.md, `reference_doc` for a
   skill reference document, and `plain_md` for a generic project doc. This is how project- and
@@ -154,8 +163,9 @@ On exit 0, parse stdout as `{ disabled, thresholds, standards, audit, notes }`:
 - `thresholds` and `audit` need no threading here: the lanes' mechanical validator reads thresholds
   itself under `--config`, and `audit.fix_mode` governs a remediate step this review does not run.
 
-On a non-zero exit (1: a malformed config layer, an un-tunable rule id, or an interpreter without
-pyyaml; 2: a usage error) the script prints nothing on stdout and one diagnostic line on stderr.
+On a non-zero exit (1: a malformed config layer, an un-tunable rule id, an interpreter without
+pyyaml, or a `lane_models` slot that is malformed, incomplete, or leaves a family with no runnable
+entry; 2: a usage error) the script prints nothing on stdout and one diagnostic line on stderr.
 Do NOT substitute `[]` and do NOT run any lane on a guessed configuration: an unread config is
 indistinguishable from an empty one. Run no detect lane, keep the files claimed (this is not version
 skew, so they do not return to the generic reviewers), and report
@@ -172,22 +182,24 @@ Route by basename first; the ONE path-shape rule is the skill-reference case in 
    (CLAUDE.md takes precedence); a claimed `AGENTS.md` sitting beside a `CLAUDE.md` is SHADOWED
    and is dropped from ALL three lanes -- never audited as a claude-md and never as a project doc.
    `script` = the text of `<root>/skills/md-domain/workflow/claude-md-detect.js`, `args` =
-   `{ files: [...], disabledCriteria: <resolved disabled>, mechanicalCheckPhrases: bundle.mechanical_check_phrases, review: true, refs: { criteria: <root>/skills/md-domain/references/standards/claude-md-standards.md, codeDirFilter: <root>/skills/md-domain/references/standards/claude-md-standards.md, densityCriteria: <root>/skills/md-domain/references/standards/claude-md-standards.md, pluginRoot: <root>, venvPython: <venvPython> } }` (one standards doc backs all three refs -- the code-directory dimension and the density lens are sections of it).
+   `{ files: [...], disabledCriteria: <resolved disabled>, laneModels: <resolved lane_models.detect>, mechanicalCheckPhrases: bundle.mechanical_check_phrases, review: true, refs: { criteria: <root>/skills/md-domain/references/standards/claude-md-standards.md, codeDirFilter: <root>/skills/md-domain/references/standards/claude-md-standards.md, densityCriteria: <root>/skills/md-domain/references/standards/claude-md-standards.md, pluginRoot: <root>, venvPython: <venvPython> } }` (one standards doc backs all three refs -- the code-directory dimension and the density lens are sections of it).
 2. **`audit_skill` lane** -- one call for every claimed file that is EITHER (a) named `SKILL.md`
    OR (b) inside a `*/skills/<name>/references/` folder (only if any). Those are the `skill`
    artifact's two subject shapes and they share one lane and one Workflow call; the lane picks the
    criteria set per file from the path.
    `script` = the text of `<root>/skills/md-domain/workflow/skill-detect.js`, `args` =
-   `{ files: [...], disabledCriteria: <resolved disabled>, mechanicalCheckPhrases: bundle.mechanical_check_phrases, review: true, refs: { pluginRoot: <root>, venvPython: <venvPython> } }`.
+   `{ files: [...], disabledCriteria: <resolved disabled>, laneModels: <resolved lane_models.detect>, mechanicalCheckPhrases: bundle.mechanical_check_phrases, review: true, refs: { pluginRoot: <root>, venvPython: <venvPython> } }`.
 3. **`audit_project_doc` lane** -- one call for every OTHER claimed `.md` file (generic docs; only if any).
    `script` = the text of `<root>/skills/md-domain/workflow/project-doc-detect.js`, `args` =
-   `{ files: [...], disabledCriteria: <resolved disabled>, mechanicalCheckPhrases: bundle.mechanical_check_phrases, review: true, refs: { criteria: <root>/skills/md-domain/references/standards/project-doc-standards.md, pluginRoot: <root> } }`.
+   `{ files: [...], disabledCriteria: <resolved disabled>, laneModels: <resolved lane_models.detect>, mechanicalCheckPhrases: bundle.mechanical_check_phrases, review: true, refs: { criteria: <root>/skills/md-domain/references/standards/project-doc-standards.md, pluginRoot: <root> } }`.
 
 `args` may be passed as an object or a JSON string; all `refs` paths must be ABSOLUTE (the
-Workflow runs from the session cwd, not the skill dir). `review: true` forces the model pin and
-per-file diff attribution; keep it true. `<resolved disabled>` is the `disabled` list from
-"Resolve the run's standards configuration" above, the same list in every lane; a lane call
-without it throws.
+Workflow runs from the session cwd, not the skill dir). `review: true` forces per-file diff
+attribution; keep it true. `<resolved disabled>` is the `disabled` list and
+`<resolved lane_models.detect>` is the `{ run, dropped }` route from "Resolve the run's standards
+configuration" above, the same values in every lane; a lane call without either throws. The lane
+dispatches each file through `run` in order, moving to the next entry when agent() throws or
+returns nothing, and returns the routes it took as `routes`.
 
 **Passing a lane script to the Workflow tool.** Read the installed lane script and pass its full
 text VERBATIM as `script`. Do not pass the installed path as `scriptPath`: the tool refuses the
@@ -205,14 +217,18 @@ The installed script remains the source of the prompt and result contract.
 
 1. Read the applicable existing detect script in full. Build the same args described above and
    below, including `review: true`, each file's `preImagePath`, `standardsPaths` and
-   `mechanicalScan`, and the top-level `disabledCriteria` and `mechanicalCheckPhrases`. Resolve every referenced file against the installed root.
-2. For each file, invoke Agent with `subagent_type: git-kit:review-lane-high` and `model: opus`.
-   The Agent tool has no effort argument; the subtype's `effort: high` frontmatter binds effort.
+   `mechanicalScan`, and the top-level `disabledCriteria`, `laneModels` and `mechanicalCheckPhrases`. Resolve every referenced file against the installed root.
+2. For each file, take `laneModels.run[0]` and invoke Agent with
+   `subagent_type: git-kit:review-lane-<effort>` and `model: <id>`, from that entry's `effort` and
+   `id`. The Agent tool has no effort argument; the subtype's `effort` frontmatter binds effort.
    Set `prompt` to the installed script's instantiated `lanePrompt` plus its exact installed
    `FILE_FINDINGS_SCHEMA`, with an instruction to return only one JSON object matching that schema.
    Preserve all prompt instructions, standards, ancestor context, and attribution input.
-   Confirm the installed script still specifies `model: 'opus'` and `effort: 'high'` before dispatch;
-   a different pin requires a matching Agent transport or the incomplete terminal below.
+   If the dispatch fails or returns no schema-valid object, announce it in one line
+   (`md-domain lane failover: <file> - <id> (<effort>) failed: <reason>; running <next id> (<next effort>)`)
+   and dispatch the same prompt with the next `run` entry. Use only `run` entries, in order; never
+   a `dropped` entry and never a model the route does not name. Record the entry each file used
+   for the step-9 disclosure line.
 3. Parse each Agent response as JSON and validate it against the installed `FILE_FINDINGS_SCHEMA`
    before running the reducer. Require one schema-valid result for every requested file.
    Missing or invalid results mean REVIEW INCOMPLETE; never substitute empty findings or DIFF-CLEAN.
@@ -220,11 +236,11 @@ The installed script remains the source of the prompt and result contract.
    installed script's review reducer and totals calculation, preserving attribution filtering,
    SERIOUS retention, and NOT-AUDITED handling. Return the same `{ perFile, totals, review }` envelope.
 
-Transport failure never authorizes a generic-review fallback or a change to the lane's model,
-effort, schema, or criteria. Keep the claimed files assigned to their existing specialist lanes.
+Transport failure never authorizes a generic-review fallback, a model or effort outside
+`laneModels.run`, or a change to the lane's schema or criteria. Keep the claimed files assigned to their existing specialist lanes.
 
 Use the native Workflow result for any lane group that already completed; invoke only outstanding
-groups manually. If Agent is unavailable, its subtype or model pin cannot be honored, or any result
+groups manually. If Agent is unavailable, every `run` entry fails for a file, or any result
 is missing or invalid, report `REVIEW INCOMPLETE: <file> - <invocation or validation failure>` for
 each affected file. Incomplete coverage cannot satisfy a submit gate.
 
@@ -295,7 +311,11 @@ For a **generic project doc** (any other claimed `.md`; `audit_project_doc` lane
 
 ## Consuming the result
 
-Each Workflow returns `{ perFile, totals, review }`. `perFile[i]` retains the input
+Each Workflow returns `{ perFile, totals, review, routes }`. `routes` is `{ dropped, perFile }`:
+the declared entries the lane could not run, and per file the `used` entry (null when every `run`
+entry failed, and that file is then absent from the result's `perFile` -- report it
+`REVIEW INCOMPLETE`) and the `failed` entries tried before it. They feed the step-9
+disclosure line. `perFile[i]` retains the input
 `mechanicalScan` record and carries `verdict`
 (`DIFF-CLEAN` = the change introduced no failure; `NON-COMPLIANT`; or `NOT-AUDITED` = the lane
 DECLINED the file as outside its criteria and read nothing -- `totals.notAudited` counts these apart

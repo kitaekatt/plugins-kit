@@ -16,8 +16,22 @@ without depending on package layout.
 
 Usage:
     emit_audit_jobs.py <subject-dir> [--repo-root PATH] [--standards PATH]
-        [--models NAME ...] [--report-dir PATH] [--max-parallel N]
-        [--limit N] [--out PATH|-]
+        [--report-dir PATH] [--max-parallel N] [--limit N] [--out PATH|-]
+
+The models each job may run on come from the `audit_job` family of skills-kit's
+layered `lane_models` config slot (skills_kit_lib.lane_models), the same slot
+every other md-domain lane reads; there is no per-invocation override. Each
+entry is `{id, effort}`. Every emitted job carries the ids, in order, as its
+`models` declaration and each entry's effort in the `model_efforts` sidecar
+job-kit (>= 0.11.0) delivers per selected entry, so no effort is dropped. A
+slot that cannot be resolved fails the emit (exit 6).
+
+An older job-kit ignores `model_efforts` and would run every entry at its
+registry effort, so before writing a job that carries it the emitter reads the
+version of the job-kit the printed `job-kit run` command will execute: the
+`job-kit` launcher on PATH, resolved to its plugin root, whose
+.claude-plugin/plugin.json states the version. A launcher that is absent, a
+version that cannot be read, or one below 0.11.0 fails the emit (exit 7).
 
 Each emitted job carries an `evidence_pack` record stating whether the md-audit
 evidence pack was attached to its prompt and, when it was, that pack's sha256 and
@@ -26,7 +40,8 @@ character count. The pack attaches only for the endpoint ids configured under
 layered config (see md-domain/references/configuring-standards.md). The shipped
 default is EMPTY, so nothing attaches until a user admits an endpoint. A
 preference list mixing admitted and non-admitted endpoints is an error and fails
-the emit (exit 4).
+the emit (exit 4), as is a pack-admitted list whose entries state an effort other
+than the one the pack was measured at.
 
 The emitted document is JSON (job-kit loads job files with yaml.safe_load, and
 every JSON document is valid YAML, so no YAML serializer is needed here). The
@@ -43,6 +58,7 @@ import importlib.util
 import io
 import json
 import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -61,13 +77,129 @@ _DISCOVER_PATH = _SCRIPTS_DIR / "discover_project_doc.py"
 _CHECKER_PATH = _SCRIPTS_DIR / "check_project_doc_audit.py"
 _EVIDENCE_PACK_PATH = _SCRIPTS_DIR / "evidence_pack.py"
 
-# A model declaration (D1): a list of registry ids naming which model(s) may
-# do this unit of work. Migration step 7 (K3) renamed the CLI flag and the
-# emitted job field from the old endpoint vocabulary to this one; the
-# ADAPTER's admission concept (resolve_admitted_endpoints, adapter_applies,
-# admitted_endpoints below) is K4 and stays an endpoint allow-list, unchanged.
-DEFAULT_MODELS = ["sonnet", "opus", "luna"]
+# The lane_models family this emitter reads. Its entries are {id, effort}; the
+# ids form each job's model declaration (D1) and the efforts its model_efforts
+# sidecar. The ADAPTER's admission concept (resolve_admitted_endpoints,
+# adapter_applies, admitted_endpoints below) stays an endpoint allow-list over
+# those ids.
+AUDIT_JOB_FAMILY = "audit_job"
 DEFAULT_MAX_PARALLEL = 4
+
+# The effort the md-audit evidence pack was measured at (see build_job's
+# options comment). A pack-admitted run sends it as extras.reasoning_effort,
+# the measured channel, so the slot must state exactly this effort for every
+# entry -- any other value would be silently overridden by that extra.
+PACK_MEASURED_EFFORT = "xhigh"
+
+
+# The first job-kit that reads a job's model_efforts sidecar. An older one
+# accepts the key and ignores it, so the version is checked, not assumed.
+MIN_JOB_KIT_FOR_MODEL_EFFORTS = (0, 11, 0)
+_VERSION_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
+
+
+class JobKitTooOldError(RuntimeError):
+    """The job-kit the run will use cannot carry model_efforts (exit 7)."""
+
+
+def _job_kit_launcher() -> str | None:
+    """The `job-kit` launcher the printed run command resolves to (the seam tests replace)."""
+    return shutil.which("job-kit")
+
+
+def require_job_kit_for_model_efforts() -> str:
+    """Return the version of the job-kit on PATH, or raise JobKitTooOldError.
+
+    The launcher lives at <plugin-root>/bin/job-kit and runs that plugin
+    root's own code, so the plugin root's .claude-plugin/plugin.json version
+    is the version the run executes. No fallback: an absent launcher, an
+    unreadable or non-X.Y.Z version, or one below 0.11.0 all raise.
+    """
+    need = ".".join(str(part) for part in MIN_JOB_KIT_FOR_MODEL_EFFORTS)
+    launcher = _job_kit_launcher()
+    if launcher is None:
+        raise JobKitTooOldError(
+            f"cannot verify job-kit >= {need}: no `job-kit` launcher is on PATH. "
+            f"The emitted jobs carry model_efforts, which job-kit {need} is the "
+            "first to deliver; install or update plugins-kit:job-kit"
+        )
+    manifest = Path(launcher).resolve().parents[1] / ".claude-plugin" / "plugin.json"
+    try:
+        version = json.loads(manifest.read_text(encoding="utf-8"))["version"]
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        raise JobKitTooOldError(
+            f"cannot verify job-kit >= {need}: cannot read the version of the "
+            f"job-kit at {launcher} from {manifest} ({type(exc).__name__}: {exc})"
+        ) from exc
+    match = _VERSION_RE.match(version) if isinstance(version, str) else None
+    if match is None:
+        raise JobKitTooOldError(
+            f"cannot verify job-kit >= {need}: {manifest} states version "
+            f"{version!r}, not X.Y.Z"
+        )
+    if tuple(int(part) for part in match.groups()) < MIN_JOB_KIT_FOR_MODEL_EFFORTS:
+        raise JobKitTooOldError(
+            f"job-kit {version} at {launcher} ignores model_efforts, so every "
+            f"entry would run at its registry effort; job-kit {need} is required. "
+            "Update plugins-kit:job-kit (`claude plugin update job-kit@plugins-kit`)"
+        )
+    return version
+
+
+class LaneModelsUnavailableError(RuntimeError):
+    """The audit_job lane_models entries could not be resolved (exit 6)."""
+
+
+def _lane_models_module() -> ModuleType:
+    """Import skills_kit_lib.lane_models (deferred; the seam tests replace)."""
+    from skills_kit_lib import lane_models
+
+    return lane_models
+
+
+def resolve_audit_job_models(project_root: Path | None) -> list[dict[str, str]]:
+    """The resolved `audit_job` entries, as ordered {id, effort} dicts.
+
+    No fallback: an unimportable resolver, a malformed slot, or an entry
+    without an effort raises LaneModelsUnavailableError naming the cause.
+    """
+    try:
+        lane_models = _lane_models_module()
+    except ImportError as exc:
+        raise LaneModelsUnavailableError(
+            "cannot resolve the audit_job lane models: skills_kit_lib.lane_models "
+            f"is not importable ({exc}); run under the skills-kit venv"
+        ) from exc
+    try:
+        resolved = lane_models.load_lane_models(project_root=project_root)
+    except lane_models.LaneModelsError as exc:
+        raise LaneModelsUnavailableError(
+            f"cannot resolve the audit_job lane models: {exc}"
+        ) from exc
+    entries = resolved.get(AUDIT_JOB_FAMILY)
+    if not entries:
+        raise LaneModelsUnavailableError(
+            f"the lane_models slot resolved no {AUDIT_JOB_FAMILY!r} entries"
+        )
+    return _normalize_entries(entries)
+
+
+def _normalize_entries(entries: object) -> list[dict[str, str]]:
+    """Copy {id, effort} entries, refusing any entry without both strings."""
+    if not isinstance(entries, list) or not entries:
+        raise ValueError(f"models must be a non-empty list of {{id, effort}} entries, got {entries!r}")
+    result: list[dict[str, str]] = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            raise ValueError(f"model entry must be an {{id, effort}} mapping, got {entry!r}")
+        model_id = entry.get("id")
+        effort = entry.get("effort")
+        if not isinstance(model_id, str) or not model_id.strip():
+            raise ValueError(f"model entry has no id: {entry!r}")
+        if not isinstance(effort, str) or not effort.strip():
+            raise ValueError(f"model entry {model_id!r} states no effort: {entry!r}")
+        result.append({"id": model_id.strip(), "effort": effort.strip()})
+    return result
 
 # The md-audit evidence pack is an ADAPTER: task-specific context admitted for
 # the model-task pairs it was measured on, and for nothing else. It was measured
@@ -162,6 +294,15 @@ def load_evidence_pack_module() -> ModuleType:
     return _load_module(_EVIDENCE_PACK_PATH, "_emit_audit_jobs_evidence_pack")
 
 
+class AdapterEffortMismatchError(ValueError):
+    """Raised when a pack-admitted run's entries state another effort.
+
+    The pack travels with the request configuration it was measured at,
+    including reasoning_effort PACK_MEASURED_EFFORT sent as an extra; an entry
+    stating a different effort would have that effort silently overridden.
+    """
+
+
 class MixedAdapterEndpointsError(ValueError):
     """Raised when a preference list mixes admitted and non-admitted endpoints.
 
@@ -190,8 +331,9 @@ def adapter_applies(endpoints: list[str], admitted_set: frozenset[str]) -> bool:
             f"endpoints: {endpoints} (admitted: {admitted}; not admitted: "
             f"{rejected}). The md-audit evidence pack is admitted only for "
             f"{sorted(admitted_set)} (configured under adapters: "
-            f"{{{ADAPTER_ID}: {{admitted_endpoints: [...]}}}}). Emit one job "
-            "file per endpoint class instead of one mixed list."
+            f"{{{ADAPTER_ID}: {{admitted_endpoints: [...]}}}}). Set the "
+            f"lane_models {AUDIT_JOB_FAMILY} slot to one endpoint class instead "
+            "of one mixed list."
         )
     return True
 
@@ -444,7 +586,7 @@ def build_job(
     standards_abs: Path,
     checker_abs: Path,
     python_abs: Path,
-    models: list[str],
+    models: list[dict[str, str]],
     used_ids: set[str],
     criteria: set[str],
     taxonomy: dict[str, str],
@@ -506,10 +648,20 @@ def build_job(
     elif pack_error is not None:
         evidence_record["error"] = pack_error
 
-    return {
+    job: dict[str, object] = {
         "id": job_id,
         "prompt": prompt,
-        "models": list(models),
+        "models": [entry["id"] for entry in models],
+    }
+    if pack is None:
+        # Per-entry effort as job-kit's model_efforts sidecar: job-kit sends
+        # the SELECTED entry's effort and refuses an entry that cannot carry
+        # it. A pack-admitted job instead sends the measured effort as the
+        # extras below (build_job_file has checked the slot states exactly
+        # that effort), and a model_efforts beside it would be reported
+        # dropped, because an effort already in extras wins.
+        job["model_efforts"] = {entry["id"]: entry["effort"] for entry in models}
+    job.update({
         "evidence_pack": evidence_record,
         # cwd is required only so the model can open the standards and subject
         # documents. When they are inlined there is nothing to open, and keeping
@@ -525,7 +677,10 @@ def build_job(
         # no report. Sending the pack at an untested configuration would make
         # the admission claim false, so these travel with it.
         "options": (
-            {"max_tokens": 60000, "extras": {"reasoning_effort": "xhigh"}}
+            {
+                "max_tokens": 60000,
+                "extras": {"reasoning_effort": PACK_MEASURED_EFFORT},
+            }
             if pack is not None
             else {}
         ),
@@ -541,7 +696,8 @@ def build_job(
                 str(standards_abs),
             ],
         },
-    }
+    })
+    return job
 
 
 def build_job_file(
@@ -549,10 +705,19 @@ def build_job_file(
     subject_dir: Path,
     repo_root: Path,
     standards: Path,
-    models: list[str],
     max_parallel: int,
     limit: int | None,
+    models: list[dict[str, str]] | None = None,
 ) -> dict:
+    """Build the job-file document.
+
+    ``models`` is a list of {id, effort} entries; None (the CLI's only mode)
+    resolves the lane_models audit_job slot for ``repo_root``, after the
+    adapter config so a missing pyyaml with a config layer on disk still
+    reports as the standards failure it is (exit 5).
+    """
+    if models is not None:
+        models = _normalize_entries(models)
     records = discover_project_docs(subject_dir)
     records.sort(key=lambda r: r["path"])
 
@@ -588,9 +753,21 @@ def build_job_file(
     # Raises on a mixed preference list -- deliberately before any job is built,
     # so a mixed list fails the emit rather than producing a half-adapted file.
     admitted_set = resolve_admitted_endpoints(repo_root)
-    evidence_module = (
-        load_evidence_pack_module() if adapter_applies(models, admitted_set) else None
-    )
+    if models is None:
+        models = resolve_audit_job_models(repo_root)
+    model_ids = [entry["id"] for entry in models]
+    evidence_module = None
+    if adapter_applies(model_ids, admitted_set):
+        off_effort = [e for e in models if e["effort"] != PACK_MEASURED_EFFORT]
+        if off_effort:
+            raise AdapterEffortMismatchError(
+                f"the md-audit evidence pack applies to {model_ids}, and it is "
+                f"admitted only at effort {PACK_MEASURED_EFFORT!r}, the effort it "
+                f"was measured at; these lane_models {AUDIT_JOB_FAMILY} entries "
+                f"state another: {off_effort}. Set their effort to "
+                f"{PACK_MEASURED_EFFORT!r}, or do not admit these endpoints."
+            )
+        evidence_module = load_evidence_pack_module()
 
     python_abs = Path(sys.executable).resolve()
     used_ids: set[str] = set()
@@ -649,7 +826,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("subject_dir", type=Path)
     parser.add_argument("--repo-root", type=Path, default=None)
     parser.add_argument("--standards", type=Path, default=None)
-    parser.add_argument("--models", action="append", default=None)
     parser.add_argument("--report-dir", type=Path, default=None)
     parser.add_argument("--max-parallel", type=int, default=DEFAULT_MAX_PARALLEL)
     parser.add_argument("--limit", type=int, default=None)
@@ -674,7 +850,6 @@ def main(argv: list[str] | None = None) -> int:
         args.standards.resolve() if args.standards else checker_module.DEFAULT_STANDARDS
     )
 
-    models = args.models if args.models else list(DEFAULT_MODELS)
     report_dir = (args.report_dir.resolve() if args.report_dir else Path.cwd() / "reports")
 
     try:
@@ -682,13 +857,15 @@ def main(argv: list[str] | None = None) -> int:
             subject_dir=subject_dir,
             repo_root=repo_root,
             standards=standards,
-            models=models,
             max_parallel=args.max_parallel,
             limit=args.limit,
         )
-    except MixedAdapterEndpointsError as exc:
+    except (MixedAdapterEndpointsError, AdapterEffortMismatchError) as exc:
         print(exc, file=sys.stderr)
         return 4
+    except LaneModelsUnavailableError as exc:
+        print(exc, file=sys.stderr)
+        return 6
     except Exception as exc:
         # StandardsUnavailableError lives in a lazily imported module, so it is
         # recognised by name rather than imported at module scope.
@@ -696,6 +873,13 @@ def main(argv: list[str] | None = None) -> int:
             print(exc, file=sys.stderr)
             return 5
         raise
+
+    if any("model_efforts" in job for job in document["jobs"]):
+        try:
+            require_job_kit_for_model_efforts()
+        except JobKitTooOldError as exc:
+            print(exc, file=sys.stderr)
+            return 7
 
     non_ascii = _non_ascii_strings(document)
     if non_ascii:

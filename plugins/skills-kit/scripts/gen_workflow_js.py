@@ -18,12 +18,16 @@ Usage:
     uv run python plugins/skills-kit/scripts/gen_workflow_js.py            # rewrite the .js files
     uv run python plugins/skills-kit/scripts/gen_workflow_js.py --check    # exit 1 on drift, write nothing
 
-The detect/classify scripts are NOT fully generated (their bodies diverge more
-than the remediate trio), but their shared skeleton chunks (args
-normalization; the detect totals reducer) are enforced by check_shared_chunks(),
-which also asserts (K1, migration step 7) that each hand-written `model: '...'`
-literal in those scripts matches its declared one-entry model declaration in
-MODEL_LITERAL_DECLARATIONS.
+The detect/classify/generate scripts are NOT fully generated (their bodies
+diverge more than the remediate trio), but their shared skeleton chunks (args
+normalization; the detect totals reducer; the lane route) are enforced by
+check_shared_chunks(). LANE_ROUTE_CHUNK is the one chunk this generator also
+WRITES into those hand-written scripts: it sits between its own begin and end
+marker lines, and a write run replaces that region, so the core-id list it
+carries is re-derived from bootstrap_lib.model_declaration.CORE_IDS rather
+than hand-copied. No workflow script carries a `model: '...'` literal; the model
+and effort of every lane come from the caller's args.laneModels
+(check_no_model_literals()).
 """
 
 from __future__ import annotations
@@ -53,7 +57,7 @@ EM = "\u2014"  # em-dash; the escape keeps this source file ASCII-only
 # (optional-plugin-dependencies.md): ABSENT (bootstrap_lib is not importable at
 # all -- this checkout has no plugins/bootstrap, or it is not on sys.path) vs
 # TOO OLD (bootstrap_lib imports, but predates model_declaration or its
-# `validate` symbol -- the frontier symbol this generator calls).
+# `CORE_IDS` symbol -- the frontier symbol this generator reads).
 _BOOTSTRAP_ROOT = PLUGIN_ROOT.parent / "bootstrap"
 if str(_BOOTSTRAP_ROOT) not in sys.path:
     sys.path.insert(0, str(_BOOTSTRAP_ROOT))
@@ -68,21 +72,94 @@ except ImportError as _exc:
         f"checkout with the bootstrap plugin present ({_exc})"
     ) from _exc
 
-if not hasattr(model_declaration, "validate"):
+if not hasattr(model_declaration, "CORE_IDS"):
     raise ImportError(
-        "bootstrap_lib.model_declaration has no validate() -- this "
-        "checkout's bootstrap plugin predates the model-declaration "
-        "validator (requires bootstrap >= 0.129.0); update plugins-kit"
+        "bootstrap_lib.model_declaration has no CORE_IDS -- this "
+        "checkout's bootstrap plugin predates the core-id set "
+        "(requires bootstrap >= 0.129.0); update plugins-kit"
     )
 
-# K2 (migration step 7): the remediate lanes' model is a one-entry model
-# declaration (D1), structurally validated by bootstrap_lib.model_declaration
-# -- shape only, no known-id or usable-set check, no llm-scripting-kit import
-# (D2, D3). REMEDIATE_MODEL is what actually fills @REMEDIATE_MODEL@ below, so
-# the four generated remediate.js files' `model: '...'` literal is DERIVED
-# from the declaration rather than typed twice.
-REMEDIATE_MODEL_DECLARATION = model_declaration.validate(["sonnet"])
-REMEDIATE_MODEL = REMEDIATE_MODEL_DECLARATION.ids[0]
+# The ids Workflow agent() can run. The JS list in LANE_ROUTE_CHUNK is rendered
+# from this tuple, so it is the producer's set, never a re-typed copy. Sorted so
+# the rendered chunk is deterministic.
+LANE_CORE_IDS = tuple(sorted(model_declaration.CORE_IDS))
+
+# ---------------------------------------------------------------------------
+# Lane route chunk: shared by every md-domain workflow script that dispatches an
+# agent. It guards the REQUIRED args.laneModels = {run, dropped} (resolved by
+# scripts/resolve_standards.py through skills_kit_lib.lane_models.agent_route),
+# and defines laneAgent(key, prompt, opts), which tries the run entries in order
+# and moves to the next when agent() throws or returns nothing. laneRoutes()
+# is the {dropped, perFile: [{path, used, failed}]} record every script returns
+# as `routes`. The chunk's first and last lines are the markers a write run
+# splices between in the hand-written scripts.
+# ---------------------------------------------------------------------------
+
+LANE_ROUTE_BEGIN = "// lane-route: begin (shared chunk; the generator rewrites this region)"
+LANE_ROUTE_END = "// lane-route: end"
+
+LANE_ROUTE_TEMPLATE = """\
+@BEGIN@
+// laneModels is REQUIRED: this lane family's resolved route from
+// scripts/resolve_standards.py (lane_models.<family>), threaded by the caller.
+// run is the ordered list of {id, effort} entries agent() can run; dropped lists
+// the declared entries it cannot run, each with its reason. An absent or
+// malformed value throws before any agent is dispatched: reading "not passed" as
+// "inherit the session model" is the default this argument exists to remove.
+const LANE_CORE_IDS = [@CORE_IDS@]
+const laneModels = input.laneModels
+const isLaneEntry = (e) => !!e && typeof e === 'object' &&
+  typeof e.id === 'string' && e.id.trim() !== '' &&
+  typeof e.effort === 'string' && e.effort.trim() !== ''
+if (!laneModels || typeof laneModels !== 'object' || !Array.isArray(laneModels.run) ||
+    laneModels.run.length === 0 || !laneModels.run.every(isLaneEntry) || !Array.isArray(laneModels.dropped)) {
+  throw new Error(`md-domain lane requires args.laneModels = {run: [{id, effort}, ...], dropped: [...]} with a non-empty run list, got ${JSON.stringify(laneModels) ?? 'nothing'}. Pass this lane family's lane_models entry from scripts/resolve_standards.py; an absent route is never read as "inherit the session model".`)
+}
+const laneUnrunnable = laneModels.run.filter((e) => !LANE_CORE_IDS.includes(e.id))
+if (laneUnrunnable.length > 0) {
+  throw new Error(`md-domain lane: args.laneModels.run names ${laneUnrunnable.map((e) => JSON.stringify(e.id)).join(', ')}, which agent() cannot run (runnable ids: ${LANE_CORE_IDS.join(', ')}). The resolver moves such ids to laneModels.dropped; a run list that still carries one was not produced by it.`)
+}
+const laneEntryText = (e) => String(e.id) + ' (' + String(e.effort) + ')'
+if (laneModels.dropped.length > 0) {
+  log('md-domain lanes: dropped ' + laneModels.dropped.map(laneEntryText).join(', ') +
+    ' -- not runnable on agent(); running ' + laneModels.run.map(laneEntryText).join(', '))
+}
+const laneRoutePerFile = []
+// Dispatch one lane through the run list. Entries are tried in order; the next
+// one runs when agent() throws or returns nothing. A lane whose every entry
+// failed returns null, as a single agent() call that died does, and each
+// failure stays on its route record.
+async function laneAgent(key, prompt, opts) {
+  const failed = []
+  for (const e of laneModels.run) {
+    let r = null
+    try {
+      r = await agent(prompt, { ...opts, model: e.id, effort: e.effort })
+    } catch (err) {
+      failed.push({ id: e.id, effort: e.effort, reason: String((err && err.message) || err) })
+      continue
+    }
+    if (r !== null && r !== undefined) {
+      laneRoutePerFile.push({ path: key, used: { id: e.id, effort: e.effort }, failed })
+      return r
+    }
+    failed.push({ id: e.id, effort: e.effort, reason: 'agent() returned nothing' })
+  }
+  laneRoutePerFile.push({ path: key, used: null, failed })
+  log('md-domain lane route exhausted for ' + key + ': ' +
+    failed.map((f) => laneEntryText(f) + ': ' + f.reason).join('; '))
+  return null
+}
+const laneRoutes = () => ({ dropped: laneModels.dropped, perFile: laneRoutePerFile })
+@END@
+"""
+
+LANE_ROUTE_CHUNK = (
+    LANE_ROUTE_TEMPLATE
+    .replace("@BEGIN@", LANE_ROUTE_BEGIN)
+    .replace("@END@", LANE_ROUTE_END)
+    .replace("@CORE_IDS@", ", ".join(f"'{i}'" for i in LANE_CORE_IDS))
+)
 
 # ---------------------------------------------------------------------------
 # Canonical remediate.js template. Tokens (@...@) are filled per lane.
@@ -137,6 +214,7 @@ if (input.fixMode !== 'apply' && input.fixMode !== 'propose') {
   throw new Error(`remediate.js requires args.fixMode = "apply" | "propose", got ${JSON.stringify(input.fixMode) ?? 'nothing'}. Pass audit.fix_mode from scripts/resolve_standards.py; an absent fixMode is never read as "apply".`)
 }
 
+@LANE_ROUTE_CHUNK@
 // Drop files whose every @ITEM_NOUN@ is a skip @EM@ nothing to do, no lane needed.
 const actionable = input.perFile.filter(
   (f) => Array.isArray(f.@ITEMS@) && f.@ITEMS@.some((@IV@) => @IV@.decision !== 'skip')
@@ -157,26 +235,20 @@ if (input.fixMode === 'propose') {
   }))
   const proposedCount = proposed.reduce((n, f) => n + f.proposed.length, 0)
   log(`Propose-only (audit.fix_mode = propose) -- no edits made; ${proposedCount} @ITEM_NOUN@(s) across ${proposed.length} @LOG_NOUN@ reported as proposals`)
-  return { perFile: proposed, summary: { applied: 0, skipped: 0, failed: 0, proposed: proposedCount }, fixMode: 'propose' }
+  return { perFile: proposed, summary: { applied: 0, skipped: 0, failed: 0, proposed: proposedCount }, fixMode: 'propose', routes: laneRoutes() }
 }
 
 @LANE_PROMPT_FN@
 
 phase('Remediate')
-// Default lane tier: sonnet at low effort. Remediation applies already-decided
-// edits to disjoint files @EM@ the judgment happened at the Q&A gate @EM@ so the
-// lane needs neither the session's main-loop model nor high reasoning effort.
-// (Detect/classify lanes pin opus at high effort @EM@ criteria application is
-// the audits' judgment core; each lane declares its right tier explicitly
-// rather than inheriting whatever the session happens to run.)
+// The model and effort come from args.laneModels through laneAgent (the lane
+// route above); nothing is inherited from the session and nothing is pinned here.
 const results = await parallel(actionable.map((f) => () =>
-  agent(lanePrompt(f), {
+  laneAgent(f.@KEY@, lanePrompt(f), {
     label: `fix:${f.@KEY@.split(/[\\\\/]/)@LABEL_TAIL@}`,
     phase: 'Remediate',
-    model: '@REMEDIATE_MODEL@',
-    effort: 'low',
     schema: FILE_RESULT_SCHEMA,
-  }).then((r) => ({ ...r, @KEY@: f.@KEY@ }))
+  }).then((r) => (r ? { ...r, @KEY@: f.@KEY@ } : null))
 ))
 
 const summary = results.filter(Boolean).reduce(
@@ -190,7 +262,7 @@ const summary = results.filter(Boolean).reduce(
 )
 log(`Remediation across ${results.filter(Boolean).length} @LOG_NOUN@ @EM@ applied ${summary.applied}, skipped ${summary.skipped}, failed ${summary.failed}`)
 
-return { perFile: results.filter(Boolean), summary }
+return { perFile: results.filter(Boolean), summary, routes: laneRoutes() }
 """
 
 # ---------------------------------------------------------------------------
@@ -226,7 +298,10 @@ CLAUDE_MD_HEADER = f"""\
 //                                          // refined instruction to apply instead
 //     }} ]
 //   }} ],
-//   fixMode: "apply"|"propose"  // REQUIRED: audit.fix_mode from
+//   fixMode: "apply"|"propose",  // REQUIRED: audit.fix_mode from
+//                                // scripts/resolve_standards.py; absent throws
+//   laneModels: {{ run: [{{id, effort}}], dropped: [{{id, effort, reason}}] }}
+//                               // REQUIRED: lane_models.remediate from
 //                               // scripts/resolve_standards.py; absent throws
 // }}
 """
@@ -284,7 +359,10 @@ SKILL_AUDIT_HEADER = f"""\
 //                                          // refined instruction to apply instead
 //     }} ]
 //   }} ],
-//   fixMode: "apply"|"propose"  // REQUIRED: audit.fix_mode from
+//   fixMode: "apply"|"propose",  // REQUIRED: audit.fix_mode from
+//                                // scripts/resolve_standards.py; absent throws
+//   laneModels: {{ run: [{{id, effort}}], dropped: [{{id, effort, reason}}] }}
+//                               // REQUIRED: lane_models.remediate from
 //                               // scripts/resolve_standards.py; absent throws
 // }}
 """
@@ -340,7 +418,10 @@ REFERENCES_HEADER = f"""\
 //       decision: "apply"|"skip"|string  // user/inferred decision; free-text = refined instruction
 //     }} ]
 //   }} ],
-//   fixMode: "apply"|"propose"  // REQUIRED: audit.fix_mode from
+//   fixMode: "apply"|"propose",  // REQUIRED: audit.fix_mode from
+//                                // scripts/resolve_standards.py; absent throws
+//   laneModels: {{ run: [{{id, effort}}], dropped: [{{id, effort, reason}}] }}
+//                               // REQUIRED: lane_models.remediate from
 //                               // scripts/resolve_standards.py; absent throws
 // }}
 """
@@ -400,7 +481,10 @@ PROJECT_DOC_HEADER = f"""\
 //                                          // refined instruction to apply instead
 //     }} ]
 //   }} ],
-//   fixMode: "apply"|"propose"  // REQUIRED: audit.fix_mode from
+//   fixMode: "apply"|"propose",  // REQUIRED: audit.fix_mode from
+//                                // scripts/resolve_standards.py; absent throws
+//   laneModels: {{ run: [{{id, effort}}], dropped: [{{id, effort, reason}}] }}
+//                               // REQUIRED: lane_models.remediate from
 //                               // scripts/resolve_standards.py; absent throws
 // }}
 """
@@ -501,7 +585,7 @@ def render_remediate(lane: str) -> str:
     frags = REMEDIATE_FRAGMENTS[lane]
     out = REMEDIATE_TEMPLATE
     out = out.replace("@EM@", EM)
-    out = out.replace("@REMEDIATE_MODEL@", REMEDIATE_MODEL)
+    out = out.replace("@LANE_ROUTE_CHUNK@", LANE_ROUTE_CHUNK)
     out = out.replace("@HEADER@", frags["HEADER"])
     for token in ("META_NAME", "META_DESC", "PHASE_DETAIL", "KEY", "ACTION_FIELD",
                   "ERR_SHAPE", "ITEM_NOUN", "ITEMS", "IV", "LANE_PROMPT_FN",
@@ -648,71 +732,44 @@ const totals = results.reduce((acc, r) => {
 }, { fix: 0, serious: 0, improve: 0, silent: 0, special: 0, fail: 0, nonCompliant: 0, diffClean: 0, notAudited: 0, suppressed: 0 })
 """
 
+WORKFLOW_DIR = MD_DOMAIN / "workflow"
+
 SHARED_CHUNK_TARGETS = {
-    MD_DOMAIN / "workflow" / "claude-md-detect.js": [ARGS_NORM_CHUNK, DETECT_DISABLED_CRITERIA_CHUNK, DETECT_MECHANICAL_CHUNK, DETECT_REVIEW_TOTALS_CHUNK],
-    MD_DOMAIN / "workflow" / "skill-detect.js": [ARGS_NORM_CHUNK, DETECT_DISABLED_CRITERIA_CHUNK, DETECT_MECHANICAL_CHUNK, DETECT_REVIEW_TOTALS_CHUNK],
-    MD_DOMAIN / "workflow" / "project-doc-detect.js": [ARGS_NORM_CHUNK, DETECT_DISABLED_CRITERIA_CHUNK, DETECT_MECHANICAL_CHUNK, DETECT_REVIEW_TOTALS_CHUNK],
-    MD_DOMAIN / "workflow" / "coverage-detect.js": [DETECT_DISABLED_CRITERIA_CHUNK],
-    MD_DOMAIN / "workflow" / "references-classify.js": [ARGS_NORM_CHUNK],
+    WORKFLOW_DIR / "claude-md-detect.js": [ARGS_NORM_CHUNK, DETECT_DISABLED_CRITERIA_CHUNK, LANE_ROUTE_CHUNK, DETECT_MECHANICAL_CHUNK, DETECT_REVIEW_TOTALS_CHUNK],
+    WORKFLOW_DIR / "skill-detect.js": [ARGS_NORM_CHUNK, DETECT_DISABLED_CRITERIA_CHUNK, LANE_ROUTE_CHUNK, DETECT_MECHANICAL_CHUNK, DETECT_REVIEW_TOTALS_CHUNK],
+    WORKFLOW_DIR / "project-doc-detect.js": [ARGS_NORM_CHUNK, DETECT_DISABLED_CRITERIA_CHUNK, LANE_ROUTE_CHUNK, DETECT_MECHANICAL_CHUNK, DETECT_REVIEW_TOTALS_CHUNK],
+    WORKFLOW_DIR / "coverage-detect.js": [DETECT_DISABLED_CRITERIA_CHUNK, LANE_ROUTE_CHUNK],
+    WORKFLOW_DIR / "references-classify.js": [ARGS_NORM_CHUNK, LANE_ROUTE_CHUNK],
+    WORKFLOW_DIR / "claude-md-generate.js": [LANE_ROUTE_CHUNK],
 }
 
-# K1 (migration step 7): the 9 hand-written `model: '...'` literals across
-# these detect/classify/generate scripts are NOT template-rendered (their
-# bodies diverge too much for the remediate template to cover), so each file
-# is declared here as a one-entry model declaration (D1), structurally
-# validated by bootstrap_lib.model_declaration -- shape only, same posture as
-# REMEDIATE_MODEL_DECLARATION above. check_shared_chunks() asserts every
-# `model: '...'` literal actually present in the file equals its declared id,
-# so a hand-edit that drifts the literal away from its declaration fails here
-# rather than only at runtime. Counts: claude-md-detect.js (1),
-# claude-md-generate.js (3), project-doc-detect.js (1), coverage-detect.js
-# (2), references-classify.js (1), skill-detect.js (1) = 9.
-MODEL_LITERAL_DECLARATIONS = {
-    MD_DOMAIN / "workflow" / "claude-md-detect.js": ["opus"],
-    MD_DOMAIN / "workflow" / "claude-md-generate.js": ["opus"],
-    MD_DOMAIN / "workflow" / "project-doc-detect.js": ["opus"],
-    MD_DOMAIN / "workflow" / "coverage-detect.js": ["opus"],
-    MD_DOMAIN / "workflow" / "references-classify.js": ["opus"],
-    MD_DOMAIN / "workflow" / "skill-detect.js": ["opus"],
-}
-
-_MODEL_LITERAL_RE = re.compile(r"model:\s*'([^']*)'")
+# A `model: '<id>'` literal anywhere in a workflow script is a pinned model: the
+# lane would run that id whatever the consumer's lane_models slot says. Every
+# dispatch goes through laneAgent, which takes the model from args.laneModels.
+_MODEL_LITERAL_RE = re.compile(r"model:\s*'")
 
 
-def check_model_literals() -> list[str]:
-    """Drift check (K1): every model: '...' literal in a declared file equals
-    its declared one-entry model declaration, verbatim."""
+def check_no_model_literals() -> list[str]:
+    """Every md-domain workflow script is free of a `model: '...'` literal."""
     problems: list[str] = []
-    for path, declared in MODEL_LITERAL_DECLARATIONS.items():
-        try:
-            declaration = model_declaration.validate(declared)
-        except model_declaration.DeclarationError as exc:
-            problems.append(f"{path}: declared model list is invalid: {exc}")
-            continue
-        expected = declaration.ids[0]
+    for path in sorted(WORKFLOW_DIR.glob("*.js")):
         try:
             text = path.read_text(encoding="utf-8")
         except OSError as e:
             problems.append(f"{path}: unreadable ({e})")
             continue
-        literals = _MODEL_LITERAL_RE.findall(text)
-        if not literals:
-            problems.append(
-                f"{path}: no model: '...' literal found (declared {expected!r})"
-            )
-            continue
-        for literal in literals:
-            if literal != expected:
+        for n, line in enumerate(text.splitlines(), start=1):
+            if _MODEL_LITERAL_RE.search(line):
                 problems.append(
-                    f"{path}: model literal {literal!r} does not match "
-                    f"declared id {expected!r}"
+                    f"{path}:{n}: pinned model literal ({line.strip()}); dispatch "
+                    "through laneAgent so args.laneModels decides the model"
                 )
     return problems
 
 
 def check_shared_chunks() -> list[str]:
-    """Return drift messages for detect/classify shared-skeleton chunks, plus
-    (K1) the hand-written model literals declared in MODEL_LITERAL_DECLARATIONS."""
+    """Return drift messages for the hand-written scripts' shared-skeleton
+    chunks, plus any pinned model literal in a workflow script."""
     problems: list[str] = []
     for path, chunks in SHARED_CHUNK_TARGETS.items():
         try:
@@ -727,8 +784,30 @@ def check_shared_chunks() -> list[str]:
                     f"{path}: shared skeleton chunk starting '{first_line}' "
                     "not found verbatim"
                 )
-    problems.extend(check_model_literals())
+    problems.extend(check_no_model_literals())
     return problems
+
+
+_LANE_ROUTE_REGION_RE = re.compile(
+    "^" + re.escape(LANE_ROUTE_BEGIN) + r"\n.*?^" + re.escape(LANE_ROUTE_END) + r"\n",
+    re.MULTILINE | re.DOTALL,
+)
+
+
+def splice_lane_route(text: str) -> str:
+    """Replace the one lane-route region in a hand-written script with the
+    current LANE_ROUTE_CHUNK. A script with no region, or more than one, is a
+    defect the caller must fix by hand: there is no safe place to guess."""
+    matches = _LANE_ROUTE_REGION_RE.findall(text)
+    if len(matches) != 1:
+        raise ValueError(
+            f"expected exactly one lane-route region, found {len(matches)}"
+        )
+    return _LANE_ROUTE_REGION_RE.sub(lambda _m: LANE_ROUTE_CHUNK, text)
+
+
+def lane_route_targets() -> list[Path]:
+    return [p for p, chunks in SHARED_CHUNK_TARGETS.items() if LANE_ROUTE_CHUNK in chunks]
 
 
 def check_remediate() -> list[str]:
@@ -757,13 +836,24 @@ def main(argv: list[str]) -> int:
         print(f"workflow-js drift check: {len(problems)} problem(s)")
         return 1 if problems else 0
 
+    # newline="\n" forces LF regardless of platform -- without it, Python's
+    # text-mode write translates \n to \r\n on Windows, leaving the generated
+    # .js files perpetually "modified" (CRLF) against the LF-committed blobs.
     for lane, path in remediate_targets().items():
-        # newline="\n" forces LF regardless of platform -- without it, Python's
-        # text-mode write translates \n to \r\n on Windows, leaving the generated
-        # .js files perpetually "modified" (CRLF) against the LF-committed blobs.
         path.write_text(render_remediate(lane), encoding="utf-8", newline="\n")
         print(f"wrote {path}")
-    problems = check_shared_chunks()
+    problems: list[str] = []
+    for path in lane_route_targets():
+        text = path.read_text(encoding="utf-8")
+        try:
+            spliced = splice_lane_route(text)
+        except ValueError as e:
+            problems.append(f"{path}: {e}")
+            continue
+        if spliced != text:
+            path.write_text(spliced, encoding="utf-8", newline="\n")
+            print(f"wrote lane route into {path}")
+    problems.extend(check_shared_chunks())
     for p in problems:
         print(p, file=sys.stderr)
     return 1 if problems else 0

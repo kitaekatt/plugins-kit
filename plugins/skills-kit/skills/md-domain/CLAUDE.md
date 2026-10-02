@@ -98,8 +98,8 @@ claude_md:
         was deleted in the same change.
       added: "2026-10-02"
     - id: contracts_preserved_verbatim_through_the_fold
-      keywords: [golden corpus gate, verdict vocabulary, rule ids preserved, model pinning, PD-1 decline, review reducer invariants, no behavior change]
-      summary: The fold is a RELOCATION, not a behavior change. Rule and taxonomy ids, the verdict vocabulary, the PD-1 decline contract, the review-reducer invariants, and the detect/remediate model pinning are all preserved verbatim so the golden corpus stays a meaningful gate.
+      keywords: [golden corpus gate, verdict vocabulary, rule ids preserved, lane model routing, PD-1 decline, review reducer invariants, no behavior change]
+      summary: The fold is a RELOCATION, not a behavior change. Rule and taxonomy ids, the verdict vocabulary, the PD-1 decline contract, the review-reducer invariants, and the lane model routing are all preserved verbatim so the golden corpus stays a meaningful gate.
       detail: |
         Preserved verbatim, deliberately: all rule and taxonomy ids (C-*, R-*,
         A-*, H-*, PD-*, CD-*, DD-*, and the per-lane letter taxonomies including
@@ -109,8 +109,8 @@ claude_md:
         lane's AUTO / DISCUSS / SPECIAL buckets; the PD-1 decline contract on both
         triggers; the review-reducer invariants (NOT-AUDITED passes through
         relabel untouched and is counted apart from diffClean, fan-out threshold 1
-        under review, the attributable/SERIOUS keep-rule); and the model pinning
-        (detect/classify opus + high effort, remediate sonnet + low effort).
+        under review, the attributable/SERIOUS keep-rule); and the lane model routing
+        (resolved from the lane_models slot; shipped default sonnet + low effort for every lane, amended 2026-10-02).
 
         Consequence for anyone editing this tree: a change that alters any of
         those is not a refactor. It needs its own decision and its own golden-
@@ -744,22 +744,36 @@ claude_md:
         still needs no lane.
       origin: Generation-lane provenance relocated from the producing procedure during the SR-4 remediation.
       added: "2026-09-07"
-    - id: detect_lanes_never_take_a_configurable_model
-      keywords: [detect lane model, adapter seam, md-audit-evidence-pack, configurable model, in-process prompt build, pinned frontier model]
-      summary: The detect/classify lanes' model is pinned, never configurable; the rationale is audit-lane.md's "Model pinning (not negotiable)" section. The design record for the adapter seam is a plugins-kit planning document, not shipped content.
+    - id: detect_lanes_take_a_configured_route_not_a_pinned_model
+      keywords: [detect lane model, lane_models, agent_route, drop incompatible, luna, adapter seam, md-audit-evidence-pack, configurable model, in-process prompt build]
+      summary: The md-domain lanes take model and effort from the lane_models config slot (shipped default sonnet low); ids that agent()/Agent cannot run are dropped and reported, never an error. This supersedes the earlier rule that detect lanes are pinned and never configurable (decision 2026-10-02).
       detail: |
-        Mechanism and rationale: references/lanes/audit-lane.md, "Model pinning
-        (not negotiable)". Recorded here only for the delta that document cannot
-        carry: the design record for the md-audit-evidence-pack adapter seam
-        lives in the plugins-kit repo's own planning tree
+        Mechanism: references/lanes/audit-lane.md, "Lane models". The design
+        record for the md-audit-evidence-pack adapter seam lives in the
+        plugins-kit repo's own planning tree
         (docs/planning/adapters/adapter-design.md), outside this plugin's
-        shipped surface.
+        shipped surface. The adapter is still enforced in emit_audit_jobs.py;
+        detect lanes still never reach an adapter-admitted endpoint, because
+        they run only core ids.
+        Rulings, verbatim:
+        "md-domain: can always be [luna high, sonnet low]"
+        "if luna is incompatible drop luna"
+        "yeah i get it you can't use luna in a workflow"
+        "it should just be dropped if it doesn't work"
+        "and it shouldn't be specified for a workflow specific specification,
+        but even if it is, it should be dropped as incompatible"
+        Scope answers: coverage and generate lanes are "All sonnet low", so
+        every md-domain lane ships sonnet low. For the job-kit project-doc
+        audit (emit_audit_jobs): "That sounds wrong it should do it the same
+        way as everything else". Frontier models (astra, fable) stay banned
+        from review lanes as a convention, with no enforcement added.
       origin: |
-        Surface: audit-lane.md's "Model pinning" section cited the adapter
-        design record by a repo-root docs/planning path, which does not exist
-        in a consumer's plugin cache (OP-1). Finding: the pointer belongs in
-        this maintainer file, not the shipped reference. Follow-up: none.
+        Original (2026-09-06): audit-lane.md cited the adapter design record
+        by a repo-root docs/planning path (OP-1); the pointer moved here.
+        Amended 2026-10-02 by the user's rulings quoted above, which replaced
+        the pinned opus/high detect lanes with the lane_models slot.
       added: "2026-09-06"
+      updated: "2026-10-02"
     - id: render_is_a_fifth_verb_with_one_command_lane
       keywords: [render verb, material command, fifth verb, command lane, not an audit, no fifth skill, routed through md-domain, skill as prompt text, render_skill, usage error outside verdicts, budget is the users]
       summary: The verb render is a fifth dispatch verb over the artifact skill. It has one lane (render_skill) that runs the material command and writes nothing. It is not an audit, checking a skill stays with `audit skill`, and the owner routed it through md-domain instead of a separate skill.

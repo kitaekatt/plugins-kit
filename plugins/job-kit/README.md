@@ -128,6 +128,21 @@ carries: effort is a property of the ENDPOINT, so a job that needs more
 deliberation than its endpoint's default says so here, and leaving it unset
 emits exactly the argv an existing job file always did.
 
+A job may instead state the effort per declared entry, in a `model_efforts`
+mapping beside `models` (a sidecar, so `models` stays the shared declaration
+grammar):
+
+```yaml
+models: [luna, sonnet]
+model_efforts: {luna: high, sonnet: low}
+```
+
+When present it must name every declared id and nothing else, and it excludes
+`options.effort`. Each attempt runs at the selected entry's effort. An entry
+whose adapter delivers no effort is refused before dispatch (the job ends
+`unroutable`, naming the entry), and an attempt whose seam reports the effort
+dropped fails with `effort_dropped` instead of reaching the contract.
+
 `workspace` accepts `directory`, `base_ref` and `isolate`; `isolate` defaults
 to `false`.
 

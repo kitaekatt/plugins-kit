@@ -231,8 +231,9 @@ class TestMdDomainContributorPresent:
         for clause in (
             "Use this route when the Workflow tool is unavailable (including inside a subagent) "
             "or rejects the lane script.",
-            f"invoke Agent with `subagent_type: {vcs}-kit:review-lane-high` and `model: opus`.",
-            "The Agent tool has no effort argument; the subtype's `effort: high` frontmatter binds effort.",
+            f"take `laneModels.run[0]` and invoke Agent with `subagent_type: {vcs}-kit:review-lane-<effort>` "
+            "and `model: <id>`, from that entry's `effort` and `id`.",
+            "The Agent tool has no effort argument; the subtype's `effort` frontmatter binds effort.",
             "Set `prompt` to the installed script's instantiated `lanePrompt` plus its exact installed "
             "`FILE_FINDINGS_SCHEMA`, with an instruction to return only one JSON object matching that schema.",
             "Parse each Agent response as JSON and validate it against the installed `FILE_FINDINGS_SCHEMA` "
@@ -241,9 +242,10 @@ class TestMdDomainContributorPresent:
             "Apply the same installed script's review reducer and totals calculation, preserving attribution "
             "filtering, SERIOUS retention, and NOT-AUDITED handling.",
             "Return the same `{ perFile, totals, review }` envelope.",
-            "Transport failure never authorizes a generic-review fallback or a change to the lane's model, "
-            "effort, schema, or criteria. Keep the claimed files assigned to their existing specialist lanes.",
-            "If Agent is unavailable, its subtype or model pin cannot be honored, or any result is missing "
+            "Transport failure never authorizes a generic-review fallback, a model or effort outside "
+            "`laneModels.run`, or a change to the lane's schema or criteria. Keep the claimed files "
+            "assigned to their existing specialist lanes.",
+            "If Agent is unavailable, every `run` entry fails for a file, or any result is missing "
             "or invalid, report `REVIEW INCOMPLETE: <file> - <invocation or validation failure>` for each "
             "affected file. Incomplete coverage cannot satisfy a submit gate.",
         ):

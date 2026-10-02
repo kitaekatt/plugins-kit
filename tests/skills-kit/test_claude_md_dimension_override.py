@@ -37,13 +37,17 @@ def _lane_prompt_builder_slice() -> str:
     return text[start:end]
 
 
+# laneModels is a required lane input; the slice runs its guard.
+LANE_MODELS = {"run": [{"id": "sonnet", "effort": "low"}], "dropped": []}
+
+
 def _render_prompt(file_record: dict) -> str:
     """Run lanePrompt(file_record) under real Node and return the rendered
     prompt string."""
     assert NODE, "node is required for this lane contract test"
     slice_src = _lane_prompt_builder_slice()
     harness = (
-        f"const args = {json.dumps({'files': [file_record], 'disabledCriteria': []})};\n"
+        f"const args = {json.dumps({'files': [file_record], 'disabledCriteria': [], 'laneModels': LANE_MODELS})};\n"
         + slice_src
         + "\nprocess.stdout.write(lanePrompt(args.files[0]))\n"
     )

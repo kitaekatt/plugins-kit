@@ -72,6 +72,7 @@ from .run import (
     run_jobs,
 )
 from .select import (
+    EffortUndeliverableError,
     NoCompatibleEndpointError,
     SelectionError,
     SharedLibTooOldError,
@@ -156,6 +157,7 @@ __all__ = [
     "run_job",
     "run_job_file",
     "run_jobs",
+    "EffortUndeliverableError",
     "NoCompatibleEndpointError",
     "SelectionError",
     "SharedLibTooOldError",

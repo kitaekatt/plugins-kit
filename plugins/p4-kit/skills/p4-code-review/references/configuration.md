@@ -87,8 +87,8 @@ missing field from the layer below:
 
 - Every reviewer record a layer states, other than a record that is only `disabled: true`,
   must state a complete `model` list in THAT layer -- every entry with both `id` and `effort`.
-- Every `validator_models` reason a layer states must be complete in that layer: exactly one
-  entry, with both `id` and `effort`.
+- Every `validator_models` reason a layer states must be complete in that layer: one or more
+  entries, each with both `id` and `effort`.
 - Nothing under a profile the layer disables is checked.
 
 The resolver collects every finding across every layer and reports them all at once, one per
@@ -124,31 +124,33 @@ profiles:
     - .md
   reviewers:
   - name: reviewer_a_claude_md_compliance
-    model: sonnet
-    effort: low
+    model:
+    - {id: luna, effort: high}
+    - {id: sonnet, effort: low}
   - name: reviewer_b_diff_only_bugs
-    model: sonnet
-    effort: low
+    model:
+    - {id: luna, effort: high}
+    - {id: sonnet, effort: low}
   validator_models:
-    bug: sonnet
-    claude_md: sonnet
+    bug: [{id: sonnet, effort: low}]
+    claude_md: [{id: sonnet, effort: low}]
 - id: code
   selection: {}
   reviewers:
   - name: reviewer_a_claude_md_compliance
-    model: sonnet
-    effort: low
+    model:
+    - {id: luna, effort: high}
+    - {id: sonnet, effort: low}
   - name: reviewer_b_diff_only_bugs
-    model: opus
-    effort: medium
+    model:
+    - {id: opus, effort: medium}
   - name: reviewer_c_introduced_code
     model:
-    - sol
-    - opus
-    effort: high
+    - {id: sol, effort: high}
+    - {id: opus, effort: high}
   validator_models:
-    bug: opus
-    claude_md: sonnet
+    bug: [{id: opus, effort: medium}]
+    claude_md: [{id: sonnet, effort: low}]
 ```
 
 ## What an `effort` value may name
@@ -208,8 +210,10 @@ follow the shared format specified in the bootstrap plugin's
 `skills/plugin-dev/references/model-declaration.md`: an empty list, or a list naming the same id
 twice, is a configuration error at resolve time. The renderer prints each reviewer's `model` as
 that entry list, in declared order; `p4-code-review` routes the ids and looks the chosen id's
-effort up in the same list. A `validator_models` value is a list of exactly one entry -- a
-validator is never endpoint-eligible, so it has nothing to choose between.
+effort up in the same list. A `validator_models` value is an ordered list of one or more
+entries. The lane tool has no validator route, so step 7 dispatches the first Agent entry and
+drops each non-Agent entry ahead of it with a `route: validator` line; the resolved table
+refuses a reason that has no Agent entry at all.
 
 Each entry is an id in the llm-scripting-kit model registry, and which harness serves it decides
 how that lane is dispatched:
@@ -267,9 +271,9 @@ The three REVIEWER lanes -- the set is `ENDPOINT_ELIGIBLE_LANES` in
 `bootstrap_lib.code_review.lane_prompts`, which is the authority; this prose is not. The
 runner refuses any other lane by name and exits 2 (a configuration error).
 
-The validator is deliberately excluded. It is the control that suppresses a weak reviewer's
-false positives, so replacing it in the same change as a reviewer would remove the instrument
-the reviewer change has to be measured with.
+The validator is excluded because the runner has no validator prompt, input or verdict
+contract. A non-Agent entry in a validator list is dropped at dispatch with a one-line
+disclosure, never sent to the runner.
 
 Eligibility is not the only gate. `reviewer_a_claude_md_compliance` and
 `reviewer_c_introduced_code` read files beyond their chunk, so they need an agent loop
@@ -370,7 +374,7 @@ state the list you want instead:
 
 prints the merged `profiles` table as YAML, then a `---` separator, then which layers were
 applied and (for any absent override) the path that would create it. Each reviewer's `model`
-is its `{id, effort}` entry list in declared order, and each validator reason is a one-entry
+is its `{id, effort}` entry list in declared order, and each validator reason is an ordered entry
 list. When any layer is incomplete it prints the findings to stderr instead and exits
 non-zero; add `--check` to list the findings alone (see "Every stated entry is complete in its
 own layer" above). This is the same

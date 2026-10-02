@@ -60,6 +60,7 @@ from .model import (
 # lib raises SharedLibTooOldError with its named remediation rather than a bare
 # ImportError naming a symbol the user has never heard of.
 from .select import (
+    EffortUndeliverableError,
     NoCompatibleEndpointError,
     SelectionError,
     select_endpoint_with_readings,
@@ -493,6 +494,41 @@ def _require_floor_subjects(job: Job, run_floor: str) -> Job:
     return replace(job, requirements=requirements)
 
 
+def _entry_effort(
+    job: Job,
+    selection: BackendSelection,
+    advertised: Mapping[str, Capabilities],
+) -> Optional[str]:
+    """The effort the job states for the selected entry, checked deliverable.
+
+    ``None`` when the job has no ``model_efforts``. Otherwise the selected
+    entry's effort, after confirming its adapter advertises a delivered
+    ``effort`` param -- the record specialized to this endpoint when the
+    factory supplied one (a transport delivers effort only through its effort
+    style), else the family advertisement. Raises
+    :class:`~.select.EffortUndeliverableError` rather than dispatching at an
+    effort nobody stated.
+    """
+    if not job.model_efforts:
+        return None
+    effort = job.model_efforts.get(selection.endpoint)
+    if effort is None:
+        raise EffortUndeliverableError(
+            f"job {job.id!r}: selected entry {selection.endpoint!r} has no "
+            f"model_efforts entry (stated: {dict(job.model_efforts)})"
+        )
+    capabilities = selection.capabilities or _capabilities_for(selection, advertised)
+    if capabilities is None or "effort" not in capabilities.params:
+        raise EffortUndeliverableError(
+            f"job {job.id!r}: entry {selection.endpoint!r} "
+            f"({getattr(selection.backend, 'name', 'unknown')}) advertises no "
+            f"delivered effort, so model_efforts {effort!r} would be dropped; "
+            "give a transport entry an effort_style, or declare an entry that "
+            "carries effort"
+        )
+    return effort
+
+
 def _backend_options(
     run_id: str,
     job: Job,
@@ -500,6 +536,7 @@ def _backend_options(
     working_directory: Path,
     timeout_s: float,
     run_floor: Optional[str],
+    entry_effort: Optional[str] = None,
 ) -> BackendOptions:
     """Build seam options from one job and its run-level deny floor."""
     allowed_tools = _string_option(job.options, "allowed_tools", None)
@@ -544,7 +581,11 @@ def _backend_options(
         temperature=(
             float(temperature_value) if temperature_value is not None else None
         ),
-        effort=effort if effort is not None else selection.effort,
+        effort=(
+            entry_effort
+            if entry_effort is not None
+            else effort if effort is not None else selection.effort
+        ),
         allowed_tools=allowed_tools,
         disallowed_tools=_merge_disallowed_tools(run_floor, job_disallowed),
         system_prompt_mode=(
@@ -753,6 +794,9 @@ def run_job(
         project_root=str(job.declared_directory),
         reachability_cache=reachability_cache if reachability_cache is not None else {},
     )
+    # Before any reservation: an undeliverable per-entry effort terminalizes
+    # the job as unroutable, so no attempt row claims it ran.
+    entry_effort = _entry_effort(job, selection, advertised)
     manager = workspace_manager
     if manager is None:
         root = (
@@ -827,6 +871,7 @@ def run_job(
             working_directory,
             timeout_s,
             run_floor,
+            entry_effort,
         )
         capabilities = _capabilities_for(selection, advertised)
     except Exception as exc:
@@ -947,6 +992,29 @@ def run_job(
             ),
         )
         raise
+    if (
+        entry_effort is not None
+        and attempt.status == COMPLETED
+        and "effort" in (attempt.dropped_params or ())
+    ):
+        # The adapter advertised effort but this call did not deliver it (an
+        # effort already in extras wins, for instance). The response was
+        # produced at some other effort, so it is not judged by the contract.
+        attempt = replace(
+            attempt,
+            status=ERROR,
+            error=AttemptError(
+                code="effort_dropped",
+                message=(
+                    f"entry {selection.endpoint!r} reported model_efforts "
+                    f"{entry_effort!r} as dropped; the attempt did not run at "
+                    "the stated effort"
+                ),
+            ),
+        )
+        terminal_state = _terminal_state_after_attempt(
+            job, reservation.budget_no, JobState.FAILED
+        )
     if terminal_state is not None or attempt.status != COMPLETED:
         recorded = store.append_attempt(
             attempt,
@@ -1370,6 +1438,11 @@ def _drive_job(
                 workspace_manager=workspace_manager,
                 reachability_cache=reachability_cache,
             )
+        except EffortUndeliverableError as exc:
+            # Named in full whatever came before: the effort, not a halt, is
+            # why this job cannot route.
+            store.mark_unroutable(run_id, job.id, str(exc))
+            return
         except SelectionError as exc:
             floor = exc if isinstance(exc, NoCompatibleEndpointError) else None
             attempts = store.list_attempts(run_id, job.id)

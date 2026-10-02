@@ -398,3 +398,59 @@ def test_absent_and_too_old_bootstrap_lib_are_diagnosed_apart(
         Job.from_mapping(_job_mapping(models=["sonnet"]), base_dir=tmp_path)
     assert ">= 0.129.0" in str(too_old.value)
     assert "claude plugin update bootstrap@plugins-kit" in str(too_old.value)
+
+
+def test_model_efforts_is_a_sidecar_that_round_trips(tmp_path: Path) -> None:
+    """Per-entry effort rides beside `models`, ordered like it, and survives
+    the ledger's to_mapping/from_mapping round trip; `models` stays ids only."""
+    job = Job.from_mapping(
+        _job_mapping(models=["luna", "sonnet"], model_efforts={"sonnet": "low", "luna": "high"}),
+        base_dir=tmp_path,
+    )
+
+    assert job.models == ("luna", "sonnet")
+    assert list(job.model_efforts.items()) == [("luna", "high"), ("sonnet", "low")]
+    mapping = job.to_mapping()
+    assert mapping["models"] == ["luna", "sonnet"]
+    assert mapping["model_efforts"] == {"luna": "high", "sonnet": "low"}
+    assert Job.from_mapping(mapping).model_efforts == job.model_efforts
+
+
+def test_a_job_without_model_efforts_keeps_its_ledger_mapping(tmp_path: Path) -> None:
+    """No sidecar, no key: an existing job's definition JSON is unchanged."""
+    job = Job.from_mapping(_job_mapping(models=["sonnet"]), base_dir=tmp_path)
+
+    assert job.model_efforts == {}
+    assert "model_efforts" not in job.to_mapping()
+
+
+@pytest.mark.parametrize(
+    "efforts, message",
+    [
+        ({"luna": "high"}, "states no effort for declared model"),
+        ({"luna": "high", "sonnet": "low", "opus": "high"}, "which models does not declare"),
+        ({"luna": "high", "sonnet": ""}, "non-empty effort string"),
+        ({"luna": "high", "sonnet": 3}, "non-empty effort string"),
+        (["high", "low"], "must be a mapping"),
+        ({"luna": "high", " luna ": "low", "sonnet": "low"}, "twice"),
+    ],
+)
+def test_model_efforts_must_name_each_declared_entry_once(
+    tmp_path: Path, efforts: object, message: str
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        Job.from_mapping(
+            _job_mapping(models=["luna", "sonnet"], model_efforts=efforts),
+            base_dir=tmp_path,
+        )
+
+
+def test_model_efforts_and_options_effort_are_exclusive(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="one place"):
+        Job.from_mapping(
+            {
+                **_job_mapping(models=["luna"], model_efforts={"luna": "high"}),
+                "options": {"effort": "low"},
+            },
+            base_dir=tmp_path,
+        )

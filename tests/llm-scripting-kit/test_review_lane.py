@@ -153,7 +153,7 @@ class TestDispatchRefusals:
             lr.check_lane_dispatchable("reviewer_z", "my-endpoint")
 
     def test_an_ineligible_lane_is_refused_by_name(self) -> None:
-        """The validator especially: it is the control, not a candidate."""
+        """The validator especially: the runner has no validator prompt, input or verdict contract."""
         with pytest.raises(lr.LaneConfigError, match="not eligible"):
             lr.check_lane_dispatchable("validator", "my-endpoint")
 

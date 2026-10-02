@@ -20,6 +20,10 @@
 //   refs:  { standardsDoc: <abs path to references/standards/references-standards.md>,
 //            taxonomyDoc: <abs path to the A-K finding-taxonomy doc, when one is
 //                          supplied; standardsDoc is used when it is not> }
+//   laneModels: { run: [{id, effort}], dropped: [{id, effort, reason}] }
+//     // REQUIRED: lane_models.classify from scripts/resolve_standards.py. Each
+//     // dispatch tries run in order and moves on when agent() throws or returns
+//     // nothing; absent throws. The result carries routes = {dropped, perFile}.
 // }
 //
 // Dispositions are the ratified four-disposition contract: FIX (auto-applied) /
@@ -68,6 +72,60 @@ if (typeof input === 'string') {
 if (!input || !Array.isArray(input.files) || input.files.length === 0) {
   throw new Error('references-classify.js requires args.files = [{file, findings}]')
 }
+
+// lane-route: begin (shared chunk; the generator rewrites this region)
+// laneModels is REQUIRED: this lane family's resolved route from
+// scripts/resolve_standards.py (lane_models.<family>), threaded by the caller.
+// run is the ordered list of {id, effort} entries agent() can run; dropped lists
+// the declared entries it cannot run, each with its reason. An absent or
+// malformed value throws before any agent is dispatched: reading "not passed" as
+// "inherit the session model" is the default this argument exists to remove.
+const LANE_CORE_IDS = ['fable', 'haiku', 'opus', 'sonnet']
+const laneModels = input.laneModels
+const isLaneEntry = (e) => !!e && typeof e === 'object' &&
+  typeof e.id === 'string' && e.id.trim() !== '' &&
+  typeof e.effort === 'string' && e.effort.trim() !== ''
+if (!laneModels || typeof laneModels !== 'object' || !Array.isArray(laneModels.run) ||
+    laneModels.run.length === 0 || !laneModels.run.every(isLaneEntry) || !Array.isArray(laneModels.dropped)) {
+  throw new Error(`md-domain lane requires args.laneModels = {run: [{id, effort}, ...], dropped: [...]} with a non-empty run list, got ${JSON.stringify(laneModels) ?? 'nothing'}. Pass this lane family's lane_models entry from scripts/resolve_standards.py; an absent route is never read as "inherit the session model".`)
+}
+const laneUnrunnable = laneModels.run.filter((e) => !LANE_CORE_IDS.includes(e.id))
+if (laneUnrunnable.length > 0) {
+  throw new Error(`md-domain lane: args.laneModels.run names ${laneUnrunnable.map((e) => JSON.stringify(e.id)).join(', ')}, which agent() cannot run (runnable ids: ${LANE_CORE_IDS.join(', ')}). The resolver moves such ids to laneModels.dropped; a run list that still carries one was not produced by it.`)
+}
+const laneEntryText = (e) => String(e.id) + ' (' + String(e.effort) + ')'
+if (laneModels.dropped.length > 0) {
+  log('md-domain lanes: dropped ' + laneModels.dropped.map(laneEntryText).join(', ') +
+    ' -- not runnable on agent(); running ' + laneModels.run.map(laneEntryText).join(', '))
+}
+const laneRoutePerFile = []
+// Dispatch one lane through the run list. Entries are tried in order; the next
+// one runs when agent() throws or returns nothing. A lane whose every entry
+// failed returns null, as a single agent() call that died does, and each
+// failure stays on its route record.
+async function laneAgent(key, prompt, opts) {
+  const failed = []
+  for (const e of laneModels.run) {
+    let r = null
+    try {
+      r = await agent(prompt, { ...opts, model: e.id, effort: e.effort })
+    } catch (err) {
+      failed.push({ id: e.id, effort: e.effort, reason: String((err && err.message) || err) })
+      continue
+    }
+    if (r !== null && r !== undefined) {
+      laneRoutePerFile.push({ path: key, used: { id: e.id, effort: e.effort }, failed })
+      return r
+    }
+    failed.push({ id: e.id, effort: e.effort, reason: 'agent() returned nothing' })
+  }
+  laneRoutePerFile.push({ path: key, used: null, failed })
+  log('md-domain lane route exhausted for ' + key + ': ' +
+    failed.map((f) => laneEntryText(f) + ': ' + f.reason).join('; '))
+  return null
+}
+const laneRoutes = () => ({ dropped: laneModels.dropped, perFile: laneRoutePerFile })
+// lane-route: end
 const refs = input.refs || {}
 
 function lanePrompt(f) {
@@ -126,15 +184,13 @@ Idempotency matters: classify deterministically from the detection signals and t
 
 phase('Classify')
 const perFile = await parallel(input.files.map((f) => () =>
-  // Default lane tier: opus at high effort. Classification is the audit's
-  // judgment core — it warrants the judge tier, explicitly pinned.
-  agent(lanePrompt(f), {
+  // The model and effort come from args.laneModels through laneAgent (the lane
+  // route above); nothing is inherited from the session and nothing is pinned here.
+  laneAgent(f.file, lanePrompt(f), {
     label: `classify:${f.file.split(/[\\/]/).pop()}`,
     phase: 'Classify',
-    model: 'opus',
-    effort: 'high',
     schema: FILE_CLASSIFIED_SCHEMA,
-  }).then((r) => ({ ...r, file: f.file }))
+  }).then((r) => (r ? { ...r, file: f.file } : null))
 ))
 
 const results = perFile.filter(Boolean)
@@ -152,4 +208,4 @@ const totals = results.reduce((acc, r) => {
 
 log(`Classified findings in ${results.length}/${input.files.length} files — ${totals.errors} ERROR; dispositions SERIOUS=${totals.serious} FIX=${totals.fix} IMPROVE=${totals.improve} SPECIAL=${totals.special} (SILENT=${totals.silent} omitted)`)
 
-return { perFile: results, totals }
+return { perFile: results, totals, routes: laneRoutes() }

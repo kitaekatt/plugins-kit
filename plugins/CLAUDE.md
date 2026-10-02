@@ -209,19 +209,17 @@ unconfigurable opinion whose test passes is a finding.
   transient failure from a confirmed outage; never excluding would repeatedly spend later
   jobs probing that outage.
 
-- **Only a reviewer lane may run on a configured endpoint.** A review profile's
-  `model` may name an llm-scripting-kit endpoint instead of an Agent alias, but the runner
-  accepts that for the three REVIEWER lanes only; `validator` is refused by name. (Until
-  2026-09-04 the set was `reviewer_b_diff_only_bugs` alone; it was widened to all three
-  reviewers by owner decision, with the two context-reading lanes further restricted to
-  harness endpoints -- `LANES_REQUIRING_AGENT_LOOP` in `bootstrap_lib.code_review.lane_prompts`.)
-  A team could reasonably want its validators on a cheap local model, and the only remedy we
-  leave them is to wait for the set to be widened -- so this is a stance, not a good default.
-  We refuse to make it a setting because the validator is the CONTROL that suppresses a weak
-  reviewer's false positives: a run with both a weakened reviewer and a weakened validator
-  cannot tell you which one caused a regression, and the config key would make that the
-  cheapest thing to reach for. Widening the set further is a plugin change, not a line of
-  YAML.
+- **A validator runs on an Agent entry only; the lane tool has no validator route.** A
+  review profile's validator reason is an ordered list of `{id, effort}` entries, the same
+  as a reviewer's, and may name llm-scripting-kit endpoint entries. The lane tool
+  (`run_review_lane` / llm-scripting-kit `review_lane`) has no validator prompt, no
+  per-issue input and no verdict contract, so the skill drops a non-Agent validator entry
+  at dispatch, discloses the drop in one route line, and runs the next Agent entry. A
+  validator with no Agent entry fails loudly when the profile resolves. Shipped validators
+  therefore name no endpoint entry. `validator` is absent from `ENDPOINT_ELIGIBLE_LANES`
+  (`bootstrap_lib.code_review.lane_prompts`) because the route is missing, not because of a
+  quality stance: the owner decided on 2026-10-02 that sonnet is not better than luna.
+  Widening the route is a plugin change.
 - **An unexplained lane failure re-selects through `describe`, and every re-selection is
   disclosed.** A reviewer declaration may cover more than one entry; when a launch
   failure is not explained by the entry-harness rule, the lane re-runs `llm-scripting-kit

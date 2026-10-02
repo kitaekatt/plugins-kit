@@ -43,26 +43,58 @@ lane record in the dispatch table:
   only: `scripts/check_project_doc_audit.py`); see "Unattended runs: the
   acceptance contract".
 
-## Model pinning (not negotiable)
+## Lane models (configured, never inherited)
 
-Every fan-out lane pins BOTH model and effort explicitly; nothing is inherited
-from the session.
+Every fan-out lane takes its model AND effort from the `lane_models` config
+slot; nothing is inherited from the session. No workflow script contains a
+model literal. Each script takes a REQUIRED `laneModels = {run, dropped}`
+argument and throws when it is absent.
 
-- **detect / classify lanes: model `opus`, effort `high`.** Detection is the
-  audit's judgment core (criteria application); a low-effort session must not
-  silently under-power it.
-- **remediate lanes: model `sonnet`, effort `low`.** Remediation applies
-  already-decided edits -- the judgment happened at the Q&A gate.
+The slot, one list of `{id, effort}` entries per lane family, in preference
+order:
 
-The detect pin also carries the md-audit evidence-pack adapter's enforcement,
-so unpinning it costs more than it looks. The md-audit evidence-pack adapter is enforced in
-`scripts/emit_audit_jobs.py`, which attaches the pack only for the endpoints it
-was measured for. That covers every caller ONLY because these lanes build their
-prompts in process against a pinned frontier model, so no adapter-admitted
-endpoint ever reaches them. Give a detect lane a configurable model and it
-becomes a second path to an audit prompt, outside that enforcement -- an audit
-that silently runs a measured-for-the-adapter model without the adapter, at
-roughly two thirds of its achievable score, with no error to notice.
+| family | shipped default |
+|---|---|
+| `detect`, `classify`, `coverage`, `generate`, `remediate` | `[{id: sonnet, effort: low}]` |
+| `audit_job` | `[{id: luna, effort: high}, {id: sonnet, effort: low}]` |
+
+**Layers.** Shipped `skills_kit_lib/defaults/lane_models.yaml`, then the user
+layer `<CLAUDE_CONFIG_DIR or ~/.claude>/skills-kit/config.yaml` with its
+`config.local.yaml` overlay, then the project layer
+`<project>/.claude/skills-kit/config.yaml` with its `config.local.yaml`
+overlay (the same files standards resolution reads). A later layer wins per family key,
+and its list REPLACES the lower layer's list wholesale. `resolve_standards.py`
+resolves the slot once per run and its JSON carries
+`lane_models: {<family>: {declared, run, dropped}}` for the agent-only
+families.
+
+**The agent_route drop.** `skills_kit_lib.lane_models.agent_route(entries)`
+splits a family's entries into `run` and `dropped`. Workflow `agent()` and the
+Agent tool run only the core ids `fable`, `opus`, `sonnet` and `haiku`, so any
+other id (for example `luna`) is dropped with the reason "not runnable by
+agent()/Agent". A drop is not an error: it is reported in `routes.dropped`
+and, for code review, as a disclosure line. This holds wherever the entry
+came from, including a workflow-specific declaration. If `run` ends up empty,
+the lane fails loudly. The workflow lanes try `run` entries in order and move
+to the next when `agent()` throws or returns nothing; failover between declared
+entries is configured behaviour. The `audit_job` family does not go through
+`agent_route`, because its route runs through job-kit and llm-scripting-kit,
+where `luna` runs.
+
+**Checking the slot.** `skills_kit_tool.py lane-models --check` exits 0 when
+every entry is complete, 1 when an entry lacks an effort (findings are
+collected across all layers), and 2 when a layer is malformed (unknown family
+key, non-list value, unknown entry field, effort outside the known levels,
+blank or duplicate id, empty list, or missing shipped file). Without `--check`
+it prints the resolved slot as YAML.
+
+**Frontier models stay out of review lanes.** `fable` and `astra` are not
+declared for any md-domain lane. This is a convention; nothing enforces it.
+
+The md-audit evidence-pack adapter is enforced in `scripts/emit_audit_jobs.py`,
+which attaches the pack only for the endpoints it was measured for. Detect
+lanes build their prompts in process and run only core ids, so no
+adapter-admitted endpoint reaches them.
 
 ## The pipeline
 
@@ -126,7 +158,7 @@ to use); exit 2 is a usage error, such as a `--primitive` no lane consumes.
 No audit runs on a partial config -- surface that stderr line and stop rather
 than falling back to defaults.
 
-On a zero exit, parse its JSON `{ disabled, thresholds, standards, audit, notes }`.
+On a zero exit, parse its JSON `{ disabled, thresholds, standards, audit, lane_models, notes }`.
 Keep run-level `disabledCriteria` = `disabled`, and per target
 `standardsPaths` = `standards.<primitive>`. Both thread into DETECT, and
 `disabledCriteria` is REQUIRED there: pass the list even when it is empty. A
@@ -175,8 +207,8 @@ is not fixed by respelling the path -- switch to `script`.
 
 **REVIEW MODE OVERRIDE: the threshold is 1.** Always use the Workflow path, even
 for a single file. A review-mode verdict gates a submit, so it must not depend on
-whatever model the session happens to be running; only the lane pins model +
-effort and enforces the schema. Never run a review-mode detect inline.
+whatever model the session happens to be running; only the lane takes its model +
+effort from `lane_models` and enforces the schema. Never run a review-mode detect inline.
 
 **Fallback when the Workflow tool is not exposed** (subagent environments do not
 have it): run the 1-file inline procedure sequentially per file -- detection for
@@ -543,7 +575,7 @@ its location moved. It differs from the three per-file lanes in five ways:
    classified -- inline for one file, otherwise via
    `workflow/references-classify.js` with
    `args = { files:[{file, findings:[{severity,line,ref}]}], refs:{standardsDoc} }`.
-   Same 2+ threshold, same opus/high pinning, no edits in the phase.
+   Same 2+ threshold, same `lane_models` route (family `classify`), no edits in the phase.
 3. **AUTO / DISCUSS / SPECIAL lanes.** The lane retains the legacy lane names
    alongside the four-disposition model; they are the structural `remediations`
    lane keys, not per-finding dispositions: AUTO = the FIX categories applied in
@@ -612,9 +644,20 @@ job file, one job per doc:
 
 ```
 emit_audit_jobs.py <subject-dir> [--repo-root PATH] [--standards PATH]
-    [--models NAME ...] [--report-dir PATH] [--max-parallel N]
-    [--limit N] [--out PATH|-]
+    [--report-dir PATH] [--max-parallel N] [--limit N] [--out PATH|-]
 ```
+
+There is no per-invocation model flag. Each job's models come from the
+`audit_job` family of the `lane_models` slot (shipped default luna high, then
+sonnet low; see "Lane models"). Every job carries `models: [ids]` in slot order
+and `model_efforts: {id: effort}`; job-kit >= 0.11.0 delivers each selected
+entry's effort. Exit codes: 0 emitted; 2 subject is not a directory; 3 the
+emitted document holds non-ASCII text; 4 a mixed admitted/non-admitted list, or
+an evidence-pack list whose slot effort differs from the measured effort; 5
+standards unavailable; 6 the `audit_job` slot cannot be resolved or imported; 7 a job carries
+`model_efforts` and the `job-kit` launcher on PATH (resolved to its plugin
+root's `.claude-plugin/plugin.json`) is missing, unreadable, or below 0.11.0,
+in which case nothing is written.
 
 `subject_dir` is a directory, not a single file -- the script discovers every
 `project_doc` under it (via `discover_project_doc.py`) and emits one job per

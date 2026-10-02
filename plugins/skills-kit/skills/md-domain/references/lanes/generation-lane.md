@@ -53,7 +53,7 @@ otherwise has to get right by hand every time:
   is one barrier over one set and `pipeline()` has no barrier between items;
   neither expresses a dependency graph. A LOOP over waves, each wave a
   `parallel()` barrier, does.
-- **The model pin** (opus + high). Without it a generation run inherits whatever
+- **The lane model** (the `generate` family of `lane_models`, shipped default sonnet + low). Without an explicit route a generation run inherits whatever
   model the session happens to be on, which for judgment-heavy work -- placement,
   wording a hoist so it is true as stated at a new depth, de-duplicating against
   the chain -- is silently under- or over-powered.

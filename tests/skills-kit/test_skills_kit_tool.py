@@ -65,7 +65,7 @@ def test_exit_status_is_the_commands(tmp_path):
 def test_unknown_command_is_a_usage_error(tmp_path):
     run = _run(tmp_path, "bogus")
     assert run.returncode == 2
-    assert "usage: skills_kit_tool.py {audit|classify|tag|material}" in run.stderr
+    assert "usage: skills_kit_tool.py {audit|classify|tag|material|lane-models}" in run.stderr
 
 
 def test_reexec_precedes_any_skills_kit_lib_import():

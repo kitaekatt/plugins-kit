@@ -24,6 +24,7 @@ from llm_scripting_kit.completion import (
     HALT_RATE_LIMIT,
     HaltError,
     LLMResponse,
+    ParamCapability,
 )
 from llm_scripting_kit.completion.adapter_capabilities import CODEX_CAPABILITIES
 from llm_scripting_kit.models import EndpointResolveError
@@ -2292,3 +2293,102 @@ def test_a_quota_halt_reported_as_response_data_also_writes_back(
     assert snapshot.attempts[0].halt_kind == HALT_QUOTA
     assert [attempt.endpoint for attempt in snapshot.attempts] == ["first", "second"]
     assert [entry for entry, _, _ in written] == ["first"]
+
+
+_EFFORT_PARAM = {"effort": ParamCapability(type="string", emits="--effort")}
+
+
+def _effort_factory(
+    backends: dict[str, FakeBackend], delivers: dict[str, bool]
+) -> Callable[..., BackendSelection]:
+    """A factory whose selections say, per entry, whether effort is delivered."""
+
+    def factory(endpoint: str, **_: object) -> BackendSelection:
+        params = _EFFORT_PARAM if delivers[endpoint] else {}
+        return BackendSelection(
+            endpoint,
+            "harness",
+            backends[endpoint],
+            "fake-model",
+            effort="medium",
+            capabilities=Capabilities(adapter="fake", params=params),
+        )
+
+    return factory
+
+
+def _effort_job(tmp_path: Path) -> Job:
+    return replace(
+        _job(tmp_path),
+        models=("first", "second"),
+        model_efforts={"first": "high", "second": "low"},
+        max_attempts=2,
+    )
+
+
+def test_each_entry_runs_at_its_own_model_effort(tmp_path: Path) -> None:
+    """The selected entry's model_efforts value is the attempt's effort, over
+    the registry default, and a failover runs the next entry at ITS effort."""
+    first = SequenceBackend([HaltError(HALT_RATE_LIMIT, "quota")])
+    second = SequenceBackend([None])
+    backends = {"first": first, "second": second}
+
+    snapshot = run_jobs(
+        [_effort_job(tmp_path)],
+        tmp_path / "entry-effort.sqlite3",
+        capabilities_provider=_advertisement,
+        backend_factory=_effort_factory(backends, {"first": True, "second": True}),
+    )
+
+    assert snapshot.jobs[0].state is JobState.ACCEPTED
+    assert first.calls[0][3].effort == "high"
+    assert second.calls[0][3].effort == "low"
+
+
+def test_an_entry_that_cannot_deliver_effort_is_unroutable_not_run(
+    tmp_path: Path,
+) -> None:
+    """An adapter advertising no delivered effort is refused before dispatch."""
+    first = SequenceBackend([None])
+    backends = {"first": first, "second": SequenceBackend([None])}
+
+    snapshot = run_jobs(
+        [_effort_job(tmp_path)],
+        tmp_path / "entry-effort-undeliverable.sqlite3",
+        capabilities_provider=_advertisement,
+        backend_factory=_effort_factory(backends, {"first": False, "second": True}),
+    )
+
+    assert snapshot.jobs[0].state is JobState.UNROUTABLE
+    assert "advertises no delivered effort" in (snapshot.jobs[0].error or "")
+    assert first.calls == []
+    assert snapshot.attempts == ()
+
+
+def test_an_attempt_reporting_its_effort_dropped_fails(tmp_path: Path) -> None:
+    """A delivering adapter that reports effort dropped on THIS call does not
+    reach the contract: the attempt fails with effort_dropped."""
+    dropped = LLMResponse(
+        text="model answer",
+        model="fake-model",
+        input_tokens=1,
+        output_tokens=1,
+        dropped_params=("effort",),
+        execution_controls_applied=(),
+    )
+    first = SequenceBackend([dropped])
+    job = replace(_effort_job(tmp_path), max_attempts=1)
+
+    snapshot = run_jobs(
+        [job],
+        tmp_path / "entry-effort-dropped.sqlite3",
+        capabilities_provider=_advertisement,
+        backend_factory=_effort_factory(
+            {"first": first, "second": SequenceBackend([None])},
+            {"first": True, "second": True},
+        ),
+    )
+
+    assert snapshot.jobs[0].state is JobState.FAILED
+    assert snapshot.attempts[0].error_code == "effort_dropped"
+    assert snapshot.attempts[0].acceptance is None

@@ -172,68 +172,51 @@ class TestDetectTotalsChunkIsNotDeadCode:
         assert offenders == []
 
 
-class TestRemediateModelDeclaration:
-    """K2 (migration step 7): the remediate lanes' model is a one-entry model
-    declaration, structurally validated by bootstrap_lib.model_declaration --
-    shape only, no known-id or usable-set expectation."""
+class TestLaneRouteChunk:
+    """No md-domain workflow script pins a model. Each takes args.laneModels and
+    dispatches through the shared LANE_ROUTE_CHUNK, whose core-id list is
+    rendered from bootstrap_lib.model_declaration.CORE_IDS. Runtime behaviour is
+    pinned by test_lane_route_dispatch.py; these are the generator-side checks."""
 
-    def test_remediate_model_declaration_is_sonnet(self):
-        assert gen.REMEDIATE_MODEL_DECLARATION.ids == ("sonnet",)
-        assert gen.REMEDIATE_MODEL == "sonnet"
+    def test_no_model_literal_in_any_workflow_script(self):
+        assert gen.check_no_model_literals() == []
 
-    def test_rendered_remediate_lanes_carry_the_declared_model(self):
-        for lane, path in gen.remediate_targets().items():
-            rendered = gen.render_remediate(lane)
-            assert f"model: '{gen.REMEDIATE_MODEL}'," in rendered, lane
-
-    def test_validator_rejects_an_empty_declaration(self):
-        with pytest.raises(gen.model_declaration.DeclarationError):
-            gen.model_declaration.validate([])
-
-    def test_validator_rejects_a_duplicate_id(self):
-        with pytest.raises(gen.model_declaration.DeclarationError):
-            gen.model_declaration.validate(["sonnet", "sonnet"])
-
-
-class TestModelLiteralDrift:
-    """K1 (migration step 7): the 9 hand-written model literals in the
-    detect/classify/generate scripts are each a one-entry model declaration;
-    check_shared_chunks() (extended) asserts every literal equals its
-    declared id."""
-
-    def test_nine_literals_declared_across_six_files(self):
-        assert len(gen.MODEL_LITERAL_DECLARATIONS) == 6
-        text_counts = {
-            path: len(gen._MODEL_LITERAL_RE.findall(path.read_text(encoding="utf-8")))
-            for path in gen.MODEL_LITERAL_DECLARATIONS
-        }
-        assert sum(text_counts.values()) == 9
-
-    def test_check_model_literals_clean_on_shipped_files(self):
-        assert gen.check_model_literals() == []
-
-    def test_check_shared_chunks_now_covers_model_literals(self):
-        # check_shared_chunks is the extended function the brief names; it
-        # must fold in check_model_literals() rather than leaving it a
-        # separately-run sibling nobody calls.
+    def test_check_shared_chunks_covers_model_literals(self):
         assert gen.check_shared_chunks() == []
 
-    def test_a_drifted_literal_is_caught(self, tmp_path):
-        target = tmp_path / "claude-md-detect.js"
-        target.write_text("model: 'haiku',\n", encoding="utf-8")
-        declarations = {target: ["opus"]}
-        original = gen.MODEL_LITERAL_DECLARATIONS
-        gen.MODEL_LITERAL_DECLARATIONS = declarations
-        try:
-            problems = gen.check_model_literals()
-        finally:
-            gen.MODEL_LITERAL_DECLARATIONS = original
-        assert any("haiku" in p and "opus" in p for p in problems)
+    def test_a_pinned_literal_is_caught(self, tmp_path, monkeypatch):
+        (tmp_path / "x-detect.js").write_text(
+            "agent(p, {\n  model: 'opus',\n})\n", encoding="utf-8")
+        monkeypatch.setattr(gen, "WORKFLOW_DIR", tmp_path)
+        problems = gen.check_no_model_literals()
+        assert len(problems) == 1 and "x-detect.js:2" in problems[0]
 
-    def test_declared_lists_validate_structurally(self):
-        for declared in gen.MODEL_LITERAL_DECLARATIONS.values():
-            declaration = gen.model_declaration.validate(declared)
-            assert len(declaration) == 1
+    def test_every_dispatching_script_carries_the_chunk(self):
+        hand_written = set(gen.lane_route_targets())
+        generated = set(gen.remediate_targets().values())
+        assert hand_written.isdisjoint(generated)
+        assert {p.name for p in hand_written | generated} == {
+            p.name for p in gen.WORKFLOW_DIR.glob("*.js")}
+        for lane in gen.remediate_targets():
+            assert gen.LANE_ROUTE_CHUNK in gen.render_remediate(lane), lane
+
+    def test_chunk_core_ids_are_rendered_from_the_producer(self):
+        assert gen.LANE_CORE_IDS == tuple(sorted(gen.model_declaration.CORE_IDS))
+        rendered = ", ".join(f"'{i}'" for i in gen.LANE_CORE_IDS)
+        assert f"const LANE_CORE_IDS = [{rendered}]" in gen.LANE_ROUTE_CHUNK
+
+    def test_splice_replaces_a_stale_region(self):
+        stale = (
+            "head\n" + gen.LANE_ROUTE_BEGIN + "\nold body\n"
+            + gen.LANE_ROUTE_END + "\ntail\n"
+        )
+        assert gen.splice_lane_route(stale) == "head\n" + gen.LANE_ROUTE_CHUNK + "tail\n"
+
+    @pytest.mark.parametrize("count", [0, 2])
+    def test_splice_refuses_zero_or_several_regions(self, count):
+        region = gen.LANE_ROUTE_BEGIN + "\nx\n" + gen.LANE_ROUTE_END + "\n"
+        with pytest.raises(ValueError, match="exactly one lane-route region"):
+            gen.splice_lane_route("a\n" + region * count)
 
 
 class TestReviewTotalsChunkCarriesSuppressedFindings:

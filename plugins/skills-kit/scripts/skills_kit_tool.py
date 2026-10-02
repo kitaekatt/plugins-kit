@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Run a skills_kit_lib command (audit, classify, tag, material) from any directory.
+"""Run a skills_kit_lib command (audit, classify, tag, material, lane-models) from any directory.
 
 Usage::
 
     "${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" \\
-        "${SKILLS_KIT_ROOT:?requires a bootstrap engine pass; run bootstrap run}/scripts/skills_kit_tool.py" <audit|classify|tag|material> [args...]
+        "${SKILLS_KIT_ROOT:?requires a bootstrap engine pass; run bootstrap run}/scripts/skills_kit_tool.py" <audit|classify|tag|material|lane-models> [args...]
 
 The launcher re-execs under the skills-kit plugin venv, where pyyaml lives.
 Without pyyaml the YAML contract checks degrade to judgment-required. It then
@@ -23,7 +23,10 @@ from pathlib import Path
 _SCRIPTS = Path(__file__).resolve().parent
 _PLUGIN_ROOT = _SCRIPTS.parent
 
-COMMANDS = ("audit", "classify", "tag", "material")
+COMMANDS = ("audit", "classify", "tag", "material", "lane-models")
+
+#: A command whose module name differs from the command spelling.
+MODULES = {"lane-models": "lane_models"}
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -35,7 +38,7 @@ def main(argv: list[str] | None = None) -> int:
     command, rest = args[0], args[1:]
     if str(_PLUGIN_ROOT) not in sys.path:
         sys.path.insert(0, str(_PLUGIN_ROOT))
-    module = f"skills_kit_lib.{command}"
+    module = f"skills_kit_lib.{MODULES.get(command, command)}"
     sys.argv = [module, *rest]
     try:
         runpy.run_module(module, run_name="__main__", alter_sys=True)

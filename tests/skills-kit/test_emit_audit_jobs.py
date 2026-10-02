@@ -41,6 +41,50 @@ def _load(path: Path, name: str):
 emit = _load(EMIT_PATH, "test_emit_audit_jobs_mod")
 checker = _load(CHECKER_PATH, "test_emit_audit_jobs_checker")
 
+# The audit_job entries skills-kit ships, restated here so these tests do not
+# depend on the resolver's own code: the seam emit._lane_models_module is
+# replaced by a fake returning them (see _fake_lane_models).
+SHIPPED_AUDIT_JOB = [{"id": "luna", "effort": "high"}, {"id": "sonnet", "effort": "low"}]
+
+
+def _entries(*ids: str, effort: str = "low") -> list[dict[str, str]]:
+    return [{"id": model_id, "effort": effort} for model_id in ids]
+
+
+def _fake_job_kit(root: Path, version: str | None) -> Path:
+    """A job-kit plugin tree: bin/job-kit plus a plugin.json stating `version`
+    (no manifest at all when version is None)."""
+    (root / "bin").mkdir(parents=True, exist_ok=True)
+    launcher = root / "bin" / "job-kit"
+    launcher.write_text("#!/bin/sh\n", encoding="utf-8")
+    if version is not None:
+        (root / ".claude-plugin").mkdir(exist_ok=True)
+        (root / ".claude-plugin" / "plugin.json").write_text(
+            json.dumps({"name": "job-kit", "version": version}), encoding="utf-8"
+        )
+    return launcher
+
+
+class _FakeLaneModelsError(ValueError):
+    pass
+
+
+def _fake_lane_models(resolved=None, error: Exception | None = None):
+    """A stand-in for skills_kit_lib.lane_models with the frozen API."""
+
+    class _Fake:
+        LaneModelsError = _FakeLaneModelsError
+        calls: list = []
+
+        @staticmethod
+        def load_lane_models(project_root=None, home=None):
+            _Fake.calls.append(project_root)
+            if error is not None:
+                raise error
+            return {"audit_job": list(SHIPPED_AUDIT_JOB)} if resolved is None else resolved
+
+    return _Fake
+
 
 @pytest.fixture(scope="module", autouse=True)
 def _hermetic_user_config(tmp_path_factory):
@@ -53,6 +97,9 @@ def _hermetic_user_config(tmp_path_factory):
     """
     mp = pytest.MonkeyPatch()
     mp.setenv("CLAUDE_CONFIG_DIR", str(tmp_path_factory.mktemp("empty-config")))
+    mp.setattr(emit, "_lane_models_module", lambda: _fake_lane_models())
+    launcher = _fake_job_kit(tmp_path_factory.mktemp("job-kit"), "0.11.0")
+    mp.setattr(emit, "_job_kit_launcher", lambda: str(launcher))
     yield
     mp.undo()
 
@@ -63,7 +110,7 @@ def document() -> dict:
         subject_dir=SUBJECT_DIR.resolve(),
         repo_root=REPO_ROOT,
         standards=checker.DEFAULT_STANDARDS,
-        models=["sonnet", "opus", "luna"],
+        models=SHIPPED_AUDIT_JOB,
         max_parallel=4,
         limit=None,
     )
@@ -141,9 +188,14 @@ class TestJobShape:
         for job in document["jobs"]:
             assert job["directory"] == str(REPO_ROOT)
 
-    def test_models_matches_input(self, document: dict):
+    def test_models_and_efforts_match_the_entries_in_order(self, document: dict):
         for job in document["jobs"]:
-            assert job["models"] == ["sonnet", "opus", "luna"]
+            assert job["models"] == ["luna", "sonnet"]
+            assert list(job["model_efforts"].items()) == [
+                ("luna", "high"),
+                ("sonnet", "low"),
+            ]
+            assert job["options"] == {}
 
     def test_file_level_deny_floor_present(self, document: dict):
         assert "Write" in document["disallowed_tools"]
@@ -208,8 +260,13 @@ class TestYamlRoundTrip:
         try:
             import sys
 
-            if str(job_kit_lib) not in sys.path:
-                sys.path.insert(0, str(job_kit_lib))
+            for lib in (
+                job_kit_lib,
+                REPO_ROOT / "plugins" / "llm-scripting-kit" / "lib",
+                REPO_ROOT / "plugins" / "bootstrap",
+            ):
+                if str(lib) not in sys.path:
+                    sys.path.insert(0, str(lib))
             import job_kit.model as job_kit_model
         except (ImportError, SystemExit):
             pytest.skip("job_kit is not importable in this environment")
@@ -270,7 +327,7 @@ class TestLimit:
             subject_dir=SUBJECT_DIR.resolve(),
             repo_root=REPO_ROOT,
             standards=checker.DEFAULT_STANDARDS,
-            models=["sonnet"],
+            models=_entries("sonnet"),
             max_parallel=1,
             limit=1,
         )
@@ -313,7 +370,7 @@ class TestEmptySubjectSkipped:
             subject_dir=docs,
             repo_root=repo,
             standards=checker.DEFAULT_STANDARDS,
-            models=["sonnet"],
+            models=_entries("sonnet"),
             max_parallel=1,
             limit=None,
         )
@@ -332,12 +389,12 @@ def _tiny_repo(tmp_path: Path) -> Path:
     return docs
 
 
-def _emit(docs: Path, repo: Path, models: list[str]) -> dict:
+def _emit(docs: Path, repo: Path, models: list[str], effort: str = "xhigh") -> dict:
     return emit.build_job_file(
         subject_dir=docs,
         repo_root=repo,
         standards=checker.DEFAULT_STANDARDS,
-        models=models,
+        models=_entries(*models, effort=effort),
         max_parallel=1,
         limit=None,
     )
@@ -528,12 +585,29 @@ class TestAdapterAttachment:
             _emit(docs, tmp_path, [EP_A, "sonnet"])
 
     def test_default_endpoints_do_not_attach(self, tmp_path: Path) -> None:
+        ids = [entry["id"] for entry in emit.resolve_audit_job_models(tmp_path)]
         assert (
-            emit.adapter_applies(
-                list(emit.DEFAULT_MODELS), emit.resolve_admitted_endpoints(tmp_path)
-            )
+            emit.adapter_applies(ids, emit.resolve_admitted_endpoints(tmp_path))
             is False
         )
+
+    def test_a_pack_job_sends_the_measured_effort_and_no_sidecar(
+        self, tmp_path: Path
+    ) -> None:
+        docs = _tiny_repo(tmp_path)
+        _admit(tmp_path, [EP_A])
+        job = _emit(docs, tmp_path, [EP_A])["jobs"][0]
+        assert job["options"]["extras"] == {"reasoning_effort": "xhigh"}
+        assert "model_efforts" not in job
+
+    def test_a_pack_admitted_entry_at_another_effort_fails_the_emit(
+        self, tmp_path: Path
+    ) -> None:
+        docs = _tiny_repo(tmp_path)
+        _admit(tmp_path, [EP_A])
+        with pytest.raises(emit.AdapterEffortMismatchError) as excinfo:
+            _emit(docs, tmp_path, [EP_A], effort="high")
+        assert "xhigh" in str(excinfo.value)
 
 
 class TestAdapterFailureDegrades:
@@ -615,7 +689,7 @@ class TestEmptyContractTableFailsLoudly:
                 subject_dir=docs,
                 repo_root=tmp_path,
                 standards=standards,
-                models=["sonnet"],
+                models=_entries("sonnet"),
                 max_parallel=1,
                 limit=None,
             )
@@ -673,3 +747,184 @@ class TestSubjectLineCountReadOncePerFile:
         assert len(calls) == len(set(calls)), (
             f"subject_line_count called more than once for the same file: {calls}"
         )
+
+
+class TestAuditJobLaneModels:
+    """The models come from the lane_models `audit_job` slot, with each entry's
+    effort carried to job-kit in the model_efforts sidecar."""
+
+    def test_main_emits_the_slot_entries_in_order_with_effort(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        docs = _tiny_repo(tmp_path)
+        fake = _fake_lane_models()
+        monkeypatch.setattr(emit, "_lane_models_module", lambda: fake)
+        out = tmp_path / "jobs.json"
+        rc = emit.main([str(docs), "--repo-root", str(tmp_path), "--out", str(out)])
+        assert rc == 0
+        job = json.loads(out.read_text(encoding="utf-8"))["jobs"][0]
+        assert job["models"] == ["luna", "sonnet"]
+        assert list(job["model_efforts"].items()) == [("luna", "high"), ("sonnet", "low")]
+        assert fake.calls == [tmp_path.resolve()]
+
+    def test_a_project_slot_replaces_the_shipped_entries(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        docs = _tiny_repo(tmp_path)
+        fake = _fake_lane_models(resolved={"audit_job": [{"id": "opus", "effort": "max"}]})
+        monkeypatch.setattr(emit, "_lane_models_module", lambda: fake)
+        out = tmp_path / "jobs.json"
+        assert emit.main([str(docs), "--repo-root", str(tmp_path), "--out", str(out)]) == 0
+        job = json.loads(out.read_text(encoding="utf-8"))["jobs"][0]
+        assert job["models"] == ["opus"]
+        assert job["model_efforts"] == {"opus": "max"}
+
+    def test_a_malformed_slot_fails_the_emit_with_exit_6(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
+    ) -> None:
+        docs = _tiny_repo(tmp_path)
+        fake = _fake_lane_models(error=_FakeLaneModelsError("audit_job: missing effort"))
+        monkeypatch.setattr(emit, "_lane_models_module", lambda: fake)
+        rc = emit.main([str(docs), "--repo-root", str(tmp_path), "--out", str(tmp_path / "o")])
+        assert rc == 6
+        assert "missing effort" in capsys.readouterr().err
+        assert not (tmp_path / "o").exists()
+
+    def test_an_unimportable_resolver_fails_the_emit_with_exit_6(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
+    ) -> None:
+        docs = _tiny_repo(tmp_path)
+
+        def _missing():
+            raise ImportError("no module named skills_kit_lib.lane_models")
+
+        monkeypatch.setattr(emit, "_lane_models_module", _missing)
+        rc = emit.main([str(docs), "--repo-root", str(tmp_path)])
+        assert rc == 6
+        assert "lane_models" in capsys.readouterr().err
+
+    def test_the_models_flag_is_gone(self, tmp_path: Path) -> None:
+        with pytest.raises(SystemExit) as excinfo:
+            emit.parse_args([str(tmp_path), "--models", "sonnet"])
+        assert excinfo.value.code == 2
+
+    @pytest.mark.parametrize(
+        "models",
+        [["sonnet"], [{"id": "sonnet"}], [{"effort": "low"}], []],
+    )
+    def test_build_job_file_refuses_an_entry_without_id_and_effort(
+        self, tmp_path: Path, models: list
+    ) -> None:
+        docs = _tiny_repo(tmp_path)
+        with pytest.raises(ValueError):
+            emit.build_job_file(
+                subject_dir=docs,
+                repo_root=tmp_path,
+                standards=checker.DEFAULT_STANDARDS,
+                models=models,
+                max_parallel=1,
+                limit=None,
+            )
+
+    def test_the_emitted_job_loads_in_job_kit_with_its_efforts(
+        self, tmp_path: Path
+    ) -> None:
+        pytest.importorskip("yaml")
+        import sys
+
+        for lib in (
+            REPO_ROOT / "plugins" / "job-kit" / "lib",
+            REPO_ROOT / "plugins" / "llm-scripting-kit" / "lib",
+            REPO_ROOT / "plugins" / "bootstrap",
+        ):
+            if str(lib) not in sys.path:
+                sys.path.insert(0, str(lib))
+        import job_kit.model as job_kit_model
+
+        docs = _tiny_repo(tmp_path)
+        document = emit.build_job_file(
+            subject_dir=docs,
+            repo_root=tmp_path,
+            standards=checker.DEFAULT_STANDARDS,
+            models=SHIPPED_AUDIT_JOB,
+            max_parallel=1,
+            limit=None,
+        )
+        out = tmp_path / "jobs.yaml"
+        out.write_text(json.dumps(document), encoding="utf-8")
+        job = job_kit_model.load_job_file(out).jobs[0]
+        assert job.models == ("luna", "sonnet")
+        assert dict(job.model_efforts) == {"luna": "high", "sonnet": "low"}
+
+
+class TestJobKitVersionPreflight:
+    """A job-kit older than 0.11.0 ignores model_efforts, so the emit refuses
+    to write such jobs unless the job-kit on PATH is verified >= 0.11.0."""
+
+    def _main(self, tmp_path: Path, monkeypatch, launcher) -> tuple[int, Path]:
+        docs = _tiny_repo(tmp_path)
+        monkeypatch.setattr(emit, "_job_kit_launcher", lambda: launcher)
+        out = tmp_path / "jobs.json"
+        rc = emit.main([str(docs), "--repo-root", str(tmp_path), "--out", str(out)])
+        return rc, out
+
+    @pytest.mark.parametrize("version", ["0.10.1", "0.9.99"])
+    def test_an_older_job_kit_fails_the_emit_with_exit_7(
+        self, tmp_path: Path, monkeypatch, capsys, version: str
+    ) -> None:
+        launcher = _fake_job_kit(tmp_path / "jk", version)
+        rc, out = self._main(tmp_path, monkeypatch, str(launcher))
+        assert rc == 7
+        assert not out.exists()
+        err = capsys.readouterr().err
+        assert "0.11.0" in err and version in err
+
+    @pytest.mark.parametrize("version", [None, "0.11", "dev"])
+    def test_an_unreadable_version_fails_the_emit_with_exit_7(
+        self, tmp_path: Path, monkeypatch, capsys, version
+    ) -> None:
+        launcher = _fake_job_kit(tmp_path / "jk", version)
+        rc, out = self._main(tmp_path, monkeypatch, str(launcher))
+        assert rc == 7
+        assert not out.exists()
+        assert "cannot verify job-kit >= 0.11.0" in capsys.readouterr().err
+
+    def test_no_launcher_on_path_fails_the_emit_with_exit_7(
+        self, tmp_path: Path, monkeypatch, capsys
+    ) -> None:
+        rc, out = self._main(tmp_path, monkeypatch, None)
+        assert rc == 7
+        assert not out.exists()
+        assert "0.11.0" in capsys.readouterr().err
+
+    @pytest.mark.parametrize("version", ["0.11.0", "0.12.3", "1.0.0"])
+    def test_a_new_enough_job_kit_emits(self, tmp_path: Path, monkeypatch, version) -> None:
+        launcher = _fake_job_kit(tmp_path / "jk", version)
+        rc, out = self._main(tmp_path, monkeypatch, str(launcher))
+        assert rc == 0
+        assert "model_efforts" in json.loads(out.read_text(encoding="utf-8"))["jobs"][0]
+
+    def test_the_launcher_is_followed_through_a_symlink_to_its_plugin_root(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        # The PATH entry is a link in a directory that is not a plugin root;
+        # only the link's TARGET sits beside a plugin.json.
+        real = _fake_job_kit(tmp_path / "jk", "0.11.0")
+        (tmp_path / "links" / "bin").mkdir(parents=True)
+        link = tmp_path / "links" / "bin" / "job-kit"
+        link.symlink_to(real)
+        rc, _ = self._main(tmp_path, monkeypatch, str(link))
+        assert rc == 0
+
+    def test_jobs_without_model_efforts_need_no_check(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        docs = _tiny_repo(tmp_path)
+        _admit(tmp_path, [EP_A])
+        fake = _fake_lane_models(resolved={"audit_job": [{"id": EP_A, "effort": "xhigh"}]})
+        monkeypatch.setattr(emit, "_lane_models_module", lambda: fake)
+        monkeypatch.setattr(emit, "_job_kit_launcher", lambda: None)
+        out = tmp_path / "jobs.json"
+        rc = emit.main([str(docs), "--repo-root", str(tmp_path), "--out", str(out)])
+        assert rc == 0
+        assert "model_efforts" not in json.loads(out.read_text(encoding="utf-8"))["jobs"][0]

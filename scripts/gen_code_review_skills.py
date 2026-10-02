@@ -435,12 +435,16 @@ MD_DOMAIN_LAUNCH = """\
             `scripts/resolve_standards.py` ONCE per review under that venvPython (exact command in
             that reference) and pass its `disabled` list as `disabledCriteria` in EVERY lane args
             object -- an empty list when nothing is disabled; every detect lane throws without it --
-            plus each file's `standardsPaths` from its `standards` map. A non-zero exit is never
-            replaced by `[]`: run no lane and report every non-trivial claimed file
-            `REVIEW INCOMPLETE` with the script's stderr line. Use the Workflow tool when callable, passing
+            plus its `lane_models.detect` route (`{run, dropped}`) as `laneModels` in EVERY lane
+            args object, plus each file's `standardsPaths` from its `standards` map. A non-zero exit
+            is never replaced by `[]`: run no lane and report every non-trivial claimed file
+            `REVIEW INCOMPLETE` with the script's stderr line. A JSON without `lane_models` is
+            version skew: run no lane and report every non-trivial claimed file
+            `REVIEW INCOMPLETE` naming skills-kit >= 0.89.0 -- never guess a model. Use the Workflow tool when callable, passing
             each installed lane's full text as `script` (never its installed path as `scriptPath`)
             per that reference; when the tool is unavailable or rejects the lane, use that reference's
-            "Manual detect invocation" with the SAME installed lanes and args. Transport failure
+            "Manual detect invocation" with the SAME installed lanes and args: it dispatches the
+            `run` entries in order, never a fixed model. Transport failure
             does not make md-domain absent and does not release its claimed files. On a skills-kit
             version skew (a detect lane
             entry point, `discover_claude_md.classify_dimension`, or a documented args contract
@@ -455,7 +459,7 @@ MD_DOMAIN_LAUNCH = """\
             same entry point and args contract and would otherwise decline the file silently. Those
             are the only sanctioned second prepare invocations.
             Then proceed with the normal fan-out. When the pass runs, the md-domain lanes execute in
-            PARALLEL with the reviewer fan-out; keep each `{perFile, totals, review}` for step 9's labeled
+            PARALLEL with the reviewer fan-out; keep each `{perFile, totals, review, routes}` for step 9's labeled
             section."""
 
 # Inserted into step 9's action, right after the unresolved-work section.
@@ -471,6 +475,15 @@ MD_DOMAIN_REPORT = """\
               this section and the code-review issues; accepted md-domain remediations are applied as
               normal edits AFTER decisions. If the md-domain pass fell back to the generic review, do NOT
               render this section (the md files were reviewed as ordinary subjects).
+            - md-domain lane disclosure: when the md-domain pass ran and the resolved
+              `lane_models.detect.dropped` list is non-empty, print ONE line for that family at the
+              top of the md-domain section, in the form
+              `md-domain lanes: dropped <id> (<effort>), ... -- not runnable on agent(); ran <id> (<effort>), ...`
+              (e.g. `md-domain lanes: dropped luna (high) -- not runnable on agent(); ran sonnet (low)`),
+              where `ran` lists the distinct `used` entries of the lanes' `routes.perFile` (or of the
+              manual dispatches). A drop is configured behaviour, not a failure; print no line when
+              nothing was dropped. A file whose every `run` entry failed (`used: null`) is
+              `REVIEW INCOMPLETE`, never DIFF-CLEAN.
             - Mechanical checks (audit-skipped) section: for every claimed file with `trivial == true`,
               render a distinct `## Mechanical checks (audit skipped)` section -- kept SEPARATE from both
               the code-review issues and the md-domain findings. For each such file, state in one line what
@@ -854,14 +867,22 @@ technique_skill:
           action: |
             Launch one validator subagent per candidate issue, all in parallel via a single message.
             The selected profile's `validator_models[reason]` (from the RESOLVED table fetched in
-            step 0) is a list of exactly one `{id, effort}` entry, chosen per issue by its reason.
-            Its `id` is one of `sonnet`, `opus`, `haiku`, `fable`: launch an Agent with
-            `subagent_type: @KIT@:review-lane-<effort>` and `model: <id>`, using that entry's own
-            stated effort, and give it the `validator` subagent definition below with the issue.
-            No validator lane is endpoint-eligible: the runner refuses one and exits 2, because the
-            validator is the control that suppresses a weak reviewer's noise and must not be
-            replaced in the same change as a reviewer. Any other id in `validator_models` is
-            therefore a configuration error to report, not a lane to run.
+            step 0) is an ordered list of one or more `{id, effort}` entries, chosen per issue by
+            its reason. Read it in declared order.
+            - Dispatch the first Agent entry. An Agent entry's `id` is one of `sonnet`, `opus`,
+              `haiku`, `fable`: launch an Agent with `subagent_type: @KIT@:review-lane-<entry effort>`
+              and `model: <id>`, using that entry's own stated effort, and give it the `validator`
+              subagent definition below with the issue.
+            - Drop every non-Agent entry ahead of it. The lane tool has no validator route: it has
+              no validator prompt, input or verdict contract, so the runner refuses a validator lane
+              and exits 2. Never send a validator to it. Announce the drop with ONE line per reason
+              per run: `route: validator <reason> -> <id> <effort>; <dropped id> dropped: no
+              lane-tool route for validators`, where `<id> <effort>` is the Agent entry dispatched.
+            - If an Agent dispatch fails, move to the next Agent entry at that entry's own effort,
+              at most once per entry, announced as `route: validator issue <n> -> <id>; <prior>
+              failed: <kind>`.
+            - If no entry is left, report the issue under `## Lane failures` as unvalidated,
+              neither confirmed nor dropped.
           tool: Agent
           expected: CONFIRMED or REJECTED per issue.
         - n: 8
@@ -872,6 +893,7 @@ technique_skill:
             - Report each corrected launch's original stderr, no-dispatch evidence,
               correction, and final outcome in a `## Launch corrections` section.
               Only a completed, schema-valid reviewer result restores that lane's coverage.
+            - A validator issue left with no usable entry is listed there as unvalidated.
             - When any lane FAILED (including an unsuccessful launch correction
               or a lane refused as a configuration error), prepend a `## Lane failures`
               section naming each failed lane, the model entry and effort it was configured with,
@@ -882,11 +904,13 @@ technique_skill:
               failed lane's files as clean, and never re-run the lane on a model its own
               declaration did not name -- a lane reaches this section only when its
               declaration has no usable entry left; report it and let the user decide.
-            - When any reviewer's declaration had two or more entries, prepend a
+            - When any reviewer's declaration had two or more entries, or any `route: validator`
+              line was announced, prepend a
               `## Lane routes` section carrying every `route:` line announced in step 6,
               verbatim, re-selections included. This is a disclosure, not a warning: the
               rendered review looks identical whichever entry ran, so the reader must never
-              have to infer which model actually reviewed their change.
+              have to infer which model actually reviewed their change. The same section also
+              carries every `route: validator` line announced in step 7, verbatim.
             - When `bundle.submit_gates` is non-empty, prepend a `## Submit checklist`
               section, each gate carrying its step-5 verdict and the evidence for it.
 @STEP9_TAIL@
@@ -1325,7 +1349,7 @@ GIT_CHECKLIST = f"""\
         - Submit gates discharged by the agent (if any), each with a MET / NOT APPLICABLE / NOT MET / NEEDS THE USER verdict and its evidence
         - Executable review-profile table resolved via render_review_profiles.py FIRST (step 0, before prepare_review.py and before any question to the user); a non-zero exit stopped the review with its stderr printed verbatim; profile selected from the resolved table using review_profiles guidance
         - Reviewers launched in parallel (single message, R {X} K Agent calls -- one per (reviewer {X} chunk) pair, where K = len(bundle.diff_chunks))
-        - Validators launched in parallel (single message, N Agent calls), each entry's id and effort taken from the profile's validator_models
+        - Validators launched in parallel (single message, N Agent calls), each the first Agent entry of the profile's validator_models list at its own effort; a non-Agent entry dropped with one `route: validator` line per reason; an issue with no Agent entry left reported as unvalidated under `## Lane failures`
         - Every reviewer and validator entry dispatched at its own stated effort -- an Agent entry as `@KIT@:review-lane-<effort>` with its `id` as the model, a lane-tool entry with `--effort <effort>`; a re-selected entry at its own effort; a runner refusal (exit 2) reported under `## Lane failures`, not re-selected past
         - Filtered to confirmed-only
         - Launch rationale line emitted once (file-type-driven; md_trivial variant when the change is all-mechanical)
@@ -1346,7 +1370,7 @@ P4_CHECKLIST = f"""\
         - Submit gates discharged by the agent (if any), each with a MET / NOT APPLICABLE / NOT MET / NEEDS THE USER verdict and its evidence
         - Executable review-profile table resolved via render_review_profiles.py FIRST (step 0, before prepare_review.py and before any question to the user); a non-zero exit stopped the review with its stderr printed verbatim; profile selected from the resolved table using review_profiles guidance
         - Reviewers launched in parallel (single message, R {X} K Agent calls -- one per (reviewer {X} chunk) pair, where K = len(bundle.diff_chunks))
-        - Validators launched in parallel (single message, N Agent calls), each entry's id and effort taken from the profile's validator_models
+        - Validators launched in parallel (single message, N Agent calls), each the first Agent entry of the profile's validator_models list at its own effort; a non-Agent entry dropped with one `route: validator` line per reason; an issue with no Agent entry left reported as unvalidated under `## Lane failures`
         - Every reviewer and validator entry dispatched at its own stated effort -- an Agent entry as `@KIT@:review-lane-<effort>` with its `id` as the model, a lane-tool entry with `--effort <effort>`; a re-selected entry at its own effort; a runner refusal (exit 2) reported under `## Lane failures`, not re-selected past
         - Filtered to confirmed-only
         - Launch rationale line emitted once (file-type-driven; md_trivial variant when the change is all-mechanical)
@@ -1940,10 +1964,19 @@ from:
 primitive this review may route. The script makes `<root>` importable itself, so no `cd` is needed.
 Run it under venvPython only: the resolver needs pyyaml, which skills-kit's venv carries.
 
-On exit 0, parse stdout as `{ disabled, thresholds, standards, audit, notes }`:
+On exit 0, parse stdout as `{ disabled, thresholds, standards, audit, lane_models, notes }`:
 
 - `disabledCriteria` = `disabled`, passed at the top level of EVERY lane args object below --
   including the empty list.
+- `laneModels` = `lane_models.detect`, passed as `{ run, dropped }` at the top level of EVERY lane
+  args object below. `run` is the ordered list of `{id, effort}` entries agent() and Agent can run;
+  `dropped` lists each declared entry they cannot run, with its reason. A drop is configured
+  behaviour, not an error: the step-9 disclosure line reports it. Every detect lane throws without
+  `laneModels`, and no lane inherits the session model.
+- If stdout has no `lane_models` key, the installed skills-kit predates the lane-model slot. Do NOT
+  guess a model and do NOT fall back to a fixed one: run no detect lane, keep the files claimed, and
+  report `REVIEW INCOMPLETE: <file> - resolve_standards.py output has no lane_models; requires skills-kit >= 0.89.0`
+  for every non-trivial claimed file.
 - per file, `standardsPaths` = `standards.<primitive>` (absent key -> `[]`), where `<primitive>` is
   `claude_md` for a CLAUDE.md / active AGENTS.md, `skill_md` for a SKILL.md, `reference_doc` for a
   skill reference document, and `plain_md` for a generic project doc. This is how project- and
@@ -1952,8 +1985,9 @@ On exit 0, parse stdout as `{ disabled, thresholds, standards, audit, notes }`:
 - `thresholds` and `audit` need no threading here: the lanes' mechanical validator reads thresholds
   itself under `--config`, and `audit.fix_mode` governs a remediate step this review does not run.
 
-On a non-zero exit (1: a malformed config layer, an un-tunable rule id, or an interpreter without
-pyyaml; 2: a usage error) the script prints nothing on stdout and one diagnostic line on stderr.
+On a non-zero exit (1: a malformed config layer, an un-tunable rule id, an interpreter without
+pyyaml, or a `lane_models` slot that is malformed, incomplete, or leaves a family with no runnable
+entry; 2: a usage error) the script prints nothing on stdout and one diagnostic line on stderr.
 Do NOT substitute `[]` and do NOT run any lane on a guessed configuration: an unread config is
 indistinguishable from an empty one. Run no detect lane, keep the files claimed (this is not version
 skew, so they do not return to the generic reviewers), and report
@@ -1970,22 +2004,24 @@ Route by basename first; the ONE path-shape rule is the skill-reference case in 
    (CLAUDE.md takes precedence); a claimed `AGENTS.md` sitting beside a `CLAUDE.md` is SHADOWED
    and is dropped from ALL three lanes -- never audited as a claude-md and never as a project doc.
    `script` = the text of `<root>/skills/md-domain/workflow/claude-md-detect.js`, `args` =
-   `{ files: [...], disabledCriteria: <resolved disabled>, mechanicalCheckPhrases: bundle.mechanical_check_phrases, review: true, refs: { criteria: <root>/skills/md-domain/references/standards/claude-md-standards.md, codeDirFilter: <root>/skills/md-domain/references/standards/claude-md-standards.md, densityCriteria: <root>/skills/md-domain/references/standards/claude-md-standards.md, pluginRoot: <root>, venvPython: <venvPython> } }` (one standards doc backs all three refs -- the code-directory dimension and the density lens are sections of it).
+   `{ files: [...], disabledCriteria: <resolved disabled>, laneModels: <resolved lane_models.detect>, mechanicalCheckPhrases: bundle.mechanical_check_phrases, review: true, refs: { criteria: <root>/skills/md-domain/references/standards/claude-md-standards.md, codeDirFilter: <root>/skills/md-domain/references/standards/claude-md-standards.md, densityCriteria: <root>/skills/md-domain/references/standards/claude-md-standards.md, pluginRoot: <root>, venvPython: <venvPython> } }` (one standards doc backs all three refs -- the code-directory dimension and the density lens are sections of it).
 2. **`audit_skill` lane** -- one call for every claimed file that is EITHER (a) named `SKILL.md`
    OR (b) inside a `*/skills/<name>/references/` folder (only if any). Those are the `skill`
    artifact's two subject shapes and they share one lane and one Workflow call; the lane picks the
    criteria set per file from the path.
    `script` = the text of `<root>/skills/md-domain/workflow/skill-detect.js`, `args` =
-   `{ files: [...], disabledCriteria: <resolved disabled>, mechanicalCheckPhrases: bundle.mechanical_check_phrases, review: true, refs: { pluginRoot: <root>, venvPython: <venvPython> } }`.
+   `{ files: [...], disabledCriteria: <resolved disabled>, laneModels: <resolved lane_models.detect>, mechanicalCheckPhrases: bundle.mechanical_check_phrases, review: true, refs: { pluginRoot: <root>, venvPython: <venvPython> } }`.
 3. **`audit_project_doc` lane** -- one call for every OTHER claimed `.md` file (generic docs; only if any).
    `script` = the text of `<root>/skills/md-domain/workflow/project-doc-detect.js`, `args` =
-   `{ files: [...], disabledCriteria: <resolved disabled>, mechanicalCheckPhrases: bundle.mechanical_check_phrases, review: true, refs: { criteria: <root>/skills/md-domain/references/standards/project-doc-standards.md, pluginRoot: <root> } }`.
+   `{ files: [...], disabledCriteria: <resolved disabled>, laneModels: <resolved lane_models.detect>, mechanicalCheckPhrases: bundle.mechanical_check_phrases, review: true, refs: { criteria: <root>/skills/md-domain/references/standards/project-doc-standards.md, pluginRoot: <root> } }`.
 
 `args` may be passed as an object or a JSON string; all `refs` paths must be ABSOLUTE (the
-Workflow runs from the session cwd, not the skill dir). `review: true` forces the model pin and
-per-file diff attribution; keep it true. `<resolved disabled>` is the `disabled` list from
-"Resolve the run's standards configuration" above, the same list in every lane; a lane call
-without it throws.
+Workflow runs from the session cwd, not the skill dir). `review: true` forces per-file diff
+attribution; keep it true. `<resolved disabled>` is the `disabled` list and
+`<resolved lane_models.detect>` is the `{ run, dropped }` route from "Resolve the run's standards
+configuration" above, the same values in every lane; a lane call without either throws. The lane
+dispatches each file through `run` in order, moving to the next entry when agent() throws or
+returns nothing, and returns the routes it took as `routes`.
 
 **Passing a lane script to the Workflow tool.** Read the installed lane script and pass its full
 text VERBATIM as `script`. Do not pass the installed path as `scriptPath`: the tool refuses the
@@ -2003,14 +2039,18 @@ The installed script remains the source of the prompt and result contract.
 
 1. Read the applicable existing detect script in full. Build the same args described above and
    below, including `review: true`, each file's `preImagePath`, `standardsPaths` and
-   `mechanicalScan`, and the top-level `disabledCriteria` and `mechanicalCheckPhrases`. Resolve every referenced file against the installed root.
-2. For each file, invoke Agent with `subagent_type: @KIT@:review-lane-high` and `model: opus`.
-   The Agent tool has no effort argument; the subtype's `effort: high` frontmatter binds effort.
+   `mechanicalScan`, and the top-level `disabledCriteria`, `laneModels` and `mechanicalCheckPhrases`. Resolve every referenced file against the installed root.
+2. For each file, take `laneModels.run[0]` and invoke Agent with
+   `subagent_type: @KIT@:review-lane-<effort>` and `model: <id>`, from that entry's `effort` and
+   `id`. The Agent tool has no effort argument; the subtype's `effort` frontmatter binds effort.
    Set `prompt` to the installed script's instantiated `lanePrompt` plus its exact installed
    `FILE_FINDINGS_SCHEMA`, with an instruction to return only one JSON object matching that schema.
    Preserve all prompt instructions, standards, ancestor context, and attribution input.
-   Confirm the installed script still specifies `model: 'opus'` and `effort: 'high'` before dispatch;
-   a different pin requires a matching Agent transport or the incomplete terminal below.
+   If the dispatch fails or returns no schema-valid object, announce it in one line
+   (`md-domain lane failover: <file> - <id> (<effort>) failed: <reason>; running <next id> (<next effort>)`)
+   and dispatch the same prompt with the next `run` entry. Use only `run` entries, in order; never
+   a `dropped` entry and never a model the route does not name. Record the entry each file used
+   for the step-9 disclosure line.
 3. Parse each Agent response as JSON and validate it against the installed `FILE_FINDINGS_SCHEMA`
    before running the reducer. Require one schema-valid result for every requested file.
    Missing or invalid results mean REVIEW INCOMPLETE; never substitute empty findings or DIFF-CLEAN.
@@ -2018,11 +2058,11 @@ The installed script remains the source of the prompt and result contract.
    installed script's review reducer and totals calculation, preserving attribution filtering,
    SERIOUS retention, and NOT-AUDITED handling. Return the same `{ perFile, totals, review }` envelope.
 
-Transport failure never authorizes a generic-review fallback or a change to the lane's model,
-effort, schema, or criteria. Keep the claimed files assigned to their existing specialist lanes.
+Transport failure never authorizes a generic-review fallback, a model or effort outside
+`laneModels.run`, or a change to the lane's schema or criteria. Keep the claimed files assigned to their existing specialist lanes.
 
 Use the native Workflow result for any lane group that already completed; invoke only outstanding
-groups manually. If Agent is unavailable, its subtype or model pin cannot be honored, or any result
+groups manually. If Agent is unavailable, every `run` entry fails for a file, or any result
 is missing or invalid, report `REVIEW INCOMPLETE: <file> - <invocation or validation failure>` for
 each affected file. Incomplete coverage cannot satisfy a submit gate.
 
@@ -2093,7 +2133,11 @@ For a **generic project doc** (any other claimed `.md`; `audit_project_doc` lane
 
 ## Consuming the result
 
-Each Workflow returns `{ perFile, totals, review }`. `perFile[i]` retains the input
+Each Workflow returns `{ perFile, totals, review, routes }`. `routes` is `{ dropped, perFile }`:
+the declared entries the lane could not run, and per file the `used` entry (null when every `run`
+entry failed, and that file is then absent from the result's `perFile` -- report it
+`REVIEW INCOMPLETE`) and the `failed` entries tried before it. They feed the step-9
+disclosure line. `perFile[i]` retains the input
 `mechanicalScan` record and carries `verdict`
 (`DIFF-CLEAN` = the change introduced no failure; `NON-COMPLIANT`; or `NOT-AUDITED` = the lane
 DECLINED the file as outside its criteria and read nothing -- `totals.notAudited` counts these apart
@@ -2347,8 +2391,8 @@ missing field from the layer below:
 
 - Every reviewer record a layer states, other than a record that is only `disabled: true`,
   must state a complete `model` list in THAT layer -- every entry with both `id` and `effort`.
-- Every `validator_models` reason a layer states must be complete in that layer: exactly one
-  entry, with both `id` and `effort`.
+- Every `validator_models` reason a layer states must be complete in that layer: one or more
+  entries, each with both `id` and `effort`.
 - Nothing under a profile the layer disables is checked.
 
 The resolver collects every finding across every layer and reports them all at once, one per
@@ -2384,31 +2428,33 @@ profiles:
     - .md
   reviewers:
   - name: reviewer_a_claude_md_compliance
-    model: sonnet
-    effort: low
+    model:
+    - {id: luna, effort: high}
+    - {id: sonnet, effort: low}
   - name: reviewer_b_diff_only_bugs
-    model: sonnet
-    effort: low
+    model:
+    - {id: luna, effort: high}
+    - {id: sonnet, effort: low}
   validator_models:
-    bug: sonnet
-    claude_md: sonnet
+    bug: [{id: sonnet, effort: low}]
+    claude_md: [{id: sonnet, effort: low}]
 - id: code
   selection: {}
   reviewers:
   - name: reviewer_a_claude_md_compliance
-    model: sonnet
-    effort: low
+    model:
+    - {id: luna, effort: high}
+    - {id: sonnet, effort: low}
   - name: reviewer_b_diff_only_bugs
-    model: opus
-    effort: medium
+    model:
+    - {id: opus, effort: medium}
   - name: reviewer_c_introduced_code
     model:
-    - sol
-    - opus
-    effort: high
+    - {id: sol, effort: high}
+    - {id: opus, effort: high}
   validator_models:
-    bug: opus
-    claude_md: sonnet
+    bug: [{id: opus, effort: medium}]
+    claude_md: [{id: sonnet, effort: low}]
 ```
 
 ## What an `effort` value may name
@@ -2468,8 +2514,10 @@ follow the shared format specified in the bootstrap plugin's
 `skills/plugin-dev/references/model-declaration.md`: an empty list, or a list naming the same id
 twice, is a configuration error at resolve time. The renderer prints each reviewer's `model` as
 that entry list, in declared order; `@SKILL_NAME@` routes the ids and looks the chosen id's
-effort up in the same list. A `validator_models` value is a list of exactly one entry -- a
-validator is never endpoint-eligible, so it has nothing to choose between.
+effort up in the same list. A `validator_models` value is an ordered list of one or more
+entries. The lane tool has no validator route, so step 7 dispatches the first Agent entry and
+drops each non-Agent entry ahead of it with a `route: validator` line; the resolved table
+refuses a reason that has no Agent entry at all.
 
 Each entry is an id in the llm-scripting-kit model registry, and which harness serves it decides
 how that lane is dispatched:
@@ -2527,9 +2575,9 @@ The three REVIEWER lanes -- the set is `ENDPOINT_ELIGIBLE_LANES` in
 `bootstrap_lib.code_review.lane_prompts`, which is the authority; this prose is not. The
 runner refuses any other lane by name and exits 2 (a configuration error).
 
-The validator is deliberately excluded. It is the control that suppresses a weak reviewer's
-false positives, so replacing it in the same change as a reviewer would remove the instrument
-the reviewer change has to be measured with.
+The validator is excluded because the runner has no validator prompt, input or verdict
+contract. A non-Agent entry in a validator list is dropped at dispatch with a one-line
+disclosure, never sent to the runner.
 
 Eligibility is not the only gate. `reviewer_a_claude_md_compliance` and
 `reviewer_c_introduced_code` read files beyond their chunk, so they need an agent loop
@@ -2630,7 +2678,7 @@ state the list you want instead:
 
 prints the merged `profiles` table as YAML, then a `---` separator, then which layers were
 applied and (for any absent override) the path that would create it. Each reviewer's `model`
-is its `{id, effort}` entry list in declared order, and each validator reason is a one-entry
+is its `{id, effort}` entry list in declared order, and each validator reason is an ordered entry
 list. When any layer is incomplete it prints the findings to stderr instead and exits
 non-zero; add `--check` to list the findings alone (see "Every stated entry is complete in its
 own layer" above). This is the same

@@ -108,7 +108,10 @@ def _args(path: Path, **extra) -> dict:
         "instruction": "Shorten the description to 160 characters or fewer.",
         "decision": "apply",
     }
-    return {"perFile": [{"path": str(path), "remediations": [item]}], **extra}
+    # laneModels is a required lane input: the resolved lane_models.remediate route.
+    lane_models = {"run": [{"id": "sonnet", "effort": "low"}], "dropped": []}
+    return {"perFile": [{"path": str(path), "remediations": [item]}],
+            "laneModels": lane_models, **extra}
 
 
 def _rows(node):
@@ -175,7 +178,7 @@ class TestFanOutPathIsEnforcedByCode:
     def test_every_remediate_lane_carries_the_guard(self, lane):
         text = (MD_DOMAIN / "workflow" / f"{lane}-remediate.js").read_text(encoding="utf-8")
         guard = text.index("input.fixMode === 'propose'")
-        assert guard < text.index("agent(lanePrompt")
+        assert guard < text.index("laneAgent(f.")
 
 
 class TestConfigBlock:
