@@ -90,6 +90,19 @@ llm-scripting-kit) and drops an invalid or one-sided pair. `ResponseCache`
 stores both fields as provenance; entries written without them still load.
 Exception charges stay estimator-based. User docs: `README.md`.
 
+## `looks_like_network_path` exists twice, and the parity test is not where you would look
+
+`llm/spend_ledger.py` carries a behavioural duplicate of
+`execution/store.py::looks_like_network_path`, because `llm/` may not import
+`execution/`. The duplicate's docstring says so and flags that a parity test exists without naming it; the
+ORIGINAL in `execution/store.py` says nothing, and the parity test lives in
+`tests/content-pipeline-kit/test_llm_spend_ledger.py`. Under this repo's
+targeted-test-run rule an agent editing `execution/store.py` would run
+`test_execution_store.py` and never see the parity failure. So: when you change
+either copy, run `test_llm_spend_ledger.py::TestNetworkPathParity` as well. The
+cheaper fix is a back-pointer comment on the `execution/store.py` copy, which no
+unit owns.
+
 ## Backend selection is process-wide
 
 Backend selection is process-global: one `CONTENT_PIPELINE_LLM_MODELS`

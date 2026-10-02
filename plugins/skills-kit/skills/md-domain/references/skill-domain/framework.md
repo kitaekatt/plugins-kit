@@ -689,7 +689,7 @@ audit_skill:
       keywords: [missing instance, no root block, schema unanchored]
       detection_signal: The walker returns no units with root equal to the schema's root key.
       default_remediation: Author a minimal-valid instance block in the owner doc and re-run the audit.
-      bucket: AUTO
+      bucket: FIX
   procedures:
     - id: run-audit
       name: Run the owner-doc validation pass

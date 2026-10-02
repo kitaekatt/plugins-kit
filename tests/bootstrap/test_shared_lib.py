@@ -1156,3 +1156,47 @@ class TestStandaloneBroadcastGate:
         assert failures == []
         assert not any(python == standalone for _n, python, _r in calls), calls
         assert calls, "consumer phase must still link the lib into the plugin venv"
+
+
+# --- resolve_project_shared_root (project consumer, no marketplace) --------
+
+def _publish_under(data_root, marketplace, name):
+    os.makedirs(os.path.join(str(data_root), marketplace, "_shared_libs", name, name))
+
+
+class TestResolveProjectSharedRoot:
+    def test_one_marketplace_resolves(self, tmp_path):
+        _publish_under(tmp_path, "mkt-a", "mylib")
+        r = shared_lib.resolve_project_shared_root(str(tmp_path), "mylib")
+        assert r.status == "resolved"
+        assert r.root == os.path.join(str(tmp_path), "mkt-a", "_shared_libs")
+
+    def test_two_marketplaces_report_both_names(self, tmp_path):
+        _publish_under(tmp_path, "mkt-a", "mylib")
+        _publish_under(tmp_path, "mkt-b", "mylib")
+        r = shared_lib.resolve_project_shared_root(str(tmp_path), "mylib")
+        assert r.status == "ambiguous"
+        assert r.root is None
+        assert "mkt-a" in r.message and "mkt-b" in r.message
+
+    def test_qualified_lookup_picks_one(self, tmp_path):
+        _publish_under(tmp_path, "mkt-a", "mylib")
+        _publish_under(tmp_path, "mkt-b", "mylib")
+        r = shared_lib.resolve_project_shared_root(str(tmp_path), "mylib", marketplace="mkt-b")
+        assert r.status == "resolved"
+        assert r.root == os.path.join(str(tmp_path), "mkt-b", "_shared_libs")
+
+    def test_qualified_lookup_does_not_fall_back_to_another_marketplace(self, tmp_path):
+        _publish_under(tmp_path, "mkt-a", "mylib")
+        r = shared_lib.resolve_project_shared_root(str(tmp_path), "mylib", marketplace="mkt-b")
+        assert r.status == "absent"
+
+    def test_absent_lib_or_missing_data_root_is_soft(self, tmp_path):
+        _publish_under(tmp_path, "mkt-a", "otherlib")
+        assert shared_lib.resolve_project_shared_root(str(tmp_path), "mylib").status == "absent"
+        missing = str(tmp_path / "nope")
+        assert shared_lib.resolve_project_shared_root(missing, "mylib").status == "absent"
+
+    def test_entry_dir_without_package_is_not_a_match(self, tmp_path):
+        os.makedirs(tmp_path / "mkt-a" / "_shared_libs" / "mylib")  # no <name>/<name>/
+        assert shared_lib.resolve_project_shared_root(str(tmp_path), "mylib").status == "absent"

@@ -517,11 +517,13 @@ its location moved. It differs from the three per-file lanes in five ways:
    `workflow/references-classify.js` with
    `args = { files:[{file, findings:[{severity,line,ref}]}], refs:{standardsDoc} }`.
    Same 2+ threshold, same opus/high pinning, no edits in the phase.
-3. **AUTO / DISCUSS / SPECIAL buckets.** The lane retains the legacy dispositions
-   alongside the four-disposition model: AUTO = the FIX categories applied in the
-   REMEDIATE phase; DISCUSS = the SERIOUS (a `skill:` hard-dep invocation to a
+3. **AUTO / DISCUSS / SPECIAL lanes.** The lane retains the legacy lane names
+   alongside the four-disposition model; they are the structural `remediations`
+   lane keys, not per-finding dispositions: AUTO = the FIX categories applied in
+   the REMEDIATE phase; DISCUSS = the SERIOUS (a `skill:` hard-dep invocation to a
    genuinely-gone skill with no surviving mechanism -- surfaced at the top, never
-   auto-fixed) and IMPROVE categories; SPECIAL = the `K` escape hatch.
+   auto-fixed) and IMPROVE categories, plus SILENT by default; SPECIAL = the `K`
+   escape hatch.
 4. **No `--review`, and no decline branch.** The lane does not implement review
    mode. `--review` on this lane is refused at the router;
    never pass it through and never let a whole-corpus scan be reported as a

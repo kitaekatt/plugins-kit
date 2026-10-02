@@ -369,7 +369,7 @@ glossary:
       sub_grouping: Procedural composition
       keywords: [subdomain config, state terms, operations, scope axes, canonical phrasing, llm-dependent content, dependency order, sub-area record, capability-skill subdomain]
       definition: |
-        An optional structured record on a capability-skill that declares a sub-area's runtime configuration: canonical state vocabulary (`state_terms`), supported verbs (`operations`), capability-space axes (`scope_axes`), readback rules (`canonical_phrasing`), LLM-produced fields (`llm_dependent_content`), and capability ordering constraints (`dependency_order`). The schema gives audit tooling a mechanical floor for verifying a sub-area's vocabulary; a capability-skill with multiple sub-areas declares one record per sub-area. Single-area capability-skills omit the field entirely.
+        A legacy structured record (superseded by the `area_config` portable unit in `authoring-patterns/area-config.md`; retained for backward compatibility, so prefer `area_config` when authoring) on a capability-skill that declares a sub-area's runtime configuration: canonical state vocabulary (`state_terms`), supported verbs (`operations`), capability-space axes (`scope_axes`), readback rules (`canonical_phrasing`), LLM-produced fields (`llm_dependent_content`), and capability ordering constraints (`dependency_order`). The schema gives audit tooling a mechanical floor for verifying a sub-area's vocabulary; a capability-skill with multiple sub-areas declares one record per sub-area. Single-area capability-skills omit the field entirely.
       realized_by: [subdomain-schema.md]
 
     - id: utility_bundle

@@ -19,11 +19,12 @@ literal is loosened, the assertion deleted, the allowlist widened. Its red
 result is at least visible, but the habit of dismissing it is what the next
 real regression meets.
 
-Four shapes have been observed in this repo, of two kinds. Shapes 1 to 3 are
-checks that PASS when they should fail; the remedy is to assert the PROPERTY
-and demonstrate the failure before believing the check. Shape 4 is a check
-that FAILS when nothing is broken; the remedy is to re-point it at the
-producer and show it still goes red when the fix is reverted.
+Eight shapes have been observed in this repo, of two kinds. Shapes 1 to 3 and
+5 to 8 are checks that PASS when they should fail, or that offer evidence which
+cannot be trusted; the remedy is to assert the PROPERTY and demonstrate the
+failure before believing the check. Shape 4 is a check that FAILS when nothing
+is broken; the remedy is to re-point it at the producer and show it still goes
+red when the fix is reverted.
 
 ## Shape 1: the check compares A to B, and both can move together
 
@@ -150,9 +151,114 @@ guarded file, so a change to that file can stale it. The stale anchor firing is
 correct -- it caught a real edit -- but choose an anchor for being distinctive
 and stable, not merely present.
 
+## Shape 5: the concurrency suite whose evidence is flaky or absent while its assertions pass
+
+A test of behaviour under contention has two jobs: assert the property, and
+prove the contention OCCURRED. The second is itself a check, and it can be
+vacuous or unreliable while every assertion on the subject passes.
+
+Worked example (content-pipeline-kit spend ledger, 2026-10). Two instances.
+
+- A one-writer version of a status-under-writers test passed.
+  With the load-bearing `BEGIN` removed from the reader helper in
+  `spend_ledger.py` it STILL passed, because a single writer never raced the
+  reader. Three concurrent writers plus a floor on raced commits made it fail
+  3 of 3 with the `BEGIN` removed
+  (`TestStatusUnderLiveWriters` in
+  `tests/content-pipeline-kit/test_llm_spend_ledger_halt.py`, which records
+  both the one-writer green run and the 3-of-3 red run).
+- A clock-based overlap-floor version of the cross-process cap test proved
+  contention by elapsed time. That floor was intermittent in 4 of 10 runs while the ledger
+  assertions passed every time, so the EVIDENCE was unreliable, not the
+  subject. The replacement is a gate process that holds the write lock until
+  every child has announced that its next statement is `reserve`
+  (`tests/content-pipeline-kit/test_llm_spend_ledger_concurrency.py`; the gate
+  prints `RELEASED <n>` and the test asserts `n` equals the child count).
+  That is deterministic and clock-free.
+
+The remedy: give every multi-process test an explicit contention floor, and
+build the floor from a rendezvous or a lock held until all parties arrive,
+never from elapsed time. Then run the revert-check on the floor itself: remove
+the protection and confirm the test goes red, and run the test repeatedly (the
+4-of-10 intermittence was invisible in a single run).
+
+## Shape 6: an independent recomputation that agrees with production because both move together
+
+A test can recompute the expected value "independently" and compare it to the
+production value. If both are derived from the same rows, deleting the
+production behaviour moves both terms and the comparison holds.
+
+Worked example (content-pipeline-kit spend ledger, 2026-10). The partition
+suite carries both halves of this shape in one file. `independent_partition`
+recomputes the five-state partition with SQL written independently of the
+production queries -- an A-vs-B comparison, which on its own cannot distinguish
+a correct partition from two wrong ones derived from the same rows. What
+actually carries the property is the HARDCODED LITERALS beside it: dropping the
+`SUM(reported_cost) FROM leaks` half of the production LEAKED term went red as
+`assert 1.0 == 4.0` against a literal the test owns, and only once a leak row
+had been injected -- the empty-table half alone could NOT show it red, which is
+why the injection sits in that test rather than being left to the unit that
+owns the write path
+(`tests/content-pipeline-kit/test_llm_spend_ledger.py`). This is Shape 1 in a
+test rather than a generator: the check compares A to B, and both can move
+together.
+
+The remedy: the literal is load-bearing. Never relax it into a comparison
+against a recomputed value, and when reviewing a test, treat a hardcoded
+expected number next to a recomputed one as the part that carries the property.
+
+## Shape 7: a predicate whose removal stays green because the language already excludes the case
+
+Removing a guard and watching the test stay green does not show the guard is
+unnecessary, and it does not show the test is sound. It can mean the language
+or engine already excludes the case, so the revert is not a counterfactual at
+all.
+
+Worked example. In `tests/content-pipeline-kit/test_llm_spend_ledger_orphans.py`
+(`TestNullLeaseIsNeverSwept`), deleting `AND lease_expires_at IS NOT NULL` from
+the sweep's eligibility query changed nothing: SQLite's three-valued logic
+already makes `lease_expires_at < ?` NULL, not true, for a NULL lease. The
+clause is belt and braces. The real counterfactual is an INSERTION: widening the
+predicate to `AND (lease_expires_at IS NULL OR lease_expires_at < ?)` turned
+the test red (the unleased row was swept) and its companion red
+(`DID NOT RAISE SpendCapExceeded`).
+
+The remedy: when removing a guard leaves the test green, look for the insertion
+that breaks the property before concluding the guard is unnecessary. A property
+stated as an absence ("never swept") is broken by adding a case, not by
+removing a clause. Record the corrected prediction beside the test, as that
+test's docstring does.
+
+## Shape 8: a structural property no runtime test can carry
+
+Some design properties have no observable runtime difference, so any runtime
+test written for them is vacuous by construction.
+
+Worked examples, both in the spend ledger work.
+
+- `BEGIN IMMEDIATE` versus plain `BEGIN`. Two runtime attempts failed. With no
+  transaction-level retry anywhere in the codebase, swapping in a plain `BEGIN`
+  yields a fail-closed error, not an over-admission, so there is no wrong
+  NUMBER to observe. A hand-built deferred-read-then-insert only asserts
+  SQLite's own `SQLITE_BUSY_SNAPSHOT` behaviour, true with or without the
+  design. `spend_ledger.py` holds three `BEGIN` sites (two `BEGIN IMMEDIATE`,
+  one deliberate plain deferred `BEGIN` for the read-only snapshot).
+- Reserve outside the settling `try`. A runtime test asserting the reserve sits
+  outside the `try` stayed green when the reserve was moved inside, because the
+  variable is initialised above the `try` and the move is unobservable
+  (`tests/content-pipeline-kit/test_llm_platform_spend.py`).
+
+Both went to AST SOURCE GUARDS that state their own revert in the docstring
+(`test_reserve_is_lexically_outside_the_settling_try` opens "NO RUNTIME TEST CAN
+CARRY THIS" and names the revert), and the design says plainly that no runtime
+test can carry the property. The honest move is to say so rather than write a
+third test that looks like coverage. The guard is still subject to Shapes 1 and
+2: show it red against the named revert.
+
 ## Why every shape needs a named revert-check
 
-Shapes 1 to 3 are checks that PASS when they should fail. Shape 1 and Shape 2
+Shapes 1 to 3 and 5 to 8 are checks that PASS when they should fail (or whose
+evidence is unreliable). Shape 1 and Shape 2
 are not detectable by reading the test, and shape 3 often is not either -- the
 fake looks complete until a new command exposes what it was never taught to
 answer. All three read as reasonable assertions about real behaviour, and all
@@ -168,3 +274,17 @@ vacuous one.
 That is why this repo's task-level communication protocol asks, when a fix is
 reported, which test would FAIL if the fix were reverted. Naming it forces the
 counterfactual to be run rather than assumed.
+
+## Where verification effort pays
+
+A seven-unit strand building the cross-process spend ledger produced ten
+vacuous or mispredicted checks (Shapes 5 to 8 are four of them). Every one was
+caught by its own author applying the counterfactual, and none by a review
+lane: all three code-review lanes returned zero findings on all seven units. An
+md-domain subject-lens audit of the same strand's documentation found a
+documented falsehood and two misplaced facts.
+
+The inference is about where to spend effort: a revert-check inside the unit
+finds what review lanes do not, and documentation needs its own audit. It is
+not a claim that review lanes are worthless. They are the control that makes a
+clean result mean something.

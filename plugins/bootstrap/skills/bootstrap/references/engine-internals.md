@@ -620,6 +620,32 @@ The step also owns the pass's **single shared-lib display line**: successful lin
 
 This is the engine-side half of "provision everything in one pass." The shell-side half is the cooldown registry-change bypass (see [Throttling](#throttling)): together they remove the common reasons a user had to reload Claude more than once after a plugin update.
 
+### Step 4c2: Project-venv shared-lib link
+
+Runs immediately after the Step 4c sweep, when the layered manifest declares `project_venv` and the engine has a `--project-dir`. It links each library named in `project_venv.shared_lib_imports` into the project's own venv (`_link_project_shared_libs`); the field's schema is in [manifest-reference.md](manifest-reference.md), and the outcomes and what a consumer sees are in [library-consumption.md](library-consumption.md).
+
+**Why here, and not inline at Step 3d.** Step 3d creates and syncs the project venv, but it runs before Step 4, and Step 4 is where owner plugins publish their shared libraries. A link attempted at Step 3d would find nothing published on any pass that first publishes the library, soft-skip with "not yet published; will retry next session", and converge a session late. That is the defect Step 4c removes for plugin consumers. Placing the link after the sweep means every owner has published, so a first pass links in the same session. Step 3d keeps sole ownership of creating and syncing the venv; Step 4c2 only links into it. Moving the link into Step 3d would reintroduce the one-session lag; a steady-state pass cannot show the difference, so the ordering is stated here.
+
+How it works, per declared library:
+
+1. The target is the same venv Step 3d used (`project_venv.subdir`, else the project root). With no `pyproject.toml` there, the step records one ok entry (`skipped - no project venv to link into`) and links nothing.
+2. A project has no marketplace of its own, so `resolve_project_shared_root` scans `<data root>/*/_shared_libs/<name>/<name>/` for the one marketplace that publishes the library (restricted to a named marketplace when the entry is qualified). One match resolves; none is `absent`; two or more without a qualifier is `ambiguous`.
+3. `link_shared_lib` writes the same executable `<name>.pth` the plugin links use (it prepends the current generation to `sys.path`) and verifies `import <name>` under the venv's interpreter, rolling the write back on failure.
+
+Routing, one entry per declared library:
+
+| Outcome | Route |
+|---|---|
+| `linked` | Quiet entry, plus the shared `_SharedLibLinkLog` aggregate line the Step 4c sweep also feeds |
+| `cached` | Ok entry (verbose-only); nothing written |
+| `skipped` (absent owner, unresolved interpreter) | Ok entry; no failure |
+| `failed` | Action entry plus a `{"type": "shared_lib", "plugin": "config"}` failure |
+| `ambiguous` | Action entry plus the same `shared_lib` failure; the message asks for the qualified form |
+
+A `sitecustomize.py` already present in the venv's site-packages is reported as an action entry, since it plus the `.pth` prepends the same generation twice.
+
+A malformed `shared_lib_imports` value is validated at Step 3d (`_normalize_project_shared_lib_imports`), reported as a `project_venv` failure marked `blocks_venv: false`, and the valid entries still link at Step 4c2. That mark exempts it from the gate on the `BOOTSTRAP_PROJECT_PYTHON` export; every other `project_venv` failure still withholds the export.
+
 ### Step 4d: Reload/restart advisory
 
 The two fixes above let bootstrap provision a plugin's deps/libs/venv in a single pass. The one thing bootstrap **cannot** do in-session is make Claude Code load plugin *code & hooks* — Claude Code loads plugins at session start, before this SessionStart hook runs. So when a pass can **prove** the running session is missing a plugin's code, it emits a notice. The notice is **informational, not action-required**: it rides in the normal display output (label `<mkt>:bootstrap@<v> notice`) with **no relay directive** in `additionalContext` — whether and when to restart is the user's call (the old "ACTION REQUIRED — surface this now" preamble made Claude present routine update notices as urgent; removed 2026-07-16).

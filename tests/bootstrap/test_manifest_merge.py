@@ -296,6 +296,34 @@ class TestProjectVenvMerge:
         assert result["project_venv"] == {"extras": ["dev"]}
         assert result["tools"] == [{"name": "git"}]
 
+    def test_shared_lib_imports_union_across_layers(self):
+        """User and project layers each add a library; merged holds both, deduplicated."""
+        base = {"project_venv": {"shared_lib_imports": ["content_pipeline", "shared_one"]}}
+        override = {"project_venv": {"shared_lib_imports": ["llm_scripting_kit", "shared_one"]}}
+        result = merge_manifests(base, override)
+        assert result["project_venv"]["shared_lib_imports"] == [
+            "content_pipeline", "shared_one", "llm_scripting_kit"]
+
+    def test_shared_lib_imports_object_form_dedups_by_name_and_marketplace(self):
+        """Same {name, marketplace} in two layers is one entry; a bare string equals an unqualified object."""
+        base = {"project_venv": {"shared_lib_imports": [
+            {"name": "a", "marketplace": "m1"}, "b"]}}
+        override = {"project_venv": {"shared_lib_imports": [
+            {"name": "a", "marketplace": "m1"}, {"name": "b"},
+            {"name": "a", "marketplace": "m2"}]}}
+        result = merge_manifests(base, override)
+        assert result["project_venv"]["shared_lib_imports"] == [
+            {"name": "a", "marketplace": "m1"}, "b",
+            {"name": "a", "marketplace": "m2"}]
+
+    def test_shared_lib_imports_union_keeps_sibling_override_semantics(self):
+        """Union is scoped to shared_lib_imports; check_imports still takes the override."""
+        base = {"project_venv": {"check_imports": ["a"], "shared_lib_imports": ["x"]}}
+        override = {"project_venv": {"check_imports": ["b"], "shared_lib_imports": ["y"]}}
+        result = merge_manifests(base, override)
+        assert result["project_venv"]["check_imports"] == ["b"]
+        assert result["project_venv"]["shared_lib_imports"] == ["x", "y"]
+
 
 class TestProjectNpmMerge:
     def test_project_npm_deep_merge(self):
