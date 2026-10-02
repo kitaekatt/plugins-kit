@@ -35,6 +35,54 @@ _ENV_IDENTITY_KEYS = {
 _ENV_STRING_LIST_KEYS = frozenset()
 
 
+# List-valued keys nested inside a deep-merged object section that are unioned
+# across layers instead of replaced. Maps section -> nested key. The generic
+# dict deep-merge lets the override list replace the base list, so a nested
+# list that layers should ADD to must be listed here.
+_NESTED_UNION_KEYS = {
+    "project_venv": ("shared_lib_imports",),
+}
+
+
+def _shared_lib_import_key(item):
+    """Identity of a ``project_venv.shared_lib_imports`` entry.
+
+    A bare string ``"x"`` and an object ``{"name": "x"}`` name the same
+    library, so both key as ``("x", None)``; ``{"name": "x", "marketplace":
+    "m"}`` keys as ``("x", "m")``. A malformed entry keys on its repr so it
+    survives the merge (validation reports it) without crashing it.
+    """
+    if isinstance(item, str):
+        return (item, None)
+    if isinstance(item, dict) and isinstance(item.get("name"), str):
+        mkt = item.get("marketplace")
+        if mkt is None or isinstance(mkt, str):
+            return (item["name"], mkt)
+    return ("\0malformed", repr(item))
+
+
+def _union_nested_lists(section, base_val, over_val, merged):
+    """Replace the deep-merged nested lists of ``section`` with their union.
+
+    Only when both layers hold a list at the nested key; any other shape keeps
+    the deep-merge result (override wins) and is left for validation.
+    """
+    for nested in _NESTED_UNION_KEYS.get(section, ()):
+        b = base_val.get(nested)
+        o = over_val.get(nested)
+        if not (isinstance(b, list) and isinstance(o, list)):
+            continue
+        seen = set()
+        union = []
+        for item in b + o:
+            k = _shared_lib_import_key(item)
+            if k not in seen:
+                seen.add(k)
+                union.append(item)
+        merged[nested] = union
+    return merged
+
+
 def _ini_key(entry):
     """Composite identity key for ini_settings entries."""
     if entry.get("file") is None or entry.get("section") is None:
@@ -226,7 +274,8 @@ def _merge_layers(base, override, identity_keys, string_list_keys):
 
         # Both are dicts — deep merge
         if isinstance(base_val, dict) and isinstance(over_val, dict):
-            result[key] = _deep_merge_dicts(base_val, over_val)
+            result[key] = _union_nested_lists(
+                key, base_val, over_val, _deep_merge_dicts(base_val, over_val))
             continue
 
         # Both are lists but not a known section — concatenate

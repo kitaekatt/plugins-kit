@@ -142,8 +142,8 @@ something, remove what it protects and watch it go red -- revert the fix and
 run the named test; for a guard that compares a generated artifact to its
 generator, ask what happens when both move together. A check that stays green
 is worse than no check, because the green result stops anyone looking again.
-The four observed shapes (three checks that pass when they should fail, one
-that fails when nothing is broken), their worked examples, and the remedy:
+The observed shapes (checks that pass when they should fail, and one that
+fails when nothing is broken), their worked examples, and the remedy:
 [docs/reference/vacuous-checks.md](docs/reference/vacuous-checks.md).
 
 **Targeted test runs** -- the full test suite is too slow for routine use. Always run only the specific test file(s) relevant to your changes:
@@ -949,6 +949,17 @@ claude_md:
         Worked example: docs/reference/vacuous-checks.md, "Shape 4".
       origin: "2026-10-01 -- the plugin-root variable migration; four tests went red on spelling alone."
       added: "2026-10-01"
+    - id: widening_a_validator_without_its_consumer
+      keywords: [widen validator, applies_to, standards_resolve, coverage-detect.js, silent no-op, loud error became silent, stale excuse, named deviation, delete the caveat, consumer ignores input, accepted but ignored, audit_skill, hand join]
+      summary: Widening what a validator admits without widening what its consumer honours turns a loud error into a silent no-op, and deleting the "stale excuse" paragraph removes the only warning. Check every consumer of the validated value, and every sentence the excuse bounded, in the same change.
+      detail: |
+        Operative: on widening an accepted-values list, open each consumer and confirm it
+        acts on the new input; before deleting a deviation note, grep the promises it
+        qualified. Run the md-domain audit AND a hand join across sites -- each caught
+        what the other missed. Worked case and the three-site anchors:
+        docs/reference/vacuous-checks.md, "Shape 9".
+      origin: "2026-10-02 -- skills-kit 0.86.0 (ebefd8b5) widened applies_to to admit code_directory; coverage-detect.js ignores the resolved standards map, so authored criteria validated and were silently dropped."
+      added: "2026-10-02"
     - id: a_survey_is_an_artifact_not_evidence
       keywords: [survey, enumeration, earlier agent pass, brief, established premise, derived artifact treated as source, re-derive before briefing, measuring instrument, offender list, leave as prose, universal claim, sync_to_data, plugin-root-variable-sites, premise marking, report contradictions]
       summary: An enumeration produced by an earlier agent pass is a map, not a measurement. Re-derive a claim before a brief rests on it, and prefer a measuring instrument -- a guard run over the real files -- to an enumeration, because the guard's offender list cannot be stale.

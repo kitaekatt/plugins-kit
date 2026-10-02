@@ -568,6 +568,48 @@ For each discovered plugin, the engine resolves the plugin's install path via `p
 
 Either phase is optional — a plugin can provide just a manifest, just a script, or both.
 
+### Step 4b3: Pre-gate env records (`_maintain_env_records`, 0.141.0)
+
+Both skip gates short-circuit the engine, so the names a pass exports through
+`session_env` are absent from most sessions (measured: a session inside the
+cooldown window had `BOOTSTRAP_PYTHON` but zero `*_ROOT` names). This step
+rewrites two records under bootstrap's data dir for `session-bootstrap.sh`'s
+own pre-gate block to re-emit, so bash resolves nothing itself:
+
+- `<data_dir>/plugin_roots` -- one `<PLUGIN>_ROOT=<install path>` line per
+  plugin that ships a `bootstrap.json`. That is the same gate the per-plugin
+  `export_env_var` sits behind, so the record holds exactly what this pass
+  exported.
+- `<data_dir>/tool_bins` -- one `BOOTSTRAP_BIN_<TOOL>=<path>` line per entry in
+  `tool_paths.all_paths(None)` whose path is a regular file: the same source
+  and the same existence test `export_tool_env_vars` applies later in the pass.
+
+Format is one `NAME=path` line per entry, LF, UTF-8, no quoting and no
+escaping. The name must be an upper-case shell identifier, and a value holding
+a single quote, a newline or a carriage return is dropped at write time
+(`record_line_is_safe` in `bootstrap_lib/env_var_check.py`), because the
+prelude re-emits the value inside single quotes into a file that is sourced as
+shell code. The write is atomic, so a reader gets one complete record or the
+previous one, never half a file.
+
+**Staleness is handled by two mechanisms and nothing else.** Each record is
+rewritten WHOLE every full pass, so a plugin that left the registry loses its
+line; and the prelude re-emits a name only while its recorded path still exists
+-- a directory for a plugin root, a regular file for a tool -- so a path
+deleted between passes is skipped rather than exported. There is no revocation
+list and no expiry. A consumer's `"${<PLUGIN>_ROOT:?<msg>}"` guard therefore
+still aborts loudly, naming the missing variable, instead of running against a
+version directory that no longer exists. A `cadence: always` throttled lane
+returns before Step 4 and never rewrites the records.
+
+Placement is after Step 4b, so a plugin installed mid-pass is in the record,
+and before Steps 5/6, so the entries reach `bootstrap.log`. Write policy
+follows `_maintain_project_python_record` and [Every check must log its
+outcome](#design-principles): a changed record is a `quiet` entry (always
+logged, never displayed -- a record rewrite is log-only, never a display item),
+a steady state is a verbose `ok` entry, and a failed write is a `quiet` entry.
+No entry carries a path.
+
 ### Step 4c: Shared-lib convergence sweep
 
 Shared-library *consumer* links (writing `<lib>.pth` into a plugin's own venv, declared via `shared_lib_imports`) happen inline while that plugin's manifest is processed. If a consumer is processed **before** the owner publishes the lib (plugins run in sort order, so this is purely an ordering accident), the inline `link_shared_lib` soft-skips with *"not yet published; will retry next session"* — an avoidable extra session/restart.
@@ -577,6 +619,32 @@ After the full plugin loop (Step 4 + the 4b re-scan), **every owner has publishe
 The step also owns the pass's **single shared-lib display line**: successful links from *both* emission sites (the per-plugin manifest phase and this sweep) are collected in `_SharedLibLinkLog` and rendered here as one aggregated entry — see [Cross-Plugin Shared Libraries](#cross-plugin-shared-libraries-shared_libs--shared_lib_imports).
 
 This is the engine-side half of "provision everything in one pass." The shell-side half is the cooldown registry-change bypass (see [Throttling](#throttling)): together they remove the common reasons a user had to reload Claude more than once after a plugin update.
+
+### Step 4c2: Project-venv shared-lib link
+
+Runs immediately after the Step 4c sweep, when the layered manifest declares `project_venv` and the engine has a `--project-dir`. It links each library named in `project_venv.shared_lib_imports` into the project's own venv (`_link_project_shared_libs`); the field's schema is in [manifest-reference.md](manifest-reference.md), and the outcomes and what a consumer sees are in [library-consumption.md](library-consumption.md).
+
+**Why here, and not inline at Step 3d.** Step 3d creates and syncs the project venv, but it runs before Step 4, and Step 4 is where owner plugins publish their shared libraries. A link attempted at Step 3d would find nothing published on any pass that first publishes the library, soft-skip with "not yet published; will retry next session", and converge a session late. That is the defect Step 4c removes for plugin consumers. Placing the link after the sweep means every owner has published, so a first pass links in the same session. Step 3d keeps sole ownership of creating and syncing the venv; Step 4c2 only links into it. Moving the link into Step 3d would reintroduce the one-session lag; a steady-state pass cannot show the difference, so the ordering is stated here.
+
+How it works, per declared library:
+
+1. The target is the same venv Step 3d used (`project_venv.subdir`, else the project root). With no `pyproject.toml` there, the step records one ok entry (`skipped - no project venv to link into`) and links nothing.
+2. A project has no marketplace of its own, so `resolve_project_shared_root` scans `<data root>/*/_shared_libs/<name>/<name>/` for the one marketplace that publishes the library (restricted to a named marketplace when the entry is qualified). One match resolves; none is `absent`; two or more without a qualifier is `ambiguous`.
+3. `link_shared_lib` writes the same executable `<name>.pth` the plugin links use (it prepends the current generation to `sys.path`) and verifies `import <name>` under the venv's interpreter, rolling the write back on failure.
+
+Routing, one entry per declared library:
+
+| Outcome | Route |
+|---|---|
+| `linked` | Quiet entry, plus the shared `_SharedLibLinkLog` aggregate line the Step 4c sweep also feeds |
+| `cached` | Ok entry (verbose-only); nothing written |
+| `skipped` (absent owner, unresolved interpreter) | Ok entry; no failure |
+| `failed` | Action entry plus a `{"type": "shared_lib", "plugin": "config"}` failure |
+| `ambiguous` | Action entry plus the same `shared_lib` failure; the message asks for the qualified form |
+
+A `sitecustomize.py` already present in the venv's site-packages is reported as an action entry, since it plus the `.pth` prepends the same generation twice.
+
+A malformed `shared_lib_imports` value is validated at Step 3d (`_normalize_project_shared_lib_imports`), reported as a `project_venv` failure marked `blocks_venv: false`, and the valid entries still link at Step 4c2. That mark exempts it from the gate on the `BOOTSTRAP_PROJECT_PYTHON` export; every other `project_venv` failure still withholds the export.
 
 ### Step 4d: Reload/restart advisory
 
@@ -1076,7 +1144,7 @@ A manifest-phase capability (module `bootstrap_lib/shared_lib.py`, wired into `_
 
 - **Owner (`shared_libs`)**: `sync_shared_lib()` content-hashes the package source at `<plugin_root>/<src>/<name>/` and, on change, clean-re-syncs it (remove-then-copy, pruning stale modules -- unlike `sync_to_data`'s merge-only copy) to the stable `~/.claude/plugins/data/plugins-kit/_shared_libs/<name>/<name>/`, staging via `_make_stage_dir` (the published-access invariant: [manifest-reference.md](manifest-reference.md#shared_libs--shared_lib_imports--cross-plugin-first-party-libraries)). Then `link_shared_lib()` writes `<name>.pth` (pointing at `_shared_libs/<name>/`) into the standalone Python and verifies `import <name>`.
 - **Consumer (`shared_lib_imports`)**: `link_shared_lib()` writes the same `.pth` into this plugin's own `<plugin_data_dir>/.venv` (the venv handler ran earlier in the same manifest pass, so it exists as the target).
-- **Stable link, versioned generations**: the `.pth` names only the version-independent `_shared_libs/<name>/`, so an owner version bump needs no per-consumer rewrite. Each publish also installs an immutable snapshot at `_shared_libs/<name>/.generations/<id>/<name>/` (`<id>` = a content-hash prefix) BEFORE flipping the `_shared_libs/<name>/.current` pointer to it. The `.pth` line (`pth_line`) reads that pointer once, at interpreter start, and prepends the generation directory to `sys.path`, falling back to `_shared_libs/<name>/` itself when the pointer is missing or names no complete generation. A running process therefore keeps resolving the generation it started with, including submodules it first imports after a later publish, for as long as that generation is retained (see `GENERATION_RETENTION_S` below); only a new process sees the new version. The stable `<name>/<name>/` copy is still swapped in place, for foreign-interpreter consumers ([library-consumption.md](library-consumption.md), mode 3). A superseded generation gets a `.superseded` marker and is deleted by a later publish once the marker is older than `GENERATION_RETENTION_S` (7 days); the publish message names the generation and every pruned or unprunable one (logged as the quiet entry). A tree published before generations has no pointer, so it re-publishes once.
+- **Stable link, versioned generations**: the `.pth` names only the version-independent `_shared_libs/<name>/`, so an owner version bump needs no per-consumer rewrite. Each publish also installs an immutable snapshot at `_shared_libs/<name>/.generations/<id>/<name>/` (`<id>` = a content-hash prefix) BEFORE flipping the `_shared_libs/<name>/.current` pointer to it. The `.pth` line (`pth_line`) reads that pointer once, at interpreter start, and prepends the generation directory to `sys.path`, falling back to `_shared_libs/<name>/` itself when the pointer is missing or names no complete generation. A running process therefore keeps resolving the generation it started with, including submodules it first imports after a later publish, for as long as that generation is retained (see `GENERATION_RETENTION_S` below); only a new process sees the new version. The stable `<name>/<name>/` copy is still swapped in place, for foreign-interpreter consumers ([library-consumption.md](library-consumption.md), mode 3b). A superseded generation gets a `.superseded` marker and is deleted by a later publish once the marker is older than `GENERATION_RETENTION_S` (7 days); the publish message names the generation and every pruned or unprunable one (logged as the quiet entry). A tree published before generations has no pointer, so it re-publishes once.
 - **Eventual consistency**: a consumer may be processed before its owner in a session; a not-yet-published library is a soft skip (logged, not a failure) that self-heals next session. The runtime `bootstrap_guard` covers the installed-but-not-yet-provisioned window.
 - **Logging**: per the "every check logs its outcome" rule — `log_ok` on cached/skipped (verbose-only); a real sync/link is a **quiet** entry (logged with its `.pth`/destination path, never displayed per-plugin) plus a record on the pass-level `_SharedLibLinkLog`; failure on a post-`.pth` import check that fails stays a normal per-plugin action entry + fix-all failure.
 - **One display line per pass**: links fire for every consuming plugin from two emission sites (the per-plugin manifest phase and the Step 4c sweep), so a per-plugin display entry means one path-bearing line per plugin per pass. Both sites instead record into `_SharedLibLinkLog`, which dedupes `(lib, plugin)` pairs and renders a single Step 4c entry grouped by lib and naming the consuming plugins by short name — e.g. `--- <mkt>:bootstrap@<v> shared-libs: linked bootstrap_lib (bootstrap, git-kit, p4-kit), p4kit_vcs (p4-kit) ---` (an owner re-publish prefixes `synced <lib>`). No paths reach the display. **Failures are never aggregated**: they stay per-plugin, verbatim, and loud.

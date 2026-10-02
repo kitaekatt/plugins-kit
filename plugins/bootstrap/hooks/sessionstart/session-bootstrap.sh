@@ -234,6 +234,65 @@ if [ -z "$FLAG_CONSOLE" ] && [ -n "${CLAUDE_ENV_FILE:-}" ]; then
     fi
 fi
 
+# --- Recorded env names for this session (every session, before any skip gate) ---
+# Re-emits the names a full pass recorded under the data dir -- <PLUGIN>_ROOT
+# from plugin_roots, BOOTSTRAP_BIN_<TOOL> from tool_bins -- into this session's
+# $CLAUDE_ENV_FILE. Both gates below short-circuit the engine, so without this
+# the names exist only in sessions that happened to run a pass; measured on a
+# session inside the cooldown window: BOOTSTRAP_PYTHON set, zero *_ROOT names.
+# Nothing is resolved here. Bash reads what the engine wrote and verifies it
+# still exists; a bash-side cache scan was ruled out (it would duplicate
+# plugin_resolve.py, disagree with the engine in exactly the --plugin-dir
+# sessions used to verify it, have no registry to pick a version dir with, and
+# run unlogged). Record format + write policy: bootstrap_lib/env_var_check.py.
+# - A name that already has an `export NAME=` line is never written again:
+#   that line is the engine-verified value, or this block's own earlier line.
+# - EXISTENCE CHECK. A name is emitted only while its recorded path is still
+#   there -- a directory for a plugin root, a regular file for a tool. A path
+#   deleted since the recording pass is SKIPPED, so a consumer's
+#   "${NAME:?...}" guard aborts loudly naming the variable instead of running
+#   against a version directory that no longer exists.
+# - Append only, and a value holding a single quote is dropped: the file is
+#   sourced as shell code. The engine drops those at write time too.
+# - Fork-free, like the block above. Console mode has no env file to write.
+_pr_have=""; _pr_out=""; _pr_sep=""; _pr_l=""; _pr_name=""; _pr_path=""
+_pr_scan() {
+    # $1: record file. $2: `d` (the path must be a directory) or `f` (a file).
+    local _pr_f=$1 _pr_kind=$2
+    [ -f "$_pr_f" ] || return 0
+    while IFS= read -r _pr_l || [ -n "$_pr_l" ]; do
+        _pr_l=${_pr_l%"$_ie_cr"}
+        case "$_pr_l" in *=*) ;; *) continue ;; esac
+        _pr_name=${_pr_l%%=*}
+        _pr_path=${_pr_l#*=}
+        case "$_pr_name" in ""|*[!A-Z0-9_]*|[0-9]*) continue ;; esac
+        case "$_pr_path" in ""|*\'*) continue ;; esac
+        case " $_pr_have " in *" $_pr_name "*) continue ;; esac
+        case "$_pr_kind" in
+            d) [ -d "$_pr_path" ] || continue ;;
+            *) [ -f "$_pr_path" ] || continue ;;
+        esac
+        _pr_out="${_pr_out}export ${_pr_name}='${_pr_path}'${_ie_nl}"
+        _pr_have="$_pr_have $_pr_name"
+    done < "$_pr_f"
+}
+if [ -z "$FLAG_CONSOLE" ] && [ -n "${CLAUDE_ENV_FILE:-}" ]; then
+    if [ -f "$CLAUDE_ENV_FILE" ]; then
+        # Read AFTER the block above appended, so its names count as present.
+        # A last line without a newline is still read; _pr_sep then puts the
+        # append on a line of its own.
+        while IFS= read -r _pr_l || { [ -n "$_pr_l" ] && _pr_sep=$_ie_nl; }; do
+            case "$_pr_l" in
+                "export "*=*) _pr_name=${_pr_l#export }
+                              _pr_have="$_pr_have ${_pr_name%%=*}" ;;
+            esac
+        done < "$CLAUDE_ENV_FILE"
+    fi
+    _pr_scan "$PLUGIN_DATA/plugin_roots" d
+    _pr_scan "$PLUGIN_DATA/tool_bins" f
+    [ -z "$_pr_out" ] || printf '%s%s' "$_pr_sep" "$_pr_out" 2>/dev/null >> "$CLAUDE_ENV_FILE" || :
+fi
+
 # --- Per-session marker (SessionStart-missed rescue's detection signal) ---
 # Touch sessions/<session_id> at ENTRY -- before the gates, so even a gate-
 # skipped invocation records "a pass was invoked for this session". The

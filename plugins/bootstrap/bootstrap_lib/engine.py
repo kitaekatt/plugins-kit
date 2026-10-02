@@ -16,9 +16,11 @@ Exit behavior:
 import argparse
 import json
 import os
+import re
 import stat
 import sys
 import tempfile
+from collections import OrderedDict
 from datetime import datetime, timedelta, timezone
 
 # Single shared atomic-write implementation (mkstemp + os.replace next to the
@@ -1116,7 +1118,11 @@ def _main_pass():
         # (env_checks) and Step 4 (plugin manifests) see it. A higher-priority
         # Step 3c outcome is kept: an opted-out project exports no project
         # interpreter at all, and an activated VIRTUAL_ENV outranks the venv.
-        if not pv_failures:
+        # A malformed OPTIONAL shared_lib_imports entry is reported (it stays in
+        # all_failures below) but does not withhold the interpreter export: the
+        # venv itself is valid and only that one library goes unlinked. Every
+        # venv-level failure still gates the export exactly as before.
+        if not [f for f in pv_failures if f.get("blocks_venv", True)]:
             if project_python_source in _PROJECT_PYTHON_OUTRANKS_VENV:
                 pv_ok.append(_kept_over_venv_entry(project_python_source))
             else:
@@ -1289,6 +1295,21 @@ def _main_pass():
             # the log.
             deferred_plugin_logs.append((data_dir, sr_label, sr_log))
 
+    # Step 4b3: Record the env names a gate-skipped session would otherwise
+    # never see. Derived from the same plugin list and the same bootstrap.json
+    # gate as the per-plugin <PLUGIN>_ROOT export above, so the record carries
+    # exactly what this pass exported -- see _maintain_env_records. Placed
+    # after Step 4b (so a plugin installed mid-pass is in it) and before
+    # Step 5/6 (so its entries reach bootstrap.log, which Step 6 writes).
+    # bootstrap_quiet_entries / bootstrap_ok_entries are RecordingLists, so
+    # the appends land in the pass record without an explicit _record_entries;
+    # bootstrap's display section was already snapshotted above, which is
+    # correct here -- a record rewrite is log-only, never a display item.
+    _maintain_env_records(
+        data_dir, enabled_plugins + new_plugins,
+        bootstrap_ok_entries, bootstrap_quiet_entries,
+    )
+
     # Step 4c: Shared-lib convergence sweep. Every owner has now published (Steps
     # 4 + 4b), so re-link all consumers in one go -- a consumer processed before
     # its owner no longer waits for the next session. Silent in steady state
@@ -1299,6 +1320,16 @@ def _main_pass():
     )
     if sweep_failures:
         all_failures.extend(sweep_failures)
+    # Step 4c2: link the declared project_venv shared libs. Deliberately HERE,
+    # after the sweep (every owner has published), and NOT inline at Step 3d,
+    # which runs before any owner publishes and would soft-skip on a first pass.
+    if project_venv_def and args.project_dir:
+        pl_actions, pl_quiets, pl_oks, pl_failures = _link_project_shared_libs(
+            project_venv_def, args.project_dir, data_dir, shared_lib_links)
+        sweep_actions = sweep_actions + pl_actions
+        sweep_quiets = sweep_quiets + pl_quiets
+        sweep_oks = sweep_oks + pl_oks
+        all_failures.extend(pl_failures)
     # ONE aggregated display line for every shared-lib success in the pass, from
     # BOTH emission sites (per-plugin manifest phase + this sweep), deduped and
     # grouped by lib -- the per-plugin lines are log-only (see _SharedLibLinkLog).
@@ -1937,7 +1968,11 @@ def _bootstrap_single_plugin(
     # this a cross-plugin caller must either glob the cache for a version dir or
     # rely on a PATH shim -- and PATH is the worse answer here: it would need one
     # entry per plugin per version, and every upgrade would strand the old one.
-    # Session-scoped only (no rc/registry persistence) for the same reason.
+    # Never written to an rc file or the registry for the same reason -- a
+    # shell bootstrap does not run in cannot re-verify the path. The pass does
+    # RECORD it under the data dir (Step 4b3, _maintain_env_records) so a
+    # gate-skipped session gets the name too, with the prelude's existence
+    # check standing in for this pass's verification.
     from .env_var_check import export_env_var, plugin_root_env_var_name
     export_env_var(plugin_root_env_var_name(plugin_info.name), plugin_info.install_path)
 
@@ -2263,6 +2298,113 @@ def _shared_lib_convergence_sweep(plugins, data_dir, link_log=None, engine_versi
             else:  # cached / skipped -> verbose-only
                 oks.append(entry)
     return actions, quiets, oks, failures
+
+
+def _link_project_shared_libs(venv_def, project_dir, data_dir, link_log=None):
+    """Step 4c2: link ``project_venv.shared_lib_imports`` into the project venv.
+
+    Runs after the convergence sweep so every owner has published; the owner's
+    marketplace is found with ``resolve_project_shared_root`` because a project
+    has none of its own. Routing, one entry per declared library:
+    linked -> quiet + the shared aggregate line; cached / skipped -> ok;
+    failed / ambiguous -> action entry plus a ``shared_lib`` failure attributed
+    to ``config``. An existing ``sitecustomize.py`` in the venv is reported.
+
+    Returns ``(actions, quiets, oks, failures)``.
+    """
+    from .shared_lib import link_shared_lib, purelib_of, resolve_project_shared_root
+    from .venv_check import _find_python
+
+    actions, quiets, oks, failures = [], [], [], []
+    entries, _bad = _normalize_project_shared_lib_imports(venv_def)
+    if not entries:
+        return actions, quiets, oks, failures
+    try:
+        target_dir, failure = _resolve_project_subdir(
+            project_dir, venv_def.get("subdir"), "project_venv")
+    except (OSError, TypeError, ValueError):
+        target_dir, failure = None, True
+    if failure or not os.path.isfile(os.path.join(target_dir, "pyproject.toml")):
+        oks.append("config: shared-libs: skipped - no project venv to link into")
+        return actions, quiets, oks, failures
+    python = _find_python(os.path.join(target_dir, ".venv"))
+    data_root = os.path.dirname(os.path.dirname(data_dir))
+    site = purelib_of(python) if python and os.path.exists(python) else None
+    if site and os.path.isfile(os.path.join(site, "sitecustomize.py")):
+        actions.append(
+            f"config: shared-libs: {os.path.join(site, 'sitecustomize.py')} exists in "
+            f"the project venv; a <lib>.pth link plus that file prepends the same "
+            f"generation twice (harmless, but neither can be shown to be the one "
+            f"working) -- remove the file once the link is in place")
+    for entry in entries:
+        name = entry["name"]
+        res = resolve_project_shared_root(data_root, name, entry["marketplace"])
+        label = f"config: shared-lib {name}"
+        if res.status == "ambiguous":
+            actions.append(f"{label}: FAILED - {res.message}")
+            failures.append({"type": "shared_lib", "name": name,
+                             "message": res.message, "plugin": "config"})
+            continue
+        if res.status == "absent":
+            oks.append(f"{label}: {res.message}")
+            continue
+        if res.status == "misqualified":
+            # Visible but not a failure: the declared marketplace is wrong, and
+            # waiting for it to publish would never help.
+            actions.append(f"{label}: {res.message}")
+            continue
+        result = link_shared_lib(name, python, res.root)
+        text = f"{label}: {result.message}"
+        if result.status == "linked":
+            quiets.append(text)
+            if link_log is not None:
+                link_log.record("linked", name, "project")
+        elif result.status == "failed":
+            actions.append(f"{label}: FAILED - {result.message}")
+            failures.append({"type": "shared_lib", "name": name,
+                             "message": result.message, "plugin": "config"})
+        else:  # cached / skipped
+            oks.append(text)
+        if result.status in ("linked", "cached") and site:
+            shadow = _project_venv_own_copy(site, name)
+            if shadow:
+                actions.append(
+                    f"{label}: the project venv already holds its own {shadow}; "
+                    f"the shared copy is prepended and is the one that imports -- "
+                    f"remove {name} from shared_lib_imports if the project's own "
+                    f"copy is wanted")
+    return actions, quiets, oks, failures
+
+
+def _project_venv_own_copy(site, name):
+    """Describe a copy of library ``name`` installed in purelib ``site``, or "".
+
+    Observable facts only (a declared-but-uninstalled dependency shadows
+    nothing): a ``<name>/`` package or ``<name>.py`` module, and a
+    ``<name>-<version>.dist-info`` directory for the version. Never modifies
+    the venv.
+    """
+    try:
+        listing = os.listdir(site)
+    except OSError:
+        return ""
+    norm = re.sub(r"[-_.]+", "_", name).lower()
+    present = (os.path.isdir(os.path.join(site, name))
+               or os.path.isfile(os.path.join(site, name + ".py")))
+    version = ""
+    for entry in sorted(listing):
+        stem, ext = os.path.splitext(entry)
+        if ext != ".dist-info" or "-" not in stem:
+            continue
+        # The version is what follows the LAST hyphen (PEP 427 escapes
+        # hyphens in the version, but legacy dirs hyphenate the name).
+        dist, ver = stem.rsplit("-", 1)
+        if re.sub(r"[-_.]+", "_", dist).lower() == norm:
+            version, present = ver, True
+            break
+    if not present:
+        return ""
+    return f"{name} {version}" if version else name
 
 
 def _plugin_ships_sessionstart_hook(install_path):
@@ -4041,6 +4183,87 @@ def _resolve_project_subdir(project_dir, subdir, label):
     return resolved, None
 
 
+def _normalize_project_shared_lib_imports(venv_def):
+    """Validate and normalize ``project_venv.shared_lib_imports``.
+
+    Accepts a list whose items are each a non-empty library name string or a
+    ``{"name": <str>, "marketplace": <str, optional>}`` object (no other keys).
+    Returns ``(entries, failures)``: ``entries`` is a list of
+    ``{"name", "marketplace"}`` dicts (``marketplace`` None when unqualified),
+    deduplicated by ``(name, marketplace)`` in first-seen order; a qualified
+    entry supersedes an unqualified entry of the same name. Every
+    malformed item adds one descriptive failure (attributed to ``config``,
+    type ``project_venv``); valid items are still returned.
+    """
+    raw = venv_def.get("shared_lib_imports") if isinstance(venv_def, dict) else None
+    if raw is None:
+        return [], []
+
+    def _fail(msg):
+        return {
+            "type": "project_venv",
+            "message": f"shared_lib_imports {msg}",
+            "remediation_cmd": None,
+            "plugin": "config",
+            # Reported, but the venv is still usable: see Step 3d.
+            "blocks_venv": False,
+        }
+
+    if not isinstance(raw, list):
+        return [], [_fail(
+            f"must be a list of library names or {{name, marketplace}} "
+            f"objects, got {type(raw).__name__}")]
+
+    entries, failures, seen = [], [], set()
+    for i, item in enumerate(raw):
+        name = marketplace = None
+        problem = None
+        if isinstance(item, str):
+            name = item
+        elif isinstance(item, dict):
+            extra = sorted(set(item) - {"name", "marketplace"})
+            name = item.get("name")
+            marketplace = item.get("marketplace")
+            if extra:
+                problem = f"has unknown key(s) {extra}"
+            elif not isinstance(name, str):
+                problem = "needs a string 'name'"
+            elif marketplace is not None and (
+                    not isinstance(marketplace, str) or not marketplace.strip()):
+                problem = "'marketplace' must be a non-empty string when present"
+        else:
+            problem = (f"must be a string or a {{name, marketplace}} object, "
+                       f"got {type(item).__name__}")
+        if problem is None and not name.strip():
+            problem = "has an empty library name"
+        elif problem is None and not name.isidentifier():
+            # A library name is the IMPORT name of a top-level Python package:
+            # the resolver joins it into <data_root>/<mkt>/_shared_libs/<name>/<name>
+            # and link_shared_lib writes <purelib>/<name>.pth and runs
+            # `import <name>`. A name that is not an identifier (a path such as
+            # "../x", a dotted "pkg.sub", a hyphenated name) could never have
+            # been importable, so refusing it rejects nothing that could have
+            # worked -- and it keeps the name out of every path join. Do not
+            # loosen this to "non-empty".
+            problem = (f"has library name {name!r}, which is not a valid Python "
+                       f"identifier (a library name is the import name of a "
+                       f"top-level package; dotted and path-like names are not "
+                       f"accepted)")
+        if problem:
+            failures.append(_fail(f"entry [{i}] {item!r} {problem}"))
+            continue
+        key = (name, marketplace)
+        if key not in seen:
+            seen.add(key)
+            entries.append({"name": name, "marketplace": marketplace})
+    # A qualified entry supersedes its bare twin: resolving the bare one could
+    # report "ambiguous" for a library the qualified entry already links.
+    qualified = {e["name"] for e in entries if e["marketplace"] is not None}
+    entries = [e for e in entries
+               if e["marketplace"] is not None or e["name"] not in qualified]
+    return entries, failures
+
+
 def _process_project_venv(venv_def, project_dir, quiet_entries=None):
     """Process project_venv: ensure the project's own .venv is ready.
 
@@ -4065,6 +4288,17 @@ def _process_project_venv(venv_def, project_dir, quiet_entries=None):
     action_entries = []
     ok_entries = []
     failures = []
+
+    # A malformed shared_lib_imports is reported whether or not the venv
+    # syncs: the declaration is wrong regardless of the project's state.
+    _entries, import_failures = _normalize_project_shared_lib_imports(venv_def)
+    for failure in import_failures:
+        _append_detail(
+            action_entries,
+            f"project_venv: FAILED - {failure['message']}",
+            display="project_venv: FAILED - bad shared_lib_imports",
+        )
+        failures.append(failure)
 
     target_dir, failure = _resolve_project_subdir(
         project_dir, venv_def.get("subdir"), "project_venv")
@@ -4253,6 +4487,62 @@ def _maintain_project_python_record(data_dir, key, value, source, parse_errors,
             ok_entries.append(f"{label}: none (project resolves to the engine interpreter)")
     else:
         ok_entries.append(f"{label}: left unchanged ({source} is not recorded)")
+
+
+def _maintain_env_records(data_dir, plugins, ok_entries, quiet_entries):
+    """Rewrite the pre-gate env records (``plugin_roots``, ``tool_bins``).
+
+    Both skip gates in session-bootstrap.sh short-circuit this engine, so the
+    names a pass exports through ``session_env`` are missing from most
+    sessions. These two records are what the hook's pre-gate prelude re-emits
+    instead; see the "pre-gate env record" comment in env_var_check.py for the
+    format and for why bash does not resolve any of this itself.
+
+    Write policy follows ``_maintain_project_python_record``: a change is a
+    quiet entry (always logged, never displayed), a steady state is a verbose
+    ok entry, a failed write is a quiet entry. The whole file is rewritten
+    every pass -- that, plus the prelude's existence check, is the entire
+    staleness story: a plugin that left the registry loses its line here, and
+    a path deleted between passes is skipped there.
+    """
+    from . import tool_paths
+    from .env_var_check import (
+        plugin_root_env_var_name, plugin_roots_record_path, read_env_record,
+        tool_bins_record_path, write_env_record,
+    )
+
+    roots = OrderedDict()
+    for plugin_info in plugins:
+        # The same gate the below-gate export sits behind: a plugin with no
+        # bootstrap.json returns from _bootstrap_single_plugin BEFORE the
+        # export, so recording it would advertise a root no pass ever looked
+        # at. Keeps the record equal to what the pass itself exported.
+        if not os.path.isfile(os.path.join(plugin_info.install_path, "bootstrap.json")):
+            continue
+        roots[plugin_root_env_var_name(plugin_info.name)] = plugin_info.install_path
+
+    # Same source and same existence test as export_tool_env_vars, which runs
+    # later in the pass against this identical mapping. None = the canonical
+    # tool_paths.json location, which is where every plugin pass records to.
+    bins = OrderedDict()
+    for tool_name, tool_path in tool_paths.all_paths(None).items():
+        if os.path.isfile(tool_path):
+            bins[tool_paths.tool_env_var_name(tool_name)] = tool_path
+
+    for label, record_path, wanted in (
+        ("plugin roots", plugin_roots_record_path(data_dir), roots),
+        ("tool paths", tool_bins_record_path(data_dir), bins),
+    ):
+        before = read_env_record(record_path)
+        wrote, kept = write_env_record(record_path, wanted)
+        # No path in any entry: a quiet entry is log-only, but the display
+        # tests treat "no absolute paths in entries" as the house rule.
+        if not wrote:
+            quiet_entries.append(f"{label}: pre-gate record write FAILED")
+        elif before == kept:
+            ok_entries.append(f"{label}: pre-gate record ok - {len(kept)} names")
+        else:
+            quiet_entries.append(f"{label}: pre-gate record now holds {len(kept)} names")
 
 
 def _interpreter_env_layers(project_dir, profile_state):

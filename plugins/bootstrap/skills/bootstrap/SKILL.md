@@ -248,6 +248,7 @@ reference_skill:
       gotchas:
         - bootstrap.local.json files are gitignored; per-machine overrides do not propagate to teammates.
         - Layer order matters. Higher-priority layers win on conflict; arrays union by identity key, objects deep-merge, scalars override. A user-level entry can be silently shadowed by a project-level entry with the same identity.
+        - "`project_venv.shared_lib_imports` is the one nested list that unions across layers rather than being replaced by the higher layer, so a user-layer list and a project-layer list both apply (references/manifest-reference.md, `project_venv`)."
     - id: marketplace_pinning
       summary: A marketplace entry's pin field freezes the ENTIRE marketplace repo at a git committish -- one pin holds every plugin, shared lib, and dependency edge at a tested snapshot until the pin is dropped.
       keywords: [pin, version pin, pin plugins, pin marketplace, freeze versions, stop updates, snapshot, unpin, drop the pin, re-pin, autoUpdate, marketplace_pins.json, detached HEAD, known-good versions]
@@ -518,6 +519,10 @@ reference_skill:
           refuses a preload that contains a shell expansion. A preload launches
           Python as `uv run --no-project python \"${CLAUDE_PLUGIN_ROOT}/...\"`
           (references/python-interpreter.md, \"Skill preload commands\")."
+        - A project venv declared with `project_venv` can also receive published shared
+          libraries through `project_venv.shared_lib_imports`; the link prepends them to
+          `sys.path`, so a shared library outranks a same-named package in that venv
+          (references/library-consumption.md, mode 3a).
     - id: merge_semantics
       summary: Layered configs merge by identity key for arrays, deep-merge for objects, override for scalars.
       keywords: [merge semantics, union, identity key, deep merge, path entries, scalar override]
@@ -616,7 +621,8 @@ reference_skill:
       keywords: [shared library, shared_libs, shared_lib_imports, standalone python, foreign interpreter, project venv, sitecustomize, PYTHONPATH shim, off-fleet pip install, vendored copy, version declaration, min_version, capability probe, non-plugin consumer]
       summary: >-
         Every supported way a consumer can reach a published shared library --
-        plugin (shared_lib_imports), the standalone Python, or a project on its
+        plugin (shared_lib_imports), the standalone Python, a project venv bootstrap
+        owns (project_venv.shared_lib_imports), or a project on its
         own interpreter -- versus the one unsupported way (off-fleet pip
         install), and the cross-cutting rule that no mode supports version
         declaration.

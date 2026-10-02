@@ -1156,3 +1156,71 @@ class TestStandaloneBroadcastGate:
         assert failures == []
         assert not any(python == standalone for _n, python, _r in calls), calls
         assert calls, "consumer phase must still link the lib into the plugin venv"
+
+
+# --- resolve_project_shared_root (project consumer, no marketplace) --------
+
+def _publish_under(data_root, marketplace, name):
+    os.makedirs(os.path.join(str(data_root), marketplace, "_shared_libs", name, name))
+
+
+class TestResolveProjectSharedRoot:
+    def test_one_marketplace_resolves(self, tmp_path):
+        _publish_under(tmp_path, "mkt-a", "mylib")
+        r = shared_lib.resolve_project_shared_root(str(tmp_path), "mylib")
+        assert r.status == "resolved"
+        assert r.root == os.path.join(str(tmp_path), "mkt-a", "_shared_libs")
+
+    def test_two_marketplaces_report_both_names(self, tmp_path):
+        _publish_under(tmp_path, "mkt-a", "mylib")
+        _publish_under(tmp_path, "mkt-b", "mylib")
+        r = shared_lib.resolve_project_shared_root(str(tmp_path), "mylib")
+        assert r.status == "ambiguous"
+        assert r.root is None
+        assert "mkt-a" in r.message and "mkt-b" in r.message
+
+    def test_qualified_lookup_picks_one(self, tmp_path):
+        _publish_under(tmp_path, "mkt-a", "mylib")
+        _publish_under(tmp_path, "mkt-b", "mylib")
+        r = shared_lib.resolve_project_shared_root(str(tmp_path), "mylib", marketplace="mkt-b")
+        assert r.status == "resolved"
+        assert r.root == os.path.join(str(tmp_path), "mkt-b", "_shared_libs")
+
+    def test_qualified_lookup_does_not_fall_back_to_another_marketplace(self, tmp_path):
+        _publish_under(tmp_path, "mkt-a", "mylib")
+        r = shared_lib.resolve_project_shared_root(str(tmp_path), "mylib", marketplace="mkt-b")
+        assert r.status == "misqualified" and r.root is None
+
+    def test_qualified_miss_names_the_marketplaces_that_do_publish_it(self, tmp_path):
+        """Returning the plain absent message turns this red."""
+        _publish_under(tmp_path, "mkt-a", "mylib")
+        _publish_under(tmp_path, "mkt-c", "mylib")
+        r = shared_lib.resolve_project_shared_root(str(tmp_path), "mylib", marketplace="mkt-b")
+        assert r.status == "misqualified" and r.root is None
+        assert "mkt-a, mkt-c" in r.message and "'mkt-b'" in r.message
+
+    def test_case_and_whitespace_mismatch_report_rather_than_resolve(self, tmp_path):
+        """Matching is exact so a manifest means the same on every filesystem.
+        Making the comparison case-insensitive or stripped turns this red."""
+        _publish_under(tmp_path, "Mkt-A", "mylib")
+        for typo in ("mkt-a", "Mkt-A ", " Mkt-A"):
+            r = shared_lib.resolve_project_shared_root(str(tmp_path), "mylib", marketplace=typo)
+            assert r.status == "misqualified", (typo, r)
+            assert "Mkt-A" in r.message
+
+    def test_qualified_miss_with_nobody_publishing_stays_plain_absent(self, tmp_path):
+        """The insertion counterfactual: reporting misqualified for every
+        qualified miss turns this red."""
+        _publish_under(tmp_path, "mkt-a", "otherlib")
+        r = shared_lib.resolve_project_shared_root(str(tmp_path), "mylib", marketplace="mkt-b")
+        assert r.status == "absent" and "will retry" in r.message
+
+    def test_absent_lib_or_missing_data_root_is_soft(self, tmp_path):
+        _publish_under(tmp_path, "mkt-a", "otherlib")
+        assert shared_lib.resolve_project_shared_root(str(tmp_path), "mylib").status == "absent"
+        missing = str(tmp_path / "nope")
+        assert shared_lib.resolve_project_shared_root(missing, "mylib").status == "absent"
+
+    def test_entry_dir_without_package_is_not_a_match(self, tmp_path):
+        os.makedirs(tmp_path / "mkt-a" / "_shared_libs" / "mylib")  # no <name>/<name>/
+        assert shared_lib.resolve_project_shared_root(str(tmp_path), "mylib").status == "absent"

@@ -296,6 +296,55 @@ class TestProjectVenvMerge:
         assert result["project_venv"] == {"extras": ["dev"]}
         assert result["tools"] == [{"name": "git"}]
 
+    def test_shared_lib_imports_union_across_layers(self):
+        """User and project layers each add a library; merged holds both, deduplicated."""
+        base = {"project_venv": {"shared_lib_imports": ["content_pipeline", "shared_one"]}}
+        override = {"project_venv": {"shared_lib_imports": ["llm_scripting_kit", "shared_one"]}}
+        result = merge_manifests(base, override)
+        assert result["project_venv"]["shared_lib_imports"] == [
+            "content_pipeline", "shared_one", "llm_scripting_kit"]
+
+    def test_shared_lib_imports_object_form_dedups_by_name_and_marketplace(self):
+        """Same {name, marketplace} in two layers is one entry; a bare string equals an unqualified object."""
+        base = {"project_venv": {"shared_lib_imports": [
+            {"name": "a", "marketplace": "m1"}, "b"]}}
+        override = {"project_venv": {"shared_lib_imports": [
+            {"name": "a", "marketplace": "m1"}, {"name": "b"},
+            {"name": "a", "marketplace": "m2"}]}}
+        result = merge_manifests(base, override)
+        assert result["project_venv"]["shared_lib_imports"] == [
+            {"name": "a", "marketplace": "m1"}, "b",
+            {"name": "a", "marketplace": "m2"}]
+
+    def test_shared_lib_imports_union_keeps_sibling_override_semantics(self):
+        """Union is scoped to shared_lib_imports; check_imports still takes the override."""
+        base = {"project_venv": {"check_imports": ["a"], "shared_lib_imports": ["x"]}}
+        override = {"project_venv": {"check_imports": ["b"], "shared_lib_imports": ["y"]}}
+        result = merge_manifests(base, override)
+        assert result["project_venv"]["check_imports"] == ["b"]
+        assert result["project_venv"]["shared_lib_imports"] == ["x", "y"]
+
+    def test_shared_lib_imports_mixed_shapes_fall_back_to_override(self):
+        """A non-list on either side skips the union (override wins) and is left
+        for validation. Applying the union to any shape turns this red."""
+        as_str = {"project_venv": {"shared_lib_imports": "x"}}
+        as_list = {"project_venv": {"shared_lib_imports": ["y"]}}
+        assert merge_manifests(as_str, as_list)["project_venv"][
+            "shared_lib_imports"] == ["y"]
+        assert merge_manifests(as_list, as_str)["project_venv"][
+            "shared_lib_imports"] == "x"
+
+    def test_shared_lib_imports_malformed_entries_key_on_their_repr(self):
+        """Distinct malformed entries both survive the union and identical ones
+        collapse. Giving every malformed entry one shared key (an insertion
+        into the identity function) drops 8 and {"name": 4}."""
+        base = {"project_venv": {"shared_lib_imports": [7, {"name": 3}]}}
+        override = {"project_venv": {"shared_lib_imports": [
+            7, 8, {"name": 3}, {"name": 4}, "ok"]}}
+        result = merge_manifests(base, override)
+        assert result["project_venv"]["shared_lib_imports"] == [
+            7, {"name": 3}, 8, {"name": 4}, "ok"]
+
 
 class TestProjectNpmMerge:
     def test_project_npm_deep_merge(self):
