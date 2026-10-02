@@ -23,4 +23,4 @@ things that change together; CRP: opt-in components -- guards, convergence,
 round-trip, VCS -- never reached from the core import path).
 """
 
-__version__ = "0.33.0"
+__version__ = "0.34.0"
