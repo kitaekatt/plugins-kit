@@ -52,6 +52,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "plugins" / "bootstrap"))
 from bootstrap_lib.code_review import lane_prompts  # noqa: E402
 from bootstrap_lib.code_review.review_profiles import EFFORT_LEVELS  # noqa: E402
+from bootstrap_lib.env_var_check import plugin_root_env_var_name  # noqa: E402
 from bootstrap_lib.interpreter_env import PLUGIN_CALL_SITE_EXPR  # noqa: E402
 
 # The launcher form for a plugin script that re-execs into its own
@@ -61,22 +62,40 @@ from bootstrap_lib.interpreter_env import PLUGIN_CALL_SITE_EXPR  # noqa: E402
 # it, and `$BOOTSTRAP_PYTHON` is exported into every bootstrap-managed session
 # (see /bootstrap fact python_interpreter and python-interpreter.md). Single
 # source for every prepare_review.py launch site rendered below.
-PREPARE_LAUNCHER = f"{PLUGIN_CALL_SITE_EXPR} ${{CLAUDE_PLUGIN_ROOT}}/scripts/prepare_review.py"
+# CLAUDE_PLUGIN_ROOT is expanded only in a hooks.json `command:` field and a
+# skill `!` preload line; it is unset in the Bash tool's environment, where an
+# agent runs these launchers. Each kit therefore anchors its scripts on the
+# `<PLUGIN>_ROOT` variable the bootstrap engine exports (name derived by
+# plugin_root_env_var_name), guarded so an unset variable fails loudly instead
+# of running `/scripts/x.py`. The kit name is the per-VCS KIT fragment value.
+_KIT_BY_VCS = {"git": "git-kit", "p4": "p4-kit"}
+_ROOT_UNSET_HINT = "requires a bootstrap engine pass; run bootstrap run"
+
+
+def _launcher(vcs: str, script: str) -> str:
+    root_var = plugin_root_env_var_name(_KIT_BY_VCS[vcs])
+    return (
+        PLUGIN_CALL_SITE_EXPR
+        + " " + chr(34) + "${" + root_var + ":?" + _ROOT_UNSET_HINT + "}/scripts/" + script + chr(34)
+    )
+
+
+PREPARE_LAUNCHER = {v: _launcher(v, "prepare_review.py") for v in _KIT_BY_VCS}
 # A YAML `tool:` scalar cannot start with a quoted segment (PLUGIN_CALL_SITE_EXPR's
 # own double quotes) and continue unquoted -- wrap the whole value in single
 # quotes so it parses as one scalar; YAML strips only the outer pair, so the
 # decoded value is still the exact bash command above. Markdown code blocks
 # (declined-ledger.md) use the raw, unwrapped PREPARE_LAUNCHER instead, since a
 # reader copy-pastes that straight into bash.
-PREPARE_LAUNCHER_YAML = "'" + PREPARE_LAUNCHER + "'"
+PREPARE_LAUNCHER_YAML = {v: "'" + PREPARE_LAUNCHER[v] + "'" for v in _KIT_BY_VCS}
 # The same launcher form for the three other review scripts; each re-execs into
 # its kit's plugin venv (reexec_under_plugin_venv via the vendored
 # bootstrap_guard), so bootstrap's own interpreter is enough to start them.
 # They are only ever rendered mid-line (prose, a table cell, a code block, or a
 # `tool:` value that starts with other text), so they need no YAML wrapping.
-LANE_LAUNCHER = f"{PLUGIN_CALL_SITE_EXPR} ${{CLAUDE_PLUGIN_ROOT}}/scripts/run_review_lane.py"
-PARSE_LAUNCHER = f"{PLUGIN_CALL_SITE_EXPR} ${{CLAUDE_PLUGIN_ROOT}}/scripts/parse_review_lane.py"
-RENDER_LAUNCHER = f"{PLUGIN_CALL_SITE_EXPR} ${{CLAUDE_PLUGIN_ROOT}}/scripts/render_review_profiles.py"
+LANE_LAUNCHER = {v: _launcher(v, "run_review_lane.py") for v in _KIT_BY_VCS}
+PARSE_LAUNCHER = {v: _launcher(v, "parse_review_lane.py") for v in _KIT_BY_VCS}
+RENDER_LAUNCHER = {v: _launcher(v, "render_review_profiles.py") for v in _KIT_BY_VCS}
 GIT_SKILL = REPO_ROOT / "plugins/git-kit/skills/git-code-review/SKILL.md"
 P4_SKILL = REPO_ROOT / "plugins/p4-kit/skills/p4-code-review/SKILL.md"
 GIT_AGENTS = REPO_ROOT / "plugins/git-kit/agents"
@@ -1089,7 +1108,7 @@ __LAUNCH_EMIT__
           on_failure: Surface the stderr message to the user and stop. No retry.""".replace(
     "__CLAIM_PROBE__", CLAIM_PROBE
 ).replace(
-    "__PREPARE_LAUNCHER__", PREPARE_LAUNCHER_YAML
+    "__PREPARE_LAUNCHER__", PREPARE_LAUNCHER_YAML["git"]
 ).replace(
     "__LAUNCH_EMIT__", LAUNCH_EMIT
 )
@@ -1135,10 +1154,10 @@ __LAUNCH_EMIT__
           on_failure: |
             If prepare reports that the CL belongs to a foreign client, re-run once without `--claim` and use that bundle. State that md-domain subject-lens review is unavailable because claim pre-images depend on the author's client workspace.
             For any other failure, surface the stderr message to the user and stop. No retry.
-            Launch note: ALWAYS invoke through `$BOOTSTRAP_PYTHON` (the guarded expression shown in `tool:`), never as a bare path and never as bare `python`/`python3` -- a bare name is not guaranteed to resolve to any interpreter that can run this script, and `python3` in particular can be absent from PATH on Windows (see /bootstrap fact python_interpreter and python-interpreter.md). Bare `${CLAUDE_PLUGIN_ROOT}/scripts/prepare_review.py <CL>` lets bash try to run the file as a shell script -- it has no shebang line in older checkouts and the exec bit does not survive on Windows checkouts, so bash parses the Python as sh and exits 2. Passing the script as an argument to `$BOOTSTRAP_PYTHON` avoids that entirely: bash only launches the interpreter, never the file. The script self-relocates under the p4-kit venv via reexec, so bootstrap's own interpreter is sufficient. And NEVER pipe the invocation (`... | tail`, `... | head`): a pipe makes `$?` the last pipeline stage's status, not the script's, which silently masks a launch failure as success.""".replace(
+            Launch note: ALWAYS invoke through `$BOOTSTRAP_PYTHON` (the guarded expression shown in `tool:`), never as a bare path and never as bare `python`/`python3` -- a bare name is not guaranteed to resolve to any interpreter that can run this script, and `python3` in particular can be absent from PATH on Windows (see /bootstrap fact python_interpreter and python-interpreter.md). Bare `$P4_KIT_ROOT/scripts/prepare_review.py <CL>` lets bash try to run the file as a shell script -- it has no shebang line in older checkouts and the exec bit does not survive on Windows checkouts, so bash parses the Python as sh and exits 2. Passing the script as an argument to `$BOOTSTRAP_PYTHON` avoids that entirely: bash only launches the interpreter, never the file. The script self-relocates under the p4-kit venv via reexec, so bootstrap's own interpreter is sufficient. And NEVER pipe the invocation (`... | tail`, `... | head`): a pipe makes `$?` the last pipeline stage's status, not the script's, which silently masks a launch failure as success.""".replace(
     "__CLAIM_PROBE__", P4_CLAIM_PROBE
 ).replace(
-    "__PREPARE_LAUNCHER__", PREPARE_LAUNCHER_YAML
+    "__PREPARE_LAUNCHER__", PREPARE_LAUNCHER_YAML["p4"]
 ).replace(
     "__LAUNCH_EMIT__", LAUNCH_EMIT
 )
@@ -1214,7 +1233,7 @@ P4_STEP10 = f"""\
 
             Skip this step entirely when `bundle.auto_shelved` is false (we did
             not create the shelf and must not touch it).
-          tool: {PREPARE_LAUNCHER_YAML}
+          tool: {PREPARE_LAUNCHER_YAML["p4"]}
           input: "--cleanup <bundle.bundle_dir>"
 """
 
@@ -1506,7 +1525,10 @@ FRAGMENTS = {
         "ISSUE_PATH": "<repo-relative or absolute path>",
         "SG_DESC": GIT_SG_DESC,
         "OUTPUT_FORMAT": GIT_OUTPUT_FORMAT,
-        "PREPARE_TOOL": PREPARE_LAUNCHER_YAML,
+        "PREPARE_TOOL": PREPARE_LAUNCHER_YAML["git"],
+        "LANE_TOOL": LANE_LAUNCHER["git"],
+        "PARSE_TOOL": PARSE_LAUNCHER["git"],
+        "RENDER_TOOL": RENDER_LAUNCHER["git"],
         "LEDGER_RECORD_N": "10",
         "BASELINE_DESC": "the range base SHA advances -- origin/main moves, or HEAD changes for a working-tree review",
     },
@@ -1538,7 +1560,10 @@ FRAGMENTS = {
         "ISSUE_PATH": "<depot or local path>",
         "SG_DESC": P4_SG_DESC,
         "OUTPUT_FORMAT": P4_OUTPUT_FORMAT,
-        "PREPARE_TOOL": PREPARE_LAUNCHER_YAML,
+        "PREPARE_TOOL": PREPARE_LAUNCHER_YAML["p4"],
+        "LANE_TOOL": LANE_LAUNCHER["p4"],
+        "PARSE_TOOL": PARSE_LAUNCHER["p4"],
+        "RENDER_TOOL": RENDER_LAUNCHER["p4"],
         "LEDGER_RECORD_N": "11",
         "BASELINE_DESC": "the CL is reshelved, its content edited, or its revisions move",
     },
@@ -1564,8 +1589,6 @@ _SHARED = {
         ("        " + line).rstrip()
         for line in lane_prompts.REVIEWER_C_SYSTEM.splitlines()
     ),
-    "LANE_TOOL": LANE_LAUNCHER,
-    "PARSE_TOOL": PARSE_LAUNCHER,
     "MD_DOMAIN_LAUNCH": MD_DOMAIN_LAUNCH,
     "MD_DOMAIN_REPORT": MD_DOMAIN_REPORT,
     "GENERATED_REPORT": GENERATED_REPORT,
@@ -1578,7 +1601,6 @@ _SHARED = {
     # for BOTH kits (git's prepare_review.py ships mode 100644 with no shebang
     # and exits 126 on a bare-path launch), so both launch it as an argument to
     # the interpreter, exactly like PREPARE_TOOL.
-    "RENDER_TOOL": RENDER_LAUNCHER,
     "X": X,
     "CHK": CHK,
     "CRS": CRS,
@@ -2077,7 +2099,7 @@ DECLINED_LEDGER_FRAGMENTS = {
         "SKILL_NAME": "git-code-review",
         "CHANGE_ID_LEDGER": "the diff range spec (e.g. `origin/main..HEAD`)",
         "BASELINE_LEDGER": "the range base SHA (`git rev-parse <base>`)",
-        "PREPARE_TOOL": PREPARE_LAUNCHER,
+        "PREPARE_TOOL": PREPARE_LAUNCHER["git"],
         "LEDGER_STORE": "~/.claude/plugins/data/plugins-kit/git-kit/reviews/ledger.json",
     },
     "p4": {
@@ -2087,7 +2109,7 @@ DECLINED_LEDGER_FRAGMENTS = {
             "a hash over the CL's shelf fingerprint (content) plus its per-file "
             "(rev, action) map (identity)"
         ),
-        "PREPARE_TOOL": PREPARE_LAUNCHER,
+        "PREPARE_TOOL": PREPARE_LAUNCHER["p4"],
         "LEDGER_STORE": "~/.claude/plugins/data/plugins-kit/p4-kit/reviews/ledger.json",
     },
 }
@@ -2438,14 +2460,14 @@ CONFIGURATION_FRAGMENTS = {
     "git": {
         "SKILL_NAME": "git-code-review",
         "KIT": "git-kit",
-        "RENDER_TOOL": RENDER_LAUNCHER,
-        "LANE_TOOL": LANE_LAUNCHER,
+        "RENDER_TOOL": RENDER_LAUNCHER["git"],
+        "LANE_TOOL": LANE_LAUNCHER["git"],
     },
     "p4": {
         "SKILL_NAME": "p4-code-review",
         "KIT": "p4-kit",
-        "RENDER_TOOL": RENDER_LAUNCHER,
-        "LANE_TOOL": LANE_LAUNCHER,
+        "RENDER_TOOL": RENDER_LAUNCHER["p4"],
+        "LANE_TOOL": LANE_LAUNCHER["p4"],
     },
 }
 

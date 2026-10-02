@@ -748,12 +748,12 @@ _PYTHON_ALLOWLIST: dict[str, AllowlistEntry] = {
         "'py' inside a regex character class of file extensions, not a "
         "command"),
     "plugins/unreal-kit/custom_bootstrap.py": AllowlistEntry(
-        "refresh_unreal_stub.py --project-root <project-root>",
+        "refresh_unreal_stub.py\\\" --project-root <project-root>",
         "agent-facing remediation message; bare `python` is the "
         "documented Windows-PATH convention (P8) and the target script "
         "self-reexecs via reexec_under_plugin_venv"),
     "plugins/unreal-kit/scripts/search_unreal_stub.py": AllowlistEntry(
-        "refresh_unreal_stub.py --project-root <project-root>",
+        "refresh_unreal_stub.py\\\" --project-root <project-root>",
         "same agent-facing P8 pattern; refresh_unreal_stub.py self-reexecs"),
     "plugins/workflow-kit/scripts/openrouter_run.py": AllowlistEntry(
         "with workflow-kit's venv python (bootstrap links llm_scripting_kit onto it via",
@@ -973,6 +973,12 @@ _MD_DOCS_ALLOWLIST: dict[str, AllowlistEntry] = {
     "docs/planning/bootstrap/MILESTONES.md": AllowlistEntry(
         "command -v python3",
         "prose describing detection-script behavior for a milestone record"),
+    "docs/reference/shared-lib-architecture.md": AllowlistEntry(
+        "## Finding 6: `find_standalone_python` duplicates",
+        "Finding 6 quotes two engine functions' source verbatim in code "
+        "fences and names the interpreter file names (python.exe, python3) "
+        "they resolve; these are the subject of the finding, not commands "
+        "a reader runs, and rewriting them would change the claim"),
 }
 
 

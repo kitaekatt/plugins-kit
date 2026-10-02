@@ -466,7 +466,7 @@ Expected: records in the file's native shape, no duplication.
   resolved thresholds and disabled rules):
 
   ```
-  (cd ${CLAUDE_PLUGIN_ROOT} && <venvPython> -m skills_kit_lib.audit <path> --config)
+  (cd "${SKILLS_KIT_ROOT:?requires a bootstrap engine pass; run bootstrap run}" && <venvPython> -m skills_kit_lib.audit <path> --config)
   ```
 
   Resolve every FAIL (an unresolved markdown link, an unclosed fence, an

@@ -43,30 +43,28 @@ technique_skill:
           description: Include per-request breakdown; cannot be combined with --all (the script exits with a parser error).
       steps:
         - n: 1
-          action: Invoke ${CLAUDE_PLUGIN_ROOT}/scripts/cache_report.py with $ARGUMENTS.
+          action: Invoke "${CACHE_KIT_ROOT:?requires a bootstrap engine pass; run bootstrap run}/scripts/cache_report.py" with $ARGUMENTS.
           tool: '"${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}"'
           expected: stdout containing the cache hit-rate, token usage, and (if --detailed) per-request breakdown.
-          on_failure: If the script is missing at ${CLAUDE_PLUGIN_ROOT}/scripts/cache_report.py, surface the error to the user verbatim. Do not improvise the script path.
+          on_failure: If the script is missing at the path "${CACHE_KIT_ROOT:?requires a bootstrap engine pass; run bootstrap run}/scripts/cache_report.py" resolves to, surface the error to the user verbatim. Do not improvise the script path.
         - n: 2
           action: Display the script's stdout verbatim in the user's chat. Do not summarize, paraphrase, or omit any lines.
       output_template: |
         Display the script's stdout verbatim. Do not summarize, paraphrase, or omit any lines.
       gotchas:
-        - The slash command resolves the script via ${CLAUDE_PLUGIN_ROOT}, which Claude Code expands to the plugin's install path at runtime. If the script is missing there, the invocation fails -- surface the error to the user, do not improvise the path.
+        - ${CLAUDE_PLUGIN_ROOT} is expanded by Claude Code only in the values the harness reads before executing them, such as a hook's `command:` field (worked example -- plugins/bootstrap/hooks/hooks.json). It is NOT present in the Bash tool's environment, so a command carrying it resolves the variable to the empty string and runs against a bare /scripts/cache_report.py. Anchor a command you run on "${CACHE_KIT_ROOT:?requires a bootstrap engine pass; run bootstrap run}" instead, and if the script is missing at the resulting path, surface the error to the user verbatim rather than improvising a path.
 ```
 
 ## Instructions
 
-Display the report output below verbatim. Do not summarize, paraphrase, or omit any lines. Show the complete report exactly as produced by the script.
-
-## Cache Usage Report
-
-!`uv run --no-project python "${CLAUDE_PLUGIN_ROOT}/scripts/cache_report.py" --session "${CLAUDE_SESSION_ID}" $ARGUMENTS`
+Run `scripts/cache_report.py` as the contract above specifies, then display its
+output verbatim. Do not summarize, paraphrase, or omit any lines. Show the
+complete report exactly as produced by the script.
 
 ---
 
-To see all sessions: run `"${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${CLAUDE_PLUGIN_ROOT}/scripts/cache_report.py" --all`
+To see all sessions: run `"${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${CACHE_KIT_ROOT:?requires a bootstrap engine pass; run bootstrap run}/scripts/cache_report.py" --all`
 
-To see a specific session: run `"${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${CLAUDE_PLUGIN_ROOT}/scripts/cache_report.py" SESSION_ID`
+To see a specific session: run `"${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${CACHE_KIT_ROOT:?requires a bootstrap engine pass; run bootstrap run}/scripts/cache_report.py" SESSION_ID`
 
-To include per-request breakdown: run `"${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${CLAUDE_PLUGIN_ROOT}/scripts/cache_report.py" --detailed`
+To include per-request breakdown: run `"${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${CACHE_KIT_ROOT:?requires a bootstrap engine pass; run bootstrap run}/scripts/cache_report.py" --detailed`

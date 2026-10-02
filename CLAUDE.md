@@ -142,7 +142,8 @@ something, remove what it protects and watch it go red -- revert the fix and
 run the named test; for a guard that compares a generated artifact to its
 generator, ask what happens when both move together. A check that stays green
 is worse than no check, because the green result stops anyone looking again.
-Both observed shapes, their worked examples, and the remedy:
+The four observed shapes (three checks that pass when they should fail, one
+that fails when nothing is broken), their worked examples, and the remedy:
 [docs/reference/vacuous-checks.md](docs/reference/vacuous-checks.md).
 
 **Targeted test runs** -- the full test suite is too slow for routine use. Always run only the specific test file(s) relevant to your changes:
@@ -584,7 +585,8 @@ Plugins follow the Claude Code plugin spec:
 - **Marketplace manifest** (`.claude-plugin/marketplace.json`): Lists available plugins with name, version, source path
 - **Plugin manifest** (`.claude-plugin/plugin.json`): Per-plugin metadata (name, version, description, keywords)
 - **Skill discovery**: Claude Code scans `skills/` directories for `SKILL.md` files
-- **Variable expansion**: `${CLAUDE_PLUGIN_ROOT}` resolves to the plugin's install path at runtime
+- **Variable expansion**: `${CLAUDE_PLUGIN_ROOT}` resolves to the plugin's install path in the values Claude Code expands before executing them. Two surfaces: a hook's `command:` field (worked example: `plugins/bootstrap/hooks/hooks.json`), and a skill's `!` preload line, where Claude Code substitutes only its own names (`${CLAUDE_PLUGIN_ROOT}`, `${CLAUDE_SESSION_ID}`) and refuses a preload carrying any other expansion (`plugins/bootstrap/skills/bootstrap/references/python-interpreter.md`, "Skill preload commands").
+  - It is absent from the Bash tool's environment, so a command carrying it that an agent types or copies out of prose runs against a bare `/`-rooted path -- never write it inside a command a skill, reference, or README asks a reader to run.
 
 **Plugin dependencies on bootstrap.** Every plugin except bootstrap declares
 `"dependencies": ["bootstrap"]`, enforced at pre-commit and again in
@@ -693,6 +695,7 @@ claude_md:
       - publish flow
       - test-suite discipline
       - Python invocation standard
+      - premise discipline when briefing delegated agents
     excludes:
       - per-plugin internals confined to ONE plugin that ship with it (covered
         by per-plugin CLAUDE.md / bootstrap.json); maintainer-only single-plugin
@@ -934,6 +937,41 @@ claude_md:
         both shapes: docs/reference/vacuous-checks.md.
       origin: "2026-09-08 -- found while shipping the generated-skills machine-emitted exclusion in bootstrap-display-rule5; the drift guard would have gone on passing with the banner removed."
       added: "2026-09-08"
+    - id: pin_the_producer_not_the_spelling
+      keywords: [hardcoded literal, pinned spelling, brittle test, expected string, anchored allowlist, anchor text, migration reds tests, re-typed constant, second source of truth, constants-only assertion, test_skill_drift, launcher string, form changes, distinctive stable anchor]
+      summary: A check that asserts a hardcoded spelling of the thing it guards must be edited by every change to that spelling. Assert against the generator or constant that PRODUCES the spelling, and re-type only the property a constants-only assertion cannot protect.
+      detail: |
+        Inverse of a_check_must_be_shown_to_fail: that insight is a check that cannot
+        fail, this one is a check that fails for a reason that is not a defect.
+        Operative rule: derive what is incidental from the producer; re-type only the
+        property the producer cannot vouch for; choose an allowlist anchor for being
+        DISTINCTIVE and STABLE, not merely present.
+        Worked example: docs/reference/vacuous-checks.md, "Shape 4".
+      origin: "2026-10-01 -- the plugin-root variable migration; four tests went red on spelling alone."
+      added: "2026-10-01"
+    - id: a_survey_is_an_artifact_not_evidence
+      keywords: [survey, enumeration, earlier agent pass, brief, established premise, derived artifact treated as source, re-derive before briefing, measuring instrument, offender list, leave as prose, universal claim, sync_to_data, plugin-root-variable-sites, premise marking, report contradictions]
+      summary: An enumeration produced by an earlier agent pass is a map, not a measurement. Re-derive a claim before a brief rests on it, and prefer a measuring instrument -- a guard run over the real files -- to an enumeration, because the guard's offender list cannot be stale.
+      detail: |
+        Worked case (2026-10-01): a read-only survey listed about 110 `${CLAUDE_PLUGIN_ROOT}`
+        sites and classified them; its claims then went into implementation briefs as
+        "established", and two were wrong. (1) A "leave these as prose" list disagreed
+        with the files: two lines carried genuinely runnable commands, and the migration
+        unit migrated them and reported the contradiction instead of complying --
+        complying would have shipped two broken sites. (2) The universal claim "no
+        plugin syncs `scripts/` into its data dir" is false: plugins/claude-ui-kit/bootstrap.json
+        declares `sync_to_data` with src `scripts`. It reached a draft of the root insight
+        claude_plugin_root_not_in_bash and docs/reference/plugin-root-variable-sites.md
+        before an md-domain review lane caught it.
+        Both errors share one cause: a derived artifact treated as a source. The survey
+        was careful and useful; the defect was in its consumption. A universal claim
+        ("no plugin ...") is checked by one grep over the real files, so run it.
+        Second-order: both errors were caught DOWNSTREAM by units told to verify premises
+        and report contradictions. That premise-marking discipline is why neither shipped,
+        so keep marking premises "established" only when the briefing agent itself
+        measured them.
+      origin: "2026-10-01 -- plugin-root variable migration; a survey's classification and one universal claim were briefed as established and were wrong."
+      added: "2026-10-01"
     - id: never_hand_make_a_plugins_output
       keywords: [hand-create artifact, hand-place file, copy the file myself, plugin should generate it, refresh action, generated stub, index, report, prove the workflow, publish and run, skip the round trip, missing prerequisite, written not working, verify by running]
       summary: Never hand-create an artifact a plugin's workflow is supposed to produce. Build or fix the producing action, publish it, install it, and run it -- a hand-placed file cannot distinguish a working workflow from a broken one.
@@ -1083,6 +1121,43 @@ claude_md:
           re-resolved per directory change inside a single session.
       origin: "2026-09-16 -- BOOTSTRAP_PYTHON / BOOTSTRAP_PROJECT_PYTHON shipped for every Python call site, on every OS, superseding an engine-process-only draft that never landed on this file."
       added: "2026-09-16"
+    - id: claude_plugin_root_not_in_bash
+      keywords: [CLAUDE_PLUGIN_ROOT, unset in Bash, /scripts/x.py, <PLUGIN>_ROOT, plugin_root_env_var_name, CLAUDE_ENV_FILE, gate-skipped session, hooks.json command, preload, CLAUDE_PLUGIN_DATA, sync_to_data]
+      summary: "`CLAUDE_PLUGIN_ROOT` is expanded by Claude Code only in values the harness reads before executing them, and is UNSET in the Bash tool's environment, so a command an agent types or copies from prose runs it as `/scripts/x.py`. An agent-typed command anchors on the bootstrap-exported `<PLUGIN>_ROOT` with a `:?` guard instead."
+      detail: |
+        The mechanism is owned one scope down by `plugins/CLAUDE.md`, under "Two
+        surfaces expand `${CLAUDE_PLUGIN_ROOT}`": the two surfaces the harness
+        expands (a `hooks/hooks.json` `command:` field, and a skill `!` preload,
+        where Claude Code substitutes only its own names such as
+        `${CLAUDE_PLUGIN_ROOT}` and `${CLAUDE_SESSION_ID}` and refuses a preload
+        carrying any other expansion), the variable's absence everywhere else
+        including the Bash tool's environment, the `/scripts/x.py` that a command
+        carrying it resolves to, the `"${<PLUGIN>_ROOT:?<msg>}"` replacement
+        form, `plugin_root_env_var_name` in
+        plugins/bootstrap/bootstrap_lib/env_var_check.py, the `export_env_var`
+        call that exports it, and the gate-skipped session in which `:?` fails
+        loudly on purpose. The preload rule is established in
+        plugins/bootstrap/skills/bootstrap/references/python-interpreter.md,
+        "Skill preload commands", and restated in that skill's SKILL.md.
+        Per-site survey, its WORKING / DOC / BROKEN classes and the per-plugin
+        counts: docs/reference/plugin-root-variable-sites.md. Guard:
+        tests/repo-scripts/test_claude_plugin_root_expansion.py. Only the two
+        gotchas below are recorded here.
+      gotchas:
+        - "Do not substitute `CLAUDE_PLUGIN_DATA`. It is set, but when measured
+          it held the data directory of a DIFFERENT plugin (codex-openai-codex),
+          so anchoring on it silently points one plugin's lookup at another's."
+        - "The data directory is not a general anchor for a shipped script
+          either. `sync_to_data` is null for git-kit, skills-kit, awesome-kit,
+          hue-kit and cache-kit, and unreal-kit syncs only `lib`; claude-ui-kit
+          is the one plugin that syncs `scripts`, declaring a `sync_to_data`
+          entry with src `scripts` and dst `scripts` in its bootstrap.json. So
+          ~/.claude/plugins/data/plugins-kit/claude-ui-kit/scripts/ does hold
+          that plugin's shipped scripts, while the same path under a plugin that
+          declares no such entry does not exist. What the data directory anchors
+          for every plugin is a venv INTERPRETER, not a script."
+      origin: "2026-10-01 -- measured while finding that agent-typed commands in skills and references used ${CLAUDE_PLUGIN_ROOT}; the complementary correction to the Plugin System 'Variable expansion' bullet."
+      added: "2026-10-01"
   conventions:
     - rule: Commit and push to dev freely without asking; only a PUBLISH (dev -> master) needs the user. Do not coordinate around other agent sessions' concurrent work.
       keywords: [commit freely, push freely, no permission, dev branch, only publishes gated, other agents, concurrent sessions, shared tree, git commit -- paths]

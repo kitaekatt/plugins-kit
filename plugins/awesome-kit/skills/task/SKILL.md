@@ -52,7 +52,7 @@ from a foreign cwd:
 ```bash
 # macOS/Linux (Windows: .venv/Scripts/python.exe instead of .venv/bin/python)
 ~/.claude/plugins/data/plugins-kit/awesome-kit/.venv/bin/python \
-  "${CLAUDE_PLUGIN_ROOT}/skills/task/scripts/task.py" <verb> [args]
+  "${AWESOME_KIT_ROOT:?requires a bootstrap engine pass; run bootstrap run}/skills/task/scripts/task.py" <verb> [args]
 ```
 
 Every `operation:` below abbreviates that invocation as `task.py`. Conventions:

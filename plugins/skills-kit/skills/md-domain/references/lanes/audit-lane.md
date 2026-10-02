@@ -14,7 +14,8 @@ table:
 | `audit_references` | `../standards/references-standards.md` | `scripts/references_audit.py` | `workflow/references-classify.js` | `workflow/references-remediate.js` |
 
 Script paths are relative to the skill root (`skills/md-domain/`). At runtime
-prefix them with `${CLAUDE_PLUGIN_ROOT}/skills/md-domain/`.
+prefix them with
+`"${SKILLS_KIT_ROOT:?requires a bootstrap engine pass; run bootstrap run}/skills/md-domain/"`.
 
 `audit_references` is the structural outlier -- a whole-corpus scanner rather
 than a per-file auditor. Its differences are collected in "The references-lane
@@ -114,7 +115,7 @@ sits above it.
 ONCE per run (not per file), resolve the configurable standards via the plugin venv:
 
 ```
-(cd ${CLAUDE_PLUGIN_ROOT} && <venvPython> scripts/resolve_standards.py \
+(cd "${SKILLS_KIT_ROOT:?requires a bootstrap engine pass; run bootstrap run}" && <venvPython> scripts/resolve_standards.py \
    --project-root <workspace root> --primitive <artifact primitive>)
 ```
 
@@ -139,7 +140,8 @@ per-run overhead.
 
 - **ONE file (non-review)** -- audit inline in the main loop.
 - **TWO OR MORE files, or ANY count in review mode** -- call the Workflow tool
-  with the script `${CLAUDE_PLUGIN_ROOT}/skills/md-domain/workflow/<artifact>-detect.js`
+  with the script
+  `"${SKILLS_KIT_ROOT:?requires a bootstrap engine pass; run bootstrap run}/skills/md-domain/workflow/<artifact>-detect.js"`
   (passed as described in "Passing a lane script to the Workflow tool" below)
   and `args = { files:[{path, ...artifact signals, ancestorClaudeMdPaths, standardsPaths, preImagePath}], disabledCriteria, review, refs }`.
   One lane per file; returns `{ perFile, totals, review }`.
@@ -187,7 +189,7 @@ file is edited in this phase.**
 Mechanical validator (skill and claude-md lanes):
 
 ```
-(cd ${CLAUDE_PLUGIN_ROOT} && <venvPython> -m skills_kit_lib.audit <path> --json --config)
+(cd "${SKILLS_KIT_ROOT:?requires a bootstrap engine pass; run bootstrap run}" && <venvPython> -m skills_kit_lib.audit <path> --json --config)
 ```
 
 `--config` makes the validator honor the resolved config (drop disabled
@@ -371,7 +373,7 @@ mode by how many FILES carry remediation work.
 
 - **ONE file** -- apply inline with Edit.
 - **TWO OR MORE files** -- call the Workflow tool with the script
-  `${CLAUDE_PLUGIN_ROOT}/skills/md-domain/workflow/<artifact>-remediate.js`
+  `"${SKILLS_KIT_ROOT:?requires a bootstrap engine pass; run bootstrap run}/skills/md-domain/workflow/<artifact>-remediate.js"`
   (passed as in "Passing a lane script to the Workflow tool", Step 2)
   and `args = { perFile:[{path, remediations:[{criterion, taxonomy, bucket, line, instruction, decision}]}] }`.
   One lane per file (disjoint files never conflict).
@@ -504,7 +506,7 @@ its location moved. It differs from the three per-file lanes in five ways:
    stdlib-only; skills_kit_lib degrades gracefully without pyyaml):
 
    ```
-   "${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${CLAUDE_PLUGIN_ROOT}/skills/md-domain/scripts/references_audit.py" \
+   "${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${SKILLS_KIT_ROOT:?requires a bootstrap engine pass; run bootstrap run}/skills/md-domain/scripts/references_audit.py" \
      --project-dir .claude/skills --user-dir $HOME/.claude/skills $ARGUMENTS
    ```
 

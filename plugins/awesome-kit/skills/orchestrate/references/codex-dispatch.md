@@ -295,7 +295,7 @@ cache entry. Run it with the plugin venv's Python; for example, on macOS/Linux:
 
 ```sh
 ~/.claude/plugins/data/plugins-kit/awesome-kit/.venv/bin/python \
-  ${CLAUDE_PLUGIN_ROOT}/skills/orchestrate/scripts/dispatch.py --list
+  "${AWESOME_KIT_ROOT:?requires a bootstrap engine pass; run bootstrap run}/skills/orchestrate/scripts/dispatch.py" --list
 ```
 
 Windows uses `.venv/Scripts/python.exe`. A dispatch names its model with

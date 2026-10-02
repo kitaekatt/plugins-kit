@@ -255,7 +255,7 @@ opt-in and stdlib only; every write lands under a directory the caller names.
 deprecated or removed. To see which names a consumer uses are affected:
 
 ```bash
-"${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${CLAUDE_PLUGIN_ROOT}/scripts/check_consumer_contract.py" <consumer source path>
+"${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${CONTENT_PIPELINE_KIT_ROOT:?requires a bootstrap engine pass; run bootstrap run}/scripts/check_consumer_contract.py" <consumer source path>
 ```
 
 The script exits 1 when a removed name is used.

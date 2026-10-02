@@ -8,7 +8,7 @@ GUIDANCE and RATIONALE prose that helps pick a profile; the EXECUTABLE table liv
 bootstrap_lib's shipped defaults (reproduced below) and is resolved per review by
 `bootstrap_lib.code_review.review_profiles`, invoked through this plugin's venv entry point:
 
-    "${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" ${CLAUDE_PLUGIN_ROOT}/scripts/render_review_profiles.py --project-root <project root>
+    "${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${GIT_KIT_ROOT:?requires a bootstrap engine pass; run bootstrap run}/scripts/render_review_profiles.py" --project-root <project root>
 
 ## Mechanical syntax coverage
 
@@ -179,7 +179,7 @@ how that lane is dispatched:
 | Entry | Dispatch |
 |---|---|
 | a `claude` harness entry: `sonnet`, `opus`, `haiku`, `fable` | an Agent subagent with that `model` |
-| any other entry (a codex or opencode harness entry, or a transport endpoint) | a Bash call to `"${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" ${CLAUDE_PLUGIN_ROOT}/scripts/run_review_lane.py` with `--model <entry>` |
+| any other entry (a codex or opencode harness entry, or a transport endpoint) | a Bash call to `"${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${GIT_KIT_ROOT:?requires a bootstrap engine pass; run bootstrap run}/scripts/run_review_lane.py"` with `--model <entry>` |
 
 `sonnet`, `opus`, `haiku` and `fable` are routable without llm-scripting-kit, because the Agent
 tool itself defines them. Every other id is resolved by llm-scripting-kit, so it may name a CLI
@@ -205,7 +205,7 @@ describe leaves out every entry this machine cannot run: an id the registry does
 entry this caller cannot drive, and an excluded one. A left-out entry is skipped without
 comment. `--caller session` is the in-session caller kind, and by itself it drives only harness
 entries. `--dispatchable transport` tells describe this caller can also run transport
-endpoints, through `"${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" ${CLAUDE_PLUGIN_ROOT}/scripts/run_review_lane.py`, so they stay in the menu. The skill passes it for every
+endpoints, through `"${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${GIT_KIT_ROOT:?requires a bootstrap engine pass; run bootstrap run}/scripts/run_review_lane.py"`, so they stay in the menu. The skill passes it for every
 reviewer except `reviewer_a_claude_md_compliance` and `reviewer_c_introduced_code`, the two
 lanes the runner binds only to a harness entry (see "Which lanes may take an endpoint entry"
 below); for those two a transport endpoint is left out of the menu. Out-of-quota and unreachable
@@ -317,7 +317,7 @@ between. To keep a cross-family entry ahead of it, state the list you want inste
 
 ## Inspecting the resolved table
 
-    "${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" ${CLAUDE_PLUGIN_ROOT}/scripts/render_review_profiles.py --project-root <project root>
+    "${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${GIT_KIT_ROOT:?requires a bootstrap engine pass; run bootstrap run}/scripts/render_review_profiles.py" --project-root <project root>
 
 prints the merged `profiles` table as YAML, then a `---` separator, then which layers were
 applied and (for any absent override) the path that would create it. This is the same

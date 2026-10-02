@@ -1,7 +1,10 @@
 """scene-layers.py can be launched directly under the bootstrap interpreter.
 
 hue-domain's SKILL.md names ``"${BOOTSTRAP_PYTHON:?...}"
-"${CLAUDE_PLUGIN_ROOT}/scripts/scene-layers.py"``. The bootstrap interpreter
+"${HUE_KIT_ROOT:?...}/scripts/scene-layers.py"`` (and the bare ``hue-kit``
+shim for hue_kit_cli.py) -- ``CLAUDE_PLUGIN_ROOT`` is unset in the Bash tool,
+so an agent-typed command anchors on the ``<PLUGIN>_ROOT`` variable the
+bootstrap engine exports. The bootstrap interpreter
 has no requests/urllib3/pyyaml, so the script must re-exec under the plugin
 venv before importing them -- but only when it runs as ``__main__``: the
 suite (and nothing else) imports it as a module, and a re-exec at import
@@ -44,6 +47,17 @@ def test_skill_md_names_the_launcher_form():
     from bootstrap_lib.interpreter_env import PLUGIN_CALL_SITE_EXPR as expr
 
     text = SKILL.read_text(encoding="utf-8")
-    for script in ("hue_kit_cli.py", "scene-layers.py"):
-        assert f'{expr} "${{CLAUDE_PLUGIN_ROOT}}/scripts/{script}"' in text, script
+    # hue_kit_cli.py is launched by the bare `hue-kit` name (bin/ is on the
+    # session PATH). CLAUDE_PLUGIN_ROOT is unset in the Bash tool, so the
+    # prefixed form expands to /scripts/hue_kit_cli.py and fails.
+    assert "command: hue-kit [--dir PATH]" in text
+    assert not [
+        line for line in text.splitlines()
+        if "${CLAUDE_PLUGIN_ROOT}" in line and "hue_kit_cli.py" in line
+    ], "hue_kit_cli.py must be launched as bare `hue-kit`, not via CLAUDE_PLUGIN_ROOT"
+    # scene-layers.py has no bin/ shim, so it keeps the launcher form, rooted
+    # on the variable the bootstrap engine exports rather than on the unset
+    # CLAUDE_PLUGIN_ROOT.
+    assert (f'{expr} "${{HUE_KIT_ROOT:?requires a bootstrap engine pass; '
+            f'run bootstrap run}}/scripts/scene-layers.py"') in text
     assert "HUE_KIT_VENV" not in text

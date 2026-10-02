@@ -20,14 +20,14 @@ Reached through the `/md-domain audit skill` front door (the member's standalone
 Direct script invocation (the script re-execs under the plugin's bootstrap-provisioned venv):
 
 ```
-"${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${CLAUDE_PLUGIN_ROOT}/skills/md-domain/scripts/report.py" \
+"${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${SKILLS_KIT_ROOT:?requires a bootstrap engine pass; run bootstrap run}/skills/md-domain/scripts/report.py" \
     [roster|hierarchy] [out|-] [--cwd <dir>]
 ```
 
 The HTML renderer (also runnable directly for dev iteration; supplies the backend for `/md-domain audit skill hierarchy`):
 
 ```
-"${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${CLAUDE_PLUGIN_ROOT}/skills/md-domain/scripts/skill_hierarchy_report.py" \
+"${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${SKILLS_KIT_ROOT:?requires a bootstrap engine pass; run bootstrap run}/skills/md-domain/scripts/skill_hierarchy_report.py" \
     [--project-root PATH] [--out PATH] [--installed-plugins PATH] [--user-skills PATH]
 ```
 
