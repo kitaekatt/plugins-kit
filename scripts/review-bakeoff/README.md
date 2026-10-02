@@ -7,7 +7,7 @@ root.
 1. Run an endpoint arm. `--arm` is the registry id passed to the lane as
    `--model`, with no prefix:
 
-   `uv run python scripts/review-bakeoff/run_bakeoff.py run --arm qwen38-5090-harness`
+   `uv run python scripts/review-bakeoff/run_bakeoff.py run --arm qwen38-5090-harness --effort EFFORT`
 
 2. Create prompts for a `harness: claude` id:
 
