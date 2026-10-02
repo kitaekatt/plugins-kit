@@ -84,3 +84,19 @@ session's work, stranded, one `git branch -D` away from being unreachable.
 Recovery took a commit of in-flight work, three cherry-picks, a content-identity check
 per commit, and a force-delete. Nothing was lost, but only because the branch was still
 there to find. That is the good outcome, not the expected one.
+
+## Rebasing in the shared tree
+
+A rebase detaches HEAD until `--continue` (or `--abort`) finishes it. A concurrent
+session that commits in that window commits onto the detached HEAD instead of `dev`,
+which is the same failure as a branch switch. `git pull --rebase` starts a rebase
+with no prompt, so it is the usual way to walk into this.
+
+**Rule.** When local `dev` is behind `origin/dev`, merge: `git pull --no-rebase`, or
+the plumbing merge in "Pushing when local dev is behind and another session's index
+blocks a pull" when that index blocks the pull. Never rebase or `pull --rebase` in
+this tree.
+
+**Worked example (2026-10-02).** A `git pull --rebase` stopped on version-line
+conflicts, and the tree sat on a detached HEAD until the rebase was continued. Any
+commit another session made during that stretch would have landed off `dev`.
