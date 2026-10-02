@@ -27,6 +27,7 @@ to ``path_entries`` + tool->PATH linkage.
 import os
 import re
 import shlex
+from collections import OrderedDict
 from typing import List, Optional, Tuple
 
 from . import session_env
@@ -63,9 +64,23 @@ def plugin_root_env_var_name(plugin_name: str) -> str:
     (``.../hue-kit/0.9.1/``), so a cross-plugin consumer has no other way to
     resolve one short of globbing the cache for a version directory.
 
-    Exported per session and NEVER persisted to rc files or the registry: the
-    value changes on every plugin upgrade, so a persisted copy would go stale
-    and point at a version directory that no longer exists.
+    NEVER persisted to rc files or the registry. The value changes on every
+    plugin upgrade, so a copy that outlives the engine's knowledge of it goes
+    stale and names a version directory that no longer exists -- and an rc
+    file or the Windows registry is read by shells bootstrap never runs in,
+    with nothing to re-verify it.
+
+    It IS recorded, under bootstrap's own data dir, by
+    ``write_env_record(plugin_roots_record_path(data_dir), ...)`` on every
+    full pass, so a session whose SessionStart pass was short-circuited by a
+    skip gate still gets the name. That record is persistence WITH
+    VERIFICATION, which is what makes it safe where an rc line is not: the
+    engine rewrites the whole file each pass (a plugin that left the registry
+    loses its line), and the SessionStart prelude re-emits a name only when
+    its recorded path still exists on disk. A path that was deleted between
+    passes is therefore skipped rather than exported, so a consumer's
+    ``"${<PLUGIN>_ROOT:?...}"`` guard aborts loudly naming the missing
+    variable instead of running against a dead directory.
 
     >>> plugin_root_env_var_name("hue-kit")
     'HUE_KIT_ROOT'
@@ -73,6 +88,103 @@ def plugin_root_env_var_name(plugin_name: str) -> str:
     'BOOTSTRAP_ROOT'
     """
     return re.sub(r"[^A-Z0-9_]", "_", plugin_name.upper()) + "_ROOT"
+
+
+# --- The pre-gate env record ----------------------------------------------
+#
+# A SessionStart skip gate (the Layer-1 session-id guard, the Layer-2
+# per-project cooldown) short-circuits the engine entirely, so the names the
+# pass exports through session_env are absent from most sessions -- measured:
+# a session inside the cooldown window had BOOTSTRAP_PYTHON but zero *_ROOT
+# variables. These records let the hook's pre-gate prelude re-emit them
+# without resolving anything itself (a bash-side cache scan would duplicate
+# plugin_resolve.py, disagree with the engine in exactly the --plugin-dir
+# sessions used to verify it, and run unlogged).
+#
+# Format, deliberately the dumbest thing a fork-free bash loop can read:
+# one ``NAME=path`` line per entry, LF endings, UTF-8, no quoting and no
+# escaping. NAME must be an upper-case shell identifier; a path holding a
+# single quote or a newline is dropped at WRITE time, because the prelude
+# wraps the value in single quotes and the env file is sourced as shell code.
+# Order is the writer's order. The whole file is rewritten every pass, which
+# is what makes an entry that left the registry disappear.
+
+PLUGIN_ROOTS_FILENAME = "plugin_roots"
+TOOL_BINS_FILENAME = "tool_bins"
+
+_RECORD_NAME_RE = re.compile(r"[A-Z_][A-Z0-9_]*")
+
+
+def plugin_roots_record_path(data_dir: str) -> str:
+    """``<data_dir>/plugin_roots`` -- the ``<PLUGIN>_ROOT`` record."""
+    return os.path.join(data_dir, PLUGIN_ROOTS_FILENAME)
+
+
+def tool_bins_record_path(data_dir: str) -> str:
+    """``<data_dir>/tool_bins`` -- the ``BOOTSTRAP_BIN_<TOOL>`` record."""
+    return os.path.join(data_dir, TOOL_BINS_FILENAME)
+
+
+def record_line_is_safe(name: str, value: str) -> bool:
+    """Whether ``NAME=value`` may be written to an env record.
+
+    The prelude re-emits the value inside single quotes, so a value holding
+    one would close the quote and turn the rest of the env file into
+    executable shell. An ``=`` inside the PATH is fine (the reader splits on
+    the first one); a newline is not, since it would forge a second entry.
+    """
+    if not isinstance(name, str) or _RECORD_NAME_RE.fullmatch(name) is None:
+        return False
+    if not isinstance(value, str) or not value:
+        return False
+    return "'" not in value and "\n" not in value and "\r" not in value
+
+
+def read_env_record(path: str) -> "OrderedDict[str, str]":
+    """Parse an env record. Unreadable file or unparsable line -> dropped.
+
+    Mirrors session_env._read_existing: a line that cannot be trusted is
+    skipped rather than carried, so a record damaged by a partial write
+    repairs itself on the next pass instead of poisoning every session.
+    """
+    out: "OrderedDict[str, str]" = OrderedDict()
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as handle:
+            for line in handle:
+                line = line.rstrip("\r\n")
+                name, sep, value = line.partition("=")
+                if not sep or not record_line_is_safe(name, value):
+                    continue
+                out[name] = value
+                out.move_to_end(name)
+    except OSError:
+        return OrderedDict()
+    return out
+
+
+def write_env_record(path: str, entries) -> Tuple[bool, "OrderedDict[str, str]"]:
+    """Rewrite an env record from ``entries`` (a NAME->path mapping).
+
+    Returns ``(wrote, kept)``: whether the file now holds exactly ``kept``,
+    and the subset of ``entries`` that survived ``record_line_is_safe``. The
+    caller compares ``kept`` with a prior ``read_env_record`` to tell a change
+    from a steady state, so the filtered mapping -- not the raw input -- is
+    what comes back. An empty mapping still rewrites the file (to empty),
+    which is how a name whose plugin left the registry stops being re-emitted.
+    The write is atomic, so the prelude reads one complete record or the
+    previous one, never a half file.
+    """
+    from .atomic_write import write_atomic
+    safe = OrderedDict()
+    for name, value in dict(entries).items():
+        if record_line_is_safe(name, value):
+            safe[name] = value
+    content = "".join(f"{n}={v}\n" for n, v in safe.items())
+    try:
+        write_atomic(path, content, newline="\n")
+    except OSError:
+        return False, safe
+    return True, safe
 
 
 def _rc_files(current_os: str) -> List[str]:

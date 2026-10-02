@@ -568,6 +568,48 @@ For each discovered plugin, the engine resolves the plugin's install path via `p
 
 Either phase is optional — a plugin can provide just a manifest, just a script, or both.
 
+### Step 4b3: Pre-gate env records (`_maintain_env_records`, 0.141.0)
+
+Both skip gates short-circuit the engine, so the names a pass exports through
+`session_env` are absent from most sessions (measured: a session inside the
+cooldown window had `BOOTSTRAP_PYTHON` but zero `*_ROOT` names). This step
+rewrites two records under bootstrap's data dir for `session-bootstrap.sh`'s
+own pre-gate block to re-emit, so bash resolves nothing itself:
+
+- `<data_dir>/plugin_roots` -- one `<PLUGIN>_ROOT=<install path>` line per
+  plugin that ships a `bootstrap.json`. That is the same gate the per-plugin
+  `export_env_var` sits behind, so the record holds exactly what this pass
+  exported.
+- `<data_dir>/tool_bins` -- one `BOOTSTRAP_BIN_<TOOL>=<path>` line per entry in
+  `tool_paths.all_paths(None)` whose path is a regular file: the same source
+  and the same existence test `export_tool_env_vars` applies later in the pass.
+
+Format is one `NAME=path` line per entry, LF, UTF-8, no quoting and no
+escaping. The name must be an upper-case shell identifier, and a value holding
+a single quote, a newline or a carriage return is dropped at write time
+(`record_line_is_safe` in `bootstrap_lib/env_var_check.py`), because the
+prelude re-emits the value inside single quotes into a file that is sourced as
+shell code. The write is atomic, so a reader gets one complete record or the
+previous one, never half a file.
+
+**Staleness is handled by two mechanisms and nothing else.** Each record is
+rewritten WHOLE every full pass, so a plugin that left the registry loses its
+line; and the prelude re-emits a name only while its recorded path still exists
+-- a directory for a plugin root, a regular file for a tool -- so a path
+deleted between passes is skipped rather than exported. There is no revocation
+list and no expiry. A consumer's `"${<PLUGIN>_ROOT:?<msg>}"` guard therefore
+still aborts loudly, naming the missing variable, instead of running against a
+version directory that no longer exists. A `cadence: always` throttled lane
+returns before Step 4 and never rewrites the records.
+
+Placement is after Step 4b, so a plugin installed mid-pass is in the record,
+and before Steps 5/6, so the entries reach `bootstrap.log`. Write policy
+follows `_maintain_project_python_record` and [Every check must log its
+outcome](#design-principles): a changed record is a `quiet` entry (always
+logged, never displayed -- a record rewrite is log-only, never a display item),
+a steady state is a verbose `ok` entry, and a failed write is a `quiet` entry.
+No entry carries a path.
+
 ### Step 4c: Shared-lib convergence sweep
 
 Shared-library *consumer* links (writing `<lib>.pth` into a plugin's own venv, declared via `shared_lib_imports`) happen inline while that plugin's manifest is processed. If a consumer is processed **before** the owner publishes the lib (plugins run in sort order, so this is purely an ordering accident), the inline `link_shared_lib` soft-skips with *"not yet published; will retry next session"* — an avoidable extra session/restart.

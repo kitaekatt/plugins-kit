@@ -38,15 +38,39 @@ what was touched, not as current coordinates.
 
 `"${<PLUGIN>_ROOT:?<msg>}/scripts/x.py"`, where the variable name comes from
 `plugin_root_env_var_name` in `plugins/bootstrap/bootstrap_lib/env_var_check.py`.
-The engine exports it at `plugins/bootstrap/bootstrap_lib/engine.py` line 1942
+The engine exports it at `plugins/bootstrap/bootstrap_lib/engine.py` line 1962
 via `export_env_var`, which calls `session_env.record` and appends to
 `$CLAUDE_ENV_FILE`.
 
-That export sits BELOW both SessionStart skip gates. The interpreter names are
-written ABOVE them (`plugins/bootstrap/hooks/sessionstart/session-bootstrap.sh`
-lines 134-137). A gate-skipped session therefore has the interpreter names but
-lacks the root variable, and the `:?` guard fails loudly. That loud failure is
+That export sits BELOW both SessionStart skip gates, so by itself it reaches
+only a session that ran a full pass. Two blocks in
+`plugins/bootstrap/hooks/sessionstart/session-bootstrap.sh` sit ABOVE the
+gates: the interpreter names (lines 134-137), and, from bootstrap 0.141.0, the
+"Recorded env names for this session" block. The second re-emits what a full
+pass recorded under bootstrap's data dir -- `<data_dir>/plugin_roots` for
+`<PLUGIN>_ROOT`, `<data_dir>/tool_bins` for `BOOTSTRAP_BIN_<TOOL>`, one
+`NAME=path` line per entry -- and resolves nothing itself. The writer is
+`engine._maintain_env_records` at Step 4b3, which rewrites each record whole on
+every full pass; a `cadence: always` throttled lane returns before Step 4 and
+never rewrites them.
+
+A name is re-emitted only while its recorded path still exists: `[ -d ]` for a
+plugin root, `[ -f ]` for a tool. A path deleted since the recording pass is
+SKIPPED.
+
+So a gate-skipped session HAS the root variable -- provided a full pass has
+recorded it since 0.141.0 reached the machine AND the recorded directory still
+exists. `"${<PLUGIN>_ROOT:?<msg>}"` remains the required replacement form, and
+the `:?` guard still fails loudly in the narrower remaining cases: before the
+first recording pass on a machine, when the recorded directory has been
+deleted, and when the plugin has left the registry (its line is dropped on the
+next full pass, because the record is rewritten whole). That loud failure is
 the intended behaviour; the alternative is a silent run of `/scripts/x.py`.
+
+Record format, the single-quote and newline safety filter, and the write
+policy: `plugins/bootstrap/bootstrap_lib/env_var_check.py`, the "pre-gate env
+record" comment. Step placement and logging:
+`plugins/bootstrap/skills/bootstrap/references/engine-internals.md`, Step 4b3.
 
 ### Rejected anchors
 

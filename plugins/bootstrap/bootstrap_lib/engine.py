@@ -20,6 +20,7 @@ import re
 import stat
 import sys
 import tempfile
+from collections import OrderedDict
 from datetime import datetime, timedelta, timezone
 
 # Single shared atomic-write implementation (mkstemp + os.replace next to the
@@ -1294,6 +1295,21 @@ def _main_pass():
             # the log.
             deferred_plugin_logs.append((data_dir, sr_label, sr_log))
 
+    # Step 4b3: Record the env names a gate-skipped session would otherwise
+    # never see. Derived from the same plugin list and the same bootstrap.json
+    # gate as the per-plugin <PLUGIN>_ROOT export above, so the record carries
+    # exactly what this pass exported -- see _maintain_env_records. Placed
+    # after Step 4b (so a plugin installed mid-pass is in it) and before
+    # Step 5/6 (so its entries reach bootstrap.log, which Step 6 writes).
+    # bootstrap_quiet_entries / bootstrap_ok_entries are RecordingLists, so
+    # the appends land in the pass record without an explicit _record_entries;
+    # bootstrap's display section was already snapshotted above, which is
+    # correct here -- a record rewrite is log-only, never a display item.
+    _maintain_env_records(
+        data_dir, enabled_plugins + new_plugins,
+        bootstrap_ok_entries, bootstrap_quiet_entries,
+    )
+
     # Step 4c: Shared-lib convergence sweep. Every owner has now published (Steps
     # 4 + 4b), so re-link all consumers in one go -- a consumer processed before
     # its owner no longer waits for the next session. Silent in steady state
@@ -1952,7 +1968,11 @@ def _bootstrap_single_plugin(
     # this a cross-plugin caller must either glob the cache for a version dir or
     # rely on a PATH shim -- and PATH is the worse answer here: it would need one
     # entry per plugin per version, and every upgrade would strand the old one.
-    # Session-scoped only (no rc/registry persistence) for the same reason.
+    # Never written to an rc file or the registry for the same reason -- a
+    # shell bootstrap does not run in cannot re-verify the path. The pass does
+    # RECORD it under the data dir (Step 4b3, _maintain_env_records) so a
+    # gate-skipped session gets the name too, with the prelude's existence
+    # check standing in for this pass's verification.
     from .env_var_check import export_env_var, plugin_root_env_var_name
     export_env_var(plugin_root_env_var_name(plugin_info.name), plugin_info.install_path)
 
@@ -4467,6 +4487,62 @@ def _maintain_project_python_record(data_dir, key, value, source, parse_errors,
             ok_entries.append(f"{label}: none (project resolves to the engine interpreter)")
     else:
         ok_entries.append(f"{label}: left unchanged ({source} is not recorded)")
+
+
+def _maintain_env_records(data_dir, plugins, ok_entries, quiet_entries):
+    """Rewrite the pre-gate env records (``plugin_roots``, ``tool_bins``).
+
+    Both skip gates in session-bootstrap.sh short-circuit this engine, so the
+    names a pass exports through ``session_env`` are missing from most
+    sessions. These two records are what the hook's pre-gate prelude re-emits
+    instead; see the "pre-gate env record" comment in env_var_check.py for the
+    format and for why bash does not resolve any of this itself.
+
+    Write policy follows ``_maintain_project_python_record``: a change is a
+    quiet entry (always logged, never displayed), a steady state is a verbose
+    ok entry, a failed write is a quiet entry. The whole file is rewritten
+    every pass -- that, plus the prelude's existence check, is the entire
+    staleness story: a plugin that left the registry loses its line here, and
+    a path deleted between passes is skipped there.
+    """
+    from . import tool_paths
+    from .env_var_check import (
+        plugin_root_env_var_name, plugin_roots_record_path, read_env_record,
+        tool_bins_record_path, write_env_record,
+    )
+
+    roots = OrderedDict()
+    for plugin_info in plugins:
+        # The same gate the below-gate export sits behind: a plugin with no
+        # bootstrap.json returns from _bootstrap_single_plugin BEFORE the
+        # export, so recording it would advertise a root no pass ever looked
+        # at. Keeps the record equal to what the pass itself exported.
+        if not os.path.isfile(os.path.join(plugin_info.install_path, "bootstrap.json")):
+            continue
+        roots[plugin_root_env_var_name(plugin_info.name)] = plugin_info.install_path
+
+    # Same source and same existence test as export_tool_env_vars, which runs
+    # later in the pass against this identical mapping. None = the canonical
+    # tool_paths.json location, which is where every plugin pass records to.
+    bins = OrderedDict()
+    for tool_name, tool_path in tool_paths.all_paths(None).items():
+        if os.path.isfile(tool_path):
+            bins[tool_paths.tool_env_var_name(tool_name)] = tool_path
+
+    for label, record_path, wanted in (
+        ("plugin roots", plugin_roots_record_path(data_dir), roots),
+        ("tool paths", tool_bins_record_path(data_dir), bins),
+    ):
+        before = read_env_record(record_path)
+        wrote, kept = write_env_record(record_path, wanted)
+        # No path in any entry: a quiet entry is log-only, but the display
+        # tests treat "no absolute paths in entries" as the house rule.
+        if not wrote:
+            quiet_entries.append(f"{label}: pre-gate record write FAILED")
+        elif before == kept:
+            ok_entries.append(f"{label}: pre-gate record ok - {len(kept)} names")
+        else:
+            quiet_entries.append(f"{label}: pre-gate record now holds {len(kept)} names")
 
 
 def _interpreter_env_layers(project_dir, profile_state):

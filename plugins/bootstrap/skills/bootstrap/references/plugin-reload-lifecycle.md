@@ -286,6 +286,15 @@ Under `~/.claude/plugins/data/<marketplace>/bootstrap/` unless noted:
   SessionStart-missed rescue's detection signal) plus
   `sessions/rescue_launched.<session_id>` one-launch locks; pruned after 7 days.
 - `cooldowns/last_run_epoch.<sha1-of-cwd>` → the Layer-2 per-project cooldown stamp.
+- `plugin_roots` / `tool_bins` -> the pre-gate env records (bootstrap 0.141.0,
+  written by `_maintain_env_records` at Step 4b3). Both skip gates
+  short-circuit the engine, so a gate-skipped session gets no `session_env`
+  export at all; the hook re-emits these two records from a block that sits
+  ABOVE both gates, which is why such a session still has `<PLUGIN>_ROOT` and
+  `BOOTSTRAP_BIN_<TOOL>`. Each is rewritten whole on every full pass and a name
+  is re-emitted only while its recorded path still exists, so a deleted path or
+  a plugin that left the registry drops out rather than going stale. Mechanics:
+  [engine-internals.md](engine-internals.md), Step 4b3.
 - `bootstrap.log` → per-run headers `--- bootstrap@<version> <ISO-ts> ---` and harvest
   audit lines (`--- bootstrap harvest … --- / harvest: launched bootstrap <v> engine`).
 - The SessionStart/UserPromptSubmit display label (`<mkt>:bootstrap@<version> -> …`)
