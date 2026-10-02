@@ -1,4 +1,4 @@
-"""The pre-gate env records: ``plugin_roots`` and ``tool_bins``.
+"""The pre-gate plugin-root env record.
 
 Three layers, one per owner:
 
@@ -7,7 +7,7 @@ Three layers, one per owner:
 - ``session-bootstrap.sh``'s prelude re-emitting it in a session whose pass
   was short-circuited by a skip gate, which is the whole point: both gates
   return before the engine runs, so ``<PLUGIN>_ROOT`` and
-  ``BOOTSTRAP_BIN_<TOOL>`` were absent from most sessions.
+  plugin-root variables were absent from most sessions.
 
 The bash harness is the one in ``test_sessionstart_interpreter_env``, reused
 rather than re-derived -- it already arranges a temporary HOME holding a fake
@@ -26,11 +26,9 @@ import pytest
 
 from bootstrap_lib.env_var_check import (
     PLUGIN_ROOTS_FILENAME,
-    TOOL_BINS_FILENAME,
     plugin_root_env_var_name,
     plugin_roots_record_path,
     read_env_record,
-    tool_bins_record_path,
     write_env_record,
 )
 from bootstrap.link_compat import link_tree
@@ -96,10 +94,8 @@ class TestRecordFormat:
         write_env_record(path, {"A_ROOT": "/a"})
         assert read_env_record(path) == {"A_ROOT": "/a"}
 
-    def test_the_two_records_are_separate_files(self, tmp_path):
+    def test_the_plugin_root_record_has_its_own_file(self, tmp_path):
         assert plugin_roots_record_path(str(tmp_path)).endswith(PLUGIN_ROOTS_FILENAME)
-        assert tool_bins_record_path(str(tmp_path)).endswith(TOOL_BINS_FILENAME)
-        assert plugin_roots_record_path(str(tmp_path)) != tool_bins_record_path(str(tmp_path))
 
 
 def _fake_tree(tmp_path, plugins, *, bootstrap_json=True):
@@ -151,6 +147,31 @@ class TestEnginePass:
         assert record[plugin_root_env_var_name("alpha-kit")] == \
             str(tmp_path / "plugins" / "alpha-kit")
         assert plugin_root_env_var_name("beta-kit") in record
+
+    def test_a_pass_removes_the_stale_tool_record(self, tmp_path):
+        fake_root, data_dir = _fake_tree(tmp_path, ["alpha-kit"])
+        real_bin = tmp_path / "real-git"
+        real_bin.write_text("", encoding="utf-8")
+        stale = data_dir / "tool_bins"
+        stale.write_text(f"BOOTSTRAP_BIN_GIT={real_bin.as_posix()}\n", encoding="utf-8")
+        result = run_engine(str(data_dir), plugin_root=str(fake_root),
+                            env=_isolated_env(tmp_path))
+        assert result.returncode == 0, result.stderr
+        assert not stale.exists()
+
+    def test_the_hook_ignores_a_stale_tool_record(self, tmp_path):
+        # The record points at a REAL regular file, so a hook that still scanned
+        # tool_bins (it skips only paths that do not exist) would emit it.
+        real_bin = tmp_path / "real-git"
+        real_bin.write_text("", encoding="utf-8")
+        scaffold = _scaffold(tmp_path / "hook")
+        scaffold.seed_guard()
+        stale_hook = scaffold.plugin_data / "tool_bins"
+        stale_hook.write_text(f"BOOTSTRAP_BIN_GIT={real_bin.as_posix()}\n",
+                              encoding="utf-8")
+        hook_result = _run(scaffold)
+        assert hook_result.returncode == 0, hook_result.stderr
+        assert scaffold.exports("BOOTSTRAP_BIN_GIT") == []
 
     def test_a_plugin_that_left_the_registry_loses_its_line(self, tmp_path):
         """Registry-change self-correction, end to end."""
@@ -212,14 +233,11 @@ class TestPreludeStatic:
         # bash-3.2/fork guard covers this block too.
         assert text.index("# --- Interpreter names for this session") < start
 
-    def test_both_records_are_read_with_their_own_existence_test(self):
+    def test_the_plugin_root_record_has_a_directory_existence_test(self):
         block = self._block()
         assert '_pr_scan "$PLUGIN_DATA/plugin_roots" d' in block
-        assert '_pr_scan "$PLUGIN_DATA/tool_bins" f' in block
         assert '[ -d "$_pr_path" ] || continue' in block, \
             "a plugin root must be verified as a directory"
-        assert '[ -f "$_pr_path" ] || continue' in block, \
-            "a tool path must be verified as a regular file"
 
     def test_posix_only_constructs(self):
         """bash 3.2 and zsh; no Mac is available to run this on."""
@@ -253,13 +271,11 @@ class TestPreludeStatic:
 class TestPreludeReEmit:
     """A gate-skipped session: the hook exits after the prelude."""
 
-    def _seeded(self, tmp_path, roots=None, bins=None):
+    def _seeded(self, tmp_path, roots=None):
         scaffold = _scaffold(tmp_path)
         scaffold.seed_guard()
         if roots is not None:
             write_env_record(plugin_roots_record_path(str(scaffold.plugin_data)), roots)
-        if bins is not None:
-            write_env_record(tool_bins_record_path(str(scaffold.plugin_data)), bins)
         return scaffold
 
     def test_a_recorded_root_reaches_a_gate_skipped_session(self, tmp_path):
@@ -283,21 +299,6 @@ class TestPreludeReEmit:
         assert scaffold.exports("HUE_KIT_ROOT") == [], \
             "a deleted version directory must NOT be exported"
         assert scaffold.exports("P4_KIT_ROOT") == [f"'{live.as_posix()}'"]
-
-    def test_a_tool_record_needs_a_regular_file_not_a_directory(self, tmp_path):
-        a_dir = tmp_path / "bin" / "git"
-        a_dir.mkdir(parents=True)
-        a_file = tmp_path / "bin" / "jq.exe"
-        a_file.write_text("", encoding="utf-8")
-        scaffold = self._seeded(tmp_path, bins={
-            "BOOTSTRAP_BIN_GIT": a_dir.as_posix(),
-            "BOOTSTRAP_BIN_JQ": a_file.as_posix(),
-        })
-        result = _run(scaffold)
-        assert result.returncode == 0, result.stderr
-        assert scaffold.exports("BOOTSTRAP_BIN_GIT") == [], \
-            "a directory is not a tool"
-        assert scaffold.exports("BOOTSTRAP_BIN_JQ") == [f"'{a_file.as_posix()}'"]
 
     def test_an_existing_export_line_is_never_written_again(self, tmp_path):
         """The engine-verified value wins; the prelude only fills the gap."""
@@ -358,9 +359,8 @@ class TestPreludeReEmit:
         assert result.returncode == 0, result.stderr
         text = scaffold.env_file.read_text(encoding="utf-8") if \
             scaffold.env_file.exists() else ""
-        assert "_ROOT=" not in text and "BOOTSTRAP_BIN_" not in text
+        assert "_ROOT=" not in text
         assert "plugin_roots" not in result.stderr
-        assert "tool_bins" not in result.stderr
 
     def test_console_mode_writes_no_env_file(self, tmp_path):
         # CLAUDE_ENV_FILE is deliberately still set, so only the --console
