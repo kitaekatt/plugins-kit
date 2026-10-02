@@ -120,9 +120,12 @@ to repair a dependence on an exported variable in skill bodies, which harness
 substitution there (verified 2026-10-02) makes unnecessary. Its remaining
 plugin-root consumers are reference, README and script sites, none of which is
 a substituted surface. A parallel `BOOTSTRAP_BIN_<TOOL>` record-and-re-emit was
-removed in bootstrap 0.142.0: its one identified consumer,
+removed in bootstrap 0.142.0, and the full-pass `BOOTSTRAP_BIN_<TOOL>` session
+export in 0.143.0: its one identified consumer,
 `plugins/claude-ui-kit/scripts/statusline.sh`, runs as the statusline
-process rather than through the Bash tool environment.
+process rather than through the Bash tool environment. The admission rule for
+every session-env name: `plugins/bootstrap/skills/bootstrap/references/manifest-reference.md`,
+"What bootstrap writes to the session env".
 
 ## Classes
 

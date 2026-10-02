@@ -92,7 +92,6 @@ class TestVenvDisplay:
                 ],
             ),
         )
-        monkeypatch.setattr(venv_check, "export_venv_env_var", lambda *a, **k: None)
 
         actions, oks, failures, quiet = [], [], [], []
         engine._process_venv_def(

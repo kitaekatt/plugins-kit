@@ -571,7 +571,9 @@ Either phase is optional — a plugin can provide just a manifest, just a script
 ### Step 4b3: Pre-gate env records (`_maintain_env_records`, 0.141.0)
 
 Both skip gates short-circuit the engine, so the names a pass exports through
-`session_env` are absent from most sessions (measured: a session inside the
+`session_env` (the families admitted by the razor in
+[manifest-reference.md](manifest-reference.md), "What bootstrap writes to the
+session env") are absent from most sessions (measured: a session inside the
 cooldown window had `BOOTSTRAP_PYTHON` but zero `*_ROOT` names). This step
 rewrites the plugin-root record under bootstrap's data dir for
 `session-bootstrap.sh`'s own pre-gate block to re-emit, so bash resolves

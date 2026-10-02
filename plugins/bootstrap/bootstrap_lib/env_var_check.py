@@ -6,7 +6,7 @@ Each `env_vars` entry is ``{"name": <NAME>, "value": <value>}``. Semantics
 - **Live export**: the variable is set in the engine process (``os.environ``)
   so later phases in the SAME pass (e.g. tool install commands) see it, and
   an export line is appended to ``$CLAUDE_ENV_FILE`` so subsequent Bash tool
-  invocations in the session see it (mirrors venv_check.export_venv_env_var).
+  invocations in the session see it.
 - **Persistence**: an ``export NAME="value"`` line is written/updated
   IN PLACE in the shell rc file(s) on macOS/Ubuntu (a value change replaces
   the existing line rather than appending a stale duplicate), or the
@@ -54,8 +54,7 @@ def _invalid_name_message(name: str) -> str:
 def plugin_root_env_var_name(plugin_name: str) -> str:
     """Compute the env var name holding a plugin's install root.
 
-    Mirrors venv_check.venv_env_var_name and tool_paths.tool_env_var_name:
-    uppercase, with every character outside ``[A-Z0-9_]`` replaced so the
+    Uppercase, with every character outside ``[A-Z0-9_]`` replaced so the
     result is a valid shell identifier.
 
     This is the pointer that lets a consumer OUTSIDE a plugin invoke that
@@ -197,8 +196,7 @@ def export_env_var(name: str, value: str) -> Optional[str]:
     """Export into the live engine process and into the ``$CLAUDE_ENV_FILE`` block.
 
     The process export always happens. The env-file part no-ops (returning
-    ``None``) when ``CLAUDE_ENV_FILE`` is unset/empty -- same contract as
-    venv_check.export_venv_env_var. The line is buffered by ``session_env``,
+    ``None``) when ``CLAUDE_ENV_FILE`` is unset/empty. The line is buffered by ``session_env``,
     which deduplicates the block and writes it once at the end of the pass.
 
     Returns:

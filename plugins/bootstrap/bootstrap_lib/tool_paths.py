@@ -19,7 +19,6 @@ State file:
 
 import json
 import os
-import re
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -127,46 +126,3 @@ def all_paths(data_dir):
         if path:
             out[name] = path
     return out
-
-
-def tool_env_var_name(name):
-    """Compute the env var name for a recorded tool.
-
-    Uppercases the tool name and replaces every character that is not a
-    valid POSIX shell identifier character (anything other than A-Z, 0-9,
-    or underscore) with an underscore. Tool names are derived from binary
-    filenames, which can contain dots (e.g. ``draw.io``); a bare dot would
-    produce ``BOOTSTRAP_BIN_DRAW.IO``, which is not a valid identifier and
-    fails to ``export`` in the shell. Mirrors the convention used by
-    bootstrap_lib.venv_check.venv_env_var_name.
-
-    >>> tool_env_var_name("git")
-    'BOOTSTRAP_BIN_GIT'
-    >>> tool_env_var_name("github-cli")
-    'BOOTSTRAP_BIN_GITHUB_CLI'
-    >>> tool_env_var_name("draw.io")
-    'BOOTSTRAP_BIN_DRAW_IO'
-    """
-    return "BOOTSTRAP_BIN_" + re.sub(r"[^A-Z0-9_]", "_", name.upper())
-
-
-def export_tool_env_vars(data_dir):
-    """Record BOOTSTRAP_BIN_<TOOL> exports in the pass's $CLAUDE_ENV_FILE block.
-
-    Mirrors export_venv_env_var: no-op when CLAUDE_ENV_FILE is unset or
-    when the recorded path no longer exists on disk (consumers fail fast
-    on unset vars rather than silently invoking a stale path). Returns
-    the list of exported var names for diagnostics.
-
-    Buffered by session_env, which deduplicates the block and writes it once
-    at the end of the pass.
-    """
-    from . import session_env
-    exported = []
-    for name, path in all_paths(data_dir).items():
-        if not os.path.isfile(path):
-            continue
-        var = session_env.record(tool_env_var_name(name), path)
-        if var is not None:
-            exported.append(var)
-    return exported
