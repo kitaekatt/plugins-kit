@@ -1,4 +1,9 @@
-"""Tests for bootstrap_lib.code_review.review_profiles."""
+"""Tests for bootstrap_lib.code_review.review_profiles.
+
+Every test resolves against a complete tmp defaults layer (``DEFAULTS``),
+monkeypatched over ``rp.DEFAULTS_PATH``. Tests that pin the SHIPPED table live
+in test_shipped_review_profiles.py.
+"""
 
 from __future__ import annotations
 
@@ -8,11 +13,52 @@ from typing import Any
 import pytest
 import yaml
 
+from bootstrap_lib import model_declaration
 from bootstrap_lib.code_review import lane_prompts as lp
 from bootstrap_lib.code_review import review_profiles as rp
 
 
-FIXTURE = Path(__file__).with_name("shipped_review_profiles.yaml")
+A = "reviewer_a_claude_md_compliance"
+B = "reviewer_b_diff_only_bugs"
+C = "reviewer_c_introduced_code"
+
+
+def _e(model_id: str, effort: str) -> dict[str, str]:
+    """One complete model entry."""
+    return {"id": model_id, "effort": effort}
+
+
+DEFAULTS: dict[str, Any] = {
+    "profiles": [
+        {
+            "id": "data_only",
+            "selection": {
+                "data_only_extensions": [".csv", ".yaml", ".yml", ".json", ".tsv", ".md"]
+            },
+            "reviewers": [
+                {"name": A, "model": [_e("sonnet", "low")]},
+                {"name": B, "model": [_e("sonnet", "low")]},
+            ],
+            "validator_models": {
+                "bug": [_e("sonnet", "medium")],
+                "claude_md": [_e("sonnet", "medium")],
+            },
+        },
+        {
+            "id": "code",
+            "selection": {},
+            "reviewers": [
+                {"name": A, "model": [_e("sonnet", "low")]},
+                {"name": B, "model": [_e("opus", "medium")]},
+                {"name": C, "model": [_e("sol", "high"), _e("opus", "high")]},
+            ],
+            "validator_models": {
+                "bug": [_e("opus", "high")],
+                "claude_md": [_e("sonnet", "medium")],
+            },
+        },
+    ]
+}
 
 
 def _write_yaml(path: Path, value: dict[str, Any]) -> None:
@@ -24,12 +70,25 @@ def _write_yaml(path: Path, value: dict[str, Any]) -> None:
     )
 
 
+@pytest.fixture(autouse=True)
+def defaults_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Point the shipped layer at a complete tmp defaults file."""
+    path = tmp_path / "defaults" / rp.CONFIG_NAME
+    _write_yaml(path, DEFAULTS)
+    monkeypatch.setattr(rp, "DEFAULTS_PATH", path)
+    return path
+
+
 def _layers(tmp_path: Path) -> tuple[Path, Path, Path]:
     """Return isolated home, project, and project-config paths."""
     home = tmp_path / "home"
     project = tmp_path / "project"
     project_config = project / ".claude" / rp.CONFIG_NAME
     return home, project, project_config
+
+
+def _user_path(tmp_path: Path) -> Path:
+    return tmp_path / "home" / ".claude" / "config" / rp.CONFIG_NAME
 
 
 def _resolved(
@@ -41,11 +100,16 @@ def _resolved(
     """Resolve test layers without consulting the real home directory."""
     home, project_root, project_path = _layers(tmp_path)
     if user is not None:
-        _write_yaml(home / ".claude" / "config" / rp.CONFIG_NAME, user)
+        _write_yaml(_user_path(tmp_path), user)
     if project is not None:
         _write_yaml(project_path, project)
     config, _provenance = rp.resolve_config(project_root, home=home)
     return config
+
+
+def _main(tmp_path: Path, *extra: str) -> int:
+    home, project_root, _project_path = _layers(tmp_path)
+    return rp.main(["--project-root", str(project_root), "--home", str(home), *extra])
 
 
 def _profile(config: dict[str, Any], profile_id: str) -> dict[str, Any]:
@@ -53,21 +117,34 @@ def _profile(config: dict[str, Any], profile_id: str) -> dict[str, Any]:
     return next(profile for profile in config["profiles"] if profile["id"] == profile_id)
 
 
-def test_shipped_only_render_matches_pre_seam_bytes(tmp_path: Path) -> None:
-    """The shipped executable projection is pinned byte-for-byte.
+def _reviewer(config: dict[str, Any], profile_id: str, name: str) -> dict[str, Any]:
+    return next(
+        reviewer
+        for reviewer in _profile(config, profile_id)["reviewers"]
+        if reviewer["name"] == name
+    )
 
-    The shipped `[sol, opus]` declaration for reviewer C resolves to `sol`
-    with `opus` left in `model_fallbacks`. The review skill joins the two back
-    into the declaration it hands to `describe`.
-    """
-    home, project_root, _project_path = _layers(tmp_path)
-    config, provenance = rp.resolve_config(project_root, home=home)
-    config = rp.apply_model_priority(config)
 
-    assert provenance[0][0:3:2] == ("shipped", "applied")
-    assert all(layer != "user" or status == "absent" for layer, _path, status in provenance)
-    assert all(layer != "project" or status == "absent" for layer, _path, status in provenance)
-    assert rp.render_projection(config).encode("utf-8") == FIXTURE.read_bytes()
+def _reviewer_layer(name: str, model: Any, profile_id: str = "code") -> dict[str, Any]:
+    """A layer stating exactly one reviewer record with ``model``."""
+    return {"profiles": [{"id": profile_id, "reviewers": [{"name": name, "model": model}]}]}
+
+
+def _validator_layer(model: Any) -> dict[str, Any]:
+    """A layer stating the code profile's `bug` validator as ``model``."""
+    return {"profiles": [{"id": "code", "validator_models": {"bug": model}}]}
+
+
+def _findings(tmp_path: Path, **layers: dict[str, Any]) -> list[str]:
+    """Resolve and return the findings the IncompleteConfigError carries."""
+    with pytest.raises(rp.IncompleteConfigError) as excinfo:
+        _resolved(tmp_path, **layers)
+    return excinfo.value.findings
+
+
+# --------------------------------------------------------------------------
+# merge semantics
+# --------------------------------------------------------------------------
 
 
 def test_patch_merges_profile_reviewer_and_validator_in_place(tmp_path: Path) -> None:
@@ -77,10 +154,8 @@ def test_patch_merges_profile_reviewer_and_validator_in_place(tmp_path: Path) ->
             "profiles": [
                 {
                     "id": "code",
-                    "reviewers": [
-                        {"name": "reviewer_b_diff_only_bugs", "model": "sonnet"}
-                    ],
-                    "validator_models": {"bug": "sonnet"},
+                    "reviewers": [{"name": B, "model": [_e("sonnet", "high")]}],
+                    "validator_models": {"bug": [_e("sonnet", "low")]},
                 }
             ]
         },
@@ -88,13 +163,12 @@ def test_patch_merges_profile_reviewer_and_validator_in_place(tmp_path: Path) ->
 
     assert [profile["id"] for profile in config["profiles"]] == ["data_only", "code"]
     code = _profile(config, "code")
-    assert [reviewer["name"] for reviewer in code["reviewers"]] == [
-        "reviewer_a_claude_md_compliance",
-        "reviewer_b_diff_only_bugs",
-        "reviewer_c_introduced_code",
-    ]
-    assert code["reviewers"][1]["model"] == "sonnet"
-    assert code["validator_models"] == {"bug": "sonnet", "claude_md": "sonnet"}
+    assert [reviewer["name"] for reviewer in code["reviewers"]] == [A, B, C]
+    assert code["reviewers"][1]["model"] == [_e("sonnet", "high")]
+    assert code["validator_models"] == {
+        "bug": [_e("sonnet", "low")],
+        "claude_md": [_e("sonnet", "medium")],
+    }
 
 
 def test_unknown_profiles_and_validator_reasons_append(tmp_path: Path) -> None:
@@ -104,15 +178,16 @@ def test_unknown_profiles_and_validator_reasons_append(tmp_path: Path) -> None:
             "profiles": [
                 {
                     "id": "data_only",
-                    "validator_models": {"security": "sonnet"},
+                    "validator_models": {"security": [_e("sonnet", "low")]},
                 },
                 {
                     "id": "security",
                     "selection": {},
-                    "reviewers": [
-                        {"name": "reviewer_b_diff_only_bugs", "model": "opus"}
-                    ],
-                    "validator_models": {"bug": "opus", "claude_md": "sonnet"},
+                    "reviewers": [{"name": B, "model": [_e("opus", "high")]}],
+                    "validator_models": {
+                        "bug": [_e("opus", "high")],
+                        "claude_md": [_e("sonnet", "low")],
+                    },
                 },
             ]
         },
@@ -123,29 +198,68 @@ def test_unknown_profiles_and_validator_reasons_append(tmp_path: Path) -> None:
         "code",
         "security",
     ]
-    data_only = _profile(config, "data_only")
-    assert data_only["validator_models"] == {
-        "bug": "sonnet",
-        "claude_md": "sonnet",
-        "security": "sonnet",
+    assert list(_profile(config, "data_only")["validator_models"]) == [
+        "bug",
+        "claude_md",
+        "security",
+    ]
+
+
+def test_the_entry_list_replaces_wholesale_across_layers(tmp_path: Path) -> None:
+    """A higher layer's list is the whole list: no entry or effort leaks up."""
+    config = _resolved(
+        tmp_path,
+        user=_reviewer_layer(C, [_e("luna", "medium")]),
+    )
+
+    assert _reviewer(config, "code", C)["model"] == [_e("luna", "medium")]
+
+
+def test_project_layer_has_highest_precedence(tmp_path: Path) -> None:
+    config = _resolved(
+        tmp_path,
+        user=_reviewer_layer(B, [_e("sonnet", "low")]),
+        project=_reviewer_layer(B, [_e("opus", "max")]),
+    )
+
+    assert _reviewer(config, "code", B)["model"] == [_e("opus", "max")]
+
+
+def test_plain_extension_list_replaces_instead_of_merging(tmp_path: Path) -> None:
+    config = _resolved(
+        tmp_path,
+        user={
+            "profiles": [
+                {"id": "data_only", "selection": {"data_only_extensions": [".toml", ".ini"]}}
+            ]
+        },
+    )
+
+    assert _profile(config, "data_only")["selection"] == {
+        "data_only_extensions": [".toml", ".ini"]
     }
-    assert list(data_only["validator_models"]) == ["bug", "claude_md", "security"]
+
+
+def test_disabled_profile_and_reviewer_are_removed(tmp_path: Path) -> None:
+    config = _resolved(
+        tmp_path,
+        user={
+            "profiles": [
+                {"id": "code", "disabled": True},
+                {"id": "data_only", "reviewers": [{"name": B, "disabled": True}]},
+            ]
+        },
+    )
+
+    assert [profile["id"] for profile in config["profiles"]] == ["data_only"]
+    assert [reviewer["name"] for reviewer in config["profiles"][0]["reviewers"]] == [A]
 
 
 def test_unknown_reviewer_name_is_rejected_with_supported_lanes(tmp_path: Path) -> None:
     with pytest.raises(rp.ConfigError, match="reviewer_security") as excinfo:
         _resolved(
             tmp_path,
-            user={
-                "profiles": [
-                    {
-                        "id": "data_only",
-                        "reviewers": [
-                            {"name": "reviewer_security", "model": "sonnet"}
-                        ],
-                    }
-                ]
-            },
+            user=_reviewer_layer("reviewer_security", [_e("sonnet", "low")], "data_only"),
         )
 
     supported = sorted(lp.KNOWN_LANES - {"validator"})
@@ -174,99 +288,410 @@ def test_profile_with_no_active_reviewers_is_rejected(tmp_path: Path) -> None:
                     {
                         "id": "code",
                         "reviewers": [
-                            {
-                                "name": name,
-                                "disabled": True,
-                            }
-                            for name in (
-                                "reviewer_a_claude_md_compliance",
-                                "reviewer_b_diff_only_bugs",
-                                "reviewer_c_introduced_code",
-                            )
+                            {"name": name, "disabled": True} for name in (A, B, C)
                         ],
                     }
                 ]
             },
         )
-def test_disabled_profile_and_reviewer_are_removed(tmp_path: Path) -> None:
-    config = _resolved(
+
+
+# --------------------------------------------------------------------------
+# completeness findings
+# --------------------------------------------------------------------------
+
+
+def test_an_entry_without_effort_is_a_finding_naming_layer_profile_lane_and_entry(
+    tmp_path: Path,
+) -> None:
+    findings = _findings(
         tmp_path,
-        user={
-            "profiles": [
-                {"id": "code", "disabled": True},
-                {
-                    "id": "data_only",
-                    "reviewers": [
-                        {
-                            "name": "reviewer_b_diff_only_bugs",
-                            "disabled": True,
-                        }
-                    ],
-                },
-            ]
-        },
+        user=_reviewer_layer(C, [_e("sol", "high"), {"id": "opus"}]),
     )
 
-    assert [profile["id"] for profile in config["profiles"]] == ["data_only"]
-    assert [reviewer["name"] for reviewer in config["profiles"][0]["reviewers"]] == [
-        "reviewer_a_claude_md_compliance"
+    assert findings == [
+        f"user {_user_path(tmp_path)}: profiles[code].reviewers[{C}].model[1] (opus): "
+        "missing effort"
     ]
 
 
-def test_plain_extension_list_replaces_instead_of_merging(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("label", "model", "location"),
+    [
+        ("bare string", "opus", ".model (opus)"),
+        ("list of strings", ["opus"], ".model[0] (opus)"),
+    ],
+)
+def test_a_bare_string_model_is_a_finding_not_a_crash(
+    tmp_path: Path, label: str, model: Any, location: str
+) -> None:
+    findings = _findings(tmp_path, user=_reviewer_layer(C, model))
+
+    assert len(findings) == 1, label
+    assert f"profiles[code].reviewers[{C}]{location}" in findings[0], label
+    assert "entry 'opus' states no effort" in findings[0], label
+    assert "{id: opus, effort: <level>}" in findings[0], label
+
+
+def test_lane_level_effort_is_an_error_naming_the_per_entry_form(tmp_path: Path) -> None:
+    findings = _findings(
+        tmp_path,
+        user={
+            "profiles": [
+                {
+                    "id": "code",
+                    "reviewers": [
+                        {"name": B, "model": [_e("opus", "high")], "effort": "high"}
+                    ],
+                }
+            ]
+        },
+    )
+
+    assert len(findings) == 1
+    assert f"profiles[code].reviewers[{B}].effort" in findings[0]
+    assert "`effort` on a lane was removed: state it on each model entry" in findings[0]
+    assert "{id: <model>, effort: <level>}" in findings[0]
+
+
+def test_a_model_override_without_efforts_is_a_finding_over_a_complete_lower_layer(
+    tmp_path: Path,
+) -> None:
+    """The shipped layer is complete; the user layer's own list is not."""
+    findings = _findings(tmp_path, user=_reviewer_layer(C, [{"id": "luna"}]))
+
+    assert findings == [
+        f"user {_user_path(tmp_path)}: profiles[code].reviewers[{C}].model[0] (luna): "
+        "missing effort"
+    ]
+
+
+def test_a_reviewer_record_without_a_model_is_a_finding(tmp_path: Path) -> None:
+    """A sparse patch no longer inherits the lower layer's model list."""
+    findings = _findings(
+        tmp_path,
+        user={"profiles": [{"id": "code", "reviewers": [{"name": B, "disabled": False}]}]},
+    )
+
+    assert len(findings) == 1
+    assert f"profiles[code].reviewers[{B}].model: missing" in findings[0]
+
+
+def test_a_disabled_only_record_is_exempt(tmp_path: Path) -> None:
+    config = _resolved(
+        tmp_path,
+        user={"profiles": [{"id": "code", "reviewers": [{"name": B, "disabled": True}]}]},
+    )
+
+    assert [reviewer["name"] for reviewer in _profile(config, "code")["reviewers"]] == [A, C]
+
+
+def test_anything_under_a_disabled_profile_is_exempt(tmp_path: Path) -> None:
     config = _resolved(
         tmp_path,
         user={
             "profiles": [
                 {
                     "id": "data_only",
-                    "selection": {"data_only_extensions": [".toml", ".ini"]},
+                    "disabled": True,
+                    "reviewers": [{"name": A, "model": "sonnet", "effort": "low"}],
+                    "validator_models": {"bug": "sonnet"},
                 }
             ]
         },
     )
 
-    assert _profile(config, "data_only")["selection"] == {
-        "data_only_extensions": [".toml", ".ini"]
-    }
+    assert [profile["id"] for profile in config["profiles"]] == ["code"]
 
 
-def test_project_layer_has_highest_precedence(tmp_path: Path) -> None:
-    config = _resolved(
+def test_resolve_raises_on_an_incomplete_layer(tmp_path: Path) -> None:
+    """The error is a ConfigError, so existing callers still see one."""
+    with pytest.raises(rp.ConfigError) as excinfo:
+        _resolved(tmp_path, project=_validator_layer([{"id": "opus"}]))
+
+    assert isinstance(excinfo.value, rp.IncompleteConfigError)
+    assert "validator_models.bug[0] (opus): missing effort" in str(excinfo.value)
+
+
+def test_an_incomplete_shipped_layer_is_a_finding(
+    tmp_path: Path, defaults_path: Path
+) -> None:
+    """The shipped layer is held to the same rule as an override."""
+    incomplete = yaml.safe_load(yaml.safe_dump(DEFAULTS))
+    incomplete["profiles"][0]["reviewers"][0]["model"] = "sonnet"
+    _write_yaml(defaults_path, incomplete)
+
+    findings = _findings(tmp_path)
+
+    assert findings == [
+        f"shipped {defaults_path}: profiles[data_only].reviewers[{A}].model (sonnet): "
+        "entry 'sonnet' states no effort; write [{id: sonnet, effort: <level>}]"
+    ]
+
+
+def test_findings_aggregate_across_all_three_layers(
+    tmp_path: Path, defaults_path: Path
+) -> None:
+    """One resolve reports every gap in shipped, user and project together."""
+    shipped = yaml.safe_load(yaml.safe_dump(DEFAULTS))
+    shipped["profiles"][1]["validator_models"]["claude_md"] = "sonnet"
+    _write_yaml(defaults_path, shipped)
+
+    findings = _findings(
         tmp_path,
-        user={
-            "profiles": [
-                {
-                    "id": "code",
-                    "reviewers": [
-                        {"name": "reviewer_b_diff_only_bugs", "model": "sonnet"}
-                    ],
-                }
-            ]
-        },
-        project={
-            "profiles": [
-                {
-                    "id": "code",
-                    "reviewers": [
-                        {"name": "reviewer_b_diff_only_bugs", "model": "opus"}
-                    ],
-                }
-            ]
-        },
+        user=_reviewer_layer(A, [{"id": "sonnet"}]),
+        project=_reviewer_layer(B, ["opus", {"id": "sonnet"}]),
     )
 
-    assert _profile(config, "code")["reviewers"][1]["model"] == "opus"
+    home, _project_root, project_path = _layers(tmp_path)
+    assert [finding.split(":", 1)[0] for finding in findings] == [
+        f"shipped {defaults_path}",
+        f"user {_user_path(tmp_path)}",
+        f"project {project_path}",
+        f"project {project_path}",
+    ]
+    assert "validator_models.claude_md (sonnet)" in findings[0]
+    assert f"reviewers[{A}].model[0] (sonnet): missing effort" in findings[1]
+    assert f"reviewers[{B}].model[0] (opus): entry 'opus' states no effort" in findings[2]
+    assert f"reviewers[{B}].model[1] (sonnet): missing effort" in findings[3]
+
+
+# --------------------------------------------------------------------------
+# entry structure
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("label", "model", "fragment"),
+    [
+        ("empty list", [], "empty"),
+        ("non-entry element", [_e("opus", "high"), 7], "{id: <model>, effort: <level>}"),
+        ("blank id", [_e("   ", "high")], "string"),
+        ("missing id", [{"effort": "high"}], "required field missing: id"),
+        ("bare mapping", _e("opus", "high"), "got a mapping"),
+        ("unknown effort", [_e("opus", "minimal")], "unknown effort 'minimal'"),
+    ],
+)
+def test_an_invalid_model_is_rejected(
+    tmp_path: Path, label: str, model: Any, fragment: str
+) -> None:
+    with pytest.raises(rp.ConfigError) as excinfo:
+        _resolved(tmp_path, user=_reviewer_layer(C, model))
+
+    assert not isinstance(excinfo.value, rp.IncompleteConfigError), label
+    message = str(excinfo.value)
+    assert ".model" in message, label
+    assert fragment in message, label
+
+
+def test_an_unknown_entry_field_is_rejected(tmp_path: Path) -> None:
+    with pytest.raises(rp.ConfigError) as excinfo:
+        _resolved(
+            tmp_path,
+            user=_reviewer_layer(C, [{"id": "opus", "effort": "high", "harness": "claude"}]),
+        )
+
+    message = str(excinfo.value)
+    assert f"reviewers[0].model[0]" in message
+    assert "unknown field(s): 'harness'" in message
+    assert "known fields: effort, id" in message
+
+
+def test_a_duplicate_entry_id_is_rejected_through_model_declaration(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seen: list[Any] = []
+    real_parse = model_declaration.parse
+
+    def spy(value: Any) -> list[str]:
+        seen.append(value)
+        return real_parse(value)
+
+    monkeypatch.setattr(model_declaration, "parse", spy)
+    with pytest.raises(rp.ConfigError) as excinfo:
+        _resolved(
+            tmp_path,
+            user=_reviewer_layer(C, [_e("sol", "high"), _e("opus", "high"), _e("sol", "low")]),
+        )
+
+    message = str(excinfo.value)
+    assert ".model[2]" in message
+    assert "duplicate id 'sol'" in message
+    assert ["sol", "opus", "sol"] in seen
+
+
+def test_the_shared_declaration_grammar_still_rejects_mappings() -> None:
+    """model_declaration is untouched: entries are this module's shape only."""
+    with pytest.raises(model_declaration.DeclarationError):
+        model_declaration.parse(_e("opus", "high"))
+    with pytest.raises(model_declaration.DeclarationError):
+        model_declaration.parse([_e("opus", "high")])
+    assert model_declaration.parse(["opus", " sol "]) == ["opus", "sol"]
+
+
+def test_a_leftover_peer_when_available_names_its_replacement(tmp_path: Path) -> None:
+    with pytest.raises(rp.ConfigError) as excinfo:
+        _resolved(
+            tmp_path,
+            user={
+                "profiles": [
+                    {"id": "code", "reviewers": [{"name": C, "peer_when_available": True}]}
+                ]
+            },
+        )
+
+    message = str(excinfo.value)
+    assert "peer_when_available" in message
+    assert "was removed" in message
+
+
+def test_a_model_fallbacks_field_is_an_unknown_field(tmp_path: Path) -> None:
+    with pytest.raises(rp.ConfigError, match="unknown field\\(s\\): 'model_fallbacks'"):
+        _resolved(
+            tmp_path,
+            user={
+                "profiles": [
+                    {
+                        "id": "code",
+                        "reviewers": [
+                            {
+                                "name": C,
+                                "model": [_e("sol", "high")],
+                                "model_fallbacks": [],
+                            }
+                        ],
+                    }
+                ]
+            },
+        )
+
+
+# --------------------------------------------------------------------------
+# validators
+# --------------------------------------------------------------------------
+
+
+def test_a_validator_entry_resolves_to_a_one_entry_list(tmp_path: Path) -> None:
+    resolved = rp.apply_model_priority(
+        _resolved(tmp_path, user=_validator_layer([_e(" haiku ", "low")]))
+    )
+
+    assert _profile(resolved, "code")["validator_models"]["bug"] == [_e("haiku", "low")]
+    rp.validate_config(resolved)
+
+
+@pytest.mark.parametrize(
+    ("label", "model", "fragment"),
+    [
+        ("empty list", [], "empty"),
+        ("two entries", [_e("opus", "high"), _e("sonnet", "low")], "exactly one"),
+        ("duplicate", [_e("opus", "high"), _e("opus", "low")], "duplicate"),
+        ("non-string id", [_e(7, "high")], "string"),  # type: ignore[arg-type]
+        ("blank", "  ", "string"),
+        ("bare mapping", _e("opus", "high"), "got a mapping"),
+    ],
+)
+def test_an_invalid_validator_is_rejected(
+    tmp_path: Path, label: str, model: Any, fragment: str
+) -> None:
+    with pytest.raises(rp.ConfigError) as excinfo:
+        _resolved(tmp_path, user=_validator_layer(model))
+
+    assert not isinstance(excinfo.value, rp.IncompleteConfigError), label
+    message = str(excinfo.value)
+    assert "validator_models.bug" in message, label
+    assert fragment in message, label
+
+
+@pytest.mark.parametrize(
+    ("label", "model", "fragment"),
+    [
+        ("scalar", "opus", "validator_models.bug (opus): entry 'opus' states no effort"),
+        ("string list", ["opus"], "validator_models.bug[0] (opus): entry 'opus' states no effort"),
+        ("no effort", [{"id": "opus"}], "validator_models.bug[0] (opus): missing effort"),
+    ],
+)
+def test_a_validator_requires_exactly_one_entry_with_effort(
+    tmp_path: Path, label: str, model: Any, fragment: str
+) -> None:
+    findings = _findings(tmp_path, user=_validator_layer(model))
+
+    assert len(findings) == 1, label
+    assert fragment in findings[0], label
+
+
+# --------------------------------------------------------------------------
+# projection
+# --------------------------------------------------------------------------
+
+
+def test_the_projection_carries_each_entrys_effort(tmp_path: Path) -> None:
+    resolved = rp.apply_model_priority(
+        _resolved(tmp_path, user=_reviewer_layer(C, [_e("luna", "xhigh"), _e("sonnet", "low")]))
+    )
+    rendered = rp.render_projection(resolved)
+    table = yaml.safe_load(rendered)
+    code = next(p for p in table["profiles"] if p["id"] == "code")
+
+    assert code["reviewers"][2] == {
+        "name": C,
+        "model": [_e("luna", "xhigh"), _e("sonnet", "low")],
+    }
+    assert code["validator_models"] == {
+        "bug": [_e("opus", "high")],
+        "claude_md": [_e("sonnet", "medium")],
+    }
+    for profile in table["profiles"]:
+        for reviewer in profile["reviewers"]:
+            assert set(reviewer) == {"name", "model"}
+            for entry in reviewer["model"]:
+                assert list(entry) == ["id", "effort"]
+                assert entry["effort"] in rp.EFFORT_LEVELS
+
+
+def test_peer_prefixed_entry_is_an_ordinary_id(tmp_path: Path) -> None:
+    resolved = rp.apply_model_priority(
+        _resolved(tmp_path, user=_reviewer_layer(C, [_e("peer:opus", "high"), _e("opus", "high")]))
+    )
+
+    assert _reviewer(resolved, "code", C)["model"] == [
+        _e("peer:opus", "high"),
+        _e("opus", "high"),
+    ]
+
+
+def test_projecting_an_entry_without_effort_is_refused(tmp_path: Path) -> None:
+    """A caller that hands in an incomplete table gets an error, not a table."""
+    config = _resolved(tmp_path)
+    _reviewer(config, "code", C)["model"] = ["sol", "opus"]
+
+    with pytest.raises(rp.ConfigError) as excinfo:
+        rp.canonical_projection(config)
+    with pytest.raises(rp.ConfigError):
+        rp.apply_model_priority(config)
+
+    assert C in str(excinfo.value)
+    assert "resolve_config" in str(excinfo.value)
+
+
+def test_validate_config_rejects_an_incomplete_resolved_table(tmp_path: Path) -> None:
+    config = _resolved(tmp_path)
+    del _profile(config, "code")["validator_models"]["bug"][0]["effort"]
+
+    with pytest.raises(rp.IncompleteConfigError, match="missing effort"):
+        rp.validate_config(config)
+
+
+# --------------------------------------------------------------------------
+# CLI
+# --------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
     ("label", "layer"),
     [
         ("unknown field", {"unexpected": True}),
-        (
-            "missing profile fields",
-            {"profiles": [{"id": "new_profile"}]},
-        ),
+        ("missing profile fields", {"profiles": [{"id": "new_profile"}]}),
         (
             "duplicate profile ids",
             {
@@ -284,554 +709,108 @@ def test_project_layer_has_highest_precedence(tmp_path: Path) -> None:
                         "id": "new_profile",
                         "selection": {},
                         "reviewers": [
-                            {"name": "same", "model": "sonnet"},
-                            {"name": "same", "model": "opus"},
+                            {"name": "same", "model": [_e("sonnet", "low")]},
+                            {"name": "same", "model": [_e("opus", "low")]},
                         ],
                         "validator_models": {},
                     }
                 ]
             },
         ),
-        (
-            "empty reviewer model",
-            {
-                "profiles": [
-                    {
-                        "id": "code",
-                        "reviewers": [{"name": "reviewer_b_diff_only_bugs", "model": ""}],
-                    }
-                ]
-            },
-        ),
-        (
-            "empty reviewer name",
-            {
-                "profiles": [
-                    {
-                        "id": "code",
-                        "reviewers": [{"name": "  ", "model": "sonnet"}],
-                    }
-                ]
-            },
-        ),
+        ("empty reviewer model", _reviewer_layer(B, "")),
+        ("empty reviewer name", _reviewer_layer("  ", [_e("sonnet", "low")])),
     ],
 )
-def test_invalid_configuration_exits_nonzero(
+def test_invalid_configuration_exits_2(
     tmp_path: Path,
     label: str,
     layer: dict[str, Any],
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """CLI rejects invalid layers before emitting a table."""
-    _home, project_root, project_path = _layers(tmp_path)
+    """CLI rejects invalid layers before emitting a table, in both modes."""
+    _home, _project_root, project_path = _layers(tmp_path)
     _write_yaml(project_path, layer)
 
-    assert rp.main(["--project-root", str(project_root), "--home", str(_home)]) == 1
+    for extra in ((), ("--check",)):
+        assert _main(tmp_path, *extra) == 2, (label, extra)
+        captured = capsys.readouterr()
+        assert captured.out == "", label
+        assert "review profiles config error:" in captured.err
+        assert str(project_path) in captured.err
+
+
+def test_cli_prints_yaml_once_and_provenance_for_shipped_only(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert _main(tmp_path) == 0
     captured = capsys.readouterr()
-    assert captured.out == "", label
-    assert "review profiles config error:" in captured.err
-    assert str(project_path) in captured.err
-
-
-def test_cli_prints_yaml_once_and_provenance_for_shipped_only(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-    home, project_root, _project_path = _layers(tmp_path)
-
-    assert rp.main(["--project-root", str(project_root), "--home", str(home)]) == 0
-    output = capsys.readouterr().out
+    output = captured.out
+    assert captured.err == ""
     assert output.count("profiles:\n") == 1
     assert "Layers applied: shipped." in output
     assert "To change this policy, create: user (" in output
     assert "project (" in output
-    assert "description:" not in output
-    assert "guidance:" not in output
-    assert "rationale:" not in output
-
-
-# --------------------------------------------------------------------------
-# model priority lists
-# --------------------------------------------------------------------------
-
-
-def _reviewer(config: dict[str, Any], profile_id: str, name: str) -> dict[str, Any]:
-    return next(
-        reviewer
-        for reviewer in _profile(config, profile_id)["reviewers"]
-        if reviewer["name"] == name
-    )
-
-
-def test_shipped_default_gives_reviewer_c_a_sol_opus_declaration(tmp_path: Path) -> None:
-    """Migration step 5: `[peer:opus, opus]` became `[sol, opus]` (design D1)."""
-    config = _resolved(tmp_path)
-
-    assert _reviewer(config, "code", "reviewer_c_introduced_code")["model"] == [
-        "sol",
-        "opus",
-    ]
-    listed = [
-        (profile["id"], reviewer["name"])
-        for profile in config["profiles"]
-        for reviewer in profile["reviewers"]
-        if not isinstance(reviewer["model"], str)
-    ]
-    assert listed == [("code", "reviewer_c_introduced_code")]
-
-
-def test_a_string_model_is_unchanged(tmp_path: Path) -> None:
-    """A plain string keeps its meaning: a one-entry list that resolves to itself."""
-    config = rp.apply_model_priority(
-        _resolved(
-            tmp_path,
-            user={
-                "profiles": [
-                    {
-                        "id": "code",
-                        "reviewers": [
-                            {"name": "reviewer_c_introduced_code", "model": "sonnet"}
-                        ],
-                    }
-                ]
-            },
-        )
-    )
-
-    code = _profile(config, "code")
-    assert [reviewer["model"] for reviewer in code["reviewers"]] == [
-        "sonnet",
-        "opus",
-        "sonnet",
-    ]
-
-
-def test_peer_prefixed_entry_is_no_longer_rewritten(tmp_path: Path) -> None:
-    """Migration step 12 (direction 12): `peer:` is dropped.
-
-    An entry spelled `peer:<name>` is now an ordinary, unresolved id -- no
-    seat discovery runs, and it is chosen as the lane's literal model exactly
-    like any other entry. (Whether an unresolvable id like this is later
-    skipped is a DISPATCH-time concern, direction 13, out of scope here.)
-    """
-    config = _resolved(
-        tmp_path,
-        user={
-            "profiles": [
-                {
-                    "id": "code",
-                    "reviewers": [
-                        {
-                            "name": "reviewer_c_introduced_code",
-                            "model": ["peer:opus", "opus"],
-                        }
-                    ],
-                }
-            ]
-        },
-    )
-
-    resolved = rp.apply_model_priority(config)
-
-    reviewer = _reviewer(resolved, "code", "reviewer_c_introduced_code")
-    assert reviewer["model"] == "peer:opus"
-    assert reviewer["model_fallbacks"] == ["opus"]
-
-
-def test_a_user_model_replaces_the_shipped_list_wholesale(tmp_path: Path) -> None:
-    """The defect this field shape fixes: `model: fable` means fable."""
-    config = _resolved(
-        tmp_path,
-        user={
-            "profiles": [
-                {
-                    "id": "code",
-                    "reviewers": [
-                        {"name": "reviewer_c_introduced_code", "model": "fable"}
-                    ],
-                }
-            ]
-        },
-    )
-    assert _reviewer(config, "code", "reviewer_c_introduced_code")["model"] == "fable"
-
-    resolved = rp.apply_model_priority(config)
-
-    assert _reviewer(resolved, "code", "reviewer_c_introduced_code")["model"] == "fable"
-
-
-def test_a_user_list_replaces_the_shipped_list_element_for_element(
-    tmp_path: Path,
-) -> None:
-    config = _resolved(
-        tmp_path,
-        user={
-            "profiles": [
-                {
-                    "id": "code",
-                    "reviewers": [
-                        {
-                            "name": "reviewer_c_introduced_code",
-                            "model": ["luna", "sonnet"],
-                        }
-                    ],
-                }
-            ]
-        },
-    )
-
-    assert _reviewer(config, "code", "reviewer_c_introduced_code")["model"] == [
-        "luna",
-        "sonnet",
-    ]
-
-
-def _with_model(tmp_path: Path, model: Any) -> dict[str, Any]:
-    """Resolve a table whose reviewer_c lane states exactly ``model``."""
-    return _resolved(
-        tmp_path,
-        user={
-            "profiles": [
-                {
-                    "id": "code",
-                    "reviewers": [
-                        {"name": "reviewer_c_introduced_code", "model": model}
-                    ],
-                }
-            ]
-        },
-    )
-
-
-def test_a_single_string_model_has_an_empty_fallback_chain(tmp_path: Path) -> None:
-    """One entry is a chain of one, and "nothing left" is stated, not absent."""
-    resolved = rp.apply_model_priority(_with_model(tmp_path, "sonnet"))
-
-    reviewer = _reviewer(resolved, "code", "reviewer_c_introduced_code")
-    assert reviewer["model"] == "sonnet"
-    assert reviewer["model_fallbacks"] == []
-
-
-def test_the_entries_after_the_chosen_one_become_the_fallback_chain(
-    tmp_path: Path,
-) -> None:
-    """`[luna, sonnet]` runs on luna and keeps sonnet for a failed dispatch."""
-    resolved = rp.apply_model_priority(_with_model(tmp_path, ["luna", "sonnet"]))
-
-    reviewer = _reviewer(resolved, "code", "reviewer_c_introduced_code")
-    assert reviewer["model"] == "luna"
-    assert reviewer["model_fallbacks"] == ["sonnet"]
-
-
-def test_the_rendered_table_carries_the_fallback_chain(tmp_path: Path) -> None:
-    """The agent reading the table can see what the lane may fall over to."""
-    resolved = rp.apply_model_priority(_with_model(tmp_path, ["luna", "sonnet"]))
-    rendered = rp.render_projection(resolved)
-
-    assert "    model: luna\n    model_fallbacks:\n    - sonnet\n" in rendered
-    table = yaml.safe_load(rendered)
+    table = yaml.safe_load(output.split("\n---\n")[0])
     code = next(p for p in table["profiles"] if p["id"] == "code")
-    assert code["reviewers"][2] == {
-        "name": "reviewer_c_introduced_code",
-        "model": "luna",
-        "model_fallbacks": ["sonnet"],
-        "effort": "high",
-    }
+    assert code["reviewers"][2]["model"] == [_e("sol", "high"), _e("opus", "high")]
 
 
-def test_a_resolved_table_carrying_a_chain_still_validates(tmp_path: Path) -> None:
-    """The derived field is a known field, not a typo the schema rejects."""
-    resolved = rp.apply_model_priority(_with_model(tmp_path, ["luna", "sonnet"]))
-
-    rp.validate_config(resolved)
-
-
-@pytest.mark.parametrize(
-    ("label", "fallbacks"),
-    [
-        ("non-list", "sonnet"),
-        ("non-string entry", ["sonnet", 7]),
-        ("empty entry", ["sonnet", "   "]),
-    ],
-)
-def test_an_invalid_model_fallbacks_is_rejected(
-    tmp_path: Path, label: str, fallbacks: Any
-) -> None:
-    resolved = rp.apply_model_priority(_resolved(tmp_path))
-    _reviewer(resolved, "code", "reviewer_c_introduced_code")[
-        "model_fallbacks"
-    ] = fallbacks
-
-    with pytest.raises(rp.ConfigError) as excinfo:
-        rp.validate_config(resolved)
-
-    assert ".model_fallbacks" in str(excinfo.value), label
-
-
-def test_a_leftover_peer_when_available_names_its_replacement(tmp_path: Path) -> None:
-    with pytest.raises(rp.ConfigError) as excinfo:
-        _resolved(
-            tmp_path,
-            user={
-                "profiles": [
-                    {
-                        "id": "code",
-                        "reviewers": [
-                            {
-                                "name": "reviewer_c_introduced_code",
-                                "peer_when_available": True,
-                            }
-                        ],
-                    }
-                ]
-            },
-        )
-
-    message = str(excinfo.value)
-    assert "peer_when_available" in message
-    assert "was removed" in message
-    assert "model: [<name>, <name>]" in message
-
-
-@pytest.mark.parametrize(
-    ("label", "model"),
-    [
-        ("empty list", []),
-        ("non-string entry", ["opus", 7]),
-        ("empty entry", ["opus", "   "]),
-        ("mapping", {"peer": "opus"}),
-    ],
-)
-def test_an_invalid_model_is_rejected(
-    tmp_path: Path, label: str, model: Any
-) -> None:
-    with pytest.raises(rp.ConfigError) as excinfo:
-        _resolved(
-            tmp_path,
-            user={
-                "profiles": [
-                    {
-                        "id": "code",
-                        "reviewers": [
-                            {"name": "reviewer_c_introduced_code", "model": model}
-                        ],
-                    }
-                ]
-            },
-        )
-
-    assert ".model" in str(excinfo.value), label
-
-
-def test_the_projection_only_ever_carries_a_resolved_string(tmp_path: Path) -> None:
-    """The runner reads this table, so a priority list must never reach it."""
-    resolved = rp.apply_model_priority(_resolved(tmp_path))
-    projection = rp.canonical_projection(resolved)
-
-    for profile in projection["profiles"]:
-        for reviewer in profile["reviewers"]:
-            # `effort` is optional and omitted when unset, so it is allowed but
-            # never required; `model` must always be present and resolved.
-            assert set(reviewer) <= {"name", "model", "model_fallbacks", "effort"}
-            assert {"name", "model", "model_fallbacks"} <= set(reviewer)
-            assert isinstance(reviewer["model"], str)
-            assert all(isinstance(entry, str) for entry in reviewer["model_fallbacks"])
-            if "effort" in reviewer:
-                assert reviewer["effort"] in rp.EFFORT_LEVELS
-
-
-def test_shipped_effort_is_stated_on_every_reviewer_lane(tmp_path: Path) -> None:
-    """Every shipped reviewer lane states its effort, scaled to the lane's depth.
-
-    An unstated lane would inherit the session's level, so a review started
-    from a high-effort session would run every lane at that level.
-    """
-    resolved = rp.apply_model_priority(_resolved(tmp_path))
-    projection = rp.canonical_projection(resolved)
-
-    stated = {
-        (profile["id"], reviewer["name"]): reviewer["effort"]
-        for profile in projection["profiles"]
-        for reviewer in profile["reviewers"]
-        if "effort" in reviewer
-    }
-    assert stated == {
-        ("data_only", "reviewer_a_claude_md_compliance"): "low",
-        ("data_only", "reviewer_b_diff_only_bugs"): "low",
-        ("code", "reviewer_a_claude_md_compliance"): "low",
-        ("code", "reviewer_b_diff_only_bugs"): "medium",
-        ("code", "reviewer_c_introduced_code"): "high",
-    }
-
-
-def test_effort_merges_by_name_without_disturbing_model(tmp_path: Path) -> None:
-    """A layer restating only `effort` keeps the shipped model for that lane."""
-    config = _resolved(
-        tmp_path,
-        project={
-            "profiles": [
-                {
-                    "id": "data_only",
-                    "reviewers": [
-                        {"name": "reviewer_a_claude_md_compliance", "effort": "high"}
-                    ],
-                }
-            ]
-        },
-    )
-    reviewer = _profile(config, "data_only")["reviewers"][0]
-
-    assert reviewer["effort"] == "high"
-    assert reviewer["model"] == "sonnet"
-
-
-def test_an_unknown_effort_is_a_hard_error(tmp_path: Path) -> None:
-    """Effort is a closed menu, so a typo fails at resolve, not at dispatch."""
-    with pytest.raises(rp.ConfigError) as excinfo:
-        _resolved(
-            tmp_path,
-            project={
-                "profiles": [
-                    {
-                        "id": "data_only",
-                        "reviewers": [
-                            {
-                                "name": "reviewer_a_claude_md_compliance",
-                                "effort": "minimal",
-                            }
-                        ],
-                    }
-                ]
-            },
-        )
-
-    message = str(excinfo.value)
-    assert "minimal" in message
-    assert "low" in message
-
-
-def test_a_lane_may_state_effort_without_stating_a_model(tmp_path: Path) -> None:
-    """Effort alone is a valid patch of a known reviewer, like `disabled`."""
-    config = _resolved(
-        tmp_path,
-        user={
-            "profiles": [
-                {
-                    "id": "code",
-                    "reviewers": [
-                        {"name": "reviewer_b_diff_only_bugs", "effort": "max"}
-                    ],
-                }
-            ]
-        },
-    )
-    reviewer = _profile(config, "code")["reviewers"][1]
-
-    assert reviewer["name"] == "reviewer_b_diff_only_bugs"
-    assert reviewer["effort"] == "max"
-    assert reviewer["model"] == "opus"
-
-
-def test_projecting_an_unresolved_list_is_refused(tmp_path: Path) -> None:
-    """A caller that skips resolution gets an error, never a list on stdout."""
-    with pytest.raises(rp.ConfigError) as excinfo:
-        rp.canonical_projection(_resolved(tmp_path))
-
-    message = str(excinfo.value)
-    assert "reviewer_c_introduced_code" in message
-    assert "apply_model_priority" in message
-
-
-def test_cli_prints_the_resolved_table_with_no_stderr(
+def test_render_exits_1_with_every_finding_on_stderr(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """The CLI has no peer diagnostic flag left -- nothing prints on stderr."""
-    home, project_root, _project_path = _layers(tmp_path)
+    """A review stops at render time: no table, every finding named."""
+    _write_yaml(_user_path(tmp_path), _reviewer_layer(C, ["sol", "opus"]))
 
-    assert rp.main(["--project-root", str(project_root), "--home", str(home)]) == 0
+    assert _main(tmp_path) == 1
     captured = capsys.readouterr()
-    assert captured.err == ""
-    table = yaml.safe_load(captured.out.split("\n---\n")[0])
-    code = next(p for p in table["profiles"] if p["id"] == "code")
-    assert code["reviewers"][2]["model"] == "sol"
+    assert captured.out == ""
+    assert "model[0] (sol): entry 'sol' states no effort" in captured.err
+    assert "model[1] (opus): entry 'opus' states no effort" in captured.err
 
 
-# --------------------------------------------------------------------------
-# The shared declaration format (bootstrap_lib.model_declaration)
-# --------------------------------------------------------------------------
-
-
-def _with_validator(tmp_path: Path, model: Any) -> dict[str, Any]:
-    """Resolve a table whose code profile's `bug` validator states ``model``."""
-    return _resolved(
-        tmp_path,
-        user={"profiles": [{"id": "code", "validator_models": {"bug": model}}]},
+def test_check_reports_every_finding_not_just_the_first(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _write_yaml(
+        _user_path(tmp_path),
+        {
+            "profiles": [
+                {
+                    "id": "code",
+                    "reviewers": [
+                        {"name": A, "model": "sonnet"},
+                        {"name": B, "model": [_e("opus", "high")], "effort": "high"},
+                        {"name": C, "model": [{"id": "sol"}, {"id": "opus"}]},
+                    ],
+                    "validator_models": {"bug": "opus"},
+                }
+            ]
+        },
     )
 
-
-def test_a_reviewer_model_naming_one_id_twice_is_rejected(tmp_path: Path) -> None:
-    with pytest.raises(rp.ConfigError) as excinfo:
-        _with_model(tmp_path, ["sol", "opus", "sol"])
-
-    message = str(excinfo.value)
-    assert ".model" in message
-    assert "duplicate" in message
-    assert "'sol'" in message
-
-
-def test_a_reviewer_model_parses_through_the_shared_validator(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """One grammar: the reviewer field is checked by model_declaration.parse."""
-    from bootstrap_lib import model_declaration
-
-    seen: list[Any] = []
-    real_parse = model_declaration.parse
-
-    def spy(value: Any) -> list[str]:
-        seen.append(value)
-        return real_parse(value)
-
-    monkeypatch.setattr(model_declaration, "parse", spy)
-    _with_model(tmp_path, ["luna", "sonnet"])
-    assert ["luna", "sonnet"] in seen
+    assert _main(tmp_path, "--check") == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    lines = [line for line in captured.err.splitlines() if line.startswith("user ")]
+    assert len(lines) == 5
+    assert any(f"reviewers[{A}].model (sonnet)" in line for line in lines)
+    assert any(f"reviewers[{B}].effort" in line for line in lines)
+    assert any(f"reviewers[{C}].model[0] (sol)" in line for line in lines)
+    assert any(f"reviewers[{C}].model[1] (opus)" in line for line in lines)
+    assert any("validator_models.bug (opus)" in line for line in lines)
 
 
-def test_a_one_element_validator_list_is_accepted_and_resolves_to_its_id(
-    tmp_path: Path,
-) -> None:
-    config = _with_validator(tmp_path, ["sonnet"])
+def test_check_exit_codes(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """0 complete, 1 findings, 2 a malformed or invalid layer."""
+    assert _main(tmp_path, "--check") == 0
+    captured = capsys.readouterr()
+    assert captured.out == "review profiles: complete. Layers applied: shipped.\n"
 
-    resolved = rp.apply_model_priority(config)
-    assert _profile(resolved, "code")["validator_models"]["bug"] == "sonnet"
-    table = yaml.safe_load(rp.render_projection(resolved))
-    code = next(p for p in table["profiles"] if p["id"] == "code")
-    assert code["validator_models"] == {"bug": "sonnet", "claude_md": "sonnet"}
+    _write_yaml(_user_path(tmp_path), _reviewer_layer(C, ["sol"]))
+    assert _main(tmp_path, "--check") == 1
 
+    _write_yaml(_user_path(tmp_path), _reviewer_layer(C, [_e("sol", "minimal")]))
+    assert _main(tmp_path, "--check") == 2
 
-def test_a_scalar_validator_still_resolves_to_its_id(tmp_path: Path) -> None:
-    resolved = rp.apply_model_priority(_with_validator(tmp_path, "haiku"))
-    assert _profile(resolved, "code")["validator_models"]["bug"] == "haiku"
-
-
-@pytest.mark.parametrize(
-    ("label", "model", "fragment"),
-    [
-        ("empty list", [], "empty"),
-        ("two entries", ["opus", "sonnet"], "exactly one"),
-        ("duplicate", ["opus", "opus"], "duplicate"),
-        ("non-string entry", [7], "string"),
-        ("blank", "  ", "string"),
-    ],
-)
-def test_an_invalid_validator_declaration_is_rejected(
-    tmp_path: Path, label: str, model: Any, fragment: str
-) -> None:
-    with pytest.raises(rp.ConfigError) as excinfo:
-        _with_validator(tmp_path, model)
-
-    message = str(excinfo.value)
-    assert "validator_models.bug" in message, label
-    assert fragment in message, label
-
-
-def test_a_resolved_table_with_a_validator_list_still_validates(tmp_path: Path) -> None:
-    config = _with_validator(tmp_path, ["opus"])
-    rp.validate_config(config)
+    _user_path(tmp_path).write_text("profiles: [\n", encoding="utf-8")
+    assert _main(tmp_path, "--check") == 2

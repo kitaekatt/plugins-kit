@@ -129,8 +129,9 @@ them, not whether they are configurable. Most rows are mechanical rules the
 `audit.py` validator evaluates. The `CV-` rows are the coverage lane's
 admission criteria (`standards/coverage-standards.md`): their enforcement is
 judgment, so an agent applies them inside
-`workflow/coverage-detect.js`, which suppresses a candidate whose criterion id
-this configuration disables. Disabling one therefore changes what an `analyze`
+`workflow/coverage-detect.js`, which stops applying a criterion whose id
+this configuration disables, so the candidates it would have rejected are
+proposed. Disabling one therefore changes what an `analyze`
 run proposes, not what an `audit` run reports. The two surfaces read the same
 `rules:` block and the same id namespace -- see "Worked example: disable a
 coverage criterion" above.
@@ -344,8 +345,8 @@ follows:
   together with the source path of the standards file that declared it. The
   agent does not infer a rule the standards file does not state and does not
   restate a criterion in its own words.
-- Disabled optional rules are suppressed via a `disabledCriteria` set threaded
-  into the detect lane (the coverage detect lane included), so a finding or candidate for a disabled id does not reach the report. `disabledCriteria` is a required input: an empty list means nothing is disabled, and a detect lane called without it throws before dispatching any agent rather than applying every criterion. The suppression reaches the agent as a prompt instruction rather than a mechanical filter.
+- Disabled optional rules are switched off via a `disabledCriteria` set threaded
+  into the detect lane (the coverage detect lane included). An audit lane does not report a finding for a disabled id. The coverage lane stops applying a disabled admission criterion, so the candidates it would have rejected are proposed. `disabledCriteria` is a required input: an empty list means nothing is disabled, and a detect lane called without it throws before dispatching any agent rather than applying every criterion. The disable reaches the agent as a prompt instruction rather than a mechanical filter.
 
 ## Troubleshooting
 
@@ -397,11 +398,5 @@ degrading to an empty config, and the message names the problem:
 
 ## Source of truth
 
-The rule-id catalog and threshold table above are GENERATED (the marked
-region): rule ids, buckets, and descriptions come from
-`skills_kit_lib/rule_catalog.py` (`RULES`), threshold defaults from
-`skills_kit_lib/audit.py` (`THRESHOLDS`). Edit those sources, then run
-`scripts/gen_standards_doc.py`; never hand-edit the generated region -- a
-stale region is caught by a drift check. The resolver's reject-un-tunable-rule
-check reads the same module directly, so the doc and the enforcement cannot
-disagree.
+The rule-id catalog and threshold table above are generated; do not edit the
+marked region by hand.

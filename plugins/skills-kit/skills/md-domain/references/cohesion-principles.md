@@ -1,9 +1,5 @@
 # Cohesion Principles (Content Allocation)
 
-> Reference doc: the placement framework, folded into md-domain from the
-> standalone cohesion-principles skill at the phase-3 restructure (2026-07-29).
-> Preserved content below is byte-faithful except path updates for the new location.
-
 The canonical framework for **where a fact, rule, or doc-section should live** across the project's load
 graph -- CLAUDE.md (and which one), SKILL.md, or `references/*.md`. Every placement decision reduces to
 CRP / CCP / ADP applied to the load graph; the L1/L2/L3 load levels are a derived consequence, not the
@@ -139,7 +135,7 @@ content_allocation:
           Two expression forms:
           (a) a YAML header field on the CLAUDE.md (e.g. `required-skills: [python-coding]`) that
               the harness consumes to auto-load named skills. (Convention; check whether the
-              harness in use today supports the field before relying on it.)
+              harness supports the field before relying on it.)
           (b) a prose pointer (e.g. "for any Python work, invoke /python-coding") in CLAUDE.md
               body. Less reliable -- the agent must remember to invoke. Acceptable when the
               skill load is conditional on the user's task within the scope.
@@ -250,7 +246,7 @@ content_allocation:
         - id: skill_to_reference_one_hop
           rule: SKILL.md cites references/*.md; a reference may cite a sibling reference at most one hop deep.
           why: deeper chains read partial content (Claude tends to stop at the second hop).
-          test: scan references/ for citations to other references/; verify each is one hop. (audit.py already enforces this.)
+          test: scan references/ for citations to other references/; verify each is one hop. (The audit rule refs-one-hop-deep checks only that nested reference files are declared in SKILL.md index.references[], and it can be disabled; citation depth is not checked mechanically.)
         - id: reference_must_not_cite_skill_sections
           rule: A reference doc must not cite SKILL.md sections by name.
           why: load order is SKILL.md -> reference; the reference runs after SKILL.md and citing back into SKILL.md reverses the direction.
@@ -281,7 +277,7 @@ content_allocation:
         children to share the REASON the fact holds, not merely to satisfy the
         same sentence for unrelated reasons. Two children can read as true of
         the same wording by coincidental overlap -- different mechanisms that
-        happen to produce the same observable sentence today. Hoisting on that
+        happen to produce the same observable sentence. Hoisting on that
         basis produces a parent-level statement that is one unrelated edit away
         from false, and it invites a reader to infer a shared mechanism that
         does not exist. Duplication is the cheaper error.
@@ -474,7 +470,7 @@ content_allocation:
           severity: FAIL on multi-trigger references.
         - id: one_hop_deep
           rule: cross-references to other references/ are one hop, not chained.
-          test: scan for citations of other references/; verify no chains. (audit.py enforces this mechanically.)
+          test: scan for citations of other references/; verify no chains. (The audit rule refs-one-hop-deep checks only that nested reference files are declared in SKILL.md index.references[], and it can be disabled; citation chains are not checked mechanically.)
           severity: FAIL on chained references.
         - id: no_skill_md_back_reference
           rule: no citation of SKILL.md sections by name.

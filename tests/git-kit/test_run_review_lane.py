@@ -20,6 +20,10 @@ _SCRIPT = (
 )
 
 
+def _run_lane_with_effort(*, effort: str, **_kw) -> int:
+    return 0
+
+
 def _run_wrapper(monkeypatch: pytest.MonkeyPatch, package, review_lane):
     monkeypatch.setitem(sys.modules, "llm_scripting_kit", package)
     if review_lane is not None:
@@ -75,6 +79,7 @@ def test_claimed_file_probe_names_0_37_0_when_owner_lacks_support(
     package = types.ModuleType("llm_scripting_kit")
     package.__path__ = []
     review_lane = types.ModuleType("llm_scripting_kit.review_lane")
+    review_lane.run_lane = _run_lane_with_effort
 
     def _old_parse_args(argv):
         # Mirrors the real pre-0.37.0 parser: no --claimed-file option.
@@ -120,6 +125,7 @@ def test_claimed_file_falls_through_to_main_when_probe_symbol_is_absent(
     package = types.ModuleType("llm_scripting_kit")
     package.__path__ = []
     review_lane = types.ModuleType("llm_scripting_kit.review_lane")
+    review_lane.run_lane = _run_lane_with_effort
     # Deliberately NO _parse_args attribute on this fake owner module.
     review_lane.main = lambda: 42
     monkeypatch.setitem(sys.modules, "llm_scripting_kit.review_lane", review_lane)
@@ -147,6 +153,7 @@ def test_mechanical_finding_probe_refuses_old_owner(
     package = types.ModuleType("llm_scripting_kit")
     package.__path__ = []
     review_lane = types.ModuleType("llm_scripting_kit.review_lane")
+    review_lane.run_lane = _run_lane_with_effort
 
     def old_parse(argv):
         parser = argparse.ArgumentParser()
@@ -173,6 +180,7 @@ def test_chunk_index_probe_refuses_old_owner(
     package = types.ModuleType("llm_scripting_kit")
     package.__path__ = []
     review_lane = types.ModuleType("llm_scripting_kit.review_lane")
+    review_lane.run_lane = _run_lane_with_effort
 
     def old_parse(argv):
         parser = argparse.ArgumentParser()
@@ -208,6 +216,7 @@ def test_chunk_index_falls_through_to_main_when_probe_symbol_is_absent(
     package = types.ModuleType("llm_scripting_kit")
     package.__path__ = []
     review_lane = types.ModuleType("llm_scripting_kit.review_lane")
+    review_lane.run_lane = _run_lane_with_effort
     review_lane.main = lambda: 42
     monkeypatch.setitem(sys.modules, "llm_scripting_kit.review_lane", review_lane)
     monkeypatch.setattr(
@@ -234,6 +243,7 @@ def test_chunk_index_probe_accepts_a_current_owner(
     package = types.ModuleType("llm_scripting_kit")
     package.__path__ = []
     review_lane = types.ModuleType("llm_scripting_kit.review_lane")
+    review_lane.run_lane = _run_lane_with_effort
 
     def new_parse(argv):
         parser = argparse.ArgumentParser()
@@ -266,6 +276,7 @@ def test_wrapper_passes_through_to_shared_main(
     package = types.ModuleType("llm_scripting_kit")
     package.__path__ = []
     review_lane = types.ModuleType("llm_scripting_kit.review_lane")
+    review_lane.run_lane = _run_lane_with_effort
     review_lane.main = lambda: 17
     monkeypatch.setitem(sys.modules, "llm_scripting_kit.review_lane", review_lane)
 
@@ -286,6 +297,7 @@ def test_pass_through_prints_no_warning_prose(
     package = types.ModuleType("llm_scripting_kit")
     package.__path__ = []
     review_lane = types.ModuleType("llm_scripting_kit.review_lane")
+    review_lane.run_lane = _run_lane_with_effort
     review_lane.main = lambda: 0
     monkeypatch.setitem(sys.modules, "llm_scripting_kit.review_lane", review_lane)
     monkeypatch.setattr(
@@ -296,3 +308,87 @@ def test_pass_through_prints_no_warning_prose(
     captured = capsys.readouterr()
     assert captured.err == ""
     assert captured.out == ""
+
+
+def _fake_owner(run_lane):
+    package = types.ModuleType("llm_scripting_kit")
+    package.__path__ = []
+    review_lane = types.ModuleType("llm_scripting_kit.review_lane")
+    review_lane.run_lane = run_lane
+    return package, review_lane
+
+
+def test_owner_without_effort_support_is_refused_naming_0_59_0(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    def old_run_lane(lane, model, chunk, mechanical_check_phrases=None):
+        raise AssertionError("must not dispatch")
+
+    package, review_lane = _fake_owner(old_run_lane)
+    review_lane.main = lambda: old_run_lane("x", "y", "z")
+    monkeypatch.setattr(
+        sys, "argv",
+        [str(_SCRIPT), "--lane", "x", "--model", "y", "--chunk", "z",
+         "--effort", "high"],
+    )
+
+    code = _run_wrapper(monkeypatch, package, review_lane)
+
+    assert code != 0
+    stderr = capsys.readouterr().err
+    assert "too old" in stderr
+    assert "0.60.0" in stderr
+    assert "--effort" in stderr
+
+
+def test_effort_reaches_run_lane_through_the_wrapper(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    seen: dict[str, str] = {}
+
+    def run_lane(*, effort: str, **_kw) -> int:
+        seen["effort"] = effort
+        return 0
+
+    package, review_lane = _fake_owner(run_lane)
+
+    def main() -> int:
+        argv = sys.argv[1:]
+        return run_lane(effort=argv[argv.index("--effort") + 1])
+
+    review_lane.main = main
+    monkeypatch.setattr(
+        sys, "argv",
+        [str(_SCRIPT), "--lane", "x", "--model", "y", "--chunk", "z",
+         "--effort", "xhigh"],
+    )
+
+    assert _run_wrapper(monkeypatch, package, review_lane) == 0
+    assert seen == {"effort": "xhigh"}
+    assert capsys.readouterr().err == ""
+
+
+@pytest.mark.parametrize("shape", ["absent", "uninspectable"])
+def test_unconfirmable_effort_support_refuses_instead_of_falling_through(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], shape: str
+) -> None:
+    package, review_lane = _fake_owner(None)
+    if shape == "absent":
+        del review_lane.run_lane
+    else:
+        review_lane.run_lane = print  # builtin with no inspectable signature
+        monkeypatch.setattr(
+            "inspect.signature",
+            lambda *_a, **_k: (_ for _ in ()).throw(ValueError("no signature")),
+        )
+    review_lane.main = lambda: pytest.fail("main must not run without effort")
+    monkeypatch.setattr(
+        sys, "argv",
+        [str(_SCRIPT), "--lane", "x", "--model", "y", "--chunk", "z",
+         "--effort", "high"],
+    )
+
+    code = _run_wrapper(monkeypatch, package, review_lane)
+
+    assert code != 0
+    assert "0.60.0" in capsys.readouterr().err
