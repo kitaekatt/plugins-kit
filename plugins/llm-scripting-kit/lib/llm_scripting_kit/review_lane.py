@@ -44,6 +44,7 @@ from llm_scripting_kit.declaration import (
     NoUsableRoutingTarget,
     describe,
 )
+from llm_scripting_kit.harness_adapters import CODEX_EFFORT_MENU
 from llm_scripting_kit.models import EndpointResolveError, discover_model_entries
 from llm_scripting_kit.models import EndpointResolveError as _SeamResolveError
 
@@ -274,6 +275,30 @@ def _check_selection(lane: str, selection: Any) -> None:
         )
 
 
+def _check_effort(effort: str, selection: Any) -> None:
+    """Refuse an effort this selection cannot carry to the model.
+
+    There is no default and no fallback: the caller states the effort, and an
+    effort that would be dropped or rejected is refused rather than sent.
+    """
+    if not isinstance(effort, str) or not effort.strip():
+        raise LaneConfigError(f"effort must be a non-empty string (got {effort!r})")
+    capabilities = getattr(selection, "capabilities", None)
+    if capabilities is None or "effort" not in capabilities.params:
+        raise LaneConfigError(
+            f"endpoint {selection.endpoint!r} ({selection.kind}) advertises no "
+            f"delivered effort (undeliverable), so effort {effort!r} would be "
+            "dropped. Give a transport entry an effort_style, or choose an "
+            "endpoint or Agent-tool model that carries effort."
+        )
+    if getattr(selection.backend, "name", None) == "codex-cli":
+        if effort not in CODEX_EFFORT_MENU:
+            raise LaneConfigError(
+                f"codex endpoint {selection.endpoint!r} does not accept effort "
+                f"{effort!r}; accepted efforts: {'|'.join(sorted(CODEX_EFFORT_MENU))}"
+            )
+
+
 def _timeout_errors() -> tuple[type[BaseException], ...]:
     """The exception types that mean THIS lane's deadline expired.
 
@@ -411,6 +436,7 @@ def run_lane(
     *,
     lane: str,
     model: str,
+    effort: str,
     diff_text: str,
     files: Sequence[str] = (),
     description: str = "",
@@ -439,6 +465,7 @@ def run_lane(
         ) from exc
     _check_selection(lane, selection)
     _check_transport_sdk(selection)
+    _check_effort(effort, selection)
 
     system = LANE_PROMPTS[lane].system
     user = build_user_message(
@@ -466,7 +493,7 @@ def run_lane(
         max_tokens=max_output_tokens,
         temperature=REVIEW_TEMPERATURE,
         timeout_s=timeout_s,
-        effort=selection.effort,
+        effort=effort,
         allowed_tools=_allowed_tools_for(lane),
         cwd=_cwd_for(lane, project_root),
         log_prefix=f"[review:{lane}]",
@@ -511,6 +538,12 @@ def run_lane(
             raise LaneRunError(
                 f"endpoint {selection.endpoint!r} failed: {type(exc).__name__}: {exc}"
             ) from exc
+        if "effort" in (getattr(response, "dropped_params", None) or ()):
+            raise LaneConfigError(
+                f"endpoint {selection.endpoint!r} reported effort {effort!r} as "
+                "dropped; the lane result is not returned because the review "
+                "did not run at the stated effort"
+            )
         try:
             issues = parse_issue_array(
                 response.text,
@@ -543,6 +576,8 @@ def run_lane(
     return {
         "lane": lane,
         "configured_model": model,
+        "effort": effort,
+        "effort_delivered": selection.capabilities.params["effort"].emits,
         "endpoint": selection.endpoint,
         "backend": getattr(selection.backend, "name", "unknown"),
         "served_model": getattr(response, "model", selection.model) or selection.model,
@@ -565,6 +600,16 @@ def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
         "--model",
         required=True,
         help="the resolved profile's model value (an llm-scripting-kit endpoint id)",
+    )
+    parser.add_argument(
+        "--effort",
+        required=True,
+        help=(
+            "the reasoning effort for this entry, stated by the review "
+            "profile (low|medium|high|xhigh|max); a codex endpoint refuses a "
+            "value outside its menu and a transport that cannot deliver "
+            "effort refuses any value"
+        ),
     )
     parser.add_argument(
         "--chunk",
@@ -719,6 +764,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         result = run_lane(
             lane=args.lane,
             model=args.model,
+            effort=args.effort,
             diff_text=diff_text,
             files=files,
             description=description,

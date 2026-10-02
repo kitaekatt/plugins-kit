@@ -13,11 +13,17 @@ field, while ordinary lists replace the lower-precedence value. The result is
 validated before it is returned so callers can resolve the profile before any
 review fan-out starts.
 
-A reviewer's ``model`` is one of those ordinary lists when it is not a bare
-string: an ordered priority list whose first entry becomes the lane's model,
-replaced wholesale by any higher layer that states one. What is left of
-that list survives into the resolved table as ``model_fallbacks``. See the model
-priority notes below ``REVIEWER_FIELDS`` and ``apply_model_priority``.
+Every model a layer names is an ENTRY stating both an id and an effort:
+
+    model:
+    - {id: sol,  effort: high}
+    - {id: opus, effort: high}
+
+A reviewer's ``model`` is an ordered list of entries; a validator reason is a
+list holding exactly one. A layer that states a reviewer or a validator reason
+must state it completely, in that layer. Each gap is a FINDING, and
+``resolve_config`` raises one error listing every finding across every layer.
+``main --check`` prints the findings without rendering a table.
 """
 
 from __future__ import annotations
@@ -44,58 +50,31 @@ PROFILE_FIELDS = frozenset(
     {"id", "selection", "reviewers", "validator_models", "disabled"}
 )
 SELECTION_FIELDS = frozenset({"data_only_extensions"})
-REVIEWER_FIELDS = frozenset(
-    {"name", "model", "model_fallbacks", "effort", "disabled"}
-)
+REVIEWER_FIELDS = frozenset({"name", "model", "disabled"})
+ENTRY_FIELDS = frozenset({"id", "effort"})
 REQUIRED_PROFILE_FIELDS = frozenset({"selection", "reviewers", "validator_models"})
 
-# --------------------------------------------------------------------------
-# effort: the reasoning budget one lane runs under
-# --------------------------------------------------------------------------
-# `effort` is OPTIONAL on a reviewer record. Absent, the lane inherits the
-# invoking session's effort -- the pre-existing behavior, kept as the default so
-# an unstated effort is never a silent change.
-#
-# It is deliberately a fixed MENU rather than the free-form string `model` is.
-# A model may name an endpoint id this library knows nothing about, but effort
-# is a vocabulary the Agent tool defines, so a typo ("lo", "minimal") would
-# otherwise resolve to an agent that does not exist and fail at dispatch, far
-# from the configuration line that caused it.
-#
-# An effort-carrying lane dispatches to a per-level reviewer AGENT instead of to
-# `general-purpose`, because the Agent tool has no effort parameter -- effort is
-# set in an agent definition's frontmatter. git-kit and p4-kit each ship the
-# agents as `<kit>:review-lane-<level>`, and the skill's step-6 dispatch rule
-# maps a resolved level to that name. Model is unaffected: a call-site `model`
-# overrides an agent definition's frontmatter, so the profile keeps owning model
-# exactly as it did, and the agent contributes effort and nothing else.
-EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max")
+# A field a reviewer record used to carry at lane level. It is reported as a
+# completeness finding with a targeted message rather than as an unknown field,
+# so a layer written against the old shape is told where the value now goes.
+_REMOVED_LANE_EFFORT = "effort"
 
 # --------------------------------------------------------------------------
-# model priority lists
+# effort: the reasoning budget one model entry runs under
 # --------------------------------------------------------------------------
+# Every model entry states its effort. It is a fixed MENU rather than the
+# free-form string an id is: an id may name an endpoint this library knows
+# nothing about, but effort is a vocabulary the dispatchers define, so a typo
+# ("lo", "minimal") would otherwise resolve to an agent or a flag value that
+# does not exist and fail at dispatch, far from the configuration line that
+# caused it.
 #
-# A reviewer's `model` is a model declaration in the shared format
-# (bootstrap_lib.model_declaration; plugin-dev references/model-declaration.md):
-# a string (one entry) or a non-empty ordered list naming no entry twice. Every
-# entry names a plain Agent alias or endpoint id, and the first entry always
-# becomes the lane's model.
-#
-# The list is a PLAIN list, so a higher layer's `model` replaces it wholesale.
-#
-# --------------------------------------------------------------------------
-# model_fallbacks: what is left of the list once the first entry is chosen
-# --------------------------------------------------------------------------
-#
-# Resolution answers "which model does this lane START on". Whether the model
-# WORKS is only learned at dispatch, where an endpoint can be out of credits,
-# rate limited, or withdrawn -- none of which this module can see. So the
-# entries after the first are carried into the resolved table rather than
-# discarded: a caller whose dispatch fails already holds the order the user
-# asked for, instead of having to re-resolve the configuration mid-review to
-# learn what to try next. Whether it falls over is the caller's decision; what
-# it may fall over TO is this module's answer. An empty chain is stated rather
-# than left out: "nothing left to try" is an answer.
+# A Claude entry dispatches to a per-level reviewer AGENT, because the Agent
+# tool has no effort parameter -- effort is set in an agent definition's
+# frontmatter. git-kit and p4-kit each ship the agents as
+# `<kit>:review-lane-<level>`. Any other entry passes its effort to the lane
+# tool. The generator and its tests import this constant by name.
+EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max")
 
 
 class ConfigError(ValueError):
@@ -106,6 +85,21 @@ class ConfigError(ValueError):
 # errors from the bootstrap engine's other configuration errors. Keep the
 # short alias as well because it matches bootstrap_lib.config_resolve.
 ReviewProfilesConfigError = ConfigError
+
+
+class IncompleteConfigError(ConfigError):
+    """Every layer is well formed, but at least one states an incomplete entry.
+
+    ``findings`` holds one line per gap, in layer order, so a caller can print
+    all of them rather than the first.
+    """
+
+    def __init__(self, findings: Sequence[str]) -> None:
+        self.findings = list(findings)
+        super().__init__(
+            f"{len(self.findings)} review-profile finding(s); every model entry "
+            "states an id and an effort:\n" + "\n".join(self.findings)
+        )
 
 
 def _require_yaml() -> Any:
@@ -207,68 +201,174 @@ def _validate_disabled(value: Mapping[str, Any], source: Path | str, location: s
     return value["disabled"]
 
 
-def _model_entries(value: Any) -> list[str]:
-    """Return a model's ordered entries, treating a string as a one-entry list."""
-    try:
-        return model_declaration.parse(value)
-    except model_declaration.DeclarationError:
-        return []
-
-
-def _parse_declaration(value: Any, source: Path | str, location: str) -> list[str]:
-    """Parse a model declaration through the shared validator.
-
-    The grammar -- a list of ids, a scalar read as a one-element list, no empty
-    list, no repeated id -- is bootstrap_lib.model_declaration's, so every
-    plugin reading a declaration rejects the same shapes. The error is
-    re-raised as this module's ``ConfigError`` with the entry's location.
-    """
-    try:
-        return model_declaration.parse(value)
-    except model_declaration.DeclarationError as exc:
-        where = location if exc.index is None else f"{location}[{exc.index}]"
-        _fail(source, where, str(exc))
-
-
-def _validate_model(value: Any, source: Path | str, location: str) -> None:
-    """Validate a reviewer's model declaration: an ordered list of ids.
-
-    A bare string is exactly a one-entry list.
-    """
-    _parse_declaration(value, source, location)
-
-
-def _validate_model_fallbacks(value: Any, source: Path | str, location: str) -> None:
-    """Validate a lane's fallback chain: a possibly-empty list of model names.
-
-    ``apply_model_priority`` derives this field, but the resolved table is
-    validated again on the way out and a caller may hand one back in, so the
-    shape is checked here rather than trusted. Empty is legal and carries a
-    claim of its own -- the lane has nothing left to try -- which is why the key
-    is kept rather than dropped when the list is empty.
-    """
-    if not isinstance(value, list):
-        _fail(
-            source,
-            location,
-            f"must be a list of strings, got {type(value).__name__}",
-        )
-    for index, entry in enumerate(value):
-        _validate_nonempty_string(entry, source, f"{location}[{index}]")
-
-
 def _validate_effort(value: Any, source: Path | str, location: str) -> None:
-    """Validate a reviewer's effort against the fixed level menu.
+    """Validate an entry's effort against the fixed level menu.
 
-    Unlike ``model`` this is a closed vocabulary (see ``EFFORT_LEVELS``), so an
+    Unlike an id this is a closed vocabulary (see ``EFFORT_LEVELS``), so an
     unknown level is rejected here rather than becoming a dispatch to an agent
-    that does not exist.
+    or a flag value that does not exist.
     """
     if not isinstance(value, str) or not value.strip():
         _fail(source, location, "must be a non-empty string")
     if value not in EFFORT_LEVELS:
         levels = ", ".join(repr(level) for level in EFFORT_LEVELS)
         _fail(source, location, f"unknown effort {value!r}; known levels: {levels}")
+
+
+def _validate_entries(
+    value: Any,
+    source: Path | str,
+    location: str,
+    *,
+    exactly_one: bool,
+) -> None:
+    """Validate the STRUCTURE of a model entry list.
+
+    The list is ``[{id: <model>, effort: <level>}, ...]``. A bare string, or a
+    string inside the list, is the retired shape; it passes structural
+    validation so ``completeness_findings`` can report it as a finding next to
+    every other gap, instead of the first one aborting the walk. Everything
+    else that is not that shape is an error here:
+
+    * a bare mapping. There is no single-entry shorthand, because a higher
+      layer's mapping would merge key by key into a lower layer's and silently
+      inherit its fields, where a list replaces wholesale.
+    * an entry field other than ``id`` and ``effort``, an entry without an
+      ``id``, or an ``effort`` outside ``EFFORT_LEVELS``.
+    * a blank id, an empty list, or one id twice -- checked by
+      ``model_declaration.parse`` over the ordered ids, so every plugin
+      reading a declaration rejects the same shapes.
+    * for a validator, any count other than one entry.
+    """
+    if isinstance(value, str):
+        ids: list[Any] = [value]
+    elif isinstance(value, dict):
+        _fail(
+            source,
+            location,
+            "must be a list of {id, effort} entries, got a mapping; write "
+            "`[{id: <model>, effort: <level>}]` -- a bare mapping would merge "
+            "key by key into the layer below instead of replacing it",
+        )
+    elif isinstance(value, list):
+        ids = []
+        for index, entry in enumerate(value):
+            entry_location = f"{location}[{index}]"
+            if isinstance(entry, str):
+                ids.append(entry)
+                continue
+            if not isinstance(entry, dict):
+                _fail(
+                    source,
+                    entry_location,
+                    "must be an {id: <model>, effort: <level>} entry, got "
+                    f"{type(entry).__name__}",
+                )
+            _validate_known_fields(entry, ENTRY_FIELDS, source, entry_location)
+            if "id" not in entry:
+                _fail(source, entry_location, "required field missing: id")
+            if "effort" in entry:
+                _validate_effort(entry["effort"], source, f"{entry_location}.effort")
+            ids.append(entry["id"])
+    else:
+        _fail(
+            source,
+            location,
+            "must be a list of {id: <model>, effort: <level>} entries, got "
+            f"{type(value).__name__}",
+        )
+
+    try:
+        parsed = model_declaration.parse(ids if isinstance(value, list) else ids[0])
+    except model_declaration.DeclarationError as exc:
+        where = location if exc.index is None else f"{location}[{exc.index}]"
+        _fail(source, where, str(exc))
+    if exactly_one and len(parsed) != 1:
+        _fail(
+            source,
+            location,
+            f"must hold exactly one entry, got {parsed!r}: a validator has no "
+            "failover chain",
+        )
+
+
+def _no_effort(model_id: str) -> str:
+    """Return the finding text for an entry written in the retired shape."""
+    return (
+        f"entry {model_id!r} states no effort; write "
+        f"[{{id: {model_id}, effort: <level>}}]"
+    )
+
+
+def _entry_findings(value: Any, source: str, location: str) -> list[str]:
+    """Return one finding per entry of ``value`` that states no effort.
+
+    ``value`` must already have passed ``_validate_entries``; any other shape
+    is an error, not a finding.
+    """
+    if isinstance(value, str):
+        model_id = value.strip()
+        return [f"{source}: {location} ({model_id}): {_no_effort(model_id)}"]
+    if not isinstance(value, list):
+        _fail(source, location, "is not a validated entry list; validate the layer first")
+    findings: list[str] = []
+    for index, entry in enumerate(value):
+        where = f"{location}[{index}]"
+        if isinstance(entry, str):
+            model_id = entry.strip()
+            findings.append(f"{source}: {where} ({model_id}): {_no_effort(model_id)}")
+        elif isinstance(entry, dict) and isinstance(entry.get("id"), str):
+            if "effort" not in entry:
+                findings.append(f"{source}: {where} ({entry['id'].strip()}): missing effort")
+        else:
+            _fail(source, where, "is not a validated entry; validate the layer first")
+    return findings
+
+
+def completeness_findings(layer_data: Mapping[str, Any], source: PathLike) -> list[str]:
+    """Return every completeness finding in one structurally valid layer.
+
+    ``layer_data`` is a RAW layer as loaded, after ``_validate_layer`` (or the
+    resolved-table validation) has accepted its structure. ``source`` labels
+    each finding, conventionally ``"<layer> <path>"``. The walk collects ALL
+    findings rather than stopping at the first:
+
+    * every non-disabled reviewer record the layer states must state a
+      ``model`` list in this layer, and every entry in it must state an effort;
+    * every validator reason the layer states must state its one entry's
+      effort;
+    * a lane-level ``effort`` is the removed shape and is reported with the
+      form that replaced it.
+
+    Exempt: a reviewer record stating ``disabled: true`` needs no model, and
+    nothing under a profile stating ``disabled: true`` is walked.
+    """
+    label = str(source)
+    findings: list[str] = []
+    for profile in layer_data.get("profiles", []):
+        if profile.get("disabled") is True:
+            continue
+        profile_location = f"profiles[{profile['id']}]"
+        for reviewer in profile.get("reviewers", []):
+            where = f"{profile_location}.reviewers[{reviewer['name']}]"
+            if _REMOVED_LANE_EFFORT in reviewer:
+                findings.append(
+                    f"{label}: {where}.effort: `effort` on a lane was removed: state "
+                    "it on each model entry, e.g. `model: [{id: <model>, effort: <level>}]`"
+                )
+            if "model" in reviewer:
+                findings.extend(_entry_findings(reviewer["model"], label, f"{where}.model"))
+            elif reviewer.get("disabled") is not True:
+                findings.append(
+                    f"{label}: {where}.model: missing: a reviewer record a layer states "
+                    "must state its whole model list in that layer, e.g. "
+                    "`model: [{id: <model>, effort: <level>}]`"
+                )
+        for reason, value in (profile.get("validator_models") or {}).items():
+            findings.extend(
+                _entry_findings(value, label, f"{profile_location}.validator_models.{reason}")
+            )
+    return findings
 
 
 def _records_by_name(records: Any, identity: str) -> dict[str, Mapping[str, Any]]:
@@ -301,47 +401,31 @@ def _validate_selection(value: Any, source: Path | str, location: str) -> None:
 
 
 def _validate_validator_models(value: Any, source: Path | str, location: str) -> None:
-    """Validate reason-to-model bindings.
+    """Validate reason-to-entry bindings.
 
     Reason keys are intentionally extensible. ``bug`` and ``claude_md`` are
     the shipped reasons; a new reason is an addressable mapping record and is
     appended by the normal mapping merge.
 
-    Each value is a model declaration naming exactly ONE id, written as a
-    one-element list or, equivalently, a bare string. A validator is never
-    endpoint-eligible and has no failover chain, so a second entry would be a
-    preference nothing honours; it is refused rather than silently ignored.
+    Each value is a list holding exactly ONE ``{id, effort}`` entry. A
+    validator is never endpoint-eligible and has no failover chain, so a
+    second entry would be a preference nothing honours; it is refused rather
+    than silently ignored.
     """
     if not isinstance(value, dict):
         _fail(source, location, f"must be a mapping, got {type(value).__name__}")
-    for reason, model in value.items():
+    for reason, entries in value.items():
         if not isinstance(reason, str) or not reason.strip():
             _fail(source, f"{location} key {reason!r}", "must be a non-empty string")
-        entries = _parse_declaration(model, source, f"{location}.{reason}")
-        if len(entries) != 1:
-            _fail(
-                source,
-                f"{location}.{reason}",
-                f"must name exactly one id, got {entries!r}: a validator has no "
-                "failover chain",
-            )
+        _validate_entries(entries, source, f"{location}.{reason}", exactly_one=True)
 
 
-def _validator_model(value: Any) -> str:
-    """Return a validator declaration's one id (a scalar or a one-element list)."""
-    return model_declaration.parse(value)[0]
+def _validate_reviewer(value: Any, source: Path | str, location: str) -> None:
+    """Validate one reviewer record's structure.
 
-
-def _validate_reviewer(
-    value: Any,
-    source: Path | str,
-    location: str,
-    *,
-    existing: Mapping[str, Any] | None,
-    parent_disabled: bool,
-    complete: bool,
-) -> None:
-    """Validate one reviewer, allowing sparse patches of known records."""
+    Whether the record states a model at all is a completeness question,
+    answered by ``completeness_findings``.
+    """
     if not isinstance(value, dict):
         _fail(source, location, f"must be a mapping, got {type(value).__name__}")
     # Checked before the generic unknown-field message so a layer written
@@ -353,41 +437,26 @@ def _validate_reviewer(
             "was removed: state the preference as an ordered model priority "
             "list instead, e.g. `model: [<name>, <name>]`",
         )
-    _validate_known_fields(value, REVIEWER_FIELDS, source, location)
+    # A lane-level `effort` is the removed shape. It is left to
+    # completeness_findings, which names the per-entry form that replaced it.
+    _validate_known_fields(
+        {key: item for key, item in value.items() if key != _REMOVED_LANE_EFFORT},
+        REVIEWER_FIELDS,
+        source,
+        location,
+    )
     if "name" not in value:
         _fail(source, location, "required field missing: name")
     _validate_nonempty_string(value["name"], source, f"{location}.name")
-    disabled = _validate_disabled(value, source, location)
-
+    _validate_disabled(value, source, location)
     if "model" in value:
-        _validate_model(value["model"], source, f"{location}.model")
-    if "model_fallbacks" in value:
-        _validate_model_fallbacks(
-            value["model_fallbacks"], source, f"{location}.model_fallbacks"
-        )
-    if "effort" in value:
-        _validate_effort(value["effort"], source, f"{location}.effort")
-    needs_model = (complete and not parent_disabled) or (existing is None and not parent_disabled)
-    if needs_model and not disabled and "model" not in value:
-        _fail(source, location, "required field missing: model")
+        _validate_entries(value["model"], source, f"{location}.model", exactly_one=False)
 
 
-def _validate_reviewers(
-    value: Any,
-    source: Path | str,
-    location: str,
-    *,
-    existing_profile: Mapping[str, Any] | None,
-    parent_disabled: bool,
-    complete: bool,
-) -> None:
+def _validate_reviewers(value: Any, source: Path | str, location: str) -> None:
     """Validate a profile's reviewer record list and its identities."""
     if not isinstance(value, list):
         _fail(source, location, f"must be a list, got {type(value).__name__}")
-    existing_reviewers = _records_by_name(
-        existing_profile.get("reviewers") if existing_profile else None,
-        "name",
-    )
     seen: set[str] = set()
     for index, reviewer in enumerate(value):
         reviewer_location = f"{location}[{index}]"
@@ -402,17 +471,7 @@ def _validate_reviewers(
             if name in seen:
                 _fail(source, location, f"duplicate reviewer name: {name!r}")
             seen.add(name)
-            existing = existing_reviewers.get(name)
-        else:
-            existing = None
-        _validate_reviewer(
-            reviewer,
-            source,
-            reviewer_location,
-            existing=existing,
-            parent_disabled=parent_disabled,
-            complete=complete,
-        )
+        _validate_reviewer(reviewer, source, reviewer_location)
 
 
 def _validate_profile(
@@ -445,14 +504,7 @@ def _validate_profile(
     if "selection" in value:
         _validate_selection(value["selection"], source, f"{location}.selection")
     if "reviewers" in value:
-        _validate_reviewers(
-            value["reviewers"],
-            source,
-            f"{location}.reviewers",
-            existing_profile=existing,
-            parent_disabled=disabled,
-            complete=complete,
-        )
+        _validate_reviewers(value["reviewers"], source, f"{location}.reviewers")
     if "validator_models" in value:
         _validate_validator_models(
             value["validator_models"],
@@ -467,7 +519,7 @@ def _validate_layer(
     *,
     base: Mapping[str, Any],
 ) -> None:
-    """Validate a sparse layer before it participates in the merge."""
+    """Validate a sparse layer's structure before it participates in the merge."""
     _validate_known_fields(value, TOP_LEVEL_FIELDS, source, "top level")
     if "profiles" not in value:
         return
@@ -504,7 +556,7 @@ def _validate_resolved(
     *,
     require_runtime_coverage: bool = False,
 ) -> None:
-    """Validate the merged table, including required fields of active records."""
+    """Validate the merged table, including the completeness of active records."""
     _validate_known_fields(value, TOP_LEVEL_FIELDS, source, "top level")
     if "profiles" not in value:
         _fail(source, "top level", "required field missing: profiles")
@@ -531,8 +583,16 @@ def _validate_resolved(
             existing=None,
             complete=True,
         )
-        if not require_runtime_coverage:
-            continue
+
+    findings = completeness_findings(value, source)
+    if findings:
+        raise IncompleteConfigError(findings)
+
+    if not require_runtime_coverage:
+        return
+    supported = sorted(lane_prompts.KNOWN_LANES - {"validator"})
+    for index, profile in enumerate(profiles):
+        location = f"profiles[{index}]"
         reviewers = profile["reviewers"]
         if not reviewers:
             _fail(
@@ -540,7 +600,6 @@ def _validate_resolved(
                 f"{location}.reviewers",
                 f"profile {profile['id']!r} must contain at least one active reviewer",
             )
-        supported = sorted(lane_prompts.KNOWN_LANES - {"validator"})
         for reviewer_index, reviewer in enumerate(reviewers):
             name = reviewer["name"]
             if name not in lane_prompts.KNOWN_LANES - {"validator"}:
@@ -556,7 +615,8 @@ def validate_config(value: Mapping[str, Any], source: PathLike = "<resolved>") -
 
     Layer loading uses the same field checks but permits sparse patches for
     identities already supplied by lower layers. This public function is for a
-    fully resolved table and therefore requires every active field.
+    fully resolved table and therefore requires every active field and every
+    entry's effort.
     """
     if not isinstance(value, dict):
         _fail(source, "top level", f"must be a mapping, got {type(value).__name__}")
@@ -638,11 +698,16 @@ def resolve_config(
 ) -> tuple[dict[str, Any], list[Provenance]]:
     """Resolve and validate all layers in increasing precedence order.
 
+    A malformed or structurally invalid layer raises ``ConfigError`` at once.
+    Completeness findings are collected across EVERY layer and raised together
+    as one ``IncompleteConfigError``, so a caller sees every gap in one pass.
+
     ``home`` is an explicit seam for tests and embedding callers. When omitted,
     the user layer is exactly ``~/.claude/config/review_profiles.yaml``.
     """
     config: dict[str, Any] = {}
     provenance: list[Provenance] = []
+    findings: list[str] = []
     for layer, path in layer_paths(project_root, home=home):
         data = load_layer(path)
         if data is None:
@@ -655,8 +720,12 @@ def resolve_config(
             continue
 
         _validate_layer(data, path, base=config)
+        findings.extend(completeness_findings(data, f"{layer} {path}"))
         config = deep_merge(config, data)
         provenance.append((layer, path, "applied"))
+
+    if findings:
+        raise IncompleteConfigError(findings)
 
     _validate_resolved(config, "resolved review profiles")
     config = _without_disabled(config)
@@ -668,66 +737,61 @@ def resolve_config(
     return config, provenance
 
 
-def _reviewer_lanes(
-    config: Mapping[str, Any],
-) -> list[tuple[str, dict[str, Any]]]:
-    """Return (profile id, reviewer record) for every reviewer in the table."""
-    lanes: list[tuple[str, dict[str, Any]]] = []
-    for profile in config.get("profiles", []):
-        if not isinstance(profile, dict):
-            continue
-        for reviewer in profile.get("reviewers", []):
-            if not isinstance(reviewer, dict):
-                continue
-            lanes.append((str(profile.get("id")), reviewer))
-    return lanes
+def _complete_entries(value: Any, location: str, *, exactly_one: bool) -> list[dict[str, str]]:
+    """Return ``value`` as normalized ``{id, effort}`` entries, or raise.
+
+    The ids are stripped by ``model_declaration.parse``. Anything other than a
+    list of complete entries is refused: a caller that skipped resolution must
+    not get a table a dispatcher would read with an effort missing.
+    """
+    if not isinstance(value, list) or not all(
+        isinstance(entry, dict)
+        and set(entry) == ENTRY_FIELDS
+        and entry["effort"] in EFFORT_LEVELS
+        for entry in value
+    ):
+        raise ConfigError(
+            f"{location}: {value!r} is not a list of complete "
+            "{id: <model>, effort: <level>} entries; resolve the configuration "
+            "with resolve_config before projecting or rendering the table"
+        )
+    try:
+        ids = model_declaration.parse([entry["id"] for entry in value])
+    except model_declaration.DeclarationError as exc:
+        raise ConfigError(f"{location}: {exc}") from exc
+    if exactly_one and len(ids) != 1:
+        raise ConfigError(f"{location}: must hold exactly one entry, got {ids!r}")
+    return [
+        {"id": model_id, "effort": entry["effort"]}
+        for model_id, entry in zip(ids, value)
+    ]
 
 
 def apply_model_priority(config: Mapping[str, Any]) -> dict[str, Any]:
-    """Resolve every reviewer's model priority list to a single model.
+    """Normalize every reviewer's and validator's entries in a resolved table.
 
-    The first entry of an ordered model declaration always becomes the lane's
-    model. Each lane also gains ``model_fallbacks``, the remainder of its list,
-    so a caller that finds the chosen model unusable at dispatch can fail over
-    without re-resolving the configuration.
+    Each reviewer's ``model`` becomes its ordered ``[{id, effort}, ...]`` list
+    and each validator reason its one-entry list, with ids stripped. An entry
+    that is not complete raises ``ConfigError``.
     """
     resolved = deepcopy(dict(config))
-    # A validator declaration names exactly one id (validated at load), so it
-    # resolves to that id; the table then carries one string per validator,
-    # exactly as it carries one per reviewer lane.
     for profile in resolved.get("profiles", []):
-        if isinstance(profile, dict) and isinstance(profile.get("validator_models"), dict):
-            profile["validator_models"] = {
-                reason: _validator_model(model)
-                for reason, model in profile["validator_models"].items()
-            }
-
-    for _profile_id, reviewer in _reviewer_lanes(resolved):
-        model = reviewer.get("model")
-        entries = _model_entries(model)
-        if not entries:
-            continue
-        reviewer["model"] = entries[0]
-        reviewer["model_fallbacks"] = entries[1:]
-
+        profile_location = f"profile {str(profile.get('id'))!r}"
+        profile["validator_models"] = {
+            reason: _complete_entries(
+                entries,
+                f"{profile_location} validator {reason!r}",
+                exactly_one=True,
+            )
+            for reason, entries in profile["validator_models"].items()
+        }
+        for reviewer in profile["reviewers"]:
+            reviewer["model"] = _complete_entries(
+                reviewer["model"],
+                f"{profile_location} lane {str(reviewer.get('name'))!r}",
+                exactly_one=False,
+            )
     return resolved
-
-
-def _projected_model(profile: Mapping[str, Any], reviewer: Mapping[str, Any]) -> str:
-    """Return a lane's resolved model, refusing to project an unresolved list.
-
-    The stdout table is what the runner dispatches from, so a priority list
-    must never reach it: a list would be read as an endpoint id and dispatched
-    as one. Every projecting caller resolves first.
-    """
-    model = reviewer["model"]
-    if isinstance(model, str):
-        return model
-    raise ConfigError(
-        f"profile {str(profile.get('id'))!r} lane {str(reviewer.get('name'))!r}: "
-        f"model is still a priority list ({model!r}); call apply_model_priority "
-        "before projecting or rendering the table"
-    )
 
 
 def canonical_projection(value: Mapping[str, Any]) -> dict[str, Any]:
@@ -735,6 +799,7 @@ def canonical_projection(value: Mapping[str, Any]) -> dict[str, Any]:
     active = _without_disabled(value)
     profiles: list[dict[str, Any]] = []
     for profile in active.get("profiles", []):
+        profile_location = f"profile {str(profile.get('id'))!r}"
         selection = profile["selection"]
         selection_projection: dict[str, Any] = {}
         if "data_only_extensions" in selection:
@@ -746,31 +811,23 @@ def canonical_projection(value: Mapping[str, Any]) -> dict[str, Any]:
                 "id": profile["id"],
                 "selection": selection_projection,
                 "reviewers": [
-                    # `effort` is omitted when unset rather than projected as a
-                    # null: absent means "inherit the session's effort", and a
-                    # rendered `effort: null` would read as a stated level.
-                    # `model_fallbacks` takes the opposite treatment and is
-                    # rendered even when empty, because the agent reading this
-                    # table asks it a question -- what may this lane fall over
-                    # to -- and an absent key would leave "nothing" and "this
-                    # table does not say" spelled identically.
                     {
                         "name": reviewer["name"],
-                        "model": _projected_model(profile, reviewer),
-                        "model_fallbacks": list(
-                            reviewer.get("model_fallbacks", ())
-                        ),
-                        **(
-                            {"effort": reviewer["effort"]}
-                            if "effort" in reviewer
-                            else {}
+                        "model": _complete_entries(
+                            reviewer["model"],
+                            f"{profile_location} lane {str(reviewer['name'])!r}",
+                            exactly_one=False,
                         ),
                     }
                     for reviewer in profile["reviewers"]
                 ],
                 "validator_models": {
-                    reason: _validator_model(model)
-                    for reason, model in profile["validator_models"].items()
+                    reason: _complete_entries(
+                        entries,
+                        f"{profile_location} validator {reason!r}",
+                        exactly_one=True,
+                    )
+                    for reason, entries in profile["validator_models"].items()
                 },
             }
         )
@@ -811,7 +868,13 @@ def render(value: Mapping[str, Any], provenance: Sequence[Provenance] | None = N
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    """CLI entry point for resolving review profiles."""
+    """CLI entry point for resolving review profiles.
+
+    Both modes share one exit contract: 1 when the layers hold completeness
+    findings (every finding on stderr, one per line), 2 when a layer is
+    malformed or invalid. Without ``--check`` a clean resolve prints the table
+    and its provenance; with ``--check`` it prints no table and exits 0.
+    """
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument(
         "--project-root",
@@ -822,6 +885,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--home",
         help="Override the home root used for the user layer (for isolated callers/tests)",
     )
+    parser.add_argument(
+        "--check",
+        action="store_true",
+        help=(
+            "Report every incomplete entry across all layers on stderr and print "
+            "no table. Exit 0 complete, 1 findings, 2 malformed or invalid layer."
+        ),
+    )
     args = parser.parse_args(argv)
     project_root = Path(args.project_root).expanduser().resolve()
     home = Path(args.home).expanduser().resolve() if args.home else None
@@ -829,10 +900,18 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         config, provenance = resolve_config(project_root, home=home)
         config = apply_model_priority(config)
-    except ConfigError as exc:
+    except IncompleteConfigError as exc:
         print(f"review profiles config error: {exc}", file=sys.stderr)
         return 1
+    except ConfigError as exc:
+        print(f"review profiles config error: {exc}", file=sys.stderr)
+        return 2
 
+    if args.check:
+        sys.stdout.write(
+            "review profiles: complete. " + render_provenance(provenance).splitlines()[0] + "\n"
+        )
+        return 0
     sys.stdout.write(render(config, provenance))
     return 0
 

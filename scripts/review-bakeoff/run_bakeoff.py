@@ -186,7 +186,7 @@ def _require_lane_model_id(arm: str) -> None:
         )
 
 
-def run_arm(arm: str, selected: Sequence[str]) -> int:
+def run_arm(arm: str, effort: str, selected: Sequence[str]) -> int:
     _require_lane_model_id(arm)
     cases = load_cases()
     wanted = set(selected)
@@ -195,7 +195,7 @@ def run_arm(arm: str, selected: Sequence[str]) -> int:
         missing = sorted(wanted - {case.case_id for case in cases})
         raise BakeoffError(f"unknown case id(s): {', '.join(missing)}")
     for case in cases:
-        command = [sys.executable, str(RUNNER), "--lane", LANE, "--model", arm, "--chunk", str(CORPUS / case.case_id / "chunk.diff"), "--description", case.case_id, "--project-root", str(ROOT)]
+        command = [sys.executable, str(RUNNER), "--lane", LANE, "--model", arm, "--effort", effort, "--chunk", str(CORPUS / case.case_id / "chunk.diff"), "--description", case.case_id, "--project-root", str(ROOT)]
         for file in case.files:
             command.extend(["--file", file])
         completed = subprocess.run(command, cwd=ROOT, capture_output=True, text=True, check=False)
@@ -299,6 +299,7 @@ def parser() -> argparse.ArgumentParser:
     sub = root.add_subparsers(dest="command", required=True)
     run = sub.add_parser("run", help="run an endpoint arm; --arm is the registry id passed as the lane --model")
     run.add_argument("--arm", required=True)
+    run.add_argument("--effort", required=True, help="lane effort passed to the wrapper as --effort; no default")
     run.add_argument("--case", action="append", default=[])
     prompts = sub.add_parser("prompts", help="write Agent prompt files")
     prompts.add_argument("--arm", required=True)
@@ -315,7 +316,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser().parse_args(argv)
     try:
         if args.command == "run":
-            return run_arm(args.arm, args.case)
+            return run_arm(args.arm, args.effort, args.case)
         if args.command == "prompts":
             return write_prompts(args.arm)
         if args.command == "ingest":

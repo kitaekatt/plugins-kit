@@ -35,6 +35,31 @@ technique_skill:
       preconditions:
         - User has at least one pending CL OR has passed a CL number argument.
       steps:
+        - n: 0
+          action: |
+            Resolve the EXECUTABLE review-profile table FIRST -- before step 1, before
+            prepare_review.py, and before any question to the user -- so a configuration
+            error stops the review before any other work happens. Run "${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${CLAUDE_PLUGIN_ROOT}/scripts/render_review_profiles.py" with
+            `--project-root <root>`, where <root> is the output of
+            `p4 -ztag -F %clientRoot% info` -- the same root prepare_review.py later reports
+            as `bundle.project_root`. When it prints nothing, no client workspace resolves:
+            omit `--project-root`, as prepare's `bundle.project_root` is then null too and
+            the resolver reads the project layer from the process working directory.
+            NEVER merge the review-profile config layers (shipped / user / project)
+            yourself -- the renderer is the only merge. Its stdout is the merged `profiles`
+            table as YAML -- profile ids, reviewer rosters, each reviewer's `model` list of
+            `{id, effort}` entries, and `validator_models` with one `{id, effort}` entry per
+            reason -- followed by a `---` separator and layer provenance; parse only the
+            YAML above the separator. Keep the resolved `profiles` list for steps 6 and 7.
+            See references/configuration.md for the full layer/merge/override contract.
+          tool: Bash running "${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${CLAUDE_PLUGIN_ROOT}/scripts/render_review_profiles.py"
+          on_failure: |
+            A non-zero exit STOPS the review. Print the renderer's stderr verbatim and do
+            nothing else: do not run step 1 or prepare_review.py, do not ask the user
+            anything, and do not launch any reviewer or validator. Never guess, default, or
+            fill in a missing model or effort. The stderr names each problem; for an entry
+            that states no effort it names the layer file, the profile, the lane, and the
+            entry. The user fixes those layers and runs the review again.
         - n: 1
           action: Resolve the CL number (from argument, else list pending CLs and prompt the user).
           tool: p4
@@ -92,16 +117,7 @@ technique_skill:
           action: |
             Read every path in unique_claude_mds (CLAUDE.md, or AGENTS.md where a directory has no
             CLAUDE.md -- the bundle already applies that precedence). Subagents do not need to re-read.
-            Also resolve the EXECUTABLE review-profile table -- profile ids, reviewer rosters,
-            per-reviewer models, and validator_models -- by running "${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${CLAUDE_PLUGIN_ROOT}/scripts/render_review_profiles.py" with
-            `--project-root <bundle.project_root>` (omit the flag when bundle.project_root is
-            unset; the resolver then falls back to the process cwd). NEVER merge the
-            review-profile config layers (shipped / user / project) yourself -- the renderer is
-            the only merge. Its stdout is the merged `profiles` table as YAML, followed by a
-            `---` separator and layer provenance; parse only the YAML above the separator. Keep
-            the resolved `profiles` list for steps 6 and 7. See references/configuration.md for
-            the full layer/merge/override contract.
-          tool: Read + "${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${CLAUDE_PLUGIN_ROOT}/scripts/render_review_profiles.py"
+          tool: Read
         - n: 5
           action: |
             If bundle.submit_gates is non-empty, DISCHARGE each gate yourself. Do NOT ask the
@@ -131,13 +147,13 @@ technique_skill:
           tool: Read + the repo itself (AskUserQuestion ONLY for a NEEDS THE USER gate)
         - n: 6
           action: |
-            Select one profile from the RESOLVED table fetched in step 4, using
+            Select one profile from the RESOLVED table fetched in step 0, using
             `review_profiles.profiles[].selection.guidance` above (this SKILL's guidance prose,
             each entry naming the profile it documents) -- this is an inference call, not regex.
             Read each profile's guidance, weigh the actual contents of `bundle.changed_files`, and
             pick the most appropriate profile id from the resolved table. Default to `code` when
             uncertain. `profile` below is that resolved-table entry -- its `reviewers` and
-            `validator_models` come from step 4, never hand-constructed.
+            `validator_models` come from step 0, never hand-constructed.
             Dispatch rule (deterministic -- compute the number, do not eyeball it): let
             lanes = R x K, where R = len(profile.reviewers) (2 for data_only, 3 for code)
             and K = len(bundle.diff_chunks). If lanes <= 6, launch the reviewer subagents
@@ -147,15 +163,20 @@ technique_skill:
             reviewers, same validators, same output either way -- only the dispatch
             mechanism changes.
             Lane routing rule (per reviewer): a reviewer's DECLARATION is its resolved
-            `model` followed by its `model_fallbacks`, in that order, read off the RESOLVED
-            table. Validators are routed by step 7, not by this rule.
+            `model` list, read off the RESOLVED table: entries of the form `{id, effort}`,
+            in declared order. Validators are routed by step 7, not by this rule.
+            - An entry's EFFORT is the `effort` stated beside its `id` in that list. Ids are
+              unique within a declaration, so the chosen id -- a first choice or a
+              re-selection alike -- has exactly one effort. Use that value as stated; never
+              substitute, raise, or lower it. Step 0 stops the review before this point when
+              any entry states no effort, so every entry you route has one.
             - A one-entry declaration has no menu and no announcement: dispatch its entry by
               the entry-harness rule below.
             - For each declaration with two or more entries, run
               `~/.claude/plugins/data/plugins-kit/llm-scripting-kit/.venv/bin/llm-scripting-kit describe <entry>... --caller session`
               (Windows: ~/.claude/plugins/data/plugins-kit/llm-scripting-kit/.venv/Scripts/llm-scripting-kit.exe)
               (the venv path works from every shell; a bare name resolves only inside a Claude Code
-              Bash session) with the entries in
+              Bash session) with each entry's `id` in
               declared order, plus `--project-root <bundle.project_root>` when the bundle
               has one, plus `--dispatchable transport` when the reviewer is not
               `reviewer_a_claude_md_compliance` or `reviewer_c_introduced_code` (the lane
@@ -182,28 +203,40 @@ technique_skill:
               step 9 under `## Lane failures`, naming each declared entry, and mark its
               coverage missing.
             Entry-harness rule (per lane, mechanical): an entry whose describe line reads
-            `claude/agent` -- or, on a one-entry declaration or the no-menu route, one of
-            `sonnet`, `opus`, `haiku`, `fable` -- launches an Agent subagent with
-            `model: <entry>`. Any other entry runs as a parallel Bash call to
-            "${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${CLAUDE_PLUGIN_ROOT}/scripts/run_review_lane.py" instead of launching an Agent for it, passing `--lane <reviewer
-            name>`, `--model <the entry>`, `--bundle <bundle.bundle_dir>/bundle.json`, and
-            `--chunk-index <i>` (that chunk's index in `bundle.diff_chunks`). The runner
+            `claude/agent` -- or, on a one-entry declaration or the no-menu route, whose id is
+            one of `sonnet`, `opus`, `haiku`, `fable` -- launches an Agent subagent with
+            `subagent_type: p4-kit:review-lane-<entry effort>` and `model: <entry id>`. Any
+            other entry runs as a parallel Bash call to "${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${CLAUDE_PLUGIN_ROOT}/scripts/run_review_lane.py" instead of launching an
+            Agent for it, passing `--lane <reviewer name>`, `--model <entry id>`, `--effort
+            <entry effort>`, `--bundle <bundle.bundle_dir>/bundle.json`, and `--chunk-index
+            <i>` (that chunk's index in `bundle.diff_chunks`). The runner
             reads the bundle itself and derives everything else -- the chunk diff path,
             that chunk's files, the claimed-file paths reviewer_a alone is entitled to, the
             mechanical-scan records reviewer_a and reviewer_b alone are entitled to, the
             change description, and the project root -- so nothing else needs building by
             hand. Its stdout is a JSON envelope whose `issues` array is that lane's candidate
-            issues, in the same shape an Agent lane returns.
+            issues, in the same shape an Agent lane returns, and whose `effort` field records
+            the effort the runner sent.
             Endpoint lanes and Agent lanes go out in the SAME message as one another; mixing
             the two dispatch mechanisms in one fan-out is normal and expected.
             A NON-ZERO exit is never an empty result. Before treating a lane as failed,
             apply the pre-dispatch launch-correction rule in references/configuration.md.
-            For a failure that rule does not explain, follow the `Re-select:` line describe
+            Exit 2 from the runner is a REFUSAL: it declined the dispatch as configured --
+            for example a lane it does not support by name, an effort outside a codex entry's
+            effort menu, an effort a transport entry cannot deliver, or an installed
+            llm-scripting-kit older than 0.60.0, the first release that accepts `--effort`. A
+            refusal the launch-correction rule does not explain is a configuration error for
+            the user to fix, not something to work around: report it in step 9 under
+            `## Lane failures` with the runner's stderr verbatim and mark coverage missing.
+            Do not re-select past it, and do not re-run the entry at another effort.
+            For any other failure the launch-correction rule does not explain, follow the
+            `Re-select:` line describe
             printed: run describe again with the same arguments plus one `--exclude <entry>`
             per entry this lane has already failed on, print its stdout verbatim, choose,
             and announce as its rule says, with `<reviewer name> chunk <i>` as the unit and
             the prior entry and its failure kind as the reason. Dispatch the chosen entry by
-            the entry-harness rule. Each entry is tried at most once per lane. On the
+            the entry-harness rule, at the chosen entry's own effort. Each entry is tried at
+            most once per lane. On the
             no-menu route, re-select the next of the four core entries in declared order
             and announce it as `route: <reviewer name> chunk <i> -> <entry>; <prior entry>
             failed: <kind>`. A one-entry declaration has nothing to re-select.
@@ -211,24 +244,17 @@ technique_skill:
             usable entry left: report it in step 9 under `## Lane failures`, naming every
             entry tried and why it failed, and mark coverage missing -- never treat absent
             output as "no issues found".
-            The runner refuses a lane it does not support by name and exits 2, which is a
-            configuration error for the user to fix, not something to work around.
 
-            Effort rule (per lane, mechanical -- applies to AGENT lanes only): a reviewer
-            record in the RESOLVED table may carry an `effort` value alongside its `model`.
-            When it does, dispatch that lane with `subagent_type: p4-kit:review-lane-<effort>`
-            instead of `general-purpose`. When it does not, use `general-purpose` and the lane
-            inherits this session's effort -- the behavior every lane had before the field
-            existed, which is why an unstated effort is never a silent change. The effort
-            agent binds ONLY the reasoning budget: pass the lane's chosen entry as `model`
-            at the call site exactly as you would otherwise (a call-site model overrides an
-            agent definition's own) and pass the lane's canonical prompt verbatim as always,
-            because the agent adds no review criteria of its own.
-            `effort` does NOT reach an ENDPOINT lane: an endpoint's effort comes from its own
-            llm-scripting-kit configuration, so a record carrying both an endpoint entry and an
-            `effort` runs at the endpoint's configured effort. Note that in one line rather
-            than reporting an effort the lane did not run at, and do not substitute an Agent
-            to honour the field.
+            Effort rule (per entry, mechanical): every entry runs at the effort its own
+            declaration entry states, whichever harness serves it. An AGENT entry receives it
+            through its dispatch target: the Agent tool has no effort argument, so
+            `p4-kit:review-lane-<effort>` binds the level in that agent's frontmatter. Pass the
+            entry's `id` as `model` at the call site (a call-site model overrides an agent
+            definition's own) and pass the lane's canonical prompt verbatim as always,
+            because the agent adds no review criteria of its own. A LANE-TOOL entry receives
+            it as `--effort <effort>`; the runner refuses, with exit 2, an effort a codex
+            entry's effort menu lacks or a transport entry cannot deliver. A re-selected entry
+            runs at ITS OWN stated effort, never at the failed entry's.
             Triviality gate (pure-mechanical, decided by prepare_review -- do NOT re-judge it):
             each `bundle.claimed_files` entry carries `trivial` (bool) and `trivial_reasons` (the
             disqualifier codes when false). Partition the claimed files into TRIVIAL (`trivial == true`)
@@ -358,13 +384,15 @@ technique_skill:
         - n: 7
           action: |
             Launch one validator subagent per candidate issue, all in parallel via a single message.
-            Use the selected profile's `validator_models[reason]` (from the RESOLVED table fetched
-            in step 4) to pick the model per issue. It names one entry, one of `sonnet`, `opus`,
-            `haiku`, `fable`, and launches an Agent with that `model`. No validator lane is
-            endpoint-eligible: the runner refuses one and exits 2, because the validator is the
-            control that suppresses a weak reviewer's noise and must not be replaced in the same
-            change as a reviewer. Any other entry in `validator_models` is therefore a
-            configuration error to report, not a lane to run.
+            The selected profile's `validator_models[reason]` (from the RESOLVED table fetched in
+            step 0) is a list of exactly one `{id, effort}` entry, chosen per issue by its reason.
+            Its `id` is one of `sonnet`, `opus`, `haiku`, `fable`: launch an Agent with
+            `subagent_type: p4-kit:review-lane-<effort>` and `model: <id>`, using that entry's own
+            stated effort, and give it the `validator` subagent definition below with the issue.
+            No validator lane is endpoint-eligible: the runner refuses one and exits 2, because the
+            validator is the control that suppresses a weak reviewer's noise and must not be
+            replaced in the same change as a reviewer. Any other id in `validator_models` is
+            therefore a configuration error to report, not a lane to run.
           tool: Agent
           expected: CONFIRMED or REJECTED per issue.
         - n: 8
@@ -377,8 +405,8 @@ technique_skill:
               Only a completed, schema-valid reviewer result restores that lane's coverage.
             - When any lane FAILED (including an unsuccessful launch correction
               or a lane refused as a configuration error), prepend a `## Lane failures`
-              section naming each failed lane, the model it was configured with, and the
-              runner's stderr reason. State plainly which files that lane would have covered
+              section naming each failed lane, the model entry and effort it was configured with,
+              and the runner's stderr reason. State plainly which files that lane would have covered
               and that they did NOT receive its review. This section is not decoration: the
               rest of the review looks identical whether a lane ran or not, so without it a
               partial review is indistinguishable from a complete one. Never describe a
@@ -516,9 +544,10 @@ technique_skill:
         - Unreconciled and default-changelist files surfaced in one question (and either folded in via the matching `p4 reconcile -c <CL>` or `p4 reopen -c <CL>` command with a re-run, or explicitly declined)
         - All CLAUDE.md files read
         - Submit gates discharged by the agent (if any), each with a MET / NOT APPLICABLE / NOT MET / NEEDS THE USER verdict and its evidence
-        - Executable review-profile table resolved via render_review_profiles.py (step 4); profile selected from the resolved table using review_profiles guidance
+        - Executable review-profile table resolved via render_review_profiles.py FIRST (step 0, before prepare_review.py and before any question to the user); a non-zero exit stopped the review with its stderr printed verbatim; profile selected from the resolved table using review_profiles guidance
         - Reviewers launched in parallel (single message, R x K Agent calls -- one per (reviewer x chunk) pair, where K = len(bundle.diff_chunks))
-        - Validators launched in parallel (single message, N Agent calls), models picked from the profile's validator_models
+        - Validators launched in parallel (single message, N Agent calls), each entry's id and effort taken from the profile's validator_models
+        - Every reviewer and validator entry dispatched at its own stated effort -- an Agent entry as `p4-kit:review-lane-<effort>` with its `id` as the model, a lane-tool entry with `--effort <effort>`; a re-selected entry at its own effort; a runner refusal (exit 2) reported under `## Lane failures`, not re-selected past
         - Filtered to confirmed-only
         - Launch rationale line emitted once (file-type-driven; md_trivial variant when the change is all-mechanical)
         - Every multi-entry reviewer declaration routed through `llm-scripting-kit describe` (stdout printed verbatim, choice announced as a `route:` line) or, without describe, through its core entries; a FAILED lane re-selected per the printed `Re-select:` line, each entry at most once; every `route:` line carried into the `## Lane routes` section; a lane with no usable entry left still reports a `## Lane failures` entry with coverage missing
@@ -561,13 +590,13 @@ technique_skill:
         - The `--review-machine-emitted` flag is the override and it is the AUTHOR's call, never an inference. Pass it only when the user or the author explicitly asks for the machine-emitted files to be reviewed.
         - The declined-findings ledger is advisory memory, not a gate. A collapsed finding is one the author already declined for THIS change at THIS baseline; when the baseline moves (the CL is reshelved, its content edited, or its revisions move) the entry goes stale and the finding re-surfaces on its own. Never let a ledger hit suppress a SERIOUS md-domain finding.
         - Record declined findings ONLY through `prepare_review.py --ledger-record <json>`. Never hand-edit ledger.json -- the key normalization (criterion/reason + taxonomy + normalized anchor) must be computed deterministically, not typed.
-        - The `review_profiles` block above is SELECTION GUIDANCE AND RATIONALE ONLY. It carries no reviewer roster, model, or validator_models -- that executable table is resolved per review by "${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${CLAUDE_PLUGIN_ROOT}/scripts/render_review_profiles.py" (step 4), which merges the shipped bootstrap_lib defaults with any `~/.claude/config/review_profiles.yaml` (user) or `<project_root>/.claude/review_profiles.yaml` (project) override. Never merge those layers yourself and never hand-edit the resolved output.
+        - The `review_profiles` block above is SELECTION GUIDANCE AND RATIONALE ONLY. It carries no reviewer roster, model, or validator_models -- that executable table is resolved per review by "${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${CLAUDE_PLUGIN_ROOT}/scripts/render_review_profiles.py" (step 0, before any other step), which merges the shipped bootstrap_lib defaults with any `~/.claude/config/review_profiles.yaml` (user) or `<project_root>/.claude/review_profiles.yaml` (project) override. Never merge those layers yourself and never hand-edit the resolved output.
         - The `profile` in steps 6-7 is always an entry from that RESOLVED table, never the guidance block. Match the guidance prose to decide which profile id fits the change, then read `reviewers` and `validator_models` off the resolved entry with that id.
-        - See references/configuration.md for the layer precedence, merge rules (profiles/reviewers merge by id/name; validator_models and other mappings deep-merge; `disabled: true` removes a record; plain lists like `data_only_extensions` replace), the shipped default table, what a declaration entry may name, how a multi-entry declaration is routed, which lanes may take an endpoint entry, and what happens when a lane fails.
-        - A reviewer's `model` is a model DECLARATION -- the resolved `model` followed by its `model_fallbacks`. Each entry is dispatched by its harness under step 6's entry-harness rule -- a `claude` entry launches an Agent subagent, any other entry runs through "${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${CLAUDE_PLUGIN_ROOT}/scripts/run_review_lane.py".
+        - See references/configuration.md for the layer precedence, merge rules (profiles/reviewers merge by id/name; validator_models and other mappings deep-merge; `disabled: true` removes a record; plain lists like `data_only_extensions`, a reviewer's `model` entry list, and a validator reason's entry list replace), the shipped default table, what a declaration entry may name, how a multi-entry declaration is routed, which lanes may take an endpoint entry, and what happens when a lane fails.
+        - A reviewer's `model` is a model DECLARATION -- an ordered list of `{id, effort}` entries. Each entry is dispatched by its harness under step 6's entry-harness rule, at that entry's own effort -- a `claude` entry launches the `p4-kit:review-lane-<effort>` agent with its `id` as the model, any other entry runs through "${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${CLAUDE_PLUGIN_ROOT}/scripts/run_review_lane.py" with `--model <id> --effort <effort>`.
         - Apply references/configuration.md's pre-dispatch launch-correction rule before classifying a failed invocation.
-        - A reviewer record may carry an `effort` (`low`, `medium`, `high`, `xhigh`, `max`) beside its `model`. It selects the DISPATCH TARGET, not a parameter: the Agent tool has no effort argument, so an effort-carrying lane goes to the `p4-kit:review-lane-<effort>` agent, whose frontmatter sets it. A lane with no `effort` keeps `general-purpose` and inherits this session's effort. Do not attempt to pass effort as an Agent argument, and do not read a lane's effort off the agent's page -- the RESOLVED table is the authority.
-        - Effort and model are independent and BOTH are honoured: the profile's `model` goes at the CALL SITE, where it overrides whatever the effort agent's own frontmatter would imply. Never move a lane to a different model to obtain an effort level, and never move it to a different effort to obtain a model.
+        - Every model entry, reviewer and validator alike, states its own `effort` (`low`, `medium`, `high`, `xhigh`, `max`); the renderer refuses a table in which any entry does not, so an entry's stated effort is the only effort it runs at. For an Agent entry, effort selects the DISPATCH TARGET, not a parameter -- the Agent tool has no effort argument, so the entry goes to the `p4-kit:review-lane-<effort>` agent, whose frontmatter sets it. For a lane-tool entry it is the `--effort` argument. Do not attempt to pass effort as an Agent argument, and do not read an entry's effort off the agent's page -- the RESOLVED table is the authority.
+        - Effort and model are independent and BOTH are honoured: the entry's `id` goes at the CALL SITE as `model`, where it overrides whatever the effort agent's own frontmatter would imply. Never move a lane to a different model to obtain an effort level, and never move it to a different effort to obtain a model. A re-selected entry runs at its own stated effort.
   narration:
     note: Reviews involve long silent stretches (batched file reads, parallel subagents that take 30s+). Post one short status line per step using these templates verbatim, filling in the bracketed counts. Do not paraphrase, omit, or add extras.
     templates:
@@ -659,7 +688,7 @@ technique_skill:
       `selection.guidance` below and pick the most appropriate one based on the actual contents
       of `bundle.changed_files`. Default to `code` when uncertain.
       The EXECUTABLE table -- profile ids, reviewer rosters, per-reviewer models, and
-      validator_models -- is NOT inline here. It is resolved at review time by step 4
+      validator_models -- is NOT inline here. It is resolved at review time by step 0
       ("${BOOTSTRAP_PYTHON:?requires bootstrap >= 0.120.0}" "${CLAUDE_PLUGIN_ROOT}/scripts/render_review_profiles.py"), which merges the shipped bootstrap_lib defaults with any user/project
       override. Never merge those layers by hand. See references/configuration.md for the full
       layer/merge/override contract and the shipped default table.
@@ -698,7 +727,7 @@ technique_skill:
   # Models are NOT set here -- they are bound by the selected `review_profiles` entry.
   subagents:
     - name: reviewer_a_claude_md_compliance
-      subagent_type: general-purpose
+      subagent_type: "p4-kit:review-lane-<entry effort> (step 6 entry-harness rule)"
       scope: CLAUDE.md compliance only, restricted to the files in one chunk
       input: "absolute path to ONE chunk .diff file, the depot paths of the files in that chunk, the per-file CLAUDE.md mapping restricted to those files, the full text of each relevant CLAUDE.md (read in step 4), and the paths of every claimed file (paths only -- their content belongs to the subject-lens reviewer)"
       canonical_prompt_note: |
@@ -784,7 +813,7 @@ technique_skill:
         - "Only consider CLAUDE.md files that share a path with the file being reviewed (use the per-file mapping when supplied; do not cross-apply)."
         - "Only flag issues in files present in your chunk -- files in other chunks are someone else's responsibility."
     - name: reviewer_b_diff_only_bugs
-      subagent_type: general-purpose
+      subagent_type: "p4-kit:review-lane-<entry effort> (step 6 entry-harness rule)"
       scope: obvious bugs visible in one chunk's diff alone
       input: "absolute path to ONE chunk .diff file, the depot paths of the files in that chunk, and the CL description"
       canonical_prompt_note: |
@@ -845,7 +874,7 @@ technique_skill:
         - "For data/doc files (data_only profile): focus on malformed syntax, duplicate keys, schema or column-count violations, and broken cross-file references."
         - "Only flag issues in files present in your chunk."
     - name: reviewer_c_introduced_code
-      subagent_type: general-purpose
+      subagent_type: "p4-kit:review-lane-<entry effort> (step 6 entry-harness rule)"
       scope: bugs/security/logic problems in the introduced code that need broader context, restricted to one chunk's files
       input: "absolute path to ONE chunk .diff file, the depot paths of the files in that chunk, local paths for those files, and the CL description"
       canonical_prompt_note: |
@@ -924,7 +953,7 @@ technique_skill:
         - "Examples: concurrency issues, lifetime bugs, security holes, an input that used to be refused and is now accepted and ignored."
         - "Only flag issues in files present in your chunk."
     - name: validator
-      subagent_type: general-purpose
+      subagent_type: "p4-kit:review-lane-<entry effort> (step 7)"
       scope: confirm or reject one candidate issue with high confidence
       input: "the issue (JSON), the chunk diff, [if claude_md: relevant CLAUDE.md contents]"
       output_format: "exactly one line: 'CONFIRMED: <one-sentence reason>' or 'REJECTED: <one-sentence reason>'"

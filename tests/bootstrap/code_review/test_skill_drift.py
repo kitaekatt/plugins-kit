@@ -46,6 +46,7 @@ _spec.loader.exec_module(gen)
 #: keep the check green (root CLAUDE.md `guard_cannot_see_its_own_subject`).
 _ROOT_VAR = {"git": "GIT_KIT_ROOT", "p4": "P4_KIT_ROOT"}
 _OTHER_VCS = {"git": "p4", "p4": "git"}
+_KIT = {"git": "git-kit", "p4": "p4-kit"}
 
 #: script -> the generator constant holding its per-kit launcher, so the
 #: launcher STRING is single-sourced while the variable NAME above is not.
@@ -117,7 +118,11 @@ class TestDeclarationRouting:
         body = " ".join(gen.render_skill(vcs).split())
         assert "Entry-harness rule" in body
         assert "an entry whose describe line reads `claude/agent`" in body
-        assert "launches an Agent subagent with `model: <entry>`" in body
+        kit = _KIT[vcs]
+        assert (
+            f"launches an Agent subagent with `subagent_type: {kit}:review-lane-<entry effort>` "
+            "and `model: <entry id>`"
+        ) in body
         assert "model-kind rule" not in body
 
     @pytest.mark.parametrize("vcs", ["git", "p4"])
@@ -143,9 +148,24 @@ class TestDeclarationRouting:
 
     @pytest.mark.parametrize("vcs", ["git", "p4"])
     def test_configuration_documents_the_shipped_declaration(self, vcs: str) -> None:
+        """The reproduced table must BE the shipped defaults, not a spelling of them.
+
+        Compared against the producer (the defaults file the resolver reads),
+        so a change to the shipped values that updates both stays green and a
+        change that updates only one goes red (root CLAUDE.md
+        `pin_the_producer_not_the_spelling`).
+        """
+        import yaml
+
         ref = gen.render_configuration(vcs)
-        assert "  - name: reviewer_c_introduced_code\n    model:\n    - sol\n    - opus\n" in ref
-        assert "peer:opus" not in ref.split("## Shipped defaults", 1)[1].split("\n## ", 1)[0]
+        section = ref.split("## Shipped defaults", 1)[1].split("\n## ", 1)[0]
+        block = section.split("```yaml\n", 1)[1].split("```", 1)[0]
+        shipped = (
+            REPO_ROOT
+            / "plugins/bootstrap/bootstrap_lib/code_review/defaults/review_profiles.yaml"
+        )
+        assert yaml.safe_load(block) == yaml.safe_load(shipped.read_text(encoding="utf-8"))
+        assert "peer:opus" not in section
 
 
 class TestMechanicalScanContract:

@@ -213,7 +213,11 @@ class TestBootstrapDependencyDiagnostics:
             return tuple(int(part) for part in text.split("."))
 
         floor = manifest["requires_bootstrap"]
-        assert floor == max("0.113.0", MIN_VERSION, key=version)
+        assert version(floor) >= version(max("0.113.0", MIN_VERSION, key=version))
+        bootstrap_plugin = json.loads(
+            Path("plugins/bootstrap/.claude-plugin/plugin.json").read_text(encoding="utf-8")
+        )
+        assert version(floor) <= version(bootstrap_plugin["version"])
         assert version(floor) >= version("0.113.0")
 
     @pytest.mark.parametrize(("error", "bootstrap_failure"), [
