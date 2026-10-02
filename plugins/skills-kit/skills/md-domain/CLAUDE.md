@@ -75,29 +75,28 @@ claude_md:
         Settled decision 3 (required audit-checked fields on folded techniques,
         2026-07-28) plus the router-enforcement section of the phase-3 design.
       added: "2026-07-29"
-    - id: references_layout_deviation
-      keywords: [refs-one-hop-deep, nested references, accepted deviation, clustered layout, standards lanes provenance, config off, one hop]
-      summary: The clustered references/ layout (standards/, lanes/, skill-domain/, authoring-patterns/, provenance/) is an ACCEPTED deviation from the refs-one-hop-deep rule; the rule is turned off for this repo in .claude/skills-kit/config.yaml. The rule itself ships unchanged to consumers.
+    - id: references_layout_passes_via_the_index
+      keywords: [refs-one-hop-deep, nested references, index.references, clustered layout, config override removed, one hop]
+      summary: "md-domain's clustered `references/` layout (standards/, lanes/, skill-domain/, authoring-patterns/, provenance/) is not a deviation -- `refs-one-hop-deep` counts a nested reference as one hop when SKILL.md's `index.references[]` declares that file's own relative path or its containing directory, so the repo-level `refs-one-hop-deep: off` override was removed."
       detail: |
-        refs-one-hop-deep FAILs nested references directories because deeply
-        nested files tend to be partially read and unindexed ones become
-        invisible. md-domain keeps the nesting anyway: the five clusters ARE
-        the architecture (per-artifact standards vs verb lanes vs deep skill
-        refs vs content-shape patterns vs provenance), and the load-graph
-        property the rule protects is preserved differently -- every cluster
-        surface is a first-class SKILL.md index entry, and the standards and
-        lane docs are indexed by full path. Decision made 2026-07-29 at the
-        phase-3 code review over the alternatives (flatten to a 30-file root;
-        amend the rule to exempt indexed-nested files). The rule amendment --
-        a nested file with an explicit index.references[].path entry counts
-        as one hop -- is the flagged follow-up that would let the rule come
-        back on for this repo.
+        The rule FAILed nested references directories because deeply nested files
+        tend to be partially read, and unindexed ones become invisible to the
+        reader. The amended predicate keys on the property that actually protects
+        the load graph -- an explicit SKILL.md `index.references[]` entry for the
+        file or its containing directory -- so the five meaning-carrying clusters
+        pass on their own terms rather than by configuration. A nested file
+        declared by neither still FAILs. Mechanism: skills_kit_lib/audit.py;
+        catalog row: references/configuring-standards.md.
       origin: |
-        Phase-3 code review 2026-07-29: the fold made md-domain the only
-        skill in the repo failing its own plugin's audit (24 nested files),
-        against the merge-gate convention. User chose keep-layout +
-        config-off + record-the-deviation.
-      added: "2026-07-29"
+        Surface: the md-domain fold made this skill the only one in the repo
+        failing its own plugin's audit (28 nested files), against the merge-gate
+        convention, carried by a repo config override plus a recorded exception.
+        Finding: the predicate was wrong, not the layout, because the load-graph
+        property the rule protects is supplied by first-class SKILL.md index
+        entries. Follow-up: none -- the amendment shipped with
+        tests/skills-kit/test_refs_one_hop_deep_index.py and the config override
+        was deleted in the same change.
+      added: "2026-10-02"
     - id: contracts_preserved_verbatim_through_the_fold
       keywords: [golden corpus gate, verdict vocabulary, rule ids preserved, model pinning, PD-1 decline, review reducer invariants, no behavior change]
       summary: The fold is a RELOCATION, not a behavior change. Rule and taxonomy ids, the verdict vocabulary, the PD-1 decline contract, the review-reducer invariants, and the detect/remediate model pinning are all preserved verbatim so the golden corpus stays a meaningful gate.

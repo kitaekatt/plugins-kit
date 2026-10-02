@@ -216,10 +216,24 @@ def check_universal(
     if not refs_dir.exists():
         out.append(CheckResult("references one-hop-deep (ADP)", NA, "no references/ directory", rule="refs-one-hop-deep"))
     else:
-        nested = list(refs_dir.glob("*/*.md"))
+        # A nested file is one hop when SKILL.md's index.references[] declares
+        # its exact path or its containing directory; only undeclared nested
+        # files fail (an unindexed nested file is invisible to the load graph).
+        declared = {
+            norm
+            for _, v, is_path in _structured_index_paths(body.text)
+            if is_path
+            for norm in [v.strip().replace("\\", "/").removeprefix("./").rstrip("/")]
+            if norm.startswith("references/")
+        }
+        nested = [
+            p for p in refs_dir.glob("*/*.md")
+            if p.relative_to(skill_dir).as_posix() not in declared
+            and p.parent.relative_to(skill_dir).as_posix() not in declared
+        ]
         if nested:
             rel = [str(p.relative_to(skill_dir)) for p in nested]
-            out.append(CheckResult("references one-hop-deep (ADP)", FAIL, f"nested: {rel}", rule="refs-one-hop-deep"))
+            out.append(CheckResult("references one-hop-deep (ADP)", FAIL, f"nested and not declared in SKILL.md index.references[] (add the file's path or its directory as an entry): {rel}", rule="refs-one-hop-deep"))
         else:
             out.append(CheckResult("references one-hop-deep (ADP)", PASS, rule="refs-one-hop-deep"))
 
