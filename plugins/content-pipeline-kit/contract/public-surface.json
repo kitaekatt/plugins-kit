@@ -299,6 +299,7 @@
     {"name": "content_pipeline.llm.platform.LLMUnavailableError", "status": "public"},
     {"name": "content_pipeline.llm.platform.PipelineHaltError", "status": "public"},
     {"name": "content_pipeline.llm.platform.ResponseCache", "status": "public"},
+    {"name": "content_pipeline.llm.platform.SpendGuard", "status": "public"},
     {"name": "content_pipeline.llm.platform.StructuralOutputError", "status": "public"},
     {"name": "content_pipeline.llm.platform.StructuredContractSupportError", "status": "public"},
     {"name": "content_pipeline.llm.platform.SubmitResult", "status": "public"},

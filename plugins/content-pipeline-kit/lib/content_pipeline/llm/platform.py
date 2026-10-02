@@ -958,6 +958,7 @@ def _charge_exception(
     pricing: Optional[Mapping[str, Any]],
     cost_budget: Optional[CostBudget],
     identifier: str,
+    record: Optional[Callable[[float], None]] = None,
 ) -> None:
     """Charge a transport exception when it reports token usage.
 
@@ -969,6 +970,14 @@ def _charge_exception(
     recorded, exactly like the no-usage-reported early return above; it does
     NOT propagate :class:`KeyError`, which would otherwise mask the original
     exception and skip halt classification entirely.
+
+    ``record`` (used by ``call_llm``'s spend-ledger integration) is called with
+    the priced cost as soon as it is KNOWN and BEFORE ``cost_budget.charge``
+    runs, so a budget raise cannot lose the figure the provider actually
+    billed. It is called whether or not a ``cost_budget`` is bound: the
+    provider billed the attempt regardless of whether an in-process
+    accumulator was watching. Every early return above leaves it uncalled,
+    which is exactly the "spend is unreadable" case.
     """
     output_tokens = getattr(exc, "output_tokens", None)
     if pricing is None or output_tokens is None:
@@ -984,6 +993,8 @@ def _charge_exception(
         int(getattr(exc, "cache_hit_tokens", 0) or 0),
         pricing=pricing,
     )
+    if record is not None:
+        record(cost)
     if cost_budget is not None:
         cost_budget.charge(cost, identifier=identifier or model)
 
@@ -1450,6 +1461,103 @@ def _notify_failed(
 
 
 # ---------------------------------------------------------------------------
+# The spend seam -- reserve before paying, settle after
+# ---------------------------------------------------------------------------
+
+
+@runtime_checkable
+class SpendGuard(Protocol):
+    """A cross-process spend cap :func:`call_llm` reserves against per ATTEMPT.
+
+    ``content_pipeline.llm.spend_ledger.SpendLedger`` implements it; this
+    Protocol is the only thing ``platform`` knows about the ledger, which is
+    what keeps the import edge one-way (``spend_ledger`` imports ``platform``
+    for :class:`BudgetExceededError`, never the reverse).
+
+    The contract :func:`call_llm` relies on:
+
+    - ``reserve`` either returns a receipt or RAISES, admitting nothing. A
+      raise therefore leaves nothing to settle, which is why ``call_llm``
+      calls it outside the ``try``/``finally`` that settles.
+    - ``settle`` resolves the receipt exactly once. ``cost_usd=None`` means
+      the spend was UNREADABLE and the implementation must HOLD the reserved
+      amount against the cap -- it must not free it, because the attempt may
+      well have billed.
+    - ``release`` frees a reservation the caller KNOWS billed nothing.
+      :func:`call_llm` never calls it: nothing sits between its ``reserve``
+      and the provider call, so no exit path can know that.
+    - ``check_halted`` is a read-only probe for a consumer's own loop between
+      units; :func:`call_llm` does not call it either, because ``reserve``
+      already observes the halt inside its own transaction.
+    """
+
+    def reserve(
+        self,
+        amount_usd: float,
+        *,
+        scope: str = "",
+        identifier: str = "",
+        model: str = "",
+        ttl_s: Optional[float] = None,
+    ) -> Any:
+        ...  # pragma: no cover -- Protocol
+
+    def settle(self, reservation: Any, cost_usd: Optional[float]) -> None:
+        ...  # pragma: no cover -- Protocol
+
+    def release(self, reservation: Any) -> None:
+        ...  # pragma: no cover -- Protocol
+
+    def check_halted(self, *, identifier: str = "") -> None:
+        ...  # pragma: no cover -- Protocol
+
+
+def _spend_reservation_usd(
+    *,
+    model: str,
+    system: str,
+    user: str,
+    pricing: Optional[Mapping[str, Any]],
+    max_output_tokens: int,
+    explicit: Optional[float],
+) -> float:
+    """Worst-case USD ONE attempt may bill, for use as its reservation.
+
+    ``explicit`` (``call_llm``'s ``spend_reserve_usd``) wins outright.
+    Otherwise the amount is priced from the request's estimated input tokens
+    plus the FULL ``max_output_tokens`` the attempt is allowed to emit -- not
+    an expected length, because a reservation must cover what the provider may
+    actually charge. An unknown model raises :class:`KeyError` from
+    :func:`estimate_cost`, by the same rule that applies everywhere else on
+    the pricing path.
+
+    Refuses with :class:`ValueError` when neither source is available, rather
+    than reserving 0: a zero reservation is admitted by any cap and then
+    bills, which is the precise failure a cap exists to prevent.
+    """
+    if explicit is not None:
+        amount = float(explicit)
+        if not (amount > 0):
+            raise ValueError(
+                f"spend_reserve_usd must be a positive USD amount, got {explicit!r}"
+            )
+        return amount
+    if pricing is None:
+        raise ValueError(
+            "call_llm(spend=...) cannot size a reservation: pass pricing= so the "
+            "attempt can be priced, or spend_reserve_usd= to set the amount "
+            "directly. Reserving 0 would be admitted by any cap and then billed."
+        )
+    return estimate_cost(
+        model,
+        estimate_request_tokens(system, user),
+        max_output_tokens,
+        0,
+        pricing=pricing,
+    )
+
+
+# ---------------------------------------------------------------------------
 # call_llm -- the single entry point
 # ---------------------------------------------------------------------------
 
@@ -1469,6 +1577,8 @@ def call_llm(
     retry_sleep: float = 0.0,
     identifier: str = "",
     on_attempt: Optional[AttemptObserver] = None,
+    spend: Optional[SpendGuard] = None,
+    spend_reserve_usd: Optional[float] = None,
 ) -> LLMResponse:
     """Run one completion through the shared pipeline concerns.
 
@@ -1529,8 +1639,49 @@ def call_llm(
     retried. After a failed attempt it runs before the original exception is
     re-raised; if it raises then, the original exception is re-raised with the
     observer's error as its cause. With ``None`` nothing changes.
+
+    ``spend`` (default ``None``) binds a :class:`SpendGuard` -- a cross-process
+    USD cap. The reservation unit is ONE PROVIDER ATTEMPT, not one
+    ``call_llm``: step 3 above bills up to ``retries + 1`` times, so a single
+    reservation per call would let a four-attempt call bill four times against
+    one admission. Per attempt, ``spend.reserve`` runs immediately before
+    ``backend.complete`` and OUTSIDE a ``try``/``finally`` that wraps the rest
+    of the iteration, so exactly one ``spend.settle`` runs on every exit path
+    of every attempt and a ``reserve`` that itself raises has admitted nothing
+    to settle. The settled cost is the figure the attempt actually billed, or
+    ``None`` when that is unreadable -- which the guard HOLDS at the reserved
+    amount; there is no release-on-failure rule and ``call_llm`` never calls
+    ``spend.release``. Because ``reserve`` reads the halt state inside its own
+    transaction, a halt committed by another process while attempt *n* is in
+    flight stops attempt *n+1*.
+
+    A CACHE HIT returns before the attempt loop, so it reserves nothing and
+    creates no row: it asks no provider and ``response_cost`` prices a
+    ``from_cache`` response at 0.0.
+
+    ``spend_reserve_usd`` (default ``None``) sets the per-attempt reservation
+    explicitly. Left ``None``, the amount is priced from the request plus the
+    full ``options.max_tokens`` (see :func:`_spend_reservation_usd`), so a
+    ``spend`` with neither ``pricing`` nor ``spend_reserve_usd`` is a
+    ``ValueError`` raised before any provider call -- reserving 0 would be
+    admitted by any cap and then billed.
+
+    With ``spend=None`` nothing in this function reads a ledger, including
+    ``spend_ledger_from_env()``: a cap must be passed in deliberately, never
+    materialize mid-run out of an inherited environment variable. The
+    consequence a consumer owns, stated so it is not mistaken for a guarantee:
+    a call made WITHOUT ``spend=`` bills the provider with no ledger row, and
+    nothing inside the ledger can see it.
     """
     opts = options or BackendOptions()
+
+    # The cost THIS attempt is known to have billed, or None while it is
+    # unreadable. Reset at the top of every iteration and read by the single
+    # settle in that iteration's `finally`.
+    charged: List[Optional[float]] = [None]
+
+    def _record_charged(cost: float) -> None:
+        charged[0] = cost
 
     def _charge_reporting(exc: BaseException, response: Optional[LLMResponse]) -> None:
         """Charge a failed attempt; a budget raise is still reported."""
@@ -1541,6 +1692,7 @@ def call_llm(
                 pricing=pricing,
                 cost_budget=cost_budget,
                 identifier=identifier,
+                record=_record_charged,
             )
         except BaseException as budget_exc:  # noqa: BLE001 -- report, re-raise
             if on_attempt is not None:
@@ -1581,6 +1733,20 @@ def call_llm(
     if output_contract is not None:
         _require_contract(output_contract, _contract_seam())
 
+    if spend is not None and pricing is None and spend_reserve_usd is None:
+        # Refused HERE, before the cache lookup, so a misconfigured call fails
+        # the same way whether or not its answer happens to be cached. The
+        # helper owns the refusal and its message; this call only ever raises,
+        # the guard above being exactly its no-source-available condition.
+        _spend_reservation_usd(
+            model=model,
+            system=system,
+            user=user,
+            pricing=pricing,
+            max_output_tokens=opts.max_tokens,
+            explicit=spend_reserve_usd,
+        )
+
     if input_budgets is not None:
         check_request_fits(
             system=system,
@@ -1603,115 +1769,167 @@ def call_llm(
                 on_attempt(_event(1, hit))
             return hit
 
+    reserve_usd: Optional[float] = None
+    reserve_ttl_s: Optional[float] = None
+    if spend is not None:
+        # Priced once: model, prompt bytes and max_tokens are fixed for every
+        # attempt of this call, so the worst case each attempt may bill is the
+        # same number. Computed AFTER the cache lookup, so a hit prices nothing.
+        reserve_usd = _spend_reservation_usd(
+            model=model,
+            system=system,
+            user=user,
+            pricing=pricing,
+            max_output_tokens=opts.max_tokens,
+            explicit=spend_reserve_usd,
+        )
+        if opts.timeout_s is not None:
+            # A lease exists only when a deadline is known. With timeout_s None
+            # the attempt is unbounded, so ttl_s stays None and the ledger
+            # stores a NULL lease no sweep may ever reclaim.
+            reserve_ttl_s = 2.0 * float(opts.timeout_s) + 60.0
+
     response: Optional[LLMResponse] = None
     last_exc: Optional[BaseException] = None
     for attempt in range(retries + 1):
         attempt_no[0] = attempt + 1
+        reservation = None
+        if spend is not None:
+            # OUTSIDE the try/finally below, and the LAST statement before it:
+            # a reserve that raises (cap exceeded, halt committed by another
+            # process, an unreachable ledger) has admitted nothing, so there is
+            # nothing to settle -- and nothing sits between this line and
+            # backend.complete that could need releasing.
+            assert reserve_usd is not None  # set above whenever spend is bound
+            reservation = spend.reserve(
+                reserve_usd,
+                identifier=identifier or model,
+                model=model,
+                ttl_s=reserve_ttl_s,
+            )
+        charged[0] = None
         try:
-            candidate = backend.complete(system, user, model=model, options=opts)
-        except PipelineHaltError as exc:
-            if on_attempt is not None:
-                _notify_failed(
-                    on_attempt,
-                    _event(attempt + 1, None, f"{type(exc).__name__}: {exc}"),
-                    exc,
-                )
-            raise
-        except StructuralOutputError as exc:
-            # A billed call whose answer broke its contract: a model defect,
-            # not a transport failure. Retry with feedback is
-            # submit_validated's job, so this is never retried here.
-            _charge_reporting(exc, getattr(exc, "response", None))
-            if on_attempt is not None:
-                _notify_failed(
-                    on_attempt,
-                    _event(
-                        attempt + 1,
-                        getattr(exc, "response", None),
-                        f"{type(exc).__name__}: {exc}",
-                    ),
-                    exc,
-                )
-            raise
-        except BaseException as exc:  # noqa: BLE001 -- classify then re-raise
-            _charge_reporting(exc, getattr(exc, "response", None))
-            if opts.timeout_s is not None and _is_callers_own_deadline(exc):
-                halt = None
-            else:
-                halt = backend.classify_halt(exc)
-            if halt is not None:
-                halt_exc = PipelineHaltError(halt, str(exc))
-                halt_exc.__cause__ = exc
+            try:
+                candidate = backend.complete(system, user, model=model, options=opts)
+            except PipelineHaltError as exc:
                 if on_attempt is not None:
                     _notify_failed(
                         on_attempt,
                         _event(attempt + 1, None, f"{type(exc).__name__}: {exc}"),
-                        halt_exc,
+                        exc,
                     )
-                raise halt_exc
-            last_exc = exc
-            if on_attempt is not None:
-                _notify_failed(
-                    on_attempt,
-                    _event(attempt + 1, None, f"{type(exc).__name__}: {exc}"),
-                    exc,
-                )
-            if attempt < retries:
-                if retry_sleep:
-                    time.sleep(retry_sleep)
-                continue
-            raise
-        candidate = replace(
-            candidate,
-            likely_reasoning_exhausted=is_likely_reasoning_exhaustion(
-                candidate.text, candidate.output_tokens
-            ),
-        )
-        if not candidate.text.strip():
-            try:
-                cost = response_cost(candidate.model, candidate, pricing=pricing)
-                if cost is not None and cost_budget is not None:
-                    cost_budget.charge(cost, identifier=identifier or model)
-            except BaseException as budget_exc:  # noqa: BLE001 -- report, re-raise
+                raise
+            except StructuralOutputError as exc:
+                # A billed call whose answer broke its contract: a model defect,
+                # not a transport failure. Retry with feedback is
+                # submit_validated's job, so this is never retried here.
+                _charge_reporting(exc, getattr(exc, "response", None))
                 if on_attempt is not None:
                     _notify_failed(
                         on_attempt,
                         _event(
                             attempt + 1,
-                            candidate,
-                            f"{type(budget_exc).__name__}: {budget_exc}",
+                            getattr(exc, "response", None),
+                            f"{type(exc).__name__}: {exc}",
                         ),
-                        budget_exc,
+                        exc,
                     )
                 raise
-            finally:
-                print(
-                    _empty_completion_line(
-                        candidate, attempt=attempt + 1, max_attempts=retries + 1
-                    ),
-                    file=sys.stderr,
-                    flush=True,
-                )
-            if on_attempt is not None:
-                on_attempt(_event(attempt + 1, candidate))
-            if attempt < retries:
-                if retry_sleep:
-                    time.sleep(retry_sleep)
-                continue
-            raise EmptyCompletionError(
-                "empty completion exhausted retry budget",
-                model=candidate.model,
-                finish_reason=candidate.finish_reason,
-                input_tokens=candidate.input_tokens,
-                output_tokens=candidate.output_tokens,
-                attempt=attempt + 1,
-                max_attempts=retries + 1,
-                likely_reasoning_exhausted=candidate.likely_reasoning_exhausted,
-                reasoning=candidate.reasoning,
-                reasoning_tail=_reasoning_tail(candidate.reasoning),
+            except BaseException as exc:  # noqa: BLE001 -- classify then re-raise
+                _charge_reporting(exc, getattr(exc, "response", None))
+                if opts.timeout_s is not None and _is_callers_own_deadline(exc):
+                    halt = None
+                else:
+                    halt = backend.classify_halt(exc)
+                if halt is not None:
+                    halt_exc = PipelineHaltError(halt, str(exc))
+                    halt_exc.__cause__ = exc
+                    if on_attempt is not None:
+                        _notify_failed(
+                            on_attempt,
+                            _event(attempt + 1, None, f"{type(exc).__name__}: {exc}"),
+                            halt_exc,
+                        )
+                    raise halt_exc
+                last_exc = exc
+                if on_attempt is not None:
+                    _notify_failed(
+                        on_attempt,
+                        _event(attempt + 1, None, f"{type(exc).__name__}: {exc}"),
+                        exc,
+                    )
+                if attempt < retries:
+                    if retry_sleep:
+                        time.sleep(retry_sleep)
+                    continue
+                raise
+            candidate = replace(
+                candidate,
+                likely_reasoning_exhausted=is_likely_reasoning_exhaustion(
+                    candidate.text, candidate.output_tokens
+                ),
             )
-        response = candidate
-        break
+            if not candidate.text.strip():
+                try:
+                    cost = response_cost(candidate.model, candidate, pricing=pricing)
+                    charged[0] = cost
+                    if cost is not None and cost_budget is not None:
+                        cost_budget.charge(cost, identifier=identifier or model)
+                except BaseException as budget_exc:  # noqa: BLE001 -- report, re-raise
+                    if on_attempt is not None:
+                        _notify_failed(
+                            on_attempt,
+                            _event(
+                                attempt + 1,
+                                candidate,
+                                f"{type(budget_exc).__name__}: {budget_exc}",
+                            ),
+                            budget_exc,
+                        )
+                    raise
+                finally:
+                    print(
+                        _empty_completion_line(
+                            candidate, attempt=attempt + 1, max_attempts=retries + 1
+                        ),
+                        file=sys.stderr,
+                        flush=True,
+                    )
+                if on_attempt is not None:
+                    on_attempt(_event(attempt + 1, candidate))
+                if attempt < retries:
+                    if retry_sleep:
+                        time.sleep(retry_sleep)
+                    continue
+                raise EmptyCompletionError(
+                    "empty completion exhausted retry budget",
+                    model=candidate.model,
+                    finish_reason=candidate.finish_reason,
+                    input_tokens=candidate.input_tokens,
+                    output_tokens=candidate.output_tokens,
+                    attempt=attempt + 1,
+                    max_attempts=retries + 1,
+                    likely_reasoning_exhausted=candidate.likely_reasoning_exhausted,
+                    reasoning=candidate.reasoning,
+                    reasoning_tail=_reasoning_tail(candidate.reasoning),
+                )
+            if spend is not None:
+                # The success exit's cost, read BEFORE the break so the settle
+                # in the finally has it. The post-loop charge re-reads the same
+                # figure; a KeyError here is the same KeyError that call would
+                # raise one statement later, and the finally settles `unknown`
+                # before it propagates.
+                charged[0] = response_cost(candidate.model, candidate, pricing=pricing)
+            response = candidate
+            break
+        finally:
+            if reservation is not None:
+                # Exactly ONE settle per reservation, on every exit of this
+                # iteration: break, continue, or any exception. settle(None)
+                # HOLDS the reserved amount as `unknown` -- an unreadable cost
+                # is not a free attempt, and there is no release-on-failure
+                # rule.
+                spend.settle(reservation, charged[0])
     assert response is not None, last_exc  # loop either breaks or raises
 
     cost = response_cost(response.model, response, pricing=pricing)
@@ -2073,6 +2291,12 @@ def submit_validated(
     ``input_budgets``, ``retries``). Per-attempt cache-busting is automatic:
     each retry carries a ``cache_salt`` equal to the attempt index.
 
+    ``**call_kwargs`` is forwarded VERBATIM, so ``spend=`` and
+    ``spend_reserve_usd=`` reach :func:`call_llm` with no signature change
+    here: one spend cap covers this whole loop, which reserves and settles once
+    per provider ATTEMPT and so admits up to ``max_attempts * (retries + 1)``
+    attempts against it.
+
     ``output_contract`` declares a structured-output contract (see
     :class:`ValidationSpec`); it is placed on ``options`` (a different
     contract already there is refused) and judged by
@@ -2248,6 +2472,7 @@ __all__ = [
     "estimate_request_tokens",
     "check_request_fits",
     "CostBudget",
+    "SpendGuard",
     "build_cache_key",
     "ResponseCache",
     "call_llm",
