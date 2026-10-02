@@ -612,11 +612,20 @@ whatever `plugin_root_env_var_name` in
 name; `plugins/bootstrap/bootstrap_lib/engine.py` exports it through
 `export_env_var` on every un-skipped pass, for every plugin that ships a
 `bootstrap.json`. The pointer exists from bootstrap 0.72.0 onward (commit
-`771d3920` added the helper and the export together). In a session whose
-bootstrap pass was skipped by a gate the variable is absent, and `:?` aborts
-the command with the message, naming the missing variable -- a loud failure
-that is the point of the form, and strictly better than silently running
-against `/scripts/x.py`.
+`771d3920` added the helper and the export together). That export sits below
+both SessionStart skip gates, but from bootstrap 0.141.0 a full pass also
+RECORDS the name under bootstrap's data dir and the hook's pre-gate prelude
+re-emits it, so a gate-skipped session carries the variable too -- provided a
+full pass has recorded it since 0.141.0 reached the machine AND the recorded
+directory still exists.
+
+`"${<PLUGIN>_ROOT:?<msg>}"` remains the required spelling. `:?` still fires,
+in a narrower set of cases: before the first recording pass on a machine, when
+the recorded directory has been deleted, and when the plugin has left the
+registry. It aborts the command with the message, naming the missing variable
+-- a loud failure that is the point of the form, and strictly better than
+silently running against `/scripts/x.py`. Record format, the existence check
+and the remaining `:?` cases: `docs/reference/plugin-root-variable-sites.md`.
 
 **SKILL.md examples launch
 `"$BOOTSTRAP_PYTHON" "${<PLUGIN>_ROOT:?<msg>}/scripts/<script>.py"`** and rely
