@@ -117,6 +117,13 @@ entry for the whole list instead of one per library.
 | `skipped` | No marketplace has published the library yet, or the interpreter or its site-packages could not be resolved | Ok entry, no failure; a later pass supplies the link |
 | `failed` | `.pth` written but the import still fails, or the write failed | Action entry plus a `shared_lib` failure attributed to `config` |
 | `ambiguous` | An unqualified entry, and two or more marketplaces publish that name | Routed like `failed`; the message names each marketplace. Qualify the entry as `{"name": ..., "marketplace": ...}` |
+| `misqualified` | A `{name, marketplace}` entry whose named marketplace does not publish the library, while one or more other marketplaces do | Action entry, no failure; the message names the marketplaces that do publish it. Correct the spelling in the entry |
+
+`marketplace` values match the marketplace directory name exactly, including case
+and surrounding whitespace; a near-miss is reported as `misqualified`, never
+resolved. `misqualified` is reported instead of waiting for a later pass to
+supply a link, because the named marketplace is wrong rather than merely behind.
+`skipped` is the case where no marketplace publishes the library at all.
 
 A failed link rolls back to the prior `.pth` (or removes the new one), so the
 next pass attempts it again. `skipped` means nothing was added on this
