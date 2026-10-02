@@ -35,7 +35,7 @@ Mechanism (a generalization of llm-scripting-kit's B1 prototype):
   before. A superseded generation is pruned once it has been superseded for
   ``GENERATION_RETENTION_S``. The stable ``<pkg>/<pkg>/`` copy is still
   swapped in place on every publish: it is the documented location a
-  foreign-interpreter consumer reads (library-consumption.md, mode 3).
+  foreign-interpreter consumer reads (library-consumption.md, mode 3b).
 
 This module shares first-party SOURCE only. Third-party deps the package needs
 (e.g. ``openai`` for ``llm_scripting_kit``) are the importing plugin's own concern,
@@ -582,7 +582,7 @@ def link_shared_lib(name: str, python: Optional[str], shared_root: str) -> Share
 
 class SharedRootResolution(NamedTuple):
     name: str
-    status: str   # "resolved" | "absent" | "ambiguous"
+    status: str   # "resolved" | "absent" | "ambiguous" | "misqualified"
     root: Optional[str]   # the shared_root to pass to link_shared_lib; set only when "resolved"
     message: str
 
@@ -603,8 +603,10 @@ def resolve_project_shared_root(
     holds it), "absent" (no match, or the named marketplace does not hold it --
     the same eventual-consistency soft-skip as an unpublished lib), or
     "ambiguous" (two or more marketplaces hold it and none was named; the message
-    names each and asks for the qualified form). ``marketplace`` restricts the
-    search to that one directory name.
+    names each and asks for the qualified form), or "misqualified" (a named
+    marketplace does not hold it but others do -- a likely typo, reported with the
+    marketplaces that do publish it; not a failure). ``marketplace`` restricts the
+    search to that one directory name, matched exactly.
     """
     try:
         candidates = sorted(os.listdir(data_root))
@@ -615,6 +617,22 @@ def resolve_project_shared_root(
         if (marketplace is None or mkt == marketplace)
         and os.path.isdir(os.path.join(data_root, mkt, "_shared_libs", name, name))
     ]
+    if not found and marketplace is not None:
+        elsewhere = [
+            mkt for mkt in candidates
+            if os.path.isdir(os.path.join(data_root, mkt, "_shared_libs", name, name))
+        ]
+        if elsewhere:
+            # Marketplace names match exactly: case and whitespace included. A
+            # case-insensitive match would resolve on Windows and fail on Linux
+            # for the same manifest, so a near-miss is reported, never resolved.
+            return SharedRootResolution(
+                name, "misqualified", None,
+                f"shared lib {name} is not published by marketplace "
+                f"{marketplace!r}, but is published by {', '.join(elsewhere)}; "
+                f"check the marketplace spelling (names match exactly, "
+                f"including case and surrounding whitespace)",
+            )
     if not found:
         where = (
             f"marketplace {marketplace}" if marketplace is not None

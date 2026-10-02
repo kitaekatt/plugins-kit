@@ -49,6 +49,23 @@ unconfigurable opinion whose test passes is a finding.
   there is no supported path for a consumer to hand-install into a plugin venv. A team that
   wants manual control should not enable the plugin -- partial adoption produces a machine
   whose bootstrap is permanently wrong.
+- **bootstrap PREPENDS a shared library into a project venv, and there is no precedence
+  setting.** A library named in `project_venv.shared_lib_imports` wins over a same-named
+  package the venv already holds, because the executable `.pth` ends
+  `sys.path.insert(0, ...)` (`bootstrap_lib/shared_lib.py`, `pth_line`). A team will
+  reasonably want the opposite: a project's `pyproject.toml` is a human artifact, and
+  prepending silently outranks a pin someone made on purpose, with a wrong version rather
+  than an ImportError as the symptom. We refuse the flag anyway. The same `.pth` mechanism
+  prepends for plugin venvs for a stated reason -- the shared copy must beat a stale
+  installed shadow in `site-packages` -- and a project venv is exactly where such stale or
+  vendored copies accumulate, so appending there would reintroduce the defect the mechanism
+  was written to prevent. What a team should do instead: stop listing that library in
+  `shared_lib_imports` and let the venv's own copy resolve. The hazard is made observable
+  rather than configurable -- when a pass links a library the venv already holds, the engine
+  emits an action entry naming the shadowed copy and its version, so the wrong-version
+  failure is attributable. Reconsider only if a consumer needs its own copy to win while
+  still having bootstrap manage the link; a per-entry flag is the shape, and it is not built
+  on speculation.
 - **secrets-kit reserves one direct `blobs/<entry-or-source>.age` slot per entry.**
   Authoring is what enforces it, at both of its entry points and through one predicate
   (`secrets_kit.authoring._canonical_blob`): `_selected_entry_blob` refuses a nested,

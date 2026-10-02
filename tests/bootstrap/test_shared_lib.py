@@ -1189,7 +1189,31 @@ class TestResolveProjectSharedRoot:
     def test_qualified_lookup_does_not_fall_back_to_another_marketplace(self, tmp_path):
         _publish_under(tmp_path, "mkt-a", "mylib")
         r = shared_lib.resolve_project_shared_root(str(tmp_path), "mylib", marketplace="mkt-b")
-        assert r.status == "absent"
+        assert r.status == "misqualified" and r.root is None
+
+    def test_qualified_miss_names_the_marketplaces_that_do_publish_it(self, tmp_path):
+        """Returning the plain absent message turns this red."""
+        _publish_under(tmp_path, "mkt-a", "mylib")
+        _publish_under(tmp_path, "mkt-c", "mylib")
+        r = shared_lib.resolve_project_shared_root(str(tmp_path), "mylib", marketplace="mkt-b")
+        assert r.status == "misqualified" and r.root is None
+        assert "mkt-a, mkt-c" in r.message and "'mkt-b'" in r.message
+
+    def test_case_and_whitespace_mismatch_report_rather_than_resolve(self, tmp_path):
+        """Matching is exact so a manifest means the same on every filesystem.
+        Making the comparison case-insensitive or stripped turns this red."""
+        _publish_under(tmp_path, "Mkt-A", "mylib")
+        for typo in ("mkt-a", "Mkt-A ", " Mkt-A"):
+            r = shared_lib.resolve_project_shared_root(str(tmp_path), "mylib", marketplace=typo)
+            assert r.status == "misqualified", (typo, r)
+            assert "Mkt-A" in r.message
+
+    def test_qualified_miss_with_nobody_publishing_stays_plain_absent(self, tmp_path):
+        """The insertion counterfactual: reporting misqualified for every
+        qualified miss turns this red."""
+        _publish_under(tmp_path, "mkt-a", "otherlib")
+        r = shared_lib.resolve_project_shared_root(str(tmp_path), "mylib", marketplace="mkt-b")
+        assert r.status == "absent" and "will retry" in r.message
 
     def test_absent_lib_or_missing_data_root_is_soft(self, tmp_path):
         _publish_under(tmp_path, "mkt-a", "otherlib")

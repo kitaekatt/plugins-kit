@@ -103,7 +103,12 @@ the venv's own interpreter. The step runs only when the layered manifest declare
 directory holds a `pyproject.toml`; otherwise it reports one verbose-only
 "skipped - no project venv to link into" entry and links nothing.
 
-**Outcomes.** Every declared library produces exactly one outcome per pass.
+**Outcomes.** Each valid, resolvable declaration produces one outcome per pass.
+Two cases produce none: a malformed entry yields no link outcome (the
+`project_venv` failure under "Malformed entries" is its only report), and an
+unqualified entry is dropped when a `{name, marketplace}` entry for the same
+name is also declared. When the step cannot run at all (see above), it emits one
+entry for the whole list instead of one per library.
 
 | Outcome | Meaning | Reported as |
 |---|---|---|
@@ -114,8 +119,11 @@ directory holds a `pyproject.toml`; otherwise it reports one verbose-only
 | `ambiguous` | An unqualified entry, and two or more marketplaces publish that name | Routed like `failed`; the message names each marketplace. Qualify the entry as `{"name": ..., "marketplace": ...}` |
 
 A failed link rolls back to the prior `.pth` (or removes the new one), so the
-next pass attempts it again. A `skipped` library leaves nothing on `sys.path`,
-and the project's own `import` then fails as an ordinary `ModuleNotFoundError`.
+next pass attempts it again. `skipped` means nothing was added on this
+pass. A link written on an earlier pass stays in place, because a skip does not
+remove an existing `.pth`: a library that later becomes unpublished keeps
+resolving from its last link. When no link exists, the project's own `import` fails as an
+ordinary `ModuleNotFoundError`.
 
 **A shared library outranks a same-named package in the venv.** The `.pth` line
 ends in `sys.path.insert(0, _bsl_p)`, so it PREPENDS the library's current
@@ -149,7 +157,8 @@ The project's own `pyproject.toml` must declare whatever the library imports
 from outside the standard library, exactly as a plugin does in mode 1.
 
 **The declaration is inert on an older engine.** `shared_lib_imports` sits in a
-layered manifest, and an older bootstrap does not know the key, so it ignores it
+layered manifest, and a bootstrap older than 0.141.0, the version that introduced
+`project_venv.shared_lib_imports`, does not know the key, so it ignores it
 and links nothing, with no message. `requires_bootstrap`
 does not gate this: that field lives in a plugin's own `bootstrap.json`, not in a
 layered manifest. A project that depends on the link should probe for the library

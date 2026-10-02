@@ -2328,6 +2328,11 @@ def _link_project_shared_libs(venv_def, project_dir, data_dir, link_log=None):
         if res.status == "absent":
             oks.append(f"{label}: {res.message}")
             continue
+        if res.status == "misqualified":
+            # Visible but not a failure: the declared marketplace is wrong, and
+            # waiting for it to publish would never help.
+            actions.append(f"{label}: {res.message}")
+            continue
         result = link_shared_lib(name, python, res.root)
         text = f"{label}: {result.message}"
         if result.status == "linked":
@@ -2371,7 +2376,9 @@ def _project_venv_own_copy(site, name):
         stem, ext = os.path.splitext(entry)
         if ext != ".dist-info" or "-" not in stem:
             continue
-        dist, ver = stem.split("-", 1)
+        # The version is what follows the LAST hyphen (PEP 427 escapes
+        # hyphens in the version, but legacy dirs hyphenate the name).
+        dist, ver = stem.rsplit("-", 1)
         if re.sub(r"[-_.]+", "_", dist).lower() == norm:
             version, present = ver, True
             break
@@ -4209,6 +4216,19 @@ def _normalize_project_shared_lib_imports(venv_def):
                        f"got {type(item).__name__}")
         if problem is None and not name.strip():
             problem = "has an empty library name"
+        elif problem is None and not name.isidentifier():
+            # A library name is the IMPORT name of a top-level Python package:
+            # the resolver joins it into <data_root>/<mkt>/_shared_libs/<name>/<name>
+            # and link_shared_lib writes <purelib>/<name>.pth and runs
+            # `import <name>`. A name that is not an identifier (a path such as
+            # "../x", a dotted "pkg.sub", a hyphenated name) could never have
+            # been importable, so refusing it rejects nothing that could have
+            # worked -- and it keeps the name out of every path join. Do not
+            # loosen this to "non-empty".
+            problem = (f"has library name {name!r}, which is not a valid Python "
+                       f"identifier (a library name is the import name of a "
+                       f"top-level package; dotted and path-like names are not "
+                       f"accepted)")
         if problem:
             failures.append(_fail(f"entry [{i}] {item!r} {problem}"))
             continue
