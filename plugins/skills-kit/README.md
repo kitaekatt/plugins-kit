@@ -26,8 +26,10 @@ and, for `audit`/`author`, an artifact (`skill`, `claude-md`, `project-doc`, or
 - **audit** checks what you already have: placement (does this fact belong
   in this file?), cohesion, drift over time, and cross-reference integrity
   (dangling skill references, broken load-graph edges). It produces a
-  reviewable set of findings -- FIX / SERIOUS / IMPROVE -- for you to accept
-  or decline. It does not auto-rewrite your files.
+  reviewable set of findings -- FIX / SERIOUS / IMPROVE. FIX findings are
+  applied to your files without a per-finding decision; IMPROVE findings are
+  applied per your decision; SERIOUS findings are never auto-applied. In
+  review mode nothing is applied.
 - **author** guides writing an artifact from content you supply: the per-type
   contract for the artifact you are producing, where the content belongs, and
   what shape it takes. "Generate a skill" routes here -- no analysis produces

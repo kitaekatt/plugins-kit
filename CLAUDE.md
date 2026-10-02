@@ -1135,8 +1135,10 @@ claude_md:
         carrying it resolves to, the `"${<PLUGIN>_ROOT:?<msg>}"` replacement
         form, `plugin_root_env_var_name` in
         plugins/bootstrap/bootstrap_lib/env_var_check.py, the `export_env_var`
-        call that exports it, and the gate-skipped session in which `:?` fails
-        loudly on purpose. The preload rule is established in
+        call that exports it, and -- from bootstrap 0.141.0 -- the pre-gate
+        record that re-emits the name into a gate-skipped session while its
+        recorded directory still exists, so `:?` still fails loudly on purpose
+        but in a narrower set of cases. The preload rule is established in
         plugins/bootstrap/skills/bootstrap/references/python-interpreter.md,
         "Skill preload commands", and restated in that skill's SKILL.md.
         Per-site survey, its WORKING / DOC / BROKEN classes and the per-plugin

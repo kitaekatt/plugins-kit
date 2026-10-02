@@ -45,7 +45,7 @@ evidence that put it there. A good candidate survives all eight criteria below.
 A run that returns none is a normal, common result -- `COVERAGE-ASSESSED` is not
 a failure state.
 
-The two `fail` severities that suppress candidates (CV-2, CV-6, CV-8) exist
+The three `fail` severities that suppress candidates (CV-2, CV-6, CV-8) exist
 because the expensive error here is a false positive, not a miss. A run that
 proposes bloat trains its reader to ignore the next run; a run that misses a
 fact leaves the reader exactly where they already were.
@@ -339,7 +339,7 @@ answers this question and coverage runs at the corresponding depth silently --
 a user who chose power-user defaults has already said which level they want,
 and asking again reads as not having listened. The precedence is: explicit flag,
 then captured posture, then this prompt. That posture is bootstrap-managed and
-does not exist yet, so today the prompt always applies.
+does not exist, so the prompt applies whenever no posture has been captured.
 
 **Where asking is impossible, disclose.** In a non-interactive dispatch the gate
 cannot prompt, so it takes `basic` and discloses it in keyword form on one line,
@@ -386,10 +386,20 @@ happened, which is precisely what the prompt exists to prevent.
 
 ## Configuring these criteria
 
-Every criterion above carries a stable id and is disable-able or tunable
-through the standard mechanism in `references/configuring-standards.md`. A
-project that holds a different position on an opinion here changes it there
-rather than forking this document.
+Every criterion above carries a stable id, and each id is a knob in the standard
+mechanism `../configuring-standards.md` describes: a user or project layer
+switches one off with `rules: {<id>: off}`. The ids are registered in
+`skills_kit_lib/rule_catalog.py`'s optional bucket, so the resolver accepts them,
+and the lane threads the resolved list into the assessment as
+`disabledCriteria`. A disabled criterion is not applied, and the report names it.
+Every criterion is ON by default, so a project that writes no config gets the
+whole set.
+
+These ids share one namespace with the mechanical audit rule ids, and the
+difference is who applies them. Every criterion here is `enforcement: judgment`,
+applied by an agent inside `../../workflow/coverage-detect.js` rather than by the
+`audit.py` validator, so disabling one changes what an `analyze` run proposes and
+nothing about what an `audit` run reports.
 
 **Named deviation: `applies_to: code_subtree` is not a file-type primitive.**
 `references/authoring-standards.md` says a standards file governs exactly one
@@ -404,7 +414,16 @@ unaffected: `coverage-detect.js` requires only a readable document at
 
 The one opinion worth naming explicitly, because a competent team genuinely
 disagrees with it: `already-ambient-suppressed` refuses a second placement at a
-trigger site even when visibility near the code would help. That is a
-deliberate default, not an oversight -- copies consume ambient budget and drift
-apart -- and a project that prefers trigger-site visibility disables the
-criterion by id.
+trigger site even when visibility near the code would help. It is configurable
+with the opinionated default on. The default is on because copies consume ambient
+budget and drift apart; a project that prefers trigger-site visibility disables
+it by id,
+
+```yaml
+rules:
+  already-ambient-suppressed: off
+```
+
+in whichever layer the preference belongs to -- the user layer for a personal
+posture, the project layer for a team's -- and nothing changes for anyone who
+writes no config.

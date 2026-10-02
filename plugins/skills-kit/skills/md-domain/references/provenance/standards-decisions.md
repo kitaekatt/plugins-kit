@@ -323,4 +323,89 @@ claude_md:
         contract: deferred-defects.md.
       origin: User-directed broadening of the CLAUDE-potential-defects.md pattern from the coverage-lane-only release valve to a general deferred-known-defects pattern with multiple admission routes.
       added: "2026-09-25"
+    - id: coverage_criteria_configurable_by_id
+      keywords: [coverage criteria, rules off, already-ambient-suppressed, plugin-opinion razor, rule_catalog optional bucket, shipped_dir, resolve_standards, coverage-detect disabledCriteria, seam not register entry, config resolution step]
+      summary: "Coverage criteria made configurable by id 2026-10-02: the eight coverage-standards.md ids are registered in rule_catalog.py's optional bucket and disableable via rules: {<id>: off}. The obstacle was a missing resolution step in the coverage lane, not the criterion. Loading shipped standards through resolve()'s shipped_dir was rejected because enabling it raises and refuses every audit."
+      detail: |
+        Surface: an md-domain audit of a 2026-10-02 skills-kit change raised a
+        plugin-opinion-razor finding. coverage-standards.md's
+        `already-ambient-suppressed` criterion sat at severity fail while its own
+        text conceded that a competent team disputes it, and no seam disabled it.
+        plugins/CLAUDE.md's razor requires every workflow opinion to be
+        configurable with a default or registered as a deliberate stance. An
+        earlier documentation pass had removed a false "disable-able or tunable"
+        promise without adding the seam, and the document had come to assert that
+        the criterion has no supported seam and to register the stance as
+        deliberate. The user ruled between the two razor remedies: "Build the
+        seam". The register-entry route was ruled out.
+        Finding: the obstacle was not the criterion but the absence of a
+        resolution step. The coverage lane had no config-resolution step at all,
+        unlike the audit lane, so there was nothing to thread a disabled list
+        through. The route taken registers the eight criterion ids in
+        rule_catalog.py's optional bucket, which needs no change to
+        standards_resolve.py; coverage-lane.md gained a once-per-run
+        scripts/resolve_standards.py call, and coverage-detect.js reads
+        input.disabledCriteria and injects a suppression clause. The default is
+        ON. A second candidate route, loading the shipped standards documents as
+        an authored layer through resolve()'s `shipped_dir` parameter (documented
+        as unused until M5), was REJECTED on evidence. Executing it makes
+        resolve() raise before returning: the `*-standards.md` glob matches
+        shipped documents that carry no `standards_set:` block, and
+        coverage-standards.md's `applies_to: code_subtree` is not one of the four
+        file-type primitives. audit-lane.md treats resolve_standards.py's
+        non-zero exit as STOP, so enabling that route would refuse every skill,
+        claude-md and project-doc audit in every project. This is the most
+        reusable finding of the entry: `shipped_dir` is fatal to enable as it
+        stands.
+        Follow-up: none for the seam itself. `shipped_dir` remains unused;
+        narrowing its glob and widening `applies_to` are prerequisites to any
+        future use of it.
+        Verification was behavioural, not a prompt-string assertion: the same
+        fixture assessed with the criterion enabled returned COVERAGE-ASSESSED
+        with no candidates, and with the id disabled returned GAPS-FOUND with the
+        suppressed fact proposed. Consumer-facing text: configuring-standards.md,
+        "Worked example: disable a coverage criterion". Criterion text:
+        coverage-standards.md.
+      origin: Surface, finding and follow-up above; the user's ruling was "Build the seam", 2026-10-02.
+      added: "2026-10-02"
+    - id: audit_block_fix_mode
+      keywords: [audit block, fix_mode, apply propose, FIX = apply, AUDIT_KEYS, _validate_audit, remediate lanes guard, args.fixMode, fails open, single-file inline edit, review mode not reusable, behaviour setting not rule id, plugin-opinion razor]
+      summary: "A fourth validated top-level config block, audit:, added 2026-10-02 with one key, fix_mode: apply | propose (default apply). propose reports FIX findings as proposals and edits nothing. The guard is code-enforced only on the multi-file fan-out path and fails open when args.fixMode is not threaded; both limits are deliberate."
+      detail: |
+        Surface: the same 2026-10-02 razor audit. md-domain's audit applied FIX
+        findings as edits with no per-finding decision (audit-lane.md step 5,
+        "FIX = apply"), and review mode, the only mode that applies nothing, is
+        scoped to gating a change rather than to a standing preference. A consumer
+        who wanted audit results and never an edit had no supported setting. The
+        user ruled "Build the seam"; the register-entry route was ruled out.
+        Finding: there is no Python applier to gate. "FIX = apply" lives in prose
+        and in the generated lane prompts, so the only code-owned chokepoint is
+        the remediate lanes (generated from scripts/gen_workflow_js.py). Review
+        mode's no-apply path is not reusable: it is entangled with pre-image
+        materialization through VCS calls, the model-judged attributability filter
+        and the DIFF-CLEAN relabel, and is rejected in combination with `fast`.
+        The key is a behaviour setting rather than a rule id, so it went into a
+        fourth validated top-level block (AUDIT_KEYS and _validate_audit in
+        standards_resolve.py, following the ADAPTER_KEYS allowlist pattern)
+        rather than into the `rules:` namespace. The value is surfaced through
+        resolve_standards.py's JSON and enforced by a guard in the four
+        *-remediate.js lanes that returns before any agent() call.
+        Follow-up: two known limitations, both deliberate.
+        (1) The guard is code-enforced only on the fan-out path for two or more
+        files. The single-file path is an agent making an inline Edit, with no
+        script to guard, so there it is enforced by a shipped instruction in
+        audit-lane.md step 5. A seam that silently stopped working below a
+        file-count threshold would be a fake gate, so the instruction covers it;
+        the asymmetry is real.
+        (2) The guard reads args.fixMode threaded by the main loop, so it fails
+        OPEN when the loop omits it. This matches the existing disabledCriteria
+        threading, which defaults to "apply every criterion" when omitted, so it
+        is a property of the lane-args design rather than something this change
+        introduced. A fail-closed variant would need an args.configResolved
+        sentinel and a changed lane contract across four lanes; it was judged not
+        worth that while the sibling mechanism fails open the same way.
+        Consumer-facing text, including both limitations: configuring-standards.md,
+        "Audit behaviour (audit:)".
+      origin: Surface, finding and follow-up above; the user's ruling was "Build the seam", 2026-10-02.
+      added: "2026-10-02"
 ```

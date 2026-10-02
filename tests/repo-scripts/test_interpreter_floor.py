@@ -50,8 +50,8 @@ def _callers() -> set[str]:
 def test_the_caller_set_is_the_known_one():
     """A consistency check on the detector: a new caller must be seen."""
     assert _callers() == {
-        "awesome-kit", "cache-kit", "git-kit", "hue-kit", "p4-kit",
-        "skills-kit", "unreal-kit",
+        "awesome-kit", "cache-kit", "content-pipeline-kit", "git-kit", "hue-kit",
+        "p4-kit", "skills-kit", "unreal-kit",
     }
 
 

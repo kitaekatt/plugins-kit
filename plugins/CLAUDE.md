@@ -49,6 +49,23 @@ unconfigurable opinion whose test passes is a finding.
   there is no supported path for a consumer to hand-install into a plugin venv. A team that
   wants manual control should not enable the plugin -- partial adoption produces a machine
   whose bootstrap is permanently wrong.
+- **bootstrap PREPENDS a shared library into a project venv, and there is no precedence
+  setting.** A library named in `project_venv.shared_lib_imports` wins over a same-named
+  package the venv already holds, because the executable `.pth` ends
+  `sys.path.insert(0, ...)` (`bootstrap_lib/shared_lib.py`, `pth_line`). A team will
+  reasonably want the opposite: a project's `pyproject.toml` is a human artifact, and
+  prepending silently outranks a pin someone made on purpose, with a wrong version rather
+  than an ImportError as the symptom. We refuse the flag anyway. The same `.pth` mechanism
+  prepends for plugin venvs for a stated reason -- the shared copy must beat a stale
+  installed shadow in `site-packages` -- and a project venv is exactly where such stale or
+  vendored copies accumulate, so appending there would reintroduce the defect the mechanism
+  was written to prevent. What a team should do instead: stop listing that library in
+  `shared_lib_imports` and let the venv's own copy resolve. The hazard is made observable
+  rather than configurable -- when a pass links a library the venv already holds, the engine
+  emits an action entry naming the shadowed copy and its version, so the wrong-version
+  failure is attributable. Reconsider only if a consumer needs its own copy to win while
+  still having bootstrap manage the link; a per-entry flag is the shape, and it is not built
+  on speculation.
 - **secrets-kit reserves one direct `blobs/<entry-or-source>.age` slot per entry.**
   Authoring is what enforces it, at both of its entry points and through one predicate
   (`secrets_kit.authoring._canonical_blob`): `_selected_entry_blob` refuses a nested,
@@ -612,11 +629,20 @@ whatever `plugin_root_env_var_name` in
 name; `plugins/bootstrap/bootstrap_lib/engine.py` exports it through
 `export_env_var` on every un-skipped pass, for every plugin that ships a
 `bootstrap.json`. The pointer exists from bootstrap 0.72.0 onward (commit
-`771d3920` added the helper and the export together). In a session whose
-bootstrap pass was skipped by a gate the variable is absent, and `:?` aborts
-the command with the message, naming the missing variable -- a loud failure
-that is the point of the form, and strictly better than silently running
-against `/scripts/x.py`.
+`771d3920` added the helper and the export together). That export sits below
+both SessionStart skip gates, but from bootstrap 0.141.0 a full pass also
+RECORDS the name under bootstrap's data dir and the hook's pre-gate prelude
+re-emits it, so a gate-skipped session carries the variable too -- provided a
+full pass has recorded it since 0.141.0 reached the machine AND the recorded
+directory still exists.
+
+`"${<PLUGIN>_ROOT:?<msg>}"` remains the required spelling. `:?` still fires,
+in a narrower set of cases: before the first recording pass on a machine, when
+the recorded directory has been deleted, and when the plugin has left the
+registry. It aborts the command with the message, naming the missing variable
+-- a loud failure that is the point of the form, and strictly better than
+silently running against `/scripts/x.py`. Record format, the existence check
+and the remaining `:?` cases: `docs/reference/plugin-root-variable-sites.md`.
 
 **SKILL.md examples launch
 `"$BOOTSTRAP_PYTHON" "${<PLUGIN>_ROOT:?<msg>}/scripts/<script>.py"`** and rely

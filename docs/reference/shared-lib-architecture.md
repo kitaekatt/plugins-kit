@@ -234,10 +234,10 @@ probe, exactly as the finding states.
 ## Finding 5: "picks up fresh source on its next import" is misleading
 
 **Confirmed at review time (2026-09-20). Fixed in bootstrap 0.140.0
-(2026-10-01) for the `.pth` consumers (modes 1-2); mode 3 has a documented
-opt-in.** The fix write-up follows the original claim.
+(2026-10-01) for the `.pth` consumers (modes 1-2; mode 3a, which also uses
+the `.pth`, inherits it); mode 3b has a documented opt-in.** The fix write-up follows the original claim.
 
-`library-consumption.md`, Mode 3 ("Foreign-interpreter project consumer"),
+`library-consumption.md`, Mode 3b ("Foreign-interpreter project consumer"),
 "Update" section, states:
 
 > ...a scheduled job or a long-running process using the project's interpreter
@@ -291,8 +291,8 @@ bad pointer cannot break interpreter startup. Python resolves each submodule
 through its package's `__path__`, which points into the immutable
 generation, so a process's lazy imports after a publish come from the
 generation it started with. The stable `<entry_dir>/<name>/` copy is still
-swapped in place: the mode-3 recipe in `library-consumption.md` reads it, and
-as of bootstrap 0.140.0 that document gives mode-3 shims the same pointer rule and replaces the
+swapped in place: the mode-3b recipe in `library-consumption.md` reads it, and
+as of bootstrap 0.140.0 that document gives mode-3b shims the same pointer rule and replaces the
 misleading sentence. A superseded generation gets a `.superseded` marker and a
 later publish deletes it once the marker is older than
 `GENERATION_RETENTION_S` (7 days), renaming it out of place first so it is

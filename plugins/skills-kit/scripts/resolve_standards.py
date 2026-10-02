@@ -21,6 +21,7 @@ every primitive that has standards. Prints one JSON object:
       "disabled":   ["<rule-id>", ...],
       "thresholds": {"<name>": <int>, ...},
       "standards":  {"<primitive>": ["<abs path>", ...], ...},
+      "audit":      {"fix_mode": "apply"|"propose"},
       "notes":      ["<loud-but-non-fatal diagnostic>", ...]
     }
 
@@ -90,6 +91,7 @@ def main(argv: list[str] | None = None) -> int:
         "disabled": sorted(resolved.disabled_rules),
         "thresholds": dict(resolved.thresholds),
         "standards": standards,
+        "audit": dict(resolved.audit),
         "notes": list(resolved.notes),
     }
     print(json.dumps(out, indent=2))

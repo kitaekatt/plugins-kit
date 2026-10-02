@@ -19,7 +19,7 @@ would take a shared_lib_imports manifest change and break audit.py's graceful
 bare-python degradation). When pyyaml is unavailable resolution degrades to
 empty defaults plus a loud note, exactly like audit.py's contract-staged state
 -- it never crashes. Malformed config, an un-tunable rule id, an unknown
-threshold, an unknown adapter or adapter setting, or an invalid standards file
+threshold, an unknown adapter or adapter setting, an unknown audit setting or value, or an invalid standards file
 are LOUD (StandardsConfigError), never a silent {}.
 """
 
@@ -69,6 +69,18 @@ ADAPTER_KEYS: dict[str, set[str]] = {
 }
 
 
+#: The audit-behaviour settings, a fourth top-level config block (`audit:`).
+#: These are behaviour settings, not rule ids, so they do not live under
+#: `rules:`. Each key maps to its allowed values; the FIRST value is the shipped
+#: default. `fix_mode: apply` applies FIX findings as edits (the audit's
+#: default); `fix_mode: propose` reports every FIX finding as a proposal and
+#: makes no edit.
+AUDIT_KEYS: dict[str, tuple[str, ...]] = {
+    "fix_mode": ("apply", "propose"),
+}
+AUDIT_DEFAULTS: dict[str, str] = {key: values[0] for key, values in AUDIT_KEYS.items()}
+
+
 @dataclass
 class StandardsFile:
     """One authored *-standards.md, parsed and schema-validated."""
@@ -90,6 +102,8 @@ class ResolvedStandards:
     - adapters: adapter id -> that adapter's settings, for the ids in
       ADAPTER_KEYS. An absent adapter, or an absent key inside one, keeps the
       shipped default -- which for every adapter setting is EMPTY.
+    - audit: the audit-behaviour settings (AUDIT_KEYS), always fully populated:
+      a key the config does not set carries its AUDIT_DEFAULTS value.
     - notes: loud-but-non-fatal diagnostics (e.g. pyyaml unavailable).
     """
 
@@ -97,6 +111,7 @@ class ResolvedStandards:
     thresholds: dict[str, int] = field(default_factory=dict)
     standards_by_primitive: dict[str, list[StandardsFile]] = field(default_factory=dict)
     adapters: dict[str, dict] = field(default_factory=dict)
+    audit: dict[str, str] = field(default_factory=lambda: dict(AUDIT_DEFAULTS))
     notes: list[str] = field(default_factory=list)
 
     def adapter_admitted_endpoints(self, adapter_id: str) -> frozenset[str]:
@@ -211,6 +226,34 @@ def _validate_adapters(merged: dict) -> dict[str, dict]:
                 extracted[key] = val
         adapters[adapter_id] = extracted
     return adapters
+
+
+def _validate_audit(merged: dict) -> dict[str, str]:
+    """Validate the merged config's `audit:` block and return the full settings.
+
+    An unknown key, or a value outside the key's allowed set, raises: a typo'd
+    `fix_mode` would otherwise silently keep the default and apply edits to a
+    consumer who asked for none. Absent keys take their AUDIT_DEFAULTS value.
+    """
+    raw = merged.get("audit", {})
+    if raw and not isinstance(raw, dict):
+        raise StandardsConfigError(
+            f"'audit:' must be a mapping of setting -> value, got {type(raw).__name__}"
+        )
+    settings = dict(AUDIT_DEFAULTS)
+    for key, val in (raw or {}).items():
+        if key not in AUDIT_KEYS:
+            raise StandardsConfigError(
+                f"audit setting '{key}' is not a known setting; valid settings: "
+                f"{sorted(AUDIT_KEYS)}"
+            )
+        allowed = AUDIT_KEYS[key]
+        if not isinstance(val, str) or val.strip().lower() not in allowed:
+            raise StandardsConfigError(
+                f"audit setting '{key}' must be one of {list(allowed)}; got {val!r}"
+            )
+        settings[key] = val.strip().lower()
+    return settings
 
 
 def _validate_and_extract(
@@ -368,11 +411,13 @@ def resolve(project_root: Path | None, *, shipped_dir: Path | None = None) -> Re
 
     disabled_rules, thresholds = _validate_and_extract(merged, authored_criteria)
     adapters = _validate_adapters(merged)
+    audit_settings = _validate_audit(merged)
 
     return ResolvedStandards(
         disabled_rules=disabled_rules,
         thresholds=thresholds,
         standards_by_primitive=standards_by_primitive,
         adapters=adapters,
+        audit=audit_settings,
         notes=notes,
     )

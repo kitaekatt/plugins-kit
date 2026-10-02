@@ -50,7 +50,7 @@ Durability rationale, one line each:
 
 ## `config.yaml` format
 
-A layer's `config.yaml` (and its `config.local.yaml` overlay) carries three
+A layer's `config.yaml` (and its `config.local.yaml` overlay) carries four
 optional top-level keys:
 
 ```yaml
@@ -61,9 +61,11 @@ thresholds:
 adapters:
   <adapter-id>:
     <setting>: <value>  # opt an adapter in (see Adapters)
+audit:
+  fix_mode: apply       # apply | propose (see Audit behaviour)
 ```
 
-All three keys are optional. An absent file is skipped silently; a present file with
+All four keys are optional. An absent file is skipped silently; a present file with
 a malformed root, an un-tunable rule id, or an unknown threshold is a loud error
 (see Troubleshooting).
 
@@ -82,6 +84,24 @@ rules below, or the `id` of a criterion declared by a standards file resolved
 for this project (any layer, any primitive) -- see
 [authoring-standards.md](authoring-standards.md). Disabling an architectural or
 inoffensive rule is refused.
+
+### Worked example: disable a coverage criterion
+
+The `analyze` verb's admission criteria carry the same kind of id. To stop
+coverage suppressing a fact that an ancestor CLAUDE.md already carries -- the
+one opinion in `standards/coverage-standards.md` whose own text concedes a
+competent team disputes it -- disable `already-ambient-suppressed`:
+
+```yaml
+rules:
+  already-ambient-suppressed: off
+```
+
+The criterion is ON by default and stays on for everyone who writes nothing. A
+team that prefers a second placement at a trigger site near the code switches it
+off in whichever layer the preference belongs to: the user layer for a personal
+posture, the project layer for a team's. Every id in
+`standards/coverage-standards.md` takes the same key.
 
 ### Worked example: tune a threshold
 
@@ -103,6 +123,17 @@ cannot be disabled.
 
 Every built-in rule id belongs to exactly one bucket. Audit findings use the
 `rule` field. The tables below are the complete catalog.
+
+Two kinds of id share the Optional table, and the difference is WHO applies
+them, not whether they are configurable. Most rows are mechanical rules the
+`audit.py` validator evaluates. The `CV-` rows are the coverage lane's
+admission criteria (`standards/coverage-standards.md`): their enforcement is
+judgment, so an agent applies them inside
+`workflow/coverage-detect.js`, which suppresses a candidate whose criterion id
+this configuration disables. Disabling one therefore changes what an `analyze`
+run proposes, not what an `audit` run reports. The two surfaces read the same
+`rules:` block and the same id namespace -- see "Worked example: disable a
+coverage criterion" above.
 
 <!-- BEGIN GENERATED: rule-catalog (gen_standards_doc.py; SSOT: rule_catalog.py + audit.py THRESHOLDS) -->
 
@@ -126,7 +157,7 @@ through `audit-framework.yaml`.
 | `desc-exclusion-clause` | The description carries a "Do NOT use for..." exclusion clause. |
 | `skill-type-tag` | A `skill-type` advisory tag is present in frontmatter (else the agent infers the type). |
 | `skill-type-valid` | The `skill-type` value is one of the canonical skill types. |
-| `refs-one-hop-deep` | `references/` is one hop deep (no nested references directories). |
+| `refs-one-hop-deep` | `references/` is one hop deep, except that a nested reference file counts as one hop when SKILL.md's `index.references[]` declares that file's own relative path or its containing directory. |
 | `body-line-count` | Reports the SKILL.md body line count (informational count row). |
 | `body-token-count` | Reports the approximate SKILL.md body token count (informational count row). |
 | `body-size-signal` | An over-threshold body with no `references/` directory raises a progressive-disclosure signal (consumes `body_max_lines`, `body_max_tokens`). |
@@ -157,6 +188,14 @@ through `audit-framework.yaml`.
 | `domain-orientation` | A domain-skill body carries orientation content (at least one H2 beyond the index). |
 | `domain-reference-index` | A domain-skill body carries a Conditional-Loading reference index. |
 | `domain-prohibited-index-only` | A domain-skill is not an index-only stub (an index with no orientation content). |
+| `absent-fact-earns-ambient-cost` | CV-1: a coverage candidate is durable and consequential rather than cheaply recoverable from the local files. |
+| `already-ambient-suppressed` | CV-2: a fact already carried by any CLAUDE.md in the directory's ancestor chain is not a candidate, a trigger site closer to the code included. |
+| `fact-scoped-to-this-directory` | CV-3: a candidate is a fact about the assessed directory's own direct code, and its destination is that directory. |
+| `candidate-tier-classified` | CV-4: every surviving candidate is classified finding-convertible or context-only, and the classification is reported. |
+| `hazard-durability` | CV-5: an observed hazard earns ambient prose only when it is durable, or severe and not being fixed. |
+| `loud-failure-excluded` | CV-6: a constraint that is documented, fails loudly at runtime, and is test-enforced is not a candidate. |
+| `evidence-floor` | CV-7: every candidate cites a file and line observed in source; a convention needs two or more instances or one authoritative source. |
+| `present-content-not-re-audited` | CV-8: coverage judges absent facts only and never evaluates content already present. |
 
 ### Inoffensive -- no knob
 
@@ -192,6 +231,31 @@ them in `thresholds:`; an override must be a positive integer.
 | `import_max_lines` | 50 | `claude-md-import-size` |
 
 <!-- END GENERATED: rule-catalog -->
+
+## Audit behaviour (`audit:`)
+
+The `audit:` block holds behaviour settings, not rule ids, so it is separate
+from `rules:`. One key is defined.
+
+`fix_mode: apply | propose`. The default is `apply`: the audit applies FIX
+findings as edits. `propose` reports every FIX finding, and every IMPROVE or
+SPECIAL item with an apply decision, as a proposal (file, line, criterion,
+instruction) and makes no edit.
+
+```yaml
+audit:
+  fix_mode: propose
+```
+
+It layers like the rest of the config. An unknown key or value fails the run
+loudly, like an unknown threshold.
+
+Two facts about how `propose` is enforced:
+
+- With two or more files, the remediate lane refuses to dispatch. With a single
+  file, the audit lane instructs the agent to make no edit.
+- The setting reaches the lane through the run's resolved config, so a caller
+  that does not thread it leaves the default `apply` in force.
 
 ## Adapters
 
@@ -261,7 +325,7 @@ At the design level, the audit lanes consume the resolved configuration as
 follows:
 
 - A per-run resolver (`scripts/resolve_standards.py`) computes, for the file
-  under audit, the disabled-rule set, the threshold overrides, and the additive
+  under audit, the disabled-rule set, the threshold overrides, the `audit:` behaviour settings, and the additive
   standards that apply to that file's primitive.
 - Additive criteria are enforced by the detect lane and reported under taxonomy
   `N_user_standard_violation`, modeled on the ancestor-CLAUDE.md convention
@@ -270,7 +334,7 @@ follows:
   agent does not infer a rule the standards file does not state and does not
   restate a criterion in its own words.
 - Disabled optional rules are suppressed via a `disabledCriteria` set threaded
-  into the detect lane, so a finding for a disabled id never reaches the report.
+  into the detect lane (the coverage detect lane included), so a finding or candidate for a disabled id does not reach the report -- provided the caller threads the set. An absent `disabledCriteria` leaves every criterion on (`workflow/coverage-detect.js:186`, `workflow/skill-detect.js:232`), and the suppression reaches the agent as a prompt instruction rather than a mechanical filter -- the same fail-open the `audit:` section records for `fix_mode`.
 
 ## Troubleshooting
 
@@ -294,6 +358,9 @@ degrading to an empty config, and the message names the problem:
   error naming the offending id or value. It is loud rather than ignored
   because a typo'd endpoint list admits nothing, which looks identical to the
   empty default.
+- **An unknown `audit:` key or value.** An `audit:` key other than `fix_mode`,
+  or a `fix_mode` value other than `apply` or `propose`, raises an error naming
+  the offending key or value.
 - **Malformed config.** A `config.yaml` that is not valid YAML, or whose root is
   not a mapping, raises an error naming the path.
 - **An invalid standards file.** A `*-standards.md` whose `standards_set:` block
