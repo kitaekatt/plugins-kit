@@ -19,8 +19,8 @@ literal is loosened, the assertion deleted, the allowlist widened. Its red
 result is at least visible, but the habit of dismissing it is what the next
 real regression meets.
 
-Eight shapes have been observed in this repo, of two kinds. Shapes 1 to 3 and
-5 to 8 are checks that PASS when they should fail, or that offer evidence which
+Nine shapes have been observed in this repo, of two kinds. Shapes 1 to 3 and
+5 to 9 are checks that PASS when they should fail, or that offer evidence which
 cannot be trusted; the remedy is to assert the PROPERTY and demonstrate the
 failure before believing the check. Shape 4 is a check that FAILS when nothing
 is broken; the remedy is to re-point it at the producer and show it still goes
@@ -270,9 +270,55 @@ test can carry the property. The honest move is to say so rather than write a
 third test that looks like coverage. The guard is still subject to Shapes 1 and
 2: show it red against the named revert.
 
+## Shape 9: widening a validator without its consumer turns a loud error into a silent no-op
+
+A validator and the code that consumes its output are one contract. Widening
+what the validator ADMITS, without widening what the consumer HONOURS, converts
+an input that used to be refused loudly into one that is accepted and ignored.
+Nothing is red afterwards, because the loud failure was the only check, and the
+widening removed it. The same change can also delete the one sentence that
+warned a reader, when that sentence was an excuse for the old mismatch.
+
+Worked example (skills-kit 0.86.0, commit `ebefd8b5`, measured 2026-10-02).
+`skills_kit_lib/standards_resolve.py` validated a standards file's `applies_to:`
+against four file-type primitives. `coverage-standards.md` carried
+`applies_to: code_subtree`, which is not one of them, so the file carried a
+"Named deviation" paragraph explaining the mismatch. That paragraph also said
+`coverage-detect.js` "never inspects `applies_to`", and that sentence BOUNDED a
+promise made in two other files: `authoring-standards.md` and
+`configuring-standards.md` both tell a reader that an authored criterion is
+enforced by a detect lane.
+
+0.86.0 renamed the subject to `code_directory`, widened the validator to admit a
+composition id, and deleted the deviation paragraph, which had become untrue.
+An authored `applies_to: code_directory` file then validated and resolved, but
+`coverage-detect.js` consumes only `input.disabledCriteria` and never the
+resolved `standards` map, so its criteria are silently ignored. Before the
+widening the same file raised `StandardsConfigError`. The sentence that would
+have warned the reader was removed by the change that made it necessary.
+
+What to do:
+
+- When you widen a validator, a schema, an enum or an accepted-values list,
+  open every CONSUMER of the validated value and confirm each one honours the
+  admitted input. A consumer that reads a different field is the signal.
+- Before deleting a "stale excuse" (a deviation note, a known-limitation
+  paragraph), list every sentence elsewhere whose truth it bounded. Grep for
+  the promises the excuse qualified; each one either gains its own caveat or
+  the consumer is widened in the same change.
+- Show it red: feed the consumer an input only the widened validator admits and
+  assert it is acted on, or still refused. A validator-only test stays green.
+
+Two review lanes caught different parts of this, so run both. The md-domain
+`audit_skill` lane found the contradiction independently in the two
+promise-making files, with exact anchors, while marking `coverage-lane.md`
+DIFF-CLEAN even though it used the false paragraph in that file as its ground
+truth. A hand join across the sites caught that third one. Each found what the
+other missed.
+
 ## Why every shape needs a named revert-check
 
-Shapes 1 to 3 and 5 to 8 are checks that PASS when they should fail (or whose
+Shapes 1 to 3 and 5 to 9 are checks that PASS when they should fail (or whose
 evidence is unreliable). Shape 1 and Shape 2
 are not detectable by reading the test, and shape 3 often is not either -- the
 fake looks complete until a new command exposes what it was never taught to
