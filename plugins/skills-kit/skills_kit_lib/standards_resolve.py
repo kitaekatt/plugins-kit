@@ -49,17 +49,31 @@ except ImportError:  # pragma: no cover - exercised only on a bare interpreter
 #: schema's note, so both stay in sync.
 APPLIES_TO_PRIMITIVES = ("skill_md", "claude_md", "reference_doc", "plain_md")
 
-#: Composition ids a standards_set's `applies_to:` may also name (the analyze
-#: lane's subject: one directory plus its ambient CLAUDE.md chain).
+#: Composition ids recognised as `applies_to:` names (the analyze lane's
+#: subject: one directory plus its ambient CLAUDE.md chain). Recognised is not
+#: authorable: see APPLIES_TO_NOT_CONSUMED.
 APPLIES_TO_COMPOSITIONS = ("code_directory",)
 
-#: Every admissible `applies_to:` value.
+#: Every recognised `applies_to:` value.
 APPLIES_TO_SUBJECTS = APPLIES_TO_PRIMITIVES + APPLIES_TO_COMPOSITIONS
 
-#: Deprecated `applies_to:` spellings, normalised to the current id so
-#: `standards_by_primitive` is keyed consistently. `code_subtree` was the
-#: composition's former name; a consumer's additive file may still carry it.
+#: Deprecated `applies_to:` spellings, normalised to the current id so a
+#: file carrying the former name `code_subtree` gets the same error as one
+#: naming `code_directory`.
 APPLIES_TO_ALIASES = {"code_subtree": "code_directory"}
+
+#: Subjects that are valid NAMES (the registry and `--primitive` use them) but
+#: have no lane that applies an AUTHORED standards set: the coverage lane reads
+#: only its shipped criteria and `disabledCriteria`, never the resolved
+#: `standards` map. An authored set naming one is rejected loudly rather than
+#: validated and then silently ignored. Wiring a lane to consume a subject's
+#: authored criteria means removing that subject from this set.
+APPLIES_TO_NOT_CONSUMED = frozenset(APPLIES_TO_COMPOSITIONS)
+
+#: The `applies_to:` values an authored set may carry.
+_AUTHORABLE_SUBJECTS = tuple(
+    s for s in APPLIES_TO_SUBJECTS if s not in APPLIES_TO_NOT_CONSUMED
+)
 
 
 class StandardsConfigError(Exception):
@@ -353,7 +367,16 @@ def _parse_standards_file(path: Path) -> StandardsFile:
     if applies_to not in APPLIES_TO_SUBJECTS:
         raise StandardsConfigError(
             f"{path}: applies_to '{applies_to}' is not a file-type primitive "
-            f"or composition id; valid values: {list(APPLIES_TO_SUBJECTS)}"
+            f"or composition id; valid values: {list(_AUTHORABLE_SUBJECTS)}"
+        )
+    if applies_to in APPLIES_TO_NOT_CONSUMED:
+        raise StandardsConfigError(
+            f"{path}: applies_to '{applies_to}' cannot carry authored criteria: "
+            "the coverage lane does not apply them, so this file would be "
+            "ignored. To switch a shipped coverage criterion off, set "
+            "`rules: {<criterion-id>: off}` in config.yaml (ids: "
+            "references/standards/coverage-standards.md). Valid applies_to "
+            f"values for an authored set: {list(_AUTHORABLE_SUBJECTS)}"
         )
     return StandardsFile(
         path=path,

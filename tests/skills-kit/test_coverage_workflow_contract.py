@@ -28,6 +28,8 @@ import importlib.util
 import re
 from pathlib import Path
 
+import pytest
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 MD_DOMAIN = REPO_ROOT / "plugins" / "skills-kit" / "skills" / "md-domain"
 DETECT = MD_DOMAIN / "workflow" / "coverage-detect.js"
@@ -483,7 +485,11 @@ class TestCoverageRegisteredWithCriteria:
 
 
 class TestCodeDirectoryAppliesTo:
-    """standards_resolve admits `code_directory` and the deprecated alias."""
+    """An authored set naming `code_directory` (or its alias) fails loudly.
+
+    The coverage lane never reads the resolved `standards` map, so accepting the
+    file would validate it and then ignore it.
+    """
 
     @staticmethod
     def _resolve_with(tmp_path, monkeypatch, applies_to):
@@ -507,16 +513,21 @@ class TestCodeDirectoryAppliesTo:
         (layer / "code-standards.md").write_text(body, encoding="utf-8")
         return resolve(None)
 
-    def test_code_directory_is_accepted(self, tmp_path, monkeypatch):
-        resolved = self._resolve_with(tmp_path, monkeypatch, "code_directory")
-        assert "code_directory" in resolved.standards_by_primitive
-
-    def test_code_subtree_alias_normalises_to_code_directory(
-        self, tmp_path, monkeypatch
+    @pytest.mark.parametrize("spelling", ["code_directory", "code_subtree"])
+    def test_authored_code_directory_set_is_rejected(
+        self, tmp_path, monkeypatch, spelling
     ):
-        resolved = self._resolve_with(tmp_path, monkeypatch, "code_subtree")
-        assert "code_directory" in resolved.standards_by_primitive
-        assert "code_subtree" not in resolved.standards_by_primitive
+        from skills_kit_lib.standards_resolve import StandardsConfigError
+
+        with pytest.raises(StandardsConfigError) as exc:
+            self._resolve_with(tmp_path, monkeypatch, spelling)
+        msg = str(exc.value)
+        # Names the offending file, the normalised id (so the alias gets the
+        # same message), why, and the supported alternative.
+        assert "code-standards.md" in msg
+        assert "'code_directory'" in msg
+        assert "coverage lane does not apply" in msg
+        assert "rules:" in msg
 
 
 class TestOutsideCounterpartStands:

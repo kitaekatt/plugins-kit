@@ -445,11 +445,14 @@ claude_md:
         subject, and the rename was deliberately not bundled with this change,
         because it touches the dispatch table, the framework registry, the lane
         records and their tests, and a partial rename is the worse failure. It
-        landed as its own change (skills-kit 0.86.0): `code_subtree` is now
-        `code_directory` and `coverage_code_subtree` is now
+        landed as its own change: skills-kit 0.86.0 renamed `code_subtree` to
+        `code_directory` and `coverage_code_subtree` to
         `coverage_code_directory`. The lane id is retired outright; the
         composition id keeps `code_subtree` as a deprecated `applies_to:` alias
-        that `standards_resolve.py` normalises to `code_directory`. The files
+        that `standards_resolve.py` normalises to `code_directory`; both
+        spellings are rejected with `StandardsConfigError` for an authored set
+        (skills-kit 0.87.0), because the coverage lane does not read the
+        resolved `standards` map and accepting the file would ignore it. The files
         named for the OUTPUT (`coverage-lane.md`, `coverage-standards.md`,
         `discover_coverage.py`, `coverage-detect.js`) kept their names.
         `code_directory` is a near-neighbour of the CD "code-directory

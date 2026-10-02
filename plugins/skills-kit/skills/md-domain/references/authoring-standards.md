@@ -5,7 +5,8 @@ YAML block. The prose is for a human browsing the standards; the block is the
 machine-validated contract skills-kit's own audits consume. One file governs
 exactly one subject -- a file-type primitive or a composition such as
 `code_directory` -- and carries the optional, tunable opinions skills-kit
-applies to it.
+applies to it. An authored set may name only a file-type primitive; the
+composition `code_directory` is rejected (see below).
 
 Standards files are the authored surface of skills-kit's configurable
 standards: architectural opinions stay hard-coded and are never expressed here;
@@ -24,13 +25,15 @@ discoverability convention; the block's `applies_to:` key is authoritative.
 | `CLAUDE-md-standards.md` | `claude_md` |
 | `reference-standards.md` | `reference_doc` |
 | `doc-standards.md` | `plain_md` |
-| `coverage-standards.md` | `code_directory` (a composition) |
+| `coverage-standards.md` | `code_directory` (shipped only; an authored set is rejected) |
 
 The primitive ids are the file-type sub-kinds registered in
-`audit-framework.yaml` (this same references/ directory); a composition id is
-one of that file's `compositions:` entries, and `code_directory` is the only
-one a standards file may name. The former spelling `code_subtree` is still
-accepted as a deprecated alias and is normalised to `code_directory`. If the
+`audit-framework.yaml` (this same references/ directory). A composition id is
+one of that file's `compositions:` entries, and an authored set may not name
+one: `code_directory` (and its former spelling `code_subtree`, normalised to it)
+raises `StandardsConfigError` naming the file, because the coverage lane applies
+only its shipped criteria and would ignore the set. Switch a shipped coverage
+criterion off with `rules: {<id>: off}` in `config.yaml` instead. If the
 filename and `applies_to` disagree, `applies_to` wins; keep them aligned so the
 file is discoverable by name.
 
@@ -41,8 +44,9 @@ Top-level fields:
 - **`identity`** (required) -- one sentence stating what this set governs and
   for which subject. Read aloud, it answers "which opinions does this file
   carry, and over what."
-- **`applies_to`** (required) -- the file-type primitive id or composition id
-  this set governs.
+- **`applies_to`** (required) -- the file-type primitive id this set governs.
+  A composition id appears only in a shipped set (`coverage-standards.md`); an
+  authored set naming one is rejected (see above).
   Authoritative over the filename convention.
 - **`criteria`** (required, at least one) -- the list of standards. Each entry
   is one checkable opinion.
@@ -79,9 +83,9 @@ Each criterion carries:
 
 - **`judgment`** (default) -- for a set naming a file-type primitive, the audit
   detect lane evaluates the criterion from its `statement` text. No code is
-  involved; the standard is enforced entirely from what it says. A
-  `code_directory` set is resolved by `scripts/resolve_standards.py` and is not
-  consumed by the coverage lane.
+  involved; the standard is enforced entirely from what it says. The coverage
+  lane evaluates no authored criteria, so a `code_directory` set is rejected by
+  `scripts/resolve_standards.py` with an error.
 - **`mechanical`** -- a registered evaluator, keyed by the criterion `id`,
   performs the check (for example a character count or a regex). The standards
   file remains the single source of truth for the statement, id, and default;
